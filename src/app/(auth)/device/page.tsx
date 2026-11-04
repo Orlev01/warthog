@@ -1,7 +1,11 @@
 import * as React from "react";
-import { ComingSoon } from "@/components/shell/coming-soon";
+import { DeviceView } from "@/components/auth/auth-views";
 
-// Operator placeholder so links to this route resolve; E04-S14 replaces it with the real screen.
+// Thin device entry (task E04-S14): mounts the new-device view at its entry step —
+// the code screen that collects the one-time code emailed to the person
+// (DeviceView steps code → confirm). It lives under (auth) and OUTSIDE any
+// protected route group, so a brand-new device with no session yet can still
+// reach it.
 export default function AddADevicePage() {
-  return <ComingSoon title="Add a device" />;
+  return <DeviceView step="code" />;
 }
