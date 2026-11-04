@@ -96,6 +96,9 @@ function configWithBaseUrl(publicBaseUrl: string): Config {
     PUBLIC_BASE_URL: publicBaseUrl,
     WEBAUTHN_RP_ID: "localhost",
     DATABASE_URL: "pglite:memory",
+    // Server secrets are required since E04-S20 (test-only values).
+    WARTHOG_HMAC_KEY: "ERERERERERERERERERERERERERERERERERERERERERE=",
+    WARTHOG_DEV_KEK: "IiIiIiIiIiIiIiIiIiIiIiIiIiIiIiIiIiIiIiIiIiI=",
   } as NodeJS.ProcessEnv);
 }
 
