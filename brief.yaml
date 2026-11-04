@@ -114,7 +114,9 @@ features:
     Sign in on another device — on a new phone or computer the person enters their email, types the
     one-time code, then confirms with an existing passkey (a passkey synced through their Apple or
     Google account works directly; a passkey held on another device works by scanning the code the
-    browser shows) or with the recovery code; the new device may then create its own passkey; the
+    browser shows), by approving the sign-in from a device where they are already signed in (that
+    device receives a push "Approve sign-in on <new device>?" and approves after a step-up check), or
+    with the recovery code; the new device may then create its own passkey; the
     security page lists every device and passkey and can remove any of them.
   - >-
     Installable phone app experience — the portal installs to the home screen on iOS and Android,
@@ -202,7 +204,9 @@ features:
     Per-agent permissions page — for each agent: which connected services and which of their tools
     it may use (read tools and change-making tools listed separately; change-making tools default to
     "ask me first"), which identity fields it may read without asking (low tier only) and whether it
-    may request high-tier fields, whether it may request a card and its spending budget, which skills
+    may request high-tier fields, whether it may request a card and its spending budget (card access
+    cannot be switched on without a budget; the budget field defaults to A$200 per month in the
+    person's currency), which skills
     it receives, whether it may read shared memory, whether what it learns is shared with other
     agents, its own rules, and (under Advanced) its request limit (default 120 requests per minute);
     changes take effect on the agent's next request.
@@ -246,14 +250,19 @@ features:
     are encrypted on the person's own device before they leave it, using a key only the person's
     passkey (or, where a device cannot do that, a vault passphrase they choose) can unlock; Warthog
     stores only the encrypted form; the one-time recovery code can restore access if every passkey is
-    lost; the vault page explains that if both the passkeys and the recovery code are lost, those
-    details must be entered again.
+    lost; the vault page explains that if both the passkeys and the recovery code are lost, the
+    account can only be reset by email after a 7-day waiting period, during which every registered
+    channel (push, email, SMS) is alerted and the reset can be cancelled from any signed-in device; a
+    reset erases the protected details (they must be entered again), revokes every agent and service
+    connection, and keeps everything else.
   - >-
     Vault unlock methods — all protected details sit under one vault key that is sealed separately for
     each unlock method the person has: every passkey whose device can unlock the vault, an optional
     vault passphrase, and the recovery code. A synced passkey unlocks on every device it syncs to. A
-    passkey that cannot unlock (different ecosystem, or a device without the capability) asks once on
-    that device for the vault passphrase or the recovery code and is then added as an unlock method.
+    passkey that can unlock but is not yet an unlock method (for example a new passkey from another
+    ecosystem) asks once for the vault passphrase or the recovery code and is then added as one. On a
+    device whose passkey cannot unlock the vault at all, the person enters the vault passphrase or the
+    recovery code each time they unlock there, and no key is ever stored on that device.
     An account that uses only an authenticator app must set a vault passphrase before adding
     high-tier details or cards. Changing or removing the passphrase requires unlocking first. Account
     recovery after losing every passkey is: email code plus recovery code, which unlocks the vault,
@@ -280,8 +289,8 @@ features:
     agent collects the card details once within 5 minutes; the release, approved amount and merchant
     are recorded and counted against budgets.
   - >-
-    Currency — the person sets their account currency in Settings (default AUD), and every budget and
-    limit is in that currency; a card request in another currency is converted for the rule checks
+    Currency — the person sets their account currency in Settings (default AUD), and their own agent
+    budgets and limits are in that currency (household amounts use the household currency); a card request in another currency is converted for the rule checks
     using the latest daily reference exchange rate from a free official source, the approval shows
     both amounts and the rate's date, and if no rate is available the request is refused with a plain
     reason.
@@ -416,7 +425,9 @@ features:
     Warthog and any current platform gap, a plain FAQ on security (who can read what), approvals and
     data rights, and a privacy policy page stating what is stored, where (Australia), that high-tier
     details and cards are encrypted on the person's own devices so neither Warthog's servers nor its
-    staff can read them, that everything else is encrypted per person and no staff tool displays it,
+    staff can read them while stored, that they pass through Warthog only for the single release the
+    person approved and are discarded once collected or expired, that everything else is encrypted
+    with a key specific to the person and no staff tool displays it,
     and how to export or delete everything.
 
   # --- Operations readiness (no admin UI in V1) ---
@@ -465,7 +476,7 @@ design_ux:
     three steps, the compatible agents and Sign up. SIGN UP — enter name and email, type the 6-digit
     code from the email, create a passkey, then see the recovery code once and tick "I've saved it".
     HOME — a set-up checklist. Step "Get notified": on their PHONE the person opens Warthog, signs in
-    (their passkey synced from the laptop, or confirmed by scanning the laptop's code), installs the
+    (their passkey synced from the laptop, or by approving the phone's sign-in from the laptop), installs the
     app from the plain-reason prompt, allows notifications, adds and verifies a mobile number for
     backup texts, and sends a test push. Step "About
     you": the VAULT identity page — name, email, phone and postal address (low tier), then add a date
@@ -477,7 +488,8 @@ design_ux:
     AGENTS — choose Claude, follow the guided steps with the copy button, and in Claude add Warthog
     as a custom connector; Claude opens Warthog's CONSENT screen — name it "Claude", choose Standard,
     allow Calendar and Gmail (changes set to "ask me first"), allow low-tier identity and high-tier
-    requests, turn on card requests with a $200 monthly budget, allow shared memory, approve; the
+    requests, turn on card requests with a $200 monthly budget, turn on both reading shared memory and
+    sharing what Claude learns, approve; the
     AGENTS list shows Claude connected; repeat for ChatGPT. RULES — add "Ask me before any agent sends
     email to my manager" and a $150 per-purchase limit. SKILLS — write a "How I like updates" style
     profile and a "Travel booking" skill scoped to Claude and ChatGPT. Then, in Claude, the person
@@ -543,6 +555,12 @@ non_functional:
     or SMS that delivers a person their own one-time sign-in or verification code, or their own
     single-use approval link, to the address or number they verified.
   - >-
+    WHEN a high-tier identity detail or card number is released, THE SYSTEM SHALL keep only a keyed
+    one-way fingerprint of the value (never the value) for 90 days, and WHEN any later tool call's
+    parameters or results contain a value matching such a fingerprint, or any digit sequence that
+    passes the card-number checksum, THE SYSTEM SHALL replace it with a masked placeholder in the
+    activity entry and logs before they are written.
+  - >-
     WHEN a high-tier identity detail or card is released, THE SYSTEM SHALL allow the requesting agent
     to collect it exactly once within 5 minutes and SHALL discard it from server memory on collection
     or expiry, whichever comes first.
@@ -551,8 +569,9 @@ non_functional:
     change, export, account deletion), THE SYSTEM SHALL require a passkey or authenticator check
     completed within the previous 5 minutes.
   - >-
-    THE SYSTEM SHALL encrypt all data in transit and at rest, encrypt each person's low-tier vault
-    fields with a key specific to that person, and store high-tier details and card numbers only in a
+    THE SYSTEM SHALL encrypt all data in transit and at rest, encrypt each person's personal content
+    (low-tier vault fields, preferences, skills, memory, tasks, life-admin records, receipt files,
+    connector credentials and activity details) with a key specific to that person, and store high-tier details and card numbers only in a
     form that the person's own device encrypted and that Warthog's servers and staff cannot decrypt.
   - >-
     WHEN an agent's request is evaluated, THE SYSTEM SHALL check the agent's permissions and every
@@ -711,32 +730,3 @@ requires:
   offline: false
   ui_framework: react
   data: cloud
-
-accepted_concerns:
-  - concern: "The primary journey's \"Get notified\" step has the phone sign in \"confirmed by scanning the laptop's code\". The \"Sign in on another device\" feature describes the reverse: the new device's browser shows the code, and the device that holds the passkey scans it. In this journey the passkey lives on the laptop, and a laptop can't scan a phone's code in the standard passkey flow. So this journey step has no feature behind it. Someone has to decide between two options: add a separate \"approve this sign-in from a device you're already signed in on\" flow, or limit the journey to a synced passkey or the recovery code."
-    route: human
-    accepted_note: "accepted 2026-11-04"
-  - concern: "An agent can put a released high-tier detail (such as the licence number) or a card number into a later tool call, for example an email sent through Gmail. By then Warthog has deleted the value from server memory and keeps only the device-encrypted copy, so it has nothing to match against. Yet the non-functional rules forbid writing such a value into an activity entry, and activity entries are append-only, hash-chained, and can only be removed by deleting the whole account. The brief doesn't say how Warthog would recognise these values so it can remove them."
-    route: human
-    accepted_note: "accepted 2026-11-04"
-  - concern: "The vault page says that if both the passkeys and the recovery code are lost, \"those details must be entered again\", which implies the account itself survives. But the only account recovery described needs the recovery code. For an account with only passkeys, nothing says how the person gets back in, or states that the account is lost and they must sign up again."
-    route: human
-    accepted_note: "accepted 2026-11-04"
-  - concern: "\"Vault unlock methods\" says a passkey on \"a device without the capability\" asks once for the passphrase or recovery code \"and is then added as an unlock method\". A passkey on a device that can't unlock the vault can't hold a copy of the vault key, so as written this can't be built. Someone has to choose: either store a key on that device instead (so anyone holding that signed-in device can unlock it after a fresh check), or ask for the passphrase every time on that device."
-    route: human
-    accepted_note: "accepted 2026-11-04"
-  - concern: "The privacy page claims high-tier details and cards are encrypted on the person's own devices \"so neither Warthog's servers nor its staff can read them\". But the \"High-tier release\" and \"Card requests\" features hand the unlocked detail to Warthog's server, where it waits up to 5 minutes for the agent to collect it. The wording should say these details can't be read while stored, and pass through Warthog only for the one release the person approved."
-    route: artifact
-    accepted_note: "accepted 2026-11-04"
-  - concern: "The privacy page promises \"everything else is encrypted per person\". The non-functional rule requires a per-person key only for low-tier vault fields; everything else is only \"encrypted at rest\". The two need to match. The ledger records \"per-user encryption keys\" from the founder's source, which supports widening the rule to all personal content, but the user must confirm that direction."
-    route: artifact
-    accepted_note: "accepted 2026-11-04"
-  - concern: "The \"Currency\" feature says \"every budget and limit is in that currency\" (the person's account currency). The \"Household\" feature puts the household budget and each member's limit in the household currency, which can be different. The Currency sentence should cover only the person's own budgets and limits; the household-currency decision is already recorded in the ledger's final-check resolutions."
-    route: artifact
-    accepted_note: "accepted 2026-11-04"
-  - concern: "The consent screen and permissions page let a person turn on card requests along with \"its spending budget\", but no default is given and nothing says a budget is required. A builder can't tell whether card access with no budget set means unlimited, refused, or blocked until a budget is entered."
-    route: human
-    accepted_note: "accepted 2026-11-04"
-  - concern: "The journey's consent step says \"allow shared memory\", which merges two separate settings: reading shared memory, and sharing what this agent learns (sharing is always opt-in). Later steps need Claude's sharing turned on: MEMORY shows \"Saved by Claude · shared\" and ChatGPT reads Claude's moving memory. The step should say both settings are switched on."
-    route: artifact
-    accepted_note: "accepted 2026-11-04"

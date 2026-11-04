@@ -34,3 +34,4 @@
   value: "9 residual concern(s) accepted by the human at ratification"
   provenance: user-stated
   raw: "accepted 2026-11-04"
+- { fact: amendment-2026-11-04, value: "resolved the 9 accepted final-check concerns: sign-in approval from a signed-in device; keyed fingerprints + card-checksum masking of released values in later calls; 7-day email-only account reset (protected details erased); passphrase-each-time on devices that cannot unlock; privacy wording; per-person keys for all personal content; currency wording; card access requires a budget (default A$200/month); journey memory settings", provenance: derived-confirmed, raw: "launcher quality pass 2026-11-04 (accepted concerns)", confirmed: "2026-11-04: founder answered Approve all (Recommended) to the nine proposed resolutions" }
