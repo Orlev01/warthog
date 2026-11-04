@@ -9,15 +9,30 @@
 //     or link-local target — so a public-looking hostname cannot smuggle a request to
 //     an internal address), a 5-second timeout, a 64 KB size cap, and a 24-hour cache.
 //
+//   - `createGuardedCimdFetcher` — the composition root (used by `/oauth/register`) that
+//     wires `createCimdFetcher` to the connection-time guarded fetch from
+//     `../http/guarded-fetch`, so the host is re-resolved and classified at connection
+//     time (closing the DNS-rebinding gap), never the bare global fetch.
+//
 //   - `isAllowedRedirectUri` — the redirect-URI rule shared by CIMD and DCR: https on
 //     any host and port is allowed; http is allowed ONLY for the two named local hosts
 //     (`localhost`, `127.0.0.1`) on any port; everything else is refused.
 //
 // Outbound HTTP, DNS and the clock are injected as seams so the whole guard is unit-
 // tested without a real socket or resolver (conventions: external services sit behind
-// interfaces with fakes; tests never touch the network).
+// interfaces with fakes; tests never touch the network). The address classification (the
+// SSRF guard's core) lives in `../http/guarded-fetch` and is imported here, so a single
+// source of truth governs which addresses are refused for both the up-front lookup and
+// the connection-time guard.
 
-import type { Clock } from "../seams/clock";
+import { type Clock, systemClock } from "../seams/clock";
+import {
+  createGuardedFetch,
+  isBlockedAddress,
+  stripBrackets,
+  systemResolver,
+  type HostResolver,
+} from "../http/guarded-fetch";
 
 const TIMEOUT_MS = 5_000; // abort an in-flight CIMD fetch after 5 seconds
 const MAX_BYTES = 64 * 1024; // refuse a CIMD document larger than 64 KB
@@ -115,6 +130,27 @@ export function createCimdFetcher(
   };
 }
 
+// The composition root for the CIMD fetcher (used by `/oauth/register`): it wires
+// `createCimdFetcher` to the CONNECTION-TIME guarded fetch from `../http/guarded-fetch`
+// — an outbound HTTP that re-resolves the host at connection time — NEVER the bare
+// global fetch. The SAME resolver backs both the up-front classification (the `lookup`
+// seam) and the connection-time guard inside the guarded fetch, so a DNS-rebinding
+// client_id that classifies as public up front but connects to a private address is
+// refused before any byte is sent. https-only, the 5-second timeout and the 64 KB cap
+// are `createCimdFetcher` properties this factory composes unchanged. Production passes
+// no deps (real node:dns + the real guarded fetch); tests inject the DNS and clock seams.
+export function createGuardedCimdFetcher(
+  deps: { readonly clock?: Clock; readonly resolve?: HostResolver } = {},
+): (clientId: string) => Promise<CimdDocument> {
+  const clock = deps.clock ?? systemClock;
+  const resolve = deps.resolve ?? systemResolver;
+  return createCimdFetcher({
+    fetch: createGuardedFetch({ resolve }),
+    lookup: resolve,
+    clock,
+  });
+}
+
 // Read a response body, enforcing the byte cap as we go so an oversized (or lying)
 // response is refused without being buffered whole. A declared content-length over
 // the cap short-circuits before a single byte is read. When `signal` aborts (the
@@ -169,125 +205,6 @@ async function readBodyCapped(
     signal.removeEventListener("abort", onAbort);
   }
   return Buffer.concat(chunks).toString("utf8");
-}
-
-// --- Address classification (the SSRF guard's core) --------------------------------
-
-// True when an address string is a private, loopback, link-local or otherwise non-
-// public IP literal. A non-IP string (a hostname that must be resolved first) is not
-// classified here, so it returns false and the caller resolves it via DNS.
-function isBlockedAddress(raw: string): boolean {
-  const addr = stripBrackets(raw.trim());
-
-  const v4 = parseIPv4(addr);
-  if (v4) return isBlockedIPv4(v4);
-
-  if (addr.includes(":")) return isBlockedIPv6(addr);
-
-  return false;
-}
-
-// Strip surrounding brackets from an IPv6 literal (`[::1]` → `::1`) and any zone id.
-function stripBrackets(host: string): string {
-  let h = host;
-  if (h.startsWith("[") && h.endsWith("]")) h = h.slice(1, -1);
-  const zone = h.indexOf("%");
-  if (zone !== -1) h = h.slice(0, zone);
-  return h;
-}
-
-// Parse a dotted-quad IPv4 literal to its four octets, or null when not one.
-function parseIPv4(s: string): [number, number, number, number] | null {
-  const parts = s.split(".");
-  if (parts.length !== 4) return null;
-  const octets: number[] = [];
-  for (const part of parts) {
-    if (!/^\d{1,3}$/.test(part)) return null;
-    const n = Number(part);
-    if (n > 255) return null;
-    octets.push(n);
-  }
-  return octets as [number, number, number, number];
-}
-
-function isBlockedIPv4([a, b]: [number, number, number, number]): boolean {
-  if (a === 0) return true; // 0.0.0.0/8 "this host"
-  if (a === 10) return true; // 10.0.0.0/8 private
-  if (a === 127) return true; // 127.0.0.0/8 loopback
-  if (a === 169 && b === 254) return true; // 169.254.0.0/16 link-local
-  if (a === 172 && b >= 16 && b <= 31) return true; // 172.16.0.0/12 private
-  if (a === 192 && b === 168) return true; // 192.168.0.0/16 private
-  return false;
-}
-
-// Eight 16-bit groups — a fully-expanded IPv6 address.
-type Groups8 = [number, number, number, number, number, number, number, number];
-
-function isBlockedIPv6(s: string): boolean {
-  const g = expandIPv6(s);
-  if (!g) return false;
-
-  // An IPv4-mapped (::ffff:a.b.c.d) address is classified by its embedded IPv4.
-  const mappedV4 = g[0] === 0 && g[1] === 0 && g[2] === 0 && g[3] === 0 && g[4] === 0 && g[5] === 0xffff;
-  if (mappedV4) {
-    return isBlockedIPv4([g[6] >> 8, g[6] & 0xff, g[7] >> 8, g[7] & 0xff]);
-  }
-
-  if (g.every((part) => part === 0)) return true; // :: unspecified
-  if (g[0] === 0 && g[1] === 0 && g[2] === 0 && g[3] === 0 && g[4] === 0 && g[5] === 0 && g[6] === 0 && g[7] === 1) {
-    return true; // ::1 loopback
-  }
-
-  if ((g[0] & 0xfe00) === 0xfc00) return true; // fc00::/7 unique-local
-  if ((g[0] & 0xffc0) === 0xfe80) return true; // fe80::/10 link-local
-  return false;
-}
-
-// Expand an IPv6 literal (with optional `::` and optional trailing IPv4) to its eight
-// 16-bit groups, or null when it is not a well-formed IPv6 address.
-function expandIPv6(input: string): Groups8 | null {
-  let s = input.toLowerCase();
-
-  // A trailing dotted-quad (e.g. `::ffff:1.2.3.4`) becomes two hex groups.
-  const lastColon = s.lastIndexOf(":");
-  const tail = s.slice(lastColon + 1);
-  if (tail.includes(".")) {
-    const v4 = parseIPv4(tail);
-    if (!v4) return null;
-    const hi = ((v4[0] << 8) | v4[1]).toString(16);
-    const lo = ((v4[2] << 8) | v4[3]).toString(16);
-    s = `${s.slice(0, lastColon + 1)}${hi}:${lo}`;
-  }
-
-  const halves = s.split("::");
-  if (halves.length > 2) return null;
-
-  const toGroups = (part: string): number[] | null => {
-    if (part === "") return [];
-    const out: number[] = [];
-    for (const group of part.split(":")) {
-      if (!/^[0-9a-f]{1,4}$/.test(group)) return null;
-      out.push(parseInt(group, 16));
-    }
-    return out;
-  };
-
-  const head = toGroups(halves[0] ?? "");
-  if (!head) return null;
-
-  let groups: number[];
-  if (halves.length === 1) {
-    groups = head;
-  } else {
-    const rest = toGroups(halves[1] ?? "");
-    if (!rest) return null;
-    const fill = 8 - head.length - rest.length;
-    if (fill < 0) return null;
-    groups = [...head, ...new Array<number>(fill).fill(0), ...rest];
-  }
-
-  if (groups.length !== 8) return null;
-  return groups as Groups8;
 }
 
 // --- Redirect-URI rule (shared by CIMD and DCR) ------------------------------------
