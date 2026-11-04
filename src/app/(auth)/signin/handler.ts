@@ -45,6 +45,7 @@ import type { AuthenticationResponseJSON } from "@simplewebauthn/server";
 import { parseBody, HttpError } from "../../../server/http/validate";
 import {
   beginPasskeyAuthentication,
+  decoyPasskeyAuthenticationOptions,
   finishPasskeyAuthentication,
 } from "../../../server/auth/passkey";
 import { verifyTotp } from "../../../server/auth/totp";
@@ -154,8 +155,11 @@ export function createSigninHandler(deps: SigninHandlerDeps): SigninHandler {
     });
   }
 
-  // Passkey step 1 — resolve the account and issue a WebAuthn authentication
-  // challenge for it (carrying the configured RP ID). No session yet.
+  // Passkey step 1 — issue a WebAuthn authentication challenge (carrying the configured
+  // RP ID). A registered account gets a real challenge, persisted so finish can verify
+  // against it; an email with no account gets indistinguishable DECOY options (same
+  // shape, same RP ID, a fresh string challenge) with nothing persisted — so begin
+  // reveals nothing about whether the account exists (E04-S19). No session either way.
   async function beginPasskey(request: Request): Promise<Response> {
     if (!sameOrigin(request)) return json(403, { error: "forbidden" });
     try {
@@ -164,9 +168,9 @@ export function createSigninHandler(deps: SigninHandlerDeps): SigninHandler {
       });
 
       const user = await getUserByEmail(db, email);
-      if (!user) return json(401, { error: "unknown_account" });
-
-      const options = await beginPasskeyAuthentication(db, { userId: user.id }, { rpId });
+      const options = user
+        ? await beginPasskeyAuthentication(db, { userId: user.id }, { rpId })
+        : await decoyPasskeyAuthenticationOptions({ rpId });
       return json(200, { options });
     } catch (error) {
       return handleError(error);

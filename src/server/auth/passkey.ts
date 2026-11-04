@@ -157,24 +157,47 @@ export async function finishPasskeyRegistration(
   return { ok: true, credentialId: credential.id };
 }
 
-// Begin authentication: build the request options carrying the configured RP ID,
-// userVerification required and the PRF extension, and persist the authentication
-// challenge for `userId`. The credentials are discoverable (resident), so no
-// allowCredentials list is named — the presented credential is bound to the person in
-// finish.
-export async function beginPasskeyAuthentication(
-  db: Db,
-  params: { userId: string },
+// Build the authentication request options carrying the configured RP ID,
+// userVerification required and the PRF extension. The credentials are discoverable
+// (resident), so no allowCredentials list is named — the presented credential is bound
+// to the person in finish. Pure option generation with NO persistence: the single
+// source of the options' shape, shared by a real begin (which also stores the
+// challenge) and the decoy issued for an email with no account.
+async function authenticationOptions(
   deps: PasskeyDeps,
 ): Promise<PublicKeyCredentialRequestOptionsJSON> {
-  const options = await generateAuthenticationOptions({
+  return generateAuthenticationOptions({
     rpID: deps.rpId,
     userVerification: "required",
     // PRF requested on get (design §4.2, §5).
     extensions: { prf: {} },
   });
+}
+
+// Begin authentication: build the request options and persist the authentication
+// challenge for `userId`, so finish can verify the response against the challenge WE
+// sent.
+export async function beginPasskeyAuthentication(
+  db: Db,
+  params: { userId: string },
+  deps: PasskeyDeps,
+): Promise<PublicKeyCredentialRequestOptionsJSON> {
+  const options = await authenticationOptions(deps);
   await storeChallenge(db, params.userId, PURPOSE_AUTHENTICATION, options.challenge);
   return options;
+}
+
+// Decoy authentication options for an email with NO account: exactly the options a real
+// begin issues (same keys and types, the configured RP ID, a fresh string challenge),
+// but with NO challenge persisted — there is no account to bind one to. Handing these
+// back instead of a 401 closes the account-enumeration oracle at begin (E04-S19): an
+// unknown email is indistinguishable from a registered one. Because no challenge is
+// stored for the email, a later finish against it still fails exactly like a failed
+// assertion (no challenge / no account), re-closing the oracle at the finish step.
+export async function decoyPasskeyAuthenticationOptions(
+  deps: PasskeyDeps,
+): Promise<PublicKeyCredentialRequestOptionsJSON> {
+  return authenticationOptions(deps);
 }
 
 // Finish authentication: verify the assertion against the credential stored for
