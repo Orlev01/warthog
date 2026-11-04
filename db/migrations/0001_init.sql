@@ -1,0 +1,11 @@
+-- 0001_init — schema baseline.
+--
+-- This is the first migration the runner applies. Warthog's aggregate tables are
+-- each introduced by their own later migration (0002_jobs, 0003_users, …), so the
+-- initial migration deliberately claims no aggregate's schema — adding a table
+-- here would duplicate the migration that owns it.
+--
+-- The migration runner owns its own bookkeeping table (schema_migrations), so it
+-- is not created here. Primary keys across the schema use gen_random_uuid(),
+-- which is a PostgreSQL core built-in (no extension to enable), so there is
+-- nothing to set up at the baseline beyond recording this starting point.
