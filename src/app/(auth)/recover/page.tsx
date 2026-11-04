@@ -1,7 +1,11 @@
 import * as React from "react";
-import { ComingSoon } from "@/components/shell/coming-soon";
+import { RecoverView } from "@/components/auth/auth-views";
 
-// Operator placeholder so links to this route resolve; E04-S14 replaces it with the real screen.
+// Thin recover entry (task E04-S14): mounts the recovery view at its entry step —
+// the identify screen that proves it's the person with their email and a one-time
+// code (RecoverView steps identify → recovery-code → passkey → new-recovery). It
+// lives under (auth) and OUTSIDE any protected route group, so recovery stays
+// reachable with no existing session (a guard could never redirect it to itself).
 export default function RecoverYourAccountPage() {
-  return <ComingSoon title="Recover your account" />;
+  return <RecoverView step="identify" />;
 }
