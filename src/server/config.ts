@@ -39,6 +39,11 @@ export interface Config {
   readonly keyVault: KeyVaultConfig;
   readonly acs: AcsConfig;
   readonly vapid: VapidConfig;
+  // Keys the one-way HMAC of codes and link tokens (WARTHOG_HMAC_KEY, >= 32 bytes).
+  readonly hmacKey: Uint8Array;
+  // The local KeyWrapper's AES-256 KEK outside production (WARTHOG_DEV_KEK, exactly 32
+  // bytes); always undefined in production, which wraps data keys with Key Vault.
+  readonly devKek: Uint8Array | undefined;
 }
 
 // Read a required variable, failing loudly instead of inventing a default
@@ -69,6 +74,39 @@ function parseEmailList(raw: string | undefined): readonly string[] {
     .filter((entry) => entry.length > 0);
 }
 
+// Decode a base64 secret. Errors name the variable but never echo its value.
+const BASE64 = /^[A-Za-z0-9+/]+={0,2}$/;
+function decodeSecret(name: string, raw: string): Uint8Array {
+  if (!BASE64.test(raw) || raw.length % 4 !== 0) {
+    throw new Error(`Invalid configuration: ${name} must be base64`);
+  }
+  return new Uint8Array(Buffer.from(raw, "base64"));
+}
+
+// WARTHOG_HMAC_KEY: required in every environment, at least 32 bytes.
+function parseHmacKey(env: NodeJS.ProcessEnv): Uint8Array {
+  const key = decodeSecret("WARTHOG_HMAC_KEY", required(env, "WARTHOG_HMAC_KEY"));
+  if (key.length < 32) {
+    throw new Error("Invalid configuration: WARTHOG_HMAC_KEY must decode to at least 32 bytes");
+  }
+  return key;
+}
+
+// WARTHOG_DEV_KEK: refused in production; required and exactly 32 bytes everywhere else.
+function parseDevKek(env: NodeJS.ProcessEnv, nodeEnv: string): Uint8Array | undefined {
+  if (nodeEnv === "production") {
+    if (env.WARTHOG_DEV_KEK !== undefined && env.WARTHOG_DEV_KEK !== "") {
+      throw new Error("Refusing to start in production with WARTHOG_DEV_KEK set");
+    }
+    return undefined;
+  }
+  const kek = decodeSecret("WARTHOG_DEV_KEK", required(env, "WARTHOG_DEV_KEK"));
+  if (kek.length !== 32) {
+    throw new Error("Invalid configuration: WARTHOG_DEV_KEK must decode to exactly 32 bytes");
+  }
+  return kek;
+}
+
 // Production must never run with dev tools enabled or an in-process pglite database.
 function assertProductionSafe(config: Config): void {
   if (config.nodeEnv !== "production") return;
@@ -81,8 +119,9 @@ function assertProductionSafe(config: Config): void {
 }
 
 export function loadConfig(env: NodeJS.ProcessEnv = process.env): Config {
+  const nodeEnv = env.NODE_ENV ?? "development";
   const config: Config = {
-    nodeEnv: env.NODE_ENV ?? "development",
+    nodeEnv,
     publicBaseUrl: required(env, "PUBLIC_BASE_URL"),
     webauthnRpId: required(env, "WEBAUTHN_RP_ID"),
     databaseUrl: required(env, "DATABASE_URL"),
@@ -102,6 +141,8 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): Config {
       publicKey: env.VAPID_PUBLIC_KEY,
       privateKey: env.VAPID_PRIVATE_KEY,
     },
+    hmacKey: parseHmacKey(env),
+    devKek: parseDevKek(env, nodeEnv),
   };
   assertProductionSafe(config);
   return config;
