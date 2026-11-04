@@ -52,10 +52,18 @@ export async function decrypt(
     throw new Error(`unrecognised envelope version, expected ${VERSION}`);
   }
   const bytes = Buffer.from(envelope.slice(PREFIX.length), "base64");
+  // Reject any envelope too short to hold a nonce plus a full tag BEFORE reaching
+  // node:crypto, so a tampered/truncated row fails with a deliberate error rather
+  // than a low-level TypeError from an undersized IV or a non-16 tag.
+  if (bytes.length < NONCE_BYTES + TAG_BYTES) {
+    throw new Error("envelope too short to hold a nonce and a full tag");
+  }
   const nonce = bytes.subarray(0, NONCE_BYTES);
   const ciphertext = bytes.subarray(NONCE_BYTES, bytes.length - TAG_BYTES);
   const tag = bytes.subarray(bytes.length - TAG_BYTES);
-  const decipher = createDecipheriv(AES_GCM, dek, nonce);
+  // Pin the tag length to a full 16 bytes: Node accepts truncated GCM tags by
+  // default, so a shortened tag must never be allowed to verify.
+  const decipher = createDecipheriv(AES_GCM, dek, nonce, { authTagLength: TAG_BYTES });
   decipher.setAAD(associatedData(table, column, rowId));
   decipher.setAuthTag(tag);
   // final() throws if the tag does not match: wrong DEK, AAD mismatch or tamper.
