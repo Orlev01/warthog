@@ -292,6 +292,44 @@ test("a fetch that outlives the 5-second timeout rejects the call", async (t) =>
   await assert.rejects(p, "a timed-out fetch surfaces as a rejection");
 });
 
+// Operator fix (E06-S03 review veto): the 5-second budget bounds the WHOLE fetch, body
+// included. A hostile server can answer headers at once and then trickle (or never finish)
+// the body; the timeout must still end the call. This fake's body never completes and does
+// not react to the abort signal, so the guard itself must stop reading at the deadline.
+test("the 5-second timeout also bounds a body that never finishes", async (t) => {
+  t.mock.timers.enable({ apis: ["setTimeout"] });
+  let signal: AbortSignal | undefined;
+  const tricklingFetch: typeof fetch = async (_input, init) => {
+    signal = init?.signal ?? undefined;
+    const body = new ReadableStream<Uint8Array>({
+      start(controller) {
+        controller.enqueue(new TextEncoder().encode('{"client_id":'));
+        // ...and nothing more, ever.
+      },
+    });
+    return new Response(body, { headers: { "content-type": "application/json" } });
+  };
+  const resolve = createCimdFetcher({
+    fetch: tricklingFetch,
+    lookup: publicLookup,
+    clock: fixedClock(new Date()),
+  });
+
+  let outcome: "pending" | "resolved" | "rejected" = "pending";
+  const p = resolve("https://trickle.example/.well-known/oauth-client");
+  p.then(() => (outcome = "resolved"), () => (outcome = "rejected"));
+  await flushAsync(); // headers arrive; the guard is now reading the body
+
+  t.mock.timers.tick(4000);
+  await flushAsync();
+  assert.equal(outcome, "pending", "still reading at 4s — the budget is 5s");
+
+  t.mock.timers.tick(1100); // cross the 5s boundary
+  await flushAsync();
+  assert.equal(signal?.aborted, true, "the request is aborted at 5s even after headers arrived");
+  assert.equal(outcome, "rejected", "a body still unfinished at 5s rejects the call");
+});
+
 // --- AC1: caps at 64 KB -------------------------------------------------------------
 
 test("CIMD fetch rejects a document larger than the 64KB cap", async () => {

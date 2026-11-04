@@ -83,21 +83,22 @@ export function createCimdFetcher(
       throw new Error("CIMD host resolves to a private, loopback or link-local address");
     }
 
-    // Fetch, cancellable at the 5-second timeout via the AbortSignal we hand to fetch.
+    // Fetch AND read the body inside one 5-second budget. The timer stays armed until the
+    // body is fully read: a hostile server can send headers at once and then trickle the
+    // body, so clearing the timer when headers arrive would leave the read unbounded.
     const controller = new AbortController();
     const timer = setTimeout(() => controller.abort(), TIMEOUT_MS);
-    let response: Response;
+    let text: string;
     try {
-      response = await deps.fetch(clientId, {
+      const response = await deps.fetch(clientId, {
         signal: controller.signal,
         // Never follow a redirect to a new host — it would bypass the address guard.
         redirect: "error",
       });
+      text = await readBodyCapped(response, MAX_BYTES, controller.signal);
     } finally {
       clearTimeout(timer);
     }
-
-    const text = await readBodyCapped(response, MAX_BYTES);
     let doc: unknown;
     try {
       doc = JSON.parse(text);
@@ -116,8 +117,14 @@ export function createCimdFetcher(
 
 // Read a response body, enforcing the byte cap as we go so an oversized (or lying)
 // response is refused without being buffered whole. A declared content-length over
-// the cap short-circuits before a single byte is read.
-async function readBodyCapped(response: Response, maxBytes: number): Promise<string> {
+// the cap short-circuits before a single byte is read. When `signal` aborts (the
+// timeout), the reader is cancelled so a pending read settles and the call rejects —
+// without relying on the fetch implementation to error the body stream itself.
+async function readBodyCapped(
+  response: Response,
+  maxBytes: number,
+  signal: AbortSignal,
+): Promise<string> {
   const declared = response.headers.get("content-length");
   if (declared !== null && Number(declared) > maxBytes) {
     throw new Error("CIMD document exceeds the size cap");
@@ -132,19 +139,34 @@ async function readBodyCapped(response: Response, maxBytes: number): Promise<str
     return text;
   }
 
+  const timedOut = () => new Error("CIMD fetch timed out");
+  if (signal.aborted) {
+    await reader.cancel().catch(() => {});
+    throw timedOut();
+  }
+  const onAbort = () => {
+    reader.cancel().catch(() => {});
+  };
+  signal.addEventListener("abort", onAbort, { once: true });
+
   const chunks: Uint8Array[] = [];
   let total = 0;
-  for (;;) {
-    const { done, value } = await reader.read();
-    if (done) break;
-    if (value) {
-      total += value.byteLength;
-      if (total > maxBytes) {
-        await reader.cancel();
-        throw new Error("CIMD document exceeds the size cap");
+  try {
+    for (;;) {
+      const { done, value } = await reader.read();
+      if (signal.aborted) throw timedOut();
+      if (done) break;
+      if (value) {
+        total += value.byteLength;
+        if (total > maxBytes) {
+          await reader.cancel();
+          throw new Error("CIMD document exceeds the size cap");
+        }
+        chunks.push(value);
       }
-      chunks.push(value);
     }
+  } finally {
+    signal.removeEventListener("abort", onAbort);
   }
   return Buffer.concat(chunks).toString("utf8");
 }

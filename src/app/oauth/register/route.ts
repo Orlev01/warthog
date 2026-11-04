@@ -18,6 +18,11 @@ function getHandler(): Promise<(request: Request) => Promise<Response>> {
       const db = await createDb(loadConfig().databaseUrl);
       return createRegisterHandler({ db });
     })();
+    // A failed bring-up (e.g. a transient database error) must not brick the route until
+    // restart: forget the rejected promise so the next request retries.
+    handlerPromise.catch(() => {
+      handlerPromise = undefined;
+    });
   }
   return handlerPromise;
 }
