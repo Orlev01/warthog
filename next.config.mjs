@@ -35,6 +35,9 @@ const nextConfig = {
     "@azure/communication-sms",
   ],
   outputFileTracingExcludes: { "*": ["node_modules/@electric-sql/pglite/**"] },
+  // The migration runner reads db/migrations from the app root at first use (getServerDb), so the
+  // SQL files ship inside the standalone server.
+  outputFileTracingIncludes: { "/**": ["./db/migrations/*.sql"] },
   async headers() {
     return [{ source: "/:path*", headers: SECURITY_HEADERS }];
   },

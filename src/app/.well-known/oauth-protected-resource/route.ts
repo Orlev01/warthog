@@ -7,8 +7,8 @@
 import { loadConfig } from "../../../server/config";
 import { createProtectedResourceMetadataHandler } from "./handler";
 
-const handler = createProtectedResourceMetadataHandler({ config: loadConfig() });
-
+// Config is read per request, never at module load: `next build` evaluates route modules
+// while collecting page data, where runtime configuration is absent (or deliberately refused).
 export function GET(request: Request): Response {
-  return handler(request);
+  return createProtectedResourceMetadataHandler({ config: loadConfig() })(request);
 }

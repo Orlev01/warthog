@@ -216,3 +216,21 @@ test("the project's migrations (incl. the initial 0001) load and apply through t
     await db.close();
   }
 });
+
+// Operator fix (dev boot smoke test): `DATABASE_URL=pglite:./.data/dev` failed on a fresh
+// checkout because PGlite does not create missing parent directories, and its start-up error
+// escaped as an unhandled rejection instead of rejecting createDb.
+test("a pglite: data directory whose parents do not exist yet is created and usable", async () => {
+  const { mkdtemp, rm } = await import("node:fs/promises");
+  const { tmpdir } = await import("node:os");
+  const { join } = await import("node:path");
+  const root = await mkdtemp(join(tmpdir(), "wh-pglite-"));
+  const db = await createDb(`pglite:${join(root, "nested", "dev")}`);
+  try {
+    const result = await db.query("SELECT 1 AS one");
+    assert.equal(Number(result.rows[0]?.one), 1);
+  } finally {
+    await db.close();
+    await rm(root, { recursive: true, force: true });
+  }
+});

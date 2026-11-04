@@ -14,9 +14,8 @@
 
 import { PGlite } from "@electric-sql/pglite";
 import { Pool } from "pg";
-import { readFile, readdir } from "node:fs/promises";
+import { mkdir, readFile, readdir } from "node:fs/promises";
 import { join } from "node:path";
-import { fileURLToPath } from "node:url";
 
 // A single query result. Only the rows matter to callers; the driver-specific
 // metadata (row count, command tag, fields) is deliberately not surfaced.
@@ -38,9 +37,12 @@ export interface Migration {
   readonly sql: string;
 }
 
-// The project's migration files live at the repo root, not relative to cwd, so
-// resolve the default directory from this module's location.
-const DEFAULT_MIGRATIONS_DIR = fileURLToPath(new URL("../../../db/migrations", import.meta.url));
+// The project's migration files live in db/migrations at the app root. Resolve them from the
+// working directory, which is the app root for `npm test`, `next dev`, `next start` and the
+// standalone server (next.config traces db/migrations into it). Never resolve them from
+// import.meta.url: Next bundles server code into .next/, where a module-relative path points
+// nowhere, and its bundler treats `new URL(…, import.meta.url)` as an asset import and fails.
+const DEFAULT_MIGRATIONS_DIR = join(process.cwd(), "db", "migrations");
 
 // Select the driver from the URL scheme (never a hard-coded default). The scheme
 // — not the credentials — is all we ever report, so a rejected URL cannot leak a
@@ -58,10 +60,15 @@ export async function createDb(databaseUrl: string): Promise<Db> {
 }
 
 // An in-process PGlite database. `pglite:memory` is in-memory; any other target
-// (e.g. `pglite:./.data/dev`) is a native data directory.
-function createPgliteDb(target: string): Db {
-  const dataDir = target === "" || target === "memory" ? "memory://" : target;
+// (e.g. `pglite:./.data/dev`) is a native data directory, created (with its parents) if
+// missing — PGlite itself only creates the last segment. Start-up is awaited so a failure
+// rejects here instead of escaping as an unhandled rejection.
+async function createPgliteDb(target: string): Promise<Db> {
+  const memory = target === "" || target === "memory";
+  const dataDir = memory ? "memory://" : target;
+  if (!memory) await mkdir(dataDir, { recursive: true });
   const pglite = new PGlite(dataDir);
+  await pglite.waitReady;
   return {
     async query(text, values) {
       if (values && values.length > 0) {

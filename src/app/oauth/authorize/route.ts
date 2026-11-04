@@ -1,5 +1,5 @@
 // The App-Router entry for `/oauth/authorize`: thin by design. It reads config at the
-// composition root (`loadConfig()` — the one env seam), opens the db, resolves the
+// composition root (`loadConfig()` — the one env seam), takes the process-wide db (`getServerDb()`), resolves the
 // signed-in session from the `__Host-wh_session` cookie (→ `verifySession`), reads the
 // agent's query, and delegates the authorization rules and code issuance to the tested
 // `authorize` seam. A `route.ts` may export ONLY the known route keys, so the testable
@@ -14,7 +14,7 @@
 import { randomUUID } from "node:crypto";
 
 import { loadConfig } from "../../../server/config";
-import { createDb } from "../../../server/db/index";
+import { getServerDb } from "../../../server/db/server";
 import { verifySession } from "../../../server/auth/session";
 import { authorize } from "../../../server/oauth/authorize";
 import { systemClock } from "../../../server/seams/clock";
@@ -37,26 +37,22 @@ function readCookie(request: Request, name: string): string | null {
 
 export async function GET(request: Request): Promise<Response> {
   const config = loadConfig();
-  const db = await createDb(config.databaseUrl);
-  try {
-    const token = readCookie(request, SESSION_COOKIE);
-    const session = token ? await verifySession(db, token, { clock: systemClock }) : null;
-    const params = new URL(request.url).searchParams;
+  const db = await getServerDb();
+  const token = readCookie(request, SESSION_COOKIE);
+  const session = token ? await verifySession(db, token, { clock: systemClock }) : null;
+  const params = new URL(request.url).searchParams;
 
-    const result = await authorize(
-      { params, session, connectionId: randomUUID() },
-      { db, config, clock: systemClock, random: systemRandom },
-    );
+  const result = await authorize(
+    { params, session, connectionId: randomUUID() },
+    { db, config, clock: systemClock, random: systemRandom },
+  );
 
-    if (result.ok) {
-      return new Response(null, { status: 302, headers: { Location: result.redirectTo } });
-    }
-    // Not signed in → send the person to sign in; any other rejection is a bad request.
-    if (result.error === "login_required") {
-      return new Response(null, { status: 302, headers: { Location: "/signin" } });
-    }
-    return new Response(result.error, { status: 400 });
-  } finally {
-    await db.close();
+  if (result.ok) {
+    return new Response(null, { status: 302, headers: { Location: result.redirectTo } });
   }
+  // Not signed in → send the person to sign in; any other rejection is a bad request.
+  if (result.error === "login_required") {
+    return new Response(null, { status: 302, headers: { Location: "/signin" } });
+  }
+  return new Response(result.error, { status: 400 });
 }
