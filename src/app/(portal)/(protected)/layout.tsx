@@ -2,8 +2,7 @@ import * as React from "react";
 import { cookies } from "next/headers";
 import { redirect } from "next/navigation";
 
-import { loadConfig } from "@/server/config";
-import { createDb } from "@/server/db/index";
+import { getServerDb } from "@/server/db/server";
 import { requireSession } from "@/server/auth/guard";
 import { systemClock } from "@/server/seams/clock";
 
@@ -23,15 +22,11 @@ import { systemClock } from "@/server/seams/clock";
 const SESSION_COOKIE = "__Host-wh_session";
 
 export default async function ProtectedLayout({ children }: { children: React.ReactNode }) {
-  const config = loadConfig();
-  const db = await createDb(config.databaseUrl);
-  let result;
-  try {
-    const token = (await cookies()).get(SESSION_COOKIE)?.value ?? null;
-    result = await requireSession(token, { db, clock: systemClock });
-  } finally {
-    await db.close();
-  }
+  // Read the request first (marks the group dynamic, so next build never prerenders it), then
+  // take the process-wide database — never createDb per request, never close the shared one.
+  const token = (await cookies()).get(SESSION_COOKIE)?.value ?? null;
+  const db = await getServerDb();
+  const result = await requireSession(token, { db, clock: systemClock });
 
   // No valid session → send the person to sign in (outside this group, so no loop).
   if (!result.ok) redirect(result.redirectTo);
