@@ -1,0 +1,109 @@
+/*
+ * Warthog's single stylesheet — the one source of visual truth (see docs/design/technical-design.md §11).
+ * Neutral palette + ONE accent (indigo). Components use these tokens (via Tailwind utilities such as
+ * bg-surface, text-fg, border-line, bg-accent) — never raw hex values. Light and dark are both
+ * defined here; contrast pairs are chosen for WCAG 2.2 AA.
+ */
+@import "tailwindcss";
+
+@custom-variant dark (&:where([data-theme="dark"], [data-theme="dark"] *));
+
+:root {
+  --wh-bg: #fafafa;            /* zinc-50 */
+  --wh-surface: #ffffff;
+  --wh-surface-muted: #f4f4f5; /* zinc-100 */
+  --wh-fg: #18181b;            /* zinc-900 */
+  --wh-fg-muted: #52525b;      /* zinc-600: AA on white and zinc-50 */
+  --wh-line: #e4e4e7;          /* zinc-200 */
+  --wh-line-strong: #a1a1aa;   /* zinc-400 */
+  --wh-accent: #4338ca;        /* indigo-700: AA for text and as a fill behind white text */
+  --wh-accent-hover: #3730a3;  /* indigo-800 */
+  --wh-accent-fg: #ffffff;
+  --wh-accent-soft: #eef2ff;   /* indigo-50: subtle highlight backgrounds */
+  --wh-success: #15803d;       /* green-700 */
+  --wh-warning: #a16207;       /* yellow-700 */
+  --wh-danger: #b91c1c;        /* red-700 */
+  --wh-focus: #6366f1;         /* indigo-500 focus ring */
+  --wh-radius: 0.75rem;
+  color-scheme: light;
+}
+
+@media (prefers-color-scheme: dark) {
+  :root:not([data-theme="light"]) {
+    --wh-bg: #09090b;
+    --wh-surface: #18181b;
+    --wh-surface-muted: #27272a;
+    --wh-fg: #fafafa;
+    --wh-fg-muted: #a1a1aa;
+    --wh-line: #27272a;
+    --wh-line-strong: #52525b;
+    --wh-accent: #a5b4fc;      /* indigo-300: AA as text on zinc-900 */
+    --wh-accent-hover: #c7d2fe;
+    --wh-accent-fg: #1e1b4b;   /* indigo-950 text on the light accent fill */
+    --wh-accent-soft: #1e1b4b;
+    --wh-success: #4ade80;
+    --wh-warning: #facc15;
+    --wh-danger: #f87171;
+    --wh-focus: #818cf8;
+    color-scheme: dark;
+  }
+}
+
+:root[data-theme="dark"] {
+  --wh-bg: #09090b;
+  --wh-surface: #18181b;
+  --wh-surface-muted: #27272a;
+  --wh-fg: #fafafa;
+  --wh-fg-muted: #a1a1aa;
+  --wh-line: #27272a;
+  --wh-line-strong: #52525b;
+  --wh-accent: #a5b4fc;
+  --wh-accent-hover: #c7d2fe;
+  --wh-accent-fg: #1e1b4b;
+  --wh-accent-soft: #1e1b4b;
+  --wh-success: #4ade80;
+  --wh-warning: #facc15;
+  --wh-danger: #f87171;
+  --wh-focus: #818cf8;
+  color-scheme: dark;
+}
+
+@theme inline {
+  --color-bg: var(--wh-bg);
+  --color-surface: var(--wh-surface);
+  --color-surface-muted: var(--wh-surface-muted);
+  --color-fg: var(--wh-fg);
+  --color-fg-muted: var(--wh-fg-muted);
+  --color-line: var(--wh-line);
+  --color-line-strong: var(--wh-line-strong);
+  --color-accent: var(--wh-accent);
+  --color-accent-hover: var(--wh-accent-hover);
+  --color-accent-fg: var(--wh-accent-fg);
+  --color-accent-soft: var(--wh-accent-soft);
+  --color-success: var(--wh-success);
+  --color-warning: var(--wh-warning);
+  --color-danger: var(--wh-danger);
+  --color-focus: var(--wh-focus);
+  --radius-card: var(--wh-radius);
+  --font-sans: var(--font-inter), ui-sans-serif, system-ui, sans-serif;
+}
+
+html,
+body {
+  background: var(--wh-bg);
+  color: var(--wh-fg);
+}
+
+:focus-visible {
+  outline: 2px solid var(--wh-focus);
+  outline-offset: 2px;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  *,
+  *::before,
+  *::after {
+    animation-duration: 0.01ms !important;
+    transition-duration: 0.01ms !important;
+  }
+}

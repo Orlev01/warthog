@@ -1,0 +1,24 @@
+node_modules/
+.next/
+next-env.d.ts
+*.tsbuildinfo
+dist/
+/build/
+# Skynet's per-job state — must be ignored in full (OBS-4): the build loop needs it untracked.
+.agent/
+# Local data (PGlite dev database, local blob store)
+.data/
+.env
+.env.*
+!.env.example
+*.log
+.DS_Store
+# Terraform
+.terraform/
+*.tfstate
+*.tfstate.*
+*.tfvars
+!*.tfvars.example
+*.tfplan
+.claude/settings.local.json
+.claude/worktrees/

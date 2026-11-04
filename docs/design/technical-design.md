@@ -1,0 +1,277 @@
+# Warthog — technical design (v1)
+
+Status: proposed 2026-11-04 by the operator session, for founder review at the architecture gate.
+Inputs: `brief.yaml` (ratified + amended), `.agent/architecture.yaml` (Skynet: `nextjs-postgres`,
+monolith, public ingress), and the architecture research of 2026-11-04 (sources in §13).
+
+This document is the job-level design of record. The brief says WHAT; this says HOW. Build agents
+read it through `.agent/conventions.md` (which points here and repeats the hard rules).
+
+---
+
+## 1. Shape
+
+One Next.js (App Router, TypeScript, Node runtime) application, one container, **one replica** in v1.
+It serves:
+
+| Surface | Path | Who |
+|---|---|---|
+| Public pages (landing, help, compatibility, privacy) | `/`, `/help/*`, `/privacy` | anyone |
+| Sign-up / sign-in / recovery | `/signup`, `/signin`, `/recover`, `/device` | anyone |
+| Portal (everything a signed-in person manages) | `/home`, `/inbox`, `/activity`, `/agents`, `/connectors`, `/vault`, `/rules`, `/spending`, `/skills`, `/memory`, `/life-admin`, `/household`, `/settings` | signed-in person (session) |
+| Agent connector (MCP, Streamable HTTP) | `POST /mcp` | agents (Bearer token) |
+| OAuth 2.1 authorization server | `/.well-known/oauth-authorization-server`, `/.well-known/oauth-protected-resource[/mcp]`, `/oauth/authorize`, `/oauth/token`, `/oauth/register`, `/oauth/revoke`, `/oauth/client-metadata.json` | agents + people (consent) |
+| Background jobs | in-process scheduler started from `instrumentation.ts` | — |
+
+**Why one replica:** pending identity/card releases live only in process memory (brief: discarded
+from server memory on collection or expiry; never in the database or its backups), and per-agent rate
+limits are in-memory. One replica is also the cheapest. Scaling out later needs a shared ephemeral
+store; that is a later decision, not v1.
+
+Background jobs run in the same process. Every job is idempotent and claimed with
+`SELECT … FOR UPDATE SKIP LOCKED` from a `jobs` table, so a second replica would be safe for jobs
+(not for releases).
+
+## 2. Azure (australiaeast) — all on the founder's sponsorship credit unless noted
+
+| Need | Service | Notes |
+|---|---|---|
+| App runtime | Container Apps (Consumption), min=max 1 replica, 0.5 vCPU / 1 GiB | no private endpoints / planned-maintenance (those add ~US$73/mo) |
+| Images | Container Registry Basic | |
+| Data | PostgreSQL Flexible Server B1MS, v16, 32 GB, TLS required, Entra auth for admin | firewall to the Container Apps outbound IPs; PITR 7 days |
+| Key encryption key | Key Vault **Premium**, one RSA-HSM 3072 key `kek-user-data` | wraps every per-person data key; ~US$1/mo |
+| App secrets | Key Vault (same vault), referenced as Container Apps secrets | OAuth client secrets, VAPID private key, ACS connection strings, session/HMAC secrets |
+| Receipt files | Storage account (blob), private container, no public access, no shared keys | files are encrypted by the app before upload |
+| Email | Communication Services Email, custom domain `warthog.com.au` (SPF/DKIM at GoDaddy DNS) | from `no-reply@warthog.com.au` |
+| SMS | Communication Services SMS on a **separate pay-as-you-go subscription (founder-paid)** with an Australian mobile number | outside the auto-stop; its own budget alert |
+| Logs/metrics | Log Analytics (30-day retention, daily cap) + Application Insights | redaction before logging (§7) |
+| Cost guard | Budget on the subscription: alerts at 50/80/100% of the cap (default US$150/mo); at 100% an action group runs an automation that scales the app to 0 and stops Postgres | |
+| Identity | User-assigned managed identity for the app (Key Vault crypto user + secrets user, blob data contributor, ACS) | no keys in env except ACS SMS connection string from the PAYG sub |
+
+Infra is Terraform/OpenTofu in `infra/` (house pattern from earlier Azure jobs), applied by the
+founder. Domain: `warthog.com.au` stays at GoDaddy DNS; records are entered by hand from
+`terraform output dns_records`. Whether the app is at the apex or `app.` is a deploy-time choice;
+**the WebAuthn RP ID is `warthog.com.au` either way**.
+
+## 3. Libraries (job ADR — extends the bundle allowlist)
+
+The `nextjs-postgres` bundle allows `next, react, react-dom, pg, zod`. This job ADR adds only
+permissively licensed, free libraries, each for a need the brief states:
+
+| Package | Licence | Need |
+|---|---|---|
+| `@modelcontextprotocol/server`, `@modelcontextprotocol/client` (v2) | Apache-2.0 | Warthog is an MCP server (agents) and an MCP client (provider-hosted connectors) |
+| `zod` **v4** | MIT | required by the MCP SDK v2 (^4.2) — pin v4 everywhere |
+| `@simplewebauthn/server`, `@simplewebauthn/browser` | MIT | passkeys, incl. the PRF extension |
+| `oauth4webapi` | MIT | Warthog as OAuth client to Google/Microsoft/others (code+PKCE, refresh) |
+| `@pushforge/builder` | MIT | Web Push with VAPID (NOT `web-push`, which is MPL-2.0) |
+| `@azure/identity`, `@azure/keyvault-keys`, `@azure/storage-blob`, `@azure/communication-email` | MIT | Azure services (SMS is called through ACS's REST API with HMAC request signing — the SMS SDK pulls a vulnerable `uuid`) |
+| `qrcode` | MIT | authenticator-app enrolment QR |
+| `tailwindcss` v4, `@tailwindcss/postcss` | MIT | styling |
+| `lucide-react` | ISC | icons |
+| dev: `@electric-sql/pglite` | Apache-2.0 | in-process Postgres for tests and local dev (no Docker) |
+| dev: `tsx`, `typescript`, `@types/*` | MIT/Apache-2.0 | test runner + types |
+
+Nothing else at runtime without a new job ADR. Versions are pinned exactly (`package-lock.json`):
+Next **15.5** and TypeScript **5.9** (the house-proven line; Next 16 / TS 7 are a later, deliberate
+upgrade).
+
+Accepted audit/licence notes (2026-11-04): `postcss` inside Next 15 has a high advisory that needs
+attacker-controlled CSS — Next only processes our own CSS at build time, and the fix is Next 16;
+`sharp` (Next's optional image optimiser) ships `libvips` under LGPL-3.0, dynamically linked and
+unmodified — house precedent (Art to Heart). Explicitly rejected: Nango (Elastic License 2.0, not
+permissive), `web-push` (MPL-2.0), any paid card vault, any hosted auth/SMS/email vendor.
+
+## 4. Data protection
+
+### 4.1 Per-person data key (server side)
+- Each person has a random 256-bit **data key (DEK)**. It is stored only **wrapped** by the Key Vault
+  KEK (`RSA-OAEP-256`). Unwrapped DEKs are cached in process memory for at most 5 minutes.
+- Encrypted with the DEK (AES-256-GCM, random 96-bit nonce, `v1:` versioned envelope, the row id and
+  column name as associated data): every personal-content column — low-tier vault fields, preferences,
+  skills, memories, tasks, life-admin records, connector credentials (OAuth tokens, API keys), activity
+  details (redacted parameters, result summary, reason), dispute notes, household shared address,
+  receipt files (encrypted before upload).
+- Plaintext metadata (needed for filtering, never personal content): ids, timestamps, kinds, agent id,
+  connector id, tool name, outcome, amounts + currency + merchant name for card releases (needed for
+  budgets), card brand + last four.
+- **Account deletion = crypto-shredding:** deleting the wrapped DEK makes everything unreadable before
+  the confirmation is shown; a job deletes the rows within 24 hours.
+- Search over encrypted fields (memory, activity text) decrypts in the app within the already
+  filtered set (max 5,000 rows per query) — acceptable at v1 scale.
+
+### 4.2 Device-held vault (high-tier details and cards)
+- The browser creates a random 256-bit **vault key (VK)** at first use. High-tier values and card data
+  are encrypted **in the browser** with VK (AES-256-GCM, WebCrypto). The server stores ciphertext only.
+- VK is stored server-side only **wrapped**, once per unlock method (`vault_unlock_methods`):
+  - **Passkey PRF:** `get()` with `extensions.prf.eval.first = salt_v1` (a fixed per-person 32-byte salt),
+    `userVerification: "required"`; wrapping key = HKDF-SHA256(prf output, info `warthog/vault-wrap/v1`).
+    PRF counts as present only when `results.first` actually comes back. After `create()`, run a
+    `get()` immediately to obtain the PRF output (many authenticators only report `enabled` on create).
+  - **Vault passphrase:** PBKDF2-SHA256, 600,000 iterations, 16-byte salt (WebCrypto; no extra library).
+  - **Recovery code:** 128 random bits shown as 26 base32 characters in groups; wrapping key =
+    HKDF(code, info `warthog/vault-wrap/v1`). The server separately stores scrypt(HKDF(code, info
+    `warthog/recovery-auth/v1`)) to verify recovery sign-in without learning the wrapping key.
+- Unwrap is always verified (GCM tag). If a PRF-derived key fails to unwrap (Apple has acknowledged
+  occasional PRF output differences across devices), fall back to passphrase/recovery code — never
+  silently re-key.
+- Devices that cannot do PRF ask for the passphrase or recovery code each time; nothing is stored on
+  the device.
+- **Release:** on approval, after step-up, the browser decrypts the value with VK and posts it over TLS
+  to `/api/approvals/:id/release`. The server holds it in the in-memory **release store** (Map, TTL
+  5 minutes, single collection), never writes it to the database, logs or metrics, and records a
+  **fingerprint**: HMAC-SHA256(fingerprint key = HKDF(DEK, `warthog/fp/v1`), normalised value)
+  kept 90 days.
+
+### 4.3 Redaction (before anything is written to activity, logs or metrics)
+1. Known secret fields by name (passwords, tokens, `authorization`, `api_key`, codes …) → `[redacted]`.
+2. Any 13–19 digit sequence (spaces/dashes allowed) that passes the Luhn check → `[card ••••1234]`.
+3. Every alphanumeric token of length ≥ 5 (normalised) whose fingerprint matches a released value of
+   that person within 90 days → `[released value]`.
+4. Values longer than 2,000 characters are truncated with a marker.
+Redaction is a pure module with exhaustive unit tests; the activity writer and the logger both call it.
+
+## 5. People: sign-in and sessions
+- Email one-time codes: 6 digits, 10-minute expiry, stored as HMAC, max 5 attempts, then backoff.
+- Passkeys via SimpleWebAuthn, RP ID `warthog.com.au` (from config), `residentKey: required`,
+  `userVerification: required`, PRF requested on create and get.
+- Authenticator app fallback: RFC 6238 TOTP implemented with `node:crypto` (30 s, 6 digits, ±1 step).
+- Recovery code issued at sign-up (shown once, confirmed saved).
+- Sessions: random 256-bit id in a `__Host-wh_session` cookie (HttpOnly, Secure, SameSite=Lax), stored
+  hashed; 14-day idle / 30-day absolute expiry; `stepped_up_at` on the session; step-up valid 5 minutes.
+- New-device sign-in: email code + (synced passkey | hybrid QR | approval from a signed-in device via
+  push + step-up | recovery code).
+- Account reset when every passkey and the recovery code are lost: email code + 7-day wait, alerts on
+  every channel, cancellable from any signed-in device; erases VK-wrapped data and revokes agents and
+  connections.
+- Every server action and route checks `Origin` (Next's server-action check plus our own for routes),
+  and every member-scoped query is filtered by the session's user id (never an id from the client).
+
+## 6. Agents: OAuth 2.1 + MCP
+
+### 6.1 Authorization server (built in-house, test-first)
+- Metadata: RFC 8414 at `/.well-known/oauth-authorization-server`; RFC 9728 at
+  `/.well-known/oauth-protected-resource` and `/.well-known/oauth-protected-resource/mcp`
+  (resource = `https://<public host>/mcp`).
+- `/mcp` without a valid token → `401` with
+  `WWW-Authenticate: Bearer resource_metadata="…", scope="warthog"`.
+- Authorization code + **PKCE S256 only**; `resource` parameter required and must equal the MCP
+  resource; `iss` returned in the authorization response (RFC 9207); form-urlencoded token endpoint.
+- Client registration: **CIMD** (`client_id` is an https URL; fetch with SSRF guards — https only, no
+  private/loopback IPs, 5 s timeout, 64 KB cap, cache 24 h) advertised with
+  `client_id_metadata_document_supported: true` and `token_endpoint_auth_methods_supported: ["none"]`;
+  **DCR** (RFC 7591) at `/oauth/register` for clients that need it (Gemini, older Claude); redirect URIs
+  must be https, or `http://localhost` / `http://127.0.0.1` (any port) for local clients.
+- Known platform callbacks get a "Verified platform" badge on the consent screen (claude.ai,
+  claude.com, chatgpt.com, Google's oauth-redirect); any other redirect host is shown prominently.
+- Tokens are **opaque** random 256-bit values stored as SHA-256 hashes, bound to one agent
+  connection: access token 1 hour; refresh token 30 days, rotated on every use, reuse of an old
+  refresh token revokes the connection's tokens (`invalid_grant`).
+- **Disconnect** deletes the connection's tokens and access keys in the same transaction that marks it
+  disconnected → the next request is refused (brief NFR).
+- Per-agent **access keys** (`wh_ak_` + 32 random bytes base62) for platforms that only send static
+  Bearer headers (xAI API, Llama Stack): shown once, stored hashed, same connection model.
+
+### 6.2 MCP server
+- `@modelcontextprotocol/server` v2 `createMcpHandler` in `src/app/mcp/route.ts` (`runtime = "nodejs"`),
+  **stateless**; supports protocol 2026-07-28 and the 2025-11-25 `initialize` handshake; validates
+  `Origin` and the `Mcp-*` headers; `X-Accel-Buffering: no` on SSE; GET/DELETE → 405.
+- Tool list for an agent = Warthog core tools + the connector tools it is permitted, namespaced
+  `<connector>__<tool>`. If the total exceeds 80, connector tools collapse into `find_tools` +
+  `call_tool`.
+- Core tools: `get_context`, `get_skill`, `request_identity_detail`, `request_card`, `check_approval`
+  (`wait_seconds` ≤ 25, long-poll), `collect_release`, `remember`, `search_memory`, `list_tasks`,
+  `create_task`, `update_task`, `complete_task`, `list_records`, `save_record`, `update_record`,
+  `log_activity`. Every tool takes an optional `reason`.
+- **Pipeline for every call** (one function, `handleAgentCall`):
+  connection active → rate limit (in-memory sliding window, default 120/min) → permission check →
+  policy engine (§8) → `allow` | `ask` | `deny` → execute | hold | refuse → **activity entry written
+  before the response** (§9).
+- **Ask** = the call is held (`held_requests`, encrypted args), an approval is created, the agent gets
+  `{status:"pending_approval", approval_id, expires_at, message}`. On approval Warthog executes the
+  held call exactly once and the result is returned by `check_approval`. Denied / expired → refusal.
+  "Ask for more detail" → `check_approval` returns the question; the agent re-calls the tool with
+  `in_reply_to: approval_id` and its answer, creating a linked approval.
+
+## 7. Connector engine
+- **Catalogue = data files** `catalogue/connectors/<id>.yaml`: id, name, aliases, category, auth kind
+  (`oauth2 | api_key | basic | provider_mcp`), base URL, auth details (authorize/token URLs + scopes,
+  or header template like `Authorization: Bearer {key}`), key-entry instructions + provider docs
+  link, optional `verify` request, curated tool set, Google early-access flag. A schema-validated
+  loader rejects bad entries at boot. Adding an entry = a PR + deploy; no code change.
+- **Availability:** `oauth2` entries are connectable only when their client id/secret are configured;
+  `api_key`/`basic` always; `provider_mcp` always (Warthog registers itself via CIMD at
+  `/oauth/client-metadata.json`, falling back to DCR).
+- **Credentials** are stored DEK-encrypted per connection; a refresh job renews OAuth tokens before
+  expiry; failures mark the connection "Reconnect needed" and notify.
+- **General request tool** per connector: `<id>__request {method, path, query, body}`; `path` is relative
+  to the entry's base URL (host cannot be overridden → no SSRF); GET/HEAD = reads, anything else =
+  makes changes. Upstream timeout 20 s; responses truncated to 100 KB for agents.
+- **Provider-hosted tools:** `readOnlyHint: true` → reads; otherwise makes changes.
+- **Curated tools** (declared reads/changes + reversal + "sends a message" flag): Gmail (search, read,
+  draft, send), Google Calendar (list, create↔delete, update), Google Drive (search, read text,
+  metadata), Outlook mail (search, read, draft, send), Outlook calendar, OneDrive (search, read), plus
+  the provider-hosted servers' own tools (Notion, Linear, Todoist, Airtable, Dropbox, …).
+- **Google early access:** an allowlist of emails in config; Google connections expire 7 days after
+  consent (Testing mode) → reminder push 24 h before; status "Reconnect needed" after.
+- Launch target: ≥ 30 `provider_mcp` + ≥ 60 `api_key` entries + Google + Microsoft (+ any the founder
+  registers: Slack, GitHub, Spotify, Strava, …) ≥ 100 connectable.
+
+## 8. Policy engine (pure TypeScript, `src/domain/policy/`)
+`evaluate(call, ctx) → { decision: "allow" | "ask" | "deny", reason, rule_id? }`, deterministic, in order:
+1. agent connection active (else deny "disconnected");
+2. permission: connector granted, tool granted, tool class allowed (reads / makes changes setting);
+3. **never-allow** rules matching (action, condition) → deny;
+4. for card requests: card access on + budget set; per-purchase limit; agent budget for its period;
+   member limit + household budget (household currency); merchant allow/block lists; currency
+   converted with the latest daily ECB reference rate (Frankfurter, free) — no rate → deny;
+5. for high-tier and card requests → **always ask** (CVV / device unlock needs the person);
+6. **ask-first** rules matching, or the tool class default "ask me first" → ask;
+7. allow.
+Rule actions/conditions are exactly the brief's vocabulary. Each rule renders back to an English
+sentence by a pure function (`ruleSentence`).
+
+## 9. Activity record
+- `activity_entries(user_id, seq, occurred_at, kind, source ['warthog' | 'agent_reported'], agent_id,
+  connector_id, tool, outcome, amount, currency, merchant, payload_ct, prev_hash, entry_hash)`.
+- `entry_hash = SHA-256(prev_hash ‖ canonical(all other fields incl. payload_ct))`; `seq` contiguous
+  per user (unique index). The integrity check recomputes the chain over ciphertext (no decryption).
+- The application database role has **INSERT and SELECT only** on `activity_entries` and
+  `activity_disputes` (UPDATE/DELETE revoked); a separate `warthog_purge` role is used only by the
+  account-deletion job.
+- Disputes are a separate append-only table referencing the entry. Undo writes a new entry.
+
+## 10. Notifications
+- Web Push (VAPID via `@pushforge/builder`), service worker `public/sw.js`, every push shows a
+  notification (iOS requirement); payload ≤ 4 KB, contains the approval id only (no personal content).
+- Fallback job at `created_at + fallback_delay`: if the approval is still unopened → one SMS (ACS SMS)
+  and one email (ACS Email) with a single-use link token (256-bit, hashed, 10-minute expiry) that opens
+  the approval after sign-in.
+- All senders behind an interface with a dev/test **outbox** implementation (`/dev/outbox`, only when
+  `WARTHOG_DEV_TOOLS=1`, which the production build refuses to start with).
+
+## 11. Look and feel
+- Neutral palette (zinc greys, near-black, white), light + dark, **one accent: indigo** (`#4338CA`
+  light / `#A5B4FC` dark for text-on-dark; contrast-checked), semantic success/warning/danger.
+- Inter (via `next/font`), Tailwind v4, lucide icons, 8 px spacing grid, cards with subtle borders.
+- Mobile: bottom nav (Home, Inbox, Activity, Agents, More); desktop: left sidebar with the same IA.
+- PWA: `manifest.webmanifest` (standalone), icons, service worker; iOS install instructions sheet.
+
+## 12. Development and testing
+- `npm test` = `node --test` via `tsx` over `src/**/*.test.ts` (the loop's objective gate);
+  `npm run typecheck` = `tsc --noEmit`.
+- Tests and local dev use **PGlite** (`DATABASE_URL=pglite:memory` / `pglite:./.data/dev`); migrations are
+  plain SQL files in `db/migrations` applied by a tiny runner; the same runner applies to Azure Postgres.
+- Seams with fakes: clock, random, Key Vault (local AES KEK from env in dev/test), push, email, SMS,
+  upstream HTTP (connector calls), exchange rates.
+- A software passkey authenticator (test helper) produces real attestation/assertion objects incl. PRF,
+  so WebAuthn flows are tested end to end without a browser.
+- Dev tools (only with `WARTHOG_DEV_TOOLS=1`): outbox viewer, "sign in as" for the acceptance walk,
+  approve-from-outbox links, a fake MCP agent console that calls `/mcp` with a dev access key.
+
+## 13. Sources (research 2026-11-04)
+MCP spec 2026-07-28 (transports, authorization, client registration); Claude connector auth docs;
+OpenAI Apps SDK auth; Gemini custom apps OAuth; MCP TS SDK v2 docs; Nango licence + self-hosting docs;
+W3C WebAuthn L3 + MDN PRF; WebKit web push; Azure Container Apps billing, PostgreSQL pricing, Key Vault
+pricing, ACS SMS concepts/pricing/AU number rules, ACS email limits; Google OAuth testing-mode and
+restricted-scope rules; Microsoft consent policies.
