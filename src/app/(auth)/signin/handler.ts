@@ -1,0 +1,212 @@
+// E04-S11 — Sign-in server actions (the injectable seam the thin `actions.ts` /
+// route verbs wrap). A RETURNING person signs in with their second factor and
+// gets a session (brief `sign_in_model`; design §5).
+//
+// Sign-in offers two methods, each its own request:
+//   - the passkey (a single, phishing-resistant factor), a two-step round trip:
+//       beginPasskey  — { email } -> 200 { options }: resolve the account and
+//                       issue a WebAuthn authentication challenge for it.
+//       finishPasskey — { email, authenticationResponse } -> verify the assertion
+//                       against that person's registered passkey and the challenge
+//                       begin issued, then mint a session and redirect to /home.
+//   - email plus the authenticator-app code, where passkeys are unavailable:
+//       signInWithTotp — { email, totp } -> resolve the account, read its TOTP
+//                       secret and verify the 6-digit code, then mint a session
+//                       and redirect to /home.
+//
+// (The email ONE-TIME code is the separate NEW-DEVICE flow, not this
+// returning-device sign-in.)
+//
+// Why a sibling `handler.ts` (not `actions.ts` or `page.tsx`): a Next "use server"
+// actions file may export only async server actions, and a `page.tsx` entry file
+// only its framework fields — neither can carry an injectable, unit-testable
+// factory without breaking `next build`. So the testable seam lives here (the
+// convention's `createXHandler({ db })` pattern); the thin `actions.ts` / route
+// verbs wrap it.
+//
+// The TOTP secret has no persistence yet (the vault_unlock_methods store is built
+// later, and this task may touch only the sign-in action/handler), so the handler
+// reads it through the injected `totpSecrets` seam — the project's "external
+// services sit behind interfaces with fakes" rule. The real store is wired when it
+// exists.
+//
+// Security (each a reviewer veto): every method checks the request `Origin` against
+// the configured `publicOrigin` first — a missing or foreign Origin is 403 and
+// changes nothing, so a cross-site request mints no session (design §5). Every body
+// is validated at the boundary through the shared `parseBody` (malformed /
+// oversized / mis-shaped → a 4xx, never a 500; INV-102). Every query runs through
+// the `Db` seam bound as parameters, so a SQL-shaped value is looked up as data and
+// cannot alter a statement (INV-102). The RP ID is `deps.rpId` (from config), never
+// hard-coded.
+
+import { z } from "zod";
+import type { AuthenticationResponseJSON } from "@simplewebauthn/server";
+
+import { parseBody, HttpError } from "../../../server/http/validate";
+import {
+  beginPasskeyAuthentication,
+  finishPasskeyAuthentication,
+} from "../../../server/auth/passkey";
+import { verifyTotp } from "../../../server/auth/totp";
+import { createSession } from "../../../server/auth/session";
+import { getUserByEmail } from "../../../server/db/users";
+import type { Clock } from "../../../server/seams/clock";
+import type { Random } from "../../../server/seams/random";
+import type { Db } from "../../../server/db/index";
+
+// The injected store the handler reads a person's base32 TOTP secret through: a
+// userId with no enrolled secret returns null. The real store is wired when the
+// vault_unlock_methods persistence exists; the shape matches the test's fake.
+export interface TotpSecretStore {
+  get(userId: string): Promise<string | null>;
+}
+
+// The dependency bundle. Each method reads the subset it needs; the superset is
+// structurally assignable to each. `rpId` is the WebAuthn RP ID (from config, never
+// hard-coded); `publicOrigin` is the origin every method checks the request against.
+export interface SigninHandlerDeps {
+  readonly db: Db;
+  readonly clock: Clock;
+  readonly random: Random;
+  readonly rpId: string;
+  readonly publicOrigin: string;
+  readonly totpSecrets: TotpSecretStore;
+}
+
+// The three methods the thin `actions.ts` / route verbs call.
+export interface SigninHandler {
+  beginPasskey(request: Request): Promise<Response>;
+  finishPasskey(request: Request): Promise<Response>;
+  signInWithTotp(request: Request): Promise<Response>;
+}
+
+// A grossly oversized body is rejected before any work; a real sign-in body (even a
+// WebAuthn assertion) is far under this.
+const MAX_BODY_BYTES = 64 * 1024;
+
+// beginPasskey: the email naming the account to issue a challenge for.
+const beginPasskeySchema = z.object({
+  email: z.string().min(1).max(320),
+});
+
+// finishPasskey: the email + the WebAuthn assertion. The assertion is kept as-is
+// (z.unknown preserves the whole object) and handed to the real verifier, which
+// rejects anything malformed.
+const finishPasskeySchema = z.object({
+  email: z.string().min(1).max(320),
+  authenticationResponse: z.unknown(),
+});
+
+// signInWithTotp: the email + the authenticator-app code. `verifyTotp` itself
+// rejects anything that is not exactly six digits.
+const totpSchema = z.object({
+  email: z.string().min(1).max(320),
+  totp: z.string().min(1).max(100),
+});
+
+// A JSON response with a status.
+function json(status: number, body: unknown): Response {
+  return new Response(JSON.stringify(body), {
+    status,
+    headers: { "content-type": "application/json" },
+  });
+}
+
+export function createSigninHandler(deps: SigninHandlerDeps): SigninHandler {
+  const { db, clock, random, rpId, publicOrigin, totpSecrets } = deps;
+
+  // The request is same-origin only when it carries exactly the configured Origin. A
+  // missing header (`null`) or a foreign one cannot be proven same-origin → refused.
+  function sameOrigin(request: Request): boolean {
+    return request.headers.get("origin") === publicOrigin;
+  }
+
+  // Map the validation boundary's 4xx to a Response; let anything unexpected surface
+  // (a genuine server fault is a 5xx, not a handled 4xx).
+  function handleError(error: unknown): Response {
+    if (error instanceof HttpError) return json(error.status, { error: error.message });
+    throw error;
+  }
+
+  // Mint a session for the signed-in person and redirect to /home carrying the
+  // host-locked `__Host-wh_session` cookie (the signed-in home).
+  async function mintSession(userId: string): Promise<Response> {
+    const created = await createSession(db, userId, { clock, random });
+    return new Response(null, {
+      status: 303,
+      headers: { location: "/home", "set-cookie": created.cookie },
+    });
+  }
+
+  // Passkey step 1 — resolve the account and issue a WebAuthn authentication
+  // challenge for it (carrying the configured RP ID). No session yet.
+  async function beginPasskey(request: Request): Promise<Response> {
+    if (!sameOrigin(request)) return json(403, { error: "forbidden" });
+    try {
+      const { email } = await parseBody(beginPasskeySchema, request, {
+        maxBytes: MAX_BODY_BYTES,
+      });
+
+      const user = await getUserByEmail(db, email);
+      if (!user) return json(401, { error: "unknown_account" });
+
+      const options = await beginPasskeyAuthentication(db, { userId: user.id }, { rpId });
+      return json(200, { options });
+    } catch (error) {
+      return handleError(error);
+    }
+  }
+
+  // Passkey step 2 — verify the assertion against the claimed person's registered
+  // passkey and the challenge begin issued (the real verifier). An assertion that is
+  // not that person's own (or otherwise fails to verify) → 4xx and NO session. On
+  // success: mint a session and redirect to /home.
+  async function finishPasskey(request: Request): Promise<Response> {
+    if (!sameOrigin(request)) return json(403, { error: "forbidden" });
+    try {
+      const { email, authenticationResponse } = await parseBody(finishPasskeySchema, request, {
+        maxBytes: MAX_BODY_BYTES,
+      });
+
+      const user = await getUserByEmail(db, email);
+      if (!user) return json(401, { error: "invalid_assertion" });
+
+      const result = await finishPasskeyAuthentication(
+        db,
+        { userId: user.id, response: authenticationResponse as AuthenticationResponseJSON },
+        { rpId },
+      );
+      if (!result.ok) return json(401, { error: "invalid_assertion" });
+
+      return await mintSession(user.id);
+    } catch (error) {
+      return handleError(error);
+    }
+  }
+
+  // Email + authenticator code — resolve the account, read its TOTP secret (the
+  // injected seam) and verify the code for the current 30-second step (±1). A wrong /
+  // out-of-window code, or no enrolled secret → 4xx and NO session. On success: mint
+  // a session and redirect to /home.
+  async function signInWithTotp(request: Request): Promise<Response> {
+    if (!sameOrigin(request)) return json(403, { error: "forbidden" });
+    try {
+      const { email, totp } = await parseBody(totpSchema, request, {
+        maxBytes: MAX_BODY_BYTES,
+      });
+
+      const user = await getUserByEmail(db, email);
+      if (!user) return json(401, { error: "invalid_code" });
+
+      const secret = await totpSecrets.get(user.id);
+      if (!secret) return json(401, { error: "invalid_code" });
+      if (!verifyTotp(secret, totp, { clock })) return json(401, { error: "invalid_code" });
+
+      return await mintSession(user.id);
+    } catch (error) {
+      return handleError(error);
+    }
+  }
+
+  return { beginPasskey, finishPasskey, signInWithTotp };
+}
