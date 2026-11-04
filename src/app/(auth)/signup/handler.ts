@@ -43,7 +43,7 @@ import {
 import { isoBase64URL } from "@simplewebauthn/server/helpers";
 
 import { parseBody, HttpError } from "../../../server/http/validate";
-import { verifyEmailCode } from "../../../server/auth/email-code";
+import { issueEmailCode, verifyEmailCode } from "../../../server/auth/email-code";
 import { beginPasskeyRegistration } from "../../../server/auth/passkey";
 import { issueRecoveryCode } from "../../../server/auth/recovery";
 import { createSession } from "../../../server/auth/session";
@@ -68,8 +68,9 @@ export interface SignupHandlerDeps {
   readonly publicOrigin: string;
 }
 
-// The three steps the thin `actions.ts` / route verbs call.
+// The steps the thin `actions.ts` / route verbs call.
 export interface SignupHandler {
+  sendCode(request: Request): Promise<Response>;
   verifyEmail(request: Request): Promise<Response>;
   registerPasskey(request: Request): Promise<Response>;
   confirmSignup(request: Request): Promise<Response>;
@@ -105,18 +106,38 @@ const discardWrites: Db = {
 // WebAuthn registration response) is far under this.
 const MAX_BODY_BYTES = 64 * 1024;
 
+// sendCode: the email the first-factor code is issued to.
+const sendCodeSchema = z.object({
+  email: z.string().min(1).max(320),
+});
+
 // verifyEmail: the email + its one-time code.
 const verifyEmailSchema = z.object({
   email: z.string().min(1).max(320),
   code: z.string().min(1).max(100),
 });
 
-// registerPasskey: the pending handle + the WebAuthn attestation. The attestation is
-// kept as-is (z.unknown preserves the whole object, never stripping its fields) and
-// handed to the real verifier, which rejects anything malformed.
+// registerPasskey: the pending handle + the WebAuthn attestation. The attestation's
+// minimal shape (RegistrationResponseJSON: ids, type and the two attestation response
+// fields) is validated HERE, so the later cast narrows rather than bypasses
+// validation — a null or mis-shaped attestation is a 4xx at the boundary, never a
+// dereference crash inside the verifier (E04-S11). Unknown extra keys pass through
+// (looseObject) untouched for the real verifier, which still rejects anything that
+// does not verify.
+const registrationResponseSchema = z.looseObject({
+  id: z.string().min(1),
+  rawId: z.string().min(1),
+  type: z.literal("public-key"),
+  response: z.looseObject({
+    clientDataJSON: z.string().min(1),
+    attestationObject: z.string().min(1),
+  }),
+  clientExtensionResults: z.looseObject({}).optional(),
+});
+
 const registerPasskeySchema = z.object({
   signupId: z.string().min(1).max(200),
-  registrationResponse: z.unknown(),
+  registrationResponse: registrationResponseSchema,
 });
 
 // confirmSignup: the pending handle + the explicit "I have saved it" confirmation.
@@ -147,6 +168,25 @@ export function createSignupHandler(deps: SignupHandlerDeps): SignupHandler {
   function handleError(error: unknown): Response {
     if (error instanceof HttpError) return json(error.status, { error: error.message });
     throw error;
+  }
+
+  // Step 0 — send the first-factor code. The Origin gate runs first (a missing or
+  // foreign Origin is 403 and sends nothing). The body { email } is validated at the
+  // boundary, then the real issuer draws a code, stores only its HMAC and delivers it
+  // in one email (bound as parameters, INV-102). The SAME 200 is returned for any
+  // well-formed email, whether or not an account already exists — no existence leak.
+  async function sendCode(request: Request): Promise<Response> {
+    if (!sameOrigin(request)) return json(403, { error: "forbidden" });
+    try {
+      const { email } = await parseBody(sendCodeSchema, request, {
+        maxBytes: MAX_BODY_BYTES,
+      });
+
+      await issueEmailCode(db, email, { clock, random, hmacKey, emailSender });
+      return json(200, { ok: true });
+    } catch (error) {
+      return handleError(error);
+    }
   }
 
   // Step 1 — verify the email one-time code (the real verifier). A wrong / expired /
@@ -303,5 +343,5 @@ export function createSignupHandler(deps: SignupHandlerDeps): SignupHandler {
     }
   }
 
-  return { verifyEmail, registerPasskey, confirmSignup };
+  return { sendCode, verifyEmail, registerPasskey, confirmSignup };
 }
