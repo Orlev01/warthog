@@ -547,6 +547,38 @@ test("beginPasskey rejects malformed and mis-shaped input with a 4xx (never a 50
   }
 });
 
+// Operator fix (E04-S11 review veto): finishPasskey's assertion field must be shape-checked
+// at the boundary. `null` (and other non-object shapes) once slipped past the schema and was
+// dereferenced inside the verifier — an anonymous, uncontrolled 500.
+test("finishPasskey rejects a mis-shaped assertion with a 4xx and mints no session (never a 500)", async () => {
+  const db = await freshDb();
+  try {
+    const handler = makeHandler(db, totpSecretsOf(new Map()));
+    const auth = createAuthenticator();
+    const email = "misshaped-assertion@warthog.com.au";
+    const user = await freshUser(db, "misshaped-assertion");
+    await registerPasskeyFor(db, auth, user);
+
+    const badAssertions: unknown[] = [null, 42, "garbage", true, [], {}, { id: 5 }, { response: {} }];
+    for (const authenticationResponse of badAssertions) {
+      await beginPasskeyFor(handler, email); // a live challenge, so only the shape can fail
+      let status: number;
+      try {
+        status = (await handler.finishPasskey(signinRequest({ email, authenticationResponse }))).status;
+      } catch (error) {
+        assert.fail(`assertion ${JSON.stringify(authenticationResponse)} threw instead of a 4xx: ${error}`);
+      }
+      assert.ok(
+        status >= 400 && status < 500,
+        `assertion ${JSON.stringify(authenticationResponse)} must be a 4xx, got ${status}`,
+      );
+    }
+    assert.equal(await sessionCount(db), 0, "no mis-shaped assertion mints a session");
+  } finally {
+    await db.close();
+  }
+});
+
 test("signInWithTotp rejects an oversized body with a 4xx before doing any work", async () => {
   const db = await freshDb();
   try {

@@ -89,12 +89,28 @@ const beginPasskeySchema = z.object({
   email: z.string().min(1).max(320),
 });
 
-// finishPasskey: the email + the WebAuthn assertion. The assertion is kept as-is
-// (z.unknown preserves the whole object) and handed to the real verifier, which
-// rejects anything malformed.
+// finishPasskey: the email + the WebAuthn assertion. The assertion's minimal shape
+// (AuthenticationResponseJSON: ids, type and the three signed response fields) is
+// validated HERE, so the later cast narrows rather than bypasses validation — a
+// null or mis-shaped assertion is a 4xx at the boundary, never a dereference crash
+// inside the verifier. Unknown extra keys pass through (looseObject) untouched for
+// the real verifier, which still rejects anything that does not verify.
+const authenticationResponseSchema = z.looseObject({
+  id: z.string().min(1),
+  rawId: z.string().min(1),
+  type: z.literal("public-key"),
+  response: z.looseObject({
+    clientDataJSON: z.string().min(1),
+    authenticatorData: z.string().min(1),
+    signature: z.string().min(1),
+    userHandle: z.string().optional(),
+  }),
+  clientExtensionResults: z.looseObject({}).optional(),
+});
+
 const finishPasskeySchema = z.object({
   email: z.string().min(1).max(320),
-  authenticationResponse: z.unknown(),
+  authenticationResponse: authenticationResponseSchema,
 });
 
 // signInWithTotp: the email + the authenticator-app code. `verifyTotp` itself
