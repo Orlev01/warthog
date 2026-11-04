@@ -16,10 +16,29 @@
 // missing required variable is rejected (throws) rather than silently defaulted.
 import { test } from "node:test";
 import assert from "node:assert/strict";
+import { readFileSync } from "node:fs";
+import { Buffer } from "node:buffer";
 
 import { loadConfig } from "./config";
 
 type Env = Record<string, string | undefined>;
+
+// --- E04-S20 key material ---------------------------------------------------------
+// Server secrets are base64 env vars that loadConfig decodes to byte arrays:
+//   WARTHOG_HMAC_KEY — keys the one-way HMAC of codes/link tokens; >= 32 bytes,
+//     required in EVERY environment.
+//   WARTHOG_DEV_KEK  — the local KeyWrapper's AES-256 KEK; EXACTLY 32 bytes,
+//     required OUTSIDE production and refused IN production.
+// Generated in-test so the base64 is always well-formed; distinctive fill bytes let
+// us prove each decoded value flows from its env var rather than a hard-coded literal.
+const HMAC_KEY_BYTES = Buffer.alloc(48, 0x2a); // 48 bytes, comfortably over the 32-byte floor
+const HMAC_KEY_B64 = HMAC_KEY_BYTES.toString("base64");
+const HMAC_KEY_32_BYTES = Buffer.alloc(32, 0x3d); // exactly at the 32-byte floor
+const HMAC_KEY_32_B64 = HMAC_KEY_32_BYTES.toString("base64");
+const DEV_KEK_BYTES = Buffer.alloc(32, 0x5c); // exactly 32 bytes (AES-256)
+const DEV_KEK_B64 = DEV_KEK_BYTES.toString("base64");
+const DEV_KEK_ALT_BYTES = Buffer.alloc(32, 0x6d); // a second, distinct 32-byte KEK
+const DEV_KEK_ALT_B64 = DEV_KEK_ALT_BYTES.toString("base64");
 
 // A fully valid DEVELOPMENT environment: pglite + dev tools, which production forbids
 // but development allows. Carries only the vars dev needs (see .env.example).
@@ -29,6 +48,10 @@ const DEV_ENV: Env = {
   WEBAUTHN_RP_ID: "localhost",
   DATABASE_URL: "pglite:memory",
   WARTHOG_DEV_TOOLS: "1",
+  // The server secrets are now required even in dev (HMAC key everywhere, dev KEK
+  // outside production), so the base DEV fixture carries valid values.
+  WARTHOG_HMAC_KEY: HMAC_KEY_B64,
+  WARTHOG_DEV_KEK: DEV_KEK_B64,
 };
 
 // A fully valid PRODUCTION environment: a real postgres URL, no dev tools, and every
@@ -52,6 +75,9 @@ const PROD_ENV: Env = {
   VAPID_PUBLIC_KEY: "SENTINEL_VAPID_PUBLIC_e5",
   VAPID_PRIVATE_KEY: "SENTINEL_VAPID_PRIV_c3",
   GOOGLE_EARLY_ACCESS: "founder@warthog.com.au",
+  // The HMAC key is required in every environment. The dev KEK is deliberately
+  // ABSENT here: production refuses it, so a valid production fixture omits it.
+  WARTHOG_HMAC_KEY: HMAC_KEY_B64,
 };
 
 function load(env: Env) {
@@ -130,7 +156,15 @@ test("reads the KEY_VAULT, ACS and VAPID secret groups from the environment", ()
 });
 
 test("loadConfig() with no argument reads the real process.env", () => {
-  const touched = ["NODE_ENV", "PUBLIC_BASE_URL", "WEBAUTHN_RP_ID", "DATABASE_URL", "WARTHOG_DEV_TOOLS"];
+  const touched = [
+    "NODE_ENV",
+    "PUBLIC_BASE_URL",
+    "WEBAUTHN_RP_ID",
+    "DATABASE_URL",
+    "WARTHOG_DEV_TOOLS",
+    "WARTHOG_HMAC_KEY",
+    "WARTHOG_DEV_KEK",
+  ];
   const saved = new Map(touched.map((k) => [k, process.env[k]]));
   try {
     process.env.NODE_ENV = "development";
@@ -138,6 +172,8 @@ test("loadConfig() with no argument reads the real process.env", () => {
     process.env.WEBAUTHN_RP_ID = "localhost";
     process.env.DATABASE_URL = "pglite:memory";
     delete process.env.WARTHOG_DEV_TOOLS;
+    process.env.WARTHOG_HMAC_KEY = HMAC_KEY_B64;
+    process.env.WARTHOG_DEV_KEK = DEV_KEK_B64;
 
     const cfg = loadConfig();
     assert.equal(cfg.publicBaseUrl, "https://from-process-env.example");
@@ -216,4 +252,145 @@ test("a different PORT yields a different bound port (proves it is not a literal
   assert.equal(a, 8123);
   assert.equal(b, 9456);
   assert.notEqual(a, b);
+});
+
+// ===================================================================================
+// E04-S20 — server secrets: hmacKey (WARTHOG_HMAC_KEY) and devKek (WARTHOG_DEV_KEK)
+// ===================================================================================
+// Email codes and link tokens are HMAC'd with a server key, and the dev KeyWrapper
+// needs a KEK. loadConfig surfaces both as byte arrays decoded from base64 env vars
+// so a composition root can build the auth handlers. The HMAC key is required in
+// every environment (>= 32 bytes); the dev KEK is the local KEK (exactly 32 bytes),
+// required outside production and refused in production.
+
+// A base64 WARTHOG_HMAC_KEY that decodes to only 16 bytes — below the 32-byte floor.
+const SHORT_HMAC_B64 = Buffer.from("short-dev-hmac!!").toString("base64");
+// Base64 dev KEKs of the wrong length (31 and 33 bytes); only exactly 32 is accepted.
+const KEK_31_B64 = Buffer.alloc(31, 0xb7).toString("base64");
+const KEK_33_B64 = Buffer.alloc(33, 0xc9).toString("base64");
+
+// Assert a value is a byte array and return its bytes as plain numbers, so the
+// comparison works whether the builder returns a Buffer or a bare Uint8Array.
+function asBytes(view: unknown, label: string): number[] {
+  assert.ok(view instanceof Uint8Array, `${label} should be a byte array (Uint8Array/Buffer)`);
+  return [...(view as Uint8Array)];
+}
+
+// loadConfig must reject with an error that NAMES the variable but never echoes its
+// (secret) value. Omit `secretValue` for a missing-var case, where there is no value
+// to leak.
+function assertRejectedNaming(run: () => unknown, varName: string, secretValue?: string): void {
+  let thrown: unknown;
+  try {
+    run();
+  } catch (err) {
+    thrown = err;
+  }
+  assert.ok(thrown instanceof Error, `expected loadConfig to reject (${varName})`);
+  const message = (thrown as Error).message;
+  assert.ok(message.includes(varName), `error should name ${varName}; got: ${message}`);
+  if (secretValue !== undefined) {
+    assert.ok(
+      !message.includes(secretValue),
+      `error for ${varName} must not echo the secret value`,
+    );
+  }
+}
+
+// Parse a KEY=VALUE dotenv file (ignoring blank and #-comment lines) into an env record.
+function parseDotenv(text: string): Env {
+  const env: Env = {};
+  for (const rawLine of text.split("\n")) {
+    const line = rawLine.trim();
+    if (line === "" || line.startsWith("#")) continue;
+    const eq = line.indexOf("=");
+    if (eq === -1) continue;
+    env[line.slice(0, eq).trim()] = line.slice(eq + 1).trim();
+  }
+  return env;
+}
+
+// --- AC1: hmacKey and devKek are byte arrays decoded from base64 ------------------
+
+test("decodes WARTHOG_HMAC_KEY from base64 into the exact bytes", () => {
+  const cfg = load(DEV_ENV);
+  assert.deepEqual(asBytes(cfg.hmacKey, "hmacKey"), [...HMAC_KEY_BYTES]);
+});
+
+test("decodes WARTHOG_DEV_KEK from base64 into exactly 32 bytes", () => {
+  const cfg = load(DEV_ENV);
+  const kek = asBytes(cfg.devKek, "devKek");
+  assert.equal(kek.length, 32);
+  assert.deepEqual(kek, [...DEV_KEK_BYTES]);
+});
+
+test("accepts a WARTHOG_HMAC_KEY of exactly 32 bytes (the floor)", () => {
+  const cfg = load({ ...DEV_ENV, WARTHOG_HMAC_KEY: HMAC_KEY_32_B64 });
+  assert.deepEqual(asBytes(cfg.hmacKey, "hmacKey"), [...HMAC_KEY_32_BYTES]);
+});
+
+// --- AC1: malformed values are rejected, naming the variable but never its value ---
+
+test("rejects a missing WARTHOG_HMAC_KEY in development (required everywhere)", () => {
+  assertRejectedNaming(() => load(omit(DEV_ENV, "WARTHOG_HMAC_KEY")), "WARTHOG_HMAC_KEY");
+});
+
+test("rejects a missing WARTHOG_HMAC_KEY in production (required everywhere)", () => {
+  assertRejectedNaming(() => load(omit(PROD_ENV, "WARTHOG_HMAC_KEY")), "WARTHOG_HMAC_KEY");
+});
+
+test("rejects a WARTHOG_HMAC_KEY shorter than 32 bytes, naming the var but not its value", () => {
+  assertRejectedNaming(
+    () => load({ ...DEV_ENV, WARTHOG_HMAC_KEY: SHORT_HMAC_B64 }),
+    "WARTHOG_HMAC_KEY",
+    SHORT_HMAC_B64,
+  );
+});
+
+test("rejects a WARTHOG_DEV_KEK that is not exactly 32 bytes, naming the var but not its value", () => {
+  for (const bad of [KEK_31_B64, KEK_33_B64]) {
+    assertRejectedNaming(() => load({ ...DEV_ENV, WARTHOG_DEV_KEK: bad }), "WARTHOG_DEV_KEK", bad);
+  }
+});
+
+// --- AC2: production vs. development rules for the dev KEK -------------------------
+
+test("production refuses a set WARTHOG_DEV_KEK, naming the var but not its value", () => {
+  // DEV_KEK_B64 is a perfectly valid 32-byte KEK — the refusal is about production,
+  // not about the value being malformed.
+  assertRejectedNaming(
+    () => load({ ...PROD_ENV, WARTHOG_DEV_KEK: DEV_KEK_B64 }),
+    "WARTHOG_DEV_KEK",
+    DEV_KEK_B64,
+  );
+});
+
+test("outside production a missing WARTHOG_DEV_KEK is rejected", () => {
+  assertRejectedNaming(() => load(omit(DEV_ENV, "WARTHOG_DEV_KEK")), "WARTHOG_DEV_KEK");
+});
+
+test("a valid production config (hmac key, no dev KEK) does not throw and carries the hmac key", () => {
+  const cfg = load(PROD_ENV); // PROD_ENV sets WARTHOG_HMAC_KEY and deliberately omits the dev KEK
+  assert.deepEqual(asBytes(cfg.hmacKey, "hmacKey"), [...HMAC_KEY_BYTES]);
+  assert.equal(cfg.devKek, undefined, "production has no local dev KEK");
+});
+
+// --- AC3: .env.example carries dev-only values loadConfig accepts -----------------
+
+test("the .env.example values load as a valid dev config with correct key sizes", () => {
+  const text = readFileSync(new URL("../../.env.example", import.meta.url), "utf8");
+  const cfg = load(parseDotenv(text));
+  const hmac = asBytes(cfg.hmacKey, "hmacKey (.env.example)");
+  assert.ok(hmac.length >= 32, "example WARTHOG_HMAC_KEY must decode to at least 32 bytes");
+  const kek = asBytes(cfg.devKek, "devKek (.env.example)");
+  assert.equal(kek.length, 32, "example WARTHOG_DEV_KEK must decode to exactly 32 bytes");
+});
+
+// --- AC4 [obligation:secrets-from-env]: both come from env, never a hard-coded value
+
+test("hmacKey and devKek are read from env, not hard-coded constants", () => {
+  const a = load({ ...DEV_ENV, WARTHOG_HMAC_KEY: HMAC_KEY_B64, WARTHOG_DEV_KEK: DEV_KEK_B64 });
+  const b = load({ ...DEV_ENV, WARTHOG_HMAC_KEY: HMAC_KEY_32_B64, WARTHOG_DEV_KEK: DEV_KEK_ALT_B64 });
+  assert.notDeepEqual(asBytes(a.hmacKey, "hmacKey"), asBytes(b.hmacKey, "hmacKey"));
+  assert.notDeepEqual(asBytes(a.devKek, "devKek"), asBytes(b.devKek, "devKek"));
 });
