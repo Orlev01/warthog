@@ -1,0 +1,742 @@
+project: warthog
+project_name: "Warthog — a personal agent home: one place a person owns that every AI agent connects through, holding who they are, what each agent may touch and spend, and a record of everything agents do"
+
+# Source: the founder's "Beehive — Product Vision & Strategy" handoff brief (pasted 2026-11-04) plus
+# the founder's answers to the build agent's questions the same day (see ledger.yaml). The founder
+# renamed the product from Beehive to Warthog (the founder's own domain warthog.com.au) and dropped the
+# bee-inspired visual identity the same day. Where the
+# source brief's early lines say "later phase" or "v1 wedge", sections 5 (Sequence), 7e and 7f
+# override them: EVERYTHING in the vision ships in V1 except the admin portal and the V2 card-issuing
+# work named in out_of_scope.
+
+product:
+  what: >-
+    Warthog is a consumer web app (installable on a phone as an app) that acts as a person's home
+    base for all of their AI agents — Claude, ChatGPT, Gemini, Grok, Llama-based clients and any
+    other agent that can add a remote connector. The person signs up once and keeps, in one place:
+    the services they have connected (email, calendar, files and more than a hundred other services), their identity
+    details in two sensitivity tiers, their saved payment cards, their skills and communication
+    preferences, a shared memory their agents can draw on, the rules and budgets agents must obey,
+    and one activity feed of everything agents did through Warthog. Every agent connects to Warthog
+    itself as a single remote connector and receives its own revocable access with its own scoped
+    set of tools, identity fields, skills, memory access and spending limits. Anything risky —
+    a write action the person wants to check, a high-tier identity detail, a card for a purchase —
+    waits in one approval inbox and reaches the person's phone as a notification; nothing is
+    released until they approve inside the signed-in app. One switch disconnects an agent and kills
+    its access, its pending requests and its card access at once. Households can share an address,
+    a budget and per-person spending limits. Everything a person keeps in Warthog can be exported
+    and taken to another account or provider.
+  why: >-
+    Heavy AI users now run several agents and repeat the same set-up for each one: re-adding the
+    same integrations, re-typing card details, address, date of birth, licence and passport numbers,
+    and re-teaching preferences and style — with no single view of what each agent did, decided or
+    spent, and no clean way to cut an agent off when they stop using it. Warthog removes the repeated
+    set-up (connect once, every agent benefits), gives the person control (per-agent permissions,
+    rules, budgets, approvals, one-click revocation) and gives them trust (a complete, tamper-evident
+    record written by Warthog itself, not by the agents). It also keeps the person independent of
+    any single AI provider: their identity, skills and memory move with them. Positioning: "Your
+    agents work for you, on your terms, from your home."
+
+users:
+  who: >-
+    Individuals and households who use two or more AI agents in daily life — starting with the
+    founder (based in Sydney) and 10 to 20 of the founder's friends, open to public sign-up from day one.
+    They use Warthog mostly from their phone (approving requests on the go, glancing at the
+    activity feed) and from a laptop browser for set-up (connecting services, adding agents,
+    writing skills and rules). Within a household there is an owner who invites a partner or
+    family members; each member has their own account and agents.
+  technical_comfort: >-
+    Comfortable adding a "custom connector" URL to Claude or ChatGPT when shown exactly where to
+    click; not necessarily developers. They will not read protocol or security jargon, will abandon
+    a set-up step that does not say plainly what happens next, and expect phone-app quality on
+    mobile. They care a lot about where their card and passport details go and expect the app to
+    explain it in one or two plain sentences at the moment they add them.
+  accessibility: >-
+    WCAG 2.2 AA throughout: accessible colour contrast for every text and accent pairing in light and
+    dark mode (the accent colour is never used for text or icons where it falls below AA), full keyboard
+    operation, visible focus, screen-reader labels on every control and status, no information
+    carried by colour alone, respects reduced-motion and system dark mode, touch targets at least
+    44px on mobile.
+
+access:
+  who_can_use: >-
+    Anyone may sign up (public from day one; no invite gate). Each person sees and manages only
+    their own data. Household members see the shared household items (shared address, household
+    budget totals, member list) but never another member's vault, cards, memory, skills, agents or
+    activity details; the household owner additionally sets each member's spending limit. AI agents
+    are a separate class of caller: each connected agent acts only on behalf of the one person who
+    connected it, only within the permissions that person granted, and only until that person
+    disconnects it. Warthog staff have no portal access to user content in V1, and the data model
+    carries roles so a later, separate admin app can show operational numbers without any path to
+    vault contents.
+  sign_in_model: >-
+    Email sign-up with a one-time code sent to the address, then a required second factor: a passkey
+    (preferred) or an authenticator-app code where passkeys are unavailable; a one-time recovery code
+    is issued at sign-up. Sign-in uses the passkey (or email plus authenticator code). Sensitive
+    actions demand a fresh check — re-authentication within the last 5 minutes — before releasing a
+    high-tier identity detail, approving a card release, changing security settings, exporting data
+    or deleting the account. Agents authenticate separately: when a person adds Warthog to an agent,
+    the agent is sent to Warthog's own sign-in and consent screen, and on approval receives its own
+    credential that only that agent holds and that the person can revoke at any time; agents that
+    cannot complete that standard connector sign-in may instead be given a per-agent access key the
+    person copies from the portal, revocable in the same way.
+
+problem: >-
+  Each AI agent is its own silo. A person who uses Claude for writing, ChatGPT for research and
+  another agent for errands must (1) set up the same integrations three times, (2) hand each agent
+  their card, address, date of birth, licence and passport details — often by pasting them into a
+  chat, where they then live in that provider's history, (3) re-teach their preferences and style to
+  every agent, and (4) piece together what each agent actually did from three separate chat
+  histories, with no shared record of decisions or spending. There is no common place to say "this
+  agent may read my calendar but must ask before emailing my manager", no budget an agent cannot
+  exceed, and no single switch to cut an agent off when they stop using it. Putting all of that in
+  one place creates a honeypot, so the place itself must be built so that the most sensitive data is
+  unreadable even to its operators, and so that its record of agent activity is written by the
+  system and cannot be altered by agents.
+
+features:
+  # --- Accounts, security, devices ---
+  - >-
+    Public landing page with the positioning line, a plain three-step explanation (connect your
+    services once; connect your agents; approve and see everything), the agent compatibility list,
+    and Sign up / Sign in.
+  - >-
+    Sign-up and sign-in — email with a one-time code, mandatory passkey (or authenticator-app code
+    as the fallback), a one-time recovery code shown once and confirmed as saved; security settings
+    page to add and remove passkeys, view and sign out other sessions, regenerate the recovery code,
+    and see recent sign-ins; email alerts for a new passkey, a new agent connection and a sign-in
+    from a new device.
+  - >-
+    Step-up check — a fresh passkey or authenticator confirmation (within the last 5 minutes) before
+    any high-tier identity release, card release approval, security change, export or account
+    deletion.
+  - >-
+    Sign in on another device — on a new phone or computer the person enters their email, types the
+    one-time code, then confirms with an existing passkey (a passkey synced through their Apple or
+    Google account works directly; a passkey held on another device works by scanning the code the
+    browser shows) or with the recovery code; the new device may then create its own passkey; the
+    security page lists every device and passkey and can remove any of them.
+  - >-
+    Installable phone app experience — the portal installs to the home screen on iOS and Android,
+    asks for notification permission at the right moment with a plain reason, and keeps a mobile
+    bottom navigation (Home, Inbox, Activity, Agents, More).
+  - >-
+    Notification settings — register one or more devices for push notifications, add and verify a
+    mobile number for the SMS fallback (6-digit code), choose whether fallback messages also go by
+    email (on by default), send a test notification, and choose the fallback delay (default 2 minutes,
+    adjustable 1 to 30 minutes).
+
+  # --- Home ---
+  - >-
+    Home dashboard — a set-up checklist for new users (install the app and turn on notifications,
+    fill in basic identity, connect a first service, connect a first agent, add a card), then for
+    everyone: pending approvals count with a link to the inbox, the latest activity across all
+    agents, each agent's status (connected, last active, spend in its current budget period against its budget), and
+    upcoming life-admin reminders.
+
+  # --- Connector hub ---
+  - >-
+    Connector catalogue — searchable and browsable by category (email, calendar, files, messaging,
+    notes and tasks, finance, travel, shopping, developer, smart home and so on), with at least 100
+    connectable services at launch — at least 30 provider-hosted connectors that allow automatic
+    registration, at least 60 services connected with the person's own API key or personal token,
+    and the services whose provider apps the founder has registered (at minimum Google and
+    Microsoft) — growing by adding catalogue entries (data files in Warthog's configuration, deployed
+    by the operator) without code changes; apart from the Google early-access entries described
+    below, the catalogue shows only connectors a person can actually connect right now,
+    and offers "Request a connector" for anything missing — the person names the service, the request
+    is recorded (and emailed to the operator address set in configuration), the person sees their
+    requests with a "Requested" status, and is notified when a catalogue entry is added whose name or
+    listed aliases match the requested service name (ignoring case and punctuation); unmatched
+    requests stay "Requested".
+  - >-
+    Connect a service once — connect through the provider's own sign-in page, an API-key form with
+    plain instructions on where to find the key, or a provider-hosted connector; shows connected
+    services with status (connected, needs reconnecting, error), the account connected, the date
+    connected, the tools it offers (each marked as "reads" or "makes changes") and which agents may
+    use it; disconnect in one click, which immediately removes every agent's access to that service
+    and revokes Warthog's stored access to the provider where the provider allows it.
+  - >-
+    Google early access — Google connectors (Gmail, Google Calendar, Google Drive) are available only
+    to people whose email the founder has placed on the early-access list in Warthog's configuration
+    (Google allows up to 100 while Warthog is unverified); everyone else sees them marked "Early
+    access — ask to join", which files a connector request; the connect screen warns that Google will
+    show an "unverified app" notice and that Google requires reconnecting every 7 days, and Warthog
+    sends a push reminder 24 hours before each connection lapses (and marks it "Reconnect needed"
+    when it does).
+  - >-
+    Connector health — expired or failing connections are detected, shown on the connector and on
+    Home as "Reconnect needed", and notified to the person; agents calling a broken connector get a
+    plain error saying the person must reconnect.
+  - >-
+    Curated tools for the most-used services (at minimum email, calendar and files for both Google and
+    Microsoft accounts, plus at least ten other popular services such as messaging, notes, task
+    and developer tools) with clear names, descriptions and a declared reversal where one exists
+    (for example "create calendar event" is undone by "delete that event"); every other connected
+    service is reachable through a general authenticated-request tool scoped to that service, where
+    any request that is not a plain read counts as "makes changes" and so follows the agent's
+    change-making setting (by default "ask me first"); a tool offered by a provider-hosted connector
+    counts as "reads" only when the provider itself marks it read-only, and otherwise as "makes
+    changes".
+
+  # --- Agents and permissions ---
+  - >-
+    Connect an agent — a guided page per platform (Claude, ChatGPT, Gemini, Grok, Llama-based
+    clients, and "Other") showing exactly where to paste Warthog's connector address, with a copy
+    button, screenshots-free step text, and a note of any platform gap (for example a platform that
+    does not yet support remote connectors) and what to do instead. For a platform that cannot use the
+    standard connector sign-in, "Create an access key" lets the person name the agent and set its
+    permissions on the same screen as the consent screen, shows the key once with a copy button, and
+    lets them revoke or replace the key later from that agent's page.
+  - >-
+    Agent consent screen — when an agent starts connecting, the signed-in person names it, sees what
+    it is asking for, picks a starting permission set, adjusts it, and approves or refuses; approval
+    issues that agent's own credential. Minimal: the low-tier profile, skills and preferences, and
+    logging activity — nothing else. Standard: Minimal plus reading shared memory, saving its own
+    memories (kept to itself unless sharing is switched on), tasks and life-admin records, and the
+    read tools of the services the person ticks on the consent screen, with those services'
+    change-making tools set to "ask me first"; no high-tier requests and no card requests. Custom:
+    starts from Standard with every setting open to change. High-tier requests, card requests and
+    sharing what it learns are always opt-in.
+  - >-
+    Per-agent permissions page — for each agent: which connected services and which of their tools
+    it may use (read tools and change-making tools listed separately; change-making tools default to
+    "ask me first"), which identity fields it may read without asking (low tier only) and whether it
+    may request high-tier fields, whether it may request a card and its spending budget, which skills
+    it receives, whether it may read shared memory, whether what it learns is shared with other
+    agents, its own rules, and (under Advanced) its request limit (default 120 requests per minute);
+    changes take effect on the agent's next request.
+  - >-
+    One-click disconnect — disconnecting an agent (after a single confirm) revokes its credential so
+    its very next request is refused, denies all its pending approvals, cancels any released-but-not-yet
+    collected identity detail or card, and records the disconnection in the activity feed; a
+    disconnected agent can be reconnected only by going through consent again.
+  - >-
+    Agent list — every agent with platform, status, connected date, last active time, request count
+    and spend in its current budget period, with filters to its activity.
+
+  # --- What agents can do through Warthog (the agent-facing tool set) ---
+  - >-
+    Agent context on connect — any agent can fetch, in one call, everything it has been granted: the
+    person's low-tier profile, the skills and preferences scoped to it, the rules it must follow, the
+    shared memory it may read, its open tasks, and Warthog's own house skill telling it how to work
+    with Warthog (fetch context first, give a reason with each request, wait for approvals, log
+    high-level outcomes with the activity tool).
+  - >-
+    Agent tool set — fetch context; fetch a skill's full text by its title; call any permitted
+    connector tool; request a high-tier identity detail with a stated purpose; request a card for a
+    purchase with amount, currency, merchant and description; check on or wait for a pending
+    approval; save and search memory; create, read, update and complete tasks; create, read and
+    update life-admin records; and log an activity summary (optionally with an amount, currency
+    and the card release it relates to). Every tool accepts an optional plain reason that is shown to
+    the person and stored with the activity entry.
+
+  # --- Identity vault ---
+  - >-
+    Identity vault — structured fields in two tiers. Low tier (default for name, preferred name,
+    email addresses, phone numbers, postal addresses with a "moving on" date, language, time zone and
+    general preferences) is shared freely with agents the person has allowed. High tier (default for
+    date of birth, passport, driver licence, car registration and any custom field the person marks
+    high) is released only after the person approves each individual request with a step-up check.
+    The person can raise any field to high tier, may choose not to store high-tier data at all, and
+    sees, at the moment of adding a high-tier detail, a plain explanation of how it is protected and
+    who can ever read it.
+  - >-
+    Device-held protection for high-tier data and cards — high-tier identity details and card numbers
+    are encrypted on the person's own device before they leave it, using a key only the person's
+    passkey (or, where a device cannot do that, a vault passphrase they choose) can unlock; Warthog
+    stores only the encrypted form; the one-time recovery code can restore access if every passkey is
+    lost; the vault page explains that if both the passkeys and the recovery code are lost, those
+    details must be entered again.
+  - >-
+    Vault unlock methods — all protected details sit under one vault key that is sealed separately for
+    each unlock method the person has: every passkey whose device can unlock the vault, an optional
+    vault passphrase, and the recovery code. A synced passkey unlocks on every device it syncs to. A
+    passkey that cannot unlock (different ecosystem, or a device without the capability) asks once on
+    that device for the vault passphrase or the recovery code and is then added as an unlock method.
+    An account that uses only an authenticator app must set a vault passphrase before adding
+    high-tier details or cards. Changing or removing the passphrase requires unlocking first. Account
+    recovery after losing every passkey is: email code plus recovery code, which unlocks the vault,
+    then the person creates a new passkey and receives a new recovery code that replaces the old one.
+  - >-
+    High-tier release — when an agent requests a high-tier detail, the person sees which agent, which
+    field and the stated purpose; on approval with a step-up check their device unlocks the detail and
+    hands it to Warthog for that one request; the agent collects it once within 5 minutes, after which
+    it is gone from Warthog's working memory; the release is recorded in the activity feed without the
+    value.
+
+  # --- Payments (V1: the person's own saved cards) ---
+  - >-
+    Saved cards — add one or more cards (cardholder name, number, expiry, a nickname, a billing
+    address from the vault); the security code is never stored; the interface only ever shows the
+    brand and last four digits; cards are protected by the device-held protection above; remove a
+    card at any time.
+  - >-
+    Card requests — an agent requests a card for a specific purchase; Warthog first checks the
+    person's rules in code (agent has card access, per-purchase limit, the agent's budget for the
+    period, the household budget and the member's limit where applicable, allowed and blocked
+    merchants) and refuses with a plain reason if any fails; otherwise it creates an approval; on
+    approval the person passes the step-up check, chooses the card, and types the security code; the
+    agent collects the card details once within 5 minutes; the release, approved amount and merchant
+    are recorded and counted against budgets.
+  - >-
+    Currency — the person sets their account currency in Settings (default AUD), and every budget and
+    limit is in that currency; a card request in another currency is converted for the rule checks
+    using the latest daily reference exchange rate from a free official source, the approval shows
+    both amounts and the rate's date, and if no rate is available the request is refused with a plain
+    reason.
+  - >-
+    Spending view (a Spending page under More, plus each agent's page) — each person sees full detail
+    of their own agents' spending; for other household members, both the owner and members see
+    only each member's totals against their limit and the household total, never merchants or
+    entries. For the person's own agents: approved card releases this period against
+    budget, with each release's merchant, approved amount, any amount the agent later reported (clearly
+    labelled as reported by the agent), and links to the activity entries.
+
+  # --- Rules and approvals ---
+  - >-
+    Rules — the person creates plain-language rules from templates: "Ask me before <agent or any
+    agent> uses <action> [when <condition>]" and "Never allow <agent or any agent> to use <action>
+    [when <condition>]", where <action> is one of: a specific tool, any tool of a chosen service, any
+    change-making tool, any tool that sends a message (email, chat or post, as declared by curated
+    tools), a card request, or a high-tier identity request; and <condition> is one of: recipient
+    equals an address or belongs to a domain (for actions with recipients), amount is over a figure
+    (for actions with an amount), or merchant is or is not in a list (for card requests); plus spending rules (per-purchase limit, budget per agent
+    per day/week/month, allowed merchants only, blocked merchants), and an approval expiry time;
+    each rule reads back as a sentence (for example "Ask me before any agent sends email to
+    manager@example.com"), can apply to all agents or chosen agents, can be paused or deleted, and
+    is enforced by Warthog in code on every request.
+  - >-
+    Approval inbox — one list of every pending request from every agent, newest first, each showing
+    the agent, what it wants to do in plain words, the exact details (recipient, amount, field
+    requested), the agent's stated reason, the rule that triggered it and time left before expiry;
+    actions Approve, Deny, or Ask for more detail (the person types a question that is returned to
+    the agent, which may resubmit); history of past decisions including expired ones.
+  - >-
+    Agents wait safely — a request that needs approval is held by Warthog, not executed; the agent is
+    told it is pending and can check or wait on it; when approved, Warthog itself carries out the held
+    request exactly as it was approved and returns the result to the agent; when denied or expired
+    the agent receives a refusal; approvals expire after the configured time (default 15 minutes,
+    adjustable from 2 minutes to 24 hours) and an expired request is denied.
+  - >-
+    Approval notifications — a push notification to every registered device within seconds, opening
+    straight onto that approval; if no device is registered, or the approval has not been opened
+    within the fallback delay, an SMS to the verified number (when the person has one) and an email
+    (unless switched off), each with a single-use link that expires after 10 minutes and still
+    requires the person to be signed in; approving never happens by replying to a message.
+
+  # --- Activity feed and audit log ---
+  - >-
+    Activity feed — one timeline across all agents of everything that passed through Warthog: every
+    tool call (agent, service, tool, parameters with secrets removed, result summary, outcome, time,
+    the agent's reason), every approval request and decision, every identity and card release, every
+    agent and service connection, disconnection and permission change, every rule change and every
+    memory write; agent-reported summaries appear in the same timeline clearly labelled "Reported by
+    <agent>" and are never counted as fact; filter by agent, service, kind, outcome and date range;
+    search; open any entry for full detail; a "Check integrity" control re-verifies the person's
+    whole record and shows either "All <n> entries intact" or the first entry that fails, with the
+    advice to export the record and contact the operator; the daily automatic check notifies the
+    person (push and email) only if their record fails, and records the pass/fail count, without
+    content, in the operational metrics.
+  - >-
+    Dispute and undo — any activity entry can be marked as disputed with a note (the original entry
+    is never changed; the dispute is added alongside it); an action whose tool declares a reversal
+    offers Undo, which Warthog carries out as a new, recorded action.
+
+  # --- Skills, preferences and shared memory ---
+  - >-
+    Skills and preferences — a communication-style and preferences profile (tone, length, language,
+    units, time zone, how they like to be taught or briefed) plus named skills (instruction
+    documents) for specific tasks, each with a title and a one-line "use this when" description; each
+    skill applies to all agents or to chosen agents; an agent's context lists the titles and "use this
+    when" lines of the skills it may use and the agent fetches a skill's full text by title when it
+    decides the skill is relevant (Warthog never guesses relevance); Warthog's own house skill is
+    always included in full; skills can be created, edited, duplicated, switched off and deleted.
+  - >-
+    Shared memory — agents with permission save memories (a short fact or note with the source agent
+    and time); each memory is either kept to the agent that saved it or shared with the person's
+    other permitted agents, following that agent's sharing setting unless the person changes it per
+    memory; the person can view, search, edit, re-scope and delete any memory, and add their own.
+
+  # --- Life admin (the use cases made concrete) ---
+  - >-
+    Life-admin records that agents and the person both maintain — subscriptions (service, cost,
+    billing cycle, next renewal, how to cancel, status), receipts and warranties (merchant, item,
+    date, amount, return-by date, warranty end date, attached receipt file), and renewals and
+    appointments (what, due date, where); reminders by notification before due dates (default 14 days
+    and 1 day before, adjustable per record); agents add and update records through Warthog.
+  - >-
+    Tasks and hand-offs — a task list the person and agents share: the person (or an agent) creates
+    a task, assigns it to a specific agent or "any agent", and agents pick it up, add notes and mark
+    it done; this is how one agent's findings (for example travel options) are handed to another
+    agent to act on (for example booking within the rules).
+  - >-
+    Moving-house helper — when the person adds a new address with a moving date, agent context
+    returns both the current address and the upcoming one with its date until the moving date, when
+    the upcoming address automatically becomes the current one; household members sharing the
+    address see the same; and Warthog creates a moving checklist of places that hold the old address
+    (connected services, the subscriptions and renewal records on file, and the person's own
+    additions), each of which can be ticked off or handed to an agent as a task.
+
+  # --- Household sharing ---
+  - >-
+    Household — the owner invites members by email (invite link valid 7 days, up to 8 members);
+    members join with their own accounts; the household can share an address record that the owner or
+    any member can edit, every change notifying all members, and each member chooses either "use the
+    household address" (their vault postal address then follows the shared one, including any
+    upcoming address and moving date) or to keep their own; the owner sets a shared monthly household budget and a monthly limit per member, both in the
+    household currency (set by the owner, defaulting to the owner's account currency), which card
+    requests from any member's agents count against (converted with the same daily reference rate
+    when a request is in another currency, showing both amounts); members see the shared address, the member
+    list and household budget totals, never each other's private data; the owner can remove a member,
+    a member can leave, the owner can transfer ownership to another member (who must accept), and the
+    owner can close the household (shared items are removed; every member keeps their own account).
+
+  # --- Portability and data rights ---
+  - >-
+    Export and portability — export everything in an open, documented format (profile, skills and
+    preferences as readable text files, memory, rules, tasks, life-admin records, connection list
+    without secrets, the full activity history); device-protected details are exported only after a
+    step-up check and are decrypted on the device; skills export as plain text documents usable with
+    other AI tools. Import (Settings, offered to new accounts) reads a Warthog export into a fresh
+    account: it restores profile, preferences, skills, memory, rules, tasks and life-admin records;
+    device-protected details in the export are re-protected on the importing device during import;
+    the old activity history is kept as a separate read-only "Imported history" archive, clearly
+    labelled, outside Warthog's own activity record; agents and service connections are not imported
+    and must be connected again.
+  - >-
+    Delete account — after a step-up check and typed confirmation, revoke every agent and service
+    connection immediately, make all stored personal data unreadable at once, remove it fully within
+    24 hours, and send a confirmation email; household ownership transfers or the household is
+    closed first.
+
+  # --- Help and compatibility ---
+  - >-
+    Agent compatibility and help pages — public pages explaining, per agent platform, how to connect
+    Warthog and any current platform gap, a plain FAQ on security (who can read what), approvals and
+    data rights, and a privacy policy page stating what is stored, where (Australia), that high-tier
+    details and cards are encrypted on the person's own devices so neither Warthog's servers nor its
+    staff can read them, that everything else is encrypted per person and no staff tool displays it,
+    and how to export or delete everything.
+
+  # --- Operations readiness (no admin UI in V1) ---
+  - >-
+    Operational metrics recorded from day one without any personal content — user and household
+    counts, active agents by platform, connector connection counts and failure rates by connector,
+    request volumes and latencies, approval response times, errors — and roles and permissions in the
+    data model so a separate admin app can be added later without access to vault contents.
+
+design_ux:
+  feel: >-
+    Sleek, modern and polished in the style of the best security products (password managers,
+    identity and banking portals) — calm, trustworthy and quick, never a developer console. A neutral
+    palette (near-black, white and cool greys, in light and dark mode) with just a touch of colour: a
+    single accent colour reserved for the one primary action on a screen, focus states, key status
+    highlights and the logo, plus standard semantic colours for success, warning and danger used
+    sparingly. Crisp typography, subtle depth, no themed mascot imagery. Generous spacing, large touch targets, one clear primary action per screen, status shown with words and
+    icons not colour alone. Sensitive moments (adding a passport or card, approving a payment) slow
+    down slightly with a short, plain explanation of what will happen. Everything reachable in two
+    taps from the mobile bottom navigation (Home, Inbox, Activity, Agents, More — where More holds
+    Vault, Connectors, Rules & budgets, Spending, Skills, Memory, Life admin with its Tasks tab,
+    Household, Settings with Security and Preferences, and Help); desktop uses a left sidebar with the
+    same sections.
+  key_flows: >-
+    (1) Sign up, create a passkey, save the recovery code, install the app and allow notifications.
+    (2) Fill in identity basics and add a card. (3) Connect a service from the catalogue. (4) Connect
+    Claude (and ChatGPT) to Warthog through the guided page and the consent screen, setting
+    permissions. (5) An agent works through Warthog: fetches context, uses a permitted tool, triggers
+    an "ask me first" rule, requests a card and a high-tier detail; the person approves each on their
+    phone from a push notification. (6) Review everything in the activity feed, dispute an entry and
+    undo a reversible action. (7) Write a skill and see two agents use it; see a memory one agent
+    saved used by another. (8) Change address with a moving date and work the moving checklist with
+    an agent. (9) Invite a household member and set limits. (10) Disconnect an agent in one click and
+    watch its next request fail. (11) Export data; delete account.
+  copy: >-
+    Plain Australian English, warm and direct, in the person's voice ("Your agents", "Ask me first").
+    Never show protocol or security jargon on primary screens (no "OAuth", "MCP", "token", "PRF",
+    "encryption key" outside the agent set-up guides, the security FAQ, and a connector's own
+    key-entry instructions where the provider itself calls the credential a token); say what happens instead
+    ("Claude will be able to read your calendar. It will ask you before adding events."). Approvals
+    read as one sentence a person can decide on in a glance ("Claude wants to pay $42.00 to BoxCo for
+    moving boxes"). Money always with currency (default AUD, configurable). Agent-reported content is
+    always prefixed "Reported by <agent>". No jokes or wordplay in security or payment copy.
+  primary_journey: >-
+    LANDING — the public page shows "Your agents work for you, on your terms, from your home", the
+    three steps, the compatible agents and Sign up. SIGN UP — enter name and email, type the 6-digit
+    code from the email, create a passkey, then see the recovery code once and tick "I've saved it".
+    HOME — a set-up checklist. Step "Get notified": on their PHONE the person opens Warthog, signs in
+    (their passkey synced from the laptop, or confirmed by scanning the laptop's code), installs the
+    app from the plain-reason prompt, allows notifications, adds and verifies a mobile number for
+    backup texts, and sends a test push. Step "About
+    you": the VAULT identity page — name, email, phone and postal address (low tier), then add a date
+    of birth and driver licence, seeing the plain explanation that these stay locked to the person's
+    device and are only released when they approve. Step "Add a card": VAULT cards — add a card, see
+    only brand and last four afterwards, with the note that the security code is never stored. Step
+    "Connect a service": CONNECTORS — search the catalogue, connect Google Calendar and Gmail through
+    Google's own sign-in, see each tool marked "reads" or "makes changes". Step "Connect an agent":
+    AGENTS — choose Claude, follow the guided steps with the copy button, and in Claude add Warthog
+    as a custom connector; Claude opens Warthog's CONSENT screen — name it "Claude", choose Standard,
+    allow Calendar and Gmail (changes set to "ask me first"), allow low-tier identity and high-tier
+    requests, turn on card requests with a $200 monthly budget, allow shared memory, approve; the
+    AGENTS list shows Claude connected; repeat for ChatGPT. RULES — add "Ask me before any agent sends
+    email to my manager" and a $150 per-purchase limit. SKILLS — write a "How I like updates" style
+    profile and a "Travel booking" skill scoped to Claude and ChatGPT. Then, in Claude, the person
+    says they are moving. VAULT — the person changes the postal address with a moving date of
+    1 December; Warthog shows the MOVING CHECKLIST in LIFE ADMIN, and they hand "Update address with
+    my energy provider" and "Book removalists" to Claude as tasks. Claude fetches its context (new
+    address, skills, rules, tasks), saves a memory ("Moving on 1 Dec to the new address"), and asks to
+    add a calendar event for moving day — the person's phone buzzes: the APPROVAL screen reads
+    "Claude wants to add 'Moving day' to your calendar on 1 Dec", with its reason; Approve; Warthog
+    adds the event and Claude gets the result. Claude asks for the licence number for a removalist
+    booking form — APPROVAL with step-up — approve, and Claude collects it once. Claude requests a
+    card for $42 at BoxCo — rules pass — APPROVAL with step-up, choose the card, type the security
+    code, approve; Claude collects the card once, completes the purchase, logs "Paid $42 to BoxCo for
+    moving boxes" and saves the receipt with its return-by date to LIFE ADMIN. A second request to
+    email the manager is caught by the rule and the person chooses "Ask for more detail"; one
+    request they ignore expires and is denied. In ChatGPT the person asks for subscriptions to cancel
+    before the move; ChatGPT reads the shared moving memory, uses Gmail through Warthog, and saves
+    three subscriptions to LIFE ADMIN. ACTIVITY — the person sees every step from both agents in one
+    timeline (Warthog-recorded tool calls, approvals, releases with no secret values, and the
+    "Reported by Claude" entry), filters to Claude, opens the calendar entry and taps Undo, and
+    disputes one entry with a note. INBOX — the decided, expired and "more detail" requests are in
+    history. MEMORY — the moving memory shows "Saved by Claude · shared".
+    LIFE ADMIN TASKS — the two moving tasks show Claude's notes, one marked done. SPENDING — Claude's
+    $42 against its $200 monthly budget, with the approved amount counted and Claude's reported amount
+    shown with its label. HOUSEHOLD — invite their
+    partner, share the address, set a $500 household budget and a $200 member limit; the partner's
+    view shows the updated shared address. SETTINGS SECURITY — both devices and passkeys, active sessions and recent sign-ins are listed, and
+    they sign out an old session. AGENTS — open ChatGPT, tap Disconnect, confirm; ChatGPT's
+    next request is refused and ACTIVITY shows the disconnection. SETTINGS — export all data and see
+    the download; the delete-account flow is shown with its confirmations.
+
+non_functional:
+  - >-
+    WHEN an approval request is created, THE SYSTEM SHALL send a push notification to every device
+    the person has registered within 5 seconds.
+  - >-
+    IF a person has no registered push device, or an approval has not been opened within the
+    person's fallback delay (default 2 minutes), THEN THE SYSTEM SHALL send one SMS to the verified
+    mobile number (if any) and one email (unless the person switched email fallback off), each
+    containing a single-use link that expires after 10 minutes and opens the approval only after
+    sign-in.
+  - >-
+    WHEN an approval reaches its expiry time without a decision, THE SYSTEM SHALL mark it expired,
+    treat it as denied, and return a denial to the waiting agent on its next check.
+  - >-
+    WHEN a person disconnects an agent, THE SYSTEM SHALL refuse every subsequent request carrying
+    that agent's credential, deny its pending approvals and cancel its uncollected releases before
+    the disconnect confirmation is shown to the person.
+  - >-
+    WHEN an agent calls a tool and the call is not refused by the agent's rate limit, THE SYSTEM
+    SHALL record an activity entry (agent, service, tool, parameters with secrets removed, outcome,
+    result summary, time, reason) before returning the result to the agent.
+  - >-
+    THE SYSTEM SHALL keep the activity record append-only, with no code path that updates or deletes
+    an activity entry other than whole-account deletion requested by the person, and SHALL chain every
+    entry to the previous entry of the same account by a cryptographic hash so that altering, removing
+    or reordering any entry makes the account's integrity check (run daily and on demand from the
+    activity page) report the first broken entry.
+  - >-
+    THE SYSTEM SHALL never write a card number, card security code, high-tier identity value,
+    password, one-time code, access credential or recovery code to any log, activity entry,
+    notification, SMS, email, error message or metrics record, with one exception: the single email
+    or SMS that delivers a person their own one-time sign-in or verification code, or their own
+    single-use approval link, to the address or number they verified.
+  - >-
+    WHEN a high-tier identity detail or card is released, THE SYSTEM SHALL allow the requesting agent
+    to collect it exactly once within 5 minutes and SHALL discard it from server memory on collection
+    or expiry, whichever comes first.
+  - >-
+    WHEN a sensitive action is requested (high-tier release approval, card release approval, security
+    change, export, account deletion), THE SYSTEM SHALL require a passkey or authenticator check
+    completed within the previous 5 minutes.
+  - >-
+    THE SYSTEM SHALL encrypt all data in transit and at rest, encrypt each person's low-tier vault
+    fields with a key specific to that person, and store high-tier details and card numbers only in a
+    form that the person's own device encrypted and that Warthog's servers and staff cannot decrypt.
+  - >-
+    WHEN an agent's request is evaluated, THE SYSTEM SHALL check the agent's permissions and every
+    applicable rule and budget in code before any connector is called or any release is offered,
+    and SHALL refuse with a plain reason when a check fails.
+  - >-
+    WHILE an agent exceeds its request limit (default 120 requests per minute, set per agent by the
+    person on that agent's permissions page), THE SYSTEM SHALL refuse further requests from that agent
+    with a rate-limit error and record one activity entry summarising the refused burst instead of one
+    entry per refused call.
+  - >-
+    WHEN a person requests an export, THE SYSTEM SHALL produce the complete export file within
+    5 minutes for an account with up to 100,000 activity entries.
+  - >-
+    WHEN a person deletes their account, THE SYSTEM SHALL revoke every agent and connection and make
+    their stored personal data unreadable before the deletion confirmation is shown, and remove it
+    entirely within 24 hours.
+  - >-
+    THE SYSTEM SHALL meet WCAG 2.2 AA on every page, including contrast for every neutral and accent
+    colour pairing in both light and dark mode.
+  - >-
+    THE SYSTEM SHALL render every page usable from 360px-wide phones to desktop widths without
+    horizontal scrolling, and SHALL be installable to the home screen with working push notifications
+    on current iOS (installed web app) and Android browsers.
+  - >-
+    WHEN an agent calls a Warthog tool that does not reach an outside service, THE SYSTEM SHALL
+    respond within 500 milliseconds at the 95th percentile, excluding time spent waiting for an
+    approval.
+  - >-
+    IF sign-in or code entry fails 5 times in 15 minutes for one account or address, THEN THE SYSTEM
+    SHALL slow further attempts with increasing delays and email the account holder.
+  - >-
+    THE SYSTEM SHALL record operational metrics (counts, rates, latencies, error categories) without
+    any personal content, identity value, message content or tool parameters.
+
+integrations: >-
+  (1) AI agent platforms as clients of Warthog, over the open remote-connector standard those
+  platforms use, including its standard sign-in and consent flow with per-client credentials and
+  automatic client registration: Claude (web, desktop, mobile and Claude Code), ChatGPT, Gemini,
+  Grok and Llama-based clients; where a platform does not yet support remote connectors, the gap is
+  documented on its help page and support follows as soon as the platform adds it. (2) At least 100 third-party services at launch, growing over time, as connectors (email, calendar, files, messaging, notes, tasks, finance,
+  travel, shopping, developer and smart-home services), reached through the provider's own sign-in,
+  a person-supplied API key, or a provider-hosted connector; provider app registration and any
+  provider security review are operator chores outside the build, started early for services that
+  need them. (3) Push notification delivery to installed phone and desktop browsers. (4) SMS
+  delivery for the approval fallback and phone verification, on a separate founder-paid Azure
+  subscription. (5) Transactional email for sign-up
+  codes, alerts, household invites and deletion confirmations. (6) The founder's Microsoft Azure
+  subscription for hosting, key management and budget alerts. (7) The founder's domain warthog.com.au
+  (registered at GoDaddy; its DNS may later move to Azure) for the portal, connector address and email
+  sending. (8) A free official source of daily reference exchange rates for foreign-currency card
+  requests. (9) Google and Microsoft developer registrations owned by the founder for their
+  connectors (Google in its unverified test mode for up to 100 early-access people). No payment processor or card issuer
+  in V1: Warthog never charges cards itself; the agent uses the released card at the merchant.
+
+constraints:
+  - id: azure-australia-east
+    title: Hosted on Microsoft Azure in Australia East
+    text: >-
+      THE SYSTEM SHALL host every component and store every byte of user data on Microsoft Azure in
+      the Australia East region, using managed services rather than self-run servers wherever a
+      managed service exists, under a dedicated subscription funded by the founder's Azure credit
+      (except SMS sending, which runs on a separate founder-paid pay-as-you-go subscription with its own
+      budget alert and is not covered by the automatic stop), with
+      budget alerts at 50%, 80% and 100% of a monthly cap the founder sets (default US$150) and an
+      automatic stop of Warthog's chargeable resources when the cap is reached, so that credit
+      exhaustion can never silently bill the founder's card.
+  - id: zero-cost-third-parties
+    title: No third-party service that bills or can start billing
+    text: >-
+      THE SYSTEM SHALL use only third-party services and software that cost nothing and cannot start
+      charging (no paid tier, no plan that bills automatically when usage is exceeded), preferring
+      permissively licensed open-source software self-hosted in Warthog's own Azure subscription and
+      free official provider connectors, with current pricing and licence terms checked before
+      adoption; the single exception is SMS delivery, which the founder pays for knowingly on a
+      separate pay-as-you-go Azure subscription because Azure credit cannot pay for it.
+  - id: free-for-users
+    title: Free product, no billing
+    text: >-
+      THE SYSTEM SHALL offer every feature free of charge and SHALL contain no billing, subscription
+      or payment collection for Warthog itself.
+  - id: no-ai-model-calls
+    title: Warthog does not run or pay for AI models
+    text: >-
+      THE SYSTEM SHALL perform every decision it makes (permissions, rules, budgets, logging,
+      redaction, reminders) in deterministic code and SHALL NOT call any AI model service; all AI
+      work is done by the person's own connected agents.
+  - id: code-is-the-record
+    title: Warthog writes the record, not the agents
+    text: >-
+      THE SYSTEM SHALL record every tool call, approval, identity release, card release, connection
+      change and memory write itself at the moment it handles it, SHALL label agent-submitted
+      summaries as reported by that agent, SHALL never treat an agent report as the source of truth,
+      and SHALL NOT claim knowledge of agent actions that did not pass through Warthog.
+  - id: agents-only-through-warthog
+    title: Agents reach connected services only through Warthog
+    text: >-
+      THE SYSTEM SHALL never give an agent a connected service's own credentials; every agent use of a
+      connected service SHALL pass through Warthog's permission check, rules and activity recording.
+  - id: per-agent-revocable-credentials
+    title: Each agent has its own revocable credential under the open connector standard
+    text: >-
+      THE SYSTEM SHALL issue each connected agent a separate credential through the remote-connector
+      standard's sign-in and consent flow (or a per-agent access key where a platform cannot use that
+      flow) and SHALL let the person revoke any one agent without affecting the others.
+  - id: no-stored-raw-card-data
+    title: No readable card numbers or security codes on Warthog's side
+    text: >-
+      THE SYSTEM SHALL store card numbers only in a form encrypted on the person's own device that
+      Warthog cannot decrypt, SHALL never store a card security code in any form, and SHALL display
+      only the card brand and last four digits.
+  - id: approvals-in-app-only
+    title: Approvals only inside the signed-in app
+    text: >-
+      THE SYSTEM SHALL accept an approval decision only from an authenticated session in the Warthog
+      app and SHALL NOT act on replies to SMS, email or notifications.
+  - id: staff-cannot-read-vault
+    title: Operators cannot read vault contents
+    text: >-
+      THE SYSTEM SHALL give no staff role, operator tool or metrics view any path to decrypt or display
+      a person's high-tier identity details, cards, memory, skills or activity contents.
+  - id: privacy-rights
+    title: Australian Privacy Act and GDPR-style rights
+    text: >-
+      THE SYSTEM SHALL let every person export all of their data and delete their account themselves
+      at any time, and SHALL show a privacy policy describing what is stored, where, and who can read it.
+  - id: own-domain
+    title: Served from the founder's domain, warthog.com.au
+    text: >-
+      THE SYSTEM SHALL serve the portal, the agent connector address and all outgoing email from the
+      founder's domain warthog.com.au, with the passkey site identity set to warthog.com.au from the
+      first sign-up, and SHALL read the public address from configuration rather than code.
+  - id: public-signup
+    title: Open sign-up with strong sign-in
+    text: >-
+      THE SYSTEM SHALL let anyone sign up without an invitation and SHALL require every account to
+      hold a passkey or authenticator-app second factor before any vault, card, connector or agent
+      feature becomes usable.
+
+out_of_scope:
+  - The admin portal (a separate staff app for user counts, connector health, errors and usage) — V1 only records the metrics and carries the roles.
+  - Native iOS and Android apps; V1 is the installable web app.
+  - WhatsApp approvals and one-tap approve or deny directly from a notification; V1 notifications open the approval screen.
+  - Virtual cards and single-use card tokens from a card-issuing provider, and card-provider spending events (V2); V1 budgets count approved release amounts only, and amounts agents report are shown with a label but never counted.
+  - Warthog charging cards, processing payments, or acting as a merchant.
+  - A browser extension or any feature that types identity or card details into third-party web forms on the person's behalf; V1 releases details to the approved agent once.
+  - Any verified record of agent actions that did not pass through Warthog — such actions appear only as agent-reported summaries, labelled as reported and never treated as fact.
+  - Billing, paid plans or payment collection for Warthog itself.
+  - Enterprise features (company workspaces, single sign-on, team administration).
+  - Connectors that need a paid integration platform, a paid provider plan, or a lengthy provider security review before launch — these are parked and added as reviews complete.
+  - Warthog running or paying for any AI model of its own.
+  - Updating an address directly inside third-party services that offer no way to do it through a connector; the moving checklist hands those to the person or an agent.
+
+requires:
+  target: web
+  offline: false
+  ui_framework: react
+  data: cloud
+
+accepted_concerns:
+  - concern: "The primary journey's \"Get notified\" step has the phone sign in \"confirmed by scanning the laptop's code\". The \"Sign in on another device\" feature describes the reverse: the new device's browser shows the code, and the device that holds the passkey scans it. In this journey the passkey lives on the laptop, and a laptop can't scan a phone's code in the standard passkey flow. So this journey step has no feature behind it. Someone has to decide between two options: add a separate \"approve this sign-in from a device you're already signed in on\" flow, or limit the journey to a synced passkey or the recovery code."
+    route: human
+    accepted_note: "accepted 2026-11-04"
+  - concern: "An agent can put a released high-tier detail (such as the licence number) or a card number into a later tool call, for example an email sent through Gmail. By then Warthog has deleted the value from server memory and keeps only the device-encrypted copy, so it has nothing to match against. Yet the non-functional rules forbid writing such a value into an activity entry, and activity entries are append-only, hash-chained, and can only be removed by deleting the whole account. The brief doesn't say how Warthog would recognise these values so it can remove them."
+    route: human
+    accepted_note: "accepted 2026-11-04"
+  - concern: "The vault page says that if both the passkeys and the recovery code are lost, \"those details must be entered again\", which implies the account itself survives. But the only account recovery described needs the recovery code. For an account with only passkeys, nothing says how the person gets back in, or states that the account is lost and they must sign up again."
+    route: human
+    accepted_note: "accepted 2026-11-04"
+  - concern: "\"Vault unlock methods\" says a passkey on \"a device without the capability\" asks once for the passphrase or recovery code \"and is then added as an unlock method\". A passkey on a device that can't unlock the vault can't hold a copy of the vault key, so as written this can't be built. Someone has to choose: either store a key on that device instead (so anyone holding that signed-in device can unlock it after a fresh check), or ask for the passphrase every time on that device."
+    route: human
+    accepted_note: "accepted 2026-11-04"
+  - concern: "The privacy page claims high-tier details and cards are encrypted on the person's own devices \"so neither Warthog's servers nor its staff can read them\". But the \"High-tier release\" and \"Card requests\" features hand the unlocked detail to Warthog's server, where it waits up to 5 minutes for the agent to collect it. The wording should say these details can't be read while stored, and pass through Warthog only for the one release the person approved."
+    route: artifact
+    accepted_note: "accepted 2026-11-04"
+  - concern: "The privacy page promises \"everything else is encrypted per person\". The non-functional rule requires a per-person key only for low-tier vault fields; everything else is only \"encrypted at rest\". The two need to match. The ledger records \"per-user encryption keys\" from the founder's source, which supports widening the rule to all personal content, but the user must confirm that direction."
+    route: artifact
+    accepted_note: "accepted 2026-11-04"
+  - concern: "The \"Currency\" feature says \"every budget and limit is in that currency\" (the person's account currency). The \"Household\" feature puts the household budget and each member's limit in the household currency, which can be different. The Currency sentence should cover only the person's own budgets and limits; the household-currency decision is already recorded in the ledger's final-check resolutions."
+    route: artifact
+    accepted_note: "accepted 2026-11-04"
+  - concern: "The consent screen and permissions page let a person turn on card requests along with \"its spending budget\", but no default is given and nothing says a budget is required. A builder can't tell whether card access with no budget set means unlimited, refused, or blocked until a budget is entered."
+    route: human
+    accepted_note: "accepted 2026-11-04"
+  - concern: "The journey's consent step says \"allow shared memory\", which merges two separate settings: reading shared memory, and sharing what this agent learns (sharing is always opt-in). Later steps need Claude's sharing turned on: MEMORY shows \"Saved by Claude · shared\" and ChatGPT reads Claude's moving memory. The step should say both settings are switched on."
+    route: artifact
+    accepted_note: "accepted 2026-11-04"
