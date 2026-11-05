@@ -2,6 +2,7 @@ import * as React from "react";
 
 import { Button } from "../ui/button";
 import { Field } from "../ui/field";
+import { Wordmark } from "../shell/wordmark";
 
 // Auth page views (task E04-S12) — the Signup, Signin, Recover and Device screens
 // as plain, step-driven PRESENTATION components. They render from props alone: no
@@ -29,6 +30,7 @@ function AuthScreen({
 }) {
   return (
     <div className="mx-auto flex w-full max-w-sm flex-col gap-6 px-4 py-8 sm:px-6">
+      <Wordmark href="/" />
       <h1 className="text-2xl font-semibold tracking-tight text-fg">{title}</h1>
       {lead ? <p className="text-sm text-fg-muted">{lead}</p> : null}
       {children}

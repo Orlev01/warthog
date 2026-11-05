@@ -18,6 +18,8 @@ import {
   type LucideIcon,
 } from "lucide-react";
 
+import { Wordmark } from "./wordmark";
+
 // AppShell — the prop-driven app frame that gives every signed-in screen one
 // fixed navigation, built on the design tokens (globals.css). Two surfaces share
 // a single information architecture (brief design_ux.feel, technical-design §12):
@@ -120,6 +122,9 @@ export function AppShell({ activeSection, children }: AppShellProps) {
         aria-label="Primary"
         className="hidden shrink-0 border-e border-line bg-surface p-3 lg:flex lg:w-64 lg:flex-col lg:gap-1"
       >
+        <div className="px-1 pb-3 pt-1">
+          <Wordmark href="/home" />
+        </div>
         {SECTIONS.map((item) => (
           <SidebarLink key={item.key} item={item} active={item.key === activeSection} />
         ))}
