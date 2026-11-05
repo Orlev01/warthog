@@ -189,6 +189,27 @@ test("the sign-out handler is built once from the composition root and reused ac
   assert.equal(receivedDeps, FAKE_DEPS, "the handler is built FROM the deps the composition root produced");
 });
 
+// Operator fix (E04-S38 review veto 2): a failed bring-up must not be cached for the life of the
+// process. The sibling dispatchers (sign-in, /oauth/revoke, /oauth/register) forget a rejected
+// bring-up so the next request retries; this one now does too.
+test("a failed bring-up is not cached: the next request retries the composition root", async () => {
+  const { handler } = spySignoutHandler();
+  let getDepsCount = 0;
+  const handle = createSignoutRouteHandler({
+    getDeps: async () => {
+      getDepsCount += 1;
+      if (getDepsCount === 1) throw new Error("database briefly unreachable");
+      return FAKE_DEPS;
+    },
+    createHandler: () => handler,
+  });
+
+  await assert.rejects(handle(signoutRequest({ token: "t1" })), /briefly unreachable/);
+  const res = await handle(signoutRequest({ token: "t2" }));
+  assert.equal(getDepsCount, 2, "the second request consulted the composition root again");
+  assert.ok(res instanceof Response, "the retried bring-up serves the request");
+});
+
 test("the route handler builds nothing until the first request (so the route entry stays import-safe)", async () => {
   const { handler } = spySignoutHandler();
   let getDepsCount = 0;

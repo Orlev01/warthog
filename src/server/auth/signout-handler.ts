@@ -94,6 +94,11 @@ export function createSignoutRouteHandler(
   function handler(): Promise<SignoutHandler> {
     if (handlerPromise === undefined) {
       handlerPromise = getDeps().then((deps) => createHandler(deps));
+      // A failed bring-up (e.g. a briefly unreachable database) must not brick sign-out for
+      // the life of the process: forget the rejected promise so the next request retries.
+      handlerPromise.catch(() => {
+        handlerPromise = undefined;
+      });
     }
     return handlerPromise;
   }
