@@ -1,0 +1,20 @@
+{
+  "id": "microsoft-outlook-calendar",
+  "name": "Outlook Calendar",
+  "aliases": [
+    "microsoft calendar",
+    "outlook calendar events",
+    "office 365 calendar"
+  ],
+  "category": "calendar",
+  "auth_kind": "oauth2",
+  "base_url": "https://graph.microsoft.com/v1.0",
+  "auth": {
+    "authorize_url": "https://login.microsoftonline.com/common/oauth2/v2.0/authorize",
+    "token_url": "https://login.microsoftonline.com/common/oauth2/v2.0/token",
+    "scopes": [
+      "https://graph.microsoft.com/Calendars.ReadWrite",
+      "offline_access"
+    ]
+  }
+}
