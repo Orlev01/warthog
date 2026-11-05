@@ -1,0 +1,24 @@
+{
+  "id": "shopify",
+  "name": "Shopify",
+  "aliases": [
+    "shopify store",
+    "shopify commerce",
+    "shopify admin"
+  ],
+  "category": "ecommerce",
+  "auth_kind": "provider_mcp",
+  "base_url": "https://mcp.shopify.com/mcp",
+  "auth": {},
+  "curated_tools": [
+    {
+      "name": "list_products"
+    },
+    {
+      "name": "list_orders"
+    },
+    {
+      "name": "create_product"
+    }
+  ]
+}

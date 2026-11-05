@@ -1,0 +1,15 @@
+{
+  "id": "cronofy",
+  "name": "Cronofy",
+  "aliases": [
+    "cronofy calendar",
+    "cronofy api"
+  ],
+  "category": "calendar",
+  "auth_kind": "api_key",
+  "base_url": "https://api.cronofy.com",
+  "auth": {
+    "header": "Authorization: Bearer {api_key}"
+  },
+  "instructions": "Sign in to Cronofy, open the API or Developer settings, and create a personal personal access token in the Developer dashboard. Copy it and paste it into Warthog here — it is stored encrypted and is never shown again. For the exact steps, see the provider's documentation at https://docs.cronofy.com/developers/api/."
+}

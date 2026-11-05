@@ -1,0 +1,24 @@
+{
+  "id": "hex",
+  "name": "Hex",
+  "aliases": [
+    "hex analytics",
+    "hex notebooks",
+    "hex data"
+  ],
+  "category": "analytics",
+  "auth_kind": "provider_mcp",
+  "base_url": "https://mcp.hex.tech/mcp",
+  "auth": {},
+  "curated_tools": [
+    {
+      "name": "list_projects"
+    },
+    {
+      "name": "run_project"
+    },
+    {
+      "name": "get_project_status"
+    }
+  ]
+}

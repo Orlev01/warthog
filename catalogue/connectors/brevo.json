@@ -1,0 +1,15 @@
+{
+  "id": "brevo",
+  "name": "Brevo",
+  "aliases": [
+    "brevo email",
+    "sendinblue"
+  ],
+  "category": "email",
+  "auth_kind": "api_key",
+  "base_url": "https://api.brevo.com/v3",
+  "auth": {
+    "header": "api-key: {api_key}"
+  },
+  "instructions": "Sign in to Brevo, open the API or Developer settings, and create a personal API key in SMTP & API → API Keys. Copy it and paste it into Warthog here — it is stored encrypted and is never shown again. For the exact steps, see the provider's documentation at https://developers.brevo.com/docs/getting-started."
+}

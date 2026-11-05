@@ -1,0 +1,15 @@
+{
+  "id": "bitbucket",
+  "name": "Bitbucket",
+  "aliases": [
+    "bitbucket repos",
+    "bitbucket git"
+  ],
+  "category": "developer-tools",
+  "auth_kind": "basic",
+  "base_url": "https://api.bitbucket.org/2.0",
+  "auth": {
+    "header": "Authorization: Basic {api_key}"
+  },
+  "instructions": "Sign in to Bitbucket, open the API or Developer settings, and create a personal username and app password in Personal settings → App passwords. Copy it and paste it into Warthog here — it is stored encrypted and is never shown again. For the exact steps, see the provider's documentation at https://developer.atlassian.com/cloud/bitbucket/rest/intro/."
+}

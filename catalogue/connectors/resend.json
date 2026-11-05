@@ -1,0 +1,15 @@
+{
+  "id": "resend",
+  "name": "Resend",
+  "aliases": [
+    "resend email",
+    "resend api"
+  ],
+  "category": "email",
+  "auth_kind": "api_key",
+  "base_url": "https://api.resend.com",
+  "auth": {
+    "header": "Authorization: Bearer {api_key}"
+  },
+  "instructions": "Sign in to Resend, open the API or Developer settings, and create a personal API key in the API Keys page. Copy it and paste it into Warthog here — it is stored encrypted and is never shown again. For the exact steps, see the provider's documentation at https://resend.com/docs/api-reference/introduction."
+}

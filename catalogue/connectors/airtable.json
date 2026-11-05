@@ -1,0 +1,24 @@
+{
+  "id": "airtable",
+  "name": "Airtable",
+  "aliases": [
+    "airtable bases",
+    "airtable tables",
+    "airtable records"
+  ],
+  "category": "database",
+  "auth_kind": "provider_mcp",
+  "base_url": "https://mcp.airtable.com/mcp",
+  "auth": {},
+  "curated_tools": [
+    {
+      "name": "list_records"
+    },
+    {
+      "name": "create_record"
+    },
+    {
+      "name": "update_record"
+    }
+  ]
+}

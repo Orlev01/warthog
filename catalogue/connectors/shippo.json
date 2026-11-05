@@ -1,0 +1,15 @@
+{
+  "id": "shippo",
+  "name": "Shippo",
+  "aliases": [
+    "shippo shipping",
+    "goshippo labels"
+  ],
+  "category": "retail",
+  "auth_kind": "api_key",
+  "base_url": "https://api.goshippo.com",
+  "auth": {
+    "header": "Authorization: ShippoToken {api_key}"
+  },
+  "instructions": "Sign in to Shippo, open the API or Developer settings, and create a personal API token in Settings → API. Copy it and paste it into Warthog here — it is stored encrypted and is never shown again. For the exact steps, see the provider's documentation at https://docs.goshippo.com/."
+}

@@ -1,0 +1,24 @@
+{
+  "id": "clickup",
+  "name": "ClickUp",
+  "aliases": [
+    "clickup tasks",
+    "clickup docs",
+    "clickup projects"
+  ],
+  "category": "project-management",
+  "auth_kind": "provider_mcp",
+  "base_url": "https://mcp.clickup.com/mcp",
+  "auth": {},
+  "curated_tools": [
+    {
+      "name": "list_tasks"
+    },
+    {
+      "name": "create_task"
+    },
+    {
+      "name": "update_task"
+    }
+  ]
+}

@@ -1,0 +1,15 @@
+{
+  "id": "opsgenie",
+  "name": "Opsgenie",
+  "aliases": [
+    "opsgenie alerts",
+    "opsgenie on-call"
+  ],
+  "category": "developer-tools",
+  "auth_kind": "api_key",
+  "base_url": "https://api.opsgenie.com",
+  "auth": {
+    "header": "Authorization: GenieKey {api_key}"
+  },
+  "instructions": "Sign in to Opsgenie, open the API or Developer settings, and create a personal API integration key in Settings → API key management. Copy it and paste it into Warthog here — it is stored encrypted and is never shown again. For the exact steps, see the provider's documentation at https://docs.opsgenie.com/docs/api-overview."
+}

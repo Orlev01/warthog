@@ -1,0 +1,15 @@
+{
+  "id": "fly-io",
+  "name": "Fly.io",
+  "aliases": [
+    "fly io machines",
+    "flyio apps"
+  ],
+  "category": "developer-tools",
+  "auth_kind": "api_key",
+  "base_url": "https://api.machines.dev/v1",
+  "auth": {
+    "header": "Authorization: Bearer {api_key}"
+  },
+  "instructions": "Sign in to Fly.io, open the API or Developer settings, and create a personal access token in running flyctl tokens create. Copy it and paste it into Warthog here — it is stored encrypted and is never shown again. For the exact steps, see the provider's documentation at https://fly.io/docs/machines/api/."
+}

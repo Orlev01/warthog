@@ -1,0 +1,15 @@
+{
+  "id": "wave",
+  "name": "Wave",
+  "aliases": [
+    "wave accounting",
+    "waveapps"
+  ],
+  "category": "accounting",
+  "auth_kind": "api_key",
+  "base_url": "https://gql.waveapps.com/graphql/public",
+  "auth": {
+    "header": "Authorization: Bearer {api_key}"
+  },
+  "instructions": "Sign in to Wave, open the API or Developer settings, and create a personal full-access token in the Wave developer portal. Copy it and paste it into Warthog here — it is stored encrypted and is never shown again. For the exact steps, see the provider's documentation at https://developer.waveapps.com/hc/en-us/articles/360019968212."
+}

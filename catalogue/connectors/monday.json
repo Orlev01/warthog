@@ -1,0 +1,24 @@
+{
+  "id": "monday",
+  "name": "monday.com",
+  "aliases": [
+    "monday com",
+    "monday boards",
+    "monday work os"
+  ],
+  "category": "project-management",
+  "auth_kind": "provider_mcp",
+  "base_url": "https://mcp.monday.com/sse",
+  "auth": {},
+  "curated_tools": [
+    {
+      "name": "list_boards"
+    },
+    {
+      "name": "create_item"
+    },
+    {
+      "name": "update_item"
+    }
+  ]
+}

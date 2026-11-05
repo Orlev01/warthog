@@ -1,0 +1,15 @@
+{
+  "id": "digitalocean",
+  "name": "DigitalOcean",
+  "aliases": [
+    "digitalocean droplets",
+    "digital ocean cloud"
+  ],
+  "category": "developer-tools",
+  "auth_kind": "api_key",
+  "base_url": "https://api.digitalocean.com/v2",
+  "auth": {
+    "header": "Authorization: Bearer {api_key}"
+  },
+  "instructions": "Sign in to DigitalOcean, open the API or Developer settings, and create a personal personal access token in API → Tokens/Keys. Copy it and paste it into Warthog here — it is stored encrypted and is never shown again. For the exact steps, see the provider's documentation at https://docs.digitalocean.com/reference/api/api-reference/."
+}

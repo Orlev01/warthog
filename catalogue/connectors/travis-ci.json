@@ -1,0 +1,15 @@
+{
+  "id": "travis-ci",
+  "name": "Travis CI",
+  "aliases": [
+    "travis ci builds",
+    "travisci"
+  ],
+  "category": "developer-tools",
+  "auth_kind": "api_key",
+  "base_url": "https://api.travis-ci.com",
+  "auth": {
+    "header": "Authorization: token {api_key}"
+  },
+  "instructions": "Sign in to Travis CI, open the API or Developer settings, and create a personal API token in Settings → copy the API authentication token. Copy it and paste it into Warthog here — it is stored encrypted and is never shown again. For the exact steps, see the provider's documentation at https://docs.travis-ci.com/api/."
+}

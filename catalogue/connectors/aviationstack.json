@@ -1,0 +1,15 @@
+{
+  "id": "aviationstack",
+  "name": "Aviationstack",
+  "aliases": [
+    "aviationstack flight data",
+    "flight tracker api"
+  ],
+  "category": "flight",
+  "auth_kind": "api_key",
+  "base_url": "https://api.aviationstack.com/v1",
+  "auth": {
+    "header": "X-ApiKey: {api_key}"
+  },
+  "instructions": "Sign in to Aviationstack, open the API or Developer settings, and create a personal API access key in your aviationstack dashboard. Copy it and paste it into Warthog here — it is stored encrypted and is never shown again. For the exact steps, see the provider's documentation at https://aviationstack.com/documentation."
+}

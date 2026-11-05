@@ -1,0 +1,24 @@
+{
+  "id": "snowflake",
+  "name": "Snowflake",
+  "aliases": [
+    "snowflake warehouse",
+    "snowflake data",
+    "snowflake sql"
+  ],
+  "category": "data-warehouse",
+  "auth_kind": "provider_mcp",
+  "base_url": "https://mcp.snowflake.com/mcp",
+  "auth": {},
+  "curated_tools": [
+    {
+      "name": "run_query"
+    },
+    {
+      "name": "list_databases"
+    },
+    {
+      "name": "describe_table"
+    }
+  ]
+}

@@ -1,0 +1,15 @@
+{
+  "id": "nozbe",
+  "name": "Nozbe",
+  "aliases": [
+    "nozbe tasks",
+    "nozbe notes"
+  ],
+  "category": "notes",
+  "auth_kind": "api_key",
+  "base_url": "https://api.nozbe.com",
+  "auth": {
+    "header": "Authorization: Bearer {api_key}"
+  },
+  "instructions": "Sign in to Nozbe, open the API or Developer settings, and create a personal API key in the Nozbe apps & add-ons settings. Copy it and paste it into Warthog here — it is stored encrypted and is never shown again. For the exact steps, see the provider's documentation at https://developer.nozbe.com/."
+}

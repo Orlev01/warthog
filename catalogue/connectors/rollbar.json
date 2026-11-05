@@ -1,0 +1,15 @@
+{
+  "id": "rollbar",
+  "name": "Rollbar",
+  "aliases": [
+    "rollbar errors",
+    "rollbar monitoring"
+  ],
+  "category": "developer-tools",
+  "auth_kind": "api_key",
+  "base_url": "https://api.rollbar.com/api/1",
+  "auth": {
+    "header": "X-Rollbar-Access-Token: {api_key}"
+  },
+  "instructions": "Sign in to Rollbar, open the API or Developer settings, and create a personal project access token in Project Settings → Access Tokens. Copy it and paste it into Warthog here — it is stored encrypted and is never shown again. For the exact steps, see the provider's documentation at https://docs.rollbar.com/reference/getting-started-1."
+}

@@ -1,0 +1,15 @@
+{
+  "id": "plivo",
+  "name": "Plivo",
+  "aliases": [
+    "plivo sms",
+    "plivo messaging"
+  ],
+  "category": "messaging",
+  "auth_kind": "basic",
+  "base_url": "https://api.plivo.com/v1",
+  "auth": {
+    "header": "Authorization: Basic {api_key}"
+  },
+  "instructions": "Sign in to Plivo, open the API or Developer settings, and create a personal Auth ID and Auth Token in the Plivo console overview page. Copy it and paste it into Warthog here — it is stored encrypted and is never shown again. For the exact steps, see the provider's documentation at https://www.plivo.com/docs/messaging/api/."
+}

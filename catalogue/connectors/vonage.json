@@ -1,0 +1,15 @@
+{
+  "id": "vonage",
+  "name": "Vonage",
+  "aliases": [
+    "vonage sms",
+    "nexmo messaging"
+  ],
+  "category": "messaging",
+  "auth_kind": "api_key",
+  "base_url": "https://api.nexmo.com",
+  "auth": {
+    "header": "Authorization: Bearer {api_key}"
+  },
+  "instructions": "Sign in to Vonage, open the API or Developer settings, and create a personal API key and secret in the Vonage API Dashboard. Copy it and paste it into Warthog here — it is stored encrypted and is never shown again. For the exact steps, see the provider's documentation at https://developer.vonage.com/en/api."
+}

@@ -1,0 +1,24 @@
+{
+  "id": "notion",
+  "name": "Notion",
+  "aliases": [
+    "notion app",
+    "notion workspace",
+    "notion notes"
+  ],
+  "category": "productivity",
+  "auth_kind": "provider_mcp",
+  "base_url": "https://mcp.notion.com/mcp",
+  "auth": {},
+  "curated_tools": [
+    {
+      "name": "search_pages"
+    },
+    {
+      "name": "get_page"
+    },
+    {
+      "name": "create_page"
+    }
+  ]
+}

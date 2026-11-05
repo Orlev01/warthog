@@ -1,0 +1,15 @@
+{
+  "id": "govee",
+  "name": "Govee",
+  "aliases": [
+    "govee lights",
+    "govee home"
+  ],
+  "category": "smart-home",
+  "auth_kind": "api_key",
+  "base_url": "https://developer-api.govee.com",
+  "auth": {
+    "header": "Govee-API-Key: {api_key}"
+  },
+  "instructions": "Sign in to Govee, open the API or Developer settings, and create a personal API key in the Govee Home app → About Us → Apply for API Key. Copy it and paste it into Warthog here — it is stored encrypted and is never shown again. For the exact steps, see the provider's documentation at https://developer.govee.com/reference/apply-you-govee-api-key."
+}

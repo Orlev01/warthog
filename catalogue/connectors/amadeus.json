@@ -1,0 +1,15 @@
+{
+  "id": "amadeus",
+  "name": "Amadeus",
+  "aliases": [
+    "amadeus travel",
+    "amadeus flights"
+  ],
+  "category": "travel",
+  "auth_kind": "api_key",
+  "base_url": "https://api.amadeus.com",
+  "auth": {
+    "header": "Authorization: Bearer {api_key}"
+  },
+  "instructions": "Sign in to Amadeus, open the API or Developer settings, and create a personal API key and secret in the Amadeus for Developers portal. Copy it and paste it into Warthog here — it is stored encrypted and is never shown again. For the exact steps, see the provider's documentation at https://developers.amadeus.com/self-service."
+}
