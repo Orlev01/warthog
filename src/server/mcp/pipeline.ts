@@ -62,6 +62,19 @@ export interface AgentCall {
   readonly reason?: string;
 }
 
+// The side effect fired on approval creation (E12-S07): a push to every registered
+// device plus a scheduled fallback job, keyed to the just-created approval. The
+// pipeline takes it as an OPTIONAL injected seam — a function of the created approval
+// ({ userId, approvalId, createdAt, dek }) — so a pipeline built WITHOUT it behaves
+// exactly as before (every earlier ask pin stays intact), while the production root
+// wires the real notifier over the configured push sender.
+export type NotifyApprovalCreatedSeam = (input: {
+  readonly userId: string;
+  readonly approvalId: string;
+  readonly createdAt: Date;
+  readonly dek: Uint8Array;
+}) => Promise<void>;
+
 // The injected seams — no process.env (INV-103).
 export interface PipelineDeps {
   readonly db: Db;
@@ -71,6 +84,7 @@ export interface PipelineDeps {
   readonly recorder: ActivityRecorder;
   readonly executeTool: (call: AgentCall, connection: AgentConnection) => Promise<unknown>;
   readonly rate?: ReferenceRate | null;
+  readonly notifyApprovalCreated?: NotifyApprovalCreatedSeam;
 }
 
 // A discriminated union on `status` (the repo idiom).
@@ -289,6 +303,18 @@ export function createAgentCallPipeline(deps: PipelineDeps): AgentCallPipeline {
           clock,
         );
         await record(connection, call, "pending_approval");
+        // Trigger the approval notifier on creation (E12-S07): a push to every
+        // registered device within seconds, plus a scheduled fallback anchored to the
+        // approval's own createdAt. A push failure does not derail this — the notifier
+        // itself schedules the fallback and resolves — so creation still succeeds.
+        if (deps.notifyApprovalCreated) {
+          await deps.notifyApprovalCreated({
+            userId: connection.userId,
+            approvalId: approval.id,
+            createdAt: approval.createdAt,
+            dek,
+          });
+        }
         return { status: "pending_approval", approval_id: approval.id, expires_at: approval.expiresAt };
       }
 
