@@ -1,0 +1,176 @@
+// E07-S14 — the `check_approval` core tool (design §6.2 MCP server
+// "check_approval (wait_seconds ≤ 25, long-poll)"; brief "Agents wait safely").
+//
+// An agent that got `{status:"pending_approval", approval_id, …}` back from a held
+// call long-polls this tool to learn the outcome. It reads the approval MEMBER-
+// SCOPED by the session connection's owning person AND owned by that connection's
+// agent (another connection's id finds nothing → refused), and then:
+//   pending      → waits up to min(wait_seconds, 25) seconds, re-reading the
+//                  approval between sleeps, and returns the first non-pending
+//                  outcome, else `pending`;
+//   approved     → runs the held call via `executeApprovedHold` EXACTLY ONCE and
+//                  returns its result (a second check finds it already run →
+//                  refused — the single-shot claim lives in the pipeline);
+//   denied/expired → a refusal;
+//   more_detail  → the person's question.
+//
+// A SERVER module built purely from its INJECTED seams (db, keyWrapper, clock,
+// sleep, executeApprovedHold): it reads no `process.env` and holds no secret
+// (INV-103) — the data key is resolved through the KeyWrapper seam, time through
+// the Clock seam, and the wait through the injected `sleep`. The handler VALIDATES
+// its input at the boundary (zod → a 4xx `HttpError` BEFORE anything is read or
+// run, INV-102); every read is member-scoped by the connection's owning user id —
+// never a value in the input — and the approvals store binds its ids as
+// parameters, so a SQL-shaped `approval_id` travels as data and cannot alter a
+// query.
+
+import { z } from "zod";
+
+import { parseParams } from "../../http/validate";
+import { getApproval } from "../../db/approvals";
+import { getUserById } from "../../db/users";
+import type { Db } from "../../db/index";
+import type { KeyWrapper } from "../../crypto/key-wrapper";
+import type { Clock } from "../../seams/clock";
+import type { AgentConnection } from "../context";
+
+// The long-poll ceiling (design §6.2 "wait_seconds ≤ 25"): a larger request is
+// clamped down to this many seconds.
+const MAX_WAIT_SECONDS = 25;
+
+// How long to wait between re-reads of a still-pending approval. Kept well below
+// the ceiling so a decision that arrives mid-wait is picked up promptly.
+const POLL_INTERVAL_MS = 1000;
+
+// Field caps, so a grossly oversized value is refused at the boundary before any
+// read (INV-102). `reason` matches the registry's envelope cap (design §6.2 "every
+// tool takes an optional reason").
+const MAX_APPROVAL_ID = 200;
+const MAX_REASON = 2000;
+
+// The validated input: the REQUIRED approval id, the OPTIONAL wait, and the
+// universal OPTIONAL `reason`. A z.object, so its `.shape` exposes each field
+// (the registry and tests read `.shape.approval_id`). `approval_id` is any capped
+// string at the schema boundary — its UUID shape is checked separately below.
+const inputSchema = z.object({
+  approval_id: z.string().min(1).max(MAX_APPROVAL_ID),
+  wait_seconds: z.number().optional(),
+  reason: z.string().max(MAX_REASON).optional(),
+});
+
+// Every approval id is a UUID (created with `randomUUID` / `gen_random_uuid`), and
+// the `approvals.id` column is uuid-typed. A well-formed-but-non-UUID `approval_id`
+// — e.g. a SQL-injection probe — can therefore match no approval; we shape-guard it
+// at the boundary and refuse it rather than feed it to `WHERE id = $1`, where the
+// uuid cast would fail (OBS-049: resolve an id-typed selector's shape deliberately).
+const approvalIdShape = z.uuid();
+
+// What an approved held call hands back (the pipeline's ApprovedHoldResult shape).
+export type ApprovedHoldResult =
+  | { status: "executed"; result: unknown }
+  | { status: "refused"; reason: string };
+
+// What check_approval returns to the waiting agent.
+export type CheckApprovalResult =
+  | { status: "pending"; approval_id: string }
+  | { status: "executed"; result: unknown }
+  | { status: "refused"; reason: string }
+  | { status: "more_detail"; approval_id: string; question: string };
+
+export interface CheckApprovalTool {
+  readonly name: string;
+  readonly inputSchema: z.ZodType;
+  handle(input: unknown, connection: AgentConnection): Promise<CheckApprovalResult>;
+}
+
+// The injected seams — no process.env (INV-103).
+export interface CheckApprovalDeps {
+  readonly db: Db;
+  readonly keyWrapper: KeyWrapper;
+  readonly clock: Clock;
+  readonly sleep: (ms: number) => Promise<void>;
+  readonly executeApprovedHold: (userId: string, approvalId: string) => Promise<ApprovedHoldResult>;
+}
+
+// A plain-English refusal when the approval cannot be read for this connection
+// (not found for this person, or owned by another of their connections). The same
+// message either way, so an id probe cannot distinguish "not mine" from "not here".
+const NOT_FOUND = "There's no approval to check for you.";
+
+export function createCheckApprovalTool(deps: CheckApprovalDeps): CheckApprovalTool {
+  const { db, keyWrapper, clock, sleep, executeApprovedHold } = deps;
+
+  // Resolve the person's unwrapped DEK: read their wrapped DEK (bound by userId
+  // through the users store) and unwrap it through the KeyWrapper seam. Throws when
+  // the person has no row (never fails silently).
+  async function dataKeyFor(userId: string): Promise<Uint8Array> {
+    const user = await getUserById(db, userId);
+    if (!user) {
+      throw new Error("check_approval: no data key for this user");
+    }
+    return keyWrapper.unwrap(user.wrappedDek);
+  }
+
+  // Map one reading of the approval to an outcome, or `null` when it is still
+  // pending (keep long-polling). The read is already member-scoped by the owning
+  // user id; here we also require the approval to belong to THIS connection's agent.
+  async function resolve(
+    approval: Awaited<ReturnType<typeof getApproval>>,
+    connection: AgentConnection,
+  ): Promise<CheckApprovalResult | null> {
+    if (!approval || approval.agentId !== connection.agentId) {
+      return { status: "refused", reason: NOT_FOUND };
+    }
+    switch (approval.status) {
+      case "pending":
+        return null;
+      case "approved":
+        // Run the held call exactly once; the pipeline refuses a second attempt.
+        return executeApprovedHold(connection.userId, approval.id);
+      case "denied":
+        return { status: "refused", reason: "You turned this request down." };
+      case "expired":
+        return { status: "refused", reason: "This request expired before it was approved." };
+      case "more_detail":
+        return { status: "more_detail", approval_id: approval.id, question: approval.question ?? "" };
+    }
+  }
+
+  return {
+    name: "check_approval",
+    inputSchema,
+
+    async handle(input: unknown, connection: AgentConnection): Promise<CheckApprovalResult> {
+      // VALIDATE at the boundary: a bad / oversized / mis-shaped input throws a 4xx
+      // `HttpError` BEFORE anything is read or run.
+      const parsed = parseParams(inputSchema, input);
+
+      // Shape-guard the id: a well-formed string that is not a UUID matches no
+      // approval (never cast against the uuid column) and is refused.
+      if (!approvalIdShape.safeParse(parsed.approval_id).success) {
+        return { status: "refused", reason: NOT_FOUND };
+      }
+
+      const dek = await dataKeyFor(connection.userId);
+
+      // The long-poll deadline: min(wait_seconds, 25) seconds from now (a missing
+      // wait waits the full ceiling; a negative one waits not at all).
+      const waitSeconds = Math.max(0, Math.min(parsed.wait_seconds ?? MAX_WAIT_SECONDS, MAX_WAIT_SECONDS));
+      const deadline = clock.now().getTime() + waitSeconds * 1000;
+
+      // Read the approval; if it is already decided, return its outcome at once
+      // (no wait). While it is pending, sleep and re-read until the deadline passes.
+      while (true) {
+        const approval = await getApproval(db, connection.userId, parsed.approval_id, dek);
+        const outcome = await resolve(approval, connection);
+        if (outcome) return outcome;
+
+        const now = clock.now().getTime();
+        if (now >= deadline) {
+          return { status: "pending", approval_id: parsed.approval_id };
+        }
+        await sleep(Math.min(POLL_INTERVAL_MS, deadline - now));
+      }
+    },
+  };
+}
