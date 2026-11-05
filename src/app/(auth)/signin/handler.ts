@@ -197,7 +197,7 @@ export function createSigninHandler(deps: SigninHandlerDeps): SigninHandler {
       const result = await finishPasskeyAuthentication(
         db,
         { userId: user.id, response: authenticationResponse as AuthenticationResponseJSON },
-        { rpId },
+        { rpId, origin: publicOrigin },
       );
       if (!result.ok) return json(401, { error: "invalid_assertion" });
 

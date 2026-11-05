@@ -6,6 +6,7 @@
 // what it is handed, verbatim.
 
 import type { OutgoingMessage, PushSender, EmailSender, SmsSender } from "./senders";
+import { processSingleton } from "../seams/process-singleton";
 
 // A recorded message: an OutgoingMessage stamped with the channel it was sent
 // on, so the single combined list stays readable per channel.
@@ -53,6 +54,8 @@ export function createOutbox(): Outbox {
 }
 
 // The process-wide singleton (design §10: one per process, not re-instantiated
-// per request), mirroring the release-store contract. ESM caches this module, so
-// every import shares this instance — the one dev tooling reads.
-export const outbox: Outbox = createOutbox();
+// per request), mirroring the release-store contract. Held through processSingleton
+// (globalThis), because Next bundles route handlers and pages into separate module
+// graphs: a plain module-level instance would split, and /dev/outbox would read an
+// empty copy while the sign-up route wrote to another.
+export const outbox: Outbox = processSingleton("notify.outbox", createOutbox);

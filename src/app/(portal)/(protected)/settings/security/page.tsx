@@ -51,6 +51,7 @@ function buildActions(db: Db) {
     clock: systemClock,
     random: systemRandom,
     rpId: loadConfig().webauthnRpId,
+    origin: new URL(loadConfig().publicBaseUrl).origin,
   });
 }
 

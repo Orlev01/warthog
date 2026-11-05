@@ -8,6 +8,7 @@
 
 import type { Clock } from "../seams/clock";
 import { systemClock } from "../seams/clock";
+import { processSingleton } from "../seams/process-singleton";
 
 const TTL_MS = 5 * 60 * 1000; // 5-minute TTL (design §4.2)
 
@@ -44,5 +45,9 @@ export function createReleaseStore(clock: Clock): ReleaseStore {
 }
 
 // The process-wide singleton (design §4.2: one per process, not re-instantiated
-// per request). ESM caches this module, so every import shares this instance.
-export const releaseStore: ReleaseStore = createReleaseStore(systemClock);
+// per request), held through processSingleton (globalThis): Next bundles route handlers and pages into
+// separate module graphs, and a value released by the MCP route must be collectable from
+// any other entry in the same process.
+export const releaseStore: ReleaseStore = processSingleton("crypto.releaseStore", () =>
+  createReleaseStore(systemClock),
+);

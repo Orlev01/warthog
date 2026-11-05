@@ -32,6 +32,7 @@ import type { AuthenticationResponseJSON } from "@simplewebauthn/server";
 import { verifyEmailCode } from "./email-code";
 import { verifyRecoveryCode } from "./recovery";
 import { finishPasskeyAuthentication } from "./passkey";
+import { processSingleton } from "../seams/process-singleton";
 import { createSession, type Session } from "./session";
 import { requireStepUp } from "./step-up";
 import { getUserByEmail, type User } from "../db/users";
@@ -63,6 +64,8 @@ interface FirstFactorDeps {
 export interface PasskeySignInDeps extends FirstFactorDeps {
   readonly random: Random;
   readonly rpId: string;
+  // The app's public origin the assertion is verified against (see PasskeyDeps).
+  readonly origin?: string;
 }
 
 // A self-service recovery-code sign-in: first factor + session minting.
@@ -98,7 +101,8 @@ interface PendingRequest {
 // The process-wide pending-request store (the release-store pattern): ESM caches
 // this module, so every import shares one Map. Keys are full-entropy random
 // handles, so requests never collide across callers.
-const pendingRequests = new Map<string, PendingRequest>();
+// Held through processSingleton (globalThis) so every module graph Next builds shares it.
+const pendingRequests = processSingleton("auth.newDeviceRequests", () => new Map<string, PendingRequest>());
 
 // Verify the email one-time code (the first factor) and resolve the person it is
 // for. Returns the person on success; null when the code is wrong/expired/
@@ -144,7 +148,7 @@ export async function signInNewDeviceWithPasskey(
   const assertion = await finishPasskeyAuthentication(
     db,
     { userId: person.id, response: params.response },
-    { rpId: deps.rpId },
+    { rpId: deps.rpId, origin: deps.origin },
   );
   if (!assertion.ok) return { ok: false, reason: assertion.reason };
 
