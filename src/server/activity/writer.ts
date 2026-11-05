@@ -41,8 +41,9 @@ const PAYLOAD_COLUMN = "payload_ct";
 
 // The genesis sentinel a fresh per-user chain's first entry links back to. Matches
 // the in-memory recorder's sentinel and is deliberately NOT a 64-hex string, so it
-// can never collide with a real entry hash.
-const GENESIS_PREV_HASH = "GENESIS";
+// can never collide with a real entry hash. Exported so the integrity check
+// (`./integrity`, E08-S02) chains the first entry against the SAME sentinel.
+export const GENESIS_PREV_HASH = "GENESIS";
 
 // The payload envelope is bound to its exact row by (user_id, seq) — the row's
 // natural identity in the per-user chain — so a ciphertext cannot be replayed into
@@ -90,7 +91,10 @@ function canonicalJson(value: unknown): string {
 // entry_hash = SHA-256(prev_hash ‖ canonical(all other fields incl. payload_ct)).
 // `fields` is every stored column except prev_hash (prepended) and entry_hash (the
 // output), so recomputation from the stored row reproduces exactly this digest.
-function computeEntryHash(prevHash: string, fields: Record<string, unknown>): string {
+// Exported as the ONE definition of the chain digest: the integrity check
+// (`./integrity`, E08-S02) recomputes with this same function, so the writer and the
+// verifier can never drift (constitution: one source of truth).
+export function computeEntryHash(prevHash: string, fields: Record<string, unknown>): string {
   return createHash("sha256")
     .update(`${prevHash}\n${canonicalJson(fields)}`, "utf8")
     .digest("hex");
