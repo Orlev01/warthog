@@ -5,7 +5,6 @@ import { revalidatePath } from "next/cache";
 
 import { AlertTriangle, CheckCircle2 } from "lucide-react";
 
-import { AppShell } from "@/components/shell/app-shell";
 import { Button } from "@/components/ui/button";
 
 import { loadConfig } from "../../../../../server/config";
@@ -238,7 +237,7 @@ function SecuritySettings({
 }
 
 // The protected loader: resolve the session (sign-in if none), load this person's
-// factors and sessions, and render the view inside the app shell.
+// factors and sessions, and render the view (the group layout supplies the app shell).
 export default async function SecurityPage({
   searchParams,
 }: {
@@ -254,9 +253,7 @@ export default async function SecurityPage({
     redirect("/signin");
   }
   const view = await buildActions(db).load(session);
-  return (
-    <AppShell activeSection="settings">
-      <SecuritySettings view={view} currentSessionId={session.id} notice={notice} />
-    </AppShell>
-  );
+  // The (portal)/(protected) layout already wraps every page in the app shell (PortalChrome);
+  // wrapping again here rendered two sidebars and two <main> landmarks.
+  return <SecuritySettings view={view} currentSessionId={session.id} notice={notice} />;
 }
