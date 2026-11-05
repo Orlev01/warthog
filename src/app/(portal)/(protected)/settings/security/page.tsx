@@ -2,19 +2,44 @@ import * as React from "react";
 import { cookies } from "next/headers";
 import { redirect } from "next/navigation";
 import { revalidatePath } from "next/cache";
+import { z } from "zod";
+import type { RegistrationResponseJSON } from "@simplewebauthn/server";
 
 import { AlertTriangle, CheckCircle2 } from "lucide-react";
 
 import { Button } from "@/components/ui/button";
+import { FactorControls } from "@/components/auth/factor-controls";
 
 import { loadConfig } from "../../../../../server/config";
 import { getServerDb } from "../../../../../server/db/server";
 import { verifySession, type Session } from "../../../../../server/auth/session";
 import { systemClock } from "../../../../../server/seams/clock";
 import { systemRandom } from "../../../../../server/seams/random";
-import { createSecurityActions, type SecurityView } from "./actions";
+import {
+  createSecurityActions,
+  type SecurityView,
+  type ActionResult,
+  type BeginAddPasskeyResult,
+  type RegenerateRecoveryResult,
+} from "./actions";
 import { noticeLocation, securityNotice, type SecurityNotice } from "./notices";
 import type { Db } from "../../../../../server/db/index";
+
+// The shape of a WebAuthn attestation the client factor component posts back to
+// finishAddPasskey. Validated at this server-action boundary so a malformed body is
+// refused in plain words rather than reaching the verifier as a crash (INV-102); the
+// real verifier still rejects anything that does not cryptographically verify. Mirrors
+// the sign-up handler's registration schema (OBS: one shape, both boundaries).
+const registrationResponseSchema = z.looseObject({
+  id: z.string().min(1),
+  rawId: z.string().min(1),
+  type: z.literal("public-key"),
+  response: z.looseObject({
+    clientDataJSON: z.string().min(1),
+    attestationObject: z.string().min(1),
+  }),
+  clientExtensionResults: z.looseObject({}).optional(),
+});
 
 // E04-S15 — Security settings screen (loader + view + server-action wrappers).
 //
@@ -92,6 +117,50 @@ async function signOutSessionAction(formData: FormData): Promise<void> {
   }
   revalidatePath("/settings/security");
   redirect(noticeLocation("session_signed_out", outcome));
+}
+
+// Begin adding a passkey from this screen (a sensitive change). A thin server-action
+// wrapper over the factory handed to the client factor component as a prop: it
+// re-derives the verified session (never trusting a client value) and returns the
+// registration options the client drives the ceremony with — or a refusal (e.g. no
+// fresh confirmation) the client turns into plain words.
+async function beginAddPasskeyAction(): Promise<BeginAddPasskeyResult> {
+  "use server";
+  const db = await getServerDb();
+  const session = await resolveSession(db);
+  if (!session) {
+    redirect("/signin");
+  }
+  return buildActions(db).beginAddPasskey(session);
+}
+
+// Finish adding a passkey. Validate the posted attestation's shape at the boundary first
+// (a malformed body is refused in plain words, never a crash; INV-102), re-derive the
+// session, then verify + store the credential for this person through the factory.
+async function finishAddPasskeyAction(response: RegistrationResponseJSON): Promise<ActionResult> {
+  "use server";
+  const db = await getServerDb();
+  const session = await resolveSession(db);
+  if (!session) {
+    redirect("/signin");
+  }
+  const parsed = registrationResponseSchema.safeParse(response);
+  if (!parsed.success) {
+    return { ok: false, reason: "invalid_request" };
+  }
+  return buildActions(db).finishAddPasskey(session, parsed.data as RegistrationResponseJSON);
+}
+
+// Regenerate this person's recovery code (a sensitive change): re-derive the session and
+// return the fresh code once — the client shows it a single time and never stores it.
+async function regenerateRecoveryAction(): Promise<RegenerateRecoveryResult> {
+  "use server";
+  const db = await getServerDb();
+  const session = await resolveSession(db);
+  if (!session) {
+    redirect("/signin");
+  }
+  return buildActions(db).regenerateRecovery(session);
 }
 
 // The outcome of the last change, in words plus an icon (never colour alone). A
@@ -172,16 +241,6 @@ function SecuritySettings({
             ))}
           </ul>
         )}
-        {/* Not wired yet: the passkey ceremony needs the client factor component. Disabled with
-            the reason, never a live-looking button that does nothing. */}
-        <div className="flex flex-col gap-1">
-          <Button type="button" variant="primary" disabled aria-describedby="add-passkey-note">
-            Add a passkey
-          </Button>
-          <p id="add-passkey-note" className="text-sm text-fg-muted">
-            Adding another passkey from this screen is coming soon.
-          </p>
-        </div>
       </Section>
 
       <Section
@@ -220,17 +279,14 @@ function SecuritySettings({
       </Section>
 
       <Section
-        title="Recovery code"
-        lead="Your way back in if you ever lose every passkey. Generating a new one replaces the old."
+        title="Make a change"
+        lead="Add a passkey or create a new recovery code. We'll ask you to confirm it's you first."
       >
-        <div className="flex flex-col gap-1">
-          <Button type="button" variant="secondary" disabled aria-describedby="new-recovery-note">
-            Generate a new recovery code
-          </Button>
-          <p id="new-recovery-note" className="text-sm text-fg-muted">
-            Generating a new recovery code from this screen is coming soon.
-          </p>
-        </div>
+        <FactorControls
+          beginAddPasskey={beginAddPasskeyAction}
+          finishAddPasskey={finishAddPasskeyAction}
+          regenerateRecovery={regenerateRecoveryAction}
+        />
       </Section>
     </div>
   );
