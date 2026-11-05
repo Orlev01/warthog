@@ -7,6 +7,7 @@ import { AlertTriangle, CheckCircle2 } from "lucide-react";
 import { PermissionsView, type PermissionsViewProps } from "@/components/agents/permissions-view";
 import { DEFAULT_CARD_BUDGET, type Budget, type PeriodKind } from "@/domain/budget/budget";
 import type { PermissionsSaveInput, SaveResult } from "./actions";
+import { collectEdits } from "./permission-edits";
 
 // E10-S08 — the LIVE per-agent permissions form (the client leg that wires the shaping
 // screen to the tested save action).
@@ -49,6 +50,10 @@ const PROBLEM: Record<string, Notice> = {
     text: "Nothing was changed: add a budget before you can switch on card access.",
   },
   invalid_request: INVALID,
+  form_incomplete: {
+    tone: "problem",
+    text: "Nothing was saved: this screen couldn't read all of your settings. Please reload the page and try again.",
+  },
 };
 
 function problemNotice(reason: string): Notice {
@@ -125,24 +130,20 @@ export function PermissionsForm({ initial, save }: PermissionsFormProps): React.
       const root = containerRef.current;
       if (!root) return;
 
-      const inputs = Array.from(root.querySelectorAll("input"));
-      const field = (type: string, re: RegExp): HTMLInputElement | undefined =>
-        inputs.find((i) => i.type === type && re.test(labelText(i)));
-
-      const cardEl = field("checkbox", /card/i);
-      const learnEl = field("checkbox", /learn/i);
-      const budgetEl = field("number", /budget/i);
-      const limitEl = field("number", /request|limit|minute/i);
-
-      // A partial edit: absent fields keep their stored value. The toggles present on this
-      // screen send their explicit on/off state (not FormData's "omitted when unchecked").
-      const input: PermissionsSaveInput = {};
-      if (cardEl) input.card = cardEl.checked;
-      if (learnEl) input.learningSharing = learnEl.checked;
-      if (limitEl && limitEl.value.trim() !== "") input.requestLimit = Number(limitEl.value);
-      if (cardEl?.checked && budgetEl && budgetEl.value.trim() !== "") {
-        input.cardBudget = { amount: Number(budgetEl.value), currency: initial.currency ?? "A$", period };
+      // Every control on the screen is carried with its explicit on/off state; a control the
+      // form cannot find refuses the save rather than silently dropping that edit.
+      const snapshot = Array.from(root.querySelectorAll("input")).map((i) => ({
+        type: i.type,
+        label: labelText(i),
+        checked: i.checked,
+        value: i.value,
+      }));
+      const collected = collectEdits(snapshot, { currency: initial.currency ?? "A$", period });
+      if (!collected.ok) {
+        setNotice(problemNotice(collected.reason));
+        return;
       }
+      const input: PermissionsSaveInput = collected.input;
 
       pendingRef.current = true;
       try {

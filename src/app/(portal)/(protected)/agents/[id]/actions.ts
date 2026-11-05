@@ -83,6 +83,11 @@ const inputSchema = z.object({
   cardBudget: cardBudgetSchema.nullable().optional(),
   learningSharing: z.boolean().optional(),
   requestLimit: z.number().int().positive().optional(),
+  // The screen's identity and memory toggles (low-tier read, high-tier ask, shared-memory
+  // read) — rendered on the screen, so every one of them persists (E10-S08 review).
+  identity: z.boolean().optional(),
+  highTier: z.boolean().optional(),
+  memoryRead: z.boolean().optional(),
 });
 
 // The save input, as the permissions screen submits it (a partial edit).
@@ -151,6 +156,9 @@ function mergeGrants(
     cardBudget: input.cardBudget !== undefined ? input.cardBudget : stored.cardBudget,
     sharing: input.learningSharing !== undefined ? input.learningSharing : stored.sharing,
     rateLimit: input.requestLimit !== undefined ? input.requestLimit : stored.rateLimit,
+    identityAccess: input.identity !== undefined ? input.identity : stored.identityAccess,
+    highTierAccess: input.highTier !== undefined ? input.highTier : stored.highTierAccess,
+    memoryRead: input.memoryRead !== undefined ? input.memoryRead : stored.memoryRead,
   };
 }
 

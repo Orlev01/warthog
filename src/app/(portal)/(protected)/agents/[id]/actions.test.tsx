@@ -666,3 +666,33 @@ test("no ambient env secret leaks into the saved permissions or the loaded scree
     else process.env.WARTHOG_DECOY_SECRET = prev;
   }
 });
+
+// Operator fix (E10-S08 review veto 2): the identity, high-tier and shared-memory toggles were
+// rendered and "saved" but never persisted. The save now carries them as partial edits.
+test("saving the identity, high-tier and shared-memory toggles persists them; other grants keep their values", async () => {
+  const db = await freshDb();
+  try {
+    const actions = makeActions(db);
+    const userId = await makeUser(db, "toggles");
+    const { agentId, connectionId } = await seedAgent(db, userId, {
+      grants: { identityAccess: true, highTierAccess: false, memoryRead: false, sharing: false, rateLimit: 120 },
+    });
+    const first = await actions.save(sessionFor(userId), agentId, asInput({ identity: false, highTier: true, memoryRead: true }));
+    assert.deepEqual(first, { ok: true });
+    let g = await readGrants(db, userId, connectionId);
+    assert.equal(g.identityAccess, false, "low-tier identity read switched off");
+    assert.equal(g.highTierAccess, true, "high-tier ask switched on");
+    assert.equal(g.memoryRead, true, "shared-memory read switched on");
+    assert.equal(g.sharing, false, "untouched: learning sharing");
+    assert.equal(g.rateLimit, 120, "untouched: request limit");
+
+    await actions.save(sessionFor(userId), agentId, asInput({ requestLimit: 60 }));
+    g = await readGrants(db, userId, connectionId);
+    assert.equal(g.rateLimit, 60);
+    assert.equal(g.identityAccess, false, "a later partial edit keeps the identity toggle");
+    assert.equal(g.highTierAccess, true, "a later partial edit keeps the high-tier toggle");
+    assert.equal(g.memoryRead, true, "a later partial edit keeps the shared-memory toggle");
+  } finally {
+    await db.close();
+  }
+});
