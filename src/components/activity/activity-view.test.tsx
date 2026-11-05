@@ -80,6 +80,15 @@ type ActivityViewProps = {
   filterOptions: ActivityFilterOptions;
   query: string; // the current search text (pre-fills the search box)
   integrity: IntegrityResult | null; // the latest Check-integrity result, if one has run
+  // E08-S10 — the Dispute/Undo controls are BOUND to these server actions (the page
+  // passes inline `use server` wrappers that re-derive the session, call
+  // disputeEntry / undoEntry and redirect with a `?notice=` outcome). Both are OPTIONAL:
+  // the loader's own props omit them (the page adds them), and when reversal EXECUTION
+  // is not configured the page supplies NO `undoAction`, so a reversible entry's Undo
+  // renders DISABLED with a one-line reason instead of a live control over a throwing
+  // executor (constitution: no dead controls — disable it and say why).
+  disputeAction?: (formData: FormData) => void | Promise<void>;
+  undoAction?: (formData: FormData) => void | Promise<void>;
 };
 
 // --- fixtures ------------------------------------------------------------------
@@ -142,14 +151,24 @@ const FILTER_OPTIONS: ActivityFilterOptions = {
   outcomes: ["Done", "Noted", "Released"],
 };
 
-// A fully-populated timeline, newest-first (the order the loader hands in). Each test
-// overrides exactly the slice it probes.
+// Stand-in server actions a test binds to the Dispute/Undo controls. A bound action is
+// what makes a control LIVE; a test probes the disabled path by overriding `undoAction`
+// to `undefined`.
+const noopDisputeAction = async (_formData: FormData): Promise<void> => {};
+const noopUndoAction = async (_formData: FormData): Promise<void> => {};
+
+// A fully-populated timeline, newest-first (the order the loader hands in). By default
+// BOTH server actions are bound (the page's live wiring), so the control tests exercise
+// live controls; a test overrides `undoAction: undefined` to probe the disabled path.
+// Each test overrides exactly the slice it probes.
 function base(overrides: Partial<ActivityViewProps> = {}): ActivityViewProps {
   return {
     entries: [ENTRY_TOOL_CALL, ENTRY_AGENT_NOTE, ENTRY_CARD_RELEASE],
     filterOptions: FILTER_OPTIONS,
     query: "",
     integrity: null,
+    disputeAction: noopDisputeAction,
+    undoAction: noopUndoAction,
     ...overrides,
   };
 }
@@ -241,6 +260,53 @@ function controlLabelText(markup: string): string {
   return parts.join(" | ");
 }
 
+// --- form-scoped helpers for the bound Dispute/Undo controls (E08-S10) ---------------
+//
+// Forms don't nest, so each <form>…</form> pairs with its own close tag. These scope an
+// assertion to ONE control's own form — never the whole screen.
+
+// The forms whose submit control's accessible name matches `re` (the Dispute form(s),
+// the Undo form(s)).
+function formsForControl(markup: string, re: RegExp): El[] {
+  return findAll(markup, "form").filter((f) =>
+    findAll(f.inner, "button").some((b) => re.test(controlFace(b))),
+  );
+}
+
+// React encodes a FUNCTION form action (a bound server action) as a `javascript:`
+// progressive-enhancement placeholder in server-rendered markup; a bare form carries no
+// such action. So "this form is bound to a server action" is observable as its action
+// scheme — behaviour, not the source text of the component.
+function isBoundToAction(form: El): boolean {
+  const action = attr(form.attrs, "action");
+  return action !== null && /^javascript:/i.test(action);
+}
+
+// The value of a hidden field named `name` carried inside `form` (e.g. the entry seq the
+// bound action consumes), or null if absent.
+function hiddenValue(form: El, name: string): string | null {
+  for (const a of inputAttrs(form.inner)) {
+    if (attr(a, "name") === name) return attr(a, "value");
+  }
+  return null;
+}
+
+// Whether `form` offers a free-text note field (an <input> or <textarea> named "note")
+// so a person can say WHY they dispute.
+function hasNoteField(form: El): boolean {
+  if (inputAttrs(form.inner).some((a) => attr(a, "name") === "note")) return true;
+  return findAll(form.inner, "textarea").some((t) => attr(t.attrs, "name") === "note");
+}
+
+// The "say-why" surface of the markup: visible text PLUS every title / aria-label (an
+// accessible reason may ride on either). A disabled control that says why carries MORE
+// of this than the same control rendered live.
+function reasonSurface(markup: string): string {
+  const parts = [visibleText(markup)];
+  for (const m of markup.matchAll(/(?:title|aria-label)="([^"]*)"/gi)) parts.push(decode(m[1]!));
+  return parts.join(" ").replace(/\s+/g, " ").trim();
+}
+
 // === AC1 — the timeline renders every entry, newest-first, agent-reported labelled ==
 
 test("renders entries in the order given — newest at the top", () => {
@@ -330,6 +396,12 @@ test("shows each entry's full detail (the timeline is render-testable, detail op
 });
 
 // === AC2 — Dispute on every entry; Undo only where a reversal is declared ==========
+//
+// E08-S10 supersedes E08-S09's dead POST forms: Dispute and Undo are now BOUND to the
+// server actions the page passes (disputeAction / undoAction), carrying the entry seq
+// the action consumes. Undo is a LIVE control only when an undoAction is supplied AND
+// the entry is reversible; otherwise it renders DISABLED with a one-line reason (never a
+// live control over a throwing executor). A non-reversible entry shows no Undo at all.
 
 test("shows a Dispute control on every entry (reversible and non-reversible alike)", () => {
   for (const entry of [ENTRY_TOOL_CALL, ENTRY_AGENT_NOTE, ENTRY_CARD_RELEASE]) {
@@ -352,31 +424,96 @@ test("shows a Dispute control on every entry (reversible and non-reversible alik
   );
 });
 
-test("shows an Undo control on an entry whose tool declares a reversal", () => {
-  const markup = render(base({ entries: [ENTRY_TOOL_CALL] })); // canUndo: true
-  const undos = buttonsMatching(markup, /\bundo\b/i);
-  assert.ok(undos.length >= 1, "a reversible entry must offer an Undo control");
+test("binds Dispute to the disputeAction server action, carrying the entry seq and a note field", () => {
+  // Rendered alone (ENTRY_CARD_RELEASE) so the one Dispute form can only be this entry's.
+  const dispatched = async (_formData: FormData): Promise<void> => {};
+  const markup = render(base({ entries: [ENTRY_CARD_RELEASE], disputeAction: dispatched }));
+  const forms = formsForControl(markup, /dispute/i);
+  assert.equal(forms.length, 1, "exactly one Dispute form for the single entry");
+  const form = forms[0]!;
   assert.ok(
-    undos.every((b) => !isDisabled(b)),
-    "the Undo control must be live, not a dead/disabled button",
+    isBoundToAction(form),
+    "the Dispute form is BOUND to the disputeAction server action (a form action), not a dead button",
+  );
+  assert.equal(
+    hiddenValue(form, "seq"),
+    String(ENTRY_CARD_RELEASE.seq),
+    "the Dispute form carries the entry seq the action consumes",
+  );
+  assert.ok(
+    hasNoteField(form),
+    "the Dispute form offers a note field so a person can say why they dispute (disputeEntry requires a note)",
+  );
+  assert.ok(
+    findAll(form.inner, "button")
+      .filter((b) => /dispute/i.test(controlFace(b)))
+      .every((b) => !isDisabled(b)),
+    "the Dispute submit is live",
   );
 });
 
-test("shows NO Undo control on an entry whose tool declares no reversal", () => {
-  // Rendered alone and as a non-reversible-only list: there must be no Undo control
-  // at all — not even a disabled one (that would be a dead control). The Dispute
-  // control, however, is still present (Undo and Dispute are distinct).
+test("binds Undo to the undoAction server action on a reversible entry when an undoAction is supplied", () => {
+  const dispatched = async (_formData: FormData): Promise<void> => {};
+  const markup = render(base({ entries: [ENTRY_TOOL_CALL], undoAction: dispatched })); // canUndo: true
+  const undos = buttonsMatching(markup, /\bundo\b/i);
+  assert.ok(undos.length >= 1, "a reversible entry with an undoAction must offer an Undo control");
+  assert.ok(
+    undos.every((b) => !isDisabled(b)),
+    "with an undoAction the reversible entry's Undo is LIVE, not disabled",
+  );
+  const forms = formsForControl(markup, /\bundo\b/i);
+  assert.equal(forms.length, 1, "exactly one Undo form for the single reversible entry");
+  const form = forms[0]!;
+  assert.ok(isBoundToAction(form), "the Undo form is BOUND to the undoAction server action");
+  assert.equal(
+    hiddenValue(form, "seq"),
+    String(ENTRY_TOOL_CALL.seq),
+    "the Undo form carries the entry seq the undo action consumes",
+  );
+});
+
+test("a reversible entry whose undoAction is NOT configured renders Undo disabled with a reason", () => {
+  // Same reversible entry, with an undoAction (live) vs without (not configured). With no
+  // undoAction the Undo is NOT a live control over a throwing executor — it is DISABLED
+  // and SAYS WHY (constitution: disable the control and say why; no dead controls).
+  const entry = ENTRY_TOOL_CALL; // canUndo: true
+  const withAction = render(base({ entries: [entry], undoAction: async () => {} }));
+  const noAction = render(base({ entries: [entry], undoAction: undefined }));
+
+  const undoButtons = buttonsMatching(noAction, /\bundo\b/i);
+  assert.ok(undoButtons.length >= 1, "a reversible entry still surfaces an Undo affordance");
+  assert.ok(
+    undoButtons.every((b) => isDisabled(b)),
+    "with no undoAction every Undo control for the reversible entry is DISABLED",
+  );
+  assert.equal(
+    formsForControl(noAction, /\bundo\b/i).filter(isBoundToAction).length,
+    0,
+    "the disabled Undo is not a bound live server-action form",
+  );
+  assert.ok(
+    reasonSurface(noAction).length > reasonSurface(withAction).length,
+    "the disabled Undo says WHY it is unavailable — a one-line reason the live control does not carry",
+  );
+});
+
+test("shows NO Undo control on an entry whose tool declares no reversal (with or without an undoAction)", () => {
+  // A non-reversible entry must offer NO Undo control at all — not even a disabled one —
+  // whether or not an undoAction is configured. The Dispute control is still present
+  // (Undo and Dispute are distinct).
   for (const entry of [ENTRY_AGENT_NOTE, ENTRY_CARD_RELEASE]) {
-    const markup = render(base({ entries: [entry] }));
-    assert.equal(
-      buttonsMatching(markup, /\bundo\b/i).length,
-      0,
-      `a non-reversible entry (seq ${entry.seq}) must offer no Undo control`,
-    );
-    assert.ok(
-      buttonsMatching(markup, /dispute/i).length >= 1,
-      `a non-reversible entry (seq ${entry.seq}) still offers Dispute`,
-    );
+    for (const undoAction of [noopUndoAction, undefined]) {
+      const markup = render(base({ entries: [entry], undoAction }));
+      assert.equal(
+        buttonsMatching(markup, /\bundo\b/i).length,
+        0,
+        `a non-reversible entry (seq ${entry.seq}) must offer no Undo control (undoAction ${undoAction ? "supplied" : "absent"})`,
+      );
+      assert.ok(
+        buttonsMatching(markup, /dispute/i).length >= 1,
+        `a non-reversible entry (seq ${entry.seq}) still offers Dispute`,
+      );
+    }
   }
   const nonReversibleList = render(base({ entries: [ENTRY_AGENT_NOTE, ENTRY_CARD_RELEASE] }));
   assert.equal(

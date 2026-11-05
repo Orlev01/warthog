@@ -127,14 +127,24 @@ function humanise(value: string): string {
 }
 
 // A stored instant → an absolute, readable label. The loader takes no clock seam, so
-// it shows WHEN an entry occurred rather than a relative "two minutes ago".
+// it shows WHEN an entry occurred rather than a relative "two minutes ago" — the DATE
+// and the TIME OF DAY, so two entries on the same day read as distinct moments.
 function formatAt(iso: string): string {
-  return new Date(iso).toLocaleDateString("en-AU", {
+  return new Date(iso).toLocaleString("en-AU", {
     timeZone: "UTC",
     day: "numeric",
     month: "short",
     year: "numeric",
+    hour: "2-digit",
+    minute: "2-digit",
   });
+}
+
+// Widen a date-ONLY `to` filter (what the view's `<input type="date">` posts, e.g.
+// "2026-04-20") to the END of that day so the whole day is inside the inclusive upper
+// bound; a value that already carries a time of day is left exactly as given.
+function widenToEndOfDay(to: string): string {
+  return /^\d{4}-\d{2}-\d{2}$/.test(to) ? `${to}T23:59:59.999Z` : to;
 }
 
 // The distinct filterable values present in the person's own entries — each is posted
@@ -175,10 +185,12 @@ const undoInputSchema = z.object({
   reason: z.string().max(NOTE_MAX).optional(),
 });
 
-// The plain-words refusal shown when a well-formed dispute is for an entry that is
-// not this person's (the dispute repo rejects an entry the caller does not own). A
-// fixed string, so no internal detail or ambient value leaks into the result.
-const DISPUTE_REFUSED = "That activity entry can't be disputed.";
+// The STABLE refusal reason codes a wrapper turns into plain words (`./notices`). The
+// sub-services report their refusals as English sentences (one carries a position
+// number), so the actions translate them into these fixed codes — a stable notice code,
+// never a passed-through sentence, and no internal detail or ambient value in the result.
+const DISPUTE_REFUSED = "dispute_refused";
+const UNDO_REFUSED = "undo_refused";
 
 export function createActivityActions(deps: ActivityActionsDeps): ActivityActions {
   const { db, disputes, undo, keyWrapper, reversalFor } = deps;
@@ -223,7 +235,10 @@ export function createActivityActions(deps: ActivityActionsDeps): ActivityAction
       entrySeq: input.entrySeq,
       reason: input.reason,
     });
-    if (!result.ok) return { ok: false, reason: result.reason };
+    // The service reports distinct English reasons (a non-reversible entry, or no such
+    // entry — the latter carrying a position number). Neither is a stable notice code, so
+    // report the one stable refusal code and let the screen say it in plain words.
+    if (!result.ok) return { ok: false, reason: UNDO_REFUSED };
     return { ok: true, entry: { seq: result.entry.seq } };
   }
 
@@ -291,7 +306,7 @@ export function createActivityActions(deps: ActivityActionsDeps): ActivityAction
     const from = firstValue(searchParams.from);
     if (from !== undefined) filters.from = from;
     const to = firstValue(searchParams.to);
-    if (to !== undefined) filters.to = to;
+    if (to !== undefined) filters.to = widenToEndOfDay(to);
 
     // Reuse the full read when nothing narrows it; otherwise the shared filtered read
     // (`listActivity`, E08-S05) narrows by facet/date in SQL, newest-first.
