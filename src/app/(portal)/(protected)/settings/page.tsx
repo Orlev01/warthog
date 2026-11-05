@@ -1,7 +1,11 @@
 import * as React from "react";
-import { ComingSoon } from "@/components/shell/coming-soon";
+import { SettingsIndex } from "@/components/settings/settings-index";
 
-// Operator placeholder so links to this route resolve; E18-S15 replaces it with the real screen.
+// E18-S15 — the Settings index. A thin loader inside the already-guarded
+// `(protected)` group (whose layout delegates the admit/redirect to
+// `requireSession` and wraps the page in PortalChrome): it mounts the propless,
+// render-tested <SettingsIndex>, which lists every settings screen from the
+// navigation IA as a labelled, described link. No per-request data to load here.
 export default function SettingsPage() {
-  return <ComingSoon title="Settings" />;
+  return <SettingsIndex />;
 }
