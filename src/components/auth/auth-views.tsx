@@ -36,10 +36,25 @@ function AuthScreen({
   );
 }
 
-// The read-only, shown-once recovery code plus its "I've saved it" confirmation.
-// The code is rendered as plain text (never prefilled into an editable input) so it
-// is never carried as a form value — the person reads it and writes it down.
-function SaveRecoveryCode({ code }: { code?: string }) {
+// The read-only, shown-once recovery code, a tick to confirm it is saved, and the
+// gated Continue. The code is rendered as plain text (never prefilled into an editable
+// input) so it is never carried as a form value — the person reads it and writes it
+// down. Continue stays disabled until the person ticks "I've saved it". Without the
+// optional wiring (the static render tests) the tick and Continue are inert copy.
+function SaveRecoveryCode({
+  code,
+  savedConfirmed = false,
+  onSavedConfirmedChange,
+  onContinue,
+  error,
+}: {
+  code?: string;
+  savedConfirmed?: boolean;
+  onSavedConfirmedChange?: (value: boolean) => void;
+  onContinue?: () => void;
+  error?: string;
+}) {
+  const checkboxId = React.useId();
   return (
     <div className="flex flex-col gap-4">
       <div className="flex flex-col gap-1.5">
@@ -48,9 +63,20 @@ function SaveRecoveryCode({ code }: { code?: string }) {
           {code}
         </p>
       </div>
-      <Button type="button" variant="primary">
-        I&apos;ve saved it
+      <label htmlFor={checkboxId} className="flex items-start gap-2 text-sm text-fg">
+        <input
+          id={checkboxId}
+          type="checkbox"
+          className="mt-0.5 h-4 w-4 rounded border-line accent-accent"
+          checked={savedConfirmed}
+          onChange={(event) => onSavedConfirmedChange?.(event.target.checked)}
+        />
+        <span>I&apos;ve saved it</span>
+      </label>
+      <Button type="button" variant="primary" disabled={!savedConfirmed} onClick={onContinue}>
+        Continue
       </Button>
+      {error ? <p className="text-sm text-danger">{error}</p> : null}
     </div>
   );
 }
@@ -59,14 +85,57 @@ function SaveRecoveryCode({ code }: { code?: string }) {
 
 export type SignupStep = "details" | "code" | "passkey" | "recovery";
 
-export function SignupView({ step, recoveryCode }: { step: SignupStep; recoveryCode?: string }) {
+// SignupView renders from props alone. The optional interactive wiring is supplied by
+// the client sign-up flow (E04-S24) to drive the screen; when it is omitted the view
+// renders as the static copy the render tests pin.
+export interface SignupViewProps {
+  step: SignupStep;
+  recoveryCode?: string;
+  email?: string;
+  code?: string;
+  error?: string;
+  savedConfirmed?: boolean;
+  onEmailChange?: (value: string) => void;
+  onCodeChange?: (value: string) => void;
+  onSavedConfirmedChange?: (value: boolean) => void;
+  onSubmit?: () => void;
+  onCreatePasskey?: () => void;
+  onConfirm?: () => void;
+}
+
+export function SignupView({
+  step,
+  recoveryCode,
+  email,
+  code,
+  error,
+  savedConfirmed,
+  onEmailChange,
+  onCodeChange,
+  onSavedConfirmedChange,
+  onSubmit,
+  onCreatePasskey,
+  onConfirm,
+}: SignupViewProps) {
+  const handleSubmit = (event: React.FormEvent<HTMLFormElement>) => {
+    event.preventDefault();
+    onSubmit?.();
+  };
   switch (step) {
     case "details":
       return (
         <AuthScreen title="Create your account" lead="Tell us a little about you to get started.">
-          <form className="flex flex-col gap-4">
+          <form className="flex flex-col gap-4" onSubmit={handleSubmit}>
             <Field label="Your name" name="name" type="text" autoComplete="name" />
-            <Field label="Email address" name="email" type="email" autoComplete="email" />
+            <Field
+              label="Email address"
+              name="email"
+              type="email"
+              autoComplete="email"
+              value={email}
+              onChange={(event) => onEmailChange?.(event.target.value)}
+              error={error}
+            />
             <Button type="submit" variant="primary">
               Continue
             </Button>
@@ -79,8 +148,17 @@ export function SignupView({ step, recoveryCode }: { step: SignupStep; recoveryC
           title="Check your email"
           lead="Enter the code we emailed you to confirm it's your address."
         >
-          <form className="flex flex-col gap-4">
-            <Field label="Your code" name="code" type="text" inputMode="numeric" autoComplete="one-time-code" />
+          <form className="flex flex-col gap-4" onSubmit={handleSubmit}>
+            <Field
+              label="Your code"
+              name="code"
+              type="text"
+              inputMode="numeric"
+              autoComplete="one-time-code"
+              value={code}
+              onChange={(event) => onCodeChange?.(event.target.value)}
+              error={error}
+            />
             <Button type="submit" variant="primary">
               Continue
             </Button>
@@ -93,9 +171,10 @@ export function SignupView({ step, recoveryCode }: { step: SignupStep; recoveryC
           title="Set up a passkey"
           lead="A passkey lets you sign in with your fingerprint, face or device PIN — there's no password to remember."
         >
-          <Button type="button" variant="primary">
+          <Button type="button" variant="primary" onClick={onCreatePasskey}>
             Create a passkey
           </Button>
+          {error ? <p className="text-sm text-danger">{error}</p> : null}
         </AuthScreen>
       );
     case "recovery":
@@ -104,7 +183,13 @@ export function SignupView({ step, recoveryCode }: { step: SignupStep; recoveryC
           title="Save your recovery code"
           lead="Write this code down and keep it somewhere safe. It's the only way back in if you ever lose your passkey, and we'll only show it once."
         >
-          <SaveRecoveryCode code={recoveryCode} />
+          <SaveRecoveryCode
+            code={recoveryCode}
+            savedConfirmed={savedConfirmed}
+            onSavedConfirmedChange={onSavedConfirmedChange}
+            onContinue={onConfirm}
+            error={error}
+          />
         </AuthScreen>
       );
   }
