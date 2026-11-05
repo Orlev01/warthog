@@ -1,0 +1,587 @@
+// E04-S29 — Account-recovery server actions (`src/app/(auth)/recover/handler.ts`).
+//
+// RED-first: the recover handler does not exist yet, so importing `./handler`
+// throws and every test here fails until the builder adds it. That absence IS the
+// point of test-first — do NOT implement anything to make these pass.
+//
+// These tests pin BEHAVIOUR (the HTTP outcome of each step, what ends up stored, and
+// which device ends up signed in), never the source text of the module — a later
+// rename that preserves behaviour must not redden them. There is no browser, no Azure
+// and no network: the recovery code, the passkey round trip, the new recovery code and
+// the session are all driven through the REAL sibling seams against an isolated
+// in-memory PGlite (src/test/db), and the WebAuthn attestation is produced by the
+// software authenticator (src/test/authenticator), whose only non-test collaborator is
+// the real @simplewebauthn/server verifier.
+//
+// Why a sibling `handler.ts` (not `actions.ts` or `page.tsx`): a Next "use server"
+// actions file may export only async server actions, and a `page.tsx` entry file only
+// its framework fields — neither can carry an injectable, unit-testable factory without
+// breaking `next build`. So the testable seam lives in a plain sibling module
+// (`handler.ts`, the convention's `createXHandler({ db })` pattern); the thin
+// `actions.ts` / route verbs wrap it. These tests drive that seam directly with fakes.
+//
+// Why this exists (brief "Recover your account"; design §4.2, §5: the one-time recovery
+// code "restores access … if every passkey is lost", and after recovery the person
+// "receives a new recovery code that replaces the old one"; INV-22 "require every
+// account to hold a passkey … second factor"; INV-102 validate-and-parameterize): the
+// recovery modules exist but nothing serves them, so a person who loses every device
+// cannot get back in. This handler is that front door: it identifies the person by
+// email, verifies their recovery code, registers a NEW passkey (the new second factor),
+// issues a NEW recovery code shown ONCE (which replaces the old one), then mints a
+// session and lands them on /home.
+//
+// ─── The contract this task defines (the builder implements exactly this) ────────────
+//
+//   createRecoverHandler(deps): {
+//     identify(req: Request):        Promise<Response>  // step 1: { email } -> start recovery
+//     verifyCode(req: Request):      Promise<Response>  // step 2: verify the recovery code
+//     registerPasskey(req: Request): Promise<Response>  // step 3: new passkey + new recovery code
+//     finish(req: Request):          Promise<Response>  // step 4: mint a session -> /home
+//   }
+//
+//   deps (one bundle; each step reads the subset it needs):
+//     { db: Db; clock: Clock; random: Random;
+//       rpId: string;            // WebAuthn RP ID (warthog.com.au), from config
+//       publicOrigin: string }   // the configured public origin, for the Origin check
+//
+//   Every step verifies the request `Origin` against `publicOrigin` first: a missing or
+//   foreign Origin is refused with 403 and changes nothing (design §5). Every step
+//   validates its JSON body at the boundary (parseBody): malformed, oversized or
+//   mis-shaped input → a 4xx Response, never an uncontrolled 500 (INV-102). Every query
+//   the steps run is parameterized, so a SQL-injection probe in an input field is bound
+//   as data and cannot alter a query (INV-102). The new recovery code is handed to the
+//   person only in the registerPasskey response and reaches no notification channel.
+//
+//   identify      — body { email }. Resolves the account and starts a pending recovery,
+//     returning 200 { recoveryId } — the handle that carries the remaining steps (the
+//     release-store / new-device pattern, as sign-up's signupId). No session is created.
+//
+//   verifyCode    — body { recoveryId, recoveryCode }. Verifies the presented recovery
+//     code against the pending recovery's account (the real verifyRecoveryCode). A wrong
+//     code → 4xx and nothing changes (no session, no passkey, the old code still works).
+//     A valid code → 200 { registrationOptions }, a PublicKeyCredentialCreationOptions
+//     carrying the configured rpId, so the person can register a new passkey.
+//
+//   registerPasskey — body { recoveryId, registrationResponse }. Verifies the WebAuthn
+//     attestation against the challenge the server issued, registers the new passkey for
+//     the account, and issues the NEW recovery code (which REPLACES the old one),
+//     returning 200 { recoveryCode } — the single place the new code is handed to the
+//     person (shown once). A bad attestation / unknown recovery → 4xx.
+//
+//   finish        — body { recoveryId }. Refuses (4xx, nothing minted) unless a new
+//     passkey was registered for the pending recovery (the new second factor). On
+//     success it mints a session and returns a redirect (303) to /home carrying the
+//     `__Host-wh_session` Set-Cookie. The new passkey authenticates against the account.
+//
+// ─── Acceptance criteria → tests ─────────────────────────────────────────────────────
+//   AC1 a person with a valid recovery code who registers a new passkey ends with a
+//       session and a 303 to /home, and the OLD recovery code no longer verifies while
+//       the NEW one does (happy path end-to-end); the new passkey authenticates; and
+//       finishing without a new passkey mints no session (the second-factor gate).
+//   AC2 a wrong recovery code is a 4xx with no session and no new passkey (and the old
+//       code keeps working — it was not replaced).
+//   AC3 every step verifies Origin: a missing or foreign Origin is 403 and changes
+//       nothing (no session, no passkey, the old recovery code untouched).
+//   AC4 a handler rejects malformed / oversized / mis-shaped input with a 4xx, and a
+//       SQL-injection probe in an input field cannot alter a query (parameter binding).
+//
+// Every db handle is closed in a `finally` so node:test leaves no open handle; each test
+// uses its own freshDb(). Recovery codes and recoveryIds are drawn from the REAL random
+// seam so nothing collides across tests (the same discipline the session / sign-up
+// tests use).
+
+import { test } from "node:test";
+import assert from "node:assert/strict";
+
+import type {
+  PublicKeyCredentialCreationOptionsJSON,
+  RegistrationResponseJSON,
+} from "@simplewebauthn/server";
+
+import { createRecoverHandler } from "./handler";
+
+import { issueRecoveryCode, verifyRecoveryCode } from "../../../server/auth/recovery";
+import { verifySession } from "../../../server/auth/session";
+import {
+  beginPasskeyAuthentication,
+  finishPasskeyAuthentication,
+} from "../../../server/auth/passkey";
+import { createUser, getUserByEmail, type User } from "../../../server/db/users";
+import { systemRandom } from "../../../server/seams/random";
+import { fixedClock, type Clock } from "../../../server/seams/clock";
+import { freshDb } from "../../../test/db";
+import { createAuthenticator, type SoftwareAuthenticator } from "../../../test/authenticator";
+import type { Db } from "../../../server/db/index";
+
+// A frozen instant: the session is minted and verified at the same clock, so it is
+// comfortably inside its idle/absolute windows with no wall-clock dependence.
+const T0 = new Date("2026-05-01T00:00:00.000Z");
+
+// The configured WebAuthn RP ID — passed through deps (never a module constant), so the
+// "RP ID from config" discipline is exercised end to end.
+const RP_ID = "warthog.com.au";
+
+// The configured public origin the handler checks the request `Origin` against, and a
+// foreign origin a cross-site request would carry.
+const GOOD_ORIGIN = "https://warthog.com.au";
+const FOREIGN_ORIGIN = "https://evil.example";
+
+// A placeholder wrapped-DEK reference: `createUser` stores it verbatim (opaque to the
+// app). Recovery never unwraps it — we only need a real `users` row to hang a recovery
+// code, a passkey and a session off a genuine userId.
+const WRAPPED_DEK = "wrapped-dek-placeholder";
+
+// Build the handler under test with the real seams and the test fakes. Recovery drives
+// the recovery/passkey/session modules only — it issues no email and creates no account,
+// so there is no emailSender / keyWrapper in the bundle.
+function makeHandler(db: Db, clock: Clock = fixedClock(T0)) {
+  return createRecoverHandler({
+    db,
+    clock,
+    random: systemRandom,
+    rpId: RP_ID,
+    publicOrigin: GOOD_ORIGIN,
+  });
+}
+
+// A JSON POST request carrying an `Origin` header. `origin: null` sends no Origin at all
+// (the cross-site / no-origin case). A raw string body is sent verbatim (for malformed
+// JSON); anything else is JSON-encoded.
+function recoverRequest(body: unknown, origin: string | null = GOOD_ORIGIN): Request {
+  const headers: Record<string, string> = { "content-type": "application/json" };
+  if (origin !== null) headers.origin = origin;
+  return new Request("https://warthog.com.au/api/recover", {
+    method: "POST",
+    headers,
+    body: typeof body === "string" ? body : JSON.stringify(body),
+  });
+}
+
+// Create a genuine account with a current recovery code, and return the user plus the
+// plaintext code the person would have saved at sign-up (the "old" code recovery
+// replaces). Distinct labels keep emails unique within a test.
+async function seedAccount(db: Db, label: string): Promise<{ user: User; recoveryCode: string }> {
+  const user = await createUser(db, { email: `${label}@warthog.com.au`, wrappedDek: WRAPPED_DEK });
+  const { code } = await issueRecoveryCode(db, user.id, { random: systemRandom });
+  return { user, recoveryCode: code };
+}
+
+// A genuinely different recovery code of the SAME 26-char base32 shape: flip the first
+// character. It stays well-formed, so verifyCode exercises the hash comparison (a real
+// wrong guess), not an input-format rejection at the boundary.
+function wrongCode(code: string): string {
+  const first = code[0] === "A" ? "B" : "A";
+  return first + code.slice(1);
+}
+
+// The session token the browser would hold, pulled out of the `Set-Cookie` the finish
+// step emits (the host-locked `__Host-wh_session` cookie, value up to the first `;`).
+function sessionTokenFromCookie(setCookie: string | null): string {
+  assert.ok(setCookie, "the finish step must set a session cookie");
+  assert.ok(
+    setCookie.startsWith("__Host-wh_session="),
+    `the session cookie must be the host-locked __Host-wh_session cookie: ${JSON.stringify(setCookie)}`,
+  );
+  return setCookie.slice("__Host-wh_session=".length).split(";")[0]!;
+}
+
+// How many member-scoped rows this person has in `table` — the "is anyone signed in /
+// does a passkey exist" probe, filtered by the account id (parameterized, as feature
+// code must be).
+async function countFor(db: Db, table: "sessions" | "passkeys", userId: string): Promise<number> {
+  const result = await db.query(`SELECT count(*)::int AS n FROM ${table} WHERE user_id = $1`, [userId]);
+  return Number(result.rows[0]?.n ?? -1);
+}
+
+// Step 1 — identify by email over the good origin and return the pending recovery's
+// handle. Asserts the step itself succeeded so a later step fails for the right reason.
+async function startIdentify(handler: ReturnType<typeof makeHandler>, email: string): Promise<string> {
+  const res = await handler.identify(recoverRequest({ email }));
+  assert.equal(res.status, 200, "identify accepts an existing account's email and starts recovery");
+  const body = (await res.json()) as { recoveryId: string };
+  assert.equal(typeof body.recoveryId, "string", "identify hands back a recovery handle");
+  assert.ok(body.recoveryId.length > 0, "the recovery handle is non-empty");
+  return body.recoveryId;
+}
+
+// Steps 1–2 — identify, then verify the recovery code, returning the handle plus the
+// passkey registration options the valid code unlocks.
+async function throughVerifyCode(
+  handler: ReturnType<typeof makeHandler>,
+  email: string,
+  recoveryCode: string,
+): Promise<{ recoveryId: string; registrationOptions: PublicKeyCredentialCreationOptionsJSON }> {
+  const recoveryId = await startIdentify(handler, email);
+
+  const res = await handler.verifyCode(recoverRequest({ recoveryId, recoveryCode }));
+  assert.equal(res.status, 200, "a valid recovery code is accepted");
+  const body = (await res.json()) as { registrationOptions: PublicKeyCredentialCreationOptionsJSON };
+  assert.equal(
+    body.registrationOptions.rp.id,
+    RP_ID,
+    "the registration options carry the configured RP ID (from config, not hard-coded)",
+  );
+  assert.equal(
+    typeof body.registrationOptions.challenge,
+    "string",
+    "the registration options carry a server-issued challenge",
+  );
+  return { recoveryId, registrationOptions: body.registrationOptions };
+}
+
+// Steps 1–3 — through registering the new passkey, returning the handle plus the NEW
+// recovery code shown once. Asserts the register step succeeded.
+async function throughRegisterPasskey(
+  handler: ReturnType<typeof makeHandler>,
+  auth: SoftwareAuthenticator,
+  email: string,
+  recoveryCode: string,
+): Promise<{ recoveryId: string; newRecoveryCode: string }> {
+  const { recoveryId, registrationOptions } = await throughVerifyCode(handler, email, recoveryCode);
+
+  const registrationResponse: RegistrationResponseJSON = await auth.register(registrationOptions);
+  const res = await handler.registerPasskey(recoverRequest({ recoveryId, registrationResponse }));
+  assert.equal(res.status, 200, "a valid attestation registers the new passkey");
+  const body = (await res.json()) as { recoveryCode: string };
+  assert.equal(typeof body.recoveryCode, "string", "the new recovery code is shown once");
+  assert.ok(body.recoveryCode.length > 0, "the new recovery code is non-empty");
+  return { recoveryId, newRecoveryCode: body.recoveryCode };
+}
+
+// =====================================================================================
+// AC1 — the happy path: identify → recovery code → new passkey → new code (shown) →
+// finish → signed in. No session until the new passkey is registered; the old code dies
+// and the new one lives; and the person lands on /home.
+// =====================================================================================
+
+test("recovery: a valid code + a new passkey ends in a session and a 303 to /home, replacing the old recovery code", async () => {
+  const clock = fixedClock(T0);
+  const db = await freshDb();
+  try {
+    const handler = makeHandler(db, clock);
+    const auth = createAuthenticator();
+    const { user, recoveryCode: oldCode } = await seedAccount(db, "recoverer");
+
+    const { recoveryId, newRecoveryCode } = await throughRegisterPasskey(
+      handler,
+      auth,
+      user.email,
+      oldCode,
+    );
+
+    // The new code shown is genuinely new, and still nobody is signed in — the session is
+    // minted only at finish.
+    assert.notEqual(newRecoveryCode, oldCode, "recovery issues a fresh code, not the old one");
+    assert.equal(await countFor(db, "sessions", user.id), 0, "no session exists before finishing");
+
+    // Finish: mint the session and send the person to /home (AC1).
+    const finishRes = await handler.finish(recoverRequest({ recoveryId }));
+    assert.ok(
+      finishRes.status >= 300 && finishRes.status < 400,
+      `finishing recovery must redirect, got ${finishRes.status}`,
+    );
+    assert.equal(finishRes.headers.get("location"), "/home", "on success the person is redirected to /home");
+
+    // The Set-Cookie is a real, verifiable session for the recovered account.
+    const token = sessionTokenFromCookie(finishRes.headers.get("set-cookie"));
+    const session = await verifySession(db, token, { clock });
+    assert.ok(session, "the issued session token verifies");
+    assert.equal(session.userId, user.id, "the session belongs to the recovered person");
+
+    // The old recovery code is dead and the new one is live — recovery replaced it.
+    assert.equal(
+      await verifyRecoveryCode(db, user.id, oldCode),
+      false,
+      "after recovery the OLD recovery code no longer verifies",
+    );
+    assert.equal(
+      await verifyRecoveryCode(db, user.id, newRecoveryCode),
+      true,
+      "the NEW recovery code shown during recovery verifies against the account",
+    );
+  } finally {
+    await db.close();
+  }
+});
+
+test("recovery: the newly registered passkey authenticates the person (the new second factor is real)", async () => {
+  const clock = fixedClock(T0);
+  const db = await freshDb();
+  try {
+    const handler = makeHandler(db, clock);
+    const auth = createAuthenticator();
+    const { user, recoveryCode: oldCode } = await seedAccount(db, "passkey-recoverer");
+
+    const { recoveryId } = await throughRegisterPasskey(handler, auth, user.email, oldCode);
+    const finishRes = await handler.finish(recoverRequest({ recoveryId }));
+    assert.ok(finishRes.status >= 300 && finishRes.status < 400, "finishing recovery redirects");
+
+    // Drive a real WebAuthn authentication with the SAME authenticator that registered
+    // during recovery: the new credential was persisted for the account and verifies.
+    const options = await beginPasskeyAuthentication(db, { userId: user.id }, { rpId: RP_ID });
+    const assertion = await auth.authenticate(options);
+    const result = await finishPasskeyAuthentication(
+      db,
+      { userId: user.id, response: assertion },
+      { rpId: RP_ID },
+    );
+    assert.equal(result.ok, true, "the passkey registered during recovery authenticates the person");
+  } finally {
+    await db.close();
+  }
+});
+
+test("recovery: finishing without registering a new passkey mints no session (the new second factor is required)", async () => {
+  const clock = fixedClock(T0);
+  const db = await freshDb();
+  try {
+    const handler = makeHandler(db, clock);
+    const { user, recoveryCode: oldCode } = await seedAccount(db, "no-passkey-recoverer");
+
+    // Verify the recovery code (so the options are issued) but DO NOT register a passkey.
+    const { recoveryId } = await throughVerifyCode(handler, user.email, oldCode);
+
+    const res = await handler.finish(recoverRequest({ recoveryId }));
+    assert.ok(
+      res.status >= 400 && res.status < 500,
+      `finishing with no new passkey is refused with a 4xx, got ${res.status}`,
+    );
+    assert.equal(await countFor(db, "sessions", user.id), 0, "no session is minted without a new passkey");
+    assert.equal(await countFor(db, "passkeys", user.id), 0, "no passkey was registered");
+    assert.equal(
+      await verifyRecoveryCode(db, user.id, oldCode),
+      true,
+      "the old recovery code still works — recovery did not complete, so nothing was replaced",
+    );
+  } finally {
+    await db.close();
+  }
+});
+
+// =====================================================================================
+// AC2 — a wrong recovery code is a 4xx: no session, no new passkey, the old code lives.
+// =====================================================================================
+
+test("recovery: a wrong recovery code is a 4xx — no session, no new passkey, and the old code still works", async () => {
+  const clock = fixedClock(T0);
+  const db = await freshDb();
+  try {
+    const handler = makeHandler(db, clock);
+    const { user, recoveryCode: oldCode } = await seedAccount(db, "wrong-code");
+
+    const recoveryId = await startIdentify(handler, user.email);
+
+    // A well-formed but wrong code, over a valid Origin, so the ONLY reason to reject is
+    // the code itself.
+    const res = await handler.verifyCode(recoverRequest({ recoveryId, recoveryCode: wrongCode(oldCode) }));
+    assert.ok(res.status >= 400 && res.status < 500, `a wrong recovery code is a 4xx, got ${res.status}`);
+
+    assert.equal(await countFor(db, "sessions", user.id), 0, "a wrong code mints no session");
+    assert.equal(await countFor(db, "passkeys", user.id), 0, "a wrong code registers no passkey");
+    assert.equal(
+      await verifyRecoveryCode(db, user.id, oldCode),
+      true,
+      "a wrong guess does not replace the account's current recovery code",
+    );
+  } finally {
+    await db.close();
+  }
+});
+
+// =====================================================================================
+// AC3 — every step verifies Origin (missing or foreign → 403, changes nothing).
+// =====================================================================================
+
+test("recovery: identify and verify-code refuse a missing or foreign Origin (403) and change nothing", async () => {
+  const clock = fixedClock(T0);
+  const db = await freshDb();
+  try {
+    const handler = makeHandler(db, clock);
+    const { user, recoveryCode: oldCode } = await seedAccount(db, "origin-early");
+
+    // identify: a foreign Origin and a missing Origin are both forbidden.
+    assert.equal(
+      (await handler.identify(recoverRequest({ email: user.email }, FOREIGN_ORIGIN))).status,
+      403,
+      "identify from a foreign Origin is forbidden",
+    );
+    assert.equal(
+      (await handler.identify(recoverRequest({ email: user.email }, null))).status,
+      403,
+      "identify with no Origin is forbidden",
+    );
+
+    // Start a real recovery over the good origin so verify-code has a handle to target.
+    const recoveryId = await startIdentify(handler, user.email);
+
+    // verify-code: the SAME valid code, so the ONLY reason to reject is the Origin.
+    assert.equal(
+      (await handler.verifyCode(recoverRequest({ recoveryId, recoveryCode: oldCode }, FOREIGN_ORIGIN))).status,
+      403,
+      "verify-code from a foreign Origin is forbidden",
+    );
+    assert.equal(
+      (await handler.verifyCode(recoverRequest({ recoveryId, recoveryCode: oldCode }, null))).status,
+      403,
+      "verify-code with no Origin is forbidden",
+    );
+
+    // Nothing changed: no session, no passkey, the old code still works.
+    assert.equal(await countFor(db, "sessions", user.id), 0, "a cross-site attempt mints no session");
+    assert.equal(await countFor(db, "passkeys", user.id), 0, "a cross-site attempt registers no passkey");
+    assert.equal(
+      await verifyRecoveryCode(db, user.id, oldCode),
+      true,
+      "a cross-site attempt does not touch the recovery code",
+    );
+
+    // The good-origin verify-code still works — the only blocker above was the Origin.
+    const ok = await handler.verifyCode(recoverRequest({ recoveryId, recoveryCode: oldCode }));
+    assert.equal(ok.status, 200, "the same code over the good Origin is accepted");
+  } finally {
+    await db.close();
+  }
+});
+
+test("recovery: register-passkey and finish refuse a missing or foreign Origin (403) and change nothing", async () => {
+  const clock = fixedClock(T0);
+  const db = await freshDb();
+  try {
+    const handler = makeHandler(db, clock);
+    const auth = createAuthenticator();
+    const { user, recoveryCode: oldCode } = await seedAccount(db, "origin-late");
+
+    // Reach a code-verified recovery over the good origin and produce a valid attestation.
+    const { recoveryId, registrationOptions } = await throughVerifyCode(handler, user.email, oldCode);
+    const registrationResponse = await auth.register(registrationOptions);
+
+    // register-passkey: the SAME valid attestation, so the ONLY reason to reject is Origin.
+    assert.equal(
+      (await handler.registerPasskey(recoverRequest({ recoveryId, registrationResponse }, FOREIGN_ORIGIN))).status,
+      403,
+      "register-passkey from a foreign Origin is forbidden",
+    );
+    assert.equal(
+      (await handler.registerPasskey(recoverRequest({ recoveryId, registrationResponse }, null))).status,
+      403,
+      "register-passkey with no Origin is forbidden",
+    );
+    // Nothing changed: no passkey stored, the old recovery code is untouched (no new one issued).
+    assert.equal(await countFor(db, "passkeys", user.id), 0, "a cross-site register stores no passkey");
+    assert.equal(
+      await verifyRecoveryCode(db, user.id, oldCode),
+      true,
+      "a cross-site register does not issue a replacement recovery code",
+    );
+
+    // The good-origin register-passkey still works — the only blocker above was Origin.
+    const registered = await handler.registerPasskey(recoverRequest({ recoveryId, registrationResponse }));
+    assert.equal(registered.status, 200, "the same attestation over the good Origin registers the passkey");
+
+    // finish: a foreign or missing Origin mints no session.
+    assert.equal(
+      (await handler.finish(recoverRequest({ recoveryId }, FOREIGN_ORIGIN))).status,
+      403,
+      "finish from a foreign Origin is forbidden",
+    );
+    assert.equal(
+      (await handler.finish(recoverRequest({ recoveryId }, null))).status,
+      403,
+      "finish with no Origin is forbidden",
+    );
+    assert.equal(await countFor(db, "sessions", user.id), 0, "a cross-site finish mints no session");
+
+    // The good-origin finish still redirects — the only blocker above was the Origin.
+    const finished = await handler.finish(recoverRequest({ recoveryId }));
+    assert.ok(
+      finished.status >= 300 && finished.status < 400,
+      `the good-Origin finish must redirect, got ${finished.status}`,
+    );
+  } finally {
+    await db.close();
+  }
+});
+
+// =====================================================================================
+// AC4 — validate-and-parameterize: 4xx on bad input, and a SQL-injection probe is bound.
+// =====================================================================================
+
+test("recovery: identify and verify-code reject malformed or mis-shaped input with a 4xx (never a 500)", async () => {
+  const db = await freshDb();
+  try {
+    const handler = makeHandler(db);
+
+    // All carry a valid Origin, so the ONLY reason to reject is the input itself.
+    const badIdentify: unknown[] = ["{ not valid json at all", {}, { email: 123 }];
+    for (const body of badIdentify) {
+      const res = await handler.identify(recoverRequest(body));
+      assert.ok(
+        res.status >= 400 && res.status < 500,
+        `bad identify input ${JSON.stringify(body)} must be a 4xx, got ${res.status}`,
+      );
+    }
+
+    const badVerify: unknown[] = ["{ not valid json", {}, { recoveryId: 5, recoveryCode: [] }];
+    for (const body of badVerify) {
+      const res = await handler.verifyCode(recoverRequest(body));
+      assert.ok(
+        res.status >= 400 && res.status < 500,
+        `bad verify-code input ${JSON.stringify(body)} must be a 4xx, got ${res.status}`,
+      );
+    }
+  } finally {
+    await db.close();
+  }
+});
+
+test("recovery: an oversized body is rejected with a 4xx before any work", async () => {
+  const db = await freshDb();
+  try {
+    const handler = makeHandler(db);
+
+    // A schema-valid shape padded past any reasonable body cap (~2 MiB). The size guard
+    // must reject it with a 4xx rather than process it.
+    const huge = { email: "huge@warthog.com.au", pad: "x".repeat(2 * 1024 * 1024) };
+    const res = await handler.identify(recoverRequest(huge));
+    assert.ok(res.status >= 400 && res.status < 500, `an oversized body must be a 4xx, got ${res.status}`);
+  } finally {
+    await db.close();
+  }
+});
+
+test("recovery: a SQL-injection probe in the email field is bound as data and cannot alter a query", async () => {
+  const clock = fixedClock(T0);
+  const db = await freshDb();
+  try {
+    const handler = makeHandler(db, clock);
+
+    // A real account with a recovery code exists; if the probe below were concatenated
+    // into SQL rather than bound, the trailing statement would drop the users table and
+    // take this row with it.
+    const { user: survivor, recoveryCode: survivorCode } = await seedAccount(db, "survivor");
+
+    // Fire the classic injection probe through the email field with a valid Origin. It is
+    // handled (never an uncontrolled 500): whether rejected at the validation boundary or
+    // reaching the query bound as a parameter, it never runs as SQL.
+    const probe = "robert'); DROP TABLE users; --@warthog.com.au";
+    const res = await handler.identify(recoverRequest({ email: probe }));
+    assert.ok(res.status < 500, `the probe must be handled, not crash the server (got ${res.status})`);
+
+    // The injection did NOT execute: the users table still exists and still holds the
+    // baseline account, its recovery code still verifies, and the recovery_codes table is
+    // intact.
+    assert.equal(
+      (await getUserByEmail(db, survivor.email))?.id,
+      survivor.id,
+      "the baseline account survived — the probe was data, not SQL",
+    );
+    assert.equal(
+      await verifyRecoveryCode(db, survivor.id, survivorCode),
+      true,
+      "the baseline account's recovery code still verifies — its row survived",
+    );
+    await db.query("SELECT 1 FROM recovery_codes LIMIT 1");
+  } finally {
+    await db.close();
+  }
+});
