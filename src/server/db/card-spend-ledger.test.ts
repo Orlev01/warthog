@@ -372,12 +372,17 @@ test("sumForHouseholdPeriod totals spend across a household's members in the per
   try {
     const alice = await makeUser(db, "ac2-hh-alice");
     const bob = await makeUser(db, "ac2-hh-bob");
+    // Operator fix (E07-S07 no-progress): the H2 release belonged to Alice, which put one
+    // person in two households and made Alice's own November total (110.50) exceed H's
+    // (30.75), so the third assertion could never pass. A person belongs to one household;
+    // the H2 release now belongs to Carol, keeping the cross-household isolation check.
+    const carol = await makeUser(db, "ac2-hh-carol");
 
     // Alice and Bob both belong to household H and both spend this month.
     await recordRelease(db, makeRelease(alice, { connectionId: CONN_A, householdId: HOUSE_H, amount: 10.5, periodKeys: keys() }));
     await recordRelease(db, makeRelease(bob, { connectionId: CONN_B, householdId: HOUSE_H, amount: 20.25, periodKeys: keys() }));
     // A release in a different household must not count toward H.
-    await recordRelease(db, makeRelease(alice, { connectionId: CONN_C, householdId: HOUSE_H2, amount: 100.0, periodKeys: keys() }));
+    await recordRelease(db, makeRelease(carol, { connectionId: CONN_C, householdId: HOUSE_H2, amount: 100.0, periodKeys: keys() }));
     // A release in a different month must not count toward November's H total.
     await recordRelease(db, makeRelease(bob, { connectionId: CONN_B, householdId: HOUSE_H, amount: 5.25, periodKeys: keys({ month: M_DEC }) }));
 
