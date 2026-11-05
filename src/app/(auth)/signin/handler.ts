@@ -49,7 +49,7 @@ import {
   finishPasskeyAuthentication,
 } from "../../../server/auth/passkey";
 import { verifyTotp } from "../../../server/auth/totp";
-import { createSession } from "../../../server/auth/session";
+import { createSession, recordStepUp } from "../../../server/auth/session";
 import { getUserByEmail } from "../../../server/db/users";
 import type { Clock } from "../../../server/seams/clock";
 import type { Random } from "../../../server/seams/random";
@@ -146,9 +146,12 @@ export function createSigninHandler(deps: SigninHandlerDeps): SigninHandler {
   }
 
   // Mint a session for the signed-in person and redirect to /home carrying the
-  // host-locked `__Host-wh_session` cookie (the signed-in home).
+  // host-locked `__Host-wh_session` cookie (the signed-in home). A sign-in IS a
+  // passkey/TOTP check, so record a step-up on the new session (design §5): the
+  // next sensitive change is allowed for the following five minutes.
   async function mintSession(userId: string): Promise<Response> {
     const created = await createSession(db, userId, { clock, random });
+    await recordStepUp(db, created.session.id, { clock });
     return new Response(null, {
       status: 303,
       headers: { location: "/home", "set-cookie": created.cookie },
