@@ -5,6 +5,7 @@ import { redirect } from "next/navigation";
 import { getServerDb } from "@/server/db/server";
 import { requireSession } from "@/server/auth/guard";
 import { systemClock } from "@/server/seams/clock";
+import { PortalChrome } from "@/components/shell/portal-chrome";
 
 // The auth-guard layout for the `(protected)` route group (INV-101, design §5): every
 // admin route under it requires an authenticated operator session verified on the server,
@@ -17,6 +18,11 @@ import { systemClock } from "@/server/seams/clock";
 // delegates the admit/redirect decision to the tested `requireSession` seam
 // (`src/server/auth/guard.ts`). Identity is taken from that cookie alone, never from any
 // other client-supplied value (INV-101).
+//
+// With a valid session the page is wrapped in PortalChrome — the client app shell that
+// lights the current navigation section from the live path (render-tested in
+// `src/components/shell/portal-chrome.test.tsx`), mounted propless so it reads the path
+// from usePathname at runtime.
 
 // The host-locked session cookie set by the session module.
 const SESSION_COOKIE = "__Host-wh_session";
@@ -31,5 +37,5 @@ export default async function ProtectedLayout({ children }: { children: React.Re
   // No valid session → send the person to sign in (outside this group, so no loop).
   if (!result.ok) redirect(result.redirectTo);
 
-  return <>{children}</>;
+  return <PortalChrome>{children}</PortalChrome>;
 }
