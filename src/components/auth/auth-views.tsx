@@ -431,18 +431,67 @@ export function RecoverView({
 
 // --- add this device to an existing account --------------------------------
 
-export type DeviceStep = "code" | "confirm";
+export type DeviceStep = "code" | "confirm" | "waiting" | "stopped";
 
-export function DeviceView({ step }: { step: DeviceStep }) {
+// DeviceView renders from props alone. The optional interactive wiring is supplied by
+// the client new-device flow (E04-S34) to drive the screen; when it is omitted the view
+// renders as the static copy the render tests pin. The `code` step collects the email
+// and the one-time code the approval request needs; `waiting` is shown while the person
+// approves on a device they already use; `stopped` explains a refused or expired request
+// and offers to start again.
+export interface DeviceViewProps {
+  step: DeviceStep;
+  email?: string;
+  code?: string;
+  error?: string;
+  onEmailChange?: (value: string) => void;
+  onCodeChange?: (value: string) => void;
+  onSubmit?: () => void;
+  onStartAgain?: () => void;
+}
+
+export function DeviceView({
+  step,
+  email,
+  code,
+  error,
+  onEmailChange,
+  onCodeChange,
+  onSubmit,
+  onStartAgain,
+}: DeviceViewProps) {
   switch (step) {
     case "code":
       return (
         <AuthScreen
           title="Add this device"
-          lead="Enter the code we emailed you to add this device to your account."
+          lead="Enter your email and the code we emailed you to add this device to your account."
         >
-          <form className="flex flex-col gap-4">
-            <Field label="Your code" name="code" type="text" inputMode="numeric" autoComplete="one-time-code" />
+          <form
+            className="flex flex-col gap-4"
+            onSubmit={(event) => {
+              event.preventDefault();
+              onSubmit?.();
+            }}
+          >
+            <Field
+              label="Email address"
+              name="email"
+              type="email"
+              autoComplete="email"
+              value={email}
+              onChange={(event) => onEmailChange?.(event.target.value)}
+            />
+            <Field
+              label="Your code"
+              name="code"
+              type="text"
+              inputMode="numeric"
+              autoComplete="one-time-code"
+              value={code}
+              onChange={(event) => onCodeChange?.(event.target.value)}
+              error={error}
+            />
             <Button type="submit" variant="primary">
               Continue
             </Button>
@@ -457,6 +506,26 @@ export function DeviceView({ step }: { step: DeviceStep }) {
         >
           <Button type="button" variant="primary">
             Confirm with your passkey
+          </Button>
+        </AuthScreen>
+      );
+    case "waiting":
+      return (
+        <AuthScreen
+          title="Waiting for approval"
+          lead="We've asked a device you already use to approve adding this one. Approve it there and we'll finish setting up this device for you."
+        >
+          <p className="text-sm text-fg-muted">
+            Keep this screen open while you approve on your other device.
+          </p>
+        </AuthScreen>
+      );
+    case "stopped":
+      return (
+        <AuthScreen title="We couldn't add this device">
+          <p className="text-sm text-fg-muted">{error ?? "The approval didn't go through."}</p>
+          <Button type="button" variant="primary" onClick={onStartAgain}>
+            Start again
           </Button>
         </AuthScreen>
       );
