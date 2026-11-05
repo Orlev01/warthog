@@ -30,6 +30,7 @@ import type { Db } from "../db/index";
 import type { SignupHandlerDeps } from "../../app/(auth)/signup/handler";
 import type { SigninHandlerDeps } from "../../app/(auth)/signin/handler";
 import type { RecoverHandlerDeps } from "../../app/(auth)/recover/handler";
+import type { DeviceHandlerDeps } from "../../app/(auth)/device/handler";
 import type { SignoutHandlerDeps } from "./signout-handler";
 import type { StepUpHandlerDeps } from "./step-up-handler";
 
@@ -143,6 +144,28 @@ export async function getRecoverDeps(
     clock: systemClock,
     random: systemRandom,
     rpId: config.webauthnRpId,
+    publicOrigin: publicOrigin(config),
+  };
+}
+
+// Build the DeviceHandlerDeps bundle from validated config: the shared db, the clock
+// and random the handshake uses, the HMAC key the email-code first factor verifies
+// against, the email sender carrying that factor's throttle alert, the push sender that
+// delivers the one approval push, and the origin every device step checks the request
+// against (design §5).
+export async function getDeviceDeps(
+  overrides: ComposeOverrides = {},
+): Promise<DeviceHandlerDeps> {
+  const config = resolveConfig(overrides);
+  const db = await resolveDb(overrides);
+  const senders = selectSenders(config, notConfiguredSenders());
+  return {
+    db,
+    clock: systemClock,
+    random: systemRandom,
+    hmacKey: config.hmacKey,
+    emailSender: senders.email,
+    pushSender: senders.push,
     publicOrigin: publicOrigin(config),
   };
 }
