@@ -1,0 +1,24 @@
+{
+  "id": "twilio",
+  "name": "Twilio",
+  "aliases": [
+    "twilio sms",
+    "twilio messaging",
+    "twilio voice"
+  ],
+  "category": "communications",
+  "auth_kind": "provider_mcp",
+  "base_url": "https://mcp.twilio.com/mcp",
+  "auth": {},
+  "curated_tools": [
+    {
+      "name": "send_message"
+    },
+    {
+      "name": "list_messages"
+    },
+    {
+      "name": "lookup_number"
+    }
+  ]
+}

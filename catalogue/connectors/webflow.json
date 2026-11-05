@@ -1,0 +1,24 @@
+{
+  "id": "webflow",
+  "name": "Webflow",
+  "aliases": [
+    "webflow sites",
+    "webflow cms",
+    "webflow designer"
+  ],
+  "category": "website-builder",
+  "auth_kind": "provider_mcp",
+  "base_url": "https://mcp.webflow.com/sse",
+  "auth": {},
+  "curated_tools": [
+    {
+      "name": "list_sites"
+    },
+    {
+      "name": "list_collections"
+    },
+    {
+      "name": "create_item"
+    }
+  ]
+}

@@ -1,0 +1,24 @@
+{
+  "id": "pagerduty",
+  "name": "PagerDuty",
+  "aliases": [
+    "pagerduty oncall",
+    "pagerduty alerts",
+    "pagerduty incidents"
+  ],
+  "category": "monitoring",
+  "auth_kind": "provider_mcp",
+  "base_url": "https://mcp.pagerduty.com/mcp",
+  "auth": {},
+  "curated_tools": [
+    {
+      "name": "list_incidents"
+    },
+    {
+      "name": "acknowledge_incident"
+    },
+    {
+      "name": "resolve_incident"
+    }
+  ]
+}
