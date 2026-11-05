@@ -24,7 +24,8 @@ import type { Db, Row } from "../db/index";
 
 // The cookie name is a `__Host-` prefix: the browser only accepts it when it is
 // Secure, Path=/ and carries no Domain — i.e. host-locked to warthog.com.au.
-const COOKIE_NAME = "__Host-wh_session";
+// Exported so sign-out reads and clears exactly this cookie (one source of truth).
+export const COOKIE_NAME = "__Host-wh_session";
 
 // A 256-bit session id (32 bytes of entropy), rendered to the client as hex.
 const SESSION_ID_BYTES = 32;
@@ -129,6 +130,23 @@ export async function verifySession(
   );
   const updated = slid.rows[0];
   return updated ? toSession(updated) : session;
+}
+
+// Delete exactly the session the presented token identifies (sign-out): re-hash the
+// token the SAME way create/verify do and delete the matching row, so the old token
+// no longer verifies and ONLY that session ends — the person's other devices keep
+// their rows. The token reaches the query bound as its hash (parameterized, INV-102),
+// so a SQL-shaped token is looked up as data and matches nothing, never alters the
+// statement. An unknown/garbage token matches no row and deletes nothing.
+export async function deleteSession(db: Db, token: string): Promise<void> {
+  await db.query(`DELETE FROM sessions WHERE token_hash = $1`, [hashToken(token)]);
+}
+
+// The Set-Cookie value that CLEARS the session cookie: the same host-locked
+// `__Host-wh_session` (Path=/, Secure, HttpOnly, SameSite=Lax) as `sessionCookie`,
+// with an empty value and Max-Age=0 so the browser drops it immediately.
+export function clearedSessionCookie(): string {
+  return `${COOKIE_NAME}=; Path=/; HttpOnly; Secure; SameSite=Lax; Max-Age=0`;
 }
 
 // Record a step-up (re-authentication) on a session, stamping stepped_up_at at the

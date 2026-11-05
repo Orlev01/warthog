@@ -29,6 +29,7 @@ import { createTotpSecretStore } from "./totp-store";
 import type { Db } from "../db/index";
 import type { SignupHandlerDeps } from "../../app/(auth)/signup/handler";
 import type { SigninHandlerDeps } from "../../app/(auth)/signin/handler";
+import type { SignoutHandlerDeps } from "./signout-handler";
 
 // The two injection points every entry shares: the validated config (defaulting to
 // the real env seam) and a db getter (defaulting to the process-wide server db).
@@ -90,6 +91,20 @@ export async function getSignupDeps(
     emailSender: selectSenders(config, notConfiguredSenders()).email,
     keyWrapper: keyWrapperFor(config),
     rpId: config.webauthnRpId,
+    publicOrigin: publicOrigin(config),
+  };
+}
+
+// Build the SignoutHandlerDeps bundle from validated config: the shared db plus the
+// origin the Origin check accepts. No clock/random — sign-out deletes the presented
+// session by its token hash and clears the cookie; it mints nothing.
+export async function getSignoutDeps(
+  overrides: ComposeOverrides = {},
+): Promise<SignoutHandlerDeps> {
+  const config = resolveConfig(overrides);
+  const db = await resolveDb(overrides);
+  return {
+    db,
     publicOrigin: publicOrigin(config),
   };
 }

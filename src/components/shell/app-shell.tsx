@@ -74,6 +74,10 @@ export type AppShellProps = {
   activeSection: string;
   // The page content, rendered inside the <main> landmark.
   children: React.ReactNode;
+  // Optional footer content for the desktop sidebar, pinned to the bottom of the
+  // sidebar below the navigation (e.g. the 'Sign out' control). Omitted on the
+  // mobile bottom nav, which carries only the five top-level sections.
+  sidebarFooter?: React.ReactNode;
 };
 
 // A bottom-nav item: icon over label, a ≥44px touch target, active item in the
@@ -112,7 +116,7 @@ function SidebarLink({ item, active }: { item: NavItem; active: boolean }) {
   );
 }
 
-export function AppShell({ activeSection, children }: AppShellProps) {
+export function AppShell({ activeSection, children, sidebarFooter }: AppShellProps) {
   return (
     <div className="min-h-screen bg-bg text-fg lg:flex">
       {/* Desktop sidebar (≥1024px): the five sections plus the More children. */}
@@ -129,6 +133,10 @@ export function AppShell({ activeSection, children }: AppShellProps) {
         {MORE_CHILDREN.map((item) => (
           <SidebarLink key={item.key} item={item} active={item.key === activeSection} />
         ))}
+        {/* Sidebar footer, pinned to the bottom below the navigation. */}
+        {sidebarFooter != null && (
+          <div className="mt-auto border-t border-line pt-3">{sidebarFooter}</div>
+        )}
       </nav>
 
       {/* Page content. Extra block padding on mobile clears the fixed bottom nav. */}

@@ -4,6 +4,7 @@ import * as React from "react";
 import { usePathname } from "next/navigation";
 
 import { AppShell } from "./app-shell";
+import { SignOutControl } from "./sign-out";
 import { activeSectionForPath } from "./nav";
 
 // PortalChrome — the signed-in app chrome the (portal)/(protected) layout mounts
@@ -39,5 +40,11 @@ export function PortalChrome({ pathname, children }: PortalChromeProps) {
   const path = pathname ?? livePath ?? "";
   const activeSection = activeSectionForPath(path) ?? "";
 
-  return <AppShell activeSection={activeSection}>{children}</AppShell>;
+  // The 'Sign out' control sits in the desktop sidebar FOOTER (its mobile twin lives
+  // in the More menu, <MoreMenu>); both reuse the one shared SignOutControl.
+  return (
+    <AppShell activeSection={activeSection} sidebarFooter={<SignOutControl className="px-3 py-2" />}>
+      {children}
+    </AppShell>
+  );
 }
