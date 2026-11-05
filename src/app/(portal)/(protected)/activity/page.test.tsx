@@ -269,9 +269,22 @@ function seqsOf(view: ActivityViewProps): number[] {
   return view.entries.map((entry) => entry.seq);
 }
 
-// Render the mounted screen the page shows over the loader's props.
-function render(view: ActivityViewProps): string {
-  return renderToStaticMarkup(<ActivityView {...view} />);
+// A stand-in server action the page binds to the Dispute/Undo controls. Binding an
+// action is what makes a control LIVE (E08-S10); the loader's own props omit the actions,
+// so a test that probes live controls passes them when it renders.
+const noopAction = async (_formData: FormData): Promise<void> => {};
+
+// Render the mounted screen the page shows over the loader's props. The page binds the
+// Dispute/Undo server actions separately from the loader's props; pass them here to render
+// the LIVE controls, or omit them to render the loader's props alone.
+function render(
+  view: ActivityViewProps,
+  actions?: {
+    disputeAction?: (formData: FormData) => void | Promise<void>;
+    undoAction?: (formData: FormData) => void | Promise<void>;
+  },
+): string {
+  return renderToStaticMarkup(<ActivityView {...view} {...actions} />);
 }
 
 // Visible text with tags stripped — the words a sighted reader actually sees.
@@ -285,15 +298,30 @@ function strip(html: string): string {
     .toLowerCase();
 }
 
-// Tally the hidden `intent` inputs by value — one per Dispute/Undo control the view
-// mounts. (The view posts `<input name="intent" value="dispute|undo">` with the seq.)
-function intentCounts(markup: string): { dispute: number; undo: number } {
-  const counts = { dispute: 0, undo: 0 };
-  for (const m of markup.matchAll(/name="intent"\s+value="([^"]+)"/g)) {
-    if (m[1] === "dispute") counts.dispute += 1;
-    if (m[1] === "undo") counts.undo += 1;
+// Every <button> as { label, disabled } — the accessible face of each control the view
+// mounts, so a live (enabled) Dispute/Undo control can be told from a disabled one.
+function controls(markup: string): { label: string; disabled: boolean }[] {
+  const out: { label: string; disabled: boolean }[] = [];
+  for (const m of markup.matchAll(/<button\b([^>]*)>([\s\S]*?)<\/button>/gi)) {
+    const label = m[2]!.replace(/<[^>]*>/g, " ").replace(/\s+/g, " ").trim();
+    out.push({ label, disabled: /\bdisabled\b/i.test(m[1]!) });
   }
-  return counts;
+  return out;
+}
+
+// Count LIVE (enabled) controls whose face matches `re`.
+function liveCount(markup: string, re: RegExp): number {
+  return controls(markup).filter((c) => re.test(c.label) && !c.disabled).length;
+}
+
+// The inner markup of each <form> whose button face matches `re` (forms don't nest).
+function formsFor(markup: string, re: RegExp): string[] {
+  const out: string[] = [];
+  for (const m of markup.matchAll(/<form\b[^>]*>([\s\S]*?)<\/form>/gi)) {
+    const inner = m[1]!;
+    if (new RegExp(re).test(inner.replace(/<[^>]*>/g, " "))) out.push(inner);
+  }
+  return out;
 }
 
 // =====================================================================================
@@ -381,11 +409,18 @@ test("the loader's props mount a live Dispute control on every entry and an Undo
     const undoable = view.entries.filter((entry) => entry.canUndo).map((entry) => entry.seq);
     assert.deepEqual(undoable, [1], "only the reversible entry (create_event, seq 1) is undoable");
 
-    // The screen those props mount: a Dispute form per entry, an Undo form only for the
-    // one reversible entry — so neither control is dead, and the Undo control is scoped.
-    const counts = intentCounts(render(view));
-    assert.equal(counts.dispute, 3, "every entry mounts a live Dispute control");
-    assert.equal(counts.undo, 1, "an Undo control is mounted only for the reversible entry");
+    // The screen those props mount once the page binds the Dispute/Undo server actions
+    // (E08-S10): a LIVE Dispute control per entry, and a LIVE Undo control only for the one
+    // reversible entry — so neither is dead, and the Undo control is scoped.
+    const markup = render(view, { disputeAction: noopAction, undoAction: noopAction });
+    assert.equal(liveCount(markup, /dispute/i), 3, "every entry mounts a live Dispute control");
+    assert.equal(liveCount(markup, /\bundo\b/i), 1, "a live Undo control is mounted only for the reversible entry");
+
+    // The one Undo control carries the reversible entry's seq (seq 1) the undo action consumes.
+    const undoForms = formsFor(markup, /\bundo\b/i);
+    assert.equal(undoForms.length, 1, "exactly one Undo form");
+    assert.match(undoForms[0]!, /name="seq"/, "the Undo form carries a seq field");
+    assert.match(undoForms[0]!, /value="1"/, "the Undo form's seq is the reversible entry's (seq 1)");
   } finally {
     await db.close();
   }
@@ -454,6 +489,112 @@ test("the date-range filter narrows to entries inside the inclusive window", asy
       to: "2026-03-31T23:59:59.999Z",
     });
     assert.deepEqual(seqsOf(march), [2], "the date range narrows to entries inside the window");
+  } finally {
+    await db.close();
+  }
+});
+
+// =====================================================================================
+// E08-S10 — a date-only 'to' is widened to the END of that day; entry labels show the
+// time of day as well as the date
+// =====================================================================================
+
+test("a date-only 'to' filter includes entries from the whole of that day (end-of-day inclusive)", async () => {
+  const db = await freshDb();
+  try {
+    const keyWrapper = localAesKeyWrapper(randomBytes(KEK_BYTES));
+    const clock = makeClock("2026-01-01T00:00:00.000Z");
+    const dek = randomBytes(DEK_BYTES);
+    const aliceId = await makePerson(db, keyWrapper, "dayfilter@people.example", dek);
+    const recorder = makeRecorder(db, clock, { [aliceId]: dek });
+
+    // Two entries ON 2026-04-20 — one just after midnight, one mid-afternoon …
+    await record(recorder, clock, "2026-04-20T00:05:00.000Z", {
+      userId: aliceId,
+      kind: "tool_call",
+      source: "warthog",
+      payload: { summary: "morningword entry", detail: "d" },
+    }); // seq 1
+    await record(recorder, clock, "2026-04-20T15:30:00.000Z", {
+      userId: aliceId,
+      kind: "tool_call",
+      source: "warthog",
+      payload: { summary: "afternoonword entry", detail: "d" },
+    }); // seq 2
+    // … and one the NEXT day, which a 'to' of 2026-04-20 must NOT include.
+    await record(recorder, clock, "2026-04-21T09:00:00.000Z", {
+      userId: aliceId,
+      kind: "tool_call",
+      source: "warthog",
+      payload: { summary: "nextdayword entry", detail: "d" },
+    }); // seq 3
+    const session = await sessionFor(db, aliceId, clock);
+
+    // A date-ONLY 'to' (no time of day, exactly what the view's `<input type="date">`
+    // posts) must widen to the END of that day. Without widening, `occurred_at <=
+    // 2026-04-20T00:00:00Z` would drop BOTH of that day's entries (00:05 and 15:30 are
+    // both after midnight); widened, both are inside the window and the next day is out.
+    const view = await makeLoader(db, keyWrapper).load(session, { to: "2026-04-20" });
+    assert.deepEqual(
+      seqsOf(view),
+      [2, 1],
+      "both of 2026-04-20's entries are inside the inclusive day window, newest-first",
+    );
+
+    const text = strip(render(view));
+    assert.ok(text.includes("afternoonword"), "the mid-afternoon entry is included (end-of-day inclusive)");
+    assert.ok(text.includes("morningword"), "the just-after-midnight entry is included");
+    assert.ok(!text.includes("nextdayword"), "an entry from the next day is outside the 'to' day");
+  } finally {
+    await db.close();
+  }
+});
+
+test("entry labels show the time of day as well as the date", async () => {
+  const db = await freshDb();
+  try {
+    const keyWrapper = localAesKeyWrapper(randomBytes(KEK_BYTES));
+    const clock = makeClock("2026-01-01T00:00:00.000Z");
+    const dek = randomBytes(DEK_BYTES);
+    const aliceId = await makePerson(db, keyWrapper, "timelabel@people.example", dek);
+    const recorder = makeRecorder(db, clock, { [aliceId]: dek });
+
+    // Two entries on the SAME calendar day at DIFFERENT times of day (12½ hours apart,
+    // so they differ in time of day under any time zone).
+    await record(recorder, clock, "2026-05-10T09:15:00.000Z", {
+      userId: aliceId,
+      kind: "tool_call",
+      source: "warthog",
+      payload: { summary: "morning entry word", detail: "d" },
+    }); // seq 1
+    await record(recorder, clock, "2026-05-10T21:45:00.000Z", {
+      userId: aliceId,
+      kind: "tool_call",
+      source: "warthog",
+      payload: { summary: "evening entry word", detail: "d" },
+    }); // seq 2
+    const session = await sessionFor(db, aliceId, clock);
+
+    const view = await makeLoader(db, keyWrapper).load(session, {});
+    const labels = view.entries.map((entry) => entry.at);
+    assert.equal(view.entries.length, 2, "both entries are listed");
+    assert.ok(
+      labels.every((label) => label.length > 0),
+      "every entry carries a time label",
+    );
+    // Two entries on the SAME date but different times of day get DISTINCT labels — the
+    // label must carry the time of day, not only the date (which is identical here).
+    assert.notEqual(
+      labels[0],
+      labels[1],
+      "same-day entries at different times get distinct labels (the label shows the time of day)",
+    );
+    // … and the label still shows the DATE too (not only the time) — the year or the
+    // month of these May-2026 entries is present, so it reads as a date AND a time.
+    assert.ok(
+      labels.every((label) => /2026|may/i.test(label)),
+      "each label still shows the date (year or month), not only the time of day",
+    );
   } finally {
     await db.close();
   }
