@@ -226,7 +226,11 @@ export async function readActivity(
 
 // Map a raw row to an ActivityEntry, decrypting its payload under `dek` bound to the
 // row's (user_id, seq). Throws if the DEK is wrong or the ciphertext was tampered.
-async function toEntry(row: Row, dek: Uint8Array): Promise<ActivityEntry> {
+// Exported as the ONE row→entry decryption mapper: the filtered list read
+// (`./list`, E08-S05) reuses it so the envelope binding and the shape can never drift
+// from the writer (constitution: one source of truth) — mirroring how `./integrity`
+// reuses `computeEntryHash` from here.
+export async function toEntry(row: Row, dek: Uint8Array): Promise<ActivityEntry> {
   const userId = String(row.user_id);
   const seq = Number(row.seq);
   const plaintext = await decrypt(
