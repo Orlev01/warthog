@@ -26,9 +26,49 @@ export interface QueryResult {
 
 // The database seam the whole app depends on. `query` binds `values` as
 // parameters; `close` releases the underlying handle (a pg Pool / a PGlite db).
+//
+// `transaction` runs `fn` inside ONE real database transaction, handing it a handle
+// pinned to a single connection: every statement `fn` issues commits together or
+// rolls back together. Only a driver that pools connections needs it (a pg Pool hands
+// out an arbitrary connection per `query`, so BEGIN / COMMIT on bare `query` calls do
+// NOT bracket the writes); an in-process PGlite is already a single connection, so it
+// omits `transaction` and `withTransaction` drives BEGIN / COMMIT / ROLLBACK straight
+// through its `query`. Callers never call this directly — they go through
+// `withTransaction`, which handles both driver shapes.
 export interface Db {
   query(text: string, values?: unknown[]): Promise<QueryResult>;
   close(): Promise<void>;
+  transaction?<T>(fn: (tx: Db) => Promise<T>): Promise<T>;
+}
+
+// Run `fn` inside one database transaction and return its result: the `tx` handed to
+// `fn` is pinned to a single connection, so every statement it issues commits together
+// on success and rolls back together — discarding every write — if `fn` or the commit
+// throws. A pooled driver supplies a native `transaction` that checks out one client
+// for the whole unit of work (so the "one transaction" is real against a real pg Pool,
+// not a sequence of statements scattered across pooled connections); an in-process
+// PGlite, already a single connection, has none, so BEGIN / COMMIT / ROLLBACK are driven
+// straight through its own `query`. This is the ONE place a transaction is opened, so
+// every caller gets the same atomicity on either driver (one source of truth).
+export async function withTransaction<T>(db: Db, fn: (tx: Db) => Promise<T>): Promise<T> {
+  if (db.transaction) {
+    return db.transaction(fn);
+  }
+  await db.query("BEGIN");
+  try {
+    const result = await fn(db);
+    await db.query("COMMIT");
+    return result;
+  } catch (err) {
+    // Roll the whole unit of work back, preserving the original failure even if the
+    // rollback itself cannot be issued (the connection is already broken).
+    try {
+      await db.query("ROLLBACK");
+    } catch {
+      /* keep the original error */
+    }
+    throw err;
+  }
 }
 
 // A plain-SQL migration: a stable name and the SQL that applies it.
@@ -88,6 +128,16 @@ async function createPgliteDb(target: string): Promise<Db> {
   };
 }
 
+// Map a pg driver result to our rows-only shape: a multi-statement simple query yields
+// one result per statement (an array), a single statement yields one result object —
+// either way, return the LAST statement's rows.
+function pgRows(raw: { rows: Row[] } | { rows: Row[] }[]): Row[] {
+  if (Array.isArray(raw)) {
+    return raw[raw.length - 1]?.rows ?? [];
+  }
+  return raw.rows;
+}
+
 // A real networked pg client. Creating the Pool does not connect; the first query
 // does, so a `postgres://` URL pointed at a dead port fails with a network error
 // (proving a real driver was selected, not an offline engine).
@@ -97,16 +147,42 @@ function createPgPoolDb(connectionString: string): Db {
     async query(text, values) {
       const raw =
         values && values.length > 0 ? await pool.query(text, values) : await pool.query(text);
-      // A multi-statement simple query yields one result per statement; a single
-      // statement yields one result object. Either way, return the last rows.
-      if (Array.isArray(raw)) {
-        const last = raw[raw.length - 1];
-        return { rows: (last?.rows ?? []) as Row[] };
-      }
-      return { rows: raw.rows as Row[] };
+      return { rows: pgRows(raw) };
     },
     async close() {
       await pool.end();
+    },
+    // A real transaction over the pool: check out ONE client, so BEGIN, every write and
+    // COMMIT all run on the SAME connection (a bare `pool.query` would hand each
+    // statement an arbitrary connection, so they would not bracket). Commit on success,
+    // roll back on any failure, and always release the client back to the pool.
+    async transaction<T>(fn: (tx: Db) => Promise<T>): Promise<T> {
+      const client = await pool.connect();
+      const tx: Db = {
+        async query(text, values) {
+          const raw =
+            values && values.length > 0 ? await client.query(text, values) : await client.query(text);
+          return { rows: pgRows(raw) };
+        },
+        // No-op: the pooled client is released when the transaction ends, below — never
+        // by a statement inside it.
+        async close() {},
+      };
+      try {
+        await client.query("BEGIN");
+        const result = await fn(tx);
+        await client.query("COMMIT");
+        return result;
+      } catch (err) {
+        try {
+          await client.query("ROLLBACK");
+        } catch {
+          /* keep the original error */
+        }
+        throw err;
+      } finally {
+        client.release();
+      }
     },
   };
 }
