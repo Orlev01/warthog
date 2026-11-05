@@ -51,7 +51,16 @@ export async function decrypt(
   if (!envelope.startsWith(PREFIX)) {
     throw new Error(`unrecognised envelope version, expected ${VERSION}`);
   }
-  const bytes = Buffer.from(envelope.slice(PREFIX.length), "base64");
+  const b64 = envelope.slice(PREFIX.length);
+  const bytes = Buffer.from(b64, "base64");
+  // Node's base64 decoder silently DROPS anything after the padding, so bytes
+  // appended to a stored envelope would otherwise decode to the SAME ciphertext and
+  // verify — a tampered row must fail deliberately. Re-encoding the decoded bytes
+  // yields the ONE canonical base64 for them; any mismatch means the stored string
+  // was not the exact envelope that was written (trailing garbage, altered padding).
+  if (bytes.toString("base64") !== b64) {
+    throw new Error("malformed envelope encoding");
+  }
   // Reject any envelope too short to hold a nonce plus a full tag BEFORE reaching
   // node:crypto, so a tampered/truncated row fails with a deliberate error rather
   // than a low-level TypeError from an undersized IV or a non-16 tag.
