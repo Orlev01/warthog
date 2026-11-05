@@ -29,6 +29,7 @@ import { createTotpSecretStore } from "./totp-store";
 import type { Db } from "../db/index";
 import type { SignupHandlerDeps } from "../../app/(auth)/signup/handler";
 import type { SigninHandlerDeps } from "../../app/(auth)/signin/handler";
+import type { RecoverHandlerDeps } from "../../app/(auth)/recover/handler";
 import type { SignoutHandlerDeps } from "./signout-handler";
 import type { StepUpHandlerDeps } from "./step-up-handler";
 
@@ -122,6 +123,25 @@ export async function getStepUpDeps(
   return {
     db,
     clock: systemClock,
+    rpId: config.webauthnRpId,
+    publicOrigin: publicOrigin(config),
+  };
+}
+
+// Build the RecoverHandlerDeps bundle from validated config: the shared db, the clock
+// and random that mint the recovery session and new recovery code, the configured RP
+// ID and the origin every recovery step checks the request against. The same shape as
+// sign-in minus the TOTP store — recovery re-establishes the second factor by
+// registering a new passkey, not by verifying an authenticator code.
+export async function getRecoverDeps(
+  overrides: ComposeOverrides = {},
+): Promise<RecoverHandlerDeps> {
+  const config = resolveConfig(overrides);
+  const db = await resolveDb(overrides);
+  return {
+    db,
+    clock: systemClock,
+    random: systemRandom,
     rpId: config.webauthnRpId,
     publicOrigin: publicOrigin(config),
   };
