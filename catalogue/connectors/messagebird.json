@@ -1,0 +1,15 @@
+{
+  "id": "messagebird",
+  "name": "Bird (MessageBird)",
+  "aliases": [
+    "messagebird sms",
+    "bird messaging"
+  ],
+  "category": "messaging",
+  "auth_kind": "api_key",
+  "base_url": "https://rest.messagebird.com",
+  "auth": {
+    "header": "Authorization: AccessKey {api_key}"
+  },
+  "instructions": "Sign in to Bird (MessageBird), open the API or Developer settings, and create a personal live access key in Developers → API access. Copy it and paste it into Warthog here — it is stored encrypted and is never shown again. For the exact steps, see the provider's documentation at https://docs.bird.com/api."
+}

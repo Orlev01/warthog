@@ -1,0 +1,15 @@
+{
+  "id": "particle",
+  "name": "Particle",
+  "aliases": [
+    "particle devices",
+    "particle iot"
+  ],
+  "category": "iot",
+  "auth_kind": "api_key",
+  "base_url": "https://api.particle.io/v1",
+  "auth": {
+    "header": "Authorization: Bearer {api_key}"
+  },
+  "instructions": "Sign in to Particle, open the API or Developer settings, and create a personal access token in the Particle console → Settings. Copy it and paste it into Warthog here — it is stored encrypted and is never shown again. For the exact steps, see the provider's documentation at https://docs.particle.io/reference/cloud-apis/api/."
+}

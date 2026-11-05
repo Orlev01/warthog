@@ -1,0 +1,15 @@
+{
+  "id": "heroku",
+  "name": "Heroku",
+  "aliases": [
+    "heroku apps",
+    "heroku dynos"
+  ],
+  "category": "developer-tools",
+  "auth_kind": "api_key",
+  "base_url": "https://api.heroku.com",
+  "auth": {
+    "header": "Authorization: Bearer {api_key}"
+  },
+  "instructions": "Sign in to Heroku, open the API or Developer settings, and create a personal API token in Account settings → API Key. Copy it and paste it into Warthog here — it is stored encrypted and is never shown again. For the exact steps, see the provider's documentation at https://devcenter.heroku.com/articles/platform-api-reference."
+}

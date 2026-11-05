@@ -1,0 +1,15 @@
+{
+  "id": "mailgun",
+  "name": "Mailgun",
+  "aliases": [
+    "mailgun email",
+    "mailgun api"
+  ],
+  "category": "email",
+  "auth_kind": "basic",
+  "base_url": "https://api.mailgun.net/v3",
+  "auth": {
+    "header": "Authorization: Basic {api_key}"
+  },
+  "instructions": "Sign in to Mailgun, open the API or Developer settings, and create a personal API key (username \"api\") in Settings → API Keys. Copy it and paste it into Warthog here — it is stored encrypted and is never shown again. For the exact steps, see the provider's documentation at https://documentation.mailgun.com/docs/mailgun/api-reference/intro/."
+}

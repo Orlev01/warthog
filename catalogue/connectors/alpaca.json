@@ -1,0 +1,15 @@
+{
+  "id": "alpaca",
+  "name": "Alpaca",
+  "aliases": [
+    "alpaca trading",
+    "alpaca markets"
+  ],
+  "category": "finance",
+  "auth_kind": "api_key",
+  "base_url": "https://api.alpaca.markets",
+  "auth": {
+    "header": "APCA-API-KEY-ID: {api_key}"
+  },
+  "instructions": "Sign in to Alpaca, open the API or Developer settings, and create a personal API key ID and secret in the Alpaca dashboard. Copy it and paste it into Warthog here — it is stored encrypted and is never shown again. For the exact steps, see the provider's documentation at https://docs.alpaca.markets/docs/getting-started."
+}

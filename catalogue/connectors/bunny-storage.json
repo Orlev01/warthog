@@ -1,0 +1,15 @@
+{
+  "id": "bunny-storage",
+  "name": "Bunny Storage",
+  "aliases": [
+    "bunnycdn storage",
+    "bunny files"
+  ],
+  "category": "file-storage",
+  "auth_kind": "api_key",
+  "base_url": "https://storage.bunnycdn.com",
+  "auth": {
+    "header": "AccessKey: {api_key}"
+  },
+  "instructions": "Sign in to Bunny Storage, open the API or Developer settings, and create a personal storage zone password in the Storage Zone → FTP & API Access. Copy it and paste it into Warthog here — it is stored encrypted and is never shown again. For the exact steps, see the provider's documentation at https://docs.bunny.net/reference/storage-api."
+}

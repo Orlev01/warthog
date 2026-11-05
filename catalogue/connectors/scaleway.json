@@ -1,0 +1,15 @@
+{
+  "id": "scaleway",
+  "name": "Scaleway",
+  "aliases": [
+    "scaleway cloud",
+    "scaleway api"
+  ],
+  "category": "developer-tools",
+  "auth_kind": "api_key",
+  "base_url": "https://api.scaleway.com",
+  "auth": {
+    "header": "X-Auth-Token: {api_key}"
+  },
+  "instructions": "Sign in to Scaleway, open the API or Developer settings, and create a personal secret key in Identity and Access Management → API keys. Copy it and paste it into Warthog here — it is stored encrypted and is never shown again. For the exact steps, see the provider's documentation at https://www.scaleway.com/en/developers/api/."
+}

@@ -1,0 +1,15 @@
+{
+  "id": "ifttt",
+  "name": "IFTTT",
+  "aliases": [
+    "ifttt automation",
+    "ifttt applets"
+  ],
+  "category": "iot",
+  "auth_kind": "api_key",
+  "base_url": "https://connect.ifttt.com/v2",
+  "auth": {
+    "header": "IFTTT-Service-Key: {api_key}"
+  },
+  "instructions": "Sign in to IFTTT, open the API or Developer settings, and create a personal service key in the IFTTT platform → API. Copy it and paste it into Warthog here — it is stored encrypted and is never shown again. For the exact steps, see the provider's documentation at https://platform.ifttt.com/docs/connect_api."
+}

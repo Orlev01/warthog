@@ -1,0 +1,15 @@
+{
+  "id": "newrelic",
+  "name": "New Relic",
+  "aliases": [
+    "new relic apm",
+    "newrelic monitoring"
+  ],
+  "category": "developer-tools",
+  "auth_kind": "api_key",
+  "base_url": "https://api.newrelic.com/v2",
+  "auth": {
+    "header": "Api-Key: {api_key}"
+  },
+  "instructions": "Sign in to New Relic, open the API or Developer settings, and create a personal user API key in API keys in the New Relic UI. Copy it and paste it into Warthog here — it is stored encrypted and is never shown again. For the exact steps, see the provider's documentation at https://docs.newrelic.com/docs/apis/rest-api-v2/."
+}

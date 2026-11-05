@@ -1,0 +1,15 @@
+{
+  "id": "postmark",
+  "name": "Postmark",
+  "aliases": [
+    "postmark email",
+    "postmark api"
+  ],
+  "category": "email",
+  "auth_kind": "api_key",
+  "base_url": "https://api.postmarkapp.com",
+  "auth": {
+    "header": "X-Postmark-Server-Token: {api_key}"
+  },
+  "instructions": "Sign in to Postmark, open the API or Developer settings, and create a personal server API token in a server's API Tokens tab. Copy it and paste it into Warthog here — it is stored encrypted and is never shown again. For the exact steps, see the provider's documentation at https://postmarkapp.com/developer/api/overview."
+}

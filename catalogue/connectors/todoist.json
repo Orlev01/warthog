@@ -1,0 +1,15 @@
+{
+  "id": "todoist",
+  "name": "Todoist",
+  "aliases": [
+    "todoist tasks",
+    "todoist todo"
+  ],
+  "category": "tasks",
+  "auth_kind": "api_key",
+  "base_url": "https://api.todoist.com/rest/v2",
+  "auth": {
+    "header": "Authorization: Bearer {api_key}"
+  },
+  "instructions": "Sign in to Todoist, open the API or Developer settings, and create a personal API token in Settings → Integrations → Developer. Copy it and paste it into Warthog here — it is stored encrypted and is never shown again. For the exact steps, see the provider's documentation at https://developer.todoist.com/rest/v2/."
+}

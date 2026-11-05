@@ -1,0 +1,15 @@
+{
+  "id": "mailjet",
+  "name": "Mailjet",
+  "aliases": [
+    "mailjet email",
+    "mailjet api"
+  ],
+  "category": "email",
+  "auth_kind": "basic",
+  "base_url": "https://api.mailjet.com/v3",
+  "auth": {
+    "header": "Authorization: Basic {api_key}"
+  },
+  "instructions": "Sign in to Mailjet, open the API or Developer settings, and create a personal API key and secret key in Account Settings → API Key Management. Copy it and paste it into Warthog here — it is stored encrypted and is never shown again. For the exact steps, see the provider's documentation at https://dev.mailjet.com/email/guides/."
+}

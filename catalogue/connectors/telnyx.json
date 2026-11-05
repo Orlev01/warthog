@@ -1,0 +1,15 @@
+{
+  "id": "telnyx",
+  "name": "Telnyx",
+  "aliases": [
+    "telnyx sms",
+    "telnyx messaging"
+  ],
+  "category": "messaging",
+  "auth_kind": "api_key",
+  "base_url": "https://api.telnyx.com/v2",
+  "auth": {
+    "header": "Authorization: Bearer {api_key}"
+  },
+  "instructions": "Sign in to Telnyx, open the API or Developer settings, and create a personal API key in the Mission Control Portal → API Keys. Copy it and paste it into Warthog here — it is stored encrypted and is never shown again. For the exact steps, see the provider's documentation at https://developers.telnyx.com/docs/api/v2/overview."
+}

@@ -1,0 +1,15 @@
+{
+  "id": "gitlab",
+  "name": "GitLab",
+  "aliases": [
+    "gitlab repos",
+    "gitlab ci"
+  ],
+  "category": "developer-tools",
+  "auth_kind": "api_key",
+  "base_url": "https://gitlab.com/api/v4",
+  "auth": {
+    "header": "PRIVATE-TOKEN: {api_key}"
+  },
+  "instructions": "Sign in to GitLab, open the API or Developer settings, and create a personal personal access token in Preferences → Access Tokens. Copy it and paste it into Warthog here — it is stored encrypted and is never shown again. For the exact steps, see the provider's documentation at https://docs.gitlab.com/ee/api/rest/."
+}

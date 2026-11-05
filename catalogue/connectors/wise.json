@@ -1,0 +1,15 @@
+{
+  "id": "wise",
+  "name": "Wise",
+  "aliases": [
+    "wise transfers",
+    "transferwise"
+  ],
+  "category": "finance",
+  "auth_kind": "api_key",
+  "base_url": "https://api.wise.com",
+  "auth": {
+    "header": "Authorization: Bearer {api_key}"
+  },
+  "instructions": "Sign in to Wise, open the API or Developer settings, and create a personal personal API token in Settings → API tokens. Copy it and paste it into Warthog here — it is stored encrypted and is never shown again. For the exact steps, see the provider's documentation at https://docs.wise.com/api-docs."
+}

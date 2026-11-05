@@ -1,0 +1,15 @@
+{
+  "id": "pushover",
+  "name": "Pushover",
+  "aliases": [
+    "pushover notifications",
+    "pushover alerts"
+  ],
+  "category": "messaging",
+  "auth_kind": "api_key",
+  "base_url": "https://api.pushover.net/1",
+  "auth": {
+    "header": "X-Pushover-Token: {api_key}"
+  },
+  "instructions": "Sign in to Pushover, open the API or Developer settings, and create a personal application API token in your Pushover apps page. Copy it and paste it into Warthog here — it is stored encrypted and is never shown again. For the exact steps, see the provider's documentation at https://pushover.net/api."
+}

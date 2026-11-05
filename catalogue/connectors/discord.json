@@ -1,0 +1,15 @@
+{
+  "id": "discord",
+  "name": "Discord",
+  "aliases": [
+    "discord chat",
+    "discord bot"
+  ],
+  "category": "messaging",
+  "auth_kind": "api_key",
+  "base_url": "https://discord.com/api/v10",
+  "auth": {
+    "header": "Authorization: Bot {api_key}"
+  },
+  "instructions": "Sign in to Discord, open the API or Developer settings, and create a personal bot token in the Developer Portal → your application → Bot. Copy it and paste it into Warthog here — it is stored encrypted and is never shown again. For the exact steps, see the provider's documentation at https://discord.com/developers/docs/reference."
+}

@@ -1,0 +1,15 @@
+{
+  "id": "uploadcare",
+  "name": "Uploadcare",
+  "aliases": [
+    "uploadcare files",
+    "uploadcare storage"
+  ],
+  "category": "file-storage",
+  "auth_kind": "api_key",
+  "base_url": "https://api.uploadcare.com",
+  "auth": {
+    "header": "Authorization: Uploadcare.Simple {api_key}"
+  },
+  "instructions": "Sign in to Uploadcare, open the API or Developer settings, and create a personal public and secret key pair in the project's API Keys. Copy it and paste it into Warthog here — it is stored encrypted and is never shown again. For the exact steps, see the provider's documentation at https://uploadcare.com/docs/start/."
+}

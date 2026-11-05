@@ -1,0 +1,15 @@
+{
+  "id": "bigcommerce",
+  "name": "BigCommerce",
+  "aliases": [
+    "bigcommerce store",
+    "bigcommerce api"
+  ],
+  "category": "ecommerce",
+  "auth_kind": "api_key",
+  "base_url": "https://api.bigcommerce.com",
+  "auth": {
+    "header": "X-Auth-Token: {api_key}"
+  },
+  "instructions": "Sign in to BigCommerce, open the API or Developer settings, and create a personal API account token in Settings → API accounts. Copy it and paste it into Warthog here — it is stored encrypted and is never shown again. For the exact steps, see the provider's documentation at https://developer.bigcommerce.com/docs/rest."
+}
