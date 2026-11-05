@@ -1,0 +1,15 @@
+{
+  "id": "tuya",
+  "name": "Tuya",
+  "aliases": [
+    "tuya smart",
+    "tuya iot"
+  ],
+  "category": "smart-home",
+  "auth_kind": "api_key",
+  "base_url": "https://openapi.tuyaus.com",
+  "auth": {
+    "header": "access_token: {api_key}"
+  },
+  "instructions": "Sign in to Tuya, open the API or Developer settings, and create a personal access token in the Tuya IoT Platform cloud project. Copy it and paste it into Warthog here — it is stored encrypted and is never shown again. For the exact steps, see the provider's documentation at https://developer.tuya.com/en/docs/cloud/."
+}

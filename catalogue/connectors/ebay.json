@@ -1,0 +1,15 @@
+{
+  "id": "ebay",
+  "name": "eBay",
+  "aliases": [
+    "ebay marketplace",
+    "ebay selling"
+  ],
+  "category": "shopping",
+  "auth_kind": "api_key",
+  "base_url": "https://api.ebay.com",
+  "auth": {
+    "header": "Authorization: Bearer {api_key}"
+  },
+  "instructions": "Sign in to eBay, open the API or Developer settings, and create a personal OAuth user token in the eBay Developers Program. Copy it and paste it into Warthog here — it is stored encrypted and is never shown again. For the exact steps, see the provider's documentation at https://developer.ebay.com/api-docs/static/rest-request-components.html."
+}

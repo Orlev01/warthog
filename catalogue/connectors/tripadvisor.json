@@ -1,0 +1,15 @@
+{
+  "id": "tripadvisor",
+  "name": "Tripadvisor",
+  "aliases": [
+    "tripadvisor content",
+    "tripadvisor api"
+  ],
+  "category": "travel",
+  "auth_kind": "api_key",
+  "base_url": "https://api.content.tripadvisor.com/api/v1",
+  "auth": {
+    "header": "X-TripAdvisor-API-Key: {api_key}"
+  },
+  "instructions": "Sign in to Tripadvisor, open the API or Developer settings, and create a personal API key in the Tripadvisor Content API portal. Copy it and paste it into Warthog here — it is stored encrypted and is never shown again. For the exact steps, see the provider's documentation at https://tripadvisor-content-api.readme.io/reference/overview."
+}

@@ -1,0 +1,15 @@
+{
+  "id": "calendly",
+  "name": "Calendly",
+  "aliases": [
+    "calendly scheduling",
+    "calendly api"
+  ],
+  "category": "calendar",
+  "auth_kind": "api_key",
+  "base_url": "https://api.calendly.com",
+  "auth": {
+    "header": "Authorization: Bearer {api_key}"
+  },
+  "instructions": "Sign in to Calendly, open the API or Developer settings, and create a personal personal access token in Integrations → API & Webhooks. Copy it and paste it into Warthog here — it is stored encrypted and is never shown again. For the exact steps, see the provider's documentation at https://developer.calendly.com/api-docs."
+}

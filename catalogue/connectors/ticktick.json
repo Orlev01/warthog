@@ -1,0 +1,15 @@
+{
+  "id": "ticktick",
+  "name": "TickTick",
+  "aliases": [
+    "ticktick tasks",
+    "ticktick notes"
+  ],
+  "category": "notes",
+  "auth_kind": "api_key",
+  "base_url": "https://api.ticktick.com/open/v1",
+  "auth": {
+    "header": "Authorization: Bearer {api_key}"
+  },
+  "instructions": "Sign in to TickTick, open the API or Developer settings, and create a personal access token in the TickTick Developer Center. Copy it and paste it into Warthog here — it is stored encrypted and is never shown again. For the exact steps, see the provider's documentation at https://developer.ticktick.com/docs."
+}

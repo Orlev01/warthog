@@ -1,0 +1,15 @@
+{
+  "id": "railway",
+  "name": "Railway",
+  "aliases": [
+    "railway hosting",
+    "railway deploys"
+  ],
+  "category": "developer-tools",
+  "auth_kind": "api_key",
+  "base_url": "https://backboard.railway.app/graphql/v2",
+  "auth": {
+    "header": "Authorization: Bearer {api_key}"
+  },
+  "instructions": "Sign in to Railway, open the API or Developer settings, and create a personal account token in Account Settings → Tokens. Copy it and paste it into Warthog here — it is stored encrypted and is never shown again. For the exact steps, see the provider's documentation at https://docs.railway.app/reference/public-api."
+}

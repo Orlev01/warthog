@@ -1,0 +1,15 @@
+{
+  "id": "coinbase",
+  "name": "Coinbase",
+  "aliases": [
+    "coinbase crypto",
+    "coinbase wallet"
+  ],
+  "category": "finance",
+  "auth_kind": "api_key",
+  "base_url": "https://api.coinbase.com/v2",
+  "auth": {
+    "header": "Authorization: Bearer {api_key}"
+  },
+  "instructions": "Sign in to Coinbase, open the API or Developer settings, and create a personal API key in Settings → API. Copy it and paste it into Warthog here — it is stored encrypted and is never shown again. For the exact steps, see the provider's documentation at https://docs.cdp.coinbase.com/."
+}

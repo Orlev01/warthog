@@ -1,0 +1,15 @@
+{
+  "id": "filestack",
+  "name": "Filestack",
+  "aliases": [
+    "filestack files",
+    "filestack api"
+  ],
+  "category": "file-storage",
+  "auth_kind": "api_key",
+  "base_url": "https://www.filestackapi.com/api",
+  "auth": {
+    "header": "X-Filestack-Key: {api_key}"
+  },
+  "instructions": "Sign in to Filestack, open the API or Developer settings, and create a personal API key in the Filestack dashboard. Copy it and paste it into Warthog here — it is stored encrypted and is never shown again. For the exact steps, see the provider's documentation at https://www.filestack.com/docs/."
+}

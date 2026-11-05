@@ -1,0 +1,15 @@
+{
+  "id": "honeybadger",
+  "name": "Honeybadger",
+  "aliases": [
+    "honeybadger errors",
+    "honeybadger monitoring"
+  ],
+  "category": "developer-tools",
+  "auth_kind": "api_key",
+  "base_url": "https://app.honeybadger.io",
+  "auth": {
+    "header": "Authorization: Bearer {api_key}"
+  },
+  "instructions": "Sign in to Honeybadger, open the API or Developer settings, and create a personal personal auth token in User settings → Authentication. Copy it and paste it into Warthog here — it is stored encrypted and is never shown again. For the exact steps, see the provider's documentation at https://docs.honeybadger.io/api/reporting-exceptions/."
+}

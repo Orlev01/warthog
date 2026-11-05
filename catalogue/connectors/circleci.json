@@ -1,0 +1,15 @@
+{
+  "id": "circleci",
+  "name": "CircleCI",
+  "aliases": [
+    "circleci pipelines",
+    "circle ci"
+  ],
+  "category": "developer-tools",
+  "auth_kind": "api_key",
+  "base_url": "https://circleci.com/api/v2",
+  "auth": {
+    "header": "Circle-Token: {api_key}"
+  },
+  "instructions": "Sign in to CircleCI, open the API or Developer settings, and create a personal personal API token in User Settings → Personal API Tokens. Copy it and paste it into Warthog here — it is stored encrypted and is never shown again. For the exact steps, see the provider's documentation at https://circleci.com/docs/api/v2/."
+}

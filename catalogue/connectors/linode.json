@@ -1,0 +1,15 @@
+{
+  "id": "linode",
+  "name": "Linode",
+  "aliases": [
+    "linode cloud",
+    "akamai linode"
+  ],
+  "category": "developer-tools",
+  "auth_kind": "api_key",
+  "base_url": "https://api.linode.com/v4",
+  "auth": {
+    "header": "Authorization: Bearer {api_key}"
+  },
+  "instructions": "Sign in to Linode, open the API or Developer settings, and create a personal personal access token in My Profile → API Tokens. Copy it and paste it into Warthog here — it is stored encrypted and is never shown again. For the exact steps, see the provider's documentation at https://techdocs.akamai.com/linode-api/reference/api."
+}
