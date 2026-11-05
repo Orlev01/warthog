@@ -199,16 +199,63 @@ export function SignupView({
 
 export type SigninStep = "passkey" | "code";
 
-export function SigninView({ step }: { step: SigninStep }) {
+// SigninView renders from props alone. The optional interactive wiring is supplied by
+// the client sign-in flow (E04-S25) to drive the screen; when it is omitted the view
+// renders as the static copy the render tests pin. The passkey step collects the email
+// (begin-passkey needs it) and offers the "use my authenticator app instead" path to
+// the code step.
+export interface SigninViewProps {
+  step: SigninStep;
+  email?: string;
+  code?: string;
+  error?: string;
+  onEmailChange?: (value: string) => void;
+  onCodeChange?: (value: string) => void;
+  onPasskey?: () => void;
+  onUseAuthenticatorApp?: () => void;
+  onSubmitCode?: () => void;
+}
+
+export function SigninView({
+  step,
+  email,
+  code,
+  error,
+  onEmailChange,
+  onCodeChange,
+  onPasskey,
+  onUseAuthenticatorApp,
+  onSubmitCode,
+}: SigninViewProps) {
   switch (step) {
     case "passkey":
       return (
         <AuthScreen
           title="Welcome back"
-          lead="Use your passkey to sign in — your fingerprint, face or device PIN."
+          lead="Enter your email and use your passkey to sign in — your fingerprint, face or device PIN."
         >
-          <Button type="button" variant="primary">
-            Sign in with your passkey
+          <form
+            className="flex flex-col gap-4"
+            onSubmit={(event) => {
+              event.preventDefault();
+              onPasskey?.();
+            }}
+          >
+            <Field
+              label="Email address"
+              name="email"
+              type="email"
+              autoComplete="email"
+              value={email}
+              onChange={(event) => onEmailChange?.(event.target.value)}
+            />
+            <Button type="submit" variant="primary">
+              Sign in with your passkey
+            </Button>
+          </form>
+          {error ? <p className="text-sm text-danger">{error}</p> : null}
+          <Button type="button" variant="secondary" onClick={onUseAuthenticatorApp}>
+            Use my authenticator app instead
           </Button>
         </AuthScreen>
       );
@@ -218,19 +265,35 @@ export function SigninView({ step }: { step: SigninStep }) {
           title="Sign in with a code"
           lead="Enter your email and the code from your authenticator app."
         >
-          <form className="flex flex-col gap-4">
-            <Field label="Email address" name="email" type="email" autoComplete="email" />
+          <form
+            className="flex flex-col gap-4"
+            onSubmit={(event) => {
+              event.preventDefault();
+              onSubmitCode?.();
+            }}
+          >
+            <Field
+              label="Email address"
+              name="email"
+              type="email"
+              autoComplete="email"
+              value={email}
+              onChange={(event) => onEmailChange?.(event.target.value)}
+            />
             <Field
               label="Authenticator code"
               name="code"
               type="text"
               inputMode="numeric"
               autoComplete="one-time-code"
+              value={code}
+              onChange={(event) => onCodeChange?.(event.target.value)}
             />
             <Button type="submit" variant="primary">
               Sign in
             </Button>
           </form>
+          {error ? <p className="text-sm text-danger">{error}</p> : null}
         </AuthScreen>
       );
   }
