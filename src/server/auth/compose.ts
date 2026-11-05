@@ -30,6 +30,7 @@ import type { Db } from "../db/index";
 import type { SignupHandlerDeps } from "../../app/(auth)/signup/handler";
 import type { SigninHandlerDeps } from "../../app/(auth)/signin/handler";
 import type { SignoutHandlerDeps } from "./signout-handler";
+import type { StepUpHandlerDeps } from "./step-up-handler";
 
 // The two injection points every entry shares: the validated config (defaulting to
 // the real env seam) and a db getter (defaulting to the process-wide server db).
@@ -105,6 +106,23 @@ export async function getSignoutDeps(
   const db = await resolveDb(overrides);
   return {
     db,
+    publicOrigin: publicOrigin(config),
+  };
+}
+
+// Build the StepUpHandlerDeps bundle from validated config: the shared db, the clock
+// that judges session freshness and stamps the recorded step-up, the configured RP ID
+// and the origin the Origin check (and assertion verification) uses. No random — a
+// step-up mints no new token; it stamps the existing session.
+export async function getStepUpDeps(
+  overrides: ComposeOverrides = {},
+): Promise<StepUpHandlerDeps> {
+  const config = resolveConfig(overrides);
+  const db = await resolveDb(overrides);
+  return {
+    db,
+    clock: systemClock,
+    rpId: config.webauthnRpId,
     publicOrigin: publicOrigin(config),
   };
 }
