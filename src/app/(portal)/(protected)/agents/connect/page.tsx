@@ -1,7 +1,28 @@
 import * as React from "react";
-import { ComingSoon } from "@/components/shell/coming-soon";
 
-// Operator placeholder so links to this route resolve; E10-S05 replaces it with the real screen.
-export default function ConnectAnAgentPage() {
-  return <ComingSoon title="Connect an agent" />;
+import { loadConfig } from "@/server/config";
+import { ConnectGuide } from "@/components/agents/connect-guide";
+
+// E10-S05 — Agents connect page loader. The `/agents/connect` page the Agents screen
+// links to, inside the `(protected)` route group (the auth guard is the group layout's
+// job). The entry's own job is thin: read the public address from configuration (INV-21 /
+// constitution #21) and derive Warthog's connector address (`<publicBaseUrl>/mcp`, design
+// §6.1/§6.2), handing it to the guided-connect view. The flag/secret values are read only
+// through the config module (secrets-from-env; INV-103).
+//
+// Thin entry over the render-tested view: all content lives in
+// src/components/agents/connect-guide.tsx (the platform picker and each platform's
+// guided-connect steps). `loadConfig()` is called INSIDE the handler, never at module load.
+
+export default async function ConnectPage({
+  searchParams,
+}: {
+  searchParams: Promise<Record<string, string | string[] | undefined>>;
+}) {
+  // Touch request data first so `next build` marks this page dynamic and never
+  // prerenders it — `loadConfig()` reads runtime config, which is absent at build.
+  await searchParams;
+  const config = loadConfig();
+  const connectorAddress = `${config.publicBaseUrl.replace(/\/+$/, "")}/mcp`;
+  return <ConnectGuide connectorAddress={connectorAddress} />;
 }
