@@ -122,6 +122,12 @@ import { upsertPermissions } from "../db/agent-permissions";
 import { createRule } from "../db/rules";
 import { getApproval } from "../db/approvals";
 import { getByApproval } from "../db/held-requests";
+// SUPERSEDED (E12-S07): the ask branch now also triggers the approval notifier on
+// creation — a push to every registered device plus a scheduled fallback job. The new
+// tests at the end exercise that side effect; the real notifier + the push-subscriptions
+// store drive the end-to-end "a push failure still schedules the fallback" pin.
+import { registerSubscription } from "../db/push-subscriptions";
+import { notifyApprovalCreated as runApprovalNotifier } from "../notify/approval-notifier";
 import { freshDb } from "../../test/db";
 import { localAesKeyWrapper, type KeyWrapper } from "../crypto/key-wrapper";
 import { fixedClock, type Clock } from "../seams/clock";
@@ -250,11 +256,24 @@ function spyExecutor(order?: string[], result: unknown = { ok: true, ran: true }
   return { fn, calls };
 }
 
+// SUPERSESSION (E12-S07): the ask branch additionally triggers the approval notifier on
+// creation. The pipeline receives it as an OPTIONAL injected seam — a function of the
+// just-created approval ({ userId, approvalId, createdAt, dek }) — so a pipeline built
+// WITHOUT it behaves exactly as before (every earlier pin stays intact) while the new
+// pins below provide it and observe the side effect.
+type NotifyApprovalCreatedSeam = (input: {
+  readonly userId: string;
+  readonly approvalId: string;
+  readonly createdAt: Date;
+  readonly dek: Uint8Array;
+}) => Promise<void>;
+
 interface Seams {
   clock: Clock;
   rateLimiter: ReturnType<typeof createRateLimiter>;
   recorder: RecorderBase;
   executeTool: (call: never, connection: never) => Promise<unknown>;
+  notifyApprovalCreated?: NotifyApprovalCreatedSeam;
 }
 
 function buildPipeline(db: Db, keyWrapper: KeyWrapper, seams: Seams): Pipeline {
@@ -265,6 +284,7 @@ function buildPipeline(db: Db, keyWrapper: KeyWrapper, seams: Seams): Pipeline {
     rateLimiter: seams.rateLimiter,
     recorder: seams.recorder,
     executeTool: seams.executeTool,
+    notifyApprovalCreated: seams.notifyApprovalCreated,
   });
 }
 
@@ -778,6 +798,152 @@ test("the recorded entry runs the call parameters through redaction: no raw secr
     assert.ok(!recorded.includes(SECRET), "a secret-named field value must not appear raw in the recorded entry");
     assert.ok(!recorded.includes(PAN), "a card number must not appear raw in the recorded entry");
     assert.ok(recorded.includes("[redacted]"), "the secret-named field is replaced with [redacted]");
+  } finally {
+    await db.close();
+  }
+});
+
+// ===========================================================================
+// SUPERSEDED (E12-S07) — an ask decision additionally triggers notifyApprovalCreated on
+// approval creation (design §10 / brief NFR "a push to every device within 5 seconds").
+// The pipeline is the single place approvals are created, so the trigger lives here. These
+// are NEW pins; every earlier ask pin above (approval + held + one activity entry, tool
+// never executed) is untouched — a pipeline built without the seam still behaves as before.
+// ===========================================================================
+
+test("an ask decision triggers notifyApprovalCreated with the created approval's id, owner and createdAt", async () => {
+  const db = await freshDb();
+  const keyWrapper = keyWrapperFor();
+  try {
+    const { userId, dek } = await makePerson(db, "notify-trigger", keyWrapper);
+    await upsertPermissions(
+      db,
+      baseGrants(userId, CONN, {
+        cardAccess: true,
+        cardBudget: { amount: 300, currency: "AUD", period: "month" },
+      }),
+    );
+
+    const notifyCalls: { userId: string; approvalId: string; createdAt: Date; dek: Uint8Array }[] = [];
+    const rec = spyRecorder(fixedClock(NOW));
+    const exec = spyExecutor();
+    const pipeline = buildPipeline(db, keyWrapper, {
+      clock: fixedClock(NOW),
+      rateLimiter: createRateLimiter(fixedClock(NOW)),
+      recorder: rec.recorder,
+      executeTool: exec.fn,
+      notifyApprovalCreated: async (input) => {
+        notifyCalls.push(input);
+      },
+    });
+
+    const conn = connectionFor(userId);
+    const result = expectPendingApproval(
+      await pipeline.handleAgentCall(
+        conn,
+        callFor({
+          connector: null,
+          tool: "request_card",
+          makesChange: true,
+          request: "card",
+          amount: 10,
+          currency: "AUD",
+          merchant: "BoxCo",
+        }),
+      ),
+    );
+
+    // The ask branch triggers the notifier exactly once for the approval it just created.
+    assert.equal(notifyCalls.length, 1, "an ask decision triggers the notifier exactly once");
+    const [call] = notifyCalls;
+    assert.ok(call);
+    assert.equal(call.approvalId, result.approval_id, "the notifier is told the created approval's id");
+    assert.equal(call.userId, userId, "the notifier is told the OWNING person (member scope)");
+
+    // The created approval's createdAt is handed through, so the fallback is anchored to it.
+    const approval = await getApproval(db, userId, result.approval_id, dek);
+    assert.ok(approval, "the approval the notifier was told about really exists");
+    assert.equal(toMs(call.createdAt), toMs(approval!.createdAt), "the notifier is told when it was created");
+
+    // The pending-approval contract still holds and the tool still never ran.
+    assert.equal(exec.calls.length, 0, "the ask decision still does not execute the tool");
+    assert.equal(rec.entries.length, 1, "the ask decision still records exactly one activity entry");
+  } finally {
+    await db.close();
+  }
+});
+
+test("with the real notifier wired, a push failure on an ask decision still schedules the fallback and returns pending_approval", async () => {
+  const db = await freshDb();
+  const keyWrapper = keyWrapperFor();
+  try {
+    const { userId, dek } = await makePerson(db, "notify-fallback", keyWrapper);
+    await upsertPermissions(
+      db,
+      baseGrants(userId, CONN, {
+        cardAccess: true,
+        cardBudget: { amount: 500, currency: "AUD", period: "month" },
+      }),
+    );
+    // One registered device, encrypted under the SAME DEK the pipeline will unwrap and
+    // hand the notifier — so the notifier can read the device back.
+    await registerSubscription(
+      db,
+      { userId, endpoint: "https://push.example.com/send/abc", keys: { p256dh: "p256dh-abc", auth: "auth-abc" } },
+      dek,
+      fixedClock(NOW),
+    );
+
+    // A push sender that ALWAYS fails: the fallback must still be scheduled.
+    const failingPush = {
+      async sendApprovalPush(): Promise<void> {
+        throw new Error("push service down");
+      },
+    };
+
+    const rec = spyRecorder(fixedClock(NOW));
+    const exec = spyExecutor();
+    const pipeline = buildPipeline(db, keyWrapper, {
+      clock: fixedClock(NOW),
+      rateLimiter: createRateLimiter(fixedClock(NOW)),
+      recorder: rec.recorder,
+      executeTool: exec.fn,
+      notifyApprovalCreated: (input) =>
+        runApprovalNotifier({ db, clock: fixedClock(NOW), push: failingPush }, input),
+    });
+
+    const result = expectPendingApproval(
+      await pipeline.handleAgentCall(
+        connectionFor(userId),
+        callFor({
+          connector: null,
+          tool: "request_card",
+          makesChange: true,
+          request: "card",
+          amount: 25,
+          currency: "AUD",
+          merchant: "BoxCo",
+        }),
+      ),
+    );
+
+    const approval = await getApproval(db, userId, result.approval_id, dek);
+    assert.ok(approval, "the approval was created despite the push failing");
+
+    // Despite the failed push, exactly one fallback job is scheduled for this approval,
+    // due at created_at + the default 2-minute delay.
+    const jobs = await db.query(
+      "SELECT run_at FROM jobs WHERE payload->>'approvalId' = $1",
+      [result.approval_id],
+    );
+    assert.equal(jobs.rows.length, 1, "a push failure still schedules exactly one fallback job");
+    assert.equal(
+      new Date(jobs.rows[0]!.run_at as string | number | Date).getTime(),
+      toMs(approval!.createdAt) + 2 * 60_000,
+      "the fallback is due at created_at + the default 2-minute delay",
+    );
+
+    assert.equal(exec.calls.length, 0, "the ask decision still does not execute the tool");
   } finally {
     await db.close();
   }
