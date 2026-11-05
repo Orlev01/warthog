@@ -78,6 +78,14 @@ export interface UpdateStatusInput {
   readonly status: ConnectionStatus;
 }
 
+// What updateConnectionCredentials needs: the person (member scope), the connection id
+// and the replacement credentials to store DEK-encrypted (e.g. a renewed OAuth token set).
+export interface UpdateCredentialsInput {
+  readonly userId: string;
+  readonly id: string;
+  readonly credentials: Record<string, unknown>;
+}
+
 // A stored instant comes back as a Date or an ISO/epoch representation depending on the
 // driver; normalise to a Date.
 function toDate(value: unknown): Date {
@@ -208,6 +216,32 @@ export async function updateConnectionStatus(
   const row = result.rows[0];
   if (!row) {
     throw new Error(`updateConnectionStatus: no connection ${id} for this user`);
+  }
+  return toConnection(row);
+}
+
+// Replace the owned connection's DEK-encrypted credentials (design §7 — a refresh job
+// renews OAuth tokens before expiry), leaving the connector, label, status and connected
+// date untouched. The ciphertext is re-bound to the SAME row id through the envelope's
+// associated data, so it decrypts under the owner's DEK exactly as the original did.
+// Member-scoped (id AND user_id both bound). THROWS (never silently) when no connection
+// with that id belongs to this user, and returns the updated Connection (no credentials).
+export async function updateConnectionCredentials(
+  db: Db,
+  { userId, id, credentials }: UpdateCredentialsInput,
+  dek: Uint8Array,
+): Promise<Connection> {
+  const envelope = await encrypt(dek, TABLE, CREDENTIALS_COLUMN, id, JSON.stringify(credentials));
+  const result = await db.query(
+    `UPDATE connections
+        SET credentials = $1
+      WHERE id = $2 AND user_id = $3
+      RETURNING ${COLUMNS}`,
+    [envelope, id, userId],
+  );
+  const row = result.rows[0];
+  if (!row) {
+    throw new Error(`updateConnectionCredentials: no connection ${id} for this user`);
   }
   return toConnection(row);
 }
