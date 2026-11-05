@@ -60,9 +60,11 @@
 //
 //   // A discriminated union on `status` (the repo idiom).
 //   type AgentCallResult =
-//     | { status: "executed";       result: unknown }  // allow → tool ran; its result returned
-//     | { status: "refused";        reason: string }   // disconnected / rate-limited / denied
-//     | { status: "not_supported";  reason: string };  // an ASK decision — the NEXT task holds it
+//     | { status: "executed";         result: unknown }  // allow → tool ran; its result returned
+//     | { status: "refused";          reason: string }   // disconnected / rate-limited / denied
+//     | { status: "pending_approval"; approval_id: string; expires_at: Date | string };
+//       // an ASK decision — the call is HELD (args DEK-encrypted), a linked approval is
+//       // created + recorded, and the agent is told pending_approval WITHOUT executing.
 //
 //   createAgentCallPipeline(deps: PipelineDeps): {
 //     handleAgentCall(connection: AgentConnection, call: AgentCall): Promise<AgentCallResult>;
@@ -93,9 +95,13 @@
 //   AC4 "A denied call is refused without executing the tool and is recorded." — a
 //        connector that is not granted, and a matching never_allow rule, each `refused`
 //        + recorded, the executor never called.
-//   ASK "An ask decision returns a clearly-typed not-yet-supported result." — a card
-//        request (and an ask_first rule) return `not_supported`; the executor is never
-//        called (the next task adds hold + approval).
+//   ASK "An ask decision HOLDS the call, creates a linked approval and returns
+//        pending_approval WITHOUT executing." — a card request (and an ask_first rule)
+//        reach `ask`: the pipeline creates a PENDING approval and a HELD request (its
+//        args DEK-encrypted, linked to that approval), records ONE Warthog activity
+//        entry, and returns {status:"pending_approval", approval_id, expires_at}; the
+//        executor is never called. The held args never appear raw in a held_requests
+//        cell (stored only DEK-encrypted) yet round-trip under the person's own DEK.
 //   SEC  (CLAUDE.md redaction hard rule / INV-103) — the recorded entry's parameters go
 //        through redaction: a secret-named field and a card number never appear raw in
 //        the recorded entry.
@@ -114,6 +120,8 @@ import { createInMemoryRecorder } from "../activity/recorder";
 import { createUser } from "../db/users";
 import { upsertPermissions } from "../db/agent-permissions";
 import { createRule } from "../db/rules";
+import { getApproval } from "../db/approvals";
+import { getByApproval } from "../db/held-requests";
 import { freshDb } from "../../test/db";
 import { localAesKeyWrapper, type KeyWrapper } from "../crypto/key-wrapper";
 import { fixedClock, type Clock } from "../seams/clock";
@@ -142,6 +150,10 @@ const OTHER_CONN = "22222222-2222-2222-2222-222222222222";
 // The frozen instant the pipeline reads time through (budget-period key + rate-limit
 // window). Mid-month noon UTC, so the buckets are unambiguous in UTC arithmetic.
 const NOW = new Date("2026-11-15T12:00:00.000Z");
+
+// Compare the MOMENT, not the representation: an `expires_at` may come back as a Date or
+// an ISO/epoch representation — either is a reasonable choice and must not redden a test.
+const toMs = (value: unknown): number => new Date(value as never).getTime();
 
 // Rule parts (the domain vocabulary) as `as const` literals.
 const ANY_AGENT = { type: "any_agent" } as const;
@@ -266,8 +278,8 @@ function expectRefused(r: Result) {
   if (r.status !== "refused") assert.fail(`expected a refused result, got "${r.status}": ${JSON.stringify(r)}`);
   return r;
 }
-function expectNotSupported(r: Result) {
-  if (r.status !== "not_supported") assert.fail(`expected a not_supported result, got "${r.status}": ${JSON.stringify(r)}`);
+function expectPendingApproval(r: Result) {
+  if (r.status !== "pending_approval") assert.fail(`expected a pending_approval result, got "${r.status}": ${JSON.stringify(r)}`);
   return r;
 }
 
@@ -515,15 +527,18 @@ test("a matching never_allow rule denies the call: refused + recorded, never exe
 });
 
 // ===========================================================================
-// ASK — an ask decision returns a clearly-typed not-yet-supported result (the
-// NEXT task holds it); the tool is never executed.
+// ASK — an ask decision HOLDS the call: the pipeline creates a PENDING approval
+// and a HELD request (its args DEK-encrypted, linked to the approval), records ONE
+// Warthog activity entry, and returns {status:"pending_approval", approval_id,
+// expires_at} WITHOUT executing the tool. (E07-S16 returned a placeholder
+// not-yet-supported result here; E07-S17 replaces it with hold + approval.)
 // ===========================================================================
 
-test("a card request (an ASK decision) returns a clearly-typed not-yet-supported result, without executing", async () => {
+test("a card request (an ASK decision) holds the call, creates a pending approval and returns pending_approval without executing", async () => {
   const db = await freshDb();
   const keyWrapper = keyWrapperFor();
   try {
-    const { userId } = await makePerson(db, "ask-card", keyWrapper);
+    const { userId, dek } = await makePerson(db, "ask-card", keyWrapper);
     // Card access with a budget that comfortably covers the request → the policy engine
     // reaches "ask" (a card request always needs the person), not "deny".
     await upsertPermissions(
@@ -543,9 +558,10 @@ test("a card request (an ASK decision) returns a clearly-typed not-yet-supported
       executeTool: exec.fn,
     });
 
-    const result = expectNotSupported(
+    const conn = connectionFor(userId);
+    const result = expectPendingApproval(
       await pipeline.handleAgentCall(
-        connectionFor(userId),
+        conn,
         callFor({
           connector: null,
           tool: "request_card",
@@ -558,14 +574,121 @@ test("a card request (an ASK decision) returns a clearly-typed not-yet-supported
       ),
     );
 
-    assert.ok(result.reason.length > 0, "the not-yet-supported result carries a plain reason");
-    assert.equal(exec.calls.length, 0, "an ask decision does not execute the tool");
+    // The return contract: a new approval id and an expiry, never an executed result.
+    assert.equal(typeof result.approval_id, "string", "an ask returns the new approval's id");
+    assert.ok(result.approval_id.length > 0, "the approval id is non-empty");
+    assert.ok(toMs(result.expires_at) > toMs(NOW), "the held approval expires in the future");
+
+    // The tool is NOT executed — the person decides it from the inbox first.
+    assert.equal(exec.calls.length, 0, "an ask decision never executes the tool");
+
+    // Warthog writes exactly ONE activity entry for the held call (it writes the record
+    // itself, not the agent).
+    assert.equal(rec.entries.length, 1, "an ask decision records exactly one activity entry");
+    const [entry] = rec.entries;
+    assert.ok(entry);
+    assert.equal(entry.source, "warthog", "Warthog writes the record itself");
+    assert.equal(entry.tool, "request_card", "the entry names the held tool");
+    assert.ok((entry.outcome ?? "").length > 0, "the held entry carries an outcome");
+
+    // A real PENDING approval was created for this person + requesting agent, and the
+    // expiry returned to the agent is that approval's expiry.
+    const approval = await getApproval(db, userId, result.approval_id, dek);
+    assert.ok(approval, "a real approval was created and is readable by its owner");
+    assert.equal(approval!.status, "pending", "the created approval is pending");
+    assert.equal(approval!.agentId, conn.agentId, "the approval belongs to the requesting agent");
+    assert.equal(
+      toMs(approval!.expiresAt),
+      toMs(result.expires_at),
+      "the returned expires_at is the created approval's expiry",
+    );
+
+    // A held request is parked behind that approval (the call Warthog runs on approval),
+    // linked by the approval id, still waiting as held.
+    const held = await getByApproval(db, userId, result.approval_id, dek);
+    assert.ok(held, "a held request is parked behind the approval");
+    assert.equal(held!.status, "held", "the held request is waiting (held)");
+    assert.equal(held!.approvalId, result.approval_id, "the held request references its approval");
+    assert.equal(held!.agentId, conn.agentId, "the held request belongs to the requesting agent");
   } finally {
     await db.close();
   }
 });
 
-test("an ask_first rule (an ASK decision) returns a not-yet-supported result, without executing", async () => {
+test("the held call's arguments are stored only DEK-encrypted, and the approval references the held request", async () => {
+  const db = await freshDb();
+  const keyWrapper = keyWrapperFor();
+  try {
+    const { userId, dek } = await makePerson(db, "ask-dek", keyWrapper);
+    await upsertPermissions(
+      db,
+      baseGrants(userId, CONN, {
+        cardAccess: true,
+        cardBudget: { amount: 500, currency: "AUD", period: "month" },
+      }),
+    );
+
+    const rec = spyRecorder(fixedClock(NOW));
+    const exec = spyExecutor();
+    const pipeline = buildPipeline(db, keyWrapper, {
+      clock: fixedClock(NOW),
+      rateLimiter: createRateLimiter(fixedClock(NOW)),
+      recorder: rec.recorder,
+      executeTool: exec.fn,
+    });
+
+    // Distinctive tokens in the call args — personal content (recipient, field) that MUST
+    // be held only DEK-encrypted. The tokens are unique, so any raw occurrence in a
+    // held_requests cell is a genuine plaintext leak, not a coincidence.
+    const RECIPIENT = "mallory-DEKLEAK7x@secret.example";
+    const FIELD = "passport_number_DEKLEAK7x";
+
+    const result = expectPendingApproval(
+      await pipeline.handleAgentCall(
+        connectionFor(userId),
+        callFor({
+          connector: null,
+          tool: "request_card",
+          makesChange: true,
+          request: "card",
+          amount: 80,
+          currency: "AUD",
+          merchant: "BoxCo",
+          params: { to: RECIPIENT, note: FIELD },
+        }),
+      ),
+    );
+
+    // The held call is reachable FROM the approval (the link) and round-trips under the
+    // person's own DEK, so Warthog can run the exact call once the person approves.
+    const held = await getByApproval(db, userId, result.approval_id, dek);
+    assert.ok(held, "a held request is parked behind the approval");
+    assert.equal(held!.approvalId, result.approval_id, "the held request references its approval");
+    const decrypted = JSON.stringify(held!.args);
+    assert.ok(decrypted.includes(RECIPIENT), "the held args round-trip the recipient under the DEK");
+    assert.ok(decrypted.includes(FIELD), "the held args round-trip the field under the DEK");
+
+    // At rest the tokens never appear RAW in any held_requests cell — the args are stored
+    // only DEK-encrypted. Scoped to held_requests (the unit under test): the same value
+    // may legitimately live (encrypted) elsewhere, so a whole-output scan would overreach.
+    const all = await db.query("SELECT * FROM held_requests");
+    assert.ok(all.rows.length >= 1, "the held request was persisted");
+    for (const row of all.rows) {
+      for (const cell of Object.values(row)) {
+        if (typeof cell === "string") {
+          assert.ok(!cell.includes(RECIPIENT), "the recipient must never be written raw to a held_requests column");
+          assert.ok(!cell.includes(FIELD), "the field must never be written raw to a held_requests column");
+        }
+      }
+    }
+
+    assert.equal(exec.calls.length, 0, "an ask decision never executes the tool");
+  } finally {
+    await db.close();
+  }
+});
+
+test("an ask_first rule (an ASK decision) also holds the call and returns pending_approval, without executing", async () => {
   const db = await freshDb();
   const keyWrapper = keyWrapperFor();
   try {
@@ -587,15 +710,25 @@ test("an ask_first rule (an ASK decision) returns a not-yet-supported result, wi
       executeTool: exec.fn,
     });
 
-    const result = expectNotSupported(
+    const result = expectPendingApproval(
       await pipeline.handleAgentCall(
         connectionFor(userId),
         callFor({ connector: null, tool: "update_task", makesChange: true }),
       ),
     );
 
-    assert.ok(result.reason.length > 0);
+    assert.ok(result.approval_id.length > 0, "the ask returns the new approval's id");
+    assert.ok(toMs(result.expires_at) > toMs(NOW), "the held approval expires in the future");
     assert.equal(exec.calls.length, 0, "an ask decision does not execute the tool");
+    assert.equal(rec.entries.length, 1, "the held call is recorded as one activity entry");
+
+    // The approval really exists and is pending; the ask_first call is held behind it.
+    const approval = await getApproval(db, userId, result.approval_id, dek);
+    assert.ok(approval, "a pending approval was created");
+    assert.equal(approval!.status, "pending", "the created approval is pending");
+    const held = await getByApproval(db, userId, result.approval_id, dek);
+    assert.ok(held, "the ask_first call is held behind the approval");
+    assert.equal(held!.status, "held", "the held request is waiting (held)");
   } finally {
     await db.close();
   }

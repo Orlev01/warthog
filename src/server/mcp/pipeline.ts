@@ -8,8 +8,9 @@
 // recorded as ONE summarising entry, not one per refused call); loads the
 // member-scoped policy context (E07-S09); evaluates the pure policy engine
 // (E03-S13); and then — on ALLOW executes the tool and records the activity
-// entry BEFORE the result returns; on DENY refuses and records; on ASK returns a
-// clearly-typed not-yet-supported result (the next task adds hold + approval).
+// entry BEFORE the result returns; on DENY refuses and records; on ASK HOLDS the
+// call (its args DEK-encrypted) behind a fresh PENDING approval, records the held
+// call, and returns `pending_approval` without executing (E07-S17).
 //
 // This is a SERVER module built purely from its INJECTED seams (db, keyWrapper,
 // clock, rateLimiter, recorder, executeTool, rate): it reads no `process.env` and
@@ -35,6 +36,9 @@ import {
 import type { Budget } from "../../domain/budget/budget";
 import type { ReferenceRate } from "../../domain/currency/convert";
 import { loadAgentContext, type AgentConnection, type AgentContext } from "./context";
+import { createApproval } from "../db/approvals";
+import { createHeldRequest } from "../db/held-requests";
+import { getUserById } from "../db/users";
 import type { RateLimiter } from "./rate-limit";
 import type { ActivityRecorder } from "../activity/recorder";
 import type { KeyWrapper } from "../crypto/key-wrapper";
@@ -73,7 +77,7 @@ export interface PipelineDeps {
 export type AgentCallResult =
   | { status: "executed"; result: unknown }
   | { status: "refused"; reason: string }
-  | { status: "not_supported"; reason: string };
+  | { status: "pending_approval"; approval_id: string; expires_at: Date };
 
 export interface AgentCallPipeline {
   handleAgentCall(connection: AgentConnection, call: AgentCall): Promise<AgentCallResult>;
@@ -152,6 +156,22 @@ function toPolicyCall(call: AgentCall): PolicyCall {
   };
 }
 
+// The approval `detail` the person reviews in their inbox: a summary of WHAT the
+// held call will do (recipient / amount / field), stored DEK-encrypted by the
+// approvals store. The raw tool arguments live on the linked held request.
+function toApprovalDetail(call: AgentCall): Record<string, unknown> {
+  return {
+    tool: call.tool,
+    connector: call.connector,
+    request: call.request,
+    amount: call.amount,
+    currency: call.currency,
+    merchant: call.merchant,
+    recipients: call.recipients,
+    reason: call.reason,
+  };
+}
+
 export function createAgentCallPipeline(deps: PipelineDeps): AgentCallPipeline {
   const { db, keyWrapper, clock, rateLimiter, recorder, executeTool } = deps;
   const rate = deps.rate ?? null;
@@ -179,6 +199,18 @@ export function createAgentCallPipeline(deps: PipelineDeps): AgentCallPipeline {
       merchant: call.merchant,
       payload: { params: call.params, reason: call.reason },
     });
+  }
+
+  // Resolve the person's unwrapped DEK (to encrypt the held call's args and the
+  // approval detail). Read the wrapped DEK member-scoped by `userId` (the session's,
+  // never a client value) and unwrap it through the KeyWrapper seam. Throws when the
+  // person has no row — never fails silently.
+  async function dataKeyFor(userId: string): Promise<Uint8Array> {
+    const user = await getUserById(db, userId);
+    if (!user) {
+      throw new Error("handleAgentCall: no data key for this user");
+    }
+    return keyWrapper.unwrap(user.wrappedDek);
   }
 
   return {
@@ -220,14 +252,36 @@ export function createAgentCallPipeline(deps: PipelineDeps): AgentCallPipeline {
         return { status: "refused", reason: decision.reason };
       }
 
-      // ASK — the person is needed. The next task holds the request and raises an
-      // approval; for now this is a clearly-typed not-yet-supported result, and the
-      // tool is never executed.
+      // ASK — the person is needed. Warthog HOLDS the call: it parks the exact
+      // agent call (its args DEK-encrypted) behind a fresh PENDING approval, records
+      // one activity entry for the held call, and tells the agent `pending_approval`
+      // WITHOUT executing the tool. The person decides it from their inbox; on
+      // approval Warthog runs the held call exactly once.
       if (decision.decision === "ask") {
-        return {
-          status: "not_supported",
-          reason: `${decision.reason} Approvals are not yet supported here.`,
-        };
+        const dek = await dataKeyFor(connection.userId);
+        const approval = await createApproval(
+          db,
+          {
+            userId: connection.userId,
+            agentId: connection.agentId,
+            detail: toApprovalDetail(call),
+          },
+          dek,
+          clock,
+        );
+        await createHeldRequest(
+          db,
+          {
+            userId: connection.userId,
+            agentId: connection.agentId,
+            approvalId: approval.id,
+            args: { ...call },
+          },
+          dek,
+          clock,
+        );
+        await record(connection, call, "pending_approval");
+        return { status: "pending_approval", approval_id: approval.id, expires_at: approval.expiresAt };
       }
 
       // ALLOW — execute the tool, then record the activity entry BEFORE the result
