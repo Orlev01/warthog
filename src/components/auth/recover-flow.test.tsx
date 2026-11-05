@@ -1,0 +1,687 @@
+// E04-S33 — Client account recovery flow (src/components/auth/recover-flow.tsx).
+//
+// RED-first: src/components/auth/recover-flow.tsx does NOT exist yet, so importing
+// `./recover-flow` throws and EVERY test in this file fails until the builder adds the
+// flow. That absence is the entire point of test-first — do not implement anything to
+// make these pass.
+//
+// Why this task exists (E04-S33): without a client flow the /recover page is static
+// copy — a person who has lost every device can't actually get back in. This flow walks
+// them through the four recovery requests (the E04-S29 handler, surfaced over HTTP by
+// E04-S30 at POST /api/auth/recover/[step]) and the passkey ceremony in between:
+//
+//   identify       → POST /api/auth/recover/identify        { email }
+//                    → keeps the returned { recoveryId }
+//   recovery code  → POST /api/auth/recover/verify-code      { recoveryId, recoveryCode }
+//                    → keeps the returned { registrationOptions }
+//   new passkey    → startRegistration({ optionsJSON: registrationOptions })  (@simplewebauthn/browser)
+//                    → POST /api/auth/recover/register-passkey { recoveryId, registrationResponse }
+//                    → shows the returned (NEW) recoveryCode ONCE
+//   new recovery   → the person ticks "I've saved it"
+//                    → POST /api/auth/recover/finish          { recoveryId }
+//                    → navigate to /home
+//
+// Two recovery codes exist in this flow and these tests keep them DISTINCT so the
+// "never re-sent / never stored" checks are precise:
+//   * the EXISTING saved code the person TYPES at the verify-code step (input), which is
+//     legitimately posted to verify-code; and
+//   * the NEW shown-once code the server returns at register-passkey (it replaces the
+//     old one), which must NEVER be sent back or written to browser storage.
+//
+// ── How these tests stay honest (and runnable without a DOM) ──────────────────────────
+// There is no jsdom / testing-library on this job and React component / E2E testing is a
+// per-job ADR, so the interactive BEHAVIOUR of the flow is not driven through a rendered
+// DOM. Instead the flow's logic lives in a framework-free, injectable controller that
+// `recover-flow.tsx` exports alongside its `"use client"` component — the "pure logic,
+// testable without I/O" convention (as the sibling signup/signin flows do). The React
+// component is a thin binding over this controller (inputs read `state`, buttons call its
+// methods); these tests drive the controller directly with a FAKE fetch and a FAKE
+// WebAuthn seam and assert what it DOES — which URLs it posts, in what order, with which
+// bodies; what it shows; where it navigates — never the source text of the module. A
+// later behaviour-preserving refactor stays green.
+//
+// The contract the builder implements (exactly this), exported from `./recover-flow`:
+//
+//   createRecoverFlow(deps: {
+//     fetch: typeof fetch;                                  // the fake fetch seam
+//     startRegistration: (opts: {                           // the WebAuthn seam,
+//       optionsJSON: PublicKeyCredentialCreationOptionsJSON;//   @simplewebauthn/browser's
+//       useAutoRegister?: boolean;                          //   startRegistration,
+//     }) => Promise<RegistrationResponseJSON>;              //   injectable for tests
+//     navigate: (path: string) => void;                     // sends the browser to /home
+//     // (any further deps the component wires must be OPTIONAL)
+//   }): RecoverFlowController
+//
+//   RecoverFlowController = {
+//     getState(): RecoverFlowState;              // a snapshot the component renders from
+//     setEmail(value: string): void;
+//     setRecoveryCode(value: string): void;      // the EXISTING saved code the person types
+//     setSavedConfirmed(value: boolean): void;
+//     submitIdentify(): Promise<void>;           // → identify
+//     submitRecoveryCode(): Promise<void>;       // → verify-code
+//     createPasskey(): Promise<void>;            // → startRegistration → register-passkey
+//     confirm(): Promise<void>;                  // → finish → navigate("/home")
+//   }
+//
+//   RecoverFlowState = {
+//     phase: ...;                 // which step is shown (maps to a RecoverView step)
+//     email: string;             // what the person typed (survives a step error)
+//     recoveryCode: string;      // the EXISTING saved code typed (survives a step error)
+//     savedConfirmed: boolean;   // the "I've saved it" tick — confirm is gated on it
+//     newRecoveryCode?: string;  // the shown-once NEW code from register-passkey
+//     error?: string;            // plain-English copy for the CURRENT step, when a step fails
+//   }
+//
+// These tests never pin the literal `phase` strings — they compare phases for
+// equality/inequality — so the builder may name the steps however reads best, as long as
+// each step is distinct and a failed step stays put.
+//
+// AC3 (GET /recover renders the flow's first step) is proven by rendering the recover
+// page's default export (its only framework field) with `react-dom/server` and reading
+// the markup — the same no-DOM render the view/page tests use.
+
+import * as React from "react";
+import { test } from "node:test";
+import assert from "node:assert/strict";
+import { renderToStaticMarkup } from "react-dom/server";
+
+import { createRecoverFlow } from "./recover-flow";
+import RecoverPage from "../../app/(auth)/recover/page";
+
+// ── Fixtures ──────────────────────────────────────────────────────────────────────────
+// Distinct, JSON-safe sample values so an assertion proves the flow carried THROUGH the
+// value it was given, not a constant. The TWO recovery codes are kept clearly distinct
+// (and neither a substring of the other, nor of any other fixture) so the absence scans
+// in the "shown once" test cannot false-fail: the typed OLD code is legitimately sent to
+// verify-code, while the NEW shown-once code must appear in no request body and no
+// storage write.
+const EMAIL = "robin@example.com";
+const RECOVERY_ID = "9f3c1a7e5b2d4680ab12cd34ef56a7b89f3c1a7e5b2d4680ab12cd34ef56a7b8";
+const TYPED_RECOVERY_CODE = "OLD1-2222-3333-4444"; // the person's existing saved code (input)
+const NEW_RECOVERY_CODE = "NEW9-3P4R-9XTD-6WHF"; // the replacement shown once, never re-sent
+
+// The registration options the server hands back at verify-code and that the flow must
+// forward VERBATIM into the WebAuthn seam (startRegistration's optionsJSON).
+const REG_OPTIONS = {
+  challenge: "Y2hhbGxlbmdlLWJ5dGVz",
+  rp: { name: "Warthog", id: "warthog.com.au" },
+  user: { id: "dXNlci1oYW5kbGU", name: EMAIL, displayName: EMAIL },
+  pubKeyCredParams: [{ type: "public-key", alg: -7 }],
+  authenticatorSelection: { residentKey: "required", userVerification: "required" },
+  extensions: { prf: {} },
+};
+
+// The attestation the authenticator returns from startRegistration and that the flow must
+// post VERBATIM as `registrationResponse` to register-passkey.
+const ATTESTATION = {
+  id: "Y3JlZGVudGlhbC1pZA",
+  rawId: "Y3JlZGVudGlhbC1pZA",
+  type: "public-key",
+  response: {
+    clientDataJSON: "Y2xpZW50LWRhdGEtanNvbg",
+    attestationObject: "YXR0ZXN0YXRpb24tb2JqZWN0",
+  },
+  clientExtensionResults: {},
+};
+
+// ── A programmable, recording fake fetch keyed by the recovery step path ────────────────
+
+type StepKey = "identify" | "verify-code" | "register-passkey" | "finish";
+
+interface RecordedCall {
+  step: StepKey;
+  url: string;
+  method: string;
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  body: any;
+}
+
+function stepOf(url: string): StepKey {
+  if (url.includes("/api/auth/recover/identify")) return "identify";
+  if (url.includes("/api/auth/recover/verify-code")) return "verify-code";
+  if (url.includes("/api/auth/recover/register-passkey")) return "register-passkey";
+  if (url.includes("/api/auth/recover/finish")) return "finish";
+  throw new Error(`the recover flow posted to an unexpected URL: ${url}`);
+}
+
+function jsonResponse(status: number, body: unknown = {}): Response {
+  return new Response(JSON.stringify(body), {
+    status,
+    headers: { "content-type": "application/json" },
+  });
+}
+
+function makeFetch() {
+  const calls: RecordedCall[] = [];
+  // Default: every step succeeds. A test swaps a single responder to drive a 4xx.
+  // `finish` answers with the followed-303 result a browser's default fetch sees: a 2xx
+  // (`response.ok`) landing on /home — the sibling flows (signin finish-passkey, signup
+  // confirm) treat success the same way.
+  const responders: Record<StepKey, () => Response> = {
+    identify: () => jsonResponse(200, { recoveryId: RECOVERY_ID }),
+    "verify-code": () => jsonResponse(200, { registrationOptions: REG_OPTIONS }),
+    "register-passkey": () => jsonResponse(200, { recoveryCode: NEW_RECOVERY_CODE }),
+    finish: () => jsonResponse(200, { ok: true }),
+  };
+  const fetchImpl = async (input: RequestInfo | URL, init?: RequestInit): Promise<Response> => {
+    const url =
+      typeof input === "string" ? input : input instanceof URL ? input.toString() : (input as Request).url;
+    const step = stepOf(url);
+    const method = (init?.method ?? "GET").toUpperCase();
+    const body = typeof init?.body === "string" ? JSON.parse(init.body) : undefined;
+    calls.push({ step, url, method, body });
+    return responders[step]();
+  };
+  return { fetchImpl, calls, responders };
+}
+
+// ── A programmable, recording fake WebAuthn seam (startRegistration) ────────────────────
+
+function makeStart() {
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  const calls: any[] = [];
+  let behaviour: () => Promise<typeof ATTESTATION> = async () => ATTESTATION;
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  const fn = async (opts: { optionsJSON: any; useAutoRegister?: boolean }) => {
+    calls.push(opts);
+    return behaviour();
+  };
+  return {
+    fn,
+    calls,
+    succeed() {
+      behaviour = async () => ATTESTATION;
+    },
+    // What the browser does when the person dismisses the OS passkey prompt.
+    cancel() {
+      behaviour = async () => {
+        throw Object.assign(
+          new Error("The operation either timed out or was not allowed by the user agent."),
+          { name: "NotAllowedError" },
+        );
+      };
+    },
+  };
+}
+
+// ── Test harness ────────────────────────────────────────────────────────────────────────
+
+function setup() {
+  const { fetchImpl, calls, responders } = makeFetch();
+  const start = makeStart();
+  const navCalls: string[] = [];
+  const flow = createRecoverFlow({
+    fetch: fetchImpl as typeof fetch,
+    startRegistration: start.fn,
+    navigate: (path: string) => {
+      navCalls.push(path);
+    },
+  });
+  return { flow, calls, responders, start, navCalls };
+}
+
+type Ctx = ReturnType<typeof setup>;
+
+// Walk the happy path up to (but not including) confirm, leaving the NEW recovery code
+// shown and awaiting the "I've saved it" confirmation.
+async function driveToNewRecovery(ctx: Ctx): Promise<void> {
+  ctx.flow.setEmail(EMAIL);
+  await ctx.flow.submitIdentify();
+  ctx.flow.setRecoveryCode(TYPED_RECOVERY_CODE);
+  await ctx.flow.submitRecoveryCode();
+  await ctx.flow.createPasskey();
+}
+
+// A step's user-facing error must read as plain Australian English — a real sentence,
+// never a raw machine code (the server speaks `invalid_code`, `unknown_recovery`,
+// `bad_attestation`, `no_second_factor`, `forbidden`, …) and never protocol/security
+// jargon.
+const JARGON: { label: string; re: RegExp }[] = [
+  { label: "OAuth", re: /\boauth\b/i },
+  { label: "WebAuthn", re: /\bwebauthn\b/i },
+  { label: "attestation", re: /\battestation\b/i },
+  { label: "assertion", re: /\bassertion\b/i },
+  { label: "token", re: /\btokens?\b/i },
+  { label: "HMAC", re: /\bhmac\b/i },
+  { label: "4xx", re: /\b4\d\d\b/ },
+];
+
+function assertPlainEnglish(message: unknown, ctx: string): asserts message is string {
+  assert.equal(typeof message, "string", `${ctx}: expected plain-English error copy, got ${typeof message}`);
+  const text = (message as string).trim();
+  assert.ok(text.length >= 8, `${ctx}: error copy must be a real message a person can read, got: "${text}"`);
+  assert.ok(/\s/.test(text), `${ctx}: error copy must read as words, not a single machine token, got: "${text}"`);
+  assert.ok(!/_/.test(text), `${ctx}: error copy must not be a raw machine code (snake_case), got: "${text}"`);
+  for (const { label, re } of JARGON) {
+    assert.ok(!re.test(text), `${ctx}: error copy must avoid jargon "${label}", got: "${text}"`);
+  }
+}
+
+// ── AC1 — the ordered, correctly-valued request sequence, then navigate to /home ────────
+
+test("posts identify, verify-code, register-passkey and finish in order, then navigates to /home", async () => {
+  const ctx = setup();
+
+  ctx.flow.setEmail(EMAIL);
+  await ctx.flow.submitIdentify();
+  ctx.flow.setRecoveryCode(TYPED_RECOVERY_CODE);
+  await ctx.flow.submitRecoveryCode();
+  await ctx.flow.createPasskey();
+
+  // The NEW recovery code is now shown; the person ticks "I've saved it", then continues.
+  assert.equal(
+    ctx.flow.getState().newRecoveryCode,
+    NEW_RECOVERY_CODE,
+    "register-passkey's new code must be shown once the passkey is registered",
+  );
+  ctx.flow.setSavedConfirmed(true);
+  await ctx.flow.confirm();
+
+  // The four steps, in exactly this order, each a POST.
+  assert.deepEqual(
+    ctx.calls.map((c) => c.step),
+    ["identify", "verify-code", "register-passkey", "finish"],
+    "the flow must post the four recovery steps in order",
+  );
+  for (const c of ctx.calls) {
+    assert.equal(c.method, "POST", `step "${c.step}" must be a POST`);
+  }
+
+  // identify carries the entered email.
+  assert.equal(ctx.calls[0]!.body.email, EMAIL, "identify must send the entered email");
+
+  // verify-code carries the server-returned recoveryId and the EXISTING code the person typed.
+  assert.equal(ctx.calls[1]!.body.recoveryId, RECOVERY_ID, "verify-code must carry the returned recoveryId");
+  assert.equal(
+    ctx.calls[1]!.body.recoveryCode,
+    TYPED_RECOVERY_CODE,
+    "verify-code must send the existing recovery code the person typed",
+  );
+
+  // The WebAuthn seam is driven with the registration options verify-code returned.
+  assert.deepEqual(
+    ctx.start.calls.map((c) => c.optionsJSON),
+    [REG_OPTIONS],
+    "startRegistration must be called once with the returned registrationOptions",
+  );
+
+  // register-passkey carries the recoveryId and the attestation from the WebAuthn seam.
+  assert.equal(ctx.calls[2]!.body.recoveryId, RECOVERY_ID, "register-passkey must carry the returned recoveryId");
+  assert.deepEqual(
+    ctx.calls[2]!.body.registrationResponse,
+    ATTESTATION,
+    "register-passkey must post the attestation from the WebAuthn seam",
+  );
+
+  // finish carries the recoveryId (and nothing the server does not need).
+  assert.equal(ctx.calls[3]!.body.recoveryId, RECOVERY_ID, "finish must carry the returned recoveryId");
+
+  // ...and the person lands on /home.
+  assert.deepEqual(ctx.navCalls, ["/home"], "a successful finish must navigate to /home");
+});
+
+test("each step advances to a distinct next step", async () => {
+  const ctx = setup();
+  const p0 = ctx.flow.getState().phase;
+
+  ctx.flow.setEmail(EMAIL);
+  await ctx.flow.submitIdentify();
+  const p1 = ctx.flow.getState().phase;
+
+  ctx.flow.setRecoveryCode(TYPED_RECOVERY_CODE);
+  await ctx.flow.submitRecoveryCode();
+  const p2 = ctx.flow.getState().phase;
+
+  await ctx.flow.createPasskey();
+  const p3 = ctx.flow.getState().phase;
+
+  assert.notEqual(p1, p0, "identifying must advance off the first step");
+  assert.notEqual(p2, p1, "verifying the recovery code must advance off the recovery-code step");
+  assert.notEqual(p3, p2, "registering the passkey must advance to the new-recovery step");
+});
+
+// ── AC2 — the new recovery code is shown once, never re-sent, never stored ──────────────
+
+test("the new recovery code is shown once and never leaves the browser (not re-sent, not stored)", async () => {
+  // Install recording stand-ins for browser storage so a write of the code is caught.
+  const g = globalThis as unknown as { localStorage?: Storage; sessionStorage?: Storage };
+  const hadLocal = Object.prototype.hasOwnProperty.call(g, "localStorage");
+  const hadSession = Object.prototype.hasOwnProperty.call(g, "sessionStorage");
+  const origLocal = g.localStorage;
+  const origSession = g.sessionStorage;
+
+  function fakeStorage() {
+    const map = new Map<string, string>();
+    const writes: { key: string; value: string }[] = [];
+    const store: Storage = {
+      getItem: (k) => (map.has(k) ? map.get(k)! : null),
+      setItem: (k, v) => {
+        map.set(k, String(v));
+        writes.push({ key: k, value: String(v) });
+      },
+      removeItem: (k) => void map.delete(k),
+      clear: () => map.clear(),
+      key: (i) => Array.from(map.keys())[i] ?? null,
+      get length() {
+        return map.size;
+      },
+    } as Storage;
+    return { store, writes };
+  }
+
+  const local = fakeStorage();
+  const session = fakeStorage();
+  g.localStorage = local.store;
+  g.sessionStorage = session.store;
+
+  try {
+    const ctx = setup();
+    await driveToNewRecovery(ctx);
+
+    assert.equal(
+      ctx.flow.getState().newRecoveryCode,
+      NEW_RECOVERY_CODE,
+      "the new recovery code must be shown once register-passkey returns it",
+    );
+
+    ctx.flow.setSavedConfirmed(true);
+    await ctx.flow.confirm();
+
+    // Never sent back to the server: the NEW code appears in no request body. (The OLD
+    // typed code is legitimately in the verify-code body; the two are distinct values, so
+    // this scan targets only the shown-once replacement.)
+    for (const c of ctx.calls) {
+      const serialized = JSON.stringify(c.body ?? {});
+      assert.ok(
+        !serialized.includes(NEW_RECOVERY_CODE),
+        `step "${c.step}" must not send the new recovery code back to the server, body: ${serialized}`,
+      );
+    }
+
+    // Never written to browser storage.
+    for (const w of [...local.writes, ...session.writes]) {
+      assert.ok(
+        !String(w.value).includes(NEW_RECOVERY_CODE) && !String(w.key).includes(NEW_RECOVERY_CODE),
+        `the new recovery code must never be written to browser storage, write: ${w.key}=${w.value}`,
+      );
+    }
+  } finally {
+    if (hadLocal) g.localStorage = origLocal;
+    else delete g.localStorage;
+    if (hadSession) g.sessionStorage = origSession;
+    else delete g.sessionStorage;
+  }
+});
+
+test("continue is disabled until the person confirms they saved the new recovery code", async () => {
+  const ctx = setup();
+  await driveToNewRecovery(ctx);
+
+  // Before the tick: the gate is closed.
+  assert.equal(ctx.flow.getState().savedConfirmed, false, "the saved confirmation starts unticked");
+
+  const atNewRecovery = ctx.flow.getState().phase;
+  await ctx.flow.confirm();
+  assert.ok(
+    !ctx.calls.some((c) => c.step === "finish"),
+    "finish must NOT post while the person has not confirmed they saved the code",
+  );
+  assert.deepEqual(ctx.navCalls, [], "confirm must NOT navigate while unticked");
+  assert.equal(ctx.flow.getState().phase, atNewRecovery, "the person stays on the new-recovery step while unticked");
+  assert.equal(ctx.flow.getState().newRecoveryCode, NEW_RECOVERY_CODE, "the code is still shown while unticked");
+
+  // After the tick: the gate opens.
+  ctx.flow.setSavedConfirmed(true);
+  assert.equal(ctx.flow.getState().savedConfirmed, true, "ticking records the saved confirmation");
+  await ctx.flow.confirm();
+  assert.ok(ctx.calls.some((c) => c.step === "finish"), "finish must post once the code is saved");
+  assert.deepEqual(ctx.navCalls, ["/home"], "confirm navigates to /home once the code is saved");
+});
+
+// ── AC2 — a 4xx on any step keeps the person put, with their input and plain copy ───────
+
+test("a 4xx from identify keeps the person on the first step, with the email they typed and plain copy", async () => {
+  const ctx = setup();
+  const before = ctx.flow.getState().phase;
+
+  ctx.flow.setEmail(EMAIL);
+  ctx.responders["identify"] = () => jsonResponse(400, { error: "bad_request" });
+  await ctx.flow.submitIdentify();
+
+  const s = ctx.flow.getState();
+  assert.equal(s.phase, before, "an identify 4xx must keep the person on the first step");
+  assert.equal(s.email, EMAIL, "the email the person typed must survive the error");
+  assertPlainEnglish(s.error, "identify 4xx");
+  assert.deepEqual(
+    ctx.calls.map((c) => c.step),
+    ["identify"],
+    "an identify 4xx must not advance to verify-code",
+  );
+  assert.deepEqual(ctx.navCalls, [], "an identify 4xx must not navigate");
+});
+
+test("a 4xx from verify-code keeps the person on the recovery-code step, with their email and code and plain copy", async () => {
+  const ctx = setup();
+
+  ctx.flow.setEmail(EMAIL);
+  await ctx.flow.submitIdentify();
+  const atRecoveryCode = ctx.flow.getState().phase;
+
+  ctx.flow.setRecoveryCode(TYPED_RECOVERY_CODE);
+  ctx.responders["verify-code"] = () => jsonResponse(400, { error: "invalid_code" });
+  await ctx.flow.submitRecoveryCode();
+
+  const s = ctx.flow.getState();
+  assert.equal(s.phase, atRecoveryCode, "a verify-code 4xx must keep the person on the recovery-code step");
+  assert.equal(s.email, EMAIL, "the email must survive the error");
+  assert.equal(s.recoveryCode, TYPED_RECOVERY_CODE, "the recovery code the person typed must survive the error");
+  assert.notEqual(s.error, "invalid_code", "the raw server code must not be shown to the person");
+  assertPlainEnglish(s.error, "verify-code 4xx");
+  assert.ok(
+    !ctx.calls.some((c) => c.step === "register-passkey"),
+    "a verify-code 4xx must not start the passkey step",
+  );
+  assert.deepEqual(ctx.navCalls, [], "a verify-code 4xx must not navigate");
+});
+
+test("a 4xx from register-passkey keeps the person on the passkey step with plain copy, and the step can be retried", async () => {
+  const ctx = setup();
+
+  ctx.flow.setEmail(EMAIL);
+  await ctx.flow.submitIdentify();
+  ctx.flow.setRecoveryCode(TYPED_RECOVERY_CODE);
+  await ctx.flow.submitRecoveryCode();
+  const atPasskey = ctx.flow.getState().phase;
+
+  ctx.responders["register-passkey"] = () => jsonResponse(400, { error: "bad_attestation" });
+  await ctx.flow.createPasskey();
+
+  let s = ctx.flow.getState();
+  assert.equal(s.phase, atPasskey, "a register-passkey 4xx must keep the person on the passkey step");
+  assert.equal(s.email, EMAIL, "the email must survive the error");
+  assert.equal(s.recoveryCode, TYPED_RECOVERY_CODE, "the typed recovery code must survive the error");
+  assert.ok(!s.newRecoveryCode, "no new recovery code is shown when registration was rejected");
+  assertPlainEnglish(s.error, "register-passkey 4xx");
+  assert.deepEqual(ctx.navCalls, [], "a register-passkey 4xx must not navigate");
+
+  // Retry: a fresh attempt can complete, and the error clears.
+  ctx.responders["register-passkey"] = () => jsonResponse(200, { recoveryCode: NEW_RECOVERY_CODE });
+  await ctx.flow.createPasskey();
+  s = ctx.flow.getState();
+  assert.equal(s.newRecoveryCode, NEW_RECOVERY_CODE, "a retry of the passkey step can complete registration");
+  assert.ok(!s.error, "the error clears once the retry succeeds");
+});
+
+test("a 4xx from finish keeps the new recovery code shown, with plain copy and no navigation", async () => {
+  const ctx = setup();
+  await driveToNewRecovery(ctx);
+  ctx.flow.setSavedConfirmed(true);
+  const atNewRecovery = ctx.flow.getState().phase;
+
+  ctx.responders["finish"] = () => jsonResponse(400, { error: "no_second_factor" });
+  await ctx.flow.confirm();
+
+  const s = ctx.flow.getState();
+  assert.equal(s.phase, atNewRecovery, "a finish 4xx must keep the person on the new-recovery step");
+  assert.equal(s.newRecoveryCode, NEW_RECOVERY_CODE, "the new recovery code is still shown so the person can save it");
+  assertPlainEnglish(s.error, "finish 4xx");
+  assert.deepEqual(ctx.navCalls, [], "a finish 4xx must not navigate");
+});
+
+test("a cancelled passkey prompt stays on the passkey step, posts nothing, and can be retried", async () => {
+  const ctx = setup();
+
+  ctx.flow.setEmail(EMAIL);
+  await ctx.flow.submitIdentify();
+  ctx.flow.setRecoveryCode(TYPED_RECOVERY_CODE);
+  await ctx.flow.submitRecoveryCode();
+  const atPasskey = ctx.flow.getState().phase;
+
+  // The person dismisses the OS passkey prompt — the WebAuthn seam rejects.
+  ctx.start.cancel();
+  await ctx.flow.createPasskey();
+
+  let s = ctx.flow.getState();
+  assert.equal(s.phase, atPasskey, "a cancelled passkey keeps the person on the passkey step");
+  assert.ok(
+    !ctx.calls.some((c) => c.step === "register-passkey"),
+    "a cancelled passkey must not post a registration to the server",
+  );
+  assertPlainEnglish(s.error, "cancelled passkey"); // never fail silently — tell them, offer a retry
+  assert.deepEqual(ctx.navCalls, [], "a cancelled passkey must not navigate");
+
+  // Retry: the person tries again and the ceremony completes.
+  ctx.start.succeed();
+  await ctx.flow.createPasskey();
+  s = ctx.flow.getState();
+  assert.equal(s.newRecoveryCode, NEW_RECOVERY_CODE, "retrying the passkey lets the person continue");
+  assert.ok(!s.error, "the cancellation message clears once the retry succeeds");
+  assert.ok(ctx.calls.some((c) => c.step === "register-passkey"), "the retry posts the registration");
+});
+
+// ── The flow starts clean on the first (identify) step ──────────────────────────────────
+
+test("a fresh flow starts on the first step with nothing typed and no error", () => {
+  const ctx = setup();
+  const s = ctx.flow.getState();
+  assert.equal(s.email, "", "the email starts empty");
+  assert.equal(s.recoveryCode, "", "the recovery code starts empty");
+  assert.equal(s.savedConfirmed, false, "the saved confirmation starts unticked");
+  assert.ok(!s.newRecoveryCode, "no new recovery code before registration");
+  assert.ok(!s.error, "no error on a fresh flow");
+  // No network and no navigation happen just by constructing the flow.
+  assert.deepEqual(ctx.calls, [], "constructing the flow makes no requests");
+  assert.deepEqual(ctx.navCalls, [], "constructing the flow navigates nowhere");
+});
+
+// ── AC3 — GET /recover renders the flow's first step (an accessibly-labelled identify) ──
+
+function decode(s: string): string {
+  return s
+    .replace(/&amp;/gi, "&")
+    .replace(/&#x27;/gi, "'")
+    .replace(/&#39;/gi, "'")
+    .replace(/&quot;/gi, '"')
+    .replace(/&lt;/gi, "<")
+    .replace(/&gt;/gi, ">")
+    .replace(/&nbsp;/gi, " ");
+}
+
+function visibleText(markup: string): string {
+  return decode(markup.replace(/<[^>]*>/g, " ")).replace(/\s+/g, " ").trim();
+}
+
+function attr(attrs: string, name: string): string | null {
+  const m = attrs.match(new RegExp(`\\b${name}="([^"]*)"`, "i"));
+  return m ? m[1]! : null;
+}
+
+function findAll(markup: string, tag: string): { attrs: string; inner: string }[] {
+  const out: { attrs: string; inner: string }[] = [];
+  for (const m of markup.matchAll(new RegExp(`<${tag}\\b([^>]*)>([\\s\\S]*?)</${tag}>`, "gi"))) {
+    out.push({ attrs: m[1]!, inner: m[2]! });
+  }
+  return out;
+}
+
+function inputs(markup: string): { attrs: string; type: string; id: string | null }[] {
+  const out: { attrs: string; type: string; id: string | null }[] = [];
+  for (const m of markup.matchAll(/<input\b([^>]*?)\/?>/gi)) {
+    const attrs = m[1]!;
+    out.push({ attrs, type: (attr(attrs, "type") ?? "text").toLowerCase(), id: attr(attrs, "id") });
+  }
+  return out;
+}
+
+function labelTextById(markup: string): Record<string, string> {
+  const map: Record<string, string> = {};
+  for (const l of findAll(markup, "label")) {
+    const f = attr(l.attrs, "for");
+    if (f) map[f] = visibleText(l.inner);
+  }
+  return map;
+}
+
+const LABELLABLE = new Set(["text", "email", "tel", "number", "password", "search", "url"]);
+
+function inputIsLabelled(
+  input: { attrs: string; id: string | null },
+  labels: Record<string, string>,
+): boolean {
+  if (input.id && labels[input.id] && labels[input.id]!.length > 0) return true;
+  const al = attr(input.attrs, "aria-label");
+  if (al && al.trim().length > 0) return true;
+  const alb = attr(input.attrs, "aria-labelledby");
+  if (alb && alb.trim().length > 0) return true;
+  return false;
+}
+
+function actionableButtons(markup: string): { name: string; attrs: string }[] {
+  return findAll(markup, "button")
+    .filter((b) => !/\bdisabled=""/i.test(b.attrs))
+    .map((b) => ({ name: visibleText(b.inner) || attr(b.attrs, "aria-label") || "", attrs: b.attrs }));
+}
+
+// Render the page entry's default export (its only framework field). It mounts the flow
+// at its first step from props alone, so it renders without a live request scope; the
+// Next 15 resolved-promise props are supplied in case the entry reads them. A sync entry
+// or an async server component are both awaited.
+async function renderPage(Page: unknown): Promise<string> {
+  assert.equal(typeof Page, "function", "the recover entry must have a default-exported page component");
+  const element = await Promise.resolve(
+    (Page as (props: unknown) => unknown)({
+      searchParams: Promise.resolve({}),
+      params: Promise.resolve({}),
+    }),
+  );
+  return renderToStaticMarkup(element as React.ReactElement);
+}
+
+test("GET /recover renders the flow's first step: an accessibly-labelled email entry with a live control", async () => {
+  const markup = await renderPage(RecoverPage);
+
+  const labels = labelTextById(markup);
+  const entry = inputs(markup).filter((i) => LABELLABLE.has(i.type));
+  assert.ok(entry.length >= 1, `the first step must render an email-entry field, got: ${markup}`);
+  for (const input of entry) {
+    assert.ok(
+      inputIsLabelled(input, labels),
+      `every field on the first step must carry an accessible label, got: ${input.attrs}`,
+    );
+  }
+
+  const labelBlob = Object.values(labels).join(" ").toLowerCase();
+  assert.match(labelBlob, /email/i, `the first step must collect the email, got labels: "${labelBlob}"`);
+
+  // It is the recovery screen, not a look-alike, and it is LIVE (a named control to proceed).
+  assert.match(
+    visibleText(markup),
+    /recover/i,
+    `the mounted screen must be the recovery flow (its copy names recovering the account), got: "${visibleText(markup)}"`,
+  );
+  const live = actionableButtons(markup).filter((b) => b.name.trim().length > 0);
+  assert.ok(
+    live.length >= 1,
+    `the first step must offer a live, named control to continue (not a dead screen), got: ${markup}`,
+  );
+});

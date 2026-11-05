@@ -305,7 +305,42 @@ export function SigninView({
 
 export type RecoverStep = "identify" | "recovery-code" | "passkey" | "new-recovery";
 
-export function RecoverView({ step, recoveryCode }: { step: RecoverStep; recoveryCode?: string }) {
+// RecoverView renders from props alone. The optional interactive wiring is supplied by
+// the client recovery flow (E04-S33) to drive the screen; when it is omitted the view
+// renders as the static copy the render tests pin. `recoveryCode` is the NEW shown-once
+// replacement code (new-recovery step); `recoveryCodeValue` is the existing code the
+// person types at the recovery-code step.
+export interface RecoverViewProps {
+  step: RecoverStep;
+  recoveryCode?: string;
+  email?: string;
+  recoveryCodeValue?: string;
+  error?: string;
+  savedConfirmed?: boolean;
+  onEmailChange?: (value: string) => void;
+  onRecoveryCodeChange?: (value: string) => void;
+  onSavedConfirmedChange?: (value: boolean) => void;
+  onSubmitIdentify?: () => void;
+  onSubmitRecoveryCode?: () => void;
+  onCreatePasskey?: () => void;
+  onConfirm?: () => void;
+}
+
+export function RecoverView({
+  step,
+  recoveryCode,
+  email,
+  recoveryCodeValue,
+  error,
+  savedConfirmed,
+  onEmailChange,
+  onRecoveryCodeChange,
+  onSavedConfirmedChange,
+  onSubmitIdentify,
+  onSubmitRecoveryCode,
+  onCreatePasskey,
+  onConfirm,
+}: RecoverViewProps) {
   switch (step) {
     case "identify":
       return (
@@ -313,8 +348,22 @@ export function RecoverView({ step, recoveryCode }: { step: RecoverStep; recover
           title="Recover your account"
           lead="First, let's check it's you. Enter your email and the code we'll send you."
         >
-          <form className="flex flex-col gap-4">
-            <Field label="Email address" name="email" type="email" autoComplete="email" />
+          <form
+            className="flex flex-col gap-4"
+            onSubmit={(event) => {
+              event.preventDefault();
+              onSubmitIdentify?.();
+            }}
+          >
+            <Field
+              label="Email address"
+              name="email"
+              type="email"
+              autoComplete="email"
+              value={email}
+              onChange={(event) => onEmailChange?.(event.target.value)}
+              error={error}
+            />
             <Field label="Your code" name="code" type="text" inputMode="numeric" autoComplete="one-time-code" />
             <Button type="submit" variant="primary">
               Continue
@@ -328,8 +377,22 @@ export function RecoverView({ step, recoveryCode }: { step: RecoverStep; recover
           title="Enter your recovery code"
           lead="Enter the recovery code you saved when you first set up your account."
         >
-          <form className="flex flex-col gap-4">
-            <Field label="Recovery code" name="recoveryCode" type="text" autoComplete="off" />
+          <form
+            className="flex flex-col gap-4"
+            onSubmit={(event) => {
+              event.preventDefault();
+              onSubmitRecoveryCode?.();
+            }}
+          >
+            <Field
+              label="Recovery code"
+              name="recoveryCode"
+              type="text"
+              autoComplete="off"
+              value={recoveryCodeValue}
+              onChange={(event) => onRecoveryCodeChange?.(event.target.value)}
+              error={error}
+            />
             <Button type="submit" variant="primary">
               Continue
             </Button>
@@ -342,9 +405,10 @@ export function RecoverView({ step, recoveryCode }: { step: RecoverStep; recover
           title="Set up a new passkey"
           lead="Now create a new passkey so you can sign in on this device from now on."
         >
-          <Button type="button" variant="primary">
+          <Button type="button" variant="primary" onClick={onCreatePasskey}>
             Create a passkey
           </Button>
+          {error ? <p className="text-sm text-danger">{error}</p> : null}
         </AuthScreen>
       );
     case "new-recovery":
@@ -353,7 +417,13 @@ export function RecoverView({ step, recoveryCode }: { step: RecoverStep; recover
           title="Save your new recovery code"
           lead="Here's your new recovery code — your old one no longer works. Write it down and keep it safe, and we'll only show it once."
         >
-          <SaveRecoveryCode code={recoveryCode} />
+          <SaveRecoveryCode
+            code={recoveryCode}
+            savedConfirmed={savedConfirmed}
+            onSavedConfirmedChange={onSavedConfirmedChange}
+            onContinue={onConfirm}
+            error={error}
+          />
         </AuthScreen>
       );
   }
