@@ -15,6 +15,7 @@ import {
 } from "lucide-react";
 
 import { PORTAL_NAV } from "@/components/shell/nav";
+import { SignOutControl } from "@/components/shell/sign-out";
 
 // MoreMenu — the mobile "More" menu (brief design_ux, technical-design §12). On
 // mobile the bottom nav's "More" tab is the only way into the More sections, so
@@ -72,6 +73,11 @@ export function MoreMenu() {
           );
         })}
       </nav>
+
+      {/* Sign out — the mobile twin of the desktop sidebar's footer control. On
+          mobile the More menu is the only way into these sections, so this is
+          where a person signs out of the device they are using. */}
+      <SignOutControl className="border border-line bg-surface px-4 py-3" />
     </div>
   );
 }
