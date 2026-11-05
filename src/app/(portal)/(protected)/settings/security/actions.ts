@@ -55,6 +55,8 @@ export interface SecurityActionsDeps {
   readonly clock: Clock;
   readonly random: Random;
   readonly rpId: string;
+  // The app's public origin a new passkey's attestation is verified against.
+  readonly origin?: string;
 }
 
 // A passkey as the loader surfaces it: its id (the handle remove takes) and when it
@@ -114,7 +116,7 @@ const STEP_UP_REQUIRED = "step_up_required";
 const uuidSchema = z.uuid();
 
 export function createSecurityActions(deps: SecurityActionsDeps): SecurityActions {
-  const { db, clock, random, rpId } = deps;
+  const { db, clock, random, rpId, origin } = deps;
 
   // List only the acting person's passkeys and sessions, scoped by the session's
   // own user id (never a client value). Sessions double as recent sign-ins, so
@@ -162,7 +164,7 @@ export function createSecurityActions(deps: SecurityActionsDeps): SecurityAction
     response: RegistrationResponseJSON,
   ): Promise<ActionResult> {
     if (!requireStepUp(session, { clock })) return { ok: false, reason: STEP_UP_REQUIRED };
-    const result = await finishPasskeyRegistration(db, { userId: session.userId, response }, { rpId });
+    const result = await finishPasskeyRegistration(db, { userId: session.userId, response }, { rpId, origin });
     return result.ok ? { ok: true } : { ok: false, reason: result.reason };
   }
 

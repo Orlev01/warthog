@@ -36,11 +36,15 @@ import { isoBase64URL, isoUint8Array } from "@simplewebauthn/server/helpers";
 
 import type { Db } from "../db/index";
 
-// The configured WebAuthn RP ID (warthog.com.au in production). The verification
-// origin is derived from it; a different configured value flows through begin and
-// finish together.
+// The configured WebAuthn RP ID (warthog.com.au in production) and the app's public
+// origin — the origin the browser reports in clientDataJSON, which every finish step
+// verifies. They differ in development (http://localhost:3000 with RP ID localhost) and
+// whenever the app is served from a subdomain of the RP ID, so the origin comes from
+// config (the origin of PUBLIC_BASE_URL). Without it, verification falls back to
+// `https://<rpId>` (the app served at the RP ID itself over https).
 export interface PasskeyDeps {
   readonly rpId: string;
+  readonly origin?: string;
 }
 
 // What finish reports back — a discriminated union on `ok`, like email-code's
@@ -58,9 +62,9 @@ const RP_NAME = "Warthog";
 const PURPOSE_REGISTRATION = "registration";
 const PURPOSE_AUTHENTICATION = "authentication";
 
-// The verification origin is always `https://<rpId>` (passkeys are HTTPS-only).
-function originFor(rpId: string): string {
-  return `https://${rpId}`;
+// The origin a finish step verifies: the configured public origin, else the RP ID itself.
+function originFor(deps: PasskeyDeps): string {
+  return deps.origin ?? `https://${deps.rpId}`;
 }
 
 // Persist (and overwrite) the single outstanding challenge the server issued for this
@@ -133,7 +137,7 @@ export async function finishPasskeyRegistration(
     verification = await verifyRegistrationResponse({
       response: params.response,
       expectedChallenge,
-      expectedOrigin: originFor(deps.rpId),
+      expectedOrigin: originFor(deps),
       expectedRPID: deps.rpId,
     });
   } catch {
@@ -231,7 +235,7 @@ export async function finishPasskeyAuthentication(
     verification = await verifyAuthenticationResponse({
       response: params.response,
       expectedChallenge,
-      expectedOrigin: originFor(deps.rpId),
+      expectedOrigin: originFor(deps),
       expectedRPID: deps.rpId,
       credential: {
         id: row.credential_id as string,

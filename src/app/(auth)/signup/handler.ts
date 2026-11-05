@@ -53,6 +53,7 @@ import type { Clock } from "../../../server/seams/clock";
 import type { Random } from "../../../server/seams/random";
 import type { EmailSender } from "../../../server/notify/senders";
 import type { Db } from "../../../server/db/index";
+import { processSingleton } from "../../../server/seams/process-singleton";
 
 // The dependency bundle. Each step reads the subset it needs; the superset is
 // structurally assignable to each. `rpId` is the WebAuthn RP ID (from config, never
@@ -89,7 +90,8 @@ interface PendingSignup {
 // The process-wide pending-sign-up store (the new-device / release-store pattern):
 // ESM caches this module, so every import shares one Map, and the three separate
 // requests of one sign-up find their pending row by its random handle.
-const pendingSignups = new Map<string, PendingSignup>();
+// Held through processSingleton (globalThis) so every module graph Next builds shares it.
+const pendingSignups = processSingleton("auth.pendingSignups", () => new Map<string, PendingSignup>());
 
 // A write-discarding `Db`: at the register stage there is no `users` row to hang a
 // challenge or recovery code off, so the real issuing functions are run against this
@@ -242,7 +244,8 @@ export function createSignupHandler(deps: SignupHandlerDeps): SignupHandler {
         verification = await verifyRegistrationResponse({
           response: registrationResponse as RegistrationResponseJSON,
           expectedChallenge: pending.challenge,
-          expectedOrigin: `https://${rpId}`,
+          // The browser reports the app's public origin, not one derived from the RP ID.
+          expectedOrigin: publicOrigin,
           expectedRPID: rpId,
         });
       } catch {

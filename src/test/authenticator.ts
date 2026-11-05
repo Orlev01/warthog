@@ -72,8 +72,12 @@ interface StoredCredential {
 /**
  * Create a fresh software authenticator. Each instance holds its own credentials, so
  * two instances model two separate devices (and therefore two separate PRF secrets).
+ * `origin` is the page origin the browser reports in clientDataJSON; it defaults to
+ * `https://<rpId>` but a real deployment's origin need not be (dev is
+ * `http://localhost:3000`, and an app on a subdomain of the RP ID differs from it).
  */
-export function createAuthenticator(): SoftwareAuthenticator {
+export function createAuthenticator(opts: { origin?: string } = {}): SoftwareAuthenticator {
+  const originFor = (rpId: string) => opts.origin ?? `https://${rpId}`;
   const credentials = new Map<string, StoredCredential>();
 
   async function register(
@@ -124,7 +128,7 @@ export function createAuthenticator(): SoftwareAuthenticator {
       type: "public-key",
       authenticatorAttachment: "platform",
       response: {
-        clientDataJSON: encodeClientDataJSON("webauthn.create", options.challenge, rpId),
+        clientDataJSON: encodeClientDataJSON("webauthn.create", options.challenge, originFor(rpId)),
         attestationObject: isoBase64URL.fromBuffer(attestationObject),
         transports: ["internal"],
       },
@@ -147,7 +151,7 @@ export function createAuthenticator(): SoftwareAuthenticator {
       uint32BE(credential.signCount),
     ]);
 
-    const clientDataJSON = clientDataJSONBytes("webauthn.get", options.challenge, rpId);
+    const clientDataJSON = clientDataJSONBytes("webauthn.get", options.challenge, originFor(rpId));
     const signatureBase = isoUint8Array.concat([authData, sha256(clientDataJSON)]);
     // Node signs ECDSA/P-256 in ASN.1 DER by default — the wire form WebAuthn uses.
     const signature = new Uint8Array(signWithKey("sha256", signatureBase, credential.privateKey));
@@ -243,16 +247,16 @@ function derivePRF(prfSecret: Uint8Array, salt: Uint8Array): Uint8Array {
 }
 
 // The clientDataJSON a browser would hand the authenticator, as base64url for the wire.
-function encodeClientDataJSON(type: string, challenge: string, rpId: string): string {
-  return isoBase64URL.fromBuffer(clientDataJSONBytes(type, challenge, rpId));
+function encodeClientDataJSON(type: string, challenge: string, origin: string): string {
+  return isoBase64URL.fromBuffer(clientDataJSONBytes(type, challenge, origin));
 }
 
-function clientDataJSONBytes(type: string, challenge: string, rpId: string): Uint8Array {
+function clientDataJSONBytes(type: string, challenge: string, origin: string): Uint8Array {
   return utf8(
     JSON.stringify({
       type,
       challenge, // already base64url, exactly as the options carried it
-      origin: `https://${rpId}`,
+      origin,
       crossOrigin: false,
     }),
   );
