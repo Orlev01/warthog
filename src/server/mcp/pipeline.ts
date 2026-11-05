@@ -36,8 +36,8 @@ import {
 import type { Budget } from "../../domain/budget/budget";
 import type { ReferenceRate } from "../../domain/currency/convert";
 import { loadAgentContext, type AgentConnection, type AgentContext } from "./context";
-import { createApproval } from "../db/approvals";
-import { createHeldRequest } from "../db/held-requests";
+import { createApproval, getApproval } from "../db/approvals";
+import { createHeldRequest, getByApproval, markExecuted, type StoredHeldRequest } from "../db/held-requests";
 import { getUserById } from "../db/users";
 import type { RateLimiter } from "./rate-limit";
 import type { ActivityRecorder } from "../activity/recorder";
@@ -79,8 +79,16 @@ export type AgentCallResult =
   | { status: "refused"; reason: string }
   | { status: "pending_approval"; approval_id: string; expires_at: Date };
 
+// The result of running an approved held call: it either ran the held tool exactly
+// once (and returns its result) or was refused (not approved, already executed, or
+// expired) with the tool left un-run.
+export type ApprovedHoldResult =
+  | { status: "executed"; result: unknown }
+  | { status: "refused"; reason: string };
+
 export interface AgentCallPipeline {
   handleAgentCall(connection: AgentConnection, call: AgentCall): Promise<AgentCallResult>;
+  executeApprovedHold(userId: string, approvalId: string): Promise<ApprovedHoldResult>;
 }
 
 // The fallback when no card budget is set: a zero budget, which `budgetAllowsCard`
@@ -286,6 +294,56 @@ export function createAgentCallPipeline(deps: PipelineDeps): AgentCallPipeline {
 
       // ALLOW — execute the tool, then record the activity entry BEFORE the result
       // is returned to the agent.
+      const result = await executeTool(call, connection);
+      await record(connection, call, "executed");
+      return { status: "executed", result };
+    },
+
+    // Run the held call behind an APPROVED approval exactly once (design §6.2;
+    // reached by the inbox approve action or `check_approval`). `userId` is the
+    // OWNING person — taken by the trusted caller from its session / the resolved
+    // agent connection, NEVER a client value — and every read/write below is
+    // member-scoped by it. A hold that is still pending, denied, expired or already
+    // executed is REFUSED and the held tool is not run (never a silent failure).
+    async executeApprovedHold(userId: string, approvalId: string): Promise<ApprovedHoldResult> {
+      const dek = await dataKeyFor(userId);
+
+      // The approval must exist FOR THIS PERSON (member-scoped: another person's id
+      // finds no approval). Only an `approved` one proceeds; pending / denied /
+      // expired is refused with the tool left un-run.
+      const approval = await getApproval(db, userId, approvalId, dek);
+      if (!approval) {
+        return { status: "refused", reason: "There's no approval to run for you." };
+      }
+      if (approval.status !== "approved") {
+        return { status: "refused", reason: "This request hasn't been approved." };
+      }
+
+      // The exact agent call Warthog parked behind the approval (member-scoped).
+      const held = await getByApproval(db, userId, approvalId, dek);
+      if (!held) {
+        return { status: "refused", reason: "This approval has no held request to run." };
+      }
+
+      // Claim the hold EXACTLY ONCE before running it: markExecuted is a single-shot
+      // compare-and-swap that throws once the held request has already run, so a
+      // second attempt is refused and the tool never runs twice.
+      let ran: StoredHeldRequest;
+      try {
+        ran = await markExecuted(db, { userId, id: held.id }, dek, clock);
+      } catch {
+        return { status: "refused", reason: "This approved request has already been run." };
+      }
+
+      // Run the held tool, then record ONE Warthog outcome entry (execute BEFORE
+      // record — Warthog writes the record itself, redacted).
+      const call = ran.args as unknown as AgentCall;
+      const connection: AgentConnection = {
+        userId: ran.userId,
+        connectionId: ran.agentId,
+        agentId: ran.agentId,
+        active: true,
+      };
       const result = await executeTool(call, connection);
       await record(connection, call, "executed");
       return { status: "executed", result };
