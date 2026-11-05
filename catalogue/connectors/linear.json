@@ -1,0 +1,24 @@
+{
+  "id": "linear",
+  "name": "Linear",
+  "aliases": [
+    "linear app",
+    "linear issues",
+    "linear tracker"
+  ],
+  "category": "project-management",
+  "auth_kind": "provider_mcp",
+  "base_url": "https://mcp.linear.app/mcp",
+  "auth": {},
+  "curated_tools": [
+    {
+      "name": "list_issues"
+    },
+    {
+      "name": "create_issue"
+    },
+    {
+      "name": "search_issues"
+    }
+  ]
+}

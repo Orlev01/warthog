@@ -1,0 +1,24 @@
+{
+  "id": "stripe",
+  "name": "Stripe",
+  "aliases": [
+    "stripe payments",
+    "stripe billing",
+    "stripe dashboard"
+  ],
+  "category": "payments",
+  "auth_kind": "provider_mcp",
+  "base_url": "https://mcp.stripe.com",
+  "auth": {},
+  "curated_tools": [
+    {
+      "name": "list_customers"
+    },
+    {
+      "name": "create_payment_link"
+    },
+    {
+      "name": "list_charges"
+    }
+  ]
+}

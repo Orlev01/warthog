@@ -1,0 +1,24 @@
+{
+  "id": "asana",
+  "name": "Asana",
+  "aliases": [
+    "asana tasks",
+    "asana projects",
+    "asana work"
+  ],
+  "category": "project-management",
+  "auth_kind": "provider_mcp",
+  "base_url": "https://mcp.asana.com/sse",
+  "auth": {},
+  "curated_tools": [
+    {
+      "name": "list_tasks"
+    },
+    {
+      "name": "create_task"
+    },
+    {
+      "name": "complete_task"
+    }
+  ]
+}

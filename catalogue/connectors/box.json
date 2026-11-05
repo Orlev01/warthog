@@ -1,0 +1,24 @@
+{
+  "id": "box",
+  "name": "Box",
+  "aliases": [
+    "box storage",
+    "box files",
+    "box cloud"
+  ],
+  "category": "storage",
+  "auth_kind": "provider_mcp",
+  "base_url": "https://mcp.box.com/mcp",
+  "auth": {},
+  "curated_tools": [
+    {
+      "name": "search_files"
+    },
+    {
+      "name": "get_file"
+    },
+    {
+      "name": "upload_file"
+    }
+  ]
+}

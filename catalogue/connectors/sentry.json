@@ -1,0 +1,24 @@
+{
+  "id": "sentry",
+  "name": "Sentry",
+  "aliases": [
+    "sentry io",
+    "sentry errors",
+    "sentry monitoring"
+  ],
+  "category": "developer-tools",
+  "auth_kind": "provider_mcp",
+  "base_url": "https://mcp.sentry.dev/mcp",
+  "auth": {},
+  "curated_tools": [
+    {
+      "name": "list_issues"
+    },
+    {
+      "name": "get_issue"
+    },
+    {
+      "name": "resolve_issue"
+    }
+  ]
+}
