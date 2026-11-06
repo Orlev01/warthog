@@ -24,7 +24,7 @@
 
 import { randomUUID } from "node:crypto";
 
-import type { Db } from "./index";
+import type { Db, Row } from "./index";
 
 // The brief's budget periods: a release falls in one bucket per granularity.
 export type PeriodKind = "day" | "week" | "month";
@@ -69,6 +69,62 @@ function periodColumn(period: PeriodKind): string {
   const column = PERIOD_COLUMN[period];
   if (!column) throw new Error(`card-spend-ledger: unknown period "${period}"`);
   return column;
+}
+
+// Pad a number to two digits for a calendar key ("1" -> "01").
+function pad2(value: number): string {
+  return String(value).padStart(2, "0");
+}
+
+// The opaque period-bucket key this ledger stores (design §8 / E07-S07), derived
+// from the instant in UTC calendar arithmetic: the day bucket "YYYY-MM-DD", the
+// month bucket "YYYY-MM", and the week bucket "YYYY-Www" (ISO-8601, weeks start
+// Monday — the same convention the budget domain's period windows use). The
+// `period` selects which granularity. The ONE source of truth for the ledger's
+// bucket keys: the policy-context loader and the spending read both derive their
+// current-period key through here, so a writer and a reader can never drift.
+export function periodKeyFor(period: PeriodKind, now: Date): string {
+  const year = now.getUTCFullYear();
+  const month = now.getUTCMonth();
+  const date = now.getUTCDate();
+
+  if (period === "month") {
+    return `${year}-${pad2(month + 1)}`;
+  }
+  if (period === "day") {
+    return `${year}-${pad2(month + 1)}-${pad2(date)}`;
+  }
+  // week: the ISO week number, decided by the Thursday of the current week.
+  const thursday = new Date(Date.UTC(year, month, date));
+  const dayFromMonday = (thursday.getUTCDay() + 6) % 7; // Monday = 0 … Sunday = 6
+  thursday.setUTCDate(thursday.getUTCDate() - dayFromMonday + 3);
+  const isoYear = thursday.getUTCFullYear();
+  const firstThursday = new Date(Date.UTC(isoYear, 0, 4));
+  const firstFromMonday = (firstThursday.getUTCDay() + 6) % 7;
+  firstThursday.setUTCDate(firstThursday.getUTCDate() - firstFromMonday + 3);
+  const weekMs = 7 * 24 * 60 * 60 * 1000;
+  const week = 1 + Math.round((thursday.getTime() - firstThursday.getTime()) / weekMs);
+  return `${isoYear}-W${pad2(week)}`;
+}
+
+// Map a raw ledger row back to a StoredRelease. `amount` is a `numeric` column, so
+// the driver hands it back as a number or a string; normalise to a number (the same
+// coercion the SUM reads use), currency/merchant/period keys are plain text.
+function toStoredRelease(row: Row): StoredRelease {
+  return {
+    id: String(row.id),
+    userId: String(row.user_id),
+    connectionId: String(row.connection_id),
+    householdId: row.household_id == null ? null : String(row.household_id),
+    amount: Number(row.amount),
+    currency: String(row.currency),
+    merchant: String(row.merchant),
+    periodKeys: {
+      day: String(row.period_day),
+      week: String(row.period_week),
+      month: String(row.period_month),
+    },
+  };
 }
 
 // Read a single-row COALESCE(SUM(...), 0) result as an exact number (0 when no row
@@ -121,6 +177,30 @@ export async function sumForConnectionPeriod(
     [userId, connectionId, periodKey],
   );
   return sumOf(result.rows);
+}
+
+// Every approved release for THAT connection owned by `userId` in the bucket
+// `period`/`periodKey` — the per-release detail the spending view lists (parallel
+// to `sumForConnectionPeriod`, which totals the same rows). Member-scoped (user_id
+// AND connection_id both bound), so another user's connection returns no rows; the
+// period key is bound and WHICH column is matched comes from the `PeriodKind`
+// whitelist, never caller text, so a value shaped like SQL is stored as data and
+// cannot alter the query. Returns an empty array when none match.
+export async function listReleasesForConnectionPeriod(
+  db: Db,
+  userId: string,
+  connectionId: string,
+  period: PeriodKind,
+  periodKey: string,
+): Promise<StoredRelease[]> {
+  const result = await db.query(
+    `SELECT id, user_id, connection_id, household_id, amount, currency, merchant,
+            period_day, period_week, period_month
+       FROM card_spend_ledger
+      WHERE user_id = $1 AND connection_id = $2 AND ${periodColumn(period)} = $3`,
+    [userId, connectionId, periodKey],
+  );
+  return result.rows.map(toStoredRelease);
 }
 
 // The member's OWN total across ALL their connections in the period (user_id
