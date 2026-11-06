@@ -28,6 +28,11 @@ import { listRules, type StoredRule } from "../db/rules";
 import { getUserById } from "../db/users";
 import type { KeyWrapper } from "../crypto/key-wrapper";
 import type { Clock } from "../seams/clock";
+import {
+  resolveCardRequestContext,
+  type CardRequest,
+  type CardRequestContext,
+} from "../spending/household-context";
 
 // The default account currency when no budget currency is set (brief: amounts
 // default to AUD).
@@ -51,12 +56,17 @@ export interface LoadAgentContextDeps {
   readonly clock: Clock;
 }
 
-// The assembled context the pipeline hands the pure engine.
+// The assembled context the pipeline hands the pure engine. For a CARD request the
+// loader additionally carries the resolved household + currency context (the member's
+// account currency, the converted amount with its rate date, the per-member monthly
+// limit and the shared household monthly budget with spend-to-date) — the fields the
+// pure engine enforces (design §8 step 4). Absent when the call is not a card request.
 export interface AgentContext {
   readonly permissions: ConnectionPermissions;
   readonly rules: StoredRule[];
   readonly spend: number;
   readonly accountCurrency: string;
+  readonly cardRequest?: CardRequestContext;
 }
 
 // The current budget-period bucket key is derived by `periodKeyFor` in the
@@ -97,6 +107,7 @@ async function dataKeyFor(
 export async function loadAgentContext(
   connection: AgentConnection,
   deps: LoadAgentContextDeps,
+  cardRequest?: CardRequest,
 ): Promise<AgentContext> {
   const { db, keyWrapper, clock } = deps;
 
@@ -127,6 +138,14 @@ export async function loadAgentContext(
   );
 
   const accountCurrency = budget?.currency ?? DEFAULT_CURRENCY;
+
+  // A card request additionally resolves the household + currency context for the
+  // connection's OWNING user (never a client value), delegating to the household-context
+  // resolver so the pure engine can enforce the member limit and the household budget.
+  if (cardRequest) {
+    const resolved = await resolveCardRequestContext(connection.userId, cardRequest, { db, clock });
+    return { permissions, rules, spend, accountCurrency, cardRequest: resolved };
+  }
 
   return { permissions, rules, spend, accountCurrency };
 }
