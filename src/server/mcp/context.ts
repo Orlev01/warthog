@@ -22,7 +22,7 @@ import {
   type ConnectionPermissions,
   type PeriodKind,
 } from "../db/agent-permissions";
-import { sumForConnectionPeriod } from "../db/card-spend-ledger";
+import { periodKeyFor, sumForConnectionPeriod } from "../db/card-spend-ledger";
 import type { Db } from "../db/index";
 import { listRules, type StoredRule } from "../db/rules";
 import { getUserById } from "../db/users";
@@ -59,39 +59,10 @@ export interface AgentContext {
   readonly accountCurrency: string;
 }
 
-// Pad a number to two digits for a calendar key ("1" -> "01").
-function pad2(value: number): string {
-  return String(value).padStart(2, "0");
-}
-
-// The opaque period-bucket key the ledger stores (design §8 / E07-S07), derived
-// from the instant in UTC calendar arithmetic: the day bucket "YYYY-MM-DD", the
-// month bucket "YYYY-MM", and the week bucket "YYYY-Www" (ISO-8601, weeks start
-// Monday — the same convention the budget domain's period windows use). The
-// budget's `period` selects which granularity.
-function periodKey(period: PeriodKind, now: Date): string {
-  const year = now.getUTCFullYear();
-  const month = now.getUTCMonth();
-  const date = now.getUTCDate();
-
-  if (period === "month") {
-    return `${year}-${pad2(month + 1)}`;
-  }
-  if (period === "day") {
-    return `${year}-${pad2(month + 1)}-${pad2(date)}`;
-  }
-  // week: the ISO week number, decided by the Thursday of the current week.
-  const thursday = new Date(Date.UTC(year, month, date));
-  const dayFromMonday = (thursday.getUTCDay() + 6) % 7; // Monday = 0 … Sunday = 6
-  thursday.setUTCDate(thursday.getUTCDate() - dayFromMonday + 3);
-  const isoYear = thursday.getUTCFullYear();
-  const firstThursday = new Date(Date.UTC(isoYear, 0, 4));
-  const firstFromMonday = (firstThursday.getUTCDay() + 6) % 7;
-  firstThursday.setUTCDate(firstThursday.getUTCDate() - firstFromMonday + 3);
-  const weekMs = 7 * 24 * 60 * 60 * 1000;
-  const week = 1 + Math.round((thursday.getTime() - firstThursday.getTime()) / weekMs);
-  return `${isoYear}-W${pad2(week)}`;
-}
+// The current budget-period bucket key is derived by `periodKeyFor` in the
+// card-spend-ledger store — the one source of truth for the ledger's bucket keys,
+// so this loader and the spending read can never drift from how releases were
+// bucketed when they were written.
 
 // Is this rule's scope applicable to the given connection? An all-agents rule
 // covers every connection; a chosen-agent rule covers only its own agent (the
@@ -152,7 +123,7 @@ export async function loadAgentContext(
     connection.userId,
     connection.connectionId,
     period,
-    periodKey(period, clock.now()),
+    periodKeyFor(period, clock.now()),
   );
 
   const accountCurrency = budget?.currency ?? DEFAULT_CURRENCY;
