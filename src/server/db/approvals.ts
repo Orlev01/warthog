@@ -203,6 +203,28 @@ export async function listPendingForUser(
   return approvals;
 }
 
+// This user's DECIDED approvals (approved / denied / expired / more_detail) — every
+// non-pending one — details decrypted; never a still-pending approval and never
+// another user's (the user id is bound as a parameter; member-scoped). The inbox
+// reads these as the person's decision HISTORY; the order is left to the caller.
+export async function listDecidedForUser(
+  db: Db,
+  userId: string,
+  dek: Uint8Array,
+): Promise<StoredApproval[]> {
+  const result = await db.query(
+    `SELECT ${COLUMNS} FROM approvals
+      WHERE user_id = $1 AND status <> 'pending'`,
+    [userId],
+  );
+  const approvals: StoredApproval[] = [];
+  for (const row of result.rows) {
+    const detail = await decryptDetail(dek, row.id as string, row.detail as string);
+    approvals.push(toStored(row, detail));
+  }
+  return approvals;
+}
+
 // Apply the decision's target status to `current` via the pure state machine — which
 // throws exactly when the move is illegal (e.g. deciding a non-pending approval) and
 // only expires when the window is due.
