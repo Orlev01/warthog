@@ -263,6 +263,48 @@ function countSelectable(markup: string, re: RegExp): number {
   return selectableNames(markup).filter((n) => re.test(n)).length;
 }
 
+// Names of every DISABLED control (the counterpart of selectableNames): a disabled
+// <button>, a disabled checkbox/radio input, or a disabled wrapping-label input. A
+// template the rules store does not hold renders DISABLED with a reason, so it appears
+// here (never in selectableNames). Reads RENDERED state, not source text.
+function disabledNames(markup: string): string[] {
+  const labels = labelTextById(markup);
+  const out: string[] = [];
+  for (const b of findAll(markup, "button")) {
+    if (!hasBoolAttr(b.attrs, "disabled")) continue;
+    out.push((visibleText(b.inner) || attr(b.attrs, "aria-label") || "").trim());
+  }
+  for (const m of markup.matchAll(/<input\b([^>]*?)\/?>/gi)) {
+    const attrs = m[1];
+    if (!hasBoolAttr(attrs, "disabled")) continue;
+    const id = attr(attrs, "id");
+    out.push(((id && labels[id]) || attr(attrs, "aria-label") || attr(attrs, "value") || "").trim());
+  }
+  for (const l of findAll(markup, "label")) {
+    const im = l.inner.match(/<input\b([^>]*?)\/?>/i);
+    if (!im || !hasBoolAttr(im[1], "disabled")) continue;
+    out.push(visibleText(l.inner));
+  }
+  return out.filter((n) => n.length > 0);
+}
+
+function hasDisabled(markup: string, re: RegExp): boolean {
+  return disabledNames(markup).some((n) => re.test(n));
+}
+
+// Whether `markup` carries a form control (input / select / textarea) posting under
+// `name` — the behaviour a FormData-reading server action depends on. Pins the NAME the
+// control posts under, not its element kind or label copy (a refactor may swap a select
+// for radios, or reword a label, and stay green).
+function hasNamedControl(markup: string, name: string): boolean {
+  return new RegExp(`<(?:input|select|textarea)\\b[^>]*\\bname="${name}"`, "i").test(markup);
+}
+
+// A disabled non-rule template must show a one-line reason pointing to WHERE that
+// setting actually lives (per agent / Spending / Settings) — generous over the plausible
+// destinations, since the exact copy is the builder's.
+const WHERE_SET_RE = /\b(spending|spend|budget|budgets|setting|settings|agent|agents|connection|connector|permission|permissions)\b/i;
+
 function render(props: RulesViewProps): string {
   return renderToStaticMarkup(<RulesView {...props} />);
 }
@@ -322,41 +364,58 @@ test("offers the Ask-me-first and Never-allow rule templates as live choices", (
   );
 });
 
-test("offers the four spending-rule templates and the approval-expiry setting", () => {
+test("shows the four spending-rule templates and the approval-expiry setting as DISABLED choices (set elsewhere)", () => {
+  // SUPERSEDED (E12-S17): the rules store holds only the ask-first / never-allow rules.
+  // The four spending rules and the approval-expiry setting are configured ELSEWHERE
+  // (per agent / Spending / Settings), so on THIS screen they appear but DISABLED —
+  // never offered as a live create choice that would post into a guaranteed error.
   const markup = render(base());
-  const controls = JSON.stringify(selectableNames(markup));
+  const nonRuleTemplates: Array<{ re: RegExp; label: string }> = [
+    { re: /per[- ]?purchase|each purchase|purchase limit/i, label: "per-purchase limit" },
+    { re: /budget/i, label: "budget per agent" },
+    { re: /allow(ed)?.*merchant|only.*merchant/i, label: "allowed-merchants only" },
+    { re: /block(ed)?.*merchant|merchant.*block/i, label: "blocked merchants" },
+    { re: /expir/i, label: "approval expiry" },
+  ];
+  for (const t of nonRuleTemplates) {
+    assert.ok(
+      hasDisabled(markup, t.re),
+      `the "${t.label}" template must appear DISABLED (set elsewhere); disabled=${JSON.stringify(disabledNames(markup))}`,
+    );
+    assert.ok(
+      !hasSelectable(markup, t.re),
+      `the "${t.label}" template must NOT be a live create choice; controls=${JSON.stringify(selectableNames(markup))}`,
+    );
+  }
+  // By contrast, the two RULE templates the store DOES hold remain live choices.
   assert.ok(
-    hasSelectable(markup, /per[- ]?purchase|each purchase|purchase limit/i),
-    `the create form must offer a per-purchase-limit template; controls=${controls}`,
+    hasSelectable(markup, /ask me (first|before)|ask[- ]first/i),
+    "Ask-me-first stays a live create choice",
   );
-  assert.ok(
-    hasSelectable(markup, /budget/i),
-    `the create form must offer a budget-per-agent template; controls=${controls}`,
-  );
-  assert.ok(
-    hasSelectable(markup, /allow(ed)?.*merchant|only.*merchant/i),
-    `the create form must offer an allowed-merchants-only template; controls=${controls}`,
-  );
-  assert.ok(
-    hasSelectable(markup, /block(ed)?.*merchant|merchant.*block/i),
-    `the create form must offer a blocked-merchants template; controls=${controls}`,
-  );
-  assert.ok(
-    hasSelectable(markup, /expir/i),
-    `the create form must offer an approval-expiry setting; controls=${controls}`,
-  );
+  assert.ok(hasSelectable(markup, /never allow/i), "Never-allow stays a live create choice");
 });
 
-test("offers a budget template scoped by day, week and month", () => {
-  // "budget per agent per day/week/month" — the three periods are choosable.
-  const markup = render(
-    base({ draft: { template: "agent_budget", scope: ANY_AGENT, amount: 333, period: "week" } }),
-  );
-  const controls = JSON.stringify(selectableNames(markup));
-  for (const period of [/\bday|daily\b/i, /\bweek|weekly\b/i, /\bmonth|monthly\b/i]) {
+test("a disabled non-rule template can never be submitted into a guaranteed error, and names where it is set", () => {
+  // SUPERSEDED (E12-S17): forcing a non-rule template active (the draft seam) must NOT
+  // produce a live Add/Create/Save control (it can never be submitted into a guaranteed
+  // error), and a reason must point to where that setting actually lives.
+  const drafts: RuleDraft[] = [
+    { template: "per_purchase_limit", scope: ANY_AGENT, amount: 175 },
+    { template: "agent_budget", scope: ANY_AGENT, amount: 333, period: "week" },
+    { template: "allowed_merchants", scope: ANY_AGENT, merchants: ["BoxCo"] },
+    { template: "blocked_merchants", scope: ANY_AGENT, merchants: ["Sketchy Store"] },
+    { template: "approval_expiry", scope: ANY_AGENT, minutes: 45 },
+  ];
+  for (const draft of drafts) {
+    const markup = render(base({ draft }));
     assert.ok(
-      hasSelectable(markup, period),
-      `the budget template must offer the ${period} period as a choice; controls=${controls}`,
+      !hasSelectable(markup, /\b(add|create|save)\b/i),
+      `the ${draft.template} template must offer NO live submit (never submitted into a guaranteed ` +
+        `error); controls=${JSON.stringify(selectableNames(markup))}`,
+    );
+    assert.ok(
+      WHERE_SET_RE.test(visibleText(markup)),
+      `the ${draft.template} template must show a reason pointing to where it is set; text="${visibleText(markup)}"`,
     );
   }
 });
@@ -494,90 +553,61 @@ test("the preview reflects a merchant-not-in condition on a card request", () =>
   );
 });
 
-// === AC2 — the spending-rule and expiry templates also preview as a sentence ======
+// === AC6 — the rule form carries the NAMED payload fields the create action posts =====
 //
-// These templates have no pure domain sentence renderer, so the component words
-// them; the test pins only the salient DATA a sentence preview must carry (the
-// figure, the merchants, the minutes), using distinctive values that neither a
-// field default nor an existing-rule line contains — so the value can only have come
-// from the preview. (A field's own `value=` is an attribute, invisible to
-// visibleText, so a figure appearing in the visible text is the rendered preview.)
+// SUPERSEDED (E12-S17): the spending/expiry templates no longer preview a submittable
+// sentence here (they are set elsewhere — covered above). Instead the RULE form gains
+// the NAMED payload fields the create form's server action reads from its FormData — the
+// SAME names the sibling actions.test.ts drives through `ruleInputFromForm`: a message
+// `rule-channel`, a `rule-target` (the tool or service name) and a `rule-condition-detail`.
+// These pin the NAME the control posts under (so a FormData-reading action gets its
+// value), not the control's copy or element kind — a refactor that rewords a label or
+// swaps a <select> for radios stays green.
 
-test("previews a per-purchase limit with its figure", () => {
-  const text = visibleText(
-    render(base({ draft: { template: "per_purchase_limit", scope: ANY_AGENT, amount: 175 } })),
-  );
-  assert.match(
-    text,
-    /175/,
-    `the per-purchase-limit preview must show its figure (175); text="${text}"`,
-  );
-});
-
-test("previews a per-agent budget with its figure", () => {
-  // 333 is neither the A$200 default nor any existing-rule figure, so its presence in
-  // the visible text can only be the budget preview reading the draft's amount.
-  const text = visibleText(
-    render(base({ draft: { template: "agent_budget", scope: CLAUDE_SCOPE, amount: 333, period: "week" } })),
-  );
-  assert.match(
-    text,
-    /333/,
-    `the budget preview must show its figure (333); text="${text}"`,
-  );
-});
-
-test("previews an allowed-merchants-only rule listing the merchants", () => {
-  const text = visibleText(
-    render(
-      base({
-        draft: {
-          template: "allowed_merchants",
-          scope: ANY_AGENT,
-          merchants: ["BoxCo", "MoveIt"],
-        },
-      }),
-    ),
-  );
-  assert.ok(text.includes("BoxCo"), `the allowed-merchants preview must list "BoxCo"; text="${text}"`);
-  assert.ok(text.includes("MoveIt"), `the allowed-merchants preview must list "MoveIt"; text="${text}"`);
-  assert.match(
-    text,
-    /only|allow/i,
-    `the allowed-merchants preview must read as an allow-only sentence; text="${text}"`,
-  );
-});
-
-test("previews a blocked-merchants rule listing the merchants", () => {
-  const text = visibleText(
-    render(
-      base({
-        draft: { template: "blocked_merchants", scope: ANY_AGENT, merchants: ["Sketchy Store"] },
-      }),
-    ),
+test("a send-message rule form names its message-channel field", () => {
+  const markup = render(
+    base({ draft: { template: "ask_first", scope: ANY_AGENT, action: { type: "send_message", channel: "email" } } }),
   );
   assert.ok(
-    text.includes("Sketchy Store"),
-    `the blocked-merchants preview must list "Sketchy Store"; text="${text}"`,
-  );
-  assert.match(
-    text,
-    /block|never|not/i,
-    `the blocked-merchants preview must read as a block sentence; text="${text}"`,
+    hasNamedControl(markup, "rule-channel"),
+    `a send-message rule form must post a named "rule-channel" field; markup=${markup}`,
   );
 });
 
-test("previews the approval-expiry setting with its minutes", () => {
-  // 45 is not a conventional preset (2/5/15/30/60), so /45/ in the visible text is the
-  // preview reading the draft's minutes, not a preset option label.
-  const text = visibleText(
-    render(base({ draft: { template: "approval_expiry", scope: ANY_AGENT, minutes: 45 } })),
+test("a specific-tool rule form names its tool-or-service field", () => {
+  const markup = render(
+    base({ draft: { template: "ask_first", scope: ANY_AGENT, action: { type: "specific_tool", tool: "send_email" } } }),
   );
-  assert.match(text, /45/, `the expiry preview must show its minutes (45); text="${text}"`);
-  assert.match(
-    text,
-    /minute|expir/i,
-    `the expiry preview must read as an expiry sentence; text="${text}"`,
+  assert.ok(
+    hasNamedControl(markup, "rule-target"),
+    `a specific-tool rule form must post a named "rule-target" field (the tool name); markup=${markup}`,
+  );
+});
+
+test("a service rule form names its tool-or-service field", () => {
+  const markup = render(
+    base({ draft: { template: "ask_first", scope: CLAUDE_SCOPE, action: { type: "service_tool", service: "gmail" } } }),
+  );
+  assert.ok(
+    hasNamedControl(markup, "rule-target"),
+    `a service rule form must post a named "rule-target" field (the service name); markup=${markup}`,
+  );
+});
+
+test("a rule carrying a condition names its condition-detail field", () => {
+  const markup = render(
+    base({
+      draft: {
+        template: "ask_first",
+        scope: ANY_AGENT,
+        action: { type: "send_message", channel: "email" },
+        condition: { type: "recipient_is", address: "manager@example.com" },
+      },
+    }),
+  );
+  assert.ok(
+    hasNamedControl(markup, "rule-condition-detail"),
+    `a rule with a condition must post a named "rule-condition-detail" field; markup=${markup}`,
   );
 });
 
