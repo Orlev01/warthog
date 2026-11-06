@@ -296,7 +296,11 @@ export function RulesView({
                 checked={active === t.value}
                 disabled={!isRuleTemplate(t.value)}
                 label={t.label}
-                description={t.description}
+                // A disabled template says where it is actually set, in the state a person
+                // sees (the default render), so it is never a dead control.
+                description={
+                  isRuleTemplate(t.value) ? t.description : SET_ELSEWHERE[t.value as NonRuleTemplate]
+                }
               />
             ))}
           </div>

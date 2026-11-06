@@ -395,6 +395,23 @@ test("shows the four spending-rule templates and the approval-expiry setting as 
   assert.ok(hasSelectable(markup, /never allow/i), "Never-allow stays a live create choice");
 });
 
+// Operator fix (E12-S17 review veto 2): the where-it-is-set reason must show in the state a
+// person actually sees — the default render — not only under a forced draft that the disabled
+// radios make unreachable.
+test("in the default render each disabled template says where it is set", () => {
+  const text = render(base()).replace(/<[^>]+>/g, " ").replace(/\s+/g, " ");
+  for (const reason of [
+    "Set a per-purchase spending limit for each agent in Spending.",
+    "Set an agent's budget per day, week or month in Spending.",
+    "Choose the merchants an agent may pay in Spending.",
+    "Choose the merchants an agent may never pay in Spending.",
+    "Choose how long approvals stay open in Settings.",
+  ]) {
+    const html = reason.replace(/'/g, "&#x27;");
+    assert.ok(text.includes(reason) || text.includes(html), `default render shows: ${reason}`);
+  }
+});
+
 test("a disabled non-rule template can never be submitted into a guaranteed error, and names where it is set", () => {
   // SUPERSEDED (E12-S17): forcing a non-rule template active (the draft seam) must NOT
   // produce a live Add/Create/Save control (it can never be submitted into a guaranteed
