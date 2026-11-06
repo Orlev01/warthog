@@ -1,0 +1,134 @@
+// E13-S04 — the `get_skill` core tool (design §6.2 MCP core tools; brief "Skills,
+// preferences and shared memory": "an agent's context lists the titles and 'use this
+// when' lines of the skills it may use … the agent fetches a skill's full text by
+// title when it decides the skill is relevant (Warthog never guesses relevance) …
+// Warthog's own house skill is always included in full").
+//
+// An agent calls `get_skill` with a TITLE when it decides a listed skill is relevant.
+// Warthog hands back the FULL instruction text of that skill IFF it is one of the
+// person's ENABLED skills whose scope covers the calling agent; a title that is
+// unknown, switched off, or scoped to OTHER agents is refused with a plain reason —
+// the out-of-scope body never leaks. Warthog's OWN house skill ("Using Warthog") is
+// ALWAYS returned in full, regardless of the person's skills or scope: the agent's
+// index advertises its title but omits the body, and this tool supplies that body.
+//
+// A SERVER module built purely from its INJECTED seams (the parameterizing `db` and
+// the `KeyWrapper` that unwraps the person's DEK): it reads no `process.env` and holds
+// no secret (INV-103). The handler VALIDATES its input at the boundary (zod → a 4xx
+// `HttpError` BEFORE any db access, INV-102); the skills store binds `user_id` as a
+// parameter and matches the title in application code, so a SQL-shaped title is inert
+// data that cannot alter a query. The OWNING person and the agent are ALWAYS taken
+// from the session `connection`, never from a value in the input, so one agent can
+// never read another person's — or another agent's — skill.
+
+import { z } from "zod";
+
+import { parseParams } from "../../http/validate";
+import { getSkillText } from "../../db/skills";
+import { getUserById } from "../../db/users";
+import { HOUSE_SKILL } from "../../../domain/skills/index";
+import type { KeyWrapper } from "../../crypto/key-wrapper";
+import type { AgentConnection } from "../context";
+import type { Db } from "../../db/index";
+
+// Field caps, so a grossly oversized value is refused at the boundary before any db
+// access (INV-102). `reason` matches the registry's envelope cap (design §6.2 "every
+// tool takes an optional reason"); a skill title is short.
+const MAX_TITLE = 200;
+const MAX_REASON = 2000;
+
+// The validated input: the REQUIRED `title` (a skill is fetched BY title) plus the
+// universal OPTIONAL `reason` (design §6.2). A z.object, so its `.shape` exposes each
+// field (the registry and tests read `.shape.title` / `.shape.reason`).
+const inputSchema = z.object({
+  title: z.string().max(MAX_TITLE),
+  reason: z.string().max(MAX_REASON).optional(),
+});
+
+// The full instruction text of Warthog's house skill — the body the agent index
+// deliberately omits (the index carries only `HOUSE_SKILL.title` + `useThisWhen`).
+// The TITLE is the ONE the index advertises (`HOUSE_SKILL.title`, one source of
+// truth); only this body lives here.
+const HOUSE_SKILL_BODY = [
+  "You are connected to this person through Warthog, their personal agent home. Everything you do for them passes through Warthog, and Warthog keeps the record.",
+  "",
+  "Before you act:",
+  "- You may only use the connected services, identity details, cards and skills the person has granted to you. If a tool call is refused, that is the person's settings speaking — do not try to work around it.",
+  "- When Warthog tells you a request is pending approval, stop and wait: the person decides it from their own signed-in app. Never ask them to approve by replying to a message, SMS or email.",
+  "- Fetch a skill's full text with get_skill only when you have decided it is relevant. Warthog never guesses relevance for you.",
+  "",
+  "When you handle money or identity:",
+  "- A released card or high-tier value is handed over once and is gone shortly after. Collect it only when you are ready to use it, and never store, log or repeat it.",
+  "- Stay within the budget and limits the person has set. If something would exceed them, let Warthog ask the person rather than forcing it through.",
+  "",
+  "Report honestly: tell the person what you actually did, and use log_activity to record an outcome you performed. Warthog labels your reports as coming from you, so never present a guess as a fact.",
+].join("\n");
+
+// What get_skill hands back to the agent: the full instruction text of a found skill,
+// or a plain refusal reason for one that is unknown / disabled / not in scope.
+export type GetSkillResult =
+  | { status: "found"; title: string; text: string }
+  | { status: "not_available"; reason: string };
+
+export interface GetSkillTool {
+  readonly name: string;
+  readonly inputSchema: z.ZodType;
+  handle(input: unknown, connection: AgentConnection): Promise<GetSkillResult>;
+}
+
+// The injected seams — no process.env (INV-103). `db` is the parameterizing seam the
+// skills store reads through; `keyWrapper` unwraps the person's DEK so the member-
+// scoped skill content can be decrypted.
+export interface GetSkillDeps {
+  readonly db: Db;
+  readonly keyWrapper: KeyWrapper;
+}
+
+// The plain refusal a title that is unknown, switched off, or scoped to other agents
+// gets — never the skill's own text.
+const NOT_AVAILABLE_REASON =
+  "No skill by that title is available to this agent.";
+
+export function createGetSkillTool(deps: GetSkillDeps): GetSkillTool {
+  const { db, keyWrapper } = deps;
+
+  // Resolve the person's unwrapped 256-bit DEK: read their wrapped DEK member-scoped
+  // by `userId` (the session's, never a client value) and unwrap it through the
+  // KeyWrapper seam. Throws when the person has no row — never fails silently.
+  async function dataKeyFor(userId: string): Promise<Uint8Array> {
+    const user = await getUserById(db, userId);
+    if (!user) {
+      throw new Error("get_skill: no data key for this user");
+    }
+    return keyWrapper.unwrap(user.wrappedDek);
+  }
+
+  return {
+    name: "get_skill",
+    inputSchema,
+
+    async handle(input: unknown, connection: AgentConnection): Promise<GetSkillResult> {
+      // VALIDATE at the boundary: a bad / oversized / mis-shaped input throws a 4xx
+      // `HttpError` BEFORE any db access or crypto work (INV-102).
+      const parsed = parseParams(inputSchema, input);
+
+      // Warthog's own house skill is ALWAYS returned in full, regardless of the
+      // person's skills or scope — the index advertises its title and this supplies
+      // the body. Matched by the canonical index title (one source of truth).
+      if (parsed.title === HOUSE_SKILL.title) {
+        return { status: "found", title: HOUSE_SKILL.title, text: HOUSE_SKILL_BODY };
+      }
+
+      // A personal skill: taking the OWNING person and the agent from the connection
+      // (never the input), fetch the full text of the enabled skill by that title IFF
+      // its scope covers this agent. The store binds `user_id` as a parameter and
+      // matches the (encrypted) title in application code, so the title is inert data.
+      const dek = await dataKeyFor(connection.userId);
+      const text = await getSkillText(db, connection.userId, connection.agentId, parsed.title, dek);
+      if (text === null) {
+        return { status: "not_available", reason: NOT_AVAILABLE_REASON };
+      }
+      return { status: "found", title: parsed.title, text };
+    },
+  };
+}
