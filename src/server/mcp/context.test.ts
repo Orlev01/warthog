@@ -107,6 +107,7 @@ import { createUser } from "../db/users";
 import { upsertPermissions, getConnectionPermissions } from "../db/agent-permissions";
 import { createRule, pauseRule } from "../db/rules";
 import { recordRelease } from "../db/card-spend-ledger";
+import { createHousehold, setMemberLimit } from "../db/households";
 import { freshDb } from "../../test/db";
 import type { Db } from "../db/index";
 import { parseBody, HttpError } from "../http/validate";
@@ -674,5 +675,66 @@ test("the loader reads no process.env: a decoy secret in the environment never a
     await db.close();
     if (prev === undefined) delete process.env.WARTHOG_DECOY_SECRET;
     else process.env.WARTHOG_DECOY_SECRET = prev;
+  }
+});
+
+// ===========================================================================
+// E15-S07 — BEHAVIOUR SUPERSESSION: the card-request context is WIRED INTO the loader.
+//
+// For a CARD request the loader additionally resolves and carries the member's account
+// currency, the amount converted via the latest daily reference rate (deny when none), the
+// per-member monthly limit and the household monthly budget with spend-to-date — the fields
+// the pure engine enforces (design §8 step 4, brief "Currency" + "Household sharing"). It
+// resolves them for the CONNECTION's owning user (never a client value), delegating to the
+// household-context resolver (`src/server/spending/household-context.ts`). These are ADDED
+// fields — every pin above stays intact; a call with no card request is unchanged.
+//
+// The loader gains an optional third argument — the card request `{ amount, currency }` — and
+// the returned context an optional `cardRequest` carrying the resolved household + currency
+// context. Built as a variable (not a fresh literal at the call site), so a superset of
+// fields stays assignable to the loader's param type.
+// ===========================================================================
+
+test("E15-S07: a card request makes the loader carry the resolved household + currency context", async () => {
+  const db = await freshDb();
+  const keyWrapper = keyWrapperFor();
+  try {
+    const { userId } = await makePerson(db, "e15s07-wire", keyWrapper);
+    await upsertPermissions(
+      db,
+      baseGrants(userId, CONN, { cardAccess: true, cardBudget: { amount: 200, currency: "AUD", period: "month" } }),
+    );
+    // The person owns a household (so they are a member of it) with a shared budget and their
+    // own per-member monthly limit.
+    const household = await createHousehold(db, { ownerId: userId, currency: "AUD", monthlyBudget: 500 });
+    await setMemberLimit(db, { householdId: household.id, actorId: userId, userId, monthlyLimit: 200 });
+
+    // A same-currency request (AUD), so the resolved context is deterministic — no rate lookup.
+    const cardRequest = { amount: 50, currency: "AUD" };
+    const ctx = await loadAgentContext(connectionFor(userId), depsFor(db, keyWrapper), cardRequest);
+
+    const cr = ctx.cardRequest;
+    assert.ok(cr, "a card request produces a resolved card-request context on the loader");
+    assert.equal(cr.accountCurrency, "AUD", "the member's account currency is carried");
+    const hh = cr.household;
+    assert.ok(hh, "the member's household context is carried");
+    assert.equal(hh.monthlyBudget, 500, "the shared household budget is carried");
+    assert.equal(hh.memberLimit, 200, "the per-member monthly limit is carried");
+  } finally {
+    await db.close();
+  }
+});
+
+test("E15-S07: with no card request the loader carries no card-request context (existing behaviour unchanged)", async () => {
+  const db = await freshDb();
+  const keyWrapper = keyWrapperFor();
+  try {
+    const { userId } = await makePerson(db, "e15s07-nocard", keyWrapper);
+    await upsertPermissions(db, baseGrants(userId, CONN));
+
+    const ctx = await loadAgentContext(connectionFor(userId), depsFor(db, keyWrapper));
+    assert.equal(ctx.cardRequest, undefined, "no card request → no card-request context on the loader");
+  } finally {
+    await db.close();
   }
 });
