@@ -19,8 +19,8 @@
 // filter — comes from a fixed whitelist keyed by the `PeriodKind` enum, never from
 // caller text. Every read is member-scoped by the `userId` the caller passes (the
 // session's id, never a client value); the household total — the one cross-member
-// aggregate the brief exposes — is gated by the caller's own participation in that
-// household.
+// aggregate the brief exposes — is gated by the caller's MEMBERSHIP of that household
+// (the household_members store, E15-S04).
 
 import { randomUUID } from "node:crypto";
 
@@ -222,9 +222,11 @@ export async function sumForMemberPeriod(
 
 // The aggregate total across a household's members in the period (household_id
 // bound) — the one cross-member number the brief exposes. Gated by the SESSION user
-// id: the EXISTS clause returns the total only when `userId` participates in
-// `householdId` (has at least one ledger row there); a non-participant gets 0 and
-// never another member's merchants or rows — only ever a NUMBER.
+// id: the EXISTS clause returns the total only when `userId` is a MEMBER of
+// `householdId` in the household_members store (E15-S04) — NOT merely when they have a
+// ledger row there, so a member with no spend of their own still reads the household
+// total; a non-member gets 0 and never another member's merchants or rows — only ever
+// a NUMBER.
 export async function sumForHouseholdPeriod(
   db: Db,
   userId: string,
@@ -237,7 +239,7 @@ export async function sumForHouseholdPeriod(
        FROM card_spend_ledger led
       WHERE led.household_id = $2 AND led.${periodColumn(period)} = $3
         AND EXISTS (
-          SELECT 1 FROM card_spend_ledger mem
+          SELECT 1 FROM household_members mem
            WHERE mem.user_id = $1 AND mem.household_id = $2
         )`,
     [userId, householdId, periodKey],
