@@ -3,8 +3,10 @@ import { cookies } from "next/headers";
 import { redirect } from "next/navigation";
 
 import { DashboardView } from "@/components/home/dashboard-view";
+import { loadConfig } from "@/server/config";
 import { getServerDb } from "@/server/db/server";
 import { verifySession } from "@/server/auth/session";
+import { selectKeyWrapper } from "@/server/crypto/key-wrapper";
 import { systemClock } from "@/server/seams/clock";
 import { createHomeActions } from "./actions";
 
@@ -28,12 +30,17 @@ import { createHomeActions } from "./actions";
 const SESSION_COOKIE = "__Host-wh_session";
 
 export default async function HomePage() {
+  // Read per-request data first so the page is dynamic (never prerendered at build).
   const token = (await cookies()).get(SESSION_COOKIE)?.value ?? null;
+  const config = loadConfig();
   const db = await getServerDb();
   const session = token ? await verifySession(db, token, { clock: systemClock }) : null;
   if (!session) {
     redirect("/signin");
   }
-  const view = await createHomeActions({ db }).load(session);
+  // The KeyWrapper (local AES outside production, Key Vault in production) lets the
+  // loader unwrap the person's DEK and greet them by their saved low-tier name.
+  const keyWrapper = selectKeyWrapper({ nodeEnv: config.nodeEnv, localKek: config.devKek });
+  const view = await createHomeActions({ db, keyWrapper }).load(session);
   return <DashboardView {...view} />;
 }
