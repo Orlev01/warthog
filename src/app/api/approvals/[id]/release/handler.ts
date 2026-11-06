@@ -1,0 +1,208 @@
+// E11-S10 — Approval release endpoint: the injectable sibling handler (design §4.2
+// "Release" + the in-memory release store; §4.3 the released-value fingerprint; §5
+// step-up; brief "release — one-time hand-over of a high-tier value or card").
+// INV-101 admin-auth-required, INV-102 validate-and-parameterize-input,
+// INV-103 secrets-from-env.
+//
+// On approval, after a fresh step-up, the browser decrypts the high-tier value / card
+// detail with the vault key (E11-S07..S09) and POSTs the PLAINTEXT to
+// `/api/approvals/[id]/release`. This endpoint is the server half of a release. It:
+//   1. requires a server-verified session (INV-101) AND a step-up within the last 5
+//      minutes (design §5) — otherwise it releases nothing;
+//   2. shape-guards the approval id (a non-UUID is a 4xx before `WHERE id = $1`,
+//      never a raw cast / 500 — OBS-049, INV-102);
+//   3. loads the approval MEMBER-SCOPED by the session user; it must be `approved`
+//      and owned by that user — else a 4xx (another user's approval is never
+//      releasable);
+//   4. validates the body `{ value }` (malformed / oversized / mis-shaped → a 4xx,
+//      never a 500 — INV-102), then puts the value in the process-wide in-memory
+//      release store under the SAME `releaseKeyFor` the agent's `collect_release`
+//      reads it with, and persists a keyed one-way HMAC FINGERPRINT of the value for
+//      90 days — NEVER writing the value itself to the database, a log or a metric.
+//
+// A Next App-Router `route.ts` may export ONLY the known route keys (OBS-025), so the
+// injectable factory lives HERE; `route.ts` imports it and exports only `POST`. Every
+// seam is optional with a production default, resolved LAZILY per request (never at
+// construction / import), so importing the entry boots no database and `next build`
+// evaluates no runtime config. The handler reads no `process.env` directly — config
+// flows through the injected seams, or in production through `loadConfig()` /
+// `getServerDb()` at request time (INV-103).
+
+import { z } from "zod";
+
+import { parseBody, HttpError } from "../../../../../server/http/validate";
+import { loadConfig } from "../../../../../server/config";
+import { getServerDb } from "../../../../../server/db/server";
+import {
+  verifySession,
+  COOKIE_NAME,
+  type Session,
+} from "../../../../../server/auth/session";
+import { requireStepUp } from "../../../../../server/auth/step-up";
+import { getApproval } from "../../../../../server/db/approvals";
+import { getUserById } from "../../../../../server/db/users";
+import { storeFingerprint } from "../../../../../server/db/release-fingerprints";
+import { fingerprint } from "../../../../../server/crypto/hmac";
+import { releaseStore, type ReleaseStore } from "../../../../../server/crypto/release-store";
+import { selectKeyWrapper, type KeyWrapper } from "../../../../../server/crypto/key-wrapper";
+import { releaseKeyFor } from "../../../../../server/mcp/tools/collect-release";
+import { systemClock, type Clock } from "../../../../../server/seams/clock";
+import type { Db } from "../../../../../server/db/index";
+
+// A released value is small (a high-tier identity field or card detail), so cap it
+// tightly: an oversized value is a bad request before anything is read or released
+// (INV-102). The raw body is bounded well below that so a grossly oversized post is
+// refused at the byte boundary, never buffered whole.
+const MAX_VALUE_CHARS = 4096;
+const MAX_BODY_BYTES = 16 * 1024;
+
+// The browser posts just the decrypted `{ value }`; the approval id rides in the path,
+// never the body. A non-string / empty / oversized value is a 4xx, never a 500.
+const bodySchema = z.object({
+  value: z.string().min(1).max(MAX_VALUE_CHARS),
+});
+
+// Every approval id is a UUID (`approvals.id` is uuid-typed, created with
+// `randomUUID`). A well-formed-but-non-UUID id — including a SQL-injection probe — is
+// shape-guarded here and refused with a 4xx, never fed to `WHERE id = $1` where the
+// uuid cast would throw a 500 (OBS-049, INV-102).
+const approvalIdShape = z.uuid();
+
+// The injectable seams, each optional with a production default resolved lazily below.
+export interface ReleaseSeams {
+  // Resolve the session from the request (server-verified; INV-101). Production reads
+  // the host-locked cookie and verifies it over the shared database.
+  readonly resolveSession?: (request: Request) => Promise<Session | null>;
+  // The shared database (every query parameter-bound; INV-102).
+  readonly db?: Db;
+  // Judges step-up freshness and the 90-day fingerprint window.
+  readonly clock?: Clock;
+  // The process-wide in-memory store the value is put into (design §4.2).
+  readonly releaseStore?: ReleaseStore;
+  // Unwraps the person's DEK to fingerprint the released value.
+  readonly keyWrapper?: KeyWrapper;
+}
+
+// --- production defaults ------------------------------------------------------------
+
+// Read one cookie's value out of the request's Cookie header, or null when absent.
+function readCookie(request: Request, name: string): string | null {
+  const header = request.headers.get("cookie");
+  if (header == null) return null;
+  for (const part of header.split(";")) {
+    const eq = part.indexOf("=");
+    if (eq === -1) continue;
+    if (part.slice(0, eq).trim() === name) return part.slice(eq + 1).trim();
+  }
+  return null;
+}
+
+// The real session resolver: read the host-locked session cookie and verify it
+// server-side over the process-wide database (never trusting any other client value —
+// INV-101). The database is taken lazily, per request, so importing this module boots
+// nothing.
+async function defaultResolveSession(request: Request): Promise<Session | null> {
+  const token = readCookie(request, COOKIE_NAME);
+  if (token == null) return null;
+  const db = await getServerDb();
+  return verifySession(db, token, { clock: systemClock });
+}
+
+// The KeyWrapper from validated config (local AES-256 outside production; Key Vault in
+// production). Read at request time, never at module load (`next build` has no runtime
+// config), and only when no wrapper is injected — so tests reading no config never
+// touch `process.env`.
+function defaultKeyWrapper(): KeyWrapper {
+  const config = loadConfig();
+  return selectKeyWrapper({ nodeEnv: config.nodeEnv, localKek: config.devKek });
+}
+
+// --- responses ----------------------------------------------------------------------
+
+function json(status: number, body: unknown): Response {
+  return new Response(JSON.stringify(body), {
+    status,
+    headers: { "content-type": "application/json; charset=utf-8" },
+  });
+}
+
+// --- the handler --------------------------------------------------------------------
+
+export function createReleaseHandler(
+  seams: ReleaseSeams = {},
+): { POST(request: Request, id: string): Promise<Response> } {
+  const resolveSession = seams.resolveSession ?? defaultResolveSession;
+
+  async function POST(request: Request, id: string): Promise<Response> {
+    const clock = seams.clock ?? systemClock;
+    const store = seams.releaseStore ?? releaseStore;
+
+    try {
+      // 1. Auth boundary (INV-101): a server-verified session, or nothing happens —
+      //    identity is the session's user id, never a client value.
+      const session = await resolveSession(request);
+      if (session == null) {
+        return json(401, { error: "unauthenticated" });
+      }
+
+      // 2. A step-up within the last 5 minutes is required for a release (design §5);
+      //    a missing / stale step-up releases nothing.
+      if (!requireStepUp(session, { clock })) {
+        return json(403, { error: "step_up_required" });
+      }
+
+      // 3. Shape-guard the id BEFORE any query: a non-UUID is a 4xx, never a raw cast.
+      if (!approvalIdShape.safeParse(id).success) {
+        return json(400, { error: "invalid_id" });
+      }
+
+      const db = seams.db ?? (await getServerDb());
+      const keyWrapper = seams.keyWrapper ?? defaultKeyWrapper();
+
+      // Resolve the person's unwrapped DEK (member-scoped by the session user): read
+      // their wrapped DEK and unwrap it through the KeyWrapper seam. It keys both the
+      // approval-detail decryption and the released-value fingerprint.
+      const user = await getUserById(db, session.userId);
+      if (user == null) {
+        return json(403, { error: "not_releasable" });
+      }
+      const dek = await keyWrapper.unwrap(user.wrappedDek);
+
+      // 4. Load the approval MEMBER-SCOPED by the session user: another user's id finds
+      //    nothing. It must be `approved` — a pending/denied/expired one is not
+      //    releasable. Either way a uniform 4xx that leaks nothing, nothing released.
+      const approval = await getApproval(db, session.userId, id, dek);
+      if (approval == null || approval.status !== "approved") {
+        return json(403, { error: "not_releasable" });
+      }
+
+      // 5. Validate the body (`{ value }`): malformed / oversized / mis-shaped is a 4xx
+      //    (never a 500), before any store or db write.
+      const { value } = await parseBody(bodySchema, request, { maxBytes: MAX_BODY_BYTES });
+
+      // 6. Persist the keyed one-way fingerprint FIRST (the audit record), then hand the
+      //    value to the agent's single collection through the in-memory store, under the
+      //    SAME key `collect_release` reads it with. The value itself is never written to
+      //    the database, a log or a metric — only its fingerprint, for 90 days.
+      await storeFingerprint(db, { userId: session.userId, fingerprint: fingerprint(dek, value) }, clock);
+      const key = releaseKeyFor({
+        userId: approval.userId,
+        connectionId: approval.agentId,
+        agentId: approval.agentId,
+        active: true,
+      });
+      store.put(key, value);
+
+      return json(200, { status: "released" });
+    } catch (error) {
+      // The input boundary throws exactly HttpError (always a 4xx), so a malformed /
+      // oversized body maps to a client error, never an uncontrolled 500.
+      if (error instanceof HttpError) {
+        return json(error.status, { error: "invalid_request" });
+      }
+      throw error;
+    }
+  }
+
+  return { POST };
+}
