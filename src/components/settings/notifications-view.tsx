@@ -38,6 +38,16 @@ export type NotificationsViewDevice = { id: string; label?: string };
 // whether it has been verified.
 export type NotificationsViewNumber = { id: string; number: string; verified: boolean };
 
+// A server action's outcome, as the register ceremony reads it back (the same
+// { ok } | { ok, reason } shape every notifications action returns).
+export type NotificationsViewActionResult = { ok: true } | { ok: false; reason: string };
+
+// A form-submit server action the page hands down to wire a control (add a number,
+// verify a code, save preferences, send a test). The browser posts the control's
+// fields as FormData; the action reads them, acts member-scoped to the session
+// person, and redirects back with a `?notice=` code the page turns into copy.
+export type NotificationsFormAction = (formData: FormData) => void | Promise<void>;
+
 export type NotificationsViewProps = {
   // the person's registered push devices. When EMPTY, the test-notification control is
   // disabled with a stated reason (nothing to push to).
@@ -50,7 +60,40 @@ export type NotificationsViewProps = {
   // the fallback delay in minutes, bounded to the inclusive 1–30 range. Defaults to 2
   // (brief default).
   fallbackDelayMinutes?: number;
+
+  // --- wiring (the page passes these in the running app; omitted in render tests) ---
+  // The VAPID application-server public key (config, a PUBLIC value — never a secret),
+  // used by the register ceremony to subscribe this browser for Web Push.
+  vapidPublicKey?: string;
+  // Register this browser as a push device: the client runs the Web Push subscription
+  // ceremony (service worker + PushManager) and hands the subscription to this server
+  // action, which stores it for the session person.
+  registerPushDevice?: (input: {
+    endpoint: string;
+    keys: { p256dh: string; auth: string };
+  }) => Promise<NotificationsViewActionResult>;
+  // Form-submit server actions for the number/preferences/test controls.
+  addMobileNumberAction?: NotificationsFormAction;
+  verifyMobileNumberAction?: NotificationsFormAction;
+  saveNotificationPrefsAction?: NotificationsFormAction;
+  sendTestNotificationAction?: NotificationsFormAction;
 };
+
+// The screen a register outcome redirects back to, with a `?notice=` code the page
+// maps to plain-words copy (the same notice channel the form actions use, so the
+// client ceremony never fails silently).
+const SCREEN = "/settings/notifications";
+
+// Decode a base64url VAPID public key into the byte array PushManager.subscribe wants
+// as its applicationServerKey (browsers accept only a BufferSource here, not the
+// string). Standard Web Push conversion.
+function urlBase64ToUint8Array(base64: string): Uint8Array<ArrayBuffer> {
+  const padded = base64 + "=".repeat((4 - (base64.length % 4)) % 4);
+  const raw = atob(padded.replace(/-/g, "+").replace(/_/g, "/"));
+  const bytes = new Uint8Array(new ArrayBuffer(raw.length));
+  for (let i = 0; i < raw.length; i += 1) bytes[i] = raw.charCodeAt(i);
+  return bytes;
+}
 
 function SectionHeading({ icon: Icon, children }: { icon: typeof Bell; children: React.ReactNode }) {
   return (
@@ -66,8 +109,49 @@ export function NotificationsView({
   numbers,
   emailFallback = true,
   fallbackDelayMinutes = 2,
+  vapidPublicKey,
+  registerPushDevice,
+  addMobileNumberAction,
+  verifyMobileNumberAction,
+  saveNotificationPrefsAction,
+  sendTestNotificationAction,
 }: NotificationsViewProps) {
   const hasDevice = devices.length > 0;
+
+  // Register THIS browser as a push device. The subscription can only be created on
+  // the client (service worker + PushManager), so this control runs the ceremony and
+  // then hands the subscription to the `registerPushDevice` server action. Every
+  // outcome — success, a browser that can't do push, or a failure — is reported in
+  // plain words via a `?notice=` redirect (never a silent no-op).
+  async function handleRegisterDevice(): Promise<void> {
+    if (!registerPushDevice) return;
+    const go = (notice: string): void => {
+      window.location.assign(`${SCREEN}?notice=${notice}`);
+    };
+    try {
+      if (typeof navigator === "undefined" || !("serviceWorker" in navigator) || !vapidPublicKey) {
+        go("push_unavailable");
+        return;
+      }
+      const registration = await navigator.serviceWorker.register("/sw.js");
+      const subscription = await registration.pushManager.subscribe({
+        userVisibleOnly: true,
+        applicationServerKey: urlBase64ToUint8Array(vapidPublicKey),
+      });
+      const json = subscription.toJSON();
+      const endpoint = json.endpoint;
+      const p256dh = json.keys?.p256dh;
+      const auth = json.keys?.auth;
+      if (!endpoint || !p256dh || !auth) {
+        go("register_failed");
+        return;
+      }
+      const result = await registerPushDevice({ endpoint, keys: { p256dh, auth } });
+      go(result.ok ? "device_registered" : "invalid_request");
+    } catch {
+      go("register_failed");
+    }
+  }
 
   return (
     <section className="flex flex-col gap-8">
@@ -88,7 +172,14 @@ export function NotificationsView({
         ) : (
           <p className="text-sm text-fg-muted">No devices registered yet.</p>
         )}
-        <Button type="button" variant="primary" className="self-start">
+        <Button
+          type="button"
+          variant="primary"
+          className="self-start"
+          onClick={() => {
+            void handleRegisterDevice();
+          }}
+        >
           <Bell aria-hidden={true} className="h-4 w-4 shrink-0" />
           Register this device
         </Button>
@@ -118,19 +209,24 @@ export function NotificationsView({
                       <p className="text-sm text-fg-muted">
                         Enter the 6-digit code we texted you, then verify.
                       </p>
-                      <div className="flex flex-col gap-3 sm:flex-row sm:items-end">
+                      <form
+                        action={verifyMobileNumberAction}
+                        className="flex flex-col gap-3 sm:flex-row sm:items-end"
+                      >
+                        <input type="hidden" name="id" value={number.id} />
                         <Field
                           label="Verification code"
+                          name="code"
                           type="text"
                           inputMode="numeric"
                           maxLength={6}
                           placeholder="123456"
                           className="sm:flex-1"
                         />
-                        <Button type="button" variant="secondary" className="sm:self-stretch">
+                        <Button type="submit" variant="secondary" className="sm:self-stretch">
                           Verify
                         </Button>
-                      </div>
+                      </form>
                     </>
                   )}
                 </Card>
@@ -140,32 +236,42 @@ export function NotificationsView({
         ) : null}
 
         {/* Add a new number: type it, then request its verification code. */}
-        <div className="flex flex-col gap-3 sm:flex-row sm:items-end">
+        <form
+          action={addMobileNumberAction}
+          className="flex flex-col gap-3 sm:flex-row sm:items-end"
+        >
           <Field
             label="Mobile number"
+            name="number"
             type="tel"
             inputMode="tel"
             placeholder="+61 400 000 000"
             className="sm:flex-1"
           />
-          <Button type="button" variant="secondary" className="sm:self-stretch">
+          <Button type="submit" variant="secondary" className="sm:self-stretch">
             <Send aria-hidden={true} className="h-4 w-4 shrink-0" />
             Send code
           </Button>
-        </div>
+        </form>
       </div>
 
       {/* ----- Fallback preferences: email fallback + the delay before it fires ----- */}
-      <div className="flex flex-col gap-3">
+      <form action={saveNotificationPrefsAction} className="flex flex-col gap-3">
         <SectionHeading icon={Mail}>Fallback</SectionHeading>
 
         <label className="flex items-center gap-3 rounded-card border border-line bg-surface p-3">
-          <input type="checkbox" defaultChecked={emailFallback} className="h-4 w-4 accent-accent" />
+          <input
+            type="checkbox"
+            name="emailFallback"
+            defaultChecked={emailFallback}
+            className="h-4 w-4 accent-accent"
+          />
           <span className="text-fg">Also send fallback alerts by email</span>
         </label>
 
         <Field
           label="Fallback delay (minutes)"
+          name="fallbackDelayMinutes"
           type="number"
           inputMode="numeric"
           min={1}
@@ -176,7 +282,10 @@ export function NotificationsView({
           How long Warthog waits for a push to be seen before falling back to SMS (1–30
           minutes).
         </p>
-      </div>
+        <Button type="submit" variant="secondary" className="self-start">
+          Save preferences
+        </Button>
+      </form>
 
       {/* ----- Send a test notification: live with a device, disabled WITH A REASON
                when none is registered (no dead controls). ----- */}
@@ -188,10 +297,12 @@ export function NotificationsView({
             nowhere to send it yet.
           </p>
         )}
-        <Button type="button" variant="secondary" disabled={!hasDevice} className="self-start">
-          <Send aria-hidden={true} className="h-4 w-4 shrink-0" />
-          Send a test notification
-        </Button>
+        <form action={sendTestNotificationAction}>
+          <Button type="submit" variant="secondary" disabled={!hasDevice} className="self-start">
+            <Send aria-hidden={true} className="h-4 w-4 shrink-0" />
+            Send a test notification
+          </Button>
+        </form>
       </div>
     </section>
   );
