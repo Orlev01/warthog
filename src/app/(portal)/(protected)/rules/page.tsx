@@ -1,7 +1,212 @@
 import * as React from "react";
-import { ComingSoon } from "@/components/shell/coming-soon";
+import { cookies } from "next/headers";
+import { redirect } from "next/navigation";
+import { revalidatePath } from "next/cache";
+import { AlertTriangle, CheckCircle2 } from "lucide-react";
 
-// Operator placeholder so links to this route resolve; E12-S17 replaces it with the real screen.
-export default function RulesBudgetsPage() {
-  return <ComingSoon title="Rules & budgets" />;
+import { RulesView } from "@/components/rules/rules-view";
+import { loadConfig } from "@/server/config";
+import { getServerDb } from "@/server/db/server";
+import { selectKeyWrapper } from "@/server/crypto/key-wrapper";
+import { verifySession, type Session } from "@/server/auth/session";
+import { systemClock } from "@/server/seams/clock";
+import type { Db } from "@/server/db/index";
+import { createRulesActions, ruleInputFromForm, type ActionResult } from "./actions";
+
+// E12-S17 — Rules page (the thin protected-page loader + rule-action wiring).
+//
+// The loader triad: this async `page.tsx` reads the signed-in session from the
+// host-locked `__Host-wh_session` cookie, turns it (via the tested
+// `createRulesActions` seam's `load`) into the <RulesView> data — the person's OWN
+// rules (active and paused), each as its exact plain sentence + status, and their
+// connected agents — and renders the view.
+//
+// It binds the four rule controls to inline `use server` wrappers (the sibling inbox
+// screen's pattern): each re-derives the verified session (never a client value,
+// design §5), calls the factory scoped to the SESSION user id, and redirects back
+// with a `?notice=` outcome the page shows in plain words (never a silent failure —
+// a refusal, a malformed id, or a rejected vocabulary is shown, not swallowed).
+//
+// Thin by design (the server-composition-roots addendum): per-request data (the
+// cookie, the search params) is read BEFORE `getServerDb()` so touching it marks the
+// page dynamic and `next build` never prerenders it or opens the database at build
+// time; config is read inside the handler (`loadConfig()`), never at module load; the
+// database comes from the process-wide `getServerDb()`, never `createDb`, and the
+// shared handle is never closed. The `(protected)` layout already wraps every page in
+// the app shell.
+
+const SESSION_COOKIE = "__Host-wh_session";
+
+// Resolve the signed-in session from the cookie (or null), re-derived wherever it is
+// needed so no handler trusts a client value for identity (design §5).
+async function resolveSession(db: Db): Promise<Session | null> {
+  const token = (await cookies()).get(SESSION_COOKIE)?.value ?? null;
+  return token ? verifySession(db, token, { clock: systemClock }) : null;
+}
+
+// Build the rules actions with the real seams. The KeyWrapper (local AES outside
+// production, Key Vault in production) lets `load`/`createRule` resolve the session
+// person's DEK to decrypt/encrypt a rule's condition.
+function buildActions(db: Db) {
+  const config = loadConfig();
+  const keyWrapper = selectKeyWrapper({ nodeEnv: config.nodeEnv, localKek: config.devKek });
+  return createRulesActions({ db, clock: systemClock, keyWrapper });
+}
+
+// Map a mutation outcome (or a thrown error) to a stable notice code the page turns
+// into plain words. A refusal names its reason; a 4xx from the validation boundary
+// is shown as "invalid"; anything else is a generic problem.
+function mutationNotice(outcome: ActionResult | unknown, doneCode: string): string {
+  if (outcome && typeof outcome === "object" && "ok" in outcome) {
+    const result = outcome as ActionResult;
+    if (result.ok) return doneCode;
+    if (result.reason === "not_found") return "not_found";
+    return "error";
+  }
+  if (outcome && typeof outcome === "object" && "status" in outcome) {
+    const status = (outcome as { status: unknown }).status;
+    if (typeof status === "number" && status >= 400 && status < 500) return "invalid";
+  }
+  return "error";
+}
+
+// Create a new rule from the submitted form. A thin server-action wrapper: re-derive
+// the verified session (never a client value), map the FormData to a rule input, and
+// store it scoped to the SESSION user id — a refusal or a rejected vocabulary is
+// shown in plain words.
+async function createAction(formData: FormData): Promise<void> {
+  "use server";
+  const db = await getServerDb();
+  const session = await resolveSession(db);
+  if (!session) {
+    redirect("/signin");
+  }
+  let outcome: ActionResult | unknown;
+  try {
+    outcome = await buildActions(db).createRule(session, ruleInputFromForm(formData));
+  } catch (error) {
+    outcome = error;
+  }
+  revalidatePath("/rules");
+  redirect(`/rules?notice=${mutationNotice(outcome, "created")}`);
+}
+
+// Replace the content of one of the acting person's OWN rules. Same discipline.
+async function updateAction(formData: FormData): Promise<void> {
+  "use server";
+  const db = await getServerDb();
+  const session = await resolveSession(db);
+  if (!session) {
+    redirect("/signin");
+  }
+  let outcome: ActionResult | unknown;
+  try {
+    outcome = await buildActions(db).updateRule(
+      session,
+      String(formData.get("rule-id") ?? ""),
+      ruleInputFromForm(formData),
+    );
+  } catch (error) {
+    outcome = error;
+  }
+  revalidatePath("/rules");
+  redirect(`/rules?notice=${mutationNotice(outcome, "updated")}`);
+}
+
+// Pause one of the acting person's OWN rules. Same discipline.
+async function pauseAction(formData: FormData): Promise<void> {
+  "use server";
+  const db = await getServerDb();
+  const session = await resolveSession(db);
+  if (!session) {
+    redirect("/signin");
+  }
+  let outcome: ActionResult | unknown;
+  try {
+    outcome = await buildActions(db).pauseRule(session, String(formData.get("rule-id") ?? ""));
+  } catch (error) {
+    outcome = error;
+  }
+  revalidatePath("/rules");
+  redirect(`/rules?notice=${mutationNotice(outcome, "paused")}`);
+}
+
+// Delete one of the acting person's OWN rules. Same discipline.
+async function deleteAction(formData: FormData): Promise<void> {
+  "use server";
+  const db = await getServerDb();
+  const session = await resolveSession(db);
+  if (!session) {
+    redirect("/signin");
+  }
+  let outcome: ActionResult | unknown;
+  try {
+    outcome = await buildActions(db).deleteRule(session, String(formData.get("rule-id") ?? ""));
+  } catch (error) {
+    outcome = error;
+  }
+  revalidatePath("/rules");
+  redirect(`/rules?notice=${mutationNotice(outcome, "deleted")}`);
+}
+
+// The outcome of the last change, in words plus an icon (never colour alone). A
+// problem is announced immediately (alert); a success politely (status).
+type Notice = { tone: "done" | "problem"; text: string };
+const NOTICES: Record<string, Notice> = {
+  created: { tone: "done", text: "Rule added — Warthog will enforce it from now on." },
+  updated: { tone: "done", text: "Rule updated." },
+  paused: { tone: "done", text: "Rule paused — Warthog won't enforce it until you resume it." },
+  deleted: { tone: "done", text: "Rule deleted." },
+  not_found: {
+    tone: "problem",
+    text: "We couldn't find that rule. It may have already been changed.",
+  },
+  invalid: { tone: "problem", text: "That rule didn't look right. Please check it and try again." },
+  error: { tone: "problem", text: "We couldn't complete that just now. Please try again." },
+};
+
+function NoticeBanner({ notice }: { notice: Notice }) {
+  const Icon = notice.tone === "done" ? CheckCircle2 : AlertTriangle;
+  return (
+    <div className="mx-auto w-full max-w-3xl px-4 pt-8 sm:px-6">
+      <div
+        role={notice.tone === "done" ? "status" : "alert"}
+        className="flex items-start gap-3 rounded-card border border-line bg-surface p-4 text-sm text-fg"
+      >
+        <Icon aria-hidden={true} className="mt-0.5 h-5 w-5 shrink-0" />
+        <p>{notice.text}</p>
+      </div>
+    </div>
+  );
+}
+
+export default async function RulesPage({
+  searchParams,
+}: {
+  searchParams: Promise<Record<string, string | string[] | undefined>>;
+}) {
+  // Read the request first: touching per-request data marks the page dynamic, so
+  // `next build` never prerenders it (and never opens the database at build time).
+  const rawNotice = (await searchParams).notice;
+  const notice = typeof rawNotice === "string" ? (NOTICES[rawNotice] ?? null) : null;
+  const db = await getServerDb();
+  const session = await resolveSession(db);
+  if (!session) {
+    redirect("/signin");
+  }
+
+  const view = await buildActions(db).load(session);
+  return (
+    <div className="mx-auto w-full max-w-3xl px-4 py-8 sm:px-6">
+      {notice ? <NoticeBanner notice={notice} /> : null}
+      <RulesView
+        rules={view.rules}
+        agents={view.agents}
+        createAction={createAction}
+        updateAction={updateAction}
+        pauseAction={pauseAction}
+        deleteAction={deleteAction}
+      />
+    </div>
+  );
 }
