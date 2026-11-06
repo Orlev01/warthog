@@ -45,12 +45,27 @@ import { parseParams } from "../../../../server/http/validate";
 import { requireStepUp } from "../../../../server/auth/step-up";
 import { decide, getApproval } from "../../../../server/db/approvals";
 import { markOpened } from "../../../../server/approvals/opened";
+import {
+  readInbox,
+  type PendingApproval,
+  type DecidedApproval,
+} from "../../../../server/approvals/inbox-read";
+import { getCardCiphertext, listCards } from "../../../../server/db/cards";
 import { getUserById } from "../../../../server/db/users";
 import type { Session } from "../../../../server/auth/session";
 import type { Clock } from "../../../../server/seams/clock";
 import type { KeyWrapper } from "../../../../server/crypto/key-wrapper";
 import type { Db } from "../../../../server/db/index";
 import type { ApprovedHoldResult } from "../../../../server/mcp/pipeline";
+import type {
+  DecidedRequestView,
+  DecidedStatus,
+  InboxViewProps,
+  PendingRequestView,
+  ReleaseKind,
+  RequestDetail,
+  SavedCardView,
+} from "../../../../components/inbox/inbox-view";
 
 // The injected seams — no process.env (INV-103). `executeApprovedHold` is the
 // pipeline's own single-shot runner for an approved held call (taken as a seam so
@@ -67,11 +82,23 @@ export interface InboxActionsDeps {
 // silent success. The page maps the reason code to plain copy.
 export type ActionResult = { ok: true } | { ok: false; reason: string };
 
+// The DATA slice of <InboxView>'s props the loader returns: the person's OWN pending
+// approvals (newest-first) + their decision history, and — for a card release — their
+// saved cards. The page adds the bound decision actions (approve / deny / ask) and the
+// device-release trigger when it renders. The view (E12-S12) owns this shape.
+export type InboxLoadData = Pick<InboxViewProps, "pending" | "history" | "savedCards">;
+
 // The inbox decision actions the loader + its server-action wrappers drive.
 export interface InboxActions {
   approveApproval(session: Session, approvalId: string): Promise<ActionResult>;
   denyApproval(session: Session, approvalId: string): Promise<ActionResult>;
   askForMoreDetail(session: Session, approvalId: string, question: string): Promise<ActionResult>;
+  // Turn the verified session into the inbox view's data: the session person's OWN
+  // pending approvals (newest-first) + their decision history, each pending request's
+  // release kind mapped from its decrypted detail, and a card release's saved-card
+  // picker. Marks every pending approval it shows OPENED (member-scoped), suppressing
+  // its SMS/email fallback once the person has viewed their inbox. READ-ONLY.
+  load(session: Session): Promise<InboxLoadData>;
 }
 
 // The refusal reason codes (mapped to copy by the page). Short, stable strings —
@@ -93,6 +120,85 @@ const questionSchema = z
   .min(1)
   .max(MAX_QUESTION_CHARS)
   .refine((value) => value.trim().length > 0);
+
+// ─── loader mapping (pure; the view's already-formatted shapes) ───────────────────────
+
+// A stored detail field as display text — "" when absent or not a string.
+function text(value: unknown): string {
+  return typeof value === "string" ? value : "";
+}
+
+// The release kind a pending request carries, from the SAME `detail.request`
+// discriminator approveApproval gates step-up on: "card" / "high_tier" → a device
+// release; anything else → null (a routine held call's plain, server-verified Approve).
+function releaseKind(detail: Record<string, unknown>): ReleaseKind | null {
+  const request = detail.request;
+  return request === "card" || request === "high_tier" ? request : null;
+}
+
+// The exact recipient / amount / field lines under a request, each present only when
+// the decrypted detail carries it (an omitted field drops out, exactly as it is stored).
+function detailLines(detail: Record<string, unknown>): RequestDetail[] {
+  const lines: RequestDetail[] = [];
+  const recipient = text(detail.recipient);
+  if (recipient) lines.push({ label: "To", value: recipient });
+  const amount = text(detail.amount);
+  if (amount) lines.push({ label: "Amount", value: amount });
+  const field = text(detail.field);
+  if (field) lines.push({ label: "Field", value: field });
+  return lines;
+}
+
+// Time left before a pending request expires, in plain words (floored at expiry).
+function timeLeftLabel(timeLeftMs: number): string {
+  if (timeLeftMs <= 0) return "Expired";
+  const minutes = Math.ceil(timeLeftMs / 60_000);
+  return minutes === 1 ? "1 minute left" : `${minutes} minutes left`;
+}
+
+// A decided status as plain-words outcome copy (the view adds the per-status icon).
+const OUTCOME: Record<DecidedStatus, string> = {
+  approved: "You approved this",
+  denied: "You turned this down",
+  expired: "This expired before you decided",
+  more_detail: "You asked for more detail",
+};
+
+// A decided instant as a medium date + short time in Australian English, read in UTC so
+// it is the same wherever the server runs.
+const DECIDED_AT = new Intl.DateTimeFormat("en-AU", {
+  timeZone: "UTC",
+  dateStyle: "medium",
+  timeStyle: "short",
+});
+
+// One pending approval → the view's already-formatted pending row.
+function toPendingView(request: PendingApproval): PendingRequestView {
+  return {
+    id: request.id,
+    agent: request.agent.displayName,
+    sentence: text(request.detail.sentence),
+    details: detailLines(request.detail),
+    reason: text(request.detail.reason),
+    rule: text(request.detail.rule),
+    timeLeft: timeLeftLabel(request.timeLeftMs),
+    release: releaseKind(request.detail),
+  };
+}
+
+// One decided approval → the view's already-formatted history row.
+function toDecidedView(entry: DecidedApproval): DecidedRequestView {
+  const view: DecidedRequestView = {
+    id: entry.id,
+    agent: entry.agent.displayName,
+    sentence: text(entry.detail.sentence),
+    status: entry.status,
+    outcome: OUTCOME[entry.status],
+    decidedAt: entry.decidedAt ? DECIDED_AT.format(entry.decidedAt) : "",
+  };
+  if (entry.question) view.question = entry.question;
+  return view;
+}
 
 export function createInboxActions(deps: InboxActionsDeps): InboxActions {
   const { db, clock, keyWrapper, executeApprovedHold } = deps;
@@ -181,5 +287,47 @@ export function createInboxActions(deps: InboxActionsDeps): InboxActions {
     return { ok: true };
   }
 
-  return { approveApproval, denyApproval, askForMoreDetail };
+  // The person's saved cards as a card release's picker shows them: the display label
+  // (brand + last four — constitution 17, never a readable number) and the
+  // device-decryptable number ciphertext the device needs to release. Member-scoped by
+  // the session user id (both the list and each ciphertext read bind it), so one person
+  // can never see another's cards.
+  async function loadSavedCards(userId: string): Promise<SavedCardView[]> {
+    const cards = await listCards(db, userId);
+    const views: SavedCardView[] = [];
+    for (const card of cards) {
+      const ciphertext = await getCardCiphertext(db, userId, card.id);
+      if (ciphertext === null) continue;
+      views.push({ id: card.id, label: `${card.brand} •••• ${card.lastFour}`, ciphertext });
+    }
+    return views;
+  }
+
+  // Turn the verified session into the inbox view's data. Reads ONLY the session
+  // person's approvals (member-scoped by `session.userId` — never a client value): their
+  // PENDING requests newest-first + their decision HISTORY (readInbox, E12-S11),
+  // resolving the person's own DEK (getUserById + keyWrapper.unwrap) so the stored detail
+  // decrypts and the time left comes from the injected clock. Marks every pending
+  // approval it shows OPENED (member-scoped markOpened), so its SMS/email fallback is
+  // suppressed once the person has viewed it. READ-ONLY: it never runs a held call
+  // (executeApprovedHold is untouched). A card release additionally needs the saved cards.
+  async function load(session: Session): Promise<InboxLoadData> {
+    const dek = await dataKeyFor(session.userId);
+    const inbox = await readInbox(db, session.userId, dek, clock);
+
+    for (const request of inbox.pending) {
+      await markOpened(db, { id: request.id, userId: session.userId }, clock);
+    }
+
+    const pending = inbox.pending.map(toPendingView);
+    const history = inbox.history.map(toDecidedView);
+    const data: InboxLoadData = { pending, history };
+
+    if (pending.some((request) => request.release === "card")) {
+      data.savedCards = await loadSavedCards(session.userId);
+    }
+    return data;
+  }
+
+  return { approveApproval, denyApproval, askForMoreDetail, load };
 }
