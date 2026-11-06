@@ -133,6 +133,22 @@ export async function saveReceiptFile(
   };
 }
 
+// Which of the owner's life-admin records carry a saved receipt file — the
+// `receipt_files` PLAINTEXT METADATA only (the `record_id`s), NEVER the encrypted
+// file bytes (no blob fetch, no decrypt). Member-scoped: `user_id` is bound, so
+// another person's receipt file never appears here. The returned Set lets a caller
+// flag a record as having an attached file without ever touching its bytes.
+export async function listRecordIdsWithFileForUser(
+  db: Db,
+  userId: string,
+): Promise<Set<string>> {
+  const result = await db.query(
+    `SELECT DISTINCT record_id FROM receipt_files WHERE user_id = $1`,
+    [userId],
+  );
+  return new Set(result.rows.map((row) => row.record_id as string));
+}
+
 // Download and decrypt the owner's own receipt file (member-scoped: both id AND
 // user_id are bound). Returns null when no such file belongs to this user — so
 // another person's file, or an absent id, is invisible, before any blob fetch or
