@@ -1,0 +1,973 @@
+// E09-S17 — Connectors page loader + connect/disconnect/request actions
+// (`src/app/(portal)/(protected)/connectors/actions.ts`, mounted by the thin
+// `src/app/(portal)/(protected)/connectors/page.tsx`).
+//
+// RED-first: the connectors-page loader seam does NOT exist yet — `connectors/`
+// holds only `page.tsx` (an operator ComingSoon placeholder). So importing
+// `./actions` throws (ERR_MODULE_NOT_FOUND) and every test here fails until the
+// builder adds it. That absence IS the point of test-first — do NOT implement
+// anything to make these pass. The builder writes `actions.ts` afterwards to
+// satisfy exactly this contract, and wires the thin `page.tsx` over it.
+//
+// These tests pin BEHAVIOUR (what the loader RETURNS and the screen it mounts; what
+// disconnect CHANGES in the database and WHOSE provider access it revokes; what the
+// handlers REFUSE) against an isolated in-memory PGlite with the REAL migrations
+// (src/test/db) and the REAL already-built seams it composes — the connection store
+// (createConnection / listConnectionsForUser / getConnectionById), the agent store
+// (createAgent / getAgentById), the agent-permissions store (upsertPermissions /
+// getConnectionPermissions), the connector-request store, the real catalogue loader,
+// and the already-render-tested ConnectorsView (E09-S16). No test asserts on the
+// SOURCE TEXT of any module, so a later behaviour-preserving refactor stays green.
+//
+// Where the task names an entry/route file, the testable seam lives in the plain
+// SIBLING module `actions.ts` (the convention's `createXActions(deps)` factory, as
+// `agents/actions.ts`, `access-key/actions.ts`, `oauth/authorize/actions.ts` and
+// `home/actions.ts` do) — never on the thin `page.tsx`, which may export only its
+// framework fields (`next build` rejects any other export, OBS-025). A server PAGE
+// that reads the session cookie + the process-wide database cannot be rendered
+// without a live request scope, so — exactly like the sibling agents loader test —
+// the loader's data assembly is pinned on the factory's `load`, and the SCREEN it
+// mounts is pinned by feeding `load`'s output straight into <ConnectorsView/> with
+// the page-supplied actions bound.
+//
+// ─── The contract this task defines (the builder implements exactly this) ────────────
+//
+//   createConnectorsActions(deps: {
+//     db: Db;
+//     clock: Clock;                                    // connected-at / requested-at (never SQL now())
+//     catalogue: CatalogueIndex;                       // browse + resolve a connector entry by id
+//     dekFor: (userId) => Promise<Uint8Array>;         // the acting person's own DEK (credential envelopes)
+//     fetch: typeof fetch;                             // SSRF-guarded outbound (api-key verify, oauth, mcp)
+//     email: EmailSender;                              // requestConnector → operator email
+//     operatorEmail: string;                           // injected from config (INV-103), never baked in
+//     googleEarlyAccess: readonly string[];            // the gate allowlist (injected from config)
+//     oauthClientConfigFor: (connectorId) => OAuthClientConfig;   // provider sign-in client (from config)
+//     providerMcpConfig: ProviderMcpConfig;            // CIMD identity (from config)
+//     listProviderTools: ListProviderTools;            // provider_mcp tool listing seam
+//     revokeProviderAccess: (input: { userId; connectionId; … }) => Promise<void>;  // the provider-side revocation seam
+//   }): {
+//     // Assemble the Connectors screen's props for the SESSION user (member-scoped by
+//     // session.userId — never a client value): the catalogue browse grouped by category
+//     // and the person's OWN connections. Returns the <ConnectorsView/> data object
+//     // ({ groups, connections, query, canRequest }); the page binds the controls when it
+//     // mounts the view. `input` carries the optional search term.
+//     load(session: Session, input?: { query?: string; category?: string }): Promise<ConnectorsViewData>;
+//     // Start a provider sign-in (oauth2) connection for the session user.
+//     connectProviderSignin(session: Session, input: { connectorId: string }): Promise<unknown>;
+//     // Save an api-key connection for the session user. Validates the input at the
+//     // boundary (a 4xx before any write); the host comes only from the catalogue entry.
+//     saveApiKeyConnection(session: Session, input: { connectorId: string; accountLabel: string; apiKey: string }): Promise<unknown>;
+//     // Connect a provider_mcp connection for the session user.
+//     connectProviderMcp(session: Session, input: { connectorId: string; accountLabel: string }): Promise<unknown>;
+//     // Disconnect ONE of the session user's own connected services: it REMOVES EVERY
+//     // agent's access to that service AND revokes the stored provider access where the
+//     // provider allows it. A malformed / oversized / SQL-shaped connection id throws a
+//     // 4xx HttpError at the boundary BEFORE any query; another person's connection id is
+//     // refused ({ ok:false }) with their service + their agents left wholly untouched.
+//     disconnectService(session: Session, connectionId: string): Promise<{ ok: true } | { ok: false; reason: string }>;
+//     // Record a "Request a connector" for the session user (member-scoped) and email the
+//     // operator. A malformed / oversized / SQL-shaped name is refused at the boundary.
+//     requestConnector(session: Session, input: { name: string }): Promise<unknown>;
+//   }
+//
+// ─── Acceptance criteria → tests ──────────────────────────────────────────────────────
+//   AC1  the loader reads ONLY the session user's connections + the catalogue and mounts
+//        ConnectorsView wired to connectProviderSignin / saveApiKeyConnection /
+//        connectProviderMcp / disconnectService / requestConnector (the five controls
+//        render LIVE, each carrying its own id — never a dead button).
+//   AC2  disconnectService removes EVERY agent's access to that service (the connector is
+//        stripped from every agent's grants) and revokes the stored provider access where
+//        the provider allows it (the revocation seam fires for a provider-sign-in service).
+//   AC3  a connector / connection id that is not the expected shape is rejected with a 4xx
+//        (not a raw cast); a person cannot disconnect another person's connection, and the
+//        strip is member-scoped (another person's agents keep their access).
+//   AC4  a handler rejects malformed / oversized input with a 4xx; a SQL-injection probe in
+//        an input field cannot alter a query (parameter binding — the table survives and
+//        nothing is mutated).                          [obligation:validate-and-parameterize-input]
+//   AC5  no ambient env secret leaks into the loaded data or the mounted screen; config is
+//        read from the injected seams, not the image/client.   [obligation:secrets-from-env]
+//
+// Scope note: connectProviderSignin and connectProviderMcp carry a provider OAuth / CIMD
+// dance whose full happy path needs a live provider; this file pins that they EXIST (so
+// the page can wire them, AC1) and exercises the input-validation / member-scope / secret
+// obligations through saveApiKeyConnection, disconnectService and requestConnector, whose
+// behaviour is offline-testable. The connect methods validate their connector id the same
+// way saveApiKeyConnection does (the pinned 4xx shape guard).
+//
+// Every db handle is closed in a `finally`. The signed-in person is a REAL user row
+// (connections.user_id / agents.user_id are foreign keys to users(id)), so the session's
+// id is one `createUser` minted. Each person gets a fresh random 256-bit DEK the injected
+// `dekFor` returns. We render ConnectorsView with `react-dom/server` (no DOM/jsdom —
+// React component / E2E testing is a per-job ADR), exactly as the sibling view + loader
+// tests do.
+
+import * as React from "react";
+import { test } from "node:test";
+import assert from "node:assert/strict";
+import { randomBytes, randomUUID } from "node:crypto";
+import { mkdtempSync, writeFileSync, rmSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
+import { renderToStaticMarkup } from "react-dom/server";
+
+import { createConnectorsActions } from "./actions";
+
+import { ConnectorsView } from "@/components/connectors/connectors-view";
+import {
+  createConnection,
+  listConnectionsForUser,
+  getConnectionById,
+  type Connection,
+} from "@/server/db/connections";
+import { createAgent } from "@/server/db/agents";
+import {
+  upsertPermissions,
+  getConnectionPermissions,
+  type PermissionGrants,
+} from "@/server/db/agent-permissions";
+import { listConnectorRequestsForUser } from "@/server/db/connector-requests";
+import { createUser } from "@/server/db/users";
+import { loadCatalogue, type CatalogueIndex } from "@/server/connectors/catalogue";
+import { HttpError } from "@/server/http/validate";
+import { fixedClock } from "@/server/seams/clock";
+import type { EmailSender, OutgoingMessage } from "@/server/notify/senders";
+import type { OAuthClientConfig } from "@/server/connectors/oauth-client";
+import type { ProviderMcpConfig, ListProviderTools } from "@/server/connectors/provider-mcp";
+import { freshDb } from "@/test/db";
+import type { Db } from "@/server/db/index";
+import type { Session } from "@/server/auth/session";
+
+// A frozen instant so seeded connections' connected-at is deterministic (the stores + the
+// loader take an injected clock, never SQL now()).
+const NOW = new Date("2026-06-01T00:00:00.000Z");
+const OPERATOR_EMAIL = "operator@warthog.com.au";
+
+// --- catalogue fixtures -------------------------------------------------------------
+//
+// A small, self-contained catalogue spanning three categories and three connect kinds,
+// none flagged for Google early access (so the per-person gate is always "connect"):
+//   • acme-mail   (api_key)      — connected with the person's own key; nothing the
+//                                  provider lets Warthog revoke server-side.
+//   • widget-sync (oauth2)       — a provider SIGN-IN service: Warthog holds the provider
+//                                  tokens, so disconnecting revokes them at the provider.
+//   • data-grid   (provider_mcp) — a provider-hosted MCP service.
+const FIXTURE_ENTRIES: Array<Record<string, unknown>> = [
+  {
+    id: "acme-mail",
+    name: "Acme Mail",
+    aliases: ["acme"],
+    category: "email",
+    auth_kind: "api_key",
+    base_url: "https://api.acme.example",
+    auth: { header: "Authorization: Bearer {api_key}" },
+    // No `verify` — saving a key makes no outbound call, so the api-key path runs offline.
+  },
+  {
+    id: "widget-sync",
+    name: "Widget Sync",
+    aliases: ["widget"],
+    category: "productivity",
+    auth_kind: "oauth2",
+    base_url: "https://api.widget.example",
+    auth: {
+      authorize_url: "https://widget.example/authorize",
+      token_url: "https://widget.example/token",
+      scopes: ["sync.read"],
+    },
+  },
+  {
+    id: "data-grid",
+    name: "Data Grid",
+    aliases: ["grid"],
+    category: "database",
+    auth_kind: "provider_mcp",
+    base_url: "https://mcp.datagrid.example/mcp",
+    auth: {},
+    curated_tools: [{ name: "list_rows" }],
+  },
+];
+
+function makeCatalogueDir(entries: Array<Record<string, unknown>>): string {
+  const dir = mkdtempSync(join(tmpdir(), "warthog-connectors-actions-"));
+  for (const entry of entries) {
+    writeFileSync(join(dir, `${String(entry.id)}.json`), JSON.stringify(entry));
+  }
+  return dir;
+}
+
+// Build a real CatalogueIndex over the fixtures through the project's own loader. Only the
+// oauth2 entry needs a configured client to be connectable; the others are always so.
+function fixtureIndex(connectableOAuth: Set<string> = new Set(["widget-sync"])): CatalogueIndex {
+  const dir = makeCatalogueDir(FIXTURE_ENTRIES);
+  try {
+    return loadCatalogue({ dir, isOAuthClientConfigured: (id) => connectableOAuth.has(id) });
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+}
+
+// --- injected-seam doubles ----------------------------------------------------------
+
+// Each person's unwrapped 256-bit DEK, keyed by user id — the injected `dekFor` returns
+// it (the credential envelopes encrypt/decrypt under it). We never read it back, so any
+// stable bytes serve.
+const deks = new Map<string, Uint8Array>();
+async function dekFor(userId: string): Promise<Uint8Array> {
+  const dek = deks.get(userId);
+  if (dek === undefined) throw new Error(`test setup: no DEK registered for ${userId}`);
+  return dek;
+}
+
+// The outbound fetch MUST NOT fire in these tests: the api-key fixture declares no verify,
+// and provider revocation goes through the `revokeProviderAccess` seam — so a fetch call
+// is a mistake the test should surface loudly.
+const unusedFetch = (async () => {
+  throw new Error("fetch must not be called in these tests");
+}) as unknown as typeof fetch;
+
+// Stub provider configs for the connect methods this file only asserts the EXISTENCE of
+// (never calls). Deliberately NOT env-derived and not resembling the decoy secret.
+const STUB_OAUTH_CONFIG: OAuthClientConfig = {
+  clientId: "stub-oauth-client",
+  clientSecret: "stub-oauth-client-auth",
+  redirectUri: "https://warthog.com.au/connectors/callback",
+};
+const STUB_MCP_CONFIG: ProviderMcpConfig = {
+  clientMetadataUrl: "https://warthog.com.au/oauth/client-metadata.json",
+};
+const STUB_LIST_TOOLS: ListProviderTools = async () => [];
+
+// Build the connectors actions under test with the real seams plus recording doubles for
+// the external effects (the operator email and the provider-side revocation). Returns the
+// actions and the two recorders so a test can assert what left Warthog.
+function makeActions(db: Db, catalogue: CatalogueIndex = fixtureIndex()) {
+  const emails: OutgoingMessage[] = [];
+  const email: EmailSender = {
+    async sendEmail(message) {
+      emails.push(message);
+    },
+  };
+  const revokeCalls: Array<{ userId: string; connectionId: string }> = [];
+  const actions = createConnectorsActions({
+    db,
+    clock: fixedClock(NOW),
+    catalogue,
+    dekFor,
+    fetch: unusedFetch,
+    email,
+    operatorEmail: OPERATOR_EMAIL,
+    googleEarlyAccess: [],
+    oauthClientConfigFor: () => STUB_OAUTH_CONFIG,
+    providerMcpConfig: STUB_MCP_CONFIG,
+    listProviderTools: STUB_LIST_TOOLS,
+    revokeProviderAccess: async (input) => {
+      revokeCalls.push({ userId: input.userId, connectionId: input.connectionId });
+    },
+  });
+  return { actions, emails, revokeCalls };
+}
+
+// --- types derived from the factory (so the tests don't hard-code a type NAME) ------
+type Actions = ReturnType<typeof createConnectorsActions>;
+type LoadData = Awaited<ReturnType<Actions["load"]>>;
+type DisconnectResult = Awaited<ReturnType<Actions["disconnectService"]>>;
+
+// --- fixtures -----------------------------------------------------------------------
+
+// Create a real person, register their DEK, and return their id. Every member-scoped row
+// (their connections, agents) hangs off this id, which must exist in `users` for the FK.
+async function makeUser(db: Db, who: string): Promise<string> {
+  const user = await createUser(db, {
+    email: `${who}-${randomUUID()}@warthog.com.au`,
+    wrappedDek: Buffer.from(`wrapped-dek-${who}`).toString("base64"),
+  });
+  deks.set(user.id, randomBytes(32));
+  return user.id;
+}
+
+// A plain signed-in session for `userId` — the page resolves this from the
+// `__Host-wh_session` cookie; the seam only needs its user id (identity from the session,
+// never a client value).
+function sessionFor(userId: string): Session {
+  return {
+    id: `sess-${userId}`,
+    userId,
+    createdAt: new Date(NOW.getTime() - 60_000),
+    lastSeenAt: new Date(NOW.getTime() - 60_000),
+    steppedUpAt: null,
+  };
+}
+
+// Provider credentials carrying a UNIQUE token, so an appearance of it in a page read is an
+// unambiguous plaintext leak (the page read never carries credentials).
+function credsWith(token: string): Record<string, unknown> {
+  return { access_token: `atok_${token}`, refresh_token: `rtok_${token}` };
+}
+
+// Seed ONE connected service for `userId` and return the created Connection (its id is the
+// handle Disconnect consumes; its connectorId is the catalogue slug agents are granted).
+async function seedConnection(
+  db: Db,
+  userId: string,
+  opts: { connectorId: string; accountLabel: string; token?: string },
+): Promise<Connection> {
+  return createConnection(
+    db,
+    {
+      userId,
+      connectorId: opts.connectorId,
+      accountLabel: opts.accountLabel,
+      credentials: credsWith(opts.token ?? opts.accountLabel),
+      status: "connected",
+    },
+    await dekFor(userId),
+    fixedClock(NOW),
+  );
+}
+
+// A complete baseline grants record (every field present, as the store requires).
+function baselineGrants(
+  userId: string,
+  connectionId: string,
+  grantedConnectors: string[],
+): PermissionGrants {
+  return {
+    userId,
+    connectionId,
+    grantedConnectors,
+    readTools: true,
+    changeTools: "ask_first",
+    identityAccess: true,
+    highTierAccess: false,
+    cardAccess: false,
+    cardBudget: null,
+    skillsScope: [],
+    memoryRead: false,
+    sharing: false,
+    rulesScope: [],
+    rateLimit: 120,
+  };
+}
+
+// Seed an agent (its row AND its permission grants) for `userId`, granting it the given
+// connector slugs. Returns the agent's connection id — the (userId, connectionId) handle
+// its grants are read back by. One row per connection: the grant connection id differs from
+// any service connection id, so the tests exercise the real two-id model.
+async function seedAgent(
+  db: Db,
+  userId: string,
+  opts: { displayName: string; grantedConnectors: string[] },
+): Promise<string> {
+  const connectionId = randomUUID();
+  await createAgent(
+    db,
+    {
+      userId,
+      connectionId,
+      displayName: opts.displayName,
+      platform: "someplatform",
+      status: "connected",
+    },
+    fixedClock(NOW),
+  );
+  await upsertPermissions(db, baselineGrants(userId, connectionId, opts.grantedConnectors));
+  return connectionId;
+}
+
+// --- tiny markup helpers (no DOM), mirrored from the sibling component/loader tests --
+
+const fakeAction = async (_formData: FormData): Promise<void> => {};
+
+// Mount the screen the loader feeds, exactly as the page does: ConnectorsView over the
+// loader's data, with the connect / disconnect / request actions bound by the page.
+function renderScreen(data: LoadData): string {
+  return renderToStaticMarkup(
+    <ConnectorsView
+      {...data}
+      connectAction={fakeAction}
+      disconnectAction={fakeAction}
+      requestAction={fakeAction}
+    />,
+  );
+}
+
+function decode(s: string): string {
+  return s
+    .replace(/&amp;/gi, "&")
+    .replace(/&#x27;|&#39;/gi, "'")
+    .replace(/&quot;/gi, '"')
+    .replace(/&lt;/gi, "<")
+    .replace(/&gt;/gi, ">")
+    .replace(/&nbsp;/gi, " ");
+}
+
+// Visible text with <script>/<style> blocks dropped whole (a bound server-action form
+// injects a progressive-enhancement submit script), tags stripped and entities decoded —
+// the words a sighted reader sees.
+function visibleText(markup: string): string {
+  const withoutScripts = markup
+    .replace(/<script\b[^>]*>[\s\S]*?<\/script>/gi, " ")
+    .replace(/<style\b[^>]*>[\s\S]*?<\/style>/gi, " ");
+  return decode(withoutScripts.replace(/<[^>]*>/g, " ")).replace(/\s+/g, " ").trim();
+}
+
+type El = { attrs: string; inner: string };
+function findAll(markup: string, tag: string): El[] {
+  const out: El[] = [];
+  for (const m of markup.matchAll(new RegExp(`<${tag}\\b([^>]*)>([\\s\\S]*?)</${tag}>`, "gi"))) {
+    out.push({ attrs: m[1]!, inner: m[2]! });
+  }
+  return out;
+}
+function attr(attrs: string, name: string): string | null {
+  const m = attrs.match(new RegExp(`\\b${name}="([^"]*)"`, "i"));
+  return m ? m[1]! : null;
+}
+
+// React encodes a FUNCTION form action as a `javascript:` progressive-enhancement
+// placeholder in server-rendered markup; a bare form carries no such action. So "this form
+// is bound to an action" is observable as its action scheme — behaviour, not source text
+// (the same probe the view's own test uses).
+function isBoundToAction(form: El): boolean {
+  const action = attr(form.attrs, "action");
+  return action !== null && /^javascript:/i.test(action);
+}
+
+// The value attributes of every <input> inside some markup fragment.
+function inputValues(innerMarkup: string): string[] {
+  const out: string[] = [];
+  for (const m of innerMarkup.matchAll(/<input\b([^>]*?)\/?>/gi)) {
+    const v = attr(m[1]!, "value");
+    if (v !== null) out.push(v);
+  }
+  return out;
+}
+
+// Forms whose visible text names a given control. `\bconnect\b` does not match inside
+// "Disconnect" (the 's' before 'connect' is a word char, so there is no boundary), so the
+// Connect and Disconnect controls are told apart cleanly.
+function formsLabelled(markup: string, label: RegExp): El[] {
+  return findAll(markup, "form").filter((f) => label.test(visibleText(f.inner)));
+}
+
+// Assert that awaiting `fn()` rejects with a 4xx HttpError (the validation boundary).
+async function assertRejects4xx(label: string, fn: () => Promise<unknown>): Promise<void> {
+  let threw = false;
+  try {
+    await fn();
+  } catch (err) {
+    threw = true;
+    assert.ok(
+      err instanceof HttpError,
+      `${label}: must be rejected at the validation boundary (HttpError), got ${String(err)}`,
+    );
+    assert.ok(
+      (err as HttpError).status >= 400 && (err as HttpError).status < 500,
+      `${label}: the rejection must carry a 4xx status, got ${(err as HttpError).status}`,
+    );
+  }
+  assert.ok(threw, `${label}: must be rejected (nothing was thrown)`);
+}
+
+// Whether a relation of this exact name exists on this handle. `to_regclass` yields the
+// relation name when it exists and NULL when it does not — a non-throwing probe scoped to
+// the one table under test (behaviour, not source text).
+async function tableExists(db: Db, name: string): Promise<boolean> {
+  const result = await db.query("SELECT to_regclass($1) AS t", [name]);
+  return result.rows[0]?.t != null;
+}
+
+// =====================================================================================
+// AC1 — the loader reads ONLY the session user's connections + the catalogue and mounts
+// ConnectorsView wired to the five controls.
+// =====================================================================================
+
+test("the loader exposes every wired action the page mounts (connect sign-in / api-key / provider-mcp / disconnect / request)", async () => {
+  const db = await freshDb();
+  try {
+    const { actions } = makeActions(db);
+    // An un-exposed action cannot be wired to the view — so each must be present to mount.
+    assert.equal(typeof actions.load, "function", "load must be exposed");
+    assert.equal(typeof actions.connectProviderSignin, "function", "connectProviderSignin must be exposed");
+    assert.equal(typeof actions.saveApiKeyConnection, "function", "saveApiKeyConnection must be exposed");
+    assert.equal(typeof actions.connectProviderMcp, "function", "connectProviderMcp must be exposed");
+    assert.equal(typeof actions.disconnectService, "function", "disconnectService must be exposed");
+    assert.equal(typeof actions.requestConnector, "function", "requestConnector must be exposed");
+  } finally {
+    await db.close();
+  }
+});
+
+test("the loader returns the catalogue (grouped) and the person's own connections, and mounts a live ConnectorsView over them", async () => {
+  const db = await freshDb();
+  try {
+    const userId = await makeUser(db, "lister");
+    const connections = [
+      await seedConnection(db, userId, { connectorId: "acme-mail", accountLabel: "QuokkaMailbox" }),
+      await seedConnection(db, userId, { connectorId: "widget-sync", accountLabel: "NarwhalWorkspace" }),
+    ];
+
+    const data: LoadData = await makeActions(db).actions.load(sessionFor(userId));
+    const markup = renderScreen(data);
+    const text = visibleText(markup);
+
+    // The catalogue is browsable: every fixture connector is offered on the screen.
+    for (const name of ["Acme Mail", "Widget Sync", "Data Grid"]) {
+      assert.ok(text.includes(name), `the catalogue must offer "${name}"; text="${text}"`);
+    }
+
+    // The person's OWN connected services are listed, each by its account label.
+    for (const connection of connections) {
+      assert.ok(
+        text.includes(connection.accountLabel),
+        `the loader must list the person's connection "${connection.accountLabel}"`,
+      );
+    }
+
+    // Wired, not dead: a Connect control per catalogue entry is bound to the action and
+    // carries that connector's id.
+    const connectForms = formsLabelled(markup, /\bconnect\b/i);
+    assert.ok(connectForms.length >= FIXTURE_ENTRIES.length, "every catalogue entry must offer a Connect control");
+    assert.ok(connectForms.every(isBoundToAction), "every Connect control must be bound to a connect action (not a dead button)");
+    for (const slug of ["acme-mail", "widget-sync", "data-grid"]) {
+      assert.ok(
+        connectForms.some((f) => inputValues(f.inner).includes(slug)),
+        `a Connect control must carry connector id "${slug}" so the action connects the right service`,
+      );
+    }
+
+    // Wired, not dead: a Disconnect control per connection is bound and carries THAT
+    // connection's id.
+    const disconnectForms = formsLabelled(markup, /\bdisconnect\b/i);
+    assert.equal(disconnectForms.length, connections.length, "every connection must offer a Disconnect control");
+    assert.ok(disconnectForms.every(isBoundToAction), "every Disconnect control must be bound to the disconnect action");
+    for (const connection of connections) {
+      assert.ok(
+        disconnectForms.some((f) => inputValues(f.inner).includes(connection.id)),
+        `a Disconnect control must carry connection id "${connection.id}" so the action disconnects the right service`,
+      );
+    }
+  } finally {
+    await db.close();
+  }
+});
+
+test("a search miss surfaces a LIVE Request-a-connector control wired to the request action", async () => {
+  const db = await freshDb();
+  try {
+    const userId = await makeUser(db, "miss");
+    // A term that matches no fixture connector → a MISS: no groups, the Request affordance on.
+    const data = await makeActions(db).actions.load(sessionFor(userId), { query: "zzqqxx-nothing-matches" });
+    assert.equal(data.canRequest, true, "a search that matches nothing offers Request a connector");
+
+    const markup = renderScreen(data);
+    const requestForms = formsLabelled(markup, /request a connector/i);
+    assert.ok(requestForms.length >= 1, "a miss must render a Request-a-connector control");
+    assert.ok(requestForms.some(isBoundToAction), "the Request-a-connector control must be bound to the request action");
+  } finally {
+    await db.close();
+  }
+});
+
+test("the loader reads ONLY the session user's connections — another person's never appear", async () => {
+  const db = await freshDb();
+  try {
+    const alice = await makeUser(db, "owner");
+    const bob = await makeUser(db, "stranger");
+    const mine = [
+      await seedConnection(db, alice, { connectorId: "acme-mail", accountLabel: "QuokkaMailbox", token: "alice-a" }),
+      await seedConnection(db, alice, { connectorId: "widget-sync", accountLabel: "NarwhalWorkspace", token: "alice-b" }),
+    ];
+    const theirs = [
+      await seedConnection(db, bob, { connectorId: "acme-mail", accountLabel: "DingoMailbox", token: "bob-a" }),
+      await seedConnection(db, bob, { connectorId: "data-grid", accountLabel: "PossumGrid", token: "bob-b" }),
+    ];
+
+    const data = await makeActions(db).actions.load(sessionFor(alice));
+    const text = visibleText(renderScreen(data));
+    const loadedIds = new Set(data.connections.map((c) => c.id));
+
+    assert.equal(data.connections.length, mine.length, "the loader lists only the session user's own connections");
+    for (const connection of mine) {
+      assert.ok(loadedIds.has(connection.id), `Alice must see her own connection ${connection.id}`);
+      assert.ok(text.includes(connection.accountLabel), `Alice's connection "${connection.accountLabel}" must appear`);
+    }
+    for (const connection of theirs) {
+      assert.ok(!loadedIds.has(connection.id), `Alice must never see another person's connection ${connection.id}`);
+      assert.ok(
+        !text.includes(connection.accountLabel),
+        `another person's connection "${connection.accountLabel}" must never appear; text="${text}"`,
+      );
+    }
+    // The unique provider tokens never reach the client-facing data (page reads carry no
+    // credentials) — neither Alice's own nor anyone else's.
+    const json = JSON.stringify(data);
+    for (const token of ["atok_alice-a", "rtok_alice-a", "atok_bob-a", "rtok_bob-b"]) {
+      assert.ok(!json.includes(token), `a stored credential (${token}) must never reach the loaded page data`);
+    }
+  } finally {
+    await db.close();
+  }
+});
+
+// =====================================================================================
+// AC2 — disconnectService removes EVERY agent's access to that service and revokes the
+// stored provider access where the provider allows it.
+// =====================================================================================
+
+test("disconnectService strips the service's connector from EVERY one of the person's agents' grants", async () => {
+  const db = await freshDb();
+  try {
+    const userId = await makeUser(db, "disc-grants");
+    // The service being disconnected (its connector slug is what agents are granted).
+    const service = await seedConnection(db, userId, { connectorId: "widget-sync", accountLabel: "NarwhalWorkspace" });
+    // Three agents, each granted the service PLUS an unrelated connector that must survive.
+    const agentA = await seedAgent(db, userId, { displayName: "QuokkaResearcher", grantedConnectors: ["widget-sync", "data-grid"] });
+    const agentB = await seedAgent(db, userId, { displayName: "NarwhalPlanner", grantedConnectors: ["acme-mail", "widget-sync"] });
+    const agentC = await seedAgent(db, userId, { displayName: "WallabyInbox", grantedConnectors: ["data-grid"] });
+
+    const result: DisconnectResult = await makeActions(db).actions.disconnectService(sessionFor(userId), service.id);
+    assert.equal(result.ok, true, "disconnecting one's own connected service succeeds");
+
+    // The disconnected service's connector is gone from every agent that had it…
+    const after = async (connectionId: string) =>
+      (await getConnectionPermissions(db, userId, connectionId))!.grantedConnectors;
+    assert.deepEqual(
+      [...(await after(agentA))].sort(),
+      ["data-grid"],
+      "agent A loses access to the disconnected service, keeps its other connector",
+    );
+    assert.deepEqual(
+      [...(await after(agentB))].sort(),
+      ["acme-mail"],
+      "agent B loses access to the disconnected service, keeps its other connector",
+    );
+    // …and an agent that never had it is untouched.
+    assert.deepEqual(
+      [...(await after(agentC))].sort(),
+      ["data-grid"],
+      "an agent that never had the service is left exactly as it was",
+    );
+  } finally {
+    await db.close();
+  }
+});
+
+test("disconnectService revokes the stored provider access for a provider-sign-in service", async () => {
+  const db = await freshDb();
+  try {
+    const userId = await makeUser(db, "disc-revoke");
+    // "widget-sync" is an oauth2 (provider sign-in) service — Warthog holds the provider
+    // tokens, so the provider allows revoking them.
+    const service = await seedConnection(db, userId, { connectorId: "widget-sync", accountLabel: "NarwhalWorkspace" });
+
+    const { actions, revokeCalls } = makeActions(db);
+    const result = await actions.disconnectService(sessionFor(userId), service.id);
+    assert.equal(result.ok, true, "disconnecting one's own provider-sign-in service succeeds");
+
+    // The provider-side revocation fired exactly for THIS person's THIS connection — never
+    // on a caller-supplied identity.
+    assert.equal(revokeCalls.length, 1, "the provider access is revoked exactly once");
+    assert.equal(revokeCalls[0]!.connectionId, service.id, "revocation names the disconnected connection");
+    assert.equal(revokeCalls[0]!.userId, userId, "revocation is scoped to the session user");
+  } finally {
+    await db.close();
+  }
+});
+
+// =====================================================================================
+// AC3 — ownership: a person cannot disconnect another person's connection, and the strip
+// is member-scoped (another person's agents keep their access).
+// =====================================================================================
+
+test("a person cannot disconnect another person's connection — it and its agents are untouched", async () => {
+  const db = await freshDb();
+  try {
+    const alice = await makeUser(db, "disc-victim");
+    const bob = await makeUser(db, "disc-attacker");
+    const aliceService = await seedConnection(db, alice, { connectorId: "widget-sync", accountLabel: "NarwhalWorkspace" });
+    const aliceAgent = await seedAgent(db, alice, { displayName: "QuokkaResearcher", grantedConnectors: ["widget-sync"] });
+
+    const { actions, revokeCalls } = makeActions(db);
+    // Bob, holding Alice's real connection id, tries to disconnect it.
+    const result = await actions.disconnectService(sessionFor(bob), aliceService.id);
+    assert.equal(result.ok, false, "disconnecting another person's connection must be refused (ok:false)");
+
+    // Alice's service still exists, and her agent still has access — nothing was stripped
+    // or revoked on another person's say-so.
+    assert.ok(
+      (await getConnectionById(db, alice, aliceService.id)) !== null,
+      "another person's refused disconnect leaves the owner's connection in place",
+    );
+    assert.deepEqual(
+      (await getConnectionPermissions(db, alice, aliceAgent))!.grantedConnectors,
+      ["widget-sync"],
+      "the owner's agent keeps its access after a stranger's refused disconnect",
+    );
+    assert.equal(revokeCalls.length, 0, "no provider access is revoked on a refused disconnect");
+  } finally {
+    await db.close();
+  }
+});
+
+test("the grant strip is member-scoped — another person granted the same connector keeps it", async () => {
+  const db = await freshDb();
+  try {
+    const alice = await makeUser(db, "strip-self");
+    const bob = await makeUser(db, "strip-other");
+    // Both people have their OWN "widget-sync" service and an agent granted it.
+    const aliceService = await seedConnection(db, alice, { connectorId: "widget-sync", accountLabel: "NarwhalWorkspace" });
+    const aliceAgent = await seedAgent(db, alice, { displayName: "QuokkaResearcher", grantedConnectors: ["widget-sync"] });
+    const bobAgent = await seedAgent(db, bob, { displayName: "DingoScheduler", grantedConnectors: ["widget-sync"] });
+
+    await makeActions(db).actions.disconnectService(sessionFor(alice), aliceService.id);
+
+    assert.deepEqual(
+      (await getConnectionPermissions(db, alice, aliceAgent))!.grantedConnectors,
+      [],
+      "Alice's agent loses access to the service she disconnected",
+    );
+    assert.deepEqual(
+      (await getConnectionPermissions(db, bob, bobAgent))!.grantedConnectors,
+      ["widget-sync"],
+      "Bob's agent — same connector, different person — is NOT stripped",
+    );
+  } finally {
+    await db.close();
+  }
+});
+
+// =====================================================================================
+// AC3 / AC4 — a connection id that is not the expected shape is rejected with a 4xx (not a
+// raw cast), and a SQL-injection probe in the id cannot alter a query (parameter binding).
+// =====================================================================================
+
+test("disconnectService rejects a malformed or oversized connection id with a 4xx before any query (OBS-049)", async () => {
+  const db = await freshDb();
+  try {
+    const userId = await makeUser(db, "disc-bad-id");
+    const { actions } = makeActions(db);
+    const session = sessionFor(userId);
+
+    // Not a well-formed uuid — a bare integer, a negative, a decimal, the empty string,
+    // whitespace, a non-uuid word, and a grossly oversized blob. Each is rejected at the
+    // boundary BEFORE it can reach `WHERE id = $1` as a failing cast.
+    for (const badId of ["not-a-uuid", "5", "-1", "1.5", "", "   ", "x".repeat(100_000)]) {
+      await assertRejects4xx(`disconnectService(id=${JSON.stringify(badId.slice(0, 16))}…)`, () =>
+        actions.disconnectService(session, badId),
+      );
+    }
+  } finally {
+    await db.close();
+  }
+});
+
+test("a SQL-injection probe in the connection id cannot alter a query: the tables survive and nothing is stripped", async () => {
+  const db = await freshDb();
+  try {
+    const userId = await makeUser(db, "disc-sqli");
+    await seedConnection(db, userId, { connectorId: "widget-sync", accountLabel: "NarwhalWorkspace" });
+    const agent = await seedAgent(db, userId, { displayName: "QuokkaResearcher", grantedConnectors: ["widget-sync"] });
+    const { actions, revokeCalls } = makeActions(db);
+
+    // A canonical SQL-breaking id. Concatenated into a statement it would drop a table;
+    // shape-guarded at the boundary it is refused with a 4xx before any query runs.
+    const probe = "x'; DROP TABLE connections; --";
+    await assertRejects4xx("disconnectService(SQLi id)", () => actions.disconnectService(sessionFor(userId), probe));
+
+    // The tables survive (the probe never reached a query)…
+    assert.equal(await tableExists(db, "connections"), true, "the connections table survives the SQL-injection probe");
+    assert.equal(await tableExists(db, "agent_permissions"), true, "the agent_permissions table survives the probe");
+    // …nothing was stripped or revoked (no query was altered).
+    assert.deepEqual(
+      (await getConnectionPermissions(db, userId, agent))!.grantedConnectors,
+      ["widget-sync"],
+      "the SQL-injection probe stripped nothing — the agent still has access",
+    );
+    assert.equal(revokeCalls.length, 0, "the SQL-injection probe revoked nothing");
+  } finally {
+    await db.close();
+  }
+});
+
+// =====================================================================================
+// AC4 — saveApiKeyConnection: happy path, and malformed / oversized / SQL-shaped input.
+// =====================================================================================
+
+test("saveApiKeyConnection creates the key connection for the SESSION user only", async () => {
+  const db = await freshDb();
+  try {
+    const alice = await makeUser(db, "save-self");
+    const bob = await makeUser(db, "save-other");
+
+    await makeActions(db).actions.saveApiKeyConnection(sessionFor(alice), {
+      connectorId: "acme-mail",
+      accountLabel: "QuokkaMailbox",
+      apiKey: "sk_test_abc123",
+    });
+
+    // The connection is Alice's — the owner is the session's id, never a client value.
+    const aliceConns = await listConnectionsForUser(db, alice);
+    assert.equal(aliceConns.length, 1, "exactly one connection is created for the acting person");
+    assert.equal(aliceConns[0]!.connectorId, "acme-mail", "the connection is for the chosen connector");
+    assert.equal(aliceConns[0]!.accountLabel, "QuokkaMailbox", "the connection carries the chosen account label");
+    // …and never lands under anyone else.
+    assert.equal((await listConnectionsForUser(db, bob)).length, 0, "no connection leaks to another person");
+  } finally {
+    await db.close();
+  }
+});
+
+test("saveApiKeyConnection rejects malformed or oversized input with a 4xx before any write", async () => {
+  const db = await freshDb();
+  try {
+    const userId = await makeUser(db, "save-bad");
+    const { actions } = makeActions(db);
+    const session = sessionFor(userId);
+
+    // An oversized / empty connector id is not the expected shape → 4xx (AC3). An unknown
+    // key shape is likewise refused: oversized / empty api key, empty / oversized label.
+    await assertRejects4xx("oversized connectorId", () =>
+      actions.saveApiKeyConnection(session, { connectorId: "x".repeat(100_000), accountLabel: "QuokkaMailbox", apiKey: "sk_test_abc" }),
+    );
+    await assertRejects4xx("empty connectorId", () =>
+      actions.saveApiKeyConnection(session, { connectorId: "", accountLabel: "QuokkaMailbox", apiKey: "sk_test_abc" }),
+    );
+    await assertRejects4xx("oversized apiKey", () =>
+      actions.saveApiKeyConnection(session, { connectorId: "acme-mail", accountLabel: "QuokkaMailbox", apiKey: "x".repeat(100_000) }),
+    );
+    await assertRejects4xx("empty apiKey", () =>
+      actions.saveApiKeyConnection(session, { connectorId: "acme-mail", accountLabel: "QuokkaMailbox", apiKey: "" }),
+    );
+    await assertRejects4xx("empty accountLabel", () =>
+      actions.saveApiKeyConnection(session, { connectorId: "acme-mail", accountLabel: "", apiKey: "sk_test_abc" }),
+    );
+    await assertRejects4xx("oversized accountLabel", () =>
+      actions.saveApiKeyConnection(session, { connectorId: "acme-mail", accountLabel: "x".repeat(100_000), apiKey: "sk_test_abc" }),
+    );
+
+    // None of the refused calls wrote a connection (the 4xx came before any write).
+    assert.equal((await listConnectionsForUser(db, userId)).length, 0, "a refused save writes no connection");
+  } finally {
+    await db.close();
+  }
+});
+
+test("a SQL-injection probe in the api key is stored as data, not executed (parameter binding)", async () => {
+  const db = await freshDb();
+  try {
+    const userId = await makeUser(db, "save-sqli");
+    const { actions } = makeActions(db);
+
+    // A SQL-breaking key value within length bounds: bound as a parameter (and encrypted),
+    // it is inert data — the connection saves and the table survives.
+    const probeKey = "x'; DROP TABLE connections; --";
+    await actions.saveApiKeyConnection(sessionFor(userId), {
+      connectorId: "acme-mail",
+      accountLabel: "QuokkaMailbox",
+      apiKey: probeKey,
+    });
+
+    assert.equal(await tableExists(db, "connections"), true, "the connections table survives a SQL-shaped api key");
+    const conns = await listConnectionsForUser(db, userId);
+    assert.equal(conns.length, 1, "the connection was created (the key was stored as data, not run)");
+    assert.equal(conns[0]!.connectorId, "acme-mail", "the saved connection is intact");
+  } finally {
+    await db.close();
+  }
+});
+
+// =====================================================================================
+// AC1 / AC4 — requestConnector records the request for the session user and emails the
+// operator, and refuses a malformed / oversized / SQL-shaped name.
+// =====================================================================================
+
+test("requestConnector records a request for the SESSION user and emails the operator", async () => {
+  const db = await freshDb();
+  try {
+    const alice = await makeUser(db, "req-self");
+    const bob = await makeUser(db, "req-other");
+    const { actions, emails } = makeActions(db);
+
+    await actions.requestConnector(sessionFor(alice), { name: "Fancy Spreadsheets" });
+
+    // Recorded for Alice (member-scoped — the owner is the session's id, never a client
+    // value), naming exactly what she typed; never recorded for anyone else.
+    const aliceReqs = await listConnectorRequestsForUser(db, alice);
+    assert.equal(aliceReqs.length, 1, "the request is recorded for the acting person");
+    assert.equal(aliceReqs[0]!.serviceName, "Fancy Spreadsheets", "the request names the service the person asked for");
+    assert.equal((await listConnectorRequestsForUser(db, bob)).length, 0, "no request leaks to another person");
+
+    // The operator is emailed at the INJECTED address (config, never baked in).
+    assert.ok(
+      emails.some((m) => m.recipient === OPERATOR_EMAIL && m.body.includes("Fancy Spreadsheets")),
+      "the operator is emailed about the requested service at the configured address",
+    );
+  } finally {
+    await db.close();
+  }
+});
+
+test("requestConnector rejects a malformed or oversized name with a 4xx before any write", async () => {
+  const db = await freshDb();
+  try {
+    const userId = await makeUser(db, "req-bad");
+    const { actions } = makeActions(db);
+    const session = sessionFor(userId);
+
+    await assertRejects4xx("empty name", () => actions.requestConnector(session, { name: "" }));
+    await assertRejects4xx("oversized name", () => actions.requestConnector(session, { name: "x".repeat(100_000) }));
+
+    assert.equal((await listConnectorRequestsForUser(db, userId)).length, 0, "a refused request writes nothing");
+  } finally {
+    await db.close();
+  }
+});
+
+test("a SQL-injection probe in a requested name is stored verbatim as data (parameter binding)", async () => {
+  const db = await freshDb();
+  try {
+    const userId = await makeUser(db, "req-sqli");
+    const { actions } = makeActions(db);
+
+    // A SQL-breaking service name within bounds: bound as a parameter it is stored
+    // VERBATIM (free text the person typed) and cannot alter a query.
+    const probe = "Robert'); DROP TABLE connector_requests; --";
+    await actions.requestConnector(sessionFor(userId), { name: probe });
+
+    assert.equal(await tableExists(db, "connector_requests"), true, "the connector_requests table survives the probe");
+    const reqs = await listConnectorRequestsForUser(db, userId);
+    assert.equal(reqs.length, 1, "the request was recorded (the name was stored as data, not run)");
+    assert.equal(reqs[0]!.serviceName, probe, "the SQL-shaped name is stored verbatim, unchanged");
+  } finally {
+    await db.close();
+  }
+});
+
+// =====================================================================================
+// AC5 — no ambient env secret leaks into the loaded data or the mounted screen; config is
+// read from the injected seams, not the image/client. [obligation:secrets-from-env]
+// =====================================================================================
+
+test("no ambient env secret leaks into the loaded connectors data or the mounted screen", async () => {
+  const DECOY = "sk_live_DECOY_must_never_appear_in_warthog";
+  const prev = process.env.WARTHOG_DECOY_SECRET;
+  process.env.WARTHOG_DECOY_SECRET = DECOY;
+  const db = await freshDb();
+  try {
+    const userId = await makeUser(db, "decoy");
+    await seedConnection(db, userId, { connectorId: "acme-mail", accountLabel: "QuokkaMailbox" });
+    await seedConnection(db, userId, { connectorId: "widget-sync", accountLabel: "NarwhalWorkspace" });
+
+    const data = await makeActions(db).actions.load(sessionFor(userId));
+
+    // The decoy appears in neither the loader's returned data…
+    assert.ok(!JSON.stringify(data).includes(DECOY), "no ambient env value is folded into the loaded connectors data");
+    // …nor the client-bound markup the person's browser receives.
+    assert.ok(!renderScreen(data).includes(DECOY), "no ambient env value is folded into the mounted Connectors screen");
+  } finally {
+    await db.close();
+    if (prev === undefined) delete process.env.WARTHOG_DECOY_SECRET;
+    else process.env.WARTHOG_DECOY_SECRET = prev;
+  }
+});

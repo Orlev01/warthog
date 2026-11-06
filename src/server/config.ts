@@ -36,6 +36,10 @@ export interface Config {
   readonly port: number;
   readonly devTools: boolean;
   readonly googleEarlyAccess: readonly string[];
+  // The operator address a connector request is emailed to (brief: "emailed to the
+  // operator address set in configuration"; design §7). Read from the environment here —
+  // never baked into source (INV-103) — and undefined when unset.
+  readonly operatorEmail: string | undefined;
   readonly keyVault: KeyVaultConfig;
   readonly acs: AcsConfig;
   readonly vapid: VapidConfig;
@@ -128,6 +132,7 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): Config {
     port: parsePort(env.PORT),
     devTools: env.WARTHOG_DEV_TOOLS === "1",
     googleEarlyAccess: parseEmailList(env.GOOGLE_EARLY_ACCESS),
+    operatorEmail: env.OPERATOR_EMAIL,
     keyVault: {
       url: env.KEY_VAULT_URL,
       keyName: env.KEY_VAULT_KEY_NAME,
