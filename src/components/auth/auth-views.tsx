@@ -93,10 +93,12 @@ export type SignupStep = "details" | "code" | "passkey" | "recovery";
 export interface SignupViewProps {
   step: SignupStep;
   recoveryCode?: string;
+  name?: string;
   email?: string;
   code?: string;
   error?: string;
   savedConfirmed?: boolean;
+  onNameChange?: (value: string) => void;
   onEmailChange?: (value: string) => void;
   onCodeChange?: (value: string) => void;
   onSavedConfirmedChange?: (value: boolean) => void;
@@ -108,10 +110,12 @@ export interface SignupViewProps {
 export function SignupView({
   step,
   recoveryCode,
+  name,
   email,
   code,
   error,
   savedConfirmed,
+  onNameChange,
   onEmailChange,
   onCodeChange,
   onSavedConfirmedChange,
@@ -128,13 +132,20 @@ export function SignupView({
       return (
         <AuthScreen title="Create your account" lead="Tell us a little about you to get started.">
           <form className="flex flex-col gap-4" onSubmit={handleSubmit}>
-            <Field label="Your name" name="name" type="text" autoComplete="name" />
+            <Field
+              label="Your name"
+              name="name"
+              type="text"
+              autoComplete="name"
+              value={name ?? ""}
+              onChange={(event) => onNameChange?.(event.target.value)}
+            />
             <Field
               label="Email address"
               name="email"
               type="email"
               autoComplete="email"
-              value={email}
+              value={email ?? ""}
               onChange={(event) => onEmailChange?.(event.target.value)}
               error={error}
             />

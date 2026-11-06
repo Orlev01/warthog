@@ -49,6 +49,7 @@ export interface SignupFlowDeps {
 
 export interface SignupFlowState {
   readonly phase: SignupPhase;
+  readonly name: string;
   readonly email: string;
   readonly code: string;
   readonly savedConfirmed: boolean;
@@ -58,6 +59,7 @@ export interface SignupFlowState {
 
 export interface SignupFlowController {
   getState(): SignupFlowState;
+  setName(value: string): void;
   setEmail(value: string): void;
   setCode(value: string): void;
   setSavedConfirmed(value: boolean): void;
@@ -99,6 +101,7 @@ export function createSignupFlow(deps: SignupFlowDeps): SignupFlowController {
 
   let state: SignupFlowState = {
     phase: "details",
+    name: "",
     email: "",
     code: "",
     savedConfirmed: false,
@@ -132,7 +135,7 @@ export function createSignupFlow(deps: SignupFlowDeps): SignupFlowController {
   }
 
   async function submitEmail(): Promise<void> {
-    const response = await post("send-code", { email: state.email });
+    const response = await post("send-code", { email: state.email, name: state.name });
     if (!response || !response.ok) {
       set({ error: stepErrorCopy("send-code") });
       return;
@@ -198,6 +201,7 @@ export function createSignupFlow(deps: SignupFlowDeps): SignupFlowController {
 
   return {
     getState: () => state,
+    setName: (value) => set({ name: value }),
     setEmail: (value) => set({ email: value }),
     setCode: (value) => set({ code: value }),
     setSavedConfirmed: (value) => set({ savedConfirmed: value }),
@@ -241,11 +245,13 @@ export function SignupFlow(props: SignupFlowProps = {}): React.ReactElement {
   return (
     <SignupView
       step={state.phase}
+      name={state.name}
       email={state.email}
       code={state.code}
       recoveryCode={state.recoveryCode}
       savedConfirmed={state.savedConfirmed}
       error={state.error}
+      onNameChange={(value) => flow.setName(value)}
       onEmailChange={(value) => flow.setEmail(value)}
       onCodeChange={(value) => flow.setCode(value)}
       onSavedConfirmedChange={(value) => flow.setSavedConfirmed(value)}

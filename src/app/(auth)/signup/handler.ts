@@ -48,6 +48,7 @@ import { beginPasskeyRegistration } from "../../../server/auth/passkey";
 import { issueRecoveryCode } from "../../../server/auth/recovery";
 import { createSession } from "../../../server/auth/session";
 import { createUser } from "../../../server/db/users";
+import { saveIdentityField } from "../../../server/db/identity-fields";
 import type { KeyWrapper } from "../../../server/crypto/key-wrapper";
 import type { Clock } from "../../../server/seams/clock";
 import type { Random } from "../../../server/seams/random";
@@ -83,6 +84,10 @@ export interface SignupHandler {
 interface PendingSignup {
   readonly email: string;
   readonly challenge: string;
+  // The name entered at the details step, captured with send-code and kept here
+  // (never a plaintext column) so confirm can save it as the person's low-tier
+  // 'name' identity field, DEK-encrypted. Absent when the person gave no name.
+  readonly name?: string;
   credential?: { id: string; publicKey: string; counter: number };
   recoveryDraws?: Uint8Array[];
 }
@@ -92,6 +97,15 @@ interface PendingSignup {
 // requests of one sign-up find their pending row by its random handle.
 // Held through processSingleton (globalThis) so every module graph Next builds shares it.
 const pendingSignups = processSingleton("auth.pendingSignups", () => new Map<string, PendingSignup>());
+
+// The name entered at the details step arrives with send-code, before a signupId
+// exists, so it is parked here keyed by the email until verify-email mints the
+// pending sign-up and takes it over. Held in process memory (the pending-sign-up
+// pattern), never a plaintext column. Shared across module graphs via processSingleton.
+const pendingSignupNames = processSingleton(
+  "auth.pendingSignupNames",
+  () => new Map<string, string>(),
+);
 
 // A write-discarding `Db`: at the register stage there is no `users` row to hang a
 // challenge or recovery code off, so the real issuing functions are run against this
@@ -108,9 +122,17 @@ const discardWrites: Db = {
 // WebAuthn registration response) is far under this.
 const MAX_BODY_BYTES = 64 * 1024;
 
-// sendCode: the email the first-factor code is issued to.
+// The person's name is low-tier identity content: at most 100 characters (AC3).
+const MAX_NAME_LENGTH = 100;
+
+// sendCode: the email the first-factor code is issued to, plus the person's name
+// from the details step. The name is optional on the wire (an earlier contract
+// sent only the email) but, when present, must be a non-blank name of at most 100
+// characters — a blank or over-long name is refused at the boundary (4xx), and
+// nothing is sent.
 const sendCodeSchema = z.object({
   email: z.string().min(1).max(320),
+  name: z.string().trim().min(1).max(MAX_NAME_LENGTH).optional(),
 });
 
 // verifyEmail: the email + its one-time code.
@@ -180,11 +202,16 @@ export function createSignupHandler(deps: SignupHandlerDeps): SignupHandler {
   async function sendCode(request: Request): Promise<Response> {
     if (!sameOrigin(request)) return json(403, { error: "forbidden" });
     try {
-      const { email } = await parseBody(sendCodeSchema, request, {
+      const { email, name } = await parseBody(sendCodeSchema, request, {
         maxBytes: MAX_BODY_BYTES,
       });
 
       await issueEmailCode(db, email, { clock, random, hmacKey, emailSender });
+      // Park the name against the email until verify-email mints a signupId and
+      // takes it onto the pending sign-up (never a plaintext column).
+      if (name !== undefined) {
+        pendingSignupNames.set(email, name);
+      }
       return json(200, { ok: true });
     } catch (error) {
       return handleError(error);
@@ -216,7 +243,11 @@ export function createSignupHandler(deps: SignupHandlerDeps): SignupHandler {
         { rpId },
       );
 
-      pendingSignups.set(signupId, { email, challenge: registrationOptions.challenge });
+      // Take the name parked at send-code onto the pending sign-up so it survives
+      // to confirm without being re-sent on this or any later step.
+      const name = pendingSignupNames.get(email);
+      pendingSignupNames.delete(email);
+      pendingSignups.set(signupId, { email, challenge: registrationOptions.challenge, name });
       return json(200, { signupId, registrationOptions });
     } catch (error) {
       return handleError(error);
@@ -305,9 +336,18 @@ export function createSignupHandler(deps: SignupHandlerDeps): SignupHandler {
         return json(400, { error: "no_second_factor" });
       }
 
-      // The account: a fresh 256-bit DEK stored only WRAPPED (design §4.1).
-      const wrappedDek = await keyWrapper.wrap(random.randomBytes(32));
+      // The account: a fresh 256-bit DEK stored only WRAPPED (design §4.1). The
+      // plaintext DEK is kept just long enough to encrypt the person's low-tier
+      // name under it, then falls out of scope.
+      const dek = random.randomBytes(32);
+      const wrappedDek = await keyWrapper.wrap(dek);
       const user = await createUser(db, { email: pending.email, wrappedDek });
+
+      // Keep the name entered at sign-up as the person's low-tier 'name' identity
+      // field, DEK-encrypted — never written to a plaintext users column.
+      if (pending.name !== undefined) {
+        await saveIdentityField(db, { userId: user.id, kind: "name", value: pending.name }, dek);
+      }
 
       // Persist the passkey registered at step 2 for the new account (mirrors the
       // passkeys storage in finishPasskeyRegistration; the credential was already

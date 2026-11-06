@@ -22,13 +22,18 @@
 import { computeSetupChecklist } from "@/domain/home/checklist";
 import type { DashboardViewProps } from "@/components/home/dashboard-view";
 import { getUserById } from "@/server/db/users";
+import { listIdentityFields } from "@/server/db/identity-fields";
+import type { KeyWrapper } from "@/server/crypto/key-wrapper";
 import type { Session } from "@/server/auth/session";
 import type { Db } from "@/server/db/index";
 
-// The dependency bundle: just the database seam this early — the full loader adds
-// the feature-data reads (approvals, activity, agents, reminders) in E18-S08.
+// The dependency bundle: the database seam, plus the KeyWrapper that unwraps the
+// person's DEK so the greeting can read their low-tier name (exactly as the vault
+// page-data loader does). The key wrapper is optional — with none, the greeting
+// falls back to the email's local part.
 export interface HomeActionsDeps {
   readonly db: Db;
+  readonly keyWrapper?: KeyWrapper;
 }
 
 // The home actions the thin loader drives: turn the verified session into the
@@ -38,7 +43,7 @@ export interface HomeActions {
 }
 
 export function createHomeActions(deps: HomeActionsDeps): HomeActions {
-  const { db } = deps;
+  const { db, keyWrapper } = deps;
 
   // Assemble the dashboard's props for the signed-in person: name them from their
   // OWN account (scoped by the session's user id, never a client value), show the
@@ -46,11 +51,22 @@ export function createHomeActions(deps: HomeActionsDeps): HomeActions {
   // each renders a plain message rather than a dead control.
   async function load(session: Session): Promise<DashboardViewProps> {
     const user = await getUserById(db, session.userId);
-    // The only plaintext identity an account has this early is its email, so the
-    // greeting is drawn from its local part (the real low-tier name arrives with
-    // E18-S08).
+    // The email's local part is the fallback greeting when no name is saved (or no
+    // key is available to decrypt one).
     const email = user?.email ?? session.userId;
-    const personName = email.split("@")[0] ?? email;
+    const localPart = email.split("@")[0] ?? email;
+
+    // Greet by the person's own low-tier name when it is readable: preferred name
+    // first, then name, else the email's local part. The fields decrypt only under
+    // THIS person's DEK, so the greeting can never name another account.
+    let personName = localPart;
+    if (user && keyWrapper) {
+      const dek = await keyWrapper.unwrap(user.wrappedDek);
+      const fields = await listIdentityFields(db, user.id, dek);
+      const preferred = fields.find((field) => field.kind === "preferred_name")?.value;
+      const name = fields.find((field) => field.kind === "name")?.value;
+      personName = preferred ?? name ?? localPart;
+    }
 
     return {
       personName,
