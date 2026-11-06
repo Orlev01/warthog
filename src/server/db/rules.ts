@@ -258,6 +258,22 @@ export async function listRules(
   return Promise.all(result.rows.map((row) => toStored(row, dek)));
 }
 
+// The user's rules — ACTIVE and PAUSED (member-scoped: user_id bound), conditions
+// decrypted under `dek`. DISTINCT from listRules/applicableRules (active-only, for
+// enforcement): the Rules PAGE must also show paused rules so the person can see
+// and resume them. Never returns another person's rules.
+export async function listAllRules(
+  db: Db,
+  userId: string,
+  dek: Uint8Array,
+): Promise<StoredRule[]> {
+  const result = await db.query(
+    `SELECT ${COLUMNS} FROM rules WHERE user_id = $1`,
+    [userId],
+  );
+  return Promise.all(result.rows.map((row) => toStored(row, dek)));
+}
+
 // The user's ACTIVE rules (member-scoped: user_id bound) whose scope covers
 // `connectionId` (an all-agents rule OR one scoped to that chosen agent) AND whose
 // action matches `action` (canonical jsonb equality), conditions decrypted under
