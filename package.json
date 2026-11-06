@@ -10,7 +10,7 @@
     "dev": "next dev",
     "build": "next build",
     "start": "next start",
-    "test": "node --import tsx --test 'src/**/*.test.ts' 'src/**/*.test.tsx'",
+    "test": "node --import tsx --test --test-concurrency=4 'src/**/*.test.ts' 'src/**/*.test.tsx'",
     "typecheck": "tsc --noEmit"
   },
   "dependencies": {
