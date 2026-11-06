@@ -49,6 +49,11 @@ export interface Config {
   // operator address set in configuration"; design §7). Read from the environment here —
   // never baked into source (INV-103) — and undefined when unset.
   readonly operatorEmail: string | undefined;
+  // The base URL of the free official daily-reference-rate source (Frankfurter / ECB
+  // reference rates — "no paid tier, no plan that bills", constitution rule 11). Read
+  // from the environment here so the provider host is never a literal in source (AC2;
+  // INV-103 / constitution rule 21) — and undefined when unset.
+  readonly exchangeRateBaseUrl: string | undefined;
   readonly keyVault: KeyVaultConfig;
   readonly acs: AcsConfig;
   readonly vapid: VapidConfig;
@@ -143,6 +148,7 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): Config {
     devTools: env.WARTHOG_DEV_TOOLS === "1",
     googleEarlyAccess: parseEmailList(env.GOOGLE_EARLY_ACCESS),
     operatorEmail: env.OPERATOR_EMAIL,
+    exchangeRateBaseUrl: env.EXCHANGE_RATE_BASE_URL,
     keyVault: {
       url: env.KEY_VAULT_URL,
       keyName: env.KEY_VAULT_KEY_NAME,
