@@ -28,6 +28,15 @@ export interface VapidConfig {
   readonly privateKey: string | undefined;
 }
 
+// The private blob storage account + container receipt files live in (design §2).
+// Read from the environment here — never baked into source (INV-103) — and
+// undefined when unset, like the keyVault / acs groups; the composition root wires
+// them into the Azure-backed blob store in production.
+export interface BlobConfig {
+  readonly account: string | undefined;
+  readonly container: string | undefined;
+}
+
 export interface Config {
   readonly nodeEnv: string;
   readonly publicBaseUrl: string;
@@ -43,6 +52,7 @@ export interface Config {
   readonly keyVault: KeyVaultConfig;
   readonly acs: AcsConfig;
   readonly vapid: VapidConfig;
+  readonly blob: BlobConfig;
   // Keys the one-way HMAC of codes and link tokens (WARTHOG_HMAC_KEY, >= 32 bytes).
   readonly hmacKey: Uint8Array;
   // The local KeyWrapper's AES-256 KEK outside production (WARTHOG_DEV_KEK, exactly 32
@@ -145,6 +155,10 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): Config {
       subject: env.VAPID_SUBJECT,
       publicKey: env.VAPID_PUBLIC_KEY,
       privateKey: env.VAPID_PRIVATE_KEY,
+    },
+    blob: {
+      account: env.STORAGE_ACCOUNT,
+      container: env.STORAGE_CONTAINER,
     },
     hmacKey: parseHmacKey(env),
     devKek: parseDevKek(env, nodeEnv),
