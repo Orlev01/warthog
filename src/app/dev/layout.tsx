@@ -13,6 +13,13 @@ import { requireDevTools } from "@/server/dev/guard";
 // admit/not-found decision to the tested `requireDevTools` seam (`src/server/dev/guard`).
 // The flag is taken from the config module alone, never from `process.env` directly
 // (secrets-from-env; INV-103).
+//
+// Dev routes depend on runtime config (`loadConfig()`) and live in-memory state (the dev
+// outbox / agent console), so they must never be prerendered: `force-dynamic` keeps every
+// `/dev` route — this guard layout included — out of `next build`'s static-generation pass,
+// where runtime config is absent and `loadConfig()` would throw (the server-composition-roots
+// addendum). The option applies to this segment and every page nested under it.
+export const dynamic = "force-dynamic";
 
 export default function DevLayout({ children }: { children: React.ReactNode }) {
   requireDevTools(loadConfig());
