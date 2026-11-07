@@ -46,7 +46,7 @@ export interface ComposeOverrides {
 // than silently dropping the message (constitution: never fail silently). With dev
 // tooling on, `selectSenders` routes every channel to the dev outbox instead, so this
 // bundle is only ever reached with dev tools off.
-function notConfiguredSenders(): Senders {
+export function notConfiguredSenders(): Senders {
   const reject = (channel: string) => async (_message: OutgoingMessage): Promise<void> => {
     throw new Error(`${channel} sending is not configured`);
   };
@@ -68,7 +68,7 @@ function publicOrigin(config: Config): string {
 // outside production; Key Vault in production (its crypto client wired by a later
 // task, so production currently rejects for the absent client rather than inventing
 // a KEK).
-function keyWrapperFor(config: Config): KeyWrapper {
+export function keyWrapperFor(config: Config): KeyWrapper {
   return selectKeyWrapper({ nodeEnv: config.nodeEnv, localKek: config.devKek });
 }
 

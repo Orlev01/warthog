@@ -30,7 +30,7 @@ const SEVEN_DAYS_MS = 7 * 24 * 60 * MINUTE_MS;
 
 // The background-job type the 7-day timer fires; its payload names the account so
 // the handler can drive completeAccountReset for the right person.
-const COMPLETE_JOB_TYPE = "account_reset.complete";
+export const COMPLETE_JOB_TYPE = "account_reset.complete";
 
 // A fixed, code-free notice sent on every channel when a reset is requested. It
 // carries no sensitive value (no code, token or link that could be acted on by

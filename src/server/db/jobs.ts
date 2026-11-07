@@ -8,7 +8,8 @@
 //     claimed inside the very statement that selects it.
 //   • run() is idempotent: a job whose handler SUCCEEDS is marked done and is never
 //     claimed again; a job whose handler THROWS is returned to the queue, due again
-//     after a short backoff, so a later run retries it.
+//     after a backoff, until MAX_ATTEMPTS, then failed; a job whose type has no
+//     handler is failed at once (dead-lettered).
 //
 // Time comes from the injected Clock, never SQL now(), so "due" is deterministic
 // and tests can move time forward without touching the wall clock. Every statement
@@ -93,26 +94,64 @@ export async function claim(db: Db, clock: Clock): Promise<Job | null> {
   return row ? toJob(row) : null;
 }
 
-// Claim the next due job and run `handler` on it. On success the job is marked done
-// so it is never claimed again (idempotent). On failure the job is returned to the
-// queue — due again after a backoff — and the error is surfaced, never swallowed.
-// Returns the processed job, or null when nothing was due.
+// A handler for one claimed row, and the dispatch table the runner routes rows through:
+// the row's enqueued `type` names its handler.
+export type JobHandler = (job: Job) => void | Promise<void>;
+export type DispatchTable = Readonly<Record<string, JobHandler>>;
+
+// A row whose handler keeps throwing is retried with an exponential backoff (1, 2, 4, 8 …
+// minutes) and, once it has used this many attempts, marked failed rather than re-queued
+// for ever.
+export const MAX_ATTEMPTS = 5;
+
+// Raised (after the row is dead-lettered) when a claimed row's type has no handler.
+export class UnknownJobTypeError extends Error {
+  constructor(readonly jobType: string) {
+    super(`No handler for job type "${jobType}"; the row was marked failed`);
+    this.name = "UnknownJobTypeError";
+  }
+}
+
+// Claim the next due job and run the handler its type names in `dispatch`. On success the
+// job is marked done so it is never claimed again (idempotent). A type with no handler is
+// dead-lettered (marked failed, never retried). A handler that throws returns the row to
+// the queue after a backoff, until MAX_ATTEMPTS, then marks it failed. Every failure is
+// surfaced to the caller (thrown), never swallowed. Returns the processed job, or null
+// when nothing was due.
+// `dispatch` may also be a single handler that takes every type (callers that run one
+// queue of their own, e.g. the connector jobs' tests).
 export async function run(
   db: Db,
   clock: Clock,
-  handler: (job: Job) => Promise<void>,
+  dispatch: DispatchTable | JobHandler,
 ): Promise<Job | null> {
   const job = await claim(db, clock);
   if (job == null) return null;
 
+  const handler =
+    typeof dispatch === "function"
+      ? dispatch
+      : Object.hasOwn(dispatch, job.type)
+        ? dispatch[job.type]
+        : undefined;
+  if (!handler) {
+    await db.query("UPDATE jobs SET status = 'failed' WHERE id = $1", [job.id]);
+    throw new UnknownJobTypeError(job.type);
+  }
+
   try {
     await handler(job);
   } catch (error) {
-    const retryAt = new Date(clock.now().getTime() + RETRY_BACKOFF_MS).toISOString();
-    await db.query("UPDATE jobs SET status = 'pending', run_at = $2::timestamptz WHERE id = $1", [
-      job.id,
-      retryAt,
-    ]);
+    if (job.attempts >= MAX_ATTEMPTS) {
+      await db.query("UPDATE jobs SET status = 'failed' WHERE id = $1", [job.id]);
+    } else {
+      const backoff = RETRY_BACKOFF_MS * 2 ** Math.max(0, job.attempts - 1);
+      const retryAt = new Date(clock.now().getTime() + backoff).toISOString();
+      await db.query("UPDATE jobs SET status = 'pending', run_at = $2::timestamptz WHERE id = $1", [
+        job.id,
+        retryAt,
+      ]);
+    }
     throw error;
   }
 

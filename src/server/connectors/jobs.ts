@@ -45,9 +45,9 @@ const REFRESH_LEAD_MS = 5 * MINUTE_MS;
 
 // The job types this module owns. The handler dispatches on these; the schedule
 // functions stamp them.
-const REFRESH_TYPE = "connection.refresh";
-const GOOGLE_REMINDER_TYPE = "connection.google_reminder";
-const GOOGLE_LAPSE_TYPE = "connection.google_lapse";
+export const REFRESH_TYPE = "connection.refresh";
+export const GOOGLE_REMINDER_TYPE = "connection.google_reminder";
+export const GOOGLE_LAPSE_TYPE = "connection.google_lapse";
 
 // Fixed, code-free notice copy (plain Australian English, no protocol jargon).
 // Carries no credential, token or link that could be acted on — reconnecting
