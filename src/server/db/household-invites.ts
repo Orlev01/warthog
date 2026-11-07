@@ -128,6 +128,45 @@ export async function issueInvite(
   };
 }
 
+// A still-open invite as surfaced to the Household page: the invited EMAIL the owner typed
+// and the invite's expiry. The row's `token_hash` (its credential-derived key) is never
+// selected, so no token or token hash leaves the server — only the email + expiry.
+export interface PendingInvite {
+  readonly email: string;
+  readonly expiresAt: Date | string;
+}
+
+// List a household's STILL-OPEN invites — unused (`used_at IS NULL`) AND not yet expired at
+// `clock.now()` (`expires_at > now`, the same boundary redeemInvite treats as expired) —
+// by email + expiry only. Member-scoped by the bound `userId`: the EXISTS gate means only a
+// member of that household reads its invites, so a non-member (or a stranger) reads []. The
+// household id, the user id and the instant all travel as BOUND values (INV-102), and the
+// token hash is never selected, so no credential is exposed. Time enters through the injected
+// Clock, never SQL now().
+export async function listPendingInvites(
+  db: Db,
+  input: { householdId: string; userId: string },
+  deps: { clock: Clock },
+): Promise<PendingInvite[]> {
+  const now = deps.clock.now();
+  const result = await db.query(
+    `SELECT i.email, i.expires_at
+       FROM household_invites i
+      WHERE i.household_id = $1
+        AND i.used_at IS NULL
+        AND i.expires_at > $3::timestamptz
+        AND EXISTS (
+          SELECT 1 FROM household_members m
+           WHERE m.household_id = $1 AND m.user_id = $2
+        )`,
+    [input.householdId, input.userId, now.toISOString()],
+  );
+  return result.rows.map((row) => ({
+    email: String(row.email),
+    expiresAt: row.expires_at as Date | string,
+  }));
+}
+
 // Redeem a presented token. It is matched by its SHA-256 hash (the raw token never reaches
 // the query layer): no matching row, or a row already used, is "invalid"; a matching row
 // past its seven-day window is "expired" and is NOT consumed; a matching, unexpired, unused
