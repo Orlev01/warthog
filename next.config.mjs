@@ -27,6 +27,7 @@ const nextConfig = {
   // PGlite (dev/test database) loads WASM from node_modules at runtime and the Azure SDKs load
   // optional modules dynamically — bundling breaks both, so Node requires them directly.
   serverExternalPackages: [
+    "pg",
     "@electric-sql/pglite",
     "@azure/identity",
     "@azure/keyvault-keys",
