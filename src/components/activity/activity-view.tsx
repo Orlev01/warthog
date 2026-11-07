@@ -300,19 +300,27 @@ export function ActivityView({
             placeholder="Search activity"
           />
         </div>
-        <div className="grid grid-cols-1 gap-4 sm:grid-cols-2">
-          {facets.map((facet) => (
-            <FacetFilter key={facet.name} {...facet} />
-          ))}
-          <div className="flex flex-col gap-1.5">
-            <Label htmlFor="activity-from">From</Label>
-            <Input id="activity-from" type="date" name="from" />
+        {/* On narrow screens the facet + date filters fill the viewport before any
+            entry shows, so they collapse behind a 'Filters' disclosure — open when a
+            filter is set (the view's only selected-filter signal is `query`) and
+            collapsed otherwise. (A <details> still emits its contents when closed, so
+            the server-rendered facets stay readable to the whole-markup checks.) */}
+        <details open={query.length > 0}>
+          <summary className="cursor-pointer font-medium text-fg">Filters</summary>
+          <div className="mt-4 grid grid-cols-1 gap-4 sm:grid-cols-2">
+            {facets.map((facet) => (
+              <FacetFilter key={facet.name} {...facet} />
+            ))}
+            <div className="flex flex-col gap-1.5">
+              <Label htmlFor="activity-from">From</Label>
+              <Input id="activity-from" type="date" name="from" />
+            </div>
+            <div className="flex flex-col gap-1.5">
+              <Label htmlFor="activity-to">To</Label>
+              <Input id="activity-to" type="date" name="to" />
+            </div>
           </div>
-          <div className="flex flex-col gap-1.5">
-            <Label htmlFor="activity-to">To</Label>
-            <Input id="activity-to" type="date" name="to" />
-          </div>
-        </div>
+        </details>
         <div>
           <button type="submit" className={BTN_SECONDARY}>
             Apply filters

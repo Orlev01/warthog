@@ -121,10 +121,13 @@ function SidebarLink({ item, active }: { item: NavItem; active: boolean }) {
 export function AppShell({ activeSection, children, sidebarFooter }: AppShellProps) {
   return (
     <div className="min-h-screen bg-bg text-fg lg:flex">
-      {/* Desktop sidebar (≥1024px): the five sections plus the More children. */}
+      {/* Desktop sidebar (≥1024px): the five sections plus the More children.
+          Sticky to the viewport height with its own overflow scroll, so its
+          footer (Sign out) stays reachable at short viewport heights without
+          scrolling the page. */}
       <nav
         aria-label="Primary"
-        className="hidden shrink-0 border-e border-line bg-surface p-3 lg:flex lg:w-64 lg:flex-col lg:gap-1"
+        className="hidden shrink-0 border-e border-line bg-surface p-3 lg:sticky lg:top-0 lg:flex lg:h-screen lg:w-64 lg:flex-col lg:gap-1 lg:overflow-y-auto"
       >
         <div className="px-1 pb-3 pt-1">
           <Wordmark href="/home" />

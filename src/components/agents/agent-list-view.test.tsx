@@ -522,3 +522,28 @@ test("uses design tokens, never a raw hex colour (populated and empty)", () => {
     );
   }
 });
+
+// ================================================================================
+// E18-S19 — the empty state gives a next step: a 'Connect an agent' link.
+// ================================================================================
+//
+// E2E screenshot: the empty Agents page had no next step. The empty state now carries
+// a LINK (an <a href>, not a dead button) to /agents/connect labelled 'Connect an
+// agent'. Scoped to the empty render (no agents), so the only content is the empty
+// state. We require the ANCHOR specifically — the empty-state description copy may
+// already contain the words "Connect an agent", but that lives in a <p>, not a link,
+// so it cannot satisfy this; the next step must be a real navigable link.
+
+test("the empty state offers a 'Connect an agent' link to /agents/connect", () => {
+  const markup = render(base({ agents: [] }));
+  const connect = anchors(markup).find((a) => a.href === "/agents/connect");
+  assert.ok(
+    connect,
+    `the empty Agents state must link to /agents/connect; anchors=${JSON.stringify(anchors(markup))}`,
+  );
+  assert.match(
+    connect!.name,
+    /connect an agent/i,
+    `the empty-state CTA must read 'Connect an agent'; name="${connect!.name}"`,
+  );
+});

@@ -296,3 +296,40 @@ test("the shell uses design tokens, never a raw hex colour", () => {
     `no raw hex colour may appear in the app shell markup, got: ${markup}`,
   );
 });
+
+// AC (E18-S19) — the desktop sidebar is sticky to the viewport with its own overflow
+// scroll, so its footer (the 'Sign out' control) stays reachable at short viewport
+// heights without scrolling the page. E2E screenshot: at 800px height Sign out sat
+// below the fold. This is a pure layout contract, so — exactly like the no-raw-hex
+// test above — the only thing the SSR markup exposes is the sidebar nav's class list:
+// it is sticky-positioned, anchored to the top, capped at the viewport height, and
+// scrolls its own vertical overflow. Patterns are lenient (breakpoint prefixes;
+// dvh/svh/lvh units; overflow-auto vs overflow-y-auto; top-0 vs an inset utility) so a
+// behaviour-preserving restyle stays green, and the viewport-height check is written so
+// a mere `min-h-*` (which does NOT cap height, so would not make the footer reachable)
+// cannot satisfy it.
+test("the desktop sidebar is sticky to the viewport height with its own overflow scroll", () => {
+  const { sidebar } = buildShell("home");
+  assert.ok(sidebar, "a sidebar landmark must be present");
+  const cls = sidebar!.attrs;
+  assert.match(
+    cls,
+    /(?:^|\s|:)sticky\b/,
+    `the sidebar must be sticky-positioned so its footer stays reachable; attrs="${cls}"`,
+  );
+  assert.match(
+    cls,
+    /(?:^|\s|:)(?:top-0|inset-0|inset-y-0|inset-block-start-0)\b/,
+    `the sticky sidebar must anchor to the top so it stays in view; attrs="${cls}"`,
+  );
+  assert.match(
+    cls,
+    /(?:^|\s|:)(?:max-)?h-(?:screen|dvh|svh|lvh)\b/,
+    `the sidebar must be capped at the viewport height so its footer can sit at the bottom; attrs="${cls}"`,
+  );
+  assert.match(
+    cls,
+    /(?:^|\s|:)overflow-(?:y-)?(?:auto|scroll)\b/,
+    `the sidebar must scroll its own vertical overflow so Sign out is reachable without scrolling the page; attrs="${cls}"`,
+  );
+});
