@@ -2,28 +2,37 @@
 // sweeps run from, built from validated config on the scheduler's first tick. Pieces that
 // need operator setup not done yet fail loudly when used (the not-configured idiom), and
 // the scheduler logs each failure redacted rather than swallowing it:
-//   • connector token refresh needs the operator OAuth clients (Google / Microsoft);
-//   • the account-reset executor (erase vault data, revoke agents and connections) is a
-//     follow-up task.
-// Exchange rates come from the free Frankfurter (ECB) reference-rate API.
+//   • connector token refresh needs the operator OAuth clients (Google / Microsoft).
+// The account-reset executor (erase vault data, revoke agents and connections) is now the
+// real db-backed one (E04-S40). Exchange rates come from the free Frankfurter (ECB)
+// reference-rate API.
+//
+// Config and the db are injectable (defaulting, in production, to loadConfig() /
+// getServerDb()), mirroring the auth composition root (`../auth/compose`), so the root
+// stays testable without a real environment, the process-wide server database or Azure.
 
-import { loadConfig } from "../config";
+import { loadConfig, type Config } from "../config";
 import { getServerDb } from "../db/server";
 import { systemClock } from "../seams/clock";
 import { systemRandom } from "../seams/random";
 import { selectSenders } from "../notify/senders";
 import { keyWrapperFor, notConfiguredSenders } from "../auth/compose";
 import { createFrankfurterRateSource } from "../currency/rate-source";
+import { createResetExecutor } from "../account/reset-executor";
 import { buildDispatchTable, buildPeriodicSweeps, type JobSeams } from "./registry";
 import { createScheduler, type Scheduler } from "./scheduler";
+import type { Db } from "../db/index";
 
 const FRANKFURTER_BASE_URL = "https://api.frankfurter.app";
 
-export async function composeJobSeams(): Promise<JobSeams> {
-  const config = loadConfig();
+export async function composeJobSeams(
+  overrides: { config?: Config; getDb?: () => Promise<Db> } = {},
+): Promise<JobSeams> {
+  const config = overrides.config ?? loadConfig();
+  const db = await (overrides.getDb ?? getServerDb)();
   const senders = selectSenders(config, notConfiguredSenders());
   return {
-    db: await getServerDb(),
+    db,
     clock: systemClock,
     keyWrapper: keyWrapperFor(config),
     random: systemRandom,
@@ -32,14 +41,7 @@ export async function composeJobSeams(): Promise<JobSeams> {
     refresh: async () => {
       throw new Error("connector token refresh is not configured (operator OAuth clients pending)");
     },
-    resetExecutor: {
-      eraseVaultData: async () => {
-        throw new Error("account reset execution is not configured");
-      },
-      revokeAgentsAndConnections: async () => {
-        throw new Error("account reset execution is not configured");
-      },
-    },
+    resetExecutor: createResetExecutor(db),
     rateSource: createFrankfurterRateSource({ baseUrl: FRANKFURTER_BASE_URL, fetchImpl: fetch }),
     publicBaseUrl: config.publicBaseUrl,
   };
