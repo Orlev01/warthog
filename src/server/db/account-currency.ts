@@ -74,6 +74,19 @@ const KNOWN_CURRENCY_CODES: ReadonlySet<string> = new Set([
   "ZAR", "ZMW", "ZWG",
 ]);
 
+// Whether `code` is a known ISO 4217 currency. This is the ONE validity check for a
+// currency code — reused by every currency write (a person's account currency AND a
+// household's currency) so the set of valid codes lives in exactly one place
+// (one-source-of-truth); membership in the known set IS the validation (an
+// unknown-but-well-formed "ZZZ", or a malformed/empty value, is rejected alike).
+export function isKnownCurrency(code: string): boolean {
+  return KNOWN_CURRENCY_CODES.has(code);
+}
+
+// The known ISO 4217 codes as a sorted array — the choices a currency control offers
+// (e.g. the household currency picker). Derived from the one known set above.
+export const KNOWN_CURRENCIES: readonly string[] = [...KNOWN_CURRENCY_CODES].sort();
+
 // Read the account currency for the person with this id (member-scoped: user_id bound
 // as a parameter). When the person has set none, returns the brief's default ("AUD")
 // assembled in code — never another person's currency.
@@ -101,7 +114,7 @@ export async function setAccountCurrency(
   db: Db,
   input: SetAccountCurrencyInput,
 ): Promise<SetAccountCurrencyResult> {
-  if (!KNOWN_CURRENCY_CODES.has(input.currency)) {
+  if (!isKnownCurrency(input.currency)) {
     return { ok: false, reason: "unknown_currency" };
   }
 
