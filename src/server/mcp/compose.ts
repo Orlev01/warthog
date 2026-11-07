@@ -36,10 +36,11 @@ import type { Config } from "../config";
 import type { Db } from "../db/index";
 import { selectKeyWrapper, type KeyWrapper } from "../crypto/key-wrapper";
 import { createDbRecorder } from "../activity/writer";
+import { type UndoReversalJob } from "../activity/undo";
 import { getRateLimiter } from "./rate-limit";
 import { systemClock, type Clock } from "../seams/clock";
 import { getUserById } from "../db/users";
-import { getAgentByConnectionId } from "../db/agents";
+import { getAgentByConnectionId, getAgentById } from "../db/agents";
 import { getConnectionPermissions } from "../db/agent-permissions";
 import { HttpError } from "../http/validate";
 
@@ -48,6 +49,7 @@ import {
   type AgentCall,
   type AgentCallResult,
   type AgentCallPipeline,
+  type ApprovedHoldResult,
 } from "./pipeline";
 import { createToolRegistry, type ConnectorToolset, type ToolDefinition } from "./tools/registry";
 import { loadAgentContext, type AgentConnection } from "./context";
@@ -162,7 +164,13 @@ function errorResult(reason: string): {
   return { content: [{ type: "text", text: reason }], isError: true };
 }
 
-export function createMcpDispatch(deps: McpDispatchDeps): McpDispatch {
+// Build the agent-call pipeline's REAL dependencies from the two composition-root inputs
+// (config + the process db): the KeyWrapper selected from config, the DB-backed recorder,
+// the per-process rate limiter, the tool-body executor and the pure pipeline. The ONE place
+// the pipeline is assembled (constitution: one source of truth), shared by the MCP dispatch
+// and the inbox/activity executors — so an approved hold and an undo reversal run through
+// exactly the gate every live agent call passes.
+function buildAgentPipeline(deps: McpDispatchDeps): AgentCallPipeline {
   const { db, config } = deps;
 
   // --- the pipeline's real dependencies, built from config + db ---------------
@@ -271,6 +279,15 @@ export function createMcpDispatch(deps: McpDispatchDeps): McpDispatch {
   };
 
   pipeline = createAgentCallPipeline({ db, keyWrapper, clock, rateLimiter, recorder, executeTool });
+  return pipeline;
+}
+
+export function createMcpDispatch(deps: McpDispatchDeps): McpDispatch {
+  const { db } = deps;
+
+  // The pipeline is assembled once here (the composition root's job) and the registry is
+  // resolved over it; both are reused for every request this dispatch serves.
+  const pipeline = buildAgentPipeline(deps);
   const registry = createToolRegistry({ pipeline });
 
   // --- the stateless MCP handler + per-request server -------------------------
@@ -330,5 +347,98 @@ export function createMcpDispatch(deps: McpDispatchDeps): McpDispatch {
     return handler.fetch(request, {
       authInfo: { token: connectionId, clientId: connectionId, scopes: [MCP_SCOPE] },
     });
+  };
+}
+
+// E07-S20 — the agent-call executors the signed-in inbox and activity screens drive, built
+// from the SAME composition-root inputs (config + the process db) and routed through the
+// SAME pipeline the MCP endpoint uses. Approving a held non-release call runs it exactly
+// once (`executeApprovedHold`, the pipeline's single-shot runner — the one check_approval
+// already uses); undoing a reversible entry runs its declared reversal through the pipeline
+// and REPORTS the outcome in plain words (`runReversal`, the undo service's reversal seam),
+// never the old "not configured" stub and never a silent failure. The user id is always the
+// CALLER's (the session's / the owning entry's), never a form value (design §5).
+export interface AgentExecutors {
+  executeApprovedHold(userId: string, approvalId: string): Promise<ApprovedHoldResult>;
+  runReversal(job: UndoReversalJob): Promise<{ outcome: string }>;
+}
+
+// Plain-words fallbacks so an undo that could not route its reversal still reports an
+// outcome — the undo service always records a reversal entry, never a blank or silent one.
+const REVERSAL_NO_ROUTE =
+  "This action couldn't be undone automatically — there's no connected agent to run the reversal.";
+const REVERSAL_FAILED = "The reversal couldn't be completed.";
+
+// One pipeline outcome as the plain-words outcome the undo entry records.
+function reversalOutcome(result: AgentCallResult): string {
+  switch (result.status) {
+    case "executed":
+      return "Undone.";
+    case "refused":
+      return result.reason;
+    case "pending_approval":
+      return "This needs your approval before it can be undone.";
+  }
+}
+
+export function createAgentExecutors(deps: McpDispatchDeps): AgentExecutors {
+  const { db } = deps;
+  const pipeline = buildAgentPipeline(deps);
+
+  // Run an entry's declared reversal through the pipeline and report its outcome. The
+  // original entry (member-scoped by the caller's user id + its seq, bound as parameters —
+  // never a client value) names the agent and connected service the reversal re-uses; the
+  // reversal tool is routed through the SAME gate a live agent call passes (so a connector
+  // the agent may no longer use is cleanly declined), and the outcome is reported in plain
+  // words — never thrown — so the undo service can always append its reversal entry (design
+  // §9; constitution 14/15).
+  async function runReversal(job: UndoReversalJob): Promise<{ outcome: string }> {
+    const found = await db.query(
+      "SELECT agent_id, connector_id FROM activity_entries WHERE user_id = $1 AND seq = $2",
+      [job.userId, job.originalSeq],
+    );
+    const row = found.rows[0];
+    if (!row) {
+      return { outcome: REVERSAL_NO_ROUTE };
+    }
+
+    const agentId = row.agent_id == null ? null : String(row.agent_id);
+    if (!agentId) {
+      return { outcome: REVERSAL_NO_ROUTE };
+    }
+
+    const agent = await getAgentById(db, job.userId, agentId);
+    if (!agent) {
+      return { outcome: REVERSAL_NO_ROUTE };
+    }
+
+    const connection: AgentConnection = {
+      userId: agent.userId,
+      connectionId: agent.connectionId,
+      agentId: agent.id,
+      active: agent.status === "connected",
+    };
+    const call: AgentCall = {
+      connector: row.connector_id == null ? null : String(row.connector_id),
+      tool: job.reversalTool,
+      makesChange: true,
+      reason: job.reason,
+    };
+
+    try {
+      const result = await pipeline.handleAgentCall(connection, call);
+      return { outcome: reversalOutcome(result) };
+    } catch {
+      // The pipeline surfaces a policy decision as a result, so a throw here is an
+      // infrastructure failure, not a refusal. Report it in plain words rather than letting
+      // it escape, so the undo service can still record the reversal entry.
+      return { outcome: REVERSAL_FAILED };
+    }
+  }
+
+  return {
+    executeApprovedHold: (userId: string, approvalId: string) =>
+      pipeline.executeApprovedHold(userId, approvalId),
+    runReversal,
   };
 }

@@ -68,6 +68,7 @@
 import * as React from "react";
 import { test } from "node:test";
 import assert from "node:assert/strict";
+import { Buffer } from "node:buffer";
 import { randomBytes, randomUUID } from "node:crypto";
 import { renderToStaticMarkup } from "react-dom/server";
 
@@ -80,6 +81,9 @@ import {
   type SavedCardView,
 } from "@/components/inbox/inbox-view";
 import { createApproval, decide } from "@/server/db/approvals";
+import { createHeldRequest, getByApproval } from "@/server/db/held-requests";
+import { listActivity } from "@/server/activity/list";
+import { loadConfig, type Config } from "@/server/config";
 import { addCard } from "@/server/db/cards";
 import { saveHighTierField } from "@/server/db/high-tier-fields";
 import { isUnopened } from "@/server/approvals/opened";
@@ -661,6 +665,166 @@ test("a person never sees another person's approvals, and viewing their own inbo
     assert.equal(await isUnopened(db, bobPending), true, "Bob's pending approval is still unopened after Alice's view");
     assert.equal(await openedAt(db, bob.userId, bobPending), null, "Alice's view never stamps Bob's approval opened");
     assert.equal(await isUnopened(db, alicePending), false, "Alice's own approval was opened by her view");
+  } finally {
+    await db.close();
+  }
+});
+
+// =====================================================================================
+// E07-S20 — Approving a held call now EXECUTES it (wired through the MCP composition
+// root) instead of reporting "approved-hold execution is not configured".
+//
+// BEHAVIOUR SUPERSESSION (declared by the plan for THIS file): until E07-S20 the inbox
+// page handed `createInboxActions` a stub `executeApprovedHold` that THREW
+// "approved-hold execution is not configured", so approving a held non-release call
+// reported an error and the agent's call never ran. This task wires that seam to the
+// real agent-call pipeline through the composition root, so approving a held non-release
+// call runs it exactly once and its outcome shows in Activity.
+//
+// RED-first: the composition root does NOT export the executor factory yet, so
+// `createAgentExecutors` is absent and this test fails at `composeExecutors(...)` — that
+// absence IS the point of test-first. The builder adds the factory to
+// `src/server/mcp/compose.ts` (within this task's Touches) and wires the page to it.
+//
+// The pinned contract (the builder implements exactly this, alongside the existing
+// `createMcpDispatch`, which compose.test.ts locks to a dispatch function and MUST keep):
+//
+//   createAgentExecutors(deps: { db: Db; config: Config }): {
+//     executeApprovedHold(userId: string, approvalId: string): Promise<ApprovedHoldResult>;
+//     runReversal(job: { userId; reversalTool; originalSeq; reason? }): Promise<{ outcome: string }>;
+//   }
+//
+// `executeApprovedHold` is the pipeline's own single-shot runner, built from { db, config }
+// (the composition root's two inputs) — the SAME thing check_approval already runs an
+// approved hold through. The user id is the CALLER's (the session's), never a form value.
+//
+// This drives the REAL pipeline end-to-end over an isolated PGlite with the real stores:
+// a pending non-release approval + its linked held call are seeded exactly as the ask path
+// parks them, then the page's own `approveApproval` (over the composed executor) runs it.
+// It asserts BEHAVIOUR (the held request is consumed; the outcome lands in Activity once),
+// never source text; the composition root is reached by its public export only.
+
+// The pipeline's approved-hold result (pipeline.ts) — declared here so the test reads
+// cleanly; the builder's own type conforms to it.
+type ApprovedHoldResult =
+  | { status: "executed"; result: unknown }
+  | { status: "refused"; reason: string };
+
+// The executor factory this task adds to the composition root (the pinned contract).
+type AgentExecutors = {
+  executeApprovedHold(userId: string, approvalId: string): Promise<ApprovedHoldResult>;
+  runReversal(job: {
+    userId: string;
+    reversalTool: string;
+    originalSeq: number;
+    reason?: string;
+  }): Promise<{ outcome: string }>;
+};
+
+// The composition-root module as this task widens it. The factory is OPTIONAL in the view
+// so the file type-checks before the builder adds it; at runtime it is absent until then,
+// so `composeExecutors` fails LOUDLY (RED) rather than silently passing. The module is
+// loaded dynamically so this one unbuilt seam reddens only THIS test, not the whole file.
+type ComposeModule = {
+  createAgentExecutors?: (deps: { db: Db; config: Config }) => AgentExecutors;
+};
+
+async function composeExecutors(db: Db, config: Config): Promise<AgentExecutors> {
+  const mod = (await import("../../../../server/mcp/compose")) as unknown as ComposeModule;
+  assert.equal(
+    typeof mod.createAgentExecutors,
+    "function",
+    "E07-S20: compose must export createAgentExecutors({ db, config }) → { executeApprovedHold, runReversal }",
+  );
+  return mod.createAgentExecutors!({ db, config });
+}
+
+// A dev config whose devKek is the local KEK the composition root derives its KeyWrapper
+// from, so the DEK we wrap below is exactly what the composed executor unwraps.
+const HMAC_KEY_B64 = Buffer.alloc(48, 0x2a).toString("base64");
+const DEV_KEK_B64 = Buffer.alloc(32, 0x5c).toString("base64");
+function devConfig(): Config {
+  return loadConfig({
+    NODE_ENV: "development",
+    PUBLIC_BASE_URL: "https://warthog.example",
+    WEBAUTHN_RP_ID: "localhost",
+    DATABASE_URL: "pglite:memory",
+    WARTHOG_HMAC_KEY: HMAC_KEY_B64,
+    WARTHOG_DEV_KEK: DEV_KEK_B64,
+  } as NodeJS.ProcessEnv);
+}
+
+test("approving a held non-release call runs it once through the composed pipeline (not an 'is not configured' stub)", async () => {
+  const db = await freshDb();
+  try {
+    const config = devConfig();
+    const keyWrapper = localAesKeyWrapper(config.devKek!);
+    const dek = randomBytes(DEK_BYTES);
+    const user = await createUser(db, {
+      email: `exec-${randomUUID()}@warthog.com.au`,
+      wrappedDek: await keyWrapper.wrap(dek),
+    });
+    const agentId = randomUUID();
+    const clock = fixedClock(NOW);
+
+    // A PENDING non-release approval (no `detail.request`) and its linked held call — a
+    // routine change (remember), parked exactly as the pipeline's ask path stores it.
+    const approval = await createApproval(
+      db,
+      { userId: user.id, agentId, detail: detailFor({ sentence: "wants to jot a quick note" }) },
+      dek,
+      clock,
+    );
+    const marker = `held-${randomUUID()}`;
+    await createHeldRequest(
+      db,
+      {
+        userId: user.id,
+        agentId,
+        approvalId: approval.id,
+        args: { connector: null, tool: "remember", makesChange: true, params: { content: marker } },
+      },
+      dek,
+      clock,
+    );
+
+    const executors = await composeExecutors(db, config);
+    const actions = createInboxActions({
+      db,
+      clock,
+      keyWrapper,
+      executeApprovedHold: executors.executeApprovedHold,
+    });
+    const session = await sessionFor(db, user.id);
+
+    // Approve → the held call runs exactly once; the held request is consumed and Warthog
+    // records the outcome in Activity. (It no longer reports "not configured".)
+    const first = await actions.approveApproval(session, approval.id);
+    assert.deepEqual(first, { ok: true }, "approving a held non-release call succeeds (it is wired, not an error)");
+
+    const ranHold = await getByApproval(db, user.id, approval.id, dek);
+    assert.equal(ranHold?.status, "executed", "the held request is consumed — the approved call ran once");
+
+    const recorded = (await listActivity(db, user.id, {}, dek)).filter(
+      (entry) => entry.tool === "remember" && entry.source === "warthog",
+    );
+    assert.equal(recorded.length, 1, "the approved held call's outcome is recorded in Activity exactly once");
+
+    // Approving again does nothing more — the held call never runs twice (re-deciding an
+    // already-approved approval is refused upstream, before the executor is reached again).
+    await assert.rejects(
+      () => actions.approveApproval(session, approval.id),
+      "re-approving an already-decided approval is refused, not a second silent run",
+    );
+    const afterSecond = (await listActivity(db, user.id, {}, dek)).filter(
+      (entry) => entry.tool === "remember" && entry.source === "warthog",
+    );
+    assert.equal(afterSecond.length, 1, "approving again runs nothing more (the held call ran only once)");
+    assert.equal(
+      (await getByApproval(db, user.id, approval.id, dek))?.status,
+      "executed",
+      "the held request stays executed after a second approve",
+    );
   } finally {
     await db.close();
   }

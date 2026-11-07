@@ -77,17 +77,23 @@
 import * as React from "react";
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { randomBytes } from "node:crypto";
+import { Buffer } from "node:buffer";
+import { randomBytes, randomUUID } from "node:crypto";
 import { renderToStaticMarkup } from "react-dom/server";
 
 import { createActivityActions } from "./actions";
 
 import { ActivityView, type ActivityViewProps } from "@/components/activity/activity-view";
 import { createDbRecorder } from "@/server/activity/writer";
+import { createUndoService } from "@/server/activity/undo";
+import { listActivity } from "@/server/activity/list";
 import type { ActivityRecorder, ActivityEntryInput } from "@/server/activity/recorder";
 import { localAesKeyWrapper, type KeyWrapper } from "@/server/crypto/key-wrapper";
 import { createUser } from "@/server/db/users";
+import { createAgent } from "@/server/db/agents";
+import { upsertPermissions } from "@/server/db/agent-permissions";
 import { createSession, type Session } from "@/server/auth/session";
+import { loadConfig, type Config } from "@/server/config";
 import { systemRandom } from "@/server/seams/random";
 import type { Clock } from "@/server/seams/clock";
 import { freshDb } from "@/test/db";
@@ -634,6 +640,202 @@ test("a person with no activity gets an empty list and the empty state renders",
 
     const text = strip(render(view));
     assert.ok(text.includes("no activity yet"), "the empty state renders when there are no entries");
+  } finally {
+    await db.close();
+  }
+});
+
+// =====================================================================================
+// E07-S20 — Undo is a LIVE control for an entry whose tool declares a reversal, wired
+// through the MCP composition root, instead of being disabled with "undo execution is
+// not configured".
+//
+// BEHAVIOUR SUPERSESSION (declared by the plan for THIS file): until E07-S20 the activity
+// page built its undo service with a stub `runReversal` that THREW "undo execution is not
+// configured", so the page supplied NO `undoAction` and a reversible entry's Undo rendered
+// DISABLED (no dead control over a throwing executor). This task wires `runReversal` to the
+// real agent-call pipeline through the composition root, so a reversible entry's Undo is a
+// LIVE control that runs the reversal once and reports the outcome in plain words.
+//
+// RED-first: the composition root does NOT export the executor factory yet, so
+// `createAgentExecutors` is absent and this test fails at `composeExecutors(...)` — that
+// absence IS the point of test-first. The builder adds the factory to
+// `src/server/mcp/compose.ts` (within this task's Touches) and binds the live undoAction.
+//
+// The pinned contract (the builder implements exactly this, alongside the existing
+// `createMcpDispatch`, which compose.test.ts locks to a dispatch function and MUST keep):
+//
+//   createAgentExecutors(deps: { db: Db; config: Config }): {
+//     executeApprovedHold(userId, approvalId): Promise<ApprovedHoldResult>;
+//     runReversal(job: { userId; reversalTool; originalSeq; reason? }): Promise<{ outcome: string }>;
+//   }
+//
+// `runReversal` is the undo service's reversal executor (the same seam shape undo.ts takes,
+// routed through the pipeline), built from { db, config } (the composition root's two
+// inputs). It REPORTS an outcome in plain words — it never fails silently and never throws
+// the old "not configured" stub — so the undo service can always record the reversal entry.
+// The user id is the CALLER's (the session's), never a form value.
+//
+// This drives the REAL undo service + pipeline over an isolated PGlite with the real stores
+// and asserts BEHAVIOUR (a live Undo renders only for the reversible entry; undoing runs the
+// reversal and appends a new recorded entry; a non-reversible entry is refused), never the
+// source text of any module.
+
+// The executor factory this task adds to the composition root (the pinned contract). Only
+// `runReversal` is exercised here; executeApprovedHold is the inbox side's twin.
+type ApprovedHoldResult =
+  | { status: "executed"; result: unknown }
+  | { status: "refused"; reason: string };
+type AgentExecutors = {
+  executeApprovedHold(userId: string, approvalId: string): Promise<ApprovedHoldResult>;
+  runReversal(job: {
+    userId: string;
+    reversalTool: string;
+    originalSeq: number;
+    reason?: string;
+  }): Promise<{ outcome: string }>;
+};
+
+// The composition-root module as this task widens it. The factory is OPTIONAL in the view
+// so the file type-checks before the builder adds it; at runtime it is absent until then,
+// so `composeExecutors` fails LOUDLY (RED). Loaded dynamically so this one unbuilt seam
+// reddens only THIS test, not the whole file.
+type ComposeModule = {
+  createAgentExecutors?: (deps: { db: Db; config: Config }) => AgentExecutors;
+};
+
+async function composeExecutors(db: Db, config: Config): Promise<AgentExecutors> {
+  const mod = (await import("../../../../server/mcp/compose")) as unknown as ComposeModule;
+  assert.equal(
+    typeof mod.createAgentExecutors,
+    "function",
+    "E07-S20: compose must export createAgentExecutors({ db, config }) → { executeApprovedHold, runReversal }",
+  );
+  return mod.createAgentExecutors!({ db, config });
+}
+
+// A dev config whose devKek is the local KEK the composition root derives its KeyWrapper
+// from, so the DEK we wrap below is exactly what the composed executor unwraps.
+const HMAC_KEY_B64 = Buffer.alloc(48, 0x2a).toString("base64");
+const DEV_KEK_B64 = Buffer.alloc(32, 0x5c).toString("base64");
+function devConfig(): Config {
+  return loadConfig({
+    NODE_ENV: "development",
+    PUBLIC_BASE_URL: "https://warthog.example",
+    WEBAUTHN_RP_ID: "localhost",
+    DATABASE_URL: "pglite:memory",
+    WARTHOG_HMAC_KEY: HMAC_KEY_B64,
+    WARTHOG_DEV_KEK: DEV_KEK_B64,
+  } as NodeJS.ProcessEnv);
+}
+
+test("a reversible entry gets a live Undo that runs the reversal once and reports the outcome; a non-reversible entry shows no Undo", async () => {
+  const db = await freshDb();
+  try {
+    const config = devConfig();
+    const keyWrapper = localAesKeyWrapper(config.devKek!);
+    const clock = makeClock("2026-02-01T00:00:00.000Z");
+    const dek = randomBytes(DEK_BYTES);
+    const userId = await makePerson(db, keyWrapper, `undo-${randomUUID()}@people.example`, dek);
+
+    // A real agent connection the reversal can resolve. No connector is granted, so routing
+    // the reversal tool through the pipeline is cleanly declined — the reversal still reports
+    // an outcome in plain words rather than throwing.
+    const connectionId = randomUUID();
+    const agent = await createAgent(
+      db,
+      { userId, connectionId, displayName: "Claude", platform: "claude" },
+      clock,
+    );
+    await upsertPermissions(db, {
+      userId,
+      connectionId,
+      grantedConnectors: [],
+      readTools: true,
+      changeTools: "allow",
+      identityAccess: false,
+      highTierAccess: false,
+      cardAccess: false,
+      cardBudget: null,
+      skillsScope: [],
+      memoryRead: true,
+      sharing: false,
+      rulesScope: [],
+      rateLimit: 120,
+    });
+
+    // seq 1 — a reversible create_event; seq 2 — a read (list_events) that declares no reversal.
+    const recorder = makeRecorder(db, clock, { [userId]: dek });
+    await record(recorder, clock, "2026-02-10T00:00:00.000Z", {
+      userId,
+      kind: "tool_call",
+      source: "warthog",
+      agentId: agent.id,
+      connectorId: "google_calendar",
+      tool: CREATE_EVENT,
+      outcome: "ok",
+      payload: { summary: "Booked a dentist slot", detail: "slot detail" },
+    });
+    await record(recorder, clock, "2026-03-10T00:00:00.000Z", {
+      userId,
+      kind: "tool_call",
+      source: "agent_reported",
+      agentId: agent.id,
+      connectorId: "google_calendar",
+      tool: LIST_EVENTS,
+      outcome: "done",
+      payload: { summary: "Read the diary", detail: "diary detail" },
+    });
+
+    const executors = await composeExecutors(db, config);
+    assert.equal(typeof executors.runReversal, "function", "the composition root builds a runReversal executor");
+
+    // The undo service the activity page composes: the real recorder + reversal table + the
+    // pipeline-backed runReversal from the composition root (no "not configured" stub).
+    const undo = createUndoService({
+      db,
+      recorder: makeRecorder(db, clock, { [userId]: dek }),
+      reversalFor,
+      runReversal: executors.runReversal,
+    });
+    const actions = createActivityActions({ db, disputes: unusedDisputes, undo, keyWrapper, reversalFor });
+    const session = await sessionFor(db, userId, clock);
+
+    // The loader + rendered screen: a LIVE Undo on the reversible entry only, carrying its seq.
+    const view = await actions.load(session, {});
+    const markup = render(view, { disputeAction: noopAction, undoAction: noopAction });
+    assert.equal(liveCount(markup, /\bundo\b/i), 1, "a live Undo is mounted for the entry with a declared reversal");
+    const undoForms = formsFor(markup, /\bundo\b/i);
+    assert.equal(undoForms.length, 1, "exactly one Undo form");
+    assert.match(undoForms[0]!, /value="1"/, "the live Undo carries the reversible entry's seq (1)");
+
+    // Undo the reversible entry → the reversal runs and reports a plain-words outcome,
+    // appended as a NEW warthog activity entry. The original entry is never altered.
+    const before = (await listActivity(db, userId, {}, dek)).filter((e) => e.tool === DELETE_EVENT).length;
+    assert.equal(before, 0, "no reversal entry exists before the undo");
+
+    const undone = await actions.undoEntry(session, 1, "undo the booking");
+    assert.equal(undone.ok, true, "undoing a reversible entry succeeds — the reversal is wired and ran");
+
+    const afterUndo = await listActivity(db, userId, {}, dek);
+    const reversalEntries = afterUndo.filter((e) => e.tool === DELETE_EVENT && e.source === "warthog");
+    assert.ok(reversalEntries.length >= 1, "the reversal ran and was recorded as a new warthog entry");
+    assert.ok(
+      reversalEntries.every((e) => typeof e.outcome === "string" && (e.outcome ?? "").length > 0),
+      "the reversal's outcome is reported in plain words, never blank or silent",
+    );
+    assert.ok(afterUndo.some((e) => e.tool === CREATE_EVENT), "the original entry is untouched (append-only)");
+    const reversalCount = reversalEntries.length;
+
+    // An entry that declares NO reversal cannot be undone — it is refused and nothing more
+    // is run or recorded (entries without a reversal show no Undo).
+    const notReversible = await actions.undoEntry(session, 2);
+    assert.equal(notReversible.ok, false, "an entry with no declared reversal is refused (shown no Undo)");
+    assert.equal(
+      (await listActivity(db, userId, {}, dek)).filter((e) => e.tool === DELETE_EVENT).length,
+      reversalCount,
+      "a refused undo runs and records no reversal",
+    );
   } finally {
     await db.close();
   }

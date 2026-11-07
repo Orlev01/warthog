@@ -5,7 +5,7 @@ import { revalidatePath } from "next/cache";
 import { AlertTriangle, CheckCircle2 } from "lucide-react";
 
 import { ActivityView } from "@/components/activity/activity-view";
-import { loadConfig } from "@/server/config";
+import { loadConfig, type Config } from "@/server/config";
 import { getServerDb } from "@/server/db/server";
 import { getUserById } from "@/server/db/users";
 import { verifySession, type Session } from "@/server/auth/session";
@@ -13,6 +13,7 @@ import { selectKeyWrapper } from "@/server/crypto/key-wrapper";
 import { createDbRecorder } from "@/server/activity/writer";
 import { createDisputeRepo } from "@/server/activity/disputes";
 import { createUndoService } from "@/server/activity/undo";
+import { createAgentExecutors } from "@/server/mcp/compose";
 import { systemClock } from "@/server/seams/clock";
 import type { Db } from "@/server/db/index";
 import { createActivityActions } from "./actions";
@@ -26,14 +27,13 @@ import { noticeLocation, activityNotice, type ActivityNotice } from "./notices";
 // OWN entries, newest-first, narrowed by the view's filters/search — and renders the
 // view. The record-wide Check-integrity control posts `verify=1`, which `load` runs.
 //
-// E08-S09 shipped Dispute/Undo as forms that posted nowhere (dead controls). This task
-// binds Dispute to an inline `use server` wrapper (`disputeEntryAction`) that re-derives
-// the session, calls `disputeEntry`, and redirects back with a `?notice=` outcome the
-// page renders in plain words (the sibling security screen's pattern). Reversal EXECUTION
-// is not wired yet (`runReversal` throws), so the page supplies NO `undoAction`: a
-// reversible entry's Undo renders DISABLED with a one-line reason rather than a live
-// control over a throwing executor (constitution: no dead controls). When reversal
-// execution lands, bind an `undoEntryAction` wrapper the same way and pass it here.
+// E08-S09 shipped Dispute/Undo as forms that posted nowhere (dead controls). Both are now
+// bound to inline `use server` wrappers (the sibling security screen's pattern) that
+// re-derive the session, call `disputeEntry` / `undoEntry`, and redirect back with a
+// `?notice=` outcome the page renders in plain words. Reversal EXECUTION is wired through
+// the MCP composition root (`createAgentExecutors().runReversal`, E07-S20), so a reversible
+// entry's Undo is a LIVE control that runs the declared reversal once and reports its
+// outcome; an entry whose tool declares no reversal shows no Undo at all (`canUndo` false).
 //
 // Thin by design (the server-composition-roots addendum): per-request data (the cookie,
 // the search params) is read BEFORE `getServerDb()` so touching it marks the page dynamic
@@ -65,8 +65,8 @@ async function resolveSession(db: Db): Promise<Session | null> {
 // production, Key Vault in production) lets `load` resolve the session person's DEK;
 // `dekFor` is the loadAgentContext idiom (the person's wrapped DEK, unwrapped) the dispute
 // repo and the undo recorder encrypt/decrypt the person's OWN content under.
-function buildActions(db: Db, nodeEnv: string, devKek: Uint8Array | undefined) {
-  const keyWrapper = selectKeyWrapper({ nodeEnv, localKek: devKek });
+function buildActions(db: Db, config: Config) {
+  const keyWrapper = selectKeyWrapper({ nodeEnv: config.nodeEnv, localKek: config.devKek });
   const dekFor = async (userId: string): Promise<Uint8Array> => {
     const user = await getUserById(db, userId);
     if (!user) {
@@ -80,13 +80,11 @@ function buildActions(db: Db, nodeEnv: string, devKek: Uint8Array | undefined) {
     db,
     recorder: createDbRecorder({ db, clock: systemClock, dekFor }),
     reversalFor,
-    // The reversal executor routes through the agent pipeline, wired by a later task;
-    // until then it rejects loudly rather than silently doing nothing (the compose.ts
-    // not-configured idiom). The page supplies no undoAction while it is unwired, so this
-    // is never invoked from the screen; undoEntry's own tests drive the undo service.
-    runReversal: async () => {
-      throw new Error("undo execution is not configured");
-    },
+    // The reversal executor routes the declared reversal tool through the agent-call
+    // pipeline, composed by the MCP composition root (`createAgentExecutors`): it reports
+    // the outcome in plain words rather than throwing, so the undo service can always record
+    // the reversal entry (E07-S20). The page binds a live undoAction over it below.
+    runReversal: createAgentExecutors({ db, config }).runReversal,
   });
 
   return createActivityActions({ db, disputes, undo, keyWrapper, reversalFor });
@@ -110,12 +108,37 @@ async function disputeEntryAction(formData: FormData): Promise<void> {
   const note = String(formData.get("note") ?? "");
   let outcome: unknown;
   try {
-    outcome = await buildActions(db, config.nodeEnv, config.devKek).disputeEntry(session, seq, note);
+    outcome = await buildActions(db, config).disputeEntry(session, seq, note);
   } catch (error) {
     outcome = error;
   }
   revalidatePath("/activity");
   redirect(noticeLocation("dispute_filed", outcome));
+}
+
+// Undo one of the acting person's OWN reversible entries. Same discipline as dispute: it
+// re-derives the verified session (never a client value, design §5), takes the entry seq
+// from the form, undoes scoped to the SESSION user id — which runs the declared reversal
+// through the pipeline and records a new reversal entry — and redirects back with a notice
+// naming the outcome. An entry that is not this person's or declares no reversal is a
+// reported refusal, and a malformed seq is a boundary 4xx, each shown in plain words.
+async function undoEntryAction(formData: FormData): Promise<void> {
+  "use server";
+  const db = await getServerDb();
+  const session = await resolveSession(db);
+  if (!session) {
+    redirect("/signin");
+  }
+  const config = loadConfig();
+  const seq = Number(formData.get("seq"));
+  let outcome: unknown;
+  try {
+    outcome = await buildActions(db, config).undoEntry(session, seq);
+  } catch (error) {
+    outcome = error;
+  }
+  revalidatePath("/activity");
+  redirect(noticeLocation("undo_done", outcome));
 }
 
 // The outcome of the last change, in words plus an icon (never colour alone). A problem is
@@ -153,11 +176,11 @@ export default async function ActivityPage({
     redirect("/signin");
   }
 
-  const view = await buildActions(db, config.nodeEnv, config.devKek).load(session, params);
+  const view = await buildActions(db, config).load(session, params);
   return (
     <>
       {notice ? <NoticeBanner notice={notice} /> : null}
-      <ActivityView {...view} disputeAction={disputeEntryAction} />
+      <ActivityView {...view} disputeAction={disputeEntryAction} undoAction={undoEntryAction} />
     </>
   );
 }
