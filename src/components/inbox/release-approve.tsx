@@ -147,7 +147,8 @@ export function createReleaseApproveFlow(deps: ReleaseApproveFlowDeps): ReleaseA
     try {
       unlockRequest = await gatherUnlock();
     } catch {
-      set({ status: "error", error: UNLOCK_FAILED_COPY });
+      // Nothing was released; the secrets entered for this attempt are not kept.
+      set({ status: "error", error: UNLOCK_FAILED_COPY, passphrase: "", securityCode: "" });
       return;
     }
 
@@ -161,11 +162,13 @@ export function createReleaseApproveFlow(deps: ReleaseApproveFlowDeps): ReleaseA
       securityCode: isCard ? state.securityCode : undefined,
     });
 
+    // Whatever the outcome, the passphrase and security code entered for this attempt are
+    // cleared from state at once (a retry asks for them again).
     if (result.ok) {
-      set({ status: "released", error: undefined });
+      set({ status: "released", error: undefined, passphrase: "", securityCode: "" });
       deps.onReleased?.();
     } else {
-      set({ status: "error", error: result.error });
+      set({ status: "error", error: result.error, passphrase: "", securityCode: "" });
     }
   }
 

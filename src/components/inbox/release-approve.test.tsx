@@ -385,6 +385,22 @@ test("a wrong passphrase releases nothing to collect and shows plain-English cop
 
 // ═══ AC3 — the released value and security code never leak client-side ════════════════
 
+// Operator review (E11-S17): once a release attempt finishes — handed over or not — the
+// passphrase and the security code must not linger in the control's state.
+test("after a release attempt the passphrase and security code are cleared from the control's state", async () => {
+  for (const releaseResult of [undefined, { ok: false as const, error: "We couldn't unlock your vault on this device." }]) {
+    const ctx = setupFlow({ request: PENDING_CARD, savedCards: SAVED_CARDS, ...(releaseResult ? { releaseResult } : {}) });
+    ctx.flow.setMethod("passphrase");
+    ctx.flow.setSecurityCode(SECURITY_CODE);
+    ctx.flow.setPassphrase(PASSPHRASE);
+    await ctx.flow.submit();
+    const state = ctx.flow.getState();
+    const outcome = releaseResult ? "failed" : "succeeded";
+    assert.equal(state.passphrase, "", `passphrase cleared after a ${outcome} release`);
+    assert.equal(state.securityCode, "", `security code cleared after a ${outcome} release`);
+  }
+});
+
 test("the security code and the passphrase never touch browser storage or the console", async () => {
   // Install recording stand-ins for browser storage and the console so a leak is caught.
   const g = globalThis as unknown as { localStorage?: Storage; sessionStorage?: Storage };
