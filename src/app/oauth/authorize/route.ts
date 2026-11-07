@@ -41,7 +41,8 @@ function readCookie(request: Request, name: string): string | null {
 // unreadable to script (HttpOnly), HTTPS-only (Secure), SameSite=Lax, Path=/ and no
 // Domain — the same shape the session cookie uses.
 function consentCookie(handle: string): string {
-  return `${CONSENT_COOKIE}=${handle}; Path=/; HttpOnly; Secure; SameSite=Lax`;
+  // Lives as long as the pending request it names (ten minutes).
+  return `${CONSENT_COOKIE}=${handle}; Path=/; HttpOnly; Secure; SameSite=Lax; Max-Age=600`;
 }
 
 export async function GET(request: Request): Promise<Response> {
