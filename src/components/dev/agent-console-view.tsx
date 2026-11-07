@@ -103,6 +103,11 @@ export function createAgentConsole(deps: AgentConsoleDeps): AgentConsoleControll
         method: "POST",
         headers: {
           "content-type": "application/json",
+          // The Streamable-HTTP headers a real MCP client sends — an Accept naming BOTH
+          // application/json and text/event-stream (or /mcp answers 406 Not Acceptable)
+          // and the protocol-version header (E07-S19).
+          accept: "application/json, text/event-stream",
+          "mcp-protocol-version": "2025-06-18",
           authorization: `Bearer ${deps.accessKey}`,
         },
         body: JSON.stringify(body),

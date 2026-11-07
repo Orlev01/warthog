@@ -28,13 +28,13 @@
 // evaluates route modules where runtime config is absent): `verifyBearer` over the
 // process-wide db, and a stateless `createMcpHandler` built once per process.
 
-import { createMcpHandler, McpServer, type McpHttpHandler } from "@modelcontextprotocol/server";
-
 import { verifyBearer, type BearerVerification } from "../../server/oauth/verify-bearer";
 import { loadConfig, type Config } from "../../server/config";
 import { getServerDb } from "../../server/db/server";
 import { systemClock } from "../../server/seams/clock";
 import { processSingleton } from "../../server/seams/process-singleton";
+import { createMcpDispatch, type McpDispatch } from "../../server/mcp/compose";
+import type { Db } from "../../server/db/index";
 
 // The injectable seams. Each is optional with a production default; the tests supply all
 // three so the route's own gating is exercised without the db or the MCP wire protocol.
@@ -53,27 +53,8 @@ export interface McpRouteHandlers {
   DELETE(request: Request): Promise<Response>;
 }
 
-// This resource requires the `warthog` scope (design §6.1/§6.2).
-const MCP_SCOPE = "warthog";
-
-// The stateless MCP server's identity (design §6.2 — one handler per process).
-const MCP_SERVER_NAME = "warthog";
-const MCP_SERVER_VERSION = "0.1.0";
-
 // JSON responses carry no credential, so they must not be cached.
 const JSON_HEADERS = { "content-type": "application/json", "cache-control": "no-store" };
-
-// The raw bearer from an `Authorization: Bearer <token>` header, or null when absent /
-// not the Bearer scheme (matched case-insensitively, as RFC 7235 permits).
-function readBearer(request: Request): string | null {
-  const header = request.headers.get("authorization");
-  if (header == null) return null;
-  const space = header.indexOf(" ");
-  if (space === -1) return null;
-  if (header.slice(0, space).toLowerCase() !== "bearer") return null;
-  const token = header.slice(space + 1).trim();
-  return token === "" ? null : token;
-}
 
 // Is the request's Origin allowed (the DNS-rebinding guard, design §6.2)? A request with
 // no Origin header is the non-browser agent case and is allowed; a browser request must
@@ -116,18 +97,15 @@ function methodNotAllowed(): Response {
   });
 }
 
-// The production MCP server: a stateless `createMcpHandler` built once per process
-// (Next splits route/page module graphs, so a bare module-level instance would split —
-// hence `processSingleton`). The verified connection is handed to the SDK as
-// pass-through `authInfo`; the SDK caps the body size and rejects an unparseable body,
-// so a malformed/oversized POST is a handled 4xx (INV-102). The tool registry + pipeline
-// wiring the server serves is a downstream integration task.
-function defaultMcpHandler(): McpHttpHandler {
-  return processSingleton("mcp.handler", () =>
-    createMcpHandler(() => new McpServer({ name: MCP_SERVER_NAME, version: MCP_SERVER_VERSION }), {
-      legacy: "stateless",
-    }),
-  );
+// The production MCP dispatch: the composition root (`createMcpDispatch`, E07-S19) built
+// once per process over the process-wide db + runtime config. It drives a stateless
+// `createMcpHandler` whose per-request `McpServer` serves the tool registry through the
+// agent-call pipeline, taking the connection ONLY from the verified bearer; the SDK caps
+// the body size and rejects an unparseable body, so a malformed/oversized POST is a handled
+// 4xx (INV-102). Memoized with `processSingleton` because Next splits route/page module
+// graphs, so a bare module-level instance would split.
+function defaultMcpDispatch(db: Db, config: Config): McpDispatch {
+  return processSingleton("mcp.dispatch", () => createMcpDispatch({ db, config }));
 }
 
 export function createMcpRouteHandler(seams: McpRouteSeams = {}): McpRouteHandlers {
@@ -145,13 +123,8 @@ export function createMcpRouteHandler(seams: McpRouteSeams = {}): McpRouteHandle
 
   async function dispatch(connectionId: string, request: Request): Promise<Response> {
     if (seams.dispatch) return seams.dispatch(connectionId, request);
-    return defaultMcpHandler().fetch(request, {
-      authInfo: {
-        token: readBearer(request) ?? connectionId,
-        clientId: connectionId,
-        scopes: [MCP_SCOPE],
-      },
-    });
+    const db = await getServerDb();
+    return defaultMcpDispatch(db, resolveConfig())(connectionId, request);
   }
 
   return {
