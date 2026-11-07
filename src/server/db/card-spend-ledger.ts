@@ -19,12 +19,12 @@
 // filter — comes from a fixed whitelist keyed by the `PeriodKind` enum, never from
 // caller text. Every read is member-scoped by the `userId` the caller passes (the
 // session's id, never a client value); the household total — the one cross-member
-// aggregate the brief exposes — is gated by the caller's own participation in that
-// household.
+// aggregate the brief exposes — is gated by the caller's MEMBERSHIP of that household
+// (the household_members store, E15-S04).
 
 import { randomUUID } from "node:crypto";
 
-import type { Db } from "./index";
+import type { Db, Row } from "./index";
 
 // The brief's budget periods: a release falls in one bucket per granularity.
 export type PeriodKind = "day" | "week" | "month";
@@ -69,6 +69,62 @@ function periodColumn(period: PeriodKind): string {
   const column = PERIOD_COLUMN[period];
   if (!column) throw new Error(`card-spend-ledger: unknown period "${period}"`);
   return column;
+}
+
+// Pad a number to two digits for a calendar key ("1" -> "01").
+function pad2(value: number): string {
+  return String(value).padStart(2, "0");
+}
+
+// The opaque period-bucket key this ledger stores (design §8 / E07-S07), derived
+// from the instant in UTC calendar arithmetic: the day bucket "YYYY-MM-DD", the
+// month bucket "YYYY-MM", and the week bucket "YYYY-Www" (ISO-8601, weeks start
+// Monday — the same convention the budget domain's period windows use). The
+// `period` selects which granularity. The ONE source of truth for the ledger's
+// bucket keys: the policy-context loader and the spending read both derive their
+// current-period key through here, so a writer and a reader can never drift.
+export function periodKeyFor(period: PeriodKind, now: Date): string {
+  const year = now.getUTCFullYear();
+  const month = now.getUTCMonth();
+  const date = now.getUTCDate();
+
+  if (period === "month") {
+    return `${year}-${pad2(month + 1)}`;
+  }
+  if (period === "day") {
+    return `${year}-${pad2(month + 1)}-${pad2(date)}`;
+  }
+  // week: the ISO week number, decided by the Thursday of the current week.
+  const thursday = new Date(Date.UTC(year, month, date));
+  const dayFromMonday = (thursday.getUTCDay() + 6) % 7; // Monday = 0 … Sunday = 6
+  thursday.setUTCDate(thursday.getUTCDate() - dayFromMonday + 3);
+  const isoYear = thursday.getUTCFullYear();
+  const firstThursday = new Date(Date.UTC(isoYear, 0, 4));
+  const firstFromMonday = (firstThursday.getUTCDay() + 6) % 7;
+  firstThursday.setUTCDate(firstThursday.getUTCDate() - firstFromMonday + 3);
+  const weekMs = 7 * 24 * 60 * 60 * 1000;
+  const week = 1 + Math.round((thursday.getTime() - firstThursday.getTime()) / weekMs);
+  return `${isoYear}-W${pad2(week)}`;
+}
+
+// Map a raw ledger row back to a StoredRelease. `amount` is a `numeric` column, so
+// the driver hands it back as a number or a string; normalise to a number (the same
+// coercion the SUM reads use), currency/merchant/period keys are plain text.
+function toStoredRelease(row: Row): StoredRelease {
+  return {
+    id: String(row.id),
+    userId: String(row.user_id),
+    connectionId: String(row.connection_id),
+    householdId: row.household_id == null ? null : String(row.household_id),
+    amount: Number(row.amount),
+    currency: String(row.currency),
+    merchant: String(row.merchant),
+    periodKeys: {
+      day: String(row.period_day),
+      week: String(row.period_week),
+      month: String(row.period_month),
+    },
+  };
 }
 
 // Read a single-row COALESCE(SUM(...), 0) result as an exact number (0 when no row
@@ -123,6 +179,30 @@ export async function sumForConnectionPeriod(
   return sumOf(result.rows);
 }
 
+// Every approved release for THAT connection owned by `userId` in the bucket
+// `period`/`periodKey` — the per-release detail the spending view lists (parallel
+// to `sumForConnectionPeriod`, which totals the same rows). Member-scoped (user_id
+// AND connection_id both bound), so another user's connection returns no rows; the
+// period key is bound and WHICH column is matched comes from the `PeriodKind`
+// whitelist, never caller text, so a value shaped like SQL is stored as data and
+// cannot alter the query. Returns an empty array when none match.
+export async function listReleasesForConnectionPeriod(
+  db: Db,
+  userId: string,
+  connectionId: string,
+  period: PeriodKind,
+  periodKey: string,
+): Promise<StoredRelease[]> {
+  const result = await db.query(
+    `SELECT id, user_id, connection_id, household_id, amount, currency, merchant,
+            period_day, period_week, period_month
+       FROM card_spend_ledger
+      WHERE user_id = $1 AND connection_id = $2 AND ${periodColumn(period)} = $3`,
+    [userId, connectionId, periodKey],
+  );
+  return result.rows.map(toStoredRelease);
+}
+
 // The member's OWN total across ALL their connections in the period (user_id
 // bound). Returns 0 when no row matches.
 export async function sumForMemberPeriod(
@@ -140,11 +220,57 @@ export async function sumForMemberPeriod(
   return sumOf(result.rows);
 }
 
+// One (member, currency) sub-total within a household's period: the member the
+// releases belong to, the ISO 4217 code they were released in, and the approved
+// total in that currency. A NUMBER per currency per member — never a merchant, a
+// release id or any other row content.
+export interface MemberCurrencyTotal {
+  readonly userId: string;
+  readonly currency: string;
+  readonly total: number;
+}
+
+// Every member's approved spend this period against the household budget, broken
+// down by the currency each release was made in (household_id bound), so the caller
+// can convert each currency into the household currency and sum. Gated by the SESSION
+// user id exactly as `sumForHouseholdPeriod`: the EXISTS clause yields rows only when
+// `userId` is a MEMBER of `householdId` (household_members store, E15-S04), so a
+// non-member reads nothing and never another member's rows. Grouped per (user, currency)
+// and returning ONLY the summed amount, it exposes totals alone — no merchant, no
+// release id, no other personal content. The period key is bound and WHICH column is
+// matched comes from the `PeriodKind` whitelist, never caller text.
+export async function sumByMemberCurrencyForHouseholdPeriod(
+  db: Db,
+  userId: string,
+  householdId: string,
+  period: PeriodKind,
+  periodKey: string,
+): Promise<MemberCurrencyTotal[]> {
+  const result = await db.query(
+    `SELECT led.user_id, led.currency, COALESCE(SUM(led.amount), 0) AS total
+       FROM card_spend_ledger led
+      WHERE led.household_id = $2 AND led.${periodColumn(period)} = $3
+        AND EXISTS (
+          SELECT 1 FROM household_members mem
+           WHERE mem.user_id = $1 AND mem.household_id = $2
+        )
+      GROUP BY led.user_id, led.currency`,
+    [userId, householdId, periodKey],
+  );
+  return result.rows.map((row) => ({
+    userId: String(row.user_id),
+    currency: String(row.currency),
+    total: Number(row.total),
+  }));
+}
+
 // The aggregate total across a household's members in the period (household_id
 // bound) — the one cross-member number the brief exposes. Gated by the SESSION user
-// id: the EXISTS clause returns the total only when `userId` participates in
-// `householdId` (has at least one ledger row there); a non-participant gets 0 and
-// never another member's merchants or rows — only ever a NUMBER.
+// id: the EXISTS clause returns the total only when `userId` is a MEMBER of
+// `householdId` in the household_members store (E15-S04) — NOT merely when they have a
+// ledger row there, so a member with no spend of their own still reads the household
+// total; a non-member gets 0 and never another member's merchants or rows — only ever
+// a NUMBER.
 export async function sumForHouseholdPeriod(
   db: Db,
   userId: string,
@@ -157,7 +283,7 @@ export async function sumForHouseholdPeriod(
        FROM card_spend_ledger led
       WHERE led.household_id = $2 AND led.${periodColumn(period)} = $3
         AND EXISTS (
-          SELECT 1 FROM card_spend_ledger mem
+          SELECT 1 FROM household_members mem
            WHERE mem.user_id = $1 AND mem.household_id = $2
         )`,
     [userId, householdId, periodKey],

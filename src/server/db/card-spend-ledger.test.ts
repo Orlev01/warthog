@@ -24,12 +24,14 @@
 // unlike vault values, held-request args or rule conditions — they are NOT DEK-encrypted
 // and this store holds no key and reads no `process.env`.
 //
-// The `connectionId` / `householdId` are opaque uuids here (the connections and
-// household-membership tables are created by later migrations, so — exactly like
-// 0011/0012/0013/0014 bind agent_id/connection_id/scope_agent_id — this store binds them
-// by value, with every READ member-scoped by the session's user_id, not a foreign key to
-// a table that does not exist yet). A household's total is the ONE cross-member aggregate
-// the brief allows, and it is gated by the caller's own participation in that household.
+// The `connectionId` / `householdId` are opaque uuids to this store (it binds them by
+// value, with every READ member-scoped by the session's user_id, not a foreign key). A
+// household's total is the ONE cross-member aggregate the brief allows, and it is gated by
+// the caller's HOUSEHOLD MEMBERSHIP. (E15-S04 supersession: authorisation moved from the
+// old "the caller has a ledger row in the household" proxy to real membership in the
+// household_members store — so a member who has spent nothing still reads the household
+// total, and a non-member reads none. The household tests below set up membership through
+// the households store accordingly.)
 //
 // ---------------------------------------------------------------------------
 // THE PINNED CONTRACT (chosen by the tester; the implementation conforms to it).
@@ -68,9 +70,11 @@
 //   sumForHouseholdPeriod(db, userId, householdId, period, periodKey): Promise<number>
 //     • the aggregate total across a household's members in the period (household_id
 //       bound) — the one cross-member number the brief exposes. Gated by the SESSION user
-//       id: returned only when `userId` participates in `householdId` (has at least one
-//       ledger row there); a non-participant gets 0 (they cannot read the household's
-//       total). It is only ever a NUMBER — never another member's merchants or rows.
+//       id: returned only when `userId` is a MEMBER of `householdId` (the household_members
+//       store, E15-S04) — NOT merely when they have a ledger row there, so a member with no
+//       spend of their own still reads the household total; a non-member gets 0 (they cannot
+//       read the household's total). It is only ever a NUMBER — never another member's
+//       merchants or rows.
 //
 // Acceptance criteria → tests:
 //   AC1 "recordRelease writes a ledger row and sumForConnectionPeriod returns the total
@@ -110,6 +114,12 @@ import {
   sumForMemberPeriod,
   sumForHouseholdPeriod,
 } from "./card-spend-ledger";
+// E15-S04 supersession: the household total now authorises the caller by REAL household
+// membership (the household_members store), not by "has a ledger row in the household".
+// These tests establish membership through the households store rather than the old
+// ledger-row proxy. Until E15-S04 ships `./households` + `0039_households.sql`, importing
+// this throws and every test here fails (RED) — that is the point of test-first.
+import { createHousehold, addMember } from "./households";
 import { createUser } from "./users";
 import { freshDb } from "../../test/db";
 import { loadMigrations, runMigrations, type Db } from "./index";
@@ -372,26 +382,30 @@ test("sumForHouseholdPeriod totals spend across a household's members in the per
   try {
     const alice = await makeUser(db, "ac2-hh-alice");
     const bob = await makeUser(db, "ac2-hh-bob");
-    // Operator fix (E07-S07 no-progress): the H2 release belonged to Alice, which put one
-    // person in two households and made Alice's own November total (110.50) exceed H's
-    // (30.75), so the third assertion could never pass. A person belongs to one household;
-    // the H2 release now belongs to Carol, keeping the cross-household isolation check.
     const carol = await makeUser(db, "ac2-hh-carol");
 
-    // Alice and Bob both belong to household H and both spend this month.
-    await recordRelease(db, makeRelease(alice, { connectionId: CONN_A, householdId: HOUSE_H, amount: 10.5, periodKeys: keys() }));
-    await recordRelease(db, makeRelease(bob, { connectionId: CONN_B, householdId: HOUSE_H, amount: 20.25, periodKeys: keys() }));
-    // A release in a different household must not count toward H.
-    await recordRelease(db, makeRelease(carol, { connectionId: CONN_C, householdId: HOUSE_H2, amount: 100.0, periodKeys: keys() }));
-    // A release in a different month must not count toward November's H total.
-    await recordRelease(db, makeRelease(bob, { connectionId: CONN_B, householdId: HOUSE_H, amount: 5.25, periodKeys: keys({ month: M_DEC }) }));
+    // Real membership (E15-S04): Alice owns household H and Bob is a member; Carol owns a
+    // separate household H2. Authorisation is by membership now, so the household id comes
+    // from the store, not a hand-written constant. A person belongs to one household, which
+    // keeps the cross-household isolation check honest (Carol is only in H2).
+    const houseH = await createHousehold(db, { ownerId: alice });
+    await addMember(db, { householdId: houseH.id, userId: bob });
+    const houseH2 = await createHousehold(db, { ownerId: carol });
 
-    const householdNov = await sumForHouseholdPeriod(db, alice, HOUSE_H, MONTH, M_NOV);
+    // Alice and Bob both spend in H this month.
+    await recordRelease(db, makeRelease(alice, { connectionId: CONN_A, householdId: houseH.id, amount: 10.5, periodKeys: keys() }));
+    await recordRelease(db, makeRelease(bob, { connectionId: CONN_B, householdId: houseH.id, amount: 20.25, periodKeys: keys() }));
+    // A release in a different household must not count toward H.
+    await recordRelease(db, makeRelease(carol, { connectionId: CONN_C, householdId: houseH2.id, amount: 100.0, periodKeys: keys() }));
+    // A release in a different month must not count toward November's H total.
+    await recordRelease(db, makeRelease(bob, { connectionId: CONN_B, householdId: houseH.id, amount: 5.25, periodKeys: keys({ month: M_DEC }) }));
+
+    const householdNov = await sumForHouseholdPeriod(db, alice, houseH.id, MONTH, M_NOV);
     assert.equal(householdNov, 30.75, "household H's November total aggregates Alice's and Bob's November releases");
 
     // Both members see the SAME household aggregate (it is the shared household total).
     assert.equal(
-      await sumForHouseholdPeriod(db, bob, HOUSE_H, MONTH, M_NOV),
+      await sumForHouseholdPeriod(db, bob, houseH.id, MONTH, M_NOV),
       30.75,
       "the household total is the same for every member of the household",
     );
@@ -460,20 +474,52 @@ test("sumForHouseholdPeriod does not expose a household's total to a non-member"
     const alice = await makeUser(db, "hh-member-alice");
     const carol = await makeUser(db, "hh-stranger-carol");
 
-    // Alice is in household H; Carol has spend but only in a DIFFERENT household H2 — she
-    // is not a participant in H.
-    await recordRelease(db, makeRelease(alice, { connectionId: CONN_A, householdId: HOUSE_H, amount: 42.5, periodKeys: keys() }));
-    await recordRelease(db, makeRelease(carol, { connectionId: CONN_B, householdId: HOUSE_H2, amount: 7.25, periodKeys: keys() }));
+    // Real membership (E15-S04): Alice is a member of household H; Carol is a member of a
+    // DIFFERENT household H2, so she is not a member of H — even though she has her own spend.
+    const houseH = await createHousehold(db, { ownerId: alice });
+    const houseH2 = await createHousehold(db, { ownerId: carol });
+    await recordRelease(db, makeRelease(alice, { connectionId: CONN_A, householdId: houseH.id, amount: 42.5, periodKeys: keys() }));
+    await recordRelease(db, makeRelease(carol, { connectionId: CONN_B, householdId: houseH2.id, amount: 7.25, periodKeys: keys() }));
 
     assert.equal(
-      await sumForHouseholdPeriod(db, alice, HOUSE_H, MONTH, M_NOV),
+      await sumForHouseholdPeriod(db, alice, houseH.id, MONTH, M_NOV),
       42.5,
       "a member of household H reads its total",
     );
     assert.equal(
-      await sumForHouseholdPeriod(db, carol, HOUSE_H, MONTH, M_NOV),
+      await sumForHouseholdPeriod(db, carol, houseH.id, MONTH, M_NOV),
       0,
       "a non-member of household H cannot read H's total (gated by the session user id)",
+    );
+  } finally {
+    await db.close();
+  }
+});
+
+test("a household member with no spend of their own still reads the household total (membership authorises, not a ledger row)", async () => {
+  // THE E15-S04 SUPERSESSION, pinned as behaviour: authorisation moved from the old
+  // "the caller has a ledger row in the household" proxy to real household membership.
+  // Under the OLD proxy Dave (who has never spent) would read 0; under the new contract a
+  // member reads the household total regardless of whether they personally have any spend.
+  const db = await freshDb();
+  try {
+    const alice = await makeUser(db, "hh-nospend-alice");
+    const dave = await makeUser(db, "hh-nospend-dave");
+
+    // Alice owns household H; Dave is a member but has NO ledger row of his own.
+    const houseH = await createHousehold(db, { ownerId: alice });
+    await addMember(db, { householdId: houseH.id, userId: dave });
+    await recordRelease(db, makeRelease(alice, { connectionId: CONN_A, householdId: houseH.id, amount: 42.5, periodKeys: keys() }));
+
+    assert.equal(
+      await sumForMemberPeriod(db, dave, MONTH, M_NOV),
+      0,
+      "Dave has spent nothing of his own (he has no ledger row at all)",
+    );
+    assert.equal(
+      await sumForHouseholdPeriod(db, dave, houseH.id, MONTH, M_NOV),
+      42.5,
+      "a member with no spend of their own still sees the household total (authorised by membership)",
     );
   } finally {
     await db.close();

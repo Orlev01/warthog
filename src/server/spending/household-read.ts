@@ -1,0 +1,138 @@
+// E15-S09 — Household spending totals read (brief "Spending view" + "Household
+// sharing"; design §8 step 4). Within a household both the owner and members see
+// ONLY each member's total approved spend this period against that member's monthly
+// limit and the household total against the shared household budget — never each
+// other's merchants or individual release entries. Every figure is expressed in the
+// household currency: a release made in another currency is converted via the latest
+// daily reference rate on or before today, a same-currency release counts at face
+// value.
+//
+// It COMPOSES the already-built, tested stores rather than re-running their SQL: the
+// caller's household (`getHouseholdForMember`), its member list with each member's
+// limit (`listMembers`), each member's per-currency household spend this month
+// (`sumByMemberCurrencyForHouseholdPeriod`, gated by the caller's membership) and the
+// daily reference rates (`getRate`) fed through the pure `convert` domain.
+//
+// Member-scoped by the GIVEN `userId` alone (the session's id, never a client value,
+// INV-102): the household is resolved FROM that id — no household id is ever accepted
+// from the client — and each underlying store binds it as a parameter, so a value
+// shaped like SQL travels as data and cannot alter a query. Every figure it reads —
+// budgets, limits, an ISO 4217 code, amounts, a daily reference scalar — is PLAINTEXT
+// METADATA (design §4.1), so the read holds no key and reads no `process.env`
+// (INV-103): the db and the clock are INJECTED seams.
+
+import { getHouseholdForMember, listMembers } from "../db/households";
+import { periodKeyFor, sumByMemberCurrencyForHouseholdPeriod } from "../db/card-spend-ledger";
+import { getRate } from "../db/exchange-rates";
+import { convert, type ReferenceRate } from "../../domain/currency/convert";
+import type { Db } from "../db/index";
+import type { Clock } from "../seams/clock";
+
+// One household member's totals — a limit and a converted total, NOTHING else: no
+// merchant, no release entry/id, no email, no other personal content.
+export interface HouseholdMemberSpending {
+  readonly userId: string;
+  readonly monthlyLimit: number | null; // this member's per-member monthly limit (null until set)
+  readonly spendToDate: number; // this member's approved spend this month, in the household currency
+}
+
+// The household spending report for a member: the shared budget and the household
+// total, plus one totals-only entry per member (incl. the owner). Every amount is in
+// the household currency.
+export interface HouseholdSpendingReport {
+  readonly householdId: string;
+  readonly currency: string; // the household currency every figure is expressed in
+  readonly monthlyBudget: number | null; // the shared monthly household budget (null until set)
+  readonly budgetSpendToDate: number; // the household total this month, in the household currency
+  readonly members: HouseholdMemberSpending[];
+}
+
+// The injected seams — no process.env.
+export interface HouseholdSpendingDeps {
+  readonly db: Db;
+  readonly clock: Clock;
+}
+
+// The budget period the member limit and the household budget are checked over (the
+// brief's shared monthly household budget and per-member monthly limit).
+const PERIOD = "month" as const;
+
+// Read the household spending totals for `userId`: resolve their household from that
+// id alone (null when they are in none), then each member's converted spend-to-date
+// against their monthly limit and the household total against the shared budget — all
+// in the household currency, converting an other-currency release via the latest daily
+// reference rate on or before today. TOTALS only — never a merchant or a release entry.
+export async function readHouseholdSpending(
+  userId: string,
+  deps: HouseholdSpendingDeps,
+): Promise<HouseholdSpendingReport | null> {
+  const { db, clock } = deps;
+
+  const household = await getHouseholdForMember(db, userId);
+  if (!household) return null;
+
+  const now = clock.now();
+  const monthKey = periodKeyFor(PERIOD, now);
+  const dayKey = periodKeyFor("day", now);
+  const householdCurrency = household.currency;
+
+  const members = await listMembers(db, household.id, userId);
+  const subTotals = await sumByMemberCurrencyForHouseholdPeriod(
+    db,
+    userId,
+    household.id,
+    PERIOD,
+    monthKey,
+  );
+
+  // The latest daily rate into the household currency, looked up once per source
+  // currency (the quote and the date are fixed for this read) and reused.
+  const rates = new Map<string, ReferenceRate | null>();
+  async function rateInto(from: string): Promise<ReferenceRate | null> {
+    const cached = rates.get(from);
+    if (cached !== undefined) return cached;
+    const lookup = await getRate(db, {
+      on: dayKey,
+      baseCurrency: from,
+      quoteCurrency: householdCurrency,
+    });
+    const rate = lookup.found
+      ? { from, to: householdCurrency, rate: lookup.rate, date: lookup.rateDate }
+      : null;
+    rates.set(from, rate);
+    return rate;
+  }
+
+  // Convert each (member, currency) sub-total into the household currency and
+  // accumulate it per member and into the household total. A same-currency amount
+  // counts at face value (no rate needed, never dropped for lack of one); an
+  // other-currency amount with no usable rate contributes 0 rather than a fabricated
+  // cross-currency figure.
+  const perMember = new Map<string, number>();
+  let budgetSpendToDate = 0;
+  for (const sub of subTotals) {
+    let amount: number;
+    if (sub.currency === householdCurrency) {
+      amount = sub.total;
+    } else {
+      const result = convert(sub.total, await rateInto(sub.currency));
+      amount = result.ok ? result.converted.amount : 0;
+    }
+    perMember.set(sub.userId, (perMember.get(sub.userId) ?? 0) + amount);
+    budgetSpendToDate += amount;
+  }
+
+  const memberRows: HouseholdMemberSpending[] = members.map((member) => ({
+    userId: member.userId,
+    monthlyLimit: member.monthlyLimit,
+    spendToDate: perMember.get(member.userId) ?? 0,
+  }));
+
+  return {
+    householdId: household.id,
+    currency: household.currency,
+    monthlyBudget: household.monthlyBudget,
+    budgetSpendToDate,
+    members: memberRows,
+  };
+}
