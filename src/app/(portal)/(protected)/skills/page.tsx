@@ -13,6 +13,7 @@ import { HttpError } from "@/server/http/validate";
 import type { Db } from "@/server/db/index";
 import { createSkillsActions, type SkillsActions } from "./actions";
 import { SkillsView } from "@/components/skills/skills-view";
+import { PageContainer } from "@/components/shell/page-container";
 
 // E13-S08 — Skills page (the thin protected-page loader + action wiring over the tested
 // `createSkillsActions` seam, `./actions`). It reads the signed-in session from the
@@ -181,14 +182,12 @@ function NoticeBanner({ notice }: { notice: Notice }) {
   const { done, text } = NOTICES[notice];
   const Icon = done ? CheckCircle2 : AlertTriangle;
   return (
-    <div className="mx-auto w-full max-w-3xl px-4 pt-8 sm:px-6">
-      <div
-        role={done ? "status" : "alert"}
-        className="flex items-start gap-3 rounded-card border border-line bg-surface p-4 text-sm text-fg"
-      >
-        <Icon aria-hidden={true} className="mt-0.5 h-5 w-5 shrink-0" />
-        <p>{text}</p>
-      </div>
+    <div
+      role={done ? "status" : "alert"}
+      className="mb-8 flex items-start gap-3 rounded-card border border-line bg-surface p-4 text-sm text-fg"
+    >
+      <Icon aria-hidden={true} className="mt-0.5 h-5 w-5 shrink-0" />
+      <p>{text}</p>
     </div>
   );
 }
@@ -211,7 +210,7 @@ export default async function SkillsPage({
   const data = await buildActions(db).load(session);
 
   return (
-    <>
+    <PageContainer>
       {notice ? <NoticeBanner notice={notice} /> : null}
       <SkillsView
         skills={data.skills}
@@ -224,6 +223,6 @@ export default async function SkillsPage({
         toggleSkillAction={toggleSkillAction}
         deleteSkillAction={deleteSkillAction}
       />
-    </>
+    </PageContainer>
   );
 }
