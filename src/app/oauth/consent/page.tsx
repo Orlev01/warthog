@@ -1,0 +1,187 @@
+import * as React from "react";
+import { cookies } from "next/headers";
+import { redirect } from "next/navigation";
+import { AlertTriangle } from "lucide-react";
+
+import { ConsentView } from "@/components/agents/consent-view";
+
+import { loadConfig } from "../../../server/config";
+import { getServerDb } from "../../../server/db/server";
+import { verifySession, type Session } from "../../../server/auth/session";
+import { systemClock } from "../../../server/seams/clock";
+import { systemRandom } from "../../../server/seams/random";
+import { HttpError } from "../../../server/http/validate";
+import { createAuthorizeActions, type ConsentApproval } from "../authorize/actions";
+import { loadConsentView } from "./actions";
+import type { Db } from "../../../server/db/index";
+
+// E10-S12 — the consent screen (loader + view + decision server-action wrappers).
+//
+// After a signed-in person's valid authorize request is carried here server-side
+// (`beginAuthorization`, with the opaque handle in the host-locked `__Host-wh_consent`
+// cookie), this thin page resolves the pending request by that handle (NEVER from the
+// form), renders the prop-driven <ConsentView>, and wires Approve/Refuse to the tested
+// consent decision. The acting person comes from the session cookie and the pending
+// request from the cookie's handle — the form carries only the person's choices. Config
+// is read inside the handler (`loadConfig()`), never at module load, and the database
+// comes from `getServerDb()` (one migrated database per process). No outcome is
+// swallowed: a failure comes back as a plain-words notice.
+
+const SESSION_COOKIE = "__Host-wh_session";
+const CONSENT_COOKIE = "__Host-wh_consent";
+const VALID_TEMPLATES = new Set(["minimal", "standard", "custom"]);
+
+// Clear the pending-handle cookie once a decision has consumed the request (host-locked,
+// so the clear must carry the same attributes the route set it with).
+const CLEAR_CONSENT_COOKIE = {
+  path: "/",
+  httpOnly: true,
+  secure: true,
+  sameSite: "lax",
+  maxAge: 0,
+} as const;
+
+// Resolve the signed-in session from the cookie (or null), re-derived wherever it is
+// needed so no handler trusts a client value for identity (design §5).
+async function resolveSession(db: Db): Promise<Session | null> {
+  const store = await cookies();
+  const token = store.get(SESSION_COOKIE)?.value ?? null;
+  return token ? verifySession(db, token, { clock: systemClock }) : null;
+}
+
+// Build the consent decision actions with the real seams.
+function buildActions(db: Db) {
+  return createAuthorizeActions({
+    db,
+    config: loadConfig(),
+    clock: systemClock,
+    random: systemRandom,
+  });
+}
+
+// The approval the person submits: their chosen name, the starting set, and the opt-ins
+// they turned on. The connecting platform is taken SERVER-SIDE from the pending request
+// (the verified callback host), never from the untrusted form; the acting person's id and
+// the pending request come from the session and the handle cookie. A checkbox that is
+// ticked is present in the form data; an unticked one is absent.
+function approvalFrom(formData: FormData, platform: string): ConsentApproval {
+  const rawTemplate = String(formData.get("starting-set") ?? "standard");
+  const template = VALID_TEMPLATES.has(rawTemplate) ? rawTemplate : "standard";
+  return {
+    name: String(formData.get("name") ?? "").trim(),
+    platform,
+    template,
+    highTier: formData.get("highTier") != null,
+    learningSharing: formData.get("learningSharing") != null,
+  };
+}
+
+// Approve the consent: re-derive the verified session (never trusting a client value),
+// take the pending request from the cookie handle, and run the tested decision — which
+// names the agent, creates its connection + permissions and issues the code. On success
+// the pending handle is cleared and the person is redirected back to the client; a
+// malformed submission comes back as a notice with the pending request still usable; an
+// expired/unknown handle comes back as an expired notice.
+async function approveConsentAction(formData: FormData): Promise<void> {
+  "use server";
+  const db = await getServerDb();
+  const store = await cookies();
+  const session = await resolveSession(db);
+  if (!session) redirect("/signin");
+
+  const handle = store.get(CONSENT_COOKIE)?.value ?? "";
+  const view = await loadConsentView(handle);
+  const platform = view?.platform ?? "Agent";
+
+  let clientRedirect: string | null = null;
+  let consumed = false;
+  let notice = "expired";
+  try {
+    const result = await buildActions(db).approve(session, handle, approvalFrom(formData, platform));
+    consumed = true;
+    if (result.ok) clientRedirect = result.redirectTo;
+  } catch (error) {
+    if (!(error instanceof HttpError)) throw error;
+    // Malformed input: the decision rejects at the boundary BEFORE consuming the pending
+    // request, so the handle is still usable — keep the cookie and let the person retry.
+    notice = "invalid";
+  }
+
+  if (consumed) store.set(CONSENT_COOKIE, "", CLEAR_CONSENT_COOKIE);
+  if (clientRedirect) redirect(clientRedirect);
+  redirect(`/oauth/consent?notice=${notice}`);
+}
+
+// Refuse the consent: take the pending request from the cookie handle and run the tested
+// decision, which creates nothing and redirects back to the client with access_denied.
+async function refuseConsentAction(_formData: FormData): Promise<void> {
+  "use server";
+  const db = await getServerDb();
+  const store = await cookies();
+  const session = await resolveSession(db);
+  if (!session) redirect("/signin");
+
+  const handle = store.get(CONSENT_COOKIE)?.value ?? "";
+  const result = await buildActions(db).refuse(session, handle);
+
+  store.set(CONSENT_COOKIE, "", CLEAR_CONSENT_COOKIE);
+  if (result.ok) redirect(result.redirectTo);
+  redirect("/oauth/consent?notice=expired");
+}
+
+// The outcome of the last attempt, in plain Australian English.
+const NOTICES: Record<string, string> = {
+  invalid: "We couldn't use those details. Check the agent's name and try again.",
+  expired: "This connection request has expired. Start connecting again from your agent.",
+};
+
+// Shown when the pending request can't be found (an expired or already-used handle), so
+// the screen explains it rather than crashing.
+function ExpiredNotice() {
+  return (
+    <main className="mx-auto flex w-full max-w-md flex-col gap-4 px-4 py-10 sm:px-6">
+      <div className="flex items-start gap-3 rounded-card border border-line bg-surface p-4 text-sm text-fg">
+        <AlertTriangle aria-hidden={true} className="mt-0.5 h-5 w-5 shrink-0" />
+        <p>
+          This connection request has expired or has already been used. Start connecting
+          again from your agent.
+        </p>
+      </div>
+    </main>
+  );
+}
+
+export default async function ConsentPage({
+  searchParams,
+}: {
+  searchParams: Promise<Record<string, string | string[] | undefined>>;
+}) {
+  // Read the request first: touching per-request data marks the page dynamic, so
+  // `next build` never prerenders it (and never opens the database at build time).
+  const rawNotice = (await searchParams).notice;
+  const noticeText = typeof rawNotice === "string" ? NOTICES[rawNotice] ?? null : null;
+
+  const store = await cookies();
+  const handle = store.get(CONSENT_COOKIE)?.value ?? "";
+  const view = await loadConsentView(handle);
+  if (!view) return <ExpiredNotice />;
+
+  return (
+    <main className="mx-auto flex w-full max-w-md flex-col gap-4 px-4 py-10 sm:px-6">
+      {noticeText ? (
+        <div
+          role="alert"
+          className="flex items-start gap-3 rounded-card border border-line bg-surface p-4 text-sm text-fg"
+        >
+          <AlertTriangle aria-hidden={true} className="mt-0.5 h-5 w-5 shrink-0" />
+          <p>{noticeText}</p>
+        </div>
+      ) : null}
+      <ConsentView
+        {...view}
+        approveAction={approveConsentAction}
+        refuseAction={refuseConsentAction}
+      />
+    </main>
+  );
+}
