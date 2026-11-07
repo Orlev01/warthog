@@ -54,11 +54,37 @@
 //        rejected with no code issued; a successful code reads back bound to the
 //        supplied consent connection, stored only as its hash.
 
+// ─── E10-S12 BEHAVIOUR SUPERSESSION (consent before code) ─────────────────────────────
+//
+// Until E10-S12 the `/oauth/authorize` route called `authorize()` directly and redirected
+// a signed-in, valid request straight back to the client with a code — no consent, no
+// agent row — so an OAuth-connected agent then got "This agent is not connected." on every
+// tool call. E10-S12 moves consent FIRST: a signed-in, valid authorize request now goes to
+// the consent screen, and the code is only minted once the person APPROVES (the consent
+// decision action, E10-S03, still issues it through `authorize()` bound to the connection it
+// creates).
+//
+// So this file keeps TWO contracts, and neither invalidates the other:
+//   • `authorize()` — UNCHANGED. It is still the code-issuer, now called by the APPROVE
+//     decision (post-consent). Every existing test below still characterizes it exactly.
+//   • `beginAuthorization()` — NEW. The seam the thin GET route now delegates to: it
+//     enforces the SAME rules (signed in, PKCE S256, matching resource) but, on success,
+//     CARRIES the authorize request SERVER-SIDE (the pending-authorization store) and
+//     returns a redirect to the internal `/oauth/consent` screen — it mints NO code and
+//     sends nothing to the client. The route puts the returned opaque handle in a
+//     host-locked cookie (never a URL/form field) so the consent page and the decision read
+//     it server-side.
+//
+// The new section at the foot of this file pins `beginAuthorization`. It proves the request
+// is carried server-side by reading it back through the already-built pending store
+// (`getPendingAuthorization`), never by grepping a module — behaviour, not source text.
+
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import { createHash, randomUUID } from "node:crypto";
 
-import { authorize, type AuthorizeDeps } from "./authorize";
+import { authorize, beginAuthorization, type AuthorizeDeps } from "./authorize";
+import { getPendingAuthorization } from "./pending";
 import { createClient, getAuthCode } from "./store";
 import { freshDb } from "../../test/db";
 import { loadConfig, type Config } from "../config";
@@ -311,6 +337,119 @@ test("a request whose resource is not the MCP resource is rejected", async () =>
       deps(db),
     );
     assert.equal(wrongHost.ok, false, "another host's resource must be rejected");
+  } finally {
+    await db.close();
+  }
+});
+
+// =====================================================================================
+// E10-S12 — beginAuthorization: a signed-in VALID request now goes to CONSENT first.
+//
+// The thin GET `/oauth/authorize` route delegates to this seam instead of issuing a code
+// outright. On success it CARRIES the authorize request server-side (the pending store)
+// and returns a redirect to the internal `/oauth/consent` screen with an opaque handle
+// (the route stores the handle in a host-locked cookie — never a URL/form field). It
+// mints NO code and sends nothing back to the client; the code is issued only after the
+// person approves (the decision calls `authorize()` above). It enforces the SAME rules as
+// `authorize()` and rejects with the SAME error vocabulary, so the route maps
+// `login_required` → the sign-in page and every other rejection → a 4xx.
+//
+//   beginAuthorization(
+//     { params: URLSearchParams; session: Session | null },
+//     AuthorizeDeps,
+//   ): Promise<{ ok: true; handle: string; redirectTo: string } | { ok: false; error: string }>
+// =====================================================================================
+
+test("a signed-in, valid request is carried to the consent screen — no code is issued", async () => {
+  const db = await dbWithClient();
+  try {
+    const result = await beginAuthorization(
+      { params: authorizeParams(), session: signedInSession() },
+      deps(db),
+    );
+
+    assert.ok(result.ok, "a signed-in, S256, correct-resource request begins the consent flow");
+    if (!result.ok) throw new Error("unreachable: beginAuthorization was not ok");
+
+    // It redirects to the INTERNAL consent screen — never back to the client — and the
+    // target carries no authorization code (consent must happen before a code exists).
+    assert.equal(result.redirectTo, "/oauth/consent", "a valid request is sent to the consent screen");
+    assert.notEqual(result.redirectTo, REDIRECT_URI, "a valid request is NOT redirected to the client yet");
+    assert.ok(
+      result.handle.length >= 32,
+      "the pending request is referenced by an opaque, high-entropy handle (for a host-locked cookie)",
+    );
+  } finally {
+    await db.close();
+  }
+});
+
+test("beginAuthorization carries the authorize request SERVER-SIDE under its handle", async () => {
+  const db = await dbWithClient();
+  try {
+    const begun = await beginAuthorization(
+      { params: authorizeParams(), session: signedInSession() },
+      deps(db),
+    );
+    assert.ok(begun.ok, "the request begins consent");
+    if (!begun.ok) throw new Error("unreachable: beginAuthorization was not ok");
+
+    // The request is held server-side and read back WHOLE through the pending store — the
+    // consent page and the decision read it from here, never trusting a form/URL field.
+    const pending = getPendingAuthorization(begun.handle);
+    assert.ok(pending != null, "the authorize request is held server-side under its handle");
+    assert.equal(pending!.params.get("client_id"), CLIENT_ID, "the consenting client is carried through");
+    assert.equal(pending!.params.get("redirect_uri"), REDIRECT_URI, "the client's redirect URI is carried through");
+    assert.equal(pending!.params.get("code_challenge"), CODE_CHALLENGE, "the PKCE S256 challenge is carried through");
+    assert.equal(pending!.params.get("code_challenge_method"), "S256", "the PKCE method is carried through");
+    assert.equal(pending!.params.get("resource"), MCP_RESOURCE, "the MCP resource is carried through");
+    assert.equal(pending!.params.get("state"), STATE, "the state is carried through for the final redirect");
+
+    // The handle is unguessable: a different handle resolves to nothing.
+    assert.equal(getPendingAuthorization("some-other-handle"), null, "a wrong handle resolves to no request");
+  } finally {
+    await db.close();
+  }
+});
+
+test("beginAuthorization rejects an unauthenticated request with login_required (the route sends it to sign in)", async () => {
+  const db = await dbWithClient();
+  try {
+    const result = await beginAuthorization(
+      { params: authorizeParams(), session: null },
+      deps(db),
+    );
+    assert.equal(result.ok, false, "with no signed-in session the consent flow must not begin");
+    if (result.ok) throw new Error("unreachable: an unauthenticated begin was accepted");
+    assert.equal(result.error, "login_required", "an unauthenticated begin names login_required");
+  } finally {
+    await db.close();
+  }
+});
+
+test("beginAuthorization rejects a malformed request (bad PKCE / wrong resource) before consent", async () => {
+  const db = await dbWithClient();
+  try {
+    const noPkce = await beginAuthorization(
+      { params: authorizeParams({ code_challenge: null }), session: signedInSession() },
+      deps(db),
+    );
+    assert.equal(noPkce.ok, false, "a request without a PKCE challenge never reaches consent");
+    if (!noPkce.ok) assert.equal(noPkce.error, "invalid_request", "a missing PKCE challenge is an invalid_request");
+
+    const plain = await beginAuthorization(
+      { params: authorizeParams({ code_challenge_method: "plain" }), session: signedInSession() },
+      deps(db),
+    );
+    assert.equal(plain.ok, false, "a non-S256 PKCE request never reaches consent");
+    if (!plain.ok) assert.equal(plain.error, "invalid_request", "a plain PKCE method is an invalid_request");
+
+    const wrongResource = await beginAuthorization(
+      { params: authorizeParams({ resource: "https://evil.example/mcp" }), session: signedInSession() },
+      deps(db),
+    );
+    assert.equal(wrongResource.ok, false, "a wrong-resource request never reaches consent");
+    if (!wrongResource.ok) assert.equal(wrongResource.error, "invalid_target", "a wrong resource is an invalid_target");
   } finally {
     await db.close();
   }

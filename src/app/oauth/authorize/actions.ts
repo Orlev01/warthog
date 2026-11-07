@@ -36,6 +36,7 @@ import { randomUUID } from "node:crypto";
 import { z } from "zod";
 
 import { authorize } from "../../../server/oauth/authorize";
+import { consumePendingAuthorization } from "../../../server/oauth/pending";
 import { createAgent } from "../../../server/db/agents";
 import {
   upsertPermissions,
@@ -94,10 +95,14 @@ export interface AuthorizeActionsDeps {
   readonly random: Random;
 }
 
-// The consent-decision actions the consent screen drives.
+// The consent-decision actions the consent screen drives. Each takes an opaque
+// `handle` to the pending authorize request held SERVER-SIDE (E10-S12): the decision
+// resolves and CONSUMES it through the pending store, never trusting the OAuth query
+// from a form/URL field. A tampered (unknown) or replayed (already-consumed) handle
+// resolves to nothing, so the decision creates nothing.
 export interface AuthorizeActions {
-  approve(session: Session, params: URLSearchParams, approval: ConsentApproval): Promise<DecisionResult>;
-  refuse(session: Session, params: URLSearchParams): Promise<DecisionResult>;
+  approve(session: Session, handle: string, approval: ConsentApproval): Promise<DecisionResult>;
+  refuse(session: Session, handle: string): Promise<DecisionResult>;
 }
 
 // A card spending budget on the approval, validated to the brief's three periods.
@@ -167,21 +172,29 @@ function grantsFor(
 export function createAuthorizeActions(deps: AuthorizeActionsDeps): AuthorizeActions {
   const { db, config, clock, random } = deps;
 
-  // Approve: validate the untrusted input FIRST (a 4xx before any write), mint the
-  // connection id server-side, issue the credential through the authorize flow bound
-  // to that connection, then name the agent and upsert its chosen permissions. The
-  // authorize seam enforces the OAuth rules (signed in, PKCE S256, matching resource)
-  // and writes nothing on rejection, so an invalid request never leaves an orphan
-  // agent behind.
+  // Approve: validate the untrusted input FIRST (a 4xx before any write), resolve and
+  // CONSUME the pending authorize request from its server-side handle (a tampered or
+  // replayed handle resolves to nothing, so nothing is created), mint the connection id
+  // server-side, issue the credential through the authorize flow bound to that
+  // connection, then name the agent and upsert its chosen permissions. The authorize
+  // seam enforces the OAuth rules (signed in, PKCE S256, matching resource) and writes
+  // nothing on rejection, so an invalid request never leaves an orphan agent behind.
   async function approve(
     session: Session,
-    params: URLSearchParams,
+    handle: string,
     approval: ConsentApproval,
   ): Promise<DecisionResult> {
     const valid = parseParams(approvalSchema, approval);
+
+    const pending = consumePendingAuthorization(handle);
+    if (pending == null) return { ok: false, error: "invalid_request" };
+
     const connectionId = randomUUID();
 
-    const issued = await authorize({ params, session, connectionId }, { db, config, clock, random });
+    const issued = await authorize(
+      { params: pending.params, session, connectionId },
+      { db, config, clock, random },
+    );
     if (!issued.ok) return { ok: false, error: issued.error };
 
     await createAgent(
@@ -201,17 +214,22 @@ export function createAuthorizeActions(deps: AuthorizeActionsDeps): AuthorizeAct
     return { ok: true, redirectTo: issued.redirectTo };
   }
 
-  // Refuse: create no agent, upsert no permissions and issue no credential. Redirect
-  // back to the client with `access_denied` (the echoed state and the configured
-  // issuer), carrying no code.
-  async function refuse(_session: Session, params: URLSearchParams): Promise<DecisionResult> {
-    const redirectUri = params.get("redirect_uri");
+  // Refuse: create no agent, upsert no permissions and issue no credential. Resolve and
+  // CONSUME the pending request from its server-side handle (a tampered or replayed
+  // handle resolves to nothing, so there is no client to redirect and nothing is
+  // created). Redirect back to the client with `access_denied` (the echoed state and the
+  // configured issuer), carrying no code.
+  async function refuse(_session: Session, handle: string): Promise<DecisionResult> {
+    const pending = consumePendingAuthorization(handle);
+    if (pending == null) return { ok: false, error: "invalid_request" };
+
+    const redirectUri = pending.params.get("redirect_uri");
     if (redirectUri == null || redirectUri === "") {
       return { ok: false, error: "invalid_request" };
     }
     const redirect = new URL(redirectUri);
     redirect.searchParams.set("error", "access_denied");
-    const state = params.get("state");
+    const state = pending.params.get("state");
     if (state != null) redirect.searchParams.set("state", state);
     redirect.searchParams.set("iss", issuer(config));
     return { ok: true, redirectTo: redirect.toString() };

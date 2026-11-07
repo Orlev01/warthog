@@ -26,6 +26,7 @@
 import { createHash } from "node:crypto";
 
 import { createAuthCode } from "./store";
+import { putPendingAuthorization } from "./pending";
 import type { Db } from "../db/index";
 import type { Config } from "../config";
 import type { Clock } from "../seams/clock";
@@ -79,18 +80,20 @@ function sha256Hex(value: string): string {
   return createHash("sha256").update(value, "utf8").digest("hex");
 }
 
-export async function authorize(
-  input: AuthorizeInput,
-  deps: AuthorizeDeps,
-): Promise<AuthorizeResult> {
-  const { params, session, connectionId } = input;
-  const { db, config, clock, random } = deps;
-
-  // Must be signed in (the route resolves this from the session cookie).
+// The OAuth authorization rules, shared by `authorize` (which issues the code) and
+// `beginAuthorization` (which carries the request to consent): the request must be
+// signed in; PKCE is mandatory and S256 only (a missing challenge, or any method
+// other than S256 — including an omitted method, which RFC 7636 defaults to "plain"
+// — is rejected); the `resource` is required and must be exactly this server's MCP
+// resource; the client and its redirect URI are required to form the response. The
+// two seams reject with the SAME error vocabulary, so the route maps each identically.
+function validateAuthorizeRequest(
+  params: URLSearchParams,
+  session: Session | null,
+  config: Config,
+): { readonly ok: true } | { readonly ok: false; readonly error: string } {
   if (session == null) return { ok: false, error: "login_required" };
 
-  // PKCE is mandatory and S256 only: a missing challenge, or any method other than
-  // S256 (including an omitted method, which RFC 7636 defaults to "plain"), is rejected.
   const codeChallenge = params.get("code_challenge");
   if (codeChallenge == null || codeChallenge === "") {
     return { ok: false, error: "invalid_request" };
@@ -99,18 +102,35 @@ export async function authorize(
     return { ok: false, error: "invalid_request" };
   }
 
-  // The resource parameter is required and must be exactly this server's MCP resource.
   const resource = params.get("resource");
   if (resource !== mcpResource(config)) {
     return { ok: false, error: "invalid_target" };
   }
 
-  // The client and its redirect URI are required to form the authorization response.
   const clientId = params.get("client_id");
   const redirectUri = params.get("redirect_uri");
   if (clientId == null || clientId === "" || redirectUri == null || redirectUri === "") {
     return { ok: false, error: "invalid_request" };
   }
+  return { ok: true };
+}
+
+export async function authorize(
+  input: AuthorizeInput,
+  deps: AuthorizeDeps,
+): Promise<AuthorizeResult> {
+  const { params, session, connectionId } = input;
+  const { db, config, clock, random } = deps;
+
+  // Enforce the authorization rules; any failure rejects with no code issued.
+  const valid = validateAuthorizeRequest(params, session, config);
+  if (!valid.ok) return valid;
+
+  // The client and its redirect URI are present (validated above).
+  const clientId = params.get("client_id")!;
+  const redirectUri = params.get("redirect_uri")!;
+  const codeChallenge = params.get("code_challenge")!;
+  const resource = params.get("resource")!;
 
   // Mint an opaque code and store ONLY its hash, bound to the consent's connection
   // together with the PKCE challenge, client, redirect URI, resource and expiry.
@@ -134,4 +154,39 @@ export async function authorize(
   redirect.searchParams.set("iss", issuer(config));
 
   return { ok: true, redirectTo: redirect.toString(), code };
+}
+
+// E10-S12 — begin the consent-first authorize flow. The thin GET `/oauth/authorize`
+// route now delegates HERE instead of issuing a code outright. This enforces the SAME
+// rules as `authorize` (signed in, PKCE S256, matching resource) and rejects with the
+// SAME error vocabulary, but on success it mints NO code and sends nothing to the
+// client: it carries the whole authorize request SERVER-SIDE (the pending store) and
+// returns an opaque handle plus a redirect to the internal `/oauth/consent` screen. The
+// route puts the handle in a host-locked cookie, so the consent page and the decision
+// read the request back by its handle and never trust a form/URL field. The code is
+// issued only once the person approves (the decision calls `authorize` above).
+export interface BeginAuthorizationInput {
+  readonly params: URLSearchParams;
+  readonly session: Session | null;
+}
+
+export type BeginAuthorizationResult =
+  | { readonly ok: true; readonly handle: string; readonly redirectTo: string }
+  | { readonly ok: false; readonly error: string };
+
+export async function beginAuthorization(
+  input: BeginAuthorizationInput,
+  deps: AuthorizeDeps,
+): Promise<BeginAuthorizationResult> {
+  const { params, session } = input;
+  const { config, random } = deps;
+
+  // Enforce the authorization rules; a rejection never reaches consent.
+  const valid = validateAuthorizeRequest(params, session, config);
+  if (!valid.ok) return valid;
+
+  // Carry the request server-side under an opaque handle and send the person to the
+  // internal consent screen — no code is issued and nothing is sent to the client.
+  const handle = putPendingAuthorization(params, random);
+  return { ok: true, handle, redirectTo: "/oauth/consent" };
 }
