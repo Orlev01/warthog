@@ -9,6 +9,7 @@ import { selectKeyWrapper } from "@/server/crypto/key-wrapper";
 import { systemClock } from "@/server/seams/clock";
 import { createIdentityActions } from "./actions";
 import { IdentityView } from "@/components/vault/identity-view";
+import { PageContainer } from "@/components/shell/page-container";
 
 // E11-S15 — Vault identity page (the thin protected-page loader over the tested
 // `createIdentityActions` seam, `./actions`). It reads the signed-in session from the
@@ -43,5 +44,9 @@ export default async function VaultPage() {
   const keyWrapper = selectKeyWrapper({ nodeEnv: config.nodeEnv, localKek: config.devKek });
   const data = await createIdentityActions({ db, keyWrapper }).load(session);
 
-  return <IdentityView lowTierFields={data.lowTierFields} highTierFields={data.highTierFields} />;
+  return (
+    <PageContainer>
+      <IdentityView lowTierFields={data.lowTierFields} highTierFields={data.highTierFields} />
+    </PageContainer>
+  );
 }
