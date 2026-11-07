@@ -1,106 +1,108 @@
-// E18-S10 — In-process job scheduler (`src/server/jobs/scheduler.ts`).
+// E18-S21 — In-process job scheduler (`src/server/jobs/scheduler.ts`), reworked into
+// two explicit parts: PERIODIC SWEEPS the scheduler runs DIRECTLY on their interval (no
+// job rows), and a DISPATCH TABLE for the payload-driven queue rows the drain claims and
+// routes by `type`.
 //
-// RED-first: `./scheduler` does NOT exist yet, so importing `createScheduler` /
-// `getScheduler` throws and every test here fails until the builder writes the
-// minimum code to pass. That absence IS the point of test-first — do NOT implement
-// anything to make these pass; the builder writes `scheduler.ts` afterwards. The
-// claim/run library (`../db/jobs`), the clock seam, the registry (E18-S09) and the
-// in-memory PGlite Queryable (via `src/test/db`) all already exist.
+// RED-first: the reworked `./scheduler` does NOT exist yet (today's scheduler enqueues
+// payload-less periodic rows and dispatches from a `jobs: SchedulerJob[]` set), so the
+// new `createScheduler({ getDb, clock, sweeps, dispatch, log })` shape and behaviours
+// below fail until the builder reworks it. That absence IS the point of test-first — do
+// NOT implement anything to make these pass. The claim/run library (`../db/jobs`), the
+// clock seam, the registry builders (`./registry`), the approvals / users / fallback job
+// modules and the in-memory PGlite (via `src/test/db`) all already exist.
 //
-// These tests pin BEHAVIOUR (what a tick DOES to the jobs table and which handler it
-// runs), never the source text of the module. Every test drives the injectable
-// `createScheduler` factory against an isolated in-memory PGlite (the project's real
-// driver seam with a `pglite:memory` URL) with a registry of handlers the test
-// controls, so no test touches the network or Azure, and a later behaviour-preserving
-// refactor stays green.
+// These tests pin BEHAVIOUR (what a tick DOES: which sweeps run, what the drain does to
+// the jobs table, which handler each claimed row reaches, that a failure is logged
+// through redaction and never aborts the rest), never the source text of the module.
 //
 // ───────────────────────────────────────────────────────────────────────────────────
 // THE PINNED CONTRACT (chosen by the tester; the implementation conforms to it).
 //
-//   // One periodic background job the scheduler ticks. `name` is matched against a
-//   // claimed row's `type` to dispatch it (exactly as the connector dispatcher routes
-//   // `run(db, clock, handler)` work by `job.type`); `intervalMs` is the schedule it is
-//   // enqueued on; `handler(job)` is run for a claimed row of that type.
-//   interface SchedulerJob {
+//   // One periodic background job the scheduler runs DIRECTLY on its interval — no job
+//   // row is ever enqueued for it. `run()` is the sweep itself (closed over its seams).
+//   interface PeriodicSweep {
 //     readonly name: string;
 //     readonly intervalMs: number;
-//     readonly handler: (job: Job) => void | Promise<void>;
+//     readonly run: () => void | Promise<void>;
 //   }
 //
 //   interface SchedulerDeps {
-//     readonly getDb: () => Promise<Db>;           // resolved per tick (lazy db source)
+//     readonly getDb: () => Promise<Db>;        // resolved per tick (lazy db source)
 //     readonly clock: Clock;
-//     readonly jobs: readonly SchedulerJob[];      // the injected registry
+//     readonly sweeps: readonly PeriodicSweep[]; // periodic sweeps, run directly
+//     // the dispatch table: enqueued `type` → the handler that runs a claimed row.
+//     readonly dispatch: Readonly<Record<string, (job: Job) => void | Promise<void>>>;
+//     readonly log: (entry: unknown) => void;   // the scheduler REDACTS before calling this
 //   }
 //
 //   function createScheduler(deps: SchedulerDeps): { tick(): Promise<unknown> };
 //   function getScheduler(): { tick(): Promise<unknown> };   // memoised per-process
 //
-// A `getDb` function (not a resolved `Db`) is the db source so the per-process
-// `getScheduler()` can stay lazy: it wires `getServerDb()` (which reads the database
-// URL from config and selects the in-process PGlite Queryable for a `pglite:` URL and
-// the real pool for a `postgres://` one — the ONE composition root, keyed on the URL
-// scheme) WITHOUT opening a database at construction time.
+// A tick:
+//   1. runs every periodic sweep whose interval has elapsed, DIRECTLY (never by enqueuing
+//      a payload-less row); a sweep that throws is logged (redacted) and does not stop the
+//      other sweeps or the drain;
+//   2. drains the runnable rows through `../db/jobs`'s claim/run, dispatching each claimed
+//      row to `dispatch[row.type]`; a row whose type has no entry is dead-lettered, a row
+//      whose handler throws is retried/failed by the queue library, one failing row never
+//      stops the drain of the others, and every failure is logged through redaction.
 //
 // ───────────────────────────────────────────────────────────────────────────────────
 // Acceptance criteria → tests:
+//   AC1  a due queue row is claimed and dispatched to its registered handler BY TYPE and
+//        marked done; a row already claimed by another tick is not run again; a real
+//        enqueued `approval.fallback` row (with its `approvalId` payload) is executed by
+//        the drain THROUGH `runApprovalFallback`.
+//   AC2  a pending approval past its `expires_at` is expired by the periodic sweep on its
+//        next tick; a not-yet-due approval is untouched.
+//   AC3  a queued row with an unknown type is dead-lettered (failed, no retry), a throwing
+//        handler is retried/failed, and in BOTH cases the other due rows in the SAME drain
+//        still run — every failure logged (redacted), never swallowed.
+//   AC4  each periodic sweep runs on its interval, DIRECTLY (no payload-less rows); a sweep
+//        that throws is logged (redacted) and stops neither the scheduler nor the other
+//        sweeps.
+//   INV-103 the scheduler runs purely from its injected deps; no ambient env value lands in
+//        what it writes.
 //
-//   AC1 "With a job registered and a due row in the jobs table, one scheduler tick
-//        claims the row and runs its handler, and a row already claimed by another tick
-//        is not run a second time."
-//          → "a tick claims a due row and dispatches it to its registered handler by
-//            type, marking the row done",
-//          → "a due row is never run a second time across repeated ticks (idempotent)",
-//          → "a row already claimed by another tick is not run again".
-//        A due row is enqueued OVERDUE (run_at well in the past) so `claim` — which
-//        orders by run_at ASC — hands it out before any row a periodic enqueue may add
-//        at `now`; and every "ran / not ran" assertion is scoped to that row's own id,
-//        so it holds whether or not a tick also enqueues periodic rows of the same type
-//        and whether a tick drains the queue or runs one row.
-//
-//   AC2 "The scheduler is a single memoised per-process instance (never re-instantiated
-//        per call), reads the database URL from config, and uses the in-memory Queryable
-//        when that URL starts with 'memory:' so the job loop is drivable under next dev."
-//          → "getScheduler returns the same instance on every call (memoised)".
-//        In THIS project the in-memory branch is NOT a `startsWith('memory:')` check in
-//        the scheduler: the project addendum forbids `createDb` in composition code and
-//        routes the database through `getServerDb()` → `createDb(loadConfig().databaseUrl)`,
-//        which selects the in-process PGlite Queryable for a `pglite:` URL (see
-//        src/server/db/index.ts, covered by its own tests). The behavioural heart of AC2
-//        — "the job loop runs against the in-memory Queryable with no Postgres" — is what
-//        every tick test below exercises: each drives `createScheduler({ getDb, ... })`
-//        with an injected in-memory `Db` from `freshDb()`. (The 'memory:' wording is noted
-//        as superseded by the project's getServerDb/`pglite:` convention.)
-//
-//   AC3 [obligation:secrets-from-env] (INV-103) "No secret value is present in source,
-//        the client bundle, or the build context; config is read from env."
-//          → "a tick folds no ambient env secret into the jobs it writes": the scheduler
-//            runs purely from its injected db + clock + registry, reading the database URL
-//            through config (never arbitrary `process.env`), so a decoy secret planted in
-//            the environment never lands in an enqueued job row.
-//
-// Every db handle is closed in a `finally` so node:test leaves no open handle; each
-// test uses its own `freshDb()` (an isolated in-memory PGlite with the real
-// migrations), so tests share no state.
+// Every db handle is closed in a `finally` so node:test leaves no open handle; each test
+// uses its own `freshDb()` (an isolated in-memory PGlite with the real migrations), so
+// tests share no state. No test touches the network or Azure.
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import { Buffer } from "node:buffer";
+import { randomBytes, randomUUID } from "node:crypto";
 
 import { createScheduler, getScheduler } from "./scheduler";
+import { buildDispatchTable, buildPeriodicSweeps } from "./registry";
 
 import { enqueue, claim, type Job } from "../db/jobs";
 import { freshDb } from "../../test/db";
-import type { Clock } from "../seams/clock";
+import { fixedClock, type Clock } from "../seams/clock";
+import { fixedRandom } from "../seams/random";
+import { localAesKeyWrapper, type KeyWrapper } from "../crypto/key-wrapper";
+import { fakeRateSource } from "../currency/rate-source";
+import { createApproval } from "../db/approvals";
+import { createUser } from "../db/users";
+// The EXACT type string production code enqueues for the approval fallback job — imported
+// from the module that owns/enqueues it, never retyped (AC1).
+import { FALLBACK_JOB_TYPE } from "../notify/approval-notifier";
+import type { OutgoingMessage } from "../notify/senders";
 import type { Db } from "../db/index";
 
 // A fixed origin instant; time only moves when a test advances it, so "due" is
 // deterministic with no wall-clock dependence.
 const T0 = new Date("2026-03-01T00:00:00.000Z");
-const HOUR_MS = 60 * 60 * 1000;
+const MINUTE_MS = 60 * 1000;
+const HOUR_MS = 60 * MINUTE_MS;
 const DAY_MS = 24 * HOUR_MS;
 
+// A Luhn-valid card number planted inside a thrown error's message, so a test can prove
+// the scheduler routes the failure THROUGH redaction before logging: after redaction the
+// full number is masked (only the last four survive), so the full string must be absent.
+const CARD = "4111111111111111";
+
 // A clock whose "now" the test controls. `advance(ms)` moves it forward so a periodic
-// job becomes due again and a scheduled-for-later row eventually fires.
+// sweep becomes due again.
 function mutableClock(start: Date): { clock: Clock; advance(ms: number): void } {
   let current = start.getTime();
   return {
@@ -115,8 +117,8 @@ function mutableClock(start: Date): { clock: Clock; advance(ms: number): void } 
   };
 }
 
-// A handler that records every job it is dispatched. Scoped id checks against
-// `received` survive any periodic rows a tick may also enqueue and run.
+// A handler that records every job it is dispatched. Id-scoped checks against `received`
+// survive whatever else a drain processes.
 function recorder(): { received: Job[]; handler: (job: Job) => Promise<void> } {
   const received: Job[] = [];
   return {
@@ -138,58 +140,130 @@ async function statusOf(db: Db, id: string): Promise<string | undefined> {
   return result.rows[0]?.status as string | undefined;
 }
 
+// Read one approval row's status straight from the table (a plaintext column — no
+// decryption needed to observe the lifecycle transition the sweep drives).
+async function approvalStatus(db: Db, id: string): Promise<string | undefined> {
+  const result = await db.query("SELECT status FROM approvals WHERE id = $1", [id]);
+  return result.rows[0]?.status as string | undefined;
+}
+
+// A COMPLETE seam bundle for the registry builders (`buildDispatchTable` /
+// `buildPeriodicSweeps`), built from cheap fakes plus whichever real seams a test needs
+// (db, clock, keyWrapper, an email recorder). The builders only ASSEMBLE handlers from
+// these seams — the fakes are never invoked unless the matching handler/sweep actually
+// runs — so a structural bundle is enough. Returned as a variable (not an inline literal
+// at the call site) so its superset of fields stays assignable to the builders' seam type.
+function jobSeams(args: {
+  db: Db;
+  clock: Clock;
+  keyWrapper: KeyWrapper;
+  onEmail?: (message: OutgoingMessage) => void;
+}) {
+  return {
+    db: args.db,
+    clock: args.clock,
+    keyWrapper: args.keyWrapper,
+    random: fixedRandom(7),
+    senders: {
+      push: { sendPush: async (): Promise<void> => {} },
+      email: {
+        sendEmail: async (message: OutgoingMessage): Promise<void> => {
+          args.onEmail?.(message);
+        },
+      },
+      sms: { sendSms: async (): Promise<void> => {} },
+    },
+    push: { sendPush: async (): Promise<void> => {} },
+    refresh: async (): Promise<void> => {},
+    resetExecutor: {
+      eraseVaultData: async (): Promise<void> => {},
+      revokeAgentsAndConnections: async (): Promise<void> => {},
+    },
+    rateSource: fakeRateSource({ rateDate: "2026-03-01", baseCurrency: "AUD", rates: { USD: 0.65 } }),
+    publicBaseUrl: "https://warthog.com.au",
+  };
+}
+
+// Create a person whose wrapped DEK really unwraps under `keyWrapper` (so the expiry
+// sweep can recover it), returning the ids a test needs.
+async function makePerson(
+  db: Db,
+  who: string,
+  keyWrapper: KeyWrapper,
+): Promise<{ userId: string; dek: Uint8Array }> {
+  const dek = randomBytes(32);
+  const wrappedDek = await keyWrapper.wrap(dek);
+  const user = await createUser(db, { email: `${who}-${randomUUID()}@warthog.com.au`, wrappedDek });
+  return { userId: user.id, dek };
+}
+
+// Arrange a PENDING approval created at `createdAt` (its 15-minute window ends at
+// createdAt + 15m), owned by `person`.
+async function arrangeApproval(
+  db: Db,
+  person: { userId: string; dek: Uint8Array },
+  createdAt: Date,
+): Promise<string> {
+  const approval = await createApproval(
+    db,
+    { userId: person.userId, agentId: randomUUID(), detail: { field: "card", amount: 1 } },
+    person.dek,
+    fixedClock(createdAt),
+  );
+  return approval.id;
+}
+
 // ===========================================================================
-// AC1 — a tick claims a due row and dispatches it to its registered handler.
+// AC1 — the drain claims a due row and dispatches it to its registered handler BY TYPE.
 // ===========================================================================
 
-test("a tick claims a due row and dispatches it to its registered handler by type, marking the row done", async () => {
+test("a tick drains a due row and dispatches it to the handler registered for its type, marking it done", async () => {
   const { clock } = mutableClock(T0);
   const db = await freshDb();
   try {
-    // Two registered jobs so we also prove dispatch routes to the CORRECT handler by
-    // type. Large intervals keep periodic enqueue from crowding the assertions (the
-    // id-scoped checks would hold regardless).
+    // Two dispatch entries so we also prove routing goes to the CORRECT handler by type.
     const recA = recorder();
     const recB = recorder();
-    const jobs = [
-      { name: "job-a", intervalMs: DAY_MS, handler: recA.handler },
-      { name: "job-b", intervalMs: DAY_MS, handler: recB.handler },
-    ];
-    const scheduler = createScheduler({ getDb: async () => db, clock, jobs });
+    const scheduler = createScheduler({
+      getDb: async () => db,
+      clock,
+      sweeps: [],
+      dispatch: { "job-a": recA.handler, "job-b": recB.handler },
+      log: () => {},
+    });
 
-    // A due (overdue) row of type job-b: claim() orders by run_at ASC, so this row is
-    // handed out before any row a periodic enqueue adds at `now`.
     const row = await enqueue(db, { type: "job-b", runAt: new Date(T0.getTime() - HOUR_MS) });
 
     await scheduler.tick();
 
-    // The row's registered handler ran for it, exactly once...
     assert.equal(timesSeen(recB.received, row.id), 1, "job-b's handler ran for the due row once");
-    const got = recB.received.find((j) => j.id === row.id);
-    assert.equal(got?.type, "job-b", "the handler is dispatched the claimed job (routed by type)");
-
-    // ...and the OTHER job's handler was never dispatched this row (routing is by type).
-    assert.equal(timesSeen(recA.received, row.id), 0, "a different job's handler is not dispatched the row");
-
-    // The claim/run library marked the processed row done, so it is never claimed again.
+    assert.equal(
+      recB.received.find((j) => j.id === row.id)?.type,
+      "job-b",
+      "the handler is dispatched the claimed job (routed by type)",
+    );
+    assert.equal(timesSeen(recA.received, row.id), 0, "a different type's handler is not dispatched the row");
     assert.equal(await statusOf(db, row.id), "done", "the processed row is marked done");
   } finally {
     await db.close();
   }
 });
 
-test("a due row is never run a second time across repeated ticks (idempotent)", async () => {
+test("a due row is drained and run exactly once across repeated ticks (idempotent)", async () => {
   const { clock } = mutableClock(T0);
   const db = await freshDb();
   try {
     const rec = recorder();
-    const jobs = [{ name: "job-a", intervalMs: DAY_MS, handler: rec.handler }];
-    const scheduler = createScheduler({ getDb: async () => db, clock, jobs });
+    const scheduler = createScheduler({
+      getDb: async () => db,
+      clock,
+      sweeps: [],
+      dispatch: { "job-a": rec.handler },
+      log: () => {},
+    });
 
     const row = await enqueue(db, { type: "job-a", runAt: new Date(T0.getTime() - HOUR_MS) });
 
-    // Tick several times at the SAME instant: the row is claimed and run on the first
-    // tick (marked done) and must never be claimed or run again on later ticks.
     await scheduler.tick();
     await scheduler.tick();
     await scheduler.tick();
@@ -206,21 +280,23 @@ test("a row already claimed by another tick is not run again", async () => {
   const db = await freshDb();
   try {
     const rec = recorder();
-    const jobs = [{ name: "job-a", intervalMs: DAY_MS, handler: rec.handler }];
-    const scheduler = createScheduler({ getDb: async () => db, clock, jobs });
+    const scheduler = createScheduler({
+      getDb: async () => db,
+      clock,
+      sweeps: [],
+      dispatch: { "job-a": rec.handler },
+      log: () => {},
+    });
 
     const row = await enqueue(db, { type: "job-a", runAt: new Date(T0.getTime() - HOUR_MS) });
 
-    // Simulate another tick/worker having already claimed this row (FOR UPDATE SKIP
-    // LOCKED marks it in the same statement that selects it, so it leaves 'pending').
+    // Another tick/worker claims it first (claim marks it in the same statement).
     const claimed = await claim(db, clock);
     assert.equal(claimed?.id, row.id, "the overdue row is the one another tick claims");
     assert.equal(await statusOf(db, row.id), "claimed", "the row is now claimed by the other tick");
 
     await scheduler.tick();
 
-    // Our scheduler never re-runs the already-claimed row: claim selects only pending
-    // rows, so this row is skipped and its handler is not dispatched it a second time.
     assert.equal(timesSeen(rec.received, row.id), 0, "an already-claimed row's handler is not run again");
     assert.equal(await statusOf(db, row.id), "claimed", "the already-claimed row is left untouched");
   } finally {
@@ -228,64 +304,254 @@ test("a row already claimed by another tick is not run again", async () => {
   }
 });
 
-// ===========================================================================
-// AC1/What — a tick enqueues DUE PERIODIC jobs and runs them via claim/run.
-// ===========================================================================
-
-test("a tick enqueues a due periodic job into the table, then claims and runs its handler", async () => {
-  const c = mutableClock(T0);
-  const db = await freshDb();
-  try {
-    const rec = recorder();
-    // A short interval so the job is due within the ticks below. The table starts
-    // empty, so the ONLY way the handler can run is the scheduler enqueueing the
-    // periodic job itself and then claiming + running it.
-    const jobs = [{ name: "periodic-a", intervalMs: 60_000, handler: rec.handler }];
-    const scheduler = createScheduler({ getDb: async () => db, clock: c.clock, jobs });
-
-    // Tick across a generous span, advancing past the interval each time, so the
-    // periodic job becomes due, is enqueued, and is claimed + run regardless of whether
-    // the scheduler enqueues it due-now (same-tick) or due at the next interval.
-    for (let i = 0; i < 5; i += 1) {
-      await scheduler.tick();
-      c.advance(60_000);
-    }
-
-    assert.ok(rec.received.length > 0, "the periodic job's handler ran at least once");
-    assert.equal(
-      rec.received[0]?.type,
-      "periodic-a",
-      "the handler is dispatched a job whose type is the periodic job's name",
-    );
-
-    // The scheduler enqueued a real row of that type (keyed on the job name) and the
-    // claim/run library marked it done.
-    const rows = await db.query("SELECT status FROM jobs WHERE type = $1", ["periodic-a"]);
-    assert.ok(rows.rows.length > 0, "a periodic-a row was enqueued into the jobs table");
-    assert.ok(
-      rows.rows.some((r) => r.status === "done"),
-      "a periodic-a row was claimed and run to done",
-    );
-  } finally {
-    await db.close();
-  }
-});
-
-test("a tick with nothing registered and an empty queue runs no handler and does not throw", async () => {
+test("an idle tick (no sweeps, empty queue) runs nothing, enqueues nothing and does not throw", async () => {
   const { clock } = mutableClock(T0);
   const db = await freshDb();
   try {
-    const scheduler = createScheduler({ getDb: async () => db, clock, jobs: [] });
-    await scheduler.tick(); // an idle tick is a no-op, not an error
+    const scheduler = createScheduler({ getDb: async () => db, clock, sweeps: [], dispatch: {}, log: () => {} });
+    await scheduler.tick();
     const rows = await db.query("SELECT count(*)::int AS n FROM jobs");
-    assert.equal(rows.rows[0]?.n, 0, "an idle tick with no jobs enqueues nothing");
+    assert.equal(rows.rows[0]?.n, 0, "an idle tick enqueues nothing");
   } finally {
     await db.close();
   }
 });
 
 // ===========================================================================
-// AC2 — a single memoised per-process instance.
+// AC4 — periodic sweeps run DIRECTLY on their interval, enqueuing no rows.
+// ===========================================================================
+
+test("a periodic sweep runs directly on its interval and enqueues no job rows", async () => {
+  const c = mutableClock(T0);
+  const db = await freshDb();
+  try {
+    let ran = 0;
+    const scheduler = createScheduler({
+      getDb: async () => db,
+      clock: c.clock,
+      sweeps: [{ name: "sweep-a", intervalMs: MINUTE_MS, run: async () => { ran += 1; } }],
+      dispatch: {},
+      log: () => {},
+    });
+
+    await scheduler.tick();
+    assert.equal(ran, 1, "a sweep runs on the first tick");
+
+    // A second tick at the SAME instant: the interval has not elapsed, so it does NOT run
+    // again — a sweep runs on its interval, not on every tick.
+    await scheduler.tick();
+    assert.equal(ran, 1, "a sweep does not run again within its interval");
+
+    // Once the interval has elapsed it runs again.
+    c.advance(MINUTE_MS);
+    await scheduler.tick();
+    assert.equal(ran, 2, "a sweep runs again once its interval has elapsed");
+
+    // It ran DIRECTLY: no payload-less job row was ever enqueued (not for its name, not
+    // at all).
+    const rows = await db.query("SELECT count(*)::int AS n FROM jobs");
+    assert.equal(rows.rows[0]?.n, 0, "a periodic sweep runs directly and enqueues no job rows");
+  } finally {
+    await db.close();
+  }
+});
+
+test("a sweep that throws is logged (redacted) and stops neither the scheduler nor the other sweeps", async () => {
+  const { clock } = mutableClock(T0);
+  const db = await freshDb();
+  try {
+    const logs: unknown[] = [];
+    let ranOther = 0;
+    const scheduler = createScheduler({
+      getDb: async () => db,
+      clock,
+      // The throwing sweep is listed FIRST, so its failure must not prevent the next one.
+      sweeps: [
+        { name: "boom-sweep", intervalMs: MINUTE_MS, run: async () => { throw new Error(`SWEEP_BOOM ${CARD}`); } },
+        { name: "ok-sweep", intervalMs: MINUTE_MS, run: async () => { ranOther += 1; } },
+      ],
+      dispatch: {},
+      log: (entry) => logs.push(entry),
+    });
+
+    // The tick must resolve (not reject) even though a sweep threw.
+    await scheduler.tick();
+
+    assert.equal(ranOther, 1, "a throwing sweep does not stop the other sweeps from running");
+    assert.ok(logs.length > 0, "the failing sweep is logged, never swallowed");
+
+    const logged = logs.map((e) => JSON.stringify(e)).join("\n");
+    assert.ok(logged.includes("SWEEP_BOOM"), "the sweep's failure (its error) is logged");
+    assert.ok(
+      !logged.includes(CARD),
+      "the logged failure passed through redaction (the card number is masked, not leaked)",
+    );
+  } finally {
+    await db.close();
+  }
+});
+
+// ===========================================================================
+// AC3 — the drain dead-letters unknown types, retries/continues past a throwing row, and
+// logs every failure (redacted); one failing row never stops the others.
+// ===========================================================================
+
+test("the drain dead-letters an unknown type, retries a throwing handler, and still runs the other due rows — logging failures redacted", async () => {
+  const { clock } = mutableClock(T0);
+  const db = await freshDb();
+  try {
+    const logs: unknown[] = [];
+    const good = recorder();
+    const scheduler = createScheduler({
+      getDb: async () => db,
+      clock,
+      sweeps: [],
+      dispatch: {
+        "good.type": good.handler,
+        "throws.type": async () => { throw new Error(`DRAIN_BOOM ${CARD}`); },
+        // "unknown.type" intentionally absent from the dispatch table.
+      },
+      log: (entry) => logs.push(entry),
+    });
+
+    const overdue = new Date(T0.getTime() - HOUR_MS);
+    const rowGood = await enqueue(db, { type: "good.type", runAt: overdue });
+    const rowThrows = await enqueue(db, { type: "throws.type", runAt: overdue });
+    const rowUnknown = await enqueue(db, { type: "unknown.type", runAt: overdue });
+
+    await scheduler.tick();
+
+    // The good row ran to done EVEN THOUGH the other two rows in the same drain failed.
+    assert.equal(timesSeen(good.received, rowGood.id), 1, "a good row still runs when other rows in the drain fail");
+    assert.equal(await statusOf(db, rowGood.id), "done", "the good row is marked done");
+
+    // The unknown-type row is dead-lettered: marked failed, never retried.
+    assert.equal(await statusOf(db, rowUnknown.id), "failed", "an unknown-type row is dead-lettered (failed)");
+
+    // The throwing row is retried (re-queued pending with a backoff) or failed — never
+    // done, never lost.
+    const throwsStatus = await statusOf(db, rowThrows.id);
+    assert.notEqual(throwsStatus, "done", "a throwing row is never marked done");
+    assert.ok(
+      throwsStatus === "pending" || throwsStatus === "failed",
+      `a throwing row is retried or failed, got ${throwsStatus}`,
+    );
+
+    // Failures are logged, redacted, never swallowed.
+    assert.ok(logs.length > 0, "drain failures are logged, never swallowed");
+    const logged = logs.map((e) => JSON.stringify(e)).join("\n");
+    assert.ok(logged.includes("DRAIN_BOOM"), "the throwing row's failure (its error) is logged");
+    assert.ok(
+      !logged.includes(CARD),
+      "the logged drain failure passed through redaction (the card number is masked, not leaked)",
+    );
+  } finally {
+    await db.close();
+  }
+});
+
+// ===========================================================================
+// AC1 — a REAL enqueued approval.fallback row is executed by the drain THROUGH
+// runApprovalFallback (wired via the registry's dispatch table, keyed on the module's
+// exported type constant).
+// ===========================================================================
+
+test("a real approval.fallback row (with its approvalId payload) is executed by the drain through runApprovalFallback", async () => {
+  const db = await freshDb();
+  const keyWrapper = localAesKeyWrapper(randomBytes(32));
+  try {
+    // A real pending, unopened approval owned by a real person.
+    const person = await makePerson(db, "fallback", keyWrapper);
+    const approvalId = await arrangeApproval(db, person, T0);
+
+    // The dispatch table wired from the registry, with a recording email sender so we can
+    // observe the fallback job's effect, and the SAME db it drains.
+    const emails: OutgoingMessage[] = [];
+    const seams = jobSeams({ db, clock: fixedClock(T0), keyWrapper, onEmail: (m) => emails.push(m) });
+    const dispatch = buildDispatchTable(seams);
+
+    // The dispatch table is keyed on the EXACT enqueued type string.
+    assert.equal(typeof dispatch[FALLBACK_JOB_TYPE], "function", "the dispatch table has an approval.fallback entry");
+
+    const scheduler = createScheduler({
+      getDb: async () => db,
+      clock: fixedClock(T0),
+      sweeps: [],
+      dispatch,
+      log: () => {},
+    });
+
+    // The real queue row production enqueues: carrying the approval id in its payload.
+    const row = await enqueue(db, {
+      type: FALLBACK_JOB_TYPE,
+      payload: { approvalId },
+      runAt: new Date(T0.getTime() - HOUR_MS),
+    });
+
+    await scheduler.tick();
+
+    // runApprovalFallback ran end-to-end through the drain: it issued the single-use link
+    // (an approval_links row for this approval) and sent the fallback email.
+    const links = await db.query("SELECT count(*)::int AS n FROM approval_links WHERE approval_id = $1", [approvalId]);
+    assert.ok(
+      Number(links.rows[0]?.n) > 0,
+      "the drain executed runApprovalFallback (a single-use approval link was issued)",
+    );
+    assert.equal(emails.length, 1, "the fallback job sent exactly one email through the injected sender");
+    assert.equal(await statusOf(db, row.id), "done", "the fallback row is marked done once handled");
+  } finally {
+    await db.close();
+  }
+});
+
+// ===========================================================================
+// AC2 — the periodic approval-expiry sweep expires a pending, past-due approval on its
+// next tick, and leaves a not-yet-due approval untouched.
+// ===========================================================================
+
+test("the approval-expiry sweep expires a past-due pending approval on its next tick and leaves a not-yet-due one", async () => {
+  const NOW = new Date("2026-11-15T12:00:00.000Z"); // the sweep's "now"
+  // Created a day ago, so its window (whatever its exact length) has long since ended →
+  // past-due at NOW. Created AT NOW, so its window is still open → not yet due at NOW.
+  // (Robust to the approval window's exact length — no 15-minute assumption.)
+  const CREATED_DUE = new Date(NOW.getTime() - DAY_MS);
+  const CREATED_NOT_DUE = NOW;
+  const db = await freshDb();
+  const keyWrapper = localAesKeyWrapper(randomBytes(32));
+  try {
+    const person = await makePerson(db, "expiry", keyWrapper);
+    const dueId = await arrangeApproval(db, person, CREATED_DUE); // expires_at < NOW
+    const notDueId = await arrangeApproval(db, person, CREATED_NOT_DUE); // expires_at > NOW
+
+    assert.equal(await approvalStatus(db, dueId), "pending", "precondition: the overdue approval starts pending");
+    assert.equal(await approvalStatus(db, notDueId), "pending", "precondition: the not-due approval starts pending");
+
+    const c = mutableClock(NOW);
+    // Build the real periodic sweeps and pick the approval-expiry one (the only one this
+    // test runs), wired with the real db + keyWrapper + the sweep's clock.
+    const sweeps = buildPeriodicSweeps(jobSeams({ db, clock: c.clock, keyWrapper }));
+    const expirySweep = sweeps.find((s) => s.name === "approval-expiry");
+    assert.ok(expirySweep, "buildPeriodicSweeps must include the approval-expiry sweep");
+
+    const scheduler = createScheduler({
+      getDb: async () => db,
+      clock: c.clock,
+      sweeps: [expirySweep!],
+      dispatch: {},
+      log: () => {},
+    });
+
+    await scheduler.tick();
+
+    assert.equal(await approvalStatus(db, dueId), "expired", "a pending approval past its expiry is expired by the sweep");
+    assert.equal(await approvalStatus(db, notDueId), "pending", "a not-yet-due approval is left untouched");
+  } finally {
+    await db.close();
+  }
+});
+
+// ===========================================================================
+// getScheduler — a single memoised per-process instance (never re-instantiated per call).
 // ===========================================================================
 
 test("getScheduler returns the same memoised instance on every call (never re-instantiated per call)", () => {
@@ -320,36 +586,37 @@ test("getScheduler returns the same memoised instance on every call (never re-in
 });
 
 // ===========================================================================
-// AC3 [obligation:secrets-from-env] (INV-103) — the scheduler reads no ambient
-// env secret; a decoy planted in the environment never lands in a written job.
+// INV-103 — the scheduler runs purely from its injected deps; no ambient env value lands
+// in what it writes (periodic sweeps run directly, so the only thing it writes is the
+// claim/mark of a drained row).
 // ===========================================================================
 
-test("a tick folds no ambient env secret into the jobs it writes (config is read from env, not arbitrary process.env)", async () => {
+test("a tick folds no ambient env secret into what it writes (config is read from env, not arbitrary process.env)", async () => {
   const DECOY = "sk_live_DECOY_must_never_appear_in_warthog_scheduler";
   const prev = process.env.WARTHOG_DECOY_SECRET;
   process.env.WARTHOG_DECOY_SECRET = DECOY;
-  const c = mutableClock(T0);
+  const { clock } = mutableClock(T0);
   const db = await freshDb();
   try {
     const rec = recorder();
-    const jobs = [{ name: "periodic-a", intervalMs: 60_000, handler: rec.handler }];
-    const scheduler = createScheduler({ getDb: async () => db, clock: c.clock, jobs });
+    const scheduler = createScheduler({
+      getDb: async () => db,
+      clock,
+      sweeps: [{ name: "sweep-a", intervalMs: MINUTE_MS, run: async () => {} }],
+      dispatch: { "work.item": rec.handler },
+      log: () => {},
+    });
 
-    // Drive the scheduler so it actually writes rows (periodic enqueue) and runs them.
-    for (let i = 0; i < 3; i += 1) {
-      await scheduler.tick();
-      c.advance(60_000);
-    }
+    // A benign dispatch row the drain processes, so there IS a written/updated row to scan.
+    await enqueue(db, { type: "work.item", runAt: new Date(T0.getTime() - HOUR_MS) });
+    await scheduler.tick();
 
     const all = await db.query("SELECT * FROM jobs");
-    assert.ok(all.rows.length > 0, "the scheduler wrote jobs rows to scan");
+    assert.ok(all.rows.length > 0, "the scheduler processed jobs rows to scan");
     for (const row of all.rows) {
       for (const cell of Object.values(row)) {
         const text = typeof cell === "string" ? cell : JSON.stringify(cell);
-        assert.ok(
-          !text.includes(DECOY),
-          "no ambient env value is folded into a job the scheduler writes",
-        );
+        assert.ok(!text.includes(DECOY), "no ambient env value is folded into a job the scheduler writes");
       }
     }
   } finally {

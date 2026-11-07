@@ -17,11 +17,25 @@
 //     • selects ONE due job (run_at <= clock.now()) and marks it claimed, so a
 //       later/concurrent claim never returns the same job (FOR UPDATE SKIP LOCKED);
 //       returns the claimed job, or null when nothing is due/claimable.
-//   run(db, clock, handler): Promise<Job | null>
-//     • claims the next due job and runs `handler(job)`. A job that throws stays
-//       retryable (it is claimed again on a later run); a job that succeeds is never
-//       run again (idempotent). Returns the processed job, or null if none was due.
+//   run(db, clock, dispatch): Promise<unknown | null>
+//     • claims the next due job and runs the handler registered for its `type` in the
+//       `dispatch` table (`Record<type, (job) => void | Promise<void>>`). A job whose
+//       handler SUCCEEDS is marked done and never run again (idempotent). A job whose
+//       handler THROWS is retried with a backoff up to a FIXED attempt count, then —
+//       once that count is exhausted — marked `failed` (terminal, never re-queued). A
+//       job whose `type` has NO entry in the dispatch table is DEAD-LETTERED: marked
+//       `failed` immediately, without retrying. Returns a truthy result when a row was
+//       processed (whatever its outcome), or null when nothing was due.
 //   Job = { id: string; type: string; payload?: unknown; ... }
+//
+// ── E18-S21 SUPERSESSION ──────────────────────────────────────────────────────────
+// This task reworks the queue library: `run` now dispatches a claimed row by TYPE (a
+// dispatch table, not one bare handler), a row whose type has no handler is marked
+// `failed` instead of looping forever, and a row whose handler keeps throwing is
+// marked `failed` once it exhausts its attempts rather than being re-queued for ever.
+// The claim / enqueue / payload / migration tests below are UNCHANGED; only the two
+// `run` tests are amended to pass a dispatch TABLE, and two new tests pin the
+// dead-letter / attempt-limit behaviour.
 //
 // Acceptance criteria → tests:
 //   AC1 "claim() selects one due job with FOR UPDATE SKIP LOCKED so two concurrent
@@ -31,6 +45,9 @@
 //        so serial claims return distinct jobs and a claimed job is never re-handed.
 //        (Cross-connection SKIP LOCKED is exercised only against a real Postgres.)
 //   AC2 "A job that throws is retried and a successful job is not re-run (idempotent)."
+//   AC2b [E18-S21] "A row whose type has no dispatch entry is marked `failed` without
+//        retrying; a row whose handler keeps throwing is retried with backoff up to a
+//        fixed attempt count and then marked `failed` — neither is re-queued for ever."
 //   AC3 "The migration second run changes nothing." — proven through the real runner:
 //        after the project migrations the `jobs` relation exists, and re-running every
 //        migration over the same database applies nothing new and does not throw.
@@ -43,7 +60,7 @@ import assert from "node:assert/strict";
 
 import { enqueue, claim, run } from "./jobs";
 import { freshDb } from "../../test/db";
-import { loadMigrations, runMigrations } from "./index";
+import { loadMigrations, runMigrations, type Db } from "./index";
 import type { Clock } from "../seams/clock";
 
 // A fixed origin instant; time only moves when a test advances it.
@@ -65,6 +82,14 @@ function mutableClock(start: Date): { clock: Clock; advance(ms: number): void } 
       current += ms;
     },
   };
+}
+
+// Read one job row's status straight from the table (behaviour, not source text), so a
+// test can observe pending → done / failed transitions without depending on run()'s
+// exact return shape.
+async function statusOf(db: Db, id: string): Promise<string | undefined> {
+  const result = await db.query("SELECT status FROM jobs WHERE id = $1", [id]);
+  return result.rows[0]?.status as string | undefined;
 }
 
 // --- claim: selects a due job, skips jobs not yet due -------------------------------
@@ -151,8 +176,10 @@ test("run claims the next due job and executes the handler with it; run on an id
     const created = await enqueue(db, { type: "refresh", runAt: clock.now() });
 
     let received: { id?: string; type?: string } | undefined;
-    const processed = await run(db, clock, async (job) => {
-      received = job;
+    const processed = await run(db, clock, {
+      refresh: async (job) => {
+        received = job;
+      },
     });
 
     assert.ok(processed != null, "run must process the one due job");
@@ -162,8 +189,10 @@ test("run claims the next due job and executes the handler with it; run on an id
 
     // Nothing is due now: a second run finds no job and runs no handler.
     let ranAgain = false;
-    const idle = await run(db, clock, async () => {
-      ranAgain = true;
+    const idle = await run(db, clock, {
+      refresh: async () => {
+        ranAgain = true;
+      },
     });
     assert.ok(idle == null, "run returns null when no job is due");
     assert.equal(ranAgain, false, "run must not invoke the handler when nothing is due");
@@ -186,12 +215,15 @@ test("a job that throws is retried, and a job that succeeds is not re-run (idemp
       if (calls === 1) throw new Error("transient failure on the first attempt");
     };
 
+    // The handler is registered under the enqueued job's type in the dispatch table.
+    const dispatch = { reminder: handler };
+
     // First attempt: the handler throws. The job must not be lost — whether run
     // records the failure or surfaces it, the job stays retryable. Tolerate either
     // error-propagation style by ignoring a throw here; the retry assertion is the
     // real contract.
     try {
-      await run(db, c.clock, handler);
+      await run(db, c.clock, dispatch);
     } catch {
       /* a surfaced failure is acceptable */
     }
@@ -201,15 +233,125 @@ test("a job that throws is retried, and a job that succeeds is not re-run (idemp
     c.advance(24 * HOUR_MS);
 
     // Second attempt: the job is retried and now succeeds.
-    const retried = await run(db, c.clock, handler);
+    const retried = await run(db, c.clock, dispatch);
     assert.ok(retried != null, "the failed job must be retried on a later run");
     assert.equal(calls, 2, "the retried job's handler ran a second time");
 
     // More time passes; the job already succeeded, so it must never run again.
     c.advance(24 * HOUR_MS);
-    const afterSuccess = await run(db, c.clock, handler);
+    const afterSuccess = await run(db, c.clock, dispatch);
     assert.ok(afterSuccess == null, "a succeeded job is not claimed again (nothing due)");
     assert.equal(calls, 2, "a succeeded job's handler is never invoked again (idempotent)");
+  } finally {
+    await db.close();
+  }
+});
+
+// --- AC2b [E18-S21]: a row whose type has no handler is dead-lettered (failed, no retry) ---
+
+test("a row whose type has no dispatch entry is marked failed and never retried", async () => {
+  const c = mutableClock(T0);
+  const db = await freshDb();
+  try {
+    // A due row of a type the dispatch table does not know about.
+    const orphan = await enqueue(db, { type: "no.such.handler", runAt: c.clock.now() });
+
+    // Draining with a dispatch table that has SOME other handler (but not this type).
+    let ranKnown = false;
+    const dispatch = {
+      "some.known.type": async (): Promise<void> => {
+        ranKnown = true;
+      },
+    };
+    // run may surface the dead-letter or handle it silently; tolerate either and assert
+    // on the row's terminal status (the real contract).
+    try {
+      await run(db, c.clock, dispatch);
+    } catch {
+      /* a surfaced dead-letter is acceptable */
+    }
+
+    assert.equal(
+      await statusOf(db, orphan.id),
+      "failed",
+      "an unknown-type row is marked failed (dead-lettered), not left pending",
+    );
+    assert.equal(ranKnown, false, "no handler is invoked for an unknown-type row");
+
+    // It is NOT re-queued: later, with time advanced past any backoff, nothing is due
+    // and the dead-lettered row is never claimed again.
+    c.advance(24 * HOUR_MS);
+    let ranLater = false;
+    const after = await run(db, c.clock, {
+      "some.known.type": async (): Promise<void> => {
+        ranLater = true;
+      },
+    });
+    assert.ok(after == null, "the dead-lettered row is not re-claimed on a later run (no retry)");
+    assert.equal(ranLater, false, "the dead-lettered row never runs a handler");
+    assert.equal(await statusOf(db, orphan.id), "failed", "the dead-lettered row stays failed");
+  } finally {
+    await db.close();
+  }
+});
+
+// --- AC2b [E18-S21]: a handler that keeps throwing is retried up to a fixed limit, then failed ---
+
+test("a row whose handler keeps throwing is retried with backoff up to a fixed limit, then marked failed", async () => {
+  const c = mutableClock(T0);
+  const db = await freshDb();
+  try {
+    const row = await enqueue(db, { type: "always.throws", runAt: c.clock.now() });
+
+    let calls = 0;
+    const dispatch = {
+      "always.throws": async (): Promise<void> => {
+        calls += 1;
+        throw new Error("permanent failure");
+      },
+    };
+
+    // First attempt: the handler throws. The row is RETRIED (re-queued pending with a
+    // backoff), not failed on the first throw — so there is at least one retry.
+    try {
+      await run(db, c.clock, dispatch);
+    } catch {
+      /* tolerate a surfaced failure */
+    }
+    assert.equal(calls, 1, "the handler ran once on the first attempt");
+    assert.equal(
+      await statusOf(db, row.id),
+      "pending",
+      "a throwing row is re-queued for retry on the first failure, not failed immediately",
+    );
+
+    // Drive the retries: advance past the backoff and run again until the row exhausts
+    // its attempts and is marked failed. A generous guard bounds the loop so a runner
+    // that never gives up fails the test (via the guard) rather than hanging.
+    let guard = 0;
+    while ((await statusOf(db, row.id)) !== "failed" && guard < 40) {
+      c.advance(24 * HOUR_MS); // clear any backoff so the row is due again
+      try {
+        await run(db, c.clock, dispatch);
+      } catch {
+        /* tolerate a surfaced failure */
+      }
+      guard += 1;
+    }
+
+    assert.equal(
+      await statusOf(db, row.id),
+      "failed",
+      "a row whose handler keeps throwing is eventually marked failed, not re-queued for ever",
+    );
+    assert.ok(calls >= 2, "the row was retried at least once (backoff) before being marked failed");
+    const callsAtFailure = calls;
+
+    // Terminal: a failed row is never claimed or run again.
+    c.advance(24 * HOUR_MS);
+    const after = await run(db, c.clock, dispatch);
+    assert.ok(after == null, "a failed row is no longer claimable (nothing due)");
+    assert.equal(calls, callsAtFailure, "a failed row's handler is never invoked again");
   } finally {
     await db.close();
   }

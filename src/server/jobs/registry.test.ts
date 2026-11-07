@@ -1,81 +1,91 @@
-// E18-S09 — Background job registry (`src/server/jobs/registry.ts`).
+// E18-S21 — Background job registry (`src/server/jobs/registry.ts`), reworked into TWO
+// explicit parts:
+//   (1) PERIODIC SWEEPS the scheduler runs directly on their interval (no job rows): the
+//       approvals expire-due sweep, life-admin reminders, exchange rates, account purge,
+//       metrics snapshot and the daily integrity check; and
+//   (2) a DISPATCH TABLE for payload-driven queue rows, keyed on the EXACT type strings
+//       production code enqueues — approval.fallback, connection.refresh,
+//       connection.google_reminder, connection.google_lapse, account_reset.complete —
+//       imported from their modules' exported constants, never retyped.
 //
-// RED-first: `./registry` does NOT exist yet, so importing `jobRegistry` throws and
-// every test here fails until the builder writes the minimum code to pass. That
-// absence IS the point of test-first — do NOT implement anything to make these pass;
-// the builder writes `registry.ts` afterwards. Every job module this registry wires
-// together already exists (built across E09–E17); only the registry that enumerates
-// them is missing.
+// RED-first: the reworked registry does NOT exist yet (today it exports a single
+// `jobRegistry` array of nine name/handler/intervalMs entries, two of which —
+// `connector-token-refresh`, `connector-health` — match NO type any production code
+// enqueues). The new builders and the exported type constants below do not exist until the
+// builder writes them, so every test here fails. That absence IS the point of test-first —
+// do NOT implement anything to make these pass.
 //
-// These tests pin BEHAVIOUR (what the registry EXPOSES as data: the set of jobs, each
-// job's stable name, its handler, and its schedule/interval), never the source text
-// of any module. The handler-resolution checks compare FUNCTION REFERENCES against
-// the real job modules' exports — reference equality, not a grep of source — so a
-// later behaviour-preserving refactor (a moved import, a reworded comment) stays
-// green, while a rename of a run function correctly travels through this test's own
-// import of it.
-//
-// WHY this exists (task E18-S09): the scheduler (E18-S10) and instrumentation
-// (E18-S11) must know every in-process background job to run. One explicit, auditable
-// registry is the single ignition list that wires the nine job modules of E09–E17
-// into the running app, each with a stable name (so it is auditable and loggable),
-// its handler (the module's run function), and the schedule/interval the scheduler
-// ticks it on.
+// These tests pin BEHAVIOUR (the DATA the registry exposes: which enqueued types have a
+// dispatch handler, which periodic sweeps exist, that the two dead entries are gone, that
+// the two halves are disjoint), never the source text of any module. The dispatch keys are
+// checked against each owning module's EXPORTED type constant (imported here), so a rename
+// of a constant travels through this test's own import of it rather than reddening a grep.
 //
 // ---------------------------------------------------------------------------
 // THE PINNED CONTRACT (chosen by the tester; the implementation conforms to it).
 //
-//   // One in-process background job: a stable machine name, the handler that runs
-//   // it (the corresponding job module's run function / runnable export), and the
-//   // interval in milliseconds the scheduler ticks it on.
-//   interface JobRegistryEntry {
+//   import type { Job } from "../db/jobs";
+//
+//   // One periodic sweep the scheduler runs directly on its interval (no job rows).
+//   interface PeriodicSweep {
 //     readonly name: string;
-//     readonly handler: (...args: never[]) => unknown; // the module's run function
-//     readonly intervalMs: number;                     // schedule/interval, ms, > 0
+//     readonly intervalMs: number;          // > 0
+//     readonly run: () => void | Promise<void>;
 //   }
 //
-//   // The auditable enumeration of every background job, exactly once.
-//   export const jobRegistry: readonly JobRegistryEntry[];
+//   // The superset of seams every handler/sweep is wired from (the composition root
+//   // supplies the real ones; each builder reads only the subset it needs).
+//   interface JobSeams {
+//     db; clock; keyWrapper; random; senders; push; refresh; resetExecutor; rateSource;
+//     publicBaseUrl;
+//   }
 //
-// The nine stable names (AC1), machine-stable (kebab-case) forms of the backlog's
-// descriptive list "connector token-refresh, connector-health, approval-fallback,
-// approval-expiry, life-admin-reminders, exchange-rates, account-purge,
-// metrics-snapshot and daily-integrity-check":
+//   // The dispatch table for payload-driven queue rows: enqueued `type` → the handler
+//   // that runs a claimed row of that type.
+//   function buildDispatchTable(seams: JobSeams): Record<string, (job: Job) => Promise<void>>;
 //
-//   connector-token-refresh, connector-health, approval-fallback, approval-expiry,
-//   life-admin-reminders, exchange-rates, account-purge, metrics-snapshot,
-//   daily-integrity-check
+//   // The periodic sweeps, run directly by the scheduler on their interval.
+//   function buildPeriodicSweeps(seams: JobSeams): readonly PeriodicSweep[];
 //
-// Handler resolution (AC2): seven jobs have a single dedicated run function, so each
-// of those handlers must BE that function (reference equality). The two connector
-// jobs (token-refresh, health) share one module (`../connectors/jobs`) that exposes
-// no `run*` function — it runs connector work through `createConnectorJobHandler`
-// plus schedule helpers — so their handlers are checked to be a runnable export of
-// that very module rather than pinned to a run function that does not exist.
+// The five enqueued types (AC1) come from the modules that enqueue them, as EXPORTED
+// constants this test imports rather than retyping: FALLBACK_JOB_TYPE
+// ("approval.fallback"), REFRESH_TYPE / GOOGLE_REMINDER_TYPE / GOOGLE_LAPSE_TYPE
+// ("connection.refresh" / ".google_reminder" / ".google_lapse"), COMPLETE_JOB_TYPE
+// ("account_reset.complete").
 // ---------------------------------------------------------------------------
 
 import { test } from "node:test";
 import assert from "node:assert/strict";
+import { randomBytes } from "node:crypto";
 
-import { jobRegistry } from "./registry";
+import { buildDispatchTable, buildPeriodicSweeps } from "./registry";
 
-// The seven jobs with a dedicated, unambiguous run function — the handler must BE it.
-import { runApprovalFallback } from "../notify/fallback-job";
-import { runApprovalExpiry } from "../approvals/expiry-job";
-import { runLifeAdminReminders } from "../life-admin/reminders-job";
-import { runRatesJob } from "../currency/rates-job";
-import { runAccountPurge } from "../account/purge-job";
-import { runMetricsSnapshot } from "../metrics/snapshot-job";
-import { runDailyIntegrityCheck } from "../activity/integrity-job";
+// The EXACT enqueued type strings, imported from each owning module's EXPORTED constant
+// (AC1) — never retyped here.
+import { FALLBACK_JOB_TYPE } from "../notify/approval-notifier";
+import { REFRESH_TYPE, GOOGLE_REMINDER_TYPE, GOOGLE_LAPSE_TYPE } from "../connectors/jobs";
+import { COMPLETE_JOB_TYPE } from "../auth/account-reset";
 
-// The two connector jobs share this module, which exposes no `run*` function.
-import * as connectorJobs from "../connectors/jobs";
+import { freshDb } from "../../test/db";
+import { fixedClock } from "../seams/clock";
+import { fixedRandom } from "../seams/random";
+import { localAesKeyWrapper } from "../crypto/key-wrapper";
+import { fakeRateSource } from "../currency/rate-source";
+import type { Db } from "../db/index";
 
-// Every stable name the registry MUST enumerate, exactly once (AC1).
-const EXPECTED_NAMES = [
-  "connector-token-refresh",
-  "connector-health",
-  "approval-fallback",
+const T0 = new Date("2026-03-01T00:00:00.000Z");
+
+// Every job type production code enqueues — each must have a dispatch handler (AC1).
+const EXPECTED_DISPATCH_TYPES = [
+  FALLBACK_JOB_TYPE,
+  REFRESH_TYPE,
+  GOOGLE_REMINDER_TYPE,
+  GOOGLE_LAPSE_TYPE,
+  COMPLETE_JOB_TYPE,
+] as const;
+
+// The periodic sweeps the scheduler runs directly on their interval.
+const EXPECTED_SWEEP_NAMES = [
   "approval-expiry",
   "life-admin-reminders",
   "exchange-rates",
@@ -84,86 +94,116 @@ const EXPECTED_NAMES = [
   "daily-integrity-check",
 ] as const;
 
-// name → the job module's run function it must resolve to (AC2), for the seven jobs
-// that have one. The connector jobs are handled separately (no run function exists).
-const EXPECTED_RUN_FN: Record<string, unknown> = {
-  "approval-fallback": runApprovalFallback,
-  "approval-expiry": runApprovalExpiry,
-  "life-admin-reminders": runLifeAdminReminders,
-  "exchange-rates": runRatesJob,
-  "account-purge": runAccountPurge,
-  "metrics-snapshot": runMetricsSnapshot,
-  "daily-integrity-check": runDailyIntegrityCheck,
-};
+// The two registry entries that matched no real enqueued job — removed by this task.
+const REMOVED_NAMES = ["connector-token-refresh", "connector-health"] as const;
 
-const CONNECTOR_JOB_NAMES = ["connector-token-refresh", "connector-health"] as const;
-
-// Find the single entry for a name, failing loudly if it is absent.
-function entryFor(name: string): { name: string; handler: unknown; intervalMs: unknown } {
-  const entry = jobRegistry.find((e) => e.name === name);
-  assert.ok(entry, `registry is missing the "${name}" job`);
-  return entry as { name: string; handler: unknown; intervalMs: unknown };
+// A COMPLETE seam bundle for the builders. They only ASSEMBLE closures from these seams
+// (nothing is invoked at build time), so cheap structural fakes suffice. Returned as a
+// variable so its superset of fields stays assignable to the builders' seam type.
+function jobSeams(db: Db) {
+  return {
+    db,
+    clock: fixedClock(T0),
+    keyWrapper: localAesKeyWrapper(randomBytes(32)),
+    random: fixedRandom(7),
+    senders: {
+      push: { sendPush: async (): Promise<void> => {} },
+      email: { sendEmail: async (): Promise<void> => {} },
+      sms: { sendSms: async (): Promise<void> => {} },
+    },
+    push: { sendPush: async (): Promise<void> => {} },
+    refresh: async (): Promise<void> => {},
+    resetExecutor: {
+      eraseVaultData: async (): Promise<void> => {},
+      revokeAgentsAndConnections: async (): Promise<void> => {},
+    },
+    rateSource: fakeRateSource({ rateDate: "2026-03-01", baseCurrency: "AUD", rates: { USD: 0.65 } }),
+    publicBaseUrl: "https://warthog.com.au",
+  };
 }
 
-test("the registry enumerates exactly the nine background jobs, each once, with no duplicate names", () => {
-  const names = jobRegistry.map((e) => e.name);
-
-  // Exactly nine entries — no more (no stray/speculative jobs), no fewer.
-  assert.equal(jobRegistry.length, 9, "the registry must hold exactly nine jobs");
-
-  // No duplicate names: the set of names is the same size as the list.
-  assert.equal(new Set(names).size, 9, "every job name must be unique (no duplicates)");
-
-  // The names are exactly the nine required, regardless of order.
-  assert.deepEqual([...names].sort(), [...EXPECTED_NAMES].sort());
+test("the imported type constants are the exact enqueued type strings production code uses (AC1)", () => {
+  assert.equal(FALLBACK_JOB_TYPE, "approval.fallback");
+  assert.equal(REFRESH_TYPE, "connection.refresh");
+  assert.equal(GOOGLE_REMINDER_TYPE, "connection.google_reminder");
+  assert.equal(GOOGLE_LAPSE_TYPE, "connection.google_lapse");
+  assert.equal(COMPLETE_JOB_TYPE, "account_reset.complete");
 });
 
-test("every entry has a non-empty stable string name and a callable handler", () => {
-  for (const name of EXPECTED_NAMES) {
-    const entry = entryFor(name);
-    assert.equal(typeof entry.name, "string", `${name}: name must be a string`);
-    assert.ok(entry.name.length > 0, `${name}: name must be non-empty`);
-    assert.equal(typeof entry.handler, "function", `${name}: handler must be a function`);
+test("the dispatch table has a handler for every enqueued job type, and only those (AC1)", async () => {
+  const db = await freshDb();
+  try {
+    const table = buildDispatchTable(jobSeams(db));
+    const keys = Object.keys(table);
+
+    // Every enqueued type has a callable handler.
+    for (const type of EXPECTED_DISPATCH_TYPES) {
+      assert.equal(typeof table[type], "function", `dispatch table is missing a handler for "${type}"`);
+    }
+
+    // Exactly those types — no stray/speculative entries, no duplicates.
+    assert.deepEqual(
+      [...keys].sort(),
+      [...new Set(EXPECTED_DISPATCH_TYPES)].sort(),
+      "the dispatch table is keyed on EXACTLY the enqueued type strings",
+    );
+  } finally {
+    await db.close();
   }
 });
 
-test("every entry carries a positive numeric schedule/interval (intervalMs)", () => {
-  for (const name of EXPECTED_NAMES) {
-    const entry = entryFor(name);
-    assert.equal(typeof entry.intervalMs, "number", `${name}: intervalMs must be a number`);
-    assert.ok(
-      Number.isFinite(entry.intervalMs as number),
-      `${name}: intervalMs must be a finite number`,
-    );
-    assert.ok((entry.intervalMs as number) > 0, `${name}: intervalMs must be greater than zero`);
+test("the periodic sweeps are the expire-due approval sweep plus the five interval jobs (AC2/AC4)", async () => {
+  const db = await freshDb();
+  try {
+    const sweeps = buildPeriodicSweeps(jobSeams(db));
+    const names = sweeps.map((s) => s.name);
+
+    // Exactly the six sweeps, each once.
+    assert.deepEqual([...names].sort(), [...EXPECTED_SWEEP_NAMES].sort(), "the periodic sweeps are exactly the expected six");
+    assert.equal(new Set(names).size, sweeps.length, "no duplicate sweep names");
+
+    // The approvals expire-due sweep is present (its behaviour is pinned in scheduler.test.ts).
+    assert.ok(sweeps.some((s) => s.name === "approval-expiry"), "the approvals expire-due sweep must be present");
+
+    // Every sweep runs directly: a positive interval and a callable run function.
+    for (const sweep of sweeps) {
+      assert.equal(typeof sweep.run, "function", `${sweep.name}: run must be a function`);
+      assert.equal(typeof sweep.intervalMs, "number", `${sweep.name}: intervalMs must be a number`);
+      assert.ok(Number.isFinite(sweep.intervalMs) && sweep.intervalMs > 0, `${sweep.name}: intervalMs must be > 0`);
+    }
+  } finally {
+    await db.close();
   }
 });
 
-test("each dedicated-run-function job's handler IS the corresponding job module's run function", () => {
-  for (const [name, runFn] of Object.entries(EXPECTED_RUN_FN)) {
-    const entry = entryFor(name);
-    assert.equal(
-      entry.handler,
-      runFn,
-      `${name}: handler must resolve to the corresponding job module's run function`,
-    );
+test("the dead registry entries (connector-token-refresh, connector-health) are removed", async () => {
+  const db = await freshDb();
+  try {
+    const dispatchKeys = new Set(Object.keys(buildDispatchTable(jobSeams(db))));
+    const sweepNames = new Set(buildPeriodicSweeps(jobSeams(db)).map((s) => s.name));
+
+    for (const dead of REMOVED_NAMES) {
+      assert.ok(!dispatchKeys.has(dead), `"${dead}" must not be a dispatch type (it matched no real job)`);
+      assert.ok(!sweepNames.has(dead), `"${dead}" must not be a periodic sweep (it matched no real job)`);
+    }
+  } finally {
+    await db.close();
   }
 });
 
-test("the connector jobs' handlers resolve to a runnable export of the connectors/jobs module", () => {
-  // Runtime function exports of the connector job module (types are erased), e.g.
-  // createConnectorJobHandler / scheduleConnectionRefresh / scheduleGoogleLapse.
-  const connectorFns = Object.values(connectorJobs).filter(
-    (v): v is (...args: never[]) => unknown => typeof v === "function",
-  );
-  assert.ok(connectorFns.length > 0, "the connectors/jobs module must export at least one function");
+test("the registry splits cleanly: no periodic sweep name is an enqueued dispatch type, and vice versa", async () => {
+  const db = await freshDb();
+  try {
+    const dispatchKeys = new Set(Object.keys(buildDispatchTable(jobSeams(db))));
+    const sweepNames = new Set(buildPeriodicSweeps(jobSeams(db)).map((s) => s.name));
 
-  for (const name of CONNECTOR_JOB_NAMES) {
-    const entry = entryFor(name);
-    assert.equal(typeof entry.handler, "function", `${name}: handler must be a function`);
-    assert.ok(
-      connectorFns.includes(entry.handler as (...args: never[]) => unknown),
-      `${name}: handler must resolve to a run function of the connectors/jobs module`,
-    );
+    for (const name of sweepNames) {
+      assert.ok(!dispatchKeys.has(name), `periodic sweep "${name}" must not also be a dispatch type (the halves are disjoint)`);
+    }
+    for (const type of dispatchKeys) {
+      assert.ok(!sweepNames.has(type), `dispatch type "${type}" must not also be a periodic sweep (the halves are disjoint)`);
+    }
+  } finally {
+    await db.close();
   }
 });
