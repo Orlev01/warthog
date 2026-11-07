@@ -23,12 +23,17 @@
 //
 // This is the render-testable, prop-driven VIEW (a Client Component in the app). The
 // real plumbing — holding the unlocked vault key, POSTing the sealed submission, the
-// server action that stores it — is wired by a LATER task. Like the sibling rules /
-// consent / notifications views, a PROP selects the initial state of the
-// conceptually-interactive "add a high-tier detail" panel, so a render test pins each
-// state without clicking anything (no DOM; React component / E2E testing is a per-job
-// ADR). We render with `react-dom/server` and read the emitted markup, exactly as the
-// sibling component tests do.
+// server action that stores it — is wired by E11-S20's live <HighTierFlow/>, which this
+// view now mounts for BOTH the "Add a high-tier detail" panel AND each low-tier field's
+// "Raise to high tier" control (its device behaviour — create/unlock the vault key →
+// seal the value → submit only ciphertext + metadata to the page's saveHighTierField /
+// raiseFieldToHighTier actions — is pinned by high-tier-flow.test.tsx, not here). This
+// file keeps pinning what IdentityView RENDERS. Like the sibling rules / consent /
+// notifications views, a PROP selects the initial state of the conceptually-interactive
+// "add a high-tier detail" panel, so a render test pins each state without clicking
+// anything (no DOM; React component / E2E testing is a per-job ADR). We render with
+// `react-dom/server` and read the emitted markup, exactly as the sibling component tests
+// do.
 //
 // These tests pin BEHAVIOUR — what the component RENDERS for the props it is given,
 // and what the exported device-seal step RETURNS when called — never the source text
@@ -44,7 +49,8 @@
 // ---------------------------------------------------------------------------
 // THE CONTRACT the builder implements (test-first spec; the component conforms):
 //
-//   IdentityView({ lowTierFields, highTierFields, addingHighTier? }):
+//   IdentityView({ lowTierFields, highTierFields, addingHighTier?,
+//                  saveHighTierField?, raiseFieldToHighTier? }):
 //     • lowTierFields   — the owner's low-tier fields, values DECRYPTED (exactly
 //                         VaultPageData.lowTierFields): { id, userId, kind, value,
 //                         movingOn }. Rendered EDITABLE in place; a postal_address
@@ -59,6 +65,14 @@
 //                         is OPEN: it shows the sensitive-moment explainer (how it is
 //                         protected + who can read it), a live value-entry field, and
 //                         a live confirm/add control. Defaults to CLOSED.
+//     • saveHighTierField? / raiseFieldToHighTier? — E11-S20 supersession: the add and
+//                         raise controls are now LIVE on-device flows (<HighTierFlow/>),
+//                         so the view passes each flow its submit seam — the page's
+//                         saveHighTierField / raiseFieldToHighTier server actions that
+//                         store the device-sealed submission. Rendered here with no-ops
+//                         so the controls are live; the device flow's own behaviour
+//                         (create/unlock the vault key → seal → submit) is pinned by
+//                         high-tier-flow.test.tsx, not here.
 //
 //   sealHighTierDetail(vaultKey, detail): Promise<submission>
 //     • The device-seal step the Add-high-tier and Raise-to-high-tier controls run
@@ -110,6 +124,14 @@ type IdentityViewProps = {
   lowTierFields: ReadonlyArray<LowTierField>;
   highTierFields: ReadonlyArray<HighTierField>;
   addingHighTier?: boolean;
+  // E11-S20 supersession: the add and raise controls are now LIVE on-device flows
+  // (HighTierFlow), so the open panels need their submit seams — the page's
+  // saveHighTierField / raiseFieldToHighTier server actions that store the sealed
+  // submission. Rendered here with no-ops so the controls are live; the device flow's own
+  // behaviour (create/unlock the vault key → seal → submit) is pinned by
+  // high-tier-flow.test.tsx, not here.
+  saveHighTierField?: (submission: unknown) => Promise<{ ok: boolean }>;
+  raiseFieldToHighTier?: (submission: unknown) => Promise<{ ok: boolean }>;
 };
 
 // --- fixtures ---------------------------------------------------------------------
@@ -159,10 +181,18 @@ const DOB: HighTierField = {
   tier: "high",
 };
 
+// The submit seams the now-live add / raise panels need (E11-S20). No-ops here — these
+// tests only render; the device flow is never submitted. Its behaviour lives in
+// high-tier-flow.test.tsx.
+const noopSaveHighTierField = async () => ({ ok: true as const });
+const noopRaiseFieldToHighTier = async () => ({ ok: true as const });
+
 function base(overrides: Partial<IdentityViewProps> = {}): IdentityViewProps {
   return {
     lowTierFields: [NAME, EMAIL, PHONE],
     highTierFields: [PASSPORT, DOB],
+    saveHighTierField: noopSaveHighTierField,
+    raiseFieldToHighTier: noopRaiseFieldToHighTier,
     ...overrides,
   };
 }

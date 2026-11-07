@@ -1,13 +1,16 @@
 "use client";
 
 import * as React from "react";
-import { ArrowUp, Lock, Plus } from "lucide-react";
+import { Lock } from "lucide-react";
 
-import { Button } from "@/components/ui/button";
 import { Card } from "@/components/ui/card";
 import { Field } from "@/components/ui/field";
-import { SensitiveNotice } from "@/components/ui/sensitive-notice";
 import { encryptValue } from "@/client/vault/values";
+import {
+  HighTierFlow,
+  type RaiseFieldToHighTierAction,
+  type SaveHighTierFieldAction,
+} from "./high-tier-flow";
 
 // E11-S13 — Vault identity view component (brief "Identity vault"; design §4.1
 // low tier + §4.2 device-held vault; primary journey "About you").
@@ -23,11 +26,13 @@ import { encryptValue } from "@/client/vault/values";
 //     explainer of HOW the detail is protected (sealed on the device) and WHO can
 //     ever read it (only when the person approves).
 //
-// This is the render-testable, prop-driven VIEW (a Client Component in the app).
-// Holding the unlocked vault key, POSTing the sealed submission and the server
-// action that stores it are wired by a LATER task; here the controls are native and
-// a PROP (`addingHighTier`) selects the initial state of the add panel, exactly the
-// `draft` idiom of the sibling rules / consent / notifications views.
+// This is the render-testable, prop-driven VIEW (a Client Component in the app). The
+// "Add a high-tier detail" panel AND each low-tier field's "Raise to high tier" control
+// are now LIVE on-device flows: the view mounts E11-S20's <HighTierFlow/> for both (its
+// device behaviour — create/unlock the vault key → seal → submit only ciphertext +
+// metadata to the page's saveHighTierField / raiseFieldToHighTier actions — is pinned by
+// high-tier-flow.test.tsx). A PROP (`addingHighTier`) selects the initial state of the
+// add panel, exactly the `draft` idiom of the sibling rules / consent / notifications views.
 //
 // The one off-device obligation — "the value is sealed with the vault key on the
 // device before it is sent (only ciphertext leaves)" — is the exported pure
@@ -83,6 +88,12 @@ export type IdentityViewProps = {
   // Selects the initial state of the "add a high-tier detail" panel. When true the
   // panel is OPEN (explainer + value field + confirm); defaults to CLOSED.
   addingHighTier?: boolean;
+  // The submit seams the now-live add / raise flows (<HighTierFlow/>) post to — the
+  // page's saveHighTierField / raiseFieldToHighTier server actions that store the
+  // device-sealed submission. The page always supplies the real actions; a prop-driven
+  // render (a preview, a render test) may omit them, in which case nothing is stored.
+  saveHighTierField?: SaveHighTierFieldAction;
+  raiseFieldToHighTier?: RaiseFieldToHighTierAction;
 };
 
 // The high-tier detail a person enters, before it is sealed on the device.
@@ -128,12 +139,6 @@ const LOW_TIER_LABELS: Record<LowTierFieldKind, string> = {
   preference: "Preference",
 };
 
-// The sensitive-moment explainer: HOW the detail is protected (sealed on the
-// device, never readable by Warthog) and WHO can ever read it (only the person,
-// only when they approve a release) — plain words, no protocol jargon.
-const PROTECTION_EXPLAINER =
-  "This detail is locked on your device with your vault key before it is saved — only the sealed version ever leaves, and Warthog can never read it. It is released only when you approve it for one agent at one moment; no one else, not even Warthog's team, can ever see it.";
-
 // The moving-on date as the ISO "YYYY-MM-DD" a date input shows (a Date is cast to
 // text; a plain string is used as-is; absent ⇒ empty).
 function isoDate(value: string | Date | null): string {
@@ -145,8 +150,16 @@ function isoDate(value: string | Date | null): string {
 // --- field cards -------------------------------------------------------------------
 
 // A low-tier field: editable in place, a postal address also carrying its moving-on
-// date, with a "Raise to high tier" control that re-seals it on the device.
-function LowTierCard({ field }: { field: LowTierField }) {
+// date, with a live "Raise to high tier" flow that re-seals its current value on the
+// device and submits only the ciphertext + metadata (the device behaviour is pinned by
+// high-tier-flow.test.tsx).
+function LowTierCard({
+  field,
+  raiseFieldToHighTier,
+}: {
+  field: LowTierField;
+  raiseFieldToHighTier?: RaiseFieldToHighTierAction;
+}) {
   const label = LOW_TIER_LABELS[field.kind];
   const isAddress = field.kind === "postal_address";
   return (
@@ -155,12 +168,11 @@ function LowTierCard({ field }: { field: LowTierField }) {
       {isAddress ? (
         <Field label="Moving on" type="date" defaultValue={isoDate(field.movingOn)} />
       ) : null}
-      <div className="flex">
-        <Button variant="secondary" type="button">
-          <ArrowUp aria-hidden={true} className="h-4 w-4 shrink-0" />
-          Raise to high tier
-        </Button>
-      </div>
+      <HighTierFlow
+        mode="raise"
+        field={{ id: field.id, value: field.value, label }}
+        raiseFieldToHighTier={raiseFieldToHighTier}
+      />
     </Card>
   );
 }
@@ -184,22 +196,13 @@ function HighTierCard({ field }: { field: HighTierField }) {
   );
 }
 
-// The "add a high-tier detail" panel, shown at the sensitive moment: the plain
-// protection explainer, a live value-entry field, and the explicit confirm. The
-// entered value is sealed on the device (sealHighTierDetail) by the later wiring
-// before anything leaves.
-function AddHighTierPanel() {
-  return (
-    <Card className="flex flex-col gap-4">
-      <h3 className="text-sm font-semibold text-fg">Add a high-tier detail</h3>
-      <Field label="What is it?" placeholder="e.g. Passport" />
-      <Field label="The detail" placeholder="Type the detail to protect" />
-      <SensitiveNotice explanation={PROTECTION_EXPLAINER} />
-    </Card>
-  );
-}
-
-export function IdentityView({ lowTierFields, highTierFields, addingHighTier = false }: IdentityViewProps) {
+export function IdentityView({
+  lowTierFields,
+  highTierFields,
+  addingHighTier = false,
+  saveHighTierField,
+  raiseFieldToHighTier,
+}: IdentityViewProps) {
   return (
     <section className="flex flex-col gap-8">
       <h1 className="text-xl font-semibold text-fg">About you</h1>
@@ -208,7 +211,7 @@ export function IdentityView({ lowTierFields, highTierFields, addingHighTier = f
       <div className="flex flex-col gap-3">
         <h2 className="text-sm font-semibold text-fg">Your details</h2>
         {lowTierFields.map((field) => (
-          <LowTierCard key={field.id} field={field} />
+          <LowTierCard key={field.id} field={field} raiseFieldToHighTier={raiseFieldToHighTier} />
         ))}
       </div>
 
@@ -218,16 +221,10 @@ export function IdentityView({ lowTierFields, highTierFields, addingHighTier = f
         {highTierFields.map((field) => (
           <HighTierCard key={field.id} field={field} />
         ))}
-        {addingHighTier ? (
-          <AddHighTierPanel />
-        ) : (
-          <div className="flex">
-            <Button variant="primary" type="button">
-              <Plus aria-hidden={true} className="h-4 w-4 shrink-0" />
-              Add a high-tier detail
-            </Button>
-          </div>
-        )}
+        {/* The live on-device add flow: closed it is the "Add a high-tier detail"
+            control, open it seals the value under the vault key and submits only
+            ciphertext + metadata. */}
+        <HighTierFlow mode="add" saveHighTierField={saveHighTierField} initialOpen={addingHighTier} />
       </div>
     </section>
   );
