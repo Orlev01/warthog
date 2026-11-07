@@ -1,12 +1,10 @@
-// E18-S13 — Early home page loader (the injectable seam the thin `page.tsx`
-// loader composes).
-//
-// Sign-up and sign-in land on `/home`, so the route mounts the home dashboard
-// (<DashboardView>, E18-S07) behind a MINIMAL loader until the full data-driven
-// loader (E18-S08) extends it: it names the signed-in person, shows the five
-// first-run set-up items all NOT done (computeSetupChecklist({}) — the one source
-// of the labels/links, this task hard-codes none), and leaves every data-bearing
-// section in its empty state.
+// E18-S08 — Home page loader (the injectable seam the thin `page.tsx` loader
+// composes). Extends the earlier minimal loader (E18-S13 greeting + all-not-done
+// checklist + empty states) to feed the dashboard view from the two already-built
+// owner-scoped reads — the set-up status read (`loadSetupChecklist`, E18-S04) and
+// the dashboard metrics read (`loadHomeMetrics`, E18-S05) — so the five checklist
+// items reflect the person's REAL progress and the approvals/activity the person
+// actually has show up.
 //
 // Why a sibling `actions.ts` factory (not `page.tsx`): a Next `page.tsx` entry
 // file may export only its framework fields, so it cannot carry an injectable,
@@ -17,23 +15,41 @@
 //
 // Security (design §5): `load` takes the person's VERIFIED Session and derives the
 // acting user id from `session.userId` — never a client-supplied value — so the
-// greeting names the session's OWN person. The one read is parameterized (INV-102).
+// greeting names the session's OWN person and both owner-scoped reads are scoped to
+// that id alone. Every underlying read is parameterized (INV-102).
+//
+// This loader adds no SQL and no crypto of its own: it REUSES the two owner-scoped
+// reads, which resolve the person's DEK through the injected `KeyWrapper` seam and
+// derive "now" from the injected `Clock`. When those seams are absent (the earliest
+// callers inject neither) the reads cannot run, so the loader falls back to the
+// first-run empty states exactly as the minimal loader did.
 
 import { computeSetupChecklist } from "@/domain/home/checklist";
-import type { DashboardViewProps } from "@/components/home/dashboard-view";
+import type {
+  DashboardActivity,
+  DashboardAgent,
+  DashboardReminder,
+  DashboardViewProps,
+} from "@/components/home/dashboard-view";
 import { getUserById } from "@/server/db/users";
 import { listIdentityFields } from "@/server/db/identity-fields";
+import { loadSetupChecklist } from "@/server/home/checklist-data";
+import { loadHomeMetrics, type HomeAgentSpend } from "@/server/home/page-data";
+import type { ActivityEntry } from "@/server/activity/recorder";
+import type { LifeAdminRecord } from "@/server/db/life-admin-records";
 import type { KeyWrapper } from "@/server/crypto/key-wrapper";
+import type { Clock } from "@/server/seams/clock";
 import type { Session } from "@/server/auth/session";
 import type { Db } from "@/server/db/index";
 
 // The dependency bundle: the database seam, plus the KeyWrapper that unwraps the
-// person's DEK so the greeting can read their low-tier name (exactly as the vault
-// page-data loader does). The key wrapper is optional — with none, the greeting
-// falls back to the email's local part.
+// person's DEK (so the greeting and the two owner-scoped reads can decrypt their
+// own data) and the Clock the reads derive "now" through. Both seams are optional —
+// with either absent the loader keeps the first-run empty states.
 export interface HomeActionsDeps {
   readonly db: Db;
   readonly keyWrapper?: KeyWrapper;
+  readonly clock?: Clock;
 }
 
 // The home actions the thin loader drives: turn the verified session into the
@@ -42,13 +58,86 @@ export interface HomeActions {
   load(session: Session): Promise<DashboardViewProps>;
 }
 
-export function createHomeActions(deps: HomeActionsDeps): HomeActions {
-  const { db, keyWrapper } = deps;
+// A string field of a decrypted payload (e.g. `summary`), or "" when the field is
+// absent or not a string.
+function payloadText(payload: unknown, key: string): string {
+  if (payload !== null && typeof payload === "object") {
+    const value = (payload as Record<string, unknown>)[key];
+    if (typeof value === "string") return value;
+  }
+  return "";
+}
 
-  // Assemble the dashboard's props for the signed-in person: name them from their
-  // OWN account (scoped by the session's user id, never a client value), show the
-  // five set-up items all not done, and leave every data-bearing section empty so
-  // each renders a plain message rather than a dead control.
+// A stored instant → an absolute, readable label (the view renders strings and
+// reaches for no clock of its own). Shown in UTC so seeded dates are deterministic.
+function formatAt(value: Date | string): string {
+  return new Date(value).toLocaleString("en-AU", {
+    timeZone: "UTC",
+    day: "numeric",
+    month: "short",
+    year: "numeric",
+    hour: "2-digit",
+    minute: "2-digit",
+  });
+}
+
+// A stored due date ("YYYY-MM-DD" or Date) → a readable date-only label.
+function formatDue(value: Date | string): string {
+  return new Date(value).toLocaleDateString("en-AU", {
+    timeZone: "UTC",
+    day: "numeric",
+    month: "short",
+    year: "numeric",
+  });
+}
+
+// Map one decrypted activity entry to the view's line. The agent is shown by its
+// display name (resolved from the person's own agents), absent when the entry is
+// not attributed to one of them; the summary is the already-redacted payload text.
+function toDashboardActivity(
+  entry: ActivityEntry,
+  agentNames: Map<string, string>,
+): DashboardActivity {
+  const agent = entry.agentId !== undefined ? agentNames.get(entry.agentId) : undefined;
+  return {
+    id: entry.entryHash,
+    summary: payloadText(entry.payload, "summary"),
+    agent,
+    at: formatAt(entry.occurredAt),
+  };
+}
+
+// Map one agent's spend aggregate to the view's agent. The store's status
+// ("connected" | "disconnected") reads as the UI's StatusKey — a disconnected agent
+// needs reconnecting before it can act again (CLAUDE.md "Reconnect needed"). Amounts
+// may come back as numeric strings from the ledger sums, so coerce to the major-unit
+// number the view renders.
+function toDashboardAgent(agent: HomeAgentSpend): DashboardAgent {
+  return {
+    id: agent.agentId,
+    name: agent.displayName,
+    status: agent.status === "connected" ? "connected" : "needs-reconnect",
+    spendThisPeriod: Number(agent.spendThisPeriod),
+    budget: Number(agent.budget),
+    budgetPeriod: agent.budgetPeriod,
+  };
+}
+
+// Map one upcoming life-admin record to the view's reminder: its title (from the
+// decrypted fields) and a readable due label.
+function toDashboardReminder(record: LifeAdminRecord): DashboardReminder {
+  return {
+    id: record.id,
+    title: payloadText(record.fields, "title") || record.kind,
+    due: record.dueDate != null ? formatDue(record.dueDate) : "",
+  };
+}
+
+export function createHomeActions(deps: HomeActionsDeps): HomeActions {
+  const { db, keyWrapper, clock } = deps;
+
+  // Assemble the dashboard's props for the signed-in person — scoped by the
+  // session's user id, never a client value.
   async function load(session: Session): Promise<DashboardViewProps> {
     const user = await getUserById(db, session.userId);
     // The email's local part is the fallback greeting when no name is saved (or no
@@ -68,13 +157,35 @@ export function createHomeActions(deps: HomeActionsDeps): HomeActions {
       personName = preferred ?? name ?? localPart;
     }
 
+    // Without the key wrapper AND clock the two owner-scoped reads cannot run (they
+    // resolve the person's DEK and derive "now"); fall back to the first-run empty
+    // states, exactly as the minimal loader did.
+    if (!keyWrapper || !clock) {
+      return {
+        personName,
+        checklist: computeSetupChecklist({}),
+        pendingApprovals: 0,
+        activity: [],
+        agents: [],
+        reminders: [],
+      };
+    }
+
+    // Feed the dashboard from the two owner-scoped reads. Both take the injected
+    // seams and the SESSION's user id — never a client value.
+    const reads = { db, keyWrapper, clock };
+    const checklist = await loadSetupChecklist(reads, session.userId);
+    const metrics = await loadHomeMetrics(reads, session.userId);
+
+    const agentNames = new Map(metrics.agents.map((agent) => [agent.agentId, agent.displayName]));
+
     return {
       personName,
-      checklist: computeSetupChecklist({}),
-      pendingApprovals: 0,
-      activity: [],
-      agents: [],
-      reminders: [],
+      checklist,
+      pendingApprovals: metrics.pendingApprovals,
+      activity: metrics.activity.map((entry) => toDashboardActivity(entry, agentNames)),
+      agents: metrics.agents.map(toDashboardAgent),
+      reminders: metrics.reminders.map(toDashboardReminder),
     };
   }
 
