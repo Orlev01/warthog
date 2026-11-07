@@ -1,0 +1,444 @@
+// E07-S19 — the MCP composition root (design §6.1/§6.2; constitution 13/14/15; INV-102).
+//
+// `createMcpDispatch` is the one place the MCP endpoint's REAL dependencies are built from
+// the two things a composition root is handed — `config` and the process `db`: the
+// KeyWrapper (selected from config), the DB-backed activity recorder, the per-process rate
+// limiter, the tool-body executor (which routes each executed call to its real tool body),
+// and the pure policy pipeline (`handleAgentCall`). It returns the DISPATCH the `/mcp`
+// route seam expects (`src/app/mcp/handler.ts`):
+//
+//   createMcpDispatch(deps): (connectionId, request) => Promise<Response>
+//
+// The dispatch drives a stateless `createMcpHandler` whose per-request `McpServer`
+// REGISTERS every core tool the registry resolves for the VERIFIED connection (plus its
+// permitted connector tools), each handler routing through `handleAgentCall` under the
+// connection resolved ONLY from the verified bearer (the `authInfo.clientId` the dispatch
+// is handed — NEVER a value in the request body), and maps the pipeline outcome to an MCP
+// tool result:
+//   • executed       → a normal result (content), not isError;
+//   • pending_approval→ `pending_approval` with approval_id + expires_at as STRUCTURED
+//                       content, nothing released;
+//   • refused        → isError with a plain reason.
+//
+// A SERVER module built purely from its two inputs: it reads no `process.env` directly
+// (the KeyWrapper comes from the already-parsed `config`, INV-103) and every member-scoped
+// read/write takes the user id from the resolved connection, never a client value. Each
+// tool body VALIDATES its input at the boundary (zod → a 4xx `HttpError` before any db
+// access, INV-102) and every store binds its values as parameters, so a SQL-shaped field
+// travels as inert data and cannot alter a query.
+
+import { z } from "zod";
+
+import { createMcpHandler, McpServer } from "@modelcontextprotocol/server";
+import type { AuthInfo } from "@modelcontextprotocol/server";
+
+import type { Config } from "../config";
+import type { Db } from "../db/index";
+import { selectKeyWrapper, type KeyWrapper } from "../crypto/key-wrapper";
+import { createDbRecorder } from "../activity/writer";
+import { type UndoReversalJob } from "../activity/undo";
+import { getRateLimiter } from "./rate-limit";
+import { systemClock, type Clock } from "../seams/clock";
+import { getUserById } from "../db/users";
+import { getAgentByConnectionId, getAgentById } from "../db/agents";
+import { getConnectionPermissions } from "../db/agent-permissions";
+import { HttpError } from "../http/validate";
+
+import {
+  createAgentCallPipeline,
+  type AgentCall,
+  type AgentCallResult,
+  type AgentCallPipeline,
+  type ApprovedHoldResult,
+} from "./pipeline";
+import { createToolRegistry, type ConnectorToolset, type ToolDefinition } from "./tools/registry";
+import { loadAgentContext, type AgentConnection } from "./context";
+
+import { createRememberTool, createSearchMemoryTool } from "./tools/memory";
+import { createGetSkillTool } from "./tools/get-skill";
+import { createCheckApprovalTool } from "./tools/check-approval";
+import { createCollectReleaseTool } from "./tools/collect-release";
+import { createLogActivityTool } from "./tools/log-activity";
+import {
+  createListRecordsTool,
+  createSaveRecordTool,
+  createUpdateRecordTool,
+} from "./tools/records";
+import {
+  createCompleteTaskTool,
+  createCreateTaskTool,
+  createListTasksTool,
+  createUpdateTaskTool,
+} from "./tools/tasks";
+import { releaseStore } from "../crypto/release-store";
+
+// The two inputs a composition root is handed (design §6.1 addendum): the process-wide
+// migrated db and the parsed runtime config. Everything else is built from these here.
+export interface McpDispatchDeps {
+  readonly db: Db;
+  readonly config: Config;
+}
+
+// The dispatch the `/mcp` route seam drives after the bearer is verified: the VERIFIED
+// connection id (the session identity, never a body value) plus the original request.
+export type McpDispatch = (connectionId: string, request: Request) => Promise<Response>;
+
+// This resource requires the `warthog` scope (design §6.1/§6.2) — the same scope the route
+// and bearer verification name.
+const MCP_SCOPE = "warthog";
+
+// The stateless MCP server's identity (design §6.2 — one handler per process).
+const MCP_SERVER_NAME = "warthog";
+const MCP_SERVER_VERSION = "0.1.0";
+
+// A thrown tool call maps to a plain-English reason the agent sees; an internal failure is
+// never surfaced verbatim (only the input-boundary's own fixed 4xx messages are safe).
+const TOOL_FAILED_REASON = "The tool call could not be completed.";
+
+// Register `tool` on `server`, routing the call through `tool.handle` under the already
+// resolved `connection` (from the verified bearer). The advertised input schema is the
+// tool's own schema made LOOSE, so the raw arguments reach `tool.handle` intact — the
+// envelope schema validates `reason`, and each tool body validates its own fields (INV-102)
+// — rather than being stripped to the envelope by the SDK before the body ever sees them.
+function registerTool(
+  server: McpServer,
+  tool: ToolDefinition,
+  connection: AgentConnection | null,
+): void {
+  const inputSchema =
+    tool.inputSchema instanceof z.ZodObject ? tool.inputSchema.loose() : tool.inputSchema;
+
+  server.registerTool(
+    tool.name,
+    { description: tool.name, inputSchema },
+    async (args: unknown) => {
+      // The connection is the verified bearer's; a request that never resolved one cannot
+      // be scoped to a person, so it is refused rather than run (never a silent success).
+      if (!connection) {
+        return errorResult("This agent is not connected.");
+      }
+      try {
+        const outcome = await tool.handle(args, connection);
+        return toToolResult(outcome);
+      } catch (err) {
+        // A boundary 4xx (malformed / oversized input, INV-102) or any other failure is
+        // surfaced as an MCP error, never a silent success.
+        return errorResult(err instanceof HttpError ? err.message : TOOL_FAILED_REASON);
+      }
+    },
+  );
+}
+
+// Map one pipeline outcome to an MCP CallToolResult (design §6.2).
+function toToolResult(outcome: AgentCallResult): {
+  content: Array<{ type: "text"; text: string }>;
+  structuredContent?: Record<string, unknown>;
+  isError?: boolean;
+} {
+  switch (outcome.status) {
+    case "executed":
+      // An allowed read/write returns its result as content — never isError.
+      return { content: [{ type: "text", text: JSON.stringify(outcome.result ?? null) }] };
+    case "pending_approval":
+      // The ask outcome is carried as STRUCTURED content with the approval id and expiry;
+      // nothing is released (the pipeline held the call behind a pending approval).
+      return {
+        content: [{ type: "text", text: "This request needs your approval." }],
+        structuredContent: {
+          status: "pending_approval",
+          approval_id: outcome.approval_id,
+          expires_at: outcome.expires_at.toISOString(),
+        },
+      };
+    case "refused":
+      // A denied / refused call is an MCP error carrying the plain reason.
+      return errorResult(outcome.reason);
+  }
+}
+
+// A CallToolResult for a refusal / failure: a plain reason, isError.
+function errorResult(reason: string): {
+  content: Array<{ type: "text"; text: string }>;
+  isError: true;
+} {
+  return { content: [{ type: "text", text: reason }], isError: true };
+}
+
+// Build the agent-call pipeline's REAL dependencies from the two composition-root inputs
+// (config + the process db): the KeyWrapper selected from config, the DB-backed recorder,
+// the per-process rate limiter, the tool-body executor and the pure pipeline. The ONE place
+// the pipeline is assembled (constitution: one source of truth), shared by the MCP dispatch
+// and the inbox/activity executors — so an approved hold and an undo reversal run through
+// exactly the gate every live agent call passes.
+function buildAgentPipeline(deps: McpDispatchDeps): AgentCallPipeline {
+  const { db, config } = deps;
+
+  // --- the pipeline's real dependencies, built from config + db ---------------
+
+  // The KeyWrapper selected from config (local AES in dev/test, Key Vault in production);
+  // it unwraps the person's DEK so personal content is encrypted/decrypted member-scoped.
+  const keyWrapper: KeyWrapper = selectKeyWrapper({
+    nodeEnv: config.nodeEnv,
+    localKek: config.devKek,
+  });
+  const clock: Clock = systemClock;
+
+  // The person's unwrapped DEK, resolved per user (member-scoped: the user id is the
+  // session's, never a client value). Throws when the person has no row (never silently).
+  async function dataKeyFor(userId: string): Promise<Uint8Array> {
+    const user = await getUserById(db, userId);
+    if (!user) {
+      throw new Error("createMcpDispatch: no data key for this user");
+    }
+    return keyWrapper.unwrap(user.wrappedDek);
+  }
+
+  // Warthog writes the record itself (principle 14): the DB-backed recorder redacts then
+  // DEK-encrypts each entry before it is persisted.
+  const recorder = createDbRecorder({ db, clock, dekFor: dataKeyFor });
+  const rateLimiter = getRateLimiter();
+
+  // --- the tool bodies the executor routes executed calls to ------------------
+
+  // The pipeline is referenced LATE by the tool executor (check_approval runs an approved
+  // hold through it), so it is declared here and assigned below; every tool call happens at
+  // request time, after the assignment.
+  let pipeline: AgentCallPipeline;
+
+  const rememberTool = createRememberTool({ db, keyWrapper, clock });
+  const searchMemoryTool = createSearchMemoryTool({ db, keyWrapper, clock });
+  const getSkillTool = createGetSkillTool({ db, keyWrapper });
+  const collectReleaseTool = createCollectReleaseTool({ releaseStore });
+  const logActivityTool = createLogActivityTool({ recorder });
+  const listTasksTool = createListTasksTool({ db, keyWrapper });
+  const createTaskTool = createCreateTaskTool({ db, keyWrapper });
+  const updateTaskTool = createUpdateTaskTool({ db, keyWrapper });
+  const completeTaskTool = createCompleteTaskTool({ db, keyWrapper });
+  const listRecordsTool = createListRecordsTool({ db, keyWrapper });
+  const saveRecordTool = createSaveRecordTool({ db, keyWrapper });
+  const updateRecordTool = createUpdateRecordTool({ db, keyWrapper });
+  const checkApprovalTool = createCheckApprovalTool({
+    db,
+    keyWrapper,
+    clock,
+    sleep: (ms: number) => new Promise<void>((resolve) => setTimeout(resolve, ms)),
+    executeApprovedHold: (userId: string, approvalId: string) =>
+      pipeline.executeApprovedHold(userId, approvalId),
+  });
+
+  // get_context hands the agent everything it has been granted for this connection — its
+  // permission grants, the rules it must follow and its budget currency/spend — assembled
+  // through the SAME member-scoped loader the pipeline uses (never a client value).
+  async function getContext(connection: AgentConnection): Promise<unknown> {
+    const context = await loadAgentContext(connection, { db, keyWrapper, clock });
+    return {
+      permissions: context.permissions,
+      rules: context.rules,
+      accountCurrency: context.accountCurrency,
+      spend: context.spend,
+    };
+  }
+
+  // The tool-body executor the pipeline runs on ALLOW: route the call to its real body by
+  // the tool name the registry stamped it with. A tool with no body (a request tool reaches
+  // execute only once approved, via executeApprovedHold; the connector engine is a later
+  // task) fails LOUDLY rather than silently doing nothing.
+  const executeTool = async (call: AgentCall, connection: AgentConnection): Promise<unknown> => {
+    switch (call.tool) {
+      case "get_context":
+        return getContext(connection);
+      case "get_skill":
+        return getSkillTool.handle(call.params, connection);
+      case "remember":
+        return rememberTool.handle(call.params, connection);
+      case "search_memory":
+        return searchMemoryTool.handle(call.params, connection);
+      case "check_approval":
+        return checkApprovalTool.handle(call.params, connection);
+      case "collect_release":
+        return collectReleaseTool.handle(call.params, connection);
+      case "list_tasks":
+        return listTasksTool.handle(call.params, connection);
+      case "create_task":
+        return createTaskTool.handle(call.params, connection);
+      case "update_task":
+        return updateTaskTool.handle(call.params, connection);
+      case "complete_task":
+        return completeTaskTool.handle(call.params, connection);
+      case "list_records":
+        return listRecordsTool.handle(call.params, connection);
+      case "save_record":
+        return saveRecordTool.handle(call.params, connection);
+      case "update_record":
+        return updateRecordTool.handle(call.params, connection);
+      case "log_activity":
+        return logActivityTool.handle(call.params, connection);
+      default:
+        throw new Error(`executeTool: no tool body for ${call.tool}`);
+    }
+  };
+
+  pipeline = createAgentCallPipeline({ db, keyWrapper, clock, rateLimiter, recorder, executeTool });
+  return pipeline;
+}
+
+export function createMcpDispatch(deps: McpDispatchDeps): McpDispatch {
+  const { db } = deps;
+
+  // The pipeline is assembled once here (the composition root's job) and the registry is
+  // resolved over it; both are reused for every request this dispatch serves.
+  const pipeline = buildAgentPipeline(deps);
+  const registry = createToolRegistry({ pipeline });
+
+  // --- the stateless MCP handler + per-request server -------------------------
+
+  // Resolve the VERIFIED connection id to its owning person and agent (one row per
+  // connection, design §6.1). The id came from the verified bearer, so this is the root
+  // identity resolution; null when no agent is linked (an inconsistent credential).
+  async function resolveConnection(connectionId: string): Promise<AgentConnection | null> {
+    const agent = await getAgentByConnectionId(db, connectionId);
+    if (!agent) return null;
+    return {
+      userId: agent.userId,
+      connectionId: agent.connectionId,
+      agentId: agent.id,
+      active: agent.status === "connected",
+    };
+  }
+
+  // The connector tools a connection is permitted come from the connector engine (a later
+  // task); until a catalogue of connector toolsets is wired, a connection with no granted
+  // connectors contributes none.
+  const NO_CONNECTOR_TOOLS: ConnectorToolset = {};
+
+  // Build a fresh MCP server for one request, registering the tools the registry resolves
+  // for the verified connection (core tools + its permitted connector tools). Each handler
+  // is bound to the resolved connection, so identity is taken ONLY from the verified bearer.
+  async function buildServer(authInfo: AuthInfo | undefined): Promise<McpServer> {
+    const server = new McpServer({ name: MCP_SERVER_NAME, version: MCP_SERVER_VERSION });
+
+    const connectionId = authInfo?.clientId;
+    const connection = connectionId ? await resolveConnection(connectionId) : null;
+
+    let tools: readonly ToolDefinition[];
+    if (connection) {
+      const permissions = await getConnectionPermissions(db, connection.userId, connection.connectionId);
+      tools = permissions
+        ? registry.resolveTools(permissions, NO_CONNECTOR_TOOLS)
+        : registry.coreTools;
+    } else {
+      // No connection resolved: advertise the core tools so tools/list still answers; a
+      // tools/call then refuses (above) rather than running unscoped.
+      tools = registry.coreTools;
+    }
+
+    for (const tool of tools) {
+      registerTool(server, tool, connection);
+    }
+    return server;
+  }
+
+  const handler = createMcpHandler((ctx) => buildServer(ctx.authInfo), { legacy: "stateless" });
+
+  return async function dispatch(connectionId: string, request: Request): Promise<Response> {
+    // Hand the VERIFIED connection to the SDK as pass-through authInfo (clientId = the
+    // connection id); the per-request factory reads it to scope the tools. The SDK never
+    // reads identity from the body.
+    return handler.fetch(request, {
+      authInfo: { token: connectionId, clientId: connectionId, scopes: [MCP_SCOPE] },
+    });
+  };
+}
+
+// E07-S20 — the agent-call executors the signed-in inbox and activity screens drive, built
+// from the SAME composition-root inputs (config + the process db) and routed through the
+// SAME pipeline the MCP endpoint uses. Approving a held non-release call runs it exactly
+// once (`executeApprovedHold`, the pipeline's single-shot runner — the one check_approval
+// already uses); undoing a reversible entry runs its declared reversal through the pipeline
+// and REPORTS the outcome in plain words (`runReversal`, the undo service's reversal seam),
+// never the old "not configured" stub and never a silent failure. The user id is always the
+// CALLER's (the session's / the owning entry's), never a form value (design §5).
+export interface AgentExecutors {
+  executeApprovedHold(userId: string, approvalId: string): Promise<ApprovedHoldResult>;
+  runReversal(job: UndoReversalJob): Promise<{ outcome: string }>;
+}
+
+// Plain-words fallbacks so an undo that could not route its reversal still reports an
+// outcome — the undo service always records a reversal entry, never a blank or silent one.
+const REVERSAL_NO_ROUTE =
+  "This action couldn't be undone automatically — there's no connected agent to run the reversal.";
+const REVERSAL_FAILED = "The reversal couldn't be completed.";
+
+// One pipeline outcome as the plain-words outcome the undo entry records.
+function reversalOutcome(result: AgentCallResult): string {
+  switch (result.status) {
+    case "executed":
+      return "Undone.";
+    case "refused":
+      return result.reason;
+    case "pending_approval":
+      return "This needs your approval before it can be undone.";
+  }
+}
+
+export function createAgentExecutors(deps: McpDispatchDeps): AgentExecutors {
+  const { db } = deps;
+  const pipeline = buildAgentPipeline(deps);
+
+  // Run an entry's declared reversal through the pipeline and report its outcome. The
+  // original entry (member-scoped by the caller's user id + its seq, bound as parameters —
+  // never a client value) names the agent and connected service the reversal re-uses; the
+  // reversal tool is routed through the SAME gate a live agent call passes (so a connector
+  // the agent may no longer use is cleanly declined), and the outcome is reported in plain
+  // words — never thrown — so the undo service can always append its reversal entry (design
+  // §9; constitution 14/15).
+  async function runReversal(job: UndoReversalJob): Promise<{ outcome: string }> {
+    const found = await db.query(
+      "SELECT agent_id, connector_id FROM activity_entries WHERE user_id = $1 AND seq = $2",
+      [job.userId, job.originalSeq],
+    );
+    const row = found.rows[0];
+    if (!row) {
+      return { outcome: REVERSAL_NO_ROUTE };
+    }
+
+    const agentId = row.agent_id == null ? null : String(row.agent_id);
+    if (!agentId) {
+      return { outcome: REVERSAL_NO_ROUTE };
+    }
+
+    const agent = await getAgentById(db, job.userId, agentId);
+    if (!agent) {
+      return { outcome: REVERSAL_NO_ROUTE };
+    }
+
+    const connection: AgentConnection = {
+      userId: agent.userId,
+      connectionId: agent.connectionId,
+      agentId: agent.id,
+      active: agent.status === "connected",
+    };
+    const call: AgentCall = {
+      connector: row.connector_id == null ? null : String(row.connector_id),
+      tool: job.reversalTool,
+      makesChange: true,
+      reason: job.reason,
+    };
+
+    try {
+      const result = await pipeline.handleAgentCall(connection, call);
+      return { outcome: reversalOutcome(result) };
+    } catch {
+      // The pipeline surfaces a policy decision as a result, so a throw here is an
+      // infrastructure failure, not a refusal. Report it in plain words rather than letting
+      // it escape, so the undo service can still record the reversal entry.
+      return { outcome: REVERSAL_FAILED };
+    }
+  }
+
+  return {
+    executeApprovedHold: (userId: string, approvalId: string) =>
+      pipeline.executeApprovedHold(userId, approvalId),
+    runReversal,
+  };
+}

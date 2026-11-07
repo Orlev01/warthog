@@ -130,6 +130,10 @@ function makeFetch() {
       headers: {
         authorization: headerOf(init, "authorization") ?? "",
         "content-type": headerOf(init, "content-type") ?? "",
+        // E07-S19: the Streamable-HTTP headers a real MCP client sends (captured so the
+        // request-init pin below can assert them).
+        accept: headerOf(init, "accept") ?? "",
+        "mcp-protocol-version": headerOf(init, "mcp-protocol-version") ?? "",
       },
       rawBody,
       body: parsed,
@@ -178,6 +182,25 @@ test("callTool POSTs the tool call to the /mcp endpoint with the dev access key 
     "the request must present the provisioned dev access key as a Bearer (reuse the real credential)",
   );
   assert.match(call.headers["content-type"], /application\/json/i, "the body is JSON");
+
+  // E07-S19: a real MCP Streamable-HTTP client declares it accepts BOTH a JSON and an SSE
+  // response, and names the protocol revision — or /mcp answers 406 Not Acceptable (the dev
+  // console bug this task fixes). The console now sends both.
+  assert.match(
+    call.headers.accept,
+    /application\/json/i,
+    "the request must Accept application/json (Streamable HTTP) or /mcp answers 406",
+  );
+  assert.match(
+    call.headers.accept,
+    /text\/event-stream/i,
+    "the request must Accept text/event-stream (Streamable HTTP) or /mcp answers 406",
+  );
+  assert.equal(
+    call.headers["mcp-protocol-version"],
+    "2025-06-18",
+    "the request must carry the MCP-Protocol-Version header a real client sends",
+  );
 
   // The body is a JSON-RPC 2.0 tools/call naming the tool and carrying the arguments.
   assert.equal(call.body.jsonrpc, "2.0", "an MCP request is JSON-RPC 2.0");

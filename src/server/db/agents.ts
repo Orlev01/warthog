@@ -129,6 +129,21 @@ export async function listAgentsForUser(db: Db, userId: string): Promise<Agent[]
   return result.rows.map(toAgent);
 }
 
+// The one agent an OAuth connection IS (one row per connection, design §6.1): resolved
+// by its `connection_id` alone — the connection id comes from the VERIFIED bearer (the
+// session identity the MCP composition root is handed), never a client value, so this is
+// the root identity resolution that turns a verified connection into its owning person and
+// agent. `connection_id` is bound as a parameter (INV-102); null when no agent is linked
+// to that connection.
+export async function getAgentByConnectionId(db: Db, connectionId: string): Promise<Agent | null> {
+  const result = await db.query(
+    `SELECT ${COLUMNS} FROM agents WHERE connection_id = $1 LIMIT 1`,
+    [connectionId],
+  );
+  const row = result.rows[0];
+  return row ? toAgent(row) : null;
+}
+
 // The one agent OWNED BY `userId` with this id (member-scoped: id AND user_id both
 // bound); null when none for this user — so another person's agent id returns null.
 export async function getAgentById(db: Db, userId: string, id: string): Promise<Agent | null> {

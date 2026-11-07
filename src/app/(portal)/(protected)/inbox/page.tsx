@@ -11,6 +11,7 @@ import { selectKeyWrapper } from "@/server/crypto/key-wrapper";
 import { verifySession, type Session } from "@/server/auth/session";
 import { systemClock } from "@/server/seams/clock";
 import type { Db } from "@/server/db/index";
+import { createAgentExecutors } from "@/server/mcp/compose";
 import { createInboxActions, type ActionResult } from "./actions";
 
 // E12-S13 — Inbox page (the thin protected-page loader + decision wiring).
@@ -28,9 +29,9 @@ import { createInboxActions, type ActionResult } from "./actions";
 // page shows in plain words (never a silent failure). A card/high-tier RELEASE's Approve
 // is the on-device unlock-decrypt-release flow (a client binding); it is not wired here,
 // so a release renders its "Approve and release" disabled with a reason (no dead
-// controls). Running an approved held call likewise awaits the agent-pipeline integration
-// task (see src/app/mcp/handler.ts) — until then its executor rejects loudly and the
-// approve wrapper reports the outcome rather than swallowing it.
+// controls). Approving a held NON-release call runs it exactly once through the agent-call
+// pipeline, composed by `createAgentExecutors` (the MCP composition root): its outcome is
+// recorded in Activity and the approve wrapper reports it in plain words (E07-S20).
 //
 // Thin by design (the server-composition-roots addendum): per-request data (the cookie,
 // the search params) is read BEFORE `getServerDb()` so touching it marks the page dynamic
@@ -48,21 +49,15 @@ async function resolveSession(db: Db): Promise<Session | null> {
   return token ? verifySession(db, token, { clock: systemClock }) : null;
 }
 
-// Running an approved held call routes through the agent-call pipeline, composed by the
-// downstream MCP integration task (src/app/mcp/handler.ts: "the tool registry + pipeline
-// wiring … is a downstream integration task"). Until then it rejects LOUDLY rather than
-// silently doing nothing (the compose.ts not-configured idiom); the approve wrapper
-// catches it and reports the outcome in plain words, never a silent failure.
-const executeApprovedHold = async (): Promise<never> => {
-  throw new Error("approved-hold execution is not configured");
-};
-
 // Build the inbox actions with the real seams. The KeyWrapper (local AES outside
 // production, Key Vault in production) lets `load` resolve the session person's DEK to
-// decrypt their own approval detail.
+// decrypt their own approval detail; `executeApprovedHold` comes from the MCP composition
+// root (`createAgentExecutors`), so approving a held non-release call runs it exactly once
+// through the agent-call pipeline instead of the old "not configured" stub (E07-S20).
 function buildActions(db: Db) {
   const config = loadConfig();
   const keyWrapper = selectKeyWrapper({ nodeEnv: config.nodeEnv, localKek: config.devKek });
+  const { executeApprovedHold } = createAgentExecutors({ db, config });
   return createInboxActions({ db, clock: systemClock, keyWrapper, executeApprovedHold });
 }
 
