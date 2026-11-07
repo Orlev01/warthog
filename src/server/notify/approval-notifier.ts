@@ -42,7 +42,7 @@ import type { Db } from "../db/index";
 
 // The fallback job's type — the agreed cross-task contract the fallback worker claims
 // a due job by (read back from the `jobs` table).
-const FALLBACK_JOB_TYPE = "approval.fallback";
+export const FALLBACK_JOB_TYPE = "approval.fallback";
 
 const MINUTE_MS = 60_000;
 

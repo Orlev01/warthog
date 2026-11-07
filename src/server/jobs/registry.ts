@@ -1,16 +1,20 @@
-// E18-S09 — Background job registry.
+// The background job registry, in two explicit parts (E18-S21):
 //
-// The single auditable ignition list of every in-process background job built across
-// E09–E17. The scheduler (E18-S10) and instrumentation (E18-S11) read this registry to
-// know which jobs to run and tick: each entry has a stable machine name (so it is
-// loggable and auditable), its handler (the job module's run function) and the
-// interval in milliseconds the scheduler ticks it on.
+//   1. PERIODIC SWEEPS the scheduler runs directly on their interval — no job rows: the
+//      approvals expire-due sweep, life-admin reminders, exchange rates, account purge,
+//      metrics snapshot and the daily integrity check.
+//   2. A DISPATCH TABLE for payload-driven queue rows, keyed on the EXACT type strings
+//      production code enqueues, imported from the modules that enqueue them (never
+//      retyped): approval.fallback, connection.refresh / google_reminder / google_lapse,
+//      account_reset.complete.
 //
-// The handler of each entry is the REAL job module's exported run function — no
-// re-implementation, no wrapper. Seven jobs have a single dedicated run function; the
-// two connector jobs (token-refresh and health) share one module whose dispatcher
-// (`createConnectorJobHandler`) routes both kinds of connector work by job type.
+// Each builder takes the superset of seams (`JobSeams`) and closes every handler or sweep
+// over the subset it needs, so the composition root (src/server/jobs/compose.ts) supplies
+// the real ones once and tests supply fakes. This module reads no process.env.
 
+import { z } from "zod";
+
+import { FALLBACK_JOB_TYPE } from "../notify/approval-notifier";
 import { runApprovalFallback } from "../notify/fallback-job";
 import { runApprovalExpiry } from "../approvals/expiry-job";
 import { runLifeAdminReminders } from "../life-admin/reminders-job";
@@ -18,32 +22,140 @@ import { runRatesJob } from "../currency/rates-job";
 import { runAccountPurge } from "../account/purge-job";
 import { runMetricsSnapshot } from "../metrics/snapshot-job";
 import { runDailyIntegrityCheck } from "../activity/integrity-job";
-import { createConnectorJobHandler } from "../connectors/jobs";
+import {
+  createConnectorJobHandler,
+  GOOGLE_LAPSE_TYPE,
+  GOOGLE_REMINDER_TYPE,
+  REFRESH_TYPE,
+  type RefreshConnection,
+} from "../connectors/jobs";
+import { COMPLETE_JOB_TYPE, completeAccountReset, type ResetExecutor } from "../auth/account-reset";
+import type { Job, JobHandler } from "../db/jobs";
+import type { Db } from "../db/index";
+import type { Clock } from "../seams/clock";
+import type { Random } from "../seams/random";
+import type { KeyWrapper } from "../crypto/key-wrapper";
+import type { PushSender, Senders } from "../notify/senders";
+import type { RateSource } from "../currency/rate-source";
 
 const MINUTE_MS = 60 * 1000;
 const HOUR_MS = 60 * MINUTE_MS;
 const DAY_MS = 24 * HOUR_MS;
 
-// One in-process background job: a stable machine name, the handler that runs it (the
-// corresponding job module's run function / runnable export), and the interval in
-// milliseconds the scheduler ticks it on.
-export interface JobRegistryEntry {
+// One periodic background job the scheduler runs directly on its interval.
+export interface PeriodicSweep {
   readonly name: string;
-  readonly handler: (...args: never[]) => unknown;
   readonly intervalMs: number;
+  readonly run: () => void | Promise<void>;
 }
 
-// The auditable enumeration of every background job, exactly once.
-export const jobRegistry: readonly JobRegistryEntry[] = [
-  // The two connector jobs share the connectors/jobs dispatcher, which routes a due
-  // refresh or health job to its handler by type off the background-jobs queue.
-  { name: "connector-token-refresh", handler: createConnectorJobHandler, intervalMs: 5 * MINUTE_MS },
-  { name: "connector-health", handler: createConnectorJobHandler, intervalMs: HOUR_MS },
-  { name: "approval-fallback", handler: runApprovalFallback, intervalMs: MINUTE_MS },
-  { name: "approval-expiry", handler: runApprovalExpiry, intervalMs: MINUTE_MS },
-  { name: "life-admin-reminders", handler: runLifeAdminReminders, intervalMs: HOUR_MS },
-  { name: "exchange-rates", handler: runRatesJob, intervalMs: DAY_MS },
-  { name: "account-purge", handler: runAccountPurge, intervalMs: HOUR_MS },
-  { name: "metrics-snapshot", handler: runMetricsSnapshot, intervalMs: HOUR_MS },
-  { name: "daily-integrity-check", handler: runDailyIntegrityCheck, intervalMs: DAY_MS },
-];
+// The superset of seams every handler and sweep is wired from.
+export interface JobSeams {
+  readonly db: Db;
+  readonly clock: Clock;
+  readonly keyWrapper: KeyWrapper;
+  readonly random: Random;
+  readonly senders: Senders;
+  readonly push: PushSender;
+  readonly refresh: RefreshConnection;
+  readonly resetExecutor: ResetExecutor;
+  readonly rateSource: RateSource;
+  readonly publicBaseUrl: string;
+}
+
+// A payload that names one approval (approval.fallback rows carry it).
+const approvalPayload = z.object({ approvalId: z.string() });
+// A payload that names one person (account_reset.complete rows carry it).
+const userPayload = z.object({ userId: z.string() });
+
+function payloadOf<T>(schema: z.ZodType<T>, job: Job): T {
+  const parsed = schema.safeParse(job.payload);
+  if (!parsed.success) throw new Error(`job ${job.type} has a malformed payload`);
+  return parsed.data;
+}
+
+// The dispatch table: enqueued `type` → the handler that runs a claimed row of that type.
+export function buildDispatchTable(seams: JobSeams): Record<string, JobHandler> {
+  const connector = createConnectorJobHandler({
+    db: seams.db,
+    clock: seams.clock,
+    push: seams.push,
+    refresh: seams.refresh,
+  });
+  return {
+    [FALLBACK_JOB_TYPE]: (job) =>
+      runApprovalFallback(
+        {
+          db: seams.db,
+          clock: seams.clock,
+          random: seams.random,
+          senders: seams.senders,
+          publicBaseUrl: seams.publicBaseUrl,
+        },
+        payloadOf(approvalPayload, job),
+      ),
+    [REFRESH_TYPE]: connector,
+    [GOOGLE_REMINDER_TYPE]: connector,
+    [GOOGLE_LAPSE_TYPE]: connector,
+    // A reset cancelled in its waiting week is no longer pending: completion reports
+    // ok:false and there is nothing to do, so that is not a failure.
+    [COMPLETE_JOB_TYPE]: async (job) => {
+      await completeAccountReset(seams.db, payloadOf(userPayload, job), { executor: seams.resetExecutor });
+    },
+  };
+}
+
+// Expire every pending approval whose expiry has passed. One approval that fails to
+// expire does not stop the rest; the failures are reported together afterwards.
+async function expireDueApprovals(seams: JobSeams): Promise<void> {
+  const due = await seams.db.query(
+    "SELECT id FROM approvals WHERE status = 'pending' AND expires_at <= $1::timestamptz",
+    [seams.clock.now().toISOString()],
+  );
+  const failures: unknown[] = [];
+  for (const row of due.rows) {
+    try {
+      await runApprovalExpiry(
+        { db: seams.db, clock: seams.clock, keyWrapper: seams.keyWrapper },
+        { approvalId: row.id as string },
+      );
+    } catch (error) {
+      failures.push(error);
+    }
+  }
+  if (failures.length > 0) {
+    throw new AggregateError(failures, `approval-expiry: ${failures.length} approval(s) failed to expire`);
+  }
+}
+
+// The periodic sweeps, run directly by the scheduler on their interval.
+export function buildPeriodicSweeps(seams: JobSeams): readonly PeriodicSweep[] {
+  return [
+    { name: "approval-expiry", intervalMs: MINUTE_MS, run: () => expireDueApprovals(seams) },
+    {
+      name: "life-admin-reminders",
+      intervalMs: HOUR_MS,
+      run: () => runLifeAdminReminders({ db: seams.db, clock: seams.clock, push: seams.push }),
+    },
+    {
+      name: "exchange-rates",
+      intervalMs: DAY_MS,
+      run: async () => {
+        await runRatesJob({ db: seams.db, source: seams.rateSource });
+      },
+    },
+    {
+      name: "account-purge",
+      intervalMs: HOUR_MS,
+      run: async () => {
+        await runAccountPurge(seams.db);
+      },
+    },
+    { name: "metrics-snapshot", intervalMs: HOUR_MS, run: () => runMetricsSnapshot(seams.db, seams.clock) },
+    {
+      name: "daily-integrity-check",
+      intervalMs: DAY_MS,
+      run: () => runDailyIntegrityCheck({ db: seams.db, clock: seams.clock, senders: seams.senders }),
+    },
+  ];
+}

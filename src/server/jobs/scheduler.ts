@@ -1,106 +1,102 @@
-// E18-S10 — In-process job scheduler.
+// The in-process job scheduler (E18-S21). A tick does two things:
 //
-// Background work runs in-process from a SINGLE per-process scheduler. On each tick it
-// does two things, in order:
-//   1. enqueues every periodic job that has come due (one row per due job, keyed on the
-//      job's name as the row `type`), and
-//   2. drains the runnable rows out of the `jobs` table through the claim/run library
-//      (`../db/jobs`), dispatching each claimed row to the handler registered for its
-//      `type` — exactly as the connector dispatcher routes work by `job.type`.
+//   1. Runs every periodic sweep whose interval has elapsed, DIRECTLY — no job row is
+//      ever enqueued for a sweep. A sweep that throws is logged (redacted) and stops
+//      neither the other sweeps nor the drain.
+//   2. Drains the runnable queue rows through the claim/run library, which dispatches
+//      each claimed row by its enqueued `type`. A row whose type has no handler is
+//      dead-lettered and a throwing handler is retried with backoff then failed (both by
+//      the library); either way the failure is logged (redacted) and the drain carries on
+//      with the other due rows.
 //
-// Using `run()` (FOR UPDATE SKIP LOCKED under the hood) keeps every run idempotent: a
-// row is claimed and marked done inside the claim statement, so a row already claimed by
-// another tick is skipped and a processed row is never run a second time.
-//
-// Time comes from the injected Clock (never `Date.now()` / SQL `now()`), so "due" is
-// deterministic and tests move time forward without touching the wall clock. The scheduler
-// reads no `process.env` and holds no secret (INV-103): `createScheduler` runs purely from
-// its injected db source, clock and job set, and the memoised `getScheduler()` reads the
-// database URL only through config (via `getServerDb()`), never arbitrary environment.
+// Every failure reaches `log` only after redaction, so a card number or token in an error
+// message never lands in a log. `getScheduler()` is the process-wide instance built from
+// the real seams (src/server/jobs/compose.ts); `createScheduler()` takes injected deps.
 
-import { enqueue, run, type Job } from "../db/jobs";
-import { getServerDb } from "../db/server";
-import { systemClock, type Clock } from "../seams/clock";
+import { run, type DispatchTable } from "../db/jobs";
+import { redact } from "../../domain/redaction/redact";
 import { processSingleton } from "../seams/process-singleton";
+import type { Clock } from "../seams/clock";
 import type { Db } from "../db/index";
+import type { PeriodicSweep } from "./registry";
 
-// One periodic background job the scheduler ticks. `name` is matched against a claimed
-// row's `type` to dispatch it; `intervalMs` is the schedule it is enqueued on; `handler`
-// is run for a claimed row of that type.
-export interface SchedulerJob {
-  readonly name: string;
-  readonly intervalMs: number;
-  readonly handler: (job: Job) => void | Promise<void>;
-}
+export type { PeriodicSweep } from "./registry";
 
 export interface SchedulerDeps {
-  // Resolved per tick (a lazy db source), so the memoised per-process instance can be
-  // constructed without opening a database.
+  // Resolved per tick, so constructing a scheduler touches no database.
   readonly getDb: () => Promise<Db>;
   readonly clock: Clock;
-  readonly jobs: readonly SchedulerJob[];
+  readonly sweeps: readonly PeriodicSweep[];
+  readonly dispatch: DispatchTable;
+  // Receives every failure, already redacted.
+  readonly log: (entry: unknown) => void;
 }
 
 export interface Scheduler {
   tick(): Promise<unknown>;
 }
 
-// Build a scheduler over an injected db source, clock and job set. The periodic schedule
-// is per-instance in-memory state: `nextEnqueueAt` records, per job name, the instant it
-// is next due to be enqueued (absent means "due now", so a job is enqueued on the first
-// tick that sees it).
-export function createScheduler(deps: SchedulerDeps): Scheduler {
-  const { getDb, clock, jobs } = deps;
-  const nextEnqueueAt = new Map<string, number>();
+// A drain processes at most this many rows per tick, so a misbehaving queue can never
+// pin a tick in an endless loop.
+const MAX_ROWS_PER_TICK = 500;
 
-  // Dispatch a claimed row to the handler registered for its type. An unregistered type
-  // is an anomaly, surfaced rather than silently swallowed (run() returns it to the queue
-  // with a backoff when a handler throws).
-  async function dispatch(job: Job): Promise<void> {
-    const registered = jobs.find((entry) => entry.name === job.type);
-    if (!registered) {
-      throw new Error(`No job registered for type "${job.type}"`);
+// A failure as a plain, redacted log entry. Released-value matching is not available
+// here, so only the pattern rules apply (card numbers, codes, tokens, secret fields).
+function failureEntry(where: string, name: string, error: unknown): unknown {
+  const message = error instanceof Error ? error.message : String(error);
+  return redact({ level: "error", where, name, error: message }, () => false);
+}
+
+export function createScheduler(deps: SchedulerDeps): Scheduler {
+  const { getDb, clock, sweeps, dispatch, log } = deps;
+  const nextRunAt = new Map<string, number>();
+
+  async function runDueSweeps(): Promise<void> {
+    const nowMs = clock.now().getTime();
+    for (const sweep of sweeps) {
+      const dueAt = nextRunAt.get(sweep.name) ?? nowMs;
+      if (nowMs < dueAt) continue;
+      nextRunAt.set(sweep.name, nowMs + sweep.intervalMs);
+      try {
+        await sweep.run();
+      } catch (error) {
+        log(failureEntry("sweep", sweep.name, error));
+      }
     }
-    await registered.handler(job);
+  }
+
+  async function drain(db: Db): Promise<void> {
+    for (let processed = 0; processed < MAX_ROWS_PER_TICK; processed++) {
+      try {
+        if ((await run(db, clock, dispatch)) === null) return;
+      } catch (error) {
+        // The library has already dead-lettered or re-queued the row; log and carry on.
+        log(failureEntry("drain", "job", error));
+      }
+    }
   }
 
   return {
     async tick(): Promise<void> {
-      const db = await getDb();
-      const nowMs = clock.now().getTime();
-
-      // Enqueue every periodic job that is due, scheduling the next run one interval out
-      // from now so a slow tick never floods the queue with catch-up rows.
-      for (const job of jobs) {
-        const dueAt = nextEnqueueAt.get(job.name) ?? nowMs;
-        if (nowMs >= dueAt) {
-          await enqueue(db, { type: job.name, runAt: new Date(nowMs) });
-          nextEnqueueAt.set(job.name, nowMs + job.intervalMs);
-        }
-      }
-
-      // Drain every runnable row through the claim/run library. Each run() claims one due
-      // row and, on success, marks it done, so the queue strictly shrinks and the loop
-      // ends when nothing is due.
-      while ((await run(db, clock, dispatch)) !== null) {
-        // keep draining
-      }
+      await runDueSweeps();
+      await drain(await getDb());
     },
   };
 }
 
-// The single per-process scheduler. Memoised on globalThis (via processSingleton) so it
-// is never re-instantiated per call and one instance survives Next's module duplication.
-// It stays lazy: the database is opened only when a tick calls `getServerDb()`, which
-// reads the database URL from config and selects the in-process PGlite Queryable for a
-// `pglite:` URL (the in-memory dev seam) or the real pool for a `postgres://` one.
-//
-// The real job registry (E18-S09) is adapted into runnable `SchedulerJob`s — each job's
-// handler closed over its own seams (push/refresh/fetch/…) — at the composition root; that
-// wiring is out of this task's scope (`scheduler.ts`, config), so the per-process instance
-// is delivered as the memoised tick engine with no jobs wired yet.
+// The process-wide scheduler over the real seams (kept on globalThis, so every module
+// graph Next builds shares one). Its seams are composed lazily on the first tick.
 export function getScheduler(): Scheduler {
-  return processSingleton("jobs.scheduler", () =>
-    createScheduler({ getDb: getServerDb, clock: systemClock, jobs: [] }),
-  );
+  return processSingleton("jobs.scheduler", () => {
+    let inner: Scheduler | undefined;
+    return {
+      async tick(): Promise<unknown> {
+        if (!inner) {
+          const { composeScheduler } = await import("./compose");
+          inner = await composeScheduler();
+        }
+        return inner.tick();
+      },
+    };
+  });
 }
