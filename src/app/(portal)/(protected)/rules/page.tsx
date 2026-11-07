@@ -11,7 +11,13 @@ import { selectKeyWrapper } from "@/server/crypto/key-wrapper";
 import { verifySession, type Session } from "@/server/auth/session";
 import { systemClock } from "@/server/seams/clock";
 import type { Db } from "@/server/db/index";
-import { createRulesActions, ruleInputFromForm, type ActionResult } from "./actions";
+import {
+  createRulesActions,
+  ruleInputFromForm,
+  rulesNotice,
+  type ActionResult,
+  type RulesNotice,
+} from "./actions";
 
 // E12-S17 — Rules page (the thin protected-page loader + rule-action wiring).
 //
@@ -150,22 +156,10 @@ async function deleteAction(formData: FormData): Promise<void> {
 }
 
 // The outcome of the last change, in words plus an icon (never colour alone). A
-// problem is announced immediately (alert); a success politely (status).
-type Notice = { tone: "done" | "problem"; text: string };
-const NOTICES: Record<string, Notice> = {
-  created: { tone: "done", text: "Rule added — Warthog will enforce it from now on." },
-  updated: { tone: "done", text: "Rule updated." },
-  paused: { tone: "done", text: "Rule paused — Warthog won't enforce it until you resume it." },
-  deleted: { tone: "done", text: "Rule deleted." },
-  not_found: {
-    tone: "problem",
-    text: "We couldn't find that rule. It may have already been changed.",
-  },
-  invalid: { tone: "problem", text: "That rule didn't look right. Please check it and try again." },
-  error: { tone: "problem", text: "We couldn't complete that just now. Please try again." },
-};
-
-function NoticeBanner({ notice }: { notice: Notice }) {
+// problem is announced immediately (alert); a success politely (status). The copy is
+// resolved by the sibling `rulesNotice` seam (one source of truth) — this page holds
+// no copy of its own.
+function NoticeBanner({ notice }: { notice: RulesNotice }) {
   const Icon = notice.tone === "done" ? CheckCircle2 : AlertTriangle;
   return (
     <div className="mx-auto w-full max-w-3xl px-4 pt-8 sm:px-6">
@@ -188,7 +182,7 @@ export default async function RulesPage({
   // Read the request first: touching per-request data marks the page dynamic, so
   // `next build` never prerenders it (and never opens the database at build time).
   const rawNotice = (await searchParams).notice;
-  const notice = typeof rawNotice === "string" ? (NOTICES[rawNotice] ?? null) : null;
+  const notice = rulesNotice(typeof rawNotice === "string" ? rawNotice : null);
   const db = await getServerDb();
   const session = await resolveSession(db);
   if (!session) {

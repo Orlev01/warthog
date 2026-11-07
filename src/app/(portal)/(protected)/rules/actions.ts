@@ -70,6 +70,38 @@ export interface RulesActionsDeps {
 // this person's). Never a silent success. The page maps the reason to plain copy.
 export type ActionResult = { ok: true } | { ok: false; reason: string };
 
+// The outcome of the last rule change, as a plain-words notice the Rules page shows
+// (in words + an icon, never colour alone): a successful outcome is "done", a problem
+// is "problem". The code→copy resolver lives in this testable sibling, not the Next
+// `page.tsx` (which may export only its framework fields) — the same seam the
+// security/activity screens use. One source of truth: the page renders what this
+// returns and holds no copy of its own.
+export type RulesNotice = { tone: "done" | "problem"; text: string };
+
+// Every `?notice=` outcome code the rule actions redirect with, mapped to its copy.
+const RULES_NOTICES: Record<string, RulesNotice> = {
+  created: { tone: "done", text: "Rule added — Warthog will enforce it from now on." },
+  updated: { tone: "done", text: "Rule updated." },
+  // E18-S20 honest-pause copy: the Rules screen offers no Resume control (the rules
+  // store has no resume primitive to back one), so the notice must NOT promise
+  // resuming — it states the effect plainly instead.
+  paused: { tone: "done", text: "Rule paused — Warthog won't enforce it for now." },
+  deleted: { tone: "done", text: "Rule deleted." },
+  not_found: {
+    tone: "problem",
+    text: "We couldn't find that rule. It may have already been changed.",
+  },
+  invalid: { tone: "problem", text: "That rule didn't look right. Please check it and try again." },
+  error: { tone: "problem", text: "We couldn't complete that just now. Please try again." },
+};
+
+// Resolve a `?notice=` code to its plain-words notice, or null for an absent or
+// unknown code — so the query string can never inject copy the page would render.
+export function rulesNotice(code: string | null | undefined): RulesNotice | null {
+  if (!code) return null;
+  return RULES_NOTICES[code] ?? null;
+}
+
 // The content of a rule, as the create form's FormData maps to it and the store
 // writes it (the member scope — the userId — is bound separately from the session).
 export interface RuleInput {
@@ -271,10 +303,22 @@ export function createRulesActions(deps: RulesActionsDeps): RulesActions {
     return { rules, agents };
   }
 
+  // Resolve a chosen-agent scope's display NAME from the person's OWN agent record
+  // (member-scoped by the session user id, so a client-forged name is never trusted)
+  // so the rule reads back naming the agent rather than the raw connection id the
+  // scope control posts (E18-S20). An all-agents scope passes through unchanged.
+  async function resolveScopeName(userId: string, scope: RuleScope): Promise<RuleScope> {
+    if (scope.type !== "agent") return scope;
+    const agents = await listAgentsForUser(db, userId);
+    const match = agents.find((agent) => agent.connectionId === scope.agentId);
+    return { type: "agent", agentId: scope.agentId, name: match ? match.displayName : scope.name };
+  }
+
   async function createRule(session: Session, input: unknown): Promise<ActionResult> {
     const content = parseParams(ruleContentSchema, input);
+    const scope = await resolveScopeName(session.userId, content.scope);
     const dek = await dataKeyFor(session.userId);
-    await storeCreateRule(db, { userId: session.userId, ...content }, dek);
+    await storeCreateRule(db, { userId: session.userId, ...content, scope }, dek);
     return { ok: true };
   }
 
