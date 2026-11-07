@@ -43,7 +43,7 @@ import { z } from "zod";
 
 import { parseParams } from "../../../../server/http/validate";
 import { requireStepUp } from "../../../../server/auth/step-up";
-import { decide, getApproval } from "../../../../server/db/approvals";
+import { decide, getApproval, type StoredApproval } from "../../../../server/db/approvals";
 import { markOpened } from "../../../../server/approvals/opened";
 import {
   readInbox,
@@ -67,6 +67,18 @@ import type {
   SavedCardView,
 } from "../../../../components/inbox/inbox-view";
 
+// The approval-metrics recorder seam (task E17-S04) — an OPTIONAL injected function whose
+// shape mirrors E17-S02's RecordMetricInput (a metric name + a finite numeric value + an
+// OPTIONAL open map of non-personal dimensions). The production root wires it to the guarded
+// recorder (`recordMetric: (input) => recordMetricEvent(db, clock, input)`); an actions object
+// built WITHOUT it records no metrics, so every behaviour that predates this seam (E12-S10) is
+// unchanged.
+export type RecordMetricSeam = (input: {
+  readonly name: string;
+  readonly value: number;
+  readonly dimensions?: Record<string, unknown>;
+}) => Promise<void>;
+
 // The injected seams — no process.env (INV-103). `executeApprovedHold` is the
 // pipeline's own single-shot runner for an approved held call (taken as a seam so
 // the actions never re-implement it and a test can observe it running exactly once).
@@ -75,6 +87,7 @@ export interface InboxActionsDeps {
   readonly clock: Clock;
   readonly keyWrapper: KeyWrapper;
   readonly executeApprovedHold: (userId: string, approvalId: string) => Promise<ApprovedHoldResult>;
+  readonly recordMetric?: RecordMetricSeam;
 }
 
 // A decision's result: success, or a refusal naming its reason (an id/approval
@@ -105,6 +118,13 @@ export interface InboxActions {
 // the same vocabulary the sibling security actions use.
 const NOT_FOUND = "not_found";
 const STEP_UP_REQUIRED = "step_up_required";
+
+// The two metrics recorded for EVERY successful decision (task E17-S04; the tester's pinned
+// contract, as `agent.request` / `agent.request.latency_ms` are E17-S03's): a response-time
+// reading (created-to-decided ms) and an outcome-count increment. Approval response time is
+// an explicit operational metric (brief "Operations readiness").
+const RESPONSE_TIME_METRIC = "approval.response_time_ms";
+const DECISION_METRIC = "approval.decision";
 
 // A well-formed uuid: the only shape an approval id may take. A malformed value is
 // rejected at the validation boundary (parseParams throws a 4xx HttpError) before
@@ -203,6 +223,23 @@ function toDecidedView(entry: DecidedApproval): DecidedRequestView {
 export function createInboxActions(deps: InboxActionsDeps): InboxActions {
   const { db, clock, keyWrapper, executeApprovedHold } = deps;
 
+  // Record the two metrics for one successful decision (task E17-S04): a response-time
+  // reading (created-to-decided ms, finite and ≥ 0) and an outcome-count increment (value 1),
+  // BOTH tagged only with the decision's `outcome` (the landed status: approved / denied /
+  // more_detail). The decision instant is the injected clock (never Date.now(); more_detail
+  // never stamps `decided_at`, so the clock — not the stored row — is the created-to-decided
+  // endpoint). An actions object built WITHOUT the seam records nothing. The dimensions are the
+  // allowlisted, non-personal set only — NEVER approval detail, recipient, amount, merchant,
+  // field, reason, question, agent id or user id.
+  async function emitDecisionMetrics(decided: StoredApproval): Promise<void> {
+    if (!deps.recordMetric) return;
+    const elapsed = clock.now().getTime() - decided.createdAt.getTime();
+    const responseMs = elapsed >= 0 ? elapsed : 0;
+    const dimensions = { outcome: decided.status };
+    await deps.recordMetric({ name: RESPONSE_TIME_METRIC, value: responseMs, dimensions });
+    await deps.recordMetric({ name: DECISION_METRIC, value: 1, dimensions });
+  }
+
   // Resolve the acting person's unwrapped DEK (to decrypt the approval detail and
   // the held args). Read the wrapped DEK member-scoped by `userId` (the session's,
   // never a client value) and unwrap it through the KeyWrapper seam. Throws when
@@ -242,7 +279,8 @@ export function createInboxActions(deps: InboxActionsDeps): InboxActions {
     }
 
     await markOpened(db, { id, userId: session.userId }, clock);
-    await decide(db, { userId: session.userId, id, decision: { status: "approved" } }, own.dek, clock);
+    const decided = await decide(db, { userId: session.userId, id, decision: { status: "approved" } }, own.dek, clock);
+    await emitDecisionMetrics(decided);
 
     if (!isRelease) {
       await executeApprovedHold(session.userId, id);
@@ -259,7 +297,8 @@ export function createInboxActions(deps: InboxActionsDeps): InboxActions {
     if (!own) return { ok: false, reason: NOT_FOUND };
 
     await markOpened(db, { id, userId: session.userId }, clock);
-    await decide(db, { userId: session.userId, id, decision: { status: "denied" } }, own.dek, clock);
+    const decided = await decide(db, { userId: session.userId, id, decision: { status: "denied" } }, own.dek, clock);
+    await emitDecisionMetrics(decided);
     return { ok: true };
   }
 
@@ -278,12 +317,13 @@ export function createInboxActions(deps: InboxActionsDeps): InboxActions {
     if (!own) return { ok: false, reason: NOT_FOUND };
 
     await markOpened(db, { id, userId: session.userId }, clock);
-    await decide(
+    const decided = await decide(
       db,
       { userId: session.userId, id, decision: { status: "more_detail", question: q } },
       own.dek,
       clock,
     );
+    await emitDecisionMetrics(decided);
     return { ok: true };
   }
 
