@@ -22,7 +22,7 @@ import { randomUUID } from "node:crypto";
 
 import type { Db, Row } from "./index";
 import { withTransaction } from "./index";
-import { getAccountCurrency } from "./account-currency";
+import { getAccountCurrency, isKnownCurrency } from "./account-currency";
 
 // The two membership roles: the owner's row is 'owner'; everyone else is 'member'.
 export type HouseholdRole = "owner" | "member";
@@ -248,6 +248,32 @@ export async function setHouseholdBudget(
     [householdId, monthlyBudget],
   );
   return { ok: true, monthlyBudget };
+}
+
+// Owner-only: set the household currency every figure is in. A non-owner / non-member is
+// refused "not_owner" and nothing changes; a code not in the known ISO 4217 set is refused
+// "unknown_currency" (the check runs BEFORE the UPDATE, so a refused set writes no row and
+// leaves the stored currency untouched). Reuses the ONE currency-validity check
+// (account-currency) so valid codes live in a single place.
+export async function setHouseholdCurrency(
+  db: Db,
+  {
+    householdId,
+    actorId,
+    currency,
+  }: { householdId: string; actorId: string; currency: string },
+): Promise<{ ok: true; currency: string } | { ok: false; reason: "not_owner" | "unknown_currency" }> {
+  if (!(await isOwner(db, householdId, actorId))) {
+    return { ok: false, reason: "not_owner" };
+  }
+  if (!isKnownCurrency(currency)) {
+    return { ok: false, reason: "unknown_currency" };
+  }
+  await db.query(
+    "UPDATE households SET currency = $2 WHERE id = $1",
+    [householdId, currency],
+  );
+  return { ok: true, currency };
 }
 
 // A non-owner member leaves on their own. The owner cannot leave (they must transfer
