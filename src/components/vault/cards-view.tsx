@@ -1,13 +1,12 @@
 "use client";
 
 import * as React from "react";
-import { CreditCard, Plus, Trash2 } from "lucide-react";
+import { CreditCard, Trash2 } from "lucide-react";
 
 import { Button } from "@/components/ui/button";
 import { Card } from "@/components/ui/card";
-import { Field, Label } from "@/components/ui/field";
-import { SensitiveNotice } from "@/components/ui/sensitive-notice";
 import { encryptValue } from "@/client/vault/values";
+import { AddCardFlow } from "./add-card-flow";
 
 // E11-S14 — Vault cards view component (brief "Identity vault"; constitution §17
 // "No readable card numbers or security codes"; design §4.2 device-held vault).
@@ -24,15 +23,16 @@ import { encryptValue } from "@/client/vault/values";
 //     note, offers a billing-address picker drawn from the vault, and seals the card
 //     NUMBER with the vault key ON THE DEVICE so only ciphertext ever leaves.
 //
-// This is the render-testable, prop-driven VIEW (a Client Component in the app).
-// Holding the unlocked vault key, POSTing the sealed submission and the server
-// action that stores it are wired by a LATER task; here the controls are native and
-// a PROP (`addingCard`) selects the initial state of the add panel, exactly the
-// `draft` idiom of the sibling identity / rules / consent / notifications views.
+// This is the render-testable, prop-driven VIEW (a Client Component in the app). The
+// live on-device "Add a card" flow — holding the unlocked vault key, sealing the number
+// and POSTing the sealed submission — is E11-S19's <AddCardFlow/>, which this view mounts
+// for the add panel (its device behaviour is pinned by add-card-flow.test.tsx). A PROP
+// (`addingCard`) selects the panel's initial open/closed state, exactly the `draft` idiom
+// of the sibling identity / rules / consent / notifications views.
 //
 // The one off-device obligation — "the number is sealed with the vault key on the
 // device before save (only ciphertext leaves), and the security code is never
-// stored" — is the exported pure `sealCard` below.
+// stored" — is the exported pure `sealCard` below, which the flow calls.
 //
 // Colour comes from the design tokens (globals.css) — never a raw hex.
 
@@ -58,6 +58,12 @@ export type VaultAddress = {
   value: string;
 };
 
+// The page's addCard server action that stores a sealed submission (the device flow's
+// output). Reports success or a refusal reason; never a silent success.
+export type AddCardAction = (
+  submission: CardSubmission,
+) => Promise<{ ok: boolean; reason?: string }>;
+
 export type CardsViewProps = {
   cards: ReadonlyArray<SavedCard>;
   billingAddresses: ReadonlyArray<VaultAddress>;
@@ -65,6 +71,10 @@ export type CardsViewProps = {
   // OPEN (explainer + security-code note + billing picker + card-number field +
   // confirm); defaults to CLOSED.
   addingCard?: boolean;
+  // The submit seam the now-live on-device add flow (AddCardFlow) posts to. The page
+  // always supplies the real server action; a prop-driven render (a preview, a render
+  // test) may omit it, in which case nothing is stored.
+  addCard?: AddCardAction;
 };
 
 // The card a person enters in the add panel, before the number is sealed on the
@@ -112,16 +122,9 @@ export async function sealCard(
   };
 }
 
-// --- plain copy --------------------------------------------------------------------
-
-// The sensitive-moment explainer: adding a card slows down and says HOW the number
-// is protected (sealed on the device, never readable by Warthog) — plain words.
-const SEAL_EXPLAINER =
-  "Adding a card is a sensitive step, so take a moment. Your card number is sealed on your device with your vault key before it is saved — only the locked version ever leaves, and Warthog can never read it.";
-
-// The explicit note that the card security code is never stored (§17).
-const SECURITY_CODE_NOTE =
-  "Your card's security code (sometimes called the CVV) is never stored — not by Warthog, and not anywhere.";
+// A render-only default for the optional submit seam (above): the page always wires the
+// real addCard server action, so this is reached only by a prop-driven render.
+const noopAddCard: AddCardAction = async () => ({ ok: true });
 
 // The two-digit month and full year the saved card shows (e.g. 11/2029, 03/2028).
 function formatExpiry(month: number, year: number): string {
@@ -156,47 +159,12 @@ function SavedCardRow({ card }: { card: SavedCard }) {
   );
 }
 
-// The "add a card" panel, shown at the sensitive moment: the plain seal explainer,
-// the live fields (card number, a name for it, and expiry), the explicit
-// "security code is never stored" note, a billing-address picker drawn from the
-// vault, and the explicit confirm. The entered number is sealed on the device
-// (sealCard) by the later wiring before anything leaves.
-function AddCardPanel({ billingAddresses }: { billingAddresses: ReadonlyArray<VaultAddress> }) {
-  const billingId = React.useId();
-  return (
-    <Card className="flex flex-col gap-4">
-      <h3 className="text-sm font-semibold text-fg">Add a card</h3>
-
-      <Field label="Card number" inputMode="numeric" placeholder="Your card number" />
-      <Field label="A name for this card" placeholder="e.g. Everyday spending" />
-      <div className="grid grid-cols-2 gap-3">
-        <Field label="Expiry month" type="number" inputMode="numeric" placeholder="MM" />
-        <Field label="Expiry year" type="number" inputMode="numeric" placeholder="YYYY" />
-      </div>
-
-      <div className="flex flex-col gap-1.5">
-        <Label htmlFor={billingId}>Billing address</Label>
-        <select
-          id={billingId}
-          defaultValue={billingAddresses[0]?.id}
-          className="min-h-11 w-full rounded-card border border-line bg-surface px-3 text-sm text-fg focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-focus focus-visible:ring-offset-2 focus-visible:ring-offset-bg"
-        >
-          {billingAddresses.map((address) => (
-            <option key={address.id} value={address.id}>
-              {address.value}
-            </option>
-          ))}
-        </select>
-      </div>
-
-      <p className="text-sm text-fg-muted">{SECURITY_CODE_NOTE}</p>
-
-      <SensitiveNotice explanation={SEAL_EXPLAINER} />
-    </Card>
-  );
-}
-
-export function CardsView({ cards, billingAddresses, addingCard = false }: CardsViewProps) {
+export function CardsView({
+  cards,
+  billingAddresses,
+  addingCard = false,
+  addCard,
+}: CardsViewProps) {
   return (
     <section className="flex flex-col gap-8">
       <h1 className="text-xl font-semibold text-fg">Your cards</h1>
@@ -208,16 +176,13 @@ export function CardsView({ cards, billingAddresses, addingCard = false }: Cards
           cards.map((card) => <SavedCardRow key={card.id} card={card} />)
         )}
 
-        {addingCard ? (
-          <AddCardPanel billingAddresses={billingAddresses} />
-        ) : (
-          <div className="flex">
-            <Button variant="primary" type="button">
-              <Plus aria-hidden={true} className="h-4 w-4 shrink-0" />
-              Add a card
-            </Button>
-          </div>
-        )}
+        {/* The live on-device add flow: closed it is the "Add a card" control, open it
+            seals the number under the vault key and submits only ciphertext + metadata. */}
+        <AddCardFlow
+          billingAddresses={billingAddresses}
+          addCard={addCard ?? noopAddCard}
+          initialOpen={addingCard}
+        />
       </div>
     </section>
   );
