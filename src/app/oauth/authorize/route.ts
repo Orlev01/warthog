@@ -1,27 +1,29 @@
 // The App-Router entry for `/oauth/authorize`: thin by design. It reads config at the
-// composition root (`loadConfig()` — the one env seam), takes the process-wide db (`getServerDb()`), resolves the
-// signed-in session from the `__Host-wh_session` cookie (→ `verifySession`), reads the
-// agent's query, and delegates the authorization rules and code issuance to the tested
-// `authorize` seam. A `route.ts` may export ONLY the known route keys, so the testable
-// logic stays in the sibling server module `src/server/oauth/authorize.ts` (OBS-025);
-// this file exports just `GET`.
+// composition root (`loadConfig()` — the one env seam), takes the process-wide db
+// (`getServerDb()`), resolves the signed-in session from the `__Host-wh_session` cookie
+// (→ `verifySession`), reads the agent's query, and delegates to the tested
+// `beginAuthorization` seam. A `route.ts` may export ONLY the known route keys, so the
+// testable logic stays in the sibling server module `src/server/oauth/authorize.ts`
+// (OBS-025); this file exports just `GET`.
 //
-// The connection the person consented to is created by the consent decision wired in
-// later (E10-S03), which will supply its id here. Until then the entry mints a fresh
-// server-side opaque uuid as the binding target — never a value taken from the request
-// (the connection is never client-supplied).
-
-import { randomUUID } from "node:crypto";
+// E10-S12 — consent before code. The route no longer issues a code outright: a valid,
+// signed-in request is CARRIED SERVER-SIDE (the pending store) and the person is sent to
+// the internal `/oauth/consent` screen. The opaque handle to that pending request rides
+// in a host-locked cookie (never a URL/form field), so the consent page and the decision
+// read the request back server-side. The code is minted only once the person approves.
 
 import { loadConfig } from "../../../server/config";
 import { getServerDb } from "../../../server/db/server";
 import { verifySession } from "../../../server/auth/session";
-import { authorize } from "../../../server/oauth/authorize";
+import { beginAuthorization } from "../../../server/oauth/authorize";
 import { systemClock } from "../../../server/seams/clock";
 import { systemRandom } from "../../../server/seams/random";
 
 // Mirrors the host-locked cookie name set by the session module.
 const SESSION_COOKIE = "__Host-wh_session";
+// The host-locked cookie that carries the pending authorize request's opaque handle to
+// the consent screen and the decision (never a URL/form field).
+const CONSENT_COOKIE = "__Host-wh_consent";
 
 // Pull one cookie's value out of the request's Cookie header, or null when absent.
 function readCookie(request: Request, name: string): string | null {
@@ -35,6 +37,14 @@ function readCookie(request: Request, name: string): string | null {
   return null;
 }
 
+// The Set-Cookie value that carries the pending handle: host-locked (`__Host-`),
+// unreadable to script (HttpOnly), HTTPS-only (Secure), SameSite=Lax, Path=/ and no
+// Domain — the same shape the session cookie uses.
+function consentCookie(handle: string): string {
+  // Lives as long as the pending request it names (ten minutes).
+  return `${CONSENT_COOKIE}=${handle}; Path=/; HttpOnly; Secure; SameSite=Lax; Max-Age=600`;
+}
+
 export async function GET(request: Request): Promise<Response> {
   const config = loadConfig();
   const db = await getServerDb();
@@ -42,13 +52,18 @@ export async function GET(request: Request): Promise<Response> {
   const session = token ? await verifySession(db, token, { clock: systemClock }) : null;
   const params = new URL(request.url).searchParams;
 
-  const result = await authorize(
-    { params, session, connectionId: randomUUID() },
+  const result = await beginAuthorization(
+    { params, session },
     { db, config, clock: systemClock, random: systemRandom },
   );
 
   if (result.ok) {
-    return new Response(null, { status: 302, headers: { Location: result.redirectTo } });
+    // Carry the pending request's handle in a host-locked cookie and send the person to
+    // the consent screen — no code is issued and nothing is sent to the client yet.
+    return new Response(null, {
+      status: 302,
+      headers: { Location: result.redirectTo, "Set-Cookie": consentCookie(result.handle) },
+    });
   }
   // Not signed in → send the person to sign in; any other rejection is a bad request.
   if (result.error === "login_required") {

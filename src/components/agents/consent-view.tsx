@@ -49,6 +49,12 @@ export type ConsentViewProps = {
   // a KNOWN platform callback (verified) shows the "Verified platform" badge; any
   // other host is shown prominently.
   redirect: { host: string; verified: boolean };
+  // E10-S12 — the server decision actions the live consent screen submits to. When
+  // given, the view becomes a real form: Approve submits the chosen name, starting set
+  // and opt-ins to `approveAction`; Refuse submits to `refuseAction`. When omitted the
+  // view renders as the pure, presentational screen (E10-S02) — no form, inert buttons.
+  approveAction?: (formData: FormData) => void | Promise<void>;
+  refuseAction?: (formData: FormData) => void | Promise<void>;
 };
 
 // The three starting sets the consent screen offers, in plain words.
@@ -67,6 +73,15 @@ const STARTING_SETS: ReadonlyArray<{
 // sharing-what-it-learns are always opt-in (off in every starting set).
 type BooleanCapability = Exclude<keyof PermissionSet, "services">;
 
+// The opt-in capabilities a person can turn ON from the live consent form (always off
+// in every starting set). High-tier and sharing-what-it-learns are simple booleans and
+// are submitted by name; card access needs a budget, which is set up on the per-agent
+// permissions page, so the card toggle stays a preview here.
+const SUBMITTABLE_OPTINS: ReadonlySet<BooleanCapability> = new Set<BooleanCapability>([
+  "highTier",
+  "learningSharing",
+]);
+
 const CAPABILITIES: ReadonlyArray<{ key: BooleanCapability; label: string }> = [
   { key: "lowTierProfile", label: "Your basic profile" },
   { key: "skills", label: "Your skills" },
@@ -82,11 +97,13 @@ const CAPABILITIES: ReadonlyArray<{ key: BooleanCapability; label: string }> = [
 ];
 
 // One capability toggle: a native, user-adjustable checkbox whose initial checked
-// state reflects whether the selected starting set grants it.
-function Toggle({ on, children }: { on: boolean; children: React.ReactNode }) {
+// state reflects whether the selected starting set grants it. A `name` makes the
+// toggle part of the live form submission (an opt-in the decision reads); without one
+// the toggle is a preview of what the starting set grants.
+function Toggle({ on, name, children }: { on: boolean; name?: string; children: React.ReactNode }) {
   return (
     <label className="flex items-center gap-3 rounded-card border border-line bg-surface p-3">
-      <input type="checkbox" defaultChecked={on} className="h-4 w-4 accent-accent" />
+      <input type="checkbox" name={name} defaultChecked={on} className="h-4 w-4 accent-accent" />
       <span className="text-fg">{children}</span>
     </label>
   );
@@ -122,12 +139,16 @@ export function ConsentView({
   services = [],
   template,
   redirect,
+  approveAction,
+  refuseAction,
 }: ConsentViewProps) {
   const tickedIds = services.filter((s) => s.ticked).map((s) => s.id);
   const permissions = permissionTemplate(template, tickedIds);
   const serviceGranted = (id: string) => permissions.services.some((p) => p.service === id);
+  // A live form only when the decision actions are wired in; otherwise the pure view.
+  const live = approveAction != null;
 
-  return (
+  const content = (
     <section className="flex flex-col gap-6">
       <header className="flex flex-col gap-3">
         <h1 className="text-xl font-semibold text-fg">Connect {platform}</h1>
@@ -137,7 +158,7 @@ export function ConsentView({
         <RedirectNotice redirect={redirect} />
       </header>
 
-      <Field label="Name" defaultValue={defaultName} placeholder={defaultName} />
+      <Field label="Name" name="name" defaultValue={defaultName} placeholder={defaultName} />
 
       <div className="flex flex-col gap-2">
         <h2 className="text-sm font-medium text-fg">{platform} is asking to</h2>
@@ -178,7 +199,11 @@ export function ConsentView({
         <legend className="pb-2 text-sm font-medium text-fg">What it can do</legend>
         <div className="flex flex-col gap-2">
           {CAPABILITIES.map((cap) => (
-            <Toggle key={cap.key} on={permissions[cap.key]}>
+            <Toggle
+              key={cap.key}
+              name={live && SUBMITTABLE_OPTINS.has(cap.key) ? cap.key : undefined}
+              on={permissions[cap.key]}
+            >
               {cap.label}
             </Toggle>
           ))}
@@ -215,15 +240,25 @@ export function ConsentView({
       ) : null}
 
       <div className="flex flex-col gap-2 sm:flex-row">
-        <Button type="button" variant="primary" className="sm:flex-1">
+        <Button type={live ? "submit" : "button"} variant="primary" className="sm:flex-1">
           Approve
         </Button>
-        <Button type="button" variant="secondary" className="sm:flex-1">
+        <Button
+          type={refuseAction != null ? "submit" : "button"}
+          formAction={refuseAction}
+          variant="secondary"
+          className="sm:flex-1"
+        >
           Refuse
         </Button>
       </div>
     </section>
   );
+
+  // When the decision actions are wired in, the whole screen is a form that posts the
+  // person's choices to Approve (the form action) or Refuse (the button's formAction);
+  // otherwise it is the pure, presentational view.
+  return live ? <form action={approveAction}>{content}</form> : content;
 }
 
 export default ConsentView;
