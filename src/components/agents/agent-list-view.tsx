@@ -63,6 +63,7 @@ const CURRENCY = "A$";
 // one primary action). Styled through tokens, no raw colour. (Same pattern as ActivityView.)
 const BTN_BASE =
   "inline-flex min-h-11 items-center justify-center gap-2 rounded-card px-4 text-sm font-medium transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-focus focus-visible:ring-offset-2 focus-visible:ring-offset-bg";
+const BTN_PRIMARY = `${BTN_BASE} bg-accent text-accent-fg hover:bg-accent-hover`;
 const BTN_SECONDARY = `${BTN_BASE} border border-line bg-surface text-fg hover:bg-surface-muted`;
 // A control that is present but not actionable (Disconnect when no action is configured):
 // the neutral surface look, dimmed and non-interactive, the native `disabled` attribute
@@ -159,6 +160,11 @@ export function AgentListView({ agents, disconnectAction }: AgentListViewProps) 
         <EmptyState
           heading="No agents connected yet"
           description="Connect an agent and it'll appear here with its status and spend."
+          action={
+            <a href="/agents/connect" className={BTN_PRIMARY}>
+              Connect an agent
+            </a>
+          }
         />
       ) : (
         <ul className="flex flex-col gap-3">

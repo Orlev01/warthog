@@ -628,3 +628,74 @@ test("uses design tokens, never a raw hex colour (populated, empty, and with a r
     );
   }
 });
+
+// === E18-S19 — the filters collapse behind a 'Filters' disclosure ===================
+//
+// Mobile polish (E2E screenshot: the filter chrome fills a phone screen before any
+// entry shows). The view now renders its filters inside a disclosure (<details>)
+// labelled 'Filters'. Two things the SSR markup can honestly show:
+//   • the facet + date-range controls live INSIDE a disclosure whose <summary> says
+//     'Filters'. (A <details> still emits its contents when closed, so the existing
+//     "renders filter controls" coverage above — which scans the whole markup — stays
+//     green; this new test additionally pins that they moved inside the disclosure.)
+//   • the disclosure is OPEN when a filter is set and CLOSED otherwise. The only
+//     selected-filter value the view receives is `query` (the page loader is NOT in
+//     this task's touches and so cannot pass facet selections), so a non-empty query
+//     is the "a filter is set" signal that opens it.
+// The responsive hide/show at ≥1024px is pure CSS media-query behaviour that static
+// markup cannot observe, so it is deliberately NOT asserted here.
+
+// The <details> disclosure whose <summary> matches `re` (e.g. the Filters one), else
+// null. Scopes an assertion to that one disclosure — never the per-entry View-details /
+// Dispute disclosures, whose summaries read differently ("View details", "Dispute").
+function detailsBySummary(markup: string, re: RegExp): El | null {
+  for (const d of findAll(markup, "details")) {
+    const summary = findAll(d.inner, "summary")
+      .map((s) => visibleText(s.inner))
+      .join(" ");
+    if (re.test(summary)) return d;
+  }
+  return null;
+}
+
+// Whether a <details> carries the `open` attribute (React server-renders `open` as
+// `open=""`). Matched as a real attribute, so a className containing "open" can't spoof it.
+function isDetailsOpen(d: El): boolean {
+  return /(?:^|\s)open(?:=""|\s|$)/i.test(d.attrs);
+}
+
+test("renders the filter controls inside a 'Filters' disclosure", () => {
+  const det = detailsBySummary(render(base()), /filters/i);
+  assert.ok(det, "the view must render a disclosure labelled 'Filters'");
+  const labels = controlLabelText(det!.inner);
+  assert.match(labels, /agent/i, `the Agent filter must live inside the Filters disclosure, got: "${labels}"`);
+  assert.match(
+    labels,
+    /service|connector|connection/i,
+    `the Service filter must live inside the Filters disclosure, got: "${labels}"`,
+  );
+  assert.match(labels, /kind/i, `the Kind filter must live inside the Filters disclosure, got: "${labels}"`);
+  assert.match(labels, /outcome/i, `the Outcome filter must live inside the Filters disclosure, got: "${labels}"`);
+  const dateInputs = inputAttrs(det!.inner).filter((a) => attr(a, "type") === "date").length;
+  assert.ok(
+    dateInputs >= 1 || /\bfrom\b|\bto\b|\bdate\b|since|until|range/i.test(labels),
+    `the date-range filter must live inside the Filters disclosure, got date inputs: ${dateInputs}, labels: "${labels}"`,
+  );
+});
+
+test("the 'Filters' disclosure is open when a filter is set and closed when none is", () => {
+  const whenNone = detailsBySummary(render(base({ query: "" })), /filters/i);
+  const whenSet = detailsBySummary(render(base({ query: "dentist" })), /filters/i);
+  assert.ok(whenNone, "a 'Filters' disclosure must render when no filter is set");
+  assert.ok(whenSet, "a 'Filters' disclosure must render when a filter is set");
+  assert.equal(
+    isDetailsOpen(whenNone!),
+    false,
+    "with no filter set the 'Filters' disclosure is closed (collapsed) by default",
+  );
+  assert.equal(
+    isDetailsOpen(whenSet!),
+    true,
+    "with a filter set (a search query) the 'Filters' disclosure is open so the active filter is visible",
+  );
+});

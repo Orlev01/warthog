@@ -338,15 +338,57 @@ test("offers a live Pause for each active rule and a live Delete for each rule",
   );
 });
 
-test("marks a paused rule's state in words (never colour alone)", () => {
-  // EXISTING has one paused rule; its paused state must be legible as a word, per the
+test("marks a paused rule's state in words, and never promises resuming without a live Resume control", () => {
+  // EXISTING has one paused rule. Its paused state must be legible as a word, per the
   // design rule "status uses words + icons, never colour alone" — shown either as a
   // "Paused" status or by offering a "Resume" control (both are words a reader sees).
-  const text = visibleText(render(base()));
+  const markup = render(base());
+  const text = visibleText(markup);
   assert.match(
     text,
     /paused|resume/i,
     `a paused rule must have its state legible in words (a "Paused" status or a "Resume" control); text="${text}"`,
+  );
+  // E18-S20 honest-pause contract (SUPERSEDES the old paused copy): the screen must not
+  // PROMISE resuming unless a live Resume control is actually shown. A resume promise
+  // with no control is a dead/dishonest affordance (there is no resume primitive to back
+  // one). So if "resume" appears as visible copy, a selectable Resume control MUST exist;
+  // if none is shown, the copy must not mention resuming. This holds either era honestly
+  // (a reworded notice with no control, or a real Resume control added later).
+  const promisesResume = /\bresume\b/i.test(text);
+  const offersLiveResume = hasSelectable(markup, /\bresume\b/i);
+  assert.ok(
+    !promisesResume || offersLiveResume,
+    `a paused rule must not promise resuming unless a live Resume control is shown; ` +
+      `visibleText="${text}", liveControls=${JSON.stringify(selectableNames(markup))}`,
+  );
+});
+
+test("renders a chosen-agent rule by the agent's name, never its raw connection id", () => {
+  // E18-S20 AC2 (SUPERSEDES: a chosen-agent scope used to read back as a raw UUID in the
+  // rule sentence). A rule scoped to a chosen agent reads back with the agent's DISPLAY
+  // NAME in its sentence (as the one-source-of-truth ruleSentence renders a named scope —
+  // by `scope.name`). The agent's connection id is matching metadata, never reader-facing
+  // copy, so it must NEVER surface in the rendered rules list.
+  const CONNECTION_ID = "a1b2c3d4-e5f6-4a7b-8c9d-0e1f2a3b4c5d"; // a uuid that appears nowhere else
+  const chosen: RulesViewRule = {
+    id: "chosen-rule-1",
+    // the sentence names the agent — what ruleSentence produces for a named scope …
+    sentence: "Ask me before Claude requests a card",
+    scope: { type: "agent", agentId: CONNECTION_ID, name: "Claude" },
+    status: "active",
+  };
+  const markup = render(base({ rules: [chosen] }));
+  const text = visibleText(markup);
+  assert.ok(
+    text.includes("Ask me before Claude requests a card"),
+    `the chosen-agent rule must read back naming the agent; text="${text}"`,
+  );
+  // … and its raw connection id never leaks into the render (the rules list shows the
+  // sentence, not the scope's matching id).
+  assert.ok(
+    !markup.includes(CONNECTION_ID),
+    `the agent's raw connection id must never appear in the rendered rules; markup=${markup}`,
   );
 });
 
