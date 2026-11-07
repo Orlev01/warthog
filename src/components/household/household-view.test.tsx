@@ -870,3 +870,24 @@ test("uses design tokens, never a raw hex colour", () => {
     );
   }
 });
+
+// Operator fix (E15-S13 review veto): an action the page has not bound must never render a live
+// control that submits nowhere (a bare browser GET would dump the shared address into the URL).
+// Every unbound control renders disabled, inside no <form>, with a one-line reason.
+test("with no actions bound, no live form is rendered: every control is disabled with a reason", () => {
+  const unbound: HouseholdViewProps = { household: baseData(), currentUserId: OWNER_ID, currencyOptions: CURRENCY_OPTIONS };
+  const ownerMarkup = render(unbound);
+  const memberMarkup = render({ ...unbound, currentUserId: PARTNER_ID });
+  for (const [who, markup] of [["owner", ownerMarkup], ["member", memberMarkup]] as const) {
+    assert.equal((markup.match(/<form\b/g) ?? []).length, 0, `${who}: no <form> without a bound action`);
+    const fieldsets = (markup.match(/<fieldset\b[^>]*\bdisabled\b/g) ?? []).length;
+    assert.ok(fieldsets > 0, `${who}: unbound controls sit in a disabled fieldset`);
+    const reasons = (decode(markup).match(/isn't available just now/g) ?? []).length;
+    assert.equal(reasons, fieldsets, `${who}: every disabled control group states why`);
+  }
+});
+
+test("a bound action still renders its live form", () => {
+  const markup = render({ household: baseData(), currentUserId: OWNER_ID, currencyOptions: CURRENCY_OPTIONS, inviteAction: NOOP });
+  assert.equal((markup.match(/<form\b/g) ?? []).length, 1, "exactly the one bound action renders a form");
+});

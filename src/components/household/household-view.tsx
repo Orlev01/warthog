@@ -77,10 +77,41 @@ export type HouseholdPageData = {
   pendingInvites: PendingInvite[];
 };
 
-// A server action a form submits to (the page binds the real one; the view renders a
-// live control either way). Optional — a control with no bound action renders disabled
-// with a reason (no dead control), but the page binds every one.
+// A server action a form submits to (the page binds the real one). Optional: a control
+// with no bound action renders disabled with a reason (no dead control) via ActionForm.
 export type FormAction = (formData: FormData) => void | Promise<void>;
+
+// A form bound to its server action or, when the page has not bound one, the same
+// controls inside a natively disabled fieldset with a one-line reason and NO <form>, so
+// nothing can submit nowhere (an action-less form would GET its fields into the URL,
+// shared address included). The sibling views' disabled-with-reason seam, generalised.
+function ActionForm({
+  action,
+  reason,
+  className,
+  children,
+}: {
+  action?: FormAction;
+  reason: string;
+  className?: string;
+  children: React.ReactNode;
+}) {
+  if (action) {
+    return (
+      <form action={action} className={className}>
+        {children}
+      </form>
+    );
+  }
+  return (
+    <div className="flex flex-col gap-1">
+      <fieldset disabled className={className}>
+        {children}
+      </fieldset>
+      <p className="text-xs text-fg-muted">{reason}</p>
+    </div>
+  );
+}
 
 export type HouseholdViewProps = {
   // the member-scoped, shared-items-only report the page read returns.
@@ -191,12 +222,12 @@ export function HouseholdView({
                   {/* Remove a member — the owner's alone, and only ever a non-owner
                       member (the owner cannot remove themselves). */}
                   {isOwner && !memberIsOwner ? (
-                    <form action={removeMemberAction}>
+                    <ActionForm action={removeMemberAction} reason="Removing members isn't available just now.">
                       <input type="hidden" name="member-id" value={member.userId} />
                       <Button variant="secondary" type="submit">
                         Remove member
                       </Button>
-                    </form>
+                    </ActionForm>
                   ) : null}
                 </li>
               );
@@ -208,7 +239,7 @@ export function HouseholdView({
       {/* ----- The shared address: a live editor for the owner AND any member. ----- */}
       <div className="flex flex-col gap-3">
         <h2 className="text-lg font-semibold text-fg">Shared address</h2>
-        <form action={editAddressAction} className="flex flex-col gap-3">
+        <ActionForm action={editAddressAction} reason="Editing the shared address isn't available just now." className="flex flex-col gap-3">
           <div className="flex flex-col gap-1.5">
             <Label htmlFor="shared-address">The one address everyone in the household shares</Label>
             <input
@@ -222,11 +253,11 @@ export function HouseholdView({
           <div>
             <Button type="submit">Save address</Button>
           </div>
-        </form>
+        </ActionForm>
 
         {/* The "use the household address" follow choice — for every member, reflecting
             the caller's current choice. */}
-        <form action={followChoiceAction} className="flex flex-col gap-3">
+        <ActionForm action={followChoiceAction} reason="Changing whether you follow the shared address isn't available just now." className="flex flex-col gap-3">
           <label className="flex items-start gap-3 rounded-card border border-line bg-surface p-3">
             <input
               type="checkbox"
@@ -246,7 +277,7 @@ export function HouseholdView({
               Save address choice
             </Button>
           </div>
-        </form>
+        </ActionForm>
       </div>
 
       {/* ----- Household budget total — shown to every member. TOTALS ONLY: the shared
@@ -275,7 +306,7 @@ export function HouseholdView({
           <h2 className="text-lg font-semibold text-fg">Manage the household</h2>
 
           {/* Invite a member by email. */}
-          <form action={inviteAction} className="flex flex-col gap-3">
+          <ActionForm action={inviteAction} reason="Inviting members isn't available just now." className="flex flex-col gap-3">
             <div className="flex flex-col gap-1.5">
               <Label htmlFor="invite-email">Invite a member by email</Label>
               <input
@@ -297,10 +328,10 @@ export function HouseholdView({
                 ))}
               </ul>
             ) : null}
-          </form>
+          </ActionForm>
 
           {/* The shared monthly household budget (in the household currency). */}
-          <form action={budgetAction} className="flex flex-col gap-3">
+          <ActionForm action={budgetAction} reason="Changing the household budget isn't available just now." className="flex flex-col gap-3">
             <div className="flex flex-col gap-1.5">
               <Label htmlFor="household-budget">Household budget ({household.currency})</Label>
               <input
@@ -318,10 +349,10 @@ export function HouseholdView({
                 Save budget
               </Button>
             </div>
-          </form>
+          </ActionForm>
 
           {/* Each member's monthly limit (in the household currency). */}
-          <form action={limitAction} className="flex flex-col gap-3">
+          <ActionForm action={limitAction} reason="Changing member limits isn't available just now." className="flex flex-col gap-3">
             <div className="flex flex-col gap-1.5">
               <Label htmlFor="member-limit">Monthly limit per member ({household.currency})</Label>
               <input
@@ -339,10 +370,10 @@ export function HouseholdView({
                 Save limit
               </Button>
             </div>
-          </form>
+          </ActionForm>
 
           {/* The household currency every figure is in. */}
-          <form action={currencyAction} className="flex flex-col gap-3">
+          <ActionForm action={currencyAction} reason="Changing the household currency isn't available just now." className="flex flex-col gap-3">
             <div className="flex flex-col gap-1.5">
               <Label htmlFor="household-currency">Household currency</Label>
               <select
@@ -363,12 +394,12 @@ export function HouseholdView({
                 Save currency
               </Button>
             </div>
-          </form>
+          </ActionForm>
 
           {/* Transfer ownership — the new owner must accept. Offered only when there is
               someone to transfer to, so it is never a dead control. */}
           {otherMembers.length > 0 ? (
-            <form action={transferAction} className="flex flex-col gap-3">
+            <ActionForm action={transferAction} reason="Transferring ownership isn't available just now." className="flex flex-col gap-3">
               <div className="flex flex-col gap-1.5">
                 <Label htmlFor="transfer-to">Transfer ownership to</Label>
                 <select id="transfer-to" name="transfer-to" className={SELECT_CLASS}>
@@ -392,11 +423,11 @@ export function HouseholdView({
                   Transfer ownership
                 </Button>
               </div>
-            </form>
+            </ActionForm>
           ) : null}
 
           {/* Close the household. */}
-          <form action={closeAction} className="flex flex-col gap-3">
+          <ActionForm action={closeAction} reason="Closing the household isn't available just now." className="flex flex-col gap-3">
             <p className="text-sm text-fg-muted">
               Closing the household removes the shared budget, limits and address for everyone.
             </p>
@@ -405,11 +436,11 @@ export function HouseholdView({
                 Close household
               </Button>
             </div>
-          </form>
+          </ActionForm>
         </div>
       ) : (
         // A non-owner member can leave the household.
-        <form action={leaveAction} className="flex flex-col gap-3">
+        <ActionForm action={leaveAction} reason="Leaving the household isn't available just now." className="flex flex-col gap-3">
           <h2 className="text-lg font-semibold text-fg">Leave</h2>
           <p className="text-sm text-fg-muted">
             Only the owner manages the budget, limits, currency and membership. You can leave at any
@@ -420,7 +451,7 @@ export function HouseholdView({
               Leave household
             </Button>
           </div>
-        </form>
+        </ActionForm>
       )}
     </section>
   );
