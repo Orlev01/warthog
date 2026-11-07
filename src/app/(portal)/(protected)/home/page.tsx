@@ -10,12 +10,13 @@ import { selectKeyWrapper } from "@/server/crypto/key-wrapper";
 import { systemClock } from "@/server/seams/clock";
 import { createHomeActions } from "./actions";
 
-// E18-S13 — Early home page (the thin protected-page loader).
+// E18-S08 — Home page (the thin protected-page loader).
 //
 // Sign-up and sign-in land here, so /home mounts the home dashboard
-// (<DashboardView>, E18-S07) behind the minimal `createHomeActions` loader until
-// the full data-driven loader (E18-S08) extends it. The page lives inside the
-// already-guarded `(protected)` route group, whose layout delegates the
+// (<DashboardView>, E18-S07) behind the `createHomeActions` loader, which feeds the
+// view from the session person's set-up status and dashboard metrics reads. The
+// page lives inside the already-guarded `(protected)` route group, whose layout
+// delegates the
 // admit/redirect to `requireSession`; this loader re-derives the verified session
 // from the `__Host-wh_session` cookie — never a client value (design §5) — to
 // scope the person's own data, and sends an absent session back to sign-in rather
@@ -39,8 +40,9 @@ export default async function HomePage() {
     redirect("/signin");
   }
   // The KeyWrapper (local AES outside production, Key Vault in production) lets the
-  // loader unwrap the person's DEK and greet them by their saved low-tier name.
+  // loader unwrap the person's DEK so the greeting and the two owner-scoped reads
+  // can decrypt their own data; the clock is "now" for the set-up and metrics reads.
   const keyWrapper = selectKeyWrapper({ nodeEnv: config.nodeEnv, localKek: config.devKek });
-  const view = await createHomeActions({ db, keyWrapper }).load(session);
+  const view = await createHomeActions({ db, keyWrapper, clock: systemClock }).load(session);
   return <DashboardView {...view} />;
 }
