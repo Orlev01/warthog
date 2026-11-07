@@ -46,6 +46,11 @@ export function createRegister(deps: SchedulerLoopDeps): () => void {
     started = true;
 
     const scheduler = createScheduler();
+    // Announce the scheduler on boot (not only on a tick failure), so the started server
+    // emits an observable "scheduler running" signal the moment it comes up — the signal a
+    // Deploy smoke check reads to confirm the in-process scheduler was started from
+    // instrumentation. The entry carries this through its `[warthog jobs]` log channel.
+    log({ level: "info", where: "job-scheduler", event: "started", intervalMs });
     setInterval(
       () =>
         // Drive one tick per firing; redact and log any failure, never swallow it, and never
