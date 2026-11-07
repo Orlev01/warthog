@@ -309,6 +309,33 @@ function hasFreeTextField(markup: string): boolean {
 // the builder's to word), the same set inbox-view.test.tsx uses.
 const APPROVE_RE = /approve|allow|hand over/i;
 const DENY_RE = /deny|turn down|decline|refuse|reject|say no/i;
+// The proceed/confirm control that runs the on-device release, and the sensitive-moment
+// explainer that accompanies it (mirrored from inbox-view.test.tsx / release-approve.test.tsx).
+const RELEASE_RE = /release|hand over|hand it|share|confirm|continue/i;
+const EXPLAINER_RE =
+  /sensitive|take a moment|moment before|before it goes ahead|check the details|double.?check|one[- ]?time|slow down/i;
+
+// The accessible name of a control: its visible text PLUS any aria-label / title.
+function controlFace(el: El): string {
+  const parts = [visibleText(el.inner)];
+  const al = attr(el.attrs, "aria-label");
+  if (al) parts.push(al);
+  const ti = attr(el.attrs, "title");
+  if (ti) parts.push(ti);
+  return parts.join(" ").replace(/\s+/g, " ").trim();
+}
+
+function isDisabled(el: El): boolean {
+  return /\bdisabled\b/i.test(el.attrs);
+}
+
+// Every LIVE control (a <button> or a disclosure <summary>, not disabled) whose accessible
+// name matches `re` — so "offers a live release control" never bets on the element kind.
+function liveControlsMatching(markup: string, re: RegExp): El[] {
+  return [...findAll(markup, "button"), ...findAll(markup, "summary")].filter(
+    (c) => re.test(controlFace(c)) && !isDisabled(c),
+  );
+}
 
 // =====================================================================================
 // AC1 — the loader reads ONLY the session user's pending (newest-first) + history.
@@ -541,6 +568,75 @@ test("the loader reads the person's saved cards — label and device ciphertext 
         "the label is display metadata (brand + last four), never the stored number ciphertext",
       );
     }
+  } finally {
+    await db.close();
+  }
+});
+
+// =====================================================================================
+// E11-S17 (BEHAVIOUR SUPERSESSION for this file) — the page now mounts the on-device
+// release control for release requests. Until E11-S17 the page passed no release trigger
+// and the view rendered a card/high-tier release's "Approve and release" DISABLED with a
+// reason (a signed-in server page cannot hand a React client a callback). This task mounts
+// the self-wired on-device <ReleaseApprove> control, so a loaded card release renders a
+// LIVE release control — the on-device unlock-decrypt-release — bound to nothing the server
+// page supplies. The page still binds the three decision server actions exactly as before.
+//
+// Rendered exactly as page.tsx renders it: the loader's props spread, the three decision
+// actions bound, and NO release trigger — so a live release control proves the view mounts
+// the on-device control itself (RED against the pre-S17 disabled-with-reason rendering).
+// =====================================================================================
+
+test("a loaded card release mounts a LIVE on-device release control (not a disabled 'Approve and release')", async () => {
+  const db = await freshDb();
+  const keyWrapper = keyWrapperFor();
+  try {
+    const alice = await makePerson(db, keyWrapper, "alice");
+
+    // A saved card exists (the picker the release offers) ...
+    await addCard(db, {
+      userId: alice.userId,
+      brand: "Visa",
+      lastFour: "4242",
+      expiryMonth: 11,
+      expiryYear: 2030,
+      nickname: "Everyday",
+      billingAddressId: "addr-1",
+      numberCiphertext: "v1:visaCipherFerry",
+    });
+    // ... and a card release is pending.
+    const cardRelease = await seedPending(db, {
+      userId: alice.userId,
+      dek: alice.dek,
+      detail: detailFor({ sentence: "wants to use a card to pay the fare", request: "card", amount: "42.00 AUD" }),
+      at: T_NEW,
+    });
+
+    const view = await makeActions(db, keyWrapper, fixedClock(NOW)).load(await sessionFor(db, alice.userId));
+
+    // Exactly page.tsx's wiring: the three decision server actions, and NO release trigger.
+    const markup = renderInbox(view, {
+      approveAction: noopAction,
+      denyAction: noopAction,
+      moreDetailAction: noopAction,
+    });
+
+    const live = liveControlsMatching(markup, RELEASE_RE);
+    assert.ok(
+      live.length >= 1,
+      `a loaded card release must mount a LIVE on-device release control, got controls: ${JSON.stringify(
+        [...findAll(markup, "button"), ...findAll(markup, "summary")].map((c) => ({
+          face: controlFace(c),
+          disabled: isDisabled(c),
+        })),
+      )}`,
+    );
+    assert.match(
+      visibleText(markup),
+      EXPLAINER_RE,
+      "the mounted on-device release shows the sensitive-moment explainer",
+    );
+    assert.ok(markup.includes(cardRelease), "the mounted release control belongs to the pending card release");
   } finally {
     await db.close();
   }

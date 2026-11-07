@@ -6,14 +6,13 @@ import {
   CheckCircle,
   XCircle,
   HelpCircle,
-  ShieldAlert,
   type LucideIcon,
 } from "lucide-react";
 
-import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/field";
 import { EmptyState } from "@/components/ui/empty";
 import type { UnlockRequest } from "@/client/vault/unlock";
+import { ReleaseApprove } from "./release-approve";
 
 // E12-S12 — Approval inbox view component (brief "Approval inbox" / "Agents wait
 // safely"; design §6; constitution 17 "no readable card numbers or security codes on
@@ -89,15 +88,14 @@ export type InboxViewProps = {
   history: readonly DecidedRequestView[];
   // Decision controls for a NON-release held call, bound to the page's server actions.
   // Optional: an absent action renders its control disabled with a reason (no dead
-  // controls). A card/high-tier release Approve runs the device flow instead (onRelease).
+  // controls). A card/high-tier release Approve runs the on-device hand-over in the
+  // <ReleaseApprove> control the view mounts itself (E11-S17) — a server page cannot hand
+  // a client a callback, so a release is LIVE BY CONSTRUCTION, never gated on a prop.
   approveAction?: InboxAction;
   denyAction?: InboxAction;
   moreDetailAction?: InboxAction;
-  // The person's saved cards, offered in a card release's picker.
+  // The person's saved cards, offered in a card release's on-device picker.
   savedCards?: readonly SavedCardView[];
-  // Runs the device unlock-decrypt-and-release for a card/high-tier request (the page's
-  // client binding gathers the chosen card + entered code and drives createReleaseFlow).
-  onRelease?: (request: PendingRequestView) => void | Promise<void>;
 };
 
 // ─── styling (design tokens; no raw hex) ─────────────────────────────────────────────
@@ -112,15 +110,8 @@ const BTN_BASE =
 const BTN_PRIMARY = `${BTN_BASE} bg-accent text-accent-fg hover:bg-accent-hover`;
 const BTN_SECONDARY = `${BTN_BASE} border border-line bg-surface text-fg hover:bg-surface-muted`;
 const BTN_DISABLED = `${BTN_BASE} border border-line bg-surface text-fg-muted opacity-50`;
-const SELECT_CLASS =
-  "min-h-11 w-full rounded-card border border-line bg-surface px-3 text-sm text-fg focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-focus focus-visible:ring-offset-2 focus-visible:ring-offset-bg";
 const TEXTAREA_CLASS =
   "min-h-11 w-full rounded-card border border-line bg-surface px-3 py-2 text-sm text-fg focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-focus focus-visible:ring-offset-2 focus-visible:ring-offset-bg";
-
-// The sensitive-moment explainer — a plain "slow down for this one moment" panel shown
-// only on a release (never a routine held call), in everyday words with no jargon.
-const RELEASE_EXPLAINER =
-  "This is a sensitive step, so take a moment before it goes ahead. Check the details are right, then approve to hand the value over just once.";
 
 // ─── decision controls ───────────────────────────────────────────────────────────────
 
@@ -214,67 +205,6 @@ function AskControl({
   );
 }
 
-// The card/high-tier Approve path: the sensitive-moment explainer, the saved-card picker
-// and the security-code field (cards only — "where relevant"), and the live control that
-// runs the device unlock-decrypt-and-release. Disabled with a reason when onRelease is
-// not supplied (no dead controls).
-function ReleaseControl({
-  request,
-  savedCards,
-  onRelease,
-}: {
-  request: PendingRequestView;
-  savedCards?: readonly SavedCardView[];
-  onRelease?: (request: PendingRequestView) => void | Promise<void>;
-}) {
-  if (!onRelease) {
-    return (
-      <DisabledControl label="Approve and release" reason="Releasing isn't available just now." />
-    );
-  }
-  const isCard = request.release === "card";
-  const cards = savedCards ?? [];
-  const cardFieldId = `inbox-card-${request.id}`;
-  const codeFieldId = `inbox-code-${request.id}`;
-  return (
-    <div className="flex flex-col gap-3">
-      <div className="flex items-start gap-2 rounded-card border border-line bg-surface-muted p-3 text-sm text-fg">
-        <ShieldAlert aria-hidden={true} className="mt-0.5 h-5 w-5 shrink-0 text-warning" />
-        <p>{RELEASE_EXPLAINER}</p>
-      </div>
-      {isCard ? (
-        <>
-          <div className="flex flex-col gap-1.5">
-            <Label htmlFor={cardFieldId}>Which card</Label>
-            <select id={cardFieldId} name="card" className={SELECT_CLASS}>
-              {cards.map((card) => (
-                <option key={card.id} value={card.id}>
-                  {card.label}
-                </option>
-              ))}
-            </select>
-          </div>
-          <div className="flex flex-col gap-1.5">
-            <Label htmlFor={codeFieldId}>Security code</Label>
-            <Input id={codeFieldId} name="securityCode" inputMode="numeric" autoComplete="off" />
-          </div>
-        </>
-      ) : null}
-      <div>
-        <button
-          type="button"
-          className={BTN_PRIMARY}
-          onClick={() => {
-            void onRelease(request);
-          }}
-        >
-          Approve and release
-        </button>
-      </div>
-    </div>
-  );
-}
-
 // ─── the pending list ────────────────────────────────────────────────────────────────
 
 function PendingItem({
@@ -283,14 +213,12 @@ function PendingItem({
   denyAction,
   moreDetailAction,
   savedCards,
-  onRelease,
 }: {
   request: PendingRequestView;
   approveAction?: InboxAction;
   denyAction?: InboxAction;
   moreDetailAction?: InboxAction;
   savedCards?: readonly SavedCardView[];
-  onRelease?: (request: PendingRequestView) => void | Promise<void>;
 }) {
   const isRelease = request.release !== null;
   return (
@@ -318,7 +246,7 @@ function PendingItem({
         </dd>
       </dl>
       {isRelease ? (
-        <ReleaseControl request={request} savedCards={savedCards} onRelease={onRelease} />
+        <ReleaseApprove request={request} savedCards={savedCards} />
       ) : (
         <ApproveControl request={request} approveAction={approveAction} />
       )}
@@ -367,7 +295,6 @@ export function InboxView({
   denyAction,
   moreDetailAction,
   savedCards,
-  onRelease,
 }: InboxViewProps) {
   const isEmpty = pending.length === 0 && history.length === 0;
   return (
@@ -394,7 +321,6 @@ export function InboxView({
                     denyAction={denyAction}
                     moreDetailAction={moreDetailAction}
                     savedCards={savedCards}
-                    onRelease={onRelease}
                   />
                 ))}
               </ul>

@@ -27,9 +27,10 @@ import { createInboxActions, type ActionResult } from "./actions";
 // activity screen's pattern): each re-derives the verified session (never a client
 // value, design §5), calls the factory, and redirects back with a `?notice=` outcome the
 // page shows in plain words (never a silent failure). A card/high-tier RELEASE's Approve
-// is the on-device unlock-decrypt-release flow (a client binding); it is not wired here,
-// so a release renders its "Approve and release" disabled with a reason (no dead
-// controls). Approving a held NON-release call runs it exactly once through the agent-call
+// is the on-device unlock-decrypt-release flow, which <InboxView> mounts as its own live
+// <ReleaseApprove> client control (E11-S17) — a server page cannot hand a client a
+// callback, so a release is live by construction, not bound here. Approving a held
+// NON-release call runs it exactly once through the agent-call
 // pipeline, composed by `createAgentExecutors` (the MCP composition root): its outcome is
 // recorded in Activity and the approve wrapper reports it in plain words (E07-S20).
 //
