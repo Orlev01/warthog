@@ -224,6 +224,34 @@ export async function readActivity(
   return Promise.all(result.rows.map((row) => toEntry(row, dek)));
 }
 
+// A BOUNDED batch of the person's entries in ascending seq order, starting STRICTLY
+// AFTER `afterSeq` (pass 0 for the first batch) and at most `limit` rows, each payload
+// DECRYPTED under `dek`. Member-scoped (the user id is bound, never a client value) and
+// keyset-paginated by seq, so a caller can page through the WHOLE chain in
+// memory-bounded batches — decrypting at most `limit` payloads at a time — without ever
+// holding the entire history in one query (the export builder reads the full activity
+// history this way). Reuses the writer's OWN `toEntry` mapper, so the envelope binding
+// and the returned shape never drift from how the record was written (constitution: one
+// source of truth). A wrong DEK or a tampered ciphertext fails the GCM tag and rejects.
+export async function readActivityBatch(
+  db: Db,
+  userId: string,
+  dek: Uint8Array,
+  afterSeq: number,
+  limit: number,
+): Promise<ActivityEntry[]> {
+  const result = await db.query(
+    `SELECT user_id, seq, occurred_at, kind, source, agent_id, connector_id, tool,
+            outcome, merchant, payload_ct, prev_hash, entry_hash
+       FROM activity_entries
+      WHERE user_id = $1 AND seq > $2
+      ORDER BY seq ASC
+      LIMIT $3`,
+    [userId, afterSeq, limit],
+  );
+  return Promise.all(result.rows.map((row) => toEntry(row, dek)));
+}
+
 // Map a raw row to an ActivityEntry, decrypting its payload under `dek` bound to the
 // row's (user_id, seq). Throws if the DEK is wrong or the ciphertext was tampered.
 // Exported as the ONE row→entry decryption mapper: the filtered list read
