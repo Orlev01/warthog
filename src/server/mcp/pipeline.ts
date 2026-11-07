@@ -75,6 +75,17 @@ export type NotifyApprovalCreatedSeam = (input: {
   readonly dek: Uint8Array;
 }) => Promise<void>;
 
+// The request-metrics recorder seam (task E17-S03) — an OPTIONAL injected function whose
+// shape mirrors E17-S02's RecordMetricInput (a metric name + a finite numeric value + an
+// OPTIONAL open map of non-personal dimensions). The production root wires it to the guarded
+// recorder (`recordMetric: (input) => recordMetricEvent(db, clock, input)`); a pipeline built
+// WITHOUT it records no metrics, so every behaviour that predates this seam is unchanged.
+export type RecordMetricSeam = (input: {
+  readonly name: string;
+  readonly value: number;
+  readonly dimensions?: Record<string, unknown>;
+}) => Promise<void>;
+
 // The injected seams — no process.env (INV-103).
 export interface PipelineDeps {
   readonly db: Db;
@@ -85,6 +96,7 @@ export interface PipelineDeps {
   readonly executeTool: (call: AgentCall, connection: AgentConnection) => Promise<unknown>;
   readonly rate?: ReferenceRate | null;
   readonly notifyApprovalCreated?: NotifyApprovalCreatedSeam;
+  readonly recordMetric?: RecordMetricSeam;
 }
 
 // A discriminated union on `status` (the repo idiom).
@@ -92,6 +104,33 @@ export type AgentCallResult =
   | { status: "executed"; result: unknown }
   | { status: "refused"; reason: string }
   | { status: "pending_approval"; approval_id: string; expires_at: Date };
+
+// The two request metrics the pipeline records for EVERY handled agent call (task E17-S03):
+// one count increment and one latency reading. Request volumes, latencies and error rates
+// are core operational numbers, and the pipeline is the one place that sees every call, its
+// outcome and its timing (brief "Operations readiness").
+const REQUEST_COUNT_METRIC = "agent.request";
+const REQUEST_LATENCY_METRIC = "agent.request.latency_ms";
+
+// The outcome label a thrown tool executor records — there is no AgentCallResult to read a
+// status from. It is a failure, so it also carries an error category.
+const EXECUTOR_FAILURE_OUTCOME = "error";
+
+// Short error-category labels — a safe identifier naming the failure CLASS, so distinct
+// classes (a disconnected agent, a rate-limited burst, a policy denial, a thrown tool) are
+// told apart in the metrics. Never free text, an identity value or message content.
+const CATEGORY_DISCONNECTED = "disconnected";
+const CATEGORY_RATE_LIMITED = "rate_limited";
+const CATEGORY_DENIED = "denied";
+const CATEGORY_TOOL_ERROR = "tool_error";
+
+// The pipeline's internal classification of a handled call: the public result plus — on a
+// refusal — the short error-category label the request metrics carry. The outcome dimension
+// is the result's own status.
+interface DecidedCall {
+  readonly result: AgentCallResult;
+  readonly errorCategory?: string;
+}
 
 // The result of running an approved held call: it either ran the held tool exactly
 // once (and returns its result) or was refused (not approved, already executed, or
@@ -235,94 +274,139 @@ export function createAgentCallPipeline(deps: PipelineDeps): AgentCallPipeline {
     return keyWrapper.unwrap(user.wrappedDek);
   }
 
+  // Record the two request metrics for one handled call (task E17-S03): a count increment
+  // (value 1) and a latency reading (elapsed ms, finite and ≥ 0), BOTH tagged with the
+  // outcome and, on a failure, the short error-category label. A pipeline built without the
+  // seam records nothing. The dimensions are the allowlisted, non-personal set only
+  // ({outcome, errorCategory}) — NEVER tool params, identity values, merchant, recipients,
+  // reason or message content.
+  async function emitRequestMetrics(
+    startedAt: number,
+    outcome: string,
+    errorCategory: string | undefined,
+  ): Promise<void> {
+    if (!deps.recordMetric) return;
+    // Elapsed wall-clock milliseconds read through the clock seam (never Date.now()). A
+    // frozen clock yields 0; the guard keeps it non-negative against a clock that steps back.
+    const elapsed = clock.now().getTime() - startedAt;
+    const latency = elapsed >= 0 ? elapsed : 0;
+    const dimensions: Record<string, unknown> = { outcome };
+    if (errorCategory !== undefined) dimensions.errorCategory = errorCategory;
+    await deps.recordMetric({ name: REQUEST_COUNT_METRIC, value: 1, dimensions });
+    await deps.recordMetric({ name: REQUEST_LATENCY_METRIC, value: latency, dimensions });
+  }
+
+  // The gatekeeping decision for one agent call (design §6.1), returning the public result
+  // plus — on a refusal — the short error-category label the request metrics carry. Every
+  // side effect (activity entries, held request, approval, the notifier) is exactly as
+  // before; only the return shape is enriched so the caller can tag the metrics.
+  async function decide(connection: AgentConnection, call: AgentCall): Promise<DecidedCall> {
+    // Gate 1 — a disconnected or revoked connection: refuse and record, never
+    // execute. (The connection's identity is the session's; no body value.)
+    if (!connection.active) {
+      const reason = "This agent is not connected.";
+      await record(connection, call, "refused");
+      return { result: { status: "refused", reason }, errorCategory: CATEGORY_DISCONNECTED };
+    }
+
+    // The member-scoped policy context (binds the ids as parameters). Carries the
+    // person's configured per-connection rate limit, used next.
+    const context = await loadAgentContext(connection, { db, keyWrapper, clock });
+
+    // Gate 2 — the per-connection rate limit. A burst over the limit is refused
+    // and recorded as ONE summarising entry for the streak, not one per call.
+    if (!rateLimiter.allow(connection.connectionId, context.permissions.rateLimit)) {
+      const reason = "This agent is going too fast — its request rate limit was reached.";
+      if (!burstSummarised.get(connection.connectionId)) {
+        await record(connection, call, "rate_limited");
+        burstSummarised.set(connection.connectionId, true);
+      }
+      return { result: { status: "refused", reason }, errorCategory: CATEGORY_RATE_LIMITED };
+    }
+    // Allowed through the limiter: the current over-limit streak (if any) is over.
+    burstSummarised.set(connection.connectionId, false);
+
+    // Gates 3 & 4 — the permission check and the policy engine, in design §8 order.
+    const decision = evaluate(
+      toPolicyCall(call),
+      toPolicyContext(connection, context, call, clock.now(), rate),
+    );
+
+    // DENY — refuse and record, never execute.
+    if (decision.decision === "deny") {
+      await record(connection, call, "denied");
+      return { result: { status: "refused", reason: decision.reason }, errorCategory: CATEGORY_DENIED };
+    }
+
+    // ASK — the person is needed. Warthog HOLDS the call: it parks the exact
+    // agent call (its args DEK-encrypted) behind a fresh PENDING approval, records
+    // one activity entry for the held call, and tells the agent `pending_approval`
+    // WITHOUT executing the tool. The person decides it from their inbox; on
+    // approval Warthog runs the held call exactly once.
+    if (decision.decision === "ask") {
+      const dek = await dataKeyFor(connection.userId);
+      const approval = await createApproval(
+        db,
+        {
+          userId: connection.userId,
+          agentId: connection.agentId,
+          detail: toApprovalDetail(call),
+        },
+        dek,
+        clock,
+      );
+      await createHeldRequest(
+        db,
+        {
+          userId: connection.userId,
+          agentId: connection.agentId,
+          approvalId: approval.id,
+          args: { ...call },
+        },
+        dek,
+        clock,
+      );
+      await record(connection, call, "pending_approval");
+      // Trigger the approval notifier on creation (E12-S07): a push to every
+      // registered device within seconds, plus a scheduled fallback anchored to the
+      // approval's own createdAt. A push failure does not derail this — the notifier
+      // itself schedules the fallback and resolves — so creation still succeeds.
+      if (deps.notifyApprovalCreated) {
+        await deps.notifyApprovalCreated({
+          userId: connection.userId,
+          approvalId: approval.id,
+          createdAt: approval.createdAt,
+          dek,
+        });
+      }
+      return { result: { status: "pending_approval", approval_id: approval.id, expires_at: approval.expiresAt } };
+    }
+
+    // ALLOW — execute the tool, then record the activity entry BEFORE the result
+    // is returned to the agent.
+    const result = await executeTool(call, connection);
+    await record(connection, call, "executed");
+    return { result: { status: "executed", result } };
+  }
+
   return {
     async handleAgentCall(connection: AgentConnection, call: AgentCall): Promise<AgentCallResult> {
-      // Gate 1 — a disconnected or revoked connection: refuse and record, never
-      // execute. (The connection's identity is the session's; no body value.)
-      if (!connection.active) {
-        const reason = "This agent is not connected.";
-        await record(connection, call, "refused");
-        return { status: "refused", reason };
+      // The pipeline is the one place that sees every agent call, its outcome and its
+      // timing, so it measures the request-count and request-latency metrics here (task
+      // E17-S03). Start the timer before the gates run.
+      const startedAt = clock.now().getTime();
+      let decided: DecidedCall;
+      try {
+        decided = await decide(connection, call);
+      } catch (err) {
+        // The tool executor (or a downstream step) threw: measure the operational failure
+        // first so error rates capture it, then let the error propagate — the pipeline
+        // never swallows a tool failure.
+        await emitRequestMetrics(startedAt, EXECUTOR_FAILURE_OUTCOME, CATEGORY_TOOL_ERROR);
+        throw err;
       }
-
-      // The member-scoped policy context (binds the ids as parameters). Carries the
-      // person's configured per-connection rate limit, used next.
-      const context = await loadAgentContext(connection, { db, keyWrapper, clock });
-
-      // Gate 2 — the per-connection rate limit. A burst over the limit is refused
-      // and recorded as ONE summarising entry for the streak, not one per call.
-      if (!rateLimiter.allow(connection.connectionId, context.permissions.rateLimit)) {
-        const reason = "This agent is going too fast — its request rate limit was reached.";
-        if (!burstSummarised.get(connection.connectionId)) {
-          await record(connection, call, "rate_limited");
-          burstSummarised.set(connection.connectionId, true);
-        }
-        return { status: "refused", reason };
-      }
-      // Allowed through the limiter: the current over-limit streak (if any) is over.
-      burstSummarised.set(connection.connectionId, false);
-
-      // Gates 3 & 4 — the permission check and the policy engine, in design §8 order.
-      const decision = evaluate(
-        toPolicyCall(call),
-        toPolicyContext(connection, context, call, clock.now(), rate),
-      );
-
-      // DENY — refuse and record, never execute.
-      if (decision.decision === "deny") {
-        await record(connection, call, "denied");
-        return { status: "refused", reason: decision.reason };
-      }
-
-      // ASK — the person is needed. Warthog HOLDS the call: it parks the exact
-      // agent call (its args DEK-encrypted) behind a fresh PENDING approval, records
-      // one activity entry for the held call, and tells the agent `pending_approval`
-      // WITHOUT executing the tool. The person decides it from their inbox; on
-      // approval Warthog runs the held call exactly once.
-      if (decision.decision === "ask") {
-        const dek = await dataKeyFor(connection.userId);
-        const approval = await createApproval(
-          db,
-          {
-            userId: connection.userId,
-            agentId: connection.agentId,
-            detail: toApprovalDetail(call),
-          },
-          dek,
-          clock,
-        );
-        await createHeldRequest(
-          db,
-          {
-            userId: connection.userId,
-            agentId: connection.agentId,
-            approvalId: approval.id,
-            args: { ...call },
-          },
-          dek,
-          clock,
-        );
-        await record(connection, call, "pending_approval");
-        // Trigger the approval notifier on creation (E12-S07): a push to every
-        // registered device within seconds, plus a scheduled fallback anchored to the
-        // approval's own createdAt. A push failure does not derail this — the notifier
-        // itself schedules the fallback and resolves — so creation still succeeds.
-        if (deps.notifyApprovalCreated) {
-          await deps.notifyApprovalCreated({
-            userId: connection.userId,
-            approvalId: approval.id,
-            createdAt: approval.createdAt,
-            dek,
-          });
-        }
-        return { status: "pending_approval", approval_id: approval.id, expires_at: approval.expiresAt };
-      }
-
-      // ALLOW — execute the tool, then record the activity entry BEFORE the result
-      // is returned to the agent.
-      const result = await executeTool(call, connection);
-      await record(connection, call, "executed");
-      return { status: "executed", result };
+      await emitRequestMetrics(startedAt, decided.result.status, decided.errorCategory);
+      return decided.result;
     },
 
     // Run the held call behind an APPROVED approval exactly once (design §6.2;
