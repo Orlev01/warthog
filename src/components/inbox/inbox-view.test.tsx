@@ -108,16 +108,14 @@ type InboxViewProps = {
   // a one-line reason rather than a live button over a missing action (constitution: no
   // dead controls — disable it and say why), exactly as ActivityView treats Dispute/Undo.
   // `approveAction` is for a NON-release held call; a card/high-tier release Approve runs
-  // the device flow instead (see createReleaseFlow).
+  // the on-device hand-over in the mounted <ReleaseApprove> control the view itself mounts
+  // (E11-S17) — a server page cannot hand a client a callback, so a release is LIVE BY
+  // CONSTRUCTION, never gated on a page-passed `onRelease` prop.
   approveAction?: (formData: FormData) => void | Promise<void>;
   denyAction?: (formData: FormData) => void | Promise<void>;
   moreDetailAction?: (formData: FormData) => void | Promise<void>;
-  // The person's saved cards, offered in a card release's picker.
+  // The person's saved cards, offered in a card release's on-device picker.
   savedCards?: readonly SavedCardView[];
-  // Runs the device unlock-decrypt-and-release for a card/high-tier request (the client
-  // binding gathers the chosen card + entered code from the release form and drives
-  // createReleaseFlow). Present so the release control is live.
-  onRelease?: (request: PendingRequestView) => void | Promise<void>;
 };
 
 // ─── fixtures ────────────────────────────────────────────────────────────────────────
@@ -219,12 +217,12 @@ const HIST_MORE_DETAIL: DecidedRequestView = {
 
 // A stand-in bound server action (what makes a decision control LIVE).
 const noopAction = async (_formData: FormData): Promise<void> => {};
-// A stand-in client release trigger (what makes the release control live).
-const noopRelease = async (_request: PendingRequestView): Promise<void> => {};
 
 // A fully-populated inbox: pending newest-first (the order the loader hands in), a full
-// history, saved cards, and every action/release trigger wired (the page's live wiring).
-// Each test overrides exactly the slice it probes.
+// history, saved cards, and every decision action wired (the page's live wiring). A
+// card/high-tier release is live by construction (the view mounts the on-device control
+// itself — E11-S17), so no release trigger is passed in. Each test overrides exactly the
+// slice it probes.
 function base(overrides: Partial<InboxViewProps> = {}): InboxViewProps {
   return {
     pending: [PENDING_CARD, PENDING_HELD, PENDING_HIGH],
@@ -233,7 +231,6 @@ function base(overrides: Partial<InboxViewProps> = {}): InboxViewProps {
     denyAction: noopAction,
     moreDetailAction: noopAction,
     savedCards: SAVED_CARDS,
-    onRelease: noopRelease,
     ...overrides,
   };
 }
