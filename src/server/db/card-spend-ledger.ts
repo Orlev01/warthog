@@ -220,6 +220,50 @@ export async function sumForMemberPeriod(
   return sumOf(result.rows);
 }
 
+// One (member, currency) sub-total within a household's period: the member the
+// releases belong to, the ISO 4217 code they were released in, and the approved
+// total in that currency. A NUMBER per currency per member — never a merchant, a
+// release id or any other row content.
+export interface MemberCurrencyTotal {
+  readonly userId: string;
+  readonly currency: string;
+  readonly total: number;
+}
+
+// Every member's approved spend this period against the household budget, broken
+// down by the currency each release was made in (household_id bound), so the caller
+// can convert each currency into the household currency and sum. Gated by the SESSION
+// user id exactly as `sumForHouseholdPeriod`: the EXISTS clause yields rows only when
+// `userId` is a MEMBER of `householdId` (household_members store, E15-S04), so a
+// non-member reads nothing and never another member's rows. Grouped per (user, currency)
+// and returning ONLY the summed amount, it exposes totals alone — no merchant, no
+// release id, no other personal content. The period key is bound and WHICH column is
+// matched comes from the `PeriodKind` whitelist, never caller text.
+export async function sumByMemberCurrencyForHouseholdPeriod(
+  db: Db,
+  userId: string,
+  householdId: string,
+  period: PeriodKind,
+  periodKey: string,
+): Promise<MemberCurrencyTotal[]> {
+  const result = await db.query(
+    `SELECT led.user_id, led.currency, COALESCE(SUM(led.amount), 0) AS total
+       FROM card_spend_ledger led
+      WHERE led.household_id = $2 AND led.${periodColumn(period)} = $3
+        AND EXISTS (
+          SELECT 1 FROM household_members mem
+           WHERE mem.user_id = $1 AND mem.household_id = $2
+        )
+      GROUP BY led.user_id, led.currency`,
+    [userId, householdId, periodKey],
+  );
+  return result.rows.map((row) => ({
+    userId: String(row.user_id),
+    currency: String(row.currency),
+    total: Number(row.total),
+  }));
+}
+
 // The aggregate total across a household's members in the period (household_id
 // bound) — the one cross-member number the brief exposes. Gated by the SESSION user
 // id: the EXISTS clause returns the total only when `userId` is a MEMBER of
