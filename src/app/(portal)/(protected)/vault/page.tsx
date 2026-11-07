@@ -1,13 +1,18 @@
 import * as React from "react";
 import { cookies } from "next/headers";
 import { redirect } from "next/navigation";
+import { revalidatePath } from "next/cache";
 
 import { loadConfig } from "@/server/config";
 import { getServerDb } from "@/server/db/server";
 import { verifySession } from "@/server/auth/session";
 import { selectKeyWrapper } from "@/server/crypto/key-wrapper";
 import { systemClock } from "@/server/seams/clock";
-import { createIdentityActions } from "./actions";
+import {
+  createIdentityActions,
+  type SaveHighTierFieldInput,
+  type RaiseFieldToHighTierInput,
+} from "./actions";
 import { IdentityView } from "@/components/vault/identity-view";
 import { PageContainer } from "@/components/shell/page-container";
 
@@ -44,9 +49,78 @@ export default async function VaultPage() {
   const keyWrapper = selectKeyWrapper({ nodeEnv: config.nodeEnv, localKek: config.devKek });
   const data = await createIdentityActions({ db, keyWrapper }).load(session);
 
+  // The live high-tier flows' submit seams: server actions that re-verify the session and
+  // store ONLY the device-sealed submission (ciphertext + metadata) through the tested
+  // `saveHighTierField` / `raiseFieldToHighTier` actions. Each re-resolves
+  // config/db/session/KeyWrapper per request (never closing over the loader's handles — the
+  // server-composition-roots addendum), takes the owner from the verified session (never the
+  // body), and reports every outcome in plain words rather than failing silently.
+  async function saveHighTierField(
+    submission: SaveHighTierFieldInput,
+  ): Promise<{ ok: boolean; reason?: string }> {
+    "use server";
+    const requestToken = (await cookies()).get(SESSION_COOKIE)?.value ?? null;
+    const requestConfig = loadConfig();
+    const requestDb = await getServerDb();
+    const requestSession = requestToken
+      ? await verifySession(requestDb, requestToken, { clock: systemClock })
+      : null;
+    if (!requestSession) {
+      return { ok: false, reason: "unauthenticated" };
+    }
+    const requestKeyWrapper = selectKeyWrapper({
+      nodeEnv: requestConfig.nodeEnv,
+      localKek: requestConfig.devKek,
+    });
+    const result = await createIdentityActions({
+      db: requestDb,
+      keyWrapper: requestKeyWrapper,
+    }).saveHighTierField(requestSession, submission);
+    if (result.ok) {
+      // Re-run this page's loader so the new high-tier detail lists (by label) right after
+      // the device flow submits — no manual reload.
+      revalidatePath("/vault");
+    }
+    return result;
+  }
+
+  async function raiseFieldToHighTier(
+    submission: RaiseFieldToHighTierInput,
+  ): Promise<{ ok: boolean; reason?: string }> {
+    "use server";
+    const requestToken = (await cookies()).get(SESSION_COOKIE)?.value ?? null;
+    const requestConfig = loadConfig();
+    const requestDb = await getServerDb();
+    const requestSession = requestToken
+      ? await verifySession(requestDb, requestToken, { clock: systemClock })
+      : null;
+    if (!requestSession) {
+      return { ok: false, reason: "unauthenticated" };
+    }
+    const requestKeyWrapper = selectKeyWrapper({
+      nodeEnv: requestConfig.nodeEnv,
+      localKek: requestConfig.devKek,
+    });
+    const result = await createIdentityActions({
+      db: requestDb,
+      keyWrapper: requestKeyWrapper,
+    }).raiseFieldToHighTier(requestSession, submission);
+    if (result.ok) {
+      // The low-tier plaintext is now removed and the detail is high tier — refresh the
+      // loader so the screen reflects both.
+      revalidatePath("/vault");
+    }
+    return result;
+  }
+
   return (
     <PageContainer>
-      <IdentityView lowTierFields={data.lowTierFields} highTierFields={data.highTierFields} />
+      <IdentityView
+        lowTierFields={data.lowTierFields}
+        highTierFields={data.highTierFields}
+        saveHighTierField={saveHighTierField}
+        raiseFieldToHighTier={raiseFieldToHighTier}
+      />
     </PageContainer>
   );
 }

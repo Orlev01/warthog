@@ -22,7 +22,9 @@
 //
 // This is the render-testable, prop-driven VIEW (a Client Component in the app). The
 // real plumbing — holding the unlocked vault key, POSTing the sealed submission, the
-// server action that stores it — is wired by a LATER task. Like the sibling
+// server action that stores it — is wired by E11-S19's live AddCardFlow, which this view
+// now mounts for the "add a card" panel (its device behaviour is pinned by
+// add-card-flow.test.tsx). This file keeps pinning what CardsView RENDERS. Like the sibling
 // identity / rules / consent / notifications views, a PROP (`addingCard`) selects the
 // initial state of the conceptually-interactive "add a card" panel, so a render test
 // pins each state without clicking anything (no DOM; React component / E2E testing is
@@ -104,6 +106,12 @@ type CardsViewProps = {
   cards: ReadonlyArray<SavedCard>;
   billingAddresses: ReadonlyArray<VaultAddress>;
   addingCard?: boolean;
+  // E11-S19 supersession: "Add a card" is now a LIVE on-device flow (AddCardFlow), so the
+  // open panel needs its submit seam — the page's addCard server action that stores the
+  // sealed submission. Rendered here with a no-op so the control is live; the device flow's
+  // own behaviour (create/unlock the vault key → seal → submit) is pinned by
+  // add-card-flow.test.tsx, not here.
+  addCard?: (submission: unknown) => Promise<{ ok: boolean }>;
 };
 
 // --- fixtures ---------------------------------------------------------------------
@@ -137,10 +145,15 @@ const CARD_B: SavedCard = {
 const ADDR_HOME: VaultAddress = { id: "addr-home", value: "12 Banksia Street, Perth" };
 const ADDR_WORK: VaultAddress = { id: "addr-work", value: "5 Marine Parade, Fremantle" };
 
+// The submit seam the now-live add panel needs (E11-S19). A no-op here — these tests only
+// render; the device flow is never submitted. Its behaviour lives in add-card-flow.test.tsx.
+const noopAddCard = async () => ({ ok: true as const });
+
 function base(overrides: Partial<CardsViewProps> = {}): CardsViewProps {
   return {
     cards: [CARD_A, CARD_B],
     billingAddresses: [ADDR_HOME, ADDR_WORK],
+    addCard: noopAddCard,
     ...overrides,
   };
 }
@@ -614,7 +627,7 @@ test("uses design tokens, never a raw hex colour", () => {
     base(),
     base({ cards: [] }),
     base({ addingCard: true }),
-    { cards: [CARD_A], billingAddresses: [ADDR_HOME], addingCard: true },
+    { cards: [CARD_A], billingAddresses: [ADDR_HOME], addingCard: true, addCard: noopAddCard },
   ];
   for (const props of variants) {
     const markup = render(props);
