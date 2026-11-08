@@ -2,7 +2,11 @@
 //
 //   1. Runs every periodic sweep whose interval has elapsed, DIRECTLY — no job row is
 //      ever enqueued for a sweep. A sweep that throws is logged (redacted) and stops
-//      neither the other sweeps nor the drain.
+//      neither the other sweeps nor the drain. "Elapsed" is decided in the database
+//      (`sweep_runs`, 0063): a run is claimed with one conditional upsert that moves the
+//      sweep's last-run instant forward only once its interval has passed, so a restart
+//      does not re-run every sweep, and two instances (overlapping revisions during a
+//      deploy) never both run the same sweep in one interval.
 //   2. Drains the runnable queue rows through the claim/run library, which dispatches
 //      each claimed row by its enqueued `type`. A row whose type has no handler is
 //      dead-lettered and a throwing handler is retried with backoff then failed (both by
@@ -52,17 +56,29 @@ function failureEntry(where: string, name: string, error: unknown): unknown {
   return redact({ level: "error", where, name, error: message }, () => false);
 }
 
+// Claim this interval's run of `sweep` at `now`: record `now` as its last run if it has
+// never run or last ran at least one interval ago, and report whether this caller won. A
+// single statement, so concurrent claimers (two instances) cannot both win, and the state
+// lives in the database, so it survives a restart. Bound values only (INV-102).
+async function claimSweepRun(db: Db, sweep: PeriodicSweep, now: Date): Promise<boolean> {
+  const result = await db.query(
+    `INSERT INTO sweep_runs (name, last_run_at) VALUES ($1, $2::timestamptz)
+     ON CONFLICT (name) DO UPDATE SET last_run_at = EXCLUDED.last_run_at
+      WHERE sweep_runs.last_run_at <= $3::timestamptz
+     RETURNING name`,
+    [sweep.name, now.toISOString(), new Date(now.getTime() - sweep.intervalMs).toISOString()],
+  );
+  return result.rows.length > 0;
+}
+
 export function createScheduler(deps: SchedulerDeps): Scheduler {
   const { getDb, clock, sweeps, dispatch, log } = deps;
-  const nextRunAt = new Map<string, number>();
 
-  async function runDueSweeps(): Promise<void> {
-    const nowMs = clock.now().getTime();
+  async function runDueSweeps(db: Db): Promise<void> {
+    const now = clock.now();
     for (const sweep of sweeps) {
-      const dueAt = nextRunAt.get(sweep.name) ?? nowMs;
-      if (nowMs < dueAt) continue;
-      nextRunAt.set(sweep.name, nowMs + sweep.intervalMs);
       try {
+        if (!(await claimSweepRun(db, sweep, now))) continue;
         await sweep.run();
       } catch (error) {
         log(failureEntry("sweep", sweep.name, error));
@@ -87,8 +103,9 @@ export function createScheduler(deps: SchedulerDeps): Scheduler {
       if (inFlight) return;
       inFlight = true;
       try {
-        await runDueSweeps();
-        await drain(await getDb());
+        const db = await getDb();
+        await runDueSweeps(db);
+        await drain(db);
       } finally {
         inFlight = false;
       }
