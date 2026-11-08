@@ -4,8 +4,10 @@ import { redirect } from "next/navigation";
 
 import { getServerDb } from "@/server/db/server";
 import { requireSession } from "@/server/auth/guard";
+import { getPendingAccountReset } from "@/server/auth/account-reset";
 import { systemClock } from "@/server/seams/clock";
 import { PortalChrome } from "@/components/shell/portal-chrome";
+import { PendingResetBanner } from "@/components/auth/pending-reset-banner";
 
 // The auth-guard layout for the `(protected)` route group (INV-101, design §5): every
 // admin route under it requires an authenticated operator session verified on the server,
@@ -23,6 +25,10 @@ import { PortalChrome } from "@/components/shell/portal-chrome";
 // lights the current navigation section from the live path (render-tested in
 // `src/components/shell/portal-chrome.test.tsx`), mounted propless so it reads the path
 // from usePathname at runtime.
+//
+// While the person has an account reset pending, every signed-in screen leads with a banner
+// that offers to cancel it (review fix W3.3; the brief: a reset "can be cancelled from any
+// signed-in device"). The read is member-scoped by the verified session's user id.
 
 // The host-locked session cookie set by the session module.
 const SESSION_COOKIE = "__Host-wh_session";
@@ -37,5 +43,16 @@ export default async function ProtectedLayout({ children }: { children: React.Re
   // No valid session → send the person to sign in (outside this group, so no loop).
   if (!result.ok) redirect(result.redirectTo);
 
-  return <PortalChrome>{children}</PortalChrome>;
+  const pendingReset = await getPendingAccountReset(db, { userId: result.session.userId });
+  return (
+    <PortalChrome>
+      {pendingReset ? (
+        <PendingResetBanner
+          requestedAt={pendingReset.requestedAt.toISOString()}
+          completesAt={pendingReset.completesAt.toISOString()}
+        />
+      ) : null}
+      {children}
+    </PortalChrome>
+  );
 }

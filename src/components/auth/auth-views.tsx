@@ -81,6 +81,7 @@ const SIGNIN_LINKS: readonly AuthLink[] = [
   { href: "/signup", label: "New here? Create an account" },
   { href: "/recover", label: "Lost your passkey? Recover your account" },
   { href: "/device", label: "Sign in by approving from another device" },
+  { href: "/reset", label: "Lost everything? Reset your account" },
 ];
 
 const SIGNUP_LINKS: readonly AuthLink[] = [
@@ -89,6 +90,12 @@ const SIGNUP_LINKS: readonly AuthLink[] = [
 
 const RECOVER_LINKS: readonly AuthLink[] = [
   { href: "/signin", label: "Found your passkey? Sign in" },
+  { href: "/reset", label: "Lost your recovery code too? Reset your account" },
+];
+
+const RESET_LINKS: readonly AuthLink[] = [
+  { href: "/signin", label: "Found your passkey? Sign in" },
+  { href: "/recover", label: "Still have your recovery code? Recover your account" },
 ];
 
 const DEVICE_LINKS: readonly AuthLink[] = [{ href: "/signin", label: "Back to sign in" }];
@@ -685,5 +692,135 @@ export function DeviceView({
           </Button>
         </AuthScreen>
       );
+  }
+}
+
+// --- reset (after losing every passkey AND the recovery code) ----------------
+
+export type ResetStep = "identify" | "email-code" | "requested";
+
+// A date in plain words ("8 May 2026"), in Australian time so the server render and the
+// browser render agree.
+function plainDate(iso: string | undefined): string | undefined {
+  if (iso === undefined) return undefined;
+  const date = new Date(iso);
+  if (Number.isNaN(date.getTime())) return undefined;
+  return date.toLocaleDateString("en-AU", {
+    day: "numeric",
+    month: "long",
+    year: "numeric",
+    timeZone: "Australia/Sydney",
+  });
+}
+
+// ResetView renders from props alone (review fix W3.3); the client reset flow supplies
+// the wiring. The first screen says plainly what a reset does before anything starts: a
+// 7-day wait, alerts everywhere, cancellable from a signed-in device, and the protected
+// details erased. `completesAt` is when a requested reset finishes.
+export interface ResetViewProps {
+  step: ResetStep;
+  email?: string;
+  emailCode?: string;
+  completesAt?: string;
+  error?: string;
+  onEmailChange?: (value: string) => void;
+  onEmailCodeChange?: (value: string) => void;
+  onSubmitIdentify?: () => void;
+  onSubmitEmailCode?: () => void;
+  returnTo?: string;
+}
+
+export function ResetView({
+  step,
+  email,
+  emailCode,
+  completesAt,
+  error,
+  onEmailChange,
+  onEmailCodeChange,
+  onSubmitIdentify,
+  onSubmitEmailCode,
+  returnTo,
+}: ResetViewProps) {
+  switch (step) {
+    case "identify":
+      return (
+        <AuthScreen
+          title="Reset your account"
+          lead="If you've lost every passkey and your recovery code, you can reset your account by email."
+        >
+          <ul className="flex list-disc flex-col gap-1 pl-5 text-sm text-fg-muted">
+            <li>The reset takes 7 days. We'll let you know by email, text and notification.</li>
+            <li>You can cancel it from any device you're still signed in on.</li>
+            <li>
+              It erases your saved cards and protected details, and disconnects your agents and services.
+              Everything else is kept.
+            </li>
+          </ul>
+          <form
+            className="flex flex-col gap-4"
+            onSubmit={(event) => {
+              event.preventDefault();
+              onSubmitIdentify?.();
+            }}
+          >
+            <Field
+              label="Email address"
+              name="email"
+              type="email"
+              autoComplete="email"
+              value={email}
+              onChange={(event) => onEmailChange?.(event.target.value)}
+              error={error}
+            />
+            <Button type="submit" variant="primary">
+              Send me a code
+            </Button>
+          </form>
+          <AuthLinks links={RESET_LINKS} returnTo={returnTo} />
+        </AuthScreen>
+      );
+    case "email-code":
+      return (
+        <AuthScreen
+          title="Check your email"
+          lead="If there's an account for that address, we've emailed it a code. Enter it to start the 7-day reset."
+        >
+          <form
+            className="flex flex-col gap-4"
+            onSubmit={(event) => {
+              event.preventDefault();
+              onSubmitEmailCode?.();
+            }}
+          >
+            <Field
+              label="Your code"
+              name="code"
+              type="text"
+              inputMode="numeric"
+              autoComplete="one-time-code"
+              value={emailCode}
+              onChange={(event) => onEmailCodeChange?.(event.target.value)}
+              error={error}
+            />
+            <Button type="submit" variant="primary">
+              Start the reset
+            </Button>
+          </form>
+        </AuthScreen>
+      );
+    case "requested": {
+      const when = plainDate(completesAt);
+      return (
+        <AuthScreen title="Your reset has started">
+          <p role="status" className="text-sm text-fg">
+            {when ? `It will finish on ${when}.` : "It will finish in 7 days."} We've let you know on every
+            channel you have with us. If you didn't ask for this, open Warthog on a device you're still
+            signed in on and cancel it.
+          </p>
+          <AuthLinks links={[{ href: "/signin", label: "Back to sign in" }]} returnTo={returnTo} />
+        </AuthScreen>
+      );
+    }
   }
 }
