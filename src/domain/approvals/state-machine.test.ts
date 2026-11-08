@@ -472,3 +472,22 @@ test("every step of the chain preserves the held request, not only the final app
     assert.deepEqual(step.request, REQUEST, `the held request is intact at status "${step.status}"`);
   }
 });
+
+// ===========================================================================
+// Review fix C5 — "an expired request is denied": once a pending approval's window
+// has passed it can no longer be approved, denied or asked about, even if the
+// minute sweep has not yet marked it expired. Only expireIfDue may move it.
+// ===========================================================================
+
+test("approve, deny and askForMoreDetail refuse a pending approval whose window has passed", () => {
+  const a = pending(T0, 2); // expires at 10:02:00
+  const atExpiry = new Date(ms(a.expiresAt));
+  const later = new Date(ms(a.expiresAt) + 14 * MINUTE);
+  for (const now of [atExpiry, later]) {
+    assert.throws(() => approve(a, now), "an overdue request can never be approved");
+    assert.throws(() => deny(a, now), "an overdue request is expired, not denied by hand");
+    assert.throws(() => askForMoreDetail(a, "Which one?", now), "an overdue request cannot be asked about");
+  }
+  assert.equal(expireIfDue(a, atExpiry).status, "expired", "expiry is the one move left for it");
+  assert.equal(approve(a, new Date(ms(a.expiresAt) - 1)).status, "approved", "a millisecond before expiry it can still be approved");
+});

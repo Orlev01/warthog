@@ -908,8 +908,10 @@ test("approving a held non-release call runs it once through the composed pipeli
 
     // Approving again does nothing more — the held call never runs twice (re-deciding an
     // already-approved approval is refused upstream, before the executor is reached again).
-    await assert.rejects(
-      () => actions.approveApproval(session, approval.id),
+    // The refusal is reported in plain words ("already decided"), never a silent success.
+    assert.deepEqual(
+      await actions.approveApproval(session, approval.id),
+      { ok: false, reason: "already_decided" },
       "re-approving an already-decided approval is refused, not a second silent run",
     );
     const afterSecond = (await listActivity(db, user.id, {}, dek)).filter(

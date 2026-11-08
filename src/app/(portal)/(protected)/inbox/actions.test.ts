@@ -730,3 +730,65 @@ test("the actions read no process.env: a decoy env secret never appears in a res
     else process.env.WARTHOG_DECOY_SECRET = prev;
   }
 });
+
+// =====================================================================================
+// Review fix C5 — decisions are compare-and-swap. A concurrent approve and deny (two
+// devices, a double-click) used to BOTH report success while the held call ran and the
+// record ended "denied". Now exactly one wins; the other is refused as already decided,
+// and the held call runs if and only if the approval ends approved. An approval past
+// its window is refused as expired (and nothing runs), even before the sweep.
+// =====================================================================================
+
+test("a concurrent approve and deny: exactly one succeeds, and the held call runs only if it ends approved", async () => {
+  for (const order of ["approve-first", "deny-first"] as const) {
+    const db = await freshDb();
+    const keyWrapper = keyWrapperFor();
+    try {
+      const a = await arrangeHeld(db, keyWrapper, `c5-race-${order}`, nonReleaseCall());
+      const session = await freshSession(db, a.userId);
+
+      const approve = () => a.actions.approveApproval(session, a.approvalId);
+      const deny = () => a.actions.denyApproval(session, a.approvalId);
+      const results = await Promise.all(order === "approve-first" ? [approve(), deny()] : [deny(), approve()]);
+
+      assert.equal(results.filter((r) => r.ok).length, 1, `${order}: exactly one decision succeeds`);
+      const refused = results.find((r) => !r.ok);
+      assert.ok(refused && !refused.ok && refused.reason === "already_decided", `${order}: the loser is told it was already decided`);
+
+      const approval = await getApproval(db, a.userId, a.approvalId, a.dek);
+      const held = await getByApproval(db, a.userId, a.approvalId, a.dek);
+      if (approval!.status === "approved") {
+        assert.equal(held!.status, "executed", `${order}: an approved hold runs`);
+        assert.equal(a.exec.calls.length, 1, `${order}: exactly once`);
+      } else {
+        assert.equal(approval!.status, "denied", `${order}: otherwise it ends denied`);
+        assert.equal(held!.status, "held", `${order}: a denied hold never runs`);
+        assert.equal(a.exec.calls.length, 0, `${order}: nothing ran`);
+      }
+    } finally {
+      await db.close();
+    }
+  }
+});
+
+test("approving an approval past its window is refused as expired and the held call never runs", async () => {
+  const db = await freshDb();
+  const keyWrapper = keyWrapperFor();
+  try {
+    const a = await arrangeHeld(db, keyWrapper, "c5-overdue", nonReleaseCall());
+    // The same actions, read 16 minutes later — past the default 15-minute window.
+    const late = fixedClock(new Date(NOW.getTime() + 16 * 60_000));
+    const lateActions = createInboxActions({ db, clock: late, keyWrapper, executeApprovedHold: a.execHold.fn });
+    const session = await freshSession(db, a.userId);
+
+    const result = await lateActions.approveApproval(session, a.approvalId);
+    assert.ok(!result.ok && result.reason === "expired", "the person is told the request expired");
+
+    const approval = await getApproval(db, a.userId, a.approvalId, a.dek);
+    assert.equal(approval!.status, "expired", "it is stored expired at once");
+    assert.equal(a.execHold.calls.length, 0, "the held call is never run");
+    assert.equal(a.exec.calls.length, 0, "the held tool never runs");
+  } finally {
+    await db.close();
+  }
+});

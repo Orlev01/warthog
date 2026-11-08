@@ -43,7 +43,13 @@ import { z } from "zod";
 
 import { parseParams } from "../../../../server/http/validate";
 import { requireStepUp } from "../../../../server/auth/step-up";
-import { decide, getApproval, type StoredApproval } from "../../../../server/db/approvals";
+import {
+  ApprovalAlreadyDecidedError,
+  decide,
+  getApproval,
+  type Decision,
+  type StoredApproval,
+} from "../../../../server/db/approvals";
 import { markOpened } from "../../../../server/approvals/opened";
 import {
   readInbox,
@@ -118,6 +124,10 @@ export interface InboxActions {
 // the same vocabulary the sibling security actions use.
 const NOT_FOUND = "not_found";
 const STEP_UP_REQUIRED = "step_up_required";
+// The approval was no longer pending when this decision landed: someone (another
+// device, a double-click, a disconnect) decided it first, or its window had passed.
+const ALREADY_DECIDED = "already_decided";
+const EXPIRED = "expired";
 
 // The two metrics recorded for EVERY successful decision (task E17-S04; the tester's pinned
 // contract, as `agent.request` / `agent.request.latency_ms` are E17-S03's): a response-time
@@ -262,6 +272,26 @@ export function createInboxActions(deps: InboxActionsDeps): InboxActions {
     return approval ? { dek, approval } : null;
   }
 
+  // Persist one decision as the store's compare-and-swap. A decision that loses —
+  // the approval was decided first, or it is past its window (stored expired at once)
+  // — is refused in plain words rather than escaping as an error, and nothing runs.
+  async function decideOwn(
+    session: Session,
+    id: string,
+    dek: Uint8Array,
+    decision: Decision,
+  ): Promise<{ ok: true; decided: StoredApproval } | { ok: false; reason: string }> {
+    try {
+      const decided = await decide(db, { userId: session.userId, id, decision }, dek, clock);
+      return { ok: true, decided };
+    } catch (error) {
+      if (error instanceof ApprovalAlreadyDecidedError) {
+        return { ok: false, reason: error.status === "expired" ? EXPIRED : ALREADY_DECIDED };
+      }
+      throw error;
+    }
+  }
+
   // Approve an approval. Validate the id shape at the boundary; load the one that
   // is this person's (refuse otherwise); gate a high-tier/card RELEASE on a fresh
   // step-up (refuse without one, approving nothing); then mark it opened, move it
@@ -279,8 +309,10 @@ export function createInboxActions(deps: InboxActionsDeps): InboxActions {
     }
 
     await markOpened(db, { id, userId: session.userId }, clock);
-    const decided = await decide(db, { userId: session.userId, id, decision: { status: "approved" } }, own.dek, clock);
-    await emitDecisionMetrics(decided);
+    // Only the caller whose compare-and-swap won goes on to run the held call.
+    const outcome = await decideOwn(session, id, own.dek, { status: "approved" });
+    if (!outcome.ok) return outcome;
+    await emitDecisionMetrics(outcome.decided);
 
     if (!isRelease) {
       await executeApprovedHold(session.userId, id);
@@ -297,8 +329,9 @@ export function createInboxActions(deps: InboxActionsDeps): InboxActions {
     if (!own) return { ok: false, reason: NOT_FOUND };
 
     await markOpened(db, { id, userId: session.userId }, clock);
-    const decided = await decide(db, { userId: session.userId, id, decision: { status: "denied" } }, own.dek, clock);
-    await emitDecisionMetrics(decided);
+    const outcome = await decideOwn(session, id, own.dek, { status: "denied" });
+    if (!outcome.ok) return outcome;
+    await emitDecisionMetrics(outcome.decided);
     return { ok: true };
   }
 
@@ -317,13 +350,9 @@ export function createInboxActions(deps: InboxActionsDeps): InboxActions {
     if (!own) return { ok: false, reason: NOT_FOUND };
 
     await markOpened(db, { id, userId: session.userId }, clock);
-    const decided = await decide(
-      db,
-      { userId: session.userId, id, decision: { status: "more_detail", question: q } },
-      own.dek,
-      clock,
-    );
-    await emitDecisionMetrics(decided);
+    const outcome = await decideOwn(session, id, own.dek, { status: "more_detail", question: q });
+    if (!outcome.ok) return outcome;
+    await emitDecisionMetrics(outcome.decided);
     return { ok: true };
   }
 

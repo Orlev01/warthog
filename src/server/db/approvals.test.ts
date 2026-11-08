@@ -107,7 +107,13 @@ import assert from "node:assert/strict";
 import { randomBytes } from "node:crypto";
 import { z } from "zod";
 
-import { createApproval, getApproval, listPendingForUser, decide } from "./approvals";
+import {
+  createApproval,
+  getApproval,
+  listPendingForUser,
+  decide,
+  ApprovalAlreadyDecidedError,
+} from "./approvals";
 import { createUser } from "./users";
 import { freshDb } from "../../test/db";
 import { loadMigrations, runMigrations, type Db } from "./index";
@@ -865,6 +871,145 @@ test("the approvals migration applies and re-running every migration changes not
     // no throw together prove the migration's second run changes nothing.
     const again = await runMigrations(db, migrations);
     assert.deepEqual(again, [], "a second migration run must change nothing");
+  } finally {
+    await db.close();
+  }
+});
+
+// ===========================================================================
+// Review fix C5 — a decision is a compare-and-swap. decide() used to read the row,
+// run the pure transition, then UPDATE unconditionally, so a concurrent approve and
+// deny (two devices, a double-click, the expiry sweep, a disconnect) BOTH succeeded
+// and the last writer won: the held call ran while the record said "denied". Now the
+// UPDATE only lands while the row is still pending; the loser is refused with a typed
+// ApprovalAlreadyDecidedError naming the status that actually won. And a pending
+// approval past its window is reported expired at once (persisted as expired), never
+// approved, even before the minute sweep runs.
+// ===========================================================================
+
+// A Db that runs `interleave` once, right BEFORE the first `UPDATE approvals` reaches
+// the database — so another decision lands between this decide()'s read and its write,
+// deterministically (not left to driver scheduling).
+function interleavingDb(db: Db, interleave: () => Promise<unknown>): Db {
+  let fired = false;
+  return {
+    async query(text: string, values?: unknown[]) {
+      if (!fired && /^\s*UPDATE approvals/i.test(text)) {
+        fired = true;
+        await interleave();
+      }
+      return db.query(text, values);
+    },
+    close: () => db.close(),
+  } as Db;
+}
+
+test("concurrent approve and deny: exactly one succeeds and the stored status is the winner's", async () => {
+  const db = await freshDb();
+  try {
+    const userId = await makeUser(db, "c5-race");
+    const dek = freshDek();
+    const created = await createApproval(db, { userId, agentId: AGENT_A, detail: detailWith("RACE") }, dek, fixedClock(T0));
+    const at = fixedClock(new Date(T0.getTime() + MINUTE));
+
+    const results = await Promise.allSettled([
+      decide(db, { userId, id: created.id, decision: { status: "approved" } }, dek, at),
+      decide(db, { userId, id: created.id, decision: { status: "denied" } }, dek, at),
+    ]);
+
+    const won = results.filter((r) => r.status === "fulfilled");
+    const lost = results.filter((r) => r.status === "rejected");
+    assert.equal(won.length, 1, "exactly one decision wins");
+    assert.equal(lost.length, 1, "the other decision is refused");
+    assert.ok(
+      (lost[0] as PromiseRejectedResult).reason instanceof ApprovalAlreadyDecidedError,
+      "the loser is refused as already decided (typed), never a silent success",
+    );
+    const winner = (won[0] as PromiseFulfilledResult<{ status: string }>).value.status;
+    const reloaded = await getApproval(db, userId, created.id, dek);
+    assert.equal(reloaded!.status, winner, "the stored status is the winner's — never overwritten by the loser");
+  } finally {
+    await db.close();
+  }
+});
+
+test("a deny whose read raced an approval is refused: the approval stays approved", async () => {
+  const db = await freshDb();
+  try {
+    const userId = await makeUser(db, "c5-interleave");
+    const dek = freshDek();
+    const created = await createApproval(db, { userId, agentId: AGENT_A, detail: detailWith("IV") }, dek, fixedClock(T0));
+    const at = fixedClock(new Date(T0.getTime() + MINUTE));
+
+    // The deny reads the row while it is pending; an approve lands before its write.
+    const racing = interleavingDb(db, () =>
+      decide(db, { userId, id: created.id, decision: { status: "approved" } }, dek, at),
+    );
+    await assert.rejects(
+      decide(racing, { userId, id: created.id, decision: { status: "denied" } }, dek, at),
+      (err: unknown) => err instanceof ApprovalAlreadyDecidedError && err.status === "approved",
+      "the stale deny is refused and names the status that won",
+    );
+
+    const reloaded = await getApproval(db, userId, created.id, dek);
+    assert.equal(reloaded!.status, "approved", "the approval is left approved");
+  } finally {
+    await db.close();
+  }
+});
+
+test("an expiry sweep whose read raced an approval is a no-op: the approval stays approved", async () => {
+  const db = await freshDb();
+  try {
+    const userId = await makeUser(db, "c5-sweep");
+    const dek = freshDek();
+    const created = await createApproval(
+      db,
+      { userId, agentId: AGENT_A, detail: detailWith("SW"), expiryMinutes: 2 },
+      dek,
+      fixedClock(T0),
+    );
+    // The person approves just inside the window...
+    const approveAt = fixedClock(new Date(T0.getTime() + MINUTE));
+    // ...while the sweep, reading a moment later with a pending snapshot, finds it due.
+    const sweepAt = fixedClock(new Date(T0.getTime() + 3 * MINUTE));
+    const racing = interleavingDb(db, () =>
+      decide(db, { userId, id: created.id, decision: { status: "approved" } }, dek, approveAt),
+    );
+
+    const swept = await decide(racing, { userId, id: created.id, decision: { status: "expired" } }, dek, sweepAt);
+    assert.equal(swept.status, "approved", "the sweep reports the decision that won rather than overwriting it");
+    const reloaded = await getApproval(db, userId, created.id, dek);
+    assert.equal(reloaded!.status, "approved", "an approved request is never overwritten to expired");
+  } finally {
+    await db.close();
+  }
+});
+
+test("approving a pending approval past its window is refused as expired, and it is stored expired at once", async () => {
+  const db = await freshDb();
+  try {
+    const userId = await makeUser(db, "c5-overdue");
+    const dek = freshDek();
+    const created = await createApproval(db, { userId, agentId: AGENT_A, detail: detailWith("OD") }, dek, fixedClock(T0));
+    // Sixteen minutes later: past the default 15-minute window, but no sweep has run.
+    const late = fixedClock(new Date(T0.getTime() + (DEFAULT_EXPIRY_MINUTES + 1) * MINUTE));
+
+    for (const decision of [
+      { status: "approved" as const },
+      { status: "denied" as const },
+      { status: "more_detail" as const, question: "Which one?" },
+    ]) {
+      await assert.rejects(
+        decide(db, { userId, id: created.id, decision }, dek, late),
+        (err: unknown) => err instanceof ApprovalAlreadyDecidedError && err.status === "expired",
+        `a ${decision.status} decision on an overdue approval is refused as expired`,
+      );
+    }
+
+    const reloaded = await getApproval(db, userId, created.id, dek);
+    assert.equal(reloaded!.status, "expired", "the overdue approval is persisted as expired right away");
+    assert.ok(reloaded!.decidedAt, "and its expiry is stamped");
   } finally {
     await db.close();
   }

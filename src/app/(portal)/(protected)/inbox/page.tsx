@@ -70,6 +70,8 @@ function decisionNotice(outcome: ActionResult | unknown, doneCode: string): stri
     if (result.ok) return doneCode;
     if (result.reason === "step_up_required") return "step_up";
     if (result.reason === "not_found") return "not_found";
+    if (result.reason === "already_decided") return "already_decided";
+    if (result.reason === "expired") return "expired";
   }
   return "error";
 }
@@ -146,6 +148,14 @@ const NOTICES: Record<string, Notice> = {
   not_found: {
     tone: "problem",
     text: "We couldn't find that request. It may have already been decided.",
+  },
+  already_decided: {
+    tone: "problem",
+    text: "That request was already decided, so nothing more was done.",
+  },
+  expired: {
+    tone: "problem",
+    text: "That request expired before you decided, so the agent won't go ahead.",
   },
   step_up: { tone: "problem", text: "Please confirm it's you first, then try again." },
   error: { tone: "problem", text: "We couldn't complete that just now. Please try again." },
