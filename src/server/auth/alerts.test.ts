@@ -74,7 +74,12 @@ import { test } from "node:test";
 import assert from "node:assert/strict";
 import { randomUUID } from "node:crypto";
 
-import { alertNewPasskey, alertNewAgentConnection, alertNewDeviceSignIn } from "./alerts";
+import {
+  alertNewPasskey,
+  alertNewAgentConnection,
+  alertNewDeviceSignIn,
+  alertAccountReenrolled,
+} from "./alerts";
 import { freshDb } from "../../test/db";
 import { createUser, type User } from "../db/users";
 import { createOutbox, type Outbox } from "../notify/outbox";
@@ -292,6 +297,29 @@ test("a card number in the device label is masked in the delivered alert", async
     const mail = emailsTo(outbox, person.email);
     assert.equal(mail.length, 1, "exactly one email alert is sent");
     assertCardMasked(mail[0].body);
+  } finally {
+    await db.close();
+  }
+});
+
+// Review fix W5 — a new passkey set up after a completed account reset. The alert says
+// what happened in plain words (a new passkey after the reset, the old passkeys and
+// recovery code no longer work, every device signed out) and carries no code or token.
+test("setting up a new passkey after a reset sends one plain email to the person", async () => {
+  const db = await freshDb();
+  try {
+    const outbox = createOutbox();
+    const person = await freshUser(db, "reenrolled");
+
+    await alertAccountReenrolled(db, { userId: person.id }, { emailSender: outbox });
+
+    const mail = emailsTo(outbox, person.email);
+    assert.equal(mail.length, 1, "exactly one email alert is sent");
+    assert.match(mail[0].body, /reset/i, "it names the reset");
+    assert.match(mail[0].body, /new passkey/i, "it says a new passkey was set up");
+    assert.match(mail[0].body, /recovery code/i, "it says a new recovery code was issued");
+    assert.doesNotMatch(mail[0].body, /using your recovery code/i, "it does not claim the old code was used");
+    assertNoCodeOrToken(mail[0].body);
   } finally {
     await db.close();
   }

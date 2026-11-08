@@ -126,3 +126,22 @@ export async function alertAccountRecovered(
     deps,
   );
 }
+
+// A new passkey was set up after a completed account reset (review fix W5). The reset
+// already erased the protected details; re-enrolment removed the old passkeys and the
+// authenticator app, signed every device out and issued a new recovery code. Fixed
+// copy — carries no code, token or credential.
+export async function alertAccountReenrolled(
+  db: Db,
+  { userId }: { userId: string },
+  deps: AlertDeps,
+): Promise<void> {
+  await sendAlert(
+    db,
+    userId,
+    "A new passkey was set up on your Warthog account after its reset. Your old passkeys and " +
+      "old recovery code no longer work, every other device was signed out and a new recovery " +
+      "code was issued. If this wasn't you, contact support straight away.",
+    deps,
+  );
+}
