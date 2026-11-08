@@ -6,7 +6,7 @@ import { Skeleton } from "@/components/ui/skeleton";
 
 // The app's fallback screens (review fix G7): the body of the error boundaries
 // (src/app/error.tsx, src/app/global-error.tsx), the 404 page (src/app/not-found.tsx) and
-// the route loading state (src/app/loading.tsx). Each is calm, plain Australian English,
+// the route loading state (src/app/(portal)/(protected)/loading.tsx). Each is calm, plain Australian English,
 // built on the design tokens, and always offers a way back into the app. An error's raw
 // message is never shown (it can carry internal detail); only Next's opaque digest is,
 // as a reference for support.

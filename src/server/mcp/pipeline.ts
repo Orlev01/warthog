@@ -219,9 +219,14 @@ function toPolicyContext(
     rules: context.rules as readonly IdentifiedRule[],
     accountCurrency: context.accountCurrency,
     card: cardPolicyFor(context, now),
-    rate: context.cardChecks ? context.cardChecks.rate : rate,
+    rate: effectiveRate(context, rate),
     now,
   };
+}
+
+// The loader's per-call daily rate when it found one, else the injected static fallback.
+function effectiveRate(context: AgentContext, rate: ReferenceRate | null): ReferenceRate | null {
+  return context.cardChecks?.rate ?? rate;
 }
 
 // The call's policy-relevant fields, in the engine's shape.
@@ -420,7 +425,7 @@ export function createAgentCallPipeline(deps: PipelineDeps): AgentCallPipeline {
             agentId: connection.agentId,
             // The same rate the engine checked, so the approval's converted amount and
             // the release's ledger amount match it.
-            detail: toApprovalDetail(call, decision, context, context.cardChecks ? context.cardChecks.rate : rate),
+            detail: toApprovalDetail(call, decision, context, effectiveRate(context, rate)),
           },
           dek,
           clock,

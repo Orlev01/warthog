@@ -1,6 +1,6 @@
 // Review fix G7 — the app's fallback screens: an error boundary (src/app/error.tsx and
 // the root src/app/global-error.tsx), the 404 page (src/app/not-found.tsx) and the
-// route-level loading state (src/app/loading.tsx). Before this fix none existed, so a
+// route-level loading state (src/app/(portal)/(protected)/loading.tsx). Before this fix none existed, so a
 // thrown error showed Next's unstyled default and a bad URL its bare 404 — with no way
 // back into the app. Each screen is styled with the design tokens and offers a way back.
 //
@@ -15,7 +15,7 @@ import { renderToStaticMarkup } from "react-dom/server";
 import { ErrorScreen } from "./status-screens";
 import AppError from "../../app/error";
 import NotFound from "../../app/not-found";
-import Loading from "../../app/loading";
+import Loading from "../../app/(portal)/(protected)/loading";
 
 function text(markup: string): string {
   return markup.replace(/<[^>]*>/g, " ").replace(/&#x27;|&#39;/g, "'").replace(/\s+/g, " ").trim();
