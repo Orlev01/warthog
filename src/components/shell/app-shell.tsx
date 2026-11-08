@@ -82,16 +82,17 @@ export type AppShellProps = {
   sidebarFooter?: React.ReactNode;
 };
 
-// A bottom-nav item: icon over label, a ≥44px touch target, active item in the
-// accent. aria-current is set only on the current item (omitted otherwise).
+// A bottom-nav item: icon over label, a ≥44px touch target. The current item is shown by
+// more than colour (WCAG 1.4.1): an accent bar along its top edge and heavier text as well
+// as the accent colour. aria-current is set only on the current item (omitted otherwise).
 function BottomItem({ item, active }: { item: NavItem; active: boolean }) {
   return (
     <a
       href={item.href}
       aria-current={active ? "page" : undefined}
       className={[
-        "flex min-h-14 flex-1 flex-col items-center justify-center gap-1 py-2 text-xs font-medium",
-        active ? "text-accent" : "text-fg-muted",
+        "flex min-h-14 flex-1 flex-col items-center justify-center gap-1 border-t-2 py-2 text-xs",
+        active ? "border-accent font-semibold text-accent" : "border-transparent font-medium text-fg-muted",
       ].join(" ")}
     >
       <item.Icon aria-hidden={true} className="h-5 w-5 shrink-0" />
@@ -100,16 +101,19 @@ function BottomItem({ item, active }: { item: NavItem; active: boolean }) {
   );
 }
 
-// A sidebar link: icon beside label, a ≥44px target, the active item on the soft
-// accent background. aria-current is set only on the current item.
+// A sidebar link: icon beside label, a ≥44px target. The current item sits on the soft
+// accent background AND carries an accent bar on its leading edge and heavier text, so it
+// is never shown by colour alone (WCAG 1.4.1). aria-current is set only on the current item.
 function SidebarLink({ item, active }: { item: NavItem; active: boolean }) {
   return (
     <a
       href={item.href}
       aria-current={active ? "page" : undefined}
       className={[
-        "flex min-h-11 items-center gap-3 rounded-card px-3 py-2 text-sm font-medium",
-        active ? "bg-accent-soft text-accent" : "text-fg hover:bg-surface-muted",
+        "flex min-h-11 items-center gap-3 rounded-card border-s-4 px-3 py-2 text-sm",
+        active
+          ? "border-accent bg-accent-soft font-semibold text-accent"
+          : "border-transparent font-medium text-fg hover:bg-surface-muted",
       ].join(" ")}
     >
       <item.Icon aria-hidden={true} className="h-5 w-5 shrink-0" />

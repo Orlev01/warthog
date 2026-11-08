@@ -39,3 +39,14 @@ test("every notice has plain copy; unknown or absent codes show nothing", () => 
   assert.equal(securityNotice(undefined), null);
   assert.equal(securityNotice("<script>"), null);
 });
+
+// Review fix G3 — a step-up refusal is no longer a dead end: the notice asks the screen to
+// mount the inline "Confirm it's you" control, and never tells the person to sign out and
+// back in.
+test("the step-up notice offers the inline confirm instead of sign-out-and-back-in advice", () => {
+  const notice = securityNotice("step_up_required");
+  assert.equal(notice?.offerConfirm, true);
+  assert.doesNotMatch(notice!.text, /sign (out|back in)/i);
+  assert.match(notice!.text, /confirm it.s you/i);
+  assert.ok(!securityNotice("passkey_removed")?.offerConfirm, "a success notice offers no confirm");
+});

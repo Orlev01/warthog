@@ -9,6 +9,7 @@ import { AlertTriangle, CheckCircle2 } from "lucide-react";
 
 import { Button } from "@/components/ui/button";
 import { FactorControls } from "@/components/auth/factor-controls";
+import { ConfirmItsYou } from "@/components/ui/confirm-its-you";
 
 import { loadConfig } from "../../../../../server/config";
 import { getServerDb } from "../../../../../server/db/server";
@@ -24,6 +25,10 @@ import {
 } from "./actions";
 import { noticeLocation, securityNotice, type SecurityNotice } from "./notices";
 import type { Db } from "../../../../../server/db/index";
+import type { Metadata } from "next";
+
+// The page title (review fix G8, WCAG 2.4.2): "%s · Warthog" via the root template.
+export const metadata: Metadata = { title: "Security" };
 
 // The shape of a WebAuthn attestation the client factor component posts back to
 // finishAddPasskey. Validated at this server-action boundary so a malformed body is
@@ -219,6 +224,9 @@ function SecuritySettings({
       </div>
 
       {notice ? <NoticeBanner notice={notice} /> : null}
+      {notice?.offerConfirm ? (
+        <ConfirmItsYou confirmedText="Thanks — that's confirmed. Make your change again within the next five minutes." />
+      ) : null}
 
       <Section title="Passkeys" lead="Sign in with your fingerprint, face or device PIN.">
         {view.passkeys.length === 0 ? (

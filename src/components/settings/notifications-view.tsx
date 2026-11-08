@@ -1,11 +1,12 @@
 "use client";
 
 import * as React from "react";
-import { Bell, Smartphone, Mail, Send, ShieldCheck, Clock } from "lucide-react";
+import { Bell, Smartphone, Mail, Send, ShieldCheck, Clock, Trash2 } from "lucide-react";
 
 import { Button } from "@/components/ui/button";
 import { Card } from "@/components/ui/card";
 import { Field } from "@/components/ui/field";
+import { endpointFingerprint, subscribeThisBrowser } from "./push-subscribe";
 
 // E12-S18 — Notification settings view component (design §10 Notifications;
 // brief "Notification settings").
@@ -30,9 +31,11 @@ import { Field } from "@/components/ui/field";
 // a live button that does nothing. Colour comes from the design tokens (globals.css) —
 // never a raw hex.
 
-// A registered push device (StoredPushSubscription-shaped): its id and an optional
-// human label.
-export type NotificationsViewDevice = { id: string; label?: string };
+// A registered push device (StoredPushSubscription-shaped): its id, a plain label (when it
+// was registered) and a one-way fingerprint of its endpoint. The browser fingerprints its
+// own current subscription and marks the matching row "This device" (review fix G5: every
+// row used to read "This device", even a phone listed on a laptop).
+export type NotificationsViewDevice = { id: string; label?: string; fingerprint?: string };
 
 // A person's mobile number (StoredMobileNumber-shaped): its id, the number, and
 // whether it has been verified.
@@ -72,7 +75,8 @@ export type NotificationsViewProps = {
     endpoint: string;
     keys: { p256dh: string; auth: string };
   }) => Promise<NotificationsViewActionResult>;
-  // Form-submit server actions for the number/preferences/test controls.
+  // Form-submit server actions for the device/number/preferences/test controls.
+  removePushDeviceAction?: NotificationsFormAction;
   addMobileNumberAction?: NotificationsFormAction;
   verifyMobileNumberAction?: NotificationsFormAction;
   saveNotificationPrefsAction?: NotificationsFormAction;
@@ -84,15 +88,28 @@ export type NotificationsViewProps = {
 // client ceremony never fails silently).
 const SCREEN = "/settings/notifications";
 
-// Decode a base64url VAPID public key into the byte array PushManager.subscribe wants
-// as its applicationServerKey (browsers accept only a BufferSource here, not the
-// string). Standard Web Push conversion.
-function urlBase64ToUint8Array(base64: string): Uint8Array<ArrayBuffer> {
-  const padded = base64 + "=".repeat((4 - (base64.length % 4)) % 4);
-  const raw = atob(padded.replace(/-/g, "+").replace(/_/g, "/"));
-  const bytes = new Uint8Array(new ArrayBuffer(raw.length));
-  for (let i = 0; i < raw.length; i += 1) bytes[i] = raw.charCodeAt(i);
-  return bytes;
+// The fingerprint of THIS browser's current push subscription, read after mount (the
+// server render and the first client render both see null, so there is no hydration
+// mismatch). Null when the browser has no service worker or no subscription.
+function useThisDeviceFingerprint(): string | null {
+  const [fingerprint, setFingerprint] = React.useState<string | null>(null);
+  React.useEffect(() => {
+    let cancelled = false;
+    if (typeof navigator === "undefined" || !("serviceWorker" in navigator)) return;
+    void navigator.serviceWorker
+      .getRegistration()
+      .then((registration) => registration?.pushManager.getSubscription())
+      .then(async (subscription) => {
+        if (!subscription || cancelled) return;
+        const value = await endpointFingerprint(subscription.endpoint);
+        if (!cancelled) setFingerprint(value);
+      })
+      .catch(() => undefined);
+    return () => {
+      cancelled = true;
+    };
+  }, []);
+  return fingerprint;
 }
 
 function SectionHeading({ icon: Icon, children }: { icon: typeof Bell; children: React.ReactNode }) {
@@ -111,42 +128,40 @@ export function NotificationsView({
   fallbackDelayMinutes = 2,
   vapidPublicKey,
   registerPushDevice,
+  removePushDeviceAction,
   addMobileNumberAction,
   verifyMobileNumberAction,
   saveNotificationPrefsAction,
   sendTestNotificationAction,
 }: NotificationsViewProps) {
   const hasDevice = devices.length > 0;
+  const thisDevice = useThisDeviceFingerprint();
 
   // Register THIS browser as a push device. The subscription can only be created on
-  // the client (service worker + PushManager), so this control runs the ceremony and
-  // then hands the subscription to the `registerPushDevice` server action. Every
-  // outcome — success, a browser that can't do push, or a failure — is reported in
-  // plain words via a `?notice=` redirect (never a silent no-op).
+  // the client, so this control runs the ceremony (`subscribeThisBrowser`: permission
+  // first, then the worker, waiting until it is ACTIVE before subscribing — review fix
+  // G5, the first tap used to fail) and hands the subscription to the
+  // `registerPushDevice` server action. Every outcome is reported in plain words via a
+  // `?notice=` redirect (never a silent no-op).
   async function handleRegisterDevice(): Promise<void> {
     if (!registerPushDevice) return;
     const go = (notice: string): void => {
       window.location.assign(`${SCREEN}?notice=${notice}`);
     };
     try {
-      if (typeof navigator === "undefined" || !("serviceWorker" in navigator) || !vapidPublicKey) {
-        go("push_unavailable");
-        return;
-      }
-      const registration = await navigator.serviceWorker.register("/sw.js");
-      const subscription = await registration.pushManager.subscribe({
-        userVisibleOnly: true,
-        applicationServerKey: urlBase64ToUint8Array(vapidPublicKey),
+      const outcome = await subscribeThisBrowser({
+        container:
+          typeof navigator !== "undefined" && "serviceWorker" in navigator
+            ? navigator.serviceWorker
+            : undefined,
+        notification: typeof Notification !== "undefined" ? Notification : undefined,
+        vapidPublicKey,
       });
-      const json = subscription.toJSON();
-      const endpoint = json.endpoint;
-      const p256dh = json.keys?.p256dh;
-      const auth = json.keys?.auth;
-      if (!endpoint || !p256dh || !auth) {
-        go("register_failed");
+      if (!outcome.ok) {
+        go(outcome.reason);
         return;
       }
-      const result = await registerPushDevice({ endpoint, keys: { p256dh, auth } });
+      const result = await registerPushDevice(outcome.subscription);
       go(result.ok ? "device_registered" : "invalid_request");
     } catch {
       go("register_failed");
@@ -160,14 +175,33 @@ export function NotificationsView({
         <SectionHeading icon={Bell}>Push notifications</SectionHeading>
         {hasDevice ? (
           <ul className="flex flex-col gap-2">
-            {devices.map((device) => (
-              <li
-                key={device.id}
-                className="rounded-card border border-line bg-surface px-4 py-3 text-sm text-fg"
-              >
-                {device.label ?? "This device"}
-              </li>
-            ))}
+            {devices.map((device) => {
+              const label = device.label ?? "Registered device";
+              const isThisDevice = thisDevice !== null && device.fingerprint === thisDevice;
+              return (
+                <li
+                  key={device.id}
+                  className="flex flex-wrap items-center justify-between gap-3 rounded-card border border-line bg-surface px-4 py-3 text-sm text-fg"
+                >
+                  <span className="flex flex-col gap-0.5">
+                    <span>{label}</span>
+                    {isThisDevice ? (
+                      <span className="inline-flex items-center gap-1.5 text-xs font-medium text-fg-muted">
+                        <Smartphone aria-hidden={true} className="h-3.5 w-3.5 shrink-0" />
+                        This device
+                      </span>
+                    ) : null}
+                  </span>
+                  <form action={removePushDeviceAction}>
+                    <input type="hidden" name="id" value={device.id} />
+                    <Button type="submit" variant="secondary" aria-label={`Remove ${label}`}>
+                      <Trash2 aria-hidden={true} className="h-4 w-4 shrink-0" />
+                      Remove
+                    </Button>
+                  </form>
+                </li>
+              );
+            })}
           </ul>
         ) : (
           <p className="text-sm text-fg-muted">No devices registered yet.</p>

@@ -855,3 +855,101 @@ test("uses design tokens, never a raw hex colour (open and closed)", () => {
     );
   }
 });
+
+// ═══ Review fix G12 — no plaintext left on screen, no duplicate on a repeat Confirm, the
+//     passphrase choice is honoured, and Confirm is never a dead end ═══════════════════
+
+test("after a card is saved its number, expiry and name are cleared from the form", async () => {
+  const server = makeServer();
+  const { flow } = makeFlow(server, makePasskey(), makeCreateKey(), makeAddCard());
+  fillCard(flow, { number: VISA_NUMBER });
+  await flow.submit();
+  const state = flow.getState();
+  assert.equal(state.status, "added");
+  assert.equal(state.number, "", "the full card number does not stay on screen");
+  assert.equal(state.expiryMonth, "");
+  assert.equal(state.expiryYear, "");
+  assert.equal(state.nickname, "");
+});
+
+test("a repeat Confirm after saving stores no second copy and asks for a card number", async () => {
+  const server = makeServer();
+  const addCard = makeAddCard();
+  const passkey = makePasskey();
+  const { flow } = makeFlow(server, passkey, makeCreateKey(), addCard);
+  fillCard(flow, { number: VISA_NUMBER });
+  await flow.submit();
+  await flow.submit();
+  assert.equal(addCard.count, 1, "only one card is stored");
+  assert.equal(passkey.calls.length, 1, "the second Confirm never reaches the passkey prompt");
+  assert.equal(flow.getState().status, "error");
+  assert.match(flow.getState().error ?? "", /card number/i);
+});
+
+test("an incomplete card (short number, bad month, no name) is refused on the device and nothing is sent", async () => {
+  for (const [label, opts] of [
+    ["short number", { number: "4242" }],
+    ["month 13", { number: VISA_NUMBER, month: "13" }],
+    ["two-digit year", { number: VISA_NUMBER, year: "29" }],
+    ["no name", { number: VISA_NUMBER, nickname: "   " }],
+  ] as const) {
+    const server = makeServer();
+    const addCard = makeAddCard();
+    const { flow } = makeFlow(server, makePasskey(), makeCreateKey(), addCard);
+    fillCard(flow, opts);
+    await flow.submit();
+    assert.equal(addCard.count, 0, `${label}: nothing is stored`);
+    assert.equal(server.gets.length + server.posts.length, 0, `${label}: nothing leaves the device`);
+    assert.equal(flow.getState().status, "error", label);
+    assertPlainFailure(flow.getState().error, label);
+  }
+});
+
+test("choosing a passphrase on an account that already has a vault wraps the EXISTING vault key with it", async () => {
+  const server = makeServer();
+  const createKey = makeCreateKey();
+  const first = makeFlow(server, makePasskey(), createKey, makeAddCard());
+  fillCard(first.flow, { number: VISA_NUMBER });
+  await first.flow.submit();
+  assert.equal(server.store.passphrase, null, "no passphrase yet");
+
+  const second = makeFlow(server, makePasskey(), createKey, makeAddCard());
+  fillCard(second.flow, { number: MC_NUMBER });
+  second.flow.setUsePassphrase(true);
+  second.flow.setPassphrase(VAULT_PASSPHRASE);
+  await second.flow.submit();
+
+  assert.equal(createKey.count, 1, "no new vault key");
+  const saved = server.store.passphrase;
+  assert.ok(saved, "the passphrase unlock method is saved");
+  const wrappingKey = await deriveWrappingKeyFromPassphrase(
+    VAULT_PASSPHRASE,
+    fromBase64(saved!.salt) as Uint8Array<ArrayBuffer>,
+  );
+  assert.ok(
+    bytesEqual(await unwrapVaultKey(wrappingKey, saved!.wrapped), FIXED_VK),
+    "the passphrase opens the same vault key the passkey does",
+  );
+});
+
+test("a vault passphrase shorter than 12 characters is refused before anything leaves the device", async () => {
+  const server = makeServer();
+  const addCard = makeAddCard();
+  const { flow } = makeFlow(server, makePasskey(), makeCreateKey(), addCard);
+  fillCard(flow, { number: VISA_NUMBER });
+  flow.setUsePassphrase(true);
+  flow.setPassphrase("hunter2");
+  await flow.submit();
+  assert.equal(addCard.count, 0);
+  assert.equal(server.gets.length + server.posts.length, 0);
+  assert.match(flow.getState().error ?? "", /12/);
+});
+
+test("with no postal address on file there is no dead Confirm: the reason and a link to add one are shown", () => {
+  const markup = renderToStaticMarkup(
+    <AddCardFlow billingAddresses={[]} addCard={noopAddCard} initialOpen />,
+  );
+  assert.ok(!liveButtons(markup).some((n) => /^confirm$/i.test(n)), `no live Confirm; live=${JSON.stringify(liveButtons(markup))}`);
+  assert.match(visibleText(markup), /postal address/i);
+  assert.match(markup, /<a\b[^>]*href="\/vault"/);
+});

@@ -634,3 +634,36 @@ test("uses design tokens, never a raw hex colour", () => {
     );
   }
 });
+
+// ================================================================================
+// Review fix G1 — details can actually be added and saved, and Cards is reachable.
+// ================================================================================
+
+test("each low-tier field is a named control inside a form with a live Save, and a new detail can be added", () => {
+  const markup = render(base({ lowTierFields: [EMAIL, ADDRESS_MOVING], highTierFields: [] }));
+  const forms = findAll(markup, "form");
+  assert.ok(forms.length >= 2, `each low-tier field is its own form; forms=${forms.length}`);
+  for (const form of forms) {
+    assert.match(form.inner, /<input\b[^>]*name="value"/, "the value control is named so it can be saved");
+  }
+  assert.match(markup, /<input\b[^>]*name="movingOn"/, "the moving-on date is a named control");
+  assert.ok(
+    liveButtons(markup).filter((n) => /^save$/i.test(n)).length >= 2,
+    `every field has a live Save; live=${JSON.stringify(liveButtons(markup))}`,
+  );
+  assert.ok(
+    liveButtons(markup).some((n) => /^add a detail$/i.test(n)),
+    `an "Add a detail" control is offered; live=${JSON.stringify(liveButtons(markup))}`,
+  );
+});
+
+test("a person with no details yet is told what to add and offered the add control", () => {
+  const markup = render(base({ lowTierFields: [], highTierFields: [] }));
+  assert.match(visibleText(markup), /add your name/i);
+  assert.ok(liveButtons(markup).some((n) => /^add a detail$/i.test(n)));
+});
+
+test("the Vault page links to Cards", () => {
+  const markup = render(base({ lowTierFields: [], highTierFields: [] }));
+  assert.match(markup, /<a\b[^>]*href="\/vault\/cards"[^>]*>[\s\S]*?Cards/);
+});

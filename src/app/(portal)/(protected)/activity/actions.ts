@@ -180,6 +180,15 @@ const disputeInputSchema = z.object({
   entrySeq: z.number().int().positive(),
   note: z.string().min(1).max(NOTE_MAX),
 });
+// A date filter is a real ISO calendar date ("YYYY-MM-DD" — what the view's date inputs
+// post) or an ISO date-time. Anything else (a hand-edited `?from=yesterday-ish`) is
+// ignored rather than cast at `occurred_at >= $n`, which threw a server error (review fix
+// G11, the OBS-049 class).
+const filterDateSchema = z.union([z.iso.date(), z.iso.datetime({ offset: true })]);
+function validDate(value: string | undefined): string | undefined {
+  return value !== undefined && filterDateSchema.safeParse(value).success ? value : undefined;
+}
+
 const undoInputSchema = z.object({
   entrySeq: z.number().int().positive(),
   reason: z.string().max(NOTE_MAX).optional(),
@@ -292,21 +301,27 @@ export function createActivityActions(deps: ActivityActionsDeps): ActivityAction
     const filterOptions = buildFilterOptions(all);
 
     // The facet/date filters the view posts back: `agent`→agentId, `service`→
-    // connectorId, and kind/outcome/from/to verbatim. An empty "All …" option (or an
-    // absent param) does not constrain.
+    // connectorId, kind/outcome verbatim, and from/to only when they are real calendar
+    // dates. An empty "All …" option (or an absent / invalid param) does not constrain.
+    // The applied values go back to the view (`activeFilters`) so its controls show them
+    // and a second Apply keeps them (review fix G11).
     const filters: ActivityFilters = {};
+    const activeFilters: NonNullable<ActivityViewProps["activeFilters"]> = {};
     const agentId = firstValue(searchParams.agent);
-    if (agentId !== undefined) filters.agentId = agentId;
+    if (agentId !== undefined) filters.agentId = activeFilters.agent = agentId;
     const connectorId = firstValue(searchParams.service);
-    if (connectorId !== undefined) filters.connectorId = connectorId;
+    if (connectorId !== undefined) filters.connectorId = activeFilters.service = connectorId;
     const kind = firstValue(searchParams.kind);
-    if (kind !== undefined) filters.kind = kind;
+    if (kind !== undefined) filters.kind = activeFilters.kind = kind;
     const outcome = firstValue(searchParams.outcome);
-    if (outcome !== undefined) filters.outcome = outcome;
-    const from = firstValue(searchParams.from);
-    if (from !== undefined) filters.from = from;
-    const to = firstValue(searchParams.to);
-    if (to !== undefined) filters.to = widenToEndOfDay(to);
+    if (outcome !== undefined) filters.outcome = activeFilters.outcome = outcome;
+    const from = validDate(firstValue(searchParams.from));
+    if (from !== undefined) filters.from = activeFilters.from = from;
+    const to = validDate(firstValue(searchParams.to));
+    if (to !== undefined) {
+      activeFilters.to = to;
+      filters.to = widenToEndOfDay(to);
+    }
 
     // Reuse the full read when nothing narrows it; otherwise the shared filtered read
     // (`listActivity`, E08-S05) narrows by facet/date in SQL, newest-first.
@@ -330,7 +345,7 @@ export function createActivityActions(deps: ActivityActionsDeps): ActivityAction
     const integrity =
       firstValue(searchParams.verify) === "1" ? await checkIntegrity(session) : null;
 
-    return { entries, filterOptions, query, integrity };
+    return { entries, filterOptions, query, integrity, activeFilters };
   }
 
   return { disputeEntry, undoEntry, checkIntegrity, load };

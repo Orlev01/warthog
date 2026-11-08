@@ -20,14 +20,17 @@ export function noticeLocation(successCode: string, outcome: ActionResult | unkn
   return `${SCREEN}?notice=${encodeURIComponent(code)}`;
 }
 
-export type SecurityNotice = { tone: "done" | "problem"; text: string };
+// `offerConfirm` asks the screen to mount the inline "Confirm it's you" control under the
+// notice (review fix G3), so a step-up refusal is never a dead end.
+export type SecurityNotice = { tone: "done" | "problem"; text: string; offerConfirm?: boolean };
 
 const NOTICES: Record<string, SecurityNotice> = {
   passkey_removed: { tone: "done", text: "Passkey removed." },
   session_signed_out: { tone: "done", text: "Signed out of that device." },
   step_up_required: {
     tone: "problem",
-    text: "Nothing was changed. For your security, this needs a fresh confirmation that it's you: sign out, sign back in, then make the change within five minutes.",
+    text: "Nothing was changed. For your security, this needs a fresh confirmation that it's you. Choose “Confirm it's you” below, then make the change again.",
+    offerConfirm: true,
   },
   not_found: { tone: "problem", text: "Nothing was changed: that item is no longer on your account." },
   invalid_request: { tone: "problem", text: "Nothing was changed: that request wasn't valid. Please try again." },

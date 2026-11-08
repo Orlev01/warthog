@@ -58,19 +58,42 @@ function readPayload(event) {
 
 self.addEventListener("notificationclick", function (event) {
   event.notification.close();
-  // Approvals are only actioned inside the signed-in app, so bring it to front.
-  event.waitUntil(focusApp());
+  // Open the app where the tap belongs: an approval notification opens straight onto
+  // that approval in the inbox; anything else opens Home. Never "/" — that is the public
+  // marketing page. (The signed-in guard sends a signed-out person to sign in.)
+  event.waitUntil(openApp(targetFor(event.notification.data)));
 });
 
-function focusApp() {
+function targetFor(data) {
+  if (data && typeof data.approval_id === "string" && data.approval_id.length > 0) {
+    return "/inbox?approval=" + encodeURIComponent(data.approval_id);
+  }
+  return "/home";
+}
+
+// Reuse an open Warthog window when there is one — navigate it to the target, then bring
+// it to the front — otherwise open a new window on the target.
+function openApp(url) {
   return self.clients
     .matchAll({ type: "window", includeUncontrolled: true })
     .then(function (windows) {
       for (var i = 0; i < windows.length; i++) {
         var client = windows[i];
+        if ("navigate" in client && "focus" in client) {
+          // navigate() rejects for a window this worker does not control yet; open a
+          // fresh window on the target instead of leaving the person where they were.
+          return client
+            .navigate(url)
+            .then(function (navigated) {
+              return (navigated || client).focus();
+            })
+            .catch(function () {
+              return self.clients.openWindow ? self.clients.openWindow(url) : undefined;
+            });
+        }
         if ("focus" in client) return client.focus();
       }
-      if (self.clients.openWindow) return self.clients.openWindow("/");
+      if (self.clients.openWindow) return self.clients.openWindow(url);
       return undefined;
     });
 }

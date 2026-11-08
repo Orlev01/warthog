@@ -4,13 +4,18 @@ import * as React from "react";
 import { Lock } from "lucide-react";
 
 import { Card } from "@/components/ui/card";
-import { Field } from "@/components/ui/field";
 import { encryptValue } from "@/client/vault/values";
 import {
   HighTierFlow,
   type RaiseFieldToHighTierAction,
   type SaveHighTierFieldAction,
 } from "./high-tier-flow";
+import {
+  LowTierDetailFlow,
+  type SaveLowTierFieldAction,
+  type UpdateLowTierFieldAction,
+} from "./low-tier-detail-flow";
+import { VaultNav } from "./vault-nav";
 
 // E11-S13 — Vault identity view component (brief "Identity vault"; design §4.1
 // low tier + §4.2 device-held vault; primary journey "About you").
@@ -18,8 +23,11 @@ import {
 // The identity page is the primary-journey "About you" surface. It renders every
 // tier FROM PROPS and never contradicts the device-held-vault rule:
 //   - LOW-tier fields (name, email, phone, a postal address with a "moving on"
-//     date, …) are handed back DECRYPTED and rendered EDITABLE in place, each with
-//     a "Raise to high tier" control;
+//     date, …) are handed back DECRYPTED and rendered EDITABLE in place — each a small
+//     form whose Save re-saves the value (and an address's moving-on date) through the
+//     page's updateLowTierField action — each with a "Raise to high tier" control, and
+//     an "Add a detail" form saves a new one through saveLowTierField (review fix G1:
+//     these fields used to have no name, no form and no Save, so every edit was lost);
 //   - HIGH-tier fields are handed back as METADATA ONLY (label + type + tier, never
 //     a value or its ciphertext) and rendered LOCKED — label + tier, never a value;
 //   - an "Add a high-tier detail" control opens, at that sensitive moment, the plain
@@ -94,6 +102,10 @@ export type IdentityViewProps = {
   // render (a preview, a render test) may omit them, in which case nothing is stored.
   saveHighTierField?: SaveHighTierFieldAction;
   raiseFieldToHighTier?: RaiseFieldToHighTierAction;
+  // The submit seams of the low-tier add / edit forms — the page's saveLowTierField /
+  // updateLowTierField server actions (the value is DEK-encrypted server-side).
+  saveLowTierField?: SaveLowTierFieldAction;
+  updateLowTierField?: UpdateLowTierFieldAction;
 };
 
 // The high-tier detail a person enters, before it is sealed on the device.
@@ -139,35 +151,30 @@ const LOW_TIER_LABELS: Record<LowTierFieldKind, string> = {
   preference: "Preference",
 };
 
-// The moving-on date as the ISO "YYYY-MM-DD" a date input shows (a Date is cast to
-// text; a plain string is used as-is; absent ⇒ empty).
-function isoDate(value: string | Date | null): string {
-  if (value === null) return "";
-  if (value instanceof Date) return value.toISOString().slice(0, 10);
-  return value.slice(0, 10);
-}
-
 // --- field cards -------------------------------------------------------------------
 
-// A low-tier field: editable in place, a postal address also carrying its moving-on
-// date, with a live "Raise to high tier" flow that re-seals its current value on the
-// device and submits only the ciphertext + metadata (the device behaviour is pinned by
-// high-tier-flow.test.tsx).
+// A low-tier field: editable in place (a postal address also carrying its moving-on
+// date) with a Save that re-saves it through updateLowTierField, plus a live "Raise to
+// high tier" flow that re-seals its current value on the device and submits only the
+// ciphertext + metadata (the device behaviour is pinned by high-tier-flow.test.tsx).
 function LowTierCard({
   field,
   raiseFieldToHighTier,
+  updateLowTierField,
 }: {
   field: LowTierField;
   raiseFieldToHighTier?: RaiseFieldToHighTierAction;
+  updateLowTierField?: UpdateLowTierFieldAction;
 }) {
   const label = LOW_TIER_LABELS[field.kind];
-  const isAddress = field.kind === "postal_address";
   return (
     <Card className="flex flex-col gap-3">
-      <Field label={label} defaultValue={field.value} />
-      {isAddress ? (
-        <Field label="Moving on" type="date" defaultValue={isoDate(field.movingOn)} />
-      ) : null}
+      <LowTierDetailFlow
+        mode="edit"
+        field={field}
+        label={label}
+        updateLowTierField={updateLowTierField}
+      />
       <HighTierFlow
         mode="raise"
         field={{ id: field.id, value: field.value, label }}
@@ -202,17 +209,33 @@ export function IdentityView({
   addingHighTier = false,
   saveHighTierField,
   raiseFieldToHighTier,
+  saveLowTierField,
+  updateLowTierField,
 }: IdentityViewProps) {
   return (
     <section className="flex flex-col gap-8">
-      <h1 className="text-xl font-semibold text-fg">About you</h1>
+      <div className="flex flex-col gap-4">
+        <h1 className="text-xl font-semibold text-fg">About you</h1>
+        <VaultNav current="identity" />
+      </div>
 
       {/* ----- Low-tier: your everyday details, editable in place ----- */}
       <div className="flex flex-col gap-3">
         <h2 className="text-sm font-semibold text-fg">Your details</h2>
+        {lowTierFields.length === 0 ? (
+          <p className="text-sm text-fg-muted">
+            Add your name, email, phone or postal address so your agents can use them.
+          </p>
+        ) : null}
         {lowTierFields.map((field) => (
-          <LowTierCard key={field.id} field={field} raiseFieldToHighTier={raiseFieldToHighTier} />
+          <LowTierCard
+            key={field.id}
+            field={field}
+            raiseFieldToHighTier={raiseFieldToHighTier}
+            updateLowTierField={updateLowTierField}
+          />
         ))}
+        <LowTierDetailFlow mode="add" saveLowTierField={saveLowTierField} />
       </div>
 
       {/* ----- High-tier: protected details, locked on the device ----- */}

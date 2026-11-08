@@ -52,13 +52,20 @@ export type DataViewProps = {
   confirmationInput?: string;
 
   // --- wiring (the page passes these in the running app; omitted in render tests) ---
-  exportAction?: DataFormAction;
+  // Export posts natively to the download route (review fix G2), so the browser receives
+  // the file itself; it defaults to that route.
+  exportAction?: string | DataFormAction;
   importAction?: DataFormAction;
   deleteAccountAction?: DataFormAction;
 };
 
 // The plain default confirmation phrase, used when the page supplies none.
 const DEFAULT_PHRASE = "delete my account";
+
+// The export download route (settings/data/export/route.ts): a same-origin POST answered
+// with the export as a JSON attachment, or a redirect back here when a fresh step-up is
+// needed.
+const EXPORT_URL = "/settings/data/export";
 
 function SectionHeading({ icon: Icon, children }: { icon: typeof Download; children: React.ReactNode }) {
   return (
@@ -73,7 +80,7 @@ export function DataView({
   importedHistory,
   confirmationPhrase = DEFAULT_PHRASE,
   confirmationInput = "",
-  exportAction,
+  exportAction = EXPORT_URL,
   importAction,
   deleteAccountAction,
 }: DataViewProps) {
@@ -88,11 +95,12 @@ export function DataView({
       <div className="flex flex-col gap-3">
         <SectionHeading icon={Download}>Export your data</SectionHeading>
         <p className="text-sm text-fg-muted">
-          This downloads a copy of everything Warthog stores about you — your identity,
-          connections, memory and your whole activity record. It is a sensitive file, so
-          keep it somewhere safe.
+          This downloads a file with what Warthog keeps about you — your everyday details,
+          connections, memory and your whole activity record. Your saved cards and protected
+          details stay locked on your device, so they are not included in the file. It is a
+          sensitive file, so keep it somewhere safe.
         </p>
-        <form action={exportAction}>
+        <form action={exportAction} method="post">
           <Button type="submit" variant="secondary" className="self-start">
             <Download aria-hidden={true} className="h-4 w-4 shrink-0" />
             Export my data

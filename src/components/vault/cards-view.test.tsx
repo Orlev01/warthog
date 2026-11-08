@@ -80,7 +80,7 @@ import assert from "node:assert/strict";
 import { webcrypto } from "node:crypto";
 import { renderToStaticMarkup } from "react-dom/server";
 
-import { CardsView, sealCard } from "./cards-view";
+import { CardsView, sealCard, createRemoveCardFlow } from "./cards-view";
 import { decryptValue } from "@/client/vault/values";
 
 // --- the prop shapes this task renders (described here as the contract; declared
@@ -636,4 +636,55 @@ test("uses design tokens, never a raw hex colour", () => {
       `no raw hex colour may appear in the cards-view markup, got: ${markup}`,
     );
   }
+});
+
+
+// ================================================================================
+// Review fix G12 — Remove actually removes (after a confirm step), reporting the outcome.
+// It used to be a live button with no handler, although the cards actions implement
+// removeCard — a stored card could never be deleted.
+// ================================================================================
+
+test("Remove asks first, then calls removeCard with exactly that card's id, once", async () => {
+  const calls: unknown[] = [];
+  const flow = createRemoveCardFlow({
+    cardId: CARD_A.id,
+    removeCard: async (input) => {
+      calls.push(input);
+      return { ok: true };
+    },
+  });
+  assert.equal(flow.getState().stage, "idle");
+  flow.ask();
+  assert.equal(flow.getState().stage, "confirming", "a confirm step comes before anything is deleted");
+  assert.deepEqual(calls, []);
+  await Promise.all([flow.confirm(), flow.confirm()]);
+  assert.deepEqual(calls, [{ cardId: CARD_A.id }], "removed once, by this card's id");
+  assert.equal(flow.getState().stage, "removed");
+});
+
+test("Keep it backs out without removing; a refused removal says so in plain words", async () => {
+  let called = 0;
+  const kept = createRemoveCardFlow({
+    cardId: CARD_A.id,
+    removeCard: async () => {
+      called += 1;
+      return { ok: true };
+    },
+  });
+  kept.ask();
+  kept.cancel();
+  assert.equal(kept.getState().stage, "idle");
+  assert.equal(called, 0);
+
+  const refused = createRemoveCardFlow({ cardId: CARD_A.id, removeCard: async () => ({ ok: false, reason: "not_found" }) });
+  refused.ask();
+  await refused.confirm();
+  assert.equal(refused.getState().stage, "error");
+  assert.ok(refused.getState().error && !/not_found/.test(refused.getState().error!));
+});
+
+test("each saved card's Remove names the card for assistive technology", () => {
+  const markup = render(base({ cards: [CARD_A], removeCard: async () => ({ ok: true }) }));
+  assert.match(markup, /<button\b[^>]*aria-label="Remove Everyday spending"/);
 });

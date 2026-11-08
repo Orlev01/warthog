@@ -12,8 +12,10 @@
 //     the users row itself PERSISTS until the purge job removes it within 24h);
 //   – revokes every agent and service connection, so an agent's next request is
 //     refused;
+//   – ends every session of the person (every device is signed out);
 //   – enqueues the account for the 24-hour purge;
-//   – sends a confirmation email to the person.
+//   – sends a confirmation email to the person (best effort: a channel failure is
+//     reported but never undoes or fails the completed deletion).
 //
 // The agent / connection / credential stores live in other aggregates, so the
 // cross-aggregate revocation is DELEGATED through an injected `DeletionExecutor`
@@ -93,11 +95,21 @@ export async function deleteAccount(
   const email = row.email as string;
 
   // Cut off every agent and service connection for this person (their next request
-  // is refused), then enqueue the account for the 24-hour purge and confirm by email
-  // — all awaited, so each has happened before success is returned.
+  // is refused), sign out every device (a shredded DEK can no longer back any page, so
+  // no session may outlive it), then enqueue the account for the 24-hour purge — all
+  // awaited, so each has happened before success is returned.
   await revoker.revokeAgentsAndConnections(userId);
+  await db.query("DELETE FROM sessions WHERE user_id = $1", [userId]);
   await enqueueAccountPurge(db, userId);
-  await senders.email.sendEmail({ recipient: email, body: CONFIRMATION_BODY });
+
+  // Confirm by email. The deletion above is already complete and irreversible, so a
+  // channel failure here must not turn it into an error the person would retry: it is
+  // reported (with no address or other personal detail) and the deletion stands.
+  try {
+    await senders.email.sendEmail({ recipient: email, body: CONFIRMATION_BODY });
+  } catch {
+    console.error("[warthog account] deletion confirmation email could not be sent");
+  }
 
   return { ok: true };
 }

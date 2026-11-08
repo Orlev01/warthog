@@ -104,25 +104,26 @@ export interface CardsActions {
 // ---- boundary validation shapes (INV-102) -----------------------------------------
 //
 // A brand / nickname is bounded free text (a grossly oversized one is rejected); the
-// last four is a short string; the device number ciphertext is a short opaque `v1:`
+// last four is exactly four digits; the device number ciphertext is a short opaque `v1:`
 // envelope, capped well above any genuine one. The billing-address reference and the
 // card id are uuids (identity_fields.id / cards.id — db/migrations), shape-guarded so a
 // non-uuid never reaches `WHERE id = $1` as a cast (OBS-049). The object schemas STRIP
 // unknown keys (zod's default), so a smuggled `securityCode` or `userId` is dropped and
 // reaches no column rather than being rejected.
 const BRAND_MAX = 256;
-const LAST_FOUR_MAX = 64;
 const NICKNAME_MAX = 256;
 const CIPHERTEXT_MAX = 64 * 1024;
 
 const addCardSchema = z.object({
   brand: z.string().min(1).max(BRAND_MAX),
-  lastFour: z.string().min(1).max(LAST_FOUR_MAX),
+  // Exactly four digits, so a full card number can never land in the plaintext column.
+  lastFour: z.string().regex(/^\d{4}$/),
   expiryMonth: z.number().int(),
   expiryYear: z.number().int(),
   nickname: z.string().min(1).max(NICKNAME_MAX),
   billingAddressId: z.uuid(),
-  numberCiphertext: z.string().min(1).max(CIPHERTEXT_MAX),
+  // A sealed device envelope (`v1:` …), never a plaintext number stored as "ciphertext".
+  numberCiphertext: z.string().min(1).max(CIPHERTEXT_MAX).regex(/^v1:/),
 });
 const removeCardSchema = z.object({
   cardId: z.uuid(),

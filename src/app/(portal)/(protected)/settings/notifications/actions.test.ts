@@ -735,3 +735,76 @@ test("the actions read no process.env: a decoy env secret never appears in a res
     else process.env.WARTHOG_DECOY_SECRET = prev;
   }
 });
+
+// =====================================================================================
+// Review fix G5 — devices are told apart and can be removed. Every device used to be
+// labelled "This device" (the loader handed back only ids) and there was no way to remove
+// a lost or stale device that still receives approval pushes.
+// =====================================================================================
+
+test("load labels each device by when it was registered and fingerprints its endpoint without revealing it", async () => {
+  const { createHash } = await import("node:crypto");
+  const db = await freshDb();
+  const keyWrapper = keyWrapperFor();
+  try {
+    const alice = await makePerson(db, keyWrapper, "alice-labels");
+    const { actions } = makeActions(db, keyWrapper);
+    const session = await sessionFor(db, alice.userId);
+    const phone = subscriptionFor("alice-phone");
+    expectOk(await actions.registerPushDevice(session, phone), "register");
+
+    const data = await actions.load(session);
+    assert.equal(data.devices.length, 1);
+    const device = data.devices[0]!;
+    assert.match(device.label ?? "", /^Registered 15 Nov 2026/, `a plain registration label; got ${device.label}`);
+    assert.equal(device.fingerprint, createHash("sha256").update(phone.endpoint).digest("hex"));
+    assert.ok(!JSON.stringify(data).includes(phone.endpoint), "the endpoint itself never reaches the page");
+  } finally {
+    await db.close();
+  }
+});
+
+test("removePushDevice removes the session person's own device; another person's id is refused and untouched", async () => {
+  const db = await freshDb();
+  const keyWrapper = keyWrapperFor();
+  try {
+    const alice = await makePerson(db, keyWrapper, "alice-remove");
+    const bob = await makePerson(db, keyWrapper, "bob-remove");
+    const { actions } = makeActions(db, keyWrapper);
+    const aliceSession = await sessionFor(db, alice.userId);
+    const bobSession = await sessionFor(db, bob.userId);
+    expectOk(await actions.registerPushDevice(aliceSession, subscriptionFor("alice-old-phone")), "register alice");
+    expectOk(await actions.registerPushDevice(bobSession, subscriptionFor("bob-phone")), "register bob");
+    const [alicesDevice] = await listSubscriptions(db, alice.userId, alice.dek, clock);
+    const [bobsDevice] = await listSubscriptions(db, bob.userId, bob.dek, clock);
+
+    assert.deepEqual(await actions.removePushDevice(aliceSession, { id: bobsDevice!.id }), {
+      ok: false,
+      reason: "not_found",
+    });
+    assert.equal((await listSubscriptions(db, bob.userId, bob.dek, clock)).length, 1, "Bob's device survives");
+
+    expectOk(await actions.removePushDevice(aliceSession, { id: alicesDevice!.id }), "remove own device");
+    assert.equal((await listSubscriptions(db, alice.userId, alice.dek, clock)).length, 0);
+
+    await assertRejects4xx("malformed id", () => actions.removePushDevice(aliceSession, { id: "1 OR 1=1" }));
+  } finally {
+    await db.close();
+  }
+});
+
+test("registering the same browser subscription again keeps a single device (no duplicate pushes)", async () => {
+  const db = await freshDb();
+  const keyWrapper = keyWrapperFor();
+  try {
+    const alice = await makePerson(db, keyWrapper, "alice-dupe");
+    const { actions } = makeActions(db, keyWrapper);
+    const session = await sessionFor(db, alice.userId);
+    const phone = subscriptionFor("alice-phone");
+    expectOk(await actions.registerPushDevice(session, phone), "first register");
+    expectOk(await actions.registerPushDevice(session, phone), "same subscription again");
+    assert.equal((await listSubscriptions(db, alice.userId, alice.dek, clock)).length, 1);
+  } finally {
+    await db.close();
+  }
+});

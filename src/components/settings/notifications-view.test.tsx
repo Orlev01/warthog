@@ -514,3 +514,26 @@ test("uses design tokens, never a raw hex colour", () => {
     );
   }
 });
+
+// ================================================================================
+// Review fix G5 — devices are told apart and each can be removed.
+// ================================================================================
+
+test("each registered device shows its own label (never every row as 'This device') and a live Remove", () => {
+  const markup = render(
+    base({
+      devices: [
+        { id: "11111111-1111-4111-8111-111111111111", label: "Registered 1 Nov 2026, 9:00 am", fingerprint: "a".repeat(64) },
+        { id: "22222222-2222-4222-8222-222222222222", label: "Registered 5 Nov 2026, 6:30 pm", fingerprint: "b".repeat(64) },
+      ],
+      removePushDeviceAction: async () => {},
+    }),
+  );
+  const text = visibleText(markup);
+  assert.ok(text.includes("Registered 1 Nov 2026, 9:00 am") && text.includes("Registered 5 Nov 2026, 6:30 pm"));
+  assert.ok(!/This device/.test(text), "no row is claimed as this device before the browser has checked");
+  const removeForms = findAll(markup, "form").filter((f) => /Remove/.test(visibleText(f.inner)));
+  assert.equal(removeForms.length, 2, "one Remove form per device");
+  assert.match(removeForms[0]!.inner, /<input[^>]*type="hidden"[^>]*name="id"[^>]*value="11111111-1111-4111-8111-111111111111"/);
+  assert.match(removeForms[0]!.inner, /aria-label="Remove Registered 1 Nov 2026, 9:00 am"/);
+});

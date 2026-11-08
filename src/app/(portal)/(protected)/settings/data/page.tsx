@@ -5,16 +5,23 @@ import { revalidatePath } from "next/cache";
 import { AlertTriangle, CheckCircle2 } from "lucide-react";
 
 import { DataView } from "@/components/settings/data-view";
+import { ConfirmItsYou } from "@/components/ui/confirm-its-you";
 import { loadConfig } from "@/server/config";
 import { getServerDb } from "@/server/db/server";
 import { selectKeyWrapper } from "@/server/crypto/key-wrapper";
 import { verifySession, COOKIE_NAME, type Session } from "@/server/auth/session";
+import { requireStepUp } from "@/server/auth/step-up";
+import { createResetExecutor } from "@/server/account/reset-executor";
 import { systemClock } from "@/server/seams/clock";
 import { selectSenders, type Senders, type OutgoingMessage } from "@/server/notify/senders";
 import { HttpError } from "@/server/http/validate";
 import type { DeletionExecutor } from "@/server/account/delete";
 import type { Db } from "@/server/db/index";
 import { createDataActions, DELETE_ACCOUNT_CONFIRMATION, type ActionResult } from "./actions";
+import type { Metadata } from "next";
+
+// The page title (review fix G8, WCAG 2.4.2): "%s · Warthog" via the root template.
+export const metadata: Metadata = { title: "Data & privacy" };
 
 // E16-S11 — Data & privacy page (the thin protected-page loader over the tested
 // `createDataActions` seam, `./actions`) wired to its controls.
@@ -22,8 +29,11 @@ import { createDataActions, DELETE_ACCOUNT_CONFIRMATION, type ActionResult } fro
 // The loader reads the signed-in session from the host-locked `__Host-wh_session` cookie,
 // turns it (via the seam's `load`) into the session person's OWN imported-history archive,
 // and mounts the render-tested <DataView/> (E16-S10) WIRED to the three data actions:
-// export everything (after a fresh step-up), import a previous export, and delete the
-// account (after a fresh step-up AND the typed confirmation phrase). The view is fed the
+// export (after a fresh step-up — a native POST to the sibling `export/route.ts`, which
+// answers with the file itself; review fix G2), import a previous export, and delete the
+// account (after a fresh step-up AND the typed confirmation phrase). While the session has
+// no fresh step-up, an inline "Confirm it's you" (review fix G3) is offered so a refused
+// export or delete is never a dead end. The view is fed the
 // SAME `DELETE_ACCOUNT_CONFIRMATION` the delete action checks, so the gate on screen and
 // the server-side check never drift (one source of truth).
 //
@@ -59,29 +69,18 @@ function notConfiguredSenders(): Senders {
 }
 
 // The cross-aggregate revoke the deletion service delegates (cut off every agent + service
-// connection). The production revoker is wired at the composition root by a later story
-// (the E16-S08 deletion-service integration); this placeholder throws loudly if ever
-// invoked rather than silently skipping the revocation.
-function notConfiguredRevoker(): DeletionExecutor {
-  return {
-    async revokeAgentsAndConnections(): Promise<void> {
-      throw new Error("account deletion revoke is not configured");
-    },
-  };
+// connection): the production executor over the db (`createResetExecutor`'s transactional
+// revokeAgentsAndConnections — the same revoke a completed account reset runs). Review fix
+// G2: this used to be null, so every delete was refused while the button looked live.
+function deletionRevokerFor(db: Db): DeletionExecutor {
+  return createResetExecutor(db);
 }
-
-// The real cross-aggregate revoker — NULL until the composition root wires it (see above).
-// While it is absent the destructive delete flow must NOT run: the deletion service
-// crypto-shreds the DEK before the revoke step, so a half-wired delete would lose data.
-// The delete control therefore reports plainly that deletion isn't available yet (honest
-// and safe), rather than running a partial delete.
-const deletionRevoker: DeletionExecutor | null = null;
 
 // Build the data actions with the real seams. The KeyWrapper (local AES outside production,
 // Key Vault in production) lets the actions resolve the session person's own DEK to read /
 // restore their DEK-encrypted content; the configured senders (the dev outbox in dev) carry
 // the delete confirmation email.
-function buildActions(db: Db, revoker: DeletionExecutor = notConfiguredRevoker()) {
+function buildActions(db: Db, revoker: DeletionExecutor = deletionRevokerFor(db)) {
   const config = loadConfig();
   const keyWrapper = selectKeyWrapper({ nodeEnv: config.nodeEnv, localKek: config.devKek });
   return createDataActions({
@@ -111,27 +110,10 @@ function noticeLocation(successCode: string, outcome: ActionResult | unknown): s
   return `${SCREEN}?notice=${encodeURIComponent(code)}`;
 }
 
-// --- the three wired server actions (thin wrappers over the tested seam) ---------------
-
-// Export everything Warthog stores — after a fresh step-up (the seam enforces it). The
-// bundle is built here; delivering the file bytes to the browser is a dedicated download
-// route (a later story, outside this page's scope), so on success the person is told their
-// export has been prepared, and a missing step-up is reported plainly.
-async function exportDataAction(_formData: FormData): Promise<void> {
-  "use server";
-  const db = await getServerDb();
-  const session = await resolveSession(db);
-  if (!session) {
-    redirect("/signin");
-  }
-  let outcome: ActionResult | unknown;
-  try {
-    outcome = await buildActions(db).exportData(session);
-  } catch (error) {
-    outcome = error;
-  }
-  redirect(noticeLocation("export_prepared", outcome));
-}
+// --- the wired server actions (thin wrappers over the tested seam) ----------------------
+//
+// Export is not a server action: the Export form posts natively to `export/route.ts`, so
+// the browser receives the file as a download (a server action can only redirect).
 
 // Import a previous Warthog export into THIS account. The uploaded file rides in the form
 // data; the seam validates it at the boundary (an oversized / malformed / wrong-version file
@@ -154,9 +136,8 @@ async function importDataAction(formData: FormData): Promise<void> {
 }
 
 // Delete the session person's account — after a fresh step-up AND the typed confirmation
-// phrase (the seam enforces both). While the cross-aggregate revoker is unwired (see
-// `deletionRevoker`), the destructive flow is not run; the control reports plainly that
-// deletion isn't available yet rather than performing a half-wired, data-losing delete.
+// phrase (the seam enforces both). The deletion service shreds the DEK, revokes every agent
+// and connection, ends every session and enqueues the purge.
 async function deleteAccountAction(formData: FormData): Promise<void> {
   "use server";
   const db = await getServerDb();
@@ -164,20 +145,25 @@ async function deleteAccountAction(formData: FormData): Promise<void> {
   if (!session) {
     redirect("/signin");
   }
-  if (!deletionRevoker) {
-    redirect(`${SCREEN}?notice=delete_unavailable`);
-  }
   let outcome: ActionResult | unknown;
   try {
-    outcome = await buildActions(db, deletionRevoker).deleteAccount(session, {
+    outcome = await buildActions(db).deleteAccount(session, {
       confirmation: String(formData.get("confirmation") ?? ""),
     });
   } catch (error) {
     outcome = error;
   }
-  // On success the account is gone and the session no longer verifies — send the person to
-  // sign-in; otherwise report the refusal reason on this screen.
+  // On success the account is gone and every session row with it — drop this browser's
+  // (now dead) host-locked cookie and send the person to sign-in; otherwise report the
+  // refusal reason on this screen.
   if ((outcome as ActionResult | undefined)?.ok) {
+    (await cookies()).set(COOKIE_NAME, "", {
+      path: "/",
+      secure: true,
+      httpOnly: true,
+      sameSite: "lax",
+      maxAge: 0,
+    });
     redirect("/signin");
   }
   revalidatePath(SCREEN);
@@ -191,25 +177,21 @@ type Notice = { tone: "done" | "problem"; text: string };
 // Plain Australian English, no protocol jargon (brief design_ux.copy). Unknown codes render
 // nothing, so the query string can never inject copy onto the screen.
 const NOTICES: Record<string, Notice> = {
-  export_prepared: {
-    tone: "done",
-    text: "Your data export has been prepared.",
-  },
   imported: {
     tone: "done",
     text: "Your export file has been imported — its history is in the archive below.",
   },
   step_up_required: {
     tone: "problem",
-    text: "That's a sensitive action. Re-authenticate with your passkey or authenticator app, then try again.",
+    text: "That's a sensitive action, so we need to check it's you first. Choose “Confirm it's you” below, then try again.",
   },
   confirmation_required: {
     tone: "problem",
     text: "Nothing was deleted: type the exact confirmation phrase to confirm.",
   },
-  delete_unavailable: {
+  owns_household: {
     tone: "problem",
-    text: "Deleting your account isn't available just yet. Please try again later.",
+    text: "Nothing was deleted: transfer or close the household you own first, then try again.",
   },
   invalid_request: {
     tone: "problem",
@@ -251,6 +233,9 @@ export default async function DataPage({
   }
 
   const data = await buildActions(db).load(session);
+  // Export and delete need a confirmation within the last five minutes; offer it inline
+  // whenever the session lacks one, so a refusal is never a dead end.
+  const needsConfirm = !requireStepUp(session, { clock: systemClock });
 
   return (
     <div className="mx-auto flex w-full max-w-2xl flex-col gap-6 px-4 py-8 sm:px-6">
@@ -262,10 +247,15 @@ export default async function DataPage({
         </p>
       </div>
       {notice ? <NoticeBanner notice={notice} /> : null}
+      {needsConfirm ? (
+        <ConfirmItsYou
+          explanation="Exporting your data or deleting your account needs a quick check that it's really you. Use your passkey to confirm."
+          confirmedText="Thanks — that's confirmed. You can export your data or delete your account for the next five minutes."
+        />
+      ) : null}
       <DataView
         importedHistory={data.importedHistory}
         confirmationPhrase={DELETE_ACCOUNT_CONFIRMATION}
-        exportAction={exportDataAction}
         importAction={importDataAction}
         deleteAccountAction={deleteAccountAction}
       />

@@ -37,6 +37,8 @@
 //     Azure sender in prod — the page's choice via selectSenders) delivers the test
 //     push, so the loop is drivable end-to-end in the running app.
 
+import { createHash } from "node:crypto";
+
 import { z } from "zod";
 
 import { parseParams } from "@/server/http/validate";
@@ -44,6 +46,7 @@ import { getUserById } from "@/server/db/users";
 import {
   listSubscriptions,
   registerSubscription,
+  removeSubscription,
 } from "@/server/db/push-subscriptions";
 import {
   addMobileNumber as addMobileNumberRepo,
@@ -84,8 +87,11 @@ export type ActionResult = { ok: true } | { ok: false; reason: string };
 // person's registered devices, their mobile numbers each with its verification state,
 // and their two saved preferences (email fallback + delay, the brief's defaults when
 // nothing is saved). READ-ONLY.
+// Each device carries a plain label (when it was registered) and a one-way fingerprint of
+// its push endpoint (SHA-256 hex), so the browser can mark its own row "This device"
+// without the endpoint — a capability URL — ever being sent to the page.
 export interface NotificationsData {
-  readonly devices: ReadonlyArray<{ id: string; label?: string }>;
+  readonly devices: ReadonlyArray<{ id: string; label?: string; fingerprint?: string }>;
   readonly numbers: ReadonlyArray<{ id: string; number: string; verified: boolean }>;
   readonly emailFallback: boolean;
   readonly fallbackDelayMinutes: number;
@@ -106,6 +112,7 @@ export interface NotificationsActions {
   // `session.userId`, never a client value). READ-ONLY.
   load(session: Session): Promise<NotificationsData>;
   registerPushDevice(session: Session, input: RegisterPushDeviceInput): Promise<ActionResult>;
+  removePushDevice(session: Session, input: { id: string }): Promise<ActionResult>;
   addMobileNumber(session: Session, input: { number: string }): Promise<ActionResult>;
   verifyMobileNumber(session: Session, input: { id: string; code: string }): Promise<ActionResult>;
   saveNotificationPrefs(
@@ -160,6 +167,25 @@ const uuidSchema = z.uuid();
 // at the boundary with a 4xx, while a well-formed but wrong code is a domain refusal.
 const codeSchema = z.string().regex(/^\d{6}$/);
 
+// A device's plain label: the day and time it was registered (Australian English, in the
+// AEST/AEDT zone the product serves), e.g. "Registered 15 Nov 2026, 11:00 pm".
+function deviceLabel(createdAt: Date): string {
+  const when = createdAt.toLocaleString("en-AU", {
+    timeZone: "Australia/Sydney",
+    day: "numeric",
+    month: "short",
+    year: "numeric",
+    hour: "numeric",
+    minute: "2-digit",
+  });
+  return `Registered ${when}`;
+}
+
+// The one-way fingerprint of a push endpoint (matches the browser's endpointFingerprint).
+function endpointFingerprint(endpoint: string): string {
+  return createHash("sha256").update(endpoint).digest("hex");
+}
+
 export function createNotificationsActions(deps: NotificationsActionsDeps): NotificationsActions {
   const { db, clock, random, hmacKey, keyWrapper, senders } = deps;
 
@@ -185,7 +211,11 @@ export function createNotificationsActions(deps: NotificationsActionsDeps): Noti
     const numbers = await listMobileNumbers(db, session.userId);
     const prefs = await getNotificationPrefs(db, session.userId);
     return {
-      devices: subscriptions.map((subscription) => ({ id: subscription.id })),
+      devices: subscriptions.map((subscription) => ({
+        id: subscription.id,
+        label: deviceLabel(subscription.createdAt),
+        fingerprint: endpointFingerprint(subscription.endpoint),
+      })),
       numbers: numbers.map((number) => ({
         id: number.id,
         number: number.number,
@@ -206,6 +236,13 @@ export function createNotificationsActions(deps: NotificationsActionsDeps): Noti
   ): Promise<ActionResult> {
     const parsed = parseParams(registerPushSchema, input);
     const dek = await dataKeyFor(session.userId);
+    // The browser reuses its existing subscription, so registering again from the same
+    // device hands back an endpoint already stored: keep the one row (a duplicate would
+    // push every approval to that device twice).
+    const existing = await listSubscriptions(db, session.userId, dek, clock);
+    if (existing.some((device) => device.endpoint === parsed.endpoint)) {
+      return { ok: true };
+    }
     await registerSubscription(
       db,
       {
@@ -218,6 +255,15 @@ export function createNotificationsActions(deps: NotificationsActionsDeps): Noti
       clock,
     );
     return { ok: true };
+  }
+
+  // Remove one of the session person's OWN devices (a lost phone, an old browser) so
+  // approval pushes stop going to it. The id is validated at the boundary (a 4xx before
+  // any query) and the delete is member-scoped: another person's id matches nothing.
+  async function removePushDevice(session: Session, input: { id: string }): Promise<ActionResult> {
+    const id = parseParams(uuidSchema, input.id);
+    const removed = await removeSubscription(db, { userId: session.userId, id });
+    return removed ? { ok: true } : { ok: false, reason: "not_found" };
   }
 
   // Add an UNVERIFIED mobile number for the session person. Validate the number at the
@@ -290,6 +336,7 @@ export function createNotificationsActions(deps: NotificationsActionsDeps): Noti
   return {
     load,
     registerPushDevice,
+    removePushDevice,
     addMobileNumber,
     verifyMobileNumber,
     saveNotificationPrefs,

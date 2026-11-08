@@ -699,3 +699,40 @@ test("the 'Filters' disclosure is open when a filter is set and closed when none
     "with a filter set (a search query) the 'Filters' disclosure is open so the active filter is visible",
   );
 });
+
+// =====================================================================================
+// Review fix G11 — applied filters are visible, and re-applying keeps them.
+// =====================================================================================
+
+test("applied filters pre-select their controls, open the panel and are summarised with a Clear link", () => {
+  const markup = renderToStaticMarkup(
+    <ActivityView
+      entries={[]}
+      filterOptions={{ agents: ["agent-claude", "agent-gpt"], services: ["gmail"], kinds: [], outcomes: [] }}
+      query=""
+      integrity={null}
+      activeFilters={{ agent: "agent-claude", from: "2026-03-01" }}
+    />,
+  );
+  assert.match(markup, /<option value="agent-claude" selected="">agent-claude<\/option>/);
+  assert.match(markup, /<option value="agent-gpt">/);
+  assert.match(markup, /<input[^>]*name="from"[^>]*value="2026-03-01"|<input[^>]*value="2026-03-01"[^>]*name="from"/);
+  assert.match(markup, /<details[^>]*\sopen=""/, "the Filters panel is open when a filter is applied");
+  const text = markup.replace(/<[^>]*>/g, " ").replace(/\s+/g, " ");
+  assert.match(text, /Filtered by/);
+  assert.match(text, /agent-claude/);
+  assert.match(markup, /<a\b[^>]*href="\/activity"[^>]*>[\s\S]*?Clear/);
+});
+
+test("with no filters applied there is no summary and the panel stays collapsed", () => {
+  const markup = renderToStaticMarkup(
+    <ActivityView
+      entries={[]}
+      filterOptions={{ agents: [], services: [], kinds: [], outcomes: [] }}
+      query=""
+      integrity={null}
+    />,
+  );
+  assert.ok(!/Filtered by/.test(markup));
+  assert.ok(!/<details[^>]*\sopen=""/.test(markup));
+});

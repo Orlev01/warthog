@@ -8,9 +8,14 @@ import { getServerDb } from "@/server/db/server";
 import { verifySession } from "@/server/auth/session";
 import { selectKeyWrapper } from "@/server/crypto/key-wrapper";
 import { systemClock } from "@/server/seams/clock";
+import { HttpError } from "@/server/http/validate";
 import { createCardsActions } from "./actions";
 import { CardsView } from "@/components/vault/cards-view";
 import type { CardSubmission } from "@/components/vault/cards-view";
+import type { Metadata } from "next";
+
+// The page title (review fix G8, WCAG 2.4.2): "%s · Warthog" via the root template.
+export const metadata: Metadata = { title: "Cards" };
 
 // E11-S16 — Vault cards page (the thin protected-page loader over the tested
 // `createCardsActions` seam, `./actions`). It reads the signed-in session from the
@@ -78,11 +83,45 @@ export default async function CardsPage() {
     return result;
   }
 
+  // Remove one of the session person's own cards (review fix G12 — Remove used to be a
+  // dead button). Re-resolves the session per request like addCard; the seam validates the
+  // id and scopes the delete to the session person; a boundary 4xx comes back as a plain
+  // refusal rather than a crash.
+  async function removeCard(input: { cardId: string }): Promise<{ ok: boolean; reason?: string }> {
+    "use server";
+    const requestToken = (await cookies()).get(SESSION_COOKIE)?.value ?? null;
+    const requestConfig = loadConfig();
+    const requestDb = await getServerDb();
+    const requestSession = requestToken
+      ? await verifySession(requestDb, requestToken, { clock: systemClock })
+      : null;
+    if (!requestSession) {
+      return { ok: false, reason: "unauthenticated" };
+    }
+    const requestKeyWrapper = selectKeyWrapper({
+      nodeEnv: requestConfig.nodeEnv,
+      localKek: requestConfig.devKek,
+    });
+    let result: { ok: boolean; reason?: string };
+    try {
+      result = await createCardsActions({ db: requestDb, keyWrapper: requestKeyWrapper }).removeCard(
+        requestSession,
+        input,
+      );
+    } catch (error) {
+      if (error instanceof HttpError) return { ok: false, reason: "invalid_request" };
+      throw error;
+    }
+    if (result.ok) revalidatePath("/vault/cards");
+    return result;
+  }
+
   return (
     <CardsView
       cards={data.cards}
       billingAddresses={data.billingAddresses}
       addCard={addCard}
+      removeCard={removeCard}
     />
   );
 }

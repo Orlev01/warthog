@@ -846,3 +846,104 @@ test("no ambient env secret leaks into any stored row or the loaded screen; the 
     else process.env.DATABASE_URL = prevDbUrl;
   }
 });
+
+// =====================================================================================
+// Review fix G1 — an existing low-tier detail can be EDITED (its value re-encrypted under
+// the owner's DEK, and a postal address's moving-on date set, kept or cleared in the same
+// save). Before this, the "About you" fields looked editable but every change was thrown
+// away: there was no update action at all.
+// =====================================================================================
+
+const updateInput = (o: Record<string, unknown>): Parameters<Actions["updateLowTierField"]>[1] =>
+  o as unknown as Parameters<Actions["updateLowTierField"]>[1];
+
+test("updateLowTierField re-saves the owner's value (decrypting to the new text) and sets, keeps or clears the moving-on date", async () => {
+  const db = await freshDb();
+  const keyWrapper = makeKeyWrapper();
+  try {
+    const { userId, dek } = await makeUserWithDek(db, keyWrapper, "update-own");
+    const actions = makeActions(db, keyWrapper);
+    const seeded = await saveIdentityField(
+      db,
+      { userId, kind: "postal_address", value: "1 Old Rd, Hobart" },
+      dek,
+    );
+
+    const changed = await actions.updateLowTierField(
+      sessionFor(userId),
+      updateInput({ fieldId: seeded.id, value: "9 New St, Darwin", movingOn: "2027-04-02" }),
+    );
+    assert.deepEqual(changed, { ok: true }, "the owner's edit succeeds");
+    let field = (await listIdentityFields(db, userId, dek)).find((f) => f.id === seeded.id);
+    assert.equal(field?.value, "9 New St, Darwin", "the stored value decrypts to the edited text");
+    assert.equal(String(field?.movingOn).slice(0, 10), "2027-04-02", "the moving-on date is stored");
+
+    // Omitting movingOn keeps the stored date; null clears it.
+    await actions.updateLowTierField(sessionFor(userId), updateInput({ fieldId: seeded.id, value: "9 New St, Darwin NT" }));
+    field = (await listIdentityFields(db, userId, dek)).find((f) => f.id === seeded.id);
+    assert.equal(field?.value, "9 New St, Darwin NT");
+    assert.equal(String(field?.movingOn).slice(0, 10), "2027-04-02", "an omitted moving-on date is left as it was");
+
+    await actions.updateLowTierField(
+      sessionFor(userId),
+      updateInput({ fieldId: seeded.id, value: "9 New St, Darwin NT", movingOn: null }),
+    );
+    field = (await listIdentityFields(db, userId, dek)).find((f) => f.id === seeded.id);
+    assert.equal(field?.movingOn, null, "a null moving-on date clears it");
+  } finally {
+    await db.close();
+  }
+});
+
+test("updateLowTierField cannot change another person's detail: not_found, and their value is untouched", async () => {
+  const db = await freshDb();
+  const keyWrapper = makeKeyWrapper();
+  try {
+    const alice = await makeUserWithDek(db, keyWrapper, "update-victim");
+    const bob = await makeUserWithDek(db, keyWrapper, "update-attacker");
+    const actions = makeActions(db, keyWrapper);
+    const alicesName = await saveIdentityField(
+      db,
+      { userId: alice.userId, kind: "name", value: "Alice Alpha" },
+      alice.dek,
+    );
+
+    const result = await actions.updateLowTierField(
+      sessionFor(bob.userId),
+      updateInput({ fieldId: alicesName.id, value: "Hijacked" }),
+    );
+    assert.deepEqual(result, { ok: false, reason: "not_found" });
+    const field = (await listIdentityFields(db, alice.userId, alice.dek)).find((f) => f.id === alicesName.id);
+    assert.equal(field?.value, "Alice Alpha", "Alice's value still decrypts under her own key, unchanged");
+  } finally {
+    await db.close();
+  }
+});
+
+test("updateLowTierField rejects a malformed id, an empty or oversized value and a non-date with a 4xx before any query", async () => {
+  const db = await freshDb();
+  const keyWrapper = makeKeyWrapper();
+  try {
+    const { userId, dek } = await makeUserWithDek(db, keyWrapper, "update-bad");
+    const actions = makeActions(db, keyWrapper);
+    const seeded = await saveIdentityField(db, { userId, kind: "name", value: "Ada Banks" }, dek);
+    const session = sessionFor(userId);
+
+    await assertRejects4xx("non-uuid id", () =>
+      actions.updateLowTierField(session, updateInput({ fieldId: "42", value: "x" })),
+    );
+    await assertRejects4xx("empty value", () =>
+      actions.updateLowTierField(session, updateInput({ fieldId: seeded.id, value: "" })),
+    );
+    await assertRejects4xx("oversized value", () =>
+      actions.updateLowTierField(session, updateInput({ fieldId: seeded.id, value: "x".repeat(5000) })),
+    );
+    await assertRejects4xx("banana date", () =>
+      actions.updateLowTierField(session, updateInput({ fieldId: seeded.id, value: "Ada", movingOn: "banana" })),
+    );
+    const field = (await listIdentityFields(db, userId, dek)).find((f) => f.id === seeded.id);
+    assert.equal(field?.value, "Ada Banks", "nothing was changed by a rejected edit");
+  } finally {
+    await db.close();
+  }
+});

@@ -93,8 +93,10 @@ const BTN_PRIMARY = `${BTN_BASE} bg-accent text-accent-fg hover:bg-accent-hover`
 const BTN_SECONDARY = `${BTN_BASE} border border-line bg-surface text-fg hover:bg-surface-muted`;
 const BTN_DISABLED = `${BTN_BASE} border border-line bg-surface text-fg-muted opacity-50`;
 
-const TAB_ACTIVE = `${BTN_BASE} border border-line bg-surface-muted text-fg`;
-const TAB_INACTIVE = `${BTN_BASE} text-fg-muted hover:bg-surface-muted`;
+// The selected tab is marked by more than its fill (review fix G10, WCAG 1.4.1): a visible
+// outline on the form-control token and heavier text.
+const TAB_ACTIVE = `${BTN_BASE} border border-line-input bg-surface-muted font-semibold text-fg`;
+const TAB_INACTIVE = `${BTN_BASE} border border-transparent text-fg-muted hover:bg-surface-muted`;
 
 const SUMMARY_CLASS =
   "inline-flex w-fit cursor-pointer items-center gap-2 text-sm font-medium text-fg";
@@ -475,6 +477,17 @@ function ChecklistPanel({
 
 // ─── the view ────────────────────────────────────────────────────────────────────────
 
+// The roving-focus step for the tab list (WAI-ARIA tabs pattern): Left/Right move to the
+// previous/next tab, wrapping at the ends; Home/End jump to the first/last. Any other key
+// returns null (left to the browser).
+export function nextTabIndex(current: number, key: string, count: number): number | null {
+  if (key === "ArrowRight") return (current + 1) % count;
+  if (key === "ArrowLeft") return (current - 1 + count) % count;
+  if (key === "Home") return 0;
+  if (key === "End") return count - 1;
+  return null;
+}
+
 const TABS: ReadonlyArray<{ key: LifeAdminTab; label: string }> = [
   { key: "subscriptions", label: "Subscriptions" },
   { key: "receipts", label: "Receipts & warranties" },
@@ -495,64 +508,96 @@ export function LifeAdminView({
   handToAgentAction,
 }: LifeAdminViewProps) {
   const [active, setActive] = React.useState<LifeAdminTab>(initialTab ?? "subscriptions");
+  // The section switcher is a WAI-ARIA tab list (review fix G10): role=tab buttons in a
+  // labelled tablist, a roving tabindex with arrow-key movement, and one tabpanel labelled
+  // by the selected tab (aria-selected on a plain button is never announced).
+  const baseId = React.useId();
+  const tabRefs = React.useRef<Array<HTMLButtonElement | null>>([]);
+  const tabId = (key: LifeAdminTab) => `${baseId}-tab-${key}`;
+  const panelId = `${baseId}-panel`;
   return (
     <div className="mx-auto flex max-w-3xl flex-col gap-6 px-4 py-8 sm:px-6">
       <h1 className="text-2xl font-semibold tracking-tight text-fg">Life admin</h1>
 
-      <div className="flex flex-wrap gap-2">
-        {TABS.map((tab) => (
-          <button
-            key={tab.key}
-            type="button"
-            aria-selected={active === tab.key}
-            className={active === tab.key ? TAB_ACTIVE : TAB_INACTIVE}
-            onClick={() => setActive(tab.key)}
-          >
-            {tab.label}
-          </button>
-        ))}
+      <div role="tablist" aria-label="Life admin sections" className="flex flex-wrap gap-2">
+        {TABS.map((tab, index) => {
+          const selected = active === tab.key;
+          return (
+            <button
+              key={tab.key}
+              ref={(element) => {
+                tabRefs.current[index] = element;
+              }}
+              type="button"
+              role="tab"
+              id={tabId(tab.key)}
+              aria-selected={selected}
+              aria-controls={panelId}
+              tabIndex={selected ? 0 : -1}
+              className={selected ? TAB_ACTIVE : TAB_INACTIVE}
+              onClick={() => setActive(tab.key)}
+              onKeyDown={(event) => {
+                const next = nextTabIndex(index, event.key, TABS.length);
+                if (next === null) return;
+                event.preventDefault();
+                setActive(TABS[next]!.key);
+                tabRefs.current[next]?.focus();
+              }}
+            >
+              {tab.label}
+            </button>
+          );
+        })}
       </div>
 
-      {active === "subscriptions" ? (
-        <RecordPanel
-          kind="subscription"
-          heading="Subscriptions"
-          records={subscriptions}
-          addRecordAction={addRecordAction}
-          editRecordAction={editRecordAction}
-          attachFileAction={attachFileAction}
-        />
-      ) : null}
+      <div
+        role="tabpanel"
+        id={panelId}
+        aria-labelledby={tabId(active)}
+        tabIndex={0}
+        className="flex flex-col gap-6"
+      >
+        {active === "subscriptions" ? (
+          <RecordPanel
+            kind="subscription"
+            heading="Subscriptions"
+            records={subscriptions}
+            addRecordAction={addRecordAction}
+            editRecordAction={editRecordAction}
+            attachFileAction={attachFileAction}
+          />
+        ) : null}
 
-      {active === "receipts" ? (
-        <RecordPanel
-          kind="receipt_warranty"
-          heading="Receipts & warranties"
-          records={receipts}
-          addRecordAction={addRecordAction}
-          editRecordAction={editRecordAction}
-          attachFileAction={attachFileAction}
-        />
-      ) : null}
+        {active === "receipts" ? (
+          <RecordPanel
+            kind="receipt_warranty"
+            heading="Receipts & warranties"
+            records={receipts}
+            addRecordAction={addRecordAction}
+            editRecordAction={editRecordAction}
+            attachFileAction={attachFileAction}
+          />
+        ) : null}
 
-      {active === "renewals" ? (
-        <RecordPanel
-          kind="renewal_appointment"
-          heading="Renewals & appointments"
-          records={renewals}
-          addRecordAction={addRecordAction}
-          editRecordAction={editRecordAction}
-          attachFileAction={attachFileAction}
-        />
-      ) : null}
+        {active === "renewals" ? (
+          <RecordPanel
+            kind="renewal_appointment"
+            heading="Renewals & appointments"
+            records={renewals}
+            addRecordAction={addRecordAction}
+            editRecordAction={editRecordAction}
+            attachFileAction={attachFileAction}
+          />
+        ) : null}
 
-      {active === "checklist" ? (
-        <ChecklistPanel
-          checklist={checklist}
-          tickOffAction={tickOffAction}
-          handToAgentAction={handToAgentAction}
-        />
-      ) : null}
+        {active === "checklist" ? (
+          <ChecklistPanel
+            checklist={checklist}
+            tickOffAction={tickOffAction}
+            handToAgentAction={handToAgentAction}
+          />
+        ) : null}
+      </div>
     </div>
   );
 }

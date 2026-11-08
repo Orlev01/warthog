@@ -116,6 +116,18 @@ const SETUP_FAILED_COPY =
   "We couldn't unlock your vault on this device, so your card wasn't saved. Check your passkey and try again.";
 const SAVE_FAILED_COPY = "We couldn't save your card just now. Please try again.";
 
+// Review fix G12 — the card is checked on the device before anything leaves it (a repeat
+// Confirm after a save, with the number already cleared, stores nothing), and a vault
+// passphrase must be long enough to resist offline guessing: the server holds its salt
+// and the passphrase-wrapped vault key, so a short one would let a database holder brute
+// force the vault.
+const MIN_PASSPHRASE_LENGTH = 12;
+const NUMBER_COPY = "Type the card number (12 to 19 digits) before you confirm.";
+const EXPIRY_COPY = "Check the expiry: a month from 1 to 12 and a four-digit year.";
+const NICKNAME_COPY = "Give this card a name so you can tell it apart, then confirm.";
+const BILLING_COPY = "Choose a billing address for this card, then confirm.";
+const PASSPHRASE_COPY = `Choose a vault passphrase of at least ${MIN_PASSPHRASE_LENGTH} characters, or untick the passphrase option.`;
+
 // The server's non-secret unlock material for a method (design §4.2 getUnlockMaterial):
 // the wrapped VK envelope (null when none is set), the method's public params and, for a
 // passkey, the assertion options whose PRF extension is eval'd with the person's salt.
@@ -151,6 +163,21 @@ function brandFromNumber(number: string): string {
   if (/^3[47]/.test(digits)) return "American Express";
   if (/^6(?:011|5)/.test(digits)) return "Discover";
   return "Card";
+}
+
+// The first problem with the person's entries, in plain words, or null when the card can
+// be sealed and saved.
+function entryProblem(state: AddCardState): string | null {
+  const digits = state.number.replace(/[\s-]/g, "");
+  if (!/^\d{12,19}$/.test(digits)) return NUMBER_COPY;
+  const month = Number(state.expiryMonth);
+  if (!Number.isInteger(month) || month < 1 || month > 12 || !/^\d{4}$/.test(state.expiryYear.trim())) {
+    return EXPIRY_COPY;
+  }
+  if (state.nickname.trim().length === 0) return NICKNAME_COPY;
+  if (state.billingAddressId.length === 0) return BILLING_COPY;
+  if (state.usePassphrase && state.passphrase.length < MIN_PASSPHRASE_LENGTH) return PASSPHRASE_COPY;
+  return null;
 }
 
 export function createAddCardFlow(deps: AddCardFlowDeps): AddCardController {
@@ -209,12 +236,28 @@ export function createAddCardFlow(deps: AddCardFlowDeps): AddCardController {
   // key is created, wrapped under the passkey PRF (and, when chosen, under the vault
   // passphrase too) and saved; on later use the existing envelope is unwrapped — no new
   // key, no save. Either way the passkey ceremony runs so its PRF is available.
+  // Also wrap `vaultKey` under the person's chosen passphrase and save that unlock method,
+  // so "Use your vault passphrase" opens the SAME vault the passkey does.
+  async function savePassphraseMethod(vaultKey: Uint8Array<ArrayBuffer>): Promise<void> {
+    const salt = crypto.getRandomValues(new Uint8Array(16));
+    const passphraseKey = await deriveWrappingKeyFromPassphrase(state.passphrase, salt);
+    await saveUnlockMethod({
+      method: "passphrase",
+      wrapped: await wrapVaultKey(passphraseKey, vaultKey),
+      params: { salt: toBase64(salt) },
+    });
+  }
+
   async function ensureVaultKey(): Promise<Uint8Array<ArrayBuffer>> {
     const material = await fetchPasskeyMaterial();
     const wrappingKey = await wrappingKeyFromPasskey(material.options);
 
     if (material.wrapped != null) {
-      return unwrapVaultKey(wrappingKey, material.wrapped);
+      const vaultKey = await unwrapVaultKey(wrappingKey, material.wrapped);
+      // The passphrase option used to be silently ignored once a vault existed (review
+      // fix G12): honour it by wrapping the EXISTING vault key.
+      if (state.usePassphrase) await savePassphraseMethod(vaultKey);
+      return vaultKey;
     }
 
     // First use on this account: create the key and save it wrapped under the passkey.
@@ -222,21 +265,18 @@ export function createAddCardFlow(deps: AddCardFlowDeps): AddCardController {
     await saveUnlockMethod({ method: "passkey_prf", wrapped: await wrapVaultKey(wrappingKey, vaultKey) });
 
     // Optionally also wrap it under a chosen vault passphrase, with a fresh public salt.
-    if (state.usePassphrase && state.passphrase.length > 0) {
-      const salt = crypto.getRandomValues(new Uint8Array(16));
-      const passphraseKey = await deriveWrappingKeyFromPassphrase(state.passphrase, salt);
-      await saveUnlockMethod({
-        method: "passphrase",
-        wrapped: await wrapVaultKey(passphraseKey, vaultKey),
-        params: { salt: toBase64(salt) },
-      });
-    }
+    if (state.usePassphrase) await savePassphraseMethod(vaultKey);
 
     return vaultKey;
   }
 
   async function submit(): Promise<void> {
     if (state.status === "working") return; // guard against a double confirm
+    const problem = entryProblem(state);
+    if (problem) {
+      set({ status: "error", error: problem });
+      return;
+    }
     set({ status: "working", error: undefined });
 
     // 1. Set up / unlock the vault key, then seal the number — all on this device. A
@@ -269,7 +309,18 @@ export function createAddCardFlow(deps: AddCardFlowDeps): AddCardController {
     }
 
     if (result.ok) {
-      set({ status: "added", error: undefined, passphrase: "" });
+      // Clear the card from the form the moment it is saved: the full number must not
+      // stay on screen, and a repeat Confirm then has nothing to store twice.
+      set({
+        status: "added",
+        error: undefined,
+        number: "",
+        nickname: "",
+        expiryMonth: "",
+        expiryYear: "",
+        usePassphrase: false,
+        passphrase: "",
+      });
       deps.onAdded?.();
     } else {
       set({ status: "error", error: SAVE_FAILED_COPY, passphrase: "" });
@@ -449,8 +500,14 @@ export function AddCardFlow(props: AddCardFlowProps): React.ReactElement {
             autoComplete="off"
             aria-label="Vault passphrase"
             value={state.passphrase}
+            minLength={MIN_PASSPHRASE_LENGTH}
             onChange={(event) => flow.setPassphrase(event.target.value)}
           />
+        ) : null}
+        {state.usePassphrase ? (
+          <p className="text-sm text-fg-muted">
+            At least {MIN_PASSPHRASE_LENGTH} characters. A few unrelated words make a strong one.
+          </p>
         ) : null}
       </div>
 
@@ -465,12 +522,23 @@ export function AddCardFlow(props: AddCardFlowProps): React.ReactElement {
         </p>
       ) : null}
 
-      <SensitiveNotice
-        explanation={SEAL_EXPLAINER}
-        onConfirm={() => {
-          void flow.submit();
-        }}
-      />
+      {props.billingAddresses.length === 0 ? (
+        // No dead Confirm: a card needs a billing address, so say why and where to add one.
+        <p className="text-sm text-fg">
+          A card needs a billing address, and you haven&apos;t saved a postal address yet.{" "}
+          <a href="/vault" className="font-medium text-accent underline underline-offset-2">
+            Add a postal address in About you
+          </a>
+          , then come back to add your card.
+        </p>
+      ) : (
+        <SensitiveNotice
+          explanation={SEAL_EXPLAINER}
+          onConfirm={() => {
+            void flow.submit();
+          }}
+        />
+      )}
     </Card>
   );
 }
