@@ -1,14 +1,13 @@
 "use client";
 
 import * as React from "react";
-import { startAuthentication } from "@simplewebauthn/browser";
-import type { PublicKeyCredentialRequestOptionsJSON } from "@simplewebauthn/browser";
 import { KeyRound } from "lucide-react";
 
 import { Button } from "@/components/ui/button";
 import { Card } from "@/components/ui/card";
 import { createConfirmItsYou } from "@/components/ui/confirm-its-you";
 import { createDeviceVault, type DeviceVault, type PasskeyAssertion } from "@/client/vault/device-vault";
+import { startVaultAuthentication } from "@/client/vault/prf-ceremony";
 import {
   createVaultKeyStep,
   PHRASE_NOT_SAVED_COPY,
@@ -139,9 +138,7 @@ export function createRecoveryPhraseSettings(deps: RecoveryPhraseSettingsDeps): 
 const defaultFetch: typeof fetch = (...args) => globalThis.fetch(...args);
 
 const defaultStartAuthentication = async (opts: { optionsJSON: unknown }): Promise<PasskeyAssertion> =>
-  (await startAuthentication({
-    optionsJSON: opts.optionsJSON as PublicKeyCredentialRequestOptionsJSON,
-  })) as unknown as PasskeyAssertion;
+  startVaultAuthentication(opts.optionsJSON);
 
 export interface RecoveryPhraseSettingsProps {
   // Whether the person has a vault recovery phrase, and any vault at all.

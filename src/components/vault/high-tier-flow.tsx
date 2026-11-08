@@ -1,8 +1,6 @@
 "use client";
 
 import * as React from "react";
-import { startAuthentication } from "@simplewebauthn/browser";
-import type { PublicKeyCredentialRequestOptionsJSON } from "@simplewebauthn/browser";
 import { ArrowUp, Plus } from "lucide-react";
 
 import { Button } from "@/components/ui/button";
@@ -11,6 +9,7 @@ import { Field } from "@/components/ui/field";
 import { SensitiveNotice } from "@/components/ui/sensitive-notice";
 import { createVaultKey } from "@/client/vault/key";
 import { createDeviceVault } from "@/client/vault/device-vault";
+import { startVaultAuthentication } from "@/client/vault/prf-ceremony";
 import { sealHighTierDetail, type HighTierFieldType } from "./identity-view";
 import {
   createVaultKeyStep,
@@ -297,10 +296,7 @@ const defaultFetch: typeof fetch = (...args) => globalThis.fetch(...args);
 // controller never inspects the options — it echoes the endpoint's verbatim).
 const defaultStartAuthentication = async (opts: {
   optionsJSON: unknown;
-}): Promise<PasskeyAssertion> =>
-  (await startAuthentication({
-    optionsJSON: opts.optionsJSON as PublicKeyCredentialRequestOptionsJSON,
-  })) as PasskeyAssertion;
+}): Promise<PasskeyAssertion> => startVaultAuthentication(opts.optionsJSON);
 
 // ─── copy (plain Australian English; no protocol jargon) ───────────────────────────────
 

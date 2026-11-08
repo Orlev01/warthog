@@ -1,7 +1,6 @@
 "use client";
 
 import * as React from "react";
-import { startAuthentication } from "@simplewebauthn/browser";
 import type { PublicKeyCredentialRequestOptionsJSON } from "@simplewebauthn/browser";
 import { ShieldAlert } from "lucide-react";
 
@@ -11,7 +10,8 @@ import { ConfirmItsYou } from "@/components/ui/confirm-its-you";
 import { unlockVault, type UnlockRequest } from "@/client/vault/unlock";
 import { decryptValue } from "@/client/vault/values";
 import { postRelease } from "@/client/vault/release";
-import { createDeviceVault, type PasskeyAssertion } from "@/client/vault/device-vault";
+import { createDeviceVault } from "@/client/vault/device-vault";
+import { startVaultAuthentication } from "@/client/vault/prf-ceremony";
 import { generateRecoveryPhrase } from "@/client/vault/recovery-phrase";
 import { RecoveryPhraseReveal } from "@/components/vault/vault-key-step";
 import {
@@ -372,10 +372,8 @@ async function defaultUnlockByPasskey(): Promise<UnlockRequest> {
   if (material.wrapped == null || material.options == null) {
     throw new Error("no passkey that can unlock your vault is set");
   }
-  const assertion = await startAuthentication({ optionsJSON: material.options });
-  const prf = (
-    assertion as { clientExtensionResults?: { prf?: { results?: { first?: string } } } }
-  ).clientExtensionResults?.prf?.results?.first;
+  const assertion = await startVaultAuthentication(material.options);
+  const prf = assertion.clientExtensionResults?.prf?.results?.first;
   if (typeof prf !== "string") {
     throw new Error("this passkey can't unlock your vault");
   }
@@ -400,10 +398,7 @@ const ADOPT_FAILED_NOTICE = "This passkey wasn't set up to unlock your vault. Yo
 async function defaultAfterRelease(unlockRequest: UnlockRequest): Promise<AfterRelease> {
   const vault = createDeviceVault({
     fetch: (...args) => globalThis.fetch(...args),
-    startAuthentication: async (opts) =>
-      (await startAuthentication({
-        optionsJSON: opts.optionsJSON as PublicKeyCredentialRequestOptionsJSON,
-      })) as unknown as PasskeyAssertion,
+    startAuthentication: (opts) => startVaultAuthentication(opts.optionsJSON),
   });
   // Most vaults already have a phrase: check first, so the vault key is only re-derived
   // when there is something to do with it.
