@@ -20,6 +20,10 @@ import {
 } from "./actions";
 import { IdentityView } from "@/components/vault/identity-view";
 import { PageContainer } from "@/components/shell/page-container";
+import type { Metadata } from "next";
+
+// The page title (review fix G8, WCAG 2.4.2): "%s · Warthog" via the root template.
+export const metadata: Metadata = { title: "About you" };
 
 // E11-S15 — Vault identity page (the thin protected-page loader over the tested
 // `createIdentityActions` seam, `./actions`). It reads the signed-in session from the

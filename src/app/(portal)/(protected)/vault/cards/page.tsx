@@ -11,6 +11,10 @@ import { systemClock } from "@/server/seams/clock";
 import { createCardsActions } from "./actions";
 import { CardsView } from "@/components/vault/cards-view";
 import type { CardSubmission } from "@/components/vault/cards-view";
+import type { Metadata } from "next";
+
+// The page title (review fix G8, WCAG 2.4.2): "%s · Warthog" via the root template.
+export const metadata: Metadata = { title: "Cards" };
 
 // E11-S16 — Vault cards page (the thin protected-page loader over the tested
 // `createCardsActions` seam, `./actions`). It reads the signed-in session from the

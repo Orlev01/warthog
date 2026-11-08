@@ -25,6 +25,10 @@ import {
 } from "./actions";
 import { noticeLocation, securityNotice, type SecurityNotice } from "./notices";
 import type { Db } from "../../../../../server/db/index";
+import type { Metadata } from "next";
+
+// The page title (review fix G8, WCAG 2.4.2): "%s · Warthog" via the root template.
+export const metadata: Metadata = { title: "Security" };
 
 // The shape of a WebAuthn attestation the client factor component posts back to
 // finishAddPasskey. Validated at this server-action boundary so a malformed body is

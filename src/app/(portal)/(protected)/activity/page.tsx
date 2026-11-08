@@ -18,6 +18,10 @@ import { systemClock } from "@/server/seams/clock";
 import type { Db } from "@/server/db/index";
 import { createActivityActions } from "./actions";
 import { noticeLocation, activityNotice, type ActivityNotice } from "./notices";
+import type { Metadata } from "next";
+
+// The page title (review fix G8, WCAG 2.4.2): "%s · Warthog" via the root template.
+export const metadata: Metadata = { title: "Activity" };
 
 // E08-S10 — Activity page (the thin protected-page loader + Dispute/Undo wiring).
 //

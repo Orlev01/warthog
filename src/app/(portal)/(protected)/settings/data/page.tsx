@@ -18,6 +18,10 @@ import { HttpError } from "@/server/http/validate";
 import type { DeletionExecutor } from "@/server/account/delete";
 import type { Db } from "@/server/db/index";
 import { createDataActions, DELETE_ACCOUNT_CONFIRMATION, type ActionResult } from "./actions";
+import type { Metadata } from "next";
+
+// The page title (review fix G8, WCAG 2.4.2): "%s · Warthog" via the root template.
+export const metadata: Metadata = { title: "Data & privacy" };
 
 // E16-S11 — Data & privacy page (the thin protected-page loader over the tested
 // `createDataActions` seam, `./actions`) wired to its controls.

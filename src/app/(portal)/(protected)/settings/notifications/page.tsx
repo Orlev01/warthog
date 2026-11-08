@@ -19,6 +19,10 @@ import {
   type ActionResult,
   type RegisterPushDeviceInput,
 } from "./actions";
+import type { Metadata } from "next";
+
+// The page title (review fix G8, WCAG 2.4.2): "%s · Warthog" via the root template.
+export const metadata: Metadata = { title: "Notifications" };
 
 // E12-S19 — Notification settings page (the thin protected-page loader over the tested
 // `createNotificationsActions` seam, `./actions`) wired to its controls.
