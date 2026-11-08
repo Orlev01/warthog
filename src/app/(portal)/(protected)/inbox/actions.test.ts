@@ -83,6 +83,7 @@ import { createAgent } from "../../../../server/db/agents";
 import { upsertPermissions } from "../../../../server/db/agent-permissions";
 import { createCheckApprovalTool } from "../../../../server/mcp/tools/check-approval";
 import { readActivity } from "../../../../server/activity/writer";
+import { createRule } from "../../../../server/db/rules";
 import { getApproval } from "../../../../server/db/approvals";
 import { getByApproval } from "../../../../server/db/held-requests";
 import { HttpError } from "../../../../server/http/validate";
@@ -902,5 +903,142 @@ test("each decision is recorded once in the person's activity feed, naming the a
     } finally {
       await db.close();
     }
+  }
+});
+
+// =====================================================================================
+// Review fix C6 — the inbox shows WHAT the agent wants. A card request used to reach the
+// person with no amount, no merchant, no sentence and no rule (the pipeline stored a
+// numeric amount and `recipients`, the inbox read text `amount` and singular
+// `recipient`). Now the pipeline stores a display-ready detail and the inbox renders
+// the exact lines: To, Amount (+ Converted with the rate's date), Merchant, Field,
+// Purpose — plus the plain sentence and the rule that triggered it.
+// =====================================================================================
+
+function line(view: { details: readonly { label: string; value: string }[] }, label: string): string | undefined {
+  return view.details.find((d) => d.label === label)?.value;
+}
+
+test("a card request reaches the inbox with its amount, merchant, sentence, reason and rule", async () => {
+  const db = await freshDb();
+  const keyWrapper = keyWrapperFor();
+  try {
+    const a = await arrangeHeld(
+      db,
+      keyWrapper,
+      "c6-card",
+      cardCall({ amount: 149.99, currency: "AUD", merchant: "JB Hi-Fi", reason: "new headphones" }),
+      { cardAccess: true, cardBudget: { amount: 500, currency: "AUD", period: "month" } },
+    );
+    const view = (await a.actions.load(await freshSession(db, a.userId))).pending[0]!;
+
+    assert.equal(line(view, "Amount"), "$149.99", "the exact amount, in its currency");
+    assert.equal(line(view, "Merchant"), "JB Hi-Fi", "the merchant");
+    assert.equal(view.sentence, "wants to use your card for $149.99 at JB Hi-Fi", "a plain sentence");
+    assert.equal(view.reason, "new headphones", "the agent's stated reason");
+    assert.ok(view.rule.length > 0, "the rule that triggered the approval");
+  } finally {
+    await db.close();
+  }
+});
+
+test("a foreign-currency card request shows the converted amount and the rate's date", async () => {
+  const db = await freshDb();
+  const keyWrapper = keyWrapperFor();
+  try {
+    const clock: Clock = fixedClock(NOW);
+    const { userId } = await makePerson(db, "c6-converted", keyWrapper);
+    await upsertPermissions(
+      db,
+      baseGrants(userId, CONN, { cardAccess: true, cardBudget: { amount: 500, currency: "AUD", period: "month" } }),
+    );
+    const agent = await createAgent(db, { userId, connectionId: CONN, displayName: "Claude", platform: "claude" }, clock);
+    const pipeline = createAgentCallPipeline({
+      db,
+      keyWrapper,
+      clock,
+      rateLimiter: createRateLimiter(clock),
+      recorder: createInMemoryRecorder({ clock }),
+      executeTool: spyExecutor().fn,
+      rate: { from: "USD", to: "AUD", rate: 1.525, date: "2026-11-14" },
+    });
+    expectPending(
+      await pipeline.handleAgentCall(connectionFor(userId, agent.id), cardCall({ amount: 100, currency: "USD", merchant: "Steam" })),
+    );
+    const actions = createInboxActions({ db, clock, keyWrapper, executeApprovedHold: pipeline.executeApprovedHold });
+    const view = (await actions.load(await freshSession(db, userId))).pending[0]!;
+
+    assert.match(line(view, "Amount") ?? "", /100\.00/, "the amount as the agent asked for it");
+    const converted = line(view, "Converted") ?? "";
+    assert.match(converted, /\$152\.50/, "the amount converted into the account currency");
+    assert.match(converted, /2026-11-14/, "with the reference rate's date");
+  } finally {
+    await db.close();
+  }
+});
+
+test("a rule-triggered held email shows who it goes to and the rule's own sentence", async () => {
+  const db = await freshDb();
+  const keyWrapper = keyWrapperFor();
+  try {
+    const clock: Clock = fixedClock(NOW);
+    const { userId, dek } = await makePerson(db, "c6-rule", keyWrapper);
+    // Changes are allowed without asking; only the rule asks.
+    await upsertPermissions(db, baseGrants(userId, CONN, { changeTools: "allow" }));
+    await createRule(
+      db,
+      {
+        userId,
+        kind: "ask_first",
+        scope: { type: "any_agent" },
+        action: { type: "send_message", channel: "email" },
+        condition: { type: "recipient_is", address: "manager@example.com" },
+      },
+      dek,
+    );
+    const agent = await createAgent(db, { userId, connectionId: CONN, displayName: "Claude", platform: "claude" }, clock);
+    const pipeline = createAgentCallPipeline({
+      db,
+      keyWrapper,
+      clock,
+      rateLimiter: createRateLimiter(clock),
+      recorder: createInMemoryRecorder({ clock }),
+      executeTool: spyExecutor().fn,
+    });
+    expectPending(
+      await pipeline.handleAgentCall(
+        connectionFor(userId, agent.id),
+        nonReleaseCall({ messageChannel: "email", recipients: ["manager@example.com", "hr@example.com"] }),
+      ),
+    );
+    const actions = createInboxActions({ db, clock, keyWrapper, executeApprovedHold: pipeline.executeApprovedHold });
+    const view = (await actions.load(await freshSession(db, userId))).pending[0]!;
+
+    assert.equal(line(view, "To"), "manager@example.com, hr@example.com", "every recipient");
+    assert.equal(view.rule, "Ask me before any agent sends email to manager@example.com", "the rule's exact sentence");
+    assert.equal(view.sentence, "wants to run send_email on gmail", "a plain sentence");
+  } finally {
+    await db.close();
+  }
+});
+
+test("a high-tier request shows the field and the stated purpose", async () => {
+  const db = await freshDb();
+  const keyWrapper = keyWrapperFor();
+  try {
+    const a = await arrangeHeld(
+      db,
+      keyWrapper,
+      "c6-high-tier",
+      highTierCall({ tool: "request_identity_detail", field: "passport", purpose: "the booking form" }),
+      { highTierAccess: true },
+    );
+    const view = (await a.actions.load(await freshSession(db, a.userId))).pending[0]!;
+
+    assert.equal(line(view, "Field"), "passport", "the field requested");
+    assert.equal(line(view, "Purpose"), "the booking form", "the stated purpose");
+    assert.equal(view.sentence, "wants to see your passport", "a plain sentence");
+  } finally {
+    await db.close();
   }
 });

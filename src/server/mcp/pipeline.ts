@@ -34,7 +34,9 @@ import {
   type PolicyContext,
 } from "../../domain/policy/evaluate";
 import type { Budget } from "../../domain/budget/budget";
-import type { ReferenceRate } from "../../domain/currency/convert";
+import { convert, type ReferenceRate } from "../../domain/currency/convert";
+import { ruleSentence } from "../../domain/rules/rules";
+import { requestSentence } from "../../domain/approvals/request-sentence";
 import { loadAgentContext, type AgentConnection, type AgentContext } from "./context";
 import { createApproval, getApproval } from "../db/approvals";
 import {
@@ -68,6 +70,10 @@ export interface AgentCall {
   readonly merchant?: string;
   readonly recipients?: string | readonly string[] | null;
   readonly messageChannel?: "email" | "chat" | "post";
+  // A high-tier request's field (e.g. "passport") and the agent's stated purpose,
+  // shown to the person on the approval (brief "High-tier release").
+  readonly field?: string;
+  readonly purpose?: string;
   readonly params?: unknown;
   readonly reason?: string;
 }
@@ -247,10 +253,47 @@ function toPolicyCall(call: AgentCall): PolicyCall {
   };
 }
 
-// The approval `detail` the person reviews in their inbox: a summary of WHAT the
-// held call will do (recipient / amount / field), stored DEK-encrypted by the
-// approvals store. The raw tool arguments live on the linked held request.
-function toApprovalDetail(call: AgentCall): Record<string, unknown> {
+// A foreign-currency card amount converted into the account currency with the SAME
+// reference rate the policy engine used (to the cent), with the rate's date — the
+// approval shows both amounts and the date (brief "Currency"), and the release counts
+// the converted amount against the budget. Null when no conversion applies.
+function convertedAmount(
+  call: AgentCall,
+  accountCurrency: string,
+  rate: ReferenceRate | null,
+): { amount: number; currency: string; rate: number; rateDate: string } | null {
+  if (call.request !== "card" || call.amount === undefined || call.currency === undefined) return null;
+  if (call.currency === accountCurrency) return null;
+  const converted = convert(call.amount, rate);
+  if (!converted.ok) return null;
+  return {
+    amount: Math.round(converted.converted.amount * 100) / 100,
+    currency: converted.converted.currency,
+    rate: converted.rate,
+    rateDate: converted.rateDate,
+  };
+}
+
+// The sentence of the rule that triggered the ask, or the engine's own plain reason
+// when no rule fired (e.g. "A card request needs your approval.").
+function triggeringRule(decision: { reason: string; ruleId?: string }, context: AgentContext): string {
+  const rule = decision.ruleId === undefined ? undefined : context.rules.find((r) => r.id === decision.ruleId);
+  return rule ? ruleSentence(rule) : decision.reason;
+}
+
+// The approval `detail` the person reviews in their inbox, display-ready: WHAT the
+// held call will do in plain words, the exact details (recipients / amount + currency
+// + any converted amount / merchant / field / purpose), the agent's reason and the
+// rule that triggered it — stored DEK-encrypted by the approvals store. The raw tool
+// arguments live on the linked held request; the raw numeric amount stays here too for
+// the release and budget paths.
+function toApprovalDetail(
+  call: AgentCall,
+  decision: { reason: string; ruleId?: string },
+  context: AgentContext,
+  rate: ReferenceRate | null,
+): Record<string, unknown> {
+  const converted = convertedAmount(call, context.accountCurrency, rate);
   return {
     tool: call.tool,
     connector: call.connector,
@@ -259,7 +302,12 @@ function toApprovalDetail(call: AgentCall): Record<string, unknown> {
     currency: call.currency,
     merchant: call.merchant,
     recipients: call.recipients,
+    field: call.field,
+    purpose: call.purpose,
     reason: call.reason,
+    sentence: requestSentence(call),
+    rule: triggeringRule(decision, context),
+    ...(converted ? { converted } : {}),
   };
 }
 
@@ -380,7 +428,7 @@ export function createAgentCallPipeline(deps: PipelineDeps): AgentCallPipeline {
         {
           userId: connection.userId,
           agentId: connection.agentId,
-          detail: toApprovalDetail(call),
+          detail: toApprovalDetail(call, decision, context, rate),
         },
         dek,
         clock,

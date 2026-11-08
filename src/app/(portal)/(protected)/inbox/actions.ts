@@ -61,6 +61,7 @@ import { getUserById } from "../../../../server/db/users";
 import { withTransaction } from "../../../../server/db/index";
 import { createDbRecorder } from "../../../../server/activity/writer";
 import { isReleaseRequest } from "../../../../domain/approvals/release-kind";
+import { formatMoney, highTierFieldLabel } from "../../../../domain/approvals/request-sentence";
 import type { Session } from "../../../../server/auth/session";
 import type { Clock } from "../../../../server/seams/clock";
 import type { KeyWrapper } from "../../../../server/crypto/key-wrapper";
@@ -173,16 +174,49 @@ function releaseKind(detail: Record<string, unknown>): ReleaseKind | null {
   return isReleaseRequest(detail.request) ? detail.request : null;
 }
 
-// The exact recipient / amount / field lines under a request, each present only when
-// the decrypted detail carries it (an omitted field drops out, exactly as it is stored).
+// The recipients a held message goes to, as one line: the pipeline stores
+// `recipients` (one address or a list); an older detail carried a single `recipient`.
+function recipientsText(detail: Record<string, unknown>): string {
+  const recipients = detail.recipients ?? detail.recipient;
+  if (Array.isArray(recipients)) return recipients.map(text).filter(Boolean).join(", ");
+  return text(recipients);
+}
+
+// The requested amount in its currency ("$149.99"); an older detail stored it as text.
+function amountText(detail: Record<string, unknown>): string {
+  if (typeof detail.amount === "number" && typeof detail.currency === "string") {
+    return formatMoney(detail.amount, detail.currency);
+  }
+  return text(detail.amount);
+}
+
+// A foreign amount converted into the account currency, with the reference rate's date
+// (brief "Currency": the approval shows both amounts and the rate's date).
+function convertedText(detail: Record<string, unknown>): string {
+  const converted = detail.converted as { amount?: unknown; currency?: unknown; rateDate?: unknown } | undefined;
+  if (!converted || typeof converted.amount !== "number" || typeof converted.currency !== "string") return "";
+  const date = text(converted.rateDate);
+  const money = formatMoney(converted.amount, converted.currency);
+  return date ? `${money} at the ${date} reference rate` : money;
+}
+
+// The exact lines under a request — recipients, amount (and its converted amount),
+// merchant, field and purpose — each present only when the decrypted detail carries
+// it (an omitted field drops out, exactly as it is stored).
 function detailLines(detail: Record<string, unknown>): RequestDetail[] {
   const lines: RequestDetail[] = [];
-  const recipient = text(detail.recipient);
-  if (recipient) lines.push({ label: "To", value: recipient });
-  const amount = text(detail.amount);
+  const recipients = recipientsText(detail);
+  if (recipients) lines.push({ label: "To", value: recipients });
+  const amount = amountText(detail);
   if (amount) lines.push({ label: "Amount", value: amount });
+  const converted = convertedText(detail);
+  if (converted) lines.push({ label: "Converted", value: converted });
+  const merchant = text(detail.merchant);
+  if (merchant) lines.push({ label: "Merchant", value: merchant });
   const field = text(detail.field);
-  if (field) lines.push({ label: "Field", value: field });
+  if (field) lines.push({ label: "Field", value: highTierFieldLabel(field) });
+  const purpose = text(detail.purpose);
+  if (purpose) lines.push({ label: "Purpose", value: purpose });
   return lines;
 }
 
