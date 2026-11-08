@@ -39,6 +39,13 @@ const nextConfig = {
   // The migration runner reads db/migrations from the app root at first use (getServerDb), so the
   // SQL files ship inside the standalone server.
   outputFileTracingIncludes: { "/**": ["./db/migrations/*.sql"] },
+  experimental: {
+    // Receipts (life-admin, up to 25 MiB) and data imports (settings/data, up to 16 MiB) upload
+    // through Server Actions, and Next's 1 MB default refuses them before the app's own limits
+    // and plain-words errors can apply. 26 MB leaves room for the largest file plus its
+    // multipart framing; Next still enforces it while streaming the body.
+    serverActions: { bodySizeLimit: "26mb" },
+  },
   async headers() {
     return [{ source: "/:path*", headers: SECURITY_HEADERS }];
   },

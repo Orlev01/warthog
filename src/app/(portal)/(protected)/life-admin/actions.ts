@@ -124,7 +124,7 @@ const MAX_FIELDS_CHARS = 100_000;
 const MAX_TITLE = 2000;
 const MAX_NOTE = 4000;
 const MAX_OFFSETS = 50;
-const MAX_FILE_BYTES = 25 * 1024 * 1024; // a receipt is small; a payload meant to exhaust memory is refused
+export const MAX_FILE_BYTES = 25 * 1024 * 1024; // a receipt is small; a payload meant to exhaust memory is refused
 const DEFAULT_STATUS = "active";
 
 const uuid = z.uuid();
