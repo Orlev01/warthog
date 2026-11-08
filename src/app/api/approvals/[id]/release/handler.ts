@@ -67,6 +67,7 @@ import { getUserById } from "../../../../../server/db/users";
 import { storeFingerprint } from "../../../../../server/db/release-fingerprints";
 import { withTransaction } from "../../../../../server/db/index";
 import { isReleaseRequest } from "../../../../../domain/approvals/release-kind";
+import { createDbRecorder } from "../../../../../server/activity/writer";
 import { fingerprint } from "../../../../../server/crypto/hmac";
 import { releaseStore, type ReleaseStore } from "../../../../../server/crypto/release-store";
 import { selectKeyWrapper, type KeyWrapper } from "../../../../../server/crypto/key-wrapper";
@@ -346,6 +347,25 @@ export function createReleaseHandler(
         }
 
         await storeFingerprint(tx, { userId, fingerprint: fingerprint(dek, value) }, clock);
+
+        // Record the release in the activity feed, in the same transaction (brief: the
+        // release is recorded without the value; a card's approved amount and merchant
+        // are recorded). Warthog writes it, redacted and DEK-encrypted — the value is
+        // never part of it.
+        const recorder = createDbRecorder({ db: tx, clock, dekFor: async () => dek });
+        await recorder.record({
+          userId,
+          kind: kind === "card" ? "card_release" : "identity_release",
+          source: "warthog",
+          agentId: agent.id,
+          tool: typeof approval.detail.tool === "string" ? approval.detail.tool : undefined,
+          outcome: "released",
+          merchant: spend?.merchant,
+          payload:
+            spend !== null
+              ? { approvalId: id, amount: spend.amount, currency: spend.currency }
+              : { approvalId: id, field: approval.detail.field, purpose: approval.detail.purpose },
+        });
         return null;
       });
       if (refused !== null) {

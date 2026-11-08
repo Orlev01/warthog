@@ -58,6 +58,8 @@ import {
 } from "../../../../server/approvals/inbox-read";
 import { getCardCiphertext, listCards } from "../../../../server/db/cards";
 import { getUserById } from "../../../../server/db/users";
+import { withTransaction } from "../../../../server/db/index";
+import { createDbRecorder } from "../../../../server/activity/writer";
 import { isReleaseRequest } from "../../../../domain/approvals/release-kind";
 import type { Session } from "../../../../server/auth/session";
 import type { Clock } from "../../../../server/seams/clock";
@@ -277,24 +279,47 @@ export function createInboxActions(deps: InboxActionsDeps): InboxActions {
     return approval ? { dek, approval } : null;
   }
 
-  // Persist one decision as the store's compare-and-swap. A decision that loses —
-  // the approval was decided first, or it is past its window (stored expired at once)
-  // — is refused in plain words rather than escaping as an error, and nothing runs.
+  // Persist one decision as the store's compare-and-swap AND record it in the person's
+  // activity feed ("every approval request and decision" — brief), in ONE transaction:
+  // the decision and its audit entry commit together. Warthog writes the entry itself
+  // (redacted, DEK-encrypted), attributed to the requesting agent. A decision that loses
+  // — the approval was decided first, or it is past its window (stored expired at once)
+  // — is refused in plain words rather than escaping as an error, records nothing, and
+  // nothing runs.
   async function decideOwn(
     session: Session,
     id: string,
     dek: Uint8Array,
     decision: Decision,
   ): Promise<{ ok: true; decided: StoredApproval } | { ok: false; reason: string }> {
-    try {
-      const decided = await decide(db, { userId: session.userId, id, decision }, dek, clock);
-      return { ok: true, decided };
-    } catch (error) {
-      if (error instanceof ApprovalAlreadyDecidedError) {
-        return { ok: false, reason: error.status === "expired" ? EXPIRED : ALREADY_DECIDED };
+    return withTransaction(db, async (tx) => {
+      let decided: StoredApproval;
+      try {
+        decided = await decide(tx, { userId: session.userId, id, decision }, dek, clock);
+      } catch (error) {
+        if (error instanceof ApprovalAlreadyDecidedError) {
+          return { ok: false, reason: error.status === "expired" ? EXPIRED : ALREADY_DECIDED };
+        }
+        throw error;
       }
-      throw error;
-    }
+      const recorder = createDbRecorder({ db: tx, clock, dekFor: async () => dek });
+      await recorder.record({
+        userId: session.userId,
+        kind: "approval_decision",
+        source: "warthog",
+        agentId: decided.agentId,
+        connectorId: text(decided.detail.connector) || undefined,
+        tool: text(decided.detail.tool) || undefined,
+        outcome: decided.status,
+        payload: {
+          approvalId: decided.id,
+          request: decided.detail.request,
+          sentence: text(decided.detail.sentence) || undefined,
+          question: decided.question,
+        },
+      });
+      return { ok: true, decided };
+    });
   }
 
   // Approve an approval. Validate the id shape at the boundary; load the one that

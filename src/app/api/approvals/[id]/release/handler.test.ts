@@ -86,6 +86,7 @@ import { createAgent } from "../../../../../server/db/agents";
 import { upsertPermissions } from "../../../../../server/db/agent-permissions";
 import { listReleasesForConnectionPeriod, periodKeyFor } from "../../../../../server/db/card-spend-ledger";
 import { createCollectReleaseTool } from "../../../../../server/mcp/tools/collect-release";
+import { readActivity } from "../../../../../server/activity/writer";
 import { createApproval, decide, getApproval } from "../../../../../server/db/approvals";
 import { lookupForUser } from "../../../../../server/db/release-fingerprints";
 import { fingerprint } from "../../../../../server/crypto/hmac";
@@ -1108,6 +1109,63 @@ test("a release with a missing or foreign Origin, or a non-JSON body, is refused
       assert.equal(store.collect(keyForApproval(userId, agentId)), undefined, `${label}: nothing is released`);
     }
     assert.equal((await getApproval(db, userId, approvalId, dek))!.status, "pending", "the approval is untouched");
+  } finally {
+    await db.close();
+  }
+});
+
+// =====================================================================================
+// Review fix C10 — the brief: "the release is recorded in the activity feed without the
+// value" (high-tier) and "the release, approved amount and merchant are recorded"
+// (card). A release used to leave no trace in the tamper-evident record.
+// =====================================================================================
+
+test("C10: a high-tier release is recorded in the activity feed, naming the agent and field, never the value", async () => {
+  const db = await freshDb();
+  try {
+    const keyWrapper = keyWrapperFor();
+    const { userId, dek } = await makePerson(db, "c10-identity", keyWrapper);
+    const agentId = await makeAgentFor(db, userId);
+    const approvalId = await makePendingApproval(db, { userId, agentId, dek });
+    const VALUE = `PA${randomUUID().replace(/-/g, "").slice(0, 10)}`;
+    const { handler } = makeHandler({ db, keyWrapper, session: sessionFor(userId, T0) });
+
+    assert2xx(await callPost(handler, releaseRequest(approvalId, { value: VALUE }), approvalId));
+
+    const entries = (await readActivity(db, userId, dek)).filter((e) => e.kind === "identity_release");
+    assert.equal(entries.length, 1, "exactly one release entry");
+    assert.equal(entries[0]!.source, "warthog", "Warthog writes the record");
+    assert.equal(entries[0]!.agentId, agentId, "attributed to the requesting agent");
+    assert.equal(entries[0]!.outcome, "released");
+    assert.match(JSON.stringify(entries[0]!.payload), /passport/, "it names the field released");
+    assert.ok(!JSON.stringify(await readActivity(db, userId, dek)).includes(VALUE), "the value is never in the feed");
+  } finally {
+    await db.close();
+  }
+});
+
+test("C10: a card release is recorded with its approved amount and merchant, never the card", async () => {
+  const db = await freshDb();
+  try {
+    const keyWrapper = keyWrapperFor();
+    const { userId, dek } = await makePerson(db, "c10-card", keyWrapper);
+    const agentId = await makeAgentFor(db, userId);
+    const approvalId = await makePendingApproval(db, { userId, agentId, dek, detail: CARD_DETAIL });
+    const { handler } = makeHandler({ db, keyWrapper, session: sessionFor(userId, T0) });
+
+    const card = JSON.stringify({ number: "4242424242424242", securityCode: "987" });
+    assert2xx(await callPost(handler, releaseRequest(approvalId, { value: card }), approvalId));
+
+    const entries = (await readActivity(db, userId, dek)).filter((e) => e.kind === "card_release");
+    assert.equal(entries.length, 1, "exactly one card release entry");
+    assert.equal(entries[0]!.merchant, "JB Hi-Fi", "with the merchant");
+    assert.equal(entries[0]!.agentId, agentId, "attributed to the requesting agent");
+    const payload = JSON.stringify(entries[0]!.payload);
+    assert.match(payload, /150/, "with the approved amount");
+    assert.match(payload, /AUD/, "and its currency");
+    const feed = JSON.stringify(await readActivity(db, userId, dek));
+    assert.ok(!feed.includes("4242424242424242"), "the card number is never in the feed");
+    assert.ok(!feed.includes(card) && !feed.includes("securityCode"), "nor the released detail or its security code");
   } finally {
     await db.close();
   }

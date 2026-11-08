@@ -82,6 +82,7 @@ import { createUser } from "../../../../server/db/users";
 import { createAgent } from "../../../../server/db/agents";
 import { upsertPermissions } from "../../../../server/db/agent-permissions";
 import { createCheckApprovalTool } from "../../../../server/mcp/tools/check-approval";
+import { readActivity } from "../../../../server/activity/writer";
 import { getApproval } from "../../../../server/db/approvals";
 import { getByApproval } from "../../../../server/db/held-requests";
 import { HttpError } from "../../../../server/http/validate";
@@ -859,5 +860,47 @@ test("approving a hold whose agent has since disconnected approves it but tells 
     assert.equal((await getByApproval(db, a.userId, a.approvalId, a.dek))!.status, "held", "the hold is left unrun");
   } finally {
     await db.close();
+  }
+});
+
+// =====================================================================================
+// Review fix C10 — the brief: the activity feed holds "every approval request and
+// decision". Deciding an approval used to write nothing to the tamper-evident record.
+// Each decision now writes ONE Warthog entry (kind approval_decision) naming the agent
+// and the outcome; a refused decision (lost race) writes nothing.
+// =====================================================================================
+
+test("each decision is recorded once in the person's activity feed, naming the agent and the outcome", async () => {
+  for (const [label, decideIt, outcome] of [
+    ["approve", (a: Awaited<ReturnType<typeof arrangeHeld>>, s: Session) => a.actions.approveApproval(s, a.approvalId), "approved"],
+    ["deny", (a: Awaited<ReturnType<typeof arrangeHeld>>, s: Session) => a.actions.denyApproval(s, a.approvalId), "denied"],
+    [
+      "ask",
+      (a: Awaited<ReturnType<typeof arrangeHeld>>, s: Session) => a.actions.askForMoreDetail(s, a.approvalId, "Which report?"),
+      "more_detail",
+    ],
+  ] as const) {
+    const db = await freshDb();
+    const keyWrapper = keyWrapperFor();
+    try {
+      const a = await arrangeHeld(db, keyWrapper, `c10-${label}`, nonReleaseCall());
+      const session = await freshSession(db, a.userId);
+      expectOk(await decideIt(a, session), label);
+
+      const decisions = (await readActivity(db, a.userId, a.dek)).filter((e) => e.kind === "approval_decision");
+      assert.equal(decisions.length, 1, `${label}: exactly one decision entry`);
+      const entry = decisions[0]!;
+      assert.equal(entry.source, "warthog", `${label}: Warthog writes the record`);
+      assert.equal(entry.agentId, a.agent.id, `${label}: attributed to the requesting agent`);
+      assert.equal(entry.outcome, outcome, `${label}: with the decision's outcome`);
+      assert.equal(entry.tool, "send_email", `${label}: naming the held tool`);
+
+      // Deciding again is refused and records nothing more.
+      await a.actions.denyApproval(session, a.approvalId);
+      const after = (await readActivity(db, a.userId, a.dek)).filter((e) => e.kind === "approval_decision");
+      assert.equal(after.length, 1, `${label}: a refused second decision records nothing`);
+    } finally {
+      await db.close();
+    }
   }
 });
