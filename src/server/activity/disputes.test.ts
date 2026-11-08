@@ -644,3 +644,38 @@ test("the dispute repo reads no process.env: a decoy env secret never appears in
     else process.env.WARTHOG_DECOY_SECRET = prev;
   }
 });
+
+// ===================================================================================
+// Two disputes filed at once on one entry both land (review finding: the per-entry
+// dispute_seq was max()+1 with no lock, so a double-submitted form or a second device got a
+// duplicate-key error instead of a stored dispute).
+// ===================================================================================
+
+test("two disputes filed at the same moment on one entry are both stored, as dispute 1 and 2", async () => {
+  const db = await freshDb();
+  try {
+    const userId = await makeUser(db, "dispute-race");
+    const dek = freshDek();
+    await buildChain(db, userId, dek, 1);
+    const repo = disputeRepo(db, { [userId]: dek });
+
+    const results = await Promise.allSettled([
+      repo.fileDispute({ userId, entrySeq: 1, note: "first device" }),
+      repo.fileDispute({ userId, entrySeq: 1, note: "second device" }),
+    ]);
+    assert.deepEqual(
+      results.filter((r) => r.status === "rejected").map((r) => String((r as PromiseRejectedResult).reason)),
+      [],
+      "neither filing failed",
+    );
+    const stored = await repo.readDisputes(userId, 1);
+    assert.deepEqual(stored.map((d) => d.note).sort(), ["first device", "second device"]);
+    const seqs = await db.query(
+      "SELECT dispute_seq FROM activity_disputes WHERE user_id = $1 AND entry_seq = 1 ORDER BY dispute_seq",
+      [userId],
+    );
+    assert.deepEqual(seqs.rows.map((r) => Number(r.dispute_seq)), [1, 2]);
+  } finally {
+    await db.close();
+  }
+});
