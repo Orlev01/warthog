@@ -20,6 +20,10 @@ const STEP_METHOD = new Map<string, keyof ResetHandler>([
   ["send-code", "sendCode"],
   ["request", "request"],
   ["cancel", "cancel"],
+  // Review fix W5 — "Reset finished? Set up a new passkey".
+  ["setup-send-code", "setupSendCode"],
+  ["setup-verify", "setupVerify"],
+  ["setup-finish", "setupFinish"],
 ]);
 
 export interface ResetStepSeams {

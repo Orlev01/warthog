@@ -153,8 +153,9 @@ export async function getRecoverDeps(
 
 // Build the ResetHandlerDeps bundle from validated config (review fix W3.3): the shared
 // db, the clock and random the email code uses, the HMAC key it is stored under, every
-// channel sender (the code email and the reset alerts on push, email and SMS) and the
-// origin every reset step checks the request against.
+// channel sender (the code email and the reset alerts on push, email and SMS), the
+// WebAuthn RP ID a new passkey registers under after a finished reset (review fix W5) and
+// the origin every reset step checks the request against.
 export async function getResetDeps(overrides: ComposeOverrides = {}): Promise<ResetHandlerDeps> {
   const config = resolveConfig(overrides);
   const db = await resolveDb(overrides);
@@ -164,6 +165,7 @@ export async function getResetDeps(overrides: ComposeOverrides = {}): Promise<Re
     random: systemRandom,
     hmacKey: config.hmacKey,
     senders: selectSenders(config, notConfiguredSenders()),
+    rpId: config.webauthnRpId,
     publicOrigin: publicOrigin(config),
   };
 }
