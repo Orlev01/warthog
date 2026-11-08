@@ -731,3 +731,104 @@ test("a high-tier release with several saved details offers a chooser", () => {
   const options = findAll(markup, "option").map((o) => visibleText(o.inner));
   assert.ok(options.includes("Passport") && options.includes("Driver licence"), "each saved detail can be chosen");
 });
+
+// ═══ Review fix W1 — the vault recovery phrase in the release flow ══════════════════════
+
+const RECOVERY_UNLOCK = (secret: string): UnlockRequest => ({
+  method: "recovery",
+  material: { wrapped: "v1:wrapped-under-phrase" },
+  secret,
+});
+
+function setupRecoveryFlow(opts: {
+  request: PendingRequestView;
+  savedCards?: readonly SavedCardView[];
+  afterRelease?: (request: UnlockRequest) => Promise<{ notice?: string; phrase?: { value: string; save: () => Promise<void> } }>;
+}) {
+  const releaseCalls: ReleaseInput[] = [];
+  const phraseCalls: string[] = [];
+  const afterCalls: UnlockRequest[] = [];
+  const flow = createReleaseApproveFlow({
+    request: opts.request,
+    savedCards: opts.savedCards,
+    releaseFlow: {
+      async release(input: ReleaseInput): Promise<ReleaseResult> {
+        releaseCalls.push(input);
+        return { ok: true };
+      },
+    },
+    unlockByPassphrase: async (p) => passphraseUnlock(p),
+    unlockByPasskey: async () => PASSKEY_UNLOCK,
+    unlockByRecoveryPhrase: async (phrase: string) => {
+      phraseCalls.push(phrase);
+      return RECOVERY_UNLOCK(phrase);
+    },
+    afterRelease: async (request) => {
+      afterCalls.push(request);
+      return opts.afterRelease ? opts.afterRelease(request) : {};
+    },
+  });
+  return { flow, releaseCalls, phraseCalls, afterCalls };
+}
+
+test("W1 — a release can unlock the vault with the recovery phrase, which is cleared once used", async () => {
+  const ctx = setupRecoveryFlow({ request: PENDING_HIGH });
+  ctx.flow.setMethod("recovery");
+  ctx.flow.setRecoveryPhrase("abcd-efgh");
+  await ctx.flow.submit();
+  assert.deepEqual(ctx.phraseCalls, ["abcd-efgh"]);
+  assert.equal(ctx.releaseCalls[0]!.unlockRequest.method, "recovery");
+  assert.equal(ctx.flow.getState().status, "released");
+  assert.equal(ctx.flow.getState().recoveryPhrase, "", "the typed phrase is not kept");
+  assert.equal(ctx.afterCalls.length, 1, "the follow-up (re-seal under this passkey) runs after the release");
+});
+
+test("W1 — after a phrase release, the follow-up's note is shown", async () => {
+  const ctx = setupRecoveryFlow({
+    request: PENDING_HIGH,
+    afterRelease: async () => ({ notice: "This device's passkey can now unlock your vault." }),
+  });
+  ctx.flow.setMethod("recovery");
+  ctx.flow.setRecoveryPhrase("abcd");
+  await ctx.flow.submit();
+  assert.match(String(ctx.flow.getState().notice), /passkey/);
+});
+
+test("W1 — a vault with no recovery phrase is offered one after the release, saved only once ticked", async () => {
+  const saves: string[] = [];
+  const ctx = setupRecoveryFlow({
+    request: PENDING_HIGH,
+    afterRelease: async () => ({
+      phrase: { value: "ABCD-EFGH-IJKL-MNOP-QRST-UVWX-YZ23-4567", save: async () => void saves.push("saved") },
+    }),
+  });
+  await ctx.flow.submit();
+  assert.equal(ctx.flow.getState().status, "released", "the release itself is never held up");
+  assert.equal(ctx.flow.getState().newPhrase, "ABCD-EFGH-IJKL-MNOP-QRST-UVWX-YZ23-4567");
+
+  await ctx.flow.confirmRecoveryPhrase();
+  assert.deepEqual(saves, [], "an unticked Continue saves nothing");
+  assert.ok(ctx.flow.getState().phraseError);
+
+  ctx.flow.setPhraseSaved(true);
+  await ctx.flow.confirmRecoveryPhrase();
+  assert.deepEqual(saves, ["saved"]);
+  assert.equal(ctx.flow.getState().newPhrase, null, "the phrase is forgotten once saved");
+});
+
+test("W1 — a failing follow-up never turns a completed release into an error", async () => {
+  const ctx = setupRecoveryFlow({
+    request: PENDING_HIGH,
+    afterRelease: async () => {
+      throw new Error("offline");
+    },
+  });
+  await ctx.flow.submit();
+  assert.equal(ctx.flow.getState().status, "released");
+  assert.equal(ctx.flow.getState().error, undefined);
+});
+
+test("W1 — the release control offers the recovery phrase as a third way to unlock", () => {
+  const html = renderToStaticMarkup(<ReleaseApprove request={PENDING_CARD} savedCards={SAVED_CARDS} />);
+  assert.match(html, /recovery phrase/i);
+});

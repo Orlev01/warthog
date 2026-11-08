@@ -297,7 +297,7 @@ test("AC1: saveUnlockMethod with no params stores an empty params object", async
   }
 });
 
-test("AC1: re-saving a method REPLACES its wrapped key (one wrapped key per method)", async () => {
+test("AC1: re-saving a method with `replace` (a fresh step-up) REPLACES its wrapped key (one wrapped key per method)", async () => {
   const db = await freshDb();
   try {
     const actions = makeActions(db);
@@ -308,11 +308,33 @@ test("AC1: re-saving a method REPLACES its wrapped key (one wrapped key per meth
     assert.notEqual(firstWrapped, secondWrapped, "the two envelopes differ");
 
     await actions.saveUnlockMethod(userId, { method: "passphrase", wrapped: firstWrapped, params: { iterations: 600000 } });
-    await actions.saveUnlockMethod(userId, { method: "passphrase", wrapped: secondWrapped, params: { iterations: 700000 } });
+    const replaced = await actions.saveUnlockMethod(
+      userId,
+      { method: "passphrase", wrapped: secondWrapped, params: { iterations: 700000 } },
+      { replace: true },
+    );
+    assert.deepEqual(replaced, { ok: true });
 
     const material = await actions.getUnlockMaterial(userId, "passphrase");
     assert.equal(material.wrapped, secondWrapped, "the latest save replaces the prior wrapped key in place");
     assert.deepEqual(material.params, { iterations: 700000 }, "and replaces its params too");
+  } finally {
+    await db.close();
+  }
+});
+
+// Review fix W1 — without `replace` a save is insert-only: an existing method is refused
+// with step_up_required and keeps its envelope.
+test("W1: re-saving a method WITHOUT `replace` is refused (step_up_required) and keeps the stored key", async () => {
+  const db = await freshDb();
+  try {
+    const actions = makeActions(db);
+    const userId = await makeUser(db, "no-replace");
+    const kept = sampleWrapped("kept");
+    await actions.saveUnlockMethod(userId, { method: "recovery", wrapped: kept });
+    const refused = await actions.saveUnlockMethod(userId, { method: "recovery", wrapped: sampleWrapped("other") });
+    assert.deepEqual(refused, { ok: false, reason: "step_up_required" });
+    assert.equal((await actions.getUnlockMaterial(userId, "recovery")).wrapped, kept);
   } finally {
     await db.close();
   }

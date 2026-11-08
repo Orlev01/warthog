@@ -149,6 +149,12 @@ function sessionFor(userId: string): Session {
   };
 }
 
+// A session that confirmed "it's you" `ageMs` before T0 — fresh within five minutes. Replacing
+// an existing unlock method is a security change, so it needs one (review fix W1).
+function steppedUpSessionFor(userId: string, ageMs = 60_000): Session {
+  return { ...sessionFor(userId), steppedUpAt: new Date(T0.getTime() - ageMs) };
+}
+
 // Read one cookie's value out of a request's Cookie header (the real resolver's job).
 function readCookie(request: Request, name: string): string | null {
   const header = request.headers.get("cookie");
@@ -207,6 +213,7 @@ function makeHandlers(opts: {
   random?: typeof systemRandom;
   rpId?: string;
   publicOrigin?: string;
+  clock?: Clock;
 }): { handlers: unknown } {
   const resolveSession =
     opts.resolveSession ?? (async () => (opts.session === undefined ? null : opts.session));
@@ -215,6 +222,7 @@ function makeHandlers(opts: {
     random: opts.random ?? systemRandom,
     rpId: opts.rpId ?? RP_ID,
     publicOrigin: opts.publicOrigin ?? ORIGIN,
+    clock: opts.clock ?? CLOCK,
     resolveSession,
   });
   return { handlers };
@@ -461,7 +469,8 @@ test("AC2: a re-save for a method replaces its wrapped key (one wrapped key per 
   const db = await freshDb();
   try {
     const a = await makeUser(db, "replace");
-    const { handlers } = makeHandlers({ db, session: sessionFor(a) });
+    // Replacing an existing method needs a fresh step-up (review fix W1).
+    const { handlers } = makeHandlers({ db, session: steppedUpSessionFor(a) });
     const save = saveMethodFn(handlers);
 
     const first = wrappedEnvelope("first");
@@ -670,17 +679,17 @@ test("[origin] a GET is NOT Origin-gated — a same-origin read (which browsers 
 // AC — an unknown method is 404. The GET serves only { passkey_prf, passphrase }.
 // ===========================================================================================
 
-test("[unknown-method] a GET for a method outside { passkey_prf, passphrase } is 404, and a method probe cannot alter a query", async () => {
+test("[unknown-method] a GET for a method outside { passkey_prf, passphrase, recovery } is 404, and a method probe cannot alter a query", async () => {
   const db = await freshDb();
   try {
     const a = await makeUser(db, "unknown-method");
     const { handlers } = makeHandlers({ db, session: sessionFor(a) });
     const get = getMaterialFn(handlers);
 
-    // "recovery" is a valid STORE method but not served over this device-unlock endpoint; the
-    // rest are plainly unknown, including a path-traversal and a SQL-injection probe.
+    // Every one of these is plainly unknown ("recovery" is now served — review fix W1),
+    // including a path-traversal and a SQL-injection probe.
     const unknown = [
-      "recovery",
+      "RECOVERY",
       "banana",
       "PASSPHRASE",
       "passkey",
@@ -831,6 +840,146 @@ test("[no-secret] the GET response never carries the session token and is limite
     const allowed = new Set(["wrapped", "params", "options"]);
     for (const key of Object.keys(body)) {
       assert.ok(allowed.has(key), `the response must carry only { wrapped, params, options }; found "${key}"`);
+    }
+  } finally {
+    await db.close();
+  }
+});
+
+// ===========================================================================================
+// Review fix W1 — the vault recovery phrase. The browser wraps the vault key under a key
+// derived from a phrase only it ever sees and saves that envelope as method 'recovery'; the
+// endpoint serves it back to the session person so they can unlock with the phrase. Replacing
+// any EXISTING method is a security change: without a fresh step-up the POST inserts only.
+// ===========================================================================================
+
+test("W1: GET /recovery returns the person's own recovery envelope with no assertion options", async () => {
+  const db = await freshDb();
+  try {
+    const a = await makeUser(db, "recovery-get");
+    const b = await makeUser(db, "recovery-get-other");
+    const envelope = wrappedEnvelope("recovery-a");
+    await saveWrappedKey(db, { userId: a, method: "recovery", wrappedKey: envelope });
+    await saveWrappedKey(db, { userId: b, method: "recovery", wrappedKey: wrappedEnvelope("recovery-b") });
+
+    const { handlers } = makeHandlers({ db, session: sessionFor(a) });
+    const res = await getMaterialFn(handlers)(getRequest("recovery"), "recovery");
+    assert.equal(res.status, 200);
+    const body = (await res.json()) as { wrapped: unknown; params: unknown; options: unknown };
+    assert.equal(body.wrapped, envelope, "the session person's own recovery envelope comes back");
+    assert.deepEqual(body.params, {});
+    assert.equal(body.options, null, "a phrase unlock needs no passkey ceremony");
+  } finally {
+    await db.close();
+  }
+});
+
+test("W1: GET /recovery returns a null envelope when the person has no recovery phrase yet", async () => {
+  const db = await freshDb();
+  try {
+    const a = await makeUser(db, "recovery-none");
+    const { handlers } = makeHandlers({ db, session: sessionFor(a) });
+    const res = await getMaterialFn(handlers)(getRequest("recovery"), "recovery");
+    assert.equal(res.status, 200);
+    assert.equal(((await res.json()) as { wrapped: unknown }).wrapped, null);
+  } finally {
+    await db.close();
+  }
+});
+
+test("W1: a first recovery envelope is saved with only a session (no step-up needed to add a method)", async () => {
+  const db = await freshDb();
+  try {
+    const a = await makeUser(db, "recovery-first");
+    const { handlers } = makeHandlers({ db, session: sessionFor(a) });
+    const envelope = wrappedEnvelope("first-recovery");
+    assert2xx(await saveMethodFn(handlers)(postRequest({ body: { method: "recovery", wrapped: envelope }, origin: ORIGIN })));
+    assert.equal((await getWrappedKey(db, a, "recovery"))?.wrappedKey, envelope);
+  } finally {
+    await db.close();
+  }
+});
+
+test("W1: overwriting an existing method without a step-up is 403 step_up_required and keeps the stored envelope", async () => {
+  const db = await freshDb();
+  try {
+    const a = await makeUser(db, "overwrite-no-step-up");
+    for (const method of ["passkey_prf", "passphrase", "recovery"] as const) {
+      const kept = wrappedEnvelope(`kept-${method}`);
+      await saveWrappedKey(db, { userId: a, method, wrappedKey: kept, params: { salt: "kept" } });
+
+      const { handlers } = makeHandlers({ db, session: sessionFor(a) });
+      const res = await saveMethodFn(handlers)(
+        postRequest({ body: { method, wrapped: wrappedEnvelope(`garbage-${method}`), params: { salt: "x" } }, origin: ORIGIN }),
+      );
+      assert.equal(res.status, 403, `replacing ${method} with no step-up is refused`);
+      assert.deepEqual(await res.json(), { error: "step_up_required" });
+      const stored = await getWrappedKey(db, a, method);
+      assert.equal(stored?.wrappedKey, kept, `the ${method} envelope is unchanged`);
+      assert.deepEqual(stored?.params, { salt: "kept" }, `the ${method} params are unchanged`);
+    }
+  } finally {
+    await db.close();
+  }
+});
+
+test("W1: overwriting with a stale step-up (over five minutes old) is refused", async () => {
+  const db = await freshDb();
+  try {
+    const a = await makeUser(db, "overwrite-stale");
+    const kept = wrappedEnvelope("kept");
+    await saveWrappedKey(db, { userId: a, method: "recovery", wrappedKey: kept });
+    const { handlers } = makeHandlers({ db, session: steppedUpSessionFor(a, 6 * 60_000) });
+    const res = await saveMethodFn(handlers)(postRequest({ body: { method: "recovery", wrapped: wrappedEnvelope("new") }, origin: ORIGIN }));
+    assert.equal(res.status, 403);
+    assert.equal((await getWrappedKey(db, a, "recovery"))?.wrappedKey, kept);
+  } finally {
+    await db.close();
+  }
+});
+
+test("W1: overwriting with a fresh step-up replaces the method (replacing the recovery phrase)", async () => {
+  const db = await freshDb();
+  try {
+    const a = await makeUser(db, "overwrite-fresh");
+    await saveWrappedKey(db, { userId: a, method: "recovery", wrappedKey: wrappedEnvelope("old") });
+    const replacement = wrappedEnvelope("replacement");
+    const { handlers } = makeHandlers({ db, session: steppedUpSessionFor(a) });
+    assert2xx(await saveMethodFn(handlers)(postRequest({ body: { method: "recovery", wrapped: replacement }, origin: ORIGIN })));
+    assert.equal((await getWrappedKey(db, a, "recovery"))?.wrappedKey, replacement);
+  } finally {
+    await db.close();
+  }
+});
+
+test("W1: concurrent first saves without a step-up keep exactly one envelope; the others are refused", async () => {
+  const db = await freshDb();
+  try {
+    const a = await makeUser(db, "first-save-race");
+    const { handlers } = makeHandlers({ db, session: sessionFor(a) });
+    const save = saveMethodFn(handlers);
+    const envelopes = ["one", "two", "three"].map((seed) => wrappedEnvelope(seed));
+    const responses = await Promise.all(
+      envelopes.map((wrapped) => save(postRequest({ body: { method: "passkey_prf", wrapped }, origin: ORIGIN }))),
+    );
+    const statuses = responses.map((r) => r.status);
+    assert.equal(statuses.filter((s) => s === 200).length, 1, `exactly one first save wins; got ${statuses}`);
+    assert.equal(statuses.filter((s) => s === 403).length, 2, "the losers are told a step-up is needed to replace it");
+    const winner = envelopes[statuses.indexOf(200)];
+    assert.equal((await getWrappedKey(db, a, "passkey_prf"))?.wrappedKey, winner, "the stored vault key is the winner's");
+  } finally {
+    await db.close();
+  }
+});
+
+test("W1: the unlock-material response is never cached", async () => {
+  const db = await freshDb();
+  try {
+    const a = await makeUser(db, "no-store");
+    const { handlers } = makeHandlers({ db, session: sessionFor(a) });
+    for (const method of ["passkey_prf", "passphrase", "recovery"]) {
+      const res = await getMaterialFn(handlers)(getRequest(method), method);
+      assert.match(res.headers.get("cache-control") ?? "", /no-store/, `${method} material is sent with no-store`);
     }
   } finally {
     await db.close();

@@ -6,7 +6,7 @@
 // The inbox release (E11-S17) and vault setup fetch `/api/vault/unlock-material/<method>`
 // and POST `/api/vault/unlock-method`; these handlers are the HTTP surface over the vault
 // unlock actions, adding no SQL and no crypto of their own:
-//   GET  getMaterial(request, method)  (method ∈ { passkey_prf, passphrase })
+//   GET  getMaterial(request, method)  (method ∈ { passkey_prf, passphrase, recovery })
 //        → { wrapped, params, options }:
 //          • passphrase  — the person's wrapped VK envelope (null when none is set) and the
 //            method's public params; no assertion options.
@@ -15,8 +15,12 @@
 //            @simplewebauthn/browser decodes at unlock time) so the browser derives the
 //            same wrapping key locally. No assertion is verified here — the derivation is
 //            entirely client-side — so no challenge is persisted.
+//          • recovery    — the vault recovery phrase's envelope (null when none is set);
+//            the phrase itself never reaches the server.
 //   POST saveMethod(request)
-//        → saves a wrapped VK (+ public params) for the signed-in person's method.
+//        → saves a wrapped VK (+ public params) for the signed-in person's method. Adding a
+//          method needs the session; replacing an existing one needs a fresh step-up
+//          (otherwise 403 step_up_required and nothing changes).
 //
 // A Next App-Router `route.ts` may export ONLY the known route keys (OBS-025), so the
 // injectable factory lives HERE; each thin `route.ts` imports it and exports only its verb.
@@ -43,16 +47,19 @@ import { parseBody, HttpError } from "../http/validate";
 import { loadConfig } from "../config";
 import { getServerDb } from "../db/server";
 import { COOKIE_NAME, verifySession, type Session } from "../auth/session";
-import { systemClock } from "../seams/clock";
+import { requireStepUp } from "../auth/step-up";
+import { systemClock, type Clock } from "../seams/clock";
 import { systemRandom, type Random } from "../seams/random";
-import { createVaultUnlockActions } from "./unlock";
+import { createVaultUnlockActions, STEP_UP_REQUIRED } from "./unlock";
 import type { UnlockMethod } from "../db/vault-unlock-methods";
 import type { Db } from "../db/index";
 
-// The methods this device-unlock endpoint serves — a STRICTER set than the store's enum
-// (which also carries `recovery`, a backup that is never a device-unlock method here). An
-// unknown method is a 404.
-const SERVED_METHODS = ["passkey_prf", "passphrase"] as const;
+// The methods this endpoint serves: every store method. `recovery` is the vault recovery
+// phrase's envelope (review fix W1): the browser generates the phrase, wraps VK under a key
+// derived from it and saves the envelope here; the server never sees the phrase, and the
+// envelope is useless without it (the phrase carries 160 random bits), so serving it to the
+// signed-in person is safe. An unknown method is a 404.
+const SERVED_METHODS = ["passkey_prf", "passphrase", "recovery"] as const;
 type ServedMethod = (typeof SERVED_METHODS)[number];
 
 function isServedMethod(method: string): method is ServedMethod {
@@ -88,6 +95,8 @@ export interface VaultUnlockHttpSeams {
   readonly rpId?: string;
   // The origin a POST's Origin header is checked against.
   readonly publicOrigin?: string;
+  // The clock a session's step-up freshness is judged against.
+  readonly clock?: Clock;
 }
 
 export interface VaultUnlockHttpHandlers {
@@ -121,10 +130,12 @@ async function defaultResolveSession(request: Request): Promise<Session | null> 
 
 // --- responses ------------------------------------------------------------------------
 
+// Every response is per-person and sensitive (wrapped keys, PRF salts), so no shared or
+// browser cache may keep it.
 function json(status: number, body: unknown): Response {
   return new Response(JSON.stringify(body), {
     status,
-    headers: { "content-type": "application/json; charset=utf-8" },
+    headers: { "content-type": "application/json; charset=utf-8", "cache-control": "no-store" },
   });
 }
 
@@ -155,7 +166,8 @@ export function createVaultUnlockHttpHandlers(
 
   // GET — serve the signed-in person's non-secret unlock material for `method`.
   async function getMaterial(request: Request, method: string): Promise<Response> {
-    // 1. A method outside { passkey_prf, passphrase } is a 404 (a read is not Origin-gated).
+    // 1. A method outside { passkey_prf, passphrase, recovery } is a 404 (a read is not
+    //    Origin-gated).
     if (!isServedMethod(method)) return json(404, { error: "not_found" });
 
     // 2. A server-verified session, or nothing — identity is the session's user id.
@@ -175,7 +187,7 @@ export function createVaultUnlockHttpHandlers(
       return json(200, { wrapped: material.wrapped, params: material.params, options });
     }
 
-    // passphrase: the wrapped envelope and public params, no assertion options.
+    // passphrase / recovery: the wrapped envelope and public params, no assertion options.
     return json(200, { wrapped: material.wrapped, params: material.params, options: null });
   }
 
@@ -200,11 +212,17 @@ export function createVaultUnlockHttpHandlers(
       const random = seams.random ?? systemRandom;
       const actions = createVaultUnlockActions({ db, random });
 
-      const result = await actions.saveUnlockMethod(session.userId, {
-        method: parsed.method,
-        wrapped: parsed.wrapped,
-        params: parsed.params,
-      });
+      // 4. Adding a method needs only the session; REPLACING one is a security change, so
+      //    it needs a step-up within the last five minutes (review fix W1). Without one the
+      //    save is insert-only and an existing method comes back 403 step_up_required —
+      //    the stored envelope is untouched, and the browser can offer "Confirm it's you".
+      const replace = requireStepUp(session, { clock: seams.clock ?? systemClock });
+      const result = await actions.saveUnlockMethod(
+        session.userId,
+        { method: parsed.method, wrapped: parsed.wrapped, params: parsed.params },
+        { replace },
+      );
+      if (!result.ok && result.reason === STEP_UP_REQUIRED) return json(403, { error: STEP_UP_REQUIRED });
       if (!result.ok) return json(400, { error: result.reason });
 
       return json(200, { ok: true });

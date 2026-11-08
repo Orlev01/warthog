@@ -37,6 +37,7 @@ import { parseParams } from "../http/validate";
 import {
   getOrCreatePrfSalt,
   getWrappedKey,
+  insertWrappedKeyIfAbsent,
   listMethods,
   saveWrappedKey,
   type UnlockMethod,
@@ -105,9 +106,23 @@ export interface VaultUnlockActionsDeps {
   readonly random: Random;
 }
 
+// How a save may treat a method the person already has. Replacing one is a security
+// change, so only a caller holding a fresh step-up passes `replace: true`; without it the
+// save inserts only and refuses an existing method (review fix W1).
+export interface SaveUnlockMethodOptions {
+  readonly replace: boolean;
+}
+
+// The refusal reason when a save would replace an existing method without `replace`.
+export const STEP_UP_REQUIRED = "step_up_required";
+
 export interface VaultUnlockActions {
   getUnlockMaterial(userId: string, method: UnlockMethod): Promise<UnlockMaterial>;
-  saveUnlockMethod(userId: string, input: SaveUnlockMethodInput): Promise<ActionResult>;
+  saveUnlockMethod(
+    userId: string,
+    input: SaveUnlockMethodInput,
+    options?: SaveUnlockMethodOptions,
+  ): Promise<ActionResult>;
   assertVaultUnlockable(userId: string, gate: VaultGate): Promise<ActionResult>;
 }
 
@@ -132,19 +147,22 @@ export function createVaultUnlockActions(deps: VaultUnlockActionsDeps): VaultUnl
       };
     },
 
-    // Persist (upsert) the wrapped VK + params for the session's `userId` + method —
-    // one wrapped key per method, a re-save replaces it — after validating the input
-    // at the boundary. Writes only the acting person's row. It does NOT gate; the
-    // caller runs `assertVaultUnlockable` first.
-    async saveUnlockMethod(userId, input) {
+    // Persist the wrapped VK + params for the session's `userId` + method — one wrapped
+    // key per method — after validating the input at the boundary. Writes only the
+    // acting person's row. With `replace` (the caller holds a fresh step-up) a re-save
+    // replaces the method; without it (the default) the save is INSERT-ONLY in one
+    // atomic statement and an existing method is refused with `step_up_required`, so a
+    // stolen session cannot swap a working envelope for garbage and two first-time
+    // saves racing each other keep one vault key (review fix W1).
+    async saveUnlockMethod(userId, input, options = { replace: false }) {
       const valid = parseParams(saveInputSchema, input);
-      await saveWrappedKey(db, {
-        userId,
-        method: valid.method,
-        wrappedKey: valid.wrapped,
-        params: valid.params,
-      });
-      return { ok: true };
+      const row = { userId, method: valid.method, wrappedKey: valid.wrapped, params: valid.params };
+      if (options.replace) {
+        await saveWrappedKey(db, row);
+        return { ok: true };
+      }
+      const inserted = await insertWrappedKeyIfAbsent(db, row);
+      return inserted ? { ok: true } : { ok: false, reason: STEP_UP_REQUIRED };
     },
 
     // The policy gate, member-scoped by `userId`:

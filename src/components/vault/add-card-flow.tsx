@@ -10,12 +10,18 @@ import { Card } from "@/components/ui/card";
 import { Field, Label } from "@/components/ui/field";
 import { Input } from "@/components/ui/input";
 import { SensitiveNotice } from "@/components/ui/sensitive-notice";
-import {
-  deriveWrappingKeyFromPrf,
-  deriveWrappingKeyFromPassphrase,
-} from "@/client/vault/derive";
-import { createVaultKey, wrapVaultKey, unwrapVaultKey } from "@/client/vault/key";
+import { ConfirmItsYou } from "@/components/ui/confirm-its-you";
+import { createVaultKey } from "@/client/vault/key";
+import { createDeviceVault, StepUpRequiredError } from "@/client/vault/device-vault";
 import { sealCard, type CardSubmission, type VaultAddress } from "./cards-view";
+import {
+  createVaultKeyStep,
+  PHRASE_NOT_SAVED_COPY,
+  RecoveryPhraseReveal,
+  VaultUnlockChoice,
+  type UnlockChoice,
+  type VaultKeyStepState,
+} from "./vault-key-step";
 
 // E11-S19 — Set up the vault and add a card on this device (brief "Saved cards" /
 // "Device-held protection" / "Vault unlock methods"; design §4.2 device-held vault;
@@ -33,6 +39,10 @@ import { sealCard, type CardSubmission, type VaultAddress } from "./cards-view";
 //     ciphertext plus plaintext metadata (brand, last four, expiry, nickname, billing
 //     address) to the page's addCard action.
 // The security code is NEVER collected here (it is typed only at release time, E11-S17).
+// Review fix W1: the vault key is obtained through the shared vault-key step
+// (./vault-key-step), so the vault unlocks with a passkey, the vault passphrase or the
+// vault recovery phrase, and a vault with no recovery phrase (a new one, or one set up
+// before phrases existed) shows a new phrase once and saves it before the card is sealed.
 //
 // It exports the TWO seams the repo's render-testable-AND-interactive pattern uses
 // (SignupView + createSignupFlow; ReleaseApprove + createReleaseApproveFlow):
@@ -52,8 +62,9 @@ import { sealCard, type CardSubmission, type VaultAddress } from "./cards-view";
 // ─── the controller contract this task introduces ─────────────────────────────────────
 
 // The control's own status alongside the person's entries: idle until they confirm,
-// `working` while the device flow runs, then `added` or `error`.
-export type AddCardStatus = "idle" | "working" | "added" | "error";
+// `working` while the device flow runs, `phrase` while a new vault recovery phrase waits
+// for the person to save it (review fix W1), then `added` or `error`.
+export type AddCardStatus = "idle" | "working" | "phrase" | "added" | "error";
 
 export interface AddCardState {
   number: string;
@@ -65,6 +76,9 @@ export interface AddCardState {
   passphrase: string;
   status: AddCardStatus;
   error?: string;
+  // True when replacing the vault passphrase was refused for a lapsed step-up: the panel
+  // then offers "Confirm it's you" inline.
+  confirmRequired: boolean;
 }
 
 // The passkey PRF assertion the OS prompt returns — the PRF output is base64url in
@@ -101,12 +115,17 @@ export interface AddCardController {
   setUsePassphrase(value: boolean): void;
   setPassphrase(value: string): void;
   submit(): Promise<void>;
+  // The shared unlock step (review fix W1): how to unlock, and the once-only reveal of a
+  // new vault recovery phrase that must be saved before the card is.
+  getUnlockState(): VaultKeyStepState;
+  setUnlockMethod(method: UnlockChoice): void;
+  setUnlockPassphrase(value: string): void;
+  setRecoveryPhrase(value: string): void;
+  setPhraseSaved(value: boolean): void;
+  confirmRecoveryPhrase(): Promise<void>;
+  // After "Confirm it's you" succeeds: clear the prompt so Confirm can be pressed again.
+  clearConfirmRequired(): void;
 }
-
-// The methods' wire names (a STRICTER set than the store's enum): the device-unlock
-// methods the endpoints serve.
-const UNLOCK_MATERIAL_BASE = "/api/vault/unlock-material";
-const UNLOCK_METHOD_URL = "/api/vault/unlock-method";
 
 // Plain-English failure copy — a real sentence a person can act on, with no crypto /
 // protocol jargon and never the card number or the passphrase (brief design_ux.copy;
@@ -115,6 +134,10 @@ const UNLOCK_METHOD_URL = "/api/vault/unlock-method";
 const SETUP_FAILED_COPY =
   "We couldn't unlock your vault on this device, so your card wasn't saved. Check your passkey and try again.";
 const SAVE_FAILED_COPY = "We couldn't save your card just now. Please try again.";
+const PHRASE_FAILED_COPY =
+  "We couldn't save your recovery phrase, so your card wasn't saved. Please try again.";
+const PASSPHRASE_STEP_UP_COPY =
+  "You already have a vault passphrase. Confirm it's you to replace it, then confirm the card again.";
 
 // Review fix G12 — the card is checked on the device before anything leaves it (a repeat
 // Confirm after a save, with the number already cleared, stores nothing), and a vault
@@ -127,32 +150,6 @@ const EXPIRY_COPY = "Check the expiry: a month from 1 to 12 and a four-digit yea
 const NICKNAME_COPY = "Give this card a name so you can tell it apart, then confirm.";
 const BILLING_COPY = "Choose a billing address for this card, then confirm.";
 const PASSPHRASE_COPY = `Choose a vault passphrase of at least ${MIN_PASSPHRASE_LENGTH} characters, or untick the passphrase option.`;
-
-// The server's non-secret unlock material for a method (design §4.2 getUnlockMaterial):
-// the wrapped VK envelope (null when none is set), the method's public params and, for a
-// passkey, the assertion options whose PRF extension is eval'd with the person's salt.
-type ServerUnlockMaterial = {
-  readonly wrapped: string | null;
-  readonly params?: Record<string, unknown> | null;
-  readonly options?: unknown;
-};
-
-// WebCrypto base64 helpers (browser `btoa`/`atob`, never Node's Buffer). The salt is
-// stored as standard base64; a WebAuthn PRF result is base64url.
-function toBase64(bytes: Uint8Array): string {
-  let binary = "";
-  for (const byte of bytes) binary += String.fromCharCode(byte);
-  return btoa(binary);
-}
-
-function base64UrlToBytes(value: string): Uint8Array<ArrayBuffer> {
-  const b64 = value.replace(/-/g, "+").replace(/_/g, "/");
-  const padding = b64.length % 4 === 0 ? "" : "=".repeat(4 - (b64.length % 4));
-  const binary = atob(b64 + padding);
-  const bytes = new Uint8Array(binary.length);
-  for (let i = 0; i < binary.length; i += 1) bytes[i] = binary.charCodeAt(i);
-  return bytes;
-}
 
 // The card brand, derived from the number's leading digits (the issuer BIN ranges). The
 // full number is never stored; only this brand + the last four are kept in plaintext.
@@ -190,6 +187,7 @@ export function createAddCardFlow(deps: AddCardFlowDeps): AddCardController {
     usePassphrase: false,
     passphrase: "",
     status: "idle",
+    confirmRequired: false,
   };
 
   function set(patch: Partial<AddCardState>): void {
@@ -197,94 +195,35 @@ export function createAddCardFlow(deps: AddCardFlowDeps): AddCardController {
     deps.onChange?.();
   }
 
-  // Read the person's passkey unlock material from the endpoint (the wrapped VK, if any,
-  // and the assertion options). A read is not Origin-gated; an unreachable endpoint throws.
-  async function fetchPasskeyMaterial(): Promise<ServerUnlockMaterial> {
-    const response = await deps.fetch(`${UNLOCK_MATERIAL_BASE}/passkey_prf`, {
-      credentials: "same-origin",
-    });
-    if (!response.ok) throw new Error("vault unlock material is unavailable on this device");
-    return (await response.json()) as ServerUnlockMaterial;
-  }
+  // The device vault over the unlock endpoints, and the shared unlock step over it: a
+  // passkey sets the vault up on first use (no envelope yet) or unlocks the EXISTING key;
+  // a passphrase or the recovery phrase unlocks it too; and a vault with no recovery
+  // phrase pauses for one before anything is sealed (review fix W1).
+  const vault = createDeviceVault({
+    fetch: deps.fetch,
+    startAuthentication: deps.startAuthentication,
+    createVaultKey: deps.createVaultKey,
+  });
+  const step = createVaultKeyStep({ vault, createIfMissing: true, onChange: () => deps.onChange?.() });
 
-  // Save a wrapped vault key for a method. The browser sets the Origin header itself (a
-  // forbidden header JS cannot set), which the server checks before storing anything.
-  async function saveUnlockMethod(body: {
-    method: "passkey_prf" | "passphrase";
-    wrapped: string;
-    params?: Record<string, unknown>;
-  }): Promise<void> {
-    const response = await deps.fetch(UNLOCK_METHOD_URL, {
-      method: "POST",
-      headers: { "content-type": "application/json" },
-      body: JSON.stringify(body),
-      credentials: "same-origin",
-    });
-    if (!response.ok) throw new Error("could not save the vault unlock method");
-  }
-
-  // Run the OS passkey prompt with the endpoint's options and recover the PRF-derived
-  // wrapping key. A dismissed prompt rejects here (nothing is created or saved).
-  async function wrappingKeyFromPasskey(options: unknown): Promise<Uint8Array<ArrayBuffer>> {
-    const assertion = await deps.startAuthentication({ optionsJSON: options });
-    const prf = assertion.clientExtensionResults?.prf?.results?.first;
-    if (typeof prf !== "string") throw new Error("this passkey can't unlock your vault");
-    return deriveWrappingKeyFromPrf(base64UrlToBytes(prf));
-  }
-
-  // Set up (first use) or unlock (later use) this device's vault key. On first use a fresh
-  // key is created, wrapped under the passkey PRF (and, when chosen, under the vault
-  // passphrase too) and saved; on later use the existing envelope is unwrapped — no new
-  // key, no save. Either way the passkey ceremony runs so its PRF is available.
-  // Also wrap `vaultKey` under the person's chosen passphrase and save that unlock method,
-  // so "Use your vault passphrase" opens the SAME vault the passkey does.
-  async function savePassphraseMethod(vaultKey: Uint8Array<ArrayBuffer>): Promise<void> {
-    const salt = crypto.getRandomValues(new Uint8Array(16));
-    const passphraseKey = await deriveWrappingKeyFromPassphrase(state.passphrase, salt);
-    await saveUnlockMethod({
-      method: "passphrase",
-      wrapped: await wrapVaultKey(passphraseKey, vaultKey),
-      params: { salt: toBase64(salt) },
-    });
-  }
-
-  async function ensureVaultKey(): Promise<Uint8Array<ArrayBuffer>> {
-    const material = await fetchPasskeyMaterial();
-    const wrappingKey = await wrappingKeyFromPasskey(material.options);
-
-    if (material.wrapped != null) {
-      const vaultKey = await unwrapVaultKey(wrappingKey, material.wrapped);
-      // The passphrase option used to be silently ignored once a vault existed (review
-      // fix G12): honour it by wrapping the EXISTING vault key.
-      if (state.usePassphrase) await savePassphraseMethod(vaultKey);
-      return vaultKey;
+  // A failure while getting the vault key ready: a lapsed step-up for replacing the
+  // passphrase offers "Confirm it's you"; anything else is the plain setup copy. The
+  // secrets entered for this attempt are cleared either way.
+  function setupFailed(error: unknown, copy: string): void {
+    if (error instanceof StepUpRequiredError) {
+      set({ status: "error", error: PASSPHRASE_STEP_UP_COPY, passphrase: "", confirmRequired: true });
+    } else {
+      set({ status: "error", error: copy, passphrase: "" });
     }
-
-    // First use on this account: create the key and save it wrapped under the passkey.
-    const vaultKey = deps.createVaultKey() as Uint8Array<ArrayBuffer>;
-    await saveUnlockMethod({ method: "passkey_prf", wrapped: await wrapVaultKey(wrappingKey, vaultKey) });
-
-    // Optionally also wrap it under a chosen vault passphrase, with a fresh public salt.
-    if (state.usePassphrase) await savePassphraseMethod(vaultKey);
-
-    return vaultKey;
   }
 
-  async function submit(): Promise<void> {
-    if (state.status === "working") return; // guard against a double confirm
-    const problem = entryProblem(state);
-    if (problem) {
-      set({ status: "error", error: problem });
-      return;
-    }
-    set({ status: "working", error: undefined });
-
-    // 1. Set up / unlock the vault key, then seal the number — all on this device. A
-    //    cancelled prompt, an unreachable endpoint or a tampered envelope lands here: the
-    //    person is told in plain words and the secrets entered for this attempt are cleared.
+  // Seal the number under the unlocked vault key and submit ONLY the ciphertext +
+  // metadata. The chosen vault passphrase (if any) is saved first, wrapping the SAME key,
+  // so "Use your vault passphrase" opens the vault the passkey does (review fix G12).
+  async function sealAndSubmit(vaultKey: Uint8Array<ArrayBuffer>): Promise<void> {
     let submission: CardSubmission;
     try {
-      const vaultKey = await ensureVaultKey();
+      if (state.usePassphrase) await vault.savePassphrase(vaultKey, state.passphrase);
       submission = await sealCard(vaultKey, {
         brand: brandFromNumber(state.number),
         number: state.number,
@@ -293,13 +232,13 @@ export function createAddCardFlow(deps: AddCardFlowDeps): AddCardController {
         nickname: state.nickname,
         billingAddressId: state.billingAddressId,
       });
-    } catch {
-      set({ status: "error", error: SETUP_FAILED_COPY, passphrase: "" });
+    } catch (error) {
+      setupFailed(error, SETUP_FAILED_COPY);
       return;
     }
 
-    // 2. Submit ONLY the ciphertext + metadata to the page's action. A refusal comes back
-    //    with its own machine reason, which we never surface raw — plain copy instead.
+    // A refusal comes back with its own machine reason, which we never surface raw —
+    // plain copy instead.
     let result: { ok: boolean; reason?: string };
     try {
       result = await deps.addCard(submission);
@@ -327,6 +266,55 @@ export function createAddCardFlow(deps: AddCardFlowDeps): AddCardController {
     }
   }
 
+  async function submit(): Promise<void> {
+    if (state.status === "working" || state.status === "phrase") return; // no double confirm
+    const problem = entryProblem(state);
+    if (problem) {
+      set({ status: "error", error: problem });
+      return;
+    }
+    set({ status: "working", error: undefined, confirmRequired: false });
+
+    // 1. Unlock (or set up) the vault key on this device. A cancelled prompt, an
+    //    unreachable endpoint, a wrong secret or a tampered envelope lands here: the
+    //    person is told in plain words and nothing is saved.
+    let vaultKey: Uint8Array<ArrayBuffer>;
+    try {
+      const got = await step.obtain();
+      if (got.kind === "reveal") {
+        // A vault with no recovery phrase: show the new phrase and wait for the person to
+        // save it before the card is sealed.
+        set({ status: "phrase" });
+        return;
+      }
+      vaultKey = got.vaultKey;
+    } catch (error) {
+      setupFailed(error, SETUP_FAILED_COPY);
+      return;
+    }
+
+    // 2. Seal and submit.
+    await sealAndSubmit(vaultKey);
+  }
+
+  async function confirmRecoveryPhrase(): Promise<void> {
+    if (state.status !== "phrase") return;
+    if (!step.getState().phraseSaved) {
+      set({ error: PHRASE_NOT_SAVED_COPY });
+      return;
+    }
+    set({ status: "working", error: undefined });
+    let vaultKey: Uint8Array<ArrayBuffer>;
+    try {
+      vaultKey = await step.confirmPhrase();
+    } catch {
+      // The phrase stays on screen so the person can try again.
+      set({ status: "phrase", error: PHRASE_FAILED_COPY });
+      return;
+    }
+    await sealAndSubmit(vaultKey);
+  }
+
   return {
     getState: () => state,
     setNumber: (value) => set({ number: value }),
@@ -337,6 +325,13 @@ export function createAddCardFlow(deps: AddCardFlowDeps): AddCardController {
     setUsePassphrase: (value) => set({ usePassphrase: value }),
     setPassphrase: (value) => set({ passphrase: value }),
     submit,
+    getUnlockState: () => step.getState(),
+    setUnlockMethod: (method) => step.setMethod(method),
+    setUnlockPassphrase: (value) => step.setPassphrase(value),
+    setRecoveryPhrase: (value) => step.setRecoveryPhrase(value),
+    setPhraseSaved: (value) => step.setPhraseSaved(value),
+    confirmRecoveryPhrase,
+    clearConfirmRequired: () => set({ confirmRequired: false, error: undefined, status: "idle" }),
   };
 }
 
@@ -403,6 +398,7 @@ export function AddCardFlow(props: AddCardFlowProps): React.ReactElement {
   }
   const flow = flowRef.current;
   const state = flow.getState();
+  const unlock = flow.getUnlockState();
 
   // Call every hook unconditionally (rules of hooks), even though the closed panel uses none.
   const numberId = React.useId();
@@ -511,7 +507,19 @@ export function AddCardFlow(props: AddCardFlowProps): React.ReactElement {
         ) : null}
       </div>
 
-      {state.error ? (
+      <VaultUnlockChoice
+        state={unlock}
+        onMethod={(method) => flow.setUnlockMethod(method)}
+        onPassphrase={(value) => flow.setUnlockPassphrase(value)}
+        onRecoveryPhrase={(value) => flow.setRecoveryPhrase(value)}
+      />
+
+      {unlock.notice ? (
+        <p role="status" className="text-sm text-fg">
+          {unlock.notice}
+        </p>
+      ) : null}
+      {state.error && state.status !== "phrase" ? (
         <p role="alert" className="text-sm text-danger">
           {state.error}
         </p>
@@ -521,8 +529,26 @@ export function AddCardFlow(props: AddCardFlowProps): React.ReactElement {
           Your card is saved.
         </p>
       ) : null}
+      {state.confirmRequired ? (
+        <ConfirmItsYou
+          explanation="Replacing your vault passphrase is a security change, so we need to check it's really you."
+          onConfirmed={() => flow.clearConfirmRequired()}
+        />
+      ) : null}
 
-      {props.billingAddresses.length === 0 ? (
+      {unlock.newPhrase !== null ? (
+        <RecoveryPhraseReveal
+          phrase={unlock.newPhrase}
+          saved={unlock.phraseSaved}
+          onSavedChange={(saved) => flow.setPhraseSaved(saved)}
+          onContinue={() => {
+            void flow.confirmRecoveryPhrase();
+          }}
+          working={state.status === "working"}
+          error={state.status === "phrase" ? state.error : undefined}
+          continueLabel="Save the phrase and my card"
+        />
+      ) : props.billingAddresses.length === 0 ? (
         // No dead Confirm: a card needs a billing address, so say why and where to add one.
         <p className="text-sm text-fg">
           A card needs a billing address, and you haven&apos;t saved a postal address yet.{" "}

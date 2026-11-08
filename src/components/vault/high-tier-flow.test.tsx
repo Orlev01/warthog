@@ -110,6 +110,7 @@ import { renderToStaticMarkup } from "react-dom/server";
 import { HighTierFlow, createHighTierFlow } from "./high-tier-flow";
 import { deriveWrappingKeyFromPrf } from "@/client/vault/derive";
 import { unwrapVaultKey } from "@/client/vault/key";
+import { unlockWithRecoveryPhrase } from "@/client/vault/recovery-phrase";
 import { decryptValue } from "@/client/vault/values";
 
 // ─── fixtures ────────────────────────────────────────────────────────────────────────
@@ -175,14 +176,16 @@ const PASSKEY_OPTIONS = {
 
 type PostBody = { method: string; wrapped: string; params?: { salt?: string } };
 
+// Review fix W1: the fake also keeps the 'recovery' envelope (the vault recovery phrase)
+// and, like the real endpoint, refuses to REPLACE an existing method without a step-up.
 function makeServer() {
-  const store: { passkey_prf: string | null } = { passkey_prf: null };
+  const store: { passkey_prf: string | null; recovery: string | null } = { passkey_prf: null, recovery: null };
   const gets: string[] = [];
   const posts: PostBody[] = [];
 
-  function json(body: unknown): Response {
+  function json(body: unknown, status = 200): Response {
     return new Response(JSON.stringify(body), {
-      status: 200,
+      status,
       headers: { "content-type": "application/json" },
     });
   }
@@ -192,12 +195,21 @@ function makeServer() {
     if (init && String(init.method).toUpperCase() === "POST") {
       const body = JSON.parse(String(init.body)) as PostBody;
       posts.push(body);
-      if (body.method === "passkey_prf") store.passkey_prf = body.wrapped;
+      if (body.method === "passkey_prf") {
+        if (store.passkey_prf !== null) return json({ error: "step_up_required" }, 403);
+        store.passkey_prf = body.wrapped;
+      } else if (body.method === "recovery") {
+        if (store.recovery !== null) return json({ error: "step_up_required" }, 403);
+        store.recovery = body.wrapped;
+      }
       return json({ ok: true });
     }
     gets.push(url);
     if (url.includes("/vault/unlock-material/passkey_prf")) {
       return json({ wrapped: store.passkey_prf, params: null, options: PASSKEY_OPTIONS });
+    }
+    if (url.includes("/vault/unlock-material/recovery")) {
+      return json({ wrapped: store.recovery, params: {}, options: null });
     }
     throw new Error(`unexpected fetch to ${url}`);
   }) as unknown as typeof fetch;
@@ -281,6 +293,16 @@ type Passkey = ReturnType<typeof makePasskey>;
 type CreateKey = ReturnType<typeof makeCreateKey>;
 type Save = ReturnType<typeof makeSave>;
 type Raise = ReturnType<typeof makeRaise>;
+
+// Confirm, and when the flow pauses on a new vault recovery phrase (a vault with none —
+// review fix W1), tick "I've saved it" and carry on, as the person would.
+async function submitThroughPhrase(flow: ReturnType<typeof makeFlow>["flow"]): Promise<void> {
+  await flow.submit();
+  if (flow.getState().status === "phrase") {
+    flow.setPhraseSaved(true);
+    await flow.confirmRecoveryPhrase();
+  }
+}
 
 function makeFlow(opts: {
   mode: "add" | "raise";
@@ -388,7 +410,7 @@ test("AC1 — a first add creates the vault key, saves its passkey-wrapped envel
   const ctx = makeFlow({ mode: "add", server, passkey, createKey, save, raise });
 
   fillAdd(ctx.flow, { value: SECRET_VALUE, label: "Passport" });
-  await ctx.flow.submit();
+  await submitThroughPhrase(ctx.flow);
 
   // It read the unlock-material endpoint and ran the passkey PRF ceremony with ITS options.
   assert.ok(
@@ -460,14 +482,14 @@ test("AC1 — a second add unlocks the existing vault key (no new key) and seals
   // First detail sets the vault up.
   const first = makeFlow({ mode: "add", server, passkey, createKey, save });
   fillAdd(first.flow, { value: SECRET_VALUE, label: "Passport" });
-  await first.flow.submit();
+  await submitThroughPhrase(first.flow);
   assert.equal(createKey.count, 1, "the first add created the vault key");
   const postsAfterFirst = server.posts.length;
 
   // Second detail on the SAME account (same server state, same seams).
   const second = makeFlow({ mode: "add", server, passkey, createKey, save });
   fillAdd(second.flow, { value: "DOB-1990-07-14", label: "Date of birth" });
-  await second.flow.submit();
+  await submitThroughPhrase(second.flow);
 
   // No new key, no new unlock method saved — it UNLOCKED the existing one.
   assert.equal(createKey.count, 1, "the second add does NOT create a new vault key");
@@ -511,7 +533,7 @@ test("AC2 — raising a field re-seals its value on the device and submits the c
     raise,
   });
 
-  await ctx.flow.submit();
+  await submitThroughPhrase(ctx.flow);
 
   // The vault key is set up on this device (first use here), and the passkey ceremony ran.
   assert.ok(
@@ -564,7 +586,7 @@ test("AC2 — raising a field on an already-set-up vault unlocks the existing ke
   // The vault already exists (an earlier add set it up).
   const setup = makeFlow({ mode: "add", server, passkey, createKey, save });
   fillAdd(setup.flow, { value: SECRET_VALUE, label: "Passport" });
-  await setup.flow.submit();
+  await submitThroughPhrase(setup.flow);
   assert.equal(createKey.count, 1, "the earlier add created the vault key");
 
   // Now raise an existing low-tier field.
@@ -577,7 +599,7 @@ test("AC2 — raising a field on an already-set-up vault unlocks the existing ke
     save,
     raise,
   });
-  await ctx.flow.submit();
+  await submitThroughPhrase(ctx.flow);
 
   assert.equal(createKey.count, 1, "raising does NOT create a new vault key when one exists");
   assert.equal(raise.count, 1, "the raise is submitted");
@@ -598,7 +620,7 @@ test("AC3 — cancelling the passkey prompt saves nothing and shows plain-Englis
   const ctx = makeFlow({ mode: "add", server, passkey, createKey, save });
 
   fillAdd(ctx.flow, { value: SECRET_VALUE, label: "Passport" });
-  await ctx.flow.submit();
+  await submitThroughPhrase(ctx.flow);
 
   assert.equal(passkey.calls.length, 1, "the passkey prompt was shown");
   assert.equal(server.posts.length, 0, "a cancelled prompt saves no unlock method");
@@ -660,7 +682,7 @@ test("AC3 — the plaintext value never appears in any request body, browser sto
     const ctx = makeFlow({ mode: "add", server, passkey, createKey, save });
 
     fillAdd(ctx.flow, { value: SECRET_VALUE, label: "Passport" });
-    await ctx.flow.submit();
+    await submitThroughPhrase(ctx.flow);
 
     // Sanity: it DID submit a ciphertext that genuinely decrypts to the value ...
     assert.equal(
@@ -713,7 +735,7 @@ test("a refused save reports a plain-English error and does not claim success", 
   const ctx = makeFlow({ mode: "add", server, passkey, createKey, save });
 
   fillAdd(ctx.flow, { value: SECRET_VALUE, label: "Passport" });
-  await ctx.flow.submit();
+  await submitThroughPhrase(ctx.flow);
 
   assert.equal(save.count, 1, "the save was attempted");
   assert.equal(ctx.savedCount, 0, "a refused save signals no success");
@@ -886,4 +908,61 @@ test("uses design tokens, never a raw hex colour (add + raise, open and closed)"
       `no raw hex colour may appear in the HighTierFlow markup, got: ${markup}`,
     );
   }
+});
+
+// ═══ Review fix W1 — the vault recovery phrase ═══════════════════════════════════════
+
+test("W1 — a first high-tier detail waits for a new recovery phrase to be saved, then seals under the same key", async () => {
+  const server = makeServer();
+  const save = makeSave();
+  const { flow } = makeFlow({ mode: "add", server, passkey: makePasskey(), createKey: makeCreateKey(), save });
+  fillAdd(flow, { value: "PA1234567", label: "Passport" });
+  await flow.submit();
+
+  assert.equal(flow.getState().status, "phrase");
+  const phrase = flow.getUnlockState().newPhrase!;
+  assert.equal(save.count, 0, "nothing is saved before the phrase is");
+
+  flow.setPhraseSaved(true);
+  await flow.confirmRecoveryPhrase();
+  assert.equal(flow.getState().status, "saved");
+  assert.equal(save.count, 1);
+  assert.ok(bytesEqual(await unlockWithRecoveryPhrase(phrase, server.store.recovery!), FIXED_VK));
+  for (const post of server.posts) {
+    assert.ok(!JSON.stringify(post).includes(phrase.replace(/-/g, "")), "the phrase never leaves the device");
+  }
+});
+
+test("W1 — the recovery phrase unlocks the vault for a new detail when the passkey can't", async () => {
+  const server = makeServer();
+  const createKey = makeCreateKey();
+  const setup = makeFlow({ mode: "add", server, passkey: makePasskey(), createKey, save: makeSave() });
+  fillAdd(setup.flow, { value: "PA1234567", label: "Passport" });
+  await setup.flow.submit();
+  const phrase = setup.flow.getUnlockState().newPhrase!;
+  setup.flow.setPhraseSaved(true);
+  await setup.flow.confirmRecoveryPhrase();
+
+  const save = makeSave();
+  // This device's passkey has no PRF result, so it can't unlock: the phrase does.
+  const noPrf = {
+    fn: async () => ({ clientExtensionResults: {} }),
+    calls: [] as unknown[],
+  } as unknown as Passkey;
+  const ctx = makeFlow({ mode: "add", server, passkey: noPrf, createKey, save });
+  fillAdd(ctx.flow, { value: "DL998877", label: "Driver licence" });
+  ctx.flow.setUnlockMethod("recovery");
+  ctx.flow.setRecoveryPhrase(phrase);
+  await ctx.flow.submit();
+
+  assert.equal(ctx.flow.getState().status, "saved", `error=${ctx.flow.getState().error}`);
+  assert.equal(createKey.count, 1, "the original vault key, never a new one");
+  assert.equal(await decryptValue(FIXED_VK as Uint8Array<ArrayBuffer>, save.subs[0]!.ciphertext), "DL998877");
+  assert.ok(ctx.flow.getUnlockState().notice, "a plain note says the phrase is needed on this device");
+});
+
+test("W1 — the open panel offers the recovery phrase as a way to unlock", () => {
+  const html = renderToStaticMarkup(<HighTierFlow mode="add" initialOpen />);
+  assert.match(html, /recovery phrase/i);
+  assert.match(html, /vault passphrase/i);
 });

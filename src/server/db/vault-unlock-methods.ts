@@ -19,6 +19,13 @@
 // authenticates a recovery unlock without the server learning the code or the
 // wrapping key the code derives.
 //
+// Review fix W1: the 'recovery' method holds VK wrapped under the VAULT RECOVERY
+// PHRASE, which the browser generates and never sends (src/client/vault/
+// recovery-phrase.ts). No server verifier is used for it — the envelope's GCM tag is
+// the check, on the device — so saveRecoveryAuth/verifyRecoveryAuth have no caller.
+// Should one ever be wired, it must receive only a value derived from the phrase under
+// a DIFFERENT HKDF info than the wrapping key, never the phrase itself.
+//
 // Entropy is drawn through the `random` seam (conventions: src/server/** never
 // calls the crypto library for randomness directly); HKDF and scrypt are
 // deterministic transforms, so they come straight from node:crypto, exactly as the
@@ -130,6 +137,24 @@ export async function saveWrappedKey(db: Db, input: SaveWrappedKeyInput): Promis
        params = EXCLUDED.params`,
     [input.userId, input.method, input.wrappedKey, JSON.stringify(params)],
   );
+}
+
+// Store the wrapped VK + params for `input.userId` + `input.method` ONLY when that
+// method has none yet, reporting whether it was inserted. An existing row is left
+// exactly as it was (ON CONFLICT DO NOTHING — one atomic statement, so two first
+// saves racing each other keep exactly one wrapped key instead of the later silently
+// replacing the earlier). The unlock-method POST uses this whenever the session has
+// no fresh step-up: replacing a method is a security change (review fix W1).
+export async function insertWrappedKeyIfAbsent(db: Db, input: SaveWrappedKeyInput): Promise<boolean> {
+  const params = input.params ?? {};
+  const result = await db.query(
+    `INSERT INTO vault_unlock_methods (user_id, method, wrapped_key, params)
+     VALUES ($1, $2, $3, $4::jsonb)
+     ON CONFLICT (user_id, method) DO NOTHING
+     RETURNING method`,
+    [input.userId, input.method, input.wrappedKey, JSON.stringify(params)],
+  );
+  return result.rows.length > 0;
 }
 
 // Which unlock methods have a saved wrapped key for `userId` (member-scoped: the

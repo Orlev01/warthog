@@ -30,6 +30,7 @@ import {
   deriveWrappingKeyFromRecoveryCode,
 } from "./derive";
 import { encryptValue } from "./values";
+import { canonicalRecoveryCharacters } from "./recovery-phrase";
 
 // The STORED, non-secret unlock-method record: the `v1:` wrapped-VK envelope, plus
 // the 16-byte PBKDF2 salt for a passphrase method (prf/recovery need no salt).
@@ -53,7 +54,9 @@ function deriveWrappingKey(request: UnlockRequest): Promise<Uint8Array<ArrayBuff
     case "passphrase":
       return deriveWrappingKeyFromPassphrase(request.secret, request.material.salt);
     case "recovery":
-      return deriveWrappingKeyFromRecoveryCode(request.secret);
+      // A typed recovery phrase is read in canonical form, so its case, spacing and
+      // grouping never matter (review fix W1).
+      return deriveWrappingKeyFromRecoveryCode(canonicalRecoveryCharacters(request.secret));
   }
 }
 

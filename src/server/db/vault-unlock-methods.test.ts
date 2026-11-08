@@ -112,6 +112,7 @@ import { z } from "zod";
 import {
   getOrCreatePrfSalt,
   saveWrappedKey,
+  insertWrappedKeyIfAbsent,
   listMethods,
   getWrappedKey,
   saveRecoveryAuth,
@@ -341,6 +342,85 @@ test("saving the same method again REPLACES its wrapped key (one wrapped key per
   } finally {
     await db.close();
   }
+});
+
+// Review fix W1 — a first save must never overwrite: the unlock-method POST inserts only
+// when the method is absent (an overwrite needs a fresh step-up), so two first-time saves
+// racing each other keep exactly one vault key instead of silently replacing the other.
+test("insertWrappedKeyIfAbsent stores a new method and reports it inserted", async () => {
+  const db = await freshDb();
+  try {
+    const userId = await makeUser(db, "insert-new");
+    const inserted = await insertWrappedKeyIfAbsent(db, {
+      userId,
+      method: RECOVERY,
+      wrappedKey: wrappedKeyFor("first"),
+    });
+    assert.equal(inserted, true, "a method the person had not saved is inserted");
+    const stored = await getWrappedKey(db, userId, RECOVERY);
+    assert.equal(stored?.wrappedKey, wrappedKeyFor("first"));
+    assert.deepEqual(stored?.params, {}, "an omitted params is stored as an empty object");
+  } finally {
+    await db.close();
+  }
+});
+
+test("insertWrappedKeyIfAbsent never replaces an existing method and reports it was not inserted", async () => {
+  const db = await freshDb();
+  try {
+    const userId = await makeUser(db, "insert-existing");
+    await saveWrappedKey(db, { userId, method: PASSPHRASE, wrappedKey: wrappedKeyFor("kept"), params: passphraseParams("kept") });
+    const inserted = await insertWrappedKeyIfAbsent(db, {
+      userId,
+      method: PASSPHRASE,
+      wrappedKey: wrappedKeyFor("intruder"),
+      params: passphraseParams("intruder"),
+    });
+    assert.equal(inserted, false, "an existing method is left alone");
+    const stored = await getWrappedKey(db, userId, PASSPHRASE);
+    assert.equal(stored?.wrappedKey, wrappedKeyFor("kept"), "the stored wrapped key is unchanged");
+    assert.deepEqual(stored?.params, passphraseParams("kept"), "and so are its params");
+  } finally {
+    await db.close();
+  }
+});
+
+test("insertWrappedKeyIfAbsent: two concurrent first saves keep exactly one wrapped key", async () => {
+  const db = await freshDb();
+  try {
+    const userId = await makeUser(db, "insert-race");
+    const results = await Promise.all(
+      ["a", "b", "c", "d"].map((token) =>
+        insertWrappedKeyIfAbsent(db, { userId, method: PASSKEY_PRF, wrappedKey: wrappedKeyFor(token) }),
+      ),
+    );
+    assert.equal(results.filter(Boolean).length, 1, "exactly one concurrent first save wins");
+    const stored = await getWrappedKey(db, userId, PASSKEY_PRF);
+    const winner = ["a", "b", "c", "d"][results.indexOf(true)]!;
+    assert.equal(stored?.wrappedKey, wrappedKeyFor(winner), "the stored key is the winner's");
+  } finally {
+    await db.close();
+  }
+});
+
+test("insertWrappedKeyIfAbsent is member-scoped: another person's method never blocks this person's", async () => {
+  const db = await freshDb();
+  try {
+    const a = await makeUser(db, "insert-scope-a");
+    const b = await makeUser(db, "insert-scope-b");
+    await saveWrappedKey(db, { userId: a, method: RECOVERY, wrappedKey: wrappedKeyFor("a") });
+    assert.equal(await insertWrappedKeyIfAbsent(db, { userId: b, method: RECOVERY, wrappedKey: wrappedKeyFor("b") }), true);
+    assert.equal((await getWrappedKey(db, a, RECOVERY))?.wrappedKey, wrappedKeyFor("a"), "A's row is untouched");
+  } finally {
+    await db.close();
+  }
+});
+
+test("insertWrappedKeyIfAbsent binds the user id and wrapped key as parameters", async () => {
+  const db = recordingDb();
+  const probe = "x'); DROP TABLE vault_unlock_methods; --";
+  await insertWrappedKeyIfAbsent(db, { userId: probe, method: RECOVERY, wrappedKey: probe });
+  assertBoundNotSpliced(db, probe);
 });
 
 test("getWrappedKey returns null for a method the person has not saved", async () => {
