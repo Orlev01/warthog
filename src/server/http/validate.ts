@@ -46,10 +46,7 @@ export async function parseBody<S extends z.ZodType>(
 ): Promise<z.infer<S>> {
   const maxBytes = opts?.maxBytes ?? DEFAULT_MAX_BYTES;
 
-  const raw = await request.text();
-  if (Buffer.byteLength(raw, "utf8") > maxBytes) {
-    throw new HttpError(413, "Request body too large");
-  }
+  const raw = await readTextCapped(request, maxBytes);
 
   let json: unknown;
   try {
@@ -61,6 +58,37 @@ export async function parseBody<S extends z.ZodType>(
   }
 
   return parse(schema, json, "Invalid request body");
+}
+
+// Read an untrusted request body as UTF-8 text, enforcing `maxBytes` WHILE reading: a declared
+// Content-Length over the cap is refused before a single byte is read, and a streamed body is
+// cancelled as soon as the running byte count crosses the cap, so an oversized (or lying)
+// request is never buffered whole. Rejects with a 413 `HttpError`. Every route that reads a raw
+// body (JSON through `parseBody`, form-encoded OAuth endpoints directly) goes through here —
+// never `request.text()` on untrusted input.
+export async function readTextCapped(request: Request, maxBytes: number): Promise<string> {
+  const declared = request.headers.get("content-length");
+  if (declared !== null && Number(declared) > maxBytes) {
+    throw new HttpError(413, "Request body too large");
+  }
+
+  const reader = request.body?.getReader();
+  if (!reader) return "";
+
+  const chunks: Uint8Array[] = [];
+  let total = 0;
+  for (;;) {
+    const { done, value } = await reader.read();
+    if (done) break;
+    total += value.byteLength;
+    if (total > maxBytes) {
+      await reader.cancel().catch(() => {});
+      throw new HttpError(413, "Request body too large");
+    }
+    chunks.push(value);
+  }
+  // Decode once over the whole body so a multi-byte character split across chunks survives.
+  return new TextDecoder().decode(Buffer.concat(chunks));
 }
 
 // Validate already-materialised path params (e.g. `{ id }`) against their declared
