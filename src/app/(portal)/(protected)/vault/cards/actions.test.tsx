@@ -814,3 +814,31 @@ test("no ambient env secret leaks into any stored row or the loaded screen; the 
     else process.env.DATABASE_URL = prevDbUrl;
   }
 });
+
+// =====================================================================================
+// Review fix G12 (follow-up) — the server never stores a full card number in the
+// plaintext last_four column, nor plaintext as "ciphertext": last four must be exactly
+// four digits and the number must arrive as a sealed `v1:` envelope.
+// =====================================================================================
+
+test("addCard rejects a last four that is not exactly four digits, or a number that is not a sealed v1 envelope", async () => {
+  const db = await freshDb();
+  const keyWrapper = makeKeyWrapper();
+  try {
+    const { userId, dek } = await makeUserWithDek(db, keyWrapper, "shape");
+    await seedUnlockMethod(db, userId);
+    const addrId = await seedBillingAddress(db, userId, dek, "1 Shape St, Perth");
+    const actions = makeActions(db, keyWrapper);
+    const session = sessionFor(userId);
+    for (const [label, overrides] of [
+      ["full number as last four", { lastFour: "4242424242424242" }],
+      ["letters as last four", { lastFour: "abcd" }],
+      ["plaintext number as ciphertext", { numberCiphertext: "4242424242424242" }],
+    ] as const) {
+      await assertRejects4xx(label, () => actions.addCard(session, addInput(submission(addrId, overrides))));
+    }
+    assert.equal((await listCards(db, userId)).length, 0, "nothing was stored");
+  } finally {
+    await db.close();
+  }
+});

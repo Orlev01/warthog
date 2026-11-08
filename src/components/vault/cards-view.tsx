@@ -76,7 +76,13 @@ export type CardsViewProps = {
   // always supplies the real server action; a prop-driven render (a preview, a render
   // test) may omit it, in which case nothing is stored.
   addCard?: AddCardAction;
+  // The page's removeCard server action (review fix G12 — Remove used to be a dead
+  // button). Omitted by a prop-driven render, in which case nothing is removed.
+  removeCard?: RemoveCardAction;
 };
+
+// The page's removeCard server action: member-scoped to the session person server-side.
+export type RemoveCardAction = (input: { cardId: string }) => Promise<{ ok: boolean; reason?: string }>;
 
 // The card a person enters in the add panel, before the number is sealed on the
 // device. Read loosely (the entered form values): a `securityCode` may be present
@@ -123,9 +129,61 @@ export async function sealCard(
   };
 }
 
-// A render-only default for the optional submit seam (above): the page always wires the
-// real addCard server action, so this is reached only by a prop-driven render.
+// Render-only defaults for the optional submit seams (above): the page always wires the
+// real addCard / removeCard server actions, so these are reached only by a prop-driven
+// render.
 const noopAddCard: AddCardAction = async () => ({ ok: true });
+const noopRemoveCard: RemoveCardAction = async () => ({ ok: true });
+
+// --- removing a saved card (review fix G12) ------------------------------------------
+//
+// A framework-free controller behind each card's Remove: ask (a confirm step names what
+// will happen), then confirm (calls removeCard once with that card's id — a double tap
+// never sends twice) or back out. Every outcome is reported in plain words.
+
+export type RemoveCardStage = "idle" | "confirming" | "working" | "removed" | "error";
+
+export interface RemoveCardState {
+  readonly stage: RemoveCardStage;
+  readonly error?: string;
+}
+
+export interface RemoveCardController {
+  getState(): RemoveCardState;
+  ask(): void;
+  cancel(): void;
+  confirm(): Promise<void>;
+}
+
+const REMOVE_FAILED_COPY = "We couldn't remove that card just now. Please try again.";
+
+export function createRemoveCardFlow(deps: {
+  cardId: string;
+  removeCard: RemoveCardAction;
+  onChange?: () => void;
+}): RemoveCardController {
+  let state: RemoveCardState = { stage: "idle" };
+  function set(next: RemoveCardState): void {
+    state = next;
+    deps.onChange?.();
+  }
+  async function confirm(): Promise<void> {
+    if (state.stage !== "confirming") return;
+    set({ stage: "working" });
+    try {
+      const result = await deps.removeCard({ cardId: deps.cardId });
+      set(result.ok ? { stage: "removed" } : { stage: "error", error: REMOVE_FAILED_COPY });
+    } catch {
+      set({ stage: "error", error: REMOVE_FAILED_COPY });
+    }
+  }
+  return {
+    getState: () => state,
+    ask: () => set({ stage: "confirming" }),
+    cancel: () => set({ stage: "idle" }),
+    confirm,
+  };
+}
 
 // The two-digit month and full year the saved card shows (e.g. 11/2029, 03/2028).
 function formatExpiry(month: number, year: number): string {
@@ -135,27 +193,80 @@ function formatExpiry(month: number, year: number): string {
 // --- card rows ---------------------------------------------------------------------
 
 // A saved card: brand + last four with its nickname and expiry, display only (never
-// an editable value field), and a Remove control. The view holds only metadata, so
-// the full number and the security code are physically absent here.
-function SavedCardRow({ card }: { card: SavedCard }) {
+// an editable value field), and a live Remove (with a confirm step). The view holds only
+// metadata, so the full number and the security code are physically absent here.
+function SavedCardRow({ card, removeCard }: { card: SavedCard; removeCard: RemoveCardAction }) {
+  const [, forceUpdate] = React.useReducer((n: number) => n + 1, 0);
+  const flowRef = React.useRef<RemoveCardController | null>(null);
+  if (flowRef.current === null) {
+    flowRef.current = createRemoveCardFlow({ cardId: card.id, removeCard, onChange: () => forceUpdate() });
+  }
+  const flow = flowRef.current;
+  const { stage, error } = flow.getState();
+
+  if (stage === "removed") {
+    return (
+      <p role="status" className="text-sm text-fg-muted">
+        {card.nickname} was removed from your vault.
+      </p>
+    );
+  }
+
   return (
-    <Card className="flex items-start justify-between gap-3">
-      <div className="flex items-start gap-3">
-        <CreditCard aria-hidden={true} className="mt-0.5 h-5 w-5 shrink-0 text-fg-muted" />
-        <div className="flex flex-col gap-0.5">
-          <span className="font-medium text-fg">{card.nickname}</span>
-          <span className="text-sm text-fg-muted">
-            {card.brand} •••• {card.lastFour}
-          </span>
-          <span className="text-sm text-fg-muted">
-            Expires {formatExpiry(card.expiryMonth, card.expiryYear)}
-          </span>
+    <Card className="flex flex-col gap-3">
+      <div className="flex items-start justify-between gap-3">
+        <div className="flex items-start gap-3">
+          <CreditCard aria-hidden={true} className="mt-0.5 h-5 w-5 shrink-0 text-fg-muted" />
+          <div className="flex flex-col gap-0.5">
+            <span className="font-medium text-fg">{card.nickname}</span>
+            <span className="text-sm text-fg-muted">
+              {card.brand} •••• {card.lastFour}
+            </span>
+            <span className="text-sm text-fg-muted">
+              Expires {formatExpiry(card.expiryMonth, card.expiryYear)}
+            </span>
+          </div>
         </div>
+        {stage === "idle" || stage === "error" ? (
+          <Button
+            variant="secondary"
+            type="button"
+            aria-label={`Remove ${card.nickname}`}
+            onClick={() => flow.ask()}
+          >
+            <Trash2 aria-hidden={true} className="h-4 w-4 shrink-0" />
+            Remove
+          </Button>
+        ) : null}
       </div>
-      <Button variant="secondary" type="button" aria-label={`Remove ${card.nickname}`}>
-        <Trash2 aria-hidden={true} className="h-4 w-4 shrink-0" />
-        Remove
-      </Button>
+      {stage === "confirming" || stage === "working" ? (
+        <div className="flex flex-col gap-2 rounded-card border border-line bg-surface-muted p-3">
+          <p className="text-sm text-fg">
+            Remove {card.nickname} ({card.brand} •••• {card.lastFour})? It is deleted from your
+            vault, and agents can no longer ask to use it.
+          </p>
+          <div className="flex flex-wrap gap-2">
+            <Button
+              variant="secondary"
+              type="button"
+              disabled={stage === "working"}
+              onClick={() => {
+                void flow.confirm();
+              }}
+            >
+              {stage === "working" ? "Removing…" : "Yes, remove it"}
+            </Button>
+            <Button variant="secondary" type="button" disabled={stage === "working"} onClick={() => flow.cancel()}>
+              Keep it
+            </Button>
+          </div>
+        </div>
+      ) : null}
+      {error ? (
+        <p role="alert" className="text-sm text-danger">
+          {error}
+        </p>
+      ) : null}
     </Card>
   );
 }
@@ -165,6 +276,7 @@ export function CardsView({
   billingAddresses,
   addingCard = false,
   addCard,
+  removeCard,
 }: CardsViewProps) {
   return (
     <section className="flex flex-col gap-8">
@@ -177,7 +289,9 @@ export function CardsView({
         {cards.length === 0 ? (
           <p className="text-sm text-fg-muted">No cards saved yet.</p>
         ) : (
-          cards.map((card) => <SavedCardRow key={card.id} card={card} />)
+          cards.map((card) => (
+            <SavedCardRow key={card.id} card={card} removeCard={removeCard ?? noopRemoveCard} />
+          ))
         )}
 
         {/* The live on-device add flow: closed it is the "Add a card" control, open it
