@@ -112,6 +112,7 @@ import {
   getApproval,
   listPendingForUser,
   decide,
+  markReleased,
   ApprovalAlreadyDecidedError,
 } from "./approvals";
 import { createUser } from "./users";
@@ -1010,6 +1011,36 @@ test("approving a pending approval past its window is refused as expired, and it
     const reloaded = await getApproval(db, userId, created.id, dek);
     assert.equal(reloaded!.status, "expired", "the overdue approval is persisted as expired right away");
     assert.ok(reloaded!.decidedAt, "and its expiry is stamped");
+  } finally {
+    await db.close();
+  }
+});
+
+// ===========================================================================
+// Review fix C3/C7 — a release approval hands its value over ONCE. markReleased is a
+// compare-and-swap on an APPROVED, not-yet-released approval: the first call wins, a
+// second (a retry, a race, an old approval) is refused, and it is member-scoped.
+// ===========================================================================
+
+test("markReleased marks an approved approval released exactly once, member-scoped", async () => {
+  const db = await freshDb();
+  try {
+    const userId = await makeUser(db, "c3-release-once");
+    const other = await makeUser(db, "c3-release-other");
+    const dek = freshDek();
+    const created = await createApproval(db, { userId, agentId: AGENT_A, detail: detailWith("RO") }, dek, fixedClock(T0));
+    const at = fixedClock(new Date(T0.getTime() + MINUTE));
+
+    assert.equal(await markReleased(db, { userId, id: created.id }, at), false, "a pending approval cannot be released");
+    await decide(db, { userId, id: created.id, decision: { status: "approved" } }, dek, at);
+
+    assert.equal(await markReleased(db, { userId: other, id: created.id }, at), false, "another person can never release it");
+    const results = await Promise.all([
+      markReleased(db, { userId, id: created.id }, at),
+      markReleased(db, { userId, id: created.id }, at),
+    ]);
+    assert.deepEqual(results.sort(), [false, true], "of two concurrent releases exactly one wins");
+    assert.equal(await markReleased(db, { userId, id: created.id }, at), false, "and it can never be released again");
   } finally {
     await db.close();
   }

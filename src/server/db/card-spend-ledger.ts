@@ -48,6 +48,9 @@ export interface NewRelease {
   readonly currency: string;
   readonly merchant: string;
   readonly periodKeys: PeriodKeys;
+  // The approval this release came from. An approval counts at most once: a second
+  // row for the same approval is refused by the store (a unique index).
+  readonly approvalId?: string;
 }
 
 // A release as handed back to callers: its generated id on top of its content. The
@@ -134,16 +137,17 @@ function sumOf(rows: { total?: unknown }[]): number {
 }
 
 // Record one approved card release for `input.userId`: inserts ONE ledger row with
-// the plaintext amount/currency/merchant and the three period keys, and returns the
-// StoredRelease carrying the generated id. No DEK — these columns are plaintext
-// metadata (design §4.1).
+// the plaintext amount/currency/merchant, the three period keys and the approval it
+// came from, and returns the StoredRelease carrying the generated id. No DEK — these
+// columns are plaintext metadata (design §4.1). Throws when the approval has already
+// been recorded (an approval counts against a budget at most once).
 export async function recordRelease(db: Db, input: NewRelease): Promise<StoredRelease> {
   const id = randomUUID();
   await db.query(
     `INSERT INTO card_spend_ledger
        (id, user_id, connection_id, household_id, amount, currency, merchant,
-        period_day, period_week, period_month)
-     VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)`,
+        period_day, period_week, period_month, approval_id)
+     VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11)`,
     [
       id,
       input.userId,
@@ -155,6 +159,7 @@ export async function recordRelease(db: Db, input: NewRelease): Promise<StoredRe
       input.periodKeys.day,
       input.periodKeys.week,
       input.periodKeys.month,
+      input.approvalId ?? null,
     ],
   );
   return { id, ...input };

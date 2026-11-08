@@ -44,7 +44,7 @@ const DETAIL_COLUMN = "detail";
 // decide hand back the same shape. `detail` comes back as ciphertext here and is
 // decrypted separately before it reaches a caller.
 const COLUMNS =
-  "id, user_id, agent_id, status, detail, question, created_at, expires_at, decided_at";
+  "id, user_id, agent_id, status, detail, question, created_at, expires_at, decided_at, released_at";
 
 // What createApproval needs: the person (the session's id), the requesting agent,
 // the detail to hold DEK-encrypted, and an optional expiry (omitted → the state
@@ -69,6 +69,8 @@ export interface StoredApproval {
   readonly expiresAt: Date;
   readonly decidedAt?: Date;
   readonly question?: string;
+  // Set the one time a card / high-tier approval's value is released (markReleased).
+  readonly releasedAt?: Date;
 }
 
 // A decision targets one of the four non-pending statuses; the repo maps each to the
@@ -105,6 +107,7 @@ function toStored(row: Row, detail: Record<string, unknown>): StoredApproval {
     expiresAt: toDate(row.expires_at),
     decidedAt: row.decided_at != null ? toDate(row.decided_at) : undefined,
     question: (row.question as string | null) ?? undefined,
+    ...(row.released_at != null ? { releasedAt: toDate(row.released_at) } : {}),
   };
 }
 
@@ -360,4 +363,29 @@ export async function decide(
     throw new ApprovalAlreadyDecidedError(id, actual);
   }
   return toStored(swapped, detail);
+}
+
+// What markReleased needs: the person (member scope) and the approval id.
+export interface MarkReleasedInput {
+  readonly userId: string;
+  readonly id: string;
+}
+
+// Mark an APPROVED card / high-tier approval as released — its value handed over to
+// the agent — exactly ONCE, member-scoped (id AND user_id bound). A compare-and-swap:
+// the UPDATE lands only while the approval is approved and not yet released, so of a
+// retried, raced or replayed release only one wins. Returns true for the winner and
+// false otherwise (not this person's, not approved, or already released).
+export async function markReleased(
+  db: Db,
+  { userId, id }: MarkReleasedInput,
+  clock: Clock,
+): Promise<boolean> {
+  const updated = await db.query(
+    `UPDATE approvals SET released_at = $1::timestamptz
+      WHERE id = $2 AND user_id = $3 AND status = 'approved' AND released_at IS NULL
+      RETURNING id`,
+    [clock.now().toISOString(), id, userId],
+  );
+  return updated.rows.length > 0;
 }
