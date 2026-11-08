@@ -38,6 +38,8 @@ import { z } from "zod";
 
 import { getAgentById } from "../../../../../server/db/agents";
 import { listConnectionsForUser } from "../../../../../server/db/connections";
+import { listAllRules } from "../../../../../server/db/rules";
+import { getUserById } from "../../../../../server/db/users";
 import {
   getConnectionPermissions,
   upsertPermissions,
@@ -46,6 +48,8 @@ import {
 } from "../../../../../server/db/agent-permissions";
 import { parseParams } from "../../../../../server/http/validate";
 import { budgetAllowsCard } from "../../../../../domain/budget/budget";
+import type { Rule } from "../../../../../domain/rules/rules";
+import type { KeyWrapper } from "../../../../../server/crypto/key-wrapper";
 import type { PermissionsViewProps } from "../../../../../components/agents/permissions-view";
 import type { Db } from "../../../../../server/db/index";
 import type { Session } from "../../../../../server/auth/session";
@@ -111,13 +115,16 @@ export type PermissionsSaveInput = z.infer<typeof inputSchema>;
 // success.
 export type SaveResult = { readonly ok: true } | { readonly ok: false; readonly reason: string };
 
-// The seams the flow composes: the database seam (the agents, agent-permissions and
-// connections stores) and an optional catalogue lookup that names a connected service (the
-// page passes the process-wide catalogue; absent ⇒ a service is shown by its id). No config,
-// no clock — editing permissions needs neither.
+// The seams the flow composes: the database seam (the agents, agent-permissions,
+// connections and rules stores), an optional catalogue lookup that names a connected service
+// (the page passes the process-wide catalogue; absent ⇒ a service is shown by its id) and an
+// optional KeyWrapper that unwraps the person's DEK so the agent's own rules (their
+// conditions are DEK-encrypted) can be listed (absent ⇒ the rules section is empty). No
+// config, no clock — editing permissions needs neither.
 export interface PermissionsActionsDeps {
   readonly db: Db;
   readonly nameOf?: (connectorId: string) => string | undefined;
+  readonly keyWrapper?: KeyWrapper;
 }
 
 // The per-agent permissions actions the thin loader + save wrapper drive.
@@ -139,6 +146,7 @@ function toViewProps(
   agentName: string,
   grants: ConnectionPermissions,
   services: readonly { id: string; name: string }[],
+  rules: readonly Rule[],
 ): PermissionsViewProps {
   return {
     agentName,
@@ -160,7 +168,7 @@ function toViewProps(
     skills: [],
     sharedMemoryRead: grants.memoryRead,
     learningSharing: grants.sharing,
-    rules: [],
+    rules,
     requestLimit: grants.rateLimit,
     currency: grants.cardBudget?.currency ?? DEFAULT_CURRENCY,
   };
@@ -223,7 +231,26 @@ function mergeGrants(
 }
 
 export function createPermissionsActions(deps: PermissionsActionsDeps): PermissionsActions {
-  const { db, nameOf } = deps;
+  const { db, nameOf, keyWrapper } = deps;
+
+  // The agent's OWN active rules — the ones the person scoped to this agent's connection —
+  // read member-scoped by the session's user id with their conditions decrypted under that
+  // person's DEK, each naming the agent by its current name (never a raw connection id
+  // stored with an older rule). Rules for all agents live on the Rules page.
+  async function agentRules(userId: string, connectionId: string, agentName: string): Promise<Rule[]> {
+    if (!keyWrapper) return [];
+    const user = await getUserById(db, userId);
+    if (!user) return [];
+    const dek = await keyWrapper.unwrap(user.wrappedDek);
+    return (await listAllRules(db, userId, dek))
+      .filter((rule) => rule.status === "active" && rule.scope.type === "agent" && rule.scope.agentId === connectionId)
+      .map((rule) => ({
+        kind: rule.kind,
+        scope: { type: "agent", agentId: connectionId, name: agentName },
+        action: rule.action,
+        condition: rule.condition,
+      }));
+  }
 
   // The person's OWN connected services (member-scoped by the session's user id), one per
   // service however many accounts of it are connected, named through the catalogue.
@@ -242,7 +269,12 @@ export function createPermissionsActions(deps: PermissionsActionsDeps): Permissi
     if (agent == null) return null;
     const grants = await getConnectionPermissions(db, session.userId, agent.connectionId);
     if (grants == null) return null;
-    return toViewProps(agent.displayName, grants, await connectedServices(session.userId));
+    return toViewProps(
+      agent.displayName,
+      grants,
+      await connectedServices(session.userId),
+      await agentRules(session.userId, agent.connectionId, agent.displayName),
+    );
   }
 
   // Save: validate the agent id shape and the input at the boundary FIRST (a 4xx before any

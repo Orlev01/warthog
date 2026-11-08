@@ -7,6 +7,8 @@ import { verifySession, type Session } from "@/server/auth/session";
 import { systemClock } from "@/server/seams/clock";
 import { HttpError } from "@/server/http/validate";
 import { getProcessCatalogue } from "@/server/connectors/catalogue";
+import { loadConfig } from "@/server/config";
+import { selectKeyWrapper } from "@/server/crypto/key-wrapper";
 import { createPermissionsActions, type PermissionsSaveInput, type SaveResult } from "./actions";
 import { PermissionsForm } from "./permissions-form";
 import type { Db } from "@/server/db/index";
@@ -86,7 +88,11 @@ export default async function AgentPermissionsPage({
     redirect("/signin");
   }
 
-  const props = await createPermissionsActions({ db, nameOf: serviceName }).load(session, id);
+  // The KeyWrapper (local AES outside production, Key Vault in production) unwraps the
+  // person's DEK so the agent's own rules, whose conditions are encrypted, can be listed.
+  const config = loadConfig();
+  const keyWrapper = selectKeyWrapper({ nodeEnv: config.nodeEnv, localKek: config.devKek });
+  const props = await createPermissionsActions({ db, nameOf: serviceName, keyWrapper }).load(session, id);
   if (props == null) {
     notFound();
   }

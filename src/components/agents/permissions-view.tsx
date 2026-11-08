@@ -290,6 +290,15 @@ export function PermissionsView({
       {/* The agent's own rules, each read back as its exact plain-English sentence. */}
       <div className="flex flex-col gap-3">
         <SectionHeading>Rules for {agentName}</SectionHeading>
+        {rules.length === 0 ? (
+          <p className="text-sm text-fg-muted">
+            No rules just for {agentName} yet.{" "}
+            <a href="/rules" className="font-medium text-accent underline underline-offset-2">
+              Add one in Rules
+            </a>
+            .
+          </p>
+        ) : null}
         <ul className="flex flex-col gap-2">
           {rules.map((rule, i) => (
             <li
