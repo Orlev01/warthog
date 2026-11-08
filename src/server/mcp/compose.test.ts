@@ -72,7 +72,7 @@ import { logActivitySchema } from "./tools/log-activity";
 
 import { loadConfig, type Config } from "../config";
 import { localAesKeyWrapper } from "../crypto/key-wrapper";
-import { fixedClock } from "../seams/clock";
+import { fixedClock, systemClock } from "../seams/clock";
 import { createUser } from "../db/users";
 import { createAgent } from "../db/agents";
 import { upsertPermissions, type PermissionGrants } from "../db/agent-permissions";
@@ -81,6 +81,8 @@ import { listPendingForUser } from "../db/approvals";
 import { registerSubscription } from "../db/push-subscriptions";
 import { createHousehold, setHouseholdBudget, setMemberLimit } from "../db/households";
 import { upsertRate } from "../db/exchange-rates";
+import { storeFingerprint } from "../db/release-fingerprints";
+import { fingerprint } from "../crypto/hmac";
 import { FALLBACK_JOB_TYPE } from "../notify/approval-notifier";
 import { outbox } from "../notify/outbox";
 import { createToken } from "../oauth/store";
@@ -669,6 +671,39 @@ test("D3: a foreign-currency card request is converted with the stored daily rat
     // 800 USD is 1200 AUD — over the A$1000 budget once converted.
     const over = await requestCard(dispatch, connectionId, 800, "USD");
     assert.match(contentText(over), /card budget/);
+  } finally {
+    await db.close();
+  }
+});
+
+// ===================================================================================
+// Review fix D4 — once a high-tier value has been released, a later tool call that echoes
+// it (in any surface form, including one written with spaces or dashes) is stored in the
+// activity record as `[released value]`, never the value.
+// ===================================================================================
+
+test("D4: a released value echoed in a later tool call is redacted from the activity record", async () => {
+  const db = await freshDb();
+  try {
+    const config = devConfig();
+    const { userId, connectionId, agentId, dek } = await seedConnection(db, config);
+    // Released just now (the dispatch reads the system clock; a fingerprint lives 90 days).
+    for (const value of ["PA1234567", "AB-123-456"]) {
+      await storeFingerprint(db, { userId, fingerprint: fingerprint(dek, value) }, systemClock);
+    }
+    const dispatch = createMcpDispatch({ db, config });
+
+    const content = "My passport is PA1234567, licence ab 123 456";
+    const rpc = await readRpc(await dispatch(connectionId, mcpPost(callBody("remember", { content }))));
+    assert.notEqual(rpc.result?.isError, true, `remember succeeds, got: ${JSON.stringify(rpc)}`);
+
+    const entries = await listActivity(db, userId, { agentId }, dek);
+    const entry = entries.find((candidate) => candidate.tool === "remember");
+    assert.ok(entry, "the remember call was recorded");
+    const stored = JSON.stringify(entry!.payload);
+    assert.ok(!stored.includes("PA1234567"), "the released passport number is not stored");
+    assert.ok(!/ab 123 456/i.test(stored), "the released licence is not stored in another surface form");
+    assert.equal(stored.split("[released value]").length - 1, 2, "both values are replaced by the marker");
   } finally {
     await db.close();
   }

@@ -33,7 +33,7 @@ import type { AuthInfo } from "@modelcontextprotocol/server";
 import type { Config } from "../config";
 import type { Db } from "../db/index";
 import { selectKeyWrapper, type KeyWrapper } from "../crypto/key-wrapper";
-import { createDbRecorder } from "../activity/writer";
+import { createRedactingRecorder } from "./recorder";
 import { type UndoReversalJob } from "../activity/undo";
 import { getRateLimiter } from "./rate-limit";
 import { systemClock, type Clock } from "../seams/clock";
@@ -223,8 +223,9 @@ function buildAgentPipeline(deps: McpDispatchDeps): AgentCallPipeline {
   }
 
   // Warthog writes the record itself (principle 14): the DB-backed recorder redacts then
-  // DEK-encrypts each entry before it is persisted.
-  const recorder = createDbRecorder({ db, clock, dekFor: dataKeyFor });
+  // DEK-encrypts each entry before it is persisted, with the person's released-value
+  // fingerprints loaded so an echoed high-tier value is stored as `[released value]`.
+  const recorder = createRedactingRecorder({ db, clock, dekFor: dataKeyFor });
   const rateLimiter = getRateLimiter();
 
   // --- the tool bodies the executor routes executed calls to ------------------
