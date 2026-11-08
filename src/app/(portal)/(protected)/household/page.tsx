@@ -340,6 +340,11 @@ const NOTICES: Record<string, Notice> = {
     text: "That invite was sent to a different email address. Sign in with that account to join.",
   },
   household_full: { tone: "problem", text: "That household already has the most members it can have (8)." },
+  invite_no_room: {
+    tone: "problem",
+    text: "No invite was sent: a household has room for 8 people, and the open invites already fill the free places.",
+  },
+  invite_throttled: { tone: "problem", text: "No invite was sent: you've sent a lot of invites this hour. Try again later." },
   not_owner: { tone: "problem", text: "Only the household owner can do that." },
   not_a_member: { tone: "problem", text: "You're not a member of a household." },
   no_household: { tone: "problem", text: "You're not in a household yet." },

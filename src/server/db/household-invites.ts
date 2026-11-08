@@ -21,6 +21,13 @@
 // authorisation to ISSUE an invite is enforced a layer up — this store's job is the token
 // lifecycle, so it takes `householdId` + `email` and never re-checks owner-ness here.
 //
+// Every invite sends an email, so issuing is bounded (review fix W3.1): a household's OPEN
+// invites (unused and unexpired) never exceed its free places (8 − current members), a new
+// invite to an address replaces that address's earlier open invite (a resend takes no extra
+// place), and a household sends at most INVITES_PER_HOUR invites in any hour. Both checks
+// and the insert are one statement, run under the household row lock addMember also takes,
+// so parallel invites (or an invite racing a join) can never overshoot either limit.
+//
 // Every statement is parameterized through the `Db` seam (INV-102): the ids and the email
 // travel as BOUND values, never concatenated into the SQL text, so a value shaped like SQL
 // is stored as data and cannot alter the query — and the raw token is hashed before it is
@@ -35,11 +42,29 @@ import type { Clock } from "../seams/clock";
 import type { Random } from "../seams/random";
 import type { Db } from "./index";
 import { withTransaction } from "./index";
-import { addMember } from "./households";
+import { addMember, MAX_MEMBERS } from "./households";
 
 const DAY_MS = 24 * 60 * 60 * 1000;
 const INVITE_TTL_MS = 7 * DAY_MS; // an invite link lapses seven days after issue (brief)
 const TOKEN_ENTROPY_BYTES = 32; // 256 bits of entropy (design §4.1)
+const HOUR_MS = 60 * 60 * 1000;
+
+// How many invites one household may send in any rolling hour (resends included). Enough to
+// invite everyone at once (at most seven places) and resend a couple; not enough to use the
+// household as a mailer.
+export const INVITES_PER_HOUR = 10;
+
+// Why an invite was not issued: the household has no free place left for another open
+// invite ("no_room"), or it has sent INVITES_PER_HOUR invites in the last hour
+// ("throttled"). Thrown by issueInvite; nothing is stored and nothing should be sent.
+export type InviteRefusal = "no_room" | "throttled";
+
+export class InviteRefusedError extends Error {
+  constructor(readonly reason: InviteRefusal) {
+    super(reason === "no_room" ? "The household has no free place for another invite" : "Too many invites this hour");
+    this.name = "InviteRefusedError";
+  }
+}
 
 // What issueInvite takes: the household this invite joins (bound to ONE) and the invited
 // person's email (bound to the invite).
@@ -112,22 +137,69 @@ function drawToken(random: Random): string {
 // Issue an invite for one household + email: draw a 256-bit token, store ONLY its SHA-256
 // hash with a seven-day expiry bound to `householdId` + `email`, and return the
 // IssuedInvite carrying the RAW token (for the single message that delivers it). The
-// returned value is assembled from the inputs (it does not depend on a RETURNING read).
-// The raw token is written to no column and returned to no other caller.
+// returned value is assembled from the inputs. The raw token is written to no column and
+// returned to no other caller.
+//
+// The insert happens only while the household is under both limits (see the header): the
+// open invites to OTHER addresses plus the current members stay under 8, and fewer than
+// INVITES_PER_HOUR invites were sent in the hour before now. Otherwise nothing is stored
+// and InviteRefusedError names the limit. A successful invite retires the address's earlier
+// open invite (its expiry becomes now, so that link reads as expired).
 export async function issueInvite(
   db: Db,
   input: IssueInviteInput,
   deps: IssueInviteDeps,
 ): Promise<IssuedInvite> {
   const token = drawToken(deps.random);
+  const tokenHash = sha256Hex(token);
   const now = deps.clock.now();
   const expiresAt = new Date(now.getTime() + INVITE_TTL_MS);
+  const hourAgo = new Date(now.getTime() - HOUR_MS);
 
-  await db.query(
-    `INSERT INTO household_invites (token_hash, household_id, email, created_at, expires_at)
-     VALUES ($1, $2, $3, $4::timestamptz, $5::timestamptz)`,
-    [sha256Hex(token), input.householdId, input.email, now.toISOString(), expiresAt.toISOString()],
-  );
+  const refusal = await withTransaction(db, async (tx): Promise<InviteRefusal | null> => {
+    // The same household lock addMember takes, so invites and joins serialise on Postgres;
+    // the gated insert below re-checks both limits in one statement either way.
+    await tx.query("SELECT 1 FROM households WHERE id = $1 FOR UPDATE", [input.householdId]);
+    const inserted = await tx.query(
+      `INSERT INTO household_invites (token_hash, household_id, email, created_at, expires_at)
+       SELECT $1, $2, $3, $4::timestamptz, $5::timestamptz
+        WHERE (SELECT count(*) FROM household_invites
+                WHERE household_id = $2 AND created_at > $6::timestamptz) < $7::int
+          AND (SELECT count(*) FROM household_invites
+                WHERE household_id = $2 AND used_at IS NULL AND expires_at > $4::timestamptz
+                  AND lower(btrim(email)) <> lower(btrim($3)))
+            + (SELECT count(*) FROM household_members WHERE household_id = $2) < $8::int
+       RETURNING token_hash`,
+      [
+        tokenHash,
+        input.householdId,
+        input.email,
+        now.toISOString(),
+        expiresAt.toISOString(),
+        hourAgo.toISOString(),
+        INVITES_PER_HOUR,
+        MAX_MEMBERS,
+      ],
+    );
+    if (inserted.rows.length === 0) {
+      // Nothing was stored: name the limit that refused it.
+      const sent = await tx.query(
+        `SELECT count(*)::int AS n FROM household_invites
+          WHERE household_id = $1 AND created_at > $2::timestamptz`,
+        [input.householdId, hourAgo.toISOString()],
+      );
+      return Number(sent.rows[0]?.n ?? 0) >= INVITES_PER_HOUR ? "throttled" : "no_room";
+    }
+    // A resend: the address's earlier open invite stops working now.
+    await tx.query(
+      `UPDATE household_invites SET expires_at = $3::timestamptz
+        WHERE household_id = $1 AND token_hash <> $2 AND used_at IS NULL
+          AND expires_at > $3::timestamptz AND lower(btrim(email)) = lower(btrim($4))`,
+      [input.householdId, tokenHash, now.toISOString(), input.email],
+    );
+    return null;
+  });
+  if (refusal) throw new InviteRefusedError(refusal);
 
   return {
     token,

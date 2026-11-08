@@ -56,7 +56,7 @@ import {
   setFollowChoice,
   type SharedAddressNotifier,
 } from "@/server/db/household-shared-address";
-import { issueInvite } from "@/server/db/household-invites";
+import { issueInvite, InviteRefusedError, type IssuedInvite } from "@/server/db/household-invites";
 import { isKnownCurrency } from "@/server/db/account-currency";
 import { ensureHouseholdKey } from "@/server/household/household-key";
 import { readHouseholdPageData, type HouseholdPageData } from "@/server/household/page-data";
@@ -101,7 +101,8 @@ export interface HouseholdActions {
   // Make a household owned by the session user; a person already in a household is refused.
   createHousehold(session: Session, input?: CreateHouseholdInput): Promise<ActionResult>;
   // OWNER-only: invite a newcomer by email — issue the invite and deliver the link; a
-  // non-owner is refused and nothing is sent. A malformed / oversized email is a 4xx.
+  // non-owner is refused and nothing is sent, as is an invite past the household's free
+  // places or its hourly allowance. A malformed / oversized email is a 4xx.
   inviteMember(session: Session, input: { email: string }): Promise<ActionResult>;
   // OWNER-only: remove a member of the owner's own household (a mis-shaped id is a 4xx).
   removeMember(session: Session, input: { memberId: string }): Promise<ActionResult>;
@@ -138,6 +139,9 @@ const NOT_A_MEMBER = "not_a_member";
 const NOT_OWNER = "not_owner";
 const ALREADY_IN_HOUSEHOLD = "already_in_household";
 const UNKNOWN_CURRENCY = "unknown_currency";
+// The invite store's limits (review fix W3.1): no free place left for another open invite,
+// or the household's hourly invite allowance is spent.
+const INVITE_REFUSALS = { no_room: "invite_no_room", throttled: "invite_throttled" } as const;
 
 // The one shape a member id may take: a well-formed uuid. A malformed value ("42", "",
 // "   ", an injection probe) is rejected at the boundary with a 4xx (parseParams throws an
@@ -210,7 +214,15 @@ export function createHouseholdActions(deps: HouseholdActionsDeps): HouseholdAct
     // lifecycle), so the gate lives here, against the session user id (never a client value).
     if (household.ownerId !== session.userId) return { ok: false, reason: NOT_OWNER };
 
-    const invite = await issueInvite(db, { householdId: household.id, email: recipient }, { clock, random });
+    // The store refuses past the household's free places or its hourly allowance; then
+    // nothing is stored and nothing is sent.
+    let invite: IssuedInvite;
+    try {
+      invite = await issueInvite(db, { householdId: household.id, email: recipient }, { clock, random });
+    } catch (error) {
+      if (error instanceof InviteRefusedError) return { ok: false, reason: INVITE_REFUSALS[error.reason] };
+      throw error;
+    }
     // The link is built on the CONFIGURED public origin, never the request host; it carries
     // the raw token exactly once, in this single delivering message.
     const link = `${publicBaseUrl}/household/join/${invite.token}`;

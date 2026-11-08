@@ -31,7 +31,7 @@ import { getAccountCurrency, isKnownCurrency } from "./account-currency";
 export type HouseholdRole = "owner" | "member";
 
 // The membership cap: the owner plus up to seven others.
-const MAX_MEMBERS = 8;
+export const MAX_MEMBERS = 8;
 
 // A household row, as handed back to callers.
 export interface Household {
