@@ -120,6 +120,7 @@ import {
   requestAccountReset,
   cancelAccountReset,
   completeAccountReset,
+  getPendingAccountReset,
   type ResetExecutor,
 } from "./account-reset";
 import { createResetExecutor } from "../account/reset-executor";
@@ -706,5 +707,27 @@ test("the erase, the revoke and the status change commit together: a failed revo
     assert.equal(status.rows[0]?.status, "pending", "and the reset is still pending");
   } finally {
     await real.close();
+  }
+});
+
+test("getPendingAccountReset reports a pending reset's dates to its own person only", async () => {
+  const clock = fixedClock(T0);
+  const { executor } = makeExecutorSpy();
+  const db = await freshDb();
+  try {
+    const person = await freshUser(db, "pending-read");
+    const other = await freshUser(db, "pending-read-other");
+    assert.equal(await getPendingAccountReset(db, { userId: person.id }), null, "nothing pending yet");
+    await requestResetFor(db, person, clock, createOutbox(), executor);
+
+    const pending = await getPendingAccountReset(db, { userId: person.id });
+    assert.equal(pending?.requestedAt.getTime(), T0.getTime());
+    assert.equal(pending?.completesAt.getTime(), T0.getTime() + SEVEN_DAYS_MS);
+    assert.equal(await getPendingAccountReset(db, { userId: other.id }), null, "another person sees nothing");
+
+    await cancelAccountReset(db, { userId: person.id }, {});
+    assert.equal(await getPendingAccountReset(db, { userId: person.id }), null, "a cancelled reset is not pending");
+  } finally {
+    await db.close();
   }
 });

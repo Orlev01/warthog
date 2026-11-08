@@ -38,6 +38,9 @@ import type { Db } from "../db/index";
 const MINUTE_MS = 60 * 1000;
 const SEVEN_DAYS_MS = 7 * 24 * 60 * MINUTE_MS;
 
+// How long a requested reset waits before it completes (the brief's 7-day window).
+export const RESET_WAIT_MS = SEVEN_DAYS_MS;
+
 // The background-job type the 7-day timer fires; its payload names the account so
 // the handler can drive completeAccountReset for the right person.
 export const COMPLETE_JOB_TYPE = "account_reset.complete";
@@ -191,6 +194,23 @@ export async function cancelAccountReset(
   );
   if (result.rows.length === 0) return { ok: false, reason: "no_pending_reset" };
   return { ok: true };
+}
+
+// The person's pending reset, for the signed-in banner that offers to cancel it: when it
+// was requested and when it will complete. Member-scoped by the session's user id; null
+// when nothing is pending.
+export async function getPendingAccountReset(
+  db: Db,
+  { userId }: { userId: string },
+): Promise<{ requestedAt: Date; completesAt: Date } | null> {
+  const found = await db.query(
+    "SELECT requested_at FROM account_resets WHERE user_id = $1 AND status = 'pending'",
+    [userId],
+  );
+  const row = found.rows[0];
+  if (!row) return null;
+  const requestedAt = new Date(row.requested_at as string | Date);
+  return { requestedAt, completesAt: new Date(requestedAt.getTime() + RESET_WAIT_MS) };
 }
 
 // The action the 7-day timer fires. Claiming the completion is a guarded, atomic
