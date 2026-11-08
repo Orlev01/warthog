@@ -262,3 +262,84 @@ test("put and collect never emit the released value to the console (logs/metrics
     );
   }
 });
+
+// ---------------------------------------------------------------------------
+// Review fix C8 — the brief: "SHALL discard it from server memory on collection
+// or expiry, whichever comes first". Lazy expiry alone left an UNCOLLECTED value
+// (an abandoned flow, a crashed agent) in the process heap as plaintext forever.
+// The store now evicts actively: each put arms an eviction for the end of its
+// 5-minute window (through an injectable scheduler, so these tests drive it), and
+// every put/collect also sweeps any entry already past its window. `size()` makes
+// "held in memory" observable.
+// ---------------------------------------------------------------------------
+
+// A scheduler the test fires by hand: records each armed eviction (with its delay)
+// and whether it was cancelled, so eviction is observed without waiting real time.
+function manualScheduler(): {
+  schedule: (evict: () => void, delayMs: number) => () => void;
+  armed: { evict: () => void; delayMs: number; cancelled: boolean }[];
+} {
+  const armed: { evict: () => void; delayMs: number; cancelled: boolean }[] = [];
+  return {
+    armed,
+    schedule(evict, delayMs) {
+      const slot = { evict, delayMs, cancelled: false };
+      armed.push(slot);
+      return () => {
+        slot.cancelled = true;
+      };
+    },
+  };
+}
+
+test("an uncollected value is evicted from memory when its 5-minute window ends, even if nobody collects it", () => {
+  const { clock, advance } = controllableClock();
+  const scheduler = manualScheduler();
+  const store = createReleaseStore(clock, scheduler.schedule);
+
+  store.put("rel-abandoned", "card-4242");
+  assert.equal(store.size(), 1, "the released value is held in memory after put");
+  assert.equal(scheduler.armed.length, 1, "put arms one eviction for the value");
+  assert.equal(scheduler.armed[0]!.delayMs, TTL_MS, "the eviction fires at the end of the 5-minute window");
+
+  // The window passes with no collect at all; the armed eviction fires.
+  advance(TTL_MS + 1);
+  scheduler.armed[0]!.evict();
+
+  assert.equal(store.size(), 0, "the uncollected value is gone from memory once it expires");
+  assert.equal(store.collect("rel-abandoned"), undefined, "an evicted value can never be collected");
+});
+
+test("a later put sweeps out every entry already past its window", () => {
+  const { clock, advance } = controllableClock();
+  const scheduler = manualScheduler();
+  const store = createReleaseStore(clock, scheduler.schedule);
+
+  store.put("rel-old-1", "value-1");
+  store.put("rel-old-2", "value-2");
+  advance(TTL_MS + 1);
+  // The armed evictions never fired (e.g. a stalled timer); the next put still sweeps.
+  store.put("rel-new", "value-3");
+
+  assert.equal(store.size(), 1, "only the fresh value is still held; both expired ones were swept");
+  assert.equal(store.collect("rel-new"), "value-3", "the fresh value is still collectable once");
+});
+
+test("collecting a value cancels its pending eviction, and replacing a value re-arms it", () => {
+  const { clock } = controllableClock();
+  const scheduler = manualScheduler();
+  const store = createReleaseStore(clock, scheduler.schedule);
+
+  store.put("rel-1", "first");
+  store.put("rel-1", "second");
+  assert.equal(scheduler.armed[0]!.cancelled, true, "replacing a value cancels the old value's eviction");
+  assert.equal(store.size(), 1, "a replaced key holds one value");
+
+  assert.equal(store.collect("rel-1"), "second", "the latest value is collected");
+  assert.equal(scheduler.armed[1]!.cancelled, true, "collecting cancels the collected value's eviction");
+
+  // A late-firing eviction for the replaced value never removes a newer value.
+  store.put("rel-1", "third");
+  scheduler.armed[0]!.evict();
+  assert.equal(store.size(), 1, "a stale eviction leaves the newer value in place");
+});
