@@ -130,9 +130,12 @@ function registerTool(
         const outcome = await tool.handle(args, connection);
         return toToolResult(outcome);
       } catch (err) {
-        // A boundary 4xx (malformed / oversized input, INV-102) or any other failure is
-        // surfaced as an MCP error, never a silent success.
-        return errorResult(err instanceof HttpError ? err.message : TOOL_FAILED_REASON);
+        // A boundary 4xx (malformed / oversized input, INV-102) carries its own fixed,
+        // safe message. Any other failure is logged for operators (never its message) and
+        // surfaced as a plain MCP error — never a silent success.
+        if (err instanceof HttpError) return errorResult(err.message);
+        logFailure("tool_call_failed", err, { tool: tool.name });
+        return errorResult(TOOL_FAILED_REASON);
       }
     },
   );
@@ -192,13 +195,22 @@ function approvalPushSender(config: Config): ApprovalPushSender {
   return createWebPushSender({ vapid: config.vapid, fetch: createGuardedFetch() });
 }
 
+// Log a failure on the MCP path for operators: a fixed event name, non-personal context
+// (a tool name) and the error's class — never its message, which could carry personal
+// content (design §4.3).
+function logFailure(event: string, err: unknown, context: Record<string, string> = {}): void {
+  console.error(
+    "[warthog mcp]",
+    JSON.stringify({ event, ...context, error: err instanceof Error ? err.name : "unknown" }),
+  );
+}
+
 // A best-effort side effect of an agent call (the approval notifier, a metric write) that
 // fails is logged and swallowed, so it can never turn a call that was already handled —
 // an approval and its held request are written before the notifier runs — into an error
-// for the agent. Only a fixed event name and the error's class reach the log, never its
-// message, which could carry personal content (design §4.3).
+// for the agent.
 function logSideEffectFailure(event: string, err: unknown): void {
-  console.error("[warthog mcp]", JSON.stringify({ event, error: err instanceof Error ? err.name : "unknown" }));
+  logFailure(event, err);
 }
 
 // Build the agent-call pipeline's REAL dependencies from the two composition-root inputs

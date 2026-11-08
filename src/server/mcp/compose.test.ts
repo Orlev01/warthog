@@ -973,6 +973,38 @@ test("D7: get_context leaves out the profile and memory the agent is not granted
   }
 });
 
+// Review fix (unverified finding, confirmed): an internal failure behind a tool call is
+// logged for operators — a fixed event, the tool and the error's class, never its message
+// (which could carry personal content) — while the agent sees only the plain reason.
+test("an internal tool failure is logged without its message and reported plainly to the agent", async (t) => {
+  const db = await freshDb();
+  try {
+    const config = devConfig();
+    const { userId, connectionId, dek } = await seedConnection(db, config, { grantedConnectors: ["amadeus"] });
+    await connectService(db, userId, dek, "amadeus", { api_key: "sk-test" });
+    const failing = (async () => {
+      throw new TypeError("socket hang up for ada@example.com");
+    }) as typeof fetch;
+    const dispatch = createMcpDispatch({ db, config, fetch: failing });
+    const logged = t.mock.method(console, "error", () => undefined);
+
+    const rpc = await readRpc(
+      await dispatch(connectionId, mcpPost(callBody("amadeus__request", { method: "GET", path: "/v1/x" }))),
+    );
+    assert.equal(rpc.result?.isError, true);
+    assert.equal(contentText(rpc.result), "The tool call could not be completed.");
+
+    const lines = logged.mock.calls.map((call) => call.arguments.map(String).join(" "));
+    const line = lines.find((text) => text.includes("tool_call_failed"));
+    assert.ok(line, `the failure is logged, got: ${JSON.stringify(lines)}`);
+    assert.match(line!, /amadeus__request/);
+    assert.match(line!, /TypeError/);
+    assert.ok(!line!.includes("ada@example.com"), "the error message never reaches the log");
+  } finally {
+    await db.close();
+  }
+});
+
 // ===================================================================================
 // AC4 — the connection comes ONLY from the verified bearer; a body naming another
 //       connection / user id is ignored.
