@@ -58,10 +58,11 @@ import {
   type ApprovedHoldResult,
 } from "./pipeline";
 import { createToolRegistry, type ToolDefinition } from "./tools/registry";
-import { loadAgentContext, type AgentConnection } from "./context";
+import type { AgentConnection } from "./context";
 
 import { createRememberTool, createSearchMemoryTool } from "./tools/memory";
 import { createGetSkillTool } from "./tools/get-skill";
+import { createGetContextTool } from "./tools/get-context";
 import { createCheckApprovalTool } from "./tools/check-approval";
 import { createCollectReleaseTool } from "./tools/collect-release";
 import { createLogActivityTool } from "./tools/log-activity";
@@ -272,18 +273,11 @@ function buildAgentPipeline(deps: McpDispatchDeps): AgentCallPipeline {
       pipeline.executeApprovedHold(userId, approvalId),
   });
 
-  // get_context hands the agent everything it has been granted for this connection — its
-  // permission grants, the rules it must follow and its budget currency/spend — assembled
-  // through the SAME member-scoped loader the pipeline uses (never a client value).
-  async function getContext(connection: AgentConnection): Promise<unknown> {
-    const context = await loadAgentContext(connection, { db, keyWrapper, clock });
-    return {
-      permissions: context.permissions,
-      rules: context.rules,
-      accountCurrency: context.accountCurrency,
-      spend: context.spend,
-    };
-  }
+  // get_context hands the agent everything it has been granted for this connection — the
+  // low-tier profile (when allowed), preferences, the skill index with the house skill, the
+  // rules as sentences, the memory it may read and its open tasks — member-scoped by the
+  // connection, with no internal ids.
+  const getContextTool = createGetContextTool({ db, keyWrapper, clock });
 
   // The tool-body executor the pipeline runs on ALLOW: a connector tool goes to the
   // connector engine under the connection's owner; a core tool is routed to its real body by
@@ -296,7 +290,7 @@ function buildAgentPipeline(deps: McpDispatchDeps): AgentCallPipeline {
     }
     switch (call.tool) {
       case "get_context":
-        return getContext(connection);
+        return getContextTool.handle(connection);
       case "get_skill":
         return getSkillTool.handle(call.params, connection);
       case "remember":

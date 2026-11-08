@@ -85,6 +85,9 @@ import { storeFingerprint } from "../db/release-fingerprints";
 import { fingerprint } from "../crypto/hmac";
 import { createConnection } from "../db/connections";
 import { createRule } from "../db/rules";
+import { saveIdentityField } from "../db/identity-fields";
+import { createMemory } from "../db/memories";
+import { createTask } from "../db/tasks";
 import { FALLBACK_JOB_TYPE } from "../notify/approval-notifier";
 import { outbox } from "../notify/outbox";
 import { createToken } from "../oauth/store";
@@ -903,6 +906,68 @@ test("D6: request_identity_detail requires a field and a purpose and stores both
     const approval = (await listPendingForUser(db, userId, dek)).find((entry) => entry.id === approvalId);
     assert.equal(approval?.detail?.field, "passport", "the approval shows which detail is wanted");
     assert.equal(approval?.detail?.purpose, "Check in for a flight", "the approval shows the stated purpose");
+  } finally {
+    await db.close();
+  }
+});
+
+// ===================================================================================
+// Review fix D7 — get_context hands the agent the brief's contents in one call (the
+// low-tier profile when allowed, preferences, the skill index with Warthog's house skill,
+// the rules as sentences, the shared memory it may read and its open tasks) and never
+// an internal user or connection id.
+// ===================================================================================
+
+async function getContextOf(dispatch: ReturnType<typeof createMcpDispatch>, connectionId: string): Promise<{ text: string; json: Record<string, unknown> }> {
+  const rpc = await readRpc(await dispatch(connectionId, mcpPost(callBody("get_context", {}))));
+  assert.notEqual(rpc.result?.isError, true, `get_context succeeds, got: ${JSON.stringify(rpc)}`);
+  const text = contentText(rpc.result);
+  return { text, json: JSON.parse(text) as Record<string, unknown> };
+}
+
+test("D7: get_context returns the profile, skills, rules, memory and open tasks without internal ids", async () => {
+  const db = await freshDb();
+  try {
+    const config = devConfig();
+    const { userId, connectionId, agentId, dek } = await seedConnection(db, config, { identityAccess: true, memoryRead: true });
+    await saveIdentityField(db, { userId, kind: "name", value: "Ada Lovelace" }, dek);
+    await createMemory(db, { userId, content: "Prefers window seats", sourceAgentId: null, scope: "shared" }, dek, fixedClock(NOW));
+    await createTask(db, { userId, title: "Renew passport", assignee: "any", createdBy: { kind: "person" } }, dek);
+    await createRule(
+      db,
+      { userId, kind: "ask_first", scope: { type: "any_agent" }, action: { type: "card_request" } },
+      dek,
+    );
+    const dispatch = createMcpDispatch({ db, config });
+
+    const { text, json } = await getContextOf(dispatch, connectionId);
+    assert.ok(!text.includes(userId), "the person's internal id is not returned");
+    assert.ok(!text.includes(connectionId), "the connection's internal id is not returned");
+    assert.ok(!text.includes(agentId), "the agent's internal id is not returned");
+
+    assert.match(text, /Ada Lovelace/, "the low-tier profile is included when identity access is on");
+    const skills = json.skills as Array<{ title: string }>;
+    assert.ok(skills.some((skill) => skill.title === "Using Warthog"), "Warthog's house skill is indexed");
+    assert.deepEqual(json.rules, ["Ask me before any agent requests a card"], "rules read back as sentences");
+    assert.match(JSON.stringify(json.memory), /Prefers window seats/, "the shared memory it may read is included");
+    assert.match(JSON.stringify(json.tasks), /Renew passport/, "its open tasks are included");
+  } finally {
+    await db.close();
+  }
+});
+
+test("D7: get_context leaves out the profile and memory the agent is not granted", async () => {
+  const db = await freshDb();
+  try {
+    const config = devConfig();
+    const { userId, connectionId, dek } = await seedConnection(db, config, { identityAccess: false, memoryRead: false });
+    await saveIdentityField(db, { userId, kind: "name", value: "Ada Lovelace" }, dek);
+    await createMemory(db, { userId, content: "Prefers window seats", sourceAgentId: null, scope: "shared" }, dek, fixedClock(NOW));
+    const dispatch = createMcpDispatch({ db, config });
+
+    const { text } = await getContextOf(dispatch, connectionId);
+    assert.ok(!text.includes("Ada Lovelace"), "no profile without identity access");
+    assert.ok(!text.includes("Prefers window seats"), "no memory without memory access");
   } finally {
     await db.close();
   }
