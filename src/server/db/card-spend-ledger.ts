@@ -79,17 +79,50 @@ function pad2(value: number): string {
   return String(value).padStart(2, "0");
 }
 
+// The zone budget periods follow when the person has saved none (brief: the founder
+// and the first members are in Sydney). Review fix W4.3: periods used to follow UTC,
+// so a Sydney daily budget reset mid-morning and 8am on 1 December counted toward
+// November.
+export const DEFAULT_TIME_ZONE = "Australia/Sydney";
+
+// One calendar-date formatter per zone, built once (Intl formatters are costly to
+// construct). Only a real IANA zone gets here: an unknown one throws in the
+// constructor and is never cached, so the map is bounded by the zone database.
+const calendarFormats = new Map<string, Intl.DateTimeFormat>();
+
+// The calendar date (year, 0-based month, day of month) the instant falls on in
+// `timeZone`. Throws RangeError for a zone that is not a real IANA name.
+function calendarDateIn(now: Date, timeZone: string): { year: number; month: number; date: number } {
+  let format = calendarFormats.get(timeZone);
+  if (format === undefined) {
+    format = new Intl.DateTimeFormat("en-US", {
+      timeZone,
+      calendar: "gregory",
+      numberingSystem: "latn",
+      year: "numeric",
+      month: "numeric",
+      day: "numeric",
+    });
+    calendarFormats.set(timeZone, format);
+  }
+  const parts = format.formatToParts(now);
+  const part = (type: Intl.DateTimeFormatPartTypes): number =>
+    Number(parts.find((entry) => entry.type === type)?.value);
+  return { year: part("year"), month: part("month") - 1, date: part("day") };
+}
+
 // The opaque period-bucket key this ledger stores (design §8 / E07-S07), derived
-// from the instant in UTC calendar arithmetic: the day bucket "YYYY-MM-DD", the
-// month bucket "YYYY-MM", and the week bucket "YYYY-Www" (ISO-8601, weeks start
-// Monday — the same convention the budget domain's period windows use). The
-// `period` selects which granularity. The ONE source of truth for the ledger's
-// bucket keys: the policy-context loader and the spending read both derive their
-// current-period key through here, so a writer and a reader can never drift.
-export function periodKeyFor(period: PeriodKind, now: Date): string {
-  const year = now.getUTCFullYear();
-  const month = now.getUTCMonth();
-  const date = now.getUTCDate();
+// from the instant's calendar date in the person's IANA `timeZone` (Sydney when
+// none is given): the day bucket "YYYY-MM-DD", the month bucket "YYYY-MM", and the
+// week bucket "YYYY-Www" (ISO-8601, weeks start Monday — the same convention the
+// budget domain's period windows use). The `period` selects which granularity. The
+// ONE source of truth for the ledger's bucket keys: the release handler writes and
+// the policy-context loader and the spending reads derive their current-period key
+// through here, each with the same person's zone, so a writer and a reader can
+// never drift. A zone that is not a real IANA name throws RangeError — the caller
+// resolves a saved preference to a valid zone first (server/spending/time-zone).
+export function periodKeyFor(period: PeriodKind, now: Date, timeZone: string = DEFAULT_TIME_ZONE): string {
+  const { year, month, date } = calendarDateIn(now, timeZone);
 
   if (period === "month") {
     return `${year}-${pad2(month + 1)}`;

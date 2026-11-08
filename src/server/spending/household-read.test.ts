@@ -500,3 +500,34 @@ test("the read reads no process.env: a decoy secret in the environment never app
     else process.env.WARTHOG_DECOY_SECRET = prev;
   }
 });
+
+// ---------------------------------------------------------------------------
+// Review fix W4.3 — the household month is the reader's own (local) month. At
+// 2026-12-01T05:00Z it is still November in Los Angeles.
+// ---------------------------------------------------------------------------
+
+test("W4.3: the household totals are read for the month in the given time zone", async () => {
+  const db = await freshDb();
+  try {
+    const alice = await makeUser(db, "tz-owner");
+    const hid = (await createHousehold(db, { ownerId: alice, currency: "AUD", monthlyBudget: 500 })).id;
+    await recordRelease(db, {
+      userId: alice,
+      connectionId: CONN_B,
+      householdId: hid,
+      amount: 60,
+      currency: "AUD",
+      merchant: "Local November",
+      periodKeys: { day: "2026-11-30", week: "2026-W49", month: "2026-11" },
+    });
+
+    const report = await readHouseholdSpending(alice, {
+      db,
+      clock: fixedClock(new Date("2026-12-01T05:00:00.000Z")),
+      timeZone: "America/Los_Angeles",
+    });
+    assert.equal(report?.budgetSpendToDate, 60, "November's spend still counts this month");
+  } finally {
+    await db.close();
+  }
+});

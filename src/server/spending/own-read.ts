@@ -89,12 +89,15 @@ async function reportedAmountsByRelease(
 // budget, the approved card releases this budget period (merchant + approved amount),
 // the per-release agent-reported amount (labelled, never counted) and a link to the
 // activity entry, plus the agent's approved total for the period. Member-scoped by
-// `userId` alone — another person's agents and releases are never returned.
+// `userId` alone — another person's agents and releases are never returned. The
+// period is the person's own: `timeZone` is their IANA zone (`./time-zone`, review fix
+// W4.3), the same one the release handler bucketed with; Sydney when absent.
 export async function readOwnSpending(
   db: Db,
   userId: string,
   dek: Uint8Array,
   clock: Clock,
+  timeZone?: string,
 ): Promise<OwnSpending> {
   const agents = await listAgentsForUser(db, userId);
   if (agents.length === 0) {
@@ -116,7 +119,7 @@ export async function readOwnSpending(
           userId,
           agent.connectionId,
           budget.period,
-          periodKeyFor(budget.period, clock.now()),
+          periodKeyFor(budget.period, clock.now(), timeZone),
         )
       : [];
 

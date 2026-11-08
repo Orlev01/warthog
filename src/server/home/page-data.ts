@@ -42,6 +42,7 @@ import { listRecordsForUser, type LifeAdminRecord } from "../db/life-admin-recor
 import { getUserById } from "../db/users";
 import type { KeyWrapper } from "../crypto/key-wrapper";
 import type { Clock } from "../seams/clock";
+import { timeZoneFor } from "../spending/time-zone";
 
 // The injected seams — no process.env. `db` is the parameterizing database seam;
 // `keyWrapper` unwraps the person's DEK (from users.wrapped_dek) so the approval
@@ -119,6 +120,10 @@ export async function loadHomeMetrics(
   // The person's account currency — the code every agent figure is expressed in.
   const currency = await getAccountCurrency(db, userId);
 
+  // The person's own time zone (review fix W4.3): "this period" and "today" are their
+  // local day/week/month — the same buckets the release handler writes.
+  const timeZone = await timeZoneFor(db, userId, dek);
+
   // The pending-approval count (decided approvals are excluded by the inbox read).
   const pending = await listPendingForUser(db, userId, dek);
 
@@ -144,7 +149,7 @@ export async function loadHomeMetrics(
           userId,
           agent.connectionId,
           budgetPeriod,
-          periodKeyFor(budgetPeriod, now),
+          periodKeyFor(budgetPeriod, now, timeZone),
         )
       : 0;
     agents.push({
@@ -161,7 +166,7 @@ export async function loadHomeMetrics(
 
   // The records whose reminder date is upcoming (a due date today or later),
   // decrypted; a record with no due date, or a past one, is excluded.
-  const today = periodKeyFor("day", now);
+  const today = periodKeyFor("day", now, timeZone);
   const records = await listRecordsForUser(db, userId, dek);
   const reminders = records.filter((record) => isUpcoming(record, today));
 

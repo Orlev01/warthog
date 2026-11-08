@@ -41,6 +41,7 @@ import {
   setAccountCurrency as setAccountCurrencyRow,
 } from "@/server/db/account-currency";
 import { readOwnSpending, type OwnSpending } from "@/server/spending/own-read";
+import { timeZoneFor } from "@/server/spending/time-zone";
 import {
   readHouseholdSpending,
   type HouseholdSpendingReport,
@@ -135,8 +136,11 @@ export function createSpendingActions(deps: SpendingActionsDeps): SpendingAction
   async function load(session: Session): Promise<SpendingData> {
     const userId = session.userId;
     const dek = await dataKeyFor(userId);
-    const own = await readOwnSpending(db, userId, dek, clock);
-    const household = await readHouseholdSpending(userId, { db, clock });
+    // Budget periods are the person's own: read in the zone saved in their preferences
+    // (review fix W4.3), the same one the release handler buckets with.
+    const timeZone = await timeZoneFor(db, userId, dek);
+    const own = await readOwnSpending(db, userId, dek, clock, timeZone);
+    const household = await readHouseholdSpending(userId, { db, clock, timeZone });
     const accountCurrency = await getAccountCurrency(db, userId);
     return { own, household, accountCurrency, currencyOptions: optionsFor(accountCurrency) };
   }

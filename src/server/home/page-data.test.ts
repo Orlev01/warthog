@@ -98,6 +98,7 @@ import { recordRelease } from "../db/card-spend-ledger";
 import { createApproval, decide } from "../db/approvals";
 import { createRecord } from "../db/life-admin-records";
 import { setAccountCurrency } from "../db/account-currency";
+import { savePreferences } from "../db/preferences";
 import { createDbRecorder } from "../activity/writer";
 import { freshDb } from "../../test/db";
 import type { Db } from "../db/index";
@@ -563,6 +564,49 @@ test("the Home feed holds only the latest entries, never the whole history", asy
     assert.equal(summaries.length, HOME_ACTIVITY_LIMIT, "only the latest page is read");
     assert.equal(summaries[0], `entry ${total}`, "starting from the newest");
     assert.ok(!summaries.includes("entry 1"), "the oldest entries are left to the Activity page");
+  } finally {
+    await db.close();
+  }
+});
+
+// ---------------------------------------------------------------------------
+// Review fix W4.3 — Home reads the person's own (local) budget period and "today", in
+// the zone saved in their preferences. At 2026-12-01T05:00Z it is still 30 November in
+// Los Angeles (already 1 December in Sydney).
+// ---------------------------------------------------------------------------
+
+test("W4.3: each agent's spend this period and today's reminders follow the person's saved time zone", async () => {
+  const db = await freshDb();
+  try {
+    const { userId, dek } = await makeUserWithDek(db, "tz-home");
+    await savePreferences(
+      db,
+      {
+        userId,
+        tone: "warm",
+        length: "short",
+        language: "en-AU",
+        units: "metric",
+        timeZone: "America/Los_Angeles",
+        briefing: "brief",
+      },
+      dek,
+    );
+    const { connectionId } = await setupAgent(db, userId, "Claude");
+    await addRelease(db, {
+      userId,
+      connectionId,
+      amount: 70,
+      periodKeys: { day: "2026-11-30", week: "2026-W49", month: "2026-11" },
+    });
+    await seedReminder(db, dek, userId, { what: "Due today, locally", dueDate: "2026-11-30" });
+
+    const metrics = (await loadHomeMetrics(
+      { db, keyWrapper, clock: fixedClock(new Date("2026-12-01T05:00:00.000Z")) },
+      userId,
+    )) as HomeMetricsLike;
+    assert.equal(Number(agentNamed(metrics, "Claude")?.spendThisPeriod), 70, "November's spend is still this month");
+    assert.deepEqual(reminderWhats(metrics), ["Due today, locally"], "a reminder due today (locally) is upcoming");
   } finally {
     await db.close();
   }

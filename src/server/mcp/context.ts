@@ -29,6 +29,7 @@ import { listRules, type StoredRule } from "../db/rules";
 import { getUserById } from "../db/users";
 import type { KeyWrapper } from "../crypto/key-wrapper";
 import type { Clock } from "../seams/clock";
+import { timeZoneFor } from "../spending/time-zone";
 import {
   resolveCardRequestContext,
   type CardRequest,
@@ -189,9 +190,9 @@ async function budgetRateFor(
 }
 
 // The current budget-period bucket key is derived by `periodKeyFor` in the
-// card-spend-ledger store — the one source of truth for the ledger's bucket keys,
-// so this loader and the spending read can never drift from how releases were
-// bucketed when they were written.
+// card-spend-ledger store — the one source of truth for the ledger's bucket keys —
+// in the person's own time zone (`timeZoneFor`), so this loader and the spending
+// read can never drift from how releases were bucketed when they were written.
 
 // Is this rule's scope applicable to the given connection? An all-agents rule
 // covers every connection; a chosen-agent rule covers only its own agent (the
@@ -245,7 +246,9 @@ export async function loadAgentContext(
   const rules = allRules.filter((rule) => appliesTo(rule, connection));
 
   // The current budget-period spend for THIS connection: the budget's period, or
-  // the month bucket when no budget is set.
+  // the month bucket when no budget is set — in the person's own time zone (review fix
+  // W4.3), the same local bucket the release handler writes.
+  const timeZone = await timeZoneFor(db, connection.userId, dek);
   const budget = permissions.cardBudget;
   const period = budget?.period ?? DEFAULT_PERIOD;
   const spend = await sumForConnectionPeriod(
@@ -253,7 +256,7 @@ export async function loadAgentContext(
     connection.userId,
     connection.connectionId,
     period,
-    periodKeyFor(period, clock.now()),
+    periodKeyFor(period, clock.now(), timeZone),
   );
 
   const accountCurrency = budget?.currency ?? DEFAULT_CURRENCY;
@@ -262,7 +265,7 @@ export async function loadAgentContext(
   // connection's OWNING user (never a client value), delegating to the household-context
   // resolver so the pure engine can enforce the member limit and the household budget.
   if (cardRequest) {
-    const resolved = await resolveCardRequestContext(connection.userId, cardRequest, { db, clock });
+    const resolved = await resolveCardRequestContext(connection.userId, cardRequest, { db, clock, timeZone });
     const now = clock.now();
     const cardChecks: CardChecks = {
       rate: await budgetRateFor(db, cardRequest, accountCurrency, resolved, now),

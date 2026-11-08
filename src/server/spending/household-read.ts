@@ -47,10 +47,14 @@ export interface HouseholdSpendingReport {
   readonly members: HouseholdMemberSpending[];
 }
 
-// The injected seams — no process.env.
+// The injected seams — no process.env. `timeZone` is the reader's own IANA zone
+// (`./time-zone`, resolved by the caller, which holds their DEK): "this month" is their
+// local month, the same bucket the release handler writes in (review fix W4.3). Sydney
+// when absent.
 export interface HouseholdSpendingDeps {
   readonly db: Db;
   readonly clock: Clock;
+  readonly timeZone?: string;
 }
 
 // The budget period the member limit and the household budget are checked over (the
@@ -72,7 +76,7 @@ export async function readHouseholdSpending(
   if (!household) return null;
 
   const now = clock.now();
-  const monthKey = periodKeyFor(PERIOD, now);
+  const monthKey = periodKeyFor(PERIOD, now, deps.timeZone);
   const dayKey = periodKeyFor("day", now);
   const householdCurrency = household.currency;
 

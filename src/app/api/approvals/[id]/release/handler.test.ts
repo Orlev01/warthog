@@ -84,7 +84,8 @@ import { createReleaseHandler } from "./handler";
 import { createUser } from "../../../../../server/db/users";
 import { createAgent } from "../../../../../server/db/agents";
 import { upsertPermissions } from "../../../../../server/db/agent-permissions";
-import { listReleasesForConnectionPeriod, periodKeyFor } from "../../../../../server/db/card-spend-ledger";
+import { listReleasesForConnectionPeriod, periodKeyFor, recordRelease } from "../../../../../server/db/card-spend-ledger";
+import { savePreferences } from "../../../../../server/db/preferences";
 import { createCollectReleaseTool } from "../../../../../server/mcp/tools/collect-release";
 import { readActivity } from "../../../../../server/activity/writer";
 import { createApproval, decide, getApproval } from "../../../../../server/db/approvals";
@@ -1059,6 +1060,70 @@ test("C3: two card approvals made before either was released cannot together exc
     assert.equal((await getApproval(db, userId, second, dek))!.status, "pending", "the refused approval is left pending");
     const rows = await listReleasesForConnectionPeriod(db, userId, connectionOfAgent.get(agentId)!, "month", periodKeyFor("month", T0));
     assert.equal(rows.length, 1, "only the first release counts");
+  } finally {
+    await db.close();
+  }
+});
+
+// Review fix W4.3: budget periods follow the person's own time zone. At 2026-12-01T05:00Z
+// it is still 30 November in Los Angeles (and already 1 December in Sydney), so a person
+// who lives in Los Angeles is still spending November's budget.
+const LA_INSTANT = new Date("2026-12-01T05:00:00.000Z");
+
+async function saveTimeZone(db: Db, userId: string, dek: Uint8Array, timeZone: string): Promise<void> {
+  await savePreferences(
+    db,
+    { userId, tone: "warm", length: "short", language: "en-AU", units: "metric", timeZone, briefing: "brief" },
+    dek,
+  );
+}
+
+test("W4.3: a card release is bucketed in the person's own time zone", async () => {
+  const db = await freshDb();
+  try {
+    const keyWrapper = keyWrapperFor();
+    const clock = fixedClock(LA_INSTANT);
+    const { userId, dek } = await makePerson(db, "tz-write", keyWrapper);
+    await saveTimeZone(db, userId, dek, "America/Los_Angeles");
+    const agentId = await makeAgentFor(db, userId);
+    const connectionId = connectionOfAgent.get(agentId)!;
+    const approvalId = await makePendingApproval(db, { userId, agentId, dek, clock, detail: CARD_DETAIL });
+    const { handler } = makeHandler({ db, keyWrapper, clock, session: sessionFor(userId, LA_INSTANT) });
+
+    assert2xx(await callPost(handler, releaseRequest(approvalId, { value: "card" }), approvalId));
+    const rows = await listReleasesForConnectionPeriod(db, userId, connectionId, "month", "2026-11");
+    assert.equal(rows.length, 1, "counted in the person's November, not Sydney's December");
+    assert.deepEqual(rows[0]!.periodKeys, { day: "2026-11-30", week: "2026-W49", month: "2026-11" });
+  } finally {
+    await db.close();
+  }
+});
+
+test("W4.3: the budget check at release reads the same local period it writes", async () => {
+  const db = await freshDb();
+  try {
+    const keyWrapper = keyWrapperFor();
+    const clock = fixedClock(LA_INSTANT);
+    const { userId, dek } = await makePerson(db, "tz-budget", keyWrapper);
+    await saveTimeZone(db, userId, dek, "America/Los_Angeles");
+    const agentId = await makeAgentFor(db, userId, { budget: 200 });
+    const connectionId = connectionOfAgent.get(agentId)!;
+    // A$100 already spent earlier in the person's (local) November.
+    await recordRelease(db, {
+      userId,
+      connectionId,
+      householdId: null,
+      amount: 100,
+      currency: "AUD",
+      merchant: "Earlier",
+      periodKeys: { day: "2026-11-20", week: "2026-W47", month: "2026-11" },
+    });
+    const approvalId = await makePendingApproval(db, { userId, agentId, dek, clock, detail: CARD_DETAIL });
+    const { handler } = makeHandler({ db, keyWrapper, clock, session: sessionFor(userId, LA_INSTANT) });
+
+    const over = await callPost(handler, releaseRequest(approvalId, { value: "card" }), approvalId);
+    assert.equal(over.status, 409, "A$100 + A$150 is over the A$200 November budget");
+    assert.deepEqual(await over.json(), { error: "over_budget" });
   } finally {
     await db.close();
   }

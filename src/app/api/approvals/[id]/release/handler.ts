@@ -65,6 +65,7 @@ import { periodKeyFor, recordRelease, sumForConnectionPeriod } from "../../../..
 import { getHouseholdForMember } from "../../../../../server/db/households";
 import { getUserById } from "../../../../../server/db/users";
 import { storeFingerprint } from "../../../../../server/db/release-fingerprints";
+import { timeZoneFor } from "../../../../../server/spending/time-zone";
 import { withTransaction } from "../../../../../server/db/index";
 import { isReleaseRequest } from "../../../../../domain/approvals/release-kind";
 import { createRedactingRecorder } from "../../../../../server/mcp/recorder";
@@ -293,6 +294,10 @@ export function createReleaseHandler(
       //    Any refusal rolls every write back. The value itself is never written to the
       //    database, a log or a metric — only its fingerprint, for 90 days.
       const now = clock.now();
+      // Budget periods follow the person's own time zone (review fix W4.3): the budget
+      // check below and the ledger row it writes use the same local day/week/month the
+      // policy engine and the spending views read.
+      const timeZone = spend !== null ? await timeZoneFor(db, userId, dek) : undefined;
       const refused = await withTransaction(db, async (tx): Promise<ReleaseRefused | null> => {
         // Serialise releases for this agent (its row locked for the transaction), so two
         // approvals made before either was released cannot together overspend a budget.
@@ -305,7 +310,7 @@ export function createReleaseHandler(
             userId,
             agent.connectionId,
             budget.period,
-            periodKeyFor(budget.period, now),
+            periodKeyFor(budget.period, now, timeZone),
           );
           if (spent + spend.amount > budget.amount) {
             return { status: 409, code: OVER_BUDGET };
@@ -338,9 +343,9 @@ export function createReleaseHandler(
             currency: spend.currency,
             merchant: spend.merchant,
             periodKeys: {
-              day: periodKeyFor("day", now),
-              week: periodKeyFor("week", now),
-              month: periodKeyFor("month", now),
+              day: periodKeyFor("day", now, timeZone),
+              week: periodKeyFor("week", now, timeZone),
+              month: periodKeyFor("month", now, timeZone),
             },
             approvalId: id,
           });

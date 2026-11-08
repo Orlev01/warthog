@@ -688,3 +688,37 @@ test("readOwnSpending runs from injected deps alone: no secret and no ambient co
     await db.close();
   }
 });
+
+// ---------------------------------------------------------------------------
+// Review fix W4.3 — the period is the person's own (local) budget period. At
+// 2026-12-01T05:00Z it is still 30 November in Los Angeles, so a person there still
+// sees November's releases (the bucket the release handler wrote in their zone).
+// ---------------------------------------------------------------------------
+
+test("W4.3: the releases this period are read in the person's own time zone", async () => {
+  const db = await freshDb();
+  try {
+    const userId = await makeUser(db, "tz-own");
+    const dek = freshDek();
+    const { connectionId } = await setupAgent(db, userId, "Claude");
+    await addRelease(db, {
+      userId,
+      connectionId,
+      amount: 40,
+      merchant: "Local November",
+      periodKeys: { day: "2026-11-30", week: "2026-W49", month: "2026-11" },
+    });
+
+    const out = await readOwnSpending(
+      db,
+      userId,
+      dek,
+      fixedClock(new Date("2026-12-01T05:00:00.000Z")),
+      "America/Los_Angeles",
+    );
+    assert.equal(out.agents[0]!.releases.length, 1, "November's release is still this period");
+    assert.equal(num(out.agents[0]!.approvedTotal), 40);
+  } finally {
+    await db.close();
+  }
+});
