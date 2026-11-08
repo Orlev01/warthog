@@ -6,14 +6,40 @@ import { fileURLToPath } from "node:url";
 
 const projectRoot = dirname(fileURLToPath(import.meta.url));
 
-// Sent on every response. Scripts/styles are not restricted here (Next's inline bootstrap needs
-// nonces for that); framing, plugins, <base> hijacking and cross-site form posts are forbidden.
+// Next's dev server evaluates code with eval and talks to its HMR websocket; the production
+// build needs neither. (Read here because next.config is evaluated by the framework itself,
+// before the app's config module exists.)
+const isDev = process.env.NODE_ENV !== "production";
+
+// The Content-Security-Policy: every fetch directive defaults to the app's own origin, so an
+// injected script can load no code from elsewhere and send nothing off-site (fetch, images,
+// fonts, frames, workers). Next's App Router bootstraps with inline scripts and React sets
+// inline styles, so script-src/style-src keep 'unsafe-inline' — a per-request nonce policy is
+// the follow-up that would also block inline script. Framing, plugins, <base> hijacking and
+// cross-site form posts stay forbidden.
+const CONTENT_SECURITY_POLICY = [
+  "default-src 'self'",
+  `script-src 'self' 'unsafe-inline'${isDev ? " 'unsafe-eval'" : ""}`,
+  "style-src 'self' 'unsafe-inline'",
+  "img-src 'self' data: blob:",
+  "font-src 'self' data:",
+  `connect-src 'self'${isDev ? " ws: wss:" : ""}`,
+  "worker-src 'self'",
+  "manifest-src 'self'",
+  "frame-src 'none'",
+  "frame-ancestors 'none'",
+  "object-src 'none'",
+  "base-uri 'self'",
+  "form-action 'self'",
+].join("; ");
+
+// Sent on every response.
 const SECURITY_HEADERS = [
   { key: "X-Content-Type-Options", value: "nosniff" },
   { key: "X-Frame-Options", value: "DENY" },
-  { key: "Content-Security-Policy", value: "frame-ancestors 'none'; object-src 'none'; base-uri 'self'; form-action 'self'" },
+  { key: "Content-Security-Policy", value: CONTENT_SECURITY_POLICY },
   { key: "Referrer-Policy", value: "strict-origin-when-cross-origin" },
-  { key: "Strict-Transport-Security", value: "max-age=63072000" },
+  { key: "Strict-Transport-Security", value: "max-age=63072000; includeSubDomains" },
   { key: "Permissions-Policy", value: "camera=(), microphone=(), geolocation=()" },
 ];
 
