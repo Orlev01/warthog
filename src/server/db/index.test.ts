@@ -89,6 +89,29 @@ test("a postgres: URL yields a real networked pg client, not an offline engine",
   );
 });
 
+// Review fix (pg pool hardening): a database that accepts the connection but never answers
+// (maintenance, failover, a stopped server behind a load balancer) must fail the request
+// promptly, not hang it forever (pg's default connection timeout is "wait forever").
+test("a postgres: database that never answers fails the query within the connect timeout", async () => {
+  const { createServer } = await import("node:net");
+  const sockets: import("node:net").Socket[] = [];
+  const server = createServer((socket) => {
+    sockets.push(socket); // accept, then say nothing
+  });
+  await new Promise<void>((resolve) => server.listen(0, "127.0.0.1", resolve));
+  const port = (server.address() as import("node:net").AddressInfo).port;
+  const db = await createDb(`postgres://u:p@127.0.0.1:${port}/none`, { connectTimeoutMs: 200 });
+  try {
+    const started = Date.now();
+    await assert.rejects(db.query("SELECT 1"), /timeout/i);
+    assert.ok(Date.now() - started < 5000, "the query failed promptly");
+  } finally {
+    await db.close().catch(() => {});
+    for (const socket of sockets) socket.destroy();
+    server.close();
+  }
+});
+
 test("createDb rejects a database URL with an unsupported scheme (malformed input, no silent default)", async () => {
   await assert.rejects(async () => {
     const db = await createDb("mysql://u:p@localhost/x");

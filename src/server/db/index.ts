@@ -91,17 +91,29 @@ export interface Migration {
 // nowhere, and its bundler treats `new URL(…, import.meta.url)` as an asset import and fails.
 const DEFAULT_MIGRATIONS_DIR = join(process.cwd(), "db", "migrations");
 
+// Tuning for the networked driver. Defaults suit production; a test may shorten them.
+export interface CreateDbOptions {
+  // Give up acquiring a connection after this long (pg's own default waits forever).
+  readonly connectTimeoutMs?: number;
+}
+
+const DEFAULT_CONNECT_TIMEOUT_MS = 5_000;
+// A runaway statement (an integrity scan, a bad plan) is cancelled rather than holding a
+// connection indefinitely. Generous, so a migration on a modest table still fits.
+const STATEMENT_TIMEOUT_MS = 60_000;
+const POOL_IDLE_TIMEOUT_MS = 30_000;
+
 // Select the driver from the URL scheme (never a hard-coded default). The scheme
 // — not the credentials — is all we ever report, so a rejected URL cannot leak a
 // password into an error message or log.
-export async function createDb(databaseUrl: string): Promise<Db> {
+export async function createDb(databaseUrl: string, options: CreateDbOptions = {}): Promise<Db> {
   const scheme = /^([a-z][a-z0-9+.-]*):/i.exec(databaseUrl)?.[1]?.toLowerCase();
 
   if (scheme === "pglite") {
     return createPgliteDb(databaseUrl.slice("pglite:".length));
   }
   if (scheme === "postgres" || scheme === "postgresql") {
-    return createPgPoolDb(databaseUrl);
+    return createPgPoolDb(databaseUrl, options);
   }
   throw new Error(`Unsupported database URL scheme: ${scheme ?? "(none)"}`);
 }
@@ -148,9 +160,22 @@ function pgRows(raw: { rows: Row[] } | { rows: Row[] }[]): Row[] {
 
 // A real networked pg client. Creating the Pool does not connect; the first query
 // does, so a `postgres://` URL pointed at a dead port fails with a network error
-// (proving a real driver was selected, not an offline engine).
-function createPgPoolDb(connectionString: string): Db {
-  const pool = new Pool({ connectionString });
+// (proving a real driver was selected, not an offline engine). Hardened: acquiring a
+// connection times out, a runaway statement is cancelled, and an error on an IDLE pooled
+// connection (the server dropped it — maintenance, failover) is logged instead of being an
+// unhandled 'error' event that kills the process; the pool replaces the connection.
+function createPgPoolDb(connectionString: string, options: CreateDbOptions): Db {
+  const pool = new Pool({
+    connectionString,
+    connectionTimeoutMillis: options.connectTimeoutMs ?? DEFAULT_CONNECT_TIMEOUT_MS,
+    idleTimeoutMillis: POOL_IDLE_TIMEOUT_MS,
+    statement_timeout: STATEMENT_TIMEOUT_MS,
+    application_name: "warthog",
+  });
+  pool.on("error", (error: Error & { code?: string }) => {
+    // The code only: a driver message can name the host or user.
+    console.error("[warthog db] idle connection error", error.code ?? "unknown");
+  });
   return {
     async query(text, values) {
       const raw =
