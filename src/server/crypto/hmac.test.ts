@@ -33,7 +33,7 @@ import { test } from "node:test";
 import assert from "node:assert/strict";
 import { randomBytes } from "node:crypto";
 
-import { hmac, verifyHmac, fingerprint } from "./hmac";
+import { hmac, verifyHmac, fingerprint, releasedValueMatcher } from "./hmac";
 
 const KEY_BYTES = 32; // a 256-bit server HMAC secret (design §2: session/HMAC secrets)
 const DEK_BYTES = 32; // a 256-bit per-person data key (design §4.1)
@@ -286,4 +286,26 @@ test("fingerprint folds letter case on the value", async () => {
     await fingerprint(dek, "ab12cd34"),
     "letter case must be normalised so case variants share one fingerprint",
   );
+});
+
+// Review fix D4 — the fingerprint normalises exactly as redaction does (case, spaces and
+// punctuation fold away), so a released "AB-123-456" matches the same value seen later as
+// "ab 123 456"; and the matcher redaction consults derives the key once and answers for
+// already-normalised tokens.
+test("fingerprint folds spaces and punctuation the way redaction normalises a value", async () => {
+  const dek = freshDek();
+  const canonical = fingerprint(dek, "ab123456");
+  assert.equal(fingerprint(dek, "AB-123-456"), canonical);
+  assert.equal(fingerprint(dek, "AB 123 456"), canonical);
+  assert.equal(fingerprint(dek, " ab.123/456 "), canonical);
+});
+
+test("releasedValueMatcher matches a normalised token whose fingerprint is stored, and nothing else", () => {
+  const dek = freshDek();
+  const matches = releasedValueMatcher(dek, [fingerprint(dek, "PA1234567"), fingerprint(dek, "AB-123-456")]);
+  assert.equal(matches("pa1234567"), true);
+  assert.equal(matches("ab123456"), true);
+  assert.equal(matches("pa7654321"), false);
+  assert.equal(releasedValueMatcher(freshDek(), [fingerprint(dek, "PA1234567")])("pa1234567"), false, "keyed per person");
+  assert.equal(releasedValueMatcher(dek, [])("pa1234567"), false, "no fingerprints never match");
 });

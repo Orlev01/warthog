@@ -48,14 +48,14 @@ const MAX_REASON = 2000;
 // remember's input: a REQUIRED non-empty `content` (there is nothing to remember
 // without it) plus the universal OPTIONAL `reason`. A z.object, so its `.shape`
 // exposes each field.
-const rememberSchema = z.object({
+export const rememberSchema = z.object({
   content: z.string().min(1).max(MAX_CONTENT),
   reason: z.string().max(MAX_REASON).optional(),
 });
 
 // search_memory's input: an OPTIONAL `query` (a bare search returns everything
 // readable) plus the universal OPTIONAL `reason`.
-const searchSchema = z.object({
+export const searchMemorySchema = z.object({
   query: z.string().max(MAX_QUERY).optional(),
   reason: z.string().max(MAX_REASON).optional(),
 });
@@ -169,11 +169,11 @@ export function createSearchMemoryTool(deps: MemoryToolDeps): SearchMemoryTool {
 
   return {
     name: "search_memory",
-    inputSchema: searchSchema,
+    inputSchema: searchMemorySchema,
 
     async handle(input: unknown, connection: AgentConnection): Promise<SearchMemoryResult> {
       // VALIDATE at the boundary (INV-102) BEFORE any db access or crypto work.
-      const parsed = parseParams(searchSchema, input);
+      const parsed = parseParams(searchMemorySchema, input);
 
       // Refuse a connection without memory permission — no memories are read.
       const permissions = await memoryPermission(db, connection);

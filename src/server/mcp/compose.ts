@@ -27,22 +27,28 @@
 // access, INV-102) and every store binds its values as parameters, so a SQL-shaped field
 // travels as inert data and cannot alter a query.
 
-import { z } from "zod";
-
 import { createMcpHandler, McpServer } from "@modelcontextprotocol/server";
 import type { AuthInfo } from "@modelcontextprotocol/server";
 
 import type { Config } from "../config";
 import type { Db } from "../db/index";
 import { selectKeyWrapper, type KeyWrapper } from "../crypto/key-wrapper";
-import { createDbRecorder } from "../activity/writer";
+import { createRedactingRecorder } from "./recorder";
 import { type UndoReversalJob } from "../activity/undo";
 import { getRateLimiter } from "./rate-limit";
 import { systemClock, type Clock } from "../seams/clock";
 import { getUserById } from "../db/users";
 import { getAgentByConnectionId, getAgentById } from "../db/agents";
 import { getConnectionPermissions } from "../db/agent-permissions";
+import { listConnectionsForUser } from "../db/connections";
+import { getProcessCatalogue, type CatalogueIndex } from "../connectors/catalogue";
+import { connectorToolsetFor, createConnectorToolExecutor } from "../connectors/tool-routing";
 import { HttpError } from "../http/validate";
+import { createGuardedFetch } from "../http/guarded-fetch";
+import { notifyApprovalCreated, type ApprovalPushSender } from "../notify/approval-notifier";
+import { createWebPushSender } from "../notify/web-push";
+import { outbox } from "../notify/outbox";
+import { recordMetricEvent } from "../metrics/record";
 
 import {
   createAgentCallPipeline,
@@ -51,11 +57,12 @@ import {
   type AgentCallPipeline,
   type ApprovedHoldResult,
 } from "./pipeline";
-import { createToolRegistry, type ConnectorToolset, type ToolDefinition } from "./tools/registry";
-import { loadAgentContext, type AgentConnection } from "./context";
+import { createToolRegistry, type ToolDefinition } from "./tools/registry";
+import type { AgentConnection } from "./context";
 
 import { createRememberTool, createSearchMemoryTool } from "./tools/memory";
 import { createGetSkillTool } from "./tools/get-skill";
+import { createGetContextTool } from "./tools/get-context";
 import { createCheckApprovalTool } from "./tools/check-approval";
 import { createCollectReleaseTool } from "./tools/collect-release";
 import { createLogActivityTool } from "./tools/log-activity";
@@ -73,10 +80,14 @@ import {
 import { releaseStore } from "../crypto/release-store";
 
 // The two inputs a composition root is handed (design §6.1 addendum): the process-wide
-// migrated db and the parsed runtime config. Everything else is built from these here.
+// migrated db and the parsed runtime config. Everything else is built from these here. The
+// outbound fetch connector calls ride on (default: the SSRF-guarded fetch) and the
+// connector catalogue (default: the process-wide index) may be supplied by a test.
 export interface McpDispatchDeps {
   readonly db: Db;
   readonly config: Config;
+  readonly fetch?: typeof fetch;
+  readonly catalogue?: CatalogueIndex;
 }
 
 // The dispatch the `/mcp` route seam drives after the bearer is verified: the VERIFIED
@@ -97,20 +108,18 @@ const TOOL_FAILED_REASON = "The tool call could not be completed.";
 
 // Register `tool` on `server`, routing the call through `tool.handle` under the already
 // resolved `connection` (from the verified bearer). The advertised input schema is the
-// tool's own schema made LOOSE, so the raw arguments reach `tool.handle` intact — the
-// envelope schema validates `reason`, and each tool body validates its own fields (INV-102)
-// — rather than being stripped to the envelope by the SDK before the body ever sees them.
+// tool body's REAL schema and the description says what the tool does, so tools/list
+// tells an agent exactly which fields to send. The SDK validates the arguments against
+// that schema first and refuses a bad call naming the field at fault (zod's issue path and
+// message, never the input value); `tool.handle` and the body validate again (INV-102).
 function registerTool(
   server: McpServer,
   tool: ToolDefinition,
   connection: AgentConnection | null,
 ): void {
-  const inputSchema =
-    tool.inputSchema instanceof z.ZodObject ? tool.inputSchema.loose() : tool.inputSchema;
-
   server.registerTool(
     tool.name,
-    { description: tool.name, inputSchema },
+    { description: tool.description, inputSchema: tool.inputSchema },
     async (args: unknown) => {
       // The connection is the verified bearer's; a request that never resolved one cannot
       // be scoped to a person, so it is refused rather than run (never a silent success).
@@ -121,9 +130,12 @@ function registerTool(
         const outcome = await tool.handle(args, connection);
         return toToolResult(outcome);
       } catch (err) {
-        // A boundary 4xx (malformed / oversized input, INV-102) or any other failure is
-        // surfaced as an MCP error, never a silent success.
-        return errorResult(err instanceof HttpError ? err.message : TOOL_FAILED_REASON);
+        // A boundary 4xx (malformed / oversized input, INV-102) carries its own fixed,
+        // safe message. Any other failure is logged for operators (never its message) and
+        // surfaced as a plain MCP error — never a silent success.
+        if (err instanceof HttpError) return errorResult(err.message);
+        logFailure("tool_call_failed", err, { tool: tool.name });
+        return errorResult(TOOL_FAILED_REASON);
       }
     },
   );
@@ -164,6 +176,43 @@ function errorResult(reason: string): {
   return { content: [{ type: "text", text: reason }], isError: true };
 }
 
+// The push channel approval notifications go out on, chosen by config like every other
+// sender (`selectSenders`): with dev tooling on, the process-wide dev outbox records a push
+// carrying only the approval's inbox link; otherwise the real VAPID Web Push sender over
+// the SSRF-guarded fetch, which refuses loudly while the VAPID keys are unset — the
+// notifier tolerates a failed push and its scheduled SMS/email fallback is the recovery.
+function approvalPushSender(config: Config): ApprovalPushSender {
+  if (config.devTools) {
+    return {
+      sendApprovalPush: (subscription, approvalId) =>
+        outbox.sendPush({
+          recipient: subscription.endpoint,
+          body: "An agent is waiting for your approval.",
+          link: `${config.publicBaseUrl}/inbox?approval=${encodeURIComponent(approvalId)}`,
+        }),
+    };
+  }
+  return createWebPushSender({ vapid: config.vapid, fetch: createGuardedFetch() });
+}
+
+// Log a failure on the MCP path for operators: a fixed event name, non-personal context
+// (a tool name) and the error's class — never its message, which could carry personal
+// content (design §4.3).
+function logFailure(event: string, err: unknown, context: Record<string, string> = {}): void {
+  console.error(
+    "[warthog mcp]",
+    JSON.stringify({ event, ...context, error: err instanceof Error ? err.name : "unknown" }),
+  );
+}
+
+// A best-effort side effect of an agent call (the approval notifier, a metric write) that
+// fails is logged and swallowed, so it can never turn a call that was already handled —
+// an approval and its held request are written before the notifier runs — into an error
+// for the agent.
+function logSideEffectFailure(event: string, err: unknown): void {
+  logFailure(event, err);
+}
+
 // Build the agent-call pipeline's REAL dependencies from the two composition-root inputs
 // (config + the process db): the KeyWrapper selected from config, the DB-backed recorder,
 // the per-process rate limiter, the tool-body executor and the pure pipeline. The ONE place
@@ -194,9 +243,19 @@ function buildAgentPipeline(deps: McpDispatchDeps): AgentCallPipeline {
   }
 
   // Warthog writes the record itself (principle 14): the DB-backed recorder redacts then
-  // DEK-encrypts each entry before it is persisted.
-  const recorder = createDbRecorder({ db, clock, dekFor: dataKeyFor });
+  // DEK-encrypts each entry before it is persisted, with the person's released-value
+  // fingerprints loaded so an echoed high-tier value is stored as `[released value]`.
+  const recorder = createRedactingRecorder({ db, clock, dekFor: dataKeyFor });
   const rateLimiter = getRateLimiter();
+
+  // The connector engine an allowed connector call is carried out by: the person's live
+  // connection, its credentials and the catalogue host only, over the SSRF-guarded fetch.
+  const executeConnectorTool = createConnectorToolExecutor({
+    db,
+    catalogue: deps.catalogue ?? getProcessCatalogue(),
+    fetch: deps.fetch ?? createGuardedFetch(),
+    dekFor: dataKeyFor,
+  });
 
   // --- the tool bodies the executor routes executed calls to ------------------
 
@@ -226,27 +285,24 @@ function buildAgentPipeline(deps: McpDispatchDeps): AgentCallPipeline {
       pipeline.executeApprovedHold(userId, approvalId),
   });
 
-  // get_context hands the agent everything it has been granted for this connection — its
-  // permission grants, the rules it must follow and its budget currency/spend — assembled
-  // through the SAME member-scoped loader the pipeline uses (never a client value).
-  async function getContext(connection: AgentConnection): Promise<unknown> {
-    const context = await loadAgentContext(connection, { db, keyWrapper, clock });
-    return {
-      permissions: context.permissions,
-      rules: context.rules,
-      accountCurrency: context.accountCurrency,
-      spend: context.spend,
-    };
-  }
+  // get_context hands the agent everything it has been granted for this connection — the
+  // low-tier profile (when allowed), preferences, the skill index with the house skill, the
+  // rules as sentences, the memory it may read and its open tasks — member-scoped by the
+  // connection, with no internal ids.
+  const getContextTool = createGetContextTool({ db, keyWrapper, clock });
 
-  // The tool-body executor the pipeline runs on ALLOW: route the call to its real body by
+  // The tool-body executor the pipeline runs on ALLOW: a connector tool goes to the
+  // connector engine under the connection's owner; a core tool is routed to its real body by
   // the tool name the registry stamped it with. A tool with no body (a request tool reaches
-  // execute only once approved, via executeApprovedHold; the connector engine is a later
-  // task) fails LOUDLY rather than silently doing nothing.
+  // execute only once approved, via executeApprovedHold) fails LOUDLY rather than silently
+  // doing nothing.
   const executeTool = async (call: AgentCall, connection: AgentConnection): Promise<unknown> => {
+    if (call.connector !== null) {
+      return executeConnectorTool({ ...call, connector: call.connector }, connection.userId);
+    }
     switch (call.tool) {
       case "get_context":
-        return getContext(connection);
+        return getContextTool.handle(connection);
       case "get_skill":
         return getSkillTool.handle(call.params, connection);
       case "remember":
@@ -278,12 +334,38 @@ function buildAgentPipeline(deps: McpDispatchDeps): AgentCallPipeline {
     }
   };
 
-  pipeline = createAgentCallPipeline({ db, keyWrapper, clock, rateLimiter, recorder, executeTool });
+  // An approval created by the pipeline notifies the person at once (a push to every
+  // registered device plus the scheduled SMS/email fallback, design §10), and every
+  // handled call records the request count/latency metrics through the guarded recorder.
+  const approvalPush = approvalPushSender(config);
+  pipeline = createAgentCallPipeline({
+    db,
+    keyWrapper,
+    clock,
+    rateLimiter,
+    recorder,
+    executeTool,
+    notifyApprovalCreated: async (input) => {
+      try {
+        await notifyApprovalCreated({ db, clock, push: approvalPush }, input);
+      } catch (err) {
+        logSideEffectFailure("approval_notify_failed", err);
+      }
+    },
+    recordMetric: async (input) => {
+      try {
+        await recordMetricEvent(db, clock, input);
+      } catch (err) {
+        logSideEffectFailure("metric_record_failed", err);
+      }
+    },
+  });
   return pipeline;
 }
 
 export function createMcpDispatch(deps: McpDispatchDeps): McpDispatch {
   const { db } = deps;
+  const catalogue = deps.catalogue ?? getProcessCatalogue();
 
   // The pipeline is assembled once here (the composition root's job) and the registry is
   // resolved over it; both are reused for every request this dispatch serves.
@@ -306,11 +388,6 @@ export function createMcpDispatch(deps: McpDispatchDeps): McpDispatch {
     };
   }
 
-  // The connector tools a connection is permitted come from the connector engine (a later
-  // task); until a catalogue of connector toolsets is wired, a connection with no granted
-  // connectors contributes none.
-  const NO_CONNECTOR_TOOLS: ConnectorToolset = {};
-
   // Build a fresh MCP server for one request, registering the tools the registry resolves
   // for the verified connection (core tools + its permitted connector tools). Each handler
   // is bound to the resolved connection, so identity is taken ONLY from the verified bearer.
@@ -323,8 +400,17 @@ export function createMcpDispatch(deps: McpDispatchDeps): McpDispatch {
     let tools: readonly ToolDefinition[];
     if (connection) {
       const permissions = await getConnectionPermissions(db, connection.userId, connection.connectionId);
+      // The connector tools this connection may use: its person's connected services that
+      // this agent is granted (member-scoped by the verified connection's owner).
       tools = permissions
-        ? registry.resolveTools(permissions, NO_CONNECTOR_TOOLS)
+        ? registry.resolveTools(
+            permissions,
+            connectorToolsetFor(
+              await listConnectionsForUser(db, connection.userId),
+              permissions.grantedConnectors,
+              catalogue,
+            ),
+          )
         : registry.coreTools;
     } else {
       // No connection resolved: advertise the core tools so tools/list still answers; a

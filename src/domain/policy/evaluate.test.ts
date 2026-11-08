@@ -418,6 +418,71 @@ test("a card request that would exceed the shared household budget denies", () =
   assert.match(r.reason, /budget|household/i);
 });
 
+// Review fix D3 — a household leg the owner has not set is NO cap (not "deny all"), and a
+// request in a currency other than the household's is converted with the household rate.
+test("a household with no member limit and no shared budget set does not cap a card request", () => {
+  const household = makeHousehold({ budget: undefined, memberLimit: undefined });
+  const r = evaluate(cardCall({ amount: 150 }), makeCtx({ card: makeCard({ household }) }));
+  assert.equal(r.decision, "ask", "an unset household leg imposes no limit");
+});
+
+test("only the household legs that are set are checked", () => {
+  const overLimit = makeHousehold({ budget: undefined, memberLimit: { amount: 100, period: "month" } });
+  assert.match(
+    evaluate(cardCall({ amount: 150 }), makeCtx({ card: makeCard({ household: overLimit }) })).reason,
+    /household spending limit/,
+  );
+  const overBudget = makeHousehold({ budget: { amount: 100, period: "month" }, memberLimit: undefined });
+  assert.match(
+    evaluate(cardCall({ amount: 150 }), makeCtx({ card: makeCard({ household: overBudget }) })).reason,
+    /shared budget/,
+  );
+});
+
+test("a request is checked against household figures in the household currency", () => {
+  // Account currency AUD, household currency NZD: 100 USD is 150 AUD for the agent budget
+  // (ctx.rate) and 160 NZD for the household (household.rate) — over a 155 NZD limit.
+  const usdToAud = { from: "USD", to: "AUD", rate: 1.5, date: "2026-03-14" };
+  const usdToNzd = { from: "USD", to: "NZD", rate: 1.6, date: "2026-03-14" };
+  const household = makeHousehold({
+    currency: "NZD",
+    budget: undefined,
+    memberLimit: { amount: 155, period: "month" },
+    rate: usdToNzd,
+  });
+  const ctx = makeCtx({ rate: usdToAud, card: makeCard({ budget: { amount: 1000, period: "month" }, household }) });
+  assert.match(evaluate(cardCall({ amount: 100, currency: "USD" }), ctx).reason, /household spending limit/);
+
+  // A request already in the household currency is compared as-is (no household rate needed).
+  const nzdCtx = makeCtx({
+    rate: { from: "NZD", to: "AUD", rate: 0.9, date: "2026-03-14" },
+    card: makeCard({ budget: { amount: 1000, period: "month" }, household: { ...household, rate: null } }),
+  });
+  assert.equal(evaluate(cardCall({ amount: 150, currency: "NZD" }), nzdCtx).decision, "ask");
+
+  // No household rate for a foreign request: refused rather than guessed.
+  const noRate = makeCtx({ rate: usdToAud, card: makeCard({ budget: { amount: 1000, period: "month" }, household: { ...household, rate: null } }) });
+  assert.match(evaluate(cardCall({ amount: 10, currency: "USD" }), noRate).reason, /reference rate/i);
+});
+
+// Review fix D8 — the block/allow lists and merchant rules compare normalised merchants.
+test("merchant lists and merchant rules cannot be dodged with case or spacing", () => {
+  const blocked = makeCtx({ card: makeCard({ merchantBlock: ["Casino"] }) });
+  assert.equal(evaluate(cardCall({ merchant: " casino " }), blocked).decision, "deny");
+  const allowed = makeCtx({ card: makeCard({ merchantAllow: ["BoxCo"] }) });
+  assert.equal(evaluate(cardCall({ merchant: "BOXCO" }), allowed).decision, "ask");
+  const rule: IdentifiedRule = {
+    id: "no-amazon",
+    kind: "never_allow",
+    scope: { type: "any_agent" },
+    action: { type: "card_request" },
+    condition: { type: "merchant_in", merchants: ["Amazon"] },
+  };
+  const r = evaluate(cardCall({ merchant: "AMAZON " }), makeCtx({ rules: [rule] }));
+  assert.equal(r.decision, "deny");
+  assert.equal(r.ruleId, "no-amazon");
+});
+
 test("a card request to a blocked merchant denies", () => {
   const r = evaluate(cardCall({ merchant: "Casino" }), makeCtx({ card: makeCard({ merchantBlock: ["Casino"] }) }));
   assertShape(r);

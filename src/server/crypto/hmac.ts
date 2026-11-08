@@ -11,6 +11,8 @@
 
 import { createHmac, hkdfSync, timingSafeEqual } from "node:crypto";
 
+import { normaliseValue } from "../../domain/redaction/luhn";
+
 const HMAC_HASH = "sha256";
 const FP_INFO = "warthog/fp/v1"; // HKDF context label for the fingerprint key (design §4.2)
 const FP_KEY_BYTES = 32; // a 256-bit derived fingerprint key
@@ -33,18 +35,36 @@ export function verifyHmac(key: Uint8Array, value: string, expected: string): bo
   return timingSafeEqual(actual, candidate);
 }
 
-// Fold trivial surface differences (surrounding whitespace, letter case) so
-// equivalent forms of a value fingerprint identically (design §4.3).
-function normalise(value: string): string {
-  return value.trim().toLowerCase();
+// The person's fingerprint key: HKDF of their DEK under the fixed context label.
+function fingerprintKey(dek: Uint8Array): Buffer {
+  return Buffer.from(hkdfSync(HMAC_HASH, dek, new Uint8Array(0), FP_INFO, FP_KEY_BYTES));
+}
+
+// The digest of an ALREADY-normalised value under a derived fingerprint key.
+function digest(key: Buffer, normalised: string): string {
+  return createHmac(HMAC_HASH, key).update(normalised, "utf8").digest("hex");
 }
 
 // A keyed, one-way fingerprint of a released value. The HMAC key is derived from
 // the person's DEK via HKDF with a fixed context label, so the fingerprint is
-// stable per person and differs across persons for the same value.
+// stable per person and differs across persons for the same value. The value is
+// normalised with the SAME normaliser redaction applies to what it scans (letter case,
+// spaces and punctuation fold away, design §4.3), so a released "AB-123-456" matches
+// the value when it is seen later as "ab 123 456".
 export function fingerprint(dek: Uint8Array, value: string): string {
-  const fingerprintKey = Buffer.from(
-    hkdfSync(HMAC_HASH, dek, new Uint8Array(0), FP_INFO, FP_KEY_BYTES),
-  );
-  return createHmac(HMAC_HASH, fingerprintKey).update(normalise(value), "utf8").digest("hex");
+  return digest(fingerprintKey(dek), normaliseValue(value));
+}
+
+// The released-value matcher redaction consults for one person (design §4.3 rule 3):
+// true when an already-normalised candidate's fingerprint is one of `fingerprints` (the
+// person's live release fingerprints). The key is derived once per matcher; with no
+// fingerprints it never matches and does no HMAC work.
+export function releasedValueMatcher(
+  dek: Uint8Array,
+  fingerprints: Iterable<string>,
+): (normalisedToken: string) => boolean {
+  const live = new Set(fingerprints);
+  if (live.size === 0) return () => false;
+  const key = fingerprintKey(dek);
+  return (normalisedToken) => live.has(digest(key, normalisedToken));
 }

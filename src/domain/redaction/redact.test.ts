@@ -280,3 +280,30 @@ test("redact applies every rule across a record in a single pass", () => {
   assert.equal(out.memo, "[released value]", "the released value is replaced");
   assert.equal(out.reason, "all good here", "a benign field passes through untouched");
 });
+
+// Review fix D4 — a released value written with spaces or dashes spans several tokens
+// ("AB-123-456", "2123 45678 1"); adjacent tokens joined only by short separators are also
+// offered to the matcher as one run, so the whole value is replaced — and unrelated
+// neighbouring words are left alone.
+test("redact replaces a released value that spans several tokens", () => {
+  const released = matches("ab123456", "2123456781");
+  assert.equal(redact("licence AB-123-456, ok", released), "licence [released value], ok");
+  assert.equal(redact("medicare 2123 45678 1 today", released), "medicare [released value] today");
+  assert.equal(redact("medicare 2123-45678-1", released), "medicare [released value]");
+});
+
+test("redact does not swallow unrelated tokens next to a multi-token match", () => {
+  const released = matches("ab123456");
+  assert.equal(redact("AB 123 456 789", released), "[released value] 789");
+  assert.equal(redact("XAB 123 456", released), "XAB 123 456", "a run is matched only as a whole");
+  assert.equal(redact("AB, 123; 456", released), "AB, 123; 456", "tokens split by other punctuation are not joined");
+});
+
+test("redact still finds a released value past a long run of text before the cut", () => {
+  const long = `${"word ".repeat(300)}PA1234567 ${"tail ".repeat(5000)}`;
+  const out = str(redact(long, matches("pa1234567")));
+  assert.ok(out.includes("[released value]"), "the value inside the kept prefix is replaced");
+  assert.ok(!out.includes("PA1234567"));
+  assert.ok(out.endsWith("…[truncated]"), "an over-long value is still truncated");
+  assert.ok(out.length <= 2000);
+});

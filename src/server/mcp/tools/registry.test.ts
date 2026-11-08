@@ -197,6 +197,28 @@ test("every core tool's input schema carries an OPTIONAL string `reason` field",
   }
 });
 
+// Review fix D1: every tool tools/list serves says what it does in words (not just its
+// name), and routes only its VALIDATED fields — an unknown extra field is dropped rather
+// than forwarded to the body or stored in the activity record.
+test("every core tool carries a plain-English description, not just its name", () => {
+  const { pipeline } = spyPipeline();
+  const registry = createToolRegistry({ pipeline });
+  for (const def of registry.coreTools) {
+    assert.ok(def.description.trim().length > 20, `"${def.name}" must describe what it does`);
+    assert.notEqual(def.description, def.name, `"${def.name}"'s description must not be its name`);
+  }
+});
+
+test("a core tool routes only its validated fields as params", async () => {
+  const { pipeline, calls } = spyPipeline();
+  const registry = createToolRegistry({ pipeline });
+  await registry.get("remember")!.handle(
+    { content: "likes tea", reason: "noted", userId: "SPOOF" },
+    connectionFor("session-person"),
+  );
+  assert.deepEqual(calls[0]!.call.params, { content: "likes tea", reason: "noted" });
+});
+
 // ===========================================================================
 // A core-tool handler is WIRED TO THE PIPELINE: it maps the tool input to an
 // AgentCall and routes it through handleAgentCall, taking the caller's identity from

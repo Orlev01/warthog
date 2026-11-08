@@ -52,7 +52,7 @@ const MAX_REASON = 2000;
 // universal OPTIONAL `reason`. A z.object, so its `.shape` exposes each field
 // (the registry and tests read `.shape.approval_id`). `approval_id` is any capped
 // string at the schema boundary — its UUID shape is checked separately below.
-const inputSchema = z.object({
+export const inputSchema = z.object({
   approval_id: z.string().min(1).max(MAX_APPROVAL_ID),
   wait_seconds: z.number().optional(),
   reason: z.string().max(MAX_REASON).optional(),

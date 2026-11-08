@@ -725,3 +725,35 @@ function subschema(
     ?.shape;
   return shape?.[field];
 }
+
+// Review fix (unverified finding, confirmed): update_task and complete_task act only on
+// the tasks the calling agent can see — assigned to it or to any agent — exactly the set
+// list_tasks shows it, never a task assigned to a different agent.
+test("update_task and complete_task refuse a task assigned to a different agent", async () => {
+  const db = await freshDb();
+  const keyWrapper = keyWrapperFor();
+  try {
+    const { userId, dek } = await makePerson(db, "task-scope", keyWrapper);
+    const conn = connectionFor(userId);
+    await grantTasks(db, userId, conn.connectionId);
+    const others = await createTask(
+      db,
+      { userId, title: "Someone else's", assignee: randomUUID(), createdBy: { kind: "person" } },
+      dek,
+    );
+    const shared = await createTask(db, { userId, title: "Anyone's", assignee: "any", createdBy: { kind: "person" } }, dek);
+    const deps = tasksDeps(db, keyWrapper, fixedClock(NOW));
+    const update = createUpdateTaskTool(deps);
+    const complete = createCompleteTaskTool(deps);
+
+    assert.equal((await update.handle({ id: others.id, status: "in_progress" }, conn)).status, "refused");
+    assert.equal((await complete.handle({ id: others.id }, conn)).status, "refused");
+    const untouched = (await listTasksForUser(db, userId, dek)).find((task) => task.id === others.id);
+    assert.equal(untouched?.status, "open", "another agent's task is left unchanged");
+
+    assert.equal((await update.handle({ id: shared.id, status: "in_progress" }, conn)).status, "updated");
+    assert.equal((await complete.handle({ id: shared.id }, conn)).status, "completed");
+  } finally {
+    await db.close();
+  }
+});

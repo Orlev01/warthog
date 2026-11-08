@@ -59,16 +59,37 @@ import assert from "node:assert/strict";
 import { Buffer } from "node:buffer";
 import { createHash, randomBytes, randomUUID } from "node:crypto";
 
+import { z } from "zod";
+
 import { createMcpDispatch } from "./compose";
+import { rememberSchema, searchMemorySchema } from "./tools/memory";
+import { getSkillSchema } from "./tools/get-skill";
+import { inputSchema as checkApprovalSchema } from "./tools/check-approval";
+import { inputSchema as collectReleaseSchema } from "./tools/collect-release";
+import { completeTaskSchema, createTaskSchema, listTasksSchema, updateTaskSchema } from "./tools/tasks";
+import { listRecordsSchema, saveRecordSchema, updateRecordSchema } from "./tools/records";
+import { logActivitySchema } from "./tools/log-activity";
 
 import { loadConfig, type Config } from "../config";
 import { localAesKeyWrapper } from "../crypto/key-wrapper";
-import { fixedClock } from "../seams/clock";
+import { fixedClock, systemClock } from "../seams/clock";
 import { createUser } from "../db/users";
 import { createAgent } from "../db/agents";
 import { upsertPermissions, type PermissionGrants } from "../db/agent-permissions";
 import { listMemoriesForUser } from "../db/memories";
 import { listPendingForUser } from "../db/approvals";
+import { registerSubscription } from "../db/push-subscriptions";
+import { createHousehold, setHouseholdBudget, setMemberLimit } from "../db/households";
+import { upsertRate } from "../db/exchange-rates";
+import { storeFingerprint } from "../db/release-fingerprints";
+import { fingerprint } from "../crypto/hmac";
+import { createConnection } from "../db/connections";
+import { createRule } from "../db/rules";
+import { saveIdentityField } from "../db/identity-fields";
+import { createMemory } from "../db/memories";
+import { createTask } from "../db/tasks";
+import { FALLBACK_JOB_TYPE } from "../notify/approval-notifier";
+import { outbox } from "../notify/outbox";
 import { createToken } from "../oauth/store";
 import { listActivity } from "../activity/list";
 import { verifyBearer, type BearerVerification } from "../oauth/verify-bearer";
@@ -92,7 +113,7 @@ const DEV_KEK_B64 = Buffer.alloc(32, 0x5c).toString("base64");
 const PUBLIC_BASE_URL = "https://warthog.example";
 const REQUEST_HOST = "https://warthog.example";
 
-function devConfig(): Config {
+function devConfig(extra: Record<string, string> = {}): Config {
   return loadConfig({
     NODE_ENV: "development",
     PUBLIC_BASE_URL,
@@ -100,6 +121,7 @@ function devConfig(): Config {
     DATABASE_URL: "pglite:memory",
     WARTHOG_HMAC_KEY: HMAC_KEY_B64,
     WARTHOG_DEV_KEK: DEV_KEK_B64,
+    ...extra,
   } as NodeJS.ProcessEnv);
 }
 
@@ -109,7 +131,11 @@ interface JsonRpcResponse {
   jsonrpc?: string;
   id?: number | string | null;
   result?: {
-    tools?: Array<{ name: string; inputSchema?: { type?: string; properties?: Record<string, unknown> } }>;
+    tools?: Array<{
+      name: string;
+      description?: string;
+      inputSchema?: { type?: string; properties?: Record<string, unknown>; required?: string[] };
+    }>;
     content?: Array<{ type: string; text?: string }>;
     structuredContent?: Record<string, unknown>;
     isError?: boolean;
@@ -262,6 +288,102 @@ test("AC1: tools/list returns the registry's core tools, each with an input sche
 });
 
 // ===================================================================================
+// Review fix D1 — tools/list publishes each tool's REAL input schema (the fields its body
+// validates, with the required ones marked) and a plain-English description, so an agent
+// can discover what to send instead of seeing only `reason` and the bare tool name.
+// ===================================================================================
+
+// The fields each tool body REQUIRES (and the optional ones it also accepts), taken from
+// the body's own zod schema — so the advertised schema and what the body validates can
+// never drift apart again.
+function requiredKeys(schema: z.ZodObject): string[] {
+  return Object.entries(schema.shape)
+    .filter(([, field]) => !(field as z.ZodType).safeParse(undefined).success)
+    .map(([key]) => key)
+    .sort();
+}
+
+const BODY_SCHEMAS: Record<string, z.ZodObject> = {
+  remember: rememberSchema,
+  search_memory: searchMemorySchema,
+  get_skill: getSkillSchema,
+  check_approval: checkApprovalSchema,
+  collect_release: collectReleaseSchema,
+  list_tasks: listTasksSchema,
+  create_task: createTaskSchema,
+  update_task: updateTaskSchema,
+  complete_task: completeTaskSchema,
+  list_records: listRecordsSchema,
+  save_record: saveRecordSchema,
+  update_record: updateRecordSchema,
+  log_activity: logActivitySchema,
+};
+
+test("D1: tools/list advertises each tool's real required fields and a plain description", async () => {
+  const db = await freshDb();
+  try {
+    const config = devConfig();
+    const { connectionId } = await seedConnection(db, config);
+    const dispatch = createMcpDispatch({ db, config });
+
+    const rpc = await readRpc(await dispatch(connectionId, mcpPost(LIST_BODY)));
+    const tools = rpc.result?.tools ?? [];
+    const byName = new Map(tools.map((tool) => [tool.name, tool]));
+
+    // Every tool says what it does in words, not just its own name.
+    for (const tool of tools) {
+      const description = tool.description ?? "";
+      assert.ok(description.trim().length > 20, `${tool.name} must carry a plain-English description`);
+      assert.notEqual(description, tool.name, `${tool.name}'s description must not be just its name`);
+    }
+
+    // The fields the agents most need to discover are advertised as required.
+    const required = (name: string): string[] => [...(byName.get(name)?.inputSchema?.required ?? [])].sort();
+    assert.ok(required("remember").includes("content"), "remember requires content");
+    assert.ok(required("check_approval").includes("approval_id"), "check_approval requires approval_id");
+    assert.ok(
+      "wait_seconds" in (byName.get("check_approval")?.inputSchema?.properties ?? {}),
+      "check_approval lists wait_seconds",
+    );
+    assert.ok(required("get_skill").includes("title"), "get_skill requires title");
+    assert.ok(required("create_task").includes("title"), "create_task requires title");
+    assert.ok(required("update_task").includes("id"), "update_task requires id");
+    assert.ok(required("complete_task").includes("id"), "complete_task requires id");
+    assert.deepEqual(required("save_record"), ["fields", "kind"], "save_record requires kind and fields");
+    assert.deepEqual(required("update_record"), ["fields", "id"], "update_record requires id and fields");
+    assert.deepEqual(required("request_card"), ["amount", "currency", "merchant"], "request_card requires its card fields");
+
+    // Table-driven: each advertised schema matches the body schema it is routed to.
+    for (const [name, schema] of Object.entries(BODY_SCHEMAS)) {
+      const advertised = byName.get(name);
+      assert.ok(advertised, `tools/list must include ${name}`);
+      assert.deepEqual(required(name), requiredKeys(schema), `${name}'s advertised required fields match its body`);
+      for (const key of Object.keys(schema.shape)) {
+        assert.ok(key in (advertised!.inputSchema?.properties ?? {}), `${name} must advertise its ${key} field`);
+      }
+    }
+  } finally {
+    await db.close();
+  }
+});
+
+test("D1: a tools/call missing a required field is refused with a message naming the field", async () => {
+  const db = await freshDb();
+  try {
+    const config = devConfig();
+    const { userId, connectionId, dek } = await seedConnection(db, config);
+    const dispatch = createMcpDispatch({ db, config });
+
+    const rpc = await readRpc(await dispatch(connectionId, mcpPost(callBody("remember", {}))));
+    assert.equal(rpc.result?.isError, true, "a remember with no content is an error");
+    assert.match(contentText(rpc.result), /content/, "the refusal names the missing field");
+    assert.equal((await listMemoriesForUser(db, userId, dek)).length, 0, "nothing is saved");
+  } finally {
+    await db.close();
+  }
+});
+
+// ===================================================================================
 // AC2 — tools/call get_context returns the allowed context AND Warthog records it;
 //       tools/call remember stores a memory the person then sees on /memory.
 // ===================================================================================
@@ -367,13 +489,517 @@ test("AC3: a denied tools/call (high-tier access off) maps to isError with a pla
     const { userId, connectionId, dek } = await seedConnection(db, config, { highTierAccess: false });
     const dispatch = createMcpDispatch({ db, config });
 
-    const res = await dispatch(connectionId, mcpPost(callBody("request_identity_detail", {})));
+    const res = await dispatch(
+      connectionId,
+      mcpPost(callBody("request_identity_detail", { field: "passport", purpose: "Check in for a flight" })),
+    );
     const rpc = await readRpc(res);
     assert.equal(rpc.result?.isError, true, "a denied request is surfaced as an MCP error (isError)");
+    assert.match(contentText(rpc.result), /high-tier/, "refused by the policy gate, not by input validation");
     assert.ok(contentText(rpc.result).trim().length > 0, "the error carries a plain reason");
 
     const pending = await listPendingForUser(db, userId, dek);
     assert.equal(pending.length, 0, "a denied request holds nothing — no pending approval is created");
+  } finally {
+    await db.close();
+  }
+});
+
+// ===================================================================================
+// Review fix D2 — the composed pipeline is wired to the approval notifier (a push to
+// every registered device plus the scheduled SMS/email fallback) and the request-metrics
+// recorder, so an approval created over MCP actually reaches the person.
+// ===================================================================================
+
+// Register one push device for the person and return its (unique) endpoint.
+async function registerDevice(db: Db, userId: string, dek: Uint8Array): Promise<string> {
+  const endpoint = `https://push.example/${randomUUID()}`;
+  await registerSubscription(
+    db,
+    { userId, endpoint, keys: { p256dh: "p256dh-key", auth: "auth-key" } },
+    dek,
+    fixedClock(NOW),
+  );
+  return endpoint;
+}
+
+// The approval.fallback job rows scheduled for one approval.
+async function fallbackJobsFor(db: Db, approvalId: string): Promise<Array<{ runAt: Date }>> {
+  const rows = await db.query(
+    "SELECT run_at FROM jobs WHERE type = $1 AND payload->>'approvalId' = $2",
+    [FALLBACK_JOB_TYPE, approvalId],
+  );
+  return rows.rows.map((row) => ({ runAt: new Date(row.run_at as string) }));
+}
+
+test("D2: a card request over MCP pushes to the person's device and schedules the fallback", async () => {
+  const db = await freshDb();
+  try {
+    const config = devConfig({ WARTHOG_DEV_TOOLS: "1" });
+    const { userId, connectionId, dek } = await seedConnection(db, config);
+    const endpoint = await registerDevice(db, userId, dek);
+    const dispatch = createMcpDispatch({ db, config });
+
+    const rpc = await readRpc(
+      await dispatch(connectionId, mcpPost(callBody("request_card", { amount: 20, currency: "AUD", merchant: "Shop" }))),
+    );
+    const approvalId = rpc.result?.structuredContent?.approval_id as string;
+    assert.equal(typeof approvalId, "string", `request_card is pending approval, got: ${JSON.stringify(rpc)}`);
+
+    // One fallback job, due at the approval's own created_at + the default 2 minutes.
+    const created = await db.query("SELECT created_at FROM approvals WHERE id = $1", [approvalId]);
+    const createdAt = new Date(created.rows[0]!.created_at as string);
+    const jobs = await fallbackJobsFor(db, approvalId);
+    assert.equal(jobs.length, 1, "exactly one approval.fallback job is scheduled");
+    assert.equal(jobs[0]!.runAt.getTime(), createdAt.getTime() + 2 * 60_000, "due 2 minutes after creation");
+
+    // The dev outbox received the push for this device, carrying the approval id only.
+    const pushes = outbox.list().filter((message) => message.channel === "push" && message.recipient === endpoint);
+    assert.equal(pushes.length, 1, "one push is sent to the registered device");
+    assert.ok(`${pushes[0]!.body} ${pushes[0]!.link ?? ""}`.includes(approvalId), "the push names the approval");
+    assert.ok(!`${pushes[0]!.body} ${pushes[0]!.link ?? ""}`.includes("Shop"), "the push carries no request detail");
+  } finally {
+    await db.close();
+  }
+});
+
+test("D2: a failed push does not fail the request: still pending_approval, fallback still scheduled", async () => {
+  const db = await freshDb();
+  try {
+    // Dev tools off and no VAPID keys: the real Web Push sender refuses every send.
+    const config = devConfig();
+    const { userId, connectionId, dek } = await seedConnection(db, config);
+    await registerDevice(db, userId, dek);
+    const dispatch = createMcpDispatch({ db, config });
+
+    const rpc = await readRpc(
+      await dispatch(connectionId, mcpPost(callBody("request_card", { amount: 20, currency: "AUD", merchant: "Shop" }))),
+    );
+    assert.notEqual(rpc.result?.isError, true, `the request is not an error, got: ${JSON.stringify(rpc)}`);
+    assert.equal(rpc.result?.structuredContent?.status, "pending_approval");
+    const approvalId = rpc.result!.structuredContent!.approval_id as string;
+    assert.equal((await fallbackJobsFor(db, approvalId)).length, 1, "the fallback is still scheduled");
+  } finally {
+    await db.close();
+  }
+});
+
+test("D2: every tools/call records the request count and latency metrics", async () => {
+  const db = await freshDb();
+  try {
+    const config = devConfig();
+    const { connectionId } = await seedConnection(db, config);
+    const dispatch = createMcpDispatch({ db, config });
+
+    await readRpc(await dispatch(connectionId, mcpPost(callBody("get_context", {}))));
+
+    const rows = await db.query("SELECT name, outcome FROM metric_events ORDER BY name");
+    const names = rows.rows.map((row) => String(row.name));
+    assert.ok(names.includes("agent.request"), "a request-count metric is recorded");
+    assert.ok(names.includes("agent.request.latency_ms"), "a request-latency metric is recorded");
+    assert.ok(rows.rows.every((row) => row.outcome === "executed"), "tagged with the call's outcome");
+  } finally {
+    await db.close();
+  }
+});
+
+// ===================================================================================
+// Review fix D3 — card requests through the composed pipeline are checked against the
+// household budget and the member's limit (in the household currency), and a foreign
+// amount is converted with the stored daily reference rate.
+// ===================================================================================
+
+async function requestCard(
+  dispatch: ReturnType<typeof createMcpDispatch>,
+  connectionId: string,
+  amount: number,
+  currency = "AUD",
+): Promise<JsonRpcResponse["result"]> {
+  const rpc = await readRpc(
+    await dispatch(connectionId, mcpPost(callBody("request_card", { amount, currency, merchant: "Shop" }))),
+  );
+  return rpc.result;
+}
+
+test("D3: a card request over the member's household limit is refused, holding nothing", async () => {
+  const db = await freshDb();
+  try {
+    const config = devConfig();
+    const { userId, connectionId, dek } = await seedConnection(db, config);
+    const household = await createHousehold(db, { ownerId: userId, currency: "AUD", monthlyBudget: 500 });
+    await setMemberLimit(db, { householdId: household.id, actorId: userId, userId, monthlyLimit: 200 });
+    const dispatch = createMcpDispatch({ db, config });
+
+    const result = await requestCard(dispatch, connectionId, 300);
+    assert.equal(result?.isError, true, "an over-limit request is refused");
+    assert.match(contentText(result), /household spending limit/);
+    assert.equal((await listPendingForUser(db, userId, dek)).length, 0, "no approval is created");
+  } finally {
+    await db.close();
+  }
+});
+
+test("D3: a card request over the shared household budget is refused; unset legs impose no cap", async () => {
+  const db = await freshDb();
+  try {
+    const config = devConfig();
+    const { userId, connectionId } = await seedConnection(db, config);
+    const household = await createHousehold(db, { ownerId: userId, currency: "AUD", monthlyBudget: 500 });
+    const dispatch = createMcpDispatch({ db, config });
+
+    const over = await requestCard(dispatch, connectionId, 900);
+    assert.equal(over?.isError, true, "an over-budget request is refused");
+    assert.match(contentText(over), /shared budget/);
+
+    // No member limit and no shared budget: nothing caps the request (it asks the person).
+    await setHouseholdBudget(db, { householdId: household.id, actorId: userId, monthlyBudget: null });
+    const asked = await requestCard(dispatch, connectionId, 900);
+    assert.equal(asked?.structuredContent?.status, "pending_approval", `got: ${JSON.stringify(asked)}`);
+  } finally {
+    await db.close();
+  }
+});
+
+test("D3: a foreign-currency card request is converted with the stored daily rate", async () => {
+  const db = await freshDb();
+  try {
+    const config = devConfig();
+    const { connectionId } = await seedConnection(db, config); // A$1000/month budget
+    const dispatch = createMcpDispatch({ db, config });
+
+    // No USD→AUD rate stored yet: refused with a plain reason rather than guessed.
+    const noRate = await requestCard(dispatch, connectionId, 100, "USD");
+    assert.equal(noRate?.isError, true);
+    assert.match(contentText(noRate), /reference rate/i);
+
+    // With a rate on file, 100 USD (150 AUD) is within budget and asks the person.
+    await upsertRate(db, { rateDate: "2020-01-01", baseCurrency: "USD", quoteCurrency: "AUD", rate: 1.5 });
+    const converted = await requestCard(dispatch, connectionId, 100, "USD");
+    assert.equal(converted?.structuredContent?.status, "pending_approval", `got: ${JSON.stringify(converted)}`);
+
+    // 800 USD is 1200 AUD — over the A$1000 budget once converted.
+    const over = await requestCard(dispatch, connectionId, 800, "USD");
+    assert.match(contentText(over), /card budget/);
+  } finally {
+    await db.close();
+  }
+});
+
+// ===================================================================================
+// Review fix D4 — once a high-tier value has been released, a later tool call that echoes
+// it (in any surface form, including one written with spaces or dashes) is stored in the
+// activity record as `[released value]`, never the value.
+// ===================================================================================
+
+test("D4: a released value echoed in a later tool call is redacted from the activity record", async () => {
+  const db = await freshDb();
+  try {
+    const config = devConfig();
+    const { userId, connectionId, agentId, dek } = await seedConnection(db, config);
+    // Released just now (the dispatch reads the system clock; a fingerprint lives 90 days).
+    for (const value of ["PA1234567", "AB-123-456"]) {
+      await storeFingerprint(db, { userId, fingerprint: fingerprint(dek, value) }, systemClock);
+    }
+    const dispatch = createMcpDispatch({ db, config });
+
+    const content = "My passport is PA1234567, licence ab 123 456";
+    const rpc = await readRpc(await dispatch(connectionId, mcpPost(callBody("remember", { content }))));
+    assert.notEqual(rpc.result?.isError, true, `remember succeeds, got: ${JSON.stringify(rpc)}`);
+
+    const entries = await listActivity(db, userId, { agentId }, dek);
+    const entry = entries.find((candidate) => candidate.tool === "remember");
+    assert.ok(entry, "the remember call was recorded");
+    const stored = JSON.stringify(entry!.payload);
+    assert.ok(!stored.includes("PA1234567"), "the released passport number is not stored");
+    assert.ok(!/ab 123 456/i.test(stored), "the released licence is not stored in another surface form");
+    assert.equal(stored.split("[released value]").length - 1, 2, "both values are replaced by the marker");
+  } finally {
+    await db.close();
+  }
+});
+
+// ===================================================================================
+// Review fix D5 — a connection's permitted connector tools are served over MCP
+// (namespaced <connector>__<tool>) and routed through the pipeline to the connector
+// engine: the general request tool for a service without curated tools, the curated
+// tools (with their read/change and sends-a-message declarations) for Google/Microsoft.
+// ===================================================================================
+
+// A recording upstream: every request the connector engine sends, answered with a fixed body.
+function recordingFetch(): { fetch: typeof fetch; sent: Array<{ url: string; init: RequestInit }> } {
+  const sent: Array<{ url: string; init: RequestInit }> = [];
+  const fake = (async (input: RequestInfo | URL, init?: RequestInit) => {
+    sent.push({ url: String(input), init: init ?? {} });
+    return new Response('{"upstream":"ok"}', { status: 200 });
+  }) as typeof fetch;
+  return { fetch: fake, sent };
+}
+
+async function connectService(
+  db: Db,
+  userId: string,
+  dek: Uint8Array,
+  connectorId: string,
+  credentials: Record<string, unknown>,
+): Promise<void> {
+  await createConnection(db, { userId, connectorId, accountLabel: "me", credentials }, dek, fixedClock(NOW));
+}
+
+test("D5: tools/list serves the granted connector's request tool and nothing for an ungranted one", async () => {
+  const db = await freshDb();
+  try {
+    const config = devConfig();
+    const { userId, connectionId, dek } = await seedConnection(db, config, { grantedConnectors: ["amadeus"] });
+    await connectService(db, userId, dek, "amadeus", { api_key: "sk-test" });
+    await connectService(db, userId, dek, "alpaca", { api_key: "sk-other" });
+    const dispatch = createMcpDispatch({ db, config, fetch: recordingFetch().fetch });
+
+    const tools = (await readRpc(await dispatch(connectionId, mcpPost(LIST_BODY)))).result?.tools ?? [];
+    const names = tools.map((tool) => tool.name);
+    assert.ok(names.includes("amadeus__request"), "the granted, connected service's request tool is served");
+    assert.ok(!names.some((name) => name.startsWith("alpaca__")), "an ungranted service contributes no tools");
+    const request = tools.find((tool) => tool.name === "amadeus__request");
+    assert.deepEqual([...(request?.inputSchema?.required ?? [])].sort(), ["method", "path"]);
+  } finally {
+    await db.close();
+  }
+});
+
+test("D5: a GET through the request tool reaches the catalogue host with the stored credential and is recorded", async () => {
+  const db = await freshDb();
+  try {
+    const config = devConfig();
+    const { userId, connectionId, agentId, dek } = await seedConnection(db, config, { grantedConnectors: ["amadeus"] });
+    await connectService(db, userId, dek, "amadeus", { api_key: "sk-test" });
+    const upstream = recordingFetch();
+    const dispatch = createMcpDispatch({ db, config, fetch: upstream.fetch });
+
+    const rpc = await readRpc(
+      await dispatch(connectionId, mcpPost(callBody("amadeus__request", { method: "GET", path: "/v1/flights" }))),
+    );
+    assert.notEqual(rpc.result?.isError, true, `the read is executed, got: ${JSON.stringify(rpc)}`);
+    assert.match(contentText(rpc.result), /upstream/, "the upstream body is returned to the agent");
+
+    assert.equal(upstream.sent.length, 1);
+    assert.equal(upstream.sent[0]!.url, "https://api.amadeus.com/v1/flights", "only the catalogue host is called");
+    const headers = new Headers(upstream.sent[0]!.init.headers);
+    assert.equal(headers.get("authorization"), "Bearer sk-test", "the stored credential is presented");
+
+    const entries = await listActivity(db, userId, { agentId }, dek);
+    const entry = entries.find((candidate) => candidate.tool === "amadeus__request");
+    assert.ok(entry, "the connector call is recorded");
+    assert.equal(entry!.connectorId, "amadeus");
+    assert.ok(!JSON.stringify(entry!.payload).includes("sk-test"), "the credential never reaches the record");
+  } finally {
+    await db.close();
+  }
+});
+
+test("D5: a change through the request tool follows the ask-first setting and sends nothing", async () => {
+  const db = await freshDb();
+  try {
+    const config = devConfig();
+    const { userId, connectionId, dek } = await seedConnection(db, config, {
+      grantedConnectors: ["amadeus"],
+      changeTools: "ask_first",
+    });
+    await connectService(db, userId, dek, "amadeus", { api_key: "sk-test" });
+    const upstream = recordingFetch();
+    const dispatch = createMcpDispatch({ db, config, fetch: upstream.fetch });
+
+    const rpc = await readRpc(
+      await dispatch(connectionId, mcpPost(callBody("amadeus__request", { method: "POST", path: "/v1/orders", body: "{}" }))),
+    );
+    assert.equal(rpc.result?.structuredContent?.status, "pending_approval", `got: ${JSON.stringify(rpc)}`);
+    assert.equal(upstream.sent.length, 0, "nothing is sent before the person approves");
+  } finally {
+    await db.close();
+  }
+});
+
+test("D5: curated Gmail tools are served (no general request tool) and message rules apply to them", async () => {
+  const db = await freshDb();
+  try {
+    const config = devConfig();
+    const { userId, connectionId, dek } = await seedConnection(db, config, { grantedConnectors: ["google-gmail"] });
+    await connectService(db, userId, dek, "google-gmail", { access_token: "ya29-test" });
+    await createRule(
+      db,
+      {
+        userId,
+        kind: "ask_first",
+        scope: { type: "any_agent" },
+        action: { type: "send_message", channel: "email" },
+        condition: { type: "recipient_in_domain", domain: "example.com" },
+      },
+      dek,
+    );
+    const upstream = recordingFetch();
+    const dispatch = createMcpDispatch({ db, config, fetch: upstream.fetch });
+
+    const names = ((await readRpc(await dispatch(connectionId, mcpPost(LIST_BODY)))).result?.tools ?? []).map((t) => t.name);
+    assert.ok(names.includes("google-gmail__send") && names.includes("google-gmail__search"));
+    assert.ok(!names.includes("google-gmail__request"), "a curated service is not reachable around its curated tools");
+
+    const mime = (to: string) => JSON.stringify({ raw: Buffer.from(`To: ${to}\r\nSubject: hi\r\n\r\nhello`).toString("base64url") });
+    const held = await readRpc(
+      await dispatch(connectionId, mcpPost(callBody("google-gmail__send", { body: mime("Bob <bob@example.com>") }))),
+    );
+    assert.equal(held.result?.structuredContent?.status, "pending_approval", "a send to the ruled domain asks first");
+    assert.equal(upstream.sent.length, 0);
+
+    const sent = await readRpc(await dispatch(connectionId, mcpPost(callBody("google-gmail__send", { body: mime("bob@other.org") }))));
+    assert.notEqual(sent.result?.isError, true, `a send elsewhere goes through, got: ${JSON.stringify(sent)}`);
+    assert.equal(upstream.sent.length, 1);
+    assert.equal(upstream.sent[0]!.url, "https://gmail.googleapis.com/gmail/v1/users/me/messages/send");
+  } finally {
+    await db.close();
+  }
+});
+
+test("D5: a connector revoked from the agent disappears and a direct call is refused", async () => {
+  const db = await freshDb();
+  try {
+    const config = devConfig();
+    const { userId, connectionId, dek } = await seedConnection(db, config, { grantedConnectors: [] });
+    await connectService(db, userId, dek, "amadeus", { api_key: "sk-test" });
+    const upstream = recordingFetch();
+    const dispatch = createMcpDispatch({ db, config, fetch: upstream.fetch });
+
+    const names = ((await readRpc(await dispatch(connectionId, mcpPost(LIST_BODY)))).result?.tools ?? []).map((t) => t.name);
+    assert.ok(!names.includes("amadeus__request"));
+    const rpc = await readRpc(
+      await dispatch(connectionId, mcpPost(callBody("amadeus__request", { method: "GET", path: "/v1/x" }))),
+    );
+    assert.equal(rpc.result?.isError ?? Boolean(rpc.error), true, "the call is refused");
+    assert.equal(upstream.sent.length, 0);
+  } finally {
+    await db.close();
+  }
+});
+
+// ===================================================================================
+// Review fix D6 — request_identity_detail names WHICH detail it wants and WHY, and both
+// are stored on the approval the person reviews in their inbox.
+// ===================================================================================
+
+test("D6: request_identity_detail requires a field and a purpose and stores both on the approval", async () => {
+  const db = await freshDb();
+  try {
+    const config = devConfig();
+    const { userId, connectionId, dek } = await seedConnection(db, config, { highTierAccess: true });
+    const dispatch = createMcpDispatch({ db, config });
+
+    const missing = await readRpc(await dispatch(connectionId, mcpPost(callBody("request_identity_detail", {}))));
+    assert.equal(missing.result?.isError, true, "a request with no field or purpose is refused");
+    assert.match(contentText(missing.result), /field/);
+    assert.match(contentText(missing.result), /purpose/);
+
+    const rpc = await readRpc(
+      await dispatch(
+        connectionId,
+        mcpPost(callBody("request_identity_detail", { field: "passport", purpose: "Check in for a flight" })),
+      ),
+    );
+    const approvalId = rpc.result?.structuredContent?.approval_id;
+    assert.equal(typeof approvalId, "string", `the request is pending approval, got: ${JSON.stringify(rpc)}`);
+    const approval = (await listPendingForUser(db, userId, dek)).find((entry) => entry.id === approvalId);
+    assert.equal(approval?.detail?.field, "passport", "the approval shows which detail is wanted");
+    assert.equal(approval?.detail?.purpose, "Check in for a flight", "the approval shows the stated purpose");
+  } finally {
+    await db.close();
+  }
+});
+
+// ===================================================================================
+// Review fix D7 — get_context hands the agent the brief's contents in one call (the
+// low-tier profile when allowed, preferences, the skill index with Warthog's house skill,
+// the rules as sentences, the shared memory it may read and its open tasks) and never
+// an internal user or connection id.
+// ===================================================================================
+
+async function getContextOf(dispatch: ReturnType<typeof createMcpDispatch>, connectionId: string): Promise<{ text: string; json: Record<string, unknown> }> {
+  const rpc = await readRpc(await dispatch(connectionId, mcpPost(callBody("get_context", {}))));
+  assert.notEqual(rpc.result?.isError, true, `get_context succeeds, got: ${JSON.stringify(rpc)}`);
+  const text = contentText(rpc.result);
+  return { text, json: JSON.parse(text) as Record<string, unknown> };
+}
+
+test("D7: get_context returns the profile, skills, rules, memory and open tasks without internal ids", async () => {
+  const db = await freshDb();
+  try {
+    const config = devConfig();
+    const { userId, connectionId, agentId, dek } = await seedConnection(db, config, { identityAccess: true, memoryRead: true });
+    await saveIdentityField(db, { userId, kind: "name", value: "Ada Lovelace" }, dek);
+    await createMemory(db, { userId, content: "Prefers window seats", sourceAgentId: null, scope: "shared" }, dek, fixedClock(NOW));
+    await createTask(db, { userId, title: "Renew passport", assignee: "any", createdBy: { kind: "person" } }, dek);
+    await createRule(
+      db,
+      { userId, kind: "ask_first", scope: { type: "any_agent" }, action: { type: "card_request" } },
+      dek,
+    );
+    const dispatch = createMcpDispatch({ db, config });
+
+    const { text, json } = await getContextOf(dispatch, connectionId);
+    assert.ok(!text.includes(userId), "the person's internal id is not returned");
+    assert.ok(!text.includes(connectionId), "the connection's internal id is not returned");
+    assert.ok(!text.includes(agentId), "the agent's internal id is not returned");
+
+    assert.match(text, /Ada Lovelace/, "the low-tier profile is included when identity access is on");
+    const skills = json.skills as Array<{ title: string }>;
+    assert.ok(skills.some((skill) => skill.title === "Using Warthog"), "Warthog's house skill is indexed");
+    assert.deepEqual(json.rules, ["Ask me before any agent requests a card"], "rules read back as sentences");
+    assert.match(JSON.stringify(json.memory), /Prefers window seats/, "the shared memory it may read is included");
+    assert.match(JSON.stringify(json.tasks), /Renew passport/, "its open tasks are included");
+  } finally {
+    await db.close();
+  }
+});
+
+test("D7: get_context leaves out the profile and memory the agent is not granted", async () => {
+  const db = await freshDb();
+  try {
+    const config = devConfig();
+    const { userId, connectionId, dek } = await seedConnection(db, config, { identityAccess: false, memoryRead: false });
+    await saveIdentityField(db, { userId, kind: "name", value: "Ada Lovelace" }, dek);
+    await createMemory(db, { userId, content: "Prefers window seats", sourceAgentId: null, scope: "shared" }, dek, fixedClock(NOW));
+    const dispatch = createMcpDispatch({ db, config });
+
+    const { text } = await getContextOf(dispatch, connectionId);
+    assert.ok(!text.includes("Ada Lovelace"), "no profile without identity access");
+    assert.ok(!text.includes("Prefers window seats"), "no memory without memory access");
+  } finally {
+    await db.close();
+  }
+});
+
+// Review fix (unverified finding, confirmed): an internal failure behind a tool call is
+// logged for operators — a fixed event, the tool and the error's class, never its message
+// (which could carry personal content) — while the agent sees only the plain reason.
+test("an internal tool failure is logged without its message and reported plainly to the agent", async (t) => {
+  const db = await freshDb();
+  try {
+    const config = devConfig();
+    const { userId, connectionId, dek } = await seedConnection(db, config, { grantedConnectors: ["amadeus"] });
+    await connectService(db, userId, dek, "amadeus", { api_key: "sk-test" });
+    const failing = (async () => {
+      throw new TypeError("socket hang up for ada@example.com");
+    }) as typeof fetch;
+    const dispatch = createMcpDispatch({ db, config, fetch: failing });
+    const logged = t.mock.method(console, "error", () => undefined);
+
+    const rpc = await readRpc(
+      await dispatch(connectionId, mcpPost(callBody("amadeus__request", { method: "GET", path: "/v1/x" }))),
+    );
+    assert.equal(rpc.result?.isError, true);
+    assert.equal(contentText(rpc.result), "The tool call could not be completed.");
+
+    const lines = logged.mock.calls.map((call) => call.arguments.map(String).join(" "));
+    const line = lines.find((text) => text.includes("tool_call_failed"));
+    assert.ok(line, `the failure is logged, got: ${JSON.stringify(lines)}`);
+    assert.match(line!, /amadeus__request/);
+    assert.match(line!, /TypeError/);
+    assert.ok(!line!.includes("ada@example.com"), "the error message never reaches the log");
   } finally {
     await db.close();
   }

@@ -85,7 +85,7 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
 
-import { ruleSentence, conditionMatches, resolveRecipients } from "./rules";
+import { ruleSentence, conditionMatches, resolveRecipients, normaliseMerchant } from "./rules";
 
 // ---------------------------------------------------------------------------
 // Local structural fixtures — loosely typed so they stay assignable to whatever
@@ -402,4 +402,19 @@ test("a resolved recipient list satisfies a matching recipient_is condition", ()
     true,
     "resolution then evaluation agree: the trimmed address matches the condition",
   );
+});
+
+// Review fix D8 — the merchant is free text from the agent, so a merchant condition
+// compares normalised forms (Unicode-compatibility folded, case-folded, trimmed, inner
+// whitespace collapsed): a "never allow Amazon" rule cannot be dodged with "amazon ".
+test("merchant conditions match regardless of case, spacing and compatibility forms", () => {
+  const blocked = { type: "merchant_in", merchants: ["Amazon", "Box  Co"] } as const;
+  for (const merchant of ["amazon", "Amazon ", " AMAZON", "ＡＭＡＺＯＮ", "box co", "BOX\tCO"]) {
+    assert.equal(conditionMatches(blocked, { merchant }), true, `"${merchant}" is in the list`);
+  }
+  assert.equal(conditionMatches(blocked, { merchant: "Amazonia" }), false, "a different merchant is not");
+  const notIn = { type: "merchant_not_in", merchants: ["Amazon"] } as const;
+  assert.equal(conditionMatches(notIn, { merchant: " amazon" }), false);
+  assert.equal(conditionMatches(notIn, { merchant: "eBay" }), true);
+  assert.equal(normaliseMerchant("  Box   CO "), "box co");
 });

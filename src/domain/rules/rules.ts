@@ -178,13 +178,32 @@ function recipientDomain(address: string): string {
   return at === -1 ? "" : address.slice(at + 1).toLowerCase();
 }
 
+// --- merchant normalisation ------------------------------------------------
+
+/**
+ * The comparable form of a merchant name. The merchant is free text the agent supplies,
+ * so every merchant comparison (rule conditions, block and allow lists) folds Unicode
+ * compatibility forms (NFKC), case, surrounding whitespace and runs of inner whitespace —
+ * "AMAZON ", "amazon" and the full-width "ＡＭＡＺＯＮ" are all the same merchant.
+ */
+export function normaliseMerchant(merchant: string): string {
+  return merchant.normalize("NFKC").toLowerCase().replace(/\s+/gu, " ").trim();
+}
+
+/** Is `merchant` one of `list`, comparing normalised forms? */
+export function merchantInList(merchant: string, list: readonly string[]): boolean {
+  const target = normaliseMerchant(merchant);
+  return list.some((entry) => normaliseMerchant(entry) === target);
+}
+
 // --- conditionMatches ------------------------------------------------------
 
 /**
  * Does the request described by `ctx` satisfy the condition? Recipient matching
  * is case-insensitive and succeeds when ANY recipient matches; amount-over is
- * strictly greater; merchant in/not-in test membership of a present merchant.
- * A condition with no datum to test in context never matches.
+ * strictly greater; merchant in/not-in test membership of a present merchant,
+ * comparing normalised names. A condition with no datum to test in context never
+ * matches.
  */
 export function conditionMatches(condition: RuleCondition, ctx: MatchContext): boolean {
   switch (condition.type) {
@@ -199,9 +218,9 @@ export function conditionMatches(condition: RuleCondition, ctx: MatchContext): b
     case "amount_over":
       return ctx.amount !== undefined && ctx.amount > condition.amount;
     case "merchant_in":
-      return ctx.merchant !== undefined && condition.merchants.includes(ctx.merchant);
+      return ctx.merchant !== undefined && merchantInList(ctx.merchant, condition.merchants);
     case "merchant_not_in":
-      return ctx.merchant !== undefined && !condition.merchants.includes(ctx.merchant);
+      return ctx.merchant !== undefined && !merchantInList(ctx.merchant, condition.merchants);
     default:
       return assertNever(condition);
   }

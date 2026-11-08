@@ -75,11 +75,11 @@ const fields = z
 
 // list_records' input: nothing but the universal OPTIONAL `reason` (the owning
 // person comes from the connection). A z.object, so its `.shape` exposes the field.
-const listRecordsSchema = z.object({ reason });
+export const listRecordsSchema = z.object({ reason });
 
 // save_record's input: a REQUIRED `kind` (one of the three), a REQUIRED `fields`
 // object, an OPTIONAL `status` + `dueDate`, plus the universal OPTIONAL `reason`.
-const saveRecordSchema = z.object({
+export const saveRecordSchema = z.object({
   kind: z.enum(RECORD_KINDS),
   fields,
   status: z.string().max(MAX_STATUS).optional(),
@@ -90,7 +90,7 @@ const saveRecordSchema = z.object({
 // update_record's input: a REQUIRED non-empty `id`, a REQUIRED `fields` object (the
 // agent resupplies the content), an OPTIONAL `status` + `dueDate`, plus the
 // universal OPTIONAL `reason`.
-const updateRecordSchema = z.object({
+export const updateRecordSchema = z.object({
   id: z.string().min(1).max(MAX_ID),
   fields,
   status: z.string().max(MAX_STATUS).optional(),

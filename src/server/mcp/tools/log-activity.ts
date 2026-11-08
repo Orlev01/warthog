@@ -41,14 +41,14 @@ const MAX_CARD_RELEASE = 200;
 // The validated input: the universal optional `reason` plus the optional reported
 // amount (a positive number), currency and card-release reference. A z.object, so
 // its `.shape` exposes each field (the registry and tests read `.shape.reason`).
-const inputSchema = z.object({
+export const logActivitySchema = z.object({
   reason: z.string().max(MAX_REASON).optional(),
   amount: z.number().positive().optional(),
   currency: z.string().min(1).max(MAX_CURRENCY).optional(),
   cardRelease: z.string().min(1).max(MAX_CARD_RELEASE).optional(),
 });
 
-type LogActivityInput = z.infer<typeof inputSchema>;
+type LogActivityInput = z.infer<typeof logActivitySchema>;
 
 // One resolvable MCP tool (the sibling `registry.ts`'s `ToolDefinition` shape),
 // specialised to write the entry directly through the recorder rather than route a
@@ -79,12 +79,12 @@ export function createLogActivityTool(deps: LogActivityDeps): LogActivityTool {
 
   return {
     name: "log_activity",
-    inputSchema,
+    inputSchema: logActivitySchema,
 
     async handle(input: unknown, connection: AgentConnection): Promise<ActivityEntry> {
       // VALIDATE at the boundary: a bad / oversized / mis-shaped input throws a 4xx
       // `HttpError` BEFORE the recorder is ever called.
-      const parsed = parseParams(inputSchema, input);
+      const parsed = parseParams(logActivitySchema, input);
 
       // Write ONE entry, labelled reported-by-agent, with the identity taken from
       // the session connection (never a body value). The recorder redacts the

@@ -102,12 +102,13 @@ import assert from "node:assert/strict";
 import { randomBytes } from "node:crypto";
 import { z } from "zod";
 
-import { loadAgentContext } from "./context";
+import { cardPolicyFor, cardRequestOf, loadAgentContext } from "./context";
 import { createUser } from "../db/users";
 import { upsertPermissions, getConnectionPermissions } from "../db/agent-permissions";
 import { createRule, pauseRule } from "../db/rules";
 import { recordRelease } from "../db/card-spend-ledger";
 import { createHousehold, setMemberLimit } from "../db/households";
+import { upsertRate } from "../db/exchange-rates";
 import { freshDb } from "../../test/db";
 import type { Db } from "../db/index";
 import { parseBody, HttpError } from "../http/validate";
@@ -734,6 +735,62 @@ test("E15-S07: with no card request the loader carries no card-request context (
 
     const ctx = await loadAgentContext(connectionFor(userId), depsFor(db, keyWrapper));
     assert.equal(ctx.cardRequest, undefined, "no card request → no card-request context on the loader");
+  } finally {
+    await db.close();
+  }
+});
+
+// Review fix D3 — a card request's context is mapped ready for the pure engine: the
+// household policy carries only the legs the owner set (an unset leg is no cap), and the
+// daily rate converts the request into the agent budget's currency, looked up when the
+// resolver targeted a different (household) currency.
+test("D3: the card checks carry only the household legs that are set, plus the policy mapping", async () => {
+  const db = await freshDb();
+  const keyWrapper = keyWrapperFor();
+  try {
+    const { userId } = await makePerson(db, "d3-legs", keyWrapper);
+    await upsertPermissions(
+      db,
+      baseGrants(userId, CONN, { cardAccess: true, cardBudget: { amount: 300, currency: "AUD", period: "month" } }),
+    );
+    const household = await createHousehold(db, { ownerId: userId, currency: "AUD" }); // no budget
+    await setMemberLimit(db, { householdId: household.id, actorId: userId, userId, monthlyLimit: 120 });
+
+    const ctx = await loadAgentContext(connectionFor(userId), depsFor(db, keyWrapper), { amount: 50, currency: "AUD" });
+    const hh = ctx.cardChecks?.household;
+    assert.ok(hh, "the household policy is carried for a card request");
+    assert.equal(hh.budget, undefined, "an unset shared budget is no cap");
+    assert.deepEqual(hh.memberLimit, { amount: 120, period: "month" });
+    assert.equal(ctx.cardChecks?.rate, null, "a same-currency request needs no rate");
+
+    const card = cardPolicyFor(ctx, NOW);
+    assert.equal(card.access, true);
+    assert.deepEqual(card.budget, { amount: 300, period: "month" });
+    assert.equal(card.household, hh, "the household policy rides on the card policy");
+
+    assert.deepEqual(cardRequestOf({ request: "card", amount: 5, currency: "AUD" }), { amount: 5, currency: "AUD" });
+    assert.equal(cardRequestOf({ request: "high_tier" }), undefined);
+  } finally {
+    await db.close();
+  }
+});
+
+test("D3: a foreign request gets a household rate and a budget-currency rate", async () => {
+  const db = await freshDb();
+  const keyWrapper = keyWrapperFor();
+  try {
+    const { userId } = await makePerson(db, "d3-rates", keyWrapper);
+    await upsertPermissions(
+      db,
+      baseGrants(userId, CONN, { cardAccess: true, cardBudget: { amount: 300, currency: "AUD", period: "month" } }),
+    );
+    await createHousehold(db, { ownerId: userId, currency: "NZD", monthlyBudget: 900 });
+    await upsertRate(db, { rateDate: DAY_NOW, baseCurrency: "USD", quoteCurrency: "NZD", rate: 1.6 });
+    await upsertRate(db, { rateDate: DAY_NOW, baseCurrency: "USD", quoteCurrency: "AUD", rate: 1.5 });
+
+    const ctx = await loadAgentContext(connectionFor(userId), depsFor(db, keyWrapper), { amount: 10, currency: "USD" });
+    assert.deepEqual(ctx.cardChecks?.rate, { from: "USD", to: "AUD", rate: 1.5, date: DAY_NOW });
+    assert.deepEqual(ctx.cardChecks?.household?.rate, { from: "USD", to: "NZD", rate: 1.6, date: DAY_NOW });
   } finally {
     await db.close();
   }

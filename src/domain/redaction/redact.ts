@@ -6,8 +6,10 @@
 //
 //   1. Known secret FIELD NAMES → `[redacted]` (keyed on the key, not the value).
 //   2. Luhn-valid card numbers → masked, revealing only the last four digits.
-//   3. Alphanumeric tokens of normalised length ≥ 5 whose fingerprint the INJECTED
-//      matcher reports as a released value → `[released value]`.
+//   3. Alphanumeric tokens — or runs of adjacent tokens joined only by a short run of
+//      spaces, `-`, `.` or `/`, so a value written "AB-123-456" is caught whole — of
+//      normalised length ≥ 5 whose fingerprint the INJECTED matcher reports as a
+//      released value → `[released value]`.
 //   4. String values longer than 2,000 characters are truncated with a marker.
 //
 // The fingerprint matcher is injected so this module stays pure: the per-person,
@@ -23,6 +25,87 @@ const TRUNCATION_MARKER = "…[truncated]";
 
 /** Shortest normalised token the released-value matcher is consulted for. */
 const MIN_TOKEN_LENGTH = 5;
+
+/** A token: a run of letters and numbers. */
+const TOKEN = /[\p{L}\p{N}]+/gu;
+
+/**
+ * What may sit between adjacent tokens that together spell ONE value written with spaces
+ * or dashes ("AB-123-456", "2123 45678 1"): a short run of whitespace, `-`, `.` or `/`.
+ */
+const JOINER = /^[\s\-./]{1,3}$/u;
+
+/** The most adjacent tokens offered to the matcher as one run. */
+const MAX_RUN_TOKENS = 6;
+
+/**
+ * How far past the length budget an over-long value is still scanned, so a released
+ * value straddling the cut is replaced, while a huge value is never scanned in full
+ * (everything past the budget is truncated away anyway).
+ */
+const SCAN_MARGIN = 256;
+
+interface Token {
+  start: number;
+  end: number;
+  normalised: string;
+}
+
+/**
+ * How many tokens, starting at `tokens[i]`, form a released value: the longest run of up
+ * to MAX_RUN_TOKENS adjacent tokens (joined only by JOINER separators) whose concatenated
+ * normal form the matcher reports, or 0 when none does.
+ */
+function releasedRunAt(
+  text: string,
+  tokens: readonly Token[],
+  i: number,
+  matchesReleased: (normalisedToken: string) => boolean,
+): number {
+  const runs: string[] = [tokens[i]!.normalised];
+  for (let k = 1; k < MAX_RUN_TOKENS && i + k < tokens.length; k += 1) {
+    const prev = tokens[i + k - 1]!;
+    const next = tokens[i + k]!;
+    if (!JOINER.test(text.slice(prev.end, next.start))) break;
+    runs.push(runs[k - 1]! + next.normalised);
+  }
+  for (let k = runs.length; k >= 1; k -= 1) {
+    const candidate = runs[k - 1]!;
+    if (candidate.length >= MIN_TOKEN_LENGTH && matchesReleased(candidate)) return k;
+  }
+  return 0;
+}
+
+/**
+ * Replace every released value in `text` with `[released value]`: a single token, or a
+ * run of adjacent tokens joined by short separators, whose normal form the matcher
+ * reports. Anything unmatched keeps its original surface form.
+ */
+function replaceReleased(
+  text: string,
+  matchesReleased: (normalisedToken: string) => boolean,
+): string {
+  const tokens: Token[] = [];
+  for (const match of text.matchAll(TOKEN)) {
+    const start = match.index;
+    tokens.push({ start, end: start + match[0].length, normalised: normaliseValue(match[0]) });
+  }
+
+  let out = "";
+  let cursor = 0;
+  let i = 0;
+  while (i < tokens.length) {
+    const run = releasedRunAt(text, tokens, i, matchesReleased);
+    if (run === 0) {
+      i += 1;
+      continue;
+    }
+    out += text.slice(cursor, tokens[i]!.start) + "[released value]";
+    cursor = tokens[i + run - 1]!.end;
+    i += run;
+  }
+  return out + text.slice(cursor);
+}
 
 // Field names (normalised) whose value is a secret regardless of its content
 // (design §4.3: passwords, tokens, `authorization`, `api_key`, codes, keys …).
@@ -85,15 +168,13 @@ function scrubString(
 ): string {
   const masked = maskCardNumbers(value);
 
-  const released = masked.replace(/[\p{L}\p{N}]+/gu, (token) => {
-    const normalised = normaliseValue(token);
-    if (normalised.length >= MIN_TOKEN_LENGTH && matchesReleased(normalised)) {
-      return "[released value]";
-    }
-    return token;
-  });
+  // Only the part that can survive truncation (plus a margin for a value straddling the
+  // cut) is scanned for released values.
+  const scanLimit = MAX_LENGTH + SCAN_MARGIN;
+  const scanned = masked.length > scanLimit ? masked.slice(0, scanLimit) : masked;
+  const released = replaceReleased(scanned, matchesReleased);
 
-  if (released.length > MAX_LENGTH) {
+  if (released.length > MAX_LENGTH || scanned.length < masked.length) {
     return released.slice(0, MAX_LENGTH - TRUNCATION_MARKER.length) + TRUNCATION_MARKER;
   }
   return released;
