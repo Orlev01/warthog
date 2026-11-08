@@ -88,7 +88,7 @@ import { test } from "node:test";
 import assert from "node:assert/strict";
 import { renderToStaticMarkup } from "react-dom/server";
 
-import { ReleaseApprove, createReleaseApproveFlow } from "./release-approve";
+import { ReleaseApprove, ReleaseStepUp, createReleaseApproveFlow } from "./release-approve";
 import type {
   PendingRequestView,
   SavedCardView,
@@ -170,8 +170,6 @@ type FlowOptions = {
   releaseResult?: ReleaseResult;
   // The passkey PRF prompt is dismissed / times out (AC2 "cancelling the unlock").
   passkeyCancelled?: boolean;
-  // What the injected "Confirm it's you" (step-up) ceremony resolves with.
-  confirmResult?: boolean;
 };
 
 function setupFlow(opts: FlowOptions) {
@@ -202,7 +200,6 @@ function setupFlow(opts: FlowOptions) {
     return PASSKEY_UNLOCK;
   };
 
-  let confirmCalls = 0;
   const flow = createReleaseApproveFlow({
     request: opts.request,
     savedCards: opts.savedCards,
@@ -210,11 +207,6 @@ function setupFlow(opts: FlowOptions) {
     releaseFlow,
     unlockByPassphrase,
     unlockByPasskey,
-    confirmItsYou: async () => {
-      events.push("confirm");
-      confirmCalls += 1;
-      return opts.confirmResult ?? true;
-    },
     onChange: () => changeEvents.push(true),
     onReleased: () => releasedEvents.push(true),
   });
@@ -232,9 +224,6 @@ function setupFlow(opts: FlowOptions) {
     },
     get changeCount() {
       return changeEvents.length;
-    },
-    get confirmCalls() {
-      return confirmCalls;
     },
   };
 }
@@ -656,7 +645,8 @@ test("uses design tokens, never a raw hex colour (card and high-tier)", () => {
 // ═══ Review fix C7 — no dead ends on the release ═══════════════════════════════════════
 //
 // A lapsed step-up used to show "Please try again" forever (only signing out and in again
-// helped). The control now offers "Confirm it's you" inline: it runs the step-up ceremony
+// helped). The control now offers "Confirm it's you" inline — the shared
+// <ConfirmItsYou> control (review fix W4.4) runs the step-up ceremony and reports back —
 // and then asks the person to approve and release again. A card release with no saved
 // card, or a high-tier release with no saved detail, is disabled with a reason instead of
 // failing at decrypt. And a high-tier release decrypts the CHOSEN saved detail.
@@ -675,27 +665,41 @@ test("a release refused for a lapsed step-up offers 'Confirm it's you' instead o
   assert.equal(refused.status, "error");
   assert.equal(refused.securityCode, "", "the security code is still cleared after the attempt");
 
-  await ctx.flow.confirm();
+  // The shared "Confirm it's you" control ran the ceremony and reports the confirmation.
+  ctx.flow.confirmed();
   const confirmed = ctx.flow.getState();
-  assert.equal(ctx.confirmCalls, 1, "the step-up ceremony ran once");
   assert.equal(confirmed.confirmRequired, false, "once confirmed, it no longer asks");
+  assert.equal(confirmed.error, undefined, "the refusal copy is cleared");
   assert.equal(confirmed.status, "idle", "ready to approve and release again");
   assert.match(confirmed.notice ?? "", /approve and release again/i, "and says what to do next");
   assert.equal(ctx.releaseCalls.length, 1, "confirming never releases on its own");
 });
 
-test("a 'Confirm it's you' that fails or is cancelled keeps offering it, with plain copy", async () => {
+test("until the shared control reports a confirmation, the release keeps offering 'Confirm it's you'", async () => {
+  // A failed or cancelled ceremony is the shared control's own state (its plain copy is
+  // pinned by confirm-its-you.test.tsx); it never reports a confirmation, so the release
+  // control keeps asking and never releases on its own.
   const ctx = setupFlow({
     request: PENDING_HIGH,
     highTierCiphertext: HIGH_CIPHERTEXT,
     releaseResult: { ok: false, error: "Please confirm it's you first, then approve and release again.", reason: "step_up_required" },
-    confirmResult: false,
   });
   await ctx.flow.submit();
-  await ctx.flow.confirm();
   const state = ctx.flow.getState();
   assert.equal(state.confirmRequired, true, "it still offers to confirm");
-  assertPlainFailure(state.error, "failed confirm");
+  assertPlainFailure(state.error, "step-up refusal");
+  assert.equal(ctx.releaseCalls.length, 1, "nothing more is released");
+});
+
+test("the release's step-up is the shared 'Confirm it's you' control, live and explained", () => {
+  const markup = renderToStaticMarkup(<ReleaseStepUp onConfirmed={() => undefined} />);
+  // The shared Button carries Tailwind `disabled:` variants in its class, so read the
+  // native attribute itself (React renders a true `disabled` as `disabled=""`).
+  const live = controlsMatching(markup, /confirm it's you/i).filter((c) => !/\bdisabled=""/.test(c.attrs));
+  assert.equal(live.length, 1, "one live 'Confirm it's you' control");
+  const text = visibleText(markup);
+  assert.match(text, /passkey/i, `it says how to confirm; text="${text}"`);
+  assert.match(text, /approve and release again/i, `and what happens next; text="${text}"`);
 });
 
 test("a high-tier release decrypts the saved detail the person chose", async () => {

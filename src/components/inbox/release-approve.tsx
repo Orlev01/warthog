@@ -7,6 +7,7 @@ import { ShieldAlert } from "lucide-react";
 
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/field";
+import { ConfirmItsYou } from "@/components/ui/confirm-its-you";
 import { unlockVault, type UnlockRequest } from "@/client/vault/unlock";
 import { decryptValue } from "@/client/vault/values";
 import { postRelease } from "@/client/vault/release";
@@ -67,7 +68,8 @@ export interface ReleaseApproveState {
   status: ReleaseStatus;
   error?: string;
   // True when the release was refused because the step-up has lapsed: the control then
-  // offers "Confirm it's you" (the step-up ceremony) inline — never a dead end.
+  // offers the shared "Confirm it's you" control (the step-up ceremony) inline — never a
+  // dead end.
   confirmRequired: boolean;
   // A plain, non-error note (e.g. "confirmed — approve and release again").
   notice?: string;
@@ -88,10 +90,6 @@ export interface ReleaseApproveFlowDeps {
   // (or an unusable passphrase) REJECTS → nothing released, plain copy.
   readonly unlockByPassphrase: (passphrase: string) => UnlockRequest | Promise<UnlockRequest>;
   readonly unlockByPasskey: () => Promise<UnlockRequest>;
-  // "Confirm it's you": run the step-up ceremony, resolving true once the session has a
-  // fresh confirmation (false when it was refused or cancelled). Offered when a release
-  // is refused because the step-up lapsed.
-  readonly confirmItsYou?: () => Promise<boolean>;
   // Optional: re-render notifier (the component wires it) and a one-shot completion signal.
   readonly onChange?: () => void;
   readonly onReleased?: () => void;
@@ -105,9 +103,10 @@ export interface ReleaseApproveController {
   setHighTierFieldId(fieldId: string): void;
   setSecurityCode(value: string): void;
   submit(): Promise<void>;
-  // Run "Confirm it's you" after a release was refused for a lapsed step-up. It never
-  // releases on its own: once confirmed, the person approves and releases again.
-  confirm(): Promise<void>;
+  // The shared "Confirm it's you" control reports a fresh confirmation after a release
+  // was refused for a lapsed step-up. It never releases on its own: the person approves
+  // and releases again (the unlock and the security code need their own fresh tap).
+  confirmed(): void;
 }
 
 // Plain-English failure copy for a unlock the device could not gather — a real sentence a
@@ -117,7 +116,6 @@ export interface ReleaseApproveController {
 // unchanged.
 const UNLOCK_FAILED_COPY =
   "We couldn't unlock your vault on this device. Check how you unlocked it, then try again.";
-const CONFIRM_FAILED_COPY = "We couldn't check it's you. Please try confirming again.";
 const CONFIRMED_NOTICE = "Thanks, that's confirmed. Approve and release again to hand it over.";
 
 // The release refusal reason that "Confirm it's you" resolves.
@@ -205,19 +203,8 @@ export function createReleaseApproveFlow(deps: ReleaseApproveFlowDeps): ReleaseA
     }
   }
 
-  async function confirm(): Promise<void> {
-    set({ status: "working", error: undefined, notice: undefined });
-    let confirmed = false;
-    try {
-      confirmed = deps.confirmItsYou ? await deps.confirmItsYou() : false;
-    } catch {
-      confirmed = false;
-    }
-    if (confirmed) {
-      set({ status: "idle", confirmRequired: false, notice: CONFIRMED_NOTICE });
-    } else {
-      set({ status: "error", confirmRequired: true, error: CONFIRM_FAILED_COPY });
-    }
+  function confirmed(): void {
+    set({ status: "idle", confirmRequired: false, error: undefined, notice: CONFIRMED_NOTICE });
   }
 
   return {
@@ -228,7 +215,7 @@ export function createReleaseApproveFlow(deps: ReleaseApproveFlowDeps): ReleaseA
     setHighTierFieldId: (fieldId) => set({ highTierFieldId: fieldId }),
     setSecurityCode: (value) => set({ securityCode: value }),
     submit,
-    confirm,
+    confirmed,
   };
 }
 
@@ -310,43 +297,16 @@ async function defaultUnlockByPasskey(): Promise<UnlockRequest> {
   return { method: "prf", material: { wrapped: material.wrapped }, secret: base64UrlToBytes(prf) };
 }
 
-// "Confirm it's you" — the passkey step-up ceremony (design §5): ask the step-up
-// endpoint for a fresh challenge, run the OS passkey prompt, and hand the assertion back;
-// on success the signed-in session carries a fresh confirmation for 5 minutes. Resolves
-// false when any step is refused or the prompt is dismissed (never throws).
-const STEP_UP_BASE = "/api/auth/step-up";
+// "Confirm it's you" — the release's step-up (design §5) is the shared <ConfirmItsYou>
+// control (review fix W4.4; components/ui/confirm-its-you): it runs the passkey ceremony
+// against the step-up endpoints and reports back once the session carries a fresh
+// confirmation, with the same plain copy as every other screen. Shown only after a
+// release was refused for a lapsed step-up.
+const STEP_UP_EXPLANATION =
+  "It's been a few minutes since you last confirmed it's you. Use your passkey to confirm, then approve and release again.";
 
-async function postStepUp(step: "begin" | "finish", body?: unknown): Promise<Response | null> {
-  try {
-    return await globalThis.fetch(`${STEP_UP_BASE}/${step}`, {
-      method: "POST",
-      credentials: "same-origin",
-      headers: { "content-type": "application/json" },
-      ...(body === undefined ? {} : { body: JSON.stringify(body) }),
-    });
-  } catch {
-    return null;
-  }
-}
-
-async function defaultConfirmItsYou(): Promise<boolean> {
-  const begin = await postStepUp("begin");
-  if (!begin || !begin.ok) return false;
-  let options: PublicKeyCredentialRequestOptionsJSON | undefined;
-  try {
-    options = ((await begin.json()) as { options?: PublicKeyCredentialRequestOptionsJSON }).options;
-  } catch {
-    return false;
-  }
-  if (options === undefined) return false;
-  let authenticationResponse: unknown;
-  try {
-    authenticationResponse = await startAuthentication({ optionsJSON: options });
-  } catch {
-    return false;
-  }
-  const finish = await postStepUp("finish", { authenticationResponse });
-  return finish !== null && finish.ok;
+export function ReleaseStepUp({ onConfirmed }: { onConfirmed: () => void }): React.ReactElement {
+  return <ConfirmItsYou explanation={STEP_UP_EXPLANATION} onConfirmed={onConfirmed} />;
 }
 
 // The release core, wired to the real client/vault primitives: unlock the vault key from
@@ -394,7 +354,6 @@ export interface ReleaseApproveProps {
   releaseFlow?: ReleaseFlow;
   unlockByPassphrase?: (passphrase: string) => UnlockRequest | Promise<UnlockRequest>;
   unlockByPasskey?: () => Promise<UnlockRequest>;
-  confirmItsYou?: () => Promise<boolean>;
   onReleased?: () => void;
 }
 
@@ -416,7 +375,6 @@ export function ReleaseApprove(props: ReleaseApproveProps): React.ReactElement {
       releaseFlow: props.releaseFlow ?? getDefaultReleaseFlow(),
       unlockByPassphrase: props.unlockByPassphrase ?? defaultUnlockByPassphrase,
       unlockByPasskey: props.unlockByPasskey ?? defaultUnlockByPasskey,
-      confirmItsYou: props.confirmItsYou ?? defaultConfirmItsYou,
       onChange: () => forceUpdate(),
       onReleased: props.onReleased,
     });
@@ -557,18 +515,7 @@ export function ReleaseApprove(props: ReleaseApproveProps): React.ReactElement {
       ) : null}
 
       {state.confirmRequired ? (
-        <div>
-          <button
-            type="button"
-            className={BTN_PRIMARY}
-            disabled={state.status === "working"}
-            onClick={() => {
-              void flow.confirm();
-            }}
-          >
-            Confirm it&apos;s you
-          </button>
-        </div>
+        <ReleaseStepUp onConfirmed={() => flow.confirmed()} />
       ) : unavailableReason !== null ? (
         <div className="flex flex-col gap-1">
           <button type="button" disabled className={BTN_PRIMARY_DISABLED}>
