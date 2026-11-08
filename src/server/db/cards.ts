@@ -9,7 +9,9 @@
 // ciphertext back to the owner's own device solely so the device can decrypt it
 // locally for a card release. So this module takes NO `dek` and imports NO crypto —
 // it is pure opaque-ciphertext storage plus plaintext metadata (brand, last four,
-// expiry, nickname, billing-address reference), exactly like the high-tier store.
+// expiry, nickname, cardholder name, billing-address reference), exactly like the
+// high-tier store. The cardholder name is printed on the card and is not secret, the
+// same as the expiry (review fix W6, migration 0090); cards saved before it have none.
 //
 // The card SECURITY CODE (CVV) is NEVER stored in any form (constitution §17): the
 // API accepts no security-code parameter and the table has no column for one, so
@@ -42,6 +44,9 @@ export interface NewCard {
   readonly expiryMonth: number;
   readonly expiryYear: number;
   readonly nickname: string;
+  // The name on the card. Optional so a caller that predates it still saves (stored as
+  // NULL); the add-card action always sends it.
+  readonly cardholderName?: string | null;
   readonly billingAddressId: string;
   readonly numberCiphertext: string;
 }
@@ -56,6 +61,8 @@ export interface CardMetadata {
   readonly expiryMonth: number;
   readonly expiryYear: number;
   readonly nickname: string;
+  // The name on the card, or null for a card saved before names were kept.
+  readonly cardholderName: string | null;
   readonly billingAddressId: string;
 }
 
@@ -70,6 +77,7 @@ function toMetadata(row: Row): CardMetadata {
     expiryMonth: Number(row.expiry_month),
     expiryYear: Number(row.expiry_year),
     nickname: row.nickname as string,
+    cardholderName: (row.cardholder_name as string | null) ?? null,
     billingAddressId: row.billing_address_id as string,
   };
 }
@@ -81,12 +89,13 @@ function toMetadata(row: Row): CardMetadata {
 // dependency on a RETURNING read), so a save never hands back the stored ciphertext.
 export async function addCard(db: Db, input: NewCard): Promise<CardMetadata> {
   const id = randomUUID();
+  const cardholderName = input.cardholderName ?? null;
 
   await db.query(
     `INSERT INTO cards
        (id, user_id, brand, last_four, expiry_month, expiry_year, nickname,
-        billing_address_id, number_ciphertext)
-     VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)`,
+        cardholder_name, billing_address_id, number_ciphertext)
+     VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)`,
     [
       id,
       input.userId,
@@ -95,6 +104,7 @@ export async function addCard(db: Db, input: NewCard): Promise<CardMetadata> {
       input.expiryMonth,
       input.expiryYear,
       input.nickname,
+      cardholderName,
       input.billingAddressId,
       input.numberCiphertext,
     ],
@@ -108,18 +118,19 @@ export async function addCard(db: Db, input: NewCard): Promise<CardMetadata> {
     expiryMonth: input.expiryMonth,
     expiryYear: input.expiryYear,
     nickname: input.nickname,
+    cardholderName,
     billingAddressId: input.billingAddressId,
   };
 }
 
 // List ALL of `userId`'s cards as METADATA ONLY — id, brand, last four, expiry,
-// nickname, billing-address reference, never the number or its ciphertext (the
+// nickname, cardholder name, billing-address reference, never the number or its ciphertext (the
 // ciphertext column is not even selected). Member-scoped (user_id is bound): never
 // another person's cards; an empty array when the person has none.
 export async function listCards(db: Db, userId: string): Promise<CardMetadata[]> {
   const result = await db.query(
     `SELECT id, user_id, brand, last_four, expiry_month, expiry_year, nickname,
-            billing_address_id
+            cardholder_name, billing_address_id
        FROM cards
       WHERE user_id = $1`,
     [userId],

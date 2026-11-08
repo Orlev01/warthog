@@ -86,6 +86,7 @@ import { listActivity } from "@/server/activity/list";
 import { loadConfig, type Config } from "@/server/config";
 import { addCard } from "@/server/db/cards";
 import { saveHighTierField } from "@/server/db/high-tier-fields";
+import { saveIdentityField } from "@/server/db/identity-fields";
 import { isUnopened } from "@/server/approvals/opened";
 import { createUser } from "@/server/db/users";
 import { createAgent } from "@/server/db/agents";
@@ -957,6 +958,170 @@ test("approving a held non-release call runs it once through the composed pipeli
       "executed",
       "the held request stays executed after a second approve",
     );
+  } finally {
+    await db.close();
+  }
+});
+
+// =====================================================================================
+// Review fix W6 — a card release hands the agent everything a checkout needs. The loader
+// adds each card's non-secret details to the picker: the expiry, the name on the card
+// (falling back to the person's saved name for a card saved before names were kept) and
+// the billing address text, resolved server-side from the card's billing reference through
+// the person's OWN postal addresses only. The inbox still SHOWS only brand + last four.
+// =====================================================================================
+
+test("W6 — the loader adds each saved card's expiry, name on card and billing address for the release", async () => {
+  const db = await freshDb();
+  const keyWrapper = keyWrapperFor();
+  try {
+    const alice = await makePerson(db, keyWrapper, "alice-w6");
+    const bob = await makePerson(db, keyWrapper, "bob-w6");
+
+    const ALICE_NAME = "Alice Quokka Wren";
+    const ALICE_ADDRESS = "12 Banksia Street, Perth WA 6000";
+    const BOB_ADDRESS = "9 Bob's Private Lane, Hobart TAS 7000";
+    await saveIdentityField(db, { userId: alice.userId, kind: "name", value: ALICE_NAME }, alice.dek);
+    const home = await saveIdentityField(
+      db,
+      { userId: alice.userId, kind: "postal_address", value: ALICE_ADDRESS },
+      alice.dek,
+    );
+    const alicePhone = await saveIdentityField(
+      db,
+      { userId: alice.userId, kind: "phone", value: "0400 000 000" },
+      alice.dek,
+    );
+    const bobHome = await saveIdentityField(
+      db,
+      { userId: bob.userId, kind: "postal_address", value: BOB_ADDRESS },
+      bob.dek,
+    );
+
+    // A card saved with its name and Alice's own address …
+    const named = await addCard(db, {
+      userId: alice.userId,
+      brand: "Visa",
+      lastFour: "4242",
+      expiryMonth: 11,
+      expiryYear: 2030,
+      nickname: "Everyday",
+      cardholderName: "A Q Wren",
+      billingAddressId: home.id,
+      numberCiphertext: "v1:visaCipherW6",
+    });
+    // … an older card with no name (falls back to Alice's saved name) …
+    const older = await addCard(db, {
+      userId: alice.userId,
+      brand: "Amex",
+      lastFour: "1005",
+      expiryMonth: 7,
+      expiryYear: 2029,
+      nickname: "Travel",
+      billingAddressId: home.id,
+      numberCiphertext: "v1:amexCipherW6",
+    });
+    // … and cards whose billing reference is not one of Alice's postal addresses: Bob's
+    // address, a non-address field of hers, and a reference that resolves to nothing.
+    const foreign = await addCard(db, {
+      userId: alice.userId,
+      brand: "Mastercard",
+      lastFour: "4444",
+      expiryMonth: 1,
+      expiryYear: 2031,
+      nickname: "Odd one",
+      cardholderName: "A Wren",
+      billingAddressId: bobHome.id,
+      numberCiphertext: "v1:mcCipherW6",
+    });
+    const notAddress = await addCard(db, {
+      userId: alice.userId,
+      brand: "Visa",
+      lastFour: "1111",
+      expiryMonth: 2,
+      expiryYear: 2032,
+      nickname: "Phone ref",
+      cardholderName: "A Wren",
+      billingAddressId: alicePhone.id,
+      numberCiphertext: "v1:visa2CipherW6",
+    });
+    const dangling = await addCard(db, {
+      userId: alice.userId,
+      brand: "Visa",
+      lastFour: "2222",
+      expiryMonth: 3,
+      expiryYear: 2033,
+      nickname: "Dangling",
+      cardholderName: "A Wren",
+      billingAddressId: "addr-gone",
+      numberCiphertext: "v1:visa3CipherW6",
+    });
+
+    await seedPending(db, {
+      userId: alice.userId,
+      dek: alice.dek,
+      detail: detailFor({ sentence: "wants to use your card for $42.00 at BoxCo", request: "card", amount: "42.00 AUD" }),
+      at: T_NEW,
+    });
+
+    const view = await makeActions(db, keyWrapper, fixedClock(NOW)).load(await sessionFor(db, alice.userId));
+    const saved = view.savedCards ?? [];
+    const byId = new Map(saved.map((card) => [card.id, card]));
+
+    const n = byId.get(named.id)!;
+    assert.equal(n.expiryMonth, 11, "the expiry month is offered");
+    assert.equal(n.expiryYear, 2030, "the expiry year is offered");
+    assert.equal(n.cardholderName, "A Q Wren", "the card's own name on card is offered");
+    assert.equal(n.billingAddress, ALICE_ADDRESS, "the billing address text is resolved from the reference");
+
+    const o = byId.get(older.id)!;
+    assert.equal(o.cardholderName, ALICE_NAME, "a card with no name falls back to the saved name");
+    assert.equal(o.billingAddress, ALICE_ADDRESS);
+    assert.equal(o.expiryMonth, 7);
+    assert.equal(o.expiryYear, 2029);
+
+    assert.equal(byId.get(foreign.id)!.billingAddress, null, "another person's address is never resolved");
+    assert.equal(byId.get(notAddress.id)!.billingAddress, null, "only a postal address is a billing address");
+    assert.equal(byId.get(dangling.id)!.billingAddress, null, "a reference to nothing resolves to no address");
+    assert.ok(!JSON.stringify(view).includes(BOB_ADDRESS), "Bob's address never reaches Alice's inbox");
+
+    // The inbox still SHOWS only brand + last four: no address, name or number on screen.
+    const markup = renderToStaticMarkup(<InboxView {...view} />);
+    const text = visibleText(markup);
+    assert.ok(text.includes("4242"), "the card's last four is shown");
+    for (const hidden of [ALICE_ADDRESS, ALICE_NAME, "A Q Wren", "v1:visaCipherW6"]) {
+      assert.ok(!markup.includes(hidden), `the inbox never renders "${hidden}"`);
+    }
+  } finally {
+    await db.close();
+  }
+});
+
+test("W6 — a card with no name and no saved name offers no name, rather than a made-up one", async () => {
+  const db = await freshDb();
+  const keyWrapper = keyWrapperFor();
+  try {
+    const carol = await makePerson(db, keyWrapper, "carol-w6");
+    const card = await addCard(db, {
+      userId: carol.userId,
+      brand: "Visa",
+      lastFour: "4242",
+      expiryMonth: 11,
+      expiryYear: 2030,
+      nickname: "Everyday",
+      billingAddressId: "addr-none",
+      numberCiphertext: "v1:carolCipherW6",
+    });
+    await seedPending(db, {
+      userId: carol.userId,
+      dek: carol.dek,
+      detail: detailFor({ request: "card", amount: "42.00 AUD" }),
+      at: T_NEW,
+    });
+    const view = await makeActions(db, keyWrapper, fixedClock(NOW)).load(await sessionFor(db, carol.userId));
+    const offered = (view.savedCards ?? []).find((c) => c.id === card.id)!;
+    assert.equal(offered.cardholderName, null, "no name to offer");
+    assert.equal(offered.billingAddress, null, "no address to offer");
   } finally {
     await db.close();
   }

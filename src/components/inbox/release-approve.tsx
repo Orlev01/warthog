@@ -19,6 +19,7 @@ import {
   type ReleaseFlow,
   type PendingRequestView,
   type SavedCardView,
+  type CardCheckoutDetails,
 } from "./inbox-view";
 
 // E11-S17 — Approve and release: the on-device card / high-tier release control
@@ -221,15 +222,31 @@ export function createReleaseApproveFlow(deps: ReleaseApproveFlowDeps): ReleaseA
   // The stored ciphertext this release decrypts: a card release decrypts the CHOSEN saved
   // card (defaulting to the first offered when the picker is untouched); a high-tier
   // release decrypts the requested value's ciphertext.
+  function chosenCard(): SavedCardView | undefined {
+    const cards = deps.savedCards ?? [];
+    return cards.find((card) => card.id === state.cardId) ?? cards[0];
+  }
   function ciphertextToRelease(): string {
     if (!isCard) {
       const fields = deps.request.highTierFields ?? [];
       const chosen = fields.find((field) => field.id === state.highTierFieldId) ?? fields[0];
       return chosen?.ciphertext ?? deps.highTierCiphertext ?? "";
     }
-    const cards = deps.savedCards ?? [];
-    const chosen = cards.find((card) => card.id === state.cardId) ?? cards[0];
-    return chosen?.ciphertext ?? "";
+    return chosenCard()?.ciphertext ?? "";
+  }
+
+  // The chosen card's non-secret checkout details, handed over with the number and the
+  // typed security code so the agent can complete the checkout (review fix W6). They are
+  // never shown here: the picker shows only brand and last four.
+  function cardDetailsToRelease(): CardCheckoutDetails | undefined {
+    const card = chosenCard();
+    if (!card) return undefined;
+    return {
+      expiryMonth: card.expiryMonth,
+      expiryYear: card.expiryYear,
+      cardholderName: card.cardholderName,
+      billingAddress: card.billingAddress,
+    };
   }
 
   async function submit(): Promise<void> {
@@ -255,6 +272,7 @@ export function createReleaseApproveFlow(deps: ReleaseApproveFlowDeps): ReleaseA
       unlockRequest,
       ciphertext: ciphertextToRelease(),
       securityCode: isCard ? state.securityCode : undefined,
+      card: isCard ? cardDetailsToRelease() : undefined,
     });
 
     // Whatever the outcome, the passphrase and security code entered for this attempt are

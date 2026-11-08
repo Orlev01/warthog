@@ -836,3 +836,56 @@ test("W1 — the release control offers the recovery phrase as a third way to un
   const html = renderToStaticMarkup(<ReleaseApprove request={PENDING_CARD} savedCards={SAVED_CARDS} />);
   assert.match(html, /recovery phrase/i);
 });
+
+// ═══ Review fix W6 — the chosen card's checkout details travel with the release ════════
+
+const CARD_VISA_FULL: SavedCardView = {
+  ...CARD_VISA,
+  expiryMonth: 11,
+  expiryYear: 2030,
+  cardholderName: "A Q Wren",
+  billingAddress: "12 Banksia Street, Perth WA 6000",
+};
+const CARD_AMEX_FULL: SavedCardView = {
+  ...CARD_AMEX,
+  expiryMonth: 7,
+  expiryYear: 2029,
+  cardholderName: "Alice Wren",
+  billingAddress: "5 Marine Parade, Fremantle WA 6160",
+};
+
+test("W6 — a card release carries the CHOSEN card's expiry, name on card and billing address", async () => {
+  const ctx = setupFlow({ request: PENDING_CARD, savedCards: [CARD_VISA_FULL, CARD_AMEX_FULL] });
+  ctx.flow.setMethod("passphrase");
+  ctx.flow.setCardId(CARD_AMEX_FULL.id);
+  ctx.flow.setSecurityCode(SECURITY_CODE);
+  ctx.flow.setPassphrase(PASSPHRASE);
+  await ctx.flow.submit();
+  assert.equal(ctx.releaseCalls.length, 1);
+  const input = ctx.releaseCalls[0]!;
+  assert.equal(input.ciphertext, CARD_AMEX_FULL.ciphertext);
+  assert.deepEqual(
+    input.card,
+    { expiryMonth: 7, expiryYear: 2029, cardholderName: "Alice Wren", billingAddress: "5 Marine Parade, Fremantle WA 6160" },
+    "the chosen card's non-secret checkout details go with the release",
+  );
+});
+
+test("W6 — the release control still shows only brand and last four, never the card's other details", () => {
+  const markup = renderToStaticMarkup(
+    <ReleaseApprove request={PENDING_CARD} savedCards={[CARD_VISA_FULL, CARD_AMEX_FULL]} />,
+  );
+  assert.ok(markup.includes("Visa ending 4242"), "the card's label is shown");
+  for (const hidden of ["A Q Wren", "Alice Wren", "Banksia", "Marine Parade", "v1:visaCipherFerry"]) {
+    assert.ok(!markup.includes(hidden), `the control never renders "${hidden}"`);
+  }
+});
+
+test("W6 — a high-tier release carries no card details", async () => {
+  const ctx = setupFlow({ request: PENDING_HIGH, highTierCiphertext: HIGH_CIPHERTEXT, savedCards: [CARD_VISA_FULL] });
+  ctx.flow.setMethod("passphrase");
+  ctx.flow.setPassphrase(PASSPHRASE);
+  await ctx.flow.submit();
+  assert.equal(ctx.releaseCalls.length, 1);
+  assert.equal(ctx.releaseCalls[0]!.card, undefined, "no card details on a high-tier release");
+});

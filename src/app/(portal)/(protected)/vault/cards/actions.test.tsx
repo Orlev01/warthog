@@ -271,6 +271,7 @@ function submission(
     expiryMonth: 11,
     expiryYear: 2029,
     nickname: "Everyday spending",
+    cardholderName: "Oren Levy",
     billingAddressId,
     numberCiphertext: "v1:CARD_CT_SENTINEL",
     ...overrides,
@@ -838,6 +839,92 @@ test("addCard rejects a last four that is not exactly four digits, or a number t
       await assertRejects4xx(label, () => actions.addCard(session, addInput(submission(addrId, overrides))));
     }
     assert.equal((await listCards(db, userId)).length, 0, "nothing was stored");
+  } finally {
+    await db.close();
+  }
+});
+
+// =====================================================================================
+// Review fix W6 — the name on the card. A checkout needs the cardholder name, so the add
+// form collects it (pre-filled with the person's saved name from About you) and the save
+// stores it with the other plaintext card metadata, validated and capped like the nickname.
+// =====================================================================================
+
+test("W6 — the loader offers the person's saved name from About you for the name on the card", async () => {
+  const db = await freshDb();
+  const keyWrapper = makeKeyWrapper();
+  try {
+    const { userId, dek } = await makeUserWithDek(db, keyWrapper, "w6-default-name");
+    const actions = makeActions(db, keyWrapper);
+    const before = await actions.load(sessionFor(userId));
+    assert.equal(before.defaultCardholderName, "", "no saved name: the field starts empty");
+
+    await saveIdentityField(db, { userId, kind: "preferred_name", value: "Ori" }, dek);
+    await saveIdentityField(db, { userId, kind: "name", value: "Oren Quokka Levy" }, dek);
+    const after = await actions.load(sessionFor(userId));
+    assert.equal(after.defaultCardholderName, "Oren Quokka Levy", "the saved full name pre-fills the field");
+
+    const markup = renderToStaticMarkup(
+      <CardsView
+        cards={after.cards}
+        billingAddresses={after.billingAddresses}
+        defaultCardholderName={after.defaultCardholderName}
+        addingCard={true}
+      />,
+    );
+    assert.ok(markup.includes('value="Oren Quokka Levy"'), "the add form shows the saved name in Name on card");
+  } finally {
+    await db.close();
+  }
+});
+
+test("W6 — addCard stores the name on the card with the other plaintext metadata", async () => {
+  const db = await freshDb();
+  const keyWrapper = makeKeyWrapper();
+  try {
+    const { userId, dek } = await makeUserWithDek(db, keyWrapper, "w6-store-name");
+    await seedUnlockMethod(db, userId);
+    const addrId = await seedBillingAddress(db, userId, dek, "3 Name St, Perth");
+    const actions = makeActions(db, keyWrapper);
+    const result = await actions.addCard(
+      sessionFor(userId),
+      addInput(submission(addrId, { cardholderName: "  Oren Q Levy  " })),
+    );
+    assert.deepEqual(result, { ok: true });
+    const cards = await listCards(db, userId);
+    assert.equal(cards.length, 1);
+    assert.equal(cards[0]!.cardholderName, "Oren Q Levy", "the name is stored, trimmed");
+    const data = await actions.load(sessionFor(userId));
+    assert.equal(data.cards[0]!.cardholderName, "Oren Q Levy", "the loader hands it back as metadata");
+  } finally {
+    await db.close();
+  }
+});
+
+test("W6 — addCard refuses a missing, blank or oversized name on the card with a 4xx and stores nothing", async () => {
+  const db = await freshDb();
+  const keyWrapper = makeKeyWrapper();
+  try {
+    const { userId, dek } = await makeUserWithDek(db, keyWrapper, "w6-bad-name");
+    await seedUnlockMethod(db, userId);
+    const addrId = await seedBillingAddress(db, userId, dek, "5 Bad Name Rd, Perth");
+    const actions = makeActions(db, keyWrapper);
+    const session = sessionFor(userId);
+    await assertRejects4xx("addCard(missing cardholderName)", () => {
+      const without = submission(addrId);
+      delete without.cardholderName;
+      return actions.addCard(session, addInput(without));
+    });
+    await assertRejects4xx("addCard(blank cardholderName)", () =>
+      actions.addCard(session, addInput(submission(addrId, { cardholderName: "   " }))),
+    );
+    await assertRejects4xx("addCard(oversized cardholderName)", () =>
+      actions.addCard(session, addInput(submission(addrId, { cardholderName: "N".repeat(257) }))),
+    );
+    await assertRejects4xx("addCard(cardholderName not a string)", () =>
+      actions.addCard(session, addInput(submission(addrId, { cardholderName: 42 }))),
+    );
+    assert.deepEqual(await listCards(db, userId), [], "no card was stored");
   } finally {
     await db.close();
   }

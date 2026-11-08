@@ -35,8 +35,9 @@ import {
 //   • on LATER use unlocks the EXISTING vault key through the unlock-material endpoint
 //     (GET /api/vault/unlock-material/passkey_prf) — no new key is created;
 //   • seals the entered card number on the device (sealCard) and submits ONLY the
-//     ciphertext plus plaintext metadata (brand, last four, expiry, nickname, billing
-//     address) to the page's addCard action.
+//     ciphertext plus plaintext metadata (brand, last four, expiry, nickname, the name on
+//     the card, billing address) to the page's addCard action. The name on the card is
+//     pre-filled with the person's saved name from About you (review fix W6).
 // The security code is NEVER collected here (it is typed only at release time, E11-S17).
 // Review fix W1: the vault key is obtained through the shared vault-key step
 // (./vault-key-step), so the vault unlocks with a passkey, the vault passphrase or the
@@ -68,6 +69,7 @@ export type AddCardStatus = "idle" | "working" | "phrase" | "added" | "error";
 export interface AddCardState {
   number: string;
   nickname: string;
+  cardholderName: string;
   expiryMonth: string;
   expiryYear: string;
   billingAddressId: string;
@@ -89,6 +91,8 @@ export type PasskeyAssertion = {
 export interface AddCardFlowDeps {
   // The billing-address picker's choices (used to default the chosen address).
   readonly billingAddresses?: readonly VaultAddress[];
+  // The person's saved name from About you: the "Name on card" field starts with it.
+  readonly defaultCardholderName?: string;
   // GET /api/vault/unlock-material/<method>, POST /api/vault/unlock-method.
   readonly fetch: typeof fetch;
   // The WebAuthn PRF assertion (OS passkey prompt); a dismissed prompt REJECTS.
@@ -108,6 +112,7 @@ export interface AddCardController {
   getState(): AddCardState;
   setNumber(value: string): void;
   setNickname(value: string): void;
+  setCardholderName(value: string): void;
   setExpiryMonth(value: string): void;
   setExpiryYear(value: string): void;
   setBillingAddressId(value: string): void;
@@ -147,6 +152,9 @@ const MIN_PASSPHRASE_LENGTH = 12;
 const NUMBER_COPY = "Type the card number (12 to 19 digits) before you confirm.";
 const EXPIRY_COPY = "Check the expiry: a month from 1 to 12 and a four-digit year.";
 const NICKNAME_COPY = "Give this card a name so you can tell it apart, then confirm.";
+// The name on the card, capped like the server's check (CARDHOLDER_NAME_MAX).
+const CARDHOLDER_NAME_MAX = 256;
+const CARDHOLDER_COPY = "Type the name on the card as it's printed, then confirm.";
 const BILLING_COPY = "Choose a billing address for this card, then confirm.";
 const PASSPHRASE_COPY = `Choose a vault passphrase of at least ${MIN_PASSPHRASE_LENGTH} characters, or untick the passphrase option.`;
 
@@ -171,6 +179,8 @@ function entryProblem(state: AddCardState): string | null {
     return EXPIRY_COPY;
   }
   if (state.nickname.trim().length === 0) return NICKNAME_COPY;
+  const cardholderName = state.cardholderName.trim();
+  if (cardholderName.length === 0 || cardholderName.length > CARDHOLDER_NAME_MAX) return CARDHOLDER_COPY;
   if (state.billingAddressId.length === 0) return BILLING_COPY;
   if (state.usePassphrase && state.passphrase.length < MIN_PASSPHRASE_LENGTH) return PASSPHRASE_COPY;
   return null;
@@ -180,6 +190,7 @@ export function createAddCardFlow(deps: AddCardFlowDeps): AddCardController {
   let state: AddCardState = {
     number: "",
     nickname: "",
+    cardholderName: deps.defaultCardholderName ?? "",
     expiryMonth: "",
     expiryYear: "",
     billingAddressId: deps.billingAddresses?.[0]?.id ?? "",
@@ -229,6 +240,7 @@ export function createAddCardFlow(deps: AddCardFlowDeps): AddCardController {
         expiryMonth: state.expiryMonth,
         expiryYear: state.expiryYear,
         nickname: state.nickname,
+        cardholderName: state.cardholderName.trim(),
         billingAddressId: state.billingAddressId,
       });
     } catch (error) {
@@ -254,6 +266,7 @@ export function createAddCardFlow(deps: AddCardFlowDeps): AddCardController {
         error: undefined,
         number: "",
         nickname: "",
+        cardholderName: deps.defaultCardholderName ?? "",
         expiryMonth: "",
         expiryYear: "",
         usePassphrase: false,
@@ -318,6 +331,7 @@ export function createAddCardFlow(deps: AddCardFlowDeps): AddCardController {
     getState: () => state,
     setNumber: (value) => set({ number: value }),
     setNickname: (value) => set({ nickname: value }),
+    setCardholderName: (value) => set({ cardholderName: value }),
     setExpiryMonth: (value) => set({ expiryMonth: value }),
     setExpiryYear: (value) => set({ expiryYear: value }),
     setBillingAddressId: (value) => set({ billingAddressId: value }),
@@ -363,6 +377,8 @@ const SECURITY_CODE_NOTE =
 
 export interface AddCardFlowProps {
   billingAddresses: readonly VaultAddress[];
+  // The person's saved name from About you, which pre-fills "Name on card".
+  defaultCardholderName?: string;
   // The page's addCard server action that stores the sealed submission.
   addCard: (submission: CardSubmission) => Promise<{ ok: boolean; reason?: string }>;
   // Selects the panel's initial state (the sibling `draft`/`addingCard` idiom): defaults
@@ -384,6 +400,7 @@ export function AddCardFlow(props: AddCardFlowProps): React.ReactElement {
   if (flowRef.current === null) {
     flowRef.current = createAddCardFlow({
       billingAddresses: props.billingAddresses,
+      defaultCardholderName: props.defaultCardholderName,
       fetch: props.fetch ?? defaultFetch,
       startAuthentication: props.startAuthentication ?? defaultStartAuthentication,
       createVaultKey: props.createVaultKey ?? createVaultKey,
@@ -399,6 +416,7 @@ export function AddCardFlow(props: AddCardFlowProps): React.ReactElement {
   // Call every hook unconditionally (rules of hooks), even though the closed panel uses none.
   const numberId = React.useId();
   const nicknameId = React.useId();
+  const cardholderNameId = React.useId();
   const monthId = React.useId();
   const yearId = React.useId();
   const billingId = React.useId();
@@ -435,6 +453,16 @@ export function AddCardFlow(props: AddCardFlowProps): React.ReactElement {
         placeholder="e.g. Everyday spending"
         value={state.nickname}
         onChange={(event) => flow.setNickname(event.target.value)}
+      />
+      <Field
+        label="Name on card"
+        id={cardholderNameId}
+        autoComplete="off"
+        placeholder="As printed on the card"
+        required={true}
+        maxLength={CARDHOLDER_NAME_MAX}
+        value={state.cardholderName}
+        onChange={(event) => flow.setCardholderName(event.target.value)}
       />
       <div className="grid grid-cols-2 gap-3">
         <Field

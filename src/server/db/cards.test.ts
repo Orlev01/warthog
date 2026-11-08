@@ -114,7 +114,7 @@ import { z } from "zod";
 import { addCard, listCards, getCardCiphertext, removeCard } from "./cards";
 import { createUser } from "./users";
 import { freshDb } from "../../test/db";
-import { loadMigrations, runMigrations, type Db } from "./index";
+import { createDb, loadMigrations, runMigrations, type Db } from "./index";
 import { parseBody, HttpError } from "../http/validate";
 
 // --- fixtures ---------------------------------------------------------------------
@@ -1010,3 +1010,78 @@ test("the cards migration applies and re-running every migration changes nothing
     await db.close();
   }
 });
+
+// ===========================================================================
+// Review fix W6 — the name on the card. A checkout needs the cardholder name, so a card keeps
+// it as plaintext metadata (it is printed on the card, not secret — the same as the expiry).
+// Migration 0090 adds the column, nullable, so cards saved before it keep working (their name
+// falls back to the person's saved name at release time).
+// ===========================================================================
+
+test("a card keeps its cardholder name as plaintext metadata; a card saved without one reads back null", async () => {
+  const db = await freshDb();
+  try {
+    const userId = await makeUser(db, "w6-name");
+    const named = await addCard(db, {
+      ...sampleCard(userId, { nickname: "Named card", numberCiphertext: deviceCiphertext("named") }),
+      cardholderName: "Oren Q Levy",
+    });
+    assert.equal(named.cardholderName, "Oren Q Levy", "the save hands back the cardholder name");
+    const unnamed = await addCard(db, sampleCard(userId, { nickname: "Older card", numberCiphertext: deviceCiphertext("older") }));
+    assert.equal(unnamed.cardholderName, null, "a card saved without a name has none");
+
+    const cards = await listCards(db, userId);
+    assert.equal(
+      (cards.find((c) => c.nickname === "Named card") as unknown as { cardholderName: unknown }).cardholderName,
+      "Oren Q Levy",
+      "the list carries the cardholder name",
+    );
+    assert.equal(
+      (cards.find((c) => c.nickname === "Older card") as unknown as { cardholderName: unknown }).cardholderName,
+      null,
+      "an unnamed card lists with a null name",
+    );
+    for (const item of cards) assertNoNumberOrCvvOnMetadata(item as unknown as Record<string, unknown>);
+  } finally {
+    await db.close();
+  }
+});
+
+test("migration 0090 adds a nullable cardholder_name column without touching existing cards", async () => {
+  // A bare in-memory database with no migrations yet, so the test can stop before 0090.
+  const db = await createDb("pglite:memory");
+  try {
+    const all = await loadMigrations();
+    assert.ok(all.some((m) => m.name.startsWith("0090_")), "a migration numbered 0090 is part of the project");
+    const before = all.filter((m) => m.name < "0090");
+    await runMigrations(db, before);
+
+    // A card saved before the migration (no cardholder name column yet).
+    const userId = await makeUser(db, "w6-migrate");
+    const id = randomUUID();
+    await db.query(
+      `INSERT INTO cards (id, user_id, brand, last_four, expiry_month, expiry_year, nickname,
+                          billing_address_id, number_ciphertext)
+       VALUES ($1, $2, 'visa', '4242', 12, 2030, 'Before 0090', $3, $4)`,
+      [id, userId, randomUUID(), deviceCiphertext("before")],
+    );
+
+    const applied = await runMigrations(db, all);
+    assert.ok(applied.some((name) => name.startsWith("0090_")), "0090 applies over the existing schema");
+
+    const column = await db.query(
+      "SELECT data_type, is_nullable FROM information_schema.columns WHERE table_name = 'cards' AND column_name = 'cardholder_name'",
+    );
+    assert.equal(column.rows.length, 1, "cards has a cardholder_name column");
+    assert.equal(column.rows[0]!.data_type, "text", "the name is text");
+    assert.equal(column.rows[0]!.is_nullable, "YES", "the column is nullable, so existing cards stay valid");
+
+    const cards = await listCards(db, userId);
+    assert.equal(cards.length, 1, "the existing card survives the migration");
+    assert.equal(cards[0]!.nickname, "Before 0090");
+    assert.equal((cards[0] as unknown as { cardholderName: unknown }).cardholderName, null, "and has no name yet");
+  } finally {
+    await db.close();
+  }
+});
+

@@ -50,6 +50,9 @@ export type SavedCard = {
   expiryMonth: number;
   expiryYear: number;
   nickname: string;
+  // The name on the card (review fix W6), or null for a card saved before names were kept.
+  // Optional so a prop-driven render that predates it still type-checks.
+  cardholderName?: string | null;
   billingAddressId: string;
 };
 
@@ -72,6 +75,9 @@ export type CardsViewProps = {
   // OPEN (explainer + security-code note + billing picker + card-number field +
   // confirm); defaults to CLOSED.
   addingCard?: boolean;
+  // The person's saved name from About you, which pre-fills the add form's "Name on card"
+  // (review fix W6). Empty or omitted when they have not saved one.
+  defaultCardholderName?: string;
   // The submit seam the now-live on-device add flow (AddCardFlow) posts to. The page
   // always supplies the real server action; a prop-driven render (a preview, a render
   // test) may omit it, in which case nothing is stored.
@@ -100,6 +106,8 @@ export type CardSubmission = {
   expiryMonth: number;
   expiryYear: number;
   nickname: string;
+  // The name on the card — printed on it, so plaintext metadata like the expiry (W6).
+  cardholderName: string;
   billingAddressId: string;
   numberCiphertext: string;
 };
@@ -124,6 +132,7 @@ export async function sealCard(
     expiryMonth: Number(input.expiryMonth),
     expiryYear: Number(input.expiryYear),
     nickname: String(input.nickname),
+    cardholderName: typeof input.cardholderName === "string" ? input.cardholderName.trim() : "",
     billingAddressId: String(input.billingAddressId),
     numberCiphertext,
   };
@@ -275,6 +284,7 @@ export function CardsView({
   cards,
   billingAddresses,
   addingCard = false,
+  defaultCardholderName,
   addCard,
   removeCard,
 }: CardsViewProps) {
@@ -298,6 +308,7 @@ export function CardsView({
             seals the number under the vault key and submits only ciphertext + metadata. */}
         <AddCardFlow
           billingAddresses={billingAddresses}
+          defaultCardholderName={defaultCardholderName}
           addCard={addCard ?? noopAddCard}
           initialOpen={addingCard}
         />
