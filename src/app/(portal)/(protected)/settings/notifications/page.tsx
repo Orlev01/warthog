@@ -103,6 +103,8 @@ async function resolveSession(db: Db): Promise<Session | null> {
 // a genuine server fault and is rethrown, never dressed up as a notice (mirrors the
 // security screen's `noticeLocation`).
 function noticeLocation(successCode: string, outcome: ActionResult | unknown): string {
+  // A 429 is the verification-text cap (review fix F5), said in plain words.
+  if (outcome instanceof HttpError && outcome.status === 429) return `${SCREEN}?notice=too_many_texts`;
   if (outcome instanceof HttpError) return `${SCREEN}?notice=invalid_request`;
   if (outcome instanceof Error) throw outcome;
   const result = outcome as ActionResult;
@@ -270,6 +272,10 @@ const NOTICES: Record<string, Notice> = {
     text: "We couldn't set this device up for push notifications. Please try again.",
   },
   invalid_request: { tone: "problem", text: "Nothing was changed: that request wasn't valid. Please try again." },
+  too_many_texts: {
+    tone: "problem",
+    text: "You've asked for several codes recently. Please wait an hour and try again.",
+  },
 };
 
 function notificationsNotice(code: string | undefined): Notice | null {

@@ -29,7 +29,7 @@
 import { listAgentsForUser } from "../db/agents";
 import { getConnectionPermissions, type CardBudget } from "../db/agent-permissions";
 import { listReleasesForConnectionPeriod, periodKeyFor } from "../db/card-spend-ledger";
-import { readActivity } from "../activity/writer";
+import { listActivity } from "../activity/list";
 import type { Db } from "../db/index";
 import type { Clock } from "../seams/clock";
 
@@ -63,25 +63,24 @@ export interface OwnSpending {
 }
 
 // The agent-reported amounts for `userId`, keyed by the release each one references.
-// Read ONCE for the owner (reused across their agents): the DEK decrypts every
-// activity payload, and only `agent_reported` entries carrying a `cardRelease`
-// reference contribute — a Warthog-written entry is never treated as a report. A
-// later report for the same release wins (entries arrive in ascending seq order).
+// Read ONCE for the owner (reused across their agents): only `agent_reported` entries
+// are read (filtered in SQL, one bounded page, newest first) and decrypted, and only
+// those carrying a `cardRelease` reference contribute — a Warthog-written entry is never
+// treated as a report. The latest report for the same release wins.
 async function reportedAmountsByRelease(
   db: Db,
   userId: string,
   dek: Uint8Array,
 ): Promise<Map<string, number | string>> {
-  const entries = await readActivity(db, userId, dek);
+  const entries = await listActivity(db, userId, { source: "agent_reported" }, dek);
   const byRelease = new Map<string, number | string>();
   for (const entry of entries) {
-    if (entry.source !== "agent_reported") continue;
     const payload = entry.payload;
     if (payload === null || typeof payload !== "object") continue;
     const { cardRelease, amount } = payload as { cardRelease?: unknown; amount?: unknown };
-    if (typeof cardRelease === "string" && (typeof amount === "number" || typeof amount === "string")) {
-      byRelease.set(cardRelease, amount);
-    }
+    if (typeof cardRelease !== "string" || (typeof amount !== "number" && typeof amount !== "string")) continue;
+    // Newest first: the first report seen for a release is its latest.
+    if (!byRelease.has(cardRelease)) byRelease.set(cardRelease, amount);
   }
   return byRelease;
 }

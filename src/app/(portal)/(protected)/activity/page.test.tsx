@@ -888,3 +888,31 @@ test("the loader hands back the applied filters so the controls can show them", 
     await db.close();
   }
 });
+
+// Review fix (E7 follow-through): the loader reads ONE bounded page of the newest entries
+// and builds the dropdowns from the plaintext facet columns, so a long history is never
+// decrypted whole and the filters still offer values from outside the page.
+test("the loader shows a bounded page of the newest entries; the filters still offer every agent", async () => {
+  const db = await freshDb();
+  try {
+    const keyWrapper = localAesKeyWrapper(randomBytes(KEK_BYTES));
+    const { aliceSession } = await seedWorld(db, keyWrapper);
+
+    const loader = createActivityActions({
+      db,
+      disputes: unusedDisputes,
+      undo: unusedUndo,
+      keyWrapper,
+      reversalFor,
+      pageLimit: 2,
+    });
+    const view = await loader.load(aliceSession, {});
+
+    assert.deepEqual(seqsOf(view), [3, 2], "only the newest two entries are read");
+    for (const agent of ["agent-claude", "agent-gpt"]) {
+      assert.ok(view.filterOptions.agents.includes(agent), `the agent filter still offers "${agent}"`);
+    }
+  } finally {
+    await db.close();
+  }
+});

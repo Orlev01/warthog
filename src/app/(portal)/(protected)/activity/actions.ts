@@ -36,13 +36,12 @@ import {
   checkIntegrity as runIntegrityCheck,
   type IntegrityResult,
 } from "@/server/activity/integrity";
-import { listActivity, type ActivityFilters } from "@/server/activity/list";
+import { listActivity, listActivityFacets, type ActivityFilters } from "@/server/activity/list";
 import { getUserById } from "@/server/db/users";
 import type { KeyWrapper } from "@/server/crypto/key-wrapper";
 import type { ActivityEntry } from "@/server/activity/recorder";
 import type {
   ActivityEntryView,
-  ActivityFilterOptions,
   ActivityViewProps,
 } from "@/components/activity/activity-view";
 import type { Session } from "@/server/auth/session";
@@ -77,7 +76,13 @@ export interface ActivityActionsDeps {
   // it to set each entry's `canUndo`, so an Undo control shows only where a reversal is
   // declared.
   readonly reversalFor?: (tool?: string) => string | undefined;
+  // How many of the newest entries one view reads and decrypts (default
+  // ACTIVITY_PAGE_LIMIT), so a long history is never decrypted whole.
+  readonly pageLimit?: number;
 }
+
+// The newest entries the Activity screen shows (and searches) at once.
+export const ACTIVITY_PAGE_LIMIT = 500;
 
 // A dispute / undo outcome: success, or a refusal naming its reason in plain words
 // (never a silent success, never a silent failure).
@@ -145,29 +150,6 @@ function formatAt(iso: string): string {
 // bound; a value that already carries a time of day is left exactly as given.
 function widenToEndOfDay(to: string): string {
   return /^\d{4}-\d{2}-\d{2}$/.test(to) ? `${to}T23:59:59.999Z` : to;
-}
-
-// The distinct filterable values present in the person's own entries — each is posted
-// back verbatim as its filter value, so the options ARE the agent/service/kind/outcome
-// the filter dropdowns match on. Built from the FULL set so a narrowing filter never
-// hides the other values you could switch to.
-function buildFilterOptions(entries: readonly ActivityEntry[]): ActivityFilterOptions {
-  const agents = new Set<string>();
-  const services = new Set<string>();
-  const kinds = new Set<string>();
-  const outcomes = new Set<string>();
-  for (const entry of entries) {
-    if (entry.agentId) agents.add(entry.agentId);
-    if (entry.connectorId) services.add(entry.connectorId);
-    if (entry.kind) kinds.add(entry.kind);
-    if (entry.outcome) outcomes.add(entry.outcome);
-  }
-  return {
-    agents: [...agents],
-    services: [...services],
-    kinds: [...kinds],
-    outcomes: [...outcomes],
-  };
 }
 
 // An entry seq is a position within a person's own chain: a POSITIVE INTEGER. A
@@ -295,10 +277,10 @@ export function createActivityActions(deps: ActivityActionsDeps): ActivityAction
     }
     const dek = await keyWrapper.unwrap(user.wrappedDek);
 
-    // The FULL set backs the filter dropdowns, so a narrowing filter never hides the
-    // other agents/services/kinds/outcomes you could switch to.
-    const all = await listActivity(db, session.userId, {}, dek);
-    const filterOptions = buildFilterOptions(all);
+    // The person's whole set of facet values backs the filter dropdowns, read from the
+    // plaintext metadata columns (nothing decrypted), so neither a narrowing filter nor
+    // the page bound hides the other agents/services/kinds/outcomes you could switch to.
+    const filterOptions = await listActivityFacets(db, session.userId);
 
     // The facet/date filters the view posts back: `agent`→agentId, `service`→
     // connectorId, kind/outcome verbatim, and from/to only when they are real calendar
@@ -323,12 +305,11 @@ export function createActivityActions(deps: ActivityActionsDeps): ActivityAction
       filters.to = widenToEndOfDay(to);
     }
 
-    // Reuse the full read when nothing narrows it; otherwise the shared filtered read
-    // (`listActivity`, E08-S05) narrows by facet/date in SQL, newest-first.
-    const narrowed =
-      Object.keys(filters).length === 0
-        ? all
-        : await listActivity(db, session.userId, filters, dek);
+    // The shared filtered read (`listActivity`, E08-S05) narrows by facet/date in SQL,
+    // newest-first, and decrypts only the bounded page it returns.
+    const narrowed = await listActivity(db, session.userId, filters, dek, {
+      limit: deps.pageLimit ?? ACTIVITY_PAGE_LIMIT,
+    });
 
     // The free-text search narrows further, in-app over the decrypted summary (an
     // encrypted column can't be matched in SQL), case-insensitively over the same text
