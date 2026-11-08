@@ -27,15 +27,19 @@
 
 import {
   evaluate,
-  type CardPolicy,
   type IdentifiedRule,
   type Permission,
   type PolicyCall,
   type PolicyContext,
 } from "../../domain/policy/evaluate";
-import type { Budget } from "../../domain/budget/budget";
 import type { ReferenceRate } from "../../domain/currency/convert";
-import { loadAgentContext, type AgentConnection, type AgentContext } from "./context";
+import {
+  cardPolicyFor,
+  cardRequestOf,
+  loadAgentContext,
+  type AgentConnection,
+  type AgentContext,
+} from "./context";
 import { createApproval, getApproval } from "../db/approvals";
 import { createHeldRequest, getByApproval, markExecuted, type StoredHeldRequest } from "../db/held-requests";
 import { getUserById } from "../db/users";
@@ -144,10 +148,6 @@ export interface AgentCallPipeline {
   executeApprovedHold(userId: string, approvalId: string): Promise<ApprovedHoldResult>;
 }
 
-// The fallback when no card budget is set: a zero budget, which `budgetAllowsCard`
-// treats as "no budget" so a card request is denied before it can ask.
-const NO_BUDGET: Budget = { amount: 0, period: "month" };
-
 // The permission the policy engine checks (design §8 step 2). The stored grants
 // grant whole CONNECTORS plus read/change tool CLASSES — there is no per-tool
 // allowlist column — so a tool is permitted when its connector is granted AND its
@@ -164,25 +164,11 @@ function toPermission(call: AgentCall, context: AgentContext): Permission {
   };
 }
 
-// The card settings the policy engine checks (design §8 step 4). The already-spent
-// total for the current budget period comes pre-summed from the loader; the engine
-// sums releases inside the window, so it is handed back as one synthetic release at
-// the current instant (which falls inside the window).
-function toCardPolicy(context: AgentContext, now: Date): CardPolicy {
-  const { permissions, spend } = context;
-  const budget: Budget = permissions.cardBudget
-    ? { amount: permissions.cardBudget.amount, period: permissions.cardBudget.period }
-    : NO_BUDGET;
-  return {
-    access: permissions.cardAccess,
-    budget,
-    releases: spend > 0 ? [{ amount: spend, at: now }] : [],
-  };
-}
-
 // Assemble the pure engine's context from the resolved connection and the loaded
 // member-scoped context. The rule scope is matched on the connection id (the same
-// id space the loader filters applicable rules by).
+// id space the loader filters applicable rules by). For a card request the card
+// policy carries the household limits and the rate is the loader's per-call daily
+// reference rate (design §8 step 4); the injected static `rate` is only a fallback.
 function toPolicyContext(
   connection: AgentConnection,
   context: AgentContext,
@@ -196,8 +182,8 @@ function toPolicyContext(
     permission: toPermission(call, context),
     rules: context.rules as readonly IdentifiedRule[],
     accountCurrency: context.accountCurrency,
-    card: toCardPolicy(context, now),
-    rate,
+    card: cardPolicyFor(context, now),
+    rate: context.cardChecks ? context.cardChecks.rate : rate,
     now,
   };
 }
@@ -311,7 +297,8 @@ export function createAgentCallPipeline(deps: PipelineDeps): AgentCallPipeline {
 
     // The member-scoped policy context (binds the ids as parameters). Carries the
     // person's configured per-connection rate limit, used next.
-    const context = await loadAgentContext(connection, { db, keyWrapper, clock });
+    // A card request also loads its household + currency context (design §8 step 4).
+    const context = await loadAgentContext(connection, { db, keyWrapper, clock }, cardRequestOf(call));
 
     // Gate 2 — the per-connection rate limit. A burst over the limit is refused
     // and recorded as ONE summarising entry for the streak, not one per call.

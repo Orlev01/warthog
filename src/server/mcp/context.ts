@@ -23,6 +23,7 @@ import {
   type PeriodKind,
 } from "../db/agent-permissions";
 import { periodKeyFor, sumForConnectionPeriod } from "../db/card-spend-ledger";
+import { getRate } from "../db/exchange-rates";
 import type { Db } from "../db/index";
 import { listRules, type StoredRule } from "../db/rules";
 import { getUserById } from "../db/users";
@@ -33,6 +34,9 @@ import {
   type CardRequest,
   type CardRequestContext,
 } from "../spending/household-context";
+import type { Budget } from "../../domain/budget/budget";
+import type { ReferenceRate } from "../../domain/currency/convert";
+import type { CardPolicy, HouseholdPolicy } from "../../domain/policy/evaluate";
 
 // The default account currency when no budget currency is set (brief: amounts
 // default to AUD).
@@ -67,6 +71,121 @@ export interface AgentContext {
   readonly spend: number;
   readonly accountCurrency: string;
   readonly cardRequest?: CardRequestContext;
+  readonly cardChecks?: CardChecks;
+}
+
+// What a CARD request adds to the engine's inputs, ready for the pure engine: the daily
+// reference rate converting the request into the agent budget's currency (`accountCurrency`;
+// null when none is needed or none is on file — the engine then refuses a foreign amount
+// rather than guess), and the household policy (null outside a household) — this member's
+// limit and the shared budget in the household currency, each with its spend so far.
+export interface CardChecks {
+  readonly rate: ReferenceRate | null;
+  readonly household: HouseholdPolicy | null;
+}
+
+// The card fields of an agent call, or undefined when it is not a card request with an
+// amount and currency (the registry requires both on request_card).
+export function cardRequestOf(call: {
+  readonly request?: string;
+  readonly amount?: number;
+  readonly currency?: string;
+}): CardRequest | undefined {
+  if (call.request !== "card" || call.amount === undefined || call.currency === undefined) {
+    return undefined;
+  }
+  return { amount: call.amount, currency: call.currency };
+}
+
+// The fallback when no card budget is set: a zero budget, which `budgetAllowsCard`
+// treats as "no budget" so a card request is denied before it can ask.
+const NO_BUDGET: Budget = { amount: 0, period: "month" };
+
+// The card settings the policy engine checks (design §8 step 4). The already-spent
+// total for the current budget period comes pre-summed from the loader; the engine
+// sums releases inside the window, so it is handed back as one synthetic release at
+// the current instant (which falls inside the window). For a card request the
+// household policy (member limit + shared budget) rides along when the person is in a
+// household.
+export function cardPolicyFor(context: AgentContext, now: Date): CardPolicy {
+  const { permissions, spend } = context;
+  const budget: Budget = permissions.cardBudget
+    ? { amount: permissions.cardBudget.amount, period: permissions.cardBudget.period }
+    : NO_BUDGET;
+  const card: CardPolicy = {
+    access: permissions.cardAccess,
+    budget,
+    releases: spend > 0 ? [{ amount: spend, at: now }] : [],
+  };
+  const household = context.cardChecks?.household;
+  return household ? { ...card, household } : card;
+}
+
+// One spend-so-far figure as the engine's release list: a single synthetic release at
+// `now` (inside the current window), or none.
+function spentSoFar(amount: number, now: Date): { amount: number; at: Date }[] {
+  return amount > 0 ? [{ amount, at: now }] : [];
+}
+
+// The household policy for a resolved card request: only the legs the owner has set (an
+// unset limit or budget is no cap, never "deny everything"), in the household currency,
+// with the resolver's conversion of the request into that currency as its rate.
+function householdPolicyFor(
+  resolved: CardRequestContext,
+  request: CardRequest,
+  now: Date,
+): HouseholdPolicy | null {
+  const household = resolved.household;
+  if (!household) return null;
+  const policy: HouseholdPolicy = {
+    currency: household.currency,
+    budgetReleases: spentSoFar(household.budgetSpendToDate, now),
+    memberReleases: spentSoFar(household.memberSpendToDate, now),
+    rate: resolved.converted
+      ? {
+          from: request.currency,
+          to: resolved.converted.currency,
+          rate: resolved.converted.rate,
+          date: resolved.converted.rateDate,
+        }
+      : null,
+  };
+  if (household.monthlyBudget !== null) {
+    policy.budget = { amount: household.monthlyBudget, period: "month" };
+  }
+  if (household.memberLimit !== null) {
+    policy.memberLimit = { amount: household.memberLimit, period: "month" };
+  }
+  return policy;
+}
+
+// The latest daily reference rate converting the request into the agent budget's
+// currency: none needed when they match; the resolver's own conversion when it already
+// targeted that currency; otherwise a lookup of the latest rate on or before today.
+async function budgetRateFor(
+  db: Db,
+  request: CardRequest,
+  budgetCurrency: string,
+  resolved: CardRequestContext,
+  now: Date,
+): Promise<ReferenceRate | null> {
+  if (request.currency === budgetCurrency) return null;
+  if (resolved.converted && resolved.converted.currency === budgetCurrency) {
+    return {
+      from: request.currency,
+      to: budgetCurrency,
+      rate: resolved.converted.rate,
+      date: resolved.converted.rateDate,
+    };
+  }
+  const lookup = await getRate(db, {
+    on: periodKeyFor("day", now),
+    baseCurrency: request.currency,
+    quoteCurrency: budgetCurrency,
+  });
+  return lookup.found
+    ? { from: request.currency, to: budgetCurrency, rate: lookup.rate, date: lookup.rateDate }
+    : null;
 }
 
 // The current budget-period bucket key is derived by `periodKeyFor` in the
@@ -144,7 +263,12 @@ export async function loadAgentContext(
   // resolver so the pure engine can enforce the member limit and the household budget.
   if (cardRequest) {
     const resolved = await resolveCardRequestContext(connection.userId, cardRequest, { db, clock });
-    return { permissions, rules, spend, accountCurrency, cardRequest: resolved };
+    const now = clock.now();
+    const cardChecks: CardChecks = {
+      rate: await budgetRateFor(db, cardRequest, accountCurrency, resolved, now),
+      household: householdPolicyFor(resolved, cardRequest, now),
+    };
+    return { permissions, rules, spend, accountCurrency, cardRequest: resolved, cardChecks };
   }
 
   return { permissions, rules, spend, accountCurrency };

@@ -79,6 +79,8 @@ import { upsertPermissions, type PermissionGrants } from "../db/agent-permission
 import { listMemoriesForUser } from "../db/memories";
 import { listPendingForUser } from "../db/approvals";
 import { registerSubscription } from "../db/push-subscriptions";
+import { createHousehold, setHouseholdBudget, setMemberLimit } from "../db/households";
+import { upsertRate } from "../db/exchange-rates";
 import { FALLBACK_JOB_TYPE } from "../notify/approval-notifier";
 import { outbox } from "../notify/outbox";
 import { createToken } from "../oauth/store";
@@ -585,6 +587,88 @@ test("D2: every tools/call records the request count and latency metrics", async
     assert.ok(names.includes("agent.request"), "a request-count metric is recorded");
     assert.ok(names.includes("agent.request.latency_ms"), "a request-latency metric is recorded");
     assert.ok(rows.rows.every((row) => row.outcome === "executed"), "tagged with the call's outcome");
+  } finally {
+    await db.close();
+  }
+});
+
+// ===================================================================================
+// Review fix D3 — card requests through the composed pipeline are checked against the
+// household budget and the member's limit (in the household currency), and a foreign
+// amount is converted with the stored daily reference rate.
+// ===================================================================================
+
+async function requestCard(
+  dispatch: ReturnType<typeof createMcpDispatch>,
+  connectionId: string,
+  amount: number,
+  currency = "AUD",
+): Promise<JsonRpcResponse["result"]> {
+  const rpc = await readRpc(
+    await dispatch(connectionId, mcpPost(callBody("request_card", { amount, currency, merchant: "Shop" }))),
+  );
+  return rpc.result;
+}
+
+test("D3: a card request over the member's household limit is refused, holding nothing", async () => {
+  const db = await freshDb();
+  try {
+    const config = devConfig();
+    const { userId, connectionId, dek } = await seedConnection(db, config);
+    const household = await createHousehold(db, { ownerId: userId, currency: "AUD", monthlyBudget: 500 });
+    await setMemberLimit(db, { householdId: household.id, actorId: userId, userId, monthlyLimit: 200 });
+    const dispatch = createMcpDispatch({ db, config });
+
+    const result = await requestCard(dispatch, connectionId, 300);
+    assert.equal(result?.isError, true, "an over-limit request is refused");
+    assert.match(contentText(result), /household spending limit/);
+    assert.equal((await listPendingForUser(db, userId, dek)).length, 0, "no approval is created");
+  } finally {
+    await db.close();
+  }
+});
+
+test("D3: a card request over the shared household budget is refused; unset legs impose no cap", async () => {
+  const db = await freshDb();
+  try {
+    const config = devConfig();
+    const { userId, connectionId } = await seedConnection(db, config);
+    const household = await createHousehold(db, { ownerId: userId, currency: "AUD", monthlyBudget: 500 });
+    const dispatch = createMcpDispatch({ db, config });
+
+    const over = await requestCard(dispatch, connectionId, 900);
+    assert.equal(over?.isError, true, "an over-budget request is refused");
+    assert.match(contentText(over), /shared budget/);
+
+    // No member limit and no shared budget: nothing caps the request (it asks the person).
+    await setHouseholdBudget(db, { householdId: household.id, actorId: userId, monthlyBudget: null });
+    const asked = await requestCard(dispatch, connectionId, 900);
+    assert.equal(asked?.structuredContent?.status, "pending_approval", `got: ${JSON.stringify(asked)}`);
+  } finally {
+    await db.close();
+  }
+});
+
+test("D3: a foreign-currency card request is converted with the stored daily rate", async () => {
+  const db = await freshDb();
+  try {
+    const config = devConfig();
+    const { connectionId } = await seedConnection(db, config); // A$1000/month budget
+    const dispatch = createMcpDispatch({ db, config });
+
+    // No USD→AUD rate stored yet: refused with a plain reason rather than guessed.
+    const noRate = await requestCard(dispatch, connectionId, 100, "USD");
+    assert.equal(noRate?.isError, true);
+    assert.match(contentText(noRate), /reference rate/i);
+
+    // With a rate on file, 100 USD (150 AUD) is within budget and asks the person.
+    await upsertRate(db, { rateDate: "2020-01-01", baseCurrency: "USD", quoteCurrency: "AUD", rate: 1.5 });
+    const converted = await requestCard(dispatch, connectionId, 100, "USD");
+    assert.equal(converted?.structuredContent?.status, "pending_approval", `got: ${JSON.stringify(converted)}`);
+
+    // 800 USD is 1200 AUD — over the A$1000 budget once converted.
+    const over = await requestCard(dispatch, connectionId, 800, "USD");
+    assert.match(contentText(over), /card budget/);
   } finally {
     await db.close();
   }

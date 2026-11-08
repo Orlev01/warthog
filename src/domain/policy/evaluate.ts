@@ -65,13 +65,19 @@ export interface Permission {
   highTierAllowed: boolean;
 }
 
-/** This member's limit and the shared household budget, in the household currency. */
+/**
+ * This member's limit and the shared household budget, in the household currency. A leg
+ * the owner has not set is absent and imposes no cap. `rate` converts a request made in
+ * another currency into the household currency, for when the household currency differs
+ * from the account currency (otherwise the account-currency amount is used as is).
+ */
 export interface HouseholdPolicy {
   currency: string;
-  budget: Budget;
+  budget?: Budget;
   budgetReleases: readonly Release[];
-  memberLimit: Budget;
+  memberLimit?: Budget;
   memberReleases: readonly Release[];
+  rate?: ReferenceRate | null;
 }
 
 /** The person's card settings (design §8 step 4). Budgets are in the account currency. */
@@ -158,6 +164,24 @@ function firstMatch(
 // --- step 4: card request checks -------------------------------------------
 
 /**
+ * The request amount in the household currency: the account-currency amount when the two
+ * currencies match, the requested amount when it was already asked in the household
+ * currency, and otherwise a conversion with the household rate (no usable rate refuses).
+ */
+function householdAmount(
+  call: PolicyCall,
+  household: HouseholdPolicy,
+  ctx: PolicyContext,
+  requested: number,
+  inAccountCurrency: number,
+): { ok: true; amount: number } | { ok: false; reason: string } {
+  if (household.currency === ctx.accountCurrency) return { ok: true, amount: inAccountCurrency };
+  if ((call.currency ?? ctx.accountCurrency) === household.currency) return { ok: true, amount: requested };
+  const converted = convert(requested, household.rate);
+  return converted.ok ? { ok: true, amount: converted.converted.amount } : { ok: false, reason: converted.reason };
+}
+
+/**
  * Run every card check (design §8 step 4) and return a deny on the first failure,
  * or undefined when the request passes (the caller then asks). The amount is
  * converted into the account/household currency with the injected reference rate;
@@ -187,10 +211,18 @@ function evaluateCard(call: PolicyCall, ctx: PolicyContext): PolicyResult | unde
 
   const household = card.household;
   if (household) {
-    if (evaluateBudget(household.memberLimit, household.memberReleases, amount, ctx.now).overBudget) {
+    const inHousehold = householdAmount(call, household, ctx, requested, amount);
+    if (!inHousehold.ok) return deny(inHousehold.reason);
+    if (
+      household.memberLimit &&
+      evaluateBudget(household.memberLimit, household.memberReleases, inHousehold.amount, ctx.now).overBudget
+    ) {
       return deny("This would put you over your household spending limit.");
     }
-    if (evaluateBudget(household.budget, household.budgetReleases, amount, ctx.now).overBudget) {
+    if (
+      household.budget &&
+      evaluateBudget(household.budget, household.budgetReleases, inHousehold.amount, ctx.now).overBudget
+    ) {
       return deny("This would put the household over its shared budget.");
     }
   }
