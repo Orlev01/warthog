@@ -658,3 +658,34 @@ test("uses design tokens, never a raw hex colour", () => {
     );
   }
 });
+
+// ================================================================================
+// Review fix W4.5 — spend in a currency with no reference rate is FLAGGED in words, never
+// shown as part of the totals (it used to be silently counted as 0).
+// ================================================================================
+
+test("W4.5: an amount that couldn't be converted is flagged, naming its currency and amount", () => {
+  const markup = render(
+    base({
+      household: {
+        ...HOUSEHOLD,
+        unconverted: [{ currency: "USD", amount: 25.5 }],
+        members: [
+          { userId: OWNER, monthlyLimit: 250, spendToDate: 90.27, unconverted: [] },
+          { userId: OTHER_MEMBER, monthlyLimit: 150, spendToDate: 47.57, unconverted: [{ currency: "USD", amount: 25.5 }] },
+        ],
+      },
+    }),
+  );
+  const household = sectionByHeading(markup, /household/i) ?? "";
+  const text = visibleText(household);
+  assert.match(text, /couldn.t convert/i, `the household section must say what couldn't be converted; text="${text}"`);
+  assert.match(text, /no rate for USD/, `and why, naming the currency; text="${text}"`);
+  assert.match(text, /USD 25\.50/, `with the amount in its own currency; text="${text}"`);
+  assert.match(text, /not (included|counted) in/i, `and say it isn't in the totals; text="${text}"`);
+});
+
+test("W4.5: a household with nothing unconverted shows no conversion warning", () => {
+  const text = visibleText(sectionByHeading(render(base()), /household/i) ?? "");
+  assert.doesNotMatch(text, /couldn.t convert/i);
+});

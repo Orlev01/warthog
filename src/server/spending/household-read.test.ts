@@ -531,3 +531,58 @@ test("W4.3: the household totals are read for the month in the given time zone",
     await db.close();
   }
 });
+
+// ---------------------------------------------------------------------------
+// Review fix W4.5 — an amount in a currency with no reference rate on file is FLAGGED,
+// never counted as 0: the household total and the member's total leave it out and the
+// report says which currency could not be converted and how much.
+// ---------------------------------------------------------------------------
+
+test("W4.5: an other-currency amount with no rate is flagged, never added as 0", async () => {
+  const db = await freshDb();
+  try {
+    const alice = await makeUser(db, "w45-owner");
+    const bob = await makeUser(db, "w45-member");
+    const hid = (await createHousehold(db, { ownerId: alice, currency: "AUD", monthlyBudget: 500 })).id;
+    await addMember(db, { householdId: hid, userId: bob });
+    await record(db, { userId: alice, householdId: hid, amount: 40, currency: "AUD", connectionId: CONN_A, who: "alice" });
+    // No USD→AUD (or JPY→AUD) rate is on file at all.
+    await record(db, { userId: bob, householdId: hid, amount: 20, currency: "USD", connectionId: CONN_B, who: "bob" });
+    await record(db, { userId: bob, householdId: hid, amount: 5, currency: "USD", connectionId: CONN_A, who: "bob" });
+    await record(db, { userId: alice, householdId: hid, amount: 900, currency: "JPY", connectionId: CONN_A, who: "alice" });
+
+    const report = await readHouseholdSpending(bob, { db, clock: fixedClock(NOW) });
+    assert.ok(report);
+    assert.equal(report.budgetSpendToDate, 40, "only the convertible AUD amount is in the household total");
+    assert.deepEqual(
+      [...report.unconverted].sort((a, b) => a.currency.localeCompare(b.currency)),
+      [
+        { currency: "JPY", amount: 900 },
+        { currency: "USD", amount: 25 },
+      ],
+      "the household report names each currency it could not convert, with its amount",
+    );
+    assert.equal(memberOf(report, bob)?.spendToDate, 0, "bob's converted total holds nothing it could not convert");
+    assert.deepEqual(memberOf(report, bob)?.unconverted, [{ currency: "USD", amount: 25 }], "and bob's entry flags it");
+    assert.deepEqual(memberOf(report, alice)?.unconverted, [{ currency: "JPY", amount: 900 }]);
+  } finally {
+    await db.close();
+  }
+});
+
+test("W4.5: a household whose every amount converts flags nothing", async () => {
+  const db = await freshDb();
+  try {
+    const alice = await makeUser(db, "w45-clean");
+    const hid = (await createHousehold(db, { ownerId: alice, currency: "AUD", monthlyBudget: 500 })).id;
+    await upsertRate(db, { rateDate: "2026-11-14", baseCurrency: "USD", quoteCurrency: "AUD", rate: 1.5 });
+    await record(db, { userId: alice, householdId: hid, amount: 10, currency: "USD", connectionId: CONN_A, who: "alice" });
+
+    const report = await readHouseholdSpending(alice, { db, clock: fixedClock(NOW) });
+    assert.equal(report?.budgetSpendToDate, 15);
+    assert.deepEqual(report?.unconverted, []);
+    assert.deepEqual(memberOf(report!, alice)?.unconverted, []);
+  } finally {
+    await db.close();
+  }
+});

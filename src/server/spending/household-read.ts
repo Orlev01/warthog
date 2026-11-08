@@ -28,23 +28,43 @@ import { convert, type ReferenceRate } from "../../domain/currency/convert";
 import type { Db } from "../db/index";
 import type { Clock } from "../seams/clock";
 
-// One household member's totals — a limit and a converted total, NOTHING else: no
-// merchant, no release entry/id, no email, no other personal content.
+// An approved amount this month that could NOT be expressed in the household currency,
+// because no daily reference rate is on file for its currency: the currency and the
+// amount in it. It is shown beside the totals and never counted in them as 0 (review
+// fix W4.5: the totals used to understate other-currency spend silently).
+export interface UnconvertedSpend {
+  readonly currency: string;
+  readonly amount: number;
+}
+
+// One household member's totals — a limit, a converted total and what could not be
+// converted, NOTHING else: no merchant, no release entry/id, no email, no other
+// personal content.
 export interface HouseholdMemberSpending {
   readonly userId: string;
   readonly monthlyLimit: number | null; // this member's per-member monthly limit (null until set)
   readonly spendToDate: number; // this member's approved spend this month, in the household currency
+  readonly unconverted: UnconvertedSpend[]; // this member's spend with no rate into the household currency
 }
 
 // The household spending report for a member: the shared budget and the household
 // total, plus one totals-only entry per member (incl. the owner). Every amount is in
-// the household currency.
+// the household currency, except the `unconverted` amounts, which are left out of the
+// totals and listed in their own currency.
 export interface HouseholdSpendingReport {
   readonly householdId: string;
   readonly currency: string; // the household currency every figure is expressed in
   readonly monthlyBudget: number | null; // the shared monthly household budget (null until set)
   readonly budgetSpendToDate: number; // the household total this month, in the household currency
+  readonly unconverted: UnconvertedSpend[]; // the household's spend with no rate, per currency
   readonly members: HouseholdMemberSpending[];
+}
+
+// Add `amount` in `currency` to a per-currency list (one entry per currency).
+function addUnconverted(list: UnconvertedSpend[], currency: string, amount: number): UnconvertedSpend[] {
+  const existing = list.find((entry) => entry.currency === currency);
+  if (!existing) return [...list, { currency, amount }];
+  return list.map((entry) => (entry.currency === currency ? { currency, amount: entry.amount + amount } : entry));
 }
 
 // The injected seams — no process.env. `timeZone` is the reader's own IANA zone
@@ -65,7 +85,8 @@ const PERIOD = "month" as const;
 // id alone (null when they are in none), then each member's converted spend-to-date
 // against their monthly limit and the household total against the shared budget — all
 // in the household currency, converting an other-currency release via the latest daily
-// reference rate on or before today. TOTALS only — never a merchant or a release entry.
+// reference rate on or before today, and flagging (never zeroing) one with no rate.
+// TOTALS only — never a merchant or a release entry.
 export async function readHouseholdSpending(
   userId: string,
   deps: HouseholdSpendingDeps,
@@ -110,17 +131,28 @@ export async function readHouseholdSpending(
   // Convert each (member, currency) sub-total into the household currency and
   // accumulate it per member and into the household total. A same-currency amount
   // counts at face value (no rate needed, never dropped for lack of one); an
-  // other-currency amount with no usable rate contributes 0 rather than a fabricated
-  // cross-currency figure.
+  // other-currency amount with no usable rate is never a fabricated figure and never
+  // a silent 0: it stays out of the totals and is listed, in its own currency, as
+  // unconverted — for the member and for the household.
   const perMember = new Map<string, number>();
+  const unconvertedPerMember = new Map<string, UnconvertedSpend[]>();
   let budgetSpendToDate = 0;
+  let unconverted: UnconvertedSpend[] = [];
   for (const sub of subTotals) {
     let amount: number;
     if (sub.currency === householdCurrency) {
       amount = sub.total;
     } else {
       const result = convert(sub.total, await rateInto(sub.currency));
-      amount = result.ok ? result.converted.amount : 0;
+      if (!result.ok) {
+        unconvertedPerMember.set(
+          sub.userId,
+          addUnconverted(unconvertedPerMember.get(sub.userId) ?? [], sub.currency, sub.total),
+        );
+        unconverted = addUnconverted(unconverted, sub.currency, sub.total);
+        continue;
+      }
+      amount = result.converted.amount;
     }
     perMember.set(sub.userId, (perMember.get(sub.userId) ?? 0) + amount);
     budgetSpendToDate += amount;
@@ -130,6 +162,7 @@ export async function readHouseholdSpending(
     userId: member.userId,
     monthlyLimit: member.monthlyLimit,
     spendToDate: perMember.get(member.userId) ?? 0,
+    unconverted: unconvertedPerMember.get(member.userId) ?? [],
   }));
 
   return {
@@ -137,6 +170,7 @@ export async function readHouseholdSpending(
     currency: household.currency,
     monthlyBudget: household.monthlyBudget,
     budgetSpendToDate,
+    unconverted,
     members: memberRows,
   };
 }
