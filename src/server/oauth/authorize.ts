@@ -222,9 +222,11 @@ export async function beginAuthorization(
   // Enforce the authorization rules; a rejection never reaches consent.
   const valid = await validateAuthorizeRequest(params, session, deps);
   if (!valid.ok) return valid;
+  if (session == null) return { ok: false, error: "login_required" }; // (validated above)
 
-  // Carry the request server-side under an opaque handle and send the person to the
-  // internal consent screen — no code is issued and nothing is sent to the client.
-  const handle = putPendingAuthorization(params, random);
+  // Carry the request server-side under an opaque handle, bound to the signed-in person
+  // who started it (only they can see or decide it), and send them to the internal
+  // consent screen — no code is issued and nothing is sent to the client.
+  const handle = putPendingAuthorization(params, session.userId, random);
   return { ok: true, handle, redirectTo: "/oauth/consent" };
 }

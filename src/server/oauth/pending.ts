@@ -13,6 +13,13 @@
 // page, action) resolves the same one. Nothing is written to the database — a pending
 // request is transient state that lives only until the person decides. The handle is
 // unguessable, so a wrong or forged handle resolves to nothing.
+//
+// A pending request is BOUND to the signed-in person who started it (review fix W3.4).
+// The consent cookie outlives a sign-out, so if one person signs out and another signs in
+// on the same browser within the request's ten minutes, the second person would otherwise
+// see — and could approve under their own account — the first person's request. Every read
+// takes the viewing person's id: a different person resolves nothing (and consumes
+// nothing, so the request stays usable for its owner).
 
 import { processSingleton } from "../seams/process-singleton";
 import type { Random } from "../seams/random";
@@ -40,7 +47,7 @@ export const PENDING_TTL_MS = 10 * 60 * 1000;
 // while a person is looking at the consent screen.
 export const MAX_PENDING_AUTHORIZATIONS = 10_000;
 
-type Entry = { readonly params: URLSearchParams; readonly createdAtMs: number };
+type Entry = { readonly params: URLSearchParams; readonly userId: string; readonly createdAtMs: number };
 
 const pending = processSingleton(
   "oauth.pendingAuthorizations",
@@ -71,12 +78,21 @@ function pruneExpired(now: Now): void {
   }
 }
 
-// Carry an authorize request into the store and return its opaque handle. A copy of
-// the params is stored so a later mutation of the caller's object can't leak in. Expired
-// requests are pruned first; if the store is still full, the oldest waiting request is
-// dropped to make room (it then reads as expired).
+// The live entry for a handle when it belongs to `userId`, or null (unknown, expired, or
+// another person's — which is left untouched).
+function owned(handle: string, userId: string, now: Now): Entry | null {
+  const entry = live(handle, now);
+  return entry != null && entry.userId === userId ? entry : null;
+}
+
+// Carry an authorize request into the store for the signed-in person `userId` (the
+// session's id, never a client value) and return its opaque handle. A copy of the params
+// is stored so a later mutation of the caller's object can't leak in. Expired requests are
+// pruned first; if the store is still full, the oldest waiting request is dropped to make
+// room (it then reads as expired).
 export function putPendingAuthorization(
   params: URLSearchParams,
+  userId: string,
   random: Random,
   now: Now = wallClock,
 ): string {
@@ -87,25 +103,35 @@ export function putPendingAuthorization(
     pending.delete(oldest.value);
   }
   const handle = Buffer.from(random.randomBytes(HANDLE_ENTROPY_BYTES)).toString("hex");
-  pending.set(handle, { params: new URLSearchParams(params), createdAtMs: now() });
+  pending.set(handle, { params: new URLSearchParams(params), userId, createdAtMs: now() });
   return handle;
 }
 
 // Resolve the pending request under a handle WITHOUT consuming it — the consent page
 // renders from this, and the person approves afterwards, so rendering must not remove
-// the one-time request. An unknown/expired handle resolves to null. A copy of the
-// params is returned so a reader cannot mutate the stored request.
-export function getPendingAuthorization(handle: string, now: Now = wallClock): PendingAuthorization | null {
-  const entry = live(handle, now);
+// the one-time request. An unknown/expired handle, or one started by someone other than
+// `userId`, resolves to null. A copy of the params is returned so a reader cannot mutate
+// the stored request.
+export function getPendingAuthorization(
+  handle: string,
+  userId: string,
+  now: Now = wallClock,
+): PendingAuthorization | null {
+  const entry = owned(handle, userId, now);
   if (entry == null) return null;
   return { params: new URLSearchParams(entry.params) };
 }
 
 // Resolve AND consume the pending request under a handle (single use): the consent
 // decision reads it here, so a replayed handle resolves to null the second time and
-// creates nothing. An unknown/forged handle resolves to null.
-export function consumePendingAuthorization(handle: string, now: Now = wallClock): PendingAuthorization | null {
-  const entry = live(handle, now);
+// creates nothing. An unknown/forged handle resolves to null, as does another person's
+// request — which is NOT consumed, so its owner can still decide it.
+export function consumePendingAuthorization(
+  handle: string,
+  userId: string,
+  now: Now = wallClock,
+): PendingAuthorization | null {
+  const entry = owned(handle, userId, now);
   if (entry == null) return null;
   pending.delete(handle);
   return { params: new URLSearchParams(entry.params) };

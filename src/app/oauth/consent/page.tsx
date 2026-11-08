@@ -110,7 +110,7 @@ async function approveConsentAction(formData: FormData): Promise<void> {
   if (!session) redirect(SIGN_IN_AND_RETURN);
 
   const handle = store.get(CONSENT_COOKIE)?.value ?? "";
-  const view = await loadConsentView(handle);
+  const view = await loadConsentView(handle, session.userId);
   const platform = view?.platform ?? "Agent";
 
   let clientRedirect: string | null = null;
@@ -189,9 +189,8 @@ export default async function ConsentPage({
 
   const store = await cookies();
   const handle = store.get(CONSENT_COOKIE)?.value ?? "";
-  const view = await loadConsentView(handle, {
+  const view = await loadConsentView(handle, session.userId, {
     db,
-    userId: session.userId,
     nameOf: (connectorId) => getCatalogue().get(connectorId)?.name,
   });
   if (!view) return <ExpiredNotice />;

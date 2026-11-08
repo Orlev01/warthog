@@ -56,20 +56,23 @@ const REQUESTED_SCOPES: ReadonlyArray<string> = [
 // catalogue when it knows the service. Never ticked by default: the person opts in.
 export interface ConsentServicesSource {
   readonly db: Db;
-  readonly userId: string;
   readonly nameOf?: (connectorId: string) => string | undefined;
 }
 
-async function connectedServices(source: ConsentServicesSource): Promise<ConsentViewService[]> {
-  const ids = [...new Set((await listConnectionsForUser(source.db, source.userId)).map((c) => c.connectorId))];
+async function connectedServices(source: ConsentServicesSource, userId: string): Promise<ConsentViewService[]> {
+  const ids = [...new Set((await listConnectionsForUser(source.db, userId)).map((c) => c.connectorId))];
   return ids.map((id) => ({ id, name: source.nameOf?.(id) ?? id, ticked: false }));
 }
 
+// The consent view for the pending request under `handle`, as seen by the signed-in
+// person `userId` (the session's id). A request someone else started renders nothing
+// (review fix W3.4), exactly like an expired one.
 export async function loadConsentView(
   handle: string,
+  userId: string,
   services?: ConsentServicesSource,
 ): Promise<ConsentViewProps | null> {
-  const pending = getPendingAuthorization(handle);
+  const pending = getPendingAuthorization(handle, userId);
   if (pending == null) return null;
 
   const redirectUri = pending.params.get("redirect_uri");
@@ -90,7 +93,7 @@ export async function loadConsentView(
     requestedScopes: REQUESTED_SCOPES,
     template: DEFAULT_TEMPLATE,
     redirect: { host, verified },
-    ...(services ? { services: await connectedServices(services) } : {}),
+    ...(services ? { services: await connectedServices(services, userId) } : {}),
   };
 }
 

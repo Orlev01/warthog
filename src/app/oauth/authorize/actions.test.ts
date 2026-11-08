@@ -225,9 +225,11 @@ function authorizeParams(resource: string = MCP_RESOURCE): URLSearchParams {
 // then resolves. This is how a real pending request reaches the decision: never from a
 // form field. `base` picks the issuer/MCP-resource so the carried request is valid for the
 // matching deps' config (the iss-A/iss-B tests run two different issuers).
-async function seedPending(db: Db, base: string = BASE_URL): Promise<string> {
+async function seedPending(db: Db, userId: string, base: string = BASE_URL): Promise<string> {
+  // The request is begun by the person who will decide it (review fix W3.4: a pending
+  // request is bound to the signed-in person who started it).
   const begun = await beginAuthorization(
-    { params: authorizeParams(`${base}/mcp`), session: sessionFor("pending-seed") },
+    { params: authorizeParams(`${base}/mcp`), session: sessionFor(userId) },
     { db, config: configWithBaseUrl(base), clock: fixedClock(NOW), random: systemRandom, resolveClient },
   );
   assert.ok(begun.ok, "seeding the pending authorize request must succeed");
@@ -300,7 +302,7 @@ test("approving creates the agent, upserts its permissions and issues a credenti
 
     const result = await actions.approve(
       sessionFor(userId),
-      await seedPending(db),
+      await seedPending(db, userId),
       approval({ name: "My Claude", platform: "claude", template: "standard" }),
     );
 
@@ -355,7 +357,7 @@ test("refusing creates no agent and issues no credential", async () => {
     const userId = await makeUser(db, "refuse");
     const actions = makeActions(db);
 
-    const result = await actions.refuse(sessionFor(userId), await seedPending(db));
+    const result = await actions.refuse(sessionFor(userId), await seedPending(db, userId));
 
     assert.ok(result.ok, "refusing is a handled outcome, not an error");
     if (!result.ok) throw new Error("unreachable: refuse was not ok");
@@ -381,7 +383,7 @@ test("Minimal grants none of high-tier, card access or sharing", async () => {
 
     const result = await actions.approve(
       sessionFor(userId),
-      await seedPending(db),
+      await seedPending(db, userId),
       approval({ template: "minimal" }),
     );
     assert.ok(result.ok, "a Minimal approval succeeds");
@@ -407,7 +409,7 @@ test("Standard leaves high-tier, card and sharing off unless they are opted in",
 
     const result = await actions.approve(
       sessionFor(userId),
-      await seedPending(db),
+      await seedPending(db, userId),
       approval({ template: "standard" }), // no opt-ins
     );
     assert.ok(result.ok, "a Standard approval succeeds");
@@ -432,7 +434,7 @@ test("explicitly opting in to high-tier and sharing turns exactly those on", asy
 
     const result = await actions.approve(
       sessionFor(userId),
-      await seedPending(db),
+      await seedPending(db, userId),
       approval({ template: "standard", highTier: true, learningSharing: true }),
     );
     assert.ok(result.ok, "an approval with opt-ins succeeds");
@@ -457,7 +459,7 @@ test("opting in to card access with a budget turns card access on and records th
 
     const result = await actions.approve(
       sessionFor(userId),
-      await seedPending(db),
+      await seedPending(db, userId),
       approval({
         template: "custom",
         card: true,
@@ -496,7 +498,7 @@ test("the agent is created under the session user, never a user id smuggled in t
 
     const result = await actions.approve(
       sessionFor(sessionUser),
-      await seedPending(db),
+      await seedPending(db, sessionUser),
       // The untrusted input smuggles the attacker's user id; the decision must ignore it.
       approval({ userId: attacker, name: "Theirs", platform: "claude", template: "standard" }),
     );
@@ -529,7 +531,7 @@ test("an oversized agent name is rejected with a 4xx and nothing is written", as
   try {
     const userId = await makeUser(db, "oversized");
     const actions = makeActions(db);
-    const handle = await seedPending(db);
+    const handle = await seedPending(db, userId);
 
     await assertRejects4xx("approve(oversized name)", () =>
       actions.approve(
@@ -554,7 +556,7 @@ test("an empty agent name is rejected with a 4xx and nothing is written", async 
   try {
     const userId = await makeUser(db, "emptyname");
     const actions = makeActions(db);
-    const handle = await seedPending(db);
+    const handle = await seedPending(db, userId);
 
     await assertRejects4xx("approve(empty name)", () =>
       actions.approve(sessionFor(userId), handle, approval({ name: "" })),
@@ -571,7 +573,7 @@ test("an unknown starting set (template) is rejected with a 4xx and nothing is w
   try {
     const userId = await makeUser(db, "badtemplate");
     const actions = makeActions(db);
-    const handle = await seedPending(db);
+    const handle = await seedPending(db, userId);
 
     await assertRejects4xx("approve(bad template)", () =>
       actions.approve(sessionFor(userId), handle, approval({ template: "bogus" })),
@@ -592,7 +594,7 @@ test("a SQL-injection probe in the agent name is stored as data: the table survi
 
     const result = await actions.approve(
       sessionFor(userId),
-      await seedPending(db),
+      await seedPending(db, userId),
       approval({ name: probe, platform: "claude", template: "standard" }),
     );
     assert.ok(result.ok, "a valid-shaped (if nasty) name is accepted");
@@ -628,12 +630,12 @@ test("the issued credential's issuer is read from config — it changes with con
 
     const resultA = await makeActions(dbA, "https://a.example").approve(
       sessionFor(userA),
-      await seedPending(dbA, "https://a.example"),
+      await seedPending(dbA, userA, "https://a.example"),
       approval(),
     );
     const resultB = await makeActions(dbB, "https://b.example").approve(
       sessionFor(userB),
-      await seedPending(dbB, "https://b.example"),
+      await seedPending(dbB, userB, "https://b.example"),
       approval(),
     );
 
@@ -665,7 +667,7 @@ test("a decoy secret in the environment never lands in the issued credential, ag
     const userId = await makeUser(db, "decoy");
     const actions = makeActions(db);
 
-    const result = await actions.approve(sessionFor(userId), await seedPending(db), approval());
+    const result = await actions.approve(sessionFor(userId), await seedPending(db, userId), approval());
     assert.ok(result.ok, "the approval succeeds with the decoy env var present");
     if (!result.ok) throw new Error("unreachable");
 
@@ -737,7 +739,7 @@ test("replaying a decision (the same handle twice) creates nothing the second ti
   try {
     const userId = await makeUser(db, "replay");
     const actions = makeActions(db);
-    const handle = await seedPending(db);
+    const handle = await seedPending(db, userId);
 
     // The first approval consumes the one-time pending request.
     const first = await actions.approve(sessionFor(userId), handle, approval({ name: "Once" }));
@@ -764,10 +766,10 @@ test("replaying a decision (the same handle twice) creates nothing the second ti
 // Approve issues no code and creates no agent.
 // =====================================================================================
 
-function plantedPending(redirectUri: string): string {
+function plantedPending(redirectUri: string, userId: string): string {
   const params = authorizeParams();
   params.set("redirect_uri", redirectUri);
-  return putPendingAuthorization(params, systemRandom);
+  return putPendingAuthorization(params, userId, systemRandom);
 }
 
 test("Refuse and Approve never redirect to a javascript:, data: or unregistered URI", async () => {
@@ -781,10 +783,10 @@ test("Refuse and Approve never redirect to a javascript:, data: or unregistered 
       "http://attacker.example/cb",
       "https://attacker.example/cb",
     ]) {
-      const refused = await makeActions(db).refuse(sessionFor(userId), plantedPending(redirectUri));
+      const refused = await makeActions(db).refuse(sessionFor(userId), plantedPending(redirectUri, userId));
       assert.equal(refused.ok, false, `refuse returns no redirect for ${redirectUri}`);
 
-      const approved = await makeActions(db).approve(sessionFor(userId), plantedPending(redirectUri), approval());
+      const approved = await makeActions(db).approve(sessionFor(userId), plantedPending(redirectUri, userId), approval());
       assert.equal(approved.ok, false, `approve returns no redirect for ${redirectUri}`);
     }
     assert.equal((await listAgentsForUser(db, userId)).length, 0, "no agent is created for a hostile redirect");
@@ -799,7 +801,7 @@ test("Approve for a client that is no longer known issues no code and creates no
     const userId = await makeUser(db, "unknown-client");
     const params = authorizeParams();
     params.set("client_id", "never-registered-client");
-    const handle = putPendingAuthorization(params, systemRandom);
+    const handle = putPendingAuthorization(params, userId, systemRandom);
 
     const approved = await makeActions(db).approve(sessionFor(userId), handle, approval());
     assert.equal(approved.ok, false, "an unknown client gets no code");
@@ -822,7 +824,7 @@ test("approving sends the new-agent-connection alert to the person, naming the a
   try {
     const userId = await makeUser(db, "alert-approve");
     sentEmails.length = 0;
-    const result = await makeActions(db).approve(sessionFor(userId), await seedPending(db), approval({ name: "Research Claude" }));
+    const result = await makeActions(db).approve(sessionFor(userId), await seedPending(db, userId), approval({ name: "Research Claude" }));
     assert.ok(result.ok);
     if (!result.ok) throw new Error("unreachable");
     const mine = sentEmails.filter((m) => m.recipient === "alert-approve@warthog.com.au");
@@ -840,7 +842,7 @@ test("refusing sends no alert", async () => {
   try {
     const userId = await makeUser(db, "alert-refuse");
     sentEmails.length = 0;
-    await makeActions(db).refuse(sessionFor(userId), await seedPending(db));
+    await makeActions(db).refuse(sessionFor(userId), await seedPending(db, userId));
     assert.equal(sentEmails.filter((m) => m.recipient === "alert-refuse@warthog.com.au").length, 0);
   } finally {
     await db.close();
@@ -856,9 +858,38 @@ test("an alert that cannot be sent does not block the approval", async () => {
         throw new Error("Email sending is not configured");
       },
     };
-    const result = await makeActions(db, BASE_URL, broken).approve(sessionFor(userId), await seedPending(db), approval());
+    const result = await makeActions(db, BASE_URL, broken).approve(sessionFor(userId), await seedPending(db, userId), approval());
     assert.ok(result.ok, "the person is still sent back to the agent with its code");
     assert.equal((await listAgentsForUser(db, userId)).length, 1, "the agent stays connected");
+  } finally {
+    await db.close();
+  }
+});
+
+// =====================================================================================
+// Review fix W3.4 — a pending request is bound to the person who started it. Someone else
+// signed in on the same browser (the consent cookie outlives a sign-out) can neither
+// approve nor refuse it; it stays there for its owner.
+// =====================================================================================
+
+test("another signed-in person can neither approve nor refuse someone's pending request", async () => {
+  const db = await freshDb();
+  try {
+    const owner = await makeUser(db, "bound-owner");
+    const other = await makeUser(db, "bound-other");
+    const handle = await seedPending(db, owner);
+    const actions = makeActions(db);
+
+    const approved = await actions.approve(sessionFor(other), handle, approval({ name: "Not mine" }));
+    assert.deepEqual(approved, { ok: false, error: "invalid_request" }, "a different person cannot approve it");
+    assert.equal((await listAgentsForUser(db, other)).length, 0, "and no agent is created for them");
+
+    const refused = await actions.refuse(sessionFor(other), handle);
+    assert.deepEqual(refused, { ok: false, error: "invalid_request" }, "nor refuse it");
+
+    const mine = await actions.approve(sessionFor(owner), handle, approval({ name: "Mine" }));
+    assert.ok(mine.ok, "the request is still there for the person who started it");
+    assert.equal((await listAgentsForUser(db, owner)).length, 1);
   } finally {
     await db.close();
   }

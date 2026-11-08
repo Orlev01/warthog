@@ -215,7 +215,9 @@ export function createAuthorizeActions(deps: AuthorizeActionsDeps): AuthorizeAct
   ): Promise<DecisionResult> {
     const valid = parseParams(approvalSchema, approval);
 
-    const pending = consumePendingAuthorization(handle);
+    // Only the person who started the request can decide it: another signed-in person's
+    // handle resolves to nothing (and is left for its owner).
+    const pending = consumePendingAuthorization(handle, session.userId);
     if (pending == null) return { ok: false, error: "invalid_request" };
 
     const connectionId = randomUUID();
@@ -266,8 +268,8 @@ export function createAuthorizeActions(deps: AuthorizeActionsDeps): AuthorizeAct
   // redirect that fails is never followed, so Refuse can't be turned into an open
   // redirect or a `javascript:` navigation. Redirect back to the client with
   // `access_denied` (the echoed state and the configured issuer), carrying no code.
-  async function refuse(_session: Session, handle: string): Promise<DecisionResult> {
-    const pending = consumePendingAuthorization(handle);
+  async function refuse(session: Session, handle: string): Promise<DecisionResult> {
+    const pending = consumePendingAuthorization(handle, session.userId);
     if (pending == null) return { ok: false, error: "invalid_request" };
 
     const validated = await validatedRedirectUri(pending.params, resolveClient);
