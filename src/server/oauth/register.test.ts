@@ -297,3 +297,24 @@ test("parallel registrations cannot race past the cap", async () => {
     await db.close();
   }
 });
+
+// Review fix (metadata conformance finding) — the DCR response echoes the registered
+// metadata a client needs, including that it is a PUBLIC client (no secret; PKCE), so a
+// client that reads the auth method from the response never tries a secret it was never
+// given (RFC 7591 §3.2.1 defaults a missing method to client_secret_basic).
+test("the registration response says the client is public (token_endpoint_auth_method none)", async () => {
+  const db = await freshDb();
+  try {
+    const now = new Date("2026-06-01T00:00:00.000Z");
+    const handler = createRegisterHandler({ db, clock: { now: () => now } });
+    const res = await handler(registerRequest(registerBody()));
+    assert.equal(res.status, 201);
+    const body = (await res.json()) as Record<string, unknown>;
+    assert.equal(body.token_endpoint_auth_method, "none");
+    assert.deepEqual(body.grant_types, ["authorization_code", "refresh_token"]);
+    assert.deepEqual(body.response_types, ["code"]);
+    assert.equal(body.client_id_issued_at, Math.floor(now.getTime() / 1000));
+  } finally {
+    await db.close();
+  }
+});

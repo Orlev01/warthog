@@ -104,8 +104,18 @@ export function createRegisterHandler({
       return response;
     }
 
+    // Echo the registered metadata (RFC 7591 §3.2.1), including that this is a PUBLIC
+    // client — no secret, PKCE instead — so a client never falls back to the default
+    // client_secret_basic it has no secret for.
     return Response.json(
-      { client_id: client.clientId, redirect_uris: client.redirectUris },
+      {
+        client_id: client.clientId,
+        client_id_issued_at: Math.floor(now.getTime() / 1000),
+        redirect_uris: client.redirectUris,
+        token_endpoint_auth_method: "none",
+        grant_types: ["authorization_code", "refresh_token"],
+        response_types: ["code"],
+      },
       { status: 201 },
     );
   };
