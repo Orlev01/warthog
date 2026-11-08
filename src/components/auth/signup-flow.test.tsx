@@ -677,3 +677,30 @@ test("a 409 at confirm tells the person the address already has an account and d
   assert.match(state.error, /sign in/i, "the copy points to signing in");
   assert.deepEqual(ctx.navCalls, [], "no navigation");
 });
+
+// ── Review fix B6 — a new person who arrived from an agent or invite goes back there ──
+
+test("after confirming, sign-up goes to a safe return path, and to /home for an unsafe one", async () => {
+  for (const [returnTo, expected] of [
+    ["/household/join/abc123", "/household/join/abc123"],
+    ["javascript:alert(1)", "/home"],
+  ] as const) {
+    const { fetchImpl } = makeFetch();
+    const start = makeStart();
+    const navCalls: string[] = [];
+    const flow = createSignupFlow({
+      fetch: fetchImpl as typeof fetch,
+      startRegistration: start.fn,
+      navigate: (path: string) => void navCalls.push(path),
+      returnTo,
+    });
+    flow.setEmail(EMAIL);
+    await flow.submitEmail();
+    flow.setCode(CODE);
+    await flow.submitCode();
+    await flow.createPasskey();
+    flow.setSavedConfirmed(true);
+    await flow.confirm();
+    assert.deepEqual(navCalls, [expected], `returnTo ${returnTo}`);
+  }
+});

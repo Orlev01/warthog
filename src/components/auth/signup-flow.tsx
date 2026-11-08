@@ -8,6 +8,7 @@ import type {
 } from "@simplewebauthn/browser";
 
 import { SignupView, type SignupStep } from "./auth-views";
+import { safeReturnPath } from "../../server/auth/return-path";
 
 // E04-S24 — Client sign-up flow.
 //
@@ -42,6 +43,9 @@ export interface SignupFlowDeps {
     useAutoRegister?: boolean;
   }) => Promise<RegistrationResponseJSON>;
   readonly navigate: (path: string) => void;
+  // Where to go after success: the page's validated `?next=` (review fix B6). It is
+  // checked again here, and anything unsafe — or nothing — means /home.
+  readonly returnTo?: string;
   // Optional: the component wires this to re-render after each state change. The
   // controller works standalone (the unit tests) when it is omitted.
   readonly onChange?: () => void;
@@ -204,7 +208,7 @@ export function createSignupFlow(deps: SignupFlowDeps): SignupFlowController {
       return;
     }
     set({ error: undefined });
-    deps.navigate("/home");
+    deps.navigate(safeReturnPath(deps.returnTo));
   }
 
   return {
@@ -234,6 +238,8 @@ export interface SignupFlowProps {
   readonly fetch?: typeof fetch;
   readonly startRegistration?: SignupFlowDeps["startRegistration"];
   readonly navigate?: (path: string) => void;
+  // The validated return path the page read from `?next=`.
+  readonly returnTo?: string;
 }
 
 export function SignupFlow(props: SignupFlowProps = {}): React.ReactElement {
@@ -244,6 +250,7 @@ export function SignupFlow(props: SignupFlowProps = {}): React.ReactElement {
       fetch: props.fetch ?? defaultFetch,
       startRegistration: props.startRegistration ?? startRegistration,
       navigate: props.navigate ?? defaultNavigate,
+      returnTo: props.returnTo,
       onChange: () => forceUpdate(),
     });
   }
@@ -252,6 +259,7 @@ export function SignupFlow(props: SignupFlowProps = {}): React.ReactElement {
 
   return (
     <SignupView
+      returnTo={props.returnTo}
       step={state.phase}
       name={state.name}
       email={state.email}

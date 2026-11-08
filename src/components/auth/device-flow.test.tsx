@@ -449,3 +449,25 @@ test("GET /device renders the flow's first step: an accessibly-labelled code ent
     `the first step must offer a live, named control to continue (not a dead screen), got: ${markup}`,
   );
 });
+
+// ── Review fix B6 — a newly approved device goes back to a safe return path ───────────
+
+test("once approved, the device flow goes to a safe return path, and to /home for an unsafe one", async () => {
+  for (const [returnTo, expected] of [
+    ["/a/AbC123", "/a/AbC123"],
+    ["https://evil.example", "/home"],
+  ] as const) {
+    const { fetchImpl } = makeFetch();
+    const navCalls: string[] = [];
+    const flow = createDeviceFlow({
+      fetch: fetchImpl as typeof fetch,
+      navigate: (path: string) => void navCalls.push(path),
+      returnTo,
+    });
+    flow.setEmail(EMAIL);
+    flow.setCode(EMAIL_CODE);
+    await flow.requestApproval();
+    await flow.poll();
+    assert.deepEqual(navCalls, [expected], `returnTo ${returnTo}`);
+  }
+});

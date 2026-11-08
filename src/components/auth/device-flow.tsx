@@ -3,6 +3,7 @@
 import * as React from "react";
 
 import { DeviceView } from "./auth-views";
+import { safeReturnPath } from "../../server/auth/return-path";
 
 // E04-S34 — Client new-device flow.
 //
@@ -46,6 +47,9 @@ export type DevicePhase = "code" | "waiting" | "stopped";
 export interface DeviceFlowDeps {
   readonly fetch: typeof fetch;
   readonly navigate: (path: string) => void;
+  // Where to go after success: the page's validated `?next=` (review fix B6). It is
+  // checked again here, and anything unsafe — or nothing — means /home.
+  readonly returnTo?: string;
   // The label naming the approval push on the person's other device. Optional so the
   // page mounts the flow with none; a sensible default is used when omitted.
   readonly deviceLabel?: string;
@@ -156,7 +160,7 @@ export function createDeviceFlow(deps: DeviceFlowDeps): DeviceFlowController {
     if (response.ok) {
       // Approved: the session cookie rode the followed 303; go to /home.
       set({ error: undefined });
-      deps.navigate("/home");
+      deps.navigate(safeReturnPath(deps.returnTo));
       return;
     }
 
@@ -201,6 +205,8 @@ export interface DeviceFlowProps {
   // fakes. The page mounts it with no props.
   readonly fetch?: typeof fetch;
   readonly navigate?: (path: string) => void;
+  // The validated return path the page read from `?next=`.
+  readonly returnTo?: string;
   readonly deviceLabel?: string;
 }
 
@@ -211,6 +217,7 @@ export function DeviceFlow(props: DeviceFlowProps = {}): React.ReactElement {
     flowRef.current = createDeviceFlow({
       fetch: props.fetch ?? defaultFetch,
       navigate: props.navigate ?? defaultNavigate,
+      returnTo: props.returnTo,
       deviceLabel: props.deviceLabel,
       onChange: () => forceUpdate(),
     });
@@ -230,6 +237,7 @@ export function DeviceFlow(props: DeviceFlowProps = {}): React.ReactElement {
 
   return (
     <DeviceView
+      returnTo={props.returnTo}
       step={state.phase}
       email={state.email}
       code={state.code}

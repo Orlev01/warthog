@@ -8,6 +8,7 @@ import type {
 } from "@simplewebauthn/browser";
 
 import { RecoverView, type RecoverStep } from "./auth-views";
+import { safeReturnPath } from "../../server/auth/return-path";
 
 // E04-S33 — Client account recovery flow.
 //
@@ -50,6 +51,9 @@ export interface RecoverFlowDeps {
     useAutoRegister?: boolean;
   }) => Promise<RegistrationResponseJSON>;
   readonly navigate: (path: string) => void;
+  // Where to go after success: the page's validated `?next=` (review fix B6). It is
+  // checked again here, and anything unsafe — or nothing — means /home.
+  readonly returnTo?: string;
   // Optional: the component wires this to re-render after each state change. The
   // controller works standalone (the unit tests) when it is omitted.
   readonly onChange?: () => void;
@@ -252,7 +256,7 @@ export function createRecoverFlow(deps: RecoverFlowDeps): RecoverFlowController 
       return;
     }
     set({ error: undefined });
-    deps.navigate("/home");
+    deps.navigate(safeReturnPath(deps.returnTo));
   }
 
   return {
@@ -283,6 +287,8 @@ export interface RecoverFlowProps {
   readonly fetch?: typeof fetch;
   readonly startRegistration?: RecoverFlowDeps["startRegistration"];
   readonly navigate?: (path: string) => void;
+  // The validated return path the page read from `?next=`.
+  readonly returnTo?: string;
 }
 
 export function RecoverFlow(props: RecoverFlowProps = {}): React.ReactElement {
@@ -293,6 +299,7 @@ export function RecoverFlow(props: RecoverFlowProps = {}): React.ReactElement {
       fetch: props.fetch ?? defaultFetch,
       startRegistration: props.startRegistration ?? startRegistration,
       navigate: props.navigate ?? defaultNavigate,
+      returnTo: props.returnTo,
       onChange: () => forceUpdate(),
     });
   }
@@ -301,6 +308,7 @@ export function RecoverFlow(props: RecoverFlowProps = {}): React.ReactElement {
 
   return (
     <RecoverView
+      returnTo={props.returnTo}
       step={state.phase}
       email={state.email}
       emailCode={state.emailCode}

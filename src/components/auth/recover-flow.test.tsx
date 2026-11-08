@@ -758,3 +758,32 @@ test("too many wrong recovery codes (429) sends the person back to the start wit
   assert.equal(s.email, EMAIL, "the email the person typed is kept");
   assertPlainEnglish(s.error, "verify-code 429");
 });
+
+// ── Review fix B6 — recovery goes back to a safe return path after finishing ──────────
+
+test("after finishing, recovery goes to a safe return path, and to /home for an unsafe one", async () => {
+  for (const [returnTo, expected] of [
+    ["/oauth/consent", "/oauth/consent"],
+    ["//evil.example", "/home"],
+  ] as const) {
+    const { fetchImpl } = makeFetch();
+    const start = makeStart();
+    const navCalls: string[] = [];
+    const flow = createRecoverFlow({
+      fetch: fetchImpl as typeof fetch,
+      startRegistration: start.fn,
+      navigate: (path: string) => void navCalls.push(path),
+      returnTo,
+    });
+    flow.setEmail(EMAIL);
+    await flow.submitIdentify();
+    flow.setEmailCode(EMAIL_CODE);
+    await flow.submitEmailCode();
+    flow.setRecoveryCode(TYPED_RECOVERY_CODE);
+    await flow.submitRecoveryCode();
+    await flow.createPasskey();
+    flow.setSavedConfirmed(true);
+    await flow.confirm();
+    assert.deepEqual(navCalls, [expected], `returnTo ${returnTo}`);
+  }
+});

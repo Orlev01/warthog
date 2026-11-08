@@ -645,3 +645,59 @@ test("GET /signin renders for a signed-out visitor and shows no protocol or secu
     assert.ok(!re.test(text), `the sign-in screen must say what happens in plain words — found jargon "${label}" in: "${text}"`);
   }
 });
+
+// ── Review fix B6 — sign-in returns to where the person started (a safe `next`) ────────
+
+function setupReturning(returnTo: string) {
+  const { fetchImpl, calls, responders } = makeFetch();
+  const start = makeStart();
+  const navCalls: string[] = [];
+  const flow = createSigninFlow({
+    fetch: fetchImpl as typeof fetch,
+    startAuthentication: start.fn,
+    navigate: (path: string) => {
+      navCalls.push(path);
+    },
+    returnTo,
+  });
+  return { flow, calls, responders, start, navCalls };
+}
+
+test("after a passkey or code sign-in the flow goes back to a safe return path", async () => {
+  const next = "/oauth/authorize?client_id=c&state=s";
+
+  const passkey = setupReturning(next);
+  passkey.flow.setEmail(EMAIL);
+  await passkey.flow.signInWithPasskey();
+  assert.deepEqual(passkey.navCalls, [next], "the passkey sign-in returns to the authorize request");
+
+  const code = setupReturning(next);
+  code.flow.setEmail(EMAIL);
+  code.flow.useAuthenticatorApp();
+  code.flow.setCode(CODE);
+  await code.flow.signInWithCode();
+  assert.deepEqual(code.navCalls, [next], "the code sign-in returns to the authorize request");
+});
+
+test("an unsafe return path is ignored: the flow goes to /home", async () => {
+  const ctx = setupReturning("//evil.example/steal");
+  ctx.flow.setEmail(EMAIL);
+  await ctx.flow.signInWithPasskey();
+  assert.deepEqual(ctx.navCalls, ["/home"]);
+});
+
+test("the sign-in page passes a safe ?next= to the flow and drops an unsafe one", async () => {
+  const render = async (next: unknown) =>
+    renderToStaticMarkup(
+      (await Promise.resolve(
+        (SigninPage as (props: unknown) => unknown)({
+          searchParams: Promise.resolve({ next }),
+          params: Promise.resolve({}),
+        }),
+      )) as React.ReactElement,
+    );
+  const kept = await render("/a/AbC123");
+  assert.ok(kept.includes("next=%2Fa%2FAbC123"), "the return path rides on the screen's links");
+  const dropped = await render("https://evil.example");
+  assert.ok(!dropped.includes("evil.example"), "an unsafe return path never reaches the page");
+});
