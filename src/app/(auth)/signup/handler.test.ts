@@ -702,3 +702,23 @@ test("confirming for an address that already has an account is a 409 and changes
     await db.close();
   }
 });
+
+// Review fix B7 — the browser a person signs up on is marked as recognised, so their next
+// sign-in there raises no "new device" alert.
+test("confirming sign-up marks the browser as one the person signs in on", async () => {
+  const clock = fixedClock(T0);
+  const outbox = createOutbox();
+  const db = await freshDb();
+  try {
+    const handler = makeHandler(db, outbox, clock);
+    const { signupId } = await throughRegisterPasskey(
+      handler, createAuthenticator(), db, outbox, "marked-browser@warthog.com.au", clock,
+    );
+    const res = await handler.confirmSignup(signupRequest({ signupId, savedConfirmed: true }));
+    const cookies = res.headers.getSetCookie();
+    assert.ok(cookies[0]?.startsWith("__Host-wh_session="), "the session cookie comes first");
+    assert.ok(cookies.some((c) => c.startsWith("__Host-wh_device=")), "the browser is marked");
+  } finally {
+    await db.close();
+  }
+});

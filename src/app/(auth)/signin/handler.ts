@@ -50,9 +50,16 @@ import {
 } from "../../../server/auth/passkey";
 import { verifyTotp } from "../../../server/auth/totp";
 import { createSession, recordStepUp } from "../../../server/auth/session";
+import { alertNewDeviceSignIn, deliverAlert } from "../../../server/auth/alerts";
+import {
+  describeDevice,
+  deviceCookieFor,
+  isRecognisedDevice,
+} from "../../../server/auth/device-recognition";
 import { getUserByEmail } from "../../../server/db/users";
 import type { Clock } from "../../../server/seams/clock";
 import type { Random } from "../../../server/seams/random";
+import type { EmailSender } from "../../../server/notify/senders";
 import type { Db } from "../../../server/db/index";
 
 // The injected store the handler reads a person's base32 TOTP secret through: a
@@ -65,10 +72,13 @@ export interface TotpSecretStore {
 // The dependency bundle. Each method reads the subset it needs; the superset is
 // structurally assignable to each. `rpId` is the WebAuthn RP ID (from config, never
 // hard-coded); `publicOrigin` is the origin every method checks the request against.
+// `hmacKey` binds the new-device cookie and `emailSender` carries the new-device alert.
 export interface SigninHandlerDeps {
   readonly db: Db;
   readonly clock: Clock;
   readonly random: Random;
+  readonly hmacKey: Uint8Array;
+  readonly emailSender: EmailSender;
   readonly rpId: string;
   readonly publicOrigin: string;
   readonly totpSecrets: TotpSecretStore;
@@ -130,7 +140,7 @@ function json(status: number, body: unknown): Response {
 }
 
 export function createSigninHandler(deps: SigninHandlerDeps): SigninHandler {
-  const { db, clock, random, rpId, publicOrigin, totpSecrets } = deps;
+  const { db, clock, random, hmacKey, emailSender, rpId, publicOrigin, totpSecrets } = deps;
 
   // The request is same-origin only when it carries exactly the configured Origin. A
   // missing header (`null`) or a foreign one cannot be proven same-origin → refused.
@@ -149,13 +159,23 @@ export function createSigninHandler(deps: SigninHandlerDeps): SigninHandler {
   // host-locked `__Host-wh_session` cookie (the signed-in home). A sign-in IS a
   // passkey/TOTP check, so record a step-up on the new session (design §5): the
   // next sensitive change is allowed for the following five minutes.
-  async function mintSession(userId: string): Promise<Response> {
+  //
+  // A sign-in from a browser this person has not signed in on before emails them the
+  // brief's new-device alert (best effort: a failed send never fails the sign-in) and
+  // marks the browser with a device cookie, so later sign-ins from it stay quiet.
+  async function mintSession(userId: string, request: Request): Promise<Response> {
     const created = await createSession(db, userId, { clock, random });
     await recordStepUp(db, created.session.id, { clock });
-    return new Response(null, {
-      status: 303,
-      headers: { location: "/home", "set-cookie": created.cookie },
-    });
+    const headers = new Headers({ location: "/home" });
+    headers.append("set-cookie", created.cookie);
+    if (!isRecognisedDevice(request, userId, hmacKey)) {
+      const deviceLabel = describeDevice(request.headers.get("user-agent"));
+      await deliverAlert("new-device-sign-in", () =>
+        alertNewDeviceSignIn(db, { userId, deviceLabel }, { emailSender }),
+      );
+      headers.append("set-cookie", deviceCookieFor(userId, { hmacKey, random }));
+    }
+    return new Response(null, { status: 303, headers });
   }
 
   // Passkey step 1 — issue a WebAuthn authentication challenge (carrying the configured
@@ -205,7 +225,7 @@ export function createSigninHandler(deps: SigninHandlerDeps): SigninHandler {
       );
       if (!result.ok) return json(401, { error: "invalid_assertion" });
 
-      return await mintSession(user.id);
+      return await mintSession(user.id, request);
     } catch (error) {
       return handleError(error);
     }
@@ -229,7 +249,7 @@ export function createSigninHandler(deps: SigninHandlerDeps): SigninHandler {
       if (!secret) return json(401, { error: "invalid_code" });
       if (!verifyTotp(secret, totp, { clock })) return json(401, { error: "invalid_code" });
 
-      return await mintSession(user.id);
+      return await mintSession(user.id, request);
     } catch (error) {
       return handleError(error);
     }

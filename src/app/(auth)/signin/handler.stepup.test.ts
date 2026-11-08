@@ -61,6 +61,7 @@ import { createUser, type User } from "../../../server/db/users";
 import { systemRandom } from "../../../server/seams/random";
 import type { Clock } from "../../../server/seams/clock";
 import { freshDb } from "../../../test/db";
+import { createOutbox, type Outbox } from "../../../server/notify/outbox";
 import { createAuthenticator, type SoftwareAuthenticator } from "../../../test/authenticator";
 import type { Db } from "../../../server/db/index";
 
@@ -80,6 +81,9 @@ const STEP_UP_WINDOW_MS = 5 * MINUTE_MS;
 // The configured WebAuthn RP ID — passed through deps (never a module constant), so the
 // "RP ID from config" discipline is exercised end to end.
 const RP_ID = "warthog.com.au";
+
+// The HMAC key the new-device cookie is bound under (review fix B7).
+const SIGNIN_HMAC_KEY = new Uint8Array(Buffer.from("warthog-signin-device-key-0123456789abcd", "utf8"));
 
 // The configured public origin the handler checks the request `Origin` against.
 const GOOD_ORIGIN = "https://warthog.com.au";
@@ -125,11 +129,18 @@ function mutableClock(start: Date): { clock: Clock; advance(ms: number): void } 
 
 // Build the handler under test with the real seams and the test fakes. Each test uses
 // its own db + totp-secret store + clock, so nothing leaks across tests.
-function makeHandler(db: Db, totpSecrets: TotpSecretStore, clock: Clock) {
+function makeHandler(
+  db: Db,
+  totpSecrets: TotpSecretStore,
+  clock: Clock,
+  outbox: Outbox = createOutbox(),
+) {
   return createSigninHandler({
     db,
     clock,
     random: systemRandom,
+    hmacKey: SIGNIN_HMAC_KEY,
+    emailSender: outbox,
     rpId: RP_ID,
     publicOrigin: GOOD_ORIGIN,
     totpSecrets,

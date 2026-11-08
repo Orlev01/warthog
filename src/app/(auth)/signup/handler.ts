@@ -48,6 +48,7 @@ import { issueEmailCode, verifyEmailCode } from "../../../server/auth/email-code
 import { beginPasskeyRegistration } from "../../../server/auth/passkey";
 import { issueRecoveryCode } from "../../../server/auth/recovery";
 import { createSession } from "../../../server/auth/session";
+import { deviceCookieFor } from "../../../server/auth/device-recognition";
 import { createUser } from "../../../server/db/users";
 import { saveIdentityField } from "../../../server/db/identity-fields";
 import type { KeyWrapper } from "../../../server/crypto/key-wrapper";
@@ -425,10 +426,12 @@ export function createSignupHandler(deps: SignupHandlerDeps): SignupHandler {
       }
 
       pendingSignups.delete(signupId);
-      return new Response(null, {
-        status: 303,
-        headers: { location: "/home", "set-cookie": created.cookie },
-      });
+      // The session cookie, plus the device cookie marking this browser as one the
+      // person signs in on, so their next sign-in here raises no new-device alert.
+      const headers = new Headers({ location: "/home" });
+      headers.append("set-cookie", created.cookie);
+      headers.append("set-cookie", deviceCookieFor(created.session.userId, { hmacKey, random }));
+      return new Response(null, { status: 303, headers });
     } catch (error) {
       return handleError(error);
     }

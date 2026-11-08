@@ -48,6 +48,7 @@ import { parseBody, HttpError } from "../../../server/http/validate";
 import { verifyRecoveryCode, issueRecoveryCode } from "../../../server/auth/recovery";
 import { issueEmailCode, verifyEmailCode } from "../../../server/auth/email-code";
 import { alertAccountRecovered, deliverAlert } from "../../../server/auth/alerts";
+import { deviceCookieFor } from "../../../server/auth/device-recognition";
 import {
   beginPasskeyRegistration,
   finishPasskeyRegistration,
@@ -359,10 +360,12 @@ export function createRecoverHandler(deps: RecoverHandlerDeps): RecoverHandler {
       await deliverAlert("account-recovered", () =>
         alertAccountRecovered(db, { userId }, { emailSender }),
       );
-      return new Response(null, {
-        status: 303,
-        headers: { location: "/home", "set-cookie": created.cookie },
-      });
+      // The session cookie, plus the device cookie marking this browser as one the
+      // person signs in on (the recovery alert has already told them about it).
+      const headers = new Headers({ location: "/home" });
+      headers.append("set-cookie", created.cookie);
+      headers.append("set-cookie", deviceCookieFor(userId, { hmacKey, random }));
+      return new Response(null, { status: 303, headers });
     } catch (error) {
       return handleError(error);
     }

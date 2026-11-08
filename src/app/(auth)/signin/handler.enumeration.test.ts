@@ -53,6 +53,7 @@ import { createUser, getUserByEmail, type User } from "../../../server/db/users"
 import { systemRandom } from "../../../server/seams/random";
 import { fixedClock, type Clock } from "../../../server/seams/clock";
 import { freshDb } from "../../../test/db";
+import { createOutbox, type Outbox } from "../../../server/notify/outbox";
 import { createAuthenticator, type SoftwareAuthenticator } from "../../../test/authenticator";
 import type { Db } from "../../../server/db/index";
 
@@ -63,6 +64,9 @@ const T0 = new Date("2026-05-01T00:00:00.000Z");
 // The configured WebAuthn RP ID — passed through deps (never a module constant), so
 // the decoy options a non-existent account gets must still carry the configured RP ID.
 const RP_ID = "warthog.com.au";
+
+// The HMAC key the new-device cookie is bound under (review fix B7).
+const SIGNIN_HMAC_KEY = new Uint8Array(Buffer.from("warthog-signin-device-key-0123456789abcd", "utf8"));
 
 // The configured public origin the handler checks the request `Origin` against.
 const GOOD_ORIGIN = "https://warthog.com.au";
@@ -86,11 +90,13 @@ function emptyTotpSecrets(): TotpSecretStore {
 }
 
 // Build the handler under test with the real seams and the test fakes.
-function makeHandler(db: Db, clock: Clock = fixedClock(T0)) {
+function makeHandler(db: Db, clock: Clock = fixedClock(T0), outbox: Outbox = createOutbox()) {
   return createSigninHandler({
     db,
     clock,
     random: systemRandom,
+    hmacKey: SIGNIN_HMAC_KEY,
+    emailSender: outbox,
     rpId: RP_ID,
     publicOrigin: GOOD_ORIGIN,
     totpSecrets: emptyTotpSecrets(),

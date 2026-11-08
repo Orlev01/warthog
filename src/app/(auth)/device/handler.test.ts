@@ -593,3 +593,32 @@ test("device: a SQL-injection probe in the email field is bound as data and cann
     await db.close();
   }
 });
+
+// =====================================================================================
+// Review fix B7 — the newly signed-in device is marked as recognised, so its next
+// sign-in does not raise another new-device alert.
+// =====================================================================================
+
+test("device: collecting the session also marks the new browser as recognised", async () => {
+  const clock = fixedClock(T0);
+  const outbox = createOutbox();
+  const db = await freshDb();
+  try {
+    const handler = makeHandler(db, clock, outbox);
+    const person = await freshUser(db, "recognised-device");
+    const code = await issueCodeFor(db, person.email, clock, outbox);
+    const requestId = await startRequest(handler, person.email, code, "Kitchen laptop");
+    const approver = await freshStepUpSession(db, person.id, clock);
+    await handler.approve(deviceRequest({ requestId }, { sessionToken: approver.token }));
+
+    const collected = await handler.collect(deviceRequest({ requestId }));
+    const cookies = collected.headers.getSetCookie();
+    assert.ok(cookies[0]?.startsWith(`${COOKIE_NAME}=`), "the session cookie comes first");
+    assert.ok(
+      cookies.some((c) => c.startsWith("__Host-wh_device=")),
+      "the new device is marked as one the person signs in on",
+    );
+  } finally {
+    await db.close();
+  }
+});

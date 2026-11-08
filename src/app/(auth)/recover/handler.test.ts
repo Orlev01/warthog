@@ -831,3 +831,19 @@ test("recovery: after five wrong recovery codes the recovery is closed, even to 
     await db.close();
   }
 });
+
+// Review fix B7 — the browser a person recovers on is marked as recognised.
+test("recovery: finishing marks the browser as one the person signs in on", async () => {
+  const db = await freshDb();
+  try {
+    const handler = makeHandler(db);
+    const { user, recoveryCode } = await seedAccount(db, "marked-recovery");
+    const { recoveryId } = await throughRegisterPasskey(handler, createAuthenticator(), user.email, recoveryCode);
+    const res = await handler.finish(recoverRequest({ recoveryId }));
+    const cookies = res.headers.getSetCookie();
+    assert.ok(cookies[0]?.startsWith("__Host-wh_session="), "the session cookie comes first");
+    assert.ok(cookies.some((c) => c.startsWith("__Host-wh_device=")), "the browser is marked");
+  } finally {
+    await db.close();
+  }
+});

@@ -766,3 +766,62 @@ test("a pending approval request expires after ten minutes: it can be neither ap
     await db.close();
   }
 });
+
+// =====================================================================================
+// Review fix B7 — signing a new device in emails the account holder the brief's
+// new-device alert, naming the device, and carrying no code.
+// =====================================================================================
+
+function alertsTo(outbox: Outbox, email: string): SentMessage[] {
+  return outbox
+    .list()
+    .filter((m) => m.channel === "email" && m.recipient === email && /new device/i.test(m.body));
+}
+
+test("collecting an approved new-device sign-in alerts the account holder, naming the device", async () => {
+  const { clock } = mutableClock(T0);
+  const outbox = createOutbox();
+  const db = await freshDb();
+  try {
+    const person = await freshUser(db, "alerted-handshake");
+    const code = await issueCodeFor(db, person.email, clock, outbox);
+    const started = await requestNewDeviceApproval(
+      db,
+      { email: person.email, code, deviceLabel: "Robin's tablet" },
+      makeDeps(clock, outbox),
+    );
+    if (!started.ok) assert.fail(`request must start: ${JSON.stringify(started)}`);
+    const approver = await freshSignedInSession(db, person.id, clock, true);
+    await approveNewDeviceRequest(db, { requestId: started.requestId, approvingSession: approver.session }, makeDeps(clock, outbox));
+    assert.equal(alertsTo(outbox, person.email).length, 0, "no alert before the device is signed in");
+
+    const collected = await collectNewDeviceApproval(db, { requestId: started.requestId }, makeDeps(clock, outbox));
+    assert.equal(collected.ok, true);
+    const alerts = alertsTo(outbox, person.email);
+    assert.equal(alerts.length, 1, "one new-device alert");
+    assert.match(alerts[0]!.body, /Robin's tablet/, "the alert names the device");
+    assert.ok(!alerts[0]!.body.includes(code), "the alert carries no code");
+  } finally {
+    await db.close();
+  }
+});
+
+test("a new-device sign-in with the recovery code alerts the account holder", async () => {
+  const { clock } = mutableClock(T0);
+  const outbox = createOutbox();
+  const db = await freshDb();
+  try {
+    const person = await freshUser(db, "alerted-recovery-device");
+    const { code: recoveryCode } = await issueRecoveryCode(db, person.id, { random: systemRandom });
+    const code = await issueCodeFor(db, person.email, clock, outbox);
+    const result = await signInNewDeviceWithRecoveryCode(
+      db,
+      { email: person.email, code, recoveryCode },
+      makeDeps(clock, outbox),
+    );
+    assert.equal(result.ok, true);
+    assert.equal(alertsTo(outbox, person.email).length, 1, "one new-device alert");
+  } finally {
+    await db.close();
+  }
+});

@@ -46,6 +46,7 @@ import {
   collectNewDeviceApproval,
 } from "../../../server/auth/new-device";
 import { COOKIE_NAME, verifySession } from "../../../server/auth/session";
+import { deviceCookieFor } from "../../../server/auth/device-recognition";
 import type { Clock } from "../../../server/seams/clock";
 import type { Random } from "../../../server/seams/random";
 import type { EmailSender, PushSender } from "../../../server/notify/senders";
@@ -202,13 +203,15 @@ export function createDeviceHandler(deps: DeviceHandlerDeps): DeviceHandler {
     try {
       const { requestId } = await parseBody(requestIdSchema, request, { maxBytes: MAX_BODY_BYTES });
 
-      const result = await collectNewDeviceApproval(db, { requestId }, { clock, random });
+      const result = await collectNewDeviceApproval(db, { requestId }, { clock, random, emailSender });
       if (!result.ok) return json(400, { error: result.reason });
 
-      return new Response(null, {
-        status: 303,
-        headers: { location: "/home", "set-cookie": result.cookie },
-      });
+      // The session cookie, plus the device cookie that marks this browser as one the
+      // person signs in on, so its next sign-in raises no new-device alert (review fix B7).
+      const headers = new Headers({ location: "/home" });
+      headers.append("set-cookie", result.cookie);
+      headers.append("set-cookie", deviceCookieFor(result.session.userId, { hmacKey, random }));
+      return new Response(null, { status: 303, headers });
     } catch (error) {
       return handleError(error);
     }
