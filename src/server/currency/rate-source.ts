@@ -106,15 +106,29 @@ export function createFrankfurterRateSource(deps: FrankfurterRateSourceDeps): Ra
   return {
     async fetchDailyRates(): Promise<DailyRates> {
       // A network error or the timeout rejects the promise; we do not catch it, so the
-      // failure is reported out of `fetchDailyRates` (AC3). The signal also bounds the body read.
-      const signal = AbortSignal.timeout(deps.timeoutMs ?? DEFAULT_TIMEOUT_MS);
-      const response = await deps.fetchImpl(url, { headers: { accept: "application/json" }, signal });
-      if (!response.ok) {
-        throw new Error(`Exchange-rate source returned HTTP ${response.status}`);
+      // failure is reported out of `fetchDailyRates` (AC3). The one timer bounds the request
+      // AND the body read, and is cleared once the body is in.
+      const controller = new AbortController();
+      const timer = setTimeout(
+        () => controller.abort(new Error("Exchange-rate source timed out")),
+        deps.timeoutMs ?? DEFAULT_TIMEOUT_MS,
+      );
+      let text: string;
+      try {
+        const response = await deps.fetchImpl(url, {
+          headers: { accept: "application/json" },
+          signal: controller.signal,
+        });
+        if (!response.ok) {
+          throw new Error(`Exchange-rate source returned HTTP ${response.status}`);
+        }
+        text = await readCapped(response, MAX_BODY_BYTES);
+      } finally {
+        clearTimeout(timer);
       }
 
       // A non-JSON body makes the parse throw; that rejection propagates (reported).
-      const body: unknown = JSON.parse(await readCapped(response, MAX_BODY_BYTES));
+      const body: unknown = JSON.parse(text);
 
       const parsed = upstreamPayloadSchema.safeParse(body);
       if (!parsed.success) {
