@@ -37,8 +37,18 @@ import type { Budget } from "../../domain/budget/budget";
 import type { ReferenceRate } from "../../domain/currency/convert";
 import { loadAgentContext, type AgentConnection, type AgentContext } from "./context";
 import { createApproval, getApproval } from "../db/approvals";
-import { createHeldRequest, getByApproval, markExecuted, type StoredHeldRequest } from "../db/held-requests";
+import {
+  createHeldRequest,
+  getByApproval,
+  markExecuted,
+  recordOutcome,
+  HeldRequestAlreadyExecutedError,
+  type HeldOutcome,
+  type StoredHeldRequest,
+} from "../db/held-requests";
+import { getAgentById } from "../db/agents";
 import { getUserById } from "../db/users";
+import { isReleaseRequest } from "../../domain/approvals/release-kind";
 import type { RateLimiter } from "./rate-limit";
 import type { ActivityRecorder } from "../activity/recorder";
 import type { KeyWrapper } from "../crypto/key-wrapper";
@@ -132,12 +142,31 @@ interface DecidedCall {
   readonly errorCategory?: string;
 }
 
-// The result of running an approved held call: it either ran the held tool exactly
-// once (and returns its result) or was refused (not approved, already executed, or
-// expired) with the tool left un-run.
+// The result of running an approved held call: the held tool ran exactly once and
+// returned its result, or the call was refused (not approved / expired / a release /
+// its agent disconnected — the tool left un-run — or the tool body itself refused).
+// Once a hold has run, its stored outcome is handed back however often it is asked
+// for. `in_progress` means another caller has claimed the hold and is running it
+// right now (ask again shortly).
 export type ApprovedHoldResult =
   | { status: "executed"; result: unknown }
-  | { status: "refused"; reason: string };
+  | { status: "refused"; reason: string }
+  | { status: "in_progress" };
+
+// The plain reasons executeApprovedHold refuses with.
+const HOLD_NOT_CONNECTED = "This agent is no longer connected, so its request was not carried out.";
+const HOLD_IS_RELEASE =
+  "This request is a one-time release: the agent collects it with collect_release once you hand it over.";
+const HOLD_FAILED = "The approved request could not be completed.";
+
+// Whether a tool body's result is its own plain refusal (`{status:"refused", reason}`
+// — e.g. "This agent does not have permission to use memories."). Such a call did not
+// do anything, so it is recorded and returned as refused, never as executed.
+function asToolRefusal(result: unknown): { status: "refused"; reason: string } | null {
+  if (typeof result !== "object" || result === null) return null;
+  const { status, reason } = result as { status?: unknown; reason?: unknown };
+  return status === "refused" && typeof reason === "string" ? { status: "refused", reason } : null;
+}
 
 export interface AgentCallPipeline {
   handleAgentCall(connection: AgentConnection, call: AgentCall): Promise<AgentCallResult>;
@@ -413,8 +442,13 @@ export function createAgentCallPipeline(deps: PipelineDeps): AgentCallPipeline {
     // reached by the inbox approve action or `check_approval`). `userId` is the
     // OWNING person — taken by the trusted caller from its session / the resolved
     // agent connection, NEVER a client value — and every read/write below is
-    // member-scoped by it. A hold that is still pending, denied, expired or already
-    // executed is REFUSED and the held tool is not run (never a silent failure).
+    // member-scoped by it. A hold that is still pending, denied or expired, a RELEASE
+    // (collected with collect_release, never run), or one whose agent has been
+    // disconnected is REFUSED and the held tool is not run (never a silent failure).
+    // The call runs under its agent's REAL connection (re-resolved from the agents
+    // row: its connection id is what tool permissions are keyed by), and its outcome
+    // is stored so a later ask — the agent's check_approval after an inbox approval —
+    // gets the result back, not "already run".
     async executeApprovedHold(userId: string, approvalId: string): Promise<ApprovedHoldResult> {
       const dek = await dataKeyFor(userId);
 
@@ -435,28 +469,63 @@ export function createAgentCallPipeline(deps: PipelineDeps): AgentCallPipeline {
         return { status: "refused", reason: "This approval has no held request to run." };
       }
 
+      // Already run: hand back what it came to (or "still running" mid-run).
+      if (held.status === "executed") {
+        return held.outcome ?? { status: "in_progress" };
+      }
+
+      // A release is handed over by the person's device and collected by the agent;
+      // it is never run as a tool, and its hold is never burned.
+      const call = held.args as unknown as AgentCall;
+      if (isReleaseRequest(call.request)) {
+        return { status: "refused", reason: HOLD_IS_RELEASE };
+      }
+
+      // Re-resolve the requesting agent (member-scoped): a disconnected or missing
+      // agent's approved hold is refused and left unclaimed — never run on a made-up
+      // connection.
+      const agent = await getAgentById(db, userId, held.agentId);
+      if (!agent || agent.status !== "connected") {
+        return { status: "refused", reason: HOLD_NOT_CONNECTED };
+      }
+
       // Claim the hold EXACTLY ONCE before running it: markExecuted is a single-shot
-      // compare-and-swap that throws once the held request has already run, so a
-      // second attempt is refused and the tool never runs twice.
+      // compare-and-swap, so of two concurrent runs only one claims it; the other
+      // hands back the stored outcome (or "still running"). Any other failure
+      // propagates — it is never mistaken for "already run".
       let ran: StoredHeldRequest;
       try {
         ran = await markExecuted(db, { userId, id: held.id }, dek, clock);
-      } catch {
-        return { status: "refused", reason: "This approved request has already been run." };
+      } catch (error) {
+        if (!(error instanceof HeldRequestAlreadyExecutedError)) throw error;
+        const current = await getByApproval(db, userId, approvalId, dek);
+        return current?.outcome ?? { status: "in_progress" };
       }
 
-      // Run the held tool, then record ONE Warthog outcome entry (execute BEFORE
-      // record — Warthog writes the record itself, redacted).
-      const call = ran.args as unknown as AgentCall;
+      // Run the held tool under the agent's REAL connection, then record ONE Warthog
+      // outcome entry (execute BEFORE record — Warthog writes the record itself,
+      // redacted) and keep the outcome for later asks. A tool body's own refusal is
+      // recorded and returned as refused, never as executed.
       const connection: AgentConnection = {
-        userId: ran.userId,
-        connectionId: ran.agentId,
-        agentId: ran.agentId,
+        userId: agent.userId,
+        connectionId: agent.connectionId,
+        agentId: agent.id,
         active: true,
       };
-      const result = await executeTool(call, connection);
-      await record(connection, call, "executed");
-      return { status: "executed", result };
+      let outcome: HeldOutcome;
+      try {
+        const result = await executeTool(call, connection);
+        const refusal = asToolRefusal(result);
+        outcome = refusal ?? { status: "executed", result };
+      } catch (error) {
+        // Keep the failure so a later ask is told the request could not be completed
+        // (never "already run"), then let the error propagate — never swallowed.
+        await recordOutcome(db, { userId, id: ran.id, outcome: { status: "refused", reason: HOLD_FAILED } }, dek);
+        throw error;
+      }
+      await record(connection, call, outcome.status);
+      await recordOutcome(db, { userId, id: ran.id, outcome }, dek);
+      return outcome;
     },
   };
 }

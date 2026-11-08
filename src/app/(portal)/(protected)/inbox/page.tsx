@@ -72,6 +72,7 @@ function decisionNotice(outcome: ActionResult | unknown, doneCode: string): stri
     if (result.reason === "not_found") return "not_found";
     if (result.reason === "already_decided") return "already_decided";
     if (result.reason === "expired") return "expired";
+    if (result.reason === "approved_not_run") return "approved_not_run";
   }
   return "error";
 }
@@ -152,6 +153,10 @@ const NOTICES: Record<string, Notice> = {
   already_decided: {
     tone: "problem",
     text: "That request was already decided, so nothing more was done.",
+  },
+  approved_not_run: {
+    tone: "problem",
+    text: "Approved, but Warthog couldn't carry out the request, so nothing was done. The agent has been told.",
   },
   expired: {
     tone: "problem",

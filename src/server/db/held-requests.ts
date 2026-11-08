@@ -27,15 +27,34 @@ import type { Db, Row } from "./index";
 // location, so a row lifted into another row/column/table fails to decrypt.
 const TABLE = "held_requests";
 const ARGS_COLUMN = "args";
+const OUTCOME_COLUMN = "outcome";
 
 // The columns every read returns, kept in one place so create, the lookup and
 // markExecuted hand back the same shape. `args` comes back as ciphertext here and
 // is decrypted separately before it reaches a caller.
-const COLUMNS = "id, user_id, agent_id, approval_id, status, args, created_at, executed_at";
+const COLUMNS =
+  "id, user_id, agent_id, approval_id, status, args, created_at, executed_at, outcome";
 
 // A held request is either waiting ('held') or has been run exactly once
 // ('executed') — the two lifecycle values the store knows.
 export type HeldStatus = "held" | "executed";
+
+// What running the held call came to, kept so the agent can be handed it however
+// many times it asks (check_approval): the tool ran and returned a result, or it was
+// refused with a plain reason.
+export type HeldOutcome =
+  | { readonly status: "executed"; readonly result: unknown }
+  | { readonly status: "refused"; readonly reason: string };
+
+// Thrown when a held request has already been claimed to run — the single-shot
+// compare-and-swap refused a second claim. A typed refusal, so callers can tell
+// "already run" apart from an infrastructure failure (which propagates as-is).
+export class HeldRequestAlreadyExecutedError extends Error {
+  constructor(id: string) {
+    super(`markExecuted: held request ${id} has already been executed`);
+    this.name = "HeldRequestAlreadyExecutedError";
+  }
+}
 
 // What createHeldRequest needs: the person (the session's id, never a client
 // value), the requesting agent, the approval the call is parked behind, and the
@@ -59,6 +78,8 @@ export interface StoredHeldRequest {
   readonly args: Record<string, unknown>;
   readonly createdAt: Date;
   readonly executedAt?: Date;
+  // The stored outcome of the run, once the claimed call has finished.
+  readonly outcome?: HeldOutcome;
 }
 
 // What markExecuted needs: the person (member scope) and the held-request id.
@@ -85,9 +106,18 @@ async function decryptArgs(
   return JSON.parse(plaintext) as Record<string, unknown>;
 }
 
-// Map a raw row (plus its already-decrypted args) to a StoredHeldRequest,
-// translating the snake_case columns to the module's camelCase fields.
-function toStored(row: Row, args: Record<string, unknown>): StoredHeldRequest {
+// Decrypt a row's stored outcome (bound to that row's id), or undefined while the
+// run has not finished. Throws if the DEK is wrong or the ciphertext was tampered.
+async function decryptOutcome(dek: Uint8Array, row: Row): Promise<HeldOutcome | undefined> {
+  if (row.outcome == null) return undefined;
+  const plaintext = await decrypt(dek, TABLE, OUTCOME_COLUMN, row.id as string, row.outcome as string);
+  return JSON.parse(plaintext) as HeldOutcome;
+}
+
+// Map a raw row (plus its already-decrypted args and outcome) to a
+// StoredHeldRequest, translating the snake_case columns to the module's camelCase
+// fields.
+function toStored(row: Row, args: Record<string, unknown>, outcome?: HeldOutcome): StoredHeldRequest {
   return {
     id: row.id as string,
     userId: row.user_id as string,
@@ -97,6 +127,7 @@ function toStored(row: Row, args: Record<string, unknown>): StoredHeldRequest {
     args,
     createdAt: toDate(row.created_at),
     executedAt: row.executed_at != null ? toDate(row.executed_at) : undefined,
+    ...(outcome !== undefined ? { outcome } : {}),
   };
 }
 
@@ -147,7 +178,7 @@ export async function getByApproval(
   const row = result.rows[0];
   if (!row) return null;
   const args = await decryptArgs(dek, row.id as string, row.args as string);
-  return toStored(row, args);
+  return toStored(row, args, await decryptOutcome(dek, row));
 }
 
 // Execute a held request, member-scoped and SINGLE-SHOT. Loads the one held
@@ -157,7 +188,8 @@ export async function getByApproval(
 // makes the transition a compare-and-swap, so a concurrent second run changes no
 // row and is refused. An already-executed held request is REFUSED (throws) and
 // left unchanged — so Warthog can never run the same held call twice. Returns the
-// StoredHeldRequest with DECRYPTED args (the executor receives the call to run).
+// StoredHeldRequest with DECRYPTED args (the executor receives the call to run). A
+// refused claim throws HeldRequestAlreadyExecutedError.
 export async function markExecuted(
   db: Db,
   { userId, id }: MarkExecutedInput,
@@ -173,7 +205,7 @@ export async function markExecuted(
     throw new Error(`markExecuted: no held request ${id} for this user`);
   }
   if ((row.status as HeldStatus) !== "held") {
-    throw new Error(`markExecuted: held request ${id} has already been executed`);
+    throw new HeldRequestAlreadyExecutedError(id);
   }
 
   const args = await decryptArgs(dek, row.id as string, row.args as string);
@@ -189,7 +221,37 @@ export async function markExecuted(
   const updatedRow = updated.rows[0];
   if (!updatedRow) {
     // The compare-and-swap matched no row: another run executed it first.
-    throw new Error(`markExecuted: held request ${id} has already been executed`);
+    throw new HeldRequestAlreadyExecutedError(id);
   }
   return toStored(updatedRow, args);
+}
+
+// What recordOutcome needs: the person (member scope), the held-request id and the
+// outcome of running it.
+export interface RecordOutcomeInput {
+  readonly userId: string;
+  readonly id: string;
+  readonly outcome: HeldOutcome;
+}
+
+// Keep the outcome of a held call that has run, DEK-encrypted and bound to its row,
+// so the agent can be handed it later (check_approval). Member-scoped (id AND user_id
+// bound) and only on an EXECUTED held request — throws when no such row is this
+// person's, so an outcome never lands on a call that has not run or on another
+// person's held request.
+export async function recordOutcome(
+  db: Db,
+  { userId, id, outcome }: RecordOutcomeInput,
+  dek: Uint8Array,
+): Promise<void> {
+  const envelope = await encrypt(dek, TABLE, OUTCOME_COLUMN, id, JSON.stringify(outcome));
+  const updated = await db.query(
+    `UPDATE held_requests SET outcome = $1
+      WHERE id = $2 AND user_id = $3 AND status = 'executed'
+      RETURNING id`,
+    [envelope, id, userId],
+  );
+  if (!updated.rows[0]) {
+    throw new Error(`recordOutcome: no executed held request ${id} for this user`);
+  }
 }

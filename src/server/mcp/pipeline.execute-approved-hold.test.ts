@@ -67,6 +67,7 @@ import { createAgentCallPipeline } from "./pipeline";
 import { createRateLimiter } from "./rate-limit";
 import { createInMemoryRecorder } from "../activity/recorder";
 import { createUser } from "../db/users";
+import { createAgent } from "../db/agents";
 import { upsertPermissions } from "../db/agent-permissions";
 import { decide, getApproval } from "../db/approvals";
 import { getByApproval } from "../db/held-requests";
@@ -89,7 +90,8 @@ type RecInput = Parameters<RecorderBase["record"]>[0];
 // runtime it is absent until the builder adds it, so each test fails RED.
 type ApprovedHoldResult =
   | { status: "executed"; result: unknown }
-  | { status: "refused"; reason: string };
+  | { status: "refused"; reason: string }
+  | { status: "in_progress" };
 
 interface ExecutesApprovedHolds {
   executeApprovedHold(userId: string, approvalId: string): Promise<ApprovedHoldResult>;
@@ -165,9 +167,22 @@ function connectionFor(
   return { userId, connectionId, agentId: opts.agentId ?? connectionId, active: opts.active ?? true };
 }
 
-// A card request — the policy engine always reaches "ask" for one (a card release
-// needs the person), so `handleAgentCall` holds it and creates a PENDING approval +
-// a linked HELD request, exactly as production does. A test overrides only what it is about.
+// A connector change the connection's "ask me first" setting holds — so
+// `handleAgentCall` creates a PENDING approval + a linked HELD request, exactly as
+// production does, and the held call is one Warthog RUNS on approval. A test overrides
+// only what it is about.
+function heldChangeCall(overrides: Record<string, unknown> = {}) {
+  return {
+    connector: "gmail" as string | null,
+    tool: "send_email",
+    makesChange: true,
+    params: { note: "a box of widgets" },
+    ...overrides,
+  };
+}
+
+// A card request — the policy engine always reaches "ask" for one. Its approval is a
+// RELEASE the agent collects with collect_release; Warthog never runs it as a tool.
 function cardCall(overrides: Record<string, unknown> = {}) {
   return {
     connector: null as string | null,
@@ -249,20 +264,35 @@ function expectPending(r: HandleResult) {
 // Arrange a person who can hold a card call, and drive the pipeline's OWN ask path to
 // create a PENDING approval + linked HELD request (the exact production shape). Returns
 // everything a test needs to then decide the approval and execute (or refuse) the hold.
+// The agent is a REAL agents row whose row id differs from its connection id (the
+// production two-id model: approvals and held requests are keyed by agents.id, tool
+// permissions by the connection id) — so a hold run under the wrong id is caught.
 async function arrangeHeldCall(
   db: Db,
   keyWrapper: KeyWrapper,
   who: string,
-  opts: { order?: string[]; execResult?: unknown; call?: Record<string, unknown> } = {},
+  opts: {
+    order?: string[];
+    execResult?: unknown;
+    call?: Record<string, unknown>;
+    makeCall?: (overrides: Record<string, unknown>) => Record<string, unknown>;
+  } = {},
 ) {
   const { userId, dek } = await makePerson(db, who, keyWrapper);
   await upsertPermissions(
     db,
     baseGrants(userId, CONN, {
       cardAccess: true,
+      highTierAccess: true,
       cardBudget: { amount: 500, currency: "AUD", period: "month" },
     }),
   );
+  const agent = await createAgent(
+    db,
+    { userId, connectionId: CONN, displayName: "Claude", platform: "claude" },
+    fixedClock(NOW),
+  );
+  assert.notEqual(agent.id, agent.connectionId, "the agent's row id is distinct from its connection id");
 
   const rec = spyRecorder(fixedClock(NOW), opts.order);
   const exec = spyExecutor(opts.order, opts.execResult);
@@ -273,10 +303,13 @@ async function arrangeHeldCall(
     executeTool: exec.fn,
   });
 
-  const conn = connectionFor(userId);
-  const held = expectPending(await pipeline.handleAgentCall(conn, cardCall(opts.call)));
+  const conn = connectionFor(userId, { agentId: agent.id });
+  const makeCall = opts.makeCall ?? heldChangeCall;
+  const held = expectPending(
+    await pipeline.handleAgentCall(conn, makeCall(opts.call ?? {}) as Parameters<Pipeline["handleAgentCall"]>[1]),
+  );
 
-  return { userId, dek, pipeline, rec, exec, conn, approvalId: held.approval_id };
+  return { userId, dek, pipeline, rec, exec, conn, agent, approvalId: held.approval_id };
 }
 
 // ===========================================================================
@@ -313,7 +346,7 @@ test("an approved hold runs the held tool exactly once, records ONE Warthog outc
     // The tool received the held call Warthog parked on the ask (the args round-trip
     // under the person's own DEK), not something new.
     const ran = exec.calls[0]!.call as { tool?: string; params?: unknown };
-    assert.equal(ran.tool, "request_card", "the executor is handed the held tool");
+    assert.equal(ran.tool, "send_email", "the executor is handed the held tool");
     assert.deepEqual(ran.params, { note: "a box of widgets" }, "the executor is handed the held call's params");
 
     // Warthog writes exactly ONE outcome entry for the run (it writes the record
@@ -322,7 +355,7 @@ test("an approved hold runs the held tool exactly once, records ONE Warthog outc
     assert.deepEqual(order, ["execute", "record"], "the tool runs, then the outcome is recorded");
     const entry = rec.entries[rec.entries.length - 1]!;
     assert.equal(entry.source, "warthog", "Warthog writes the record itself (not the agent)");
-    assert.equal(entry.tool, "request_card", "the outcome entry names the held tool");
+    assert.equal(entry.tool, "send_email", "the outcome entry names the held tool");
     assert.equal(entry.agentId, conn.agentId, "the outcome entry is attributed to the held call's agent");
     assert.ok((entry.outcome ?? "").length > 0, "the outcome entry carries an outcome");
 
@@ -340,18 +373,20 @@ test("an approved hold runs the held tool exactly once, records ONE Warthog outc
 // hold is refused and does NOT run the tool again.
 // ===========================================================================
 
-test("a second executeApprovedHold on an already-executed hold is refused and never runs the tool again", async () => {
+test("a second executeApprovedHold on an already-executed hold hands back the SAME result and never runs the tool again", async () => {
   const db = await freshDb();
   const keyWrapper = keyWrapperFor();
   try {
     const { userId, dek, pipeline, exec, approvalId } = await arrangeHeldCall(db, keyWrapper, "exactly-once");
     await decide(db, { userId, id: approvalId, decision: { status: "approved" } }, dek, fixedClock(NOW));
 
-    expectExecuted(await holds(pipeline).executeApprovedHold(userId, approvalId));
+    const first = expectExecuted(await holds(pipeline).executeApprovedHold(userId, approvalId));
     assert.equal(exec.calls.length, 1, "the first run executes the tool once");
 
-    const second = expectRefused(await holds(pipeline).executeApprovedHold(userId, approvalId));
-    assert.ok(second.reason.length > 0, "the refusal carries a plain reason");
+    // Review fix C2: the inbox runs the hold on approval and the agent asks later via
+    // check_approval — it must get the call's result back, not "already run".
+    const second = expectExecuted(await holds(pipeline).executeApprovedHold(userId, approvalId));
+    assert.deepEqual(second.result, first.result, "the stored result is handed back however often it is asked for");
     assert.equal(exec.calls.length, 1, "the second attempt does NOT run the tool again — exactly once");
 
     // The held request stays executed — the second attempt changed nothing.
@@ -503,6 +538,159 @@ test("the recorded outcome entry runs the held call's parameters through redacti
     assert.ok(!recorded.includes(SECRET), "a secret-named field value must not appear raw in the recorded outcome entry");
     assert.ok(!recorded.includes(PAN), "a card number must not appear raw in the recorded outcome entry");
     assert.ok(recorded.includes("[redacted]"), "the secret-named field is replaced with [redacted]");
+  } finally {
+    await db.close();
+  }
+});
+
+// ===========================================================================
+// Review fix C2 — an approved hold runs under its agent's REAL connection, never a
+// made-up one, and its outcome reaches the agent.
+//
+// executeApprovedHold used to run the held call as `{ connectionId: agentId, agentId,
+// active: true }`: agents.id is NOT the connection id, so every permission-checked
+// tool body (remember, tasks, records) found no grants and refused, the activity log
+// still said "executed", and the result was thrown away (a later check_approval got
+// "already run"). It also forced `active: true`, so a disconnected agent's approved
+// hold still ran, and it ran card/high-tier holds as tools (which have no body).
+// ===========================================================================
+
+test("the held call runs under the agent's real connection: its connection id, its agent id", async () => {
+  const db = await freshDb();
+  const keyWrapper = keyWrapperFor();
+  try {
+    const { userId, dek, pipeline, exec, agent, approvalId } = await arrangeHeldCall(db, keyWrapper, "c2-real-conn");
+    await decide(db, { userId, id: approvalId, decision: { status: "approved" } }, dek, fixedClock(NOW));
+
+    expectExecuted(await holds(pipeline).executeApprovedHold(userId, approvalId));
+
+    const ranUnder = exec.calls[0]!.connection as { userId: string; connectionId: string; agentId: string; active: boolean };
+    assert.equal(ranUnder.connectionId, agent.connectionId, "the tool sees the connection id its grants are keyed by");
+    assert.equal(ranUnder.agentId, agent.id, "the tool sees the agent's own row id");
+    assert.equal(ranUnder.userId, userId, "the tool runs for the owning person");
+  } finally {
+    await db.close();
+  }
+});
+
+test("an approved hold whose agent has since been disconnected is refused, never run, and left held", async () => {
+  const db = await freshDb();
+  const keyWrapper = keyWrapperFor();
+  try {
+    const { userId, dek, pipeline, exec, rec, agent, approvalId } = await arrangeHeldCall(db, keyWrapper, "c2-disconnected");
+    await decide(db, { userId, id: approvalId, decision: { status: "approved" } }, dek, fixedClock(NOW));
+    await db.query("UPDATE agents SET status = 'disconnected' WHERE id = $1 AND user_id = $2", [agent.id, userId]);
+    const before = rec.entries.length;
+
+    const result = expectRefused(await holds(pipeline).executeApprovedHold(userId, approvalId));
+    assert.match(result.reason, /no longer connected/i, "the refusal says the agent is no longer connected");
+    assert.equal(exec.calls.length, 0, "a disconnected agent's held call never runs");
+    assert.equal((await getByApproval(db, userId, approvalId, dek))!.status, "held", "the hold is left unclaimed");
+    assert.equal(rec.entries.length, before, "nothing is recorded as executed");
+  } finally {
+    await db.close();
+  }
+});
+
+test("an approved card or high-tier hold is refused before it is claimed: it is collected, never run as a tool", async () => {
+  const highTierCall = (overrides: Record<string, unknown>) => ({
+    connector: null,
+    tool: "request_identity_detail",
+    makesChange: false,
+    request: "high_tier",
+    ...overrides,
+  });
+  for (const [label, makeCall] of [
+    ["card", cardCall],
+    ["high-tier", highTierCall],
+  ] as const) {
+    const db = await freshDb();
+    const keyWrapper = keyWrapperFor();
+    try {
+      const { userId, dek, pipeline, exec, approvalId } = await arrangeHeldCall(db, keyWrapper, `c2-release-${label}`, {
+        makeCall: makeCall as (o: Record<string, unknown>) => Record<string, unknown>,
+      });
+      await decide(db, { userId, id: approvalId, decision: { status: "approved" } }, dek, fixedClock(NOW));
+
+      const result = expectRefused(await holds(pipeline).executeApprovedHold(userId, approvalId));
+      assert.match(result.reason, /collect_release/, `${label}: the refusal points at collect_release`);
+      assert.equal(exec.calls.length, 0, `${label}: a release is never run as a tool`);
+      assert.equal((await getByApproval(db, userId, approvalId, dek))!.status, "held", `${label}: the hold is never burned`);
+    } finally {
+      await db.close();
+    }
+  }
+});
+
+test("a tool body's refusal is recorded as refused, returned as a refusal, and handed back the same later", async () => {
+  const db = await freshDb();
+  const keyWrapper = keyWrapperFor();
+  try {
+    const refusal = { status: "refused", reason: "This agent does not have permission to use memories." };
+    const { userId, dek, pipeline, rec, exec, approvalId } = await arrangeHeldCall(db, keyWrapper, "c2-body-refusal", {
+      execResult: refusal,
+    });
+    await decide(db, { userId, id: approvalId, decision: { status: "approved" } }, dek, fixedClock(NOW));
+
+    const first = expectRefused(await holds(pipeline).executeApprovedHold(userId, approvalId));
+    assert.equal(first.reason, refusal.reason, "the agent is handed the body's own plain reason");
+    assert.equal(rec.entries[rec.entries.length - 1]!.outcome, "refused", "the activity log says refused, not executed");
+
+    const again = expectRefused(await holds(pipeline).executeApprovedHold(userId, approvalId));
+    assert.equal(again.reason, refusal.reason, "a later ask gets the same refusal, not 'already run'");
+    assert.equal(exec.calls.length, 1, "the tool ran once");
+  } finally {
+    await db.close();
+  }
+});
+
+test("two concurrent runs of one approved hold run the tool exactly once", async () => {
+  const db = await freshDb();
+  const keyWrapper = keyWrapperFor();
+  try {
+    const { userId, dek, pipeline, exec, approvalId } = await arrangeHeldCall(db, keyWrapper, "c2-concurrent");
+    await decide(db, { userId, id: approvalId, decision: { status: "approved" } }, dek, fixedClock(NOW));
+
+    const results = await Promise.all([
+      holds(pipeline).executeApprovedHold(userId, approvalId),
+      holds(pipeline).executeApprovedHold(userId, approvalId),
+    ]);
+
+    assert.equal(exec.calls.length, 1, "the held tool runs exactly once");
+    assert.ok(results.some((r) => r.status === "executed"), "one run hands back the result");
+    for (const r of results) {
+      assert.ok(r.status === "executed" || r.status === "in_progress", `never a refusal for an approved hold (got ${r.status})`);
+    }
+    const after = expectExecuted(await holds(pipeline).executeApprovedHold(userId, approvalId));
+    assert.deepEqual(after.result, { ran: "APPROVED-HOLD-RESULT" }, "afterwards the stored result is handed back");
+  } finally {
+    await db.close();
+  }
+});
+
+test("a held call whose tool threw keeps the failure, so a later ask is told it could not be completed", async () => {
+  const db = await freshDb();
+  const keyWrapper = keyWrapperFor();
+  try {
+    const { userId, dek, approvalId } = await arrangeHeldCall(db, keyWrapper, "c2-throw");
+    await decide(db, { userId, id: approvalId, decision: { status: "approved" } }, dek, fixedClock(NOW));
+
+    // The same person's hold, run by a pipeline whose tool executor throws.
+    let attempts = 0;
+    const throwing = buildPipeline(db, keyWrapper, {
+      clock: fixedClock(NOW),
+      rateLimiter: createRateLimiter(fixedClock(NOW)),
+      recorder: createInMemoryRecorder({ clock: fixedClock(NOW) }),
+      executeTool: (async () => {
+        attempts += 1;
+        throw new Error("provider exploded");
+      }) as never,
+    });
+
+    await assert.rejects(holds(throwing).executeApprovedHold(userId, approvalId), /provider exploded/, "the failure is never swallowed");
+    const later = expectRefused(await holds(throwing).executeApprovedHold(userId, approvalId));
+    assert.match(later.reason, /could not be completed/i, "a later ask is told the request could not be completed");
+    assert.equal(attempts, 1, "the held call is never retried behind the person's back");
   } finally {
     await db.close();
   }

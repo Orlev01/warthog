@@ -79,7 +79,9 @@ import { createAgentCallPipeline } from "../../../../server/mcp/pipeline";
 import { createRateLimiter } from "../../../../server/mcp/rate-limit";
 import { createInMemoryRecorder } from "../../../../server/activity/recorder";
 import { createUser } from "../../../../server/db/users";
+import { createAgent } from "../../../../server/db/agents";
 import { upsertPermissions } from "../../../../server/db/agent-permissions";
+import { createCheckApprovalTool } from "../../../../server/mcp/tools/check-approval";
 import { getApproval } from "../../../../server/db/approvals";
 import { getByApproval } from "../../../../server/db/held-requests";
 import { HttpError } from "../../../../server/http/validate";
@@ -153,8 +155,11 @@ function baseGrants(userId: string, connectionId: string, overrides: Partial<Gra
   } as Grants;
 }
 
-function connectionFor(userId: string) {
-  return { userId, connectionId: CONN, agentId: CONN, active: true };
+// The resolved connection of a REAL agent: its row id (agents.id — what approvals and
+// held requests are keyed by) is distinct from its connection id (what tool grants are
+// keyed by), exactly as in production.
+function connectionFor(userId: string, agentId: string) {
+  return { userId, connectionId: CONN, agentId, active: true };
 }
 
 // The three held-call shapes, each of which the policy engine routes to "ask" (so the
@@ -291,6 +296,11 @@ async function arrangeHeld(
   const clock: Clock = fixedClock(NOW);
   const { userId, dek } = await makePerson(db, who, keyWrapper);
   await upsertPermissions(db, baseGrants(userId, CONN, grantsOverrides));
+  const agent = await createAgent(
+    db,
+    { userId, connectionId: CONN, displayName: "Claude", platform: "claude" },
+    clock,
+  );
 
   const exec = spyExecutor();
   const pipeline = createAgentCallPipeline({
@@ -304,8 +314,9 @@ async function arrangeHeld(
   const execHold = wrapExecuteApprovedHold(pipeline);
   const actions = createInboxActions({ db, clock, keyWrapper, executeApprovedHold: execHold.fn });
 
-  const held = expectPending(await pipeline.handleAgentCall(connectionFor(userId), call));
-  return { userId, dek, pipeline, exec, execHold, actions, approvalId: held.approval_id };
+  const connection = connectionFor(userId, agent.id);
+  const held = expectPending(await pipeline.handleAgentCall(connection, call));
+  return { userId, dek, pipeline, exec, execHold, actions, agent, connection, approvalId: held.approval_id };
 }
 
 // =====================================================================================
@@ -788,6 +799,64 @@ test("approving an approval past its window is refused as expired and the held c
     assert.equal(approval!.status, "expired", "it is stored expired at once");
     assert.equal(a.execHold.calls.length, 0, "the held call is never run");
     assert.equal(a.exec.calls.length, 0, "the held tool never runs");
+  } finally {
+    await db.close();
+  }
+});
+
+// =====================================================================================
+// Review fix C2 — the outcome of a hold the INBOX ran reaches the agent. Approving runs
+// the held call at once; the agent's later check_approval used to be told "This
+// approved request has already been run." (the result was thrown away). Now it gets the
+// call's own result. And when the held call cannot be carried out (here: its agent was
+// disconnected after asking), the person is told so instead of a bare "Approved".
+// =====================================================================================
+
+test("after an inbox approval runs the hold, the agent's check_approval gets the call's result", async () => {
+  const db = await freshDb();
+  const keyWrapper = keyWrapperFor();
+  try {
+    const a = await arrangeHeld(db, keyWrapper, "c2-inbox-then-check", nonReleaseCall());
+    const session = await freshSession(db, a.userId);
+    expectOk(await a.actions.approveApproval(session, a.approvalId), "approve");
+    assert.equal(a.exec.calls.length, 1, "the inbox ran the held call");
+    const ranUnder = a.exec.calls[0]!.connection as { connectionId: string; agentId: string };
+    assert.equal(ranUnder.connectionId, CONN, "under the agent's real connection id");
+    assert.equal(ranUnder.agentId, a.agent.id, "and its own agent id");
+
+    const checkApproval = createCheckApprovalTool({
+      db,
+      keyWrapper,
+      clock: fixedClock(NOW),
+      sleep: async () => {},
+      executeApprovedHold: (userId, approvalId) => a.pipeline.executeApprovedHold(userId, approvalId),
+    });
+    for (const attempt of ["first", "second"]) {
+      const checked = await checkApproval.handle({ approval_id: a.approvalId, wait_seconds: 0 }, a.connection);
+      assert.deepEqual(
+        checked,
+        { status: "executed", result: { ran: "INBOX-APPROVED-RESULT" } },
+        `${attempt} check: the agent is handed the held call's result`,
+      );
+    }
+    assert.equal(a.exec.calls.length, 1, "the held call still ran exactly once");
+  } finally {
+    await db.close();
+  }
+});
+
+test("approving a hold whose agent has since disconnected approves it but tells the person nothing was carried out", async () => {
+  const db = await freshDb();
+  const keyWrapper = keyWrapperFor();
+  try {
+    const a = await arrangeHeld(db, keyWrapper, "c2-inbox-disconnected", nonReleaseCall());
+    await db.query("UPDATE agents SET status = 'disconnected' WHERE id = $1", [a.agent.id]);
+    const session = await freshSession(db, a.userId);
+
+    const result = await a.actions.approveApproval(session, a.approvalId);
+    assert.deepEqual(result, { ok: false, reason: "approved_not_run" }, "the person is told it was not carried out");
+    assert.equal(a.exec.calls.length, 0, "a disconnected agent's held call never runs");
+    assert.equal((await getByApproval(db, a.userId, a.approvalId, a.dek))!.status, "held", "the hold is left unrun");
   } finally {
     await db.close();
   }

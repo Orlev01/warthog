@@ -90,6 +90,7 @@ import { createAgentCallPipeline } from "../pipeline";
 import { createRateLimiter } from "../rate-limit";
 import { createInMemoryRecorder } from "../../activity/recorder";
 import { createUser } from "../../db/users";
+import { createAgent } from "../../db/agents";
 import { upsertPermissions, type PermissionGrants } from "../../db/agent-permissions";
 import { decide, getApproval } from "../../db/approvals";
 import { getByApproval } from "../../db/held-requests";
@@ -133,7 +134,8 @@ interface CheckResult {
 // The pipeline method shape check_approval is handed (its executeApprovedHold).
 type ApprovedHoldResult =
   | { status: "executed"; result: unknown }
-  | { status: "refused"; reason: string };
+  | { status: "refused"; reason: string }
+  | { status: "in_progress" };
 
 function keyWrapperFor(): KeyWrapper {
   return localAesKeyWrapper(randomBytes(KEK_BYTES));
@@ -188,9 +190,21 @@ function connectionFor(
   return { userId, connectionId, agentId: opts.agentId ?? connectionId, active: opts.active ?? true };
 }
 
-// A card request — the policy engine always reaches "ask" for one (a card release needs
-// the person), so `handleAgentCall` holds it and creates a PENDING approval + a linked
-// HELD request, exactly as production does. A test overrides only what it is about.
+// A connector change the connection's "ask me first" setting holds — so
+// `handleAgentCall` creates a PENDING approval + a linked HELD request, exactly as
+// production does, and Warthog RUNS the held call once it is approved.
+function heldChangeCall(overrides: Record<string, unknown> = {}) {
+  return {
+    connector: "gmail" as string | null,
+    tool: "send_email",
+    makesChange: true,
+    params: { note: "a box of widgets" },
+    ...overrides,
+  };
+}
+
+// A card request — the policy engine always reaches "ask" for one. Its approval is a
+// RELEASE the agent collects with collect_release; Warthog never runs it as a tool.
 function cardCall(overrides: Record<string, unknown> = {}) {
   return {
     connector: null as string | null,
@@ -251,14 +265,27 @@ function subschema(
 // a PENDING approval + linked HELD request (the exact production shape), and hand back
 // everything a test needs: the owner's ids + dek, the approval id, the connection, the
 // executor spy (to count held-tool runs), and the `executeApprovedHold` dep for the tool.
-async function arrangeHeldCall(db: Db, keyWrapper: KeyWrapper, who: string, call: Record<string, unknown> = {}) {
+async function arrangeHeldCall(
+  db: Db,
+  keyWrapper: KeyWrapper,
+  who: string,
+  call: Record<string, unknown> = {},
+  makeCall: (overrides: Record<string, unknown>) => Record<string, unknown> = heldChangeCall,
+) {
   const { userId, dek } = await makePerson(db, who, keyWrapper);
   await upsertPermissions(
     db,
     baseGrants(userId, CONN, {
       cardAccess: true,
+      highTierAccess: true,
       cardBudget: { amount: 500, currency: "AUD", period: "month" },
     }),
+  );
+  // A REAL agent whose row id differs from its connection id (the production two-id model).
+  const agent = await createAgent(
+    db,
+    { userId, connectionId: CONN, displayName: "Claude", platform: "claude" },
+    fixedClock(NOW),
   );
 
   const recorder = createInMemoryRecorder({ clock: fixedClock(NOW) });
@@ -272,8 +299,8 @@ async function arrangeHeldCall(db: Db, keyWrapper: KeyWrapper, who: string, call
     executeTool: exec.fn,
   });
 
-  const conn = connectionFor(userId);
-  const held = await pipeline.handleAgentCall(conn, cardCall(call));
+  const conn = connectionFor(userId, { agentId: agent.id });
+  const held = await pipeline.handleAgentCall(conn, makeCall(call) as Parameters<typeof pipeline.handleAgentCall>[1]);
   if (held.status !== "pending_approval") {
     assert.fail(`arrange: expected a pending_approval, got "${held.status}"`);
   }
@@ -416,15 +443,16 @@ test("an approved held call returns the executed result exactly once", async () 
     assert.equal(arranged.exec.calls.length, 1, "the held tool ran exactly once");
     assert.equal(s1.slept.length, 0, "an already-decided approval returns immediately, without waiting");
 
-    // A second check finds the hold already run → refused, and the tool is NOT re-run.
+    // A second check finds the hold already run → it hands back the SAME result (review
+    // fix C2: the agent always gets the outcome back), and the tool is NOT re-run.
     const s2 = sleeper(NOW.getTime());
     const second = (await buildTool(db, keyWrapper, arranged, s2).handle(
       { approval_id: arranged.approvalId, wait_seconds: 25 },
       arranged.conn,
     )) as CheckResult;
 
-    assert.equal(second.status, "refused", "a second check on an already-run hold is refused");
-    assert.ok((second.reason ?? "").length > 0, "the refusal carries a plain reason");
+    assert.equal(second.status, "executed", "a second check on an already-run hold hands back its outcome");
+    assert.deepEqual(second.result, first.result, "the same result, however often the agent asks");
     assert.equal(arranged.exec.calls.length, 1, "the held tool is NOT run again — exactly once");
   } finally {
     await db.close();
@@ -690,6 +718,122 @@ test("the check_approval tool is named and exposes approval_id, wait_seconds and
     assert.equal(reason!.safeParse(undefined).success, true, "`reason` is OPTIONAL");
     assert.equal(reason!.safeParse("a short note").success, true, "`reason` accepts a string");
     assert.equal(reason!.safeParse(12345).success, false, "`reason` rejects a non-string");
+  } finally {
+    await db.close();
+  }
+});
+
+// ===========================================================================
+// Review fix C2 — check_approval on an approved RELEASE (card / high-tier) used to call
+// executeApprovedHold, which ran "request_card" as a tool (no body → an error to the
+// agent) and burned the hold. A release is collected, so the agent is told exactly that.
+// ===========================================================================
+
+test("an approved card or high-tier release tells the agent to collect it, and never runs anything", async () => {
+  const highTierCall = (overrides: Record<string, unknown>) => ({
+    connector: null,
+    tool: "request_identity_detail",
+    makesChange: false,
+    request: "high_tier",
+    ...overrides,
+  });
+  for (const [label, makeCall] of [
+    ["card", cardCall],
+    ["high-tier", highTierCall],
+  ] as const) {
+    const db = await freshDb();
+    const keyWrapper = keyWrapperFor();
+    try {
+      const arranged = await arrangeHeldCall(db, keyWrapper, `release-${label}`, {}, makeCall as never);
+      await decide(
+        db,
+        { userId: arranged.userId, id: arranged.approvalId, decision: { status: "approved" } },
+        arranged.dek,
+        fixedClock(NOW),
+      );
+      let holdRuns = 0;
+      const tool = createCheckApprovalTool({
+        db,
+        keyWrapper,
+        ...sleeper(NOW.getTime()),
+        executeApprovedHold: async () => {
+          holdRuns += 1;
+          throw new Error("a release must never reach executeApprovedHold");
+        },
+      });
+
+      const result = (await tool.handle({ approval_id: arranged.approvalId, wait_seconds: 0 }, arranged.conn)) as CheckResult & {
+        next?: string;
+      };
+      assert.equal(result.status, "approved", `${label}: the agent is told the release was approved`);
+      assert.equal(result.next, "collect_release", `${label}: and to collect it with collect_release`);
+      assert.equal(result.approval_id, arranged.approvalId, `${label}: naming the approval`);
+      assert.equal(holdRuns, 0, `${label}: nothing is run`);
+      assert.equal(arranged.exec.calls.length, 0, `${label}: no tool body runs`);
+      const held = await getByApproval(db, arranged.userId, arranged.approvalId, arranged.dek);
+      assert.equal(held!.status, "held", `${label}: the release's hold is never burned`);
+    } finally {
+      await db.close();
+    }
+  }
+});
+
+// ===========================================================================
+// Review fix C5 — a pending approval past its window is reported expired at once (and
+// stored expired), not "pending" until the minute sweep happens to run.
+// ===========================================================================
+
+test("a pending approval past its window is refused as expired at once, and stored expired", async () => {
+  const db = await freshDb();
+  const keyWrapper = keyWrapperFor();
+  try {
+    const arranged = await arrangeHeldCall(db, keyWrapper, "c5-overdue");
+    // No sweep has run; the agent checks 20 minutes later.
+    const s = sleeper(AFTER_EXPIRY.getTime());
+    const result = (await buildTool(db, keyWrapper, arranged, s).handle(
+      { approval_id: arranged.approvalId, wait_seconds: 25 },
+      arranged.conn,
+    )) as CheckResult;
+
+    assert.equal(result.status, "refused", "the overdue request is refused");
+    assert.match(result.reason ?? "", /expired/i, "the refusal says it expired");
+    assert.equal(s.slept.length, 0, "the agent is answered at once, without waiting");
+    assert.equal(arranged.exec.calls.length, 0, "the held tool never runs");
+    const approval = await getApproval(db, arranged.userId, arranged.approvalId, arranged.dek);
+    assert.equal(approval!.status, "expired", "the approval is stored expired");
+  } finally {
+    await db.close();
+  }
+});
+
+// ===========================================================================
+// Review fix C2 — while another caller (the inbox approval) is still running the held
+// call, check_approval keeps the agent waiting rather than reporting a refusal.
+// ===========================================================================
+
+test("a hold another caller is still running keeps the agent waiting, then returns pending", async () => {
+  const db = await freshDb();
+  const keyWrapper = keyWrapperFor();
+  try {
+    const arranged = await arrangeHeldCall(db, keyWrapper, "c2-in-progress");
+    await decide(
+      db,
+      { userId: arranged.userId, id: arranged.approvalId, decision: { status: "approved" } },
+      arranged.dek,
+      fixedClock(NOW),
+    );
+    const s = sleeper(NOW.getTime());
+    const tool = createCheckApprovalTool({
+      db,
+      keyWrapper,
+      clock: s.clock,
+      sleep: s.sleep,
+      executeApprovedHold: async () => ({ status: "in_progress" }) as ApprovedHoldResult,
+    });
+
+    const result = (await tool.handle({ approval_id: arranged.approvalId, wait_seconds: 3 }, arranged.conn)) as CheckResult;
+    assert.equal(result.status, "pending", "the agent is told to keep waiting, not refused");
+    assert.ok(s.slept.length >= 1, "the tool kept polling while the run was in progress");
   } finally {
     await db.close();
   }

@@ -58,6 +58,7 @@ import {
 } from "../../../../server/approvals/inbox-read";
 import { getCardCiphertext, listCards } from "../../../../server/db/cards";
 import { getUserById } from "../../../../server/db/users";
+import { isReleaseRequest } from "../../../../domain/approvals/release-kind";
 import type { Session } from "../../../../server/auth/session";
 import type { Clock } from "../../../../server/seams/clock";
 import type { KeyWrapper } from "../../../../server/crypto/key-wrapper";
@@ -128,6 +129,10 @@ const STEP_UP_REQUIRED = "step_up_required";
 // device, a double-click, a disconnect) decided it first, or its window had passed.
 const ALREADY_DECIDED = "already_decided";
 const EXPIRED = "expired";
+// The approval landed, but Warthog could not carry out the held call (its agent was
+// disconnected, the agent no longer has the permission, …). The agent is handed the
+// same refusal through check_approval; the person is told nothing was done.
+const APPROVED_NOT_RUN = "approved_not_run";
 
 // The two metrics recorded for EVERY successful decision (task E17-S04; the tester's pinned
 // contract, as `agent.request` / `agent.request.latency_ms` are E17-S03's): a response-time
@@ -159,11 +164,11 @@ function text(value: unknown): string {
 }
 
 // The release kind a pending request carries, from the SAME `detail.request`
-// discriminator approveApproval gates step-up on: "card" / "high_tier" → a device
-// release; anything else → null (a routine held call's plain, server-verified Approve).
+// discriminator approveApproval gates step-up on (and the pipeline and check_approval
+// read): "card" / "high_tier" → a device release; anything else → null (a routine held
+// call's plain, server-verified Approve).
 function releaseKind(detail: Record<string, unknown>): ReleaseKind | null {
-  const request = detail.request;
-  return request === "card" || request === "high_tier" ? request : null;
+  return isReleaseRequest(detail.request) ? detail.request : null;
 }
 
 // The exact recipient / amount / field lines under a request, each present only when
@@ -302,8 +307,7 @@ export function createInboxActions(deps: InboxActionsDeps): InboxActions {
     const own = await loadOwn(session, id);
     if (!own) return { ok: false, reason: NOT_FOUND };
 
-    const request = own.approval.detail.request;
-    const isRelease = request === "card" || request === "high_tier";
+    const isRelease = isReleaseRequest(own.approval.detail.request);
     if (isRelease && !requireStepUp(session, { clock })) {
       return { ok: false, reason: STEP_UP_REQUIRED };
     }
@@ -315,7 +319,10 @@ export function createInboxActions(deps: InboxActionsDeps): InboxActions {
     await emitDecisionMetrics(outcome.decided);
 
     if (!isRelease) {
-      await executeApprovedHold(session.userId, id);
+      // The run's outcome is stored for the agent's check_approval; a refusal is also
+      // reported to the person, never a bare "Approved" for something that did not run.
+      const ran = await executeApprovedHold(session.userId, id);
+      if (ran.status === "refused") return { ok: false, reason: APPROVED_NOT_RUN };
     }
     return { ok: true };
   }
