@@ -56,7 +56,14 @@ import { completeAccountReset } from "../auth/account-reset";
 import { createUser } from "../db/users";
 import { addCard, listCards } from "../db/cards";
 import { saveHighTierField, listHighTierFields } from "../db/high-tier-fields";
-import { saveWrappedKey, listMethods } from "../db/vault-unlock-methods";
+import {
+  saveWrappedKey,
+  listMethods,
+  getWrappedKey,
+  getOrCreatePrfSalt,
+  saveRecoveryAuth,
+  verifyRecoveryAuth,
+} from "../db/vault-unlock-methods";
 import { saveIdentityField, listIdentityFields } from "../db/identity-fields";
 import { createConnection, listConnectionsForUser } from "../db/connections";
 import { createAgent, listAgentsForUser } from "../db/agents";
@@ -370,6 +377,41 @@ test("revokeAgentsAndConnections touches only the given user's agents, connectio
     assert.equal(bystanderAgents.length, 1, "the bystander's agent survives");
     assert.equal(bystanderAgents[0]?.status, "connected", "the bystander's agent stays connected");
     assert.equal((await listConnectionsForUser(db, bystander)).length, 1, "the bystander's connection survives");
+  } finally {
+    await db.close();
+  }
+});
+
+// Review fix W5 — a reset must leave no stale vault material behind, so the person's
+// first protected save after it sets up a FRESH vault: no wrapped key for any method, a
+// new passkey-PRF salt (the old one salted the lost passkeys) and no recovery verifier
+// for the lost code. Member-scoped like the rest of the erase.
+test("eraseVaultData also clears the PRF salt and the recovery verifier, so the next set-up starts fresh", async () => {
+  const db = await freshDb();
+  try {
+    const victim = await makeUser(db);
+    const bystander = await makeUser(db);
+    const salts = new Map<string, string>();
+    for (const userId of [victim, bystander]) {
+      await seedVault(db, userId);
+      await saveWrappedKey(db, { userId, method: "recovery", wrappedKey: "wrapped-vk-recovery" });
+      salts.set(userId, await getOrCreatePrfSalt(db, userId, { random: systemRandom }));
+      await saveRecoveryAuth(db, userId, "OLD-RECOVERY-CODE", { random: systemRandom });
+    }
+
+    await createResetExecutor(db).eraseVaultData(victim);
+
+    assert.deepEqual(await listMethods(db, victim), [], "no unlock method survives");
+    assert.equal(await getWrappedKey(db, victim, "passkey_prf"), null, "no passkey envelope: the next unlock sets up a new vault key");
+    assert.equal(await getWrappedKey(db, victim, "recovery"), null, "no recovery envelope: a new recovery phrase is asked for");
+    assert.equal(await verifyRecoveryAuth(db, victim, "OLD-RECOVERY-CODE"), false, "the old recovery verifier is gone");
+    const fresh = await getOrCreatePrfSalt(db, victim, { random: systemRandom });
+    assert.notEqual(fresh, salts.get(victim), "the next set-up draws a new PRF salt");
+
+    // The bystander keeps every piece.
+    assert.deepEqual((await listMethods(db, bystander)).sort(), ["passphrase", "recovery"]);
+    assert.equal(await getOrCreatePrfSalt(db, bystander, { random: systemRandom }), salts.get(bystander));
+    assert.equal(await verifyRecoveryAuth(db, bystander, "OLD-RECOVERY-CODE"), true);
   } finally {
     await db.close();
   }

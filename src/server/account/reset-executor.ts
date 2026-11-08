@@ -37,11 +37,18 @@ export function createResetExecutor(db: Db): ResetExecutor {
     // server only ever held as opaque ciphertext (never decryptable without the lost
     // vault key). The low-tier identity fields (server DEK-encrypted) and the activity
     // history are in other tables and are deliberately untouched.
+    //
+    // Review fix W5: the vault's set-up material goes too — the passkey-PRF salt (it
+    // salted the lost passkeys) and the recovery verifier (of the lost code) — so the
+    // person's first protected save after the reset sets up a wholly fresh vault (new
+    // vault key, new salt, new recovery phrase) with nothing stale left behind.
     async eraseVaultData(userId: string, outer?: Db): Promise<void> {
       await inTransaction(outer, async (tx) => {
         await tx.query("DELETE FROM cards WHERE user_id = $1", [userId]);
         await tx.query("DELETE FROM high_tier_fields WHERE user_id = $1", [userId]);
         await tx.query("DELETE FROM vault_unlock_methods WHERE user_id = $1", [userId]);
+        await tx.query("DELETE FROM vault_prf_salts WHERE user_id = $1", [userId]);
+        await tx.query("DELETE FROM vault_recovery_auth WHERE user_id = $1", [userId]);
       });
     },
 
