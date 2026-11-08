@@ -34,7 +34,7 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
 
-import { createDb, runMigrations, loadMigrations } from "./index";
+import { createDb, runMigrations, loadMigrations, type Db } from "./index";
 
 type Row = Record<string, unknown>;
 
@@ -191,6 +191,115 @@ test("a later run applies only the newly-added migration", async () => {
   } finally {
     await db.close();
   }
+});
+
+// --- Review fix F11: each migration is atomic with its bookkeeping, and runs are serialised ---
+//
+// A crash (or error) between a migration's body and its schema_migrations row used to leave the
+// schema applied but unrecorded, so every later boot failed with "already exists". Two processes
+// starting at once (a revision switch) could both apply the same migration. Each migration and
+// its bookkeeping row now commit together inside one transaction holding the migration advisory
+// lock, re-checking under the lock whether another runner already applied it.
+
+// A db that forwards to `inner` but fails the first statement matching `failOn`.
+function failingOnce(inner: Db, failOn: RegExp): Db {
+  let failed = false;
+  return {
+    async query(text, values) {
+      if (!failed && failOn.test(text)) {
+        failed = true;
+        throw new Error("simulated crash");
+      }
+      return inner.query(text, values);
+    },
+    close: () => inner.close(),
+  };
+}
+
+test("a migration whose bookkeeping row fails is rolled back with it, and the next run applies it cleanly", async () => {
+  const db = await createDb("pglite:memory");
+  try {
+    const m1 = migration("0001_create_widgets", "CREATE TABLE widgets (id integer PRIMARY KEY)");
+    await assert.rejects(runMigrations(failingOnce(db, /INSERT INTO schema_migrations/), [m1]));
+
+    const exists = await db.query("SELECT to_regclass('widgets') AS t");
+    assert.equal(rowsOf(exists)[0]?.t ?? null, null, "the body was rolled back with its bookkeeping row");
+
+    assert.deepEqual(await runMigrations(db, [m1]), ["0001_create_widgets"], "the retry applies it");
+    await db.query("SELECT 1 FROM widgets");
+  } finally {
+    await db.close();
+  }
+});
+
+test("a failing migration stops the run, keeping the migrations before it applied and recorded", async () => {
+  const db = await createDb("pglite:memory");
+  try {
+    const good = migration("0001_create_widgets", "CREATE TABLE widgets (id integer PRIMARY KEY)");
+    const bad = migration("0002_broken", "CREATE TABLE gadgets (id integer PRIMARY KEY); SELECT * FROM nowhere");
+    await assert.rejects(runMigrations(db, [good, bad]));
+    const recorded = await db.query("SELECT name FROM schema_migrations ORDER BY name");
+    assert.deepEqual(rowsOf(recorded).map((r) => r.name), ["0001_create_widgets"]);
+    const gadgets = await db.query("SELECT to_regclass('gadgets') AS t");
+    assert.equal(rowsOf(gadgets)[0]?.t ?? null, null, "the failed migration left nothing behind");
+  } finally {
+    await db.close();
+  }
+});
+
+test("concurrent runs over one database apply each migration exactly once", async () => {
+  const db = await createDb("pglite:memory");
+  try {
+    const migrations = [
+      migration("0001_create_widgets", "CREATE TABLE widgets (id integer PRIMARY KEY)"),
+      migration("0002_create_gadgets", "CREATE TABLE gadgets (id integer PRIMARY KEY)"),
+      migration("0003_create_gizmos", "CREATE TABLE gizmos (id integer PRIMARY KEY)"),
+    ];
+    const [a, b] = await Promise.all([runMigrations(db, migrations), runMigrations(db, migrations)]);
+    assert.deepEqual([...a, ...b].sort(), migrations.map((m) => m.name), "each applied exactly once");
+    const recorded = await db.query("SELECT count(*)::int AS n FROM schema_migrations");
+    assert.equal(Number(rowsOf(recorded)[0]?.n), 3);
+  } finally {
+    await db.close();
+  }
+});
+
+test("on a pooled driver, each migration runs in one transaction holding the migration lock", async () => {
+  // A recording pooled db: `transaction` hands out a handle whose statements are grouped.
+  const transactions: string[][] = [];
+  const applied = new Set<string>();
+  const db: Db = {
+    async query(text) {
+      if (/SELECT name FROM schema_migrations/.test(text)) {
+        return { rows: [...applied].map((name) => ({ name })) };
+      }
+      return { rows: [] };
+    },
+    async close() {},
+    async transaction(fn) {
+      const statements: string[] = [];
+      transactions.push(statements);
+      return fn({
+        async query(text, values) {
+          statements.push(text);
+          if (/INSERT INTO schema_migrations/.test(text)) applied.add(String(values?.[0]));
+          return { rows: [] };
+        },
+        async close() {},
+      });
+    },
+  };
+
+  await runMigrations(db, [migration("0001_create_widgets", "CREATE TABLE widgets (id integer PRIMARY KEY)")]);
+
+  const body = transactions.find((t) => t.includes("CREATE TABLE widgets (id integer PRIMARY KEY)"));
+  assert.ok(body, "the migration body ran inside a transaction");
+  assert.match(body[0]!, /pg_advisory_xact_lock/, "the transaction first takes the migration lock");
+  assert.ok(
+    body.some((t) => /SELECT 1 FROM schema_migrations WHERE name/.test(t)),
+    "it re-checks under the lock whether the migration was already applied",
+  );
+  assert.match(body[body.length - 1]!, /INSERT INTO schema_migrations/, "the bookkeeping row commits with it");
 });
 
 // --- AC3 end-to-end: the project's initial migration loads and applies -------------

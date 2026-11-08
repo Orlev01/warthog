@@ -10,7 +10,10 @@
 //
 // A tiny plain-SQL migration runner applies the project's migration files once
 // each and records them in a `schema_migrations` bookkeeping table it owns, so a
-// second run over the same database applies nothing new (idempotent).
+// second run over the same database applies nothing new (idempotent). Each migration
+// and its bookkeeping row commit together in ONE transaction that holds the migration
+// advisory lock, so a crash can never leave a migration applied but unrecorded, and two
+// processes starting at once (a revision switch) never both apply the same migration.
 //
 // PGlite is a devDependency and is excluded from the standalone server's file tracing, so the
 // production image does not contain it. It is therefore loaded only when a `pglite:` URL is
@@ -204,25 +207,57 @@ export async function loadMigrations(dir: string = DEFAULT_MIGRATIONS_DIR): Prom
   return migrations;
 }
 
+// The advisory-lock key every migration transaction takes (pg_advisory_xact_lock over its
+// hash), so concurrent runners — in this process or another — apply migrations one at a time.
+const MIGRATION_LOCK_KEY = "warthog.schema_migrations";
+
+// Runs in progress per database handle in THIS process, chained so concurrent calls on one
+// handle run one after another (an in-process PGlite is a single session, where the advisory
+// lock cannot separate two callers; a pooled pg handle gets the advisory lock as well).
+const runsInProgress = new WeakMap<Db, Promise<unknown>>();
+
 // Apply every not-yet-applied migration in order and return the names applied on
 // this run. The runner owns `schema_migrations`: it ensures the table exists, so
 // it never depends on a migration to create its own bookkeeping, and records each
-// migration as it applies it — so a second run finds them all present and applies
-// nothing new.
+// migration in the SAME transaction that applies it — so a second run finds them all
+// present and applies nothing new, and a failure leaves neither the body nor the row.
+// The first failing migration stops the run (later ones depend on it).
 export async function runMigrations(db: Db, migrations: Migration[]): Promise<string[]> {
-  await db.query(
-    "CREATE TABLE IF NOT EXISTS schema_migrations (" +
-      "name text PRIMARY KEY, applied_at timestamptz NOT NULL DEFAULT now())",
-  );
+  const previous = runsInProgress.get(db) ?? Promise.resolve();
+  const run = previous.catch(() => {}).then(() => applyPending(db, migrations));
+  runsInProgress.set(db, run);
+  try {
+    return await run;
+  } finally {
+    if (runsInProgress.get(db) === run) runsInProgress.delete(db);
+  }
+}
+
+async function applyPending(db: Db, migrations: Migration[]): Promise<string[]> {
+  await withTransaction(db, async (tx) => {
+    await tx.query("SELECT pg_advisory_xact_lock(hashtext($1))", [MIGRATION_LOCK_KEY]);
+    await tx.query(
+      "CREATE TABLE IF NOT EXISTS schema_migrations (" +
+        "name text PRIMARY KEY, applied_at timestamptz NOT NULL DEFAULT now())",
+    );
+  });
+  // A cheap first look, outside the lock: only migrations missing here are re-checked under it.
   const existing = await db.query("SELECT name FROM schema_migrations");
   const alreadyApplied = new Set(existing.rows.map((row) => row.name as string));
 
   const appliedNow: string[] = [];
   for (const migration of migrations) {
     if (alreadyApplied.has(migration.name)) continue;
-    await db.query(migration.sql);
-    await db.query("INSERT INTO schema_migrations (name) VALUES ($1)", [migration.name]);
-    appliedNow.push(migration.name);
+    const applied = await withTransaction(db, async (tx) => {
+      await tx.query("SELECT pg_advisory_xact_lock(hashtext($1))", [MIGRATION_LOCK_KEY]);
+      // Another runner may have applied it while this one waited for the lock.
+      const done = await tx.query("SELECT 1 FROM schema_migrations WHERE name = $1", [migration.name]);
+      if (done.rows.length > 0) return false;
+      await tx.query(migration.sql);
+      await tx.query("INSERT INTO schema_migrations (name) VALUES ($1)", [migration.name]);
+      return true;
+    });
+    if (applied) appliedNow.push(migration.name);
   }
   return appliedNow;
 }
