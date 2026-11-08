@@ -314,24 +314,28 @@ export function SigninView({
 
 // --- recover (after losing every passkey) ----------------------------------
 
-export type RecoverStep = "identify" | "recovery-code" | "passkey" | "new-recovery";
+export type RecoverStep = "identify" | "email-code" | "recovery-code" | "passkey" | "new-recovery";
 
 // RecoverView renders from props alone. The optional interactive wiring is supplied by
 // the client recovery flow (E04-S33) to drive the screen; when it is omitted the view
 // renders as the static copy the render tests pin. `recoveryCode` is the NEW shown-once
 // replacement code (new-recovery step); `recoveryCodeValue` is the existing code the
-// person types at the recovery-code step.
+// person types at the recovery-code step; `emailCode` is the one-time code from the
+// email identify sent (email-code step).
 export interface RecoverViewProps {
   step: RecoverStep;
   recoveryCode?: string;
   email?: string;
+  emailCode?: string;
   recoveryCodeValue?: string;
   error?: string;
   savedConfirmed?: boolean;
   onEmailChange?: (value: string) => void;
+  onEmailCodeChange?: (value: string) => void;
   onRecoveryCodeChange?: (value: string) => void;
   onSavedConfirmedChange?: (value: boolean) => void;
   onSubmitIdentify?: () => void;
+  onSubmitEmailCode?: () => void;
   onSubmitRecoveryCode?: () => void;
   onCreatePasskey?: () => void;
   onConfirm?: () => void;
@@ -341,13 +345,16 @@ export function RecoverView({
   step,
   recoveryCode,
   email,
+  emailCode,
   recoveryCodeValue,
   error,
   savedConfirmed,
   onEmailChange,
+  onEmailCodeChange,
   onRecoveryCodeChange,
   onSavedConfirmedChange,
   onSubmitIdentify,
+  onSubmitEmailCode,
   onSubmitRecoveryCode,
   onCreatePasskey,
   onConfirm,
@@ -357,7 +364,7 @@ export function RecoverView({
       return (
         <AuthScreen
           title="Recover your account"
-          lead="First, let's check it's you. Enter your email and the code we'll send you."
+          lead="First, let's check it's you. Enter your email and we'll send you a code."
         >
           <form
             className="flex flex-col gap-4"
@@ -375,7 +382,35 @@ export function RecoverView({
               onChange={(event) => onEmailChange?.(event.target.value)}
               error={error}
             />
-            <Field label="Your code" name="code" type="text" inputMode="numeric" autoComplete="one-time-code" />
+            <Button type="submit" variant="primary">
+              Send me a code
+            </Button>
+          </form>
+        </AuthScreen>
+      );
+    case "email-code":
+      return (
+        <AuthScreen
+          title="Check your email"
+          lead="If there's an account for that address, we've emailed it a code. Enter it here."
+        >
+          <form
+            className="flex flex-col gap-4"
+            onSubmit={(event) => {
+              event.preventDefault();
+              onSubmitEmailCode?.();
+            }}
+          >
+            <Field
+              label="Your code"
+              name="code"
+              type="text"
+              inputMode="numeric"
+              autoComplete="one-time-code"
+              value={emailCode}
+              onChange={(event) => onEmailCodeChange?.(event.target.value)}
+              error={error}
+            />
             <Button type="submit" variant="primary">
               Continue
             </Button>

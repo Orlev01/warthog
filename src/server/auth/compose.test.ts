@@ -41,7 +41,7 @@ import { test } from "node:test";
 import assert from "node:assert/strict";
 import { Buffer } from "node:buffer";
 
-import { getSignupDeps, getSigninDeps } from "./compose";
+import { getSignupDeps, getSigninDeps, getRecoverDeps } from "./compose";
 import { loadConfig } from "../config";
 import { createTotpSecretStore } from "./totp-store";
 import { selectKeyWrapper } from "../crypto/key-wrapper";
@@ -234,4 +234,20 @@ test("[obligation:secrets-from-env] the KeyWrapper KEK flows from the injected c
   // ...but B's wrapper — built from a DIFFERENT dev KEK in config — cannot unwrap it,
   // which it could if the KEK were a single hard-coded constant shared by both.
   await assert.rejects(depsB.keyWrapper.unwrap(wrappedByA));
+});
+
+// --- Review fix B2 — recovery sends and checks an email one-time code ------------
+
+test("getRecoverDeps carries the config's HMAC key and a dev-outbox email sender for the recovery email code", async () => {
+  const config = devConfig();
+  const deps = await getRecoverDeps({ config, getDb: async () => stubDb() });
+
+  assert.deepEqual(Buffer.from(deps.hmacKey), Buffer.from(config.hmacKey));
+  const recipient = `b2-${tag()}@example.test`;
+  const body = `captured-${tag()}`;
+  await deps.emailSender.sendEmail({ recipient, body });
+  assert.ok(
+    outbox.list().some((m) => m.channel === "email" && m.recipient === recipient && m.body === body),
+    "the recovery email sender is the dev outbox when dev tools are on",
+  );
 });

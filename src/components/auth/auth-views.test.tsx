@@ -40,7 +40,8 @@
 //                       (accessibly-labelled inputs).
 //
 //   RecoverView({ step, recoveryCode? }):   recovery after losing every passkey.
-//     step "identify"      → prove it's you with the emailed one-time code.
+//     step "identify"      → enter your email; a one-time code is emailed to it.
+//     step "email-code"    → prove it's you with the emailed one-time code.
 //     step "recovery-code" → enter your saved recovery code (a labelled input).
 //     step "passkey"       → create a new passkey.
 //     step "new-recovery"  → show the NEW `recoveryCode` once; confirm it's saved.
@@ -232,7 +233,7 @@ const ALL: Rendered[] = [
     step,
     render: () => renderToStaticMarkup(<SigninView step={step} />),
   })),
-  ...(["identify", "recovery-code", "passkey", "new-recovery"] as const).map((step) => ({
+  ...(["identify", "email-code", "recovery-code", "passkey", "new-recovery"] as const).map((step) => ({
     view: "RecoverView",
     step,
     render: () => renderToStaticMarkup(<RecoverView step={step} recoveryCode={RECOVER_CODE} />),

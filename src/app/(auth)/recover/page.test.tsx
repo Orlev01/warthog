@@ -40,6 +40,7 @@ import assert from "node:assert/strict";
 import { renderToStaticMarkup } from "react-dom/server";
 
 import RecoverPage from "./page";
+import { RecoverView } from "../../../components/auth/auth-views";
 
 // --- tiny markup helpers (no DOM) ------------------------------------------
 
@@ -178,22 +179,18 @@ const JARGON: { label: string; re: RegExp }[] = [
 // ===========================================================================
 
 // AC1 (mount the view at its entry step) — the entry mounts `RecoverView` at the
-// `identify` step: the first factor of recovery, which proves it's the person by
-// collecting their email and the one-time code through accessibly-labelled inputs.
-// This is the "email-code" that leads the recover flow. The operator placeholder
+// `identify` step: the start of the first factor, which collects the email the one-time
+// code is sent to through an accessibly-labelled input. (Review fix B2: the code can only
+// be typed once it has been emailed, so it is collected on the next, `email-code`, step —
+// pinned below — rather than by a dead field on this one.) The operator placeholder
 // renders no fields at all, so this is RED until the real view is mounted. The
-// `/recover/` copy pin distinguishes it from the look-alike sign-in-with-a-code
-// view (which also collects an email + a code), so this test fails if the WRONG
-// email+code screen is mounted, not only when none is.
-test("recover page entry mounts the recovery view's identify step (email + code, accessibly labelled)", async () => {
+// `/recover/` copy pin distinguishes it from the look-alike sign-in screens.
+test("recover page entry mounts the recovery view's identify step (email, accessibly labelled)", async () => {
   const markup = await renderPage(RecoverPage);
 
   const labels = labelTextById(markup);
   const entry = inputs(markup).filter((i) => LABELLABLE.has(i.type));
-  assert.ok(
-    entry.length >= 2,
-    `the recover entry must mount the identify step collecting at least the email and the code (two fields), got ${entry.length}: ${markup}`,
-  );
+  assert.ok(entry.length >= 1, `the recover entry must collect the email, got ${entry.length}: ${markup}`);
   for (const input of entry) {
     assert.ok(
       inputIsLabelled(input, labels),
@@ -203,7 +200,14 @@ test("recover page entry mounts the recovery view's identify step (email + code,
 
   const labelBlob = Object.values(labels).join(" ").toLowerCase();
   assert.match(labelBlob, /email/i, `a field must be labelled for the email, got labels: "${labelBlob}"`);
-  assert.match(labelBlob, /code/i, `a field must be labelled for the one-time code, got labels: "${labelBlob}"`);
+
+  // The next step collects the emailed one-time code, accessibly labelled.
+  const codeStep = renderToStaticMarkup(<RecoverView step="email-code" />);
+  const codeLabels = labelTextById(codeStep);
+  const codeInputs = inputs(codeStep).filter((i) => LABELLABLE.has(i.type));
+  assert.equal(codeInputs.length, 1, `the email-code step collects the code: ${codeStep}`);
+  assert.ok(inputIsLabelled(codeInputs[0]!, codeLabels), "the code field carries an accessible label");
+  assert.match(Object.values(codeLabels).join(" "), /code/i, "the field is labelled for the code");
 
   assert.match(
     visibleText(markup),
