@@ -6,12 +6,17 @@
 // ContainerClient in production, whose account + container flow from configuration —
 // never a literal baked in here (INV-103: secrets-from-env).
 //
+// The production store is built LAZILY: constructing it never throws (every life-admin page
+// builds one), and the container is validated and opened on the first blob operation, which
+// fails loudly, naming the missing setting, when the configuration is incomplete.
+//
 // A key is an OPAQUE identifier: it is matched EXACTLY (bound as a map key / blob
 // name), never concatenated into or interpreted as a query, so a key shaped like a
 // SQL-injection probe round-trips as plain data (INV-102's share for a seam that runs
 // no SQL and has no HTTP handler).
 
 import { processSingleton } from "../seams/process-singleton";
+import { openAzureContainer } from "./azure-container";
 
 export interface BlobStore {
   put(key: string, bytes: Uint8Array): Promise<void>;
@@ -37,8 +42,19 @@ export interface SelectBlobStoreOptions {
   readonly nodeEnv: string;
   readonly account?: string;
   readonly container?: string;
-  readonly openContainer?: (account: string, container: string) => BlobContainerClient;
+  // Opens the container (default: the real Azure client authenticated with the app's managed
+  // identity, `./azure-container`). Tests inject a fake.
+  readonly openContainer?: (
+    account: string,
+    container: string,
+  ) => BlobContainerClient | Promise<BlobContainerClient>;
 }
+
+// Azure naming rules: a storage account is 3-24 lowercase letters and digits; a container is
+// 3-63 lowercase letters, digits and single hyphens, starting and ending alphanumeric. Checked
+// before either reaches a URL.
+const ACCOUNT_NAME = /^[a-z0-9]{3,24}$/;
+const CONTAINER_NAME = /^(?=.{3,63}$)[a-z0-9]+(-[a-z0-9]+)*$/;
 
 // A FRESH, empty in-memory store (for isolated tests). Stores bytes BY VALUE, like a
 // real blob backend: the caller's buffer is copied in on put and copied out on get, so
@@ -76,16 +92,18 @@ function isBlobNotFound(err: unknown): boolean {
   return e.statusCode === 404 || e.code === "BlobNotFound";
 }
 
-// The Azure-backed store: every operation delegates to the real ContainerClient,
-// keyed by the (opaque) blob key. A missing blob is reported as null.
-function azureBlobStore(container: BlobContainerClient): BlobStore {
+// The Azure-backed store: every operation delegates to the real ContainerClient, keyed by the
+// (opaque) blob key, opened through `container()` on first use. A missing blob is reported as
+// null.
+function azureBlobStore(container: () => Promise<BlobContainerClient>): BlobStore {
   return {
     async put(key, bytes) {
-      await container.getBlockBlobClient(key).uploadData(bytes);
+      await (await container()).getBlockBlobClient(key).uploadData(bytes);
     },
     async get(key) {
+      const client = (await container()).getBlockBlobClient(key);
       try {
-        const buffer = await container.getBlockBlobClient(key).downloadToBuffer();
+        const buffer = await client.downloadToBuffer();
         return Uint8Array.from(buffer);
       } catch (err) {
         if (isBlobNotFound(err)) return null;
@@ -93,7 +111,7 @@ function azureBlobStore(container: BlobContainerClient): BlobStore {
       }
     },
     async delete(key) {
-      await container.getBlockBlobClient(key).deleteIfExists();
+      await (await container()).getBlockBlobClient(key).deleteIfExists();
     },
   };
 }
@@ -101,21 +119,35 @@ function azureBlobStore(container: BlobContainerClient): BlobStore {
 // Choose the blob store by environment. Any non-"production" nodeEnv uses the
 // in-memory singleton (no account, container or Azure client — dev/test runs without
 // Azure or any secret). "production" uses the Azure-backed store, which REQUIRES the
-// account, container (both read from config by the composition root) and an
-// openContainer client: a missing one is refused, never defaulted to a literal.
+// account and container (both read from config by the composition root): a missing or
+// malformed one is refused, never defaulted to a literal — on the first blob operation,
+// never at construction, so a page that builds the store without using it always renders.
 export function selectBlobStore(options: SelectBlobStoreOptions): BlobStore {
   if (options.nodeEnv !== "production") {
     return inMemoryBlobStore;
   }
-  const { account, container, openContainer } = options;
-  if (account === undefined || account === "") {
-    throw new Error("Blob storage account is required in production (config STORAGE_ACCOUNT)");
-  }
-  if (container === undefined || container === "") {
-    throw new Error("Blob storage container is required in production (config STORAGE_CONTAINER)");
-  }
-  if (openContainer === undefined) {
-    throw new Error("Blob storage requires an openContainer client in production");
-  }
-  return azureBlobStore(openContainer(account, container));
+  const { account, container } = options;
+  const open = options.openContainer ?? openAzureContainer;
+  let opened: Promise<BlobContainerClient> | undefined;
+  return azureBlobStore(() => {
+    if (account === undefined || account === "") {
+      return Promise.reject(new Error("Blob storage account is required in production (config STORAGE_ACCOUNT)"));
+    }
+    if (container === undefined || container === "") {
+      return Promise.reject(
+        new Error("Blob storage container is required in production (config STORAGE_CONTAINER)"),
+      );
+    }
+    if (!ACCOUNT_NAME.test(account)) {
+      return Promise.reject(new Error("Invalid configuration: STORAGE_ACCOUNT is not a storage account name"));
+    }
+    if (!CONTAINER_NAME.test(container)) {
+      return Promise.reject(new Error("Invalid configuration: STORAGE_CONTAINER is not a container name"));
+    }
+    opened ??= (async () => open(account, container))();
+    opened.catch(() => {
+      opened = undefined;
+    });
+    return opened;
+  });
 }
