@@ -57,7 +57,7 @@ import { test } from "node:test";
 import assert from "node:assert/strict";
 import { renderToStaticMarkup } from "react-dom/server";
 
-import { ConsentView } from "./consent-view";
+import { ConsentView, consentToggleState } from "./consent-view";
 import {
   permissionTemplate,
   type PermissionSet,
@@ -495,5 +495,106 @@ test("the consent view uses design tokens, never a raw hex colour", () => {
       !/#[0-9a-fA-F]{3,8}\b/.test(markup),
       `no raw hex colour may appear in the consent-view markup, got: ${markup}`,
     );
+  }
+});
+
+// =====================================================================================
+// Review fix A2 — every toggle the person can change is submitted, and the ones that
+// cannot be changed say so.
+//
+// Until this fix only high-tier and sharing had a form name: unticking "Read your shared
+// memory" (or ticking "Card requests", or a service) changed nothing that was stored,
+// and switching the starting set left the toggles as they were. Now each adjustable
+// toggle is a named, controlled input seeded from the starting set (and re-seeded when it
+// changes — `consentToggleState`), card requests carry a budget, services submit their
+// ids, and the always-included rows are shown as fixed (disabled) rather than as live
+// controls that do nothing.
+// =====================================================================================
+
+function liveRender(props: Partial<ConsentViewProps> = {}): string {
+  const noop = async (_formData: FormData) => {};
+  return renderToStaticMarkup(<ConsentView {...base(props)} approveAction={noop} refuseAction={noop} />);
+}
+
+// Every <input>/<select> with a name, as { name, type, checked, value, disabled }.
+function namedControls(markup: string) {
+  const out: Array<{ name: string; type: string; checked: boolean; value: string | null; disabled: boolean }> = [];
+  for (const m of markup.matchAll(/<(input|select)\b([^>]*?)\/?>/gi)) {
+    const attrs = m[2]!;
+    const name = attr(attrs, "name");
+    if (!name) continue;
+    out.push({
+      name,
+      type: (attr(attrs, "type") ?? m[1]!).toLowerCase(),
+      checked: hasBoolAttr(attrs, "checked"),
+      value: attr(attrs, "value"),
+      disabled: hasBoolAttr(attrs, "disabled"),
+    });
+  }
+  return out;
+}
+
+test("A2: every adjustable toggle on the live form has a name the decision reads", () => {
+  const names = new Set(namedControls(liveRender()).filter((c) => c.type === "checkbox").map((c) => c.name));
+  for (const name of ["identity", "memoryRead", "tasks", "records", "highTier", "card", "learningSharing", "service"]) {
+    assert.ok(names.has(name), `the live form submits "${name}"; got ${[...names].join(", ")}`);
+  }
+});
+
+test("A2: the always-included rows are fixed (disabled, unnamed), never dead live controls", () => {
+  const controls = toggleControls(liveRender());
+  for (const re of [/your skills/i, /your preferences/i, /logging its activity/i, /save its own memories/i]) {
+    const control = controls.find((c) => re.test(c.name));
+    assert.ok(control, `a ${re} row is shown`);
+    assert.equal(control!.disabled, true, `${re} cannot be toggled on its own`);
+  }
+});
+
+test("A2: ticked services submit their ids; un-ticked ones are present but unchecked", () => {
+  const services = namedControls(liveRender()).filter((c) => c.name === "service");
+  assert.deepEqual(
+    services.map((s) => [s.value, s.checked]),
+    [["gcal", true], ["gmail", true], ["dropbox", false]],
+  );
+});
+
+test("A2: turning on card requests shows a budget defaulting to A$200 a month", () => {
+  // Seeded with card off, so the budget is absent; the pure seed proves the default.
+  assert.equal(namedControls(liveRender()).some((c) => c.name === "cardBudgetAmount"), false);
+  const seeded = consentToggleState("standard", []);
+  assert.equal(seeded.card, false, "card is opt-in");
+  assert.deepEqual(seeded.cardBudget, { amount: "200", period: "month" });
+
+  const withCard = namedControls(
+    renderToStaticMarkup(
+      <ConsentView
+        {...base()}
+        approveAction={async () => {}}
+        refuseAction={async () => {}}
+        initialState={{ ...seeded, card: true }}
+      />,
+    ),
+  );
+  assert.equal(withCard.find((c) => c.name === "cardBudgetAmount")?.value, "200");
+  assert.equal(withCard.find((c) => c.name === "cardBudgetCurrency")?.value, "AUD");
+  assert.ok(withCard.some((c) => c.name === "cardBudgetPeriod"), "the budget period is chosen");
+});
+
+test("A2: switching the starting set re-seeds the toggles (Standard → Minimal unticks shared memory, tasks, services)", () => {
+  const standard = consentToggleState("standard", ["gmail"]);
+  assert.equal(standard.memoryRead, true);
+  assert.equal(standard.tasks, true);
+  assert.equal(standard.records, true);
+  assert.deepEqual(standard.services, ["gmail"]);
+
+  const minimal = consentToggleState("minimal", ["gmail"]);
+  assert.equal(minimal.identity, true, "the basic profile stays on");
+  assert.equal(minimal.memoryRead, false);
+  assert.equal(minimal.tasks, false);
+  assert.equal(minimal.records, false);
+  assert.deepEqual(minimal.services, []);
+  for (const optIn of ["highTier", "card", "learningSharing"] as const) {
+    assert.equal(standard[optIn], false);
+    assert.equal(minimal[optIn], false);
   }
 });

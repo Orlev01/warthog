@@ -22,7 +22,10 @@
 
 import { getPendingAuthorization } from "../../../server/oauth/pending";
 import { isAllowedRedirectUri } from "../../../server/oauth/clients";
-import type { ConsentViewProps } from "../../../components/agents/consent-view";
+import { listConnectionsForUser } from "../../../server/db/connections";
+import type { ConsentViewProps, ConsentViewService } from "../../../components/agents/consent-view";
+import type { ConsentApproval } from "../authorize/actions";
+import type { Db } from "../../../server/db/index";
 
 // The platforms Warthog recognises, by the EXACT host their OAuth callback returns to
 // (design §6.1). A known callback host earns the "Verified platform" badge and a friendly
@@ -47,7 +50,25 @@ const REQUESTED_SCOPES: ReadonlyArray<string> = [
   "Use only the permissions you choose below",
 ];
 
-export async function loadConsentView(handle: string): Promise<ConsentViewProps | null> {
+// Review fix A2 — the person's own connected services, offered on the screen so their
+// read tools can be ticked. Member-scoped by the SESSION's user id; one row per connected
+// service (a person can connect two accounts of one service), named through the
+// catalogue when it knows the service. Never ticked by default: the person opts in.
+export interface ConsentServicesSource {
+  readonly db: Db;
+  readonly userId: string;
+  readonly nameOf?: (connectorId: string) => string | undefined;
+}
+
+async function connectedServices(source: ConsentServicesSource): Promise<ConsentViewService[]> {
+  const ids = [...new Set((await listConnectionsForUser(source.db, source.userId)).map((c) => c.connectorId))];
+  return ids.map((id) => ({ id, name: source.nameOf?.(id) ?? id, ticked: false }));
+}
+
+export async function loadConsentView(
+  handle: string,
+  services?: ConsentServicesSource,
+): Promise<ConsentViewProps | null> {
   const pending = getPendingAuthorization(handle);
   if (pending == null) return null;
 
@@ -69,5 +90,43 @@ export async function loadConsentView(handle: string): Promise<ConsentViewProps 
     requestedScopes: REQUESTED_SCOPES,
     template: DEFAULT_TEMPLATE,
     redirect: { host, verified },
+    ...(services ? { services: await connectedServices(services) } : {}),
+  };
+}
+
+// Review fix A2 — the approval the person submits, read from the consent form: their
+// chosen name, the starting set, and EVERY toggle the screen shows as adjustable (a
+// ticked checkbox is present in the form data, an unticked one is absent — so each is
+// submitted as an explicit true/false and overrides the starting set), the ticked
+// services, and the card budget when card requests are on. The connecting platform is
+// taken SERVER-SIDE from the pending request (never the form); the acting person's id and
+// the pending request come from the session and the handle cookie. Values are passed
+// through as typed — the decision's zod boundary rejects a malformed one (a 4xx).
+const VALID_TEMPLATES = new Set(["minimal", "standard", "custom"]);
+
+export function approvalFromForm(formData: FormData, platform: string): ConsentApproval {
+  const rawTemplate = String(formData.get("starting-set") ?? "standard");
+  const template = VALID_TEMPLATES.has(rawTemplate) ? rawTemplate : "standard";
+  const ticked = (name: string) => formData.get(name) != null;
+  const card = ticked("card");
+  return {
+    name: String(formData.get("name") ?? "").trim(),
+    platform,
+    template,
+    identity: ticked("identity"),
+    memoryRead: ticked("memoryRead"),
+    tasks: ticked("tasks"),
+    records: ticked("records"),
+    highTier: ticked("highTier"),
+    learningSharing: ticked("learningSharing"),
+    tickedServices: formData.getAll("service").map(String),
+    card,
+    cardBudget: card
+      ? {
+          amount: Number(String(formData.get("cardBudgetAmount") ?? "").trim() || Number.NaN),
+          currency: String(formData.get("cardBudgetCurrency") ?? "AUD"),
+          period: String(formData.get("cardBudgetPeriod") ?? "month"),
+        }
+      : null,
   };
 }

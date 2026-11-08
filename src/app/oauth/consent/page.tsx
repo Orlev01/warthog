@@ -1,4 +1,5 @@
 import * as React from "react";
+import { join } from "node:path";
 import { cookies } from "next/headers";
 import { redirect } from "next/navigation";
 import { AlertTriangle } from "lucide-react";
@@ -12,8 +13,10 @@ import { systemClock } from "../../../server/seams/clock";
 import { systemRandom } from "../../../server/seams/random";
 import { HttpError } from "../../../server/http/validate";
 import { systemClientResolver } from "../../../server/oauth/clients";
-import { createAuthorizeActions, type ConsentApproval } from "../authorize/actions";
-import { loadConsentView } from "./actions";
+import { loadCatalogue, type CatalogueIndex } from "../../../server/connectors/catalogue";
+import { processSingleton } from "../../../server/seams/process-singleton";
+import { createAuthorizeActions } from "../authorize/actions";
+import { approvalFromForm, loadConsentView } from "./actions";
 import type { Db } from "../../../server/db/index";
 
 // E10-S12 — the consent screen (loader + view + decision server-action wrappers).
@@ -33,7 +36,6 @@ const CONSENT_COOKIE = "__Host-wh_consent";
 // A session that lapses mid-consent signs in and comes straight back here: the pending
 // handle cookie outlives the sign-in (review fix A4). A fixed, relative path.
 const SIGN_IN_AND_RETURN = `/signin?next=${encodeURIComponent("/oauth/consent")}`;
-const VALID_TEMPLATES = new Set(["minimal", "standard", "custom"]);
 
 // Clear the pending-handle cookie once a decision has consumed the request (host-locked,
 // so the clear must carry the same attributes the route set it with).
@@ -65,21 +67,15 @@ function buildActions(db: Db) {
   });
 }
 
-// The approval the person submits: their chosen name, the starting set, and the opt-ins
-// they turned on. The connecting platform is taken SERVER-SIDE from the pending request
-// (the verified callback host), never from the untrusted form; the acting person's id and
-// the pending request come from the session and the handle cookie. A checkbox that is
-// ticked is present in the form data; an unticked one is absent.
-function approvalFrom(formData: FormData, platform: string): ConsentApproval {
-  const rawTemplate = String(formData.get("starting-set") ?? "standard");
-  const template = VALID_TEMPLATES.has(rawTemplate) ? rawTemplate : "standard";
-  return {
-    name: String(formData.get("name") ?? "").trim(),
-    platform,
-    template,
-    highTier: formData.get("highTier") != null,
-    learningSharing: formData.get("learningSharing") != null,
-  };
+// The connector catalogue (the same process-wide index the connectors screen builds), so
+// the person's connected services are named on the consent screen as they are elsewhere.
+function getCatalogue(): CatalogueIndex {
+  return processSingleton("connectors.catalogue", () =>
+    loadCatalogue({
+      dir: join(process.cwd(), "catalogue", "connectors"),
+      isOAuthClientConfigured: () => false,
+    }),
+  );
 }
 
 // Approve the consent: re-derive the verified session (never trusting a client value),
@@ -103,7 +99,7 @@ async function approveConsentAction(formData: FormData): Promise<void> {
   let consumed = false;
   let notice = "expired";
   try {
-    const result = await buildActions(db).approve(session, handle, approvalFrom(formData, platform));
+    const result = await buildActions(db).approve(session, handle, approvalFromForm(formData, platform));
     consumed = true;
     if (result.ok) clientRedirect = result.redirectTo;
   } catch (error) {
@@ -137,7 +133,7 @@ async function refuseConsentAction(_formData: FormData): Promise<void> {
 
 // The outcome of the last attempt, in plain Australian English.
 const NOTICES: Record<string, string> = {
-  invalid: "We couldn't use those details. Check the agent's name and try again.",
+  invalid: "We couldn't use those details. Check the agent's name and card budget, then try again.",
   expired: "This connection request has expired. Start connecting again from your agent.",
 };
 
@@ -167,9 +163,19 @@ export default async function ConsentPage({
   const rawNotice = (await searchParams).notice;
   const noticeText = typeof rawNotice === "string" ? NOTICES[rawNotice] ?? null : null;
 
+  // The consent screen is the signed-in person's: a lapsed session signs in and returns
+  // here (the pending-handle cookie outlives it), and the services offered are their own.
+  const db = await getServerDb();
+  const session = await resolveSession(db);
+  if (!session) redirect(SIGN_IN_AND_RETURN);
+
   const store = await cookies();
   const handle = store.get(CONSENT_COOKIE)?.value ?? "";
-  const view = await loadConsentView(handle);
+  const view = await loadConsentView(handle, {
+    db,
+    userId: session.userId,
+    nameOf: (connectorId) => getCatalogue().get(connectorId)?.name,
+  });
   if (!view) return <ExpiredNotice />;
 
   return (
