@@ -64,12 +64,15 @@ export interface DeviceFlowState {
   // The emailed one-time code the person types (the request's first factor).
   readonly code: string;
   readonly error?: string;
+  // A plain, non-error status line (e.g. "we've emailed you a code").
+  readonly notice?: string;
 }
 
 export interface DeviceFlowController {
   getState(): DeviceFlowState;
   setEmail(value: string): void;
   setCode(value: string): void;
+  sendCode(): Promise<void>;
   requestApproval(): Promise<void>;
   poll(): Promise<void>;
   startAgain(): void;
@@ -88,10 +91,16 @@ const DEFAULT_DEVICE_LABEL = "New device";
 // account (the server answers the same either way), so it makes no account claim.
 const REQUEST_FAILED_COPY =
   "We couldn't add this device. Check your email address and the code we emailed you, then try again.";
+const SEND_CODE_FAILED_COPY =
+  "We couldn't send a code just now. Check your email address and try again.";
+// The server answers the same whether or not the address has an account, so the notice
+// makes no account claim either.
+const CODE_SENT_NOTICE =
+  "If there's an account for that address, we've emailed it a code. Enter it below.";
 const REQUEST_GONE_COPY =
   "That approval request has expired or was turned down. You can start again when you're ready.";
 
-type StepPath = "request" | "collect";
+type StepPath = "send-code" | "request" | "collect";
 
 export function createDeviceFlow(deps: DeviceFlowDeps): DeviceFlowController {
   // The collection handle lives in this closure, never in the rendered snapshot — it is
@@ -129,6 +138,16 @@ export function createDeviceFlow(deps: DeviceFlowDeps): DeviceFlowController {
     } catch {
       return {};
     }
+  }
+
+  // Ask for the emailed one-time code the request needs (the first factor).
+  async function sendCode(): Promise<void> {
+    const response = await post("send-code", { email: state.email });
+    if (!response || !response.ok) {
+      set({ error: SEND_CODE_FAILED_COPY, notice: undefined });
+      return;
+    }
+    set({ error: undefined, notice: CODE_SENT_NOTICE });
   }
 
   async function requestApproval(): Promise<void> {
@@ -183,6 +202,7 @@ export function createDeviceFlow(deps: DeviceFlowDeps): DeviceFlowController {
     getState: () => state,
     setEmail: (value) => set({ email: value }),
     setCode: (value) => set({ code: value }),
+    sendCode,
     requestApproval,
     poll,
     startAgain,
@@ -242,8 +262,12 @@ export function DeviceFlow(props: DeviceFlowProps = {}): React.ReactElement {
       email={state.email}
       code={state.code}
       error={state.error}
+      notice={state.notice}
       onEmailChange={(value) => flow.setEmail(value)}
       onCodeChange={(value) => flow.setCode(value)}
+      onSendCode={() => {
+        void flow.sendCode();
+      }}
       onSubmit={() => {
         void flow.requestApproval();
       }}

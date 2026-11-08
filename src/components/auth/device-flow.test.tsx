@@ -81,6 +81,7 @@ import assert from "node:assert/strict";
 import { renderToStaticMarkup } from "react-dom/server";
 
 import { createDeviceFlow } from "./device-flow";
+import { DeviceView } from "./auth-views";
 import DevicePage from "../../app/(auth)/device/page";
 
 // ── Fixtures ──────────────────────────────────────────────────────────────────────────
@@ -93,7 +94,7 @@ const REQUEST_ID = "9f3c1a7e5b2d4680ab12cd34ef56a7b89f3c1a7e5b2d4680ab12cd34ef56
 
 // ── A programmable, recording fake fetch keyed by the device step path ──────────────────
 
-type StepKey = "request" | "collect";
+type StepKey = "send-code" | "request" | "collect";
 
 interface RecordedCall {
   step: StepKey;
@@ -104,6 +105,7 @@ interface RecordedCall {
 }
 
 function stepOf(url: string): StepKey {
+  if (url.includes("/api/auth/device/send-code")) return "send-code";
   if (url.includes("/api/auth/device/request")) return "request";
   if (url.includes("/api/auth/device/collect")) return "collect";
   // The NEW-device flow never posts `approve` (that is the OTHER device's job); any other
@@ -124,6 +126,7 @@ function makeFetch() {
   // approved (the followed-303 result a browser's default fetch sees — a 2xx landing on
   // /home). A test swaps `collect` to drive the pending poll / terminal-failure paths.
   const responders: Record<StepKey, () => Response> = {
+    "send-code": () => jsonResponse(200, { ok: true }),
     request: () => jsonResponse(200, { requestId: REQUEST_ID }),
     collect: () => jsonResponse(200, { ok: true }),
   };
@@ -470,4 +473,34 @@ test("once approved, the device flow goes to a safe return path, and to /home fo
     await flow.poll();
     assert.deepEqual(navCalls, [expected], `returnTo ${returnTo}`);
   }
+});
+
+// ── Signing in on a new device starts with the emailed code: the flow can ask for it ──
+
+test("'Email me a code' posts the email to send-code and says a code is on its way", async () => {
+  const ctx = setup();
+  ctx.flow.setEmail(EMAIL);
+  await ctx.flow.sendCode();
+
+  assert.deepEqual(ctx.calls.map((c) => c.step), ["send-code"]);
+  assert.deepEqual(ctx.calls[0]!.body, { email: EMAIL });
+  const s = ctx.flow.getState();
+  assert.equal(s.phase, "code", "the person stays on the code step to type it");
+  assert.equal(s.error, undefined);
+  assert.match(s.notice ?? "", /email/i, "a plain notice says the code was emailed");
+});
+
+test("a failed send-code shows plain copy and no notice", async () => {
+  const ctx = setup();
+  ctx.responders["send-code"] = () => jsonResponse(400, { error: "bad_request" });
+  ctx.flow.setEmail(EMAIL);
+  await ctx.flow.sendCode();
+  const s = ctx.flow.getState();
+  assertPlainEnglish(s.error, "send-code 4xx");
+  assert.equal(s.notice, undefined);
+});
+
+test("the device code step offers an 'Email me a code' control", () => {
+  const markup = renderToStaticMarkup(<DeviceView step="code" />);
+  assert.match(markup, /<button[^>]*type="button"[^>]*>Email me a code<\/button>/);
 });

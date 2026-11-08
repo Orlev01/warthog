@@ -31,6 +31,7 @@ import { getDeviceDeps } from "../../../../../server/auth/compose";
 // the task names. A Map is exact-match and carries no inherited keys, so a step like
 // "constructor" or "requestApproval" cannot resolve to a method.
 const STEP_METHOD = new Map<string, keyof DeviceHandler>([
+  ["send-code", "sendCode"],
   ["request", "requestApproval"],
   ["approve", "approve"],
   ["collect", "collect"],

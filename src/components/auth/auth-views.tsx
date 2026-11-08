@@ -559,8 +559,12 @@ export interface DeviceViewProps {
   email?: string;
   code?: string;
   error?: string;
+  // A plain status line under the form (e.g. the code was emailed).
+  notice?: string;
   onEmailChange?: (value: string) => void;
   onCodeChange?: (value: string) => void;
+  // "Email me a code": send the one-time code to the email entered above.
+  onSendCode?: () => void;
   onSubmit?: () => void;
   onStartAgain?: () => void;
   // Where to go after signing in (a validated relative path), carried on the links
@@ -573,8 +577,10 @@ export function DeviceView({
   email,
   code,
   error,
+  notice,
   onEmailChange,
   onCodeChange,
+  onSendCode,
   onSubmit,
   onStartAgain,
   returnTo,
@@ -584,7 +590,7 @@ export function DeviceView({
       return (
         <AuthScreen
           title="Add this device"
-          lead="Enter your email and the code we emailed you to add this device to your account."
+          lead="Enter your email and we'll email you a code. Then enter the code to add this device to your account."
         >
           <form
             className="flex flex-col gap-4"
@@ -601,6 +607,14 @@ export function DeviceView({
               value={email}
               onChange={(event) => onEmailChange?.(event.target.value)}
             />
+            <Button type="button" variant="secondary" onClick={onSendCode}>
+              Email me a code
+            </Button>
+            {notice ? (
+              <p role="status" className="text-sm text-fg-muted">
+                {notice}
+              </p>
+            ) : null}
             <Field
               label="Your code"
               name="code"
