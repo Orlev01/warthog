@@ -190,6 +190,26 @@ async function saveNotificationPrefsAction(formData: FormData): Promise<void> {
   redirect(noticeLocation("prefs_saved", outcome));
 }
 
+// Remove one of the session person's own push devices (review fix G5), so approval pushes
+// stop reaching a lost phone or an old browser. The id rides in the form; the seam
+// validates it and scopes the delete to the session person.
+async function removePushDeviceAction(formData: FormData): Promise<void> {
+  "use server";
+  const db = await getServerDb();
+  const session = await resolveSession(db);
+  if (!session) {
+    redirect("/signin");
+  }
+  let outcome: ActionResult | unknown;
+  try {
+    outcome = await buildActions(db).removePushDevice(session, { id: String(formData.get("id") ?? "") });
+  } catch (error) {
+    outcome = error;
+  }
+  revalidatePath(SCREEN);
+  redirect(noticeLocation("device_removed", outcome));
+}
+
 // Send a test push to each of the session person's registered devices through the
 // configured sender (the dev outbox in dev), so a person can confirm notifications work.
 async function sendTestNotificationAction(_formData: FormData): Promise<void> {
@@ -217,6 +237,7 @@ type Notice = { tone: "done" | "problem"; text: string };
 // render nothing, so the query string can never inject copy onto the screen.
 const NOTICES: Record<string, Notice> = {
   device_registered: { tone: "done", text: "This device is set up for push notifications." },
+  device_removed: { tone: "done", text: "That device won't get Warthog notifications any more." },
   code_sent: { tone: "done", text: "We've texted you a 6-digit code. Enter it below to verify your number." },
   number_verified: { tone: "done", text: "Your mobile number is verified." },
   prefs_saved: { tone: "done", text: "Your notification settings are saved." },
@@ -235,6 +256,11 @@ const NOTICES: Record<string, Notice> = {
     tone: "problem",
     text: "Push notifications aren't available on this device or browser.",
   },
+  push_denied: {
+    tone: "problem",
+    text: "Notifications are turned off for Warthog in this browser. Allow them in your browser settings, then try again.",
+  },
+  not_found: { tone: "problem", text: "Nothing was changed: that device is no longer registered." },
   register_failed: {
     tone: "problem",
     text: "We couldn't set this device up for push notifications. Please try again.",
@@ -294,6 +320,7 @@ export default async function NotificationsPage({
         {...data}
         vapidPublicKey={vapidPublicKey}
         registerPushDevice={registerPushDeviceAction}
+        removePushDeviceAction={removePushDeviceAction}
         addMobileNumberAction={addMobileNumberAction}
         verifyMobileNumberAction={verifyMobileNumberAction}
         saveNotificationPrefsAction={saveNotificationPrefsAction}
