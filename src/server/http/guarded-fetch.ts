@@ -21,11 +21,16 @@
 //
 // The DNS resolver is injected as a seam (conventions: external services sit behind
 // interfaces with fakes; tests never touch the network), defaulting to node:dns.
+//
+// The request is built from a WHATWG `Request` over the caller's `(input, init)`, exactly as
+// `fetch` would build it: method, headers and body (string, URLSearchParams, bytes, Blob, a
+// Request input's own body) all reach the wire. Node dials an IP-literal host without calling
+// the custom lookup, so an IP literal is classified here, before the request is created.
 
 import * as http from "node:http";
 import * as https from "node:https";
 import { lookup as dnsLookup } from "node:dns/promises";
-import type { LookupFunction } from "node:net";
+import { isIP, type LookupFunction } from "node:net";
 import { Readable } from "node:stream";
 
 // The connection-time DNS seam: resolve a hostname to its address string(s). Returns []
@@ -73,8 +78,12 @@ export type GuardedLookup = (
 //   - otherwise hands `net` the vetted public addresses in the `{ address, family }`
 //     array form it requires under `all: true`.
 // Re-resolving every time is what defeats DNS rebinding: a host that answered public once
-// and private next is refused on the next connection.
-export function createGuardedLookup(resolve: HostResolver): GuardedLookup {
+// and private next is refused on the next connection. `isBlocked` is the address
+// classification (default `isBlockedAddress`); only a test relaxes it, to dial a local server.
+export function createGuardedLookup(
+  resolve: HostResolver,
+  isBlocked: (address: string) => boolean = isBlockedAddress,
+): GuardedLookup {
   return function guardedLookup(hostname, _options, callback) {
     resolve(hostname).then(
       (addresses) => {
@@ -82,7 +91,7 @@ export function createGuardedLookup(resolve: HostResolver): GuardedLookup {
           callback(new Error(`host ${hostname} does not resolve to any address`));
           return;
         }
-        if (addresses.some(isBlockedAddress)) {
+        if (addresses.some(isBlocked)) {
           callback(
             new Error(`host ${hostname} resolves to a private, loopback or link-local address`),
           );
@@ -105,53 +114,78 @@ function familyOf(address: string): number {
 }
 
 // The seams the guarded fetch depends on: the connection-time DNS resolver (injected for
-// tests, default node:dns).
+// tests, default node:dns) and the address classification (default `isBlockedAddress`). Only
+// a wire-level test relaxes `isBlocked`, to reach a server on loopback; production never does.
 export interface GuardedFetchDeps {
   readonly resolve?: HostResolver;
+  readonly isBlocked?: (address: string) => boolean;
 }
+
+// Hop-by-hop and framing headers the transport sets itself: never forwarded from the caller.
+const TRANSPORT_HEADERS = new Set(["host", "content-length", "connection", "keep-alive", "transfer-encoding"]);
 
 // Build a `fetch`-shaped function whose connection re-resolves and classifies the host at
 // connection time through the guarded lookup — never the bare global fetch's own
-// resolution. A request to a host that resolves (at connection time) to a blocked address
-// is refused before any byte is sent.
+// resolution. A request to a host that resolves (at connection time) to a blocked address,
+// or whose host is a blocked IP literal, is refused before any byte is sent. The caller's
+// method, headers and body are sent as given.
 export function createGuardedFetch(deps: GuardedFetchDeps = {}): typeof globalThis.fetch {
   const resolve = deps.resolve ?? systemResolver;
-  const lookup = createGuardedLookup(resolve);
+  const isBlocked = deps.isBlocked ?? isBlockedAddress;
+  const lookup = createGuardedLookup(resolve, isBlocked);
 
-  const guardedFetch = (input: RequestInfo | URL, init?: RequestInit): Promise<Response> =>
-    new Promise<Response>((resolveResponse, rejectResponse) => {
-      let url: URL;
-      try {
-        url = new URL(
-          typeof input === "string" ? input : input instanceof URL ? input.href : input.url,
-        );
-      } catch {
-        rejectResponse(new Error("guarded fetch received an invalid URL"));
-        return;
-      }
+  const guardedFetch = async (input: RequestInfo | URL, init?: RequestInit): Promise<Response> => {
+    // Normalise exactly as fetch does, so a Request input and an `init` are treated alike and
+    // every body type the platform accepts is encoded (with its default content type).
+    let request: Request;
+    try {
+      request = new Request(input, init);
+    } catch {
+      throw new Error("guarded fetch received an invalid URL or request");
+    }
+    const url = new URL(request.url);
 
-      const transport =
-        url.protocol === "https:" ? https : url.protocol === "http:" ? http : null;
-      if (!transport) {
-        rejectResponse(new Error(`guarded fetch supports only http and https, not ${url.protocol}`));
-        return;
-      }
+    const transport = url.protocol === "https:" ? https : url.protocol === "http:" ? http : null;
+    if (!transport) {
+      throw new Error(`guarded fetch supports only http and https, not ${url.protocol}`);
+    }
 
+    // Node dials an IP literal directly (the custom lookup is never consulted), so classify
+    // it here, before any socket is opened.
+    const hostname = stripBrackets(url.hostname);
+    if (isIP(hostname) !== 0 && isBlocked(hostname)) {
+      throw new Error("guarded fetch refused a private, loopback or link-local address");
+    }
+
+    const headers: Record<string, string> = {};
+    for (const [name, value] of request.headers) {
+      if (!TRANSPORT_HEADERS.has(name)) headers[name] = value;
+    }
+    // Bodies here are small (JSON, forms), so they are buffered and sent with a length.
+    const body = request.body ? Buffer.from(await request.arrayBuffer()) : null;
+    if (body) headers["content-length"] = String(body.byteLength);
+
+    return new Promise<Response>((resolveResponse, rejectResponse) => {
       const options: http.RequestOptions = {
-        method: init?.method ?? "GET",
-        signal: init?.signal ?? undefined,
+        method: request.method,
+        headers,
+        signal: init?.signal ?? (input instanceof Request ? input.signal : undefined),
         // The connection-time guard: `net`/`tls` dials only the vetted address this
         // lookup returns, so there is no second resolution for a rebind to exploit.
         lookup: lookup as unknown as LookupFunction,
+        // A fresh connection per request: Node's global agent keeps sockets alive and would
+        // hand this request a pooled socket — one this guard never vetted — without calling
+        // the lookup at all.
+        agent: false,
       };
 
-      const request = transport.request(url, options, (response) => {
+      const outgoing = transport.request(url, options, (response) => {
         try {
           const status = response.statusCode ?? 0;
           // Never follow a redirect — it would dial a host the address guard never
           // vetted. `redirect: "error"` refuses it (node http never auto-follows).
           if (
-            init?.redirect === "error" &&
+            request.redirect === "error" &&
             status >= 300 &&
             status < 400 &&
             response.headers.location !== undefined
@@ -161,22 +195,22 @@ export function createGuardedFetch(deps: GuardedFetchDeps = {}): typeof globalTh
             return;
           }
 
-          const headers = new Headers();
+          const responseHeaders = new Headers();
           for (const [name, value] of Object.entries(response.headers)) {
             if (value === undefined) continue;
             if (Array.isArray(value)) {
-              for (const v of value) headers.append(name, v);
+              for (const v of value) responseHeaders.append(name, v);
             } else {
-              headers.set(name, value);
+              responseHeaders.set(name, value);
             }
           }
 
-          const body = Readable.toWeb(response) as unknown as ReadableStream<Uint8Array>;
+          const responseBody = Readable.toWeb(response) as unknown as ReadableStream<Uint8Array>;
           resolveResponse(
-            new Response(body, {
+            new Response(responseBody, {
               status: status || 200,
               statusText: response.statusMessage ?? "",
-              headers,
+              headers: responseHeaders,
             }),
           );
         } catch (err) {
@@ -185,9 +219,10 @@ export function createGuardedFetch(deps: GuardedFetchDeps = {}): typeof globalTh
         }
       });
 
-      request.on("error", (err) => rejectResponse(err));
-      request.end();
+      outgoing.on("error", (err) => rejectResponse(err));
+      outgoing.end(body ?? undefined);
     });
+  };
 
   return guardedFetch as typeof globalThis.fetch;
 }
@@ -231,14 +266,26 @@ function parseIPv4(s: string): [number, number, number, number] | null {
   return octets as [number, number, number, number];
 }
 
-function isBlockedIPv4([a, b]: [number, number, number, number]): boolean {
+function isBlockedIPv4([a, b, c, d]: [number, number, number, number]): boolean {
   if (a === 0) return true; // 0.0.0.0/8 "this host"
   if (a === 10) return true; // 10.0.0.0/8 private
+  if (a === 100 && b >= 64 && b <= 127) return true; // 100.64.0.0/10 CGNAT (Azure platform ranges)
   if (a === 127) return true; // 127.0.0.0/8 loopback
+  if (a === 168 && b === 63 && c === 129 && d === 16) return true; // Azure platform virtual IP
   if (a === 169 && b === 254) return true; // 169.254.0.0/16 link-local
   if (a === 172 && b >= 16 && b <= 31) return true; // 172.16.0.0/12 private
+  if (a === 192 && b === 0 && (c === 0 || c === 2)) return true; // 192.0.0/24 IETF, 192.0.2/24 docs
   if (a === 192 && b === 168) return true; // 192.168.0.0/16 private
+  if (a === 198 && (b === 18 || b === 19)) return true; // 198.18.0.0/15 benchmarking
+  if (a === 198 && b === 51 && c === 100) return true; // 198.51.100.0/24 documentation
+  if (a === 203 && b === 0 && c === 113) return true; // 203.0.113.0/24 documentation
+  if (a >= 224) return true; // 224/4 multicast, 240/4 reserved, 255.255.255.255 broadcast
   return false;
+}
+
+// The IPv4 address carried in two 16-bit groups (high, low).
+function v4From(high: number, low: number): [number, number, number, number] {
+  return [high >> 8, high & 0xff, low >> 8, low & 0xff];
 }
 
 // Eight 16-bit groups — a fully-expanded IPv6 address.
@@ -246,21 +293,35 @@ type Groups8 = [number, number, number, number, number, number, number, number];
 
 function isBlockedIPv6(s: string): boolean {
   const g = expandIPv6(s);
-  if (!g) return false;
+  // Anything containing a colon that is not a well-formed IPv6 address is refused, never
+  // waved through as "not an IP".
+  if (!g) return true;
 
-  // An IPv4-mapped (::ffff:a.b.c.d) address is classified by its embedded IPv4.
-  const mappedV4 = g[0] === 0 && g[1] === 0 && g[2] === 0 && g[3] === 0 && g[4] === 0 && g[5] === 0xffff;
-  if (mappedV4) {
-    return isBlockedIPv4([g[6] >> 8, g[6] & 0xff, g[7] >> 8, g[7] & 0xff]);
-  }
+  const zero = (from: number, to: number) => g.slice(from, to).every((part) => part === 0);
 
-  if (g.every((part) => part === 0)) return true; // :: unspecified
-  if (g[0] === 0 && g[1] === 0 && g[2] === 0 && g[3] === 0 && g[4] === 0 && g[5] === 0 && g[6] === 0 && g[7] === 1) {
-    return true; // ::1 loopback
-  }
+  // An IPv4-mapped (::ffff:a.b.c.d) or IPv4-translated (::ffff:0:a.b.c.d) address is
+  // classified by its embedded IPv4.
+  if (zero(0, 5) && g[5] === 0xffff) return isBlockedIPv4(v4From(g[6], g[7]));
+  if (zero(0, 4) && g[4] === 0xffff && g[5] === 0) return isBlockedIPv4(v4From(g[6], g[7]));
 
+  // ::/96 — the unspecified address, ::1 loopback and the deprecated IPv4-compatible form;
+  // none is ever a legitimate public answer.
+  if (zero(0, 6)) return true;
+
+  // 64:ff9b::/96 NAT64 is classified by its embedded IPv4; 64:ff9b:1::/48 is local-use NAT64.
+  if (g[0] === 0x64 && g[1] === 0xff9b && zero(2, 6)) return isBlockedIPv4(v4From(g[6], g[7]));
+  if (g[0] === 0x64 && g[1] === 0xff9b && g[2] === 1) return true;
+
+  // 2002::/16 6to4 embeds the IPv4 in groups 1-2.
+  if (g[0] === 0x2002) return isBlockedIPv4(v4From(g[1], g[2]));
+
+  if (g[0] === 0x2001 && g[1] === 0) return true; // 2001::/32 Teredo (embedded IPv4 is obfuscated)
+  if (g[0] === 0x2001 && g[1] === 0xdb8) return true; // 2001:db8::/32 documentation
+  if (g[0] === 0x100 && zero(1, 4)) return true; // 100::/64 discard-only
   if ((g[0] & 0xfe00) === 0xfc00) return true; // fc00::/7 unique-local
   if ((g[0] & 0xffc0) === 0xfe80) return true; // fe80::/10 link-local
+  if ((g[0] & 0xffc0) === 0xfec0) return true; // fec0::/10 deprecated site-local
+  if ((g[0] & 0xff00) === 0xff00) return true; // ff00::/8 multicast
   return false;
 }
 
