@@ -3,6 +3,7 @@ import { ShieldAlert, ShieldCheck } from "lucide-react";
 
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/field";
+import { Select } from "@/components/ui/select";
 import { EmptyState } from "@/components/ui/empty";
 import type { IntegrityResult } from "@/server/activity/integrity";
 
@@ -55,10 +56,24 @@ export type ActivityFilterOptions = {
   outcomes: readonly string[];
 };
 
+// The applied filter values, keyed by the GET param each control posts.
+export type ActivityActiveFilters = {
+  agent?: string;
+  service?: string;
+  kind?: string;
+  outcome?: string;
+  from?: string; // "YYYY-MM-DD" (or an ISO date-time)
+  to?: string; // "YYYY-MM-DD" (or an ISO date-time)
+};
+
 export type ActivityViewProps = {
   entries: readonly ActivityEntryView[];
   filterOptions: ActivityFilterOptions;
   query: string; // the current search text (pre-fills the search box)
+  // The facet/date filters currently applied (review fix G11): each pre-selects its
+  // control, the Filters panel opens when any is set, a "Filtered by …" line names them
+  // with a Clear link, and re-applying keeps them. Absent ⇒ nothing applied.
+  activeFilters?: ActivityActiveFilters;
   integrity: IntegrityResult | null; // the latest Check-integrity result, if one has run
   // E08-S10 — the per-entry Dispute/Undo controls are BOUND to these server actions (the
   // page passes inline `use server` wrappers that re-derive the session, call
@@ -71,10 +86,6 @@ export type ActivityViewProps = {
   undoAction?: (formData: FormData) => void | Promise<void>;
 };
 
-// A native select styled on the design tokens (there is no Select primitive yet): same
-// surface, border, radius, touch target (≥44px) and focus ring as the Input primitive.
-const SELECT_CLASS =
-  "min-h-11 w-full rounded-card border border-line bg-surface px-3 text-sm text-fg focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-focus focus-visible:ring-offset-2 focus-visible:ring-offset-bg";
 
 // The action buttons mirror the shared Button primitive's look on the design tokens
 // (≥44px target, token colour/radius/focus) but as native <button>s: every control in
@@ -91,29 +102,40 @@ const BTN_SECONDARY = `${BTN_BASE} border border-line bg-surface text-fg hover:b
 // `disabled` attribute doing the disabling. Styled through tokens, no raw colour.
 const BTN_DISABLED = `${BTN_BASE} border border-line bg-surface text-fg-muted opacity-50`;
 
-// The four facet filters, each keyed to its resolved option list.
+// The four facet filters, each keyed to its resolved option list and its applied value.
 type Facet = {
-  name: string;
+  name: keyof ActivityActiveFilters;
   label: string;
   all: string;
   options: readonly string[];
+  value?: string;
 };
 
-function FacetFilter({ name, label, all, options }: Facet) {
+function FacetFilter({ name, label, all, options, value }: Facet) {
   const id = `activity-filter-${name}`;
   return (
     <div className="flex flex-col gap-1.5">
       <Label htmlFor={id}>{label}</Label>
-      <select id={id} name={name} defaultValue="" className={SELECT_CLASS}>
+      <Select id={id} name={name} defaultValue={value ?? ""}>
         <option value="">{all}</option>
         {options.map((option) => (
           <option key={option} value={option}>
             {option}
           </option>
         ))}
-      </select>
+      </Select>
     </div>
   );
+}
+
+// "Filtered by Agent: agent-claude · From 1 Mar 2026" — the applied filters in words.
+function filterSummary(facets: readonly Facet[], active: ActivityActiveFilters): string[] {
+  const parts = facets
+    .filter((facet) => active[facet.name] !== undefined)
+    .map((facet) => `${facet.label}: ${active[facet.name]}`);
+  if (active.from) parts.push(`From ${active.from}`);
+  if (active.to) parts.push(`To ${active.to}`);
+  return parts;
 }
 
 // The Check-integrity result panel: a status read with WORDS and an icon, never colour
@@ -264,15 +286,17 @@ export function ActivityView({
   filterOptions,
   query,
   integrity,
+  activeFilters = {},
   disputeAction,
   undoAction,
 }: ActivityViewProps) {
   const facets: Facet[] = [
-    { name: "agent", label: "Agent", all: "All agents", options: filterOptions.agents },
-    { name: "service", label: "Service", all: "All services", options: filterOptions.services },
-    { name: "kind", label: "Kind", all: "All kinds", options: filterOptions.kinds },
-    { name: "outcome", label: "Outcome", all: "All outcomes", options: filterOptions.outcomes },
+    { name: "agent", label: "Agent", all: "All agents", options: filterOptions.agents, value: activeFilters.agent },
+    { name: "service", label: "Service", all: "All services", options: filterOptions.services, value: activeFilters.service },
+    { name: "kind", label: "Kind", all: "All kinds", options: filterOptions.kinds, value: activeFilters.kind },
+    { name: "outcome", label: "Outcome", all: "All outcomes", options: filterOptions.outcomes, value: activeFilters.outcome },
   ];
+  const applied = filterSummary(facets, activeFilters);
 
   return (
     <div className="mx-auto flex max-w-3xl flex-col gap-6 px-4 py-8 sm:px-6">
@@ -302,10 +326,20 @@ export function ActivityView({
         </div>
         {/* On narrow screens the facet + date filters fill the viewport before any
             entry shows, so they collapse behind a 'Filters' disclosure — open when a
-            filter is set (the view's only selected-filter signal is `query`) and
-            collapsed otherwise. (A <details> still emits its contents when closed, so
-            the server-rendered facets stay readable to the whole-markup checks.) */}
-        <details open={query.length > 0}>
+            search or any filter is applied, collapsed otherwise. (A <details> still
+            emits its contents when closed, so the server-rendered facets stay readable
+            to the whole-markup checks.) */}
+        {applied.length > 0 ? (
+          <p className="flex flex-wrap items-center gap-x-3 gap-y-1 text-sm text-fg">
+            <span>
+              <span className="font-medium">Filtered by</span> {applied.join(" · ")}
+            </span>
+            <a href="/activity" className="font-medium text-accent underline underline-offset-2">
+              Clear filters
+            </a>
+          </p>
+        ) : null}
+        <details open={query.length > 0 || applied.length > 0}>
           <summary className="cursor-pointer font-medium text-fg">Filters</summary>
           <div className="mt-4 grid grid-cols-1 gap-4 sm:grid-cols-2">
             {facets.map((facet) => (
@@ -313,11 +347,11 @@ export function ActivityView({
             ))}
             <div className="flex flex-col gap-1.5">
               <Label htmlFor="activity-from">From</Label>
-              <Input id="activity-from" type="date" name="from" />
+              <Input id="activity-from" type="date" name="from" defaultValue={activeFilters.from?.slice(0, 10) ?? ""} />
             </div>
             <div className="flex flex-col gap-1.5">
               <Label htmlFor="activity-to">To</Label>
-              <Input id="activity-to" type="date" name="to" />
+              <Input id="activity-to" type="date" name="to" defaultValue={activeFilters.to?.slice(0, 10) ?? ""} />
             </div>
           </div>
         </details>

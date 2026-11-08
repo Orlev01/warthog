@@ -840,3 +840,51 @@ test("a reversible entry gets a live Undo that runs the reversal once and report
     await db.close();
   }
 });
+
+// =====================================================================================
+// Review fix G11 — the filters show what is applied, and bad dates never crash the page.
+// A hand-made `?from=yesterday-ish` reached `occurred_at >= $n` as a timestamp cast and
+// threw (a 500); and after "filter to Claude" the list was filtered but every control
+// still read "All …" with the panel collapsed, so pressing Apply again silently dropped
+// the filter. The loader now validates dates and hands the applied filters back.
+// =====================================================================================
+
+test("a malformed from/to date is ignored (never a server error) and not reported as applied", async () => {
+  const db = await freshDb();
+  try {
+    const keyWrapper = localAesKeyWrapper(randomBytes(KEK_BYTES));
+    const { aliceSession } = await seedWorld(db, keyWrapper);
+    const loader = makeLoader(db, keyWrapper);
+    for (const bad of ["yesterday-ish", "2026-13-45", "'; DROP TABLE activity_entries; --"]) {
+      const view = await loader.load(aliceSession, { from: bad, to: bad });
+      assert.deepEqual(seqsOf(view), [3, 2, 1], `"${bad}" narrows nothing`);
+      assert.equal(view.activeFilters?.from, undefined);
+      assert.equal(view.activeFilters?.to, undefined);
+    }
+  } finally {
+    await db.close();
+  }
+});
+
+test("the loader hands back the applied filters so the controls can show them", async () => {
+  const db = await freshDb();
+  try {
+    const keyWrapper = localAesKeyWrapper(randomBytes(KEK_BYTES));
+    const { aliceSession } = await seedWorld(db, keyWrapper);
+    const view = await makeLoader(db, keyWrapper).load(aliceSession, {
+      agent: "agent-claude",
+      service: "gmail",
+      from: "2026-03-01",
+      to: "2026-04-30",
+    });
+    assert.deepEqual(view.activeFilters, {
+      agent: "agent-claude",
+      service: "gmail",
+      from: "2026-03-01",
+      to: "2026-04-30",
+    });
+    assert.deepEqual(seqsOf(view), [3]);
+  } finally {
+    await db.close();
+  }
+});
