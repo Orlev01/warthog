@@ -33,7 +33,6 @@ import { parseParams } from "../../http/validate";
 import { getConnectionPermissions, type ConnectionPermissions } from "../../db/agent-permissions";
 import {
   createTask,
-  listTasksForUser,
   tasksForAgent,
   updateTask,
   addNote,
@@ -197,6 +196,18 @@ async function tasksPermission(
   return permissions;
 }
 
+// The task with `id` among those the connection's agent may see — the person's tasks
+// assigned to this agent or to any agent (the list_tasks set) — or undefined.
+async function visibleTask(
+  db: Db,
+  connection: AgentConnection,
+  id: string,
+  dek: Uint8Array,
+): Promise<Task | undefined> {
+  const visible = await tasksForAgent(db, connection.userId, connection.agentId, dek);
+  return visible.find((task) => task.id === id);
+}
+
 export function createListTasksTool(deps: TasksToolDeps): ListTasksTool {
   const { db, keyWrapper } = deps;
 
@@ -281,11 +292,12 @@ export function createUpdateTaskTool(deps: TasksToolDeps): UpdateTaskTool {
         return { status: "refused", reason: NO_PERMISSION_REASON };
       }
 
-      // Find the task THIS PERSON owns (member-scoped by the connection's userId) — so
-      // one person can never change another's task. A missing one refuses (not throws).
+      // Find the task among those THIS AGENT may see — the person's tasks assigned to it
+      // or to any agent (member-scoped by the connection's userId and filtered by its
+      // agent), exactly what list_tasks shows it — so it can never change another
+      // person's task or one assigned to a different agent. A missing one refuses.
       const dek = await dataKeyFor(db, keyWrapper, connection.userId);
-      const owned = await listTasksForUser(db, connection.userId, dek);
-      const task = owned.find((t) => t.id === parsed.id);
+      const task = await visibleTask(db, connection, parsed.id, dek);
       if (!task) {
         return { status: "refused", reason: NO_SUCH_TASK_REASON };
       }
@@ -325,7 +337,7 @@ export function createUpdateTaskTool(deps: TasksToolDeps): UpdateTaskTool {
 }
 
 export function createCompleteTaskTool(deps: TasksToolDeps): CompleteTaskTool {
-  const { db } = deps;
+  const { db, keyWrapper } = deps;
 
   return {
     name: "complete_task",
@@ -341,10 +353,12 @@ export function createCompleteTaskTool(deps: TasksToolDeps): CompleteTaskTool {
         return { status: "refused", reason: NO_PERMISSION_REASON };
       }
 
-      // Mark the CONNECTION's person's own task done (member-scoped by the connection's
-      // userId). No match ⇒ a refusal (not a throw) — one person can never complete
-      // another's task. Status is plaintext metadata, so no DEK is needed.
-      const done = await completeTask(db, { userId: connection.userId, id: parsed.id });
+      // Mark done only a task THIS AGENT may see (assigned to it or to any agent,
+      // member-scoped by the connection's userId). No match ⇒ a refusal (not a throw) —
+      // it can never complete another person's task or one assigned to another agent.
+      const dek = await dataKeyFor(db, keyWrapper, connection.userId);
+      const task = await visibleTask(db, connection, parsed.id, dek);
+      const done = task !== undefined && (await completeTask(db, { userId: connection.userId, id: task.id }));
       if (!done) {
         return { status: "refused", reason: NO_SUCH_TASK_REASON };
       }
