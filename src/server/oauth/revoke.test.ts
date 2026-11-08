@@ -136,7 +136,7 @@ test("revoking with a refresh token also deletes the connection's tokens, and th
 
     // End-to-end: the revoked refresh token can no longer be exchanged at /oauth/token
     // — the agent is genuinely cut off, not merely missing from one table read.
-    const deps: TokenDeps = { db, clock: systemClock, random: systemRandom };
+    const deps: TokenDeps = { db, clock: systemClock, random: systemRandom, hmacKey: new Uint8Array(32).fill(0x11) };
     const after = await exchangeToken(
       { params: new URLSearchParams({ grant_type: "refresh_token", refresh_token: refresh }) },
       deps,

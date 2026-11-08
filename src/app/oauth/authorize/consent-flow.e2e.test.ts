@@ -95,6 +95,7 @@ function deps(db: Db, config: Config) {
     config,
     clock: fixedClock(NOW),
     random: systemRandom,
+    hmacKey: config.hmacKey,
     resolveClient: createClientResolver({
       db,
       fetchCimd: async (clientId: string): Promise<Record<string, unknown>> => {

@@ -148,6 +148,18 @@ export async function getAuthCode(db: Db, codeHash: string): Promise<AuthCode | 
   return row ? toAuthCode(row) : null;
 }
 
+// Resolve AND remove a code by its hash in ONE statement (review fix A3): only one
+// caller ever gets the row back, so a code is single-use even under concurrent
+// redemption; a replayed or unknown code resolves to null.
+export async function consumeAuthCode(db: Db, codeHash: string): Promise<AuthCode | null> {
+  const result = await db.query(
+    `DELETE FROM oauth_auth_codes WHERE code_hash = $1 RETURNING ${AUTH_CODE_RETURNING}`,
+    [codeHash],
+  );
+  const row = result.rows[0];
+  return row ? toAuthCode(row) : null;
+}
+
 // --- Access & refresh tokens -------------------------------------------------------
 
 // Which bearer this is: a short-lived access token or a long-lived refresh token.

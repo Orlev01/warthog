@@ -115,8 +115,12 @@ function s256Challenge(verifier: string): string {
 // The token seam needs only the db (store), a clock (TTLs) and a randomness source
 // (the opaque bearers). systemRandom gives real entropy so successive tokens differ —
 // a fixed source would make every minted token identical and hide rotation.
-function deps(db: Db): TokenDeps {
-  return { db, clock: fixedClock(NOW), random: systemRandom };
+// Review fix A3: the token seam also takes the server HMAC key (the retry-safe refresh
+// successor is derived from it). A test-only value.
+const HMAC_KEY = new Uint8Array(32).fill(0x11);
+
+function deps(db: Db, now: Date = NOW): TokenDeps {
+  return { db, clock: fixedClock(now), random: systemRandom, hmacKey: HMAC_KEY };
 }
 
 // An isolated in-memory db with the consenting client already registered.
@@ -322,8 +326,10 @@ test("reusing a retired refresh token is rejected with invalid_grant and revokes
     if (!rotated.ok) throw new Error("unreachable: rotation was not ok");
     const r2 = rotated.body.refresh_token;
 
-    // Reusing the RETIRED token R1 is rejected with invalid_grant.
-    const reuse = await exchangeToken({ params: refreshParams(r1) }, deps(db));
+    // Reusing the RETIRED token R1 — after the short retry grace window (review fix A3)
+    // — is rejected with invalid_grant.
+    const later = new Date(NOW.getTime() + 5 * 60_000);
+    const reuse = await exchangeToken({ params: refreshParams(r1) }, deps(db, later));
     assert.equal(reuse.ok, false, "reusing a retired refresh token must be rejected");
     if (reuse.ok) throw new Error("unreachable: reuse of a retired token was accepted");
     assert.equal(reuse.error, "invalid_grant", "the reuse is rejected with invalid_grant");
@@ -331,7 +337,7 @@ test("reusing a retired refresh token is rejected with invalid_grant and revokes
     // The reuse revoked the connection's tokens: the then-current refresh token R2 —
     // valid moments ago — no longer works. This proves connection-level revocation
     // through the seam's own behaviour, without assuming how revocation is stored.
-    const afterRevoke = await exchangeToken({ params: refreshParams(r2) }, deps(db));
+    const afterRevoke = await exchangeToken({ params: refreshParams(r2) }, deps(db, later));
     assert.equal(afterRevoke.ok, false, "the connection's current refresh token is revoked by the reuse");
     if (afterRevoke.ok) throw new Error("unreachable: a revoked token was accepted");
     assert.equal(afterRevoke.error, "invalid_grant", "the revoked token is rejected with invalid_grant");
@@ -345,6 +351,116 @@ test("a refresh token that was never issued is rejected", async () => {
   try {
     const result = await exchangeToken({ params: refreshParams(`never-issued-${randomUUID()}`) }, deps(db));
     assert.equal(result.ok, false, "an unknown refresh token cannot be exchanged for tokens");
+  } finally {
+    await db.close();
+  }
+});
+
+// =====================================================================================
+// Review fix A3 — single use is ATOMIC, and a retried refresh is safe.
+//
+// Until this fix a code was read and then deleted, and a refresh token was read and then
+// retired, with nothing tying the two together: two concurrent exchanges of one code
+// both minted a token pair, two concurrent refreshes forked the token family, and an
+// agent's HTTP client that retried a timed-out refresh had its whole connection revoked
+// as a "replay". Now the code is consumed by one DELETE … RETURNING and the refresh token
+// claimed by one conditional UPDATE … RETURNING, so exactly one request wins; and the
+// successor refresh token is derived from the presented one with the server key, so a
+// retry within a short grace window gets the SAME successor back (no plaintext stored)
+// instead of revoking the connection. Past the window, or once the successor itself has
+// been used, a replay still revokes the connection's tokens.
+// =====================================================================================
+
+async function liveRefreshTokens(db: Db, connectionId: string, now: Date): Promise<number> {
+  const result = await db.query(
+    "SELECT count(*)::int AS n FROM oauth_tokens WHERE connection_id = $1::uuid AND kind = 'refresh' AND expires_at > $2::timestamptz",
+    [connectionId, now.toISOString()],
+  );
+  return Number(result.rows[0]!.n);
+}
+
+test("two concurrent exchanges of one authorization code: exactly one mints tokens", async () => {
+  const db = await dbWithClient();
+  try {
+    const connectionId = randomUUID();
+    const code = await seedAuthCode(db, { connectionId });
+    const results = await Promise.all([
+      exchangeToken({ params: codeExchangeParams(code) }, deps(db)),
+      exchangeToken({ params: codeExchangeParams(code) }, deps(db)),
+    ]);
+    assert.equal(results.filter((r) => r.ok).length, 1, "the code is redeemed exactly once");
+    assert.equal(await liveRefreshTokens(db, connectionId, NOW), 1, "one token family exists");
+  } finally {
+    await db.close();
+  }
+});
+
+test("two concurrent refreshes with one token do not fork the token family", async () => {
+  const db = await dbWithClient();
+  try {
+    const connectionId = randomUUID();
+    const first = await exchangeToken({ params: codeExchangeParams(await seedAuthCode(db, { connectionId })) }, deps(db));
+    if (!first.ok) throw new Error("unreachable");
+    const r1 = first.body.refresh_token;
+
+    const results = await Promise.all([
+      exchangeToken({ params: refreshParams(r1) }, deps(db)),
+      exchangeToken({ params: refreshParams(r1) }, deps(db)),
+    ]);
+    const issued = new Set(results.flatMap((r) => (r.ok ? [r.body.refresh_token] : [])));
+    assert.ok(issued.size >= 1, "at least one refresh succeeds");
+    assert.equal(issued.size, 1, "every successful refresh hands back the same successor");
+    assert.equal(await liveRefreshTokens(db, connectionId, NOW), 1, "exactly one live refresh token");
+
+    const [successor] = [...issued];
+    const next = await exchangeToken({ params: refreshParams(successor!) }, deps(db));
+    assert.ok(next.ok, "the connection was not revoked: the successor still refreshes");
+  } finally {
+    await db.close();
+  }
+});
+
+test("a refresh retried within the grace window gets the same successor and keeps the connection", async () => {
+  const db = await dbWithClient();
+  try {
+    const connectionId = randomUUID();
+    const first = await exchangeToken({ params: codeExchangeParams(await seedAuthCode(db, { connectionId })) }, deps(db));
+    if (!first.ok) throw new Error("unreachable");
+    const r1 = first.body.refresh_token;
+
+    const rotated = await exchangeToken({ params: refreshParams(r1) }, deps(db));
+    assert.ok(rotated.ok);
+    if (!rotated.ok) throw new Error("unreachable");
+
+    // The response was lost; the client retries a few seconds later with the same token.
+    const retried = await exchangeToken({ params: refreshParams(r1) }, deps(db, new Date(NOW.getTime() + 5_000)));
+    assert.ok(retried.ok, "a quick retry is not treated as theft");
+    if (!retried.ok) throw new Error("unreachable");
+    assert.equal(retried.body.refresh_token, rotated.body.refresh_token, "the same successor is handed back");
+    assert.ok(retried.body.access_token.length >= 32, "with a usable access token");
+    assert.equal(await liveRefreshTokens(db, connectionId, NOW), 1, "still one live refresh token");
+  } finally {
+    await db.close();
+  }
+});
+
+test("replaying a token whose successor has already been used revokes the connection, even within the window", async () => {
+  const db = await dbWithClient();
+  try {
+    const connectionId = randomUUID();
+    const first = await exchangeToken({ params: codeExchangeParams(await seedAuthCode(db, { connectionId })) }, deps(db));
+    if (!first.ok) throw new Error("unreachable");
+    const r1 = first.body.refresh_token;
+    const second = await exchangeToken({ params: refreshParams(r1) }, deps(db));
+    if (!second.ok) throw new Error("unreachable");
+    const third = await exchangeToken({ params: refreshParams(second.body.refresh_token) }, deps(db));
+    if (!third.ok) throw new Error("unreachable");
+
+    const replay = await exchangeToken({ params: refreshParams(r1) }, deps(db));
+    assert.equal(replay.ok, false, "a token two generations old is a replay");
+    if (!replay.ok) assert.equal(replay.error, "invalid_grant");
+    const current = await exchangeToken({ params: refreshParams(third.body.refresh_token) }, deps(db));
+    assert.equal(current.ok, false, "the connection's tokens were revoked");
   } finally {
     await db.close();
   }
