@@ -30,7 +30,8 @@
 // read or write another's unlock methods. This module reads no `process.env` and
 // holds no key (config flows from `src/server/config.ts` alone, INV-103).
 
-import { hkdfSync, scryptSync, timingSafeEqual } from "node:crypto";
+import { hkdfSync, scrypt, timingSafeEqual } from "node:crypto";
+import { promisify } from "node:util";
 
 import type { Random } from "../seams/random";
 import type { Db } from "./index";
@@ -69,12 +70,20 @@ const SCRYPT_PARAMS = { N: 16384, r: 8, p: 1 } as const;
 // The stored recovery-auth hash: scrypt(HKDF(code, info), salt). HKDF
 // domain-separates the code (an empty salt, as only the info is named), and scrypt
 // makes the result slow to brute-force. Deterministic in the code and salt, so
-// verify recomputes it from the stored salt.
-function recoveryAuthHash(code: string, salt: Uint8Array): Buffer {
+// verify recomputes it from the stored salt. The async scrypt runs on the libuv pool, so a
+// derivation never blocks the event loop (review: the sync form stalled every request).
+const scryptAsync = promisify(scrypt) as (
+  password: Buffer,
+  salt: Buffer,
+  keylen: number,
+  options: { N: number; r: number; p: number },
+) => Promise<Buffer>;
+
+async function recoveryAuthHash(code: string, salt: Uint8Array): Promise<Buffer> {
   const prk = Buffer.from(
     hkdfSync("sha256", Buffer.from(code, "utf8"), new Uint8Array(0), Buffer.from(HKDF_INFO, "utf8"), HKDF_KEY_LEN),
   );
-  return scryptSync(prk, Buffer.from(salt), SCRYPT_KEY_LEN, SCRYPT_PARAMS);
+  return scryptAsync(prk, Buffer.from(salt), SCRYPT_KEY_LEN, SCRYPT_PARAMS);
 }
 
 // The person's FIXED passkey-PRF salt, created once on first call and returned
@@ -162,7 +171,7 @@ export async function saveRecoveryAuth(
   deps: { random: Random },
 ): Promise<void> {
   const salt = deps.random.randomBytes(RECOVERY_SALT_BYTES);
-  const hash = recoveryAuthHash(code, salt);
+  const hash = await recoveryAuthHash(code, salt);
   await db.query(
     `INSERT INTO vault_recovery_auth (user_id, auth_hash, salt)
      VALUES ($1, $2, $3)
@@ -185,6 +194,6 @@ export async function verifyRecoveryAuth(db: Db, userId: string, code: string): 
   if (!row) return false;
 
   const expected = Buffer.from(row.auth_hash as string, "hex");
-  const actual = recoveryAuthHash(code, Buffer.from(row.salt as string, "hex"));
+  const actual = await recoveryAuthHash(code, Buffer.from(row.salt as string, "hex"));
   return expected.length === actual.length && timingSafeEqual(expected, actual);
 }

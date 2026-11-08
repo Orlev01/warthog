@@ -183,7 +183,8 @@ const CORE_TOOL_SPECS: readonly CoreToolSpec[] = [
     extra: (p) => ({
       request: "card",
       amount: p.amount as number,
-      currency: p.currency as string,
+      // An ISO code: "aud" or " AUD " must not read as a foreign currency.
+      currency: (p.currency as string).trim().toUpperCase(),
       merchant: p.merchant as string,
     }),
   },

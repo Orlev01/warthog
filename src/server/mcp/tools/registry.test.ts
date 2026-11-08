@@ -343,3 +343,17 @@ test("a very large permitted connector set collapses into find_tools + call_tool
     assert.ok(resolved.includes(name), `collapsing connector tools keeps the core tool "${name}"`);
   }
 });
+
+// Review fix: an agent's currency code reaches the pipeline as an ISO code ("usd" and
+// " AUD " are AUD/USD), so a lower-case code is never treated as a foreign currency.
+test("request_card hands the pipeline the currency code upper-cased and trimmed", async () => {
+  const { pipeline, calls } = spyPipeline();
+  const registry = createToolRegistry({ pipeline });
+
+  await registry.get("request_card")!.handle(
+    { amount: 10, currency: " aud ", merchant: "Acme" },
+    connectionFor("user-1"),
+  );
+
+  assert.equal(calls[0]?.call.currency, "AUD");
+});
