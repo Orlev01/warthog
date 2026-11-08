@@ -22,7 +22,8 @@ import { createInboxActions, type ActionResult } from "./actions";
 // seam's `load`) into the <InboxView> props — the person's OWN pending approvals
 // (newest-first) + their decision history, each pending request's release kind, and a
 // card release's saved-card picker — and renders the view. Viewing marks every pending
-// approval OPENED, suppressing its SMS/email fallback.
+// approval OPENED, suppressing its SMS/email fallback. A notification tap lands here with
+// `?approval=<id>`, which the view uses to bring that request into view (review fix W4.2).
 //
 // It binds the three decision controls to inline `use server` wrappers (the sibling
 // activity screen's pattern): each re-derives the verified session (never a client
@@ -196,8 +197,13 @@ export default async function InboxPage({
 }) {
   // Read the request first: touching per-request data marks the page dynamic, so
   // `next build` never prerenders it (and never opens the database at build time).
-  const rawNotice = (await searchParams).notice;
+  const params = await searchParams;
+  const rawNotice = params.notice;
   const notice = typeof rawNotice === "string" ? (NOTICES[rawNotice] ?? null) : null;
+  // A notification tap opens /inbox?approval=<id> (review fix W4.2): the view marks that
+  // request, scrolls to it and focuses it, or says plainly that it was decided or is gone.
+  // The id is only compared against the person's own loaded approvals, never rendered.
+  const focusApproval = typeof params.approval === "string" ? params.approval : undefined;
   const db = await getServerDb();
   const session = await resolveSession(db);
   if (!session) {
@@ -210,6 +216,7 @@ export default async function InboxPage({
       {notice ? <NoticeBanner notice={notice} /> : null}
       <InboxView
         {...view}
+        focusApproval={focusApproval}
         approveAction={approveAction}
         denyAction={denyAction}
         moreDetailAction={moreDetailAction}

@@ -2,8 +2,10 @@
 
 import * as React from "react";
 import {
+  Bell,
   Clock,
   CheckCircle,
+  Info,
   XCircle,
   HelpCircle,
   type LucideIcon,
@@ -109,6 +111,11 @@ export type InboxViewProps = {
   moreDetailAction?: InboxAction;
   // The person's saved cards, offered in a card release's on-device picker.
   savedCards?: readonly SavedCardView[];
+  // The approval a notification tap opened (/inbox?approval=<id>, review fix W4.2). The
+  // view marks that request, scrolls to it and moves focus to it; one that was already
+  // decided or is gone gets a plain notice. Compared against the loaded ids only — it is
+  // never written into the page.
+  focusApproval?: string;
 };
 
 // ─── styling (design tokens; no raw hex) ─────────────────────────────────────────────
@@ -218,6 +225,77 @@ function AskControl({
   );
 }
 
+// ─── the approval a notification opened (review fix W4.2) ────────────────────────────
+//
+// A push notification opens /inbox?approval=<id> (public/sw.js). That request is marked
+// in words and an icon (never colour alone), scrolled into view and given focus once the
+// page has mounted, so the person lands straight on it. A request that was already
+// decided, or that is gone, gets a plain notice instead.
+
+// The element id every request's list item carries, so the opened one can be found.
+function approvalElementId(id: string): string {
+  return `approval-${id}`;
+}
+
+// The opened request's highlight: an accent border and ring on top of the words below.
+const FOCUSED_ITEM = "border-accent ring-2 ring-accent focus:outline-none";
+
+function OpenedTag() {
+  return (
+    <span className="inline-flex items-center gap-1.5 text-xs font-medium text-accent">
+      <Bell aria-hidden={true} className="h-3.5 w-3.5 shrink-0" />
+      From your notification
+    </span>
+  );
+}
+
+// The minimal DOM this needs, as a seam so it is testable without a browser.
+type FocusTarget = {
+  scrollIntoView(options?: ScrollIntoViewOptions): void;
+  focus(options?: FocusOptions): void;
+};
+type FocusDocument = { getElementById(id: string): FocusTarget | null };
+
+// Scroll the opened request into view and move focus to it (so a keyboard or screen
+// reader user lands on it too). False when it is not on the page — never an error.
+export function focusApprovalElement(doc: FocusDocument, approvalId: string): boolean {
+  const element = doc.getElementById(approvalElementId(approvalId));
+  if (!element) return false;
+  element.scrollIntoView({ block: "center" });
+  element.focus({ preventScroll: true });
+  return true;
+}
+
+// Where the opened approval stands among the loaded requests.
+type OpenedState = "pending" | "decided" | "expired" | "gone";
+
+function openedStateOf(
+  id: string,
+  pending: readonly PendingRequestView[],
+  history: readonly DecidedRequestView[],
+): OpenedState {
+  if (pending.some((request) => request.id === id)) return "pending";
+  const decided = history.find((entry) => entry.id === id);
+  if (!decided) return "gone";
+  return decided.status === "expired" ? "expired" : "decided";
+}
+
+// Plain words for an opened approval that can no longer be decided.
+const OPENED_NOTICE: Record<Exclude<OpenedState, "pending">, string> = {
+  decided: "That request has already been decided. You'll find it under History below.",
+  expired: "That request expired before it was decided. You'll find it under History below.",
+  gone: "We couldn't find that request. It may have expired or been removed.",
+};
+
+function OpenedNotice({ state }: { state: Exclude<OpenedState, "pending"> }) {
+  return (
+    <div role="status" className="flex items-start gap-3 rounded-card border border-line bg-surface p-4 text-sm text-fg">
+      <Info aria-hidden={true} className="mt-0.5 h-5 w-5 shrink-0" />
+      <p>{OPENED_NOTICE[state]}</p>
+    </div>
+  );
+}
+
 // ─── the pending list ────────────────────────────────────────────────────────────────
 
 // A detail value (and any free-text line) may be one long unbroken string — an email
@@ -231,16 +309,23 @@ function PendingItem({
   denyAction,
   moreDetailAction,
   savedCards,
+  focused,
 }: {
   request: PendingRequestView;
   approveAction?: InboxAction;
   denyAction?: InboxAction;
   moreDetailAction?: InboxAction;
   savedCards?: readonly SavedCardView[];
+  focused: boolean;
 }) {
   const isRelease = request.release !== null;
   return (
-    <li className="flex flex-col gap-3 rounded-card border border-line bg-surface p-4">
+    <li
+      id={approvalElementId(request.id)}
+      tabIndex={focused ? -1 : undefined}
+      className={`flex flex-col gap-3 rounded-card border bg-surface p-4 ${focused ? FOCUSED_ITEM : "border-line"}`}
+    >
+      {focused ? <OpenedTag /> : null}
       <p className={`text-fg ${WRAP_ANYWHERE}`}>
         <span className="font-medium">{request.agent}</span> {request.sentence}
       </p>
@@ -287,10 +372,15 @@ const HISTORY_META: Record<DecidedStatus, { Icon: LucideIcon; tone: string }> = 
   more_detail: { Icon: HelpCircle, tone: "text-fg-muted" },
 };
 
-function HistoryItem({ entry }: { entry: DecidedRequestView }) {
+function HistoryItem({ entry, focused }: { entry: DecidedRequestView; focused: boolean }) {
   const { Icon, tone } = HISTORY_META[entry.status];
   return (
-    <li className="flex flex-col gap-1 rounded-card border border-line bg-surface p-4">
+    <li
+      id={approvalElementId(entry.id)}
+      tabIndex={focused ? -1 : undefined}
+      className={`flex flex-col gap-1 rounded-card border bg-surface p-4 ${focused ? FOCUSED_ITEM : "border-line"}`}
+    >
+      {focused ? <OpenedTag /> : null}
       <p className={`text-fg ${WRAP_ANYWHERE}`}>
         <span className="font-medium">{entry.agent}</span> {entry.sentence}
       </p>
@@ -313,11 +403,18 @@ export function InboxView({
   denyAction,
   moreDetailAction,
   savedCards,
+  focusApproval,
 }: InboxViewProps) {
   const isEmpty = pending.length === 0 && history.length === 0;
+  const opened = focusApproval ? openedStateOf(focusApproval, pending, history) : null;
+  // Once mounted, bring the opened request into view and give it focus.
+  React.useEffect(() => {
+    if (focusApproval && opened !== "gone") focusApprovalElement(document, focusApproval);
+  }, [focusApproval, opened]);
   return (
     <div className="mx-auto flex max-w-3xl flex-col gap-6 px-4 py-8 sm:px-6">
       <h1 className="text-2xl font-semibold tracking-tight text-fg">Inbox</h1>
+      {opened !== null && opened !== "pending" ? <OpenedNotice state={opened} /> : null}
       {isEmpty ? (
         <EmptyState
           heading="Nothing waiting"
@@ -339,6 +436,7 @@ export function InboxView({
                     denyAction={denyAction}
                     moreDetailAction={moreDetailAction}
                     savedCards={savedCards}
+                    focused={request.id === focusApproval}
                   />
                 ))}
               </ul>
@@ -351,7 +449,7 @@ export function InboxView({
             ) : (
               <ul className="flex flex-col gap-3">
                 {history.map((entry) => (
-                  <HistoryItem key={entry.id} entry={entry} />
+                  <HistoryItem key={entry.id} entry={entry} focused={entry.id === focusApproval} />
                 ))}
               </ul>
             )}
