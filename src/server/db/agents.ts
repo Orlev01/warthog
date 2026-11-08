@@ -180,3 +180,45 @@ export async function recordAgentActivity(
   }
   return toAgent(row);
 }
+
+// A uuid-shaped id. agents.id is a uuid column, so an id of any other shape names no
+// agent: it is answered without a query rather than cast at `WHERE id = $1` (OBS-049).
+const UUID_SHAPE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+
+// Count one agent call (review fix W2.2): the pipeline calls this for EVERY call that
+// reaches it, so the agent card's request count and last-active time stay true. One
+// atomic UPDATE (request_count = request_count + 1), never a read-then-write, so parallel
+// calls each count. Member-scoped like recordAgentActivity, but it never throws for an
+// agent it cannot find (an unknown or malformed id, or another person's agent): there is
+// simply nothing to count, and the call itself must still be handled. Returns whether an
+// agent was counted.
+export async function countAgentRequest(
+  db: Db,
+  { userId, id }: RecordActivityInput,
+  clock: Clock,
+): Promise<boolean> {
+  if (!UUID_SHAPE.test(id) || !UUID_SHAPE.test(userId)) return false;
+  const result = await db.query(
+    `UPDATE agents
+        SET request_count = request_count + 1,
+            last_active_at = $1::timestamptz
+      WHERE id = $2 AND user_id = $3
+      RETURNING id`,
+    [clock.now().toISOString(), id, userId],
+  );
+  return result.rows.length > 0;
+}
+
+// The display names of the agents OWNED BY `userId` (member-scoped), keyed by BOTH each
+// agent's id and its connection id (review fix W2.1). Activity entries name an agent by
+// its id, while rule scopes and grants name it by its connection id; the screens show
+// the name the person gave it for either, never the raw id. The two id spaces are
+// independent random uuids, so the keys never collide.
+export async function agentNamesForUser(db: Db, userId: string): Promise<Map<string, string>> {
+  const names = new Map<string, string>();
+  for (const agent of await listAgentsForUser(db, userId)) {
+    names.set(agent.id, agent.displayName);
+    names.set(agent.connectionId, agent.displayName);
+  }
+  return names;
+}
