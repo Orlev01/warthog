@@ -465,6 +465,24 @@ test("a request is checked against household figures in the household currency",
   assert.match(evaluate(cardCall({ amount: 10, currency: "USD" }), noRate).reason, /reference rate/i);
 });
 
+// Review fix D8 — the block/allow lists and merchant rules compare normalised merchants.
+test("merchant lists and merchant rules cannot be dodged with case or spacing", () => {
+  const blocked = makeCtx({ card: makeCard({ merchantBlock: ["Casino"] }) });
+  assert.equal(evaluate(cardCall({ merchant: " casino " }), blocked).decision, "deny");
+  const allowed = makeCtx({ card: makeCard({ merchantAllow: ["BoxCo"] }) });
+  assert.equal(evaluate(cardCall({ merchant: "BOXCO" }), allowed).decision, "ask");
+  const rule: IdentifiedRule = {
+    id: "no-amazon",
+    kind: "never_allow",
+    scope: { type: "any_agent" },
+    action: { type: "card_request" },
+    condition: { type: "merchant_in", merchants: ["Amazon"] },
+  };
+  const r = evaluate(cardCall({ merchant: "AMAZON " }), makeCtx({ rules: [rule] }));
+  assert.equal(r.decision, "deny");
+  assert.equal(r.ruleId, "no-amazon");
+});
+
 test("a card request to a blocked merchant denies", () => {
   const r = evaluate(cardCall({ merchant: "Casino" }), makeCtx({ card: makeCard({ merchantBlock: ["Casino"] }) }));
   assertShape(r);

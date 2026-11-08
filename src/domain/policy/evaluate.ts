@@ -13,6 +13,7 @@
 
 import {
   conditionMatches,
+  merchantInList,
   type MatchContext,
   type Rule,
   type RuleAction,
@@ -227,10 +228,10 @@ function evaluateCard(call: PolicyCall, ctx: PolicyContext): PolicyResult | unde
     }
   }
 
-  if (card.merchantBlock && call.merchant !== undefined && card.merchantBlock.includes(call.merchant)) {
+  if (card.merchantBlock && call.merchant !== undefined && merchantInList(call.merchant, card.merchantBlock)) {
     return deny("This merchant is on your block list.");
   }
-  if (card.merchantAllow && !(call.merchant !== undefined && card.merchantAllow.includes(call.merchant))) {
+  if (card.merchantAllow && !(call.merchant !== undefined && merchantInList(call.merchant, card.merchantAllow))) {
     return deny("This merchant is not on your allow list.");
   }
 
