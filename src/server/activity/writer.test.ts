@@ -957,3 +957,49 @@ test("an entry recorded without a payload is stored (as a null payload) rather t
     await db.close();
   }
 });
+
+// ===================================================================================
+// The PLAINTEXT metadata an agent can supply is redacted too (review finding: `merchant` —
+// free agent text up to 500 characters from request_card — was written to a plaintext,
+// hash-chained column verbatim, so an agent or a prompt injection could put a card number
+// or a released value there permanently, unencrypted).
+// ===================================================================================
+
+test("record redacts a card number or released value in the merchant, kind and tool before storing them", async () => {
+  const db = await freshDb();
+  try {
+    const userId = await makeUser(db, "meta-redact");
+    const dek = freshDek();
+    const RELEASED = "swordfishxyz";
+    const matchesReleased = (u: string, token: string): boolean => u === userId && token === RELEASED;
+    const recorder = recorderFor(db, userId, dek, matchesReleased);
+
+    const entry = await recorder.record({
+      userId,
+      kind: `note ${CARD}`,
+      source: "agent_reported",
+      tool: `lookup ${RELEASED}`,
+      merchant: `Shop ${CARD} ref ${RELEASED}`,
+      payload: { ok: true },
+    });
+
+    const perUser = (token: string): boolean => matchesReleased(userId, token);
+    assert.equal(entry.merchant, redact(`Shop ${CARD} ref ${RELEASED}`, perUser), "the returned merchant is the redacted one");
+    assert.ok(String(entry.merchant).includes("[card "), "the card in the merchant is masked");
+    assert.ok(String(entry.merchant).includes("[released value]"), "the released value in the merchant is masked");
+
+    const [stored] = await readActivity(db, userId, dek);
+    assert.equal(stored.merchant, entry.merchant, "the stored merchant is the redacted one");
+    assert.equal(stored.kind, redact(`note ${CARD}`, perUser), "the stored kind is redacted");
+    assert.equal(stored.tool, redact(`lookup ${RELEASED}`, perUser), "the stored tool is redacted");
+    for (const cell of (await allCells(db, userId)).filter((c): c is string => typeof c === "string")) {
+      assert.ok(!cell.includes(CARD), "no stored cell carries the raw card number");
+      assert.ok(!cell.includes(RELEASED), "no stored cell carries the raw released value");
+    }
+
+    const { checkIntegrity } = await import("./integrity");
+    assert.equal((await checkIntegrity(db, userId)).intact, true, "the chain is computed over the redacted values");
+  } finally {
+    await db.close();
+  }
+});

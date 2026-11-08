@@ -7,7 +7,9 @@
 // one-source-of-truth) so the agent pipeline and every write-through depend on the
 // one contract. Each `record()`:
 //   (a) redacts the payload (`../../domain/redaction/redact`, design §4.3) with the
-//       per-user released-value matcher BEFORE anything is persisted;
+//       per-user released-value matcher BEFORE anything is persisted — and the
+//       PLAINTEXT text metadata an agent can supply (kind, tool, merchant) too, since
+//       those land unencrypted in the hash chain;
 //   (b) DEK-encrypts the redacted payload into a `v1:` envelope
 //       (`../crypto/envelope`, design §4.1) — the readable payload never lands in a
 //       column, so a card or released value never reaches the stored ciphertext in
@@ -260,21 +262,34 @@ export function createDbRecorder(options: DbRecorderOptions): ActivityRecorder {
         matchesReleased ? matchesReleased(userId, token) : false;
       const payload = redact(input.payload ?? null, perUser);
 
+      // The plaintext columns an agent's text can reach — the kind (log_activity), the tool
+      // name and the card merchant (request_card) — are stored readable for filtering and
+      // budgets, so they get the same card / released-value / length rules first: a card
+      // number or released value an agent (or a prompt injection) puts there never lands
+      // in clear. Ids and outcomes are Warthog's own values and are stored as given.
+      const text = (value: string): string => String(redact(value, perUser));
+      const stored: ActivityEntryInput = {
+        ...input,
+        kind: text(input.kind),
+        tool: input.tool === undefined ? undefined : text(input.tool),
+        merchant: input.merchant === undefined ? undefined : text(input.merchant),
+      };
+
       const { seq, occurredAt, prevHash, entryHash } = await serialisePerUser(userId, () =>
-        appendEntry(db, clock, dek, input, payload),
+        appendEntry(db, clock, dek, stored, payload),
       );
 
       return {
         userId,
         seq,
         occurredAt,
-        kind: input.kind,
-        source: input.source,
-        agentId: input.agentId,
-        connectorId: input.connectorId,
-        tool: input.tool,
-        outcome: input.outcome,
-        merchant: input.merchant,
+        kind: stored.kind,
+        source: stored.source,
+        agentId: stored.agentId,
+        connectorId: stored.connectorId,
+        tool: stored.tool,
+        outcome: stored.outcome,
+        merchant: stored.merchant,
         payload,
         prevHash,
         entryHash,
