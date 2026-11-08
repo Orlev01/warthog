@@ -397,15 +397,24 @@ test("checkIntegrity verifies only the given user's entries", async () => {
 
 test("checkIntegrity binds the user id as a parameter, never woven into the SQL text", async () => {
   const db = recordingDb();
-  const probe = "p'; DROP TABLE activity_entries; --";
+  const userId = "3f2b8c1e-4d5a-4b6c-8d7e-9f0a1b2c3d4e";
 
-  const result = await checkIntegrity(db, probe);
+  const result = await checkIntegrity(db, userId);
   assert.equal(result.intact, true, "the recording db returns no rows → a vacuously sound chain");
 
   assert.ok(db.calls.length >= 1, "the check issues at least one query");
-  assert.ok(db.calls.some((c) => c.values.includes(probe)), "the user id travels as a bound value");
+  assert.ok(db.calls.some((c) => c.values.includes(userId)), "the user id travels as a bound value");
   for (const call of db.calls) {
-    assert.ok(!call.text.includes(probe), "the id is bound, never concatenated into the SQL");
+    assert.ok(!call.text.includes(userId), "the id is bound, never concatenated into the SQL");
+  }
+
+  // An id that is not even a uuid (an injection probe) matches no entries — it is turned
+  // away before any query, so it can reach neither the SQL text nor a uuid cast (OBS-049).
+  const probeDb = recordingDb();
+  const probe = "p'; DROP TABLE activity_entries; --";
+  assert.deepEqual(await checkIntegrity(probeDb, probe), { intact: true, checked: 0, brokenSeq: null });
+  for (const call of probeDb.calls) {
+    assert.ok(!call.text.includes(probe), "the probe is never concatenated into the SQL");
     assert.ok(!call.text.includes("DROP TABLE"), "no injected statement appears in the SQL text");
   }
 });
@@ -481,9 +490,13 @@ test("the integrity handler rejects a mis-shaped field with a 4xx and never reac
   assert.equal(db.calls.length, 0, "a mis-shaped field must never reach a query");
 });
 
+// Session user ids are uuids (users.id); the check turns anything else away before a query.
+const SESSION_USER = "0b9d6c2a-1e3f-4a5b-9c8d-7e6f5a4b3c2d";
+const BODY_USER = "9e8d7c6b-5a4f-4e3d-8c2b-1a0f9e8d7c6b";
+
 test("a well-formed request runs the check and returns 200", async () => {
   const db = recordingDb();
-  const handler = createIntegrityHandler(db, "u");
+  const handler = createIntegrityHandler(db, SESSION_USER);
 
   const res = await handler(postJson(JSON.stringify({ reason: "daily job" })));
 
@@ -495,18 +508,18 @@ test("a well-formed request runs the check and returns 200", async () => {
 
 test("the integrity handler checks the session user, never a body-supplied id", async () => {
   const db = recordingDb();
-  const handler = createIntegrityHandler(db, "session-user");
+  const handler = createIntegrityHandler(db, SESSION_USER);
 
   // The body smuggles a victim's user id; the handler must ignore it and use the session's.
-  const res = await handler(postJson(JSON.stringify({ userId: "attacker", reason: "x" })));
+  const res = await handler(postJson(JSON.stringify({ userId: BODY_USER, reason: "x" })));
 
   assert.equal(res.status, 200, `expected a 2xx, got ${res.status}`);
   assert.ok(
-    db.calls.some((c) => c.values.includes("session-user")),
+    db.calls.some((c) => c.values.includes(SESSION_USER)),
     "the query is scoped to the session user id",
   );
   assert.ok(
-    !db.calls.some((c) => c.values.includes("attacker")),
+    !db.calls.some((c) => c.values.includes(BODY_USER)),
     "the body-supplied id never reaches the query",
   );
 });
@@ -566,5 +579,86 @@ test("checkIntegrity reads no process.env: a decoy env secret never appears in i
     await db.close();
     if (prev === undefined) delete process.env.WARTHOG_DECOY_SECRET;
     else process.env.WARTHOG_DECOY_SECRET = prev;
+  }
+});
+
+// ===================================================================================
+// The per-user check uses the (user_id, seq) index and reads the chain in bounded batches
+// (review finding: `WHERE user_id::text = $1` defeated the primary key, so every check — once
+// per account in the daily sweep, and on the Activity page's verify — scanned the WHOLE table
+// and held the person's entire chain, ciphertext included, in memory at once).
+// ===================================================================================
+
+// A db seam over a real database that records every SELECT the check issues against
+// activity_entries, so a test can EXPLAIN exactly those statements.
+function capturingDb(inner: Db): Db & { readonly reads: { text: string; values: unknown[] }[] } {
+  const reads: { text: string; values: unknown[] }[] = [];
+  return {
+    reads,
+    async query(text: string, values: unknown[] = []) {
+      if (/FROM\s+activity_entries/i.test(text)) reads.push({ text, values });
+      return inner.query(text, values);
+    },
+    close: () => inner.close(),
+  };
+}
+
+test("the integrity check reads a person's chain through the (user_id, seq) index, never a table scan", async () => {
+  const db = await freshDb();
+  try {
+    const userId = await makeUser(db, "index-use");
+    await buildChain(db, userId, freshDek(), 3);
+    const capturing = capturingDb(db);
+    assert.equal((await checkIntegrity(capturing, userId)).intact, true);
+    assert.ok(capturing.reads.length >= 1, "the check read the chain");
+
+    // With sequential scans priced out, a predicate the index can serve plans an index scan;
+    // one it cannot (a cast on user_id) still has to fall back to a Seq Scan.
+    await db.query("SET enable_seqscan = off");
+    for (const read of capturing.reads) {
+      const plan = await db.query(`EXPLAIN ${read.text}`, read.values);
+      const text = plan.rows.map((r) => String(Object.values(r)[0])).join("\n");
+      assert.doesNotMatch(text, /Seq Scan on activity_entries/, `the chain read uses the index:\n${text}`);
+    }
+  } finally {
+    await db.close();
+  }
+});
+
+test("the integrity check reads a long chain in bounded batches and still verifies it end to end", async () => {
+  const db = await freshDb();
+  try {
+    const userId = await makeUser(db, "batched");
+    const { INTEGRITY_BATCH_SIZE } = await import("./integrity");
+    const n = INTEGRITY_BATCH_SIZE * 2 + 3;
+    // Seed a long valid chain quickly through the writer's own digest.
+    const { computeEntryHash, GENESIS_PREV_HASH } = await import("./writer");
+    let prev = GENESIS_PREV_HASH;
+    for (let seq = 1; seq <= n; seq += 1) {
+      const occurredAt = T0.toISOString();
+      const fields = {
+        user_id: userId, seq, occurred_at: occurredAt, kind: "tool_call", source: "warthog",
+        agent_id: null, connector_id: null, tool: null, outcome: null, amount: null, currency: null,
+        merchant: null, payload_ct: `v1:${seq}`,
+      };
+      const hash = computeEntryHash(prev, fields);
+      await db.query(
+        `INSERT INTO activity_entries (user_id, seq, occurred_at, kind, source, payload_ct, prev_hash, entry_hash)
+         VALUES ($1, $2, $3, 'tool_call', 'warthog', $4, $5, $6)`,
+        [userId, seq, occurredAt, `v1:${seq}`, prev, hash],
+      );
+      prev = hash;
+    }
+
+    const capturing = capturingDb(db);
+    assert.deepEqual(await checkIntegrity(capturing, userId), { intact: true, checked: n, brokenSeq: null });
+    assert.ok(capturing.reads.length >= 3, "the chain was read in several bounded batches");
+
+    // A break in the LAST batch is still found, with the right seq (the hash carries over
+    // from one batch to the next).
+    await db.query("UPDATE activity_entries SET kind = 'tampered' WHERE user_id = $1 AND seq = $2", [userId, n - 1]);
+    assert.deepEqual(await checkIntegrity(db, userId), { intact: false, checked: n - 1, brokenSeq: n - 1 });
+  } finally {
+    await db.close();
   }
 });

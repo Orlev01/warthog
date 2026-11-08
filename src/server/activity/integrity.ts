@@ -25,10 +25,13 @@
 //
 // Member-scoped (INV-102): the user id is BOUND as a parameter — the session's id (or
 // the agent connection's), never a client value — so one person's check never reads
-// or is affected by another's entries. The id is compared as text (`user_id::text`),
-// so a value that is not a well-formed uuid simply matches no rows rather than
-// erroring at the type boundary (OBS-049); a value shaped like SQL is stored/compared
-// as inert data and cannot alter the query.
+// or is affected by another's entries. A value that is not a well-formed uuid matches
+// no rows: it is turned away before any query rather than erroring at the type
+// boundary (OBS-049), so the query can compare `user_id` as the uuid it is and use the
+// (user_id, seq) primary key — never a cast that forces a scan of every person's
+// entries. The chain is read in bounded keyset batches (INTEGRITY_BATCH_SIZE rows,
+// carrying the previous hash across), so checking a long record never holds all of it
+// in memory; the daily sweep runs this once per account.
 
 import { computeEntryHash, GENESIS_PREV_HASH } from "./writer";
 import type { Db, Row } from "../db/index";
@@ -67,46 +70,67 @@ function hashedFieldsFromRow(row: Row): Record<string, unknown> {
   };
 }
 
+// How many entries one read of the chain fetches. Bounds the memory a check holds
+// (each row carries its ciphertext) however long the record grows.
+export const INTEGRITY_BATCH_SIZE = 1000;
+
+// A canonical uuid (what every user id is). Anything else names no person.
+const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+
 // Recompute the per-user hash chain over the stored ciphertext and report whether it
 // is intact, or the seq of the first broken entry. Reads only the given user's
-// entries (bound as a parameter) and never decrypts a payload.
+// entries (bound as a parameter), batch by batch in seq order, and never decrypts a
+// payload.
 export async function checkIntegrity(db: Db, userId: string): Promise<IntegrityResult> {
-  const result = await db.query(
-    `SELECT user_id, seq, occurred_at, kind, source, agent_id, connector_id, tool,
-            outcome, amount, currency, merchant, payload_ct, prev_hash, entry_hash
-       FROM activity_entries
-      WHERE user_id::text = $1
-      ORDER BY seq ASC`,
-    [userId],
-  );
-  const rows = result.rows;
+  if (!UUID.test(userId)) {
+    return { intact: true, checked: 0, brokenSeq: null };
+  }
 
   let expectedSeq = 1;
   let expectedPrev = GENESIS_PREV_HASH;
   let examined = 0;
-  for (const row of rows) {
-    const seq = Number(row.seq);
-    const prevHash = String(row.prev_hash);
-    const entryHash = String(row.entry_hash);
-    examined += 1;
+  let afterSeq = 0;
+  for (;;) {
+    // The next batch strictly after the last seq read (keyset pagination on the primary
+    // key). Ordering by seq is what lets a gap or a reorder show up below.
+    const result = await db.query(
+      `SELECT user_id, seq, occurred_at, kind, source, agent_id, connector_id, tool,
+              outcome, amount, currency, merchant, payload_ct, prev_hash, entry_hash
+         FROM activity_entries
+        WHERE user_id = $1::uuid AND seq > $2
+        ORDER BY seq ASC
+        LIMIT $3`,
+      [userId, afterSeq, INTEGRITY_BATCH_SIZE],
+    );
+    const rows = result.rows;
 
-    // (1) seq must be contiguous — a hole or an insertion shows here.
-    if (seq !== expectedSeq) {
-      return { intact: false, checked: examined, brokenSeq: seq };
-    }
-    // (2) prev_hash must chain to the previous entry's entry_hash (genesis first).
-    if (prevHash !== expectedPrev) {
-      return { intact: false, checked: examined, brokenSeq: seq };
-    }
-    // (3) entry_hash must recompute from the stored row — any altered hashed field,
-    // including the ciphertext, breaks this (no decryption is attempted).
-    if (computeEntryHash(prevHash, hashedFieldsFromRow(row)) !== entryHash) {
-      return { intact: false, checked: examined, brokenSeq: seq };
+    for (const row of rows) {
+      const seq = Number(row.seq);
+      const prevHash = String(row.prev_hash);
+      const entryHash = String(row.entry_hash);
+      examined += 1;
+
+      // (1) seq must be contiguous — a hole or an insertion shows here.
+      if (seq !== expectedSeq) {
+        return { intact: false, checked: examined, brokenSeq: seq };
+      }
+      // (2) prev_hash must chain to the previous entry's entry_hash (genesis first).
+      if (prevHash !== expectedPrev) {
+        return { intact: false, checked: examined, brokenSeq: seq };
+      }
+      // (3) entry_hash must recompute from the stored row — any altered hashed field,
+      // including the ciphertext, breaks this (no decryption is attempted).
+      if (computeEntryHash(prevHash, hashedFieldsFromRow(row)) !== entryHash) {
+        return { intact: false, checked: examined, brokenSeq: seq };
+      }
+
+      expectedSeq = seq + 1;
+      expectedPrev = entryHash;
+      afterSeq = seq;
     }
 
-    expectedSeq = seq + 1;
-    expectedPrev = entryHash;
+    if (rows.length < INTEGRITY_BATCH_SIZE) break;
   }
 
-  return { intact: true, checked: rows.length, brokenSeq: null };
+  return { intact: true, checked: examined, brokenSeq: null };
 }
