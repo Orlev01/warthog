@@ -406,3 +406,94 @@ test("the jobs migration applies and re-running every migration changes nothing"
     await db.close();
   }
 });
+
+// --- a claim is a LEASE: a row stranded in 'claimed' is picked up again --------------
+//
+// WHY (review finding "claimed job rows are never reclaimed"): a deploy, restart or OOM
+// while a handler ran left its row 'claimed' for ever — nothing selected or reset it — so an
+// account reset never completed and an approval fallback was never sent, silently. A claim
+// now holds the row only for a lease; once the lease has lapsed without the row reaching
+// done / pending / failed, the next claim takes it again.
+
+test("a row left 'claimed' by a crash is reclaimed and run once its lease has lapsed", async () => {
+  const c = mutableClock(T0);
+  const db = await freshDb();
+  try {
+    const { CLAIM_LEASE_MS } = await import("./jobs");
+    const row = await enqueue(db, { type: "account_reset.complete", runAt: c.clock.now() });
+
+    // The process claims the row, then dies before its handler finishes.
+    const first = await claim(db, c.clock);
+    assert.equal(first?.id, row.id);
+
+    let calls = 0;
+    const dispatch = { "account_reset.complete": async () => void (calls += 1) };
+
+    // Within the lease the row is still held (a live handler may be running).
+    c.advance(CLAIM_LEASE_MS - 1);
+    assert.equal(await run(db, c.clock, dispatch), null, "a row inside its lease is not handed out again");
+    assert.equal(calls, 0);
+
+    // After the restart, once the lease has lapsed, the row runs and completes.
+    c.advance(2);
+    const reclaimed = await run(db, c.clock, dispatch);
+    assert.equal(reclaimed?.id, row.id, "the stranded row is reclaimed");
+    assert.equal(reclaimed?.attempts, 2, "the reclaim counts as another attempt");
+    assert.equal(calls, 1, "its handler runs");
+    assert.equal(await statusOf(db, row.id), "done");
+  } finally {
+    await db.close();
+  }
+});
+
+test("a stranded row that has used every attempt is failed, not run again", async () => {
+  const c = mutableClock(T0);
+  const db = await freshDb();
+  try {
+    const { CLAIM_LEASE_MS, MAX_ATTEMPTS } = await import("./jobs");
+    const row = await enqueue(db, { type: "poison", runAt: c.clock.now() });
+    // A row whose handler crashes the process on every attempt.
+    await db.query("UPDATE jobs SET attempts = $2 WHERE id = $1", [row.id, MAX_ATTEMPTS - 1]);
+    assert.equal((await claim(db, c.clock))?.attempts, MAX_ATTEMPTS);
+
+    c.advance(CLAIM_LEASE_MS + 1);
+    let calls = 0;
+    assert.equal(await run(db, c.clock, { poison: async () => void (calls += 1) }), null);
+    assert.equal(calls, 0, "a row that has crashed every attempt is not run again");
+    assert.equal(await statusOf(db, row.id), "failed", "it is dead-lettered instead");
+  } finally {
+    await db.close();
+  }
+});
+
+test("a worker whose lease lapsed cannot overwrite the outcome of the reclaimed run", async () => {
+  const c = mutableClock(T0);
+  const db = await freshDb();
+  try {
+    const { CLAIM_LEASE_MS } = await import("./jobs");
+    const row = await enqueue(db, { type: "slow", runAt: c.clock.now() });
+
+    // Worker A claims and stalls past its lease; worker B reclaims and finishes.
+    let releaseA: () => void = () => {};
+    const stalled = new Promise<void>((resolve) => {
+      releaseA = resolve;
+    });
+    const runA = run(db, c.clock, { slow: () => stalled });
+    await new Promise((resolve) => setTimeout(resolve, 20));
+    c.advance(CLAIM_LEASE_MS + 1);
+    const reclaimed = await run(db, c.clock, {
+      slow: async () => {
+        throw new Error("B's attempt failed and must be retried");
+      },
+    }).catch(() => "B threw");
+    assert.equal(reclaimed, "B threw");
+    assert.equal(await statusOf(db, row.id), "pending", "B's failure re-queued the row for retry");
+
+    // A finally finishes: its stale success must not mark the re-queued row done.
+    releaseA();
+    await runA;
+    assert.equal(await statusOf(db, row.id), "pending", "the stale worker's outcome is fenced out");
+  } finally {
+    await db.close();
+  }
+});

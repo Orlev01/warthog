@@ -625,3 +625,61 @@ test("a tick folds no ambient env secret into what it writes (config is read fro
     else process.env.WARTHOG_DECOY_SECRET = prev;
   }
 });
+
+// ===========================================================================
+// Ticks never overlap (review finding: the interval timer fires regardless of whether the
+// previous tick finished, so long drains ran concurrently with the next tick's sweeps and
+// drain — overlapping approval-expiry runs, and a lease-lapsed row reclaimed while its
+// first handler was still running).
+// ===========================================================================
+
+test("a tick that fires while the previous one is still running does nothing", async () => {
+  const c = mutableClock(T0);
+  const db = await freshDb();
+  try {
+    let running = 0;
+    let maxConcurrent = 0;
+    let runs = 0;
+    let release: () => void = () => {};
+    const gate = new Promise<void>((resolve) => {
+      release = resolve;
+    });
+    const scheduler = createScheduler({
+      getDb: async () => db,
+      clock: c.clock,
+      sweeps: [
+        {
+          name: "slow-sweep",
+          intervalMs: MINUTE_MS,
+          run: async () => {
+            runs += 1;
+            running += 1;
+            maxConcurrent = Math.max(maxConcurrent, running);
+            await gate;
+            running -= 1;
+          },
+        },
+      ],
+      dispatch: {},
+      log: () => {},
+    });
+
+    const first = scheduler.tick();
+    // The timer fires again (twice) after the interval, while the first tick is stuck.
+    c.advance(MINUTE_MS);
+    await scheduler.tick();
+    c.advance(MINUTE_MS);
+    await scheduler.tick();
+    assert.equal(runs, 1, "the overlapping ticks ran nothing");
+
+    release();
+    await first;
+    assert.equal(maxConcurrent, 1, "the sweep never ran concurrently with itself");
+
+    // Once the first tick has finished, the next one runs normally.
+    await scheduler.tick();
+    assert.equal(runs, 2, "a tick after the previous one finished runs the due sweep");
+  } finally {
+    await db.close();
+  }
+});

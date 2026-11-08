@@ -2,10 +2,16 @@
 //
 // Background work (connection refresh, reminders, provider fallback, integrity
 // checks, account purge) runs in-process off the `jobs` table. This module makes
-// two guarantees:
+// three guarantees:
 //   • claim() hands out ONE due job at a time with FOR UPDATE SKIP LOCKED, so two
 //     concurrent (or serial) claimers never take the same job — the row is marked
 //     claimed inside the very statement that selects it.
+//   • a claim is a LEASE (CLAIM_LEASE_MS): a row whose claim lapsed without reaching
+//     done / pending / failed — its process was restarted or crashed mid-handler — is
+//     claimable again (or failed, once it has used every attempt), so no job is ever
+//     stranded in 'claimed'. The row's attempt count fences each claim: only the worker
+//     holding the CURRENT claim can record the outcome, so a stale worker that wakes up
+//     after its row was reclaimed changes nothing.
 //   • run() is idempotent: a job whose handler SUCCEEDS is marked done and is never
 //     claimed again; a job whose handler THROWS is returned to the queue, due again
 //     after a backoff, until MAX_ATTEMPTS, then failed; a job whose type has no
@@ -38,6 +44,12 @@ export interface NewJob {
 // A failed job is retried, but not instantly: it becomes due again a short while
 // later, so a transient fault has time to clear and a hot loop cannot spin on it.
 const RETRY_BACKOFF_MS = 60_000;
+
+// How long a claim holds its row. A handler that has not finished (done, re-queued or
+// failed) within this long is presumed lost with its process, and the row is handed out
+// again. Generous next to every handler's real run time (seconds), so a live handler is
+// never doubled; the in-process scheduler also never overlaps its own ticks.
+export const CLAIM_LEASE_MS = 15 * 60_000;
 
 // The columns every read returns, kept in one place so claim and enqueue hand back
 // the same shape.
@@ -74,21 +86,35 @@ export async function enqueue(db: Db, job: NewJob): Promise<Job> {
 
 // Claim ONE due job (run_at <= now), marking it claimed in the same statement so a
 // later or concurrent claim never hands out the same job. FOR UPDATE SKIP LOCKED
-// makes a concurrent claimer skip a row another is already taking. Returns the
-// claimed job, or null when nothing is due.
+// makes a concurrent claimer skip a row another is already taking. A row whose claim
+// lapsed (claimed_at older than the lease, or unset on a row stranded before leases
+// existed) is due again — unless it has already used every attempt, in which case it is
+// failed first: a job that takes its process down every time must not run for ever.
+// Returns the claimed job, or null when nothing is due.
 export async function claim(db: Db, clock: Clock): Promise<Job | null> {
+  const now = clock.now();
+  const leaseExpiredBefore = new Date(now.getTime() - CLAIM_LEASE_MS).toISOString();
+  await db.query(
+    `UPDATE jobs SET status = 'failed'
+      WHERE status = 'claimed'
+        AND (claimed_at IS NULL OR claimed_at <= $1::timestamptz)
+        AND attempts >= $2`,
+    [leaseExpiredBefore, MAX_ATTEMPTS],
+  );
   const result = await db.query(
     `UPDATE jobs
-        SET status = 'claimed', attempts = attempts + 1
+        SET status = 'claimed', attempts = attempts + 1, claimed_at = $1::timestamptz
       WHERE id = (
               SELECT id FROM jobs
-               WHERE status = 'pending' AND run_at <= $1::timestamptz
+               WHERE (status = 'pending' AND run_at <= $1::timestamptz)
+                  OR (status = 'claimed'
+                      AND (claimed_at IS NULL OR claimed_at <= $2::timestamptz))
                ORDER BY run_at
                FOR UPDATE SKIP LOCKED
                LIMIT 1
             )
       RETURNING ${RETURNING}`,
-    [clock.now().toISOString()],
+    [now.toISOString(), leaseExpiredBefore],
   );
   const row = result.rows[0];
   return row ? toJob(row) : null;
@@ -134,8 +160,12 @@ export async function run(
       : Object.hasOwn(dispatch, job.type)
         ? dispatch[job.type]
         : undefined;
+  // Every outcome below is recorded only while THIS claim is still the row's current one
+  // (still 'claimed', same attempt count): if the lease lapsed and another worker took
+  // the row, this stale worker's outcome is dropped rather than overwriting that run's.
+  const CURRENT_CLAIM = "id = $1 AND status = 'claimed' AND attempts = $2";
   if (!handler) {
-    await db.query("UPDATE jobs SET status = 'failed' WHERE id = $1", [job.id]);
+    await db.query(`UPDATE jobs SET status = 'failed' WHERE ${CURRENT_CLAIM}`, [job.id, job.attempts]);
     throw new UnknownJobTypeError(job.type);
   }
 
@@ -143,18 +173,18 @@ export async function run(
     await handler(job);
   } catch (error) {
     if (job.attempts >= MAX_ATTEMPTS) {
-      await db.query("UPDATE jobs SET status = 'failed' WHERE id = $1", [job.id]);
+      await db.query(`UPDATE jobs SET status = 'failed' WHERE ${CURRENT_CLAIM}`, [job.id, job.attempts]);
     } else {
       const backoff = RETRY_BACKOFF_MS * 2 ** Math.max(0, job.attempts - 1);
       const retryAt = new Date(clock.now().getTime() + backoff).toISOString();
-      await db.query("UPDATE jobs SET status = 'pending', run_at = $2::timestamptz WHERE id = $1", [
-        job.id,
-        retryAt,
-      ]);
+      await db.query(
+        `UPDATE jobs SET status = 'pending', run_at = $3::timestamptz WHERE ${CURRENT_CLAIM}`,
+        [job.id, job.attempts, retryAt],
+      );
     }
     throw error;
   }
 
-  await db.query("UPDATE jobs SET status = 'done' WHERE id = $1", [job.id]);
+  await db.query(`UPDATE jobs SET status = 'done' WHERE ${CURRENT_CLAIM}`, [job.id, job.attempts]);
   return job;
 }

@@ -9,6 +9,11 @@
 //      the library); either way the failure is logged (redacted) and the drain carries on
 //      with the other due rows.
 //
+// Ticks never overlap: the interval timer keeps firing while a long tick (a slow sweep, a
+// big drain) is still running, and a tick that fires then does nothing — so a sweep never
+// runs concurrently with itself and a queue row's claim is never reclaimed by this same
+// process while its handler is still running.
+//
 // Every failure reaches `log` only after redaction, so a card number or token in an error
 // message never lands in a log. `getScheduler()` is the process-wide instance built from
 // the real seams (src/server/jobs/compose.ts); `createScheduler()` takes injected deps.
@@ -76,10 +81,17 @@ export function createScheduler(deps: SchedulerDeps): Scheduler {
     }
   }
 
+  let inFlight = false;
   return {
     async tick(): Promise<void> {
-      await runDueSweeps();
-      await drain(await getDb());
+      if (inFlight) return;
+      inFlight = true;
+      try {
+        await runDueSweeps();
+        await drain(await getDb());
+      } finally {
+        inFlight = false;
+      }
     },
   };
 }
