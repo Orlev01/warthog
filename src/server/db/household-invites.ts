@@ -57,10 +57,10 @@ export const INVITES_PER_HOUR = 10;
 // Why an invite was not issued: the household has no free place left for another open
 // invite ("no_room"), or it has sent INVITES_PER_HOUR invites in the last hour
 // ("throttled"). Thrown by issueInvite; nothing is stored and nothing should be sent.
-export type InviteRefusal = "no_room" | "throttled";
+export type IssueRefusal = "no_room" | "throttled";
 
 export class InviteRefusedError extends Error {
-  constructor(readonly reason: InviteRefusal) {
+  constructor(readonly reason: IssueRefusal) {
     super(reason === "no_room" ? "The household has no free place for another invite" : "Too many invites this hour");
     this.name = "InviteRefusedError";
   }
@@ -156,7 +156,7 @@ export async function issueInvite(
   const expiresAt = new Date(now.getTime() + INVITE_TTL_MS);
   const hourAgo = new Date(now.getTime() - HOUR_MS);
 
-  const refusal = await withTransaction(db, async (tx): Promise<InviteRefusal | null> => {
+  const refusal = await withTransaction(db, async (tx): Promise<IssueRefusal | null> => {
     // The same household lock addMember takes, so invites and joins serialise on Postgres;
     // the gated insert below re-checks both limits in one statement either way.
     await tx.query("SELECT 1 FROM households WHERE id = $1 FOR UPDATE", [input.householdId]);
