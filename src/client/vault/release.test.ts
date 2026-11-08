@@ -41,7 +41,7 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
 
-import { postRelease } from "./release";
+import { postRelease, ReleaseRejectedError } from "./release";
 
 // --- representative plaintexts (distinct, no JSON-special characters) --------
 //
@@ -392,6 +392,36 @@ test("retains nothing across calls: each release carries only its own value and 
         "no value from the first release may linger into the second",
       );
       assert.ok(!second.url.includes(ID_A), "the second request must not reuse the first id");
+    },
+  );
+});
+
+// ---------------------------------------------------------------------------
+// Review fix C7: a refused release says WHY (the server's stable error code), so the
+// inbox can offer the right next step — e.g. "Confirm it's you" when the step-up has
+// lapsed — instead of a generic "try again" that can never succeed.
+// ---------------------------------------------------------------------------
+
+test("a refused release carries the server's error code (and never the value)", async () => {
+  await withFetch(
+    () => new Response(JSON.stringify({ error: "step_up_required" }), { status: 403 }),
+    async () => {
+      await assert.rejects(postRelease(APPROVAL_ID, HIGH_TIER_VALUE), (err: unknown) => {
+        assert.ok(err instanceof ReleaseRejectedError, "a refusal is a typed ReleaseRejectedError");
+        assert.equal(err.code, "step_up_required", "carrying the server's error code");
+        assert.equal(err.status, 403, "and the status");
+        assert.ok(!err.message.includes(HIGH_TIER_VALUE), "never the released value");
+        return true;
+      });
+    },
+  );
+  await withFetch(
+    () => new Response("not json", { status: 500 }),
+    async () => {
+      await assert.rejects(postRelease(APPROVAL_ID, HIGH_TIER_VALUE), (err: unknown) => {
+        assert.ok(err instanceof ReleaseRejectedError && err.code === null, "an unreadable body has no code");
+        return true;
+      });
     },
   );
 });

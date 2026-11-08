@@ -61,9 +61,16 @@ export interface ReleaseApproveState {
   method: ReleaseMethod;
   passphrase: string;
   cardId?: string;
+  // The saved high-tier detail chosen for a high-tier release.
+  highTierFieldId?: string;
   securityCode: string;
   status: ReleaseStatus;
   error?: string;
+  // True when the release was refused because the step-up has lapsed: the control then
+  // offers "Confirm it's you" (the step-up ceremony) inline — never a dead end.
+  confirmRequired: boolean;
+  // A plain, non-error note (e.g. "confirmed — approve and release again").
+  notice?: string;
 }
 
 export interface ReleaseApproveFlowDeps {
@@ -81,6 +88,10 @@ export interface ReleaseApproveFlowDeps {
   // (or an unusable passphrase) REJECTS → nothing released, plain copy.
   readonly unlockByPassphrase: (passphrase: string) => UnlockRequest | Promise<UnlockRequest>;
   readonly unlockByPasskey: () => Promise<UnlockRequest>;
+  // "Confirm it's you": run the step-up ceremony, resolving true once the session has a
+  // fresh confirmation (false when it was refused or cancelled). Offered when a release
+  // is refused because the step-up lapsed.
+  readonly confirmItsYou?: () => Promise<boolean>;
   // Optional: re-render notifier (the component wires it) and a one-shot completion signal.
   readonly onChange?: () => void;
   readonly onReleased?: () => void;
@@ -91,8 +102,12 @@ export interface ReleaseApproveController {
   setMethod(method: ReleaseMethod): void;
   setPassphrase(value: string): void;
   setCardId(cardId: string): void;
+  setHighTierFieldId(fieldId: string): void;
   setSecurityCode(value: string): void;
   submit(): Promise<void>;
+  // Run "Confirm it's you" after a release was refused for a lapsed step-up. It never
+  // releases on its own: once confirmed, the person approves and releases again.
+  confirm(): Promise<void>;
 }
 
 // Plain-English failure copy for a unlock the device could not gather — a real sentence a
@@ -102,6 +117,11 @@ export interface ReleaseApproveController {
 // unchanged.
 const UNLOCK_FAILED_COPY =
   "We couldn't unlock your vault on this device. Check how you unlocked it, then try again.";
+const CONFIRM_FAILED_COPY = "We couldn't check it's you. Please try confirming again.";
+const CONFIRMED_NOTICE = "Thanks, that's confirmed. Approve and release again to hand it over.";
+
+// The release refusal reason that "Confirm it's you" resolves.
+const STEP_UP_REQUIRED = "step_up_required";
 
 export function createReleaseApproveFlow(deps: ReleaseApproveFlowDeps): ReleaseApproveController {
   const isCard = deps.request.release === "card";
@@ -110,8 +130,10 @@ export function createReleaseApproveFlow(deps: ReleaseApproveFlowDeps): ReleaseA
     method: "passkey",
     passphrase: "",
     cardId: deps.savedCards?.[0]?.id,
+    highTierFieldId: deps.request.highTierFields?.[0]?.id,
     securityCode: "",
     status: "idle",
+    confirmRequired: false,
   };
 
   function set(patch: Partial<ReleaseApproveState>): void {
@@ -131,14 +153,18 @@ export function createReleaseApproveFlow(deps: ReleaseApproveFlowDeps): ReleaseA
   // card (defaulting to the first offered when the picker is untouched); a high-tier
   // release decrypts the requested value's ciphertext.
   function ciphertextToRelease(): string {
-    if (!isCard) return deps.highTierCiphertext ?? "";
+    if (!isCard) {
+      const fields = deps.request.highTierFields ?? [];
+      const chosen = fields.find((field) => field.id === state.highTierFieldId) ?? fields[0];
+      return chosen?.ciphertext ?? deps.highTierCiphertext ?? "";
+    }
     const cards = deps.savedCards ?? [];
     const chosen = cards.find((card) => card.id === state.cardId) ?? cards[0];
     return chosen?.ciphertext ?? "";
   }
 
   async function submit(): Promise<void> {
-    set({ status: "working", error: undefined });
+    set({ status: "working", error: undefined, notice: undefined });
 
     // 1. Gather the unlock material by the chosen method. A cancelled passkey prompt (or
     //    an unusable passphrase) rejects here: nothing is released and the person is told
@@ -165,10 +191,32 @@ export function createReleaseApproveFlow(deps: ReleaseApproveFlowDeps): ReleaseA
     // Whatever the outcome, the passphrase and security code entered for this attempt are
     // cleared from state at once (a retry asks for them again).
     if (result.ok) {
-      set({ status: "released", error: undefined, passphrase: "", securityCode: "" });
+      set({ status: "released", error: undefined, passphrase: "", securityCode: "", confirmRequired: false });
       deps.onReleased?.();
     } else {
-      set({ status: "error", error: result.error, passphrase: "", securityCode: "" });
+      // A lapsed step-up is resolved right here ("Confirm it's you"), not by signing out.
+      set({
+        status: "error",
+        error: result.error,
+        passphrase: "",
+        securityCode: "",
+        confirmRequired: result.reason === STEP_UP_REQUIRED,
+      });
+    }
+  }
+
+  async function confirm(): Promise<void> {
+    set({ status: "working", error: undefined, notice: undefined });
+    let confirmed = false;
+    try {
+      confirmed = deps.confirmItsYou ? await deps.confirmItsYou() : false;
+    } catch {
+      confirmed = false;
+    }
+    if (confirmed) {
+      set({ status: "idle", confirmRequired: false, notice: CONFIRMED_NOTICE });
+    } else {
+      set({ status: "error", confirmRequired: true, error: CONFIRM_FAILED_COPY });
     }
   }
 
@@ -177,8 +225,10 @@ export function createReleaseApproveFlow(deps: ReleaseApproveFlowDeps): ReleaseA
     setMethod: (method) => set({ method }),
     setPassphrase: (value) => set({ passphrase: value }),
     setCardId: (cardId) => set({ cardId }),
+    setHighTierFieldId: (fieldId) => set({ highTierFieldId: fieldId }),
     setSecurityCode: (value) => set({ securityCode: value }),
     submit,
+    confirm,
   };
 }
 
@@ -260,6 +310,45 @@ async function defaultUnlockByPasskey(): Promise<UnlockRequest> {
   return { method: "prf", material: { wrapped: material.wrapped }, secret: base64UrlToBytes(prf) };
 }
 
+// "Confirm it's you" — the passkey step-up ceremony (design §5): ask the step-up
+// endpoint for a fresh challenge, run the OS passkey prompt, and hand the assertion back;
+// on success the signed-in session carries a fresh confirmation for 5 minutes. Resolves
+// false when any step is refused or the prompt is dismissed (never throws).
+const STEP_UP_BASE = "/api/auth/step-up";
+
+async function postStepUp(step: "begin" | "finish", body?: unknown): Promise<Response | null> {
+  try {
+    return await globalThis.fetch(`${STEP_UP_BASE}/${step}`, {
+      method: "POST",
+      credentials: "same-origin",
+      headers: { "content-type": "application/json" },
+      ...(body === undefined ? {} : { body: JSON.stringify(body) }),
+    });
+  } catch {
+    return null;
+  }
+}
+
+async function defaultConfirmItsYou(): Promise<boolean> {
+  const begin = await postStepUp("begin");
+  if (!begin || !begin.ok) return false;
+  let options: PublicKeyCredentialRequestOptionsJSON | undefined;
+  try {
+    options = ((await begin.json()) as { options?: PublicKeyCredentialRequestOptionsJSON }).options;
+  } catch {
+    return false;
+  }
+  if (options === undefined) return false;
+  let authenticationResponse: unknown;
+  try {
+    authenticationResponse = await startAuthentication({ optionsJSON: options });
+  } catch {
+    return false;
+  }
+  const finish = await postStepUp("finish", { authenticationResponse });
+  return finish !== null && finish.ok;
+}
+
 // The release core, wired to the real client/vault primitives: unlock the vault key from
 // the opaque material, decrypt the stored ciphertext under it, and POST the plaintext to
 // the approval's release endpoint — the single hand-over (the server stores only
@@ -284,6 +373,7 @@ const BTN_BASE =
 // Deliberately omits any `disabled:` utility variant so a LIVE control's class never
 // reads as "disabled" to a markup scan; the native `disabled` attribute disables it.
 const BTN_PRIMARY = `${BTN_BASE} bg-accent text-accent-fg hover:bg-accent-hover`;
+const BTN_PRIMARY_DISABLED = `${BTN_BASE} border border-line bg-surface text-fg-muted opacity-50`;
 const SELECT_CLASS =
   "min-h-11 w-full rounded-card border border-line bg-surface px-3 text-sm text-fg focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-focus focus-visible:ring-offset-2 focus-visible:ring-offset-bg";
 
@@ -304,8 +394,14 @@ export interface ReleaseApproveProps {
   releaseFlow?: ReleaseFlow;
   unlockByPassphrase?: (passphrase: string) => UnlockRequest | Promise<UnlockRequest>;
   unlockByPasskey?: () => Promise<UnlockRequest>;
+  confirmItsYou?: () => Promise<boolean>;
   onReleased?: () => void;
 }
+
+// Why a release has nothing to hand over (no dead control: the button is disabled and
+// this one line says why).
+const NO_CARD_REASON = "Add a card in your vault first, then approve and release.";
+const NO_HIGH_TIER_REASON = "Save this detail in your vault first, then approve and release.";
 
 export function ReleaseApprove(props: ReleaseApproveProps): React.ReactElement {
   const { request, approvalId, savedCards, highTierCiphertext } = props;
@@ -320,6 +416,7 @@ export function ReleaseApprove(props: ReleaseApproveProps): React.ReactElement {
       releaseFlow: props.releaseFlow ?? getDefaultReleaseFlow(),
       unlockByPassphrase: props.unlockByPassphrase ?? defaultUnlockByPassphrase,
       unlockByPasskey: props.unlockByPasskey ?? defaultUnlockByPasskey,
+      confirmItsYou: props.confirmItsYou ?? defaultConfirmItsYou,
       onChange: () => forceUpdate(),
       onReleased: props.onReleased,
     });
@@ -329,10 +426,23 @@ export function ReleaseApprove(props: ReleaseApproveProps): React.ReactElement {
 
   const isCard = request.release === "card";
   const cards = savedCards ?? [];
+  // A high-tier release offers the person's saved details (when the loader provided
+  // them); none provided at all falls back to a directly supplied ciphertext.
+  const highTierFields = request.highTierFields;
   const cardFieldId = React.useId();
   const codeFieldId = React.useId();
+  const highTierFieldIdAttr = React.useId();
   const passphraseFieldId = React.useId();
   const methodName = React.useId();
+  // Nothing to hand over: no saved card for a card release, or no saved detail for a
+  // high-tier one.
+  const unavailableReason = isCard
+    ? cards.length === 0
+      ? NO_CARD_REASON
+      : null
+    : highTierFields !== undefined && highTierFields.length === 0
+      ? NO_HIGH_TIER_REASON
+      : null;
 
   return (
     <div className="flex flex-col gap-3">
@@ -371,6 +481,25 @@ export function ReleaseApprove(props: ReleaseApproveProps): React.ReactElement {
             />
           </div>
         </>
+      ) : null}
+
+      {!isCard && highTierFields !== undefined && highTierFields.length > 1 ? (
+        <div className="flex flex-col gap-1.5">
+          <Label htmlFor={highTierFieldIdAttr}>Which detail</Label>
+          <select
+            id={highTierFieldIdAttr}
+            name="highTierField"
+            value={state.highTierFieldId ?? ""}
+            onChange={(event) => flow.setHighTierFieldId(event.target.value)}
+            className={SELECT_CLASS}
+          >
+            {highTierFields.map((field) => (
+              <option key={field.id} value={field.id}>
+                {field.label}
+              </option>
+            ))}
+          </select>
+        </div>
       ) : null}
 
       <fieldset className="flex flex-col gap-2">
@@ -412,8 +541,13 @@ export function ReleaseApprove(props: ReleaseApproveProps): React.ReactElement {
       ) : null}
 
       {state.error ? (
-        <p role="alert" className="text-sm text-danger">
+        <p role="alert" className="break-words text-sm text-danger">
           {state.error}
+        </p>
+      ) : null}
+      {state.notice ? (
+        <p role="status" className="text-sm text-fg">
+          {state.notice}
         </p>
       ) : null}
       {state.status === "released" ? (
@@ -422,18 +556,40 @@ export function ReleaseApprove(props: ReleaseApproveProps): React.ReactElement {
         </p>
       ) : null}
 
-      <div>
-        <button
-          type="button"
-          className={BTN_PRIMARY}
-          disabled={state.status === "working"}
-          onClick={() => {
-            void flow.submit();
-          }}
-        >
-          Approve and release
-        </button>
-      </div>
+      {state.confirmRequired ? (
+        <div>
+          <button
+            type="button"
+            className={BTN_PRIMARY}
+            disabled={state.status === "working"}
+            onClick={() => {
+              void flow.confirm();
+            }}
+          >
+            Confirm it&apos;s you
+          </button>
+        </div>
+      ) : unavailableReason !== null ? (
+        <div className="flex flex-col gap-1">
+          <button type="button" disabled className={BTN_PRIMARY_DISABLED}>
+            Approve and release
+          </button>
+          <p className="text-xs text-fg-muted">{unavailableReason}</p>
+        </div>
+      ) : (
+        <div>
+          <button
+            type="button"
+            className={BTN_PRIMARY}
+            disabled={state.status === "working"}
+            onClick={() => {
+              void flow.submit();
+            }}
+          >
+            Approve and release
+          </button>
+        </div>
+      )}
     </div>
   );
 }

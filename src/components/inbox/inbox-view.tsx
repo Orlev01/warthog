@@ -12,6 +12,7 @@ import {
 import { Label } from "@/components/ui/field";
 import { EmptyState } from "@/components/ui/empty";
 import type { UnlockRequest } from "@/client/vault/unlock";
+import { ReleaseRejectedError } from "@/client/vault/release";
 import { ReleaseApprove } from "./release-approve";
 
 // E12-S12 — Approval inbox view component (brief "Approval inbox" / "Agents wait
@@ -47,7 +48,18 @@ export type ReleaseKind = "card" | "high_tier";
 // One already-formatted detail line under a request (display-ready and already redacted).
 export type RequestDetail = { label: string; value: string };
 
-// A pending request awaiting the person's decision, as the view renders it.
+// One of the person's saved high-tier details offered for a high-tier release: its
+// plaintext label (e.g. "Passport") and the device-decryptable ciphertext — never a
+// readable value (the server holds only ciphertext; the device decrypts it).
+export type HighTierFieldView = {
+  id: string;
+  label: string;
+  ciphertext: string;
+};
+
+// A pending request awaiting the person's decision, as the view renders it. A high-tier
+// release carries the person's saved high-tier details (best match for the requested
+// field first) so their device can decrypt the one they choose.
 export type PendingRequestView = {
   id: string;
   agent: string;
@@ -57,6 +69,7 @@ export type PendingRequestView = {
   rule: string;
   timeLeft: string;
   release: ReleaseKind | null;
+  highTierFields?: readonly HighTierFieldView[];
 };
 
 export type DecidedStatus = "approved" | "denied" | "expired" | "more_detail";
@@ -365,7 +378,9 @@ export interface ReleaseInput {
   readonly securityCode?: string;
 }
 
-export type ReleaseResult = { ok: true } | { ok: false; error: string };
+// A failed release carries plain copy and, when the server refused it, the server's
+// stable reason (e.g. "step_up_required") so the control can offer the next step.
+export type ReleaseResult = { ok: true } | { ok: false; error: string; reason?: string };
 
 export interface ReleaseFlow {
   release(input: ReleaseInput): Promise<ReleaseResult>;
@@ -380,6 +395,16 @@ const DECRYPT_FAILED_COPY =
   "We couldn't open that saved value on your device. Please try again.";
 const RELEASE_FAILED_COPY =
   "We couldn't complete the release just now. Please try again.";
+
+// Plain copy for each reason the server refuses a release with — what happened and what
+// to do next (never "try again" when trying again cannot help).
+const REFUSAL_COPY: Record<string, string> = {
+  step_up_required: "Please confirm it's you first, then approve and release again.",
+  over_budget: "This would put the agent over its card budget, so nothing was handed over.",
+  expired: "This request expired before you approved it, so nothing was handed over.",
+  already_released: "This has already been handed over to the agent.",
+  not_releasable: "This request can no longer be approved and released, so nothing was handed over.",
+};
 
 export function createReleaseFlow(deps: ReleaseFlowDeps): ReleaseFlow {
   async function release(input: ReleaseInput): Promise<ReleaseResult> {
@@ -409,10 +434,16 @@ export function createReleaseFlow(deps: ReleaseFlowDeps): ReleaseFlow {
         ? value
         : JSON.stringify({ number: value, securityCode: input.securityCode });
 
-    // 3. Post the released value to the approval's release endpoint.
+    // 3. Post the released value to the approval's release endpoint. A refusal with a
+    //    known reason is reported in its own plain words (with the reason, so the
+    //    control can offer e.g. "Confirm it's you"); anything else is the generic copy.
     try {
       await deps.postRelease(input.approvalId, payload);
-    } catch {
+    } catch (error) {
+      const reason = error instanceof ReleaseRejectedError ? error.code : null;
+      if (reason !== null && REFUSAL_COPY[reason] !== undefined) {
+        return { ok: false, error: REFUSAL_COPY[reason], reason };
+      }
       return { ok: false, error: RELEASE_FAILED_COPY };
     }
 

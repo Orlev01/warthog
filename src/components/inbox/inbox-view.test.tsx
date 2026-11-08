@@ -56,6 +56,7 @@ import assert from "node:assert/strict";
 import { renderToStaticMarkup } from "react-dom/server";
 
 import { InboxView, createReleaseFlow } from "./inbox-view";
+import { ReleaseRejectedError } from "@/client/vault/release";
 
 // ─── the prop shapes this task introduces (described here as the contract) ───────────
 
@@ -1020,4 +1021,44 @@ test("constructing the release flow performs no unlock, decrypt or release", () 
   const ctx = setupFlow();
   assert.deepEqual(ctx.events, [], "creating the flow touches nothing until a release is decided");
   assert.equal(ctx.postCalls.length, 0, "no release is posted on construction");
+});
+
+// ═══ Review fix C7 — a refused release says why, so the person can act on it ═══════════
+//
+// Every refusal used to collapse into "We couldn't complete the release just now. Please
+// try again." — including a lapsed step-up, where trying again can never succeed. The
+// flow now reports the server's reason with copy that says what to do next.
+
+test("a release refused for a lapsed step-up reports step_up_required with copy that asks the person to confirm it's them", async () => {
+  const ctx = setupFlow({
+    post: () => {
+      throw new ReleaseRejectedError(403, "step_up_required");
+    },
+  });
+  const result = await ctx.flow.release({ approvalId: APPROVAL_ID, unlockRequest: UNLOCK_REQUEST, ciphertext: CARD_CIPHERTEXT });
+  if (result.ok) assert.fail("a refused release must not report success");
+  assert.equal(result.reason, "step_up_required", "the reason is passed on");
+  assertPlainFailure(result.error, "step-up refusal");
+  assert.match(result.error, /confirm it's you/i, "the copy asks the person to confirm it's them");
+  assert.doesNotMatch(result.error, /try again/i, "never the generic 'try again'");
+});
+
+test("other refusals each get their own plain reason", async () => {
+  for (const [code, re] of [
+    ["over_budget", /budget/i],
+    ["expired", /expired/i],
+    ["already_released", /already/i],
+    ["not_releasable", /can no longer/i],
+  ] as const) {
+    const ctx = setupFlow({
+      post: () => {
+        throw new ReleaseRejectedError(409, code);
+      },
+    });
+    const result = await ctx.flow.release({ approvalId: APPROVAL_ID, unlockRequest: UNLOCK_REQUEST, ciphertext: CARD_CIPHERTEXT });
+    if (result.ok) assert.fail(`${code}: a refused release must not report success`);
+    assert.equal(result.reason, code, `${code}: the reason is passed on`);
+    assertPlainFailure(result.error, code);
+    assert.match(result.error, re, `${code}: the copy says what happened`);
+  }
 });

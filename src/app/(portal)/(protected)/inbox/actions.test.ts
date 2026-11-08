@@ -84,6 +84,7 @@ import { upsertPermissions } from "../../../../server/db/agent-permissions";
 import { createCheckApprovalTool } from "../../../../server/mcp/tools/check-approval";
 import { readActivity } from "../../../../server/activity/writer";
 import { createRule } from "../../../../server/db/rules";
+import { saveHighTierField } from "../../../../server/db/high-tier-fields";
 import { getApproval } from "../../../../server/db/approvals";
 import { getByApproval } from "../../../../server/db/held-requests";
 import { HttpError } from "../../../../server/http/validate";
@@ -1038,6 +1039,41 @@ test("a high-tier request shows the field and the stated purpose", async () => {
     assert.equal(line(view, "Field"), "passport", "the field requested");
     assert.equal(line(view, "Purpose"), "the booking form", "the stated purpose");
     assert.equal(view.sentence, "wants to see your passport", "a plain sentence");
+  } finally {
+    await db.close();
+  }
+});
+
+// =====================================================================================
+// Review fix C7 — a high-tier "Approve and release" used to decrypt an EMPTY ciphertext
+// (the inbox never loaded the requested detail), so it always failed. The loader now
+// hands each high-tier request the person's own saved high-tier details — the one
+// matching the requested field first — as device-decryptable ciphertext only.
+// =====================================================================================
+
+test("a high-tier request carries the person's saved details, the requested field first, as ciphertext only", async () => {
+  const db = await freshDb();
+  const keyWrapper = keyWrapperFor();
+  try {
+    const a = await arrangeHeld(
+      db,
+      keyWrapper,
+      "c7-high-tier-fields",
+      highTierCall({ tool: "request_identity_detail", field: "passport" }),
+      { highTierAccess: true },
+    );
+    await saveHighTierField(db, { userId: a.userId, type: "driver_licence", label: "Driver licence", ciphertext: "v1:licenceCipher" });
+    await saveHighTierField(db, { userId: a.userId, type: "passport", label: "Passport", ciphertext: "v1:passportCipher" });
+    // Another person's detail must never be offered.
+    const other = await makePerson(db, "c7-someone-else", keyWrapper);
+    await saveHighTierField(db, { userId: other.userId, type: "passport", label: "Their passport", ciphertext: "v1:theirCipher" });
+
+    const view = (await a.actions.load(await freshSession(db, a.userId))).pending[0]!;
+    const fields = view.highTierFields ?? [];
+    assert.equal(fields.length, 2, "both of the person's own details, and nobody else's");
+    assert.equal(fields[0]!.label, "Passport", "the requested field comes first");
+    assert.equal(fields[0]!.ciphertext, "v1:passportCipher", "as the device-decryptable ciphertext");
+    assert.equal(fields[1]!.label, "Driver licence");
   } finally {
     await db.close();
   }

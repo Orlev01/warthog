@@ -57,6 +57,7 @@ import {
   type DecidedApproval,
 } from "../../../../server/approvals/inbox-read";
 import { getCardCiphertext, listCards } from "../../../../server/db/cards";
+import { getHighTierCiphertext, listHighTierFields } from "../../../../server/db/high-tier-fields";
 import { getUserById } from "../../../../server/db/users";
 import { withTransaction } from "../../../../server/db/index";
 import { createDbRecorder } from "../../../../server/activity/writer";
@@ -70,6 +71,7 @@ import type { ApprovedHoldResult } from "../../../../server/mcp/pipeline";
 import type {
   DecidedRequestView,
   DecidedStatus,
+  HighTierFieldView,
   InboxViewProps,
   PendingRequestView,
   ReleaseKind,
@@ -438,6 +440,34 @@ export function createInboxActions(deps: InboxActionsDeps): InboxActions {
     return views;
   }
 
+  // The person's saved high-tier details as a high-tier release offers them: the
+  // plaintext label and the device-decryptable ciphertext (never a readable value — the
+  // server holds only ciphertext). Member-scoped by the session user id (both the list
+  // and each ciphertext read bind it), so one person can never see another's details.
+  async function loadHighTierFields(userId: string): Promise<{ type: string; view: HighTierFieldView }[]> {
+    const fields = await listHighTierFields(db, userId);
+    const loaded: { type: string; view: HighTierFieldView }[] = [];
+    for (const field of fields) {
+      const ciphertext = await getHighTierCiphertext(db, userId, field.id);
+      if (ciphertext === null) continue;
+      loaded.push({ type: field.type, view: { id: field.id, label: field.label, ciphertext } });
+    }
+    return loaded;
+  }
+
+  // A high-tier request's offered details: the ones matching the requested field first
+  // (preselected), then the rest, so the person can still choose deliberately.
+  function offerFor(
+    request: PendingRequestView,
+    detail: Record<string, unknown>,
+    fields: readonly { type: string; view: HighTierFieldView }[],
+  ): PendingRequestView {
+    const wanted = text(detail.field);
+    const matching = fields.filter((field) => wanted !== "" && field.type === wanted);
+    const rest = fields.filter((field) => !(wanted !== "" && field.type === wanted));
+    return { ...request, highTierFields: [...matching, ...rest].map((field) => field.view) };
+  }
+
   // Turn the verified session into the inbox view's data. Reads ONLY the session
   // person's approvals (member-scoped by `session.userId` — never a client value): their
   // PENDING requests newest-first + their decision HISTORY (readInbox, E12-S11),
@@ -454,7 +484,14 @@ export function createInboxActions(deps: InboxActionsDeps): InboxActions {
       await markOpened(db, { id: request.id, userId: session.userId }, clock);
     }
 
-    const pending = inbox.pending.map(toPendingView);
+    let pending = inbox.pending.map(toPendingView);
+    // A high-tier release needs the person's saved detail to decrypt on their device.
+    if (pending.some((request) => request.release === "high_tier")) {
+      const fields = await loadHighTierFields(session.userId);
+      pending = pending.map((request, index) =>
+        request.release === "high_tier" ? offerFor(request, inbox.pending[index]!.detail, fields) : request,
+      );
+    }
     const history = inbox.history.map(toDecidedView);
     const data: InboxLoadData = { pending, history };
 

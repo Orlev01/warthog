@@ -170,6 +170,8 @@ type FlowOptions = {
   releaseResult?: ReleaseResult;
   // The passkey PRF prompt is dismissed / times out (AC2 "cancelling the unlock").
   passkeyCancelled?: boolean;
+  // What the injected "Confirm it's you" (step-up) ceremony resolves with.
+  confirmResult?: boolean;
 };
 
 function setupFlow(opts: FlowOptions) {
@@ -200,6 +202,7 @@ function setupFlow(opts: FlowOptions) {
     return PASSKEY_UNLOCK;
   };
 
+  let confirmCalls = 0;
   const flow = createReleaseApproveFlow({
     request: opts.request,
     savedCards: opts.savedCards,
@@ -207,6 +210,11 @@ function setupFlow(opts: FlowOptions) {
     releaseFlow,
     unlockByPassphrase,
     unlockByPasskey,
+    confirmItsYou: async () => {
+      events.push("confirm");
+      confirmCalls += 1;
+      return opts.confirmResult ?? true;
+    },
     onChange: () => changeEvents.push(true),
     onReleased: () => releasedEvents.push(true),
   });
@@ -224,6 +232,9 @@ function setupFlow(opts: FlowOptions) {
     },
     get changeCount() {
       return changeEvents.length;
+    },
+    get confirmCalls() {
+      return confirmCalls;
     },
   };
 }
@@ -640,4 +651,83 @@ test("uses design tokens, never a raw hex colour (card and high-tier)", () => {
       `no raw hex colour may appear in the ReleaseApprove markup, got: ${markup}`,
     );
   }
+});
+
+// ═══ Review fix C7 — no dead ends on the release ═══════════════════════════════════════
+//
+// A lapsed step-up used to show "Please try again" forever (only signing out and in again
+// helped). The control now offers "Confirm it's you" inline: it runs the step-up ceremony
+// and then asks the person to approve and release again. A card release with no saved
+// card, or a high-tier release with no saved detail, is disabled with a reason instead of
+// failing at decrypt. And a high-tier release decrypts the CHOSEN saved detail.
+
+test("a release refused for a lapsed step-up offers 'Confirm it's you' instead of a dead 'try again'", async () => {
+  const ctx = setupFlow({
+    request: PENDING_CARD,
+    savedCards: SAVED_CARDS,
+    releaseResult: { ok: false, error: "Please confirm it's you first, then approve and release again.", reason: "step_up_required" },
+  });
+  ctx.flow.setSecurityCode(SECURITY_CODE);
+  await ctx.flow.submit();
+
+  const refused = ctx.flow.getState();
+  assert.equal(refused.confirmRequired, true, "the control now offers to confirm it's you");
+  assert.equal(refused.status, "error");
+  assert.equal(refused.securityCode, "", "the security code is still cleared after the attempt");
+
+  await ctx.flow.confirm();
+  const confirmed = ctx.flow.getState();
+  assert.equal(ctx.confirmCalls, 1, "the step-up ceremony ran once");
+  assert.equal(confirmed.confirmRequired, false, "once confirmed, it no longer asks");
+  assert.equal(confirmed.status, "idle", "ready to approve and release again");
+  assert.match(confirmed.notice ?? "", /approve and release again/i, "and says what to do next");
+  assert.equal(ctx.releaseCalls.length, 1, "confirming never releases on its own");
+});
+
+test("a 'Confirm it's you' that fails or is cancelled keeps offering it, with plain copy", async () => {
+  const ctx = setupFlow({
+    request: PENDING_HIGH,
+    highTierCiphertext: HIGH_CIPHERTEXT,
+    releaseResult: { ok: false, error: "Please confirm it's you first, then approve and release again.", reason: "step_up_required" },
+    confirmResult: false,
+  });
+  await ctx.flow.submit();
+  await ctx.flow.confirm();
+  const state = ctx.flow.getState();
+  assert.equal(state.confirmRequired, true, "it still offers to confirm");
+  assertPlainFailure(state.error, "failed confirm");
+});
+
+test("a high-tier release decrypts the saved detail the person chose", async () => {
+  const fields = [
+    { id: "f-passport", label: "Passport", ciphertext: "v1:passportCipherOne" },
+    { id: "f-licence", label: "Driver licence", ciphertext: "v1:licenceCipherTwo" },
+  ];
+  const ctx = setupFlow({ request: { ...PENDING_HIGH, highTierFields: fields } });
+  assert.equal(ctx.flow.getState().highTierFieldId, "f-passport", "the first (best-matching) detail is preselected");
+  ctx.flow.setHighTierFieldId("f-licence");
+  await ctx.flow.submit();
+  assert.equal(ctx.releaseCalls[0]!.ciphertext, "v1:licenceCipherTwo", "the chosen detail is what is decrypted");
+});
+
+test("a card release with no saved card, or a high-tier release with no saved detail, is disabled with a reason", () => {
+  for (const [label, element] of [
+    ["card", <ReleaseApprove request={PENDING_CARD} savedCards={[]} />],
+    ["high-tier", <ReleaseApprove request={{ ...PENDING_HIGH, highTierFields: [] }} />],
+  ] as const) {
+    const markup = renderToStaticMarkup(element);
+    const live = controlsMatching(markup, /approve and release/i).filter((c) => !isDisabled(c));
+    assert.equal(live.length, 0, `${label}: no live release control when there is nothing to release`);
+    assert.match(visibleText(markup), /vault/i, `${label}: a one-line reason points the person to their vault`);
+  }
+});
+
+test("a high-tier release with several saved details offers a chooser", () => {
+  const fields = [
+    { id: "f-passport", label: "Passport", ciphertext: "v1:passportCipherOne" },
+    { id: "f-licence", label: "Driver licence", ciphertext: "v1:licenceCipherTwo" },
+  ];
+  const markup = renderToStaticMarkup(<ReleaseApprove request={{ ...PENDING_HIGH, highTierFields: fields }} />);
+  const options = findAll(markup, "option").map((o) => visibleText(o.inner));
+  assert.ok(options.includes("Passport") && options.includes("Driver licence"), "each saved detail can be chosen");
 });
