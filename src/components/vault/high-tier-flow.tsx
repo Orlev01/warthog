@@ -9,9 +9,17 @@ import { Button } from "@/components/ui/button";
 import { Card } from "@/components/ui/card";
 import { Field } from "@/components/ui/field";
 import { SensitiveNotice } from "@/components/ui/sensitive-notice";
-import { deriveWrappingKeyFromPrf } from "@/client/vault/derive";
-import { createVaultKey, wrapVaultKey, unwrapVaultKey } from "@/client/vault/key";
+import { createVaultKey } from "@/client/vault/key";
+import { createDeviceVault } from "@/client/vault/device-vault";
 import { sealHighTierDetail, type HighTierFieldType } from "./identity-view";
+import {
+  createVaultKeyStep,
+  PHRASE_NOT_SAVED_COPY,
+  RecoveryPhraseReveal,
+  VaultUnlockChoice,
+  type UnlockChoice,
+  type VaultKeyStepState,
+} from "./vault-key-step";
 
 // E11-S20 — Add a high-tier detail on this device (brief "Identity vault" /
 // "Device-held protection"; design §4.2 device-held vault; constitution 17/19 — the
@@ -35,6 +43,9 @@ import { sealHighTierDetail, type HighTierFieldType } from "./identity-view";
 //     raiseFieldToHighTier action (whose server side removes the plaintext low-tier
 //     value).
 // The plaintext value is NEVER collected into a request body, storage or the console.
+// Review fix W1: the vault key is obtained through the shared vault-key step
+// (./vault-key-step) — a passkey, the vault passphrase or the vault recovery phrase — and a
+// vault with no recovery phrase shows a new one once and saves it before the detail is.
 //
 // It exports the TWO seams the repo's render-testable-AND-interactive pattern uses
 // (SignupView + createSignupFlow; ReleaseApprove + createReleaseApproveFlow; AddCardFlow
@@ -55,8 +66,9 @@ import { sealHighTierDetail, type HighTierFieldType } from "./identity-view";
 export type HighTierMode = "add" | "raise";
 
 // The control's own status alongside the person's entries: idle until they confirm,
-// `working` while the device flow runs, then `saved` or `error`.
-export type HighTierStatus = "idle" | "working" | "saved" | "error";
+// `working` while the device flow runs, `phrase` while a new vault recovery phrase waits
+// for the person to save it (review fix W1), then `saved` or `error`.
+export type HighTierStatus = "idle" | "working" | "phrase" | "saved" | "error";
 
 export interface HighTierState {
   type: string;
@@ -121,11 +133,15 @@ export interface HighTierController {
   setLabel(value: string): void;
   setValue(value: string): void;
   submit(): Promise<void>;
+  // The shared unlock step (review fix W1): how to unlock, and the once-only reveal of a
+  // new vault recovery phrase that must be saved before the detail is.
+  getUnlockState(): VaultKeyStepState;
+  setUnlockMethod(method: UnlockChoice): void;
+  setUnlockPassphrase(value: string): void;
+  setRecoveryPhrase(value: string): void;
+  setPhraseSaved(value: boolean): void;
+  confirmRecoveryPhrase(): Promise<void>;
 }
-
-// The unlock endpoints (the device-unlock methods the endpoints serve).
-const UNLOCK_MATERIAL_BASE = "/api/vault/unlock-material";
-const UNLOCK_METHOD_URL = "/api/vault/unlock-method";
 
 // A high-tier detail with no chosen type is saved as a "custom" detail (the store enum's
 // catch-all); the person names it with a label. A render test does not force a type
@@ -139,26 +155,8 @@ const DEFAULT_TYPE: HighTierFieldType = "custom";
 const SETUP_FAILED_COPY =
   "We couldn't unlock your vault on this device, so your detail wasn't saved. Check your passkey and try again.";
 const SAVE_FAILED_COPY = "We couldn't save your detail just now. Please try again.";
-
-// The server's non-secret unlock material for a method (design §4.2 getUnlockMaterial):
-// the wrapped VK envelope (null when none is set), the method's public params and the
-// passkey assertion options whose PRF extension is eval'd with the person's salt.
-type ServerUnlockMaterial = {
-  readonly wrapped: string | null;
-  readonly params?: Record<string, unknown> | null;
-  readonly options?: unknown;
-};
-
-// WebCrypto base64url → bytes (browser `atob`, never Node's Buffer). A WebAuthn PRF
-// result is base64url.
-function base64UrlToBytes(value: string): Uint8Array<ArrayBuffer> {
-  const b64 = value.replace(/-/g, "+").replace(/_/g, "/");
-  const padding = b64.length % 4 === 0 ? "" : "=".repeat(4 - (b64.length % 4));
-  const binary = atob(b64 + padding);
-  const bytes = new Uint8Array(binary.length);
-  for (let i = 0; i < binary.length; i += 1) bytes[i] = binary.charCodeAt(i);
-  return bytes;
-}
+const PHRASE_FAILED_COPY =
+  "We couldn't save your recovery phrase, so your detail wasn't saved. Please try again.";
 
 export function createHighTierFlow(deps: HighTierFlowDeps): HighTierController {
   let state: HighTierState = {
@@ -174,57 +172,16 @@ export function createHighTierFlow(deps: HighTierFlowDeps): HighTierController {
     deps.onChange?.();
   }
 
-  // Read the person's passkey unlock material from the endpoint (the wrapped VK, if any,
-  // and the assertion options). A read is not Origin-gated; an unreachable endpoint throws.
-  async function fetchPasskeyMaterial(): Promise<ServerUnlockMaterial> {
-    const response = await deps.fetch(`${UNLOCK_MATERIAL_BASE}/passkey_prf`, {
-      credentials: "same-origin",
-    });
-    if (!response.ok) throw new Error("vault unlock material is unavailable on this device");
-    return (await response.json()) as ServerUnlockMaterial;
-  }
-
-  // Save a wrapped vault key for a method. The browser sets the Origin header itself (a
-  // forbidden header JS cannot set), which the server checks before storing anything.
-  async function saveUnlockMethod(body: {
-    method: "passkey_prf";
-    wrapped: string;
-  }): Promise<void> {
-    const response = await deps.fetch(UNLOCK_METHOD_URL, {
-      method: "POST",
-      headers: { "content-type": "application/json" },
-      body: JSON.stringify(body),
-      credentials: "same-origin",
-    });
-    if (!response.ok) throw new Error("could not save the vault unlock method");
-  }
-
-  // Run the OS passkey prompt with the endpoint's options and recover the PRF-derived
-  // wrapping key. A dismissed prompt rejects here (nothing is created or saved).
-  async function wrappingKeyFromPasskey(options: unknown): Promise<Uint8Array<ArrayBuffer>> {
-    const assertion = await deps.startAuthentication({ optionsJSON: options });
-    const prf = assertion.clientExtensionResults?.prf?.results?.first;
-    if (typeof prf !== "string") throw new Error("this passkey can't unlock your vault");
-    return deriveWrappingKeyFromPrf(base64UrlToBytes(prf));
-  }
-
-  // Set up (first use) or unlock (later use) this device's vault key. On first use a fresh
-  // key is created, wrapped under the passkey PRF and saved; on later use the existing
-  // envelope is unwrapped — no new key, no save. Either way the passkey ceremony runs so
-  // its PRF is available.
-  async function ensureVaultKey(): Promise<Uint8Array<ArrayBuffer>> {
-    const material = await fetchPasskeyMaterial();
-    const wrappingKey = await wrappingKeyFromPasskey(material.options);
-
-    if (material.wrapped != null) {
-      return unwrapVaultKey(wrappingKey, material.wrapped);
-    }
-
-    // First use on this account: create the key and save it wrapped under the passkey.
-    const vaultKey = deps.createVaultKey() as Uint8Array<ArrayBuffer>;
-    await saveUnlockMethod({ method: "passkey_prf", wrapped: await wrapVaultKey(wrappingKey, vaultKey) });
-    return vaultKey;
-  }
+  // The device vault over the unlock endpoints, and the shared unlock step over it: a
+  // passkey sets the vault up on first use or unlocks the EXISTING key; a passphrase or
+  // the recovery phrase unlocks it too; and a vault with no recovery phrase pauses for
+  // one before anything is sealed (review fix W1).
+  const vault = createDeviceVault({
+    fetch: deps.fetch,
+    startAuthentication: deps.startAuthentication,
+    createVaultKey: deps.createVaultKey,
+  });
+  const step = createVaultKeyStep({ vault, createIfMissing: true, onChange: () => deps.onChange?.() });
 
   // Submit the sealed detail to the mode's action: RAISE carries the low-tier field's id;
   // ADD carries only the sealed metadata.
@@ -241,16 +198,10 @@ export function createHighTierFlow(deps: HighTierFlowDeps): HighTierController {
     return deps.saveHighTierField(submission);
   }
 
-  async function submit(): Promise<void> {
-    if (state.status === "working") return; // guard against a double confirm
-    set({ status: "working", error: undefined });
-
-    // 1. Set up / unlock the vault key, then seal the value — all on this device. A
-    //    cancelled prompt, an unreachable endpoint or a tampered envelope lands here: the
-    //    person is told in plain words and nothing leaves the device.
+  // Seal the value under the unlocked vault key and submit ONLY the ciphertext + metadata.
+  async function sealAndSubmit(vaultKey: Uint8Array<ArrayBuffer>): Promise<void> {
     let submission: { type: HighTierFieldType; label: string; ciphertext: string };
     try {
-      const vaultKey = await ensureVaultKey();
       submission = await sealHighTierDetail(vaultKey, {
         type: state.type as HighTierFieldType,
         label: state.label,
@@ -261,8 +212,8 @@ export function createHighTierFlow(deps: HighTierFlowDeps): HighTierController {
       return;
     }
 
-    // 2. Submit ONLY the ciphertext + metadata to the page's action. A refusal comes back
-    //    with its own machine reason, which we never surface raw — plain copy instead.
+    // A refusal comes back with its own machine reason, which we never surface raw —
+    // plain copy instead.
     let result: { ok: boolean; reason?: string };
     try {
       result = await submitSealed(submission);
@@ -279,12 +230,62 @@ export function createHighTierFlow(deps: HighTierFlowDeps): HighTierController {
     }
   }
 
+  async function submit(): Promise<void> {
+    if (state.status === "working" || state.status === "phrase") return; // no double confirm
+    set({ status: "working", error: undefined });
+
+    // 1. Unlock (or set up) the vault key on this device. A cancelled prompt, an
+    //    unreachable endpoint, a wrong secret or a tampered envelope lands here: the
+    //    person is told in plain words and nothing leaves the device.
+    let vaultKey: Uint8Array<ArrayBuffer>;
+    try {
+      const got = await step.obtain();
+      if (got.kind === "reveal") {
+        // A vault with no recovery phrase: show the new phrase and wait for the person to
+        // save it before the detail is sealed.
+        set({ status: "phrase" });
+        return;
+      }
+      vaultKey = got.vaultKey;
+    } catch {
+      set({ status: "error", error: SETUP_FAILED_COPY });
+      return;
+    }
+
+    // 2. Seal and submit.
+    await sealAndSubmit(vaultKey);
+  }
+
+  async function confirmRecoveryPhrase(): Promise<void> {
+    if (state.status !== "phrase") return;
+    if (!step.getState().phraseSaved) {
+      set({ error: PHRASE_NOT_SAVED_COPY });
+      return;
+    }
+    set({ status: "working", error: undefined });
+    let vaultKey: Uint8Array<ArrayBuffer>;
+    try {
+      vaultKey = await step.confirmPhrase();
+    } catch {
+      // The phrase stays on screen so the person can try again.
+      set({ status: "phrase", error: PHRASE_FAILED_COPY });
+      return;
+    }
+    await sealAndSubmit(vaultKey);
+  }
+
   return {
     getState: () => state,
     setType: (value) => set({ type: value }),
     setLabel: (value) => set({ label: value }),
     setValue: (value) => set({ value }),
     submit,
+    getUnlockState: () => step.getState(),
+    setUnlockMethod: (method) => step.setMethod(method),
+    setUnlockPassphrase: (value) => step.setPassphrase(value),
+    setRecoveryPhrase: (value) => step.setRecoveryPhrase(value),
+    setPhraseSaved: (value) => step.setPhraseSaved(value),
+    confirmRecoveryPhrase,
   };
 }
 
@@ -352,6 +353,7 @@ export function HighTierFlow(props: HighTierFlowProps): React.ReactElement {
   }
   const flow = flowRef.current;
   const state = flow.getState();
+  const unlock = flow.getUnlockState();
   const isRaise = props.mode === "raise";
 
   // Call every hook unconditionally (rules of hooks), even though the closed panel uses none.
@@ -403,7 +405,19 @@ export function HighTierFlow(props: HighTierFlowProps): React.ReactElement {
         </>
       )}
 
-      {state.error ? (
+      <VaultUnlockChoice
+        state={unlock}
+        onMethod={(method) => flow.setUnlockMethod(method)}
+        onPassphrase={(value) => flow.setUnlockPassphrase(value)}
+        onRecoveryPhrase={(value) => flow.setRecoveryPhrase(value)}
+      />
+
+      {unlock.notice ? (
+        <p role="status" className="text-sm text-fg">
+          {unlock.notice}
+        </p>
+      ) : null}
+      {state.error && state.status !== "phrase" ? (
         <p role="alert" className="text-sm text-danger">
           {state.error}
         </p>
@@ -414,12 +428,26 @@ export function HighTierFlow(props: HighTierFlowProps): React.ReactElement {
         </p>
       ) : null}
 
-      <SensitiveNotice
-        explanation={PROTECTION_EXPLAINER}
-        onConfirm={() => {
-          void flow.submit();
-        }}
-      />
+      {unlock.newPhrase !== null ? (
+        <RecoveryPhraseReveal
+          phrase={unlock.newPhrase}
+          saved={unlock.phraseSaved}
+          onSavedChange={(saved) => flow.setPhraseSaved(saved)}
+          onContinue={() => {
+            void flow.confirmRecoveryPhrase();
+          }}
+          working={state.status === "working"}
+          error={state.status === "phrase" ? state.error : undefined}
+          continueLabel="Save the phrase and my detail"
+        />
+      ) : (
+        <SensitiveNotice
+          explanation={PROTECTION_EXPLAINER}
+          onConfirm={() => {
+            void flow.submit();
+          }}
+        />
+      )}
     </Card>
   );
 }
