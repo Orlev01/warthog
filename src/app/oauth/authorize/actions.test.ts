@@ -97,6 +97,8 @@ import { createHash } from "node:crypto";
 import { createAuthorizeActions, type ConsentApproval } from "./actions";
 
 import { beginAuthorization } from "../../../server/oauth/authorize";
+import { putPendingAuthorization } from "../../../server/oauth/pending";
+import type { ResolvedClient } from "../../../server/oauth/clients";
 import { getAuthCode } from "../../../server/oauth/store";
 import { listAgentsForUser } from "../../../server/db/agents";
 import { getConnectionPermissions } from "../../../server/db/agent-permissions";
@@ -148,12 +150,20 @@ function configWithBaseUrl(publicBaseUrl: string): Config {
 
 // Build the consent-decision actions under test with the real seams, a frozen clock and
 // the real randomness source (so credentials/connection ids never collide across tests).
+// Review fix A1: authorize now resolves the client and enforces its registered redirect
+// URIs. The consenting client here registers exactly REDIRECT_URI; anything else is
+// unknown. (A fake resolver — no database row and no CIMD fetch needed.)
+async function resolveClient(clientId: string): Promise<ResolvedClient | null> {
+  return clientId === CLIENT_ID ? { clientId, registration: "cimd", redirectUris: [REDIRECT_URI] } : null;
+}
+
 function makeActions(db: Db, base: string = BASE_URL) {
   return createAuthorizeActions({
     db,
     config: configWithBaseUrl(base),
     clock: fixedClock(NOW),
     random: systemRandom,
+    resolveClient,
   });
 }
 
@@ -207,7 +217,7 @@ function authorizeParams(resource: string = MCP_RESOURCE): URLSearchParams {
 async function seedPending(db: Db, base: string = BASE_URL): Promise<string> {
   const begun = await beginAuthorization(
     { params: authorizeParams(`${base}/mcp`), session: sessionFor("pending-seed") },
-    { db, config: configWithBaseUrl(base), clock: fixedClock(NOW), random: systemRandom },
+    { db, config: configWithBaseUrl(base), clock: fixedClock(NOW), random: systemRandom, resolveClient },
   );
   assert.ok(begun.ok, "seeding the pending authorize request must succeed");
   if (!begun.ok) throw new Error("unreachable: beginAuthorization failed to seed a pending request");
@@ -731,6 +741,58 @@ test("replaying a decision (the same handle twice) creates nothing the second ti
       1,
       "the replay creates no second agent (the handle is single-use)",
     );
+  } finally {
+    await db.close();
+  }
+});
+
+// =====================================================================================
+// Review fix A1 (defence in depth) — the decision never redirects to an unvalidated URI.
+// A pending request is planted straight into the store (beginAuthorization now refuses
+// these), so the decision's OWN re-check is what is proven: Refuse returns no redirect and
+// Approve issues no code and creates no agent.
+// =====================================================================================
+
+function plantedPending(redirectUri: string): string {
+  const params = authorizeParams();
+  params.set("redirect_uri", redirectUri);
+  return putPendingAuthorization(params, systemRandom);
+}
+
+test("Refuse and Approve never redirect to a javascript:, data: or unregistered URI", async () => {
+  const db = await freshDb();
+  try {
+    const userId = await makeUser(db, "hostile-redirect");
+    for (const redirectUri of [
+      "javascript://claude.ai/%0aalert(1)//",
+      "javascript:fetch('//attacker.example/x')//",
+      "data:text/html,x",
+      "http://attacker.example/cb",
+      "https://attacker.example/cb",
+    ]) {
+      const refused = await makeActions(db).refuse(sessionFor(userId), plantedPending(redirectUri));
+      assert.equal(refused.ok, false, `refuse returns no redirect for ${redirectUri}`);
+
+      const approved = await makeActions(db).approve(sessionFor(userId), plantedPending(redirectUri), approval());
+      assert.equal(approved.ok, false, `approve returns no redirect for ${redirectUri}`);
+    }
+    assert.equal((await listAgentsForUser(db, userId)).length, 0, "no agent is created for a hostile redirect");
+  } finally {
+    await db.close();
+  }
+});
+
+test("Approve for a client that is no longer known issues no code and creates no agent", async () => {
+  const db = await freshDb();
+  try {
+    const userId = await makeUser(db, "unknown-client");
+    const params = authorizeParams();
+    params.set("client_id", "never-registered-client");
+    const handle = putPendingAuthorization(params, systemRandom);
+
+    const approved = await makeActions(db).approve(sessionFor(userId), handle, approval());
+    assert.equal(approved.ok, false, "an unknown client gets no code");
+    assert.equal((await listAgentsForUser(db, userId)).length, 0, "and no agent row");
   } finally {
     await db.close();
   }

@@ -18,6 +18,12 @@
 //     any host and port is allowed; http is allowed ONLY for the two named local hosts
 //     (`localhost`, `127.0.0.1`) on any port; everything else is refused.
 //
+//   - `createClientResolver` / `systemClientResolver` — review fix A1: the one place a
+//     `client_id` on an authorize request becomes a KNOWN client with its registered
+//     redirect URIs (a DCR row from `oauth_clients`, else a CIMD document fetched through
+//     the guarded fetcher), or null. `/oauth/authorize` refuses anything that does not
+//     resolve, so a crafted link can no longer name an arbitrary client or redirect.
+//
 // Outbound HTTP, DNS and the clock are injected as seams so the whole guard is unit-
 // tested without a real socket or resolver (conventions: external services sit behind
 // interfaces with fakes; tests never touch the network). The address classification (the
@@ -25,7 +31,12 @@
 // source of truth governs which addresses are refused for both the up-front lookup and
 // the connection-time guard.
 
+import { z } from "zod";
+
 import { type Clock, systemClock } from "../seams/clock";
+import { processSingleton } from "../seams/process-singleton";
+import { getClient, type Registration } from "./store";
+import type { Db } from "../db/index";
 import {
   createGuardedFetch,
   isBlockedAddress,
@@ -224,4 +235,81 @@ export function isAllowedRedirectUri(uri: string): boolean {
     return url.hostname === "localhost" || url.hostname === "127.0.0.1";
   }
   return false;
+}
+
+// --- Client resolution (review fix A1) ---------------------------------------------
+
+// A client the authorization server knows: its id, how it registered, and the redirect
+// URIs it registered. An authorize request's redirect_uri must EXACTLY equal one of these.
+export interface ResolvedClient {
+  readonly clientId: string;
+  readonly registration: Registration;
+  readonly redirectUris: readonly string[];
+}
+
+// Resolve a client_id to the client it names, or null when it names none.
+export type ClientResolver = (clientId: string) => Promise<ResolvedClient | null>;
+
+// The fields a CIMD document must carry for Warthog to trust it as a client: its own
+// client_id (compared with the URL it was fetched from) and its redirect URIs. Bounded,
+// so a hostile document can't hand back an unbounded list. Other metadata is ignored.
+const MAX_CIMD_REDIRECT_URIS = 20;
+const MAX_REDIRECT_URI_LENGTH = 2048;
+const cimdDocumentSchema = z.object({
+  client_id: z.string(),
+  redirect_uris: z
+    .array(z.string().min(1).max(MAX_REDIRECT_URI_LENGTH))
+    .min(1)
+    .max(MAX_CIMD_REDIRECT_URIS),
+});
+
+// True when a client_id is shaped like a CIMD client id (an https URL).
+function isCimdClientId(clientId: string): boolean {
+  try {
+    return new URL(clientId).protocol === "https:";
+  } catch {
+    return false;
+  }
+}
+
+// Build a resolver over the db (DCR and pre-registered clients) and a CIMD fetcher. A
+// client registered in `oauth_clients` wins; otherwise an https client_id is fetched as a
+// CIMD document and accepted only when the document names the SAME client_id and lists
+// its redirect URIs. Every failure — an unknown id, a refused or failed fetch, a
+// malformed or mismatched document — resolves to null, so authorize fails closed.
+export function createClientResolver(deps: {
+  readonly db: Db;
+  readonly fetchCimd: (clientId: string) => Promise<Record<string, unknown>>;
+}): ClientResolver {
+  return async function resolveClient(clientId: string): Promise<ResolvedClient | null> {
+    if (clientId === "") return null;
+
+    const registered = await getClient(deps.db, clientId);
+    if (registered != null) {
+      return {
+        clientId: registered.clientId,
+        registration: registered.registration,
+        redirectUris: registered.redirectUris,
+      };
+    }
+
+    if (!isCimdClientId(clientId)) return null;
+    let doc: Record<string, unknown>;
+    try {
+      doc = await deps.fetchCimd(clientId);
+    } catch {
+      return null;
+    }
+    const parsed = cimdDocumentSchema.safeParse(doc);
+    if (!parsed.success || parsed.data.client_id !== clientId) return null;
+    return { clientId, registration: "cimd", redirectUris: parsed.data.redirect_uris };
+  };
+}
+
+// The production resolver: the process-wide guarded CIMD fetcher (held through
+// processSingleton so its 24-hour cache is shared by every route, page and action and
+// survives across requests) over the given db.
+export function systemClientResolver(db: Db): ClientResolver {
+  const fetchCimd = processSingleton("oauth.cimdFetcher", () => createGuardedCimdFetcher());
+  return createClientResolver({ db, fetchCimd });
 }

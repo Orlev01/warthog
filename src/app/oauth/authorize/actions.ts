@@ -35,7 +35,8 @@ import { randomUUID } from "node:crypto";
 
 import { z } from "zod";
 
-import { authorize } from "../../../server/oauth/authorize";
+import { authorize, validatedRedirectUri } from "../../../server/oauth/authorize";
+import type { ClientResolver } from "../../../server/oauth/clients";
 import { consumePendingAuthorization } from "../../../server/oauth/pending";
 import { createAgent } from "../../../server/db/agents";
 import {
@@ -86,13 +87,16 @@ export type DecisionResult =
   | { readonly ok: false; readonly error: string };
 
 // The seams the decision composes: the db (stores), config (the issuer, read through
-// the authorize seam), the clock (the agent's connected-at + the credential expiry)
-// and the randomness source (the opaque credential).
+// the authorize seam), the clock (the agent's connected-at + the credential expiry),
+// the randomness source (the opaque credential) and the client resolver (review fix
+// A1: both decisions re-check the client and its registered redirect URI, so neither
+// ever redirects to an unvalidated URI).
 export interface AuthorizeActionsDeps {
   readonly db: Db;
   readonly config: Config;
   readonly clock: Clock;
   readonly random: Random;
+  readonly resolveClient: ClientResolver;
 }
 
 // The consent-decision actions the consent screen drives. Each takes an opaque
@@ -170,7 +174,7 @@ function grantsFor(
 }
 
 export function createAuthorizeActions(deps: AuthorizeActionsDeps): AuthorizeActions {
-  const { db, config, clock, random } = deps;
+  const { db, config, clock, random, resolveClient } = deps;
 
   // Approve: validate the untrusted input FIRST (a 4xx before any write), resolve and
   // CONSUME the pending authorize request from its server-side handle (a tampered or
@@ -193,7 +197,7 @@ export function createAuthorizeActions(deps: AuthorizeActionsDeps): AuthorizeAct
 
     const issued = await authorize(
       { params: pending.params, session, connectionId },
-      { db, config, clock, random },
+      { db, config, clock, random, resolveClient },
     );
     if (!issued.ok) return { ok: false, error: issued.error };
 
@@ -217,17 +221,17 @@ export function createAuthorizeActions(deps: AuthorizeActionsDeps): AuthorizeAct
   // Refuse: create no agent, upsert no permissions and issue no credential. Resolve and
   // CONSUME the pending request from its server-side handle (a tampered or replayed
   // handle resolves to nothing, so there is no client to redirect and nothing is
-  // created). Redirect back to the client with `access_denied` (the echoed state and the
-  // configured issuer), carrying no code.
+  // created). Re-check the client and its registered redirect URI (review fix A1) — a
+  // redirect that fails is never followed, so Refuse can't be turned into an open
+  // redirect or a `javascript:` navigation. Redirect back to the client with
+  // `access_denied` (the echoed state and the configured issuer), carrying no code.
   async function refuse(_session: Session, handle: string): Promise<DecisionResult> {
     const pending = consumePendingAuthorization(handle);
     if (pending == null) return { ok: false, error: "invalid_request" };
 
-    const redirectUri = pending.params.get("redirect_uri");
-    if (redirectUri == null || redirectUri === "") {
-      return { ok: false, error: "invalid_request" };
-    }
-    const redirect = new URL(redirectUri);
+    const validated = await validatedRedirectUri(pending.params, resolveClient);
+    if (!validated.ok) return { ok: false, error: validated.error };
+    const redirect = new URL(validated.redirectUri);
     redirect.searchParams.set("error", "access_denied");
     const state = pending.params.get("state");
     if (state != null) redirect.searchParams.set("state", state);

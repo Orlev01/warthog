@@ -86,6 +86,7 @@ import { createHash, randomUUID } from "node:crypto";
 import { authorize, beginAuthorization, type AuthorizeDeps } from "./authorize";
 import { getPendingAuthorization } from "./pending";
 import { createClient, getAuthCode } from "./store";
+import { createClientResolver } from "./clients";
 import { freshDb } from "../../test/db";
 import { loadConfig, type Config } from "../config";
 import { fixedClock } from "../seams/clock";
@@ -128,8 +129,25 @@ function configWithBaseUrl(publicBaseUrl: string): Config {
   } as NodeJS.ProcessEnv);
 }
 
-function deps(db: Db, base: string = BASE_URL): AuthorizeDeps {
-  return { db, config: configWithBaseUrl(base), clock: fixedClock(NOW), random: systemRandom };
+// Review fix A1: the seams now include the client resolver. Tests resolve clients from the
+// test database only — a CIMD fetch is never made (no network in tests); the CIMD path is
+// exercised with an injected fake document where a test needs it.
+async function noCimd(clientId: string): Promise<Record<string, unknown>> {
+  throw new Error(`no CIMD fetch in tests (${clientId})`);
+}
+
+function deps(
+  db: Db,
+  base: string = BASE_URL,
+  fetchCimd: (clientId: string) => Promise<Record<string, unknown>> = noCimd,
+): AuthorizeDeps {
+  return {
+    db,
+    config: configWithBaseUrl(base),
+    clock: fixedClock(NOW),
+    random: systemRandom,
+    resolveClient: createClientResolver({ db, fetchCimd }),
+  };
 }
 
 // A plain signed-in session (the seam only needs it to be non-null; the route is what
@@ -450,6 +468,196 @@ test("beginAuthorization rejects a malformed request (bad PKCE / wrong resource)
     );
     assert.equal(wrongResource.ok, false, "a wrong-resource request never reaches consent");
     if (!wrongResource.ok) assert.equal(wrongResource.error, "invalid_target", "a wrong resource is an invalid_target");
+  } finally {
+    await db.close();
+  }
+});
+
+// =====================================================================================
+// Review fix A1 — the client and its redirect URI are ENFORCED, not just present.
+//
+// Until this fix `validateAuthorizeRequest` only checked that client_id and redirect_uri
+// were non-empty: an unregistered client with any redirect URI — including
+// `javascript:` — reached the consent screen, and Refuse/Approve then redirected to it
+// (script on the Warthog origin, or a code delivered to any host). Now the client must
+// resolve (a DCR row, or a CIMD document fetched through the guarded fetcher), the
+// redirect URI must EXACTLY equal one the client registered, and it must also pass the
+// shared redirect rule (https, or http on localhost / 127.0.0.1). `response_type` must be
+// `code`. Both seams share the validator, so the approve path re-checks after consent.
+// =====================================================================================
+
+test("beginAuthorization rejects an unregistered client_id with invalid_client", async () => {
+  const db = await dbWithClient();
+  try {
+    const result = await beginAuthorization(
+      {
+        params: authorizeParams({ client_id: "never-registered-client", redirect_uri: "https://attacker.example/cb" }),
+        session: signedInSession(),
+      },
+      deps(db),
+    );
+    assert.equal(result.ok, false, "an unknown client never reaches consent");
+    if (!result.ok) assert.equal(result.error, "invalid_client");
+  } finally {
+    await db.close();
+  }
+});
+
+test("beginAuthorization rejects a redirect_uri the client did not register (exact match only)", async () => {
+  const db = await dbWithClient();
+  try {
+    for (const redirectUri of [
+      "https://claude.ai/other",
+      "https://attacker.example/cb",
+      `${REDIRECT_URI}/`,
+      `${REDIRECT_URI}?x=1`,
+      "https://CLAUDE.ai/api/mcp/auth_callback",
+    ]) {
+      const result = await beginAuthorization(
+        { params: authorizeParams({ redirect_uri: redirectUri }), session: signedInSession() },
+        deps(db),
+      );
+      assert.equal(result.ok, false, `an unregistered redirect URI is refused: ${redirectUri}`);
+      if (!result.ok) assert.equal(result.error, "invalid_request");
+    }
+  } finally {
+    await db.close();
+  }
+});
+
+test("a javascript:, data: or plain-http redirect is refused even when it is in the client's registration", async () => {
+  const db = await freshDb();
+  try {
+    const hostile = [
+      "javascript:alert(1)//",
+      "javascript://claude.ai/%0aalert(1)//",
+      "data:text/html,x",
+      "http://evil.example/cb",
+    ];
+    // A row planted straight into the store (bypassing /oauth/register's own check), so the
+    // scheme rule at authorize is proven to hold on its own.
+    await createClient(db, { clientId: "planted-client", registration: "dcr", redirectUris: hostile });
+    for (const redirectUri of hostile) {
+      const begun = await beginAuthorization(
+        { params: authorizeParams({ client_id: "planted-client", redirect_uri: redirectUri }), session: signedInSession() },
+        deps(db),
+      );
+      assert.equal(begun.ok, false, `begin refuses ${redirectUri}`);
+      if (!begun.ok) assert.equal(begun.error, "invalid_request");
+
+      const issued = await authorize(
+        {
+          params: authorizeParams({ client_id: "planted-client", redirect_uri: redirectUri }),
+          session: signedInSession(),
+          connectionId: randomUUID(),
+        },
+        deps(db),
+      );
+      assert.equal(issued.ok, false, `authorize issues no code for ${redirectUri}`);
+    }
+  } finally {
+    await db.close();
+  }
+});
+
+test("http on localhost / 127.0.0.1 is accepted for a client that registered it", async () => {
+  const db = await freshDb();
+  try {
+    const local = ["http://localhost:8976/callback", "http://127.0.0.1:33418/cb"];
+    await createClient(db, { clientId: "local-client", registration: "dcr", redirectUris: local });
+    for (const redirectUri of local) {
+      const begun = await beginAuthorization(
+        { params: authorizeParams({ client_id: "local-client", redirect_uri: redirectUri }), session: signedInSession() },
+        deps(db),
+      );
+      assert.ok(begun.ok, `a registered loopback redirect is accepted: ${redirectUri}`);
+    }
+  } finally {
+    await db.close();
+  }
+});
+
+test("response_type must be code", async () => {
+  const db = await dbWithClient();
+  try {
+    for (const responseType of [null, "token", "code id_token"]) {
+      const result = await beginAuthorization(
+        { params: authorizeParams({ response_type: responseType }), session: signedInSession() },
+        deps(db),
+      );
+      assert.equal(result.ok, false, `response_type ${String(responseType)} is refused`);
+      if (!result.ok) assert.equal(result.error, "unsupported_response_type");
+    }
+  } finally {
+    await db.close();
+  }
+});
+
+test("authorize (the approve path) re-checks the client: an unknown client is issued no code", async () => {
+  const db = await freshDb();
+  try {
+    const result = await authorize(
+      { params: authorizeParams(), session: signedInSession(), connectionId: randomUUID() },
+      deps(db),
+    );
+    assert.equal(result.ok, false, "with no registration for the client, no code is issued");
+    if (!result.ok) assert.equal(result.error, "invalid_client");
+  } finally {
+    await db.close();
+  }
+});
+
+test("a CIMD client is resolved from its metadata document and its redirect URIs enforced", async () => {
+  const db = await freshDb();
+  try {
+    const cimd = async (clientId: string) => ({ client_id: clientId, redirect_uris: [REDIRECT_URI] });
+    const ok = await beginAuthorization(
+      { params: authorizeParams(), session: signedInSession() },
+      deps(db, BASE_URL, cimd),
+    );
+    assert.ok(ok.ok, "a CIMD client whose document lists the redirect URI begins consent");
+
+    const wrongRedirect = await beginAuthorization(
+      { params: authorizeParams({ redirect_uri: "https://claude.ai/elsewhere" }), session: signedInSession() },
+      deps(db, BASE_URL, cimd),
+    );
+    assert.equal(wrongRedirect.ok, false, "a redirect URI the document does not list is refused");
+
+    const impostor = async () => ({ client_id: "https://evil.example/client", redirect_uris: [REDIRECT_URI] });
+    const mismatched = await beginAuthorization(
+      { params: authorizeParams(), session: signedInSession() },
+      deps(db, BASE_URL, impostor),
+    );
+    assert.equal(mismatched.ok, false, "a document naming another client_id is refused");
+    if (!mismatched.ok) assert.equal(mismatched.error, "invalid_client");
+  } finally {
+    await db.close();
+  }
+});
+
+// Review fix A4 — only a VALID request is bounced through sign-in. A malformed or unknown-
+// client request with no session is a 400 at once (never a sign-in round trip that comes
+// back to an error), so login_required means "valid, just signed out".
+test("a signed-out request that is malformed is rejected as malformed, not sent to sign in", async () => {
+  const db = await dbWithClient();
+  try {
+    const plain = await beginAuthorization(
+      { params: authorizeParams({ code_challenge_method: "plain" }), session: null },
+      deps(db),
+    );
+    assert.equal(plain.ok, false);
+    if (!plain.ok) assert.equal(plain.error, "invalid_request", "bad PKCE with no session is invalid_request");
+
+    const unknown = await beginAuthorization(
+      { params: authorizeParams({ client_id: "never-registered-client" }), session: null },
+      deps(db),
+    );
+    assert.equal(unknown.ok, false);
+    if (!unknown.ok) assert.equal(unknown.error, "invalid_client", "an unknown client with no session is invalid_client");
+
+    const valid = await beginAuthorization({ params: authorizeParams(), session: null }, deps(db));
+    assert.equal(valid.ok, false);
+    if (!valid.ok) assert.equal(valid.error, "login_required", "a valid request with no session needs sign-in");
   } finally {
     await db.close();
   }

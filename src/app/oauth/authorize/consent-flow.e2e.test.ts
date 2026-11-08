@@ -42,6 +42,7 @@ import { localAesKeyWrapper } from "../../../server/crypto/key-wrapper";
 import { exchangeToken } from "../../../server/oauth/token";
 import { verifyBearer } from "../../../server/oauth/verify-bearer";
 import { createClient } from "../../../server/oauth/store";
+import { createClientResolver } from "../../../server/oauth/clients";
 import { createMcpDispatch } from "../../../server/mcp/compose";
 import { listActivity } from "../../../server/activity/list";
 import { createUser } from "../../../server/db/users";
@@ -85,8 +86,21 @@ function devConfig(): Config {
   } as NodeJS.ProcessEnv);
 }
 
+// Review fix A1: the client is resolved from the database (each test registers it, as a
+// real flow needs); no CIMD fetch is ever made in tests.
 function deps(db: Db, config: Config) {
-  return { db, config, clock: fixedClock(NOW), random: systemRandom };
+  return {
+    db,
+    config,
+    clock: fixedClock(NOW),
+    random: systemRandom,
+    resolveClient: createClientResolver({
+      db,
+      fetchCimd: async (clientId: string): Promise<Record<string, unknown>> => {
+        throw new Error(`no CIMD fetch in tests (${clientId})`);
+      },
+    }),
+  };
 }
 
 function sessionFor(userId: string): Session {

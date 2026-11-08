@@ -22,11 +22,21 @@
 // The seam takes the connection as an OPAQUE uuid the caller supplies: the consent
 // decision that creates the connection is wired in later (E10-S03), and the seam's job
 // is only to BIND the issued code to it.
+//
+// Review fix A1 — the client and its redirect URI are ENFORCED. `response_type` must be
+// `code`; the `client_id` must resolve to a known client (a DCR row, or a CIMD document
+// fetched through the SSRF-guarded fetcher — the injected `resolveClient` seam); and the
+// `redirect_uri` must EXACTLY equal one the client registered AND pass the shared
+// redirect rule (https, or http on localhost / 127.0.0.1). Until then a crafted link
+// could name any client and any redirect — including `javascript:` — and the consent
+// screen's Approve/Refuse redirected straight to it. The checks run BEFORE the session
+// check, so only a valid request is sent through sign-in (review fix A4).
 
 import { createHash } from "node:crypto";
 
 import { createAuthCode } from "./store";
 import { putPendingAuthorization } from "./pending";
+import { isAllowedRedirectUri, type ClientResolver } from "./clients";
 import type { Db } from "../db/index";
 import type { Config } from "../config";
 import type { Clock } from "../seams/clock";
@@ -50,12 +60,14 @@ export interface AuthorizeInput {
 }
 
 // The seams authorize depends on: the db (store), config (issuer + MCP resource), the
-// clock (expiry) and the randomness source (the opaque code).
+// clock (expiry), the randomness source (the opaque code) and the client resolver (a
+// client_id → its registered redirect URIs; `systemClientResolver(db)` in production).
 export interface AuthorizeDeps {
   readonly db: Db;
   readonly config: Config;
   readonly clock: Clock;
   readonly random: Random;
+  readonly resolveClient: ClientResolver;
 }
 
 // The outcome: a redirect carrying the issued code, or a rejection naming the OAuth
@@ -80,19 +92,49 @@ function sha256Hex(value: string): string {
   return createHash("sha256").update(value, "utf8").digest("hex");
 }
 
+// The redirect URI an authorize request may be answered at, or null when it may not be
+// answered at all: the client must resolve, and the requested redirect_uri must EXACTLY
+// equal (string comparison — no normalisation, RFC 9700 §4.1.3) one of its registered
+// redirect URIs and also pass the shared scheme rule, so a `javascript:` or plain-http
+// URI planted in a registration is still refused. Shared by the validator below and the
+// consent decision's Refuse, so NOTHING redirects to an unvalidated URI.
+export async function validatedRedirectUri(
+  params: URLSearchParams,
+  resolveClient: ClientResolver,
+): Promise<{ readonly ok: true; readonly redirectUri: string } | { readonly ok: false; readonly error: string }> {
+  const clientId = params.get("client_id");
+  const redirectUri = params.get("redirect_uri");
+  if (clientId == null || clientId === "" || redirectUri == null || redirectUri === "") {
+    return { ok: false, error: "invalid_request" };
+  }
+  const client = await resolveClient(clientId);
+  if (client == null) return { ok: false, error: "invalid_client" };
+  if (!client.redirectUris.includes(redirectUri) || !isAllowedRedirectUri(redirectUri)) {
+    return { ok: false, error: "invalid_request" };
+  }
+  return { ok: true, redirectUri };
+}
+
 // The OAuth authorization rules, shared by `authorize` (which issues the code) and
-// `beginAuthorization` (which carries the request to consent): the request must be
-// signed in; PKCE is mandatory and S256 only (a missing challenge, or any method
-// other than S256 — including an omitted method, which RFC 7636 defaults to "plain"
-// — is rejected); the `resource` is required and must be exactly this server's MCP
-// resource; the client and its redirect URI are required to form the response. The
-// two seams reject with the SAME error vocabulary, so the route maps each identically.
-function validateAuthorizeRequest(
+// `beginAuthorization` (which carries the request to consent): `response_type` is
+// `code`; the client resolves and the redirect URI is one it registered (above); PKCE is
+// mandatory and S256 only (a missing challenge, or any method other than S256 —
+// including an omitted method, which RFC 7636 defaults to "plain" — is rejected); the
+// `resource` is required and must be exactly this server's MCP resource; and, LAST, the
+// request must be signed in — so `login_required` means "valid, just signed out" and a
+// malformed request is refused at once rather than bounced through sign-in. The two
+// seams reject with the SAME error vocabulary, so the route maps each identically.
+async function validateAuthorizeRequest(
   params: URLSearchParams,
   session: Session | null,
-  config: Config,
-): { readonly ok: true } | { readonly ok: false; readonly error: string } {
-  if (session == null) return { ok: false, error: "login_required" };
+  deps: AuthorizeDeps,
+): Promise<{ readonly ok: true } | { readonly ok: false; readonly error: string }> {
+  if (params.get("response_type") !== "code") {
+    return { ok: false, error: "unsupported_response_type" };
+  }
+
+  const redirect = await validatedRedirectUri(params, deps.resolveClient);
+  if (!redirect.ok) return redirect;
 
   const codeChallenge = params.get("code_challenge");
   if (codeChallenge == null || codeChallenge === "") {
@@ -103,15 +145,11 @@ function validateAuthorizeRequest(
   }
 
   const resource = params.get("resource");
-  if (resource !== mcpResource(config)) {
+  if (resource !== mcpResource(deps.config)) {
     return { ok: false, error: "invalid_target" };
   }
 
-  const clientId = params.get("client_id");
-  const redirectUri = params.get("redirect_uri");
-  if (clientId == null || clientId === "" || redirectUri == null || redirectUri === "") {
-    return { ok: false, error: "invalid_request" };
-  }
+  if (session == null) return { ok: false, error: "login_required" };
   return { ok: true };
 }
 
@@ -123,10 +161,10 @@ export async function authorize(
   const { db, config, clock, random } = deps;
 
   // Enforce the authorization rules; any failure rejects with no code issued.
-  const valid = validateAuthorizeRequest(params, session, config);
+  const valid = await validateAuthorizeRequest(params, session, deps);
   if (!valid.ok) return valid;
 
-  // The client and its redirect URI are present (validated above).
+  // The client and its registered redirect URI (validated above).
   const clientId = params.get("client_id")!;
   const redirectUri = params.get("redirect_uri")!;
   const codeChallenge = params.get("code_challenge")!;
@@ -179,10 +217,10 @@ export async function beginAuthorization(
   deps: AuthorizeDeps,
 ): Promise<BeginAuthorizationResult> {
   const { params, session } = input;
-  const { config, random } = deps;
+  const { random } = deps;
 
   // Enforce the authorization rules; a rejection never reaches consent.
-  const valid = validateAuthorizeRequest(params, session, config);
+  const valid = await validateAuthorizeRequest(params, session, deps);
   if (!valid.ok) return valid;
 
   // Carry the request server-side under an opaque handle and send the person to the

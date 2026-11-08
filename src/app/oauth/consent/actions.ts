@@ -7,8 +7,13 @@
 // route puts in a host-locked cookie), this loader turns the pending request — resolved by
 // its handle, NEVER trusted from a form/URL field — into the prop-driven <ConsentView>'s
 // props (E10-S02): the connecting platform name, the redirect { host, verified } (verified
-// === the callback host is a KNOWN platform, EXACT host match, never a look-alike), a valid
-// preselected starting set, and the plain-words scopes.
+// === the callback is an https URL on a KNOWN platform's default port, EXACT host match,
+// never a look-alike), a valid preselected starting set, and the plain-words scopes.
+//
+// Review fix A1 (defence in depth): authorize now refuses any redirect the client did not
+// register, but the loader still renders nothing for a redirect outside the shared rule
+// (https, or http on localhost / 127.0.0.1) — `javascript://claude.ai/…` has hostname
+// `claude.ai` and used to earn the Verified badge.
 //
 // Rendering must NOT consume the one-time pending request — the page renders first and the
 // person approves afterwards — so the loader reads through the NON-consuming
@@ -16,6 +21,7 @@
 // page shows an expired-request message rather than crashing.
 
 import { getPendingAuthorization } from "../../../server/oauth/pending";
+import { isAllowedRedirectUri } from "../../../server/oauth/clients";
 import type { ConsentViewProps } from "../../../components/agents/consent-view";
 
 // The platforms Warthog recognises, by the EXACT host their OAuth callback returns to
@@ -46,18 +52,16 @@ export async function loadConsentView(handle: string): Promise<ConsentViewProps 
   if (pending == null) return null;
 
   const redirectUri = pending.params.get("redirect_uri");
-  if (redirectUri == null || redirectUri === "") return null;
+  if (redirectUri == null || redirectUri === "" || !isAllowedRedirectUri(redirectUri)) return null;
 
-  let host: string;
-  try {
-    host = new URL(redirectUri).hostname;
-  } catch {
-    return null;
-  }
+  const url = new URL(redirectUri);
+  const host = url.hostname;
 
-  const friendly = KNOWN_PLATFORMS.get(host);
-  const verified = friendly != null;
-  const platform = friendly ?? host;
+  // Only the platform's own https origin (default port) is the platform; anything else on
+  // a known host is shown, by host, without the badge.
+  const known = url.protocol === "https:" && url.port === "" ? KNOWN_PLATFORMS.get(host) : undefined;
+  const verified = known != null;
+  const platform = known ?? host;
 
   return {
     platform,
