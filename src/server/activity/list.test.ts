@@ -687,3 +687,140 @@ test("the list read reads no process.env: a decoy env secret never appears in a 
     else process.env.WARTHOG_DECOY_SECRET = prev;
   }
 });
+
+// ===================================================================================
+// Bounded, paginated reads (review finding: Home, Activity and Spending listed — and
+// decrypted — a person's ENTIRE history on every view, with no LIMIT and an ORDER BY no
+// index served, so every page view grew with the record: thousands of AES-GCM decrypts held
+// in memory on a small container within weeks of normal agent use).
+// ===================================================================================
+
+test("a limit returns only the newest entries, and the cursor pages through the rest with no gap or overlap", async () => {
+  const db = await freshDb();
+  try {
+    const alice = await makeUser(db, "paging");
+    const dek = freshDek();
+    // Five entries, two of them at the SAME instant (the seq breaks the tie).
+    await recordEntry(db, alice, dek, JAN, {}); // seq1
+    await recordEntry(db, alice, dek, FEB, {}); // seq2
+    await recordEntry(db, alice, dek, FEB, {}); // seq3
+    await recordEntry(db, alice, dek, MAR, {}); // seq4
+    await recordEntry(db, alice, dek, APR, {}); // seq5
+
+    const { cursorAfter } = await import("./list");
+    const page1 = await listActivity(db, alice, {}, dek, { limit: 2 });
+    assert.deepEqual(seqs(page1), [5, 4], "the first page is the newest two");
+    const page2 = await listActivity(db, alice, {}, dek, { limit: 2, before: cursorAfter(page1) });
+    assert.deepEqual(seqs(page2), [3, 2], "the next page continues strictly after the cursor");
+    const page3 = await listActivity(db, alice, {}, dek, { limit: 2, before: cursorAfter(page2) });
+    assert.deepEqual(seqs(page3), [1], "the last page holds what is left");
+
+    // Filters and the cursor combine.
+    assert.deepEqual(
+      seqs(await listActivity(db, alice, { from: FEB }, dek, { limit: 10, before: cursorAfter(page1) })),
+      [3, 2],
+    );
+  } finally {
+    await db.close();
+  }
+});
+
+test("every list read is bounded, even when the caller asks for no limit or an absurd one", async () => {
+  const { MAX_LIST_LIMIT } = await import("./list");
+  for (const options of [undefined, {}, { limit: 1_000_000 }, { limit: 0 }, { limit: -5 }]) {
+    const db = recordingDb();
+    await listActivity(db, "3f2b8c1e-4d5a-4b6c-8d7e-9f0a1b2c3d4e", {}, freshDek(), options);
+    const [call] = db.calls;
+    assert.ok(call, "the read issued a query");
+    assert.match(call.text, /LIMIT \$\d+/, "the statement carries a bound LIMIT");
+    const limit = call.values[call.values.length - 1];
+    assert.equal(typeof limit, "number");
+    assert.ok((limit as number) >= 1 && (limit as number) <= MAX_LIST_LIMIT, `the limit is clamped (${String(limit)})`);
+  }
+});
+
+test("the newest-first read is served by an index, with no scan of other people's rows and no sort", async () => {
+  const db = await freshDb();
+  try {
+    const alice = await makeUser(db, "plan");
+    const dek = freshDek();
+    await recordEntry(db, alice, dek, JAN, {});
+    const reads: { text: string; values: unknown[] }[] = [];
+    const capturing: Db = {
+      async query(text: string, values: unknown[] = []) {
+        reads.push({ text, values });
+        return db.query(text, values);
+      },
+      close: () => db.close(),
+    };
+    await listActivity(capturing, alice, {}, dek, { limit: 20 });
+    await db.query("SET enable_seqscan = off");
+    await db.query("SET enable_sort = off");
+    for (const read of reads) {
+      const plan = await db.query(`EXPLAIN ${read.text}`, read.values);
+      const text = plan.rows.map((r) => String(Object.values(r)[0])).join("\n");
+      assert.doesNotMatch(text, /Seq Scan|Sort/, `the read walks an index in order:\n${text}`);
+    }
+  } finally {
+    await db.close();
+  }
+});
+
+test("the filter options come from the plaintext columns, without decrypting anything", async () => {
+  const db = await freshDb();
+  try {
+    const alice = await makeUser(db, "facets");
+    const bob = await makeUser(db, "facets-other");
+    const dek = freshDek();
+    await recordEntry(db, alice, dek, JAN, { agentId: "agent-a", connectorId: "gmail", kind: "tool_call", outcome: "executed" });
+    await recordEntry(db, alice, dek, FEB, { agentId: "agent-b", kind: "approval", outcome: "refused" });
+    await recordEntry(db, alice, dek, MAR, { agentId: "agent-a", kind: "tool_call", outcome: "executed" });
+    await recordEntry(db, bob, freshDek(), MAR, { agentId: "bobs-agent", connectorId: "xero" });
+
+    const { listActivityFacets } = await import("./list");
+    const facets = await listActivityFacets(db, alice);
+    assert.deepEqual(
+      {
+        agents: [...facets.agents].sort(),
+        services: [...facets.services].sort(),
+        kinds: [...facets.kinds].sort(),
+        outcomes: [...facets.outcomes].sort(),
+      },
+      { agents: ["agent-a", "agent-b"], services: ["gmail"], kinds: ["approval", "tool_call"], outcomes: ["executed", "refused"] },
+      "each distinct value of the person's own entries, and never another person's",
+    );
+  } finally {
+    await db.close();
+  }
+});
+
+test("a malformed date bound is rejected as a 4xx rather than failing in the database", async () => {
+  const db = await freshDb();
+  try {
+    const alice = await makeUser(db, "bad-dates");
+    for (const filters of [{ from: "yesterday-ish" }, { to: "2026-13-45" }, { from: "1; DROP TABLE x" }]) {
+      await assert.rejects(
+        listActivity(db, alice, filters, freshDek()),
+        (err: unknown) => err instanceof HttpError && err.status >= 400 && err.status < 500,
+        `${JSON.stringify(filters)} is a 4xx`,
+      );
+    }
+  } finally {
+    await db.close();
+  }
+});
+
+test("the source filter narrows to agent-reported (or Warthog-written) entries in SQL", async () => {
+  const db = await freshDb();
+  try {
+    const alice = await makeUser(db, "source-filter");
+    const dek = freshDek();
+    await recordEntry(db, alice, dek, JAN, { source: "warthog" }); // seq1
+    await recordEntry(db, alice, dek, FEB, { source: "agent_reported" }); // seq2
+    await recordEntry(db, alice, dek, MAR, { source: "warthog" }); // seq3
+    assert.deepEqual(seqs(await listActivity(db, alice, { source: "agent_reported" }, dek)), [2]);
+    assert.deepEqual(seqs(await listActivity(db, alice, { source: "warthog" }, dek)), [3, 1]);
+  } finally {
+    await db.close();
+  }
+});

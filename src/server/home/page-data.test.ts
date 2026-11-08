@@ -540,3 +540,30 @@ test("every figure is scoped to the session person — never another person's ap
     await db.close();
   }
 });
+
+// ===========================================================================
+// The Home feed is a bounded page (review finding: Home listed and decrypted the person's
+// ENTIRE activity history on every visit, growing with every agent call).
+// ===========================================================================
+
+test("the Home feed holds only the latest entries, never the whole history", async () => {
+  const db = await freshDb();
+  try {
+    const { userId, dek } = await makeUserWithDek(db, "home-bounded");
+    const { HOME_ACTIVITY_LIMIT } = await import("./page-data");
+    const total = HOME_ACTIVITY_LIMIT + 5;
+    for (let i = 1; i <= total; i += 1) {
+      await recordActivity(db, dek, userId, {
+        at: new Date(NOW.getTime() - (total - i) * 60_000),
+        payload: { summary: `entry ${i}` },
+      });
+    }
+
+    const summaries = activitySummaries(await load(db, userId));
+    assert.equal(summaries.length, HOME_ACTIVITY_LIMIT, "only the latest page is read");
+    assert.equal(summaries[0], `entry ${total}`, "starting from the newest");
+    assert.ok(!summaries.includes("entry 1"), "the oldest entries are left to the Activity page");
+  } finally {
+    await db.close();
+  }
+});
