@@ -122,7 +122,16 @@ export interface GuardedFetchDeps {
 }
 
 // Hop-by-hop and framing headers the transport sets itself: never forwarded from the caller.
-const TRANSPORT_HEADERS = new Set(["host", "content-length", "connection", "keep-alive", "transfer-encoding"]);
+// Accept-Encoding is dropped too: unlike fetch, this transport does not decompress, so the
+// response must come back unencoded.
+const TRANSPORT_HEADERS = new Set([
+  "host",
+  "content-length",
+  "connection",
+  "keep-alive",
+  "transfer-encoding",
+  "accept-encoding",
+]);
 
 // Build a `fetch`-shaped function whose connection re-resolves and classifies the host at
 // connection time through the guarded lookup — never the bare global fetch's own

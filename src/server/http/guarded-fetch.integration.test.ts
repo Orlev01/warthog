@@ -140,6 +140,16 @@ test("a GET sends its headers and no body", async () => {
   assert.equal(r.body, "");
 });
 
+test("transport-owned headers are never forwarded (the transport cannot decode a compressed reply)", async () => {
+  await wireFetch()(`http://provider.test:${port}/plain`, {
+    headers: { "accept-encoding": "gzip, br", host: "evil.example", accept: "application/json" },
+  });
+  const r = last();
+  assert.equal(r.headers["accept-encoding"], undefined, "no encoding is requested");
+  assert.equal(r.headers.host, `provider.test:${port}`, "the Host is the URL's, never the caller's");
+  assert.equal(r.headers.accept, "application/json");
+});
+
 test("every request is vetted afresh: no pooled socket skips the connection-time lookup", async () => {
   let resolved = 0;
   const guarded = createGuardedFetch({
