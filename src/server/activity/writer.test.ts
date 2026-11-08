@@ -167,8 +167,10 @@ function json(payload: unknown): string {
 }
 
 // A db seam stand-in that records every call instead of running it, so a test can prove
-// WHAT reached the query layer and HOW (bound value vs. spliced text). It returns no rows
-// (so the writer treats the chain as fresh) and satisfies the `Db` shape structurally.
+// WHAT reached the query layer and HOW (bound value vs. spliced text). A read returns no
+// rows (so the writer treats the chain as fresh); an `INSERT … RETURNING` answers with the
+// inserted row's seq, as a real database does when the insert lands (the writer treats an
+// empty RETURNING as a lost race and retries). It satisfies the `Db` shape structurally.
 interface RecordingDb extends Db {
   readonly calls: { text: string; values: unknown[] }[];
 }
@@ -178,7 +180,8 @@ function recordingDb(): RecordingDb {
     calls,
     query(text: string, values: unknown[] = []) {
       calls.push({ text, values });
-      return Promise.resolve({ rows: [] as Record<string, unknown>[] });
+      const inserted = /^\s*INSERT\b[\s\S]*\bRETURNING\b/i.test(text);
+      return Promise.resolve({ rows: (inserted ? [{ seq: values[1] }] : []) as Record<string, unknown>[] });
     },
     close() {
       return Promise.resolve();
@@ -757,6 +760,199 @@ test("the activity migration applies and re-running every migration changes noth
     // second run changes nothing.
     const again = await runMigrations(db, migrations);
     assert.deepEqual(again, [], "a second migration run must change nothing");
+  } finally {
+    await db.close();
+  }
+});
+
+// ===================================================================================
+// Concurrency — parallel appends for ONE person never collide on (user_id, seq).
+//
+// WHY (review finding "concurrent activity writes collide on (user_id, seq)"): MCP clients
+// issue parallel tool calls, and the pipeline runs the tool BEFORE it records. The append
+// used to read the chain head, await the DEK and the encryption, then insert head+1 with no
+// lock or retry, so every call that lost the race had already run its side effect, then
+// failed with a duplicate-key error: the audit entry was lost and the agent was told the
+// call failed (and retried it). Every parallel append must now land, contiguous and chained.
+// ===================================================================================
+
+// A db seam over a real database whose every query resolves on a LATER macrotask, the way
+// a pooled network connection does, so concurrent callers genuinely interleave between the
+// head read and the insert (an in-process PGlite otherwise answers in lock-step).
+function laggyDb(inner: Db): Db {
+  return {
+    async query(text, values) {
+      const result = await inner.query(text, values);
+      await new Promise((resolve) => setTimeout(resolve, 1));
+      return result;
+    },
+    close: () => inner.close(),
+  };
+}
+
+test("parallel record() calls for one person all land with seq 1..N, chained, and the chain verifies", async () => {
+  const db = await freshDb();
+  try {
+    const userId = await makeUser(db, "race-parallel");
+    const dek = freshDek();
+    // Two recorder instances over the same handle (the pipeline's and a portal write's):
+    // serialisation must hold across instances, not only within one.
+    const a = recorderFor(laggyDb(db), userId, dek);
+    const b = recorderFor(laggyDb(db), userId, dek);
+
+    const N = 20;
+    const settled = await Promise.allSettled(
+      Array.from({ length: N }, (_, i) =>
+        (i % 2 === 0 ? a : b).record({ userId, kind: "tool_call", source: "warthog", payload: { n: i } }),
+      ),
+    );
+    const rejected = settled.filter((s) => s.status === "rejected");
+    assert.deepEqual(
+      rejected.map((r) => String((r as PromiseRejectedResult).reason)),
+      [],
+      "no parallel append is rejected",
+    );
+
+    const stored = await readActivity(db, userId, dek);
+    assert.deepEqual(
+      stored.map((e) => e.seq),
+      Array.from({ length: N }, (_, i) => i + 1),
+      "the stored seqs are exactly 1..N",
+    );
+    for (let i = 1; i < stored.length; i += 1) {
+      assert.equal(stored[i].prevHash, stored[i - 1].entryHash, `entry ${i + 1} chains to entry ${i}`);
+    }
+    assert.deepEqual(
+      stored.map((e) => (e.payload as { n: number }).n).sort((x, y) => x - y),
+      Array.from({ length: N }, (_, i) => i),
+      "every call's own payload was recorded exactly once and decrypts",
+    );
+
+    const { checkIntegrity } = await import("./integrity");
+    assert.deepEqual(
+      await checkIntegrity(db, userId),
+      { intact: true, checked: N, brokenSeq: null },
+      "the integrity check verifies the whole chain",
+    );
+  } finally {
+    await db.close();
+  }
+});
+
+test("an append that loses the race to another writer (another replica) retries on the new head instead of failing", async () => {
+  const db = await freshDb();
+  try {
+    const userId = await makeUser(db, "race-replica");
+    const dek = freshDek();
+    const { computeEntryHash, GENESIS_PREV_HASH } = await import("./writer");
+
+    // Between this recorder's head read and its insert, a DIFFERENT process (which shares no
+    // in-process lock with it) commits a valid entry at the same seq. Simulated by a db seam
+    // that slips that competitor row in just before the recorder's first INSERT runs.
+    let competitorInserted = false;
+    const racing: Db = {
+      async query(text, values) {
+        if (!competitorInserted && /^\s*INSERT INTO activity_entries/i.test(text)) {
+          competitorInserted = true;
+          const occurredAt = T0.toISOString();
+          const fields = {
+            user_id: userId,
+            seq: 1,
+            occurred_at: occurredAt,
+            kind: "tool_call",
+            source: "warthog",
+            agent_id: null,
+            connector_id: null,
+            tool: "other-replica",
+            outcome: null,
+            amount: null,
+            currency: null,
+            merchant: null,
+            payload_ct: "v1:competitor",
+          };
+          await db.query(
+            `INSERT INTO activity_entries
+               (user_id, seq, occurred_at, kind, source, tool, payload_ct, prev_hash, entry_hash)
+             VALUES ($1, 1, $2, 'tool_call', 'warthog', 'other-replica', 'v1:competitor', $3, $4)`,
+            [userId, occurredAt, GENESIS_PREV_HASH, computeEntryHash(GENESIS_PREV_HASH, fields)],
+          );
+        }
+        return db.query(text, values);
+      },
+      close: () => db.close(),
+    };
+
+    const entry = await recorderFor(racing, userId, dek).record({
+      userId,
+      kind: "tool_call",
+      source: "warthog",
+      payload: { mine: true },
+    });
+    assert.equal(competitorInserted, true, "the competing writer won the first seq");
+    assert.equal(entry.seq, 2, "the losing append moved to the next seq rather than failing");
+
+    const rows = await db.query(
+      "SELECT seq, tool, prev_hash, entry_hash FROM activity_entries WHERE user_id = $1 ORDER BY seq",
+      [userId],
+    );
+    assert.deepEqual(
+      rows.rows.map((r) => [Number(r.seq), r.tool ?? null]),
+      [
+        [1, "other-replica"],
+        [2, null],
+      ],
+      "both entries are stored, the competitor's first",
+    );
+    assert.equal(rows.rows[1].prev_hash, rows.rows[0].entry_hash, "the retried entry chains to the competitor");
+
+    const { checkIntegrity } = await import("./integrity");
+    assert.deepEqual(await checkIntegrity(db, userId), { intact: true, checked: 2, brokenSeq: null });
+  } finally {
+    await db.close();
+  }
+});
+
+test("an append inside an open transaction and a concurrent append outside it both commit, contiguous", async () => {
+  const db = await freshDb();
+  try {
+    const userId = await makeUser(db, "race-in-tx");
+    const dek = freshDek();
+    const { withTransaction } = await import("../db/index");
+
+    const [inTx, outside] = await Promise.all([
+      withTransaction(db, (tx) =>
+        recorderFor(tx, userId, dek).record({
+          userId,
+          kind: "connection_change",
+          source: "warthog",
+          payload: { in: "tx" },
+        }),
+      ),
+      recorderFor(laggyDb(db), userId, dek).record({
+        userId,
+        kind: "tool_call",
+        source: "warthog",
+        payload: { in: "autocommit" },
+      }),
+    ]);
+
+    assert.deepEqual([inTx.seq, outside.seq].sort(), [1, 2], "both appends committed with distinct seqs");
+    const { checkIntegrity } = await import("./integrity");
+    assert.deepEqual(await checkIntegrity(db, userId), { intact: true, checked: 2, brokenSeq: null });
+  } finally {
+    await db.close();
+  }
+});
+
+test("an entry recorded without a payload is stored (as a null payload) rather than failing", async () => {
+  const db = await freshDb();
+  try {
+    const userId = await makeUser(db, "no-payload");
+    const dek = freshDek();
+    const entry = await recorderFor(db, userId, dek).record({ userId, kind: "tool_call", source: "warthog" });
+    assert.equal(entry.seq, 1);
+    const [stored] = await readActivity(db, userId, dek);
+    assert.equal(stored.payload, null, "an omitted payload reads back as null");
   } finally {
     await db.close();
   }
