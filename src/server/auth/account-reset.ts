@@ -145,12 +145,13 @@ export async function requestAccountReset(
   // addressed to the person (the sender finds their devices); SMS only ever goes to a
   // number they verified.
   const mobiles = (await listMobileNumbers(db, person.id)).filter((number) => number.verified);
-  const sends: Promise<void>[] = [
-    deps.senders.push.sendPush({ recipient: person.id, body: ALERT_BODY }),
-    deps.senders.email.sendEmail({ recipient: person.email, body: ALERT_BODY }),
-    ...mobiles.map((mobile) => deps.senders.sms.sendSms({ recipient: mobile.number, body: ALERT_BODY })),
+  const sends: (() => Promise<void>)[] = [
+    () => deps.senders.push.sendPush({ recipient: person.id, body: ALERT_BODY }),
+    () => deps.senders.email.sendEmail({ recipient: person.email, body: ALERT_BODY }),
+    ...mobiles.map((mobile) => () => deps.senders.sms.sendSms({ recipient: mobile.number, body: ALERT_BODY })),
   ];
-  const outcomes = await Promise.allSettled(sends);
+  // Each send is isolated, even one that throws before returning a promise.
+  const outcomes = await Promise.allSettled(sends.map(async (send) => send()));
   if (!outcomes.some((outcome) => outcome.status === "fulfilled")) {
     // Nobody could be told: withdraw the reset and its timer rather than let it run
     // unannounced. The send errors are not logged (they may name a recipient).
