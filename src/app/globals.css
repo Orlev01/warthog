@@ -16,6 +16,7 @@
   --wh-fg-muted: #52525b;      /* zinc-600: AA on white and zinc-50 */
   --wh-line: #e4e4e7;          /* zinc-200 */
   --wh-line-strong: #a1a1aa;   /* zinc-400 */
+  --wh-line-input: #71717a;    /* zinc-500: form-control borders, ≥3:1 on bg/surface/muted (WCAG 1.4.11) */
   --wh-accent: #4338ca;        /* indigo-700: AA for text and as a fill behind white text */
   --wh-accent-hover: #3730a3;  /* indigo-800 */
   --wh-accent-fg: #ffffff;
@@ -37,6 +38,7 @@
     --wh-fg-muted: #a1a1aa;
     --wh-line: #27272a;
     --wh-line-strong: #52525b;
+    --wh-line-input: #71717a;  /* zinc-500: ≥3:1 on zinc-950/900/800 */
     --wh-accent: #a5b4fc;      /* indigo-300: AA as text on zinc-900 */
     --wh-accent-hover: #c7d2fe;
     --wh-accent-fg: #1e1b4b;   /* indigo-950 text on the light accent fill */
@@ -57,6 +59,7 @@
   --wh-fg-muted: #a1a1aa;
   --wh-line: #27272a;
   --wh-line-strong: #52525b;
+  --wh-line-input: #71717a;
   --wh-accent: #a5b4fc;
   --wh-accent-hover: #c7d2fe;
   --wh-accent-fg: #1e1b4b;
@@ -76,6 +79,7 @@
   --color-fg-muted: var(--wh-fg-muted);
   --color-line: var(--wh-line);
   --color-line-strong: var(--wh-line-strong);
+  --color-line-input: var(--wh-line-input);
   --color-accent: var(--wh-accent);
   --color-accent-hover: var(--wh-accent-hover);
   --color-accent-fg: var(--wh-accent-fg);
@@ -97,6 +101,19 @@ body {
 :focus-visible {
   outline: 2px solid var(--wh-focus);
   outline-offset: 2px;
+}
+
+/*
+ * Form-control borders (WCAG 2.2 SC 1.4.11 Non-text Contrast): a field's border is its only
+ * visible boundary, so it needs 3:1 against the fill behind it — which the decorative
+ * --wh-line divider (~1.2:1) does not give. The shared Input/Select use `border-line-input`;
+ * this safety net lifts any raw text-like <input>, <select> or <textarea> still composed
+ * with `border-line` to the same token, leaving an invalid field's danger border alone.
+ */
+@layer utilities {
+  :where(select, textarea, input:not([type="checkbox"], [type="radio"], [type="range"], [type="color"], [type="hidden"])).border-line:not([aria-invalid="true"]) {
+    border-color: var(--wh-line-input);
+  }
 }
 
 @media (prefers-reduced-motion: reduce) {
