@@ -55,7 +55,7 @@ import type { RateLimiter } from "./rate-limit";
 import type { ActivityRecorder } from "../activity/recorder";
 import type { KeyWrapper } from "../crypto/key-wrapper";
 import type { Clock } from "../seams/clock";
-import type { Db } from "../db/index";
+import { withTransaction, type Db } from "../db/index";
 
 // What the agent is asking to do. The policy-relevant fields are exactly the
 // engine's `PolicyCall`, plus the tool `params` (executed + recorded, redacted)
@@ -423,27 +423,32 @@ export function createAgentCallPipeline(deps: PipelineDeps): AgentCallPipeline {
     // approval Warthog runs the held call exactly once.
     if (decision.decision === "ask") {
       const dek = await dataKeyFor(connection.userId);
-      const approval = await createApproval(
-        db,
-        {
-          userId: connection.userId,
-          agentId: connection.agentId,
-          detail: toApprovalDetail(call, decision, context, rate),
-        },
-        dek,
-        clock,
-      );
-      await createHeldRequest(
-        db,
-        {
-          userId: connection.userId,
-          agentId: connection.agentId,
-          approvalId: approval.id,
-          args: { ...call },
-        },
-        dek,
-        clock,
-      );
+      // The pending approval and the held call it guards are written together: a
+      // failure part-way never leaves an approval in the inbox with nothing behind it.
+      const approval = await withTransaction(db, async (tx) => {
+        const created = await createApproval(
+          tx,
+          {
+            userId: connection.userId,
+            agentId: connection.agentId,
+            detail: toApprovalDetail(call, decision, context, rate),
+          },
+          dek,
+          clock,
+        );
+        await createHeldRequest(
+          tx,
+          {
+            userId: connection.userId,
+            agentId: connection.agentId,
+            approvalId: created.id,
+            args: { ...call },
+          },
+          dek,
+          clock,
+        );
+        return created;
+      });
       await record(connection, call, "pending_approval");
       // Trigger the approval notifier on creation (E12-S07): a push to every
       // registered device within seconds, plus a scheduled fallback anchored to the

@@ -1011,3 +1011,49 @@ test("a result that merely carries a status field is still executed (only a refu
     await db.close();
   }
 });
+
+// ===========================================================================
+// Review fix (approval/held-request atomicity) — the ASK path writes the pending
+// approval and the held call it guards together. A failure part-way used to leave a
+// pending approval in the person's inbox with no held call behind it (approving it ran
+// nothing). Now both commit together or neither does, and the agent is told nothing
+// is pending.
+// ===========================================================================
+
+test("if holding the call fails, no pending approval is left behind", async () => {
+  const db = await freshDb();
+  const keyWrapper = keyWrapperFor();
+  try {
+    const { userId } = await makePerson(db, "atomic-ask", keyWrapper);
+    await upsertPermissions(db, baseGrants(userId, CONN, {
+      cardAccess: true,
+      cardBudget: { amount: 500, currency: "AUD", period: "month" },
+    }));
+    // A db that fails the held-call insert — any failure after the approval is written.
+    const failing: Db = {
+      query(text: string, values?: unknown[]) {
+        if (/insert\s+into\s+held_requests/i.test(text)) {
+          return Promise.reject(new Error("injected failure: held request write failed"));
+        }
+        return db.query(text, values);
+      },
+      close: () => db.close(),
+    };
+    const pipeline = buildPipeline(failing, keyWrapper, {
+      clock: fixedClock(NOW),
+      rateLimiter: createRateLimiter(fixedClock(NOW)),
+      recorder: spyRecorder(fixedClock(NOW)).recorder,
+      executeTool: spyExecutor().fn,
+    });
+
+    await assert.rejects(
+      pipeline.handleAgentCall(connectionFor(userId), callFor({ tool: "request_card", makesChange: true, request: "card", amount: 42, currency: "AUD", merchant: "BoxCo" })),
+      /held request write failed/,
+      "the failure is surfaced, never a silent pending_approval",
+    );
+    const pending = await db.query("SELECT id FROM approvals WHERE user_id = $1", [userId]);
+    assert.equal(pending.rows.length, 0, "no orphan pending approval is left in the inbox");
+  } finally {
+    await db.close();
+  }
+});
