@@ -101,7 +101,8 @@ import {
   deriveWrappingKeyFromPrf,
   deriveWrappingKeyFromPassphrase,
 } from "@/client/vault/derive";
-import { unwrapVaultKey } from "@/client/vault/key";
+import { unwrapVaultKey, wrapVaultKey } from "@/client/vault/key";
+import { unlockWithRecoveryPhrase } from "@/client/vault/recovery-phrase";
 import { decryptValue } from "@/client/vault/values";
 
 // ─── fixtures ────────────────────────────────────────────────────────────────────────
@@ -165,17 +166,27 @@ const PASSKEY_OPTIONS = {
 type SavedPassphrase = { wrapped: string; salt: string };
 type PostBody = { method: string; wrapped: string; params?: { salt?: string } };
 
+// Review fix W1: the fake also keeps the 'recovery' envelope (the vault recovery phrase),
+// answers the step-up endpoints, and — like the real endpoint — refuses to REPLACE an
+// existing method (403 step_up_required) until the session has confirmed it's you.
 function makeServer() {
-  const store: { passkey_prf: string | null; passphrase: SavedPassphrase | null } = {
+  const store: {
+    passkey_prf: string | null;
+    passphrase: SavedPassphrase | null;
+    recovery: string | null;
+  } = {
     passkey_prf: null,
     passphrase: null,
+    recovery: null,
   };
   const gets: string[] = [];
   const posts: PostBody[] = [];
+  const stepUpPosts: string[] = [];
+  let steppedUp = false;
 
-  function json(body: unknown): Response {
+  function json(body: unknown, status = 200): Response {
     return new Response(JSON.stringify(body), {
-      status: 200,
+      status,
       headers: { "content-type": "application/json" },
     });
   }
@@ -183,15 +194,31 @@ function makeServer() {
   const fetch = (async (input: RequestInfo | URL, init?: RequestInit): Promise<Response> => {
     const url = String(input);
     if (init && String(init.method).toUpperCase() === "POST") {
+      if (url.startsWith("/api/auth/step-up/")) {
+        stepUpPosts.push(String(init.body ?? ""));
+        if (url.endsWith("/begin")) return json({ options: STEP_UP_OPTIONS });
+        steppedUp = true;
+        return json({ ok: true });
+      }
       const body = JSON.parse(String(init.body)) as PostBody;
       posts.push(body);
+      const exists =
+        body.method === "passkey_prf"
+          ? store.passkey_prf !== null
+          : body.method === "passphrase"
+            ? store.passphrase !== null
+            : store.recovery !== null;
+      if (exists && !steppedUp) return json({ error: "step_up_required" }, 403);
       if (body.method === "passkey_prf") store.passkey_prf = body.wrapped;
       else if (body.method === "passphrase") {
         store.passphrase = { wrapped: body.wrapped, salt: String(body.params?.salt) };
-      }
+      } else if (body.method === "recovery") store.recovery = body.wrapped;
       return json({ ok: true });
     }
     gets.push(url);
+    if (url.includes("/vault/unlock-material/recovery")) {
+      return json({ wrapped: store.recovery, params: {}, options: null });
+    }
     if (url.includes("/vault/unlock-material/passkey_prf")) {
       return json({ wrapped: store.passkey_prf, params: null, options: PASSKEY_OPTIONS });
     }
@@ -205,18 +232,26 @@ function makeServer() {
     throw new Error(`unexpected fetch to ${url}`);
   }) as unknown as typeof fetch;
 
-  return { store, gets, posts, fetch };
+  return { store, gets, posts, stepUpPosts, fetch };
 }
+
+// The step-up endpoint's assertion options (a distinct challenge from the material's).
+const STEP_UP_OPTIONS = {
+  rpId: "warthog.com.au",
+  challenge: "c3RlcC11cA",
+  userVerification: "required",
+  extensions: { prf: {} },
+};
 
 // The WebAuthn PRF ceremony fake: returns the fixed PRF output (base64url) for the salt in
 // the options it was handed, recording the options so we can prove the endpoint's options
 // are used. A `cancelled` prompt REJECTS (the OS dialog dismissed).
-function makePasskey(opts: { cancelled?: boolean } = {}) {
+function makePasskey(opts: { cancelled?: boolean; prf?: Uint8Array } = {}) {
   const calls: unknown[] = [];
   const fn = async ({ optionsJSON }: { optionsJSON: unknown }) => {
     calls.push(optionsJSON);
     if (opts.cancelled) throw new Error("The passkey prompt was dismissed.");
-    return { clientExtensionResults: { prf: { results: { first: toBase64Url(FIXED_PRF) } } } };
+    return { clientExtensionResults: { prf: { results: { first: toBase64Url(opts.prf ?? FIXED_PRF) } } } };
   };
   return {
     fn,
@@ -297,6 +332,16 @@ function makeFlow(server: Server, passkey: Passkey, createKey: CreateKey, addCar
   };
 }
 
+// Confirm, and when the flow pauses on a new vault recovery phrase (a vault with none —
+// review fix W1), tick "I've saved it" and carry on, as the person would.
+async function submitThroughPhrase(flow: ReturnType<typeof makeFlow>["flow"]): Promise<void> {
+  await flow.submit();
+  if (flow.getState().status === "phrase") {
+    flow.setPhraseSaved(true);
+    await flow.confirmRecoveryPhrase();
+  }
+}
+
 function fillCard(
   flow: ReturnType<typeof makeFlow>["flow"],
   opts: { number: string; nickname?: string; month?: string; year?: string; billing?: string },
@@ -369,7 +414,7 @@ test("AC1 — a first add creates the vault key, saves its passkey-wrapped envel
   const ctx = makeFlow(server, passkey, createKey, addCard);
 
   fillCard(ctx.flow, { number: VISA_NUMBER });
-  await ctx.flow.submit();
+  await submitThroughPhrase(ctx.flow);
 
   // It read the unlock-material endpoint and ran the passkey PRF ceremony with ITS options.
   assert.ok(
@@ -448,7 +493,7 @@ test("AC1 — when a vault passphrase is chosen it is ALSO saved, wrapping the s
   fillCard(ctx.flow, { number: VISA_NUMBER });
   ctx.flow.setUsePassphrase(true);
   ctx.flow.setPassphrase(VAULT_PASSPHRASE);
-  await ctx.flow.submit();
+  await submitThroughPhrase(ctx.flow);
 
   // Still exactly one vault key, now saved under BOTH methods.
   assert.equal(createKey.count, 1, "one vault key is created even when two unlock methods are saved");
@@ -499,14 +544,14 @@ test("AC2 — a second add unlocks the existing vault key (no new key) and seals
   // First card sets the vault up.
   const first = makeFlow(server, passkey, createKey, addCard);
   fillCard(first.flow, { number: VISA_NUMBER, nickname: "Everyday spending" });
-  await first.flow.submit();
+  await submitThroughPhrase(first.flow);
   assert.equal(createKey.count, 1, "the first add created the vault key");
   const postsAfterFirst = server.posts.length;
 
   // Second card on the SAME account (same server state, same seams).
   const second = makeFlow(server, passkey, createKey, addCard);
   fillCard(second.flow, { number: MC_NUMBER, nickname: "Travel backup", billing: "addr-work" });
-  await second.flow.submit();
+  await submitThroughPhrase(second.flow);
 
   // No new key, no new unlock method saved — it UNLOCKED the existing one.
   assert.equal(createKey.count, 1, "the second add does NOT create a new vault key");
@@ -544,7 +589,7 @@ test("AC3 — cancelling the passkey prompt saves nothing and shows plain-Englis
   const ctx = makeFlow(server, passkey, createKey, addCard);
 
   fillCard(ctx.flow, { number: VISA_NUMBER });
-  await ctx.flow.submit();
+  await submitThroughPhrase(ctx.flow);
 
   assert.equal(passkey.calls.length, 1, "the passkey prompt was shown");
   assert.equal(server.posts.length, 0, "a cancelled prompt saves no unlock method");
@@ -608,7 +653,7 @@ test("AC3 — the full card number never appears in any request body, browser st
     fillCard(ctx.flow, { number: VISA_NUMBER });
     ctx.flow.setUsePassphrase(true);
     ctx.flow.setPassphrase(VAULT_PASSPHRASE);
-    await ctx.flow.submit();
+    await submitThroughPhrase(ctx.flow);
 
     // Sanity: it DID submit a ciphertext that genuinely decrypts to the number ...
     assert.equal(
@@ -665,7 +710,7 @@ test("a refused save reports a plain-English error and does not claim success", 
   const ctx = makeFlow(server, passkey, createKey, addCard);
 
   fillCard(ctx.flow, { number: VISA_NUMBER });
-  await ctx.flow.submit();
+  await submitThroughPhrase(ctx.flow);
 
   assert.equal(addCard.count, 1, "the save was attempted");
   assert.equal(ctx.addedCount, 0, "a refused save signals no success");
@@ -863,7 +908,7 @@ test("after a card is saved its number, expiry and name are cleared from the for
   const server = makeServer();
   const { flow } = makeFlow(server, makePasskey(), makeCreateKey(), makeAddCard());
   fillCard(flow, { number: VISA_NUMBER });
-  await flow.submit();
+  await submitThroughPhrase(flow);
   const state = flow.getState();
   assert.equal(state.status, "added");
   assert.equal(state.number, "", "the full card number does not stay on screen");
@@ -878,8 +923,8 @@ test("a repeat Confirm after saving stores no second copy and asks for a card nu
   const passkey = makePasskey();
   const { flow } = makeFlow(server, passkey, makeCreateKey(), addCard);
   fillCard(flow, { number: VISA_NUMBER });
-  await flow.submit();
-  await flow.submit();
+  await submitThroughPhrase(flow);
+  await submitThroughPhrase(flow);
   assert.equal(addCard.count, 1, "only one card is stored");
   assert.equal(passkey.calls.length, 1, "the second Confirm never reaches the passkey prompt");
   assert.equal(flow.getState().status, "error");
@@ -897,7 +942,7 @@ test("an incomplete card (short number, bad month, no name) is refused on the de
     const addCard = makeAddCard();
     const { flow } = makeFlow(server, makePasskey(), makeCreateKey(), addCard);
     fillCard(flow, opts);
-    await flow.submit();
+    await submitThroughPhrase(flow);
     assert.equal(addCard.count, 0, `${label}: nothing is stored`);
     assert.equal(server.gets.length + server.posts.length, 0, `${label}: nothing leaves the device`);
     assert.equal(flow.getState().status, "error", label);
@@ -910,14 +955,14 @@ test("choosing a passphrase on an account that already has a vault wraps the EXI
   const createKey = makeCreateKey();
   const first = makeFlow(server, makePasskey(), createKey, makeAddCard());
   fillCard(first.flow, { number: VISA_NUMBER });
-  await first.flow.submit();
+  await submitThroughPhrase(first.flow);
   assert.equal(server.store.passphrase, null, "no passphrase yet");
 
   const second = makeFlow(server, makePasskey(), createKey, makeAddCard());
   fillCard(second.flow, { number: MC_NUMBER });
   second.flow.setUsePassphrase(true);
   second.flow.setPassphrase(VAULT_PASSPHRASE);
-  await second.flow.submit();
+  await submitThroughPhrase(second.flow);
 
   assert.equal(createKey.count, 1, "no new vault key");
   const saved = server.store.passphrase;
@@ -939,7 +984,7 @@ test("a vault passphrase shorter than 12 characters is refused before anything l
   fillCard(flow, { number: VISA_NUMBER });
   flow.setUsePassphrase(true);
   flow.setPassphrase("hunter2");
-  await flow.submit();
+  await submitThroughPhrase(flow);
   assert.equal(addCard.count, 0);
   assert.equal(server.gets.length + server.posts.length, 0);
   assert.match(flow.getState().error ?? "", /12/);
@@ -952,4 +997,144 @@ test("with no postal address on file there is no dead Confirm: the reason and a 
   assert.ok(!liveButtons(markup).some((n) => /^confirm$/i.test(n)), `no live Confirm; live=${JSON.stringify(liveButtons(markup))}`);
   assert.match(visibleText(markup), /postal address/i);
   assert.match(markup, /<a\b[^>]*href="\/vault"/);
+});
+
+// ═══ Review fix W1 — the vault recovery phrase ═══════════════════════════════════════
+
+test("W1 — a first add shows a new recovery phrase and saves nothing until the person ticks 'I've saved it'", async () => {
+  const server = makeServer();
+  const addCard = makeAddCard();
+  const { flow } = makeFlow(server, makePasskey(), makeCreateKey(), addCard);
+  fillCard(flow, { number: VISA_NUMBER });
+  await flow.submit();
+
+  assert.equal(flow.getState().status, "phrase", "the flow pauses on the phrase");
+  const phrase = flow.getUnlockState().newPhrase;
+  assert.match(String(phrase), /^[A-Z2-7]{4}(-[A-Z2-7]{4}){7}$/);
+  assert.equal(addCard.count, 0, "no card is saved before the phrase is");
+  assert.equal(server.store.recovery, null, "no recovery envelope yet");
+
+  await flow.confirmRecoveryPhrase();
+  assert.equal(flow.getState().status, "phrase", "an unticked Continue keeps the phrase on screen");
+  assertPlainFailure(flow.getState().error, "unticked");
+  assert.equal(addCard.count, 0);
+
+  flow.setPhraseSaved(true);
+  await flow.confirmRecoveryPhrase();
+  assert.equal(flow.getState().status, "added");
+  assert.equal(addCard.count, 1);
+  assert.equal(flow.getUnlockState().newPhrase, null, "the phrase is not kept once saved");
+  assert.ok(
+    bytesEqual(await unlockWithRecoveryPhrase(phrase!, server.store.recovery!), FIXED_VK),
+    "the recovery envelope opens the vault key the card is sealed under",
+  );
+  for (const post of server.posts) {
+    const body = JSON.stringify(post);
+    assert.ok(!body.includes(phrase!) && !body.includes(phrase!.replace(/-/g, "")), "the phrase never leaves the device");
+  }
+});
+
+test("W1 — an existing vault with no recovery phrase is asked for one once, then never again", async () => {
+  const server = makeServer();
+  server.store.passkey_prf = await wrapVaultKey(
+    await deriveWrappingKeyFromPrf(u8(FIXED_PRF) as Uint8Array<ArrayBuffer>),
+    u8(FIXED_VK) as Uint8Array<ArrayBuffer>,
+  );
+  const createKey = makeCreateKey();
+  const first = makeFlow(server, makePasskey(), createKey, makeAddCard());
+  fillCard(first.flow, { number: VISA_NUMBER });
+  await first.flow.submit();
+  assert.equal(first.flow.getState().status, "phrase", "the one-time prompt appears on the next unlock");
+  first.flow.setPhraseSaved(true);
+  await first.flow.confirmRecoveryPhrase();
+  assert.equal(first.flow.getState().status, "added");
+  assert.equal(createKey.count, 0, "the EXISTING vault key is sealed under the phrase, never a new one");
+
+  const second = makeFlow(server, makePasskey(), createKey, makeAddCard());
+  fillCard(second.flow, { number: MC_NUMBER });
+  await second.flow.submit();
+  assert.equal(second.flow.getState().status, "added", "no second prompt");
+});
+
+test("W1 — after losing the passkey, the recovery phrase unlocks the vault and this device's new passkey takes over", async () => {
+  const server = makeServer();
+  const createKey = makeCreateKey();
+  const first = makeFlow(server, makePasskey(), createKey, makeAddCard());
+  fillCard(first.flow, { number: VISA_NUMBER });
+  await first.flow.submit();
+  const phrase = first.flow.getUnlockState().newPhrase!;
+  first.flow.setPhraseSaved(true);
+  await first.flow.confirmRecoveryPhrase();
+
+  // A new passkey (a different PRF output) cannot open the old passkey envelope.
+  const NEW_PRF = bytes(32, 23);
+  const newPasskey = makePasskey({ prf: NEW_PRF });
+  const addCard = makeAddCard();
+  const second = makeFlow(server, newPasskey, createKey, addCard);
+  fillCard(second.flow, { number: MC_NUMBER });
+  second.flow.setUnlockMethod("recovery");
+  second.flow.setRecoveryPhrase(phrase.toLowerCase().replace(/-/g, " "));
+  await second.flow.submit();
+
+  assert.equal(second.flow.getState().status, "added", `saved; error=${second.flow.getState().error}`);
+  assert.equal(createKey.count, 1, "no new vault key — the original one is recovered");
+  assert.equal(
+    await decryptValue(FIXED_VK as Uint8Array<ArrayBuffer>, addCard.subs[0]!.numberCiphertext),
+    MC_NUMBER,
+    "the card is sealed under the original vault key",
+  );
+  assert.equal(newPasskey.calls.length, 1, "one passkey prompt re-seals the vault and confirms it's you");
+  const resealed = await unwrapVaultKey(
+    await deriveWrappingKeyFromPrf(u8(NEW_PRF) as Uint8Array<ArrayBuffer>),
+    server.store.passkey_prf!,
+  );
+  assert.ok(bytesEqual(resealed, FIXED_VK), "the new passkey now opens the vault");
+  for (const body of server.stepUpPosts) {
+    assert.ok(!body.includes(toBase64Url(NEW_PRF)), "the PRF output never reaches the server");
+  }
+  assert.match(String(second.flow.getUnlockState().notice), /passkey/i);
+});
+
+test("W1 — a wrong recovery phrase saves nothing and says so plainly", async () => {
+  const server = makeServer();
+  const first = makeFlow(server, makePasskey(), makeCreateKey(), makeAddCard());
+  fillCard(first.flow, { number: VISA_NUMBER });
+  await submitThroughPhrase(first.flow);
+
+  const addCard = makeAddCard();
+  const second = makeFlow(server, makePasskey(), makeCreateKey(), addCard);
+  fillCard(second.flow, { number: MC_NUMBER });
+  second.flow.setUnlockMethod("recovery");
+  second.flow.setRecoveryPhrase("AAAA-AAAA-AAAA-AAAA-AAAA-AAAA-AAAA-AAAA");
+  await second.flow.submit();
+  assert.equal(second.flow.getState().status, "error");
+  assertPlainFailure(second.flow.getState().error, "wrong phrase");
+  assert.equal(addCard.count, 0);
+});
+
+test("W1 — replacing an existing vault passphrase without a fresh step-up offers 'Confirm it's you' and saves no card", async () => {
+  const server = makeServer();
+  const first = makeFlow(server, makePasskey(), makeCreateKey(), makeAddCard());
+  fillCard(first.flow, { number: VISA_NUMBER });
+  first.flow.setUsePassphrase(true);
+  first.flow.setPassphrase(VAULT_PASSPHRASE);
+  await submitThroughPhrase(first.flow);
+  const kept = server.store.passphrase;
+
+  const addCard = makeAddCard();
+  const second = makeFlow(server, makePasskey(), makeCreateKey(), addCard);
+  fillCard(second.flow, { number: MC_NUMBER });
+  second.flow.setUsePassphrase(true);
+  second.flow.setPassphrase("another long vault passphrase");
+  await second.flow.submit();
+
+  assert.equal(second.flow.getState().confirmRequired, true, "Confirm it's you is offered inline");
+  assertPlainFailure(second.flow.getState().error, "passphrase step-up");
+  assert.equal(addCard.count, 0, "no card is saved while the passphrase change is pending");
+  assert.deepEqual(server.store.passphrase, kept, "the stored passphrase is unchanged");
+
+  const html = renderToStaticMarkup(
+    <AddCardFlow billingAddresses={[ADDR_HOME]} addCard={async () => ({ ok: true })} initialOpen />,
+  );
+  assert.match(html, /recovery phrase/i, "the open panel offers unlocking with the recovery phrase");
 });
