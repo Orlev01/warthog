@@ -19,6 +19,13 @@
 // authenticates a recovery unlock without the server learning the code or the
 // wrapping key the code derives.
 //
+// Review fix W1: the 'recovery' method holds VK wrapped under the VAULT RECOVERY
+// PHRASE, which the browser generates and never sends (src/client/vault/
+// recovery-phrase.ts). No server verifier is used for it — the envelope's GCM tag is
+// the check, on the device — so saveRecoveryAuth/verifyRecoveryAuth have no caller.
+// Should one ever be wired, it must receive only a value derived from the phrase under
+// a DIFFERENT HKDF info than the wrapping key, never the phrase itself.
+//
 // Entropy is drawn through the `random` seam (conventions: src/server/** never
 // calls the crypto library for randomness directly); HKDF and scrypt are
 // deterministic transforms, so they come straight from node:crypto, exactly as the
