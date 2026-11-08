@@ -37,9 +37,11 @@
 import { z } from "zod";
 
 import { getAgentById } from "../../../../../server/db/agents";
+import { listConnectionsForUser } from "../../../../../server/db/connections";
 import {
   getConnectionPermissions,
   upsertPermissions,
+  type ConnectionPermissions,
   type PermissionGrants,
 } from "../../../../../server/db/agent-permissions";
 import { parseParams } from "../../../../../server/http/validate";
@@ -55,6 +57,11 @@ const DEFAULT_CURRENCY = "A$";
 // A grossly oversized currency label is rejected at the boundary before any write; the
 // twin access-key create flow caps it the same way.
 const MAX_CURRENCY_LENGTH = 8;
+
+// The connected services a save may name, capped as the consent screen caps its ticked
+// services, so an oversized list is rejected at the boundary before any write.
+const MAX_SERVICE_LENGTH = 200;
+const MAX_SERVICES = 100;
 
 // A well-formed uuid: the only shape an agent id handle may take (agents.id is a uuid,
 // db/migrations/0020_agents.sql). A malformed value is rejected at the validation
@@ -88,6 +95,12 @@ const inputSchema = z.object({
   identity: z.boolean().optional(),
   highTier: z.boolean().optional(),
   memoryRead: z.boolean().optional(),
+  // Review fix W2.3 — the tasks and life-admin records grants (migration 0068) and the
+  // connected services the agent may use: the ids of the services TICKED on the screen,
+  // every one of the person's connected services being shown (an absent id is unticked).
+  tasks: z.boolean().optional(),
+  records: z.boolean().optional(),
+  connectors: z.array(z.string().min(1).max(MAX_SERVICE_LENGTH)).max(MAX_SERVICES).optional(),
 });
 
 // The save input, as the permissions screen submits it (a partial edit).
@@ -98,10 +111,13 @@ export type PermissionsSaveInput = z.infer<typeof inputSchema>;
 // success.
 export type SaveResult = { readonly ok: true } | { readonly ok: false; readonly reason: string };
 
-// The seams the flow composes: just the database seam (the agents + agent-permissions
-// stores). No config, no clock — editing permissions needs neither.
+// The seams the flow composes: the database seam (the agents, agent-permissions and
+// connections stores) and an optional catalogue lookup that names a connected service (the
+// page passes the process-wide catalogue; absent ⇒ a service is shown by its id). No config,
+// no clock — editing permissions needs neither.
 export interface PermissionsActionsDeps {
   readonly db: Db;
+  readonly nameOf?: (connectorId: string) => string | undefined;
 }
 
 // The per-agent permissions actions the thin loader + save wrapper drive.
@@ -116,13 +132,25 @@ export interface PermissionsActions {
 
 // Build the screen's props from the agent and its stored grants. The policy-relevant
 // state the person edits — card access + its budget, the identity/high-tier/memory/
-// sharing toggles and the request limit — is reflected from storage. The catalogue-
-// dependent lists (connector names/tools, skill names, rule objects) are assembled by
-// their own screens and are out of this task's scope, so they render empty here.
-function toViewProps(agentName: string, grants: PermissionGrants): PermissionsViewProps {
+// sharing toggles, the tasks and records grants, which of the person's connected services
+// it may use and the request limit — is reflected from storage. Skill names and rule
+// objects are assembled by their own screens and render empty here.
+function toViewProps(
+  agentName: string,
+  grants: ConnectionPermissions,
+  services: readonly { id: string; name: string }[],
+): PermissionsViewProps {
   return {
     agentName,
-    connectors: [],
+    connectors: services.map((service) => ({
+      id: service.id,
+      name: service.name,
+      granted: grants.grantedConnectors.includes(service.id),
+      readTools: [],
+      changeTools: [],
+    })),
+    tasksAccess: grants.tasksAccess,
+    recordsAccess: grants.recordsAccess,
     lowTierRead: grants.identityAccess,
     highTierRequest: grants.highTierAccess,
     cardAccess: grants.cardAccess,
@@ -138,18 +166,48 @@ function toViewProps(agentName: string, grants: PermissionGrants): PermissionsVi
   };
 }
 
+// The connected services after an edit, and the tool classes that go with them. The screen
+// shows (and so edits) only the person's OWN connected services: a ticked id is granted only
+// when it is one of them (never trusting the form for this), an unticked one is revoked, and a
+// stored grant for a service the screen does not show (since disconnected) is kept. A granted
+// service gets what consent gives it: its read tools on and its changes "ask me first" unless
+// a less strict class is already stored. With nothing granted the classes are left as stored
+// (they gate connector tools only).
+function mergeConnectors(
+  stored: PermissionGrants,
+  ticked: readonly string[] | undefined,
+  connected: ReadonlySet<string>,
+): Pick<PermissionGrants, "grantedConnectors" | "readTools" | "changeTools"> {
+  if (ticked === undefined) {
+    return { grantedConnectors: stored.grantedConnectors, readTools: stored.readTools, changeTools: stored.changeTools };
+  }
+  const kept = stored.grantedConnectors.filter((id) => !connected.has(id));
+  const granted = ticked.filter((id) => connected.has(id));
+  const grantedConnectors = [...new Set([...kept, ...granted])];
+  if (granted.length === 0) {
+    return { grantedConnectors, readTools: stored.readTools, changeTools: stored.changeTools };
+  }
+  return {
+    grantedConnectors,
+    readTools: true,
+    changeTools: stored.changeTools === "off" ? "ask_first" : stored.changeTools,
+  };
+}
+
 // Apply the partial edit to the stored grants: a field the input touches is overwritten,
 // every other field keeps its stored value — including the card budget, which is RETAINED
 // when card access is toggled off (so it survives a later re-enable, OBS-022). The acting
 // user id and the resolved connection id are fixed server-side, never taken from the input.
 function mergeGrants(
-  stored: PermissionGrants,
+  stored: ConnectionPermissions,
   input: PermissionsSaveInput,
   userId: string,
   connectionId: string,
+  connected: ReadonlySet<string>,
 ): PermissionGrants {
   return {
     ...stored,
+    ...mergeConnectors(stored, input.connectors, connected),
     userId,
     connectionId,
     cardAccess: input.card !== undefined ? input.card : stored.cardAccess,
@@ -159,11 +217,20 @@ function mergeGrants(
     identityAccess: input.identity !== undefined ? input.identity : stored.identityAccess,
     highTierAccess: input.highTier !== undefined ? input.highTier : stored.highTierAccess,
     memoryRead: input.memoryRead !== undefined ? input.memoryRead : stored.memoryRead,
+    tasksAccess: input.tasks !== undefined ? input.tasks : stored.tasksAccess,
+    recordsAccess: input.records !== undefined ? input.records : stored.recordsAccess,
   };
 }
 
 export function createPermissionsActions(deps: PermissionsActionsDeps): PermissionsActions {
-  const { db } = deps;
+  const { db, nameOf } = deps;
+
+  // The person's OWN connected services (member-scoped by the session's user id), one per
+  // service however many accounts of it are connected, named through the catalogue.
+  async function connectedServices(userId: string): Promise<{ id: string; name: string }[]> {
+    const ids = [...new Set((await listConnectionsForUser(db, userId)).map((c) => c.connectorId))];
+    return ids.map((id) => ({ id, name: nameOf?.(id) ?? id }));
+  }
 
   // Load: resolve the agent by (session.userId, agentId) FIRST — another person's id (or a
   // malformed one) matches nothing and reads null, never their permissions — then read its
@@ -175,7 +242,7 @@ export function createPermissionsActions(deps: PermissionsActionsDeps): Permissi
     if (agent == null) return null;
     const grants = await getConnectionPermissions(db, session.userId, agent.connectionId);
     if (grants == null) return null;
-    return toViewProps(agent.displayName, grants);
+    return toViewProps(agent.displayName, grants, await connectedServices(session.userId));
   }
 
   // Save: validate the agent id shape and the input at the boundary FIRST (a 4xx before any
@@ -197,7 +264,8 @@ export function createPermissionsActions(deps: PermissionsActionsDeps): Permissi
     const stored = await getConnectionPermissions(db, session.userId, agent.connectionId);
     if (stored == null) return { ok: false, reason: "not_found" };
 
-    const next = mergeGrants(stored, valid, session.userId, agent.connectionId);
+    const connected = new Set((await connectedServices(session.userId)).map((service) => service.id));
+    const next = mergeGrants(stored, valid, session.userId, agent.connectionId, connected);
     if (next.cardAccess && (next.cardBudget == null || !budgetAllowsCard(next.cardBudget))) {
       return { ok: false, reason: "card_needs_budget" };
     }
