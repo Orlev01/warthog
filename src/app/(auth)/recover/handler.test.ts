@@ -585,3 +585,24 @@ test("recovery: a SQL-injection probe in the email field is bound as data and ca
     await db.close();
   }
 });
+
+// =====================================================================================
+// Review fix B5 — a pending recovery expires, so an abandoned one is forgotten.
+// =====================================================================================
+
+test("recovery: a pending recovery expires after thirty minutes and its handle stops working", async () => {
+  let now = T0.getTime();
+  const clock: Clock = { now: () => new Date(now) };
+  const db = await freshDb();
+  try {
+    const handler = makeHandler(db, clock);
+    const { user, recoveryCode } = await seedAccount(db, "expired-recovery");
+    const recoveryId = await startIdentify(handler, user.email);
+
+    now += 31 * 60 * 1000;
+    const res = await handler.verifyCode(recoverRequest({ recoveryId, recoveryCode }));
+    assert.equal(res.status, 400, "an expired pending recovery is unknown");
+  } finally {
+    await db.close();
+  }
+});

@@ -32,7 +32,7 @@ import type { AuthenticationResponseJSON } from "@simplewebauthn/server";
 import { verifyEmailCode } from "./email-code";
 import { verifyRecoveryCode } from "./recovery";
 import { finishPasskeyAuthentication } from "./passkey";
-import { processSingleton } from "../seams/process-singleton";
+import { pendingStore } from "./pending-store";
 import { createSession, type Session } from "./session";
 import { requireStepUp } from "./step-up";
 import { getUserByEmail, type User } from "../db/users";
@@ -98,11 +98,14 @@ interface PendingRequest {
   approved: boolean;
 }
 
-// The process-wide pending-request store (the release-store pattern): ESM caches
-// this module, so every import shares one Map. Keys are full-entropy random
-// handles, so requests never collide across callers.
-// Held through processSingleton (globalThis) so every module graph Next builds shares it.
-const pendingRequests = processSingleton("auth.newDeviceRequests", () => new Map<string, PendingRequest>());
+// The process-wide pending-request store (the release-store pattern). Keys are
+// full-entropy random handles, so requests never collide across callers. It is bounded
+// and expiring (pending-store): a request must be approved and collected within ten
+// minutes, so a stale approved request can never be collected days later.
+const pendingRequests = pendingStore<PendingRequest>("auth.newDeviceRequests", {
+  ttlMs: 10 * 60 * 1000,
+  maxEntries: 10_000,
+});
 
 // Verify the email one-time code (the first factor) and resolve the person it is
 // for. Returns the person on success; null when the code is wrong/expired/
@@ -186,7 +189,7 @@ export async function requestNewDeviceApproval(
   if (!person) return { ok: false, reason: "invalid_code" };
 
   const requestId = Buffer.from(deps.random.randomBytes(32)).toString("hex");
-  pendingRequests.set(requestId, { userId: person.id, approved: false });
+  pendingRequests.set(requestId, { userId: person.id, approved: false }, deps.clock.now());
 
   await deps.pushSender.sendPush({
     recipient: person.id,
@@ -207,7 +210,7 @@ export async function approveNewDeviceRequest(
   params: { requestId: string; approvingSession: Session },
   deps: ApproveDeps,
 ): Promise<{ ok: true } | { ok: false; reason: string }> {
-  const request = pendingRequests.get(params.requestId);
+  const request = pendingRequests.get(params.requestId, deps.clock.now());
   if (!request) return { ok: false, reason: "unknown_request" };
 
   if (!requireStepUp(params.approvingSession, { clock: deps.clock })) {
@@ -231,7 +234,7 @@ export async function collectNewDeviceApproval(
   params: { requestId: string },
   deps: CollectDeps,
 ): Promise<NewDeviceResult> {
-  const request = pendingRequests.get(params.requestId);
+  const request = pendingRequests.get(params.requestId, deps.clock.now());
   if (!request) return { ok: false, reason: "unknown_request" };
   if (!request.approved) return { ok: false, reason: "not_approved" };
 

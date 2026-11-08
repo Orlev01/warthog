@@ -713,3 +713,56 @@ test("signInNewDeviceWithRecoveryCode refuses when the email code is wrong, even
     await db.close();
   }
 });
+
+// =====================================================================================
+// Review fix B5 — a pending approval request expires: a stale approved request can no
+// longer be collected, and an old request can no longer be approved.
+// =====================================================================================
+
+test("a pending approval request expires after ten minutes: it can be neither approved nor collected", async () => {
+  const c = mutableClock(T0);
+  const outbox = createOutbox();
+  const db = await freshDb();
+  try {
+    const person = await freshUser(db, "stale-request");
+
+    // Approved in time, but collected too late.
+    const code = await issueCodeFor(db, person.email, c.clock, outbox);
+    const started = await requestNewDeviceApproval(
+      db,
+      { email: person.email, code, deviceLabel: "new phone" },
+      makeDeps(c.clock, outbox),
+    );
+    if (!started.ok) assert.fail(`request must start: ${JSON.stringify(started)}`);
+    const approver = await freshSignedInSession(db, person.id, c.clock, true);
+    const approved = await approveNewDeviceRequest(
+      db,
+      { requestId: started.requestId, approvingSession: approver.session },
+      makeDeps(c.clock, outbox),
+    );
+    assert.equal(approved.ok, true);
+    c.advance(11 * MINUTE_MS);
+    const late = await collectNewDeviceApproval(db, { requestId: started.requestId }, makeDeps(c.clock, outbox));
+    assert.equal(late.ok, false, "an expired request yields no session");
+
+    // Approved too late.
+    c.advance(MINUTE_MS);
+    const code2 = await issueCodeFor(db, person.email, c.clock, outbox);
+    const second = await requestNewDeviceApproval(
+      db,
+      { email: person.email, code: code2, deviceLabel: "new tablet" },
+      makeDeps(c.clock, outbox),
+    );
+    if (!second.ok) assert.fail(`request must start: ${JSON.stringify(second)}`);
+    c.advance(11 * MINUTE_MS);
+    const fresh = await freshSignedInSession(db, person.id, c.clock, true);
+    const tooLate = await approveNewDeviceRequest(
+      db,
+      { requestId: second.requestId, approvingSession: fresh.session },
+      makeDeps(c.clock, outbox),
+    );
+    assert.equal(tooLate.ok, false, "an expired request cannot be approved");
+  } finally {
+    await db.close();
+  }
+});

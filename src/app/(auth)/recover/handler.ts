@@ -14,8 +14,8 @@
 // Across the four separate requests a pending recovery (the resolved account and
 // whether its new passkey has been registered) lives in PROCESS MEMORY keyed by a
 // random `recoveryId`, the release-store / new-device pattern sign-up uses for its
-// `signupId` — a module-level Map (held through processSingleton so every module graph
-// Next builds shares one) with full-entropy handles so pending recoveries never collide.
+// `signupId` — a bounded, expiring process-wide store (pending-store) with full-entropy
+// handles so pending recoveries never collide.
 //
 // Unlike sign-up there is an existing `users` row from the first step, so the real
 // issuing functions run against the injected production `Db` and persist for real:
@@ -47,7 +47,7 @@ import { getUserByEmail } from "../../../server/db/users";
 import type { Clock } from "../../../server/seams/clock";
 import type { Random } from "../../../server/seams/random";
 import type { Db } from "../../../server/db/index";
-import { processSingleton } from "../../../server/seams/process-singleton";
+import { pendingStore } from "../../../server/auth/pending-store";
 
 // The dependency bundle. Each step reads the subset it needs; the superset is
 // structurally assignable to each. `rpId` is the WebAuthn RP ID (from config, never
@@ -80,13 +80,13 @@ interface PendingRecovery {
 }
 
 // The process-wide pending-recovery store (the new-device / release-store pattern):
-// ESM caches this module, so every import shares one Map, and the four separate
-// requests of one recovery find their pending row by its random handle. Held through
-// processSingleton (globalThis) so every module graph Next builds shares it.
-const pendingRecoveries = processSingleton(
-  "auth.pendingRecoveries",
-  () => new Map<string, PendingRecovery>(),
-);
+// the separate requests of one recovery find their pending row by its random handle.
+// identify is unauthenticated, so the store is bounded and expiring (pending-store): a
+// recovery must finish within thirty minutes, and a flood cannot grow memory unbounded.
+const pendingRecoveries = pendingStore<PendingRecovery>("auth.pendingRecoveries", {
+  ttlMs: 30 * 60 * 1000,
+  maxEntries: 10_000,
+});
 
 // A grossly oversized body is rejected before any work; a real recovery body (even a
 // WebAuthn registration response) is far under this.
@@ -168,7 +168,7 @@ export function createRecoverHandler(deps: RecoverHandlerDeps): RecoverHandler {
 
       // A full-entropy handle for the pending recovery.
       const recoveryId = Buffer.from(random.randomBytes(32)).toString("hex");
-      pendingRecoveries.set(recoveryId, { userId: user?.id ?? null, userName: email });
+      pendingRecoveries.set(recoveryId, { userId: user?.id ?? null, userName: email }, clock.now());
 
       return json(200, { recoveryId });
     } catch (error) {
@@ -188,7 +188,7 @@ export function createRecoverHandler(deps: RecoverHandlerDeps): RecoverHandler {
         maxBytes: MAX_BODY_BYTES,
       });
 
-      const pending = pendingRecoveries.get(recoveryId);
+      const pending = pendingRecoveries.get(recoveryId, clock.now());
       if (!pending || !pending.userId) return json(400, { error: "invalid_code" });
 
       const ok = await verifyRecoveryCode(db, pending.userId, recoveryCode);
@@ -221,7 +221,7 @@ export function createRecoverHandler(deps: RecoverHandlerDeps): RecoverHandler {
         { maxBytes: MAX_BODY_BYTES },
       );
 
-      const pending = pendingRecoveries.get(recoveryId);
+      const pending = pendingRecoveries.get(recoveryId, clock.now());
       if (!pending || !pending.userId) return json(400, { error: "unknown_recovery" });
 
       const result = await finishPasskeyRegistration(
@@ -250,7 +250,7 @@ export function createRecoverHandler(deps: RecoverHandlerDeps): RecoverHandler {
     try {
       const { recoveryId } = await parseBody(finishSchema, request, { maxBytes: MAX_BODY_BYTES });
 
-      const pending = pendingRecoveries.get(recoveryId);
+      const pending = pendingRecoveries.get(recoveryId, clock.now());
       if (!pending || !pending.userId) return json(400, { error: "unknown_recovery" });
       if (!pending.passkeyRegistered) return json(400, { error: "no_second_factor" });
 

@@ -483,3 +483,26 @@ test("a second send-code for one address inside a minute is refused with 429 and
     await db.close();
   }
 });
+
+// =====================================================================================
+// Review fix B5 — a pending sign-up expires, so an abandoned one is forgotten.
+// =====================================================================================
+
+test("a pending sign-up expires after thirty minutes: registering on it afterwards is refused", async () => {
+  let now = T0.getTime();
+  const clock: Clock = { now: () => new Date(now) };
+  const outbox = createOutbox();
+  const db = await freshDb();
+  try {
+    const handler = makeHandler(db, outbox, clock);
+    const auth = createAuthenticator();
+    const { signupId, options } = await startSignup(handler, db, outbox, "slowcoach@warthog.com.au", clock);
+
+    now += 31 * 60 * 1000;
+    const registrationResponse = await auth.register(options);
+    const res = await handler.registerPasskey(signupRequest({ signupId, registrationResponse }));
+    assert.equal(res.status, 400, "an expired pending sign-up is unknown");
+  } finally {
+    await db.close();
+  }
+});

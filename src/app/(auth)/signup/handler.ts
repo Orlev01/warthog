@@ -13,8 +13,9 @@
 // Until confirmation there is NO `users` row: a pending sign-up (the email, the
 // registration challenge, the verified credential and the recovery code's entropy)
 // lives in PROCESS MEMORY keyed by a random `signupId`, the release-store /
-// new-device pattern — a module-level Map so it survives across the three separate
-// requests, with full-entropy handles so pending sign-ups never collide.
+// new-device pattern — a bounded, expiring process-wide store (pending-store) so it
+// survives across the three separate requests, with full-entropy handles so pending
+// sign-ups never collide.
 //
 // Because there is no account yet at steps 1–2, the real issuing functions
 // (`beginPasskeyRegistration`, `issueRecoveryCode`) — which both PERSIST against a
@@ -54,7 +55,7 @@ import type { Clock } from "../../../server/seams/clock";
 import type { Random } from "../../../server/seams/random";
 import type { EmailSender } from "../../../server/notify/senders";
 import type { Db } from "../../../server/db/index";
-import { processSingleton } from "../../../server/seams/process-singleton";
+import { pendingStore } from "../../../server/auth/pending-store";
 
 // The dependency bundle. Each step reads the subset it needs; the superset is
 // structurally assignable to each. `rpId` is the WebAuthn RP ID (from config, never
@@ -93,19 +94,23 @@ interface PendingSignup {
 }
 
 // The process-wide pending-sign-up store (the new-device / release-store pattern):
-// ESM caches this module, so every import shares one Map, and the three separate
-// requests of one sign-up find their pending row by its random handle.
-// Held through processSingleton (globalThis) so every module graph Next builds shares it.
-const pendingSignups = processSingleton("auth.pendingSignups", () => new Map<string, PendingSignup>());
+// the three separate requests of one sign-up find their pending row by its random
+// handle. Unauthenticated requests create the entries, so the store is bounded and
+// expiring (pending-store): an abandoned sign-up — and the recovery-code entropy it
+// holds — is forgotten after thirty minutes, and a flood cannot grow memory unbounded.
+const pendingSignups = pendingStore<PendingSignup>("auth.pendingSignups", {
+  ttlMs: 30 * 60 * 1000,
+  maxEntries: 10_000,
+});
 
 // The name entered at the details step arrives with send-code, before a signupId
 // exists, so it is parked here keyed by the email until verify-email mints the
 // pending sign-up and takes it over. Held in process memory (the pending-sign-up
-// pattern), never a plaintext column. Shared across module graphs via processSingleton.
-const pendingSignupNames = processSingleton(
-  "auth.pendingSignupNames",
-  () => new Map<string, string>(),
-);
+// pattern), never a plaintext column; it lapses with the code it arrived with.
+const pendingSignupNames = pendingStore<string>("auth.pendingSignupNames", {
+  ttlMs: 15 * 60 * 1000,
+  maxEntries: 10_000,
+});
 
 // A write-discarding `Db`: at the register stage there is no `users` row to hang a
 // challenge or recovery code off, so the real issuing functions are run against this
@@ -227,7 +232,7 @@ export function createSignupHandler(deps: SignupHandlerDeps): SignupHandler {
       // Park the name against the email until verify-email mints a signupId and
       // takes it onto the pending sign-up (never a plaintext column).
       if (name !== undefined) {
-        pendingSignupNames.set(email, name);
+        pendingSignupNames.set(email, name, clock.now());
       }
       return json(200, { ok: true });
     } catch (error) {
@@ -262,9 +267,9 @@ export function createSignupHandler(deps: SignupHandlerDeps): SignupHandler {
 
       // Take the name parked at send-code onto the pending sign-up so it survives
       // to confirm without being re-sent on this or any later step.
-      const name = pendingSignupNames.get(email);
+      const name = pendingSignupNames.get(email, clock.now());
       pendingSignupNames.delete(email);
-      pendingSignups.set(signupId, { email, challenge: registrationOptions.challenge, name });
+      pendingSignups.set(signupId, { email, challenge: registrationOptions.challenge, name }, clock.now());
       return json(200, { signupId, registrationOptions });
     } catch (error) {
       return handleError(error);
@@ -284,7 +289,7 @@ export function createSignupHandler(deps: SignupHandlerDeps): SignupHandler {
         { maxBytes: MAX_BODY_BYTES },
       );
 
-      const pending = pendingSignups.get(signupId);
+      const pending = pendingSignups.get(signupId, clock.now());
       if (!pending) return json(400, { error: "unknown_signup" });
 
       let verification;
@@ -346,7 +351,7 @@ export function createSignupHandler(deps: SignupHandlerDeps): SignupHandler {
         maxBytes: MAX_BODY_BYTES,
       });
 
-      const pending = pendingSignups.get(signupId);
+      const pending = pendingSignups.get(signupId, clock.now());
       if (!pending) return json(400, { error: "unknown_signup" });
       if (!savedConfirmed) return json(400, { error: "not_confirmed" });
       if (!pending.credential || !pending.recoveryDraws) {
