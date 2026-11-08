@@ -471,6 +471,16 @@ test("AC3: tools/call request_card returns pending_approval (structured) and cre
     assert.ok(expiresAt, "the structured content carries expires_at");
     assert.ok(!Number.isNaN(new Date(expiresAt).getTime()), "expires_at is a valid instant");
 
+    // Many MCP clients hand the model only the text content, so the text carries the same
+    // structured result as JSON (MCP: a tool returning structured content SHOULD also return
+    // it serialised in a text block) — otherwise the agent never sees the approval_id it
+    // needs for check_approval.
+    const text = result!.content?.[0]?.text ?? "";
+    const fromText = JSON.parse(text) as Record<string, unknown>;
+    assert.equal(fromText.approval_id, structured!.approval_id, "the text carries the approval_id");
+    assert.equal(fromText.status, "pending_approval");
+    assert.match(String(fromText.next ?? ""), /check_approval/, "and tells the agent what to call next");
+
     // The approval is visible in the person's inbox, still PENDING — nothing released.
     const pending = await listPendingForUser(db, userId, dek);
     const approval = pending.find((entry) => entry.id === structured!.approval_id);

@@ -17,7 +17,7 @@
 // tool result:
 //   • executed       → a normal result (content), not isError;
 //   • pending_approval→ `pending_approval` with approval_id + expires_at as STRUCTURED
-//                       content, nothing released;
+//                       content (and the same JSON as text), nothing released;
 //   • refused        → isError with a plain reason.
 //
 // A SERVER module built purely from its two inputs: it reads no `process.env` directly
@@ -151,17 +151,20 @@ function toToolResult(outcome: AgentCallResult): {
     case "executed":
       // An allowed read/write returns its result as content — never isError.
       return { content: [{ type: "text", text: JSON.stringify(outcome.result ?? null) }] };
-    case "pending_approval":
+    case "pending_approval": {
       // The ask outcome is carried as STRUCTURED content with the approval id and expiry;
-      // nothing is released (the pipeline held the call behind a pending approval).
-      return {
-        content: [{ type: "text", text: "This request needs your approval." }],
-        structuredContent: {
-          status: "pending_approval",
-          approval_id: outcome.approval_id,
-          expires_at: outcome.expires_at.toISOString(),
-        },
+      // nothing is released (the pipeline held the call behind a pending approval). The text
+      // block carries the same JSON: many MCP clients give the model only the text, and the
+      // agent needs the approval_id for check_approval (MCP: structured content SHOULD also
+      // be returned serialised in a text block).
+      const structured = {
+        status: "pending_approval",
+        approval_id: outcome.approval_id,
+        expires_at: outcome.expires_at.toISOString(),
+        next: "The person has been asked. Call check_approval with this approval_id to wait for their decision.",
       };
+      return { content: [{ type: "text", text: JSON.stringify(structured) }], structuredContent: structured };
+    }
     case "refused":
       // A denied / refused call is an MCP error carrying the plain reason.
       return errorResult(outcome.reason);
