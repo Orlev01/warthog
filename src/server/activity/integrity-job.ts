@@ -53,15 +53,24 @@ export async function runDailyIntegrityCheck(deps: DailyIntegrityCheckDeps): Pro
   // from the row and bound into `checkIntegrity`, never from a client value.
   const accounts = await db.query("SELECT id, email FROM users");
 
+  // One account whose check errors, or whose alert cannot be delivered, must not stop the
+  // sweep: every account is still checked and alerted and the counts are still recorded;
+  // the failures are reported together at the end. (An account whose check errored is in
+  // neither count — it was not verified either way.)
+  const failures: unknown[] = [];
   let passed = 0;
   let failed = 0;
   for (const row of accounts.rows) {
-    const result = await checkIntegrity(db, String(row.id));
-    if (result.intact) {
-      passed += 1;
-    } else {
-      failed += 1;
-      await alertFailure(senders, row.email as string);
+    try {
+      const result = await checkIntegrity(db, String(row.id));
+      if (result.intact) {
+        passed += 1;
+      } else {
+        failed += 1;
+        failures.push(...(await alertFailure(senders, row.email as string)));
+      }
+    } catch (error) {
+      failures.push(error);
     }
   }
 
@@ -77,12 +86,24 @@ export async function runDailyIntegrityCheck(deps: DailyIntegrityCheckDeps): Pro
     value: failed,
     dimensions: { outcome: OUTCOME_FAIL },
   });
+
+  if (failures.length > 0) {
+    throw new AggregateError(failures, `daily-integrity-check: ${failures.length} check or alert failure(s)`);
+  }
 }
 
 // Alert one person whose record broke: ONE push AND ONE email to their address on file, with a
-// fixed non-personal body and no link. No SMS is sent.
-async function alertFailure(senders: Senders, recipient: string): Promise<void> {
+// fixed non-personal body and no link. No SMS is sent. Both channels are always attempted —
+// a failed push never costs the email — and the failures are returned for the caller to report.
+async function alertFailure(senders: Senders, recipient: string): Promise<unknown[]> {
   const message: OutgoingMessage = { recipient, body: ALERT_BODY };
-  await senders.push.sendPush(message);
-  await senders.email.sendEmail(message);
+  const failures: unknown[] = [];
+  for (const send of [() => senders.push.sendPush(message), () => senders.email.sendEmail(message)]) {
+    try {
+      await send();
+    } catch (error) {
+      failures.push(error);
+    }
+  }
+  return failures;
 }

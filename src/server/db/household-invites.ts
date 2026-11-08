@@ -10,7 +10,9 @@
 // message (the emailed link) that delivers it; it appears in clear nowhere else. Redeeming
 // resolves the token to the ONE household it is bound to and ADDS the redeeming, signed-in
 // person as a member (within the 8-member cap), then marks the token used — a second
-// presentation, an expired token or an unknown token is rejected.
+// presentation, an expired token or an unknown token is rejected. The invite is bound to
+// the invited EMAIL: only the account with that (verified) email can redeem it, and only
+// while it belongs to no other household — a person belongs to one household.
 //
 // Like the approval-link store (E12-S05) this one is CREDENTIAL-KEYED: a row is addressed
 // by its token hash and bound to one household + the invited email, not a `user_id`. The
@@ -79,12 +81,20 @@ export interface RedeemInviteDeps {
 // What redeem reports back — a discriminated union on `ok`. A live, unused, unexpired
 // token adds the user and resolves to its household; a lapsed token is "expired"; an
 // unknown token, or one already used, is "invalid" (the two are indistinguishable); a
-// redemption that would exceed the 8-member cap is "household_full".
+// token presented by an account whose email is not the invited one is "wrong_account"; a
+// person who already belongs to another household is "already_in_household"; a
+// redemption that would exceed the 8-member cap is "household_full". Every refusal adds
+// no member and leaves the invite usable (except "invalid", where there is none).
 export type RedeemInviteResult =
   | { ok: true; householdId: string }
   | { ok: false; reason: "invalid" }
   | { ok: false; reason: "expired" }
+  | { ok: false; reason: "wrong_account" }
+  | { ok: false; reason: "already_in_household" }
   | { ok: false; reason: "household_full" };
+
+// The refusals a presented token can meet before anyone is added.
+type InviteRefusal = Extract<RedeemInviteResult, { ok: false }>;
 
 // SHA-256 hex of a value — how the invite token is addressed in storage (never the raw
 // value), the same contract every opaque Warthog token is stored under.
@@ -167,14 +177,70 @@ export async function listPendingInvites(
   }));
 }
 
+// Check a presented token for `userId` WITHOUT consuming it or adding anyone: the
+// household it would join, or why it would be refused. The checks, in order: the token
+// exists and is unused ("invalid"), is inside its seven-day window ("expired"), was sent
+// to THIS account's email ("wrong_account" — compared case- and space-insensitively; the
+// account email is the one verified at sign-up, so a forwarded or leaked link cannot
+// enrol someone else), and the person is in no other household ("already_in_household").
+// The capacity check happens on the add itself (`addMember`), never here, so a preview
+// never promises a place that a concurrent join then takes.
+async function checkInvite(
+  db: Db,
+  tokenHash: string,
+  userId: string,
+  now: Date,
+): Promise<{ ok: true; householdId: string } | InviteRefusal> {
+  const found = await db.query(
+    `SELECT i.household_id, i.expires_at, i.used_at,
+            lower(btrim(i.email)) = lower(btrim(u.email)) AS email_matches
+       FROM household_invites i
+       LEFT JOIN users u ON u.id = $2
+      WHERE i.token_hash = $1`,
+    [tokenHash, userId],
+  );
+  const row = found.rows[0];
+  if (!row || row.used_at != null) {
+    return { ok: false, reason: "invalid" };
+  }
+  if (new Date(row.expires_at as string | number | Date).getTime() <= now.getTime()) {
+    return { ok: false, reason: "expired" };
+  }
+  if (row.email_matches !== true) {
+    return { ok: false, reason: "wrong_account" };
+  }
+  const householdId = String(row.household_id);
+  const elsewhere = await db.query(
+    "SELECT 1 FROM household_members WHERE user_id = $1 AND household_id <> $2",
+    [userId, householdId],
+  );
+  if (elsewhere.rows.length > 0) {
+    return { ok: false, reason: "already_in_household" };
+  }
+  return { ok: true, householdId };
+}
+
+// What a presented token WOULD do for the signed-in `userId`, without consuming it or
+// adding anyone — the join confirmation screen's read, so a person is shown a refusal
+// before they confirm rather than after. Same outcomes and checks as redeemInvite, except
+// that a full household is only discovered on the redeem itself.
+export async function previewInvite(
+  db: Db,
+  input: RedeemInviteInput,
+  deps: RedeemInviteDeps,
+): Promise<RedeemInviteResult> {
+  return checkInvite(db, sha256Hex(input.token), input.userId, deps.clock.now());
+}
+
 // Redeem a presented token. It is matched by its SHA-256 hash (the raw token never reaches
-// the query layer): no matching row, or a row already used, is "invalid"; a matching row
-// past its seven-day window is "expired" and is NOT consumed; a matching, unexpired, unused
-// row adds `userId` to the bound household and marks the token used, in one transaction so
-// the member-add and the single-use consume commit together. Adding is cap-checked BEFORE
-// the token is consumed, so a full household is refused with "household_full" and leaves the
-// invite intact. The consume is a guarded `used_at IS NULL` UPDATE, so the FIRST redemption
-// wins — a second presentation finds the row already used and is rejected.
+// the query layer) and checked exactly as `checkInvite` describes; a token that passes adds
+// `userId` to the bound household and marks the token used, in one transaction so the
+// member-add and the single-use consume commit together. Adding is cap- and
+// one-household-checked atomically BEFORE the token is consumed (`addMember` locks the
+// household row and re-checks in its insert), so a full household is refused with
+// "household_full", two parallel joins can never overfill it, and a refusal leaves the
+// invite intact. The consume is a guarded `used_at IS NULL` UPDATE, so the FIRST
+// redemption wins — a second presentation finds the row already used and is rejected.
 export async function redeemInvite(
   db: Db,
   input: RedeemInviteInput,
@@ -184,27 +250,16 @@ export async function redeemInvite(
   const tokenHash = sha256Hex(input.token);
 
   return withTransaction(db, async (tx): Promise<RedeemInviteResult> => {
-    const found = await tx.query(
-      `SELECT household_id, expires_at, used_at
-         FROM household_invites
-        WHERE token_hash = $1`,
-      [tokenHash],
-    );
-    const row = found.rows[0];
-    if (!row || row.used_at != null) {
-      return { ok: false, reason: "invalid" };
-    }
-    if (new Date(row.expires_at as string | number | Date).getTime() <= now.getTime()) {
-      return { ok: false, reason: "expired" };
-    }
+    const checked = await checkInvite(tx, tokenHash, input.userId, now);
+    if (!checked.ok) return checked;
+    const { householdId } = checked;
 
-    const householdId = String(row.household_id);
-
-    // Enforce the shared 8-member cap BEFORE consuming the token, so a refusal adds no
-    // member and leaves the invite intact.
+    // Enforce the shared 8-member cap and the one-household rule BEFORE consuming the
+    // token, so a refusal adds no member and leaves the invite intact. Already being a
+    // member of THIS household is not a refusal: the token is simply spent.
     const added = await addMember(tx, { householdId, userId: input.userId });
-    if (!added.ok && added.reason === "household_full") {
-      return { ok: false, reason: "household_full" };
+    if (!added.ok && added.reason !== "already_member") {
+      return { ok: false, reason: added.reason };
     }
 
     // Claim the token exactly once: the guarded UPDATE lets only the first redemption win.

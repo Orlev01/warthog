@@ -12,7 +12,8 @@
 //     to the record (its opaque id — the app resolves it after sign-in) and NO personal
 //     content; then
 //   • marks that offset sent (`markReminderSent`), so `listDueForReminder` stops returning
-//     it and the reminder never fires again.
+//     it and that reminder never fires again for this due date (moving the due date
+//     clears the markers, so the next cycle's reminders fire).
 //
 // The defaults (14 days and 1 day before the due date) and any per-record override live on
 // the record's own reminder offsets, so this job honours whatever the store hands it — it
@@ -65,17 +66,28 @@ export async function runLifeAdminReminders(deps: LifeAdminRemindersDeps): Promi
   // The clock instant is bound as a parameter on the read (INV-102).
   const due = await listDueForReminder(db, clock);
 
+  // One reminder that cannot be delivered (an expired push subscription, a provider blip)
+  // must not stop the others: each is tried on its own, a failed one stays unmarked so the
+  // next sweep tries it again, and the failures are reported together at the end.
+  const failures: unknown[] = [];
   for (const reminder of due) {
-    // ONE push to the record's OWNER (carried on the due reminder, never a client value),
-    // carrying only a reference to the record and no personal content.
-    await push.sendPush({
-      recipient: reminder.userId,
-      body: REMINDER_BODY,
-      link: buildReference(reminder.recordId),
-    });
+    try {
+      // ONE push to the record's OWNER (carried on the due reminder, never a client
+      // value), carrying only a reference to the record and no personal content.
+      await push.sendPush({
+        recipient: reminder.userId,
+        body: REMINDER_BODY,
+        link: buildReference(reminder.recordId),
+      });
 
-    // Mark this offset sent so it drops out of the due set — the sweep is idempotent and
-    // the reminder never fires twice. The record id is bound as a parameter (INV-102).
-    await markReminderSent(db, { recordId: reminder.recordId, offset: reminder.offset });
+      // Mark this offset sent so it drops out of the due set — the sweep is idempotent and
+      // the reminder never fires twice. The record id is bound as a parameter (INV-102).
+      await markReminderSent(db, { recordId: reminder.recordId, offset: reminder.offset });
+    } catch (error) {
+      failures.push(error);
+    }
+  }
+  if (failures.length > 0) {
+    throw new AggregateError(failures, `life-admin-reminders: ${failures.length} reminder(s) failed to send`);
   }
 }

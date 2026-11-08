@@ -625,3 +625,105 @@ test("a tick folds no ambient env secret into what it writes (config is read fro
     else process.env.WARTHOG_DECOY_SECRET = prev;
   }
 });
+
+// ===========================================================================
+// Ticks never overlap (review finding: the interval timer fires regardless of whether the
+// previous tick finished, so long drains ran concurrently with the next tick's sweeps and
+// drain — overlapping approval-expiry runs, and a lease-lapsed row reclaimed while its
+// first handler was still running).
+// ===========================================================================
+
+test("a tick that fires while the previous one is still running does nothing", async () => {
+  const c = mutableClock(T0);
+  const db = await freshDb();
+  try {
+    let running = 0;
+    let maxConcurrent = 0;
+    let runs = 0;
+    let release: () => void = () => {};
+    const gate = new Promise<void>((resolve) => {
+      release = resolve;
+    });
+    let markStarted: () => void = () => {};
+    const started = new Promise<void>((resolve) => {
+      markStarted = resolve;
+    });
+    const scheduler = createScheduler({
+      getDb: async () => db,
+      clock: c.clock,
+      sweeps: [
+        {
+          name: "slow-sweep",
+          intervalMs: MINUTE_MS,
+          run: async () => {
+            runs += 1;
+            running += 1;
+            maxConcurrent = Math.max(maxConcurrent, running);
+            markStarted();
+            await gate;
+            running -= 1;
+          },
+        },
+      ],
+      dispatch: {},
+      log: () => {},
+    });
+
+    const first = scheduler.tick();
+    await started;
+    // The timer fires again (twice) after the interval, while the first tick is stuck.
+    c.advance(MINUTE_MS);
+    await scheduler.tick();
+    c.advance(MINUTE_MS);
+    await scheduler.tick();
+    assert.equal(runs, 1, "the overlapping ticks ran nothing");
+
+    release();
+    await first;
+    assert.equal(maxConcurrent, 1, "the sweep never ran concurrently with itself");
+
+    // Once the first tick has finished, the next one runs normally.
+    await scheduler.tick();
+    assert.equal(runs, 2, "a tick after the previous one finished runs the due sweep");
+  } finally {
+    await db.close();
+  }
+});
+
+// ===========================================================================
+// A sweep's schedule survives a restart and is shared by every instance (review finding: the
+// "when did this sweep last run" state lived in an in-memory Map, so every deploy or restart
+// re-ran every sweep on its first tick — re-sending integrity alerts, duplicating metric
+// snapshots — and two revisions overlapping during a deploy both ran every sweep).
+// ===========================================================================
+
+test("a restarted scheduler does not re-run a sweep inside its interval, and two instances never both run it", async () => {
+  const c = mutableClock(T0);
+  const db = await freshDb();
+  try {
+    let runs = 0;
+    const make = () =>
+      createScheduler({
+        getDb: async () => db,
+        clock: c.clock,
+        sweeps: [{ name: "daily-sweep", intervalMs: DAY_MS, run: async () => void (runs += 1) }],
+        dispatch: {},
+        log: () => {},
+      });
+
+    await make().tick();
+    assert.equal(runs, 1, "the first boot runs the sweep");
+
+    // A deploy an hour later: a brand-new scheduler over the same database.
+    c.advance(HOUR_MS);
+    await make().tick();
+    assert.equal(runs, 1, "the restarted scheduler does not run it again inside its interval");
+
+    // Two instances (overlapping revisions) tick at once once the interval has passed.
+    c.advance(DAY_MS);
+    await Promise.all([make().tick(), make().tick()]);
+    assert.equal(runs, 2, "exactly one of them runs the now-due sweep");
+  } finally {
+    await db.close();
+  }
+});

@@ -9,9 +9,12 @@
 // date-swap applied — or to keep their own vault postal address.
 //
 // The address is PERSONAL CONTENT, so `current` and `upcoming` are stored only
-// DEK-ENCRYPTED (`../crypto/envelope`, design §4.1): the household id is the row id, so
+// ENCRYPTED (`../crypto/envelope`, design §4.1): the household id is the row id, so
 // each value's envelope binds the ciphertext to its exact (table, column, row) and the
-// plaintext never lands in a column. `moving_on` is plaintext metadata (a bare calendar
+// plaintext never lands in a column. The key is the HOUSEHOLD's own data key (0058,
+// resolved by `../household/household-key`), not any one person's DEK, so it survives
+// an ownership transfer and no member ever needs another member's key; this module just
+// takes whichever key it is handed. `moving_on` is plaintext metadata (a bare calendar
 // date for the date-swap, like a vault postal address's moving-on date).
 //
 // Every statement is parameterized through the `Db` seam (INV-102): the ids and every
@@ -177,6 +180,48 @@ export async function getSharedAddress(
     upcoming,
     movingOn: (row.moving_on as string | null) ?? null,
   };
+}
+
+// Re-encrypt the household's shared address (if any) from `fromKey` to `toKey`, in place,
+// locking the row so a concurrent edit cannot interleave. Returns true when a row was
+// re-encrypted; false when there is no row, or when it does not decrypt under `fromKey`
+// (it is then left untouched — it was already unreadable, and overwriting it would hide
+// that; the next edit replaces it). Bound to the same (table, column, household id)
+// associated data as every other write, so the re-encrypted values read back through
+// getSharedAddress under `toKey`. Run it inside the caller's transaction.
+export async function reencryptSharedAddress(
+  db: Db,
+  householdId: string,
+  fromKey: Uint8Array,
+  toKey: Uint8Array,
+): Promise<boolean> {
+  const result = await db.query(
+    "SELECT current, upcoming FROM household_shared_address WHERE household_id = $1 FOR UPDATE",
+    [householdId],
+  );
+  const row = result.rows[0];
+  if (!row) return false;
+
+  let current: string;
+  let upcoming: string | null;
+  try {
+    current = await decrypt(fromKey, TABLE, CURRENT_COLUMN, householdId, row.current as string);
+    upcoming =
+      row.upcoming == null
+        ? null
+        : await decrypt(fromKey, TABLE, UPCOMING_COLUMN, householdId, row.upcoming as string);
+  } catch {
+    return false;
+  }
+
+  const currentEnvelope = await encrypt(toKey, TABLE, CURRENT_COLUMN, householdId, current);
+  const upcomingEnvelope =
+    upcoming == null ? null : await encrypt(toKey, TABLE, UPCOMING_COLUMN, householdId, upcoming);
+  await db.query(
+    "UPDATE household_shared_address SET current = $2, upcoming = $3 WHERE household_id = $1",
+    [householdId, currentEnvelope, upcomingEnvelope],
+  );
+  return true;
 }
 
 // Set the SESSION user's OWN follow choice for a household they belong to: `follow = true`

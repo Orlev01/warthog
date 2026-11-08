@@ -172,8 +172,13 @@ export async function createRecord(
 
 // Update the owner's own record (member-scoped: both id AND user_id are bound),
 // re-encrypting the fields and updating the plaintext metadata. `reminderOffsets`
-// are left unchanged when omitted. THROWS when no such record belongs to this
-// user — so one person can never edit another's record.
+// are left unchanged when omitted. Moving the due date (to another date, or clearing
+// it) starts a FRESH reminder cycle: the sent-markers belonged to the old date, so they
+// are cleared and the new date's reminders fire — a renewal rolled on a year reminds
+// again. An edit that keeps the same date keeps them, so nothing is sent twice. (In the
+// SET list `due_date` still names the row's OLD value, so the comparison is old vs new.)
+// THROWS when no such record belongs to this user — so one person can never edit
+// another's record.
 export async function updateRecord(
   db: Db,
   input: UpdateRecordInput,
@@ -188,7 +193,9 @@ export async function updateRecord(
      SET fields = $3,
          due_date = $4::date,
          status = $5,
-         reminder_offsets = COALESCE($6::int[], reminder_offsets)
+         reminder_offsets = COALESCE($6::int[], reminder_offsets),
+         sent_offsets = CASE WHEN due_date IS DISTINCT FROM $4::date
+                             THEN '{}'::int[] ELSE sent_offsets END
      WHERE id = $1 AND user_id = $2
      RETURNING ${SELECT_COLUMNS}`,
     [input.id, input.userId, envelope, dueDate, input.status, reminderOffsets],
@@ -243,16 +250,17 @@ async function decryptRows(rows: Row[], dek: Uint8Array): Promise<LifeAdminRecor
 // The REMINDERS JOB's read. Deliberately CROSS-USER (no userId, no dek): for EVERY
 // person, return each (record, offset) where the offset's reminder date
 // (due_date − offset days) is at or before `clock.now()`, the offset has NOT been
-// marked sent, and the record has a due date. METADATA ONLY — it never decrypts a
-// field (the fields blob is not even selected), which is exactly design §4.1's
-// "filter without decrypting another person's data".
+// marked sent, and the record has a due date — the earliest reminder date first. METADATA
+// ONLY — it never decrypts a field (the fields blob is not even selected), which is
+// exactly design §4.1's "filter without decrypting another person's data".
 export async function listDueForReminder(db: Db, clock: Clock): Promise<DueReminder[]> {
   const result = await db.query(
     `SELECT r.id AS record_id, r.user_id, r.kind, r.due_date::text AS due_date, o AS "offset"
      FROM life_admin_records r, unnest(r.reminder_offsets) AS o
      WHERE r.due_date IS NOT NULL
        AND NOT (o = ANY(r.sent_offsets))
-       AND (r.due_date - o) <= $1`,
+       AND (r.due_date - o) <= $1
+     ORDER BY (r.due_date - o), r.id, o`,
     [clock.now()],
   );
   return result.rows.map((row) => ({

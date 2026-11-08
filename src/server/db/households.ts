@@ -9,7 +9,10 @@
 // These are PLAINTEXT METADATA (ids, roles, budgets, limits, an ISO 4217 code —
 // needed for the budget maths, design §4.1), so — unlike vault values, cards or
 // released values — they are NOT DEK-encrypted and this module holds no key and reads
-// no `process.env` (INV-103): config flows from `src/server/config.ts` alone.
+// no `process.env` (INV-103): config flows from `src/server/config.ts` alone. The one
+// key-shaped column, `wrapped_dek` (the household's own data key for shared content,
+// 0058), is stored and handed back only in its KEK-WRAPPED form; wrapping, unwrapping and
+// generating it is `src/server/household/household-key.ts`'s job, never this store's.
 //
 // Every statement is parameterized through the `Db` seam (INV-102): the ids and the
 // amounts travel as BOUND values, never concatenated into the SQL text, so a value
@@ -114,13 +117,17 @@ export async function createHousehold(db: Db, input: NewHousehold): Promise<Hous
 }
 
 // The household this user belongs to (member-scoped by userId), or null. A person
-// belongs to one household, so this returns that one.
+// belongs to one household (enforced by addMember and, where it could be added, the
+// unique index of 0060), so this returns that one; the ORDER BY only keeps the answer
+// deterministic — the household they own first — for data from before that was enforced.
 export async function getHouseholdForMember(db: Db, userId: string): Promise<Household | null> {
   const result = await db.query(
     `SELECT h.id, h.owner_id, h.currency, h.monthly_budget, h.pending_owner_id
        FROM households h
        JOIN household_members m ON m.household_id = h.id
-      WHERE m.user_id = $1`,
+      WHERE m.user_id = $1
+      ORDER BY (m.role = 'owner') DESC, h.id
+      LIMIT 1`,
     [userId],
   );
   const row = result.rows[0];
@@ -162,29 +169,52 @@ export async function isHouseholdMember(
   return result.rows.length > 0;
 }
 
+// Why addMember refused.
+export type AddMemberRefusal = "household_full" | "already_member" | "already_in_household";
+
 // Add `userId` as role 'member'. Total membership (incl. the owner) is capped at 8 —
 // the 9th is refused with "household_full"; re-adding an existing member is refused
-// with "already_member" and never duplicates the membership.
+// with "already_member" and never duplicates the membership; a person who already
+// belongs to ANOTHER household (as its owner or a member) is refused with
+// "already_in_household" — a person belongs to one household.
+//
+// Both rules hold under concurrency. The household row is locked first, so on Postgres
+// concurrent adds to one household serialise (call this inside a transaction, as
+// redeemInvite does, so the lock is held until the insert commits); and the insert itself
+// re-checks the cap and the one-household rule in the same statement, so adds that share
+// one session (PGlite) cannot both pass a count taken before either inserted. A clash with
+// the one-household unique index (two joins racing into different households) inserts
+// nothing rather than raising, and is reported as "already_in_household".
 export async function addMember(
   db: Db,
   { householdId, userId }: { householdId: string; userId: string },
-): Promise<{ ok: true; member: HouseholdMember } | { ok: false; reason: "household_full" | "already_member" }> {
-  const members = await db.query(
-    "SELECT user_id FROM household_members WHERE household_id = $1",
-    [householdId],
+): Promise<{ ok: true; member: HouseholdMember } | { ok: false; reason: AddMemberRefusal }> {
+  await db.query("SELECT 1 FROM households WHERE id = $1 FOR UPDATE", [householdId]);
+  const inserted = await db.query(
+    `INSERT INTO household_members (household_id, user_id, role)
+     SELECT $1, $2, 'member'
+      WHERE (SELECT count(*) FROM household_members WHERE household_id = $1) < $3
+        AND NOT EXISTS (SELECT 1 FROM household_members WHERE user_id = $2)
+     ON CONFLICT DO NOTHING
+     RETURNING user_id`,
+    [householdId, userId, MAX_MEMBERS],
   );
-  if (members.rows.some((row) => String(row.user_id) === userId)) {
+  if (inserted.rows.length > 0) {
+    return { ok: true, member: { householdId, userId, role: "member", monthlyLimit: null } };
+  }
+
+  // Nothing was inserted: report why.
+  const memberships = await db.query(
+    "SELECT household_id FROM household_members WHERE user_id = $1",
+    [userId],
+  );
+  if (memberships.rows.some((row) => String(row.household_id) === householdId)) {
     return { ok: false, reason: "already_member" };
   }
-  if (members.rows.length >= MAX_MEMBERS) {
-    return { ok: false, reason: "household_full" };
+  if (memberships.rows.length > 0) {
+    return { ok: false, reason: "already_in_household" };
   }
-  await db.query(
-    `INSERT INTO household_members (household_id, user_id, role)
-     VALUES ($1, $2, 'member')`,
-    [householdId, userId],
-  );
-  return { ok: true, member: { householdId, userId, role: "member", monthlyLimit: null } };
+  return { ok: false, reason: "household_full" };
 }
 
 // Owner-only: remove a member (the target must be a member). The removed person keeps
@@ -322,17 +352,19 @@ export async function acceptOwnership(
   db: Db,
   { householdId, userId }: { householdId: string; userId: string },
 ): Promise<{ ok: true } | { ok: false; reason: "no_pending_transfer" }> {
-  const pending = await db.query(
-    "SELECT owner_id FROM households WHERE id = $1 AND pending_owner_id = $2",
-    [householdId, userId],
-  );
-  const row = pending.rows[0];
-  if (!row) {
-    return { ok: false, reason: "no_pending_transfer" };
-  }
-  const oldOwnerId = String(row.owner_id);
+  return withTransaction(db, async (tx) => {
+    // Read (and lock) the pending transfer INSIDE the transaction, so two concurrent
+    // accepts — or an accept racing a new transfer — act on one consistent owner.
+    const pending = await tx.query(
+      "SELECT owner_id FROM households WHERE id = $1 AND pending_owner_id = $2 FOR UPDATE",
+      [householdId, userId],
+    );
+    const row = pending.rows[0];
+    if (!row) {
+      return { ok: false, reason: "no_pending_transfer" } as const;
+    }
+    const oldOwnerId = String(row.owner_id);
 
-  await withTransaction(db, async (tx) => {
     await tx.query(
       "UPDATE households SET owner_id = $2, pending_owner_id = NULL WHERE id = $1",
       [householdId, userId],
@@ -345,9 +377,38 @@ export async function acceptOwnership(
       "UPDATE household_members SET role = 'owner' WHERE household_id = $1 AND user_id = $2",
       [householdId, userId],
     );
+    return { ok: true } as const;
   });
+}
 
-  return { ok: true };
+// The household's KEK-wrapped data key (0058), or null when it has none yet (a household
+// created before household keys existed). Unscoped by person on purpose — the key belongs
+// to the household, and callers resolve the household from the SESSION user first.
+export async function getHouseholdWrappedKey(db: Db, householdId: string): Promise<string | null> {
+  const result = await db.query("SELECT wrapped_dek FROM households WHERE id = $1", [householdId]);
+  const value = result.rows[0]?.wrapped_dek;
+  return value == null ? null : String(value);
+}
+
+// Store `wrappedKey` as the household's data key ONLY if it has none yet, returning the
+// owner at that moment when this call won (null when the household already had a key or
+// does not exist). The conditional UPDATE makes the first writer win: a concurrent second
+// claim updates nothing (on Postgres it waits on the row lock, then sees the key set), so
+// a household never ends up with two keys. Run it inside the transaction that re-encrypts
+// any existing shared content, so the key and the content under it commit together.
+export async function claimHouseholdWrappedKey(
+  db: Db,
+  householdId: string,
+  wrappedKey: string,
+): Promise<{ ownerId: string } | null> {
+  const result = await db.query(
+    `UPDATE households SET wrapped_dek = $2
+      WHERE id = $1 AND wrapped_dek IS NULL
+      RETURNING owner_id`,
+    [householdId, wrappedKey],
+  );
+  const row = result.rows[0];
+  return row ? { ownerId: String(row.owner_id) } : null;
 }
 
 // Owner-only: close the household — removes the household and (by cascade) every

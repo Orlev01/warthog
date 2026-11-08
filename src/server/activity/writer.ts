@@ -7,13 +7,19 @@
 // one-source-of-truth) so the agent pipeline and every write-through depend on the
 // one contract. Each `record()`:
 //   (a) redacts the payload (`../../domain/redaction/redact`, design §4.3) with the
-//       per-user released-value matcher BEFORE anything is persisted;
+//       per-user released-value matcher BEFORE anything is persisted — and the
+//       PLAINTEXT text metadata an agent can supply (kind, tool, merchant) too, since
+//       those land unencrypted in the hash chain;
 //   (b) DEK-encrypts the redacted payload into a `v1:` envelope
 //       (`../crypto/envelope`, design §4.1) — the readable payload never lands in a
 //       column, so a card or released value never reaches the stored ciphertext in
 //       clear;
 //   (c) assigns a contiguous per-user `seq` (1, 2, 3, …) and chains `prev_hash` to
-//       the previous entry's `entry_hash` (a genesis sentinel for the first); and
+//       the previous entry's `entry_hash` (a genesis sentinel for the first) — safely
+//       under concurrency: appends for one person are serialised in-process, and an
+//       insert that still loses the seq to another writer (another replica, or an entry
+//       committed by an enclosing transaction) re-reads the head and retries, so a
+//       parallel tool call never loses its entry or fails after it has run; and
 //   (d) computes `entry_hash = SHA-256(prev_hash ‖ canonical(all other fields incl.
 //       payload_ct))` over the CIPHERTEXT, so the daily integrity check recomputes
 //       the chain from the stored row with no decryption, then inserts the row.
@@ -29,6 +35,7 @@
 import { createHash } from "node:crypto";
 
 import type { Clock } from "../seams/clock";
+import { processSingleton } from "../seams/process-singleton";
 import { redact } from "../../domain/redaction/redact";
 import { decrypt, encrypt } from "../crypto/envelope";
 import type { Db, Row } from "../db/index";
@@ -50,6 +57,41 @@ export const GENESIS_PREV_HASH = "GENESIS";
 // another position.
 function payloadRowId(userId: string, seq: number): string {
   return `${userId}:${seq}`;
+}
+
+// How many times one append re-reads the chain head after losing its seq to another
+// writer before it gives up. In-process appends never race (they are serialised below),
+// so a retry only happens when ANOTHER process or an enclosing transaction committed the
+// same seq first; a handful of attempts is ample, and the cap turns a pathological
+// livelock into a clear error instead of a hang.
+const MAX_APPEND_ATTEMPTS = 10;
+
+// The tail of each person's in-process append queue. Every recorder instance (the agent
+// pipeline's, the portal's, a disconnect's) chains its appends for a person onto the SAME
+// tail, so the read-head → encrypt → insert sequence never interleaves for one person
+// within this process — on PGlite (one shared session, where database locks cannot
+// serialise anything) and on the single production replica alike. Process-wide so every
+// module copy shares it (see `processSingleton`); an entry is dropped once its queue
+// drains, so the map holds only people with an append in flight.
+const appendQueues = processSingleton(
+  "activity.appendQueues",
+  () => new Map<string, Promise<unknown>>(),
+);
+
+// Run `append` once every earlier append for `userId` in this process has settled, and
+// return its result. A failed append never blocks the ones queued behind it.
+function serialisePerUser<T>(userId: string, append: () => Promise<T>): Promise<T> {
+  const previous = appendQueues.get(userId) ?? Promise.resolve();
+  const run = previous.then(append);
+  const tail = run.then(
+    () => undefined,
+    () => undefined,
+  );
+  appendQueues.set(userId, tail);
+  void tail.then(() => {
+    if (appendQueues.get(userId) === tail) appendQueues.delete(userId);
+  });
+  return run;
 }
 
 export interface DbRecorderOptions {
@@ -110,6 +152,102 @@ function toIso(value: unknown): string {
   return new Date(value as string | number | Date).toISOString();
 }
 
+// The stored identity of one appended entry.
+interface AppendedEntry {
+  seq: number;
+  occurredAt: string;
+  prevHash: string;
+  entryHash: string;
+}
+
+// Append one (already redacted) entry at the head of the person's chain. The insert is
+// `ON CONFLICT DO NOTHING`: if another writer committed this seq first, nothing is
+// inserted (and, unlike a raised duplicate-key error, an enclosing transaction is NOT
+// aborted — on Postgres the insert waits for a conflicting uncommitted row to commit or
+// roll back first), so the append re-reads the new head and tries again. The payload is
+// re-encrypted and the hash recomputed on every attempt because both are bound to the
+// seq. Member-scoped — the user id is bound on every statement.
+async function appendEntry(
+  db: Db,
+  clock: Clock,
+  dek: Uint8Array,
+  input: ActivityEntryInput,
+  payload: unknown,
+): Promise<AppendedEntry> {
+  const { userId } = input;
+  for (let attempt = 1; ; attempt += 1) {
+    // The head of THIS user's chain: the previous seq and entry_hash, or the
+    // genesis for a fresh chain.
+    const head = await db.query(
+      "SELECT seq, entry_hash FROM activity_entries WHERE user_id = $1 ORDER BY seq DESC LIMIT 1",
+      [userId],
+    );
+    const prev = head.rows[0];
+    const seq = prev ? Number(prev.seq) + 1 : 1;
+    const prevHash = prev ? String(prev.entry_hash) : GENESIS_PREV_HASH;
+
+    const occurredAt = clock.now().toISOString();
+    const payloadCt = await encrypt(
+      dek,
+      TABLE,
+      PAYLOAD_COLUMN,
+      payloadRowId(userId, seq),
+      JSON.stringify(payload),
+    );
+
+    // The canonical field set the entry hash is taken over (every column but
+    // prev_hash and entry_hash), including the ciphertext.
+    const hashedFields: Record<string, unknown> = {
+      user_id: userId,
+      seq,
+      occurred_at: occurredAt,
+      kind: input.kind,
+      source: input.source,
+      agent_id: input.agentId ?? null,
+      connector_id: input.connectorId ?? null,
+      tool: input.tool ?? null,
+      outcome: input.outcome ?? null,
+      amount: null,
+      currency: null,
+      merchant: input.merchant ?? null,
+      payload_ct: payloadCt,
+    };
+    const entryHash = computeEntryHash(prevHash, hashedFields);
+
+    const inserted = await db.query(
+      `INSERT INTO activity_entries
+         (user_id, seq, occurred_at, kind, source, agent_id, connector_id, tool,
+          outcome, amount, currency, merchant, payload_ct, prev_hash, entry_hash)
+       VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15)
+       ON CONFLICT (user_id, seq) DO NOTHING
+       RETURNING seq`,
+      [
+        userId,
+        seq,
+        occurredAt,
+        input.kind,
+        input.source,
+        input.agentId ?? null,
+        input.connectorId ?? null,
+        input.tool ?? null,
+        input.outcome ?? null,
+        null,
+        null,
+        input.merchant ?? null,
+        payloadCt,
+        prevHash,
+        entryHash,
+      ],
+    );
+    if (inserted.rows.length > 0) {
+      return { seq, occurredAt, prevHash, entryHash };
+    }
+    if (attempt >= MAX_APPEND_ATTEMPTS) {
+      throw new Error("The activity entry could not be appended: the chain head kept moving.");
+    }
+  }
+}
+
 export function createDbRecorder(options: DbRecorderOptions): ActivityRecorder {
   const { db, clock, dekFor, matchesReleased } = options;
 
@@ -118,84 +256,40 @@ export function createDbRecorder(options: DbRecorderOptions): ActivityRecorder {
       const { userId } = input;
       const dek = await dekFor(userId);
 
-      // Redact the payload with the per-user matcher BEFORE it is encrypted.
+      // Redact the payload with the per-user matcher BEFORE it is encrypted. An omitted
+      // payload is stored as null (JSON has no `undefined`, so it could not be encrypted).
       const perUser = (token: string): boolean =>
         matchesReleased ? matchesReleased(userId, token) : false;
-      const payload = redact(input.payload, perUser);
+      const payload = redact(input.payload ?? null, perUser);
 
-      // The head of THIS user's chain: the previous seq and entry_hash, or the
-      // genesis for a fresh chain. Member-scoped — the user id is bound.
-      const head = await db.query(
-        "SELECT seq, entry_hash FROM activity_entries WHERE user_id = $1 ORDER BY seq DESC LIMIT 1",
-        [userId],
-      );
-      const prev = head.rows[0];
-      const seq = prev ? Number(prev.seq) + 1 : 1;
-      const prevHash = prev ? String(prev.entry_hash) : GENESIS_PREV_HASH;
-
-      const occurredAt = clock.now().toISOString();
-      const payloadCt = await encrypt(
-        dek,
-        TABLE,
-        PAYLOAD_COLUMN,
-        payloadRowId(userId, seq),
-        JSON.stringify(payload),
-      );
-
-      // The canonical field set the entry hash is taken over (every column but
-      // prev_hash and entry_hash), including the ciphertext.
-      const hashedFields: Record<string, unknown> = {
-        user_id: userId,
-        seq,
-        occurred_at: occurredAt,
-        kind: input.kind,
-        source: input.source,
-        agent_id: input.agentId ?? null,
-        connector_id: input.connectorId ?? null,
-        tool: input.tool ?? null,
-        outcome: input.outcome ?? null,
-        amount: null,
-        currency: null,
-        merchant: input.merchant ?? null,
-        payload_ct: payloadCt,
+      // The plaintext columns an agent's text can reach — the kind (log_activity), the tool
+      // name and the card merchant (request_card) — are stored readable for filtering and
+      // budgets, so they get the same card / released-value / length rules first: a card
+      // number or released value an agent (or a prompt injection) puts there never lands
+      // in clear. Ids and outcomes are Warthog's own values and are stored as given.
+      const text = (value: string): string => String(redact(value, perUser));
+      const stored: ActivityEntryInput = {
+        ...input,
+        kind: text(input.kind),
+        tool: input.tool === undefined ? undefined : text(input.tool),
+        merchant: input.merchant === undefined ? undefined : text(input.merchant),
       };
-      const entryHash = computeEntryHash(prevHash, hashedFields);
 
-      await db.query(
-        `INSERT INTO activity_entries
-           (user_id, seq, occurred_at, kind, source, agent_id, connector_id, tool,
-            outcome, amount, currency, merchant, payload_ct, prev_hash, entry_hash)
-         VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15)`,
-        [
-          userId,
-          seq,
-          occurredAt,
-          input.kind,
-          input.source,
-          input.agentId ?? null,
-          input.connectorId ?? null,
-          input.tool ?? null,
-          input.outcome ?? null,
-          null,
-          null,
-          input.merchant ?? null,
-          payloadCt,
-          prevHash,
-          entryHash,
-        ],
+      const { seq, occurredAt, prevHash, entryHash } = await serialisePerUser(userId, () =>
+        appendEntry(db, clock, dek, stored, payload),
       );
 
       return {
         userId,
         seq,
         occurredAt,
-        kind: input.kind,
-        source: input.source,
-        agentId: input.agentId,
-        connectorId: input.connectorId,
-        tool: input.tool,
-        outcome: input.outcome,
-        merchant: input.merchant,
+        kind: stored.kind,
+        source: stored.source,
+        agentId: stored.agentId,
+        connectorId: stored.connectorId,
+        tool: stored.tool,
+        outcome: stored.outcome,
+        merchant: stored.merchant,
         payload,
         prevHash,
         entryHash,

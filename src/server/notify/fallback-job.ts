@@ -8,16 +8,20 @@
 // `runApprovalFallback` is what the background worker runs when the fallback job it
 // claimed (`approval.fallback`, scheduled by the notifier at created_at + the person's
 // delay) comes due. At that moment, for the one approval the job carries, it:
-//   • does NOTHING when the approval is no longer armed — already opened, or already
-//     decided (approved / denied / expired) — so a person who got there in time is
-//     never messaged;
-//   • does NOTHING a second time — once it has fired for an approval (a single-use
-//     link has been issued) a re-run sends no further SMS, email or link, so the job
-//     is idempotent even while the approval is still unopened;
+//   • does NOTHING when the approval is no longer armed — already opened, already
+//     decided (approved / denied / expired), or past its expiry even if the expiry
+//     sweep has not marked it yet — so nobody is told about an approval they can no
+//     longer act on, and a person who got there in time is never messaged;
+//   • sends each channel at most ONCE — a channel is recorded as sent
+//     (`approval_fallback_sends`) only after its send succeeds, so a re-run sends only
+//     the channels that have not gone yet, and nothing once both have (idempotent even
+//     while the approval is still unopened);
 //   • otherwise issues ONE single-use link (a 256-bit token, 10-minute expiry) and
 //     sends ONE SMS to the owner's VERIFIED number (if any) AND ONE email to the
-//     owner's address (unless they switched email fallback off), each carrying that
-//     one link.
+//     owner's address (unless they switched email fallback off) — whichever of those
+//     has not gone yet — each carrying that one link. One channel's failure never
+//     stops the other: both are attempted, and the failure is then rethrown so the
+//     job is retried (with a fresh link) for just the channel that failed.
 //
 // The message carries the single-use link but NO approval detail: the detail is the
 // person's own (DEK-encrypted) personal content, and this job never loads it, so it
@@ -37,7 +41,6 @@
 
 import { z } from "zod";
 
-import { isUnopened } from "../approvals/opened";
 import { issueApprovalLink } from "../db/approval-links";
 import { listMobileNumbers } from "../db/mobile-numbers";
 import { getNotificationPrefs } from "../db/notification-prefs";
@@ -87,36 +90,59 @@ function buildLink(publicBaseUrl: string, token: string): string {
   return `${publicBaseUrl.replace(/\/+$/, "")}/approvals/open?token=${token}`;
 }
 
-// The owner resolved from the approval row, plus whether the fallback has already
-// fired for it (a single-use link already issued — the idempotency marker).
+// The two fallback channels, as recorded in approval_fallback_sends.
+type FallbackChannel = "sms" | "email";
+
+// The owner resolved from a still-ARMED approval row, plus the channels that have
+// already gone out for it.
 interface ApprovalFallbackState {
   readonly userId: string;
   readonly email: string;
-  readonly linkIssued: boolean;
+  readonly sent: ReadonlySet<FallbackChannel>;
 }
 
-// Resolve the approval's OWNER (user id + email) and the idempotency marker in one
-// parameterized read: the approval id is BOUND as a parameter (INV-102), never woven
-// into the SQL text. The owner comes from the approval's own row (member scope is taken
-// from the approval, never from a client value), so the SMS and email can only reach
-// the owner. Returns null when no such approval exists.
-async function loadState(db: Db, approvalId: string): Promise<ApprovalFallbackState | null> {
+// Resolve the approval's OWNER (user id + email) and the channels already sent, in one
+// parameterized read — but only while the approval is still ARMED: pending, unopened and
+// not past its expiry at `now`. The approval id and the instant are BOUND as parameters
+// (INV-102), never woven into the SQL text. The owner comes from the approval's own row
+// (member scope is taken from the approval, never from a client value), so the SMS and
+// email can only reach the owner. Returns null when there is no such armed approval.
+async function loadArmedState(
+  db: Db,
+  approvalId: string,
+  now: Date,
+): Promise<ApprovalFallbackState | null> {
   const result = await db.query(
     `SELECT a.user_id AS user_id,
             u.email    AS email,
-            EXISTS (SELECT 1 FROM approval_links l WHERE l.approval_id = a.id) AS link_issued
+            ARRAY(SELECT s.channel FROM approval_fallback_sends s
+                   WHERE s.approval_id = a.id) AS sent
        FROM approvals a
        JOIN users u ON u.id = a.user_id
-      WHERE a.id = $1`,
-    [approvalId],
+      WHERE a.id = $1
+        AND a.status = 'pending'
+        AND a.opened_at IS NULL
+        AND a.expires_at > $2::timestamptz`,
+    [approvalId, now.toISOString()],
   );
   const row = result.rows[0];
   if (!row) return null;
   return {
     userId: row.user_id as string,
     email: row.email as string,
-    linkIssued: row.link_issued as boolean,
+    sent: new Set((row.sent as string[] | null) ?? []) as ReadonlySet<FallbackChannel>,
   };
+}
+
+// Record that `channel` has gone out for the approval (after its send succeeded).
+// Idempotent: recording an already-recorded channel changes nothing.
+async function markSent(db: Db, approvalId: string, channel: FallbackChannel, now: Date): Promise<void> {
+  await db.query(
+    `INSERT INTO approval_fallback_sends (approval_id, channel, sent_at)
+     VALUES ($1, $2, $3::timestamptz)
+     ON CONFLICT (approval_id, channel) DO NOTHING`,
+    [approvalId, channel, now.toISOString()],
+  );
 }
 
 export async function runApprovalFallback(
@@ -130,35 +156,40 @@ export async function runApprovalFallback(
   // issued, and an injection-shaped id never reaches a query (OBS-049).
   const approvalId = parseParams(approvalIdSchema, input.approvalId);
 
-  // Still armed? The fallback fires ONLY while the approval is unopened AND pending;
-  // once it has been opened or decided, send nothing (and issue no link).
-  if (!(await isUnopened(db, approvalId))) return;
-
-  // Resolve the owner and the idempotency marker. No row ⇒ nothing to do (defensive;
-  // `isUnopened` already proved a pending approval exists).
-  const state = await loadState(db, approvalId);
+  // Still armed (pending, unopened, unexpired)? Otherwise send nothing and issue no link.
+  const now = clock.now();
+  const state = await loadArmedState(db, approvalId, now);
   if (!state) return;
 
-  // Idempotent: if a single-use link has already been issued for this approval, the
-  // fallback has already fired — send nothing more. The MARKER (a prior link), not
-  // `isUnopened`, is what suppresses the second run while the approval is unchanged.
-  if (state.linkIssued) return;
+  // The channels still to send: an SMS only to a VERIFIED number (an unverified number is
+  // never texted), an email unless the person switched email fallback off — each only if
+  // it has not already gone. Member-scoped reads by the owner's id.
+  const verified = (await listMobileNumbers(db, state.userId)).find((number) => number.verified);
+  const { emailFallback } = await getNotificationPrefs(db, state.userId);
+  const due: FallbackChannel[] = [];
+  if (verified && !state.sent.has("sms")) due.push("sms");
+  if (emailFallback && !state.sent.has("email")) due.push("email");
+  if (due.length === 0) return;
 
   // Fire: issue ONE single-use link (256-bit token, 10-minute expiry from clock.now())
-  // and build the address the person opens it at.
+  // for this attempt's messages and build the address the person opens it at.
   const issued = await issueApprovalLink(db, { approvalId }, { clock, random });
   const link = buildLink(publicBaseUrl, issued.token);
 
-  // ONE SMS to the owner's VERIFIED number, if they have one (an unverified number is
-  // never texted). Member-scoped read by the owner's id.
-  const verified = (await listMobileNumbers(db, state.userId)).find((number) => number.verified);
-  if (verified) {
-    await senders.sms.sendSms({ recipient: verified.number, body: SMS_BODY, link });
+  // Send every due channel, recording each one that goes; a failure on one never stops
+  // the other. Any failure is rethrown afterwards so the job retries the unsent channel.
+  let failure: unknown;
+  for (const channel of due) {
+    try {
+      if (channel === "sms" && verified) {
+        await senders.sms.sendSms({ recipient: verified.number, body: SMS_BODY, link });
+      } else if (channel === "email") {
+        await senders.email.sendEmail({ recipient: state.email, body: EMAIL_BODY, link });
+      }
+      await markSent(db, approvalId, channel, now);
+    } catch (error) {
+      failure ??= error;
+    }
   }
-
-  // ONE email to the owner's address, unless they switched email fallback off.
-  const { emailFallback } = await getNotificationPrefs(db, state.userId);
-  if (emailFallback) {
-    await senders.email.sendEmail({ recipient: state.email, body: EMAIL_BODY, link });
-  }
+  if (failure !== undefined) throw failure;
 }

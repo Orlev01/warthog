@@ -644,3 +644,52 @@ test("the job reads no process.env: a decoy secret never lands in a metric or a 
     else process.env.WARTHOG_DECOY_SECRET = prev;
   }
 });
+
+// ===========================================================================
+// One account's failure never stops the sweep (review finding: an alert that threw — or a
+// check that errored — aborted the remaining accounts AND the metrics write).
+// ===========================================================================
+
+test("an alert that fails for one account still lets every account be checked, alerted and counted", async () => {
+  const db = await freshDb();
+  try {
+    // Two tampered accounts and one sound one.
+    const emails: string[] = [];
+    for (const who of ["first", "second"]) {
+      const user = await createUser(db, { email: `${who}-broken@warthog.com.au`, wrappedDek: "wrapped-dek-opaque" });
+      emails.push(user.email);
+      await buildSoundChain(db, user.id, 2);
+      await db.query("UPDATE activity_entries SET kind = 'tampered' WHERE user_id = $1 AND seq = 1", [user.id]);
+    }
+    const sound = await createUser(db, { email: "sound@warthog.com.au", wrappedDek: "wrapped-dek-opaque" });
+    await buildSoundChain(db, sound.id, 1);
+
+    // The push channel fails for the first broken account.
+    const outbox = recordingSenders();
+    const senders: Senders = {
+      ...outbox,
+      push: {
+        async sendPush(message) {
+          if (message.recipient === emails[0]) throw new Error("push channel down");
+          await outbox.push.sendPush(message);
+        },
+      },
+    };
+
+    await assert.rejects(runDailyIntegrityCheck({ db, clock: CLOCK, senders }), "the failure is surfaced");
+
+    const sent = outbox.list();
+    assert.deepEqual(
+      onChannel(sent, "email").map((m) => m.recipient).sort(),
+      [...emails].sort(),
+      "both broken accounts were emailed, the first despite its failed push",
+    );
+    assert.deepEqual(onChannel(sent, "push").map((m) => m.recipient), [emails[1]], "the second still got its push");
+
+    const events = await queryMetrics(db, { name: INTEGRITY_CHECK, from: DAY_FROM, to: DAY_TO });
+    assert.equal(byOutcome(events, OUTCOME_FAIL)[0]?.value, 2, "the fail count was still recorded");
+    assert.equal(byOutcome(events, OUTCOME_PASS)[0]?.value, 1, "and the pass count");
+  } finally {
+    await db.close();
+  }
+});

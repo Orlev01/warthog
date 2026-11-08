@@ -95,7 +95,8 @@ import {
   addMember as seedMember,
   getHouseholdForMember,
 } from "@/server/db/households";
-import type { SharedAddressNotifier } from "@/server/db/household-shared-address";
+import { setSharedAddress, type SharedAddressNotifier } from "@/server/db/household-shared-address";
+import { decrypt } from "@/server/crypto/envelope";
 import type { EmailSender, OutgoingMessage } from "@/server/notify/senders";
 import type { Session } from "@/server/auth/session";
 import { localAesKeyWrapper, type KeyWrapper } from "@/server/crypto/key-wrapper";
@@ -784,5 +785,88 @@ test("the actions read no process.env: a decoy env secret never appears in a res
     await db.close();
     if (prev === undefined) delete process.env.WARTHOG_DECOY_SECRET;
     else process.env.WARTHOG_DECOY_SECRET = prev;
+  }
+});
+
+// =====================================================================================
+// The shared address survives an ownership transfer (review finding: it was encrypted
+// under the OWNER's DEK and never re-encrypted, so after an accepted transfer every
+// member's read threw, and the old owner deleting their account destroyed it for good).
+// =====================================================================================
+
+// Whether `ciphertext` (a stored shared-address column) decrypts under `key`.
+async function decryptsUnder(key: Uint8Array, householdId: string, ciphertext: string): Promise<boolean> {
+  try {
+    await decrypt(key, "household_shared_address", "current", householdId, ciphertext);
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+test("the shared address still reads for every member after an ownership transfer, even once the old owner's key is gone", async () => {
+  const db = await freshDb();
+  try {
+    const alice = await makeUser(db, "owner");
+    const bob = await makeUser(db, "member");
+    const hid = (await seedHousehold(db, { ownerId: alice.id, currency: "AUD" })).id;
+    await seedMember(db, { householdId: hid, userId: bob.id });
+    const actions = makeActions(db);
+
+    // A MEMBER edits the address, then ownership moves from Alice to Bob.
+    expectOk(await actions.editSharedAddress(sessionFor(bob.id), { current: "1 Main St, Hobart" }), "edit");
+    expectOk(await actions.transferOwnership(sessionFor(alice.id), { toUserId: bob.id }), "transfer");
+    expectOk(await actions.acceptOwnership(sessionFor(bob.id)), "accept");
+
+    assert.equal((await actions.load(sessionFor(alice.id)))?.sharedAddress?.current, "1 Main St, Hobart");
+    assert.equal((await actions.load(sessionFor(bob.id)))?.sharedAddress?.current, "1 Main St, Hobart");
+
+    // The address is held under a HOUSEHOLD key, not any one person's data key: neither
+    // member's DEK opens it (so a member's read never needs another person's whole DEK).
+    const row = (await db.query("SELECT current FROM household_shared_address WHERE household_id = $1", [hid]))
+      .rows[0];
+    assert.ok(row, "the shared address row exists");
+    assert.equal(await decryptsUnder(alice.dek, hid, String(row.current)), false, "not under Alice's DEK");
+    assert.equal(await decryptsUnder(bob.dek, hid, String(row.current)), false, "not under Bob's DEK");
+
+    // The former owner's key is destroyed (account deletion crypto-shreds it): the address
+    // still reads for the remaining member.
+    await db.query("UPDATE users SET wrapped_dek = $2 WHERE id = $1", [
+      alice.id,
+      await keyWrapper.wrap(randomBytes(32)),
+    ]);
+    assert.equal((await actions.load(sessionFor(bob.id)))?.sharedAddress?.current, "1 Main St, Hobart");
+  } finally {
+    await db.close();
+  }
+});
+
+test("a shared address written under the owner's key before the household key existed survives a transfer", async () => {
+  const db = await freshDb();
+  try {
+    const alice = await makeUser(db, "owner");
+    const bob = await makeUser(db, "member");
+    const hid = (await seedHousehold(db, { ownerId: alice.id, currency: "AUD" })).id;
+    await seedMember(db, { householdId: hid, userId: bob.id });
+    // The pre-fix layout: the address encrypted directly under the owner's DEK.
+    await setSharedAddress(
+      db,
+      { householdId: hid, actorId: alice.id, current: "2 Legacy Rd, Perth", upcoming: "3 Next St, Perth" },
+      alice.dek,
+      { notify: noopNotify },
+    );
+    const actions = makeActions(db);
+    assert.equal((await actions.load(sessionFor(bob.id)))?.sharedAddress?.current, "2 Legacy Rd, Perth");
+
+    expectOk(await actions.transferOwnership(sessionFor(alice.id), { toUserId: bob.id }), "transfer");
+    expectOk(await actions.acceptOwnership(sessionFor(bob.id)), "accept");
+
+    for (const who of [alice.id, bob.id]) {
+      const loaded = await actions.load(sessionFor(who));
+      assert.equal(loaded?.sharedAddress?.current, "2 Legacy Rd, Perth", "the current address reads after transfer");
+      assert.equal(loaded?.sharedAddress?.upcoming, "3 Next St, Perth", "and so does the upcoming one");
+    }
+  } finally {
+    await db.close();
   }
 });

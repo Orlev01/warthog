@@ -97,6 +97,10 @@ async function toDispute(row: Row, dek: Uint8Array): Promise<FiledDispute> {
   };
 }
 
+// How many times one filing re-reads the next dispute seq after losing it to a dispute
+// filed at the same moment, before giving up with a clear error.
+const MAX_FILE_ATTEMPTS = 10;
+
 export function createDisputeRepo(options: DisputeRepoOptions): DisputeRepo {
   const { db, clock, dekFor } = options;
 
@@ -115,30 +119,41 @@ export function createDisputeRepo(options: DisputeRepoOptions): DisputeRepo {
         throw new Error(`no activity entry at seq ${entrySeq} to dispute`);
       }
 
-      // The next per-entry dispute seq (1, 2, 3, …): the table is append-only, so
-      // max+1 is contiguous. It gives each dispute its own identity for envelope
-      // binding.
-      const head = await db.query(
-        "SELECT max(dispute_seq) AS m FROM activity_disputes WHERE user_id = $1 AND entry_seq = $2",
-        [userId, entrySeq],
-      );
-      const disputeSeq = Number(head.rows[0]?.m ?? 0) + 1;
-
       const createdAt = clock.now().toISOString();
       const dek = await dekFor(userId);
-      const noteCt = await encrypt(
-        dek,
-        TABLE,
-        NOTE_COLUMN,
-        noteRowId(userId, entrySeq, disputeSeq),
-        note,
-      );
 
-      await db.query(
-        `INSERT INTO activity_disputes (user_id, entry_seq, dispute_seq, note_ct, created_at)
-         VALUES ($1, $2, $3, $4, $5)`,
-        [userId, entrySeq, disputeSeq, noteCt, createdAt],
-      );
+      // The next per-entry dispute seq (1, 2, 3, …): the table is append-only, so
+      // max+1 is contiguous. It gives each dispute its own identity for envelope
+      // binding. Two disputes filed at once (a double-submitted form, a second device)
+      // can read the same max: the insert is `ON CONFLICT DO NOTHING`, so the one that
+      // loses simply re-reads the max and takes the next seq (re-encrypting, since the
+      // envelope is bound to the seq) instead of failing.
+      for (let attempt = 1; ; attempt += 1) {
+        const head = await db.query(
+          "SELECT max(dispute_seq) AS m FROM activity_disputes WHERE user_id = $1 AND entry_seq = $2",
+          [userId, entrySeq],
+        );
+        const disputeSeq = Number(head.rows[0]?.m ?? 0) + 1;
+        const noteCt = await encrypt(
+          dek,
+          TABLE,
+          NOTE_COLUMN,
+          noteRowId(userId, entrySeq, disputeSeq),
+          note,
+        );
+
+        const inserted = await db.query(
+          `INSERT INTO activity_disputes (user_id, entry_seq, dispute_seq, note_ct, created_at)
+           VALUES ($1, $2, $3, $4, $5)
+           ON CONFLICT (user_id, entry_seq, dispute_seq) DO NOTHING
+           RETURNING dispute_seq`,
+          [userId, entrySeq, disputeSeq, noteCt, createdAt],
+        );
+        if (inserted.rows.length > 0) break;
+        if (attempt >= MAX_FILE_ATTEMPTS) {
+          throw new Error("The dispute could not be stored: other disputes kept arriving at once.");
+        }
+      }
 
       return { userId, entrySeq, createdAt, note };
     },

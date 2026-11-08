@@ -6,7 +6,8 @@
 // reminders. This is the single OWNER-scoped aggregation that feeds them: it
 // REUSES the already-built, tested primitives rather than re-running their SQL —
 //   • the pending count          — the approval inbox (`listPendingForUser`);
-//   • the activity feed           — the activity list-all read, newest first
+//   • the activity feed           — the activity list read, newest first, the
+//                                    latest HOME_ACTIVITY_LIMIT entries only
 //                                    (`listActivity` with no filters);
 //   • each agent's status /        — the agents aggregate (`listAgentsForUser`);
 //     last-active
@@ -67,9 +68,12 @@ export interface HomeAgentSpend {
   readonly currency: string;
 }
 
+// How many of the latest activity entries the Home feed shows.
+export const HOME_ACTIVITY_LIMIT = 20;
+
 export interface HomeMetrics {
   readonly pendingApprovals: number; // the count of PENDING approvals (decided excluded)
-  readonly activity: ActivityEntry[]; // the latest entries across ALL the person's agents, newest first
+  readonly activity: ActivityEntry[]; // the latest HOME_ACTIVITY_LIMIT entries across ALL the person's agents, newest first
   readonly agents: HomeAgentSpend[]; // the person's agents, each with spend-this-period
   readonly reminders: LifeAdminRecord[]; // the life-admin records whose reminder date is upcoming
 }
@@ -118,8 +122,10 @@ export async function loadHomeMetrics(
   // The pending-approval count (decided approvals are excluded by the inbox read).
   const pending = await listPendingForUser(db, userId, dek);
 
-  // The latest activity across ALL the person's agents, newest first, decrypted.
-  const activity = await listActivity(db, userId, {}, dek);
+  // The latest activity across ALL the person's agents, newest first, decrypted — a
+  // bounded page, so Home never decrypts the person's whole history (the Activity page
+  // holds the full record).
+  const activity = await listActivity(db, userId, {}, dek, { limit: HOME_ACTIVITY_LIMIT });
 
   // Each agent with its status / last-active and its spend this budget period
   // against the budget held in its agent-permission grant.
