@@ -132,6 +132,24 @@ export async function saveWrappedKey(db: Db, input: SaveWrappedKeyInput): Promis
   );
 }
 
+// Store the wrapped VK + params for `input.userId` + `input.method` ONLY when that
+// method has none yet, reporting whether it was inserted. An existing row is left
+// exactly as it was (ON CONFLICT DO NOTHING — one atomic statement, so two first
+// saves racing each other keep exactly one wrapped key instead of the later silently
+// replacing the earlier). The unlock-method POST uses this whenever the session has
+// no fresh step-up: replacing a method is a security change (review fix W1).
+export async function insertWrappedKeyIfAbsent(db: Db, input: SaveWrappedKeyInput): Promise<boolean> {
+  const params = input.params ?? {};
+  const result = await db.query(
+    `INSERT INTO vault_unlock_methods (user_id, method, wrapped_key, params)
+     VALUES ($1, $2, $3, $4::jsonb)
+     ON CONFLICT (user_id, method) DO NOTHING
+     RETURNING method`,
+    [input.userId, input.method, input.wrappedKey, JSON.stringify(params)],
+  );
+  return result.rows.length > 0;
+}
+
 // Which unlock methods have a saved wrapped key for `userId` (member-scoped: the
 // user id is bound). Never another person's, and never the wrapped key itself —
 // only which methods exist. Empty array when the person has saved none.
