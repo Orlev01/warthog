@@ -59,6 +59,7 @@ import {
 import { getCardCiphertext, listCards } from "../../../../server/db/cards";
 import { getHighTierCiphertext, listHighTierFields } from "../../../../server/db/high-tier-fields";
 import { getUserById } from "../../../../server/db/users";
+import { listIdentityFields } from "../../../../server/db/identity-fields";
 import { withTransaction } from "../../../../server/db/index";
 import { createRedactingRecorder } from "../../../../server/mcp/recorder";
 import { isReleaseRequest } from "../../../../domain/approvals/release-kind";
@@ -429,13 +430,36 @@ export function createInboxActions(deps: InboxActionsDeps): InboxActions {
   // device-decryptable number ciphertext the device needs to release. Member-scoped by
   // the session user id (both the list and each ciphertext read bind it), so one person
   // can never see another's cards.
-  async function loadSavedCards(userId: string): Promise<SavedCardView[]> {
+  //
+  // Review fix W6: each card also carries the non-secret details a checkout needs, which
+  // the release hands over with the number and security code (the inbox never shows them):
+  // the expiry, the name on the card (falling back to the person's saved name for a card
+  // saved before names were kept) and the billing address text. The address is resolved
+  // HERE, from the card's billing reference, through the person's OWN low-tier postal
+  // addresses only (listIdentityFields binds the session user id and decrypts under their
+  // DEK) — so a reference to someone else's field, to a non-address field or to nothing
+  // resolves to null, never to another person's data.
+  async function loadSavedCards(userId: string, dek: Uint8Array): Promise<SavedCardView[]> {
     const cards = await listCards(db, userId);
+    if (cards.length === 0) return [];
+    const fields = await listIdentityFields(db, userId, dek);
+    const savedName = fields.find((field) => field.kind === "name")?.value ?? null;
+    const addressById = new Map(
+      fields.filter((field) => field.kind === "postal_address").map((field) => [field.id, field.value]),
+    );
     const views: SavedCardView[] = [];
     for (const card of cards) {
       const ciphertext = await getCardCiphertext(db, userId, card.id);
       if (ciphertext === null) continue;
-      views.push({ id: card.id, label: `${card.brand} •••• ${card.lastFour}`, ciphertext });
+      views.push({
+        id: card.id,
+        label: `${card.brand} •••• ${card.lastFour}`,
+        ciphertext,
+        expiryMonth: card.expiryMonth,
+        expiryYear: card.expiryYear,
+        cardholderName: card.cardholderName ?? savedName,
+        billingAddress: addressById.get(card.billingAddressId) ?? null,
+      });
     }
     return views;
   }
@@ -496,7 +520,7 @@ export function createInboxActions(deps: InboxActionsDeps): InboxActions {
     const data: InboxLoadData = { pending, history };
 
     if (pending.some((request) => request.release === "card")) {
-      data.savedCards = await loadSavedCards(session.userId);
+      data.savedCards = await loadSavedCards(session.userId, dek);
     }
     return data;
   }

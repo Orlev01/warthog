@@ -90,10 +90,21 @@ export type DecidedRequestView = {
 // One of the person's saved cards offered in a card release's picker. The server stores
 // only the device-decryptable `ciphertext`; the view shows the display `label` (brand +
 // last four — constitution 17), never a readable card number.
+//
+// Review fix W6: a checkout needs more than the number and security code, so the card also
+// carries its NON-SECRET checkout details, which the release hands to the agent alongside
+// them and the inbox never shows: the expiry, the name on the card (the person's saved name
+// for a card saved before names were kept; null when there is neither) and the billing
+// address text (resolved server-side from the person's own postal addresses; null when the
+// card's address is gone).
 export type SavedCardView = {
   id: string;
   label: string;
   ciphertext: string;
+  expiryMonth: number;
+  expiryYear: number;
+  cardholderName: string | null;
+  billingAddress: string | null;
 };
 
 type InboxAction = (formData: FormData) => void | Promise<void>;
