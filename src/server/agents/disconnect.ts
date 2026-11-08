@@ -36,7 +36,7 @@ import { z } from "zod";
 
 import { parseParams } from "../http/validate";
 import { revokeAccessKey } from "../oauth/access-key";
-import { createDbRecorder } from "../activity/writer";
+import { createRedactingRecorder } from "../mcp/recorder";
 import { ApprovalAlreadyDecidedError, decide } from "../db/approvals";
 import { getAgentById } from "../db/agents";
 import { withTransaction } from "../db/index";
@@ -138,7 +138,7 @@ export async function disconnectAgent(
 
     // (d) Record the disconnection — Warthog writes the record (principle 14). LAST,
     // so it is the step that fails under a mid-transaction error.
-    const recorder = createDbRecorder({ db: tx, clock, dekFor });
+    const recorder = createRedactingRecorder({ db: tx, clock, dekFor });
     await recorder.record({
       userId,
       kind: "connection_change",

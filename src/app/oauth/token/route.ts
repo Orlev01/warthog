@@ -1,13 +1,14 @@
 // The App-Router entry for `/oauth/token`: thin by design. The token endpoint is a
 // POST with a form-urlencoded body (RFC 6749 §3.2), so this takes the process-wide db
 // (`getServerDb()`), parses the body
-// into params (`new URLSearchParams(await request.text())`) and delegates the grant
+// into params under a streaming size cap (`readOAuthForm`) and delegates the grant
 // logic to the tested `exchangeToken` seam. A `route.ts` may export ONLY the known
 // route keys, so the testable logic stays in the sibling server module
 // `src/server/oauth/token.ts` (OBS-025); this file exports just `POST`.
 
 import { loadConfig } from "../../../server/config";
 import { getServerDb } from "../../../server/db/server";
+import { readOAuthForm } from "../../../server/oauth/form";
 import { exchangeToken } from "../../../server/oauth/token";
 import { systemClock } from "../../../server/seams/clock";
 import { systemRandom } from "../../../server/seams/random";
@@ -16,8 +17,9 @@ import { systemRandom } from "../../../server/seams/random";
 const JSON_HEADERS = { "content-type": "application/json", "cache-control": "no-store" };
 
 export async function POST(request: Request): Promise<Response> {
+  const params = await readOAuthForm(request);
+  if (params instanceof Response) return params;
   const db = await getServerDb();
-  const params = new URLSearchParams(await request.text());
 
   const result = await exchangeToken(
     { params },

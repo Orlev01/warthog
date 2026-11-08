@@ -217,3 +217,28 @@ test("revoking one connection's token leaves another connection's tokens intact"
     await db.close();
   }
 });
+
+// --- Review fix: the unauthenticated body is capped while it streams -----------------
+
+test("an oversized revocation body is refused with 413 before it is parsed, and revokes nothing", async () => {
+  const db = await freshDb();
+  try {
+    const handler = createRevokeHandler({ db });
+    const connectionId = randomUUID();
+    const access = await seedToken(db, { connectionId, kind: "access" });
+
+    const body = new URLSearchParams({ token: access, pad: "x".repeat(32 * 1024) });
+    const res = await handler(
+      new Request("https://warthog.com.au/oauth/revoke", {
+        method: "POST",
+        headers: { "content-type": "application/x-www-form-urlencoded" },
+        body: body.toString(),
+      }),
+    );
+
+    assert.equal(res.status, 413, "an oversized body is a 413");
+    assert.ok((await resolveToken(db, sha256Hex(access))) != null, "nothing was revoked");
+  } finally {
+    await db.close();
+  }
+});

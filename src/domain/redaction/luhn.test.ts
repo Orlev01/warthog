@@ -248,3 +248,25 @@ test("normaliseValue is deterministic and leaves an already-normalised value alo
     "a value that is already lower-case and punctuation-free is unchanged",
   );
 });
+
+// Review fix: a canonical UUID is an identifier, never a card number. Its hex groups can
+// contain a 13–19 digit run (across the hyphens) that happens to pass Luhn, which masked
+// about 0.2% of random ids — corrupting release references stored in activity payloads.
+test("maskCardNumbers leaves canonical UUIDs intact, even when their digits pass Luhn", () => {
+  for (const id of [
+    "31517018-7226-460a-9eec-67777419f331",
+    "49856e5c-fbe0-4774-9117-0429da0e63e0",
+    "AC23C419-8697-4758-93E5-BC376F542F9F",
+  ]) {
+    assert.equal(maskCardNumbers(id), id);
+    assert.equal(maskCardNumbers(`release ${id} ok`), `release ${id} ok`);
+  }
+});
+
+test("a card number next to a UUID is still masked", () => {
+  const id = "31517018-7226-460a-9eec-67777419f331";
+  assert.equal(
+    maskCardNumbers(`${id} 4242 4242 4242 4242`),
+    `${id} [card ••••4242]`,
+  );
+});

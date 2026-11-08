@@ -13,6 +13,8 @@ import { ConfirmItsYou } from "@/components/ui/confirm-its-you";
 
 import { loadConfig } from "../../../../../server/config";
 import { getServerDb } from "../../../../../server/db/server";
+import { notConfiguredSenders } from "../../../../../server/auth/compose";
+import { selectSenders } from "../../../../../server/notify/senders";
 import { verifySession, type Session } from "../../../../../server/auth/session";
 import { systemClock } from "../../../../../server/seams/clock";
 import { systemRandom } from "../../../../../server/seams/random";
@@ -81,6 +83,7 @@ function buildActions(db: Db) {
     random: systemRandom,
     rpId: loadConfig().webauthnRpId,
     origin: new URL(loadConfig().publicBaseUrl).origin,
+    alerts: { emailSender: selectSenders(loadConfig(), notConfiguredSenders()).email },
   });
 }
 

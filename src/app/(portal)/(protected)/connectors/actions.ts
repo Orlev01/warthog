@@ -46,7 +46,7 @@ import type { Session } from "@/server/auth/session";
 import type { EmailSender } from "@/server/notify/senders";
 import { getUserById } from "@/server/db/users";
 import { getConnectionById, getConnectionCredentials } from "@/server/db/connections";
-import { createDbRecorder } from "@/server/activity/writer";
+import { createRedactingRecorder } from "@/server/mcp/recorder";
 import { listAgentsForUser } from "@/server/db/agents";
 import { getConnectionPermissions, upsertPermissions } from "@/server/db/agent-permissions";
 import {
@@ -402,7 +402,7 @@ export function createConnectorsActions(deps: ConnectorsActionsDeps): Connectors
 
       // Warthog writes the record (principle 14): which service and account went, and whether
       // the provider confirmed the revocation (null when the kind has nothing to revoke).
-      await createDbRecorder({ db: tx, clock, dekFor }).record({
+      await createRedactingRecorder({ db: tx, clock, dekFor }).record({
         userId,
         kind: "connection_change",
         source: "warthog",

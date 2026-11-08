@@ -67,7 +67,7 @@ import { getUserById } from "../../../../../server/db/users";
 import { storeFingerprint } from "../../../../../server/db/release-fingerprints";
 import { withTransaction } from "../../../../../server/db/index";
 import { isReleaseRequest } from "../../../../../domain/approvals/release-kind";
-import { createDbRecorder } from "../../../../../server/activity/writer";
+import { createRedactingRecorder } from "../../../../../server/mcp/recorder";
 import { fingerprint } from "../../../../../server/crypto/hmac";
 import { releaseStore, type ReleaseStore } from "../../../../../server/crypto/release-store";
 import { selectKeyWrapper, type KeyWrapper } from "../../../../../server/crypto/key-wrapper";
@@ -352,7 +352,7 @@ export function createReleaseHandler(
         // release is recorded without the value; a card's approved amount and merchant
         // are recorded). Warthog writes it, redacted and DEK-encrypted — the value is
         // never part of it.
-        const recorder = createDbRecorder({ db: tx, clock, dekFor: async () => dek });
+        const recorder = createRedactingRecorder({ db: tx, clock, dekFor: async () => dek });
         await recorder.record({
           userId,
           kind: kind === "card" ? "card_release" : "identity_release",

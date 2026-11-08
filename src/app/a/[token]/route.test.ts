@@ -349,6 +349,24 @@ test("[AC2] an unauthenticated click is sent to sign-in", async () => {
   }
 });
 
+test("[AC2] sign-in is told to come back to the same link afterwards", async () => {
+  const db = await freshDb();
+  try {
+    const userId = await seedUser(db, "ac2-next");
+    const approvalId = await seedApproval(db, userId);
+    const { token } = await issueApprovalLink(db, { approvalId }, { clock: fixedClock(T0), random: systemRandom });
+
+    const request = linkRequest(token); // no cookie
+    const res = await callGet(handlerOver(db, fixedClock(WITHIN)), request, token);
+
+    const loc = locationOf(res, request);
+    assert.ok(loc != null && loc.pathname === "/signin", "goes to sign-in");
+    assert.equal(loc.searchParams.get("next"), `/a/${token}`, "with the link as the relative return path");
+  } finally {
+    await db.close();
+  }
+});
+
 test("[AC2] the link carries no authority of its own: the token survives an unauthenticated click", async () => {
   const db = await freshDb();
   try {

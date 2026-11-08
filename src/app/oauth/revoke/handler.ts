@@ -16,6 +16,7 @@
 import { createHash } from "node:crypto";
 
 import type { Db } from "../../../server/db/index";
+import { readOAuthForm } from "../../../server/oauth/form";
 import { resolveToken } from "../../../server/oauth/store";
 
 // SHA-256 hex of a value — how a token is addressed in storage (design §6.1); the
@@ -32,8 +33,10 @@ function ok(): Response {
 
 export function createRevokeHandler({ db }: { db: Db }): (request: Request) => Promise<Response> {
   return async function revoke(request: Request): Promise<Response> {
-    // RFC 7009 §2.1: a form-urlencoded body carrying the `token` to revoke.
-    const params = new URLSearchParams(await request.text());
+    // RFC 7009 §2.1: a form-urlencoded body carrying the `token` to revoke, read under
+    // a size cap (an oversized body is a 413, never buffered whole).
+    const params = await readOAuthForm(request);
+    if (params instanceof Response) return params;
     const token = params.get("token");
     // No token presented: nothing to revoke, and a missing one is not a server error.
     if (!token) return ok();

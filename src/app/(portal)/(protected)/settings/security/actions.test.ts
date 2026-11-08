@@ -579,3 +579,44 @@ test("regenerate recovery requires a fresh step-up: without one, the existing co
     await db.close();
   }
 });
+
+// --- Review fix: adding a passkey sends the brief's security alert ---------------------
+
+test("adding a passkey emails the person a new-passkey alert; a send failure never fails the add", async () => {
+  const db = await freshDb();
+  try {
+    const alice = await createPerson(db, "alert-add@warthog.com.au");
+    await registerPasskeyFor(db, alice, createAuthenticator());
+    const sent: { recipient: string; body: string }[] = [];
+    const actions = createSecurityActions({
+      db,
+      clock,
+      random: systemRandom,
+      rpId: RP_ID,
+      alerts: { emailSender: { sendEmail: async (m) => void sent.push(m) } },
+    });
+
+    const session = await steppedUpSession(db, alice);
+    const begun = await actions.beginAddPasskey(session);
+    assert.ok(begun.ok);
+    const finished = await actions.finishAddPasskey(session, await createAuthenticator().register(begun.options));
+    assert.equal(finished.ok, true);
+    assert.equal(sent.length, 1, "one alert");
+    assert.equal(sent[0]!.recipient, "alert-add@warthog.com.au");
+    assert.match(sent[0]!.body, /new passkey/i);
+
+    const failing = createSecurityActions({
+      db,
+      clock,
+      random: systemRandom,
+      rpId: RP_ID,
+      alerts: { emailSender: { sendEmail: async () => { throw new Error("down"); } } },
+    });
+    const again = await failing.beginAddPasskey(session);
+    assert.ok(again.ok);
+    const added = await failing.finishAddPasskey(session, await createAuthenticator().register(again.options));
+    assert.equal(added.ok, true, "the passkey is still added when the alert cannot be sent");
+  } finally {
+    await db.close();
+  }
+});

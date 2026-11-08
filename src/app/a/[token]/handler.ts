@@ -34,6 +34,7 @@ import { z } from "zod";
 
 import { HttpError, parseParams } from "../../../server/http/validate";
 import { COOKIE_NAME, verifySession } from "../../../server/auth/session";
+import { withReturnPath } from "../../../server/auth/return-path";
 import { redeemApprovalLink } from "../../../server/db/approval-links";
 import { markOpened } from "../../../server/approvals/opened";
 import { loadConfig, type Config } from "../../../server/config";
@@ -115,12 +116,13 @@ export function createApprovalLinkHandler(
 
     const db = seams.db ?? (await getServerDb());
 
-    // 2. Resolve the session. No session → sign-in; the token is NOT redeemed, so it
-    //    survives for after sign-in and the link records no decision by itself.
+    // 2. Resolve the session. No session → sign-in, told to come back to this link; the
+    //    token is NOT redeemed, so it survives for after sign-in and the link records no
+    //    decision by itself.
     const sessionToken = readCookie(request, COOKIE_NAME);
     const session = sessionToken ? await verifySession(db, sessionToken, { clock }) : null;
     if (!session) {
-      return redirectTo(baseUrl, "/signin");
+      return redirectTo(baseUrl, withReturnPath("/signin", `/a/${token}`));
     }
 
     // 3. Redeem the single-use token. A reused, expired or unknown token opens nothing.

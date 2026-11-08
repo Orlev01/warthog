@@ -10,7 +10,7 @@ import { getServerDb } from "@/server/db/server";
 import { getUserById } from "@/server/db/users";
 import { verifySession, type Session } from "@/server/auth/session";
 import { selectKeyWrapper } from "@/server/crypto/key-wrapper";
-import { createDbRecorder } from "@/server/activity/writer";
+import { createRedactingRecorder } from "@/server/mcp/recorder";
 import { createDisputeRepo } from "@/server/activity/disputes";
 import { createUndoService } from "@/server/activity/undo";
 import { createAgentExecutors } from "@/server/mcp/compose";
@@ -82,7 +82,7 @@ function buildActions(db: Db, config: Config) {
   const disputes = createDisputeRepo({ db, clock: systemClock, dekFor });
   const undo = createUndoService({
     db,
-    recorder: createDbRecorder({ db, clock: systemClock, dekFor }),
+    recorder: createRedactingRecorder({ db, clock: systemClock, dekFor }),
     reversalFor,
     // The reversal executor routes the declared reversal tool through the agent-call
     // pipeline, composed by the MCP composition root (`createAgentExecutors`): it reports

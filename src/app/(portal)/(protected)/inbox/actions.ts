@@ -60,7 +60,7 @@ import { getCardCiphertext, listCards } from "../../../../server/db/cards";
 import { getHighTierCiphertext, listHighTierFields } from "../../../../server/db/high-tier-fields";
 import { getUserById } from "../../../../server/db/users";
 import { withTransaction } from "../../../../server/db/index";
-import { createDbRecorder } from "../../../../server/activity/writer";
+import { createRedactingRecorder } from "../../../../server/mcp/recorder";
 import { isReleaseRequest } from "../../../../domain/approvals/release-kind";
 import { formatMoney, highTierFieldLabel } from "../../../../domain/approvals/request-sentence";
 import type { Session } from "../../../../server/auth/session";
@@ -338,7 +338,7 @@ export function createInboxActions(deps: InboxActionsDeps): InboxActions {
         }
         throw error;
       }
-      const recorder = createDbRecorder({ db: tx, clock, dekFor: async () => dek });
+      const recorder = createRedactingRecorder({ db: tx, clock, dekFor: async () => dek });
       await recorder.record({
         userId: session.userId,
         kind: "approval_decision",

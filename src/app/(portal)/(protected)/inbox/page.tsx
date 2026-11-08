@@ -10,6 +10,7 @@ import { getServerDb } from "@/server/db/server";
 import { selectKeyWrapper } from "@/server/crypto/key-wrapper";
 import { verifySession, type Session } from "@/server/auth/session";
 import { systemClock } from "@/server/seams/clock";
+import { recordMetricEvent } from "@/server/metrics/record";
 import type { Db } from "@/server/db/index";
 import { createAgentExecutors } from "@/server/mcp/compose";
 import { createInboxActions, type ActionResult } from "./actions";
@@ -59,7 +60,14 @@ function buildActions(db: Db) {
   const config = loadConfig();
   const keyWrapper = selectKeyWrapper({ nodeEnv: config.nodeEnv, localKek: config.devKek });
   const { executeApprovedHold } = createAgentExecutors({ db, config });
-  return createInboxActions({ db, clock: systemClock, keyWrapper, executeApprovedHold });
+  return createInboxActions({
+    db,
+    clock: systemClock,
+    keyWrapper,
+    executeApprovedHold,
+    // Decision counts and response times reach the metrics store (review fix D2).
+    recordMetric: (input) => recordMetricEvent(db, systemClock, input),
+  });
 }
 
 // Map a decision outcome (or a thrown error) to a stable notice code the page turns into
