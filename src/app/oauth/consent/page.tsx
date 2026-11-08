@@ -11,6 +11,7 @@ import { verifySession, type Session } from "../../../server/auth/session";
 import { systemClock } from "../../../server/seams/clock";
 import { systemRandom } from "../../../server/seams/random";
 import { HttpError } from "../../../server/http/validate";
+import { systemClientResolver } from "../../../server/oauth/clients";
 import { createAuthorizeActions, type ConsentApproval } from "../authorize/actions";
 import { loadConsentView } from "./actions";
 import type { Db } from "../../../server/db/index";
@@ -29,6 +30,9 @@ import type { Db } from "../../../server/db/index";
 
 const SESSION_COOKIE = "__Host-wh_session";
 const CONSENT_COOKIE = "__Host-wh_consent";
+// A session that lapses mid-consent signs in and comes straight back here: the pending
+// handle cookie outlives the sign-in (review fix A4). A fixed, relative path.
+const SIGN_IN_AND_RETURN = `/signin?next=${encodeURIComponent("/oauth/consent")}`;
 const VALID_TEMPLATES = new Set(["minimal", "standard", "custom"]);
 
 // Clear the pending-handle cookie once a decision has consumed the request (host-locked,
@@ -49,13 +53,15 @@ async function resolveSession(db: Db): Promise<Session | null> {
   return token ? verifySession(db, token, { clock: systemClock }) : null;
 }
 
-// Build the consent decision actions with the real seams.
+// Build the consent decision actions with the real seams (the client resolver re-checks
+// the client and its registered redirect URI before either decision redirects).
 function buildActions(db: Db) {
   return createAuthorizeActions({
     db,
     config: loadConfig(),
     clock: systemClock,
     random: systemRandom,
+    resolveClient: systemClientResolver(db),
   });
 }
 
@@ -87,7 +93,7 @@ async function approveConsentAction(formData: FormData): Promise<void> {
   const db = await getServerDb();
   const store = await cookies();
   const session = await resolveSession(db);
-  if (!session) redirect("/signin");
+  if (!session) redirect(SIGN_IN_AND_RETURN);
 
   const handle = store.get(CONSENT_COOKIE)?.value ?? "";
   const view = await loadConsentView(handle);
@@ -119,7 +125,7 @@ async function refuseConsentAction(_formData: FormData): Promise<void> {
   const db = await getServerDb();
   const store = await cookies();
   const session = await resolveSession(db);
-  if (!session) redirect("/signin");
+  if (!session) redirect(SIGN_IN_AND_RETURN);
 
   const handle = store.get(CONSENT_COOKIE)?.value ?? "";
   const result = await buildActions(db).refuse(session, handle);
