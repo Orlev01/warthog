@@ -110,7 +110,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { renderToStaticMarkup } from "react-dom/server";
 
-import { createConnectorsActions } from "./actions";
+import { createConnectorsActions, type RevokeProviderAccessInput } from "./actions";
 
 import { ConnectorsView } from "@/components/connectors/connectors-view";
 import {
@@ -126,6 +126,7 @@ import {
   type PermissionGrants,
 } from "@/server/db/agent-permissions";
 import { listConnectorRequestsForUser } from "@/server/db/connector-requests";
+import { readActivity } from "@/server/activity/writer";
 import { createUser } from "@/server/db/users";
 import { loadCatalogue, type CatalogueIndex } from "@/server/connectors/catalogue";
 import { HttpError } from "@/server/http/validate";
@@ -240,7 +241,11 @@ const STUB_LIST_TOOLS: ListProviderTools = async () => [];
 // Build the connectors actions under test with the real seams plus recording doubles for
 // the external effects (the operator email and the provider-side revocation). Returns the
 // actions and the two recorders so a test can assert what left Warthog.
-function makeActions(db: Db, catalogue: CatalogueIndex = fixtureIndex()) {
+function makeActions(
+  db: Db,
+  catalogue: CatalogueIndex = fixtureIndex(),
+  opts: { revoke?: (input: RevokeProviderAccessInput) => Promise<void> } = {},
+) {
   const emails: OutgoingMessage[] = [];
   const email: EmailSender = {
     async sendEmail(message) {
@@ -262,6 +267,7 @@ function makeActions(db: Db, catalogue: CatalogueIndex = fixtureIndex()) {
     listProviderTools: STUB_LIST_TOOLS,
     revokeProviderAccess: async (input) => {
       revokeCalls.push({ userId: input.userId, connectionId: input.connectionId });
+      await opts.revoke?.(input);
     },
   });
   return { actions, emails, revokeCalls };
@@ -670,6 +676,134 @@ test("disconnectService revokes the stored provider access for a provider-sign-i
     assert.equal(revokeCalls.length, 1, "the provider access is revoked exactly once");
     assert.equal(revokeCalls[0]!.connectionId, service.id, "revocation names the disconnected connection");
     assert.equal(revokeCalls[0]!.userId, userId, "revocation is scoped to the session user");
+  } finally {
+    await db.close();
+  }
+});
+
+// Review fix F4 — disconnecting really disconnects: the connection and its stored provider
+// credentials are gone, the provider is asked to revoke (best effort, while the tokens still
+// exist), and the disconnection is recorded in the person's activity.
+
+test("disconnectService deletes the connection and its stored credentials, so the page no longer lists it", async () => {
+  const db = await freshDb();
+  try {
+    const userId = await makeUser(db, "disc-delete");
+    const service = await seedConnection(db, userId, { connectorId: "acme-mail", accountLabel: "QuokkaMail", token: "SECRET" });
+    const kept = await seedConnection(db, userId, { connectorId: "data-grid", accountLabel: "Grid" });
+    const agent = await seedAgent(db, userId, { displayName: "QuokkaResearcher", grantedConnectors: ["acme-mail"] });
+
+    const { actions } = makeActions(db);
+    const result = await actions.disconnectService(sessionFor(userId), service.id);
+    assert.equal(result.ok, true);
+
+    assert.equal(await getConnectionById(db, userId, service.id), null, "the connection is gone");
+    const stored = await db.query("SELECT count(*)::int AS n FROM connections WHERE id = $1", [service.id]);
+    assert.equal(stored.rows[0]?.n, 0, "no row (and so no ciphertext of the credentials) remains");
+    assert.deepEqual(
+      (await listConnectionsForUser(db, userId)).map((c) => c.id),
+      [kept.id],
+      "only the other service remains",
+    );
+    const data = await actions.load(sessionFor(userId));
+    assert.deepEqual(data.connections.map((c) => c.id), [kept.id], "the page lists only the remaining service");
+
+    // Re-granting the connector cannot silently reactivate the old credential: there is none.
+    assert.deepEqual((await getConnectionPermissions(db, userId, agent))!.grantedConnectors, []);
+  } finally {
+    await db.close();
+  }
+});
+
+test("disconnectService records the disconnection in the person's activity, with no credential in it", async () => {
+  const db = await freshDb();
+  try {
+    const userId = await makeUser(db, "disc-activity");
+    const service = await seedConnection(db, userId, { connectorId: "widget-sync", accountLabel: "NarwhalWorkspace", token: "SECRET" });
+
+    await makeActions(db).actions.disconnectService(sessionFor(userId), service.id);
+
+    const entries = await readActivity(db, userId, await dekFor(userId));
+    assert.equal(entries.length, 1, "exactly one activity entry is written");
+    const entry = entries[0]!;
+    assert.equal(entry.kind, "connection_change");
+    assert.equal(entry.source, "warthog");
+    assert.equal(entry.connectorId, "widget-sync");
+    assert.equal(entry.outcome, "disconnected");
+    const json = JSON.stringify(entry);
+    assert.ok(json.includes("NarwhalWorkspace"), "the entry names the disconnected account");
+    assert.ok(!json.includes("SECRET"), "no stored credential reaches the activity record");
+  } finally {
+    await db.close();
+  }
+});
+
+test("provider revocation runs while the stored tokens still exist, and is handed them", async () => {
+  const db = await freshDb();
+  try {
+    const userId = await makeUser(db, "disc-revoke-first");
+    const service = await seedConnection(db, userId, { connectorId: "widget-sync", accountLabel: "NarwhalWorkspace", token: "T1" });
+
+    let sawRow = false;
+    let sawCredentials: Record<string, unknown> | undefined;
+    const { actions, revokeCalls } = makeActions(db, fixtureIndex(), {
+      revoke: async (input) => {
+        sawRow = (await getConnectionById(db, userId, input.connectionId)) !== null;
+        sawCredentials = input.credentials;
+      },
+    });
+    await actions.disconnectService(sessionFor(userId), service.id);
+
+    assert.equal(revokeCalls.length, 1);
+    assert.equal(sawRow, true, "the provider is asked to revoke before Warthog forgets the tokens");
+    assert.deepEqual(sawCredentials, credsWith("T1"), "the revoker is handed the stored token set");
+    assert.equal(await getConnectionById(db, userId, service.id), null, "and then the connection is deleted");
+  } finally {
+    await db.close();
+  }
+});
+
+test("a failed provider revocation never blocks the disconnect, and the record says it was not revoked", async () => {
+  const db = await freshDb();
+  try {
+    const userId = await makeUser(db, "disc-revoke-fails");
+    const service = await seedConnection(db, userId, { connectorId: "widget-sync", accountLabel: "NarwhalWorkspace" });
+    const agent = await seedAgent(db, userId, { displayName: "QuokkaResearcher", grantedConnectors: ["widget-sync"] });
+
+    const { actions } = makeActions(db, fixtureIndex(), {
+      revoke: async () => {
+        throw new Error("provider unavailable");
+      },
+    });
+    const result = await actions.disconnectService(sessionFor(userId), service.id);
+
+    assert.equal(result.ok, true, "the person's disconnect still succeeds");
+    assert.equal(await getConnectionById(db, userId, service.id), null, "the credentials are still deleted");
+    assert.deepEqual((await getConnectionPermissions(db, userId, agent))!.grantedConnectors, []);
+    const [entry] = await readActivity(db, userId, await dekFor(userId));
+    assert.deepEqual(
+      (entry!.payload as { providerRevoked?: unknown }).providerRevoked,
+      false,
+      "the activity record states the provider access was not revoked",
+    );
+  } finally {
+    await db.close();
+  }
+});
+
+test("an api-key service is not sent to the provider revoker, but is still deleted and recorded", async () => {
+  const db = await freshDb();
+  try {
+    const userId = await makeUser(db, "disc-apikey");
+    const service = await seedConnection(db, userId, { connectorId: "acme-mail", accountLabel: "QuokkaMail" });
+
+    const { actions, revokeCalls } = makeActions(db);
+    await actions.disconnectService(sessionFor(userId), service.id);
+
+    assert.equal(revokeCalls.length, 0, "an api key has no provider-side revocation");
+    assert.equal(await getConnectionById(db, userId, service.id), null);
+    const [entry] = await readActivity(db, userId, await dekFor(userId));
+    assert.equal(entry!.connectorId, "acme-mail");
   } finally {
     await db.close();
   }

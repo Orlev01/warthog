@@ -44,7 +44,7 @@ import { test } from "node:test";
 import assert from "node:assert/strict";
 import { z } from "zod";
 
-import { parseBody, parseParams, HttpError } from "./validate";
+import { parseBody, parseParams, readTextCapped, HttpError } from "./validate";
 import { createDb } from "../db/index";
 
 // --- helpers ---------------------------------------------------------------------
@@ -194,6 +194,105 @@ test("parseBody rejects an oversized body with a 4xx even with no explicit cap (
   const huge = JSON.stringify({ note: "a".repeat(10 * 1024 * 1024) });
   const err = await caught(() => parseBody(schema, jsonRequest(huge)));
   assertHttp4xx(err, "the 2-arg form must still reject a grossly oversized body");
+});
+
+// --- review fix F2: the cap is enforced WHILE reading, never after buffering -------
+//
+// An unauthenticated client can stream hundreds of MiB at an auth route. The boundary must stop
+// reading as soon as the running byte count crosses the cap (and cancel the stream), and must
+// refuse a declared Content-Length over the cap before reading a single byte.
+
+const MiB = 1024 * 1024;
+
+// A request whose body is a pull-based stream of `chunkBytes` chunks (up to `totalBytes`),
+// recording how many bytes the reader actually pulled and whether it cancelled the stream.
+function streamedRequest(opts: {
+  totalBytes: number;
+  chunkBytes: number;
+  headers?: Record<string, string>;
+  pullThrows?: boolean;
+}): { request: Request; stats: { pulled: number; cancelled: boolean } } {
+  const stats = { pulled: 0, cancelled: false };
+  const chunk = new TextEncoder().encode("a".repeat(opts.chunkBytes));
+  const body = new ReadableStream<Uint8Array>({
+    pull(controller) {
+      if (opts.pullThrows) throw new Error("the body must not be read");
+      if (stats.pulled >= opts.totalBytes) {
+        controller.close();
+        return;
+      }
+      stats.pulled += chunk.byteLength;
+      controller.enqueue(chunk);
+    },
+    cancel() {
+      stats.cancelled = true;
+    },
+  });
+  const request = new Request("https://warthog.com.au/api/items", {
+    method: "POST",
+    headers: { "content-type": "application/json", ...opts.headers },
+    body,
+    duplex: "half",
+  } as RequestInit & { duplex: "half" });
+  return { request, stats };
+}
+
+test("parseBody stops reading an oversized streamed body once the cap is crossed, and cancels it", async () => {
+  const schema = z.object({ note: z.string() });
+  const { request, stats } = streamedRequest({ totalBytes: 64 * MiB, chunkBytes: MiB });
+  const err = await caught(() => parseBody(schema, request, { maxBytes: 64 * 1024 }));
+  assertHttp4xx(err, "an oversized streamed body must be rejected");
+  assert.equal((err as HttpError).status, 413);
+  // Read at most the cap plus the chunk in flight (and one the stream may have queued ahead),
+  // never the whole 64 MiB.
+  assert.ok(stats.pulled <= 3 * MiB, `read ${stats.pulled} bytes of a 64 KiB-capped body`);
+  assert.equal(stats.cancelled, true, "the body stream must be cancelled once refused");
+});
+
+test("parseBody refuses a declared Content-Length over the cap without reading the body", async () => {
+  const schema = z.object({ note: z.string() });
+  const { request } = streamedRequest({
+    totalBytes: MiB,
+    chunkBytes: 1024,
+    headers: { "content-length": String(1_000_000_000) },
+    pullThrows: true,
+  });
+  const err = await caught(() => parseBody(schema, request, { maxBytes: 64 * 1024 }));
+  assertHttp4xx(err);
+  assert.equal((err as HttpError).status, 413);
+});
+
+test("parseBody still parses a streamed body under the cap (multi-byte text survives chunking)", async () => {
+  const schema = z.object({ note: z.string() });
+  const text = JSON.stringify({ note: "café ✓ ".repeat(500) });
+  const bytes = new TextEncoder().encode(text);
+  // Split mid-character on purpose: a decoder per chunk would corrupt the text.
+  const body = new ReadableStream<Uint8Array>({
+    start(controller) {
+      for (let i = 0; i < bytes.length; i += 7) controller.enqueue(bytes.slice(i, i + 7));
+      controller.close();
+    },
+  });
+  const request = new Request("https://warthog.com.au/api/items", {
+    method: "POST",
+    body,
+    duplex: "half",
+  } as RequestInit & { duplex: "half" });
+  assert.deepEqual(await parseBody(schema, request, { maxBytes: 64 * 1024 }), JSON.parse(text));
+});
+
+test("readTextCapped returns the body text under the cap and refuses an over-cap body with a 413", async () => {
+  const form = "grant_type=authorization_code&code=abc";
+  const ok = new Request("https://warthog.com.au/oauth/token", { method: "POST", body: form });
+  assert.equal(await readTextCapped(ok, 1024), form);
+
+  const big = new Request("https://warthog.com.au/oauth/token", { method: "POST", body: "a".repeat(2048) });
+  const err = await caught(() => readTextCapped(big, 1024));
+  assertHttp4xx(err);
+  assert.equal((err as HttpError).status, 413);
+
+  // No body at all reads as empty text (as request.text() would).
+  assert.equal(await readTextCapped(new Request("https://warthog.com.au/oauth/token"), 1024), "");
 });
 
 // --- AC2: an id param is validated to its shape; a bad id never reaches a query --

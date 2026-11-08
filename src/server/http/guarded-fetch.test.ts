@@ -62,7 +62,7 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
 
-import { createGuardedLookup, createGuardedFetch } from "./guarded-fetch";
+import { createGuardedLookup, createGuardedFetch, isBlockedAddress } from "./guarded-fetch";
 
 // --- helpers -----------------------------------------------------------------------
 
@@ -124,6 +124,34 @@ const blockedResolvedAddresses = [
   "fe80::1", // IPv6 link-local (fe80::/10)
   "::ffff:127.0.0.1", // IPv4-mapped loopback
   "::ffff:10.0.0.1", // IPv4-mapped private
+  // Review fix F3: platform, shared and reserved ranges, and IPv6 forms that embed IPv4.
+  "168.63.129.16", // Azure platform virtual IP (WireServer)
+  "100.64.0.1", // CGNAT 100.64/10 (low edge)
+  "100.100.0.1", // CGNAT — Azure Container Apps reserved infrastructure
+  "100.127.255.255", // CGNAT 100.64/10 (high edge)
+  "192.0.0.1", // IETF protocol assignments 192.0.0/24
+  "192.0.2.1", // documentation TEST-NET-1
+  "198.18.0.1", // benchmarking 198.18/15
+  "198.19.255.255", // benchmarking 198.18/15 (high edge)
+  "198.51.100.7", // documentation TEST-NET-2
+  "203.0.113.9", // documentation TEST-NET-3
+  "224.0.0.1", // multicast 224/4
+  "239.255.255.250", // multicast (SSDP)
+  "240.0.0.1", // reserved 240/4
+  "255.255.255.255", // limited broadcast
+  "::169.254.169.254", // IPv4-compatible (::/96) metadata endpoint
+  "::8.8.8.8", // IPv4-compatible (::/96) — deprecated, never a real answer
+  "::ffff:0:127.0.0.1", // IPv4-translated (::ffff:0:0/96) loopback
+  "64:ff9b::a9fe:a9fe", // NAT64 (64:ff9b::/96) of 169.254.169.254
+  "64:ff9b::7f00:1", // NAT64 of 127.0.0.1
+  "64:ff9b:1::1", // local-use NAT64 64:ff9b:1::/48
+  "2002:a9fe:a9fe::1", // 6to4 (2002::/16) of 169.254.169.254
+  "2002:7f00:1::", // 6to4 of 127.0.0.1
+  "2001:0:4136:e378:8000:63bf:3fff:fdd2", // Teredo 2001::/32 (embedded IPv4 is obfuscated)
+  "2001:db8::1", // documentation 2001:db8::/32
+  "100::1", // discard-only 100::/64
+  "fec0::1", // deprecated site-local fec0::/10
+  "ff02::1", // multicast ff00::/8
 ];
 
 for (const addr of blockedResolvedAddresses) {
@@ -162,6 +190,37 @@ test("guarded connect lookup refuses a host that resolves to nothing", { timeout
 
   assert.ok(res.err instanceof Error, "an unresolvable host must be refused, not dialled");
 });
+
+// Review fix F3: the classification itself, for every blocked literal above (callers' up-front
+// checks use it directly), and the public neighbours that must stay reachable.
+for (const addr of blockedResolvedAddresses) {
+  test(`isBlockedAddress classifies ${addr} as blocked`, () => {
+    assert.equal(isBlockedAddress(addr), true);
+    if (addr.includes(":")) assert.equal(isBlockedAddress(`[${addr}]`), true, "bracketed too");
+  });
+}
+
+const publicLiterals = [
+  "93.184.216.34",
+  "8.8.8.8",
+  "100.63.255.255", // just below CGNAT
+  "100.128.0.1", // just above CGNAT
+  "168.63.129.17", // next to the Azure platform IP
+  "198.17.255.255", // just below 198.18/15
+  "198.20.0.1", // just above 198.18/15
+  "223.255.255.255", // just below multicast
+  "2606:2800:220:1:248:1893:25c8:1946",
+  "2001:4860:4860::8888",
+  "64:ff9b::808:808", // NAT64 of public 8.8.8.8
+  "2002:808:808::1", // 6to4 of public 8.8.8.8
+  "::ffff:8.8.8.8", // IPv4-mapped public
+];
+
+for (const addr of publicLiterals) {
+  test(`isBlockedAddress lets the public address ${addr} through`, () => {
+    assert.equal(isBlockedAddress(addr), false);
+  });
+}
 
 // --- AC2: a host that resolves only to public addresses passes the guard ------------
 //

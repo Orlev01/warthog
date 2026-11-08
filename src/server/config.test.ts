@@ -394,3 +394,36 @@ test("hmacKey and devKek are read from env, not hard-coded constants", () => {
   assert.notDeepEqual(asBytes(a.hmacKey, "hmacKey"), asBytes(b.hmacKey, "hmacKey"));
   assert.notDeepEqual(asBytes(a.devKek, "devKek"), asBytes(b.devKek, "devKek"));
 });
+
+// --- Review fix F8: production refuses an incomplete Key Vault configuration at start-up --------
+//
+// Production wraps every data key under the Key Vault KEK, so without the vault URL and key name
+// no person's data can be read. That is refused when the config is loaded (the readiness probe
+// loads it), naming the variable but never echoing a value.
+
+test("production refuses to start without KEY_VAULT_URL or KEY_VAULT_KEY_NAME, naming the variable", () => {
+  assertRejectedNaming(() => load(omit(PROD_ENV, "KEY_VAULT_URL")), "KEY_VAULT_URL");
+  assertRejectedNaming(() => load(omit(PROD_ENV, "KEY_VAULT_KEY_NAME")), "KEY_VAULT_KEY_NAME");
+  assertRejectedNaming(() => load({ ...PROD_ENV, KEY_VAULT_URL: "" }), "KEY_VAULT_URL");
+});
+
+test("production refuses a KEY_VAULT_URL that is not an https URL", () => {
+  assertRejectedNaming(() => load({ ...PROD_ENV, KEY_VAULT_URL: "http://warthog-kv.vault.azure.net/" }), "KEY_VAULT_URL");
+  assertRejectedNaming(() => load({ ...PROD_ENV, KEY_VAULT_URL: "not a url" }), "KEY_VAULT_URL");
+});
+
+test("outside production the Key Vault settings stay optional (the local KEK wraps data keys)", () => {
+  const cfg = load(omit(DEV_ENV, "KEY_VAULT_URL", "KEY_VAULT_KEY_NAME"));
+  assert.equal(cfg.keyVault.url, undefined);
+});
+
+// --- Review fix: production refuses the published dev HMAC key ----------------------------------
+
+test("production refuses the WARTHOG_HMAC_KEY published in .env.example", () => {
+  const text = readFileSync(new URL("../../.env.example", import.meta.url), "utf8");
+  const published = parseDotenv(text).WARTHOG_HMAC_KEY;
+  assert.ok(published, ".env.example publishes a dev HMAC key");
+  assertRejectedNaming(() => load({ ...PROD_ENV, WARTHOG_HMAC_KEY: published }), "WARTHOG_HMAC_KEY");
+  // Development may use it (that is what it is for).
+  assert.doesNotThrow(() => load({ ...DEV_ENV, WARTHOG_HMAC_KEY: published }));
+});

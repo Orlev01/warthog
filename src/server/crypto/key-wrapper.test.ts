@@ -177,3 +177,92 @@ test("selectKeyWrapper selection is driven by nodeEnv: production uses Key Vault
   await wrapper.wrap(freshDek());
   assert.equal(client.calls.wrap, 1, "production must use Key Vault, not the stray local KEK");
 });
+
+// ===========================================================================
+// Review fix F8 — the production wrapper is built lazily and records which KEK version wrapped
+// each data key.
+//
+// Every page builds its KeyWrapper with only { nodeEnv, localKek }; in production that used to
+// throw at construction, breaking every page. Construction must never throw: the Key Vault
+// client is resolved on first use. And a Key Vault key can be rotated: a DEK wrapped under one
+// key version must still unwrap after the vault's current version moves on, so the wrapped form
+// records the exact key id (with version) that wrapped it, and unwrap goes to that version.
+// ===========================================================================
+
+const V1 = "https://warthog-kv.vault.azure.net/keys/kek-user-data/1111";
+const V2 = "https://warthog-kv.vault.azure.net/keys/kek-user-data/2222";
+
+// A fake Key Vault in which each key version has its own secret byte, so unwrapping under the
+// wrong version yields the wrong bytes (and a real RSA unwrap would fail outright).
+function versionedVault() {
+  const secretOf = (keyId: string) => (keyId === V1 ? 0x11 : keyId === V2 ? 0x22 : 0x00);
+  const unwrapCalls: string[] = [];
+  const clientAt = (keyId: string, currentVersion: () => string) => ({
+    async wrapKey(_algorithm: string, key: Uint8Array) {
+      const version = currentVersion();
+      return { result: Uint8Array.from(key, (b) => b ^ secretOf(version)), keyID: version };
+    },
+    async unwrapKey(_algorithm: string, encryptedKey: Uint8Array) {
+      const version = keyId === "current" ? currentVersion() : keyId;
+      unwrapCalls.push(version);
+      return { result: Uint8Array.from(encryptedKey, (b) => b ^ secretOf(version)) };
+    },
+  });
+  return { clientAt, unwrapCalls };
+}
+
+test("selectKeyWrapper in production constructs without a client: construction never throws", () => {
+  assert.doesNotThrow(() => selectKeyWrapper({ nodeEnv: "production" }));
+  assert.doesNotThrow(() => selectKeyWrapper({ nodeEnv: "production", localKek: undefined }));
+});
+
+test("the production wrapper records the wrapping key's id and version in the wrapped DEK", async () => {
+  const vault = versionedVault();
+  let current = V1;
+  const wrapper = selectKeyWrapper({
+    nodeEnv: "production",
+    keyVaultClient: vault.clientAt("current", () => current),
+    keyVaultClientFor: (keyId) => vault.clientAt(keyId, () => current),
+  });
+  const wrapped = await wrapper.wrap(freshDek());
+  const match = /^kv1:([A-Za-z0-9_-]+):/.exec(wrapped);
+  assert.ok(match, `the wrapped DEK carries a versioned envelope, got ${wrapped.slice(0, 12)}…`);
+  assert.equal(Buffer.from(match[1]!, "base64url").toString("utf8"), V1, "it names the exact key version");
+});
+
+test("a DEK wrapped before a key rotation still unwraps, through the version that wrapped it", async () => {
+  const vault = versionedVault();
+  let current = V1;
+  const wrapper = selectKeyWrapper({
+    nodeEnv: "production",
+    keyVaultClient: vault.clientAt("current", () => current),
+    keyVaultClientFor: (keyId) => vault.clientAt(keyId, () => current),
+  });
+  const dek = freshDek();
+  const wrappedUnderV1 = await wrapper.wrap(dek);
+
+  current = V2; // the vault's key rotates
+  const back = await wrapper.unwrap(wrappedUnderV1);
+  assert.deepEqual([...back], [...dek], "the old DEK unwraps after rotation");
+  assert.deepEqual(vault.unwrapCalls, [V1], "the unwrap went to the version that wrapped it");
+
+  // New DEKs wrap under the new version and round-trip too.
+  const dek2 = freshDek();
+  assert.deepEqual([...(await wrapper.unwrap(await wrapper.wrap(dek2)))], [...dek2]);
+});
+
+test("a legacy wrapped DEK (plain base64, no key id) still unwraps through the default client", async () => {
+  const client = fakeKeyVaultClient();
+  const wrapper = selectKeyWrapper({ nodeEnv: "production", keyVaultClient: client });
+  const dek = freshDek();
+  const legacy = Buffer.concat([Buffer.from([0x5a]), Buffer.from(dek)]).toString("base64");
+  assert.deepEqual([...(await wrapper.unwrap(legacy))], [...dek]);
+});
+
+test("a malformed versioned envelope is refused rather than sent to Key Vault", async () => {
+  const client = fakeKeyVaultClient();
+  const wrapper = selectKeyWrapper({ nodeEnv: "production", keyVaultClient: client });
+  await assert.rejects(wrapper.unwrap("kv1:not valid!:AAAA"));
+  await assert.rejects(wrapper.unwrap("kv1::AAAA"));
+  assert.equal(client.calls.unwrap, 0, "nothing malformed reaches Key Vault");
+});

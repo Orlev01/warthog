@@ -76,6 +76,7 @@ import {
   inMemoryBlobStore,
   selectBlobStore,
 } from "./blob";
+import { openAzureContainer } from "./azure-container";
 // Documentary type anchors — the names/shapes the implementation exports. Erased
 // at runtime, so a rename that preserves behaviour cannot redden the run for the
 // wrong reason; the runtime assertions below are what gate behaviour.
@@ -446,15 +447,60 @@ test("selectBlobStore in production refuses a missing account (no literal fallba
   }, "production without a configured account must be refused, never defaulted to a literal");
 });
 
-test("selectBlobStore in production requires the injected Azure client (tests/dev never touch Azure)", async () => {
-  await assert.rejects(async () => {
-    const store = selectBlobStore({
-      nodeEnv: "production",
-      account: "warthogreceipts",
-      container: "receipts",
-    });
-    await store.put(freshKey(), freshBytes());
-  }, "production requires an openContainer client, mirroring the Key Vault wrapper");
+// Review fix F7: this used to pin that production REQUIRES an injected client — but no caller
+// ever injected one, so the production store could never be built and every life-admin page
+// threw. Production now constructs without one, opening the real Azure container lazily.
+test("selectBlobStore in production constructs without an injected client (the real Azure opener is the default)", () => {
+  assert.doesNotThrow(() =>
+    selectBlobStore({ nodeEnv: "production", account: "warthogreceipts", container: "receipts" }),
+  );
+});
+
+test("selectBlobStore in production never throws at construction: an incomplete config fails loudly on use", async () => {
+  let opened = 0;
+  const store = selectBlobStore({ nodeEnv: "production", openContainer: () => (opened++, fakeContainer()) });
+  await assert.rejects(store.put(freshKey(), freshBytes()), /STORAGE_ACCOUNT/);
+  await assert.rejects(store.get(freshKey()), /STORAGE_ACCOUNT/);
+  const noContainer = selectBlobStore({ nodeEnv: "production", account: "warthogreceipts", openContainer: () => (opened++, fakeContainer()) });
+  await assert.rejects(noContainer.delete(freshKey()), /STORAGE_CONTAINER/);
+  assert.equal(opened, 0, "no container is opened for an incomplete config");
+});
+
+test("selectBlobStore in production opens the container once, on first use", async () => {
+  let opened = 0;
+  const container = fakeContainer();
+  const store = selectBlobStore({
+    nodeEnv: "production",
+    account: "warthogreceipts",
+    container: "receipts",
+    openContainer: async () => {
+      opened++;
+      return container;
+    },
+  });
+  assert.equal(opened, 0, "nothing is opened at construction");
+  const key = freshKey();
+  await store.put(key, freshBytes());
+  await store.get(key);
+  await store.delete(key);
+  assert.equal(opened, 1, "the container is opened once and reused");
+});
+
+test("selectBlobStore in production refuses a malformed account or container name", async () => {
+  for (const [account, container] of [
+    ["evil.example.com/x", "receipts"],
+    ["WarthogReceipts", "receipts"],
+    ["warthogreceipts", "../other"],
+  ] as const) {
+    const store = selectBlobStore({ nodeEnv: "production", account, container, openContainer: () => fakeContainer() });
+    await assert.rejects(store.put(freshKey(), freshBytes()), /STORAGE_/);
+  }
+});
+
+test("openAzureContainer builds a real Azure ContainerClient for the configured account and container, offline", async () => {
+  const container = (await openAzureContainer("warthogreceipts", "receipts")) as unknown as { url: string };
+  assert.equal(container.url, "https://warthogreceipts.blob.core.windows.net/receipts");
+  assert.equal(typeof (container as unknown as BlobContainerClient).getBlockBlobClient, "function");
 });
 
 // ===========================================================================

@@ -453,14 +453,31 @@ test("the raw code never reaches the query layer as a bound value when adding", 
   // A recording SMS makes the drawn code observable; a recording db captures every
   // bound value. The code is hashed before it is stored, so its plaintext must appear
   // in no parameter list.
-  const db = recordingDb();
-  const { sent, sender } = recordingSms();
+  //
+  // The add only sends once its capped insert RETURNS the new row, so the recorder forwards
+  // every statement to a real database (it records, it does not stub).
+  const real = await freshDb();
+  try {
+    const calls: { text: string; values: unknown[] }[] = [];
+    const db: RecordingDb = {
+      calls,
+      query(text: string, values: unknown[] = []) {
+        calls.push({ text, values });
+        return real.query(text, values);
+      },
+      close: () => Promise.resolve(),
+    };
+    const { sent, sender } = recordingSms();
+    const userId = await makeUser(real, "raw-code-add");
 
-  await addMobileNumber(db, { userId: "session-user", number: NUMBER_A }, addDeps(sender));
+    await addMobileNumber(db, { userId, number: NUMBER_A }, addDeps(sender));
 
-  assert.equal(sent.length, 1, "one SMS was sent");
-  const code = codeFromSms(sent[0]!.body);
-  assertNeverBound(db, code);
+    assert.equal(sent.length, 1, "one SMS was sent");
+    const code = codeFromSms(sent[0]!.body);
+    assertNeverBound(db, code);
+  } finally {
+    await real.close();
+  }
 });
 
 test("the raw code never reaches the query layer as a bound value when verifying", async () => {
@@ -917,3 +934,207 @@ test("the mobile_numbers migration applies and re-running every migration change
   }
 });
 
+
+// ===========================================================================
+// Review fix F5 — outbound SMS abuse and code guessing.
+//
+// Adding a number sends an SMS at the operator's cost, so sends are capped per person and per
+// destination number (format variations of one number count as one), atomically, before any
+// row is written or any SMS is sent. A code allows a fixed number of attempts and is consumed
+// by the verification it completes.
+// ===========================================================================
+
+const HOUR_MS = 60 * 60 * 1000;
+const at = (offsetMs: number): Clock => fixedClock(new Date(T0.getTime() + offsetMs));
+
+// Add a number, reporting whether it was refused with a 429 (the throttle) and what was sent.
+async function tryAdd(
+  db: Db,
+  input: AddMobileNumberInput,
+  clock: Clock = fixedClock(T0),
+): Promise<{ refused: boolean; sent: RecordedSms[] }> {
+  const { sent, sender } = recordingSms();
+  try {
+    await addMobileNumber(db, input, addDeps(sender, { clock }));
+    return { refused: false, sent };
+  } catch (error) {
+    assert.ok(error instanceof HttpError, `a throttled add throws an HttpError, got ${String(error)}`);
+    assert.equal(error.status, 429, "a throttled add is a 429");
+    return { refused: true, sent };
+  }
+}
+
+async function countRows(db: Db, userId: string): Promise<number> {
+  const result = await db.query("SELECT count(*)::int AS n FROM mobile_numbers WHERE user_id = $1", [userId]);
+  return Number(result.rows[0]?.n);
+}
+
+test("a person can text at most 3 codes an hour: the 4th add sends nothing and stores nothing", async () => {
+  const db = await freshDb();
+  try {
+    const userId = await makeUser(db, "f5-hourly");
+    for (let i = 0; i < 3; i++) {
+      const { refused, sent } = await tryAdd(db, { userId, number: `+6140000000${i}` }, at(i * 60_000));
+      assert.equal(refused, false, `add ${i + 1} is allowed`);
+      assert.equal(sent.length, 1);
+    }
+    const fourth = await tryAdd(db, { userId, number: "+61400000009" }, at(10 * 60_000));
+    assert.equal(fourth.refused, true, "the 4th add within the hour is refused");
+    assert.equal(fourth.sent.length, 0, "no SMS is sent for a refused add");
+    assert.equal(await countRows(db, userId), 3, "no row is stored for a refused add");
+
+    // The window slides: an hour after the first send, one more is allowed.
+    const later = await tryAdd(db, { userId, number: "+61400000009" }, at(HOUR_MS + 1));
+    assert.equal(later.refused, false, "the hourly window slides");
+  } finally {
+    await db.close();
+  }
+});
+
+test("the daily cap holds across hours: at most 10 codes a day per person", async () => {
+  const db = await freshDb();
+  try {
+    const userId = await makeUser(db, "f5-daily");
+    let allowed = 0;
+    for (let hour = 0; hour < 5; hour++) {
+      for (let i = 0; i < 3; i++) {
+        const { refused } = await tryAdd(
+          db,
+          { userId, number: `+614000${hour}${i}000` },
+          at(hour * (HOUR_MS + 1) + i * 1000),
+        );
+        if (!refused) allowed++;
+      }
+    }
+    assert.equal(allowed, 10, "exactly 10 sends are allowed in 24 hours");
+    const nextDay = await tryAdd(db, { userId, number: "+61400999999" }, at(24 * HOUR_MS + 1));
+    assert.equal(nextDay.refused, false, "the daily window slides");
+  } finally {
+    await db.close();
+  }
+});
+
+test("concurrent adds cannot exceed the cap (the check and the insert are one atomic step)", async () => {
+  const db = await freshDb();
+  try {
+    const userId = await makeUser(db, "f5-concurrent");
+    const results = await Promise.all(
+      Array.from({ length: 6 }, (_, i) => tryAdd(db, { userId, number: `+6140000010${i}` })),
+    );
+    assert.equal(results.filter((r) => !r.refused).length, 3, "exactly 3 of 6 parallel adds are allowed");
+    assert.equal(results.reduce((n, r) => n + r.sent.length, 0), 3, "exactly 3 SMS are sent");
+    assert.equal(await countRows(db, userId), 3);
+  } finally {
+    await db.close();
+  }
+});
+
+test("a destination number is capped across people, whatever its formatting", async () => {
+  const db = await freshDb();
+  try {
+    const formats = ["+61 400 555 666", "+61400555666", "+61 (400) 555-666", "+61-400-555-666"];
+    const results = [];
+    for (const [i, number] of formats.entries()) {
+      const userId = await makeUser(db, `f5-victim-${i}`);
+      results.push(await tryAdd(db, { userId, number }));
+    }
+    assert.deepEqual(
+      results.map((r) => r.refused),
+      [false, false, false, true],
+      "the 4th text to the same number within the hour is refused, even from another account",
+    );
+  } finally {
+    await db.close();
+  }
+});
+
+test("a code allows 5 attempts: after 5 wrong guesses even the right code is refused as expired", async () => {
+  const db = await freshDb();
+  try {
+    const userId = await makeUser(db, "f5-attempts");
+    const { stored, code } = await addAndCapture(db, { userId, number: NUMBER_A });
+    const wrong = code === "000000" ? "111111" : "000000";
+
+    for (let i = 0; i < 5; i++) {
+      const result = await verifyMobileNumber(db, { userId, id: stored.id, code: wrong }, verifyDeps());
+      assert.deepEqual(result, { ok: false, reason: "invalid" }, `wrong guess ${i + 1} is invalid`);
+    }
+    const afterLockout = await verifyMobileNumber(db, { userId, id: stored.id, code }, verifyDeps());
+    assert.deepEqual(afterLockout, { ok: false, reason: "expired" }, "the code is dead after 5 attempts");
+    const [listed] = await listMobileNumbers(db, userId);
+    assert.equal(listed!.verified, false, "the number stays unverified");
+  } finally {
+    await db.close();
+  }
+});
+
+test("the right code on the 5th attempt still verifies", async () => {
+  const db = await freshDb();
+  try {
+    const userId = await makeUser(db, "f5-fifth");
+    const { stored, code } = await addAndCapture(db, { userId, number: NUMBER_A });
+    const wrong = code === "000000" ? "111111" : "000000";
+    for (let i = 0; i < 4; i++) {
+      await verifyMobileNumber(db, { userId, id: stored.id, code: wrong }, verifyDeps());
+    }
+    assert.deepEqual(await verifyMobileNumber(db, { userId, id: stored.id, code }, verifyDeps()), { ok: true });
+  } finally {
+    await db.close();
+  }
+});
+
+test("a code is consumed by the verification it completes: presenting it again is refused", async () => {
+  const db = await freshDb();
+  try {
+    const userId = await makeUser(db, "f5-consume");
+    const { stored, code } = await addAndCapture(db, { userId, number: NUMBER_A });
+
+    assert.deepEqual(await verifyMobileNumber(db, { userId, id: stored.id, code }, verifyDeps()), { ok: true });
+    assert.deepEqual(
+      await verifyMobileNumber(db, { userId, id: stored.id, code }, verifyDeps()),
+      { ok: false, reason: "invalid" },
+      "a consumed code verifies nothing",
+    );
+    const row = await db.query("SELECT code_hmac FROM mobile_numbers WHERE id = $1", [stored.id]);
+    assert.equal(row.rows[0]?.code_hmac ?? null, null, "the code's HMAC is cleared once used");
+    const [listed] = await listMobileNumbers(db, userId);
+    assert.equal(listed!.verified, true, "the number stays verified");
+  } finally {
+    await db.close();
+  }
+});
+
+test("two concurrent verifications with the right code: exactly one succeeds", async () => {
+  const db = await freshDb();
+  try {
+    const userId = await makeUser(db, "f5-race");
+    const { stored, code } = await addAndCapture(db, { userId, number: NUMBER_A });
+    const results = await Promise.all([
+      verifyMobileNumber(db, { userId, id: stored.id, code }, verifyDeps()),
+      verifyMobileNumber(db, { userId, id: stored.id, code }, verifyDeps()),
+    ]);
+    assert.equal(results.filter((r) => r.ok).length, 1, "the code is spent exactly once");
+  } finally {
+    await db.close();
+  }
+});
+
+test("concurrent wrong guesses cannot exceed the attempt limit", async () => {
+  const db = await freshDb();
+  try {
+    const userId = await makeUser(db, "f5-guess-race");
+    const { stored, code } = await addAndCapture(db, { userId, number: NUMBER_A });
+    const wrong = code === "000000" ? "111111" : "000000";
+    await Promise.all(
+      Array.from({ length: 20 }, () => verifyMobileNumber(db, { userId, id: stored.id, code: wrong }, verifyDeps())),
+    );
+    const row = await db.query("SELECT code_attempts FROM mobile_numbers WHERE id = $1", [stored.id]);
+    assert.equal(Number(row.rows[0]?.code_attempts), 5, "no more than 5 attempts were ever counted");
+    assert.deepEqual(
+      await verifyMobileNumber(db, { userId, id: stored.id, code }, verifyDeps()),
+      { ok: false, reason: "expired" },
+    );
+  } finally {
+    await db.close();
+  }
+});

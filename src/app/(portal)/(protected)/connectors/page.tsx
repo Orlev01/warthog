@@ -14,6 +14,7 @@ import { systemClock } from "@/server/seams/clock";
 import { processSingleton } from "@/server/seams/process-singleton";
 import { selectSenders, type Senders, type OutgoingMessage } from "@/server/notify/senders";
 import { HttpError } from "@/server/http/validate";
+import { connectCallbackUrl } from "@/server/http/routes";
 import { loadCatalogue, type CatalogueIndex } from "@/server/connectors/catalogue";
 import { createGuardedProviderFetch } from "@/server/connectors/provider-mcp";
 import type { Db } from "@/server/db/index";
@@ -88,7 +89,7 @@ function buildActions(db: Db, config: Config): ConnectorsActions {
     }
     return keyWrapper.unwrap(user.wrappedDek);
   };
-  const redirectUri = new URL("/connectors/callback", config.publicBaseUrl).href;
+  const redirectUri = connectCallbackUrl(config.publicBaseUrl);
   return createConnectorsActions({
     db,
     clock: systemClock,
@@ -112,9 +113,13 @@ function buildActions(db: Db, config: Config): ConnectorsActions {
     // The concrete MCP tool-listing transport is a later task; until then a connect lists no
     // tools (they are filled once the MCP client lands).
     listProviderTools: async () => [],
-    // The provider-side revocation client is a later task; the seam is wired so disconnect
-    // calls it for a provider-sign-in service the moment that client exists.
-    revokeProviderAccess: async () => {},
+    // The provider-side revocation client is a later task (no provider sign-in client is
+    // registered yet, so no oauth2 connection can exist). Until it lands the seam refuses
+    // loudly rather than pretending: disconnect still deletes the stored tokens and records
+    // that the provider access was not revoked (never a silent success).
+    revokeProviderAccess: async () => {
+      throw new Error("Provider revocation is not configured");
+    },
   });
 }
 

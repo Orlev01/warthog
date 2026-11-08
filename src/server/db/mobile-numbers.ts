@@ -12,6 +12,13 @@
 // verified. A wrong code, or one for another person's number, is "invalid"; a code
 // presented past its expiry is "expired" and does not verify.
 //
+// Abuse limits (review fix F5). Every add sends an SMS at the operator's cost, so sends are
+// capped per person and per destination number (its digits, so formatting variations count as
+// one number), and the cap check and the insert are ONE atomic step: an add over the cap
+// throws a 429 `HttpError` before any row is written or SMS sent. A code allows
+// MAX_CODE_ATTEMPTS presentations (counted atomically, before the comparison), after which it
+// is dead and reported "expired" (send a new one); the verification it completes consumes it.
+//
 // Every statement is parameterized through the `Db` seam (INV-102): the id, user id,
 // number and keyed digest travel as BOUND values, never concatenated into the SQL
 // text, so a value shaped like SQL is stored as data and cannot alter the query.
@@ -23,18 +30,35 @@
 
 import { randomUUID } from "node:crypto";
 
-import { hmac } from "../crypto/hmac";
+import { hmac, verifyHmac } from "../crypto/hmac";
+import { HttpError } from "../http/validate";
 import type { Clock } from "../seams/clock";
 import type { Random } from "../seams/random";
 import type { SmsSender } from "../notify/senders";
-import type { Db, Row } from "./index";
+import { withTransaction, type Db, type Row } from "./index";
 
 const CODE_DIGITS = 6;
 const CODE_MODULUS = 10 ** CODE_DIGITS; // reduce entropy into [0, 999999]
 const CODE_ENTROPY_BYTES = 4; // 32 bits, reduced to the 6-digit space
 
 const MINUTE_MS = 60 * 1000;
+const HOUR_MS = 60 * MINUTE_MS;
+const DAY_MS = 24 * HOUR_MS;
 const CODE_TTL_MS = 10 * MINUTE_MS; // a verification code lapses ten minutes after issue
+const MAX_CODE_ATTEMPTS = 5; // presentations of one code before it is dead
+
+// The SMS send caps, each over a sliding window ending now: per person, and per destination
+// number across every person (so many accounts cannot pump one number).
+const SEND_LIMITS = {
+  perPersonHour: 3,
+  perPersonDay: 10,
+  perNumberHour: 3,
+  perNumberDay: 5,
+} as const;
+
+// One fixed advisory-lock key serialises concurrent adds on a pooled pg connection, so two
+// adds cannot both pass the cap check before either inserts.
+const SEND_LOCK_KEY = "warthog.mobile_numbers.send";
 
 // What addMobileNumber takes: the person (the SESSION's id, never a client value)
 // and the mobile number to add.
@@ -121,12 +145,46 @@ export async function addMobileNumber(
   const code = drawCode(deps.random);
   const now = deps.clock.now();
   const expiresAt = new Date(now.getTime() + CODE_TTL_MS);
+  const hourAgo = new Date(now.getTime() - HOUR_MS).toISOString();
+  const dayAgo = new Date(now.getTime() - DAY_MS).toISOString();
 
-  await db.query(
-    `INSERT INTO mobile_numbers (id, user_id, number, code_hmac, code_expires_at, created_at)
-     VALUES ($1, $2, $3, $4, $5::timestamptz, $6::timestamptz)`,
-    [id, input.userId, input.number, hmac(deps.hmacKey, code), expiresAt.toISOString(), now.toISOString()],
-  );
+  // The cap check and the insert are one statement under one lock: the row is written only
+  // when every window is under its cap, so concurrent adds can never overshoot.
+  const inserted = await withTransaction(db, async (tx) => {
+    await tx.query("SELECT pg_advisory_xact_lock(hashtext($1))", [SEND_LOCK_KEY]);
+    return tx.query(
+      `INSERT INTO mobile_numbers (id, user_id, number, code_hmac, code_expires_at, created_at)
+       SELECT $1::uuid, $2::uuid, $3::text, $4::text, $5::timestamptz, $6::timestamptz
+        WHERE (SELECT count(*) FROM mobile_numbers
+                WHERE user_id = $2::uuid AND created_at > $7::timestamptz) < $9::int
+          AND (SELECT count(*) FROM mobile_numbers
+                WHERE user_id = $2::uuid AND created_at > $8::timestamptz) < $10::int
+          AND (SELECT count(*) FROM mobile_numbers
+                WHERE regexp_replace(number, '[^0-9]', '', 'g') = regexp_replace($3::text, '[^0-9]', '', 'g')
+                  AND created_at > $7::timestamptz) < $11::int
+          AND (SELECT count(*) FROM mobile_numbers
+                WHERE regexp_replace(number, '[^0-9]', '', 'g') = regexp_replace($3::text, '[^0-9]', '', 'g')
+                  AND created_at > $8::timestamptz) < $12::int
+       RETURNING id`,
+      [
+        id,
+        input.userId,
+        input.number,
+        hmac(deps.hmacKey, code),
+        expiresAt.toISOString(),
+        now.toISOString(),
+        hourAgo,
+        dayAgo,
+        SEND_LIMITS.perPersonHour,
+        SEND_LIMITS.perPersonDay,
+        SEND_LIMITS.perNumberHour,
+        SEND_LIMITS.perNumberDay,
+      ],
+    );
+  });
+  if (inserted.rows.length === 0) {
+    throw new HttpError(429, "Too many verification texts. Try again later.");
+  }
 
   await deps.smsSender.sendSms({
     recipient: input.number,
@@ -146,11 +204,15 @@ export async function addMobileNumber(
 }
 
 // Verify a presented code for this person's number. Member-scoped: the id AND the
-// user id are both bound, so a number that is not this person's matches nothing. The
-// code is matched by its keyed digest (the raw code never reaches the query layer):
-// no matching row is "invalid"; a matching row past its expiry is "expired" and does
-// NOT verify; a matching, unexpired row marks the number verified at the clock's
-// instant and returns { ok: true }.
+// user id are both bound, so a number that is not this person's matches nothing.
+//   1. The presentation is counted FIRST, atomically, and only while the code is pending and
+//      under MAX_CODE_ATTEMPTS — so parallel guesses can never exceed the limit. No pending
+//      code (none, consumed, or another person's) is "invalid"; a pending code whose attempts
+//      are spent is dead and "expired" (send a new one).
+//   2. The keyed digest is compared in constant time (the raw code never reaches the query
+//      layer): a mismatch is "invalid"; a match past its expiry is "expired".
+//   3. A matching, unexpired code is consumed by a compare-and-swap on its digest that also
+//      marks the number verified, so it verifies exactly once even under a race.
 export async function verifyMobileNumber(
   db: Db,
   input: VerifyMobileNumberInput,
@@ -158,14 +220,24 @@ export async function verifyMobileNumber(
 ): Promise<VerifyMobileResult> {
   const now = deps.clock.now();
 
-  const found = await db.query(
-    `SELECT id, code_expires_at
-       FROM mobile_numbers
-      WHERE id = $1 AND user_id = $2 AND code_hmac = $3`,
-    [input.id, input.userId, hmac(deps.hmacKey, input.code)],
+  const counted = await db.query(
+    `UPDATE mobile_numbers
+        SET code_attempts = code_attempts + 1
+      WHERE id = $1 AND user_id = $2 AND code_hmac IS NOT NULL AND code_attempts < $3
+      RETURNING code_hmac, code_expires_at`,
+    [input.id, input.userId, MAX_CODE_ATTEMPTS],
   );
-  const row = found.rows[0];
+  const row = counted.rows[0];
   if (!row) {
+    const pending = await db.query(
+      "SELECT 1 FROM mobile_numbers WHERE id = $1 AND user_id = $2 AND code_hmac IS NOT NULL",
+      [input.id, input.userId],
+    );
+    return pending.rows.length > 0 ? { ok: false, reason: "expired" } : { ok: false, reason: "invalid" };
+  }
+
+  const storedHmac = row.code_hmac as string;
+  if (!verifyHmac(deps.hmacKey, input.code, storedHmac)) {
     return { ok: false, reason: "invalid" };
   }
 
@@ -173,13 +245,14 @@ export async function verifyMobileNumber(
     return { ok: false, reason: "expired" };
   }
 
-  await db.query(
+  const consumed = await db.query(
     `UPDATE mobile_numbers
-        SET verified = true, verified_at = $3::timestamptz
-      WHERE id = $1 AND user_id = $2`,
-    [input.id, input.userId, now.toISOString()],
+        SET verified = true, verified_at = $3::timestamptz, code_hmac = NULL, code_expires_at = NULL
+      WHERE id = $1 AND user_id = $2 AND code_hmac = $4
+      RETURNING id`,
+    [input.id, input.userId, now.toISOString(), storedHmac],
   );
-  return { ok: true };
+  return consumed.rows.length > 0 ? { ok: true } : { ok: false, reason: "invalid" };
 }
 
 // All of `userId`'s numbers (member-scoped: WHERE user_id bound), with their

@@ -10,9 +10,16 @@
 //
 // A tiny plain-SQL migration runner applies the project's migration files once
 // each and records them in a `schema_migrations` bookkeeping table it owns, so a
-// second run over the same database applies nothing new (idempotent).
+// second run over the same database applies nothing new (idempotent). Each migration
+// and its bookkeeping row commit together in ONE transaction that holds the migration
+// advisory lock, so a crash can never leave a migration applied but unrecorded, and two
+// processes starting at once (a revision switch) never both apply the same migration.
+//
+// PGlite is a devDependency and is excluded from the standalone server's file tracing, so the
+// production image does not contain it. It is therefore loaded only when a `pglite:` URL is
+// opened (a dynamic import inside createPgliteDb), never at module load: a `postgres://`
+// process must be able to import this module without PGlite installed.
 
-import { PGlite } from "@electric-sql/pglite";
 import { Pool } from "pg";
 import { mkdir, readFile, readdir } from "node:fs/promises";
 import { join } from "node:path";
@@ -84,17 +91,29 @@ export interface Migration {
 // nowhere, and its bundler treats `new URL(…, import.meta.url)` as an asset import and fails.
 const DEFAULT_MIGRATIONS_DIR = join(process.cwd(), "db", "migrations");
 
+// Tuning for the networked driver. Defaults suit production; a test may shorten them.
+export interface CreateDbOptions {
+  // Give up acquiring a connection after this long (pg's own default waits forever).
+  readonly connectTimeoutMs?: number;
+}
+
+const DEFAULT_CONNECT_TIMEOUT_MS = 5_000;
+// A runaway statement (an integrity scan, a bad plan) is cancelled rather than holding a
+// connection indefinitely. Generous, so a migration on a modest table still fits.
+const STATEMENT_TIMEOUT_MS = 60_000;
+const POOL_IDLE_TIMEOUT_MS = 30_000;
+
 // Select the driver from the URL scheme (never a hard-coded default). The scheme
 // — not the credentials — is all we ever report, so a rejected URL cannot leak a
 // password into an error message or log.
-export async function createDb(databaseUrl: string): Promise<Db> {
+export async function createDb(databaseUrl: string, options: CreateDbOptions = {}): Promise<Db> {
   const scheme = /^([a-z][a-z0-9+.-]*):/i.exec(databaseUrl)?.[1]?.toLowerCase();
 
   if (scheme === "pglite") {
     return createPgliteDb(databaseUrl.slice("pglite:".length));
   }
   if (scheme === "postgres" || scheme === "postgresql") {
-    return createPgPoolDb(databaseUrl);
+    return createPgPoolDb(databaseUrl, options);
   }
   throw new Error(`Unsupported database URL scheme: ${scheme ?? "(none)"}`);
 }
@@ -107,6 +126,7 @@ async function createPgliteDb(target: string): Promise<Db> {
   const memory = target === "" || target === "memory";
   const dataDir = memory ? "memory://" : target;
   if (!memory) await mkdir(dataDir, { recursive: true });
+  const { PGlite } = await import("@electric-sql/pglite");
   const pglite = new PGlite(dataDir);
   await pglite.waitReady;
   return {
@@ -140,9 +160,22 @@ function pgRows(raw: { rows: Row[] } | { rows: Row[] }[]): Row[] {
 
 // A real networked pg client. Creating the Pool does not connect; the first query
 // does, so a `postgres://` URL pointed at a dead port fails with a network error
-// (proving a real driver was selected, not an offline engine).
-function createPgPoolDb(connectionString: string): Db {
-  const pool = new Pool({ connectionString });
+// (proving a real driver was selected, not an offline engine). Hardened: acquiring a
+// connection times out, a runaway statement is cancelled, and an error on an IDLE pooled
+// connection (the server dropped it — maintenance, failover) is logged instead of being an
+// unhandled 'error' event that kills the process; the pool replaces the connection.
+function createPgPoolDb(connectionString: string, options: CreateDbOptions): Db {
+  const pool = new Pool({
+    connectionString,
+    connectionTimeoutMillis: options.connectTimeoutMs ?? DEFAULT_CONNECT_TIMEOUT_MS,
+    idleTimeoutMillis: POOL_IDLE_TIMEOUT_MS,
+    statement_timeout: STATEMENT_TIMEOUT_MS,
+    application_name: "warthog",
+  });
+  pool.on("error", (error: Error & { code?: string }) => {
+    // The code only: a driver message can name the host or user.
+    console.error("[warthog db] idle connection error", error.code ?? "unknown");
+  });
   return {
     async query(text, values) {
       const raw =
@@ -199,25 +232,57 @@ export async function loadMigrations(dir: string = DEFAULT_MIGRATIONS_DIR): Prom
   return migrations;
 }
 
+// The advisory-lock key every migration transaction takes (pg_advisory_xact_lock over its
+// hash), so concurrent runners — in this process or another — apply migrations one at a time.
+const MIGRATION_LOCK_KEY = "warthog.schema_migrations";
+
+// Runs in progress per database handle in THIS process, chained so concurrent calls on one
+// handle run one after another (an in-process PGlite is a single session, where the advisory
+// lock cannot separate two callers; a pooled pg handle gets the advisory lock as well).
+const runsInProgress = new WeakMap<Db, Promise<unknown>>();
+
 // Apply every not-yet-applied migration in order and return the names applied on
 // this run. The runner owns `schema_migrations`: it ensures the table exists, so
 // it never depends on a migration to create its own bookkeeping, and records each
-// migration as it applies it — so a second run finds them all present and applies
-// nothing new.
+// migration in the SAME transaction that applies it — so a second run finds them all
+// present and applies nothing new, and a failure leaves neither the body nor the row.
+// The first failing migration stops the run (later ones depend on it).
 export async function runMigrations(db: Db, migrations: Migration[]): Promise<string[]> {
-  await db.query(
-    "CREATE TABLE IF NOT EXISTS schema_migrations (" +
-      "name text PRIMARY KEY, applied_at timestamptz NOT NULL DEFAULT now())",
-  );
+  const previous = runsInProgress.get(db) ?? Promise.resolve();
+  const run = previous.catch(() => {}).then(() => applyPending(db, migrations));
+  runsInProgress.set(db, run);
+  try {
+    return await run;
+  } finally {
+    if (runsInProgress.get(db) === run) runsInProgress.delete(db);
+  }
+}
+
+async function applyPending(db: Db, migrations: Migration[]): Promise<string[]> {
+  await withTransaction(db, async (tx) => {
+    await tx.query("SELECT pg_advisory_xact_lock(hashtext($1))", [MIGRATION_LOCK_KEY]);
+    await tx.query(
+      "CREATE TABLE IF NOT EXISTS schema_migrations (" +
+        "name text PRIMARY KEY, applied_at timestamptz NOT NULL DEFAULT now())",
+    );
+  });
+  // A cheap first look, outside the lock: only migrations missing here are re-checked under it.
   const existing = await db.query("SELECT name FROM schema_migrations");
   const alreadyApplied = new Set(existing.rows.map((row) => row.name as string));
 
   const appliedNow: string[] = [];
   for (const migration of migrations) {
     if (alreadyApplied.has(migration.name)) continue;
-    await db.query(migration.sql);
-    await db.query("INSERT INTO schema_migrations (name) VALUES ($1)", [migration.name]);
-    appliedNow.push(migration.name);
+    const applied = await withTransaction(db, async (tx) => {
+      await tx.query("SELECT pg_advisory_xact_lock(hashtext($1))", [MIGRATION_LOCK_KEY]);
+      // Another runner may have applied it while this one waited for the lock.
+      const done = await tx.query("SELECT 1 FROM schema_migrations WHERE name = $1", [migration.name]);
+      if (done.rows.length > 0) return false;
+      await tx.query(migration.sql);
+      await tx.query("INSERT INTO schema_migrations (name) VALUES ($1)", [migration.name]);
+      return true;
+    });
+    if (applied) appliedNow.push(migration.name);
   }
   return appliedNow;
 }

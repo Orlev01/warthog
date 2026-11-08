@@ -346,3 +346,41 @@ test("the real source reads no process.env: a decoy secret in the environment ne
 export type __DailyRatesAnchor = DailyRates;
 export type __RateSourceAnchor = RateSource;
 export type __FrankfurterDepsAnchor = FrankfurterRateSourceDeps;
+
+// --- Review fix: the upstream fetch is bounded in time and size -------------------------------
+//
+// The daily rates run inside the shared scheduler tick, so a slow or hostile upstream must not
+// hold it, and an oversized body must not be buffered whole.
+
+test("the real source bounds the request with a timeout, and a hung upstream is reported", async () => {
+  let signal: AbortSignal | undefined;
+  const hung = (async (_input: RequestInfo | URL, init?: RequestInit) => {
+    signal = init?.signal ?? undefined;
+    return new Promise<Response>((_resolve, reject) => {
+      init?.signal?.addEventListener("abort", () => reject(new Error("aborted")));
+    });
+  }) as typeof globalThis.fetch;
+  const source = createFrankfurterRateSource({ baseUrl: "https://rates.example.test", fetchImpl: hung, timeoutMs: 50 });
+  await assert.rejects(source.fetchDailyRates());
+  assert.ok(signal instanceof AbortSignal, "the request carries an abort signal");
+});
+
+test("an oversized response body is refused without being buffered whole", async () => {
+  let pulled = 0;
+  const chunk = new TextEncoder().encode(" ".repeat(64 * 1024));
+  const huge = () =>
+    new Response(
+      new ReadableStream<Uint8Array>({
+        pull(controller) {
+          pulled += chunk.byteLength;
+          if (pulled > 64 * 1024 * 1024) controller.close();
+          else controller.enqueue(chunk);
+        },
+      }),
+      { status: 200, headers: { "content-type": "application/json" } },
+    );
+  const f = recordingFetch(huge);
+  const source = createFrankfurterRateSource({ baseUrl: "https://rates.example.test", fetchImpl: f.fetch });
+  await assert.rejects(source.fetchDailyRates(), /size/i);
+  assert.ok(pulled < 4 * 1024 * 1024, `read ${pulled} bytes before refusing`);
+});
