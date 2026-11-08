@@ -473,3 +473,40 @@ test("a raw recovery code is shown in groups of four characters", () => {
     );
   }
 });
+
+// Review fix B11 — every way in is reachable from the screen a person lands on: sign-in
+// links to sign-up, account recovery and approve-from-another-device, and the other
+// screens link back to sign-in.
+function hrefsWithText(markup: string): { href: string; text: string }[] {
+  return [...markup.matchAll(/<a\b[^>]*\bhref="([^"]*)"[^>]*>([\s\S]*?)<\/a>/g)].map((m) => ({
+    href: m[1]!.replace(/&amp;/g, "&"),
+    text: visibleText(m[2]!),
+  }));
+}
+
+test("the sign-in screen links to sign-up, recovery and signing in from another device", () => {
+  for (const step of ["passkey", "code"] as const) {
+    const links = hrefsWithText(renderToStaticMarkup(<SigninView step={step} />));
+    for (const [href, words] of [
+      ["/signup", /create an account/i],
+      ["/recover", /recover/i],
+      ["/device", /another device/i],
+    ] as const) {
+      const link = links.find((l) => l.href === href);
+      assert.ok(link, `sign-in (${step}) links to ${href}, got ${JSON.stringify(links)}`);
+      assert.match(link.text, words, `the ${href} link says where it goes`);
+    }
+  }
+});
+
+test("sign-up, recovery and new-device screens link back to sign-in", () => {
+  for (const markup of [
+    renderToStaticMarkup(<SignupView step="details" />),
+    renderToStaticMarkup(<RecoverView step="identify" />),
+    renderToStaticMarkup(<DeviceView step="code" />),
+  ]) {
+    const link = hrefsWithText(markup).find((l) => l.href === "/signin");
+    assert.ok(link, `the screen links back to sign-in: ${markup}`);
+    assert.match(link.text, /sign in/i);
+  }
+});

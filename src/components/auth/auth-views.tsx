@@ -3,6 +3,7 @@ import * as React from "react";
 import { Button } from "../ui/button";
 import { Field } from "../ui/field";
 import { Wordmark } from "../shell/wordmark";
+import { withReturnPath } from "../../server/auth/return-path";
 
 // Auth page views (task E04-S12) — the Signup, Signin, Recover and Device screens
 // as plain, step-driven PRESENTATION components. They render from props alone: no
@@ -45,6 +46,50 @@ function groupRecoveryCode(code: string | undefined): string | undefined {
   if (code === undefined || !/^[A-Z2-7]{8,}$/.test(code)) return code;
   return code.match(/.{1,4}/g)!.join(" ");
 }
+
+// The other ways in, as plain links under a screen's main action: sign-in offers
+// sign-up, account recovery and signing in by approving from another device; the other
+// screens lead back to sign-in. Each link carries the return path along (when there is
+// one), so moving between auth screens never loses where the person was going.
+interface AuthLink {
+  readonly href: string;
+  readonly label: string;
+}
+
+function AuthLinks({ links, returnTo }: { links: readonly AuthLink[]; returnTo?: string }) {
+  return (
+    <nav aria-label="Other ways to sign in">
+      <ul className="flex flex-col gap-2 text-sm">
+        {links.map((link) => (
+          <li key={link.href}>
+            <a
+              href={withReturnPath(link.href, returnTo)}
+              className="rounded-card text-accent underline-offset-4 hover:underline focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-focus"
+            >
+              {link.label}
+            </a>
+          </li>
+        ))}
+      </ul>
+    </nav>
+  );
+}
+
+const SIGNIN_LINKS: readonly AuthLink[] = [
+  { href: "/signup", label: "New here? Create an account" },
+  { href: "/recover", label: "Lost your passkey? Recover your account" },
+  { href: "/device", label: "Sign in by approving from another device" },
+];
+
+const SIGNUP_LINKS: readonly AuthLink[] = [
+  { href: "/signin", label: "Already have an account? Sign in" },
+];
+
+const RECOVER_LINKS: readonly AuthLink[] = [
+  { href: "/signin", label: "Found your passkey? Sign in" },
+];
+
+const DEVICE_LINKS: readonly AuthLink[] = [{ href: "/signin", label: "Back to sign in" }];
 
 // The read-only, shown-once recovery code, a tick to confirm it is saved, and the
 // gated Continue. The code is rendered as plain text (never prefilled into an editable
@@ -113,6 +158,9 @@ export interface SignupViewProps {
   onSubmit?: () => void;
   onCreatePasskey?: () => void;
   onConfirm?: () => void;
+  // Where to go after signing in (a validated relative path), carried on the links
+  // to the other auth screens.
+  returnTo?: string;
 }
 
 export function SignupView({
@@ -130,6 +178,7 @@ export function SignupView({
   onSubmit,
   onCreatePasskey,
   onConfirm,
+  returnTo,
 }: SignupViewProps) {
   const handleSubmit = (event: React.FormEvent<HTMLFormElement>) => {
     event.preventDefault();
@@ -161,6 +210,7 @@ export function SignupView({
               Continue
             </Button>
           </form>
+          <AuthLinks links={SIGNUP_LINKS} returnTo={returnTo} />
         </AuthScreen>
       );
     case "code":
@@ -235,6 +285,9 @@ export interface SigninViewProps {
   onPasskey?: () => void;
   onUseAuthenticatorApp?: () => void;
   onSubmitCode?: () => void;
+  // Where to go after signing in (a validated relative path), carried on the links
+  // to the other auth screens.
+  returnTo?: string;
 }
 
 export function SigninView({
@@ -247,6 +300,7 @@ export function SigninView({
   onPasskey,
   onUseAuthenticatorApp,
   onSubmitCode,
+  returnTo,
 }: SigninViewProps) {
   switch (step) {
     case "passkey":
@@ -278,6 +332,7 @@ export function SigninView({
           <Button type="button" variant="secondary" onClick={onUseAuthenticatorApp}>
             Use my authenticator app instead
           </Button>
+          <AuthLinks links={SIGNIN_LINKS} returnTo={returnTo} />
         </AuthScreen>
       );
     case "code":
@@ -315,6 +370,7 @@ export function SigninView({
             </Button>
           </form>
           {error ? <p className="text-sm text-danger">{error}</p> : null}
+          <AuthLinks links={SIGNIN_LINKS} returnTo={returnTo} />
         </AuthScreen>
       );
   }
@@ -347,6 +403,9 @@ export interface RecoverViewProps {
   onSubmitRecoveryCode?: () => void;
   onCreatePasskey?: () => void;
   onConfirm?: () => void;
+  // Where to go after signing in (a validated relative path), carried on the links
+  // to the other auth screens.
+  returnTo?: string;
 }
 
 export function RecoverView({
@@ -366,6 +425,7 @@ export function RecoverView({
   onSubmitRecoveryCode,
   onCreatePasskey,
   onConfirm,
+  returnTo,
 }: RecoverViewProps) {
   switch (step) {
     case "identify":
@@ -394,6 +454,7 @@ export function RecoverView({
               Send me a code
             </Button>
           </form>
+          <AuthLinks links={RECOVER_LINKS} returnTo={returnTo} />
         </AuthScreen>
       );
     case "email-code":
@@ -502,6 +563,9 @@ export interface DeviceViewProps {
   onCodeChange?: (value: string) => void;
   onSubmit?: () => void;
   onStartAgain?: () => void;
+  // Where to go after signing in (a validated relative path), carried on the links
+  // to the other auth screens.
+  returnTo?: string;
 }
 
 export function DeviceView({
@@ -513,6 +577,7 @@ export function DeviceView({
   onCodeChange,
   onSubmit,
   onStartAgain,
+  returnTo,
 }: DeviceViewProps) {
   switch (step) {
     case "code":
@@ -550,6 +615,7 @@ export function DeviceView({
               Continue
             </Button>
           </form>
+          <AuthLinks links={DEVICE_LINKS} returnTo={returnTo} />
         </AuthScreen>
       );
     case "confirm":
