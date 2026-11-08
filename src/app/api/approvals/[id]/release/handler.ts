@@ -76,12 +76,17 @@ import { releaseKeyFor } from "../../../../../server/mcp/tools/collect-release";
 import { systemClock, type Clock } from "../../../../../server/seams/clock";
 import type { Db } from "../../../../../server/db/index";
 
-// A released value is small (a high-tier identity field or card detail), so cap it
-// tightly: an oversized value is a bad request before anything is read or released
-// (INV-102). The raw body is bounded well below that so a grossly oversized post is
-// refused at the byte boundary, never buffered whole.
-const MAX_VALUE_CHARS = 4096;
-const MAX_BODY_BYTES = 16 * 1024;
+// A released value is small (a high-tier identity field or card detail), so cap it: an
+// oversized value is a bad request before anything is read or released (INV-102). A card
+// release is the largest (review fix W6): {number, securityCode, expiryMonth, expiryYear,
+// cardholderName, billingAddress}, where the name on the card is capped at 256 characters
+// and a saved postal address at 4096. Even when every one of those characters needs a
+// six-character JSON escape that is under 27,000 characters, so 32 KiB fits it with room.
+// The raw body is bounded too (4 bytes for every value character: room for UTF-8 and a
+// second round of escaping), so a grossly oversized post is refused at the byte boundary,
+// never buffered whole.
+const MAX_VALUE_CHARS = 32 * 1024;
+const MAX_BODY_BYTES = 4 * MAX_VALUE_CHARS;
 
 // The browser posts just the decrypted `{ value }`; the approval id rides in the path,
 // never the body. A non-string / empty / oversized value is a 4xx, never a 500.

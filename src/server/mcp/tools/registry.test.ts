@@ -357,3 +357,15 @@ test("request_card hands the pipeline the currency code upper-cased and trimmed"
 
   assert.equal(calls[0]?.call.currency, "AUD");
 });
+
+// Review fix W6: a card release now hands over everything a checkout needs, so
+// collect_release tells the agent which fields a card comes back with.
+test("collect_release's description names every field a released card carries", () => {
+  const { pipeline } = spyPipeline();
+  const registry = createToolRegistry({ pipeline });
+  const def = registry.coreTools.find((tool) => tool.name === "collect_release");
+  assert.ok(def, "collect_release is a core tool");
+  for (const field of ["number", "securityCode", "expiryMonth", "expiryYear", "cardholderName", "billingAddress"]) {
+    assert.ok(def!.description.includes(field), `the description names "${field}"; got: ${def!.description}`);
+  }
+});

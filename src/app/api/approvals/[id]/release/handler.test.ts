@@ -1235,3 +1235,61 @@ test("C10: a card release is recorded with its approved amount and merchant, nev
     await db.close();
   }
 });
+
+// ═══ Review fix W6 — the release cap fits a full card checkout payload ═════════════════
+//
+// A card release now carries {number, securityCode, expiryMonth, expiryYear, cardholderName,
+// billingAddress}. The name on the card is capped at 256 characters and a saved postal
+// address at 4096, so the largest legal payload — even one where every character of the
+// name and address needs JSON escaping — must still be accepted and collected intact.
+
+test("W6: a full card payload at the largest legal name and address is released and collected intact", async () => {
+  const db = await freshDb();
+  try {
+    const keyWrapper = keyWrapperFor();
+    const { userId, dek } = await makePerson(db, "w6-full-card", keyWrapper);
+    const agentId = await makeAgentFor(db, userId);
+    const approvalId = await makePendingApproval(db, { userId, agentId, dek, detail: CARD_DETAIL });
+    const { handler, store } = makeHandler({ db, keyWrapper, session: sessionFor(userId, T0) });
+
+    // Every character escapes to six in JSON (a control character), and to seven in the
+    // posted body: the worst case for both the value cap and the body cap.
+    const card = JSON.stringify({
+      number: "4242424242424242424",
+      securityCode: "1234",
+      expiryMonth: 11,
+      expiryYear: 2030,
+      cardholderName: "\u0001".repeat(256),
+      billingAddress: "\u0001".repeat(4096),
+    });
+    const res = await callPost(handler, releaseRequest(approvalId, { value: card }), approvalId);
+    assert2xx(res);
+    assert.equal(store.collect(keyForApproval(userId, agentId)), card, "the agent collects the whole payload, once");
+  } finally {
+    await db.close();
+  }
+});
+
+test("W6: a realistic full card payload (multi-line address, accented name) is released", async () => {
+  const db = await freshDb();
+  try {
+    const keyWrapper = keyWrapperFor();
+    const { userId, dek } = await makePerson(db, "w6-real-card", keyWrapper);
+    const agentId = await makeAgentFor(db, userId);
+    const approvalId = await makePendingApproval(db, { userId, agentId, dek, detail: CARD_DETAIL });
+    const { handler, store } = makeHandler({ db, keyWrapper, session: sessionFor(userId, T0) });
+
+    const card = JSON.stringify({
+      number: "4242424242424242",
+      securityCode: "123",
+      expiryMonth: 11,
+      expiryYear: 2030,
+      cardholderName: "Zoë O'Brien-Łukasz",
+      billingAddress: ("Unit 5, \"The Quokka\"\n12 Banksia Street\nPerth WA 6000\n").repeat(80).slice(0, 4096),
+    });
+    assert2xx(await callPost(handler, releaseRequest(approvalId, { value: card }), approvalId));
+    assert.equal(store.collect(keyForApproval(userId, agentId)), card);
+  } finally {
+    await db.close();
+  }
+});
