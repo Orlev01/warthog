@@ -37,6 +37,7 @@ function makeHandler(db: Db, outbox: Outbox, clock: Clock = fixedClock(T0)) {
     random: systemRandom,
     hmacKey: HMAC_KEY,
     senders: { push: outbox, email: outbox, sms: outbox },
+    rpId: "warthog.com.au",
     publicOrigin: GOOD_ORIGIN,
   });
 }

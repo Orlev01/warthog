@@ -41,7 +41,7 @@ import { test } from "node:test";
 import assert from "node:assert/strict";
 import { Buffer } from "node:buffer";
 
-import { getSignupDeps, getSigninDeps, getRecoverDeps } from "./compose";
+import { getSignupDeps, getSigninDeps, getRecoverDeps, getResetDeps } from "./compose";
 import { loadConfig } from "../config";
 import { createTotpSecretStore } from "./totp-store";
 import { selectKeyWrapper } from "../crypto/key-wrapper";
@@ -250,4 +250,13 @@ test("getRecoverDeps carries the config's HMAC key and a dev-outbox email sender
     outbox.list().some((m) => m.channel === "email" && m.recipient === recipient && m.body === body),
     "the recovery email sender is the dev outbox when dev tools are on",
   );
+});
+
+// --- Review fix W5 — a new passkey after a finished reset registers under the RP ID ------
+
+test("getResetDeps carries the configured WebAuthn RP ID and the public origin", async () => {
+  const config = devConfig();
+  const deps = await getResetDeps({ config, getDb: async () => stubDb() });
+  assert.equal(deps.rpId, config.webauthnRpId);
+  assert.equal(deps.publicOrigin, new URL(config.publicBaseUrl).origin);
 });

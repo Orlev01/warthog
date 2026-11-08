@@ -16,6 +16,9 @@ const STEP_METHOD: ReadonlyArray<readonly [string, keyof ResetHandler]> = [
   ["send-code", "sendCode"],
   ["request", "request"],
   ["cancel", "cancel"],
+  ["setup-send-code", "setupSendCode"],
+  ["setup-verify", "setupVerify"],
+  ["setup-finish", "setupFinish"],
 ];
 
 function recordingHandler(calls: string[]): ResetHandler {
@@ -23,7 +26,14 @@ function recordingHandler(calls: string[]): ResetHandler {
     calls.push(name);
     return new Response(name, { status: 200 });
   };
-  return { sendCode: answer("sendCode"), request: answer("request"), cancel: answer("cancel") };
+  return {
+    sendCode: answer("sendCode"),
+    request: answer("request"),
+    cancel: answer("cancel"),
+    setupSendCode: answer("setupSendCode"),
+    setupVerify: answer("setupVerify"),
+    setupFinish: answer("setupFinish"),
+  };
 }
 
 const post = () => new Request("https://warthog.com.au/api/auth/reset/x", { method: "POST" });
@@ -55,7 +65,7 @@ test("an unknown step is a 404 and builds nothing", async () => {
       return FAKE_DEPS;
     },
   });
-  for (const step of ["sendCode", "constructor", "__proto__", "complete", ""]) {
+  for (const step of ["sendCode", "setupFinish", "setup", "constructor", "__proto__", "complete", ""]) {
     assert.equal((await dispatch(post(), step)).status, 404, `${step || "(empty)"} is not a step`);
   }
   assert.equal(built, false, "no config or database was touched");
