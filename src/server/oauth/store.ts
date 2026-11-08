@@ -64,6 +64,35 @@ export async function createClient(db: Db, client: NewClient): Promise<Client> {
   return toClient(row);
 }
 
+// Store a DCR registration ONLY while fewer than `max` DCR clients were registered since
+// `since` (review fix A5): the count and the insert are one statement, so parallel
+// registrations can't each see room and all insert. `createdAt` is the registration
+// instant (the caller's clock). Returns the created client, or null when the window is
+// full and nothing was stored.
+export async function createClientWithinCap(
+  db: Db,
+  client: NewClient,
+  cap: { readonly since: Date; readonly max: number; readonly createdAt: Date },
+): Promise<Client | null> {
+  const result = await db.query(
+    `INSERT INTO oauth_clients (client_id, registration, redirect_uris, created_at)
+     SELECT $1, $2, $3::jsonb, $4::timestamptz
+     WHERE (SELECT count(*) FROM oauth_clients
+            WHERE registration = $2 AND created_at > $5::timestamptz) < $6
+     RETURNING ${CLIENT_RETURNING}`,
+    [
+      client.clientId,
+      client.registration,
+      JSON.stringify(client.redirectUris),
+      cap.createdAt.toISOString(),
+      cap.since.toISOString(),
+      cap.max,
+    ],
+  );
+  const row = result.rows[0];
+  return row ? toClient(row) : null;
+}
+
 // Read the one client with this id (bound as a parameter), or null when none.
 export async function getClient(db: Db, clientId: string): Promise<Client | null> {
   const result = await db.query(

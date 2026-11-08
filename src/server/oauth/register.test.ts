@@ -234,3 +234,66 @@ test("rejects a body missing redirect_uris with a 4xx and never reaches a query"
   assert.ok(is4xx(res.status), `expected a 4xx, got ${res.status}`);
   assert.equal(db.calls.length, 0, "a missing required field must never reach a query");
 });
+
+// =====================================================================================
+// Review fix A5 — DCR is unauthenticated, so it is bounded: a registration may carry at
+// most a handful of reasonably sized redirect URIs, and only so many registrations are
+// accepted per window (counted in the database, so the cap holds across restarts and
+// replicas, and enforced in the same statement that inserts, so parallel requests can't
+// race past it). Past the cap the endpoint answers 429 and stores nothing.
+// =====================================================================================
+
+function registerBody(uris: string[] = ["https://claude.ai/api/mcp/auth_callback"]): string {
+  return JSON.stringify({ redirect_uris: uris });
+}
+
+async function dcrCount(db: Db): Promise<number> {
+  const result = await db.query("SELECT count(*)::int AS n FROM oauth_clients WHERE registration = 'dcr'");
+  return Number(result.rows[0]!.n);
+}
+
+test("a registration with too many redirect URIs, or an oversized one, is refused before any query", async () => {
+  const db = recordingDb();
+  const handler = createRegisterHandler({ db });
+  const many = Array.from({ length: 11 }, (_, i) => `https://claude.ai/cb/${i}`);
+  const tooMany = await handler(registerRequest(registerBody(many)));
+  assert.equal(tooMany.status, 400, "more than ten redirect URIs is refused");
+  const long = await handler(registerRequest(registerBody([`https://claude.ai/${"a".repeat(2100)}`])));
+  assert.equal(long.status, 400, "a redirect URI over 2048 characters is refused");
+  assert.equal(db.calls.length, 0, "neither reached a query");
+});
+
+test("registrations past the per-window cap get a 429 and store nothing; the window then reopens", async () => {
+  const db = await freshDb();
+  try {
+    let now = new Date("2026-06-01T00:00:00.000Z");
+    const clock = { now: () => now };
+    const handler = createRegisterHandler({ db, clock, maxRegistrationsPerWindow: 3 });
+    for (let i = 0; i < 3; i++) {
+      assert.equal((await handler(registerRequest(registerBody()))).status, 201, `registration ${i + 1} is accepted`);
+    }
+    const refused = await handler(registerRequest(registerBody()));
+    assert.equal(refused.status, 429, "the fourth in the window is refused");
+    assert.ok(refused.headers.get("retry-after"), "the client is told when to retry");
+    assert.equal(await dcrCount(db), 3, "nothing more was stored");
+
+    now = new Date(now.getTime() + 61 * 60_000);
+    assert.equal((await handler(registerRequest(registerBody()))).status, 201, "a new window accepts again");
+  } finally {
+    await db.close();
+  }
+});
+
+test("parallel registrations cannot race past the cap", async () => {
+  const db = await freshDb();
+  try {
+    const handler = createRegisterHandler({ db, maxRegistrationsPerWindow: 3 });
+    const statuses = (await Promise.all(Array.from({ length: 8 }, () => handler(registerRequest(registerBody()))))).map(
+      (r) => r.status,
+    );
+    assert.equal(statuses.filter((s) => s === 201).length, 3, `exactly the cap is accepted, got ${statuses.join(",")}`);
+    assert.equal(await dcrCount(db), 3);
+  } finally {
+    await db.close();
+  }
+});
