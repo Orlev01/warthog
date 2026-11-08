@@ -649,3 +649,31 @@ test("the read reads no process.env: a decoy secret in the environment never app
     else process.env.WARTHOG_DECOY_SECRET = prev;
   }
 });
+
+// =====================================================================================
+// One unreadable shared-address row never takes the whole Household page down (review
+// finding: a row that no longer decrypts made the read throw for every member, so nobody
+// could reach the controls to re-enter the address, remove a member or close the household).
+// =====================================================================================
+
+test("a shared address that no longer decrypts reads as unset instead of failing the whole report", async () => {
+  const db = await freshDb();
+  try {
+    const alice = await makeUser(db, "unreadable-owner");
+    const household = await createHousehold(db, { ownerId: alice.id, currency: "AUD" });
+    // Encrypted under a key nobody holds any more.
+    await setSharedAddress(
+      db,
+      { householdId: household.id, actorId: alice.id, current: "4 Lost St, Darwin" },
+      randomBytes(32),
+      { notify: noNotify },
+    );
+
+    const data = await readHouseholdPageData(alice.id, { db, keyWrapper, clock: fixedClock(NOW) });
+    assert.ok(data, "the report still loads");
+    assert.equal(data.sharedAddress, null, "the unreadable address reads as unset, so it can be re-entered");
+    assert.equal(data.householdId, household.id, "the rest of the report is intact");
+  } finally {
+    await db.close();
+  }
+});

@@ -9,7 +9,10 @@
 // These are PLAINTEXT METADATA (ids, roles, budgets, limits, an ISO 4217 code —
 // needed for the budget maths, design §4.1), so — unlike vault values, cards or
 // released values — they are NOT DEK-encrypted and this module holds no key and reads
-// no `process.env` (INV-103): config flows from `src/server/config.ts` alone.
+// no `process.env` (INV-103): config flows from `src/server/config.ts` alone. The one
+// key-shaped column, `wrapped_dek` (the household's own data key for shared content,
+// 0058), is stored and handed back only in its KEK-WRAPPED form; wrapping, unwrapping and
+// generating it is `src/server/household/household-key.ts`'s job, never this store's.
 //
 // Every statement is parameterized through the `Db` seam (INV-102): the ids and the
 // amounts travel as BOUND values, never concatenated into the SQL text, so a value
@@ -322,17 +325,19 @@ export async function acceptOwnership(
   db: Db,
   { householdId, userId }: { householdId: string; userId: string },
 ): Promise<{ ok: true } | { ok: false; reason: "no_pending_transfer" }> {
-  const pending = await db.query(
-    "SELECT owner_id FROM households WHERE id = $1 AND pending_owner_id = $2",
-    [householdId, userId],
-  );
-  const row = pending.rows[0];
-  if (!row) {
-    return { ok: false, reason: "no_pending_transfer" };
-  }
-  const oldOwnerId = String(row.owner_id);
+  return withTransaction(db, async (tx) => {
+    // Read (and lock) the pending transfer INSIDE the transaction, so two concurrent
+    // accepts — or an accept racing a new transfer — act on one consistent owner.
+    const pending = await tx.query(
+      "SELECT owner_id FROM households WHERE id = $1 AND pending_owner_id = $2 FOR UPDATE",
+      [householdId, userId],
+    );
+    const row = pending.rows[0];
+    if (!row) {
+      return { ok: false, reason: "no_pending_transfer" } as const;
+    }
+    const oldOwnerId = String(row.owner_id);
 
-  await withTransaction(db, async (tx) => {
     await tx.query(
       "UPDATE households SET owner_id = $2, pending_owner_id = NULL WHERE id = $1",
       [householdId, userId],
@@ -345,9 +350,38 @@ export async function acceptOwnership(
       "UPDATE household_members SET role = 'owner' WHERE household_id = $1 AND user_id = $2",
       [householdId, userId],
     );
+    return { ok: true } as const;
   });
+}
 
-  return { ok: true };
+// The household's KEK-wrapped data key (0058), or null when it has none yet (a household
+// created before household keys existed). Unscoped by person on purpose — the key belongs
+// to the household, and callers resolve the household from the SESSION user first.
+export async function getHouseholdWrappedKey(db: Db, householdId: string): Promise<string | null> {
+  const result = await db.query("SELECT wrapped_dek FROM households WHERE id = $1", [householdId]);
+  const value = result.rows[0]?.wrapped_dek;
+  return value == null ? null : String(value);
+}
+
+// Store `wrappedKey` as the household's data key ONLY if it has none yet, returning the
+// owner at that moment when this call won (null when the household already had a key or
+// does not exist). The conditional UPDATE makes the first writer win: a concurrent second
+// claim updates nothing (on Postgres it waits on the row lock, then sees the key set), so
+// a household never ends up with two keys. Run it inside the transaction that re-encrypts
+// any existing shared content, so the key and the content under it commit together.
+export async function claimHouseholdWrappedKey(
+  db: Db,
+  householdId: string,
+  wrappedKey: string,
+): Promise<{ ownerId: string } | null> {
+  const result = await db.query(
+    `UPDATE households SET wrapped_dek = $2
+      WHERE id = $1 AND wrapped_dek IS NULL
+      RETURNING owner_id`,
+    [householdId, wrappedKey],
+  );
+  const row = result.rows[0];
+  return row ? { ownerId: String(row.owner_id) } : null;
 }
 
 // Owner-only: close the household — removes the household and (by cascade) every

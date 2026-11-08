@@ -58,7 +58,7 @@ import {
 } from "@/server/db/household-shared-address";
 import { issueInvite } from "@/server/db/household-invites";
 import { isKnownCurrency } from "@/server/db/account-currency";
-import { getUserById } from "@/server/db/users";
+import { ensureHouseholdKey } from "@/server/household/household-key";
 import { readHouseholdPageData, type HouseholdPageData } from "@/server/household/page-data";
 import type { Session } from "@/server/auth/session";
 import type { Clock } from "@/server/seams/clock";
@@ -67,9 +67,10 @@ import type { KeyWrapper } from "@/server/crypto/key-wrapper";
 import type { EmailSender } from "@/server/notify/senders";
 import type { Db } from "@/server/db/index";
 
-// The injected seams — no process.env (INV-103). `keyWrapper` unwraps the OWNER's DEK to
-// en/decrypt the shared address; `clock` is the invite-window / page-read "now" (never SQL
-// now()); `random` draws the invite token; `notify` is the shared-address edit notifier;
+// The injected seams — no process.env (INV-103). `keyWrapper` wraps/unwraps the HOUSEHOLD's
+// data key the shared address is encrypted under; `clock` is the invite-window / page-read
+// "now" (never SQL now()); `random` draws the invite token and a new household key;
+// `notify` is the shared-address edit notifier;
 // `email` delivers the invite link (the single message carrying it); `publicBaseUrl` is the
 // configured public origin the invite link is built on (never the request host).
 export interface HouseholdActionsDeps {
@@ -112,8 +113,9 @@ export interface HouseholdActions {
   acceptOwnership(session: Session): Promise<ActionResult>;
   // OWNER-only: close the household (the shared container is gone for everyone).
   closeHousehold(session: Session): Promise<ActionResult>;
-  // ANY member: edit the one shared address (encrypted under the OWNER's DEK so every
-  // member's read decrypts it). An oversized value is a 4xx.
+  // ANY member: edit the one shared address (encrypted under the HOUSEHOLD's data key, so
+  // every member's read decrypts it and an ownership transfer never strands it). An
+  // oversized value is a 4xx.
   editSharedAddress(
     session: Session,
     input: { current: string; upcoming?: string | null; movingOn?: string | null },
@@ -172,16 +174,11 @@ const INVITE_BODY = "You've been invited to join a household on Warthog. Open th
 export function createHouseholdActions(deps: HouseholdActionsDeps): HouseholdActions {
   const { db, keyWrapper, clock, random, notify, email, publicBaseUrl } = deps;
 
-  // Resolve the household OWNER's unwrapped DEK — the shared address is encrypted under it,
-  // so an edit by ANY member stores ciphertext every member's read decrypts. Read the
-  // owner's wrapped DEK (member-scoped, bound) and unwrap it through the injected seam;
-  // throws when the owner has no row (never fails silently).
-  async function ownerDekFor(ownerId: string): Promise<Uint8Array> {
-    const owner = await getUserById(db, ownerId);
-    if (!owner) {
-      throw new Error("household actions: household owner has no user row");
-    }
-    return keyWrapper.unwrap(owner.wrappedDek);
+  // The household's own data key (created on first use, re-encrypting a pre-existing
+  // shared address under it) — the shared address is encrypted under it, so an edit by ANY
+  // member stores ciphertext every member's read decrypts, whoever owns the household.
+  function householdKey(householdId: string): Promise<Uint8Array> {
+    return ensureHouseholdKey(householdId, { db, keyWrapper, random });
   }
 
   function load(session: Session): Promise<HouseholdPageData | null> {
@@ -198,7 +195,10 @@ export function createHouseholdActions(deps: HouseholdActionsDeps): HouseholdAct
       currency = parseParams(currencySchema, input.currency);
       if (!isKnownCurrency(currency)) return { ok: false, reason: UNKNOWN_CURRENCY };
     }
-    await storeCreateHousehold(db, { ownerId: session.userId, currency });
+    const household = await storeCreateHousehold(db, { ownerId: session.userId, currency });
+    // Give the new household its data key up front, so shared content is never written
+    // under a person's key.
+    await householdKey(household.id);
     return { ok: true };
   }
 
@@ -252,6 +252,10 @@ export function createHouseholdActions(deps: HouseholdActionsDeps): HouseholdAct
   async function acceptOwnership(session: Session): Promise<ActionResult> {
     const household = await getHouseholdForMember(db, session.userId);
     if (!household) return { ok: false, reason: NO_HOUSEHOLD };
+    // Move any shared content still under the CURRENT owner's DEK (a household from before
+    // household keys) onto the household key BEFORE ownership moves, while that owner's DEK
+    // is still the one it is encrypted under. A no-op once the household has its key.
+    if (household.pendingOwnerId === session.userId) await householdKey(household.id);
     const result = await storeAcceptOwnership(db, { householdId: household.id, userId: session.userId });
     return result.ok ? { ok: true } : { ok: false, reason: result.reason };
   }
@@ -270,7 +274,7 @@ export function createHouseholdActions(deps: HouseholdActionsDeps): HouseholdAct
     const parsed = parseParams(editAddressSchema, input);
     const household = await getHouseholdForMember(db, session.userId);
     if (!household) return { ok: false, reason: NOT_A_MEMBER };
-    const ownerDek = await ownerDekFor(household.ownerId);
+    const key = await householdKey(household.id);
     const result = await setSharedAddress(
       db,
       {
@@ -280,7 +284,7 @@ export function createHouseholdActions(deps: HouseholdActionsDeps): HouseholdAct
         upcoming: parsed.upcoming ?? null,
         movingOn: parsed.movingOn ?? null,
       },
-      ownerDek,
+      key,
       { notify },
     );
     return result.ok ? { ok: true } : { ok: false, reason: result.reason };
