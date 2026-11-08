@@ -43,7 +43,13 @@ import { z } from "zod";
 
 import { parseParams } from "../../../../server/http/validate";
 import { requireStepUp } from "../../../../server/auth/step-up";
-import { decide, getApproval, type StoredApproval } from "../../../../server/db/approvals";
+import {
+  ApprovalAlreadyDecidedError,
+  decide,
+  getApproval,
+  type Decision,
+  type StoredApproval,
+} from "../../../../server/db/approvals";
 import { markOpened } from "../../../../server/approvals/opened";
 import {
   readInbox,
@@ -51,7 +57,12 @@ import {
   type DecidedApproval,
 } from "../../../../server/approvals/inbox-read";
 import { getCardCiphertext, listCards } from "../../../../server/db/cards";
+import { getHighTierCiphertext, listHighTierFields } from "../../../../server/db/high-tier-fields";
 import { getUserById } from "../../../../server/db/users";
+import { withTransaction } from "../../../../server/db/index";
+import { createDbRecorder } from "../../../../server/activity/writer";
+import { isReleaseRequest } from "../../../../domain/approvals/release-kind";
+import { formatMoney, highTierFieldLabel } from "../../../../domain/approvals/request-sentence";
 import type { Session } from "../../../../server/auth/session";
 import type { Clock } from "../../../../server/seams/clock";
 import type { KeyWrapper } from "../../../../server/crypto/key-wrapper";
@@ -60,6 +71,7 @@ import type { ApprovedHoldResult } from "../../../../server/mcp/pipeline";
 import type {
   DecidedRequestView,
   DecidedStatus,
+  HighTierFieldView,
   InboxViewProps,
   PendingRequestView,
   ReleaseKind,
@@ -118,6 +130,14 @@ export interface InboxActions {
 // the same vocabulary the sibling security actions use.
 const NOT_FOUND = "not_found";
 const STEP_UP_REQUIRED = "step_up_required";
+// The approval was no longer pending when this decision landed: someone (another
+// device, a double-click, a disconnect) decided it first, or its window had passed.
+const ALREADY_DECIDED = "already_decided";
+const EXPIRED = "expired";
+// The approval landed, but Warthog could not carry out the held call (its agent was
+// disconnected, the agent no longer has the permission, …). The agent is handed the
+// same refusal through check_approval; the person is told nothing was done.
+const APPROVED_NOT_RUN = "approved_not_run";
 
 // The two metrics recorded for EVERY successful decision (task E17-S04; the tester's pinned
 // contract, as `agent.request` / `agent.request.latency_ms` are E17-S03's): a response-time
@@ -149,23 +169,56 @@ function text(value: unknown): string {
 }
 
 // The release kind a pending request carries, from the SAME `detail.request`
-// discriminator approveApproval gates step-up on: "card" / "high_tier" → a device
-// release; anything else → null (a routine held call's plain, server-verified Approve).
+// discriminator approveApproval gates step-up on (and the pipeline and check_approval
+// read): "card" / "high_tier" → a device release; anything else → null (a routine held
+// call's plain, server-verified Approve).
 function releaseKind(detail: Record<string, unknown>): ReleaseKind | null {
-  const request = detail.request;
-  return request === "card" || request === "high_tier" ? request : null;
+  return isReleaseRequest(detail.request) ? detail.request : null;
 }
 
-// The exact recipient / amount / field lines under a request, each present only when
-// the decrypted detail carries it (an omitted field drops out, exactly as it is stored).
+// The recipients a held message goes to, as one line: the pipeline stores
+// `recipients` (one address or a list); an older detail carried a single `recipient`.
+function recipientsText(detail: Record<string, unknown>): string {
+  const recipients = detail.recipients ?? detail.recipient;
+  if (Array.isArray(recipients)) return recipients.map(text).filter(Boolean).join(", ");
+  return text(recipients);
+}
+
+// The requested amount in its currency ("$149.99"); an older detail stored it as text.
+function amountText(detail: Record<string, unknown>): string {
+  if (typeof detail.amount === "number" && typeof detail.currency === "string") {
+    return formatMoney(detail.amount, detail.currency);
+  }
+  return text(detail.amount);
+}
+
+// A foreign amount converted into the account currency, with the reference rate's date
+// (brief "Currency": the approval shows both amounts and the rate's date).
+function convertedText(detail: Record<string, unknown>): string {
+  const converted = detail.converted as { amount?: unknown; currency?: unknown; rateDate?: unknown } | undefined;
+  if (!converted || typeof converted.amount !== "number" || typeof converted.currency !== "string") return "";
+  const date = text(converted.rateDate);
+  const money = formatMoney(converted.amount, converted.currency);
+  return date ? `${money} at the ${date} reference rate` : money;
+}
+
+// The exact lines under a request — recipients, amount (and its converted amount),
+// merchant, field and purpose — each present only when the decrypted detail carries
+// it (an omitted field drops out, exactly as it is stored).
 function detailLines(detail: Record<string, unknown>): RequestDetail[] {
   const lines: RequestDetail[] = [];
-  const recipient = text(detail.recipient);
-  if (recipient) lines.push({ label: "To", value: recipient });
-  const amount = text(detail.amount);
+  const recipients = recipientsText(detail);
+  if (recipients) lines.push({ label: "To", value: recipients });
+  const amount = amountText(detail);
   if (amount) lines.push({ label: "Amount", value: amount });
+  const converted = convertedText(detail);
+  if (converted) lines.push({ label: "Converted", value: converted });
+  const merchant = text(detail.merchant);
+  if (merchant) lines.push({ label: "Merchant", value: merchant });
   const field = text(detail.field);
-  if (field) lines.push({ label: "Field", value: field });
+  if (field) lines.push({ label: "Field", value: highTierFieldLabel(field) });
+  const purpose = text(detail.purpose);
+  if (purpose) lines.push({ label: "Purpose", value: purpose });
   return lines;
 }
 
@@ -262,6 +315,49 @@ export function createInboxActions(deps: InboxActionsDeps): InboxActions {
     return approval ? { dek, approval } : null;
   }
 
+  // Persist one decision as the store's compare-and-swap AND record it in the person's
+  // activity feed ("every approval request and decision" — brief), in ONE transaction:
+  // the decision and its audit entry commit together. Warthog writes the entry itself
+  // (redacted, DEK-encrypted), attributed to the requesting agent. A decision that loses
+  // — the approval was decided first, or it is past its window (stored expired at once)
+  // — is refused in plain words rather than escaping as an error, records nothing, and
+  // nothing runs.
+  async function decideOwn(
+    session: Session,
+    id: string,
+    dek: Uint8Array,
+    decision: Decision,
+  ): Promise<{ ok: true; decided: StoredApproval } | { ok: false; reason: string }> {
+    return withTransaction(db, async (tx) => {
+      let decided: StoredApproval;
+      try {
+        decided = await decide(tx, { userId: session.userId, id, decision }, dek, clock);
+      } catch (error) {
+        if (error instanceof ApprovalAlreadyDecidedError) {
+          return { ok: false, reason: error.status === "expired" ? EXPIRED : ALREADY_DECIDED };
+        }
+        throw error;
+      }
+      const recorder = createDbRecorder({ db: tx, clock, dekFor: async () => dek });
+      await recorder.record({
+        userId: session.userId,
+        kind: "approval_decision",
+        source: "warthog",
+        agentId: decided.agentId,
+        connectorId: text(decided.detail.connector) || undefined,
+        tool: text(decided.detail.tool) || undefined,
+        outcome: decided.status,
+        payload: {
+          approvalId: decided.id,
+          request: decided.detail.request,
+          sentence: text(decided.detail.sentence) || undefined,
+          question: decided.question,
+        },
+      });
+      return { ok: true, decided };
+    });
+  }
+
   // Approve an approval. Validate the id shape at the boundary; load the one that
   // is this person's (refuse otherwise); gate a high-tier/card RELEASE on a fresh
   // step-up (refuse without one, approving nothing); then mark it opened, move it
@@ -272,18 +368,22 @@ export function createInboxActions(deps: InboxActionsDeps): InboxActions {
     const own = await loadOwn(session, id);
     if (!own) return { ok: false, reason: NOT_FOUND };
 
-    const request = own.approval.detail.request;
-    const isRelease = request === "card" || request === "high_tier";
+    const isRelease = isReleaseRequest(own.approval.detail.request);
     if (isRelease && !requireStepUp(session, { clock })) {
       return { ok: false, reason: STEP_UP_REQUIRED };
     }
 
     await markOpened(db, { id, userId: session.userId }, clock);
-    const decided = await decide(db, { userId: session.userId, id, decision: { status: "approved" } }, own.dek, clock);
-    await emitDecisionMetrics(decided);
+    // Only the caller whose compare-and-swap won goes on to run the held call.
+    const outcome = await decideOwn(session, id, own.dek, { status: "approved" });
+    if (!outcome.ok) return outcome;
+    await emitDecisionMetrics(outcome.decided);
 
     if (!isRelease) {
-      await executeApprovedHold(session.userId, id);
+      // The run's outcome is stored for the agent's check_approval; a refusal is also
+      // reported to the person, never a bare "Approved" for something that did not run.
+      const ran = await executeApprovedHold(session.userId, id);
+      if (ran.status === "refused") return { ok: false, reason: APPROVED_NOT_RUN };
     }
     return { ok: true };
   }
@@ -297,8 +397,9 @@ export function createInboxActions(deps: InboxActionsDeps): InboxActions {
     if (!own) return { ok: false, reason: NOT_FOUND };
 
     await markOpened(db, { id, userId: session.userId }, clock);
-    const decided = await decide(db, { userId: session.userId, id, decision: { status: "denied" } }, own.dek, clock);
-    await emitDecisionMetrics(decided);
+    const outcome = await decideOwn(session, id, own.dek, { status: "denied" });
+    if (!outcome.ok) return outcome;
+    await emitDecisionMetrics(outcome.decided);
     return { ok: true };
   }
 
@@ -317,13 +418,9 @@ export function createInboxActions(deps: InboxActionsDeps): InboxActions {
     if (!own) return { ok: false, reason: NOT_FOUND };
 
     await markOpened(db, { id, userId: session.userId }, clock);
-    const decided = await decide(
-      db,
-      { userId: session.userId, id, decision: { status: "more_detail", question: q } },
-      own.dek,
-      clock,
-    );
-    await emitDecisionMetrics(decided);
+    const outcome = await decideOwn(session, id, own.dek, { status: "more_detail", question: q });
+    if (!outcome.ok) return outcome;
+    await emitDecisionMetrics(outcome.decided);
     return { ok: true };
   }
 
@@ -343,6 +440,34 @@ export function createInboxActions(deps: InboxActionsDeps): InboxActions {
     return views;
   }
 
+  // The person's saved high-tier details as a high-tier release offers them: the
+  // plaintext label and the device-decryptable ciphertext (never a readable value — the
+  // server holds only ciphertext). Member-scoped by the session user id (both the list
+  // and each ciphertext read bind it), so one person can never see another's details.
+  async function loadHighTierFields(userId: string): Promise<{ type: string; view: HighTierFieldView }[]> {
+    const fields = await listHighTierFields(db, userId);
+    const loaded: { type: string; view: HighTierFieldView }[] = [];
+    for (const field of fields) {
+      const ciphertext = await getHighTierCiphertext(db, userId, field.id);
+      if (ciphertext === null) continue;
+      loaded.push({ type: field.type, view: { id: field.id, label: field.label, ciphertext } });
+    }
+    return loaded;
+  }
+
+  // A high-tier request's offered details: the ones matching the requested field first
+  // (preselected), then the rest, so the person can still choose deliberately.
+  function offerFor(
+    request: PendingRequestView,
+    detail: Record<string, unknown>,
+    fields: readonly { type: string; view: HighTierFieldView }[],
+  ): PendingRequestView {
+    const wanted = text(detail.field);
+    const matching = fields.filter((field) => wanted !== "" && field.type === wanted);
+    const rest = fields.filter((field) => !(wanted !== "" && field.type === wanted));
+    return { ...request, highTierFields: [...matching, ...rest].map((field) => field.view) };
+  }
+
   // Turn the verified session into the inbox view's data. Reads ONLY the session
   // person's approvals (member-scoped by `session.userId` — never a client value): their
   // PENDING requests newest-first + their decision HISTORY (readInbox, E12-S11),
@@ -359,7 +484,14 @@ export function createInboxActions(deps: InboxActionsDeps): InboxActions {
       await markOpened(db, { id: request.id, userId: session.userId }, clock);
     }
 
-    const pending = inbox.pending.map(toPendingView);
+    let pending = inbox.pending.map(toPendingView);
+    // A high-tier release needs the person's saved detail to decrypt on their device.
+    if (pending.some((request) => request.release === "high_tier")) {
+      const fields = await loadHighTierFields(session.userId);
+      pending = pending.map((request, index) =>
+        request.release === "high_tier" ? offerFor(request, inbox.pending[index]!.detail, fields) : request,
+      );
+    }
     const history = inbox.history.map(toDecidedView);
     const data: InboxLoadData = { pending, history };
 

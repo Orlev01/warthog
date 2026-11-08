@@ -862,3 +862,41 @@ test("the card_spend_ledger migration applies and re-running every migration cha
     await db.close();
   }
 });
+
+// ---------------------------------------------------------------------------
+// Review fix C3 — a release is counted once per approval. The release endpoint now
+// records every approved card release; the ledger row carries the approval it came
+// from, and a second row for the same approval is refused, so a retried or raced
+// release can never count twice against a budget.
+// ---------------------------------------------------------------------------
+
+test("recordRelease links a row to its approval and refuses a second row for the same approval", async () => {
+  const db = await freshDb();
+  try {
+    const userId = await makeUser(db, "c3-once");
+    const approvalId = "cccccccc-cccc-cccc-cccc-cccccccccccc";
+    const release = {
+      userId,
+      connectionId: CONN_A,
+      householdId: null,
+      amount: 150,
+      currency: "AUD",
+      merchant: "JB Hi-Fi",
+      periodKeys: { day: D5, week: W45, month: M_NOV },
+      approvalId,
+    };
+
+    const stored = await recordRelease(db, release);
+    assert.equal(stored.approvalId, approvalId, "the stored release names its approval");
+    await assert.rejects(recordRelease(db, release), "a second row for the same approval is refused");
+    assert.equal(await sumForConnectionPeriod(db, userId, CONN_A, MONTH, M_NOV), 150, "the approval counts once");
+
+    // Rows with no approval (e.g. earlier imports) are unaffected by the once-per-approval rule.
+    const { approvalId: _omit, ...unlinked } = release;
+    await recordRelease(db, unlinked);
+    await recordRelease(db, unlinked);
+    assert.equal(await sumForConnectionPeriod(db, userId, CONN_A, MONTH, M_NOV), 450, "unlinked rows still add up");
+  } finally {
+    await db.close();
+  }
+});

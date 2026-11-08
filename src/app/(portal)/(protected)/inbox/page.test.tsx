@@ -88,6 +88,9 @@ import { addCard } from "@/server/db/cards";
 import { saveHighTierField } from "@/server/db/high-tier-fields";
 import { isUnopened } from "@/server/approvals/opened";
 import { createUser } from "@/server/db/users";
+import { createAgent } from "@/server/db/agents";
+import { upsertPermissions } from "@/server/db/agent-permissions";
+import { listMemoriesForUser } from "@/server/db/memories";
 import { createSession, type Session } from "@/server/auth/session";
 import { localAesKeyWrapper, type KeyWrapper } from "@/server/crypto/key-wrapper";
 import { fixedClock, type Clock } from "@/server/seams/clock";
@@ -860,8 +863,33 @@ test("approving a held non-release call runs it once through the composed pipeli
       email: `exec-${randomUUID()}@warthog.com.au`,
       wrappedDek: await keyWrapper.wrap(dek),
     });
-    const agentId = randomUUID();
     const clock = fixedClock(NOW);
+    // A REAL connected agent (its row id differs from its connection id) whose
+    // connection is allowed to keep memories — so the held `remember` really saves one
+    // when it runs under the agent's real connection (review fix C2).
+    const connectionId = randomUUID();
+    const agent = await createAgent(
+      db,
+      { userId: user.id, connectionId, displayName: "Claude", platform: "claude" },
+      clock,
+    );
+    const agentId = agent.id;
+    await upsertPermissions(db, {
+      userId: user.id,
+      connectionId,
+      grantedConnectors: [],
+      readTools: true,
+      changeTools: "ask_first",
+      identityAccess: false,
+      highTierAccess: false,
+      cardAccess: false,
+      cardBudget: null,
+      skillsScope: [],
+      memoryRead: true,
+      sharing: false,
+      rulesScope: [],
+      rateLimit: 120,
+    });
 
     // A PENDING non-release approval (no `detail.request`) and its linked held call — a
     // routine change (remember), parked exactly as the pipeline's ask path stores it.
@@ -905,11 +933,19 @@ test("approving a held non-release call runs it once through the composed pipeli
       (entry) => entry.tool === "remember" && entry.source === "warthog",
     );
     assert.equal(recorded.length, 1, "the approved held call's outcome is recorded in Activity exactly once");
+    assert.equal(recorded[0]!.outcome, "executed", "it is recorded as executed — the tool really ran");
+
+    // The held `remember` really ran under the agent's connection: the memory is saved.
+    const memories = await listMemoriesForUser(db, user.id, dek);
+    assert.equal(memories.length, 1, "the approved memory is saved (not refused for want of permission)");
+    assert.equal(memories[0]!.content, marker, "it is exactly the content the agent asked to keep");
 
     // Approving again does nothing more — the held call never runs twice (re-deciding an
     // already-approved approval is refused upstream, before the executor is reached again).
-    await assert.rejects(
-      () => actions.approveApproval(session, approval.id),
+    // The refusal is reported in plain words ("already decided"), never a silent success.
+    assert.deepEqual(
+      await actions.approveApproval(session, approval.id),
+      { ok: false, reason: "already_decided" },
       "re-approving an already-decided approval is refused, not a second silent run",
     );
     const afterSecond = (await listActivity(db, user.id, {}, dek)).filter(

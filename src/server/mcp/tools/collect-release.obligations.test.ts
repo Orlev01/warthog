@@ -72,6 +72,9 @@ function landmineStore(): ReleaseStore {
     collect(): string | undefined {
       throw new Error("releaseStore.collect must not run for invalid input");
     },
+    size(): number {
+      throw new Error("releaseStore.size must not run for invalid input");
+    },
   };
 }
 

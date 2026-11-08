@@ -93,7 +93,13 @@ import assert from "node:assert/strict";
 import { randomBytes } from "node:crypto";
 import { z } from "zod";
 
-import { createHeldRequest, getByApproval, markExecuted } from "./held-requests";
+import {
+  createHeldRequest,
+  getByApproval,
+  markExecuted,
+  recordOutcome,
+  HeldRequestAlreadyExecutedError,
+} from "./held-requests";
 import { createApproval } from "./approvals";
 import { createUser } from "./users";
 import { freshDb } from "../../test/db";
@@ -719,6 +725,91 @@ test("the held_requests migration applies and re-running every migration changes
     // no throw together prove the migration's second run changes nothing.
     const again = await runMigrations(db, migrations);
     assert.deepEqual(again, [], "a second migration run must change nothing");
+  } finally {
+    await db.close();
+  }
+});
+
+// ===========================================================================
+// Review fix C2 — the outcome of a held call is kept, so the agent gets it back.
+// The brief: "when approved, Warthog itself carries out the held request ... and
+// returns the result to the agent". The inbox runs the hold on approval and the agent
+// later asks check_approval, so the outcome has to outlive the run: it is stored
+// DEK-encrypted on the held request (bound to its row) and read back by its owner.
+// A second claim is refused with a TYPED error, so callers can tell "already run"
+// from an infrastructure failure.
+// ===========================================================================
+
+test("markExecuted refuses a second claim with a typed HeldRequestAlreadyExecutedError", async () => {
+  const db = await freshDb();
+  try {
+    const userId = await makeUser(db, "c2-typed");
+    const dek = freshDek();
+    const approvalId = await makeApproval(db, userId, dek);
+    const held = await createHeldRequest(db, { userId, agentId: AGENT_A, approvalId, args: argsWith("TY") }, dek, fixedClock(T0));
+
+    await markExecuted(db, { userId, id: held.id }, dek, fixedClock(T0));
+    await assert.rejects(
+      markExecuted(db, { userId, id: held.id }, dek, fixedClock(T0)),
+      (err: unknown) => err instanceof HeldRequestAlreadyExecutedError,
+      "a second claim is refused as already executed (typed)",
+    );
+  } finally {
+    await db.close();
+  }
+});
+
+test("recordOutcome stores the run's outcome DEK-encrypted and getByApproval hands it back to the owner", async () => {
+  const db = await freshDb();
+  try {
+    const userId = await makeUser(db, "c2-outcome");
+    const dek = freshDek();
+    const approvalId = await makeApproval(db, userId, dek);
+    const held = await createHeldRequest(db, { userId, agentId: AGENT_A, approvalId, args: argsWith("OC") }, dek, fixedClock(T0));
+
+    assert.equal((await getByApproval(db, userId, approvalId, dek))!.outcome, undefined, "no outcome before the run");
+
+    await markExecuted(db, { userId, id: held.id }, dek, fixedClock(T0));
+    const outcome = { status: "executed" as const, result: { saved: "note-OUTCOME-TOKEN-7731" } };
+    await recordOutcome(db, { userId, id: held.id, outcome }, dek);
+
+    const reloaded = await getByApproval(db, userId, approvalId, dek);
+    assert.deepEqual(reloaded!.outcome, outcome, "the owner reads the stored outcome back");
+
+    const raw = await db.query("SELECT outcome FROM held_requests WHERE id = $1", [held.id]);
+    assert.ok(
+      !String(raw.rows[0]!.outcome).includes("OUTCOME-TOKEN-7731"),
+      "the outcome is stored encrypted — the plaintext result never lands in the column",
+    );
+    await assert.rejects(
+      getByApproval(db, userId, approvalId, freshDek()),
+      "a different DEK cannot decrypt the stored outcome",
+    );
+  } finally {
+    await db.close();
+  }
+});
+
+test("recordOutcome is member-scoped and only lands on an executed held request", async () => {
+  const db = await freshDb();
+  try {
+    const owner = await makeUser(db, "c2-owner");
+    const intruder = await makeUser(db, "c2-intruder");
+    const dek = freshDek();
+    const approvalId = await makeApproval(db, owner, dek);
+    const held = await createHeldRequest(db, { userId: owner, agentId: AGENT_A, approvalId, args: argsWith("MS") }, dek, fixedClock(T0));
+    const outcome = { status: "refused" as const, reason: "nope" };
+
+    await assert.rejects(
+      recordOutcome(db, { userId: owner, id: held.id, outcome }, dek),
+      "an outcome cannot be recorded for a held request that has not run",
+    );
+    await markExecuted(db, { userId: owner, id: held.id }, dek, fixedClock(T0));
+    await assert.rejects(
+      recordOutcome(db, { userId: intruder, id: held.id, outcome }, dek),
+      "another person can never record an outcome on this person's held request",
+    );
+    assert.equal((await getByApproval(db, owner, approvalId, dek))!.outcome, undefined, "the owner's row is untouched");
   } finally {
     await db.close();
   }

@@ -30,6 +30,7 @@ import {
   createApproval as holdPending,
   deny,
   expireIfDue,
+  isDue,
   type Approval,
   type ApprovalStatus,
 } from "../../domain/approvals/state-machine";
@@ -43,7 +44,7 @@ const DETAIL_COLUMN = "detail";
 // decide hand back the same shape. `detail` comes back as ciphertext here and is
 // decrypted separately before it reaches a caller.
 const COLUMNS =
-  "id, user_id, agent_id, status, detail, question, created_at, expires_at, decided_at";
+  "id, user_id, agent_id, status, detail, question, created_at, expires_at, decided_at, released_at";
 
 // What createApproval needs: the person (the session's id), the requesting agent,
 // the detail to hold DEK-encrypted, and an optional expiry (omitted → the state
@@ -68,6 +69,8 @@ export interface StoredApproval {
   readonly expiresAt: Date;
   readonly decidedAt?: Date;
   readonly question?: string;
+  // Set the one time a card / high-tier approval's value is released (markReleased).
+  readonly releasedAt?: Date;
 }
 
 // A decision targets one of the four non-pending statuses; the repo maps each to the
@@ -104,6 +107,7 @@ function toStored(row: Row, detail: Record<string, unknown>): StoredApproval {
     expiresAt: toDate(row.expires_at),
     decidedAt: row.decided_at != null ? toDate(row.decided_at) : undefined,
     question: (row.question as string | null) ?? undefined,
+    ...(row.released_at != null ? { releasedAt: toDate(row.released_at) } : {}),
   };
 }
 
@@ -225,6 +229,21 @@ export async function listDecidedForUser(
   return approvals;
 }
 
+// Thrown when a decision cannot land because the approval is no longer pending: it
+// was already decided, a concurrent decision won the compare-and-swap, or its window
+// had passed (it is then stored as expired at once). `status` is the status the
+// approval is actually in, so a caller can say "already decided" or "expired" in
+// plain words. A typed refusal — callers catch exactly this, never a bare Error.
+export class ApprovalAlreadyDecidedError extends Error {
+  readonly status: ApprovalStatus;
+
+  constructor(id: string, status: ApprovalStatus) {
+    super(`decide: approval ${id} is no longer pending (it is ${status})`);
+    this.name = "ApprovalAlreadyDecidedError";
+    this.status = status;
+  }
+}
+
 // Apply the decision's target status to `current` via the pure state machine — which
 // throws exactly when the move is illegal (e.g. deciding a non-pending approval) and
 // only expires when the window is due.
@@ -241,12 +260,61 @@ function applyDecision(current: Approval, decision: Decision, now: Date): Approv
   }
 }
 
+// Map a raw row (and its decrypted detail) to the pure machine's Approval.
+function toApproval(row: Row, detail: Record<string, unknown>): Approval {
+  return {
+    id: row.id as string,
+    agentId: row.agent_id as string,
+    status: row.status as ApprovalStatus,
+    request: detail,
+    createdAt: toDate(row.created_at),
+    expiresAt: toDate(row.expires_at),
+    decidedAt: row.decided_at != null ? toDate(row.decided_at) : undefined,
+    question: (row.question as string | null) ?? undefined,
+  };
+}
+
+// Persist `next` as a COMPARE-AND-SWAP: the UPDATE lands only while the row is
+// still pending (member-scoped by id AND user_id), so of two concurrent decisions
+// exactly one changes the row. Returns the updated row, or null when the swap lost
+// (the row was decided by someone else first).
+async function swapFromPending(db: Db, userId: string, next: Approval): Promise<Row | null> {
+  const updated = await db.query(
+    `UPDATE approvals
+        SET status = $1, decided_at = $2::timestamptz, question = $3
+      WHERE id = $4 AND user_id = $5 AND status = 'pending'
+      RETURNING ${COLUMNS}`,
+    [next.status, next.decidedAt?.toISOString() ?? null, next.question ?? null, next.id, userId],
+  );
+  return updated.rows[0] ?? null;
+}
+
+// Re-read the row a lost compare-and-swap left behind (member-scoped).
+async function reload(db: Db, userId: string, id: string): Promise<Row> {
+  const loaded = await db.query(
+    `SELECT ${COLUMNS} FROM approvals WHERE id = $1 AND user_id = $2`,
+    [id, userId],
+  );
+  const row = loaded.rows[0];
+  if (!row) {
+    throw new Error(`decide: approval ${id} vanished during the decision`);
+  }
+  return row;
+}
+
 // Decide an approval, member-scoped. Loads the one approval OWNED BY `userId`
 // (throws when none for this user, so one person can never decide another's),
-// applies the pure transition (throwing exactly when the machine throws — an
-// already-decided approval is refused and left unchanged), persists and returns the
-// updated StoredApproval. `{status:"expired"}` delegates to expireIfDue — a no-op
-// unless the window has passed.
+// applies the pure transition and persists it as a compare-and-swap from `pending`,
+// returning the updated StoredApproval.
+//   • approved / denied / more_detail on an approval that is no longer pending —
+//     already decided, or decided concurrently by someone else first — throws
+//     ApprovalAlreadyDecidedError naming the status that actually won; the row is
+//     left unchanged. On a pending approval whose window has passed it is refused the
+//     same way (status "expired") AND the approval is stored expired at once, so an
+//     overdue request is denied even before the minute sweep runs.
+//   • `{status:"expired"}` delegates to expireIfDue — a no-op unless the window has
+//     passed — and never throws for a decision that landed first: it returns the
+//     approval as it actually stands (so the sweep never overwrites a decision).
 export async function decide(
   db: Db,
   { userId, id, decision }: DecideInput,
@@ -263,29 +331,61 @@ export async function decide(
   }
 
   const detail = await decryptDetail(dek, row.id as string, row.detail as string);
-  const current: Approval = {
-    id: row.id as string,
-    agentId: row.agent_id as string,
-    status: row.status as ApprovalStatus,
-    request: detail,
-    createdAt: toDate(row.created_at),
-    expiresAt: toDate(row.expires_at),
-    decidedAt: row.decided_at != null ? toDate(row.decided_at) : undefined,
-    question: (row.question as string | null) ?? undefined,
-  };
+  const current = toApproval(row, detail);
+  const now = clock.now();
 
-  const next = applyDecision(current, decision, clock.now());
-
-  const updated = await db.query(
-    `UPDATE approvals
-        SET status = $1, decided_at = $2::timestamptz, question = $3
-      WHERE id = $4 AND user_id = $5
-      RETURNING ${COLUMNS}`,
-    [next.status, next.decidedAt?.toISOString() ?? null, next.question ?? null, id, userId],
-  );
-  const updatedRow = updated.rows[0];
-  if (!updatedRow) {
-    throw new Error(`decide: approval ${id} vanished during the decision`);
+  if (decision.status === "expired") {
+    const next = expireIfDue(current, now);
+    // Not due, or already decided: nothing to persist.
+    if (next === current) return toStored(row, detail);
+    const swapped = await swapFromPending(db, userId, next);
+    // A decision landed between the read and the write: report it as it stands.
+    return toStored(swapped ?? (await reload(db, userId, id)), detail);
   }
-  return toStored(updatedRow, detail);
+
+  if (current.status !== "pending") {
+    throw new ApprovalAlreadyDecidedError(id, current.status);
+  }
+
+  // An overdue pending approval is expired, never decided by hand: persist the
+  // expiry now (the swap may lose to a decision that landed first) and refuse.
+  if (isDue(current, now)) {
+    const swapped = await swapFromPending(db, userId, expireIfDue(current, now));
+    const actual = (swapped ?? (await reload(db, userId, id))).status as ApprovalStatus;
+    throw new ApprovalAlreadyDecidedError(id, actual);
+  }
+
+  const next = applyDecision(current, decision, now);
+  const swapped = await swapFromPending(db, userId, next);
+  if (!swapped) {
+    // A concurrent decision won the swap: refuse, naming the status it left.
+    const actual = (await reload(db, userId, id)).status as ApprovalStatus;
+    throw new ApprovalAlreadyDecidedError(id, actual);
+  }
+  return toStored(swapped, detail);
+}
+
+// What markReleased needs: the person (member scope) and the approval id.
+export interface MarkReleasedInput {
+  readonly userId: string;
+  readonly id: string;
+}
+
+// Mark an APPROVED card / high-tier approval as released — its value handed over to
+// the agent — exactly ONCE, member-scoped (id AND user_id bound). A compare-and-swap:
+// the UPDATE lands only while the approval is approved and not yet released, so of a
+// retried, raced or replayed release only one wins. Returns true for the winner and
+// false otherwise (not this person's, not approved, or already released).
+export async function markReleased(
+  db: Db,
+  { userId, id }: MarkReleasedInput,
+  clock: Clock,
+): Promise<boolean> {
+  const updated = await db.query(
+    `UPDATE approvals SET released_at = $1::timestamptz
+      WHERE id = $2 AND user_id = $3 AND status = 'approved' AND released_at IS NULL
+      RETURNING id`,
+    [clock.now().toISOString(), id, userId],
+  );
+  return updated.rows.length > 0;
 }

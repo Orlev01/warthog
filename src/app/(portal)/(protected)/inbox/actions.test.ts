@@ -79,7 +79,12 @@ import { createAgentCallPipeline } from "../../../../server/mcp/pipeline";
 import { createRateLimiter } from "../../../../server/mcp/rate-limit";
 import { createInMemoryRecorder } from "../../../../server/activity/recorder";
 import { createUser } from "../../../../server/db/users";
+import { createAgent } from "../../../../server/db/agents";
 import { upsertPermissions } from "../../../../server/db/agent-permissions";
+import { createCheckApprovalTool } from "../../../../server/mcp/tools/check-approval";
+import { readActivity } from "../../../../server/activity/writer";
+import { createRule } from "../../../../server/db/rules";
+import { saveHighTierField } from "../../../../server/db/high-tier-fields";
 import { getApproval } from "../../../../server/db/approvals";
 import { getByApproval } from "../../../../server/db/held-requests";
 import { HttpError } from "../../../../server/http/validate";
@@ -153,8 +158,11 @@ function baseGrants(userId: string, connectionId: string, overrides: Partial<Gra
   } as Grants;
 }
 
-function connectionFor(userId: string) {
-  return { userId, connectionId: CONN, agentId: CONN, active: true };
+// The resolved connection of a REAL agent: its row id (agents.id — what approvals and
+// held requests are keyed by) is distinct from its connection id (what tool grants are
+// keyed by), exactly as in production.
+function connectionFor(userId: string, agentId: string) {
+  return { userId, connectionId: CONN, agentId, active: true };
 }
 
 // The three held-call shapes, each of which the policy engine routes to "ask" (so the
@@ -291,6 +299,11 @@ async function arrangeHeld(
   const clock: Clock = fixedClock(NOW);
   const { userId, dek } = await makePerson(db, who, keyWrapper);
   await upsertPermissions(db, baseGrants(userId, CONN, grantsOverrides));
+  const agent = await createAgent(
+    db,
+    { userId, connectionId: CONN, displayName: "Claude", platform: "claude" },
+    clock,
+  );
 
   const exec = spyExecutor();
   const pipeline = createAgentCallPipeline({
@@ -304,8 +317,9 @@ async function arrangeHeld(
   const execHold = wrapExecuteApprovedHold(pipeline);
   const actions = createInboxActions({ db, clock, keyWrapper, executeApprovedHold: execHold.fn });
 
-  const held = expectPending(await pipeline.handleAgentCall(connectionFor(userId), call));
-  return { userId, dek, pipeline, exec, execHold, actions, approvalId: held.approval_id };
+  const connection = connectionFor(userId, agent.id);
+  const held = expectPending(await pipeline.handleAgentCall(connection, call));
+  return { userId, dek, pipeline, exec, execHold, actions, agent, connection, approvalId: held.approval_id };
 }
 
 // =====================================================================================
@@ -728,5 +742,339 @@ test("the actions read no process.env: a decoy env secret never appears in a res
     await db.close();
     if (prev === undefined) delete process.env.WARTHOG_DECOY_SECRET;
     else process.env.WARTHOG_DECOY_SECRET = prev;
+  }
+});
+
+// =====================================================================================
+// Review fix C5 — decisions are compare-and-swap. A concurrent approve and deny (two
+// devices, a double-click) used to BOTH report success while the held call ran and the
+// record ended "denied". Now exactly one wins; the other is refused as already decided,
+// and the held call runs if and only if the approval ends approved. An approval past
+// its window is refused as expired (and nothing runs), even before the sweep.
+// =====================================================================================
+
+test("a concurrent approve and deny: exactly one succeeds, and the held call runs only if it ends approved", async () => {
+  for (const order of ["approve-first", "deny-first"] as const) {
+    const db = await freshDb();
+    const keyWrapper = keyWrapperFor();
+    try {
+      const a = await arrangeHeld(db, keyWrapper, `c5-race-${order}`, nonReleaseCall());
+      const session = await freshSession(db, a.userId);
+
+      const approve = () => a.actions.approveApproval(session, a.approvalId);
+      const deny = () => a.actions.denyApproval(session, a.approvalId);
+      const results = await Promise.all(order === "approve-first" ? [approve(), deny()] : [deny(), approve()]);
+
+      assert.equal(results.filter((r) => r.ok).length, 1, `${order}: exactly one decision succeeds`);
+      const refused = results.find((r) => !r.ok);
+      assert.ok(refused && !refused.ok && refused.reason === "already_decided", `${order}: the loser is told it was already decided`);
+
+      const approval = await getApproval(db, a.userId, a.approvalId, a.dek);
+      const held = await getByApproval(db, a.userId, a.approvalId, a.dek);
+      if (approval!.status === "approved") {
+        assert.equal(held!.status, "executed", `${order}: an approved hold runs`);
+        assert.equal(a.exec.calls.length, 1, `${order}: exactly once`);
+      } else {
+        assert.equal(approval!.status, "denied", `${order}: otherwise it ends denied`);
+        assert.equal(held!.status, "held", `${order}: a denied hold never runs`);
+        assert.equal(a.exec.calls.length, 0, `${order}: nothing ran`);
+      }
+    } finally {
+      await db.close();
+    }
+  }
+});
+
+test("approving an approval past its window is refused as expired and the held call never runs", async () => {
+  const db = await freshDb();
+  const keyWrapper = keyWrapperFor();
+  try {
+    const a = await arrangeHeld(db, keyWrapper, "c5-overdue", nonReleaseCall());
+    // The same actions, read 16 minutes later — past the default 15-minute window.
+    const late = fixedClock(new Date(NOW.getTime() + 16 * 60_000));
+    const lateActions = createInboxActions({ db, clock: late, keyWrapper, executeApprovedHold: a.execHold.fn });
+    const session = await freshSession(db, a.userId);
+
+    const result = await lateActions.approveApproval(session, a.approvalId);
+    assert.ok(!result.ok && result.reason === "expired", "the person is told the request expired");
+
+    const approval = await getApproval(db, a.userId, a.approvalId, a.dek);
+    assert.equal(approval!.status, "expired", "it is stored expired at once");
+    assert.equal(a.execHold.calls.length, 0, "the held call is never run");
+    assert.equal(a.exec.calls.length, 0, "the held tool never runs");
+  } finally {
+    await db.close();
+  }
+});
+
+// =====================================================================================
+// Review fix C2 — the outcome of a hold the INBOX ran reaches the agent. Approving runs
+// the held call at once; the agent's later check_approval used to be told "This
+// approved request has already been run." (the result was thrown away). Now it gets the
+// call's own result. And when the held call cannot be carried out (here: its agent was
+// disconnected after asking), the person is told so instead of a bare "Approved".
+// =====================================================================================
+
+test("after an inbox approval runs the hold, the agent's check_approval gets the call's result", async () => {
+  const db = await freshDb();
+  const keyWrapper = keyWrapperFor();
+  try {
+    const a = await arrangeHeld(db, keyWrapper, "c2-inbox-then-check", nonReleaseCall());
+    const session = await freshSession(db, a.userId);
+    expectOk(await a.actions.approveApproval(session, a.approvalId), "approve");
+    assert.equal(a.exec.calls.length, 1, "the inbox ran the held call");
+    const ranUnder = a.exec.calls[0]!.connection as { connectionId: string; agentId: string };
+    assert.equal(ranUnder.connectionId, CONN, "under the agent's real connection id");
+    assert.equal(ranUnder.agentId, a.agent.id, "and its own agent id");
+
+    const checkApproval = createCheckApprovalTool({
+      db,
+      keyWrapper,
+      clock: fixedClock(NOW),
+      sleep: async () => {},
+      executeApprovedHold: (userId, approvalId) => a.pipeline.executeApprovedHold(userId, approvalId),
+    });
+    for (const attempt of ["first", "second"]) {
+      const checked = await checkApproval.handle({ approval_id: a.approvalId, wait_seconds: 0 }, a.connection);
+      assert.deepEqual(
+        checked,
+        { status: "executed", result: { ran: "INBOX-APPROVED-RESULT" } },
+        `${attempt} check: the agent is handed the held call's result`,
+      );
+    }
+    assert.equal(a.exec.calls.length, 1, "the held call still ran exactly once");
+  } finally {
+    await db.close();
+  }
+});
+
+test("approving a hold whose agent has since disconnected approves it but tells the person nothing was carried out", async () => {
+  const db = await freshDb();
+  const keyWrapper = keyWrapperFor();
+  try {
+    const a = await arrangeHeld(db, keyWrapper, "c2-inbox-disconnected", nonReleaseCall());
+    await db.query("UPDATE agents SET status = 'disconnected' WHERE id = $1", [a.agent.id]);
+    const session = await freshSession(db, a.userId);
+
+    const result = await a.actions.approveApproval(session, a.approvalId);
+    assert.deepEqual(result, { ok: false, reason: "approved_not_run" }, "the person is told it was not carried out");
+    assert.equal(a.exec.calls.length, 0, "a disconnected agent's held call never runs");
+    assert.equal((await getByApproval(db, a.userId, a.approvalId, a.dek))!.status, "held", "the hold is left unrun");
+  } finally {
+    await db.close();
+  }
+});
+
+// =====================================================================================
+// Review fix C10 — the brief: the activity feed holds "every approval request and
+// decision". Deciding an approval used to write nothing to the tamper-evident record.
+// Each decision now writes ONE Warthog entry (kind approval_decision) naming the agent
+// and the outcome; a refused decision (lost race) writes nothing.
+// =====================================================================================
+
+test("each decision is recorded once in the person's activity feed, naming the agent and the outcome", async () => {
+  for (const [label, decideIt, outcome] of [
+    ["approve", (a: Awaited<ReturnType<typeof arrangeHeld>>, s: Session) => a.actions.approveApproval(s, a.approvalId), "approved"],
+    ["deny", (a: Awaited<ReturnType<typeof arrangeHeld>>, s: Session) => a.actions.denyApproval(s, a.approvalId), "denied"],
+    [
+      "ask",
+      (a: Awaited<ReturnType<typeof arrangeHeld>>, s: Session) => a.actions.askForMoreDetail(s, a.approvalId, "Which report?"),
+      "more_detail",
+    ],
+  ] as const) {
+    const db = await freshDb();
+    const keyWrapper = keyWrapperFor();
+    try {
+      const a = await arrangeHeld(db, keyWrapper, `c10-${label}`, nonReleaseCall());
+      const session = await freshSession(db, a.userId);
+      expectOk(await decideIt(a, session), label);
+
+      const decisions = (await readActivity(db, a.userId, a.dek)).filter((e) => e.kind === "approval_decision");
+      assert.equal(decisions.length, 1, `${label}: exactly one decision entry`);
+      const entry = decisions[0]!;
+      assert.equal(entry.source, "warthog", `${label}: Warthog writes the record`);
+      assert.equal(entry.agentId, a.agent.id, `${label}: attributed to the requesting agent`);
+      assert.equal(entry.outcome, outcome, `${label}: with the decision's outcome`);
+      assert.equal(entry.tool, "send_email", `${label}: naming the held tool`);
+
+      // Deciding again is refused and records nothing more.
+      await a.actions.denyApproval(session, a.approvalId);
+      const after = (await readActivity(db, a.userId, a.dek)).filter((e) => e.kind === "approval_decision");
+      assert.equal(after.length, 1, `${label}: a refused second decision records nothing`);
+    } finally {
+      await db.close();
+    }
+  }
+});
+
+// =====================================================================================
+// Review fix C6 — the inbox shows WHAT the agent wants. A card request used to reach the
+// person with no amount, no merchant, no sentence and no rule (the pipeline stored a
+// numeric amount and `recipients`, the inbox read text `amount` and singular
+// `recipient`). Now the pipeline stores a display-ready detail and the inbox renders
+// the exact lines: To, Amount (+ Converted with the rate's date), Merchant, Field,
+// Purpose — plus the plain sentence and the rule that triggered it.
+// =====================================================================================
+
+function line(view: { details: readonly { label: string; value: string }[] }, label: string): string | undefined {
+  return view.details.find((d) => d.label === label)?.value;
+}
+
+test("a card request reaches the inbox with its amount, merchant, sentence, reason and rule", async () => {
+  const db = await freshDb();
+  const keyWrapper = keyWrapperFor();
+  try {
+    const a = await arrangeHeld(
+      db,
+      keyWrapper,
+      "c6-card",
+      cardCall({ amount: 149.99, currency: "AUD", merchant: "JB Hi-Fi", reason: "new headphones" }),
+      { cardAccess: true, cardBudget: { amount: 500, currency: "AUD", period: "month" } },
+    );
+    const view = (await a.actions.load(await freshSession(db, a.userId))).pending[0]!;
+
+    assert.equal(line(view, "Amount"), "$149.99", "the exact amount, in its currency");
+    assert.equal(line(view, "Merchant"), "JB Hi-Fi", "the merchant");
+    assert.equal(view.sentence, "wants to use your card for $149.99 at JB Hi-Fi", "a plain sentence");
+    assert.equal(view.reason, "new headphones", "the agent's stated reason");
+    assert.ok(view.rule.length > 0, "the rule that triggered the approval");
+  } finally {
+    await db.close();
+  }
+});
+
+test("a foreign-currency card request shows the converted amount and the rate's date", async () => {
+  const db = await freshDb();
+  const keyWrapper = keyWrapperFor();
+  try {
+    const clock: Clock = fixedClock(NOW);
+    const { userId } = await makePerson(db, "c6-converted", keyWrapper);
+    await upsertPermissions(
+      db,
+      baseGrants(userId, CONN, { cardAccess: true, cardBudget: { amount: 500, currency: "AUD", period: "month" } }),
+    );
+    const agent = await createAgent(db, { userId, connectionId: CONN, displayName: "Claude", platform: "claude" }, clock);
+    const pipeline = createAgentCallPipeline({
+      db,
+      keyWrapper,
+      clock,
+      rateLimiter: createRateLimiter(clock),
+      recorder: createInMemoryRecorder({ clock }),
+      executeTool: spyExecutor().fn,
+      rate: { from: "USD", to: "AUD", rate: 1.525, date: "2026-11-14" },
+    });
+    expectPending(
+      await pipeline.handleAgentCall(connectionFor(userId, agent.id), cardCall({ amount: 100, currency: "USD", merchant: "Steam" })),
+    );
+    const actions = createInboxActions({ db, clock, keyWrapper, executeApprovedHold: pipeline.executeApprovedHold });
+    const view = (await actions.load(await freshSession(db, userId))).pending[0]!;
+
+    assert.match(line(view, "Amount") ?? "", /100\.00/, "the amount as the agent asked for it");
+    const converted = line(view, "Converted") ?? "";
+    assert.match(converted, /\$152\.50/, "the amount converted into the account currency");
+    assert.match(converted, /2026-11-14/, "with the reference rate's date");
+  } finally {
+    await db.close();
+  }
+});
+
+test("a rule-triggered held email shows who it goes to and the rule's own sentence", async () => {
+  const db = await freshDb();
+  const keyWrapper = keyWrapperFor();
+  try {
+    const clock: Clock = fixedClock(NOW);
+    const { userId, dek } = await makePerson(db, "c6-rule", keyWrapper);
+    // Changes are allowed without asking; only the rule asks.
+    await upsertPermissions(db, baseGrants(userId, CONN, { changeTools: "allow" }));
+    await createRule(
+      db,
+      {
+        userId,
+        kind: "ask_first",
+        scope: { type: "any_agent" },
+        action: { type: "send_message", channel: "email" },
+        condition: { type: "recipient_is", address: "manager@example.com" },
+      },
+      dek,
+    );
+    const agent = await createAgent(db, { userId, connectionId: CONN, displayName: "Claude", platform: "claude" }, clock);
+    const pipeline = createAgentCallPipeline({
+      db,
+      keyWrapper,
+      clock,
+      rateLimiter: createRateLimiter(clock),
+      recorder: createInMemoryRecorder({ clock }),
+      executeTool: spyExecutor().fn,
+    });
+    expectPending(
+      await pipeline.handleAgentCall(
+        connectionFor(userId, agent.id),
+        nonReleaseCall({ messageChannel: "email", recipients: ["manager@example.com", "hr@example.com"] }),
+      ),
+    );
+    const actions = createInboxActions({ db, clock, keyWrapper, executeApprovedHold: pipeline.executeApprovedHold });
+    const view = (await actions.load(await freshSession(db, userId))).pending[0]!;
+
+    assert.equal(line(view, "To"), "manager@example.com, hr@example.com", "every recipient");
+    assert.equal(view.rule, "Ask me before any agent sends email to manager@example.com", "the rule's exact sentence");
+    assert.equal(view.sentence, "wants to run send_email on gmail", "a plain sentence");
+  } finally {
+    await db.close();
+  }
+});
+
+test("a high-tier request shows the field and the stated purpose", async () => {
+  const db = await freshDb();
+  const keyWrapper = keyWrapperFor();
+  try {
+    const a = await arrangeHeld(
+      db,
+      keyWrapper,
+      "c6-high-tier",
+      highTierCall({ tool: "request_identity_detail", field: "passport", purpose: "the booking form" }),
+      { highTierAccess: true },
+    );
+    const view = (await a.actions.load(await freshSession(db, a.userId))).pending[0]!;
+
+    assert.equal(line(view, "Field"), "passport", "the field requested");
+    assert.equal(line(view, "Purpose"), "the booking form", "the stated purpose");
+    assert.equal(view.sentence, "wants to see your passport", "a plain sentence");
+  } finally {
+    await db.close();
+  }
+});
+
+// =====================================================================================
+// Review fix C7 — a high-tier "Approve and release" used to decrypt an EMPTY ciphertext
+// (the inbox never loaded the requested detail), so it always failed. The loader now
+// hands each high-tier request the person's own saved high-tier details — the one
+// matching the requested field first — as device-decryptable ciphertext only.
+// =====================================================================================
+
+test("a high-tier request carries the person's saved details, the requested field first, as ciphertext only", async () => {
+  const db = await freshDb();
+  const keyWrapper = keyWrapperFor();
+  try {
+    const a = await arrangeHeld(
+      db,
+      keyWrapper,
+      "c7-high-tier-fields",
+      highTierCall({ tool: "request_identity_detail", field: "passport" }),
+      { highTierAccess: true },
+    );
+    await saveHighTierField(db, { userId: a.userId, type: "driver_licence", label: "Driver licence", ciphertext: "v1:licenceCipher" });
+    await saveHighTierField(db, { userId: a.userId, type: "passport", label: "Passport", ciphertext: "v1:passportCipher" });
+    // Another person's detail must never be offered.
+    const other = await makePerson(db, "c7-someone-else", keyWrapper);
+    await saveHighTierField(db, { userId: other.userId, type: "passport", label: "Their passport", ciphertext: "v1:theirCipher" });
+
+    const view = (await a.actions.load(await freshSession(db, a.userId))).pending[0]!;
+    const fields = view.highTierFields ?? [];
+    assert.equal(fields.length, 2, "both of the person's own details, and nobody else's");
+    assert.equal(fields[0]!.label, "Passport", "the requested field comes first");
+    assert.equal(fields[0]!.ciphertext, "v1:passportCipher", "as the device-decryptable ciphertext");
+    assert.equal(fields[1]!.label, "Driver licence");
+  } finally {
+    await db.close();
   }
 });

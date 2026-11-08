@@ -186,20 +186,21 @@ async function issueKey(db: Db, connectionId: string): Promise<string> {
   return key;
 }
 
-// Seed a PENDING approval for `userId`'s connection (the pipeline stores approvals keyed
-// by the requesting connection). The detail carries a unique token so a leak would be
+// Seed a PENDING approval requested by `agent` — exactly as the pipeline stores it, keyed
+// by the requesting AGENT's row id (approvals.agent_id = agents.id, never the connection
+// id; the two are distinct uuids). The detail carries a unique token so a leak would be
 // unambiguous. Returns the approval id.
 async function seedPending(
   db: Db,
   userId: string,
-  connectionId: string,
+  agent: { readonly id: string },
   token: string,
 ): Promise<string> {
   const approval = await createApproval(
     db,
     {
       userId,
-      agentId: connectionId,
+      agentId: agent.id,
       detail: {
         recipient: `recipient-${token}@secret.example`,
         amount: "42.00 AUD",
@@ -318,8 +319,8 @@ test("disconnect refuses the next request, denies pending approvals, cancels the
     assert.equal(await nextRequestAccepted(db, key), true, "the access key is accepted before disconnect");
 
     // Two pending approvals for this connection, waiting in the inbox.
-    const approvalA = await seedPending(db, userId, connectionId, "a");
-    const approvalB = await seedPending(db, userId, connectionId, "b");
+    const approvalA = await seedPending(db, userId, agent, "a");
+    const approvalB = await seedPending(db, userId, agent, "b");
     assert.equal(
       (await listPendingForUser(db, userId, await dekFor(userId))).length,
       2,
@@ -372,7 +373,7 @@ test("disconnect refuses the next request, denies pending approvals, cancels the
     assert.equal(disconnectEntries.length, 1, "exactly one disconnection entry is recorded in the feed");
     const entry = disconnectEntries[0]!;
     assert.ok(
-      entry.agentId === agent.id || entry.agentId === connectionId,
+      entry.agentId === agent.id,
       "the disconnection entry names the agent that was disconnected",
     );
 
@@ -399,7 +400,7 @@ test("disconnect affects only the named agent — another of the person's agents
 
     const keyA = await issueKey(db, agentA.connectionId);
     const keyB = await issueKey(db, agentB.connectionId);
-    const pendingB = await seedPending(db, userId, agentB.connectionId, "b-survives");
+    const pendingB = await seedPending(db, userId, agentB, "b-survives");
 
     const releaseStore = createReleaseStore(fixedClock(NOW));
     releaseStore.put(releaseKey(userId, agentA.connectionId), "A-value");
@@ -442,8 +443,8 @@ test("disconnect denies only pending approvals — an already-approved one is le
     const agent = await connectAgent(db, userId);
     const connectionId = agent.connectionId;
 
-    const pending = await seedPending(db, userId, connectionId, "pending");
-    const alreadyApproved = await seedPending(db, userId, connectionId, "approved");
+    const pending = await seedPending(db, userId, agent, "pending");
+    const alreadyApproved = await seedPending(db, userId, agent, "approved");
     await decide(
       db,
       { userId, id: alreadyApproved, decision: { status: "approved" } },
@@ -485,7 +486,7 @@ test("a failure while recording the disconnection commits nothing — the agent 
     const connectionId = agent.connectionId;
 
     const key = await issueKey(db, connectionId);
-    const pending = await seedPending(db, userId, connectionId, "atomic");
+    const pending = await seedPending(db, userId, agent, "atomic");
 
     // A db that forwards every statement to the real PGlite EXCEPT the activity insert,
     // which it fails — simulating a mid-transaction error. BEGIN / the writes / ROLLBACK
@@ -545,7 +546,7 @@ test("a person cannot disconnect another person's agent — the other person's a
     const aliceAgent = await connectAgent(db, alice, "Alice's Claude");
 
     const aliceKey = await issueKey(db, aliceAgent.connectionId);
-    const alicePending = await seedPending(db, alice, aliceAgent.connectionId, "alice");
+    const alicePending = await seedPending(db, alice, aliceAgent, "alice");
 
     const releaseStore = createReleaseStore(fixedClock(NOW));
     releaseStore.put(releaseKey(alice, aliceAgent.connectionId), "alice-value");
@@ -684,5 +685,50 @@ test("no ambient env secret lands in the confirmation or the recorded disconnect
     await db.close();
     if (prev === undefined) delete process.env.WARTHOG_DECOY_SECRET;
     else process.env.WARTHOG_DECOY_SECRET = prev;
+  }
+});
+
+// =====================================================================================
+// Review fix C4 — a pending approval decided concurrently (the person approves it on
+// another device while the disconnect runs) must not abort the disconnect: the decision
+// that landed first stands, and the agent is still cut off.
+// =====================================================================================
+
+test("an approval decided while the disconnect runs is left as decided, and the disconnect still completes", async () => {
+  const db = await freshDb();
+  try {
+    const userId = await makeUser(db, "c4-race");
+    const agent = await connectAgent(db, userId);
+    const key = await issueKey(db, agent.connectionId);
+    const racing = await seedPending(db, userId, agent, "race");
+
+    // The disconnect reads the approval while it is pending; the person's approval
+    // lands before the disconnect's deny is written.
+    let fired = false;
+    const interleaved: Db = {
+      async query(text: string, values?: unknown[]) {
+        if (!fired && /^\s*UPDATE approvals/i.test(text)) {
+          fired = true;
+          await decide(db, { userId, id: racing, decision: { status: "approved" } }, await dekFor(userId), fixedClock(NOW));
+        }
+        return db.query(text, values);
+      },
+      close: () => db.close(),
+    } as Db;
+
+    const result = await disconnectAgent(
+      disconnectDeps(interleaved, createReleaseStore(fixedClock(NOW))),
+      sessionFor(userId),
+      agent.id,
+    );
+    assert.ok(result.ok, "the disconnect still completes");
+    assert.equal(await nextRequestAccepted(db, key), false, "the agent is cut off");
+    assert.equal(
+      (await getApproval(db, userId, racing, await dekFor(userId)))!.status,
+      "approved",
+      "the decision that landed first stands",
+    );
+  } finally {
+    await db.close();
   }
 });

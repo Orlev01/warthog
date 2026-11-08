@@ -7,10 +7,16 @@
 // agent (another connection's id finds nothing → refused), and then:
 //   pending      → waits up to min(wait_seconds, 25) seconds, re-reading the
 //                  approval between sleeps, and returns the first non-pending
-//                  outcome, else `pending`;
-//   approved     → runs the held call via `executeApprovedHold` EXACTLY ONCE and
-//                  returns its result (a second check finds it already run →
-//                  refused — the single-shot claim lives in the pipeline);
+//                  outcome, else `pending`; a pending approval already past its
+//                  window is expired on the spot (stored) and refused at once;
+//   approved     → a RELEASE (card / high-tier) is collected, never run: the agent
+//                  is told `released` (once the person's device has handed it over;
+//                  else `approved`) with `next: "collect_release"`. Any other
+//                  held call runs via `executeApprovedHold` EXACTLY ONCE (the
+//                  single-shot claim lives in the pipeline) and its stored outcome
+//                  is returned — the same outcome however often the agent asks,
+//                  even when the inbox ran it on approval; while another caller is
+//                  still running it, the agent keeps waiting;
 //   denied/expired → a refusal;
 //   more_detail  → the person's question.
 //
@@ -27,8 +33,10 @@
 import { z } from "zod";
 
 import { parseParams } from "../../http/validate";
-import { getApproval } from "../../db/approvals";
+import { decide, getApproval } from "../../db/approvals";
 import { getUserById } from "../../db/users";
+import { isDue } from "../../../domain/approvals/state-machine";
+import { isReleaseRequest } from "../../../domain/approvals/release-kind";
 import type { Db } from "../../db/index";
 import type { KeyWrapper } from "../../crypto/key-wrapper";
 import type { Clock } from "../../seams/clock";
@@ -65,15 +73,20 @@ export const inputSchema = z.object({
 // uuid cast would fail (OBS-049: resolve an id-typed selector's shape deliberately).
 const approvalIdShape = z.uuid();
 
-// What an approved held call hands back (the pipeline's ApprovedHoldResult shape).
+// What an approved held call hands back (the pipeline's ApprovedHoldResult shape):
+// its outcome, or `in_progress` while another caller is still running it.
 export type ApprovedHoldResult =
   | { status: "executed"; result: unknown }
-  | { status: "refused"; reason: string };
+  | { status: "refused"; reason: string }
+  | { status: "in_progress" };
 
-// What check_approval returns to the waiting agent.
+// What check_approval returns to the waiting agent. `released` / `approved` + `next`
+// is an approved RELEASE: the agent collects the value with collect_release (`released`
+// once the person's device has handed it over).
 export type CheckApprovalResult =
   | { status: "pending"; approval_id: string }
   | { status: "executed"; result: unknown }
+  | { status: "approved" | "released"; approval_id: string; next: "collect_release" }
   | { status: "refused"; reason: string }
   | { status: "more_detail"; approval_id: string; question: string };
 
@@ -96,6 +109,19 @@ export interface CheckApprovalDeps {
 // (not found for this person, or owned by another of their connections). The same
 // message either way, so an id probe cannot distinguish "not mine" from "not here".
 const NOT_FOUND = "There's no approval to check for you.";
+const EXPIRED = "This request expired before it was approved.";
+
+// The pure machine's view of a stored approval — just what `isDue` reads.
+function approvalWindow(approval: NonNullable<Awaited<ReturnType<typeof getApproval>>>) {
+  return {
+    id: approval.id,
+    agentId: approval.agentId,
+    status: approval.status,
+    request: approval.detail,
+    createdAt: approval.createdAt,
+    expiresAt: approval.expiresAt,
+  };
+}
 
 export function createCheckApprovalTool(deps: CheckApprovalDeps): CheckApprovalTool {
   const { db, keyWrapper, clock, sleep, executeApprovedHold } = deps;
@@ -117,20 +143,40 @@ export function createCheckApprovalTool(deps: CheckApprovalDeps): CheckApprovalT
   async function resolve(
     approval: Awaited<ReturnType<typeof getApproval>>,
     connection: AgentConnection,
+    dek: Uint8Array,
   ): Promise<CheckApprovalResult | null> {
     if (!approval || approval.agentId !== connection.agentId) {
       return { status: "refused", reason: NOT_FOUND };
     }
     switch (approval.status) {
-      case "pending":
-        return null;
-      case "approved":
-        // Run the held call exactly once; the pipeline refuses a second attempt.
-        return executeApprovedHold(connection.userId, approval.id);
+      case "pending": {
+        // An approval already past its window "is denied" now, not when the minute
+        // sweep next runs: store the expiry (a decision that landed first stands) and
+        // answer with whatever the approval actually came to.
+        if (!isDue(approvalWindow(approval), clock.now())) return null;
+        const settled = await decide(
+          db,
+          { userId: connection.userId, id: approval.id, decision: { status: "expired" } },
+          dek,
+          clock,
+        );
+        return settled.status === "pending" ? null : resolve(settled, connection, dek);
+      }
+      case "approved": {
+        // A release is collected, never run: tell the agent where to get it.
+        if (isReleaseRequest(approval.detail.request)) {
+          const status = approval.releasedAt !== undefined ? "released" : "approved";
+          return { status, approval_id: approval.id, next: "collect_release" };
+        }
+        // Run the held call exactly once (the pipeline's single-shot claim) and hand
+        // back its stored outcome; keep waiting while another caller is running it.
+        const outcome = await executeApprovedHold(connection.userId, approval.id);
+        return outcome.status === "in_progress" ? null : outcome;
+      }
       case "denied":
         return { status: "refused", reason: "You turned this request down." };
       case "expired":
-        return { status: "refused", reason: "This request expired before it was approved." };
+        return { status: "refused", reason: EXPIRED };
       case "more_detail":
         return { status: "more_detail", approval_id: approval.id, question: approval.question ?? "" };
     }
@@ -162,7 +208,7 @@ export function createCheckApprovalTool(deps: CheckApprovalDeps): CheckApprovalT
       // (no wait). While it is pending, sleep and re-read until the deadline passes.
       while (true) {
         const approval = await getApproval(db, connection.userId, parsed.approval_id, dek);
-        const outcome = await resolve(approval, connection);
+        const outcome = await resolve(approval, connection, dek);
         if (outcome) return outcome;
 
         const now = clock.now().getTime();

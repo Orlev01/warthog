@@ -948,3 +948,112 @@ test("with the real notifier wired, a push failure on an ask decision still sche
     await db.close();
   }
 });
+
+// ===========================================================================
+// Review fix C9 — a tool body that refuses (`{status:"refused", reason}` — e.g. "This
+// agent does not have permission to use memories.") did nothing, so it must not be
+// returned to the agent as a success (isError:false) nor written to the tamper-evident
+// activity record as "executed". It is recorded "refused" and returned as a refusal
+// carrying the body's own plain reason.
+// ===========================================================================
+
+test("a tool body's own refusal is recorded as refused and returned as a refusal, never as executed", async () => {
+  const db = await freshDb();
+  const keyWrapper = keyWrapperFor();
+  try {
+    const { userId } = await makePerson(db, "c9-body-refusal", keyWrapper);
+    await upsertPermissions(db, baseGrants(userId, CONN));
+
+    const reason = "This agent does not have permission to use memories.";
+    const rec = spyRecorder(fixedClock(NOW));
+    const exec = spyExecutor(undefined, { status: "refused", reason });
+    const pipeline = buildPipeline(db, keyWrapper, {
+      clock: fixedClock(NOW),
+      rateLimiter: createRateLimiter(fixedClock(NOW)),
+      recorder: rec.recorder,
+      executeTool: exec.fn,
+    });
+
+    const result = expectRefused(
+      await pipeline.handleAgentCall(connectionFor(userId), callFor({ tool: "search_memory" })),
+    );
+    assert.equal(result.reason, reason, "the agent is handed the body's own plain reason");
+    assert.equal(exec.calls.length, 1, "the body did run (and refused)");
+    assert.equal(rec.entries.length, 1, "exactly one activity entry is recorded");
+    assert.equal(rec.entries[0]!.outcome, "refused", "the activity record says refused, not executed");
+  } finally {
+    await db.close();
+  }
+});
+
+test("a result that merely carries a status field is still executed (only a refusal with a reason is a refusal)", async () => {
+  const db = await freshDb();
+  const keyWrapper = keyWrapperFor();
+  try {
+    const { userId } = await makePerson(db, "c9-not-refusal", keyWrapper);
+    await upsertPermissions(db, baseGrants(userId, CONN));
+
+    const rec = spyRecorder(fixedClock(NOW));
+    const exec = spyExecutor(undefined, { status: "saved", id: "m-1" });
+    const pipeline = buildPipeline(db, keyWrapper, {
+      clock: fixedClock(NOW),
+      rateLimiter: createRateLimiter(fixedClock(NOW)),
+      recorder: rec.recorder,
+      executeTool: exec.fn,
+    });
+
+    const result = expectExecuted(
+      await pipeline.handleAgentCall(connectionFor(userId), callFor({ tool: "search_memory" })),
+    );
+    assert.deepEqual(result.result, { status: "saved", id: "m-1" }, "the body's result is handed back as-is");
+    assert.equal(rec.entries[0]!.outcome, "executed", "and recorded as executed");
+  } finally {
+    await db.close();
+  }
+});
+
+// ===========================================================================
+// Review fix (approval/held-request atomicity) — the ASK path writes the pending
+// approval and the held call it guards together. A failure part-way used to leave a
+// pending approval in the person's inbox with no held call behind it (approving it ran
+// nothing). Now both commit together or neither does, and the agent is told nothing
+// is pending.
+// ===========================================================================
+
+test("if holding the call fails, no pending approval is left behind", async () => {
+  const db = await freshDb();
+  const keyWrapper = keyWrapperFor();
+  try {
+    const { userId } = await makePerson(db, "atomic-ask", keyWrapper);
+    await upsertPermissions(db, baseGrants(userId, CONN, {
+      cardAccess: true,
+      cardBudget: { amount: 500, currency: "AUD", period: "month" },
+    }));
+    // A db that fails the held-call insert — any failure after the approval is written.
+    const failing: Db = {
+      query(text: string, values?: unknown[]) {
+        if (/insert\s+into\s+held_requests/i.test(text)) {
+          return Promise.reject(new Error("injected failure: held request write failed"));
+        }
+        return db.query(text, values);
+      },
+      close: () => db.close(),
+    };
+    const pipeline = buildPipeline(failing, keyWrapper, {
+      clock: fixedClock(NOW),
+      rateLimiter: createRateLimiter(fixedClock(NOW)),
+      recorder: spyRecorder(fixedClock(NOW)).recorder,
+      executeTool: spyExecutor().fn,
+    });
+
+    await assert.rejects(
+      pipeline.handleAgentCall(connectionFor(userId), callFor({ tool: "request_card", makesChange: true, request: "card", amount: 42, currency: "AUD", merchant: "BoxCo" })),
+      /held request write failed/,
+      "the failure is surfaced, never a silent pending_approval",
+    );
+    const pending = await db.query("SELECT id FROM approvals WHERE user_id = $1", [userId]);
+    assert.equal(pending.rows.length, 0, "no orphan pending approval is left in the inbox");
+  } finally {
+    await db.close();
+  }
+});

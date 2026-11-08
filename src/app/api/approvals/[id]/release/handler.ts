@@ -4,21 +4,34 @@
 // INV-101 admin-auth-required, INV-102 validate-and-parameterize-input,
 // INV-103 secrets-from-env.
 //
-// On approval, after a fresh step-up, the browser decrypts the high-tier value / card
-// detail with the vault key (E11-S07..S09) and POSTs the PLAINTEXT to
-// `/api/approvals/[id]/release`. This endpoint is the server half of a release. It:
-//   1. requires a server-verified session (INV-101) AND a step-up within the last 5
+// "Approve and release" is ONE step on the person's device: after a fresh step-up the
+// browser decrypts the high-tier value / card detail with the vault key (E11-S07..S09)
+// and POSTs the PLAINTEXT to `/api/approvals/[id]/release`. This endpoint is the server
+// half of that step. It:
+//   1. checks the request's `Origin` against the configured public origin and requires
+//      a JSON body (design §5: every route checks Origin) — otherwise nothing happens;
+//   2. requires a server-verified session (INV-101) AND a step-up within the last 5
 //      minutes (design §5) — otherwise it releases nothing;
-//   2. shape-guards the approval id (a non-UUID is a 4xx before `WHERE id = $1`,
+//   3. shape-guards the approval id (a non-UUID is a 4xx before `WHERE id = $1`,
 //      never a raw cast / 500 — OBS-049, INV-102);
-//   3. loads the approval MEMBER-SCOPED by the session user; it must be `approved`
-//      and owned by that user — else a 4xx (another user's approval is never
-//      releasable);
-//   4. validates the body `{ value }` (malformed / oversized / mis-shaped → a 4xx,
-//      never a 500 — INV-102), then puts the value in the process-wide in-memory
-//      release store under the SAME `releaseKeyFor` the agent's `collect_release`
-//      reads it with, and persists a keyed one-way HMAC FINGERPRINT of the value for
-//      90 days — NEVER writing the value itself to the database, a log or a metric.
+//   4. loads the approval MEMBER-SCOPED by the session user; it must be a card or
+//      high-tier RELEASE that is pending or approved and not yet released — else a 4xx
+//      (another user's approval, a routine held call, a denied / expired one, or one
+//      already released is never releasable);
+//   5. re-resolves the requesting agent (member-scoped) — it must still be connected
+//      and still allowed the access (card / high-tier) — so a value is never planted
+//      for a revoked agent;
+//   6. validates the body `{ value }` (malformed / oversized / mis-shaped → a 4xx,
+//      never a 500 — INV-102);
+//   7. in ONE transaction: approves a pending approval (the store's compare-and-swap),
+//      marks it released exactly once, for a card re-checks the agent's budget (with
+//      the agent row locked, so approvals made before any release cannot together
+//      overspend it) and records the spend in the ledger, and persists a keyed one-way
+//      HMAC FINGERPRINT of the value for 90 days — NEVER writing the value itself to
+//      the database, a log or a metric;
+//   8. then puts the value in the process-wide in-memory release store under the
+//      requesting agent's REAL connection (`releaseKeyFor`, the SAME key the agent's
+//      `collect_release` reads), for its single collection.
 //
 // A Next App-Router `route.ts` may export ONLY the known route keys (OBS-025), so the
 // injectable factory lives HERE; `route.ts` imports it and exports only `POST`. Every
@@ -39,9 +52,22 @@ import {
   type Session,
 } from "../../../../../server/auth/session";
 import { requireStepUp } from "../../../../../server/auth/step-up";
-import { getApproval } from "../../../../../server/db/approvals";
+import {
+  ApprovalAlreadyDecidedError,
+  decide,
+  getApproval,
+  markReleased,
+  type StoredApproval,
+} from "../../../../../server/db/approvals";
+import { getAgentById } from "../../../../../server/db/agents";
+import { getConnectionPermissions } from "../../../../../server/db/agent-permissions";
+import { periodKeyFor, recordRelease, sumForConnectionPeriod } from "../../../../../server/db/card-spend-ledger";
+import { getHouseholdForMember } from "../../../../../server/db/households";
 import { getUserById } from "../../../../../server/db/users";
 import { storeFingerprint } from "../../../../../server/db/release-fingerprints";
+import { withTransaction } from "../../../../../server/db/index";
+import { isReleaseRequest } from "../../../../../domain/approvals/release-kind";
+import { createDbRecorder } from "../../../../../server/activity/writer";
 import { fingerprint } from "../../../../../server/crypto/hmac";
 import { releaseStore, type ReleaseStore } from "../../../../../server/crypto/release-store";
 import { selectKeyWrapper, type KeyWrapper } from "../../../../../server/crypto/key-wrapper";
@@ -81,6 +107,9 @@ export interface ReleaseSeams {
   readonly releaseStore?: ReleaseStore;
   // Unwraps the person's DEK to fingerprint the released value.
   readonly keyWrapper?: KeyWrapper;
+  // The origin every POST's Origin header must match (design §5). Production reads
+  // the configured public base URL.
+  readonly publicOrigin?: string;
 }
 
 // --- production defaults ------------------------------------------------------------
@@ -126,6 +155,45 @@ function json(status: number, body: unknown): Response {
   });
 }
 
+// A release that cannot go ahead, answered with its status and stable error code.
+// Inside the release transaction a refusal is RETURNED (the transaction commits), not
+// thrown: no refusal path has anything to undo — the budget check runs before any
+// write, an expiry stored by the decision should stand, and a concurrent approval of
+// the same request is genuine. Only an unexpected failure throws and rolls back.
+interface ReleaseRefused {
+  readonly status: number;
+  readonly code: string;
+}
+
+// The stable error codes the browser maps to plain copy.
+const NOT_RELEASABLE = "not_releasable";
+const ALREADY_RELEASED = "already_released";
+const EXPIRED = "expired";
+const OVER_BUDGET = "over_budget";
+
+// What a card release counts against the agent's budget: the approved amount in the
+// budget's currency (the converted amount when the request was in another currency)
+// and the merchant. Null when the stored detail does not carry a usable amount — the
+// release is then refused rather than counted wrongly.
+function cardSpendOf(
+  detail: Record<string, unknown>,
+): { amount: number; currency: string; merchant: string } | null {
+  const converted = detail.converted as { amount?: unknown; currency?: unknown } | undefined;
+  const amount = converted?.amount ?? detail.amount;
+  const currency = converted?.currency ?? detail.currency;
+  const merchant = detail.merchant;
+  if (typeof amount !== "number" || !Number.isFinite(amount) || amount <= 0) return null;
+  if (typeof currency !== "string" || typeof merchant !== "string") return null;
+  return { amount, currency, merchant };
+}
+
+// Whether an approval can still be released by this request: a pending one (approved
+// in the same step) or an approved one whose value has not been handed over yet.
+function stillReleasable(approval: StoredApproval): boolean {
+  if (approval.releasedAt !== undefined) return false;
+  return approval.status === "pending" || approval.status === "approved";
+}
+
 // --- the handler --------------------------------------------------------------------
 
 export function createReleaseHandler(
@@ -138,15 +206,25 @@ export function createReleaseHandler(
     const store = seams.releaseStore ?? releaseStore;
 
     try {
-      // 1. Auth boundary (INV-101): a server-verified session, or nothing happens —
+      // 1. Origin FIRST (design §5): a missing or foreign Origin changes nothing. The
+      //    body must be JSON, so a cross-site "simple" text/plain post is refused too.
+      const publicOrigin = seams.publicOrigin ?? new URL(loadConfig().publicBaseUrl).origin;
+      if (request.headers.get("origin") !== publicOrigin) {
+        return json(403, { error: "forbidden" });
+      }
+      if (!(request.headers.get("content-type") ?? "").toLowerCase().startsWith("application/json")) {
+        return json(415, { error: "unsupported_media_type" });
+      }
+
+      // 2. Auth boundary (INV-101): a server-verified session, or nothing happens —
       //    identity is the session's user id, never a client value.
       const session = await resolveSession(request);
       if (session == null) {
         return json(401, { error: "unauthenticated" });
       }
 
-      // 2. A step-up within the last 5 minutes is required for a release (design §5);
-      //    a missing / stale step-up releases nothing.
+      // A step-up within the last 5 minutes is required for a release (design §5);
+      // a missing / stale step-up releases nothing.
       if (!requireStepUp(session, { clock })) {
         return json(403, { error: "step_up_required" });
       }
@@ -158,40 +236,149 @@ export function createReleaseHandler(
 
       const db = seams.db ?? (await getServerDb());
       const keyWrapper = seams.keyWrapper ?? defaultKeyWrapper();
+      const userId = session.userId;
 
       // Resolve the person's unwrapped DEK (member-scoped by the session user): read
       // their wrapped DEK and unwrap it through the KeyWrapper seam. It keys both the
       // approval-detail decryption and the released-value fingerprint.
-      const user = await getUserById(db, session.userId);
+      const user = await getUserById(db, userId);
       if (user == null) {
-        return json(403, { error: "not_releasable" });
+        return json(403, { error: NOT_RELEASABLE });
       }
       const dek = await keyWrapper.unwrap(user.wrappedDek);
 
       // 4. Load the approval MEMBER-SCOPED by the session user: another user's id finds
-      //    nothing. It must be `approved` — a pending/denied/expired one is not
-      //    releasable. Either way a uniform 4xx that leaks nothing, nothing released.
-      const approval = await getApproval(db, session.userId, id, dek);
-      if (approval == null || approval.status !== "approved") {
-        return json(403, { error: "not_releasable" });
+      //    nothing. Only a card / high-tier RELEASE that is pending or approved and not
+      //    yet released can be released — a uniform 4xx that leaks nothing otherwise.
+      const approval = await getApproval(db, userId, id, dek);
+      if (approval == null || !isReleaseRequest(approval.detail.request)) {
+        return json(403, { error: NOT_RELEASABLE });
+      }
+      if (approval.releasedAt !== undefined) {
+        return json(409, { error: ALREADY_RELEASED });
+      }
+      if (approval.status === "expired") {
+        return json(403, { error: EXPIRED });
+      }
+      if (!stillReleasable(approval)) {
+        return json(403, { error: NOT_RELEASABLE });
+      }
+      const kind = approval.detail.request;
+
+      // 5. The requesting agent, re-resolved member-scoped: it must still be connected
+      //    and still allowed this access, so a value is never planted for an agent the
+      //    person has since disconnected or restricted.
+      const agent = await getAgentById(db, userId, approval.agentId);
+      if (agent == null || agent.status !== "connected") {
+        return json(403, { error: NOT_RELEASABLE });
+      }
+      const permissions = await getConnectionPermissions(db, userId, agent.connectionId);
+      const allowed = kind === "card" ? permissions?.cardAccess === true : permissions?.highTierAccess === true;
+      if (!permissions || !allowed) {
+        return json(403, { error: NOT_RELEASABLE });
+      }
+      const spend = kind === "card" ? cardSpendOf(approval.detail) : null;
+      if (kind === "card" && (spend === null || permissions.cardBudget === null || spend.currency !== permissions.cardBudget.currency)) {
+        // A card release must be counted against the agent's budget; one that cannot be
+        // (no usable amount, no budget, or a currency the budget is not kept in) is refused.
+        return json(403, { error: NOT_RELEASABLE });
       }
 
-      // 5. Validate the body (`{ value }`): malformed / oversized / mis-shaped is a 4xx
+      // 6. Validate the body (`{ value }`): malformed / oversized / mis-shaped is a 4xx
       //    (never a 500), before any store or db write.
       const { value } = await parseBody(bodySchema, request, { maxBytes: MAX_BODY_BYTES });
 
-      // 6. Persist the keyed one-way fingerprint FIRST (the audit record), then hand the
-      //    value to the agent's single collection through the in-memory store, under the
-      //    SAME key `collect_release` reads it with. The value itself is never written to
-      //    the database, a log or a metric — only its fingerprint, for 90 days.
-      await storeFingerprint(db, { userId: session.userId, fingerprint: fingerprint(dek, value) }, clock);
-      const key = releaseKeyFor({
-        userId: approval.userId,
-        connectionId: approval.agentId,
-        agentId: approval.agentId,
-        active: true,
+      // 7. ONE transaction: approve (if pending), mark released exactly once, count a
+      //    card's spend, and persist the keyed one-way fingerprint (the audit record).
+      //    Any refusal rolls every write back. The value itself is never written to the
+      //    database, a log or a metric — only its fingerprint, for 90 days.
+      const now = clock.now();
+      const refused = await withTransaction(db, async (tx): Promise<ReleaseRefused | null> => {
+        // Serialise releases for this agent (its row locked for the transaction), so two
+        // approvals made before either was released cannot together overspend a budget.
+        await tx.query("SELECT id FROM agents WHERE id = $1 AND user_id = $2 FOR UPDATE", [agent.id, userId]);
+
+        if (spend !== null && permissions.cardBudget !== null) {
+          const budget = permissions.cardBudget;
+          const spent = await sumForConnectionPeriod(
+            tx,
+            userId,
+            agent.connectionId,
+            budget.period,
+            periodKeyFor(budget.period, now),
+          );
+          if (spent + spend.amount > budget.amount) {
+            return { status: 409, code: OVER_BUDGET };
+          }
+        }
+
+        if (approval.status === "pending") {
+          try {
+            await decide(tx, { userId, id, decision: { status: "approved" } }, dek, clock);
+          } catch (error) {
+            if (!(error instanceof ApprovalAlreadyDecidedError)) throw error;
+            // A concurrent approval of the same request stands; anything else does not
+            // (an overdue approval has just been stored expired).
+            if (error.status === "expired") return { status: 403, code: EXPIRED };
+            if (error.status !== "approved") return { status: 403, code: NOT_RELEASABLE };
+          }
+        }
+
+        if (!(await markReleased(tx, { userId, id }, clock))) {
+          return { status: 409, code: ALREADY_RELEASED };
+        }
+
+        if (spend !== null) {
+          const household = await getHouseholdForMember(tx, userId);
+          await recordRelease(tx, {
+            userId,
+            connectionId: agent.connectionId,
+            householdId: household?.id ?? null,
+            amount: spend.amount,
+            currency: spend.currency,
+            merchant: spend.merchant,
+            periodKeys: {
+              day: periodKeyFor("day", now),
+              week: periodKeyFor("week", now),
+              month: periodKeyFor("month", now),
+            },
+            approvalId: id,
+          });
+        }
+
+        await storeFingerprint(tx, { userId, fingerprint: fingerprint(dek, value) }, clock);
+
+        // Record the release in the activity feed, in the same transaction (brief: the
+        // release is recorded without the value; a card's approved amount and merchant
+        // are recorded). Warthog writes it, redacted and DEK-encrypted — the value is
+        // never part of it.
+        const recorder = createDbRecorder({ db: tx, clock, dekFor: async () => dek });
+        await recorder.record({
+          userId,
+          kind: kind === "card" ? "card_release" : "identity_release",
+          source: "warthog",
+          agentId: agent.id,
+          tool: typeof approval.detail.tool === "string" ? approval.detail.tool : undefined,
+          outcome: "released",
+          merchant: spend?.merchant,
+          payload:
+            spend !== null
+              ? { approvalId: id, amount: spend.amount, currency: spend.currency }
+              : { approvalId: id, field: approval.detail.field, purpose: approval.detail.purpose },
+        });
+        return null;
       });
-      store.put(key, value);
+      if (refused !== null) {
+        return json(refused.status, { error: refused.code });
+      }
+
+      // 8. Hand the value to the agent's single collection through the in-memory store,
+      //    under the requesting agent's REAL connection — the SAME key `collect_release`
+      //    reads it with (never the agent's row id).
+      store.put(
+        releaseKeyFor({ userId, connectionId: agent.connectionId, agentId: agent.id, active: true }),
+        value,
+      );
 
       return json(200, { status: "released" });
     } catch (error) {

@@ -92,46 +92,62 @@ export function createApproval(input: CreateApprovalInput, now: Date): Approval 
   };
 }
 
-/** Guard: only a pending approval may be decided or asked about. */
-function requirePending(approval: Approval, action: string): void {
+/**
+ * Whether a PENDING approval's window has been reached (now >= expiresAt). An
+ * overdue request "is denied": it can no longer be decided by hand, even before
+ * anything has marked it expired — only expireIfDue may move it.
+ */
+export function isDue(approval: Approval, now: Date): boolean {
+  return approval.status === "pending" && ms(now) >= ms(approval.expiresAt);
+}
+
+/**
+ * Guard: only a pending approval still inside its window may be decided or asked
+ * about.
+ */
+function requirePending(approval: Approval, action: string, now: Date): void {
   if (approval.status !== "pending") {
     throw new Error(
       `Cannot ${action} an approval in status "${approval.status}"; only a pending approval can be.`,
     );
   }
+  if (isDue(approval, now)) {
+    throw new Error(`Cannot ${action} an approval whose expiry time has passed; it has expired.`);
+  }
 }
 
 /**
  * A pending approval → approved, stamping the decision time. Illegal from any
- * non-pending status (throws — never fails silently). Returns a new object and
- * does not mutate the input.
+ * non-pending status, or once the window has passed (throws — never fails
+ * silently). Returns a new object and does not mutate the input.
  */
 export function approve(approval: Approval, now: Date): Approval {
-  requirePending(approval, "approve");
+  requirePending(approval, "approve", now);
   return { ...approval, status: "approved", decidedAt: new Date(ms(now)) };
 }
 
 /**
  * A pending approval → denied, stamping the decision time. Illegal from any
- * non-pending status (throws). Returns a new object and does not mutate the input.
+ * non-pending status, or once the window has passed (throws). Returns a new object
+ * and does not mutate the input.
  */
 export function deny(approval: Approval, now: Date): Approval {
-  requirePending(approval, "deny");
+  requirePending(approval, "deny", now);
   return { ...approval, status: "denied", decidedAt: new Date(ms(now)) };
 }
 
 /**
  * A pending approval → more_detail, recording the question on the SAME approval
- * (same id). Illegal from any non-pending status (throws); an empty or blank
- * question is rejected ("records a question" needs one). The held request is
- * preserved while detail is sought.
+ * (same id). Illegal from any non-pending status, or once the window has passed
+ * (throws); an empty or blank question is rejected ("records a question" needs
+ * one). The held request is preserved while detail is sought.
  */
 export function askForMoreDetail(
   approval: Approval,
   question: string,
-  _now: Date,
+  now: Date,
 ): Approval {
-  requirePending(approval, "ask for more detail");
+  requirePending(approval, "ask for more detail", now);
   if (question.trim() === "") {
     throw new Error("A question is required to ask for more detail.");
   }

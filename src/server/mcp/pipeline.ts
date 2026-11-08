@@ -32,7 +32,9 @@ import {
   type PolicyCall,
   type PolicyContext,
 } from "../../domain/policy/evaluate";
-import type { ReferenceRate } from "../../domain/currency/convert";
+import { convert, type ReferenceRate } from "../../domain/currency/convert";
+import { ruleSentence } from "../../domain/rules/rules";
+import { requestSentence } from "../../domain/approvals/request-sentence";
 import {
   cardPolicyFor,
   cardRequestOf,
@@ -41,13 +43,23 @@ import {
   type AgentContext,
 } from "./context";
 import { createApproval, getApproval } from "../db/approvals";
-import { createHeldRequest, getByApproval, markExecuted, type StoredHeldRequest } from "../db/held-requests";
+import {
+  createHeldRequest,
+  getByApproval,
+  markExecuted,
+  recordOutcome,
+  HeldRequestAlreadyExecutedError,
+  type HeldOutcome,
+  type StoredHeldRequest,
+} from "../db/held-requests";
+import { getAgentById } from "../db/agents";
 import { getUserById } from "../db/users";
+import { isReleaseRequest } from "../../domain/approvals/release-kind";
 import type { RateLimiter } from "./rate-limit";
 import type { ActivityRecorder } from "../activity/recorder";
 import type { KeyWrapper } from "../crypto/key-wrapper";
 import type { Clock } from "../seams/clock";
-import type { Db } from "../db/index";
+import { withTransaction, type Db } from "../db/index";
 
 // What the agent is asking to do. The policy-relevant fields are exactly the
 // engine's `PolicyCall`, plus the tool `params` (executed + recorded, redacted)
@@ -62,7 +74,8 @@ export interface AgentCall {
   readonly merchant?: string;
   readonly recipients?: string | readonly string[] | null;
   readonly messageChannel?: "email" | "chat" | "post";
-  // A high-tier request's field and stated purpose, shown to the person on the approval.
+  // A high-tier request's field (e.g. "passport") and the agent's stated purpose,
+  // shown to the person on the approval (brief "High-tier release").
   readonly field?: string;
   readonly purpose?: string;
   readonly params?: unknown;
@@ -130,6 +143,7 @@ const CATEGORY_DISCONNECTED = "disconnected";
 const CATEGORY_RATE_LIMITED = "rate_limited";
 const CATEGORY_DENIED = "denied";
 const CATEGORY_TOOL_ERROR = "tool_error";
+const CATEGORY_TOOL_REFUSED = "tool_refused";
 
 // The pipeline's internal classification of a handled call: the public result plus — on a
 // refusal — the short error-category label the request metrics carry. The outcome dimension
@@ -139,12 +153,31 @@ interface DecidedCall {
   readonly errorCategory?: string;
 }
 
-// The result of running an approved held call: it either ran the held tool exactly
-// once (and returns its result) or was refused (not approved, already executed, or
-// expired) with the tool left un-run.
+// The result of running an approved held call: the held tool ran exactly once and
+// returned its result, or the call was refused (not approved / expired / a release /
+// its agent disconnected — the tool left un-run — or the tool body itself refused).
+// Once a hold has run, its stored outcome is handed back however often it is asked
+// for. `in_progress` means another caller has claimed the hold and is running it
+// right now (ask again shortly).
 export type ApprovedHoldResult =
   | { status: "executed"; result: unknown }
-  | { status: "refused"; reason: string };
+  | { status: "refused"; reason: string }
+  | { status: "in_progress" };
+
+// The plain reasons executeApprovedHold refuses with.
+const HOLD_NOT_CONNECTED = "This agent is no longer connected, so its request was not carried out.";
+const HOLD_IS_RELEASE =
+  "This request is a one-time release: the agent collects it with collect_release once you hand it over.";
+const HOLD_FAILED = "The approved request could not be completed.";
+
+// Whether a tool body's result is its own plain refusal (`{status:"refused", reason}`
+// — e.g. "This agent does not have permission to use memories."). Such a call did not
+// do anything, so it is recorded and returned as refused, never as executed.
+function asToolRefusal(result: unknown): { status: "refused"; reason: string } | null {
+  if (typeof result !== "object" || result === null) return null;
+  const { status, reason } = result as { status?: unknown; reason?: unknown };
+  return status === "refused" && typeof reason === "string" ? { status: "refused", reason } : null;
+}
 
 export interface AgentCallPipeline {
   handleAgentCall(connection: AgentConnection, call: AgentCall): Promise<AgentCallResult>;
@@ -206,10 +239,47 @@ function toPolicyCall(call: AgentCall): PolicyCall {
   };
 }
 
-// The approval `detail` the person reviews in their inbox: a summary of WHAT the
-// held call will do (recipient / amount / field), stored DEK-encrypted by the
-// approvals store. The raw tool arguments live on the linked held request.
-function toApprovalDetail(call: AgentCall): Record<string, unknown> {
+// A foreign-currency card amount converted into the account currency with the SAME
+// reference rate the policy engine used (to the cent), with the rate's date — the
+// approval shows both amounts and the date (brief "Currency"), and the release counts
+// the converted amount against the budget. Null when no conversion applies.
+function convertedAmount(
+  call: AgentCall,
+  accountCurrency: string,
+  rate: ReferenceRate | null,
+): { amount: number; currency: string; rate: number; rateDate: string } | null {
+  if (call.request !== "card" || call.amount === undefined || call.currency === undefined) return null;
+  if (call.currency === accountCurrency) return null;
+  const converted = convert(call.amount, rate);
+  if (!converted.ok) return null;
+  return {
+    amount: Math.round(converted.converted.amount * 100) / 100,
+    currency: converted.converted.currency,
+    rate: converted.rate,
+    rateDate: converted.rateDate,
+  };
+}
+
+// The sentence of the rule that triggered the ask, or the engine's own plain reason
+// when no rule fired (e.g. "A card request needs your approval.").
+function triggeringRule(decision: { reason: string; ruleId?: string }, context: AgentContext): string {
+  const rule = decision.ruleId === undefined ? undefined : context.rules.find((r) => r.id === decision.ruleId);
+  return rule ? ruleSentence(rule) : decision.reason;
+}
+
+// The approval `detail` the person reviews in their inbox, display-ready: WHAT the
+// held call will do in plain words, the exact details (recipients / amount + currency
+// + any converted amount / merchant / field / purpose), the agent's reason and the
+// rule that triggered it — stored DEK-encrypted by the approvals store. The raw tool
+// arguments live on the linked held request; the raw numeric amount stays here too for
+// the release and budget paths.
+function toApprovalDetail(
+  call: AgentCall,
+  decision: { reason: string; ruleId?: string },
+  context: AgentContext,
+  rate: ReferenceRate | null,
+): Record<string, unknown> {
+  const converted = convertedAmount(call, context.accountCurrency, rate);
   return {
     tool: call.tool,
     connector: call.connector,
@@ -221,6 +291,9 @@ function toApprovalDetail(call: AgentCall): Record<string, unknown> {
     field: call.field,
     purpose: call.purpose,
     reason: call.reason,
+    sentence: requestSentence(call),
+    rule: triggeringRule(decision, context),
+    ...(converted ? { converted } : {}),
   };
 }
 
@@ -337,27 +410,34 @@ export function createAgentCallPipeline(deps: PipelineDeps): AgentCallPipeline {
     // approval Warthog runs the held call exactly once.
     if (decision.decision === "ask") {
       const dek = await dataKeyFor(connection.userId);
-      const approval = await createApproval(
-        db,
-        {
-          userId: connection.userId,
-          agentId: connection.agentId,
-          detail: toApprovalDetail(call),
-        },
-        dek,
-        clock,
-      );
-      await createHeldRequest(
-        db,
-        {
-          userId: connection.userId,
-          agentId: connection.agentId,
-          approvalId: approval.id,
-          args: { ...call },
-        },
-        dek,
-        clock,
-      );
+      // The pending approval and the held call it guards are written together: a
+      // failure part-way never leaves an approval in the inbox with nothing behind it.
+      const approval = await withTransaction(db, async (tx) => {
+        const created = await createApproval(
+          tx,
+          {
+            userId: connection.userId,
+            agentId: connection.agentId,
+            // The same rate the engine checked, so the approval's converted amount and
+            // the release's ledger amount match it.
+            detail: toApprovalDetail(call, decision, context, context.cardChecks ? context.cardChecks.rate : rate),
+          },
+          dek,
+          clock,
+        );
+        await createHeldRequest(
+          tx,
+          {
+            userId: connection.userId,
+            agentId: connection.agentId,
+            approvalId: created.id,
+            args: { ...call },
+          },
+          dek,
+          clock,
+        );
+        return created;
+      });
       await record(connection, call, "pending_approval");
       // Trigger the approval notifier on creation (E12-S07): a push to every
       // registered device within seconds, plus a scheduled fallback anchored to the
@@ -375,8 +455,15 @@ export function createAgentCallPipeline(deps: PipelineDeps): AgentCallPipeline {
     }
 
     // ALLOW — execute the tool, then record the activity entry BEFORE the result
-    // is returned to the agent.
+    // is returned to the agent. A tool body that refuses (e.g. the connection lacks
+    // the permission it checks) did nothing: it is recorded and returned as refused,
+    // with the body's own plain reason — never as executed.
     const result = await executeTool(call, connection);
+    const refusal = asToolRefusal(result);
+    if (refusal) {
+      await record(connection, call, "refused");
+      return { result: refusal, errorCategory: CATEGORY_TOOL_REFUSED };
+    }
     await record(connection, call, "executed");
     return { result: { status: "executed", result } };
   }
@@ -405,8 +492,13 @@ export function createAgentCallPipeline(deps: PipelineDeps): AgentCallPipeline {
     // reached by the inbox approve action or `check_approval`). `userId` is the
     // OWNING person — taken by the trusted caller from its session / the resolved
     // agent connection, NEVER a client value — and every read/write below is
-    // member-scoped by it. A hold that is still pending, denied, expired or already
-    // executed is REFUSED and the held tool is not run (never a silent failure).
+    // member-scoped by it. A hold that is still pending, denied or expired, a RELEASE
+    // (collected with collect_release, never run), or one whose agent has been
+    // disconnected is REFUSED and the held tool is not run (never a silent failure).
+    // The call runs under its agent's REAL connection (re-resolved from the agents
+    // row: its connection id is what tool permissions are keyed by), and its outcome
+    // is stored so a later ask — the agent's check_approval after an inbox approval —
+    // gets the result back, not "already run".
     async executeApprovedHold(userId: string, approvalId: string): Promise<ApprovedHoldResult> {
       const dek = await dataKeyFor(userId);
 
@@ -427,28 +519,63 @@ export function createAgentCallPipeline(deps: PipelineDeps): AgentCallPipeline {
         return { status: "refused", reason: "This approval has no held request to run." };
       }
 
+      // Already run: hand back what it came to (or "still running" mid-run).
+      if (held.status === "executed") {
+        return held.outcome ?? { status: "in_progress" };
+      }
+
+      // A release is handed over by the person's device and collected by the agent;
+      // it is never run as a tool, and its hold is never burned.
+      const call = held.args as unknown as AgentCall;
+      if (isReleaseRequest(call.request)) {
+        return { status: "refused", reason: HOLD_IS_RELEASE };
+      }
+
+      // Re-resolve the requesting agent (member-scoped): a disconnected or missing
+      // agent's approved hold is refused and left unclaimed — never run on a made-up
+      // connection.
+      const agent = await getAgentById(db, userId, held.agentId);
+      if (!agent || agent.status !== "connected") {
+        return { status: "refused", reason: HOLD_NOT_CONNECTED };
+      }
+
       // Claim the hold EXACTLY ONCE before running it: markExecuted is a single-shot
-      // compare-and-swap that throws once the held request has already run, so a
-      // second attempt is refused and the tool never runs twice.
+      // compare-and-swap, so of two concurrent runs only one claims it; the other
+      // hands back the stored outcome (or "still running"). Any other failure
+      // propagates — it is never mistaken for "already run".
       let ran: StoredHeldRequest;
       try {
         ran = await markExecuted(db, { userId, id: held.id }, dek, clock);
-      } catch {
-        return { status: "refused", reason: "This approved request has already been run." };
+      } catch (error) {
+        if (!(error instanceof HeldRequestAlreadyExecutedError)) throw error;
+        const current = await getByApproval(db, userId, approvalId, dek);
+        return current?.outcome ?? { status: "in_progress" };
       }
 
-      // Run the held tool, then record ONE Warthog outcome entry (execute BEFORE
-      // record — Warthog writes the record itself, redacted).
-      const call = ran.args as unknown as AgentCall;
+      // Run the held tool under the agent's REAL connection, then record ONE Warthog
+      // outcome entry (execute BEFORE record — Warthog writes the record itself,
+      // redacted) and keep the outcome for later asks. A tool body's own refusal is
+      // recorded and returned as refused, never as executed.
       const connection: AgentConnection = {
-        userId: ran.userId,
-        connectionId: ran.agentId,
-        agentId: ran.agentId,
+        userId: agent.userId,
+        connectionId: agent.connectionId,
+        agentId: agent.id,
         active: true,
       };
-      const result = await executeTool(call, connection);
-      await record(connection, call, "executed");
-      return { status: "executed", result };
+      let outcome: HeldOutcome;
+      try {
+        const result = await executeTool(call, connection);
+        const refusal = asToolRefusal(result);
+        outcome = refusal ?? { status: "executed", result };
+      } catch (error) {
+        // Keep the failure so a later ask is told the request could not be completed
+        // (never "already run"), then let the error propagate — never swallowed.
+        await recordOutcome(db, { userId, id: ran.id, outcome: { status: "refused", reason: HOLD_FAILED } }, dek);
+        throw error;
+      }
+      await record(connection, call, outcome.status);
+      await recordOutcome(db, { userId, id: ran.id, outcome }, dek);
+      return outcome;
     },
   };
 }
