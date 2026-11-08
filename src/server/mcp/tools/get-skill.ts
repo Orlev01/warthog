@@ -40,7 +40,7 @@ const MAX_REASON = 2000;
 // The validated input: the REQUIRED `title` (a skill is fetched BY title) plus the
 // universal OPTIONAL `reason` (design §6.2). A z.object, so its `.shape` exposes each
 // field (the registry and tests read `.shape.title` / `.shape.reason`).
-const inputSchema = z.object({
+export const getSkillSchema = z.object({
   title: z.string().max(MAX_TITLE),
   reason: z.string().max(MAX_REASON).optional(),
 });
@@ -105,12 +105,12 @@ export function createGetSkillTool(deps: GetSkillDeps): GetSkillTool {
 
   return {
     name: "get_skill",
-    inputSchema,
+    inputSchema: getSkillSchema,
 
     async handle(input: unknown, connection: AgentConnection): Promise<GetSkillResult> {
       // VALIDATE at the boundary: a bad / oversized / mis-shaped input throws a 4xx
       // `HttpError` BEFORE any db access or crypto work (INV-102).
-      const parsed = parseParams(inputSchema, input);
+      const parsed = parseParams(getSkillSchema, input);
 
       // Warthog's own house skill is ALWAYS returned in full, regardless of the
       // person's skills or scope — the index advertises its title and this supplies

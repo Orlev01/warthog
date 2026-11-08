@@ -24,15 +24,25 @@ import { parseParams } from "../../http/validate";
 import type { AgentCall, AgentCallResult, AgentCallPipeline } from "../pipeline";
 import type { AgentConnection } from "../context";
 import type { ConnectionPermissions } from "../../db/agent-permissions";
+import { rememberSchema, searchMemorySchema } from "./memory";
+import { getSkillSchema } from "./get-skill";
+import { inputSchema as checkApprovalSchema } from "./check-approval";
+import { inputSchema as collectReleaseSchema } from "./collect-release";
+import { completeTaskSchema, createTaskSchema, listTasksSchema, updateTaskSchema } from "./tasks";
+import { listRecordsSchema, saveRecordSchema, updateRecordSchema } from "./records";
+import { logActivitySchema } from "./log-activity";
 
 // --- the pinned contract (documented in `registry.test.ts`) ----------------
 
-// One resolvable MCP tool: its name, the zod OBJECT schema its input is validated
-// against (whose `.shape` always carries an optional string `reason`, design §6.2
-// "every tool takes an optional reason"), and a handler that validates the input and
+// One resolvable MCP tool: its name, a plain-English description of what it does and
+// when to use it (what tools/list shows the agent), the zod OBJECT schema its input is
+// validated against — the tool body's REAL schema, so tools/list advertises every field
+// the body needs (whose `.shape` always carries an optional string `reason`, design §6.2
+// "every tool takes an optional reason") — and a handler that validates the input and
 // routes the call through the pipeline under the session connection's identity.
 export interface ToolDefinition {
   readonly name: string;
+  readonly description: string;
   readonly inputSchema: z.ZodType; // a z.object(...) exposing an optional `reason` in its .shape
   handle(input: unknown, connection: AgentConnection): Promise<AgentCallResult>;
 }
@@ -75,40 +85,61 @@ const NAMESPACE = "__";
 
 // --- core tool specs -------------------------------------------------------
 
-// A core tool: its name, whether it makes a change (its tool class), the zod object
-// its input is validated against, and an optional map to the policy-relevant
-// `AgentCall` fields beyond the envelope (connector / tool / makesChange / reason /
-// params) — the two request tools name their `request` kind and card fields here.
+// A core tool: its name, a plain-English description (what tools/list shows the
+// agent), whether it makes a change (its tool class), the zod object its input is
+// validated against — the tool body's OWN exported schema, so what is advertised and
+// what the body validates are one definition and cannot drift — and an optional map to
+// the policy-relevant `AgentCall` fields beyond the envelope (connector / tool /
+// makesChange / reason / params) — the two request tools name their `request` kind and
+// card fields here.
 interface CoreToolSpec {
   readonly name: string;
+  readonly description: string;
   readonly makesChange: boolean;
   readonly schema: z.ZodType;
   readonly extra?: (parsed: Record<string, unknown>) => Partial<AgentCall>;
 }
 
-// A simple tool whose only validated envelope is the optional `reason`; its other
-// arguments (if any) are forwarded as `params` and validated by its tool body (a
-// later task), the pipeline never trusting them for policy.
+// A tool whose only argument is the optional `reason` (get_context takes nothing else).
 const envelope = z.object({ reason });
 
+// request_card's input: the purchase it is for (amount, currency, merchant) plus the
+// universal optional reason, shown to the person when they decide.
+const requestCardSchema = z.object({
+  amount: z.number().positive().describe("The purchase amount, in major units (e.g. 49.95)."),
+  currency: z.string().min(1).max(MAX_CURRENCY).describe("The ISO 4217 currency code, e.g. AUD."),
+  merchant: z.string().min(1).max(MAX_MERCHANT).describe("Who the purchase is with."),
+  reason,
+});
+
 const CORE_TOOL_SPECS: readonly CoreToolSpec[] = [
-  { name: "get_context", makesChange: false, schema: envelope },
-  { name: "get_skill", makesChange: false, schema: envelope },
+  {
+    name: "get_context",
+    description:
+      "Fetch everything you have been granted in one call: the person's profile you may see, the skills and preferences scoped to you, the rules you must follow, the shared memory you may read, your open tasks and Warthog's house skill. Call this first.",
+    makesChange: false,
+    schema: envelope,
+  },
+  {
+    name: "get_skill",
+    description: "Fetch the full text of one skill by its title (get_context lists the titles you can use).",
+    makesChange: false,
+    schema: getSkillSchema,
+  },
   {
     name: "request_identity_detail",
+    description:
+      "Ask the person to release one high-tier identity detail (such as a passport or driver licence) for a stated purpose. The person approves each request; you get pending_approval, wait with check_approval, then collect the value once with collect_release.",
     makesChange: false,
     schema: envelope,
     extra: () => ({ request: "high_tier" }),
   },
   {
     name: "request_card",
+    description:
+      "Ask to use one of the person's saved cards for one purchase, with its amount, currency and merchant. Warthog checks the person's rules and budgets first and refuses with a reason if one fails; otherwise you get pending_approval, wait with check_approval, then collect the card details once with collect_release.",
     makesChange: true,
-    schema: z.object({
-      amount: z.number().positive(),
-      currency: z.string().min(1).max(MAX_CURRENCY),
-      merchant: z.string().min(1).max(MAX_MERCHANT),
-      reason,
-    }),
+    schema: requestCardSchema,
     extra: (p) => ({
       request: "card",
       amount: p.amount as number,
@@ -116,18 +147,84 @@ const CORE_TOOL_SPECS: readonly CoreToolSpec[] = [
       merchant: p.merchant as string,
     }),
   },
-  { name: "check_approval", makesChange: false, schema: envelope },
-  { name: "collect_release", makesChange: false, schema: envelope },
-  { name: "remember", makesChange: true, schema: envelope },
-  { name: "search_memory", makesChange: false, schema: envelope },
-  { name: "list_tasks", makesChange: false, schema: envelope },
-  { name: "create_task", makesChange: true, schema: envelope },
-  { name: "update_task", makesChange: true, schema: envelope },
-  { name: "complete_task", makesChange: true, schema: envelope },
-  { name: "list_records", makesChange: false, schema: envelope },
-  { name: "save_record", makesChange: true, schema: envelope },
-  { name: "update_record", makesChange: true, schema: envelope },
-  { name: "log_activity", makesChange: true, schema: envelope },
+  {
+    name: "check_approval",
+    description:
+      "Check on a request that is waiting for the person's approval, by the approval_id you were given, optionally waiting up to wait_seconds for a decision. Once approved, Warthog carries out the held request and returns its result.",
+    makesChange: false,
+    schema: checkApprovalSchema,
+  },
+  {
+    name: "collect_release",
+    description:
+      "Collect an approved high-tier detail or card. A release can be collected once, within 5 minutes of the person approving it.",
+    makesChange: false,
+    schema: collectReleaseSchema,
+  },
+  {
+    name: "remember",
+    description:
+      "Save a short fact or note to the person's memory, kept to you or shared with their other agents according to your sharing setting.",
+    makesChange: true,
+    schema: rememberSchema,
+  },
+  {
+    name: "search_memory",
+    description: "Search the memories you may read (shared memories plus your own), optionally filtered by a text query.",
+    makesChange: false,
+    schema: searchMemorySchema,
+  },
+  {
+    name: "list_tasks",
+    description: "List the person's tasks that are assigned to you or to any agent.",
+    makesChange: false,
+    schema: listTasksSchema,
+  },
+  {
+    name: "create_task",
+    description: "Create a task with a title, optionally assigned to one agent (otherwise any agent may pick it up).",
+    makesChange: true,
+    schema: createTaskSchema,
+  },
+  {
+    name: "update_task",
+    description: "Update one of your tasks by id: change its status or append a note.",
+    makesChange: true,
+    schema: updateTaskSchema,
+  },
+  {
+    name: "complete_task",
+    description: "Mark one of your tasks as done, by id.",
+    makesChange: true,
+    schema: completeTaskSchema,
+  },
+  {
+    name: "list_records",
+    description:
+      "List the person's life-admin records: subscriptions, receipts and warranties, and renewals and appointments.",
+    makesChange: false,
+    schema: listRecordsSchema,
+  },
+  {
+    name: "save_record",
+    description:
+      "Save a new life-admin record (a subscription, a receipt or warranty, or a renewal or appointment) with its details and an optional due date.",
+    makesChange: true,
+    schema: saveRecordSchema,
+  },
+  {
+    name: "update_record",
+    description: "Update a life-admin record by id, resupplying its details and optionally its status or due date.",
+    makesChange: true,
+    schema: updateRecordSchema,
+  },
+  {
+    name: "log_activity",
+    description:
+      "Log a high-level summary of something you did to the person's activity feed (put the summary in reason), optionally with an amount, currency and the card release it relates to. It is labelled as reported by you.",
+    makesChange: true,
+    schema: logActivitySchema,
+  },
 ];
 
 // --- tool-definition builders ----------------------------------------------
@@ -140,15 +237,18 @@ const CORE_TOOL_SPECS: readonly CoreToolSpec[] = [
 function buildCoreTool(spec: CoreToolSpec, pipeline: AgentCallPipeline): ToolDefinition {
   return {
     name: spec.name,
+    description: spec.description,
     inputSchema: spec.schema,
     async handle(input: unknown, connection: AgentConnection): Promise<AgentCallResult> {
       const parsed = parseParams(spec.schema, input) as Record<string, unknown>;
+      // The VALIDATED fields are what travel on (and are recorded): an extra field the
+      // schema does not know is dropped here rather than forwarded or stored.
       const call: AgentCall = {
         connector: null,
         tool: spec.name,
         makesChange: spec.makesChange,
         reason: parsed.reason as string | undefined,
-        params: input,
+        params: parsed,
         ...(spec.extra?.(parsed) ?? {}),
       };
       return pipeline.handleAgentCall(connection, call);
@@ -168,6 +268,7 @@ function buildConnectorTool(
   const name = `${connectorId}${NAMESPACE}${toolName}`;
   return {
     name,
+    description: `Use the ${toolName} tool of the person's ${connectorId} service.`,
     inputSchema: envelope,
     async handle(input: unknown, connection: AgentConnection): Promise<AgentCallResult> {
       const parsed = parseParams(envelope, input) as Record<string, unknown>;
@@ -196,8 +297,24 @@ export function createToolRegistry(deps: ToolRegistryDeps): ToolRegistry {
   // §6.2). They are not part of the always-available core, so a small set is never
   // collapsed into them.
   const collapseHelpers: readonly ToolDefinition[] = [
-    buildCoreTool({ name: "find_tools", makesChange: false, schema: envelope }, pipeline),
-    buildCoreTool({ name: "call_tool", makesChange: true, schema: envelope }, pipeline),
+    buildCoreTool(
+      {
+        name: "find_tools",
+        description: "Find the connected-service tools you may use, when there are too many to list.",
+        makesChange: false,
+        schema: envelope,
+      },
+      pipeline,
+    ),
+    buildCoreTool(
+      {
+        name: "call_tool",
+        description: "Call one of the connected-service tools found with find_tools, by its name.",
+        makesChange: true,
+        schema: envelope,
+      },
+      pipeline,
+    ),
   ];
 
   const byName = new Map<string, ToolDefinition>(

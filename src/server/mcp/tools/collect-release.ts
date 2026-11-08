@@ -35,7 +35,7 @@ const MAX_REASON = 2000;
 // The validated input: just the universal OPTIONAL `reason` (design §6.2). A
 // z.object, so its `.shape` exposes the field (the registry and tests read
 // `.shape.reason`).
-const inputSchema = z.object({
+export const inputSchema = z.object({
   reason: z.string().max(MAX_REASON).optional(),
 });
 

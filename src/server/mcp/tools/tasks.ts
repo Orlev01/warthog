@@ -65,11 +65,11 @@ const reason = z.string().max(MAX_REASON).optional();
 // list_tasks' input: nothing but the universal OPTIONAL `reason` (the owning person
 // and the agent scope come from the connection). A z.object, so its `.shape` exposes
 // each field.
-const listTasksSchema = z.object({ reason });
+export const listTasksSchema = z.object({ reason });
 
 // create_task's input: a REQUIRED non-empty `title`, an OPTIONAL `assignee` (a
 // specific agent id, defaulting to 'any'), plus the universal OPTIONAL `reason`.
-const createTaskSchema = z.object({
+export const createTaskSchema = z.object({
   title: z.string().min(1).max(MAX_TITLE),
   assignee: z.string().min(1).max(MAX_ASSIGNEE).optional(),
   reason,
@@ -77,7 +77,7 @@ const createTaskSchema = z.object({
 
 // update_task's input: a REQUIRED non-empty `id`, an OPTIONAL `status` (pick it up)
 // and an OPTIONAL `note` to append, plus the universal OPTIONAL `reason`.
-const updateTaskSchema = z.object({
+export const updateTaskSchema = z.object({
   id: z.string().min(1).max(MAX_ID),
   status: z.enum(["open", "in_progress", "done"]).optional(),
   note: z.string().min(1).max(MAX_NOTE).optional(),
@@ -85,7 +85,7 @@ const updateTaskSchema = z.object({
 });
 
 // complete_task's input: a REQUIRED non-empty `id` plus the universal OPTIONAL `reason`.
-const completeTaskSchema = z.object({
+export const completeTaskSchema = z.object({
   id: z.string().min(1).max(MAX_ID),
   reason,
 });

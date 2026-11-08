@@ -27,8 +27,6 @@
 // access, INV-102) and every store binds its values as parameters, so a SQL-shaped field
 // travels as inert data and cannot alter a query.
 
-import { z } from "zod";
-
 import { createMcpHandler, McpServer } from "@modelcontextprotocol/server";
 import type { AuthInfo } from "@modelcontextprotocol/server";
 
@@ -97,20 +95,18 @@ const TOOL_FAILED_REASON = "The tool call could not be completed.";
 
 // Register `tool` on `server`, routing the call through `tool.handle` under the already
 // resolved `connection` (from the verified bearer). The advertised input schema is the
-// tool's own schema made LOOSE, so the raw arguments reach `tool.handle` intact — the
-// envelope schema validates `reason`, and each tool body validates its own fields (INV-102)
-// — rather than being stripped to the envelope by the SDK before the body ever sees them.
+// tool body's REAL schema and the description says what the tool does, so tools/list
+// tells an agent exactly which fields to send. The SDK validates the arguments against
+// that schema first and refuses a bad call naming the field at fault (zod's issue path and
+// message, never the input value); `tool.handle` and the body validate again (INV-102).
 function registerTool(
   server: McpServer,
   tool: ToolDefinition,
   connection: AgentConnection | null,
 ): void {
-  const inputSchema =
-    tool.inputSchema instanceof z.ZodObject ? tool.inputSchema.loose() : tool.inputSchema;
-
   server.registerTool(
     tool.name,
-    { description: tool.name, inputSchema },
+    { description: tool.description, inputSchema: tool.inputSchema },
     async (args: unknown) => {
       // The connection is the verified bearer's; a request that never resolved one cannot
       // be scoped to a person, so it is refused rather than run (never a silent success).

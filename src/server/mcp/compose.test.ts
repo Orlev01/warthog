@@ -59,7 +59,16 @@ import assert from "node:assert/strict";
 import { Buffer } from "node:buffer";
 import { createHash, randomBytes, randomUUID } from "node:crypto";
 
+import { z } from "zod";
+
 import { createMcpDispatch } from "./compose";
+import { rememberSchema, searchMemorySchema } from "./tools/memory";
+import { getSkillSchema } from "./tools/get-skill";
+import { inputSchema as checkApprovalSchema } from "./tools/check-approval";
+import { inputSchema as collectReleaseSchema } from "./tools/collect-release";
+import { completeTaskSchema, createTaskSchema, listTasksSchema, updateTaskSchema } from "./tools/tasks";
+import { listRecordsSchema, saveRecordSchema, updateRecordSchema } from "./tools/records";
+import { logActivitySchema } from "./tools/log-activity";
 
 import { loadConfig, type Config } from "../config";
 import { localAesKeyWrapper } from "../crypto/key-wrapper";
@@ -109,7 +118,11 @@ interface JsonRpcResponse {
   jsonrpc?: string;
   id?: number | string | null;
   result?: {
-    tools?: Array<{ name: string; inputSchema?: { type?: string; properties?: Record<string, unknown> } }>;
+    tools?: Array<{
+      name: string;
+      description?: string;
+      inputSchema?: { type?: string; properties?: Record<string, unknown>; required?: string[] };
+    }>;
     content?: Array<{ type: string; text?: string }>;
     structuredContent?: Record<string, unknown>;
     isError?: boolean;
@@ -256,6 +269,102 @@ test("AC1: tools/list returns the registry's core tools, each with an input sche
         `${name}'s input schema must expose the universal optional reason (design §6.2)`,
       );
     }
+  } finally {
+    await db.close();
+  }
+});
+
+// ===================================================================================
+// Review fix D1 — tools/list publishes each tool's REAL input schema (the fields its body
+// validates, with the required ones marked) and a plain-English description, so an agent
+// can discover what to send instead of seeing only `reason` and the bare tool name.
+// ===================================================================================
+
+// The fields each tool body REQUIRES (and the optional ones it also accepts), taken from
+// the body's own zod schema — so the advertised schema and what the body validates can
+// never drift apart again.
+function requiredKeys(schema: z.ZodObject): string[] {
+  return Object.entries(schema.shape)
+    .filter(([, field]) => !(field as z.ZodType).safeParse(undefined).success)
+    .map(([key]) => key)
+    .sort();
+}
+
+const BODY_SCHEMAS: Record<string, z.ZodObject> = {
+  remember: rememberSchema,
+  search_memory: searchMemorySchema,
+  get_skill: getSkillSchema,
+  check_approval: checkApprovalSchema,
+  collect_release: collectReleaseSchema,
+  list_tasks: listTasksSchema,
+  create_task: createTaskSchema,
+  update_task: updateTaskSchema,
+  complete_task: completeTaskSchema,
+  list_records: listRecordsSchema,
+  save_record: saveRecordSchema,
+  update_record: updateRecordSchema,
+  log_activity: logActivitySchema,
+};
+
+test("D1: tools/list advertises each tool's real required fields and a plain description", async () => {
+  const db = await freshDb();
+  try {
+    const config = devConfig();
+    const { connectionId } = await seedConnection(db, config);
+    const dispatch = createMcpDispatch({ db, config });
+
+    const rpc = await readRpc(await dispatch(connectionId, mcpPost(LIST_BODY)));
+    const tools = rpc.result?.tools ?? [];
+    const byName = new Map(tools.map((tool) => [tool.name, tool]));
+
+    // Every tool says what it does in words, not just its own name.
+    for (const tool of tools) {
+      const description = tool.description ?? "";
+      assert.ok(description.trim().length > 20, `${tool.name} must carry a plain-English description`);
+      assert.notEqual(description, tool.name, `${tool.name}'s description must not be just its name`);
+    }
+
+    // The fields the agents most need to discover are advertised as required.
+    const required = (name: string): string[] => [...(byName.get(name)?.inputSchema?.required ?? [])].sort();
+    assert.ok(required("remember").includes("content"), "remember requires content");
+    assert.ok(required("check_approval").includes("approval_id"), "check_approval requires approval_id");
+    assert.ok(
+      "wait_seconds" in (byName.get("check_approval")?.inputSchema?.properties ?? {}),
+      "check_approval lists wait_seconds",
+    );
+    assert.ok(required("get_skill").includes("title"), "get_skill requires title");
+    assert.ok(required("create_task").includes("title"), "create_task requires title");
+    assert.ok(required("update_task").includes("id"), "update_task requires id");
+    assert.ok(required("complete_task").includes("id"), "complete_task requires id");
+    assert.deepEqual(required("save_record"), ["fields", "kind"], "save_record requires kind and fields");
+    assert.deepEqual(required("update_record"), ["fields", "id"], "update_record requires id and fields");
+    assert.deepEqual(required("request_card"), ["amount", "currency", "merchant"], "request_card requires its card fields");
+
+    // Table-driven: each advertised schema matches the body schema it is routed to.
+    for (const [name, schema] of Object.entries(BODY_SCHEMAS)) {
+      const advertised = byName.get(name);
+      assert.ok(advertised, `tools/list must include ${name}`);
+      assert.deepEqual(required(name), requiredKeys(schema), `${name}'s advertised required fields match its body`);
+      for (const key of Object.keys(schema.shape)) {
+        assert.ok(key in (advertised!.inputSchema?.properties ?? {}), `${name} must advertise its ${key} field`);
+      }
+    }
+  } finally {
+    await db.close();
+  }
+});
+
+test("D1: a tools/call missing a required field is refused with a message naming the field", async () => {
+  const db = await freshDb();
+  try {
+    const config = devConfig();
+    const { userId, connectionId, dek } = await seedConnection(db, config);
+    const dispatch = createMcpDispatch({ db, config });
+
+    const rpc = await readRpc(await dispatch(connectionId, mcpPost(callBody("remember", {}))));
+    assert.equal(rpc.result?.isError, true, "a remember with no content is an error");
+    assert.match(contentText(rpc.result), /content/, "the refusal names the missing field");
+    assert.equal((await listMemoriesForUser(db, userId, dek)).length, 0, "nothing is saved");
   } finally {
     await db.close();
   }
