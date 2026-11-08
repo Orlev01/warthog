@@ -39,6 +39,7 @@ import { authorize, validatedRedirectUri } from "../../../server/oauth/authorize
 import type { ClientResolver } from "../../../server/oauth/clients";
 import { consumePendingAuthorization } from "../../../server/oauth/pending";
 import { createAgent } from "../../../server/db/agents";
+import { listConnectionsForUser } from "../../../server/db/connections";
 import {
   upsertPermissions,
   type PermissionGrants,
@@ -65,15 +66,24 @@ const MAX_SERVICES = 100;
 
 // The person's consent decision, as the consent screen submits it. `template` is the
 // chosen starting set (validated to one of the three names below); `tickedServices`
-// are the service ids whose read tools Standard/Custom grant. High-tier, card and
-// learning-sharing are ALWAYS opt-in — absent/false means off. `card` needs a budget
-// when on. `template` is typed as a plain string here (the untrusted form value); the
-// validation boundary narrows it.
+// are the service ids whose read tools are granted (kept only when the person has
+// actually connected that service). High-tier, card and learning-sharing are ALWAYS
+// opt-in — absent/false means off. `card` needs a budget when on. `template` is typed
+// as a plain string here (the untrusted form value); the validation boundary narrows it.
+//
+// Review fix A2 — `identity`, `memoryRead`, `tasks` and `records` are the screen's own
+// toggles (basic profile, shared memory, tasks, life-admin records). When given they
+// OVERRIDE the starting set, so what the person sees ticked is exactly what is stored;
+// when absent the starting set decides.
 export interface ConsentApproval {
   readonly name: string;
   readonly platform: string;
   readonly template: string;
   readonly tickedServices?: readonly string[];
+  readonly identity?: boolean;
+  readonly memoryRead?: boolean;
+  readonly tasks?: boolean;
+  readonly records?: boolean;
   readonly highTier?: boolean;
   readonly card?: boolean;
   readonly cardBudget?: { amount: number; currency: string; period: string } | null;
@@ -126,6 +136,10 @@ const approvalSchema = z
     platform: z.string().min(1).max(MAX_PLATFORM_LENGTH),
     template: z.enum(["minimal", "standard", "custom"]),
     tickedServices: z.array(z.string().max(MAX_SERVICE_LENGTH)).max(MAX_SERVICES).optional(),
+    identity: z.boolean().optional(),
+    memoryRead: z.boolean().optional(),
+    tasks: z.boolean().optional(),
+    records: z.boolean().optional(),
     highTier: z.boolean().optional(),
     card: z.boolean().optional(),
     cardBudget: cardBudgetSchema.nullable().optional(),
@@ -143,33 +157,41 @@ function issuer(config: Config): string {
   return config.publicBaseUrl.replace(/\/$/, "");
 }
 
-// Translate the chosen starting set (template + ticked services, plus the explicit
-// opt-ins) into the one connection's stored grants, member-scoped to `userId`. The
-// template is the one-source-of-truth domain contract; high-tier, card and sharing
-// are off in every template and switch on only when the approval opted in. A card
-// budget is recorded only when card access is on.
+// Translate the person's choices into the one connection's stored grants,
+// member-scoped to `userId`. The starting set (the one-source-of-truth domain contract)
+// supplies every grant the approval does not state; each toggle the screen submits
+// overrides it (review fix A2), so the stored grants match the visible toggles.
+// High-tier, card and sharing are off in every template and switch on only when opted
+// in; a card budget is recorded only when card access is on. `connectedServices` is the
+// person's OWN connected service ids: a ticked service is granted only when it is one of
+// them (never trusting the form for this), with its read tools on and its changes set to
+// "ask me first". Tasks and records are their own grants, not the connector tool classes.
 function grantsFor(
   userId: string,
   connectionId: string,
   approval: ValidApproval,
+  connectedServices: ReadonlySet<string>,
 ): PermissionGrants {
-  const set = permissionTemplate(approval.template, approval.tickedServices ?? []);
+  const set = permissionTemplate(approval.template, []);
+  const services = [...new Set(approval.tickedServices ?? [])].filter((id) => connectedServices.has(id));
   const cardAccess = approval.card === true;
   return {
     userId,
     connectionId,
-    grantedConnectors: set.services.map((s) => s.service),
-    readTools: set.services.length > 0,
-    changeTools: set.services.length > 0 ? "ask_first" : "off",
-    identityAccess: set.lowTierProfile,
+    grantedConnectors: services,
+    readTools: services.length > 0,
+    changeTools: services.length > 0 ? "ask_first" : "off",
+    identityAccess: approval.identity ?? set.lowTierProfile,
     highTierAccess: approval.highTier === true,
     cardAccess,
     cardBudget: cardAccess ? approval.cardBudget ?? null : null,
     skillsScope: [],
-    memoryRead: set.sharedMemoryRead,
+    memoryRead: approval.memoryRead ?? set.sharedMemoryRead,
     sharing: approval.learningSharing === true,
     rulesScope: [],
     rateLimit: DEFAULT_RATE_LIMIT,
+    tasksAccess: approval.tasks ?? set.tasks,
+    recordsAccess: approval.records ?? set.lifeAdmin,
   };
 }
 
@@ -213,7 +235,12 @@ export function createAuthorizeActions(deps: AuthorizeActionsDeps): AuthorizeAct
       clock,
     );
 
-    await upsertPermissions(db, grantsFor(session.userId, connectionId, valid));
+    // The person's own connected services (member-scoped by the session's user id): the
+    // only ones a ticked service can grant.
+    const connected = new Set(
+      (await listConnectionsForUser(db, session.userId)).map((c) => c.connectorId),
+    );
+    await upsertPermissions(db, grantsFor(session.userId, connectionId, valid, connected));
 
     return { ok: true, redirectTo: issued.redirectTo };
   }

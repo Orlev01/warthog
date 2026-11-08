@@ -48,6 +48,7 @@ import { listActivity } from "../../../server/activity/list";
 import { createUser } from "../../../server/db/users";
 import { listAgentsForUser } from "../../../server/db/agents";
 import { getConnectionPermissions } from "../../../server/db/agent-permissions";
+import { createConnection } from "../../../server/db/connections";
 import { fixedClock } from "../../../server/seams/clock";
 import { systemRandom } from "../../../server/seams/random";
 import { freshDb } from "../../../test/db";
@@ -348,6 +349,141 @@ test("AC2: refusing consent redirects with access_denied and creates nothing", a
 
     // Nothing was created: no agent on /agents.
     assert.deepEqual(await listAgentsForUser(db, userId), [], "refusing creates no agent");
+  } finally {
+    await db.close();
+  }
+});
+
+// =====================================================================================
+// Review fix A2 — what the consent screen shows is what the agent gets.
+//
+// Until this fix a Standard agent connected through the consent screen was refused
+// list_tasks, create_task, list_records and save_record (those tools gated on the
+// connector tool classes, which the decision set from ticked services only), and most
+// of the screen's toggles were never submitted. Now tasks and records have their own
+// grants, every visible toggle overrides the starting set, and a ticked service is kept
+// only when the person has actually connected it.
+// =====================================================================================
+
+// Connect an agent end to end (authorize → consent approve → token) with the given
+// approval, and return what an MCP call needs.
+async function connectWith(
+  overrides: Partial<ConsentApproval>,
+): Promise<{ db: Db; config: Config; userId: string; connectionId: string }> {
+  const db = await freshDb();
+  const config = devConfig();
+  await createClient(db, { clientId: CLIENT_ID, registration: "cimd", redirectUris: [REDIRECT_URI] });
+  const { userId } = await makePerson(db, config);
+  const session = sessionFor(userId);
+  const begun = await beginAuthorization({ params: authorizeParams(), session }, deps(db, config));
+  if (!begun.ok) throw new Error(`begin failed: ${begun.error}`);
+  const decided = await createAuthorizeActions(deps(db, config)).approve(session, begun.handle, approval(overrides));
+  if (!decided.ok) throw new Error(`approve failed: ${decided.error}`);
+  const exchanged = await exchangeToken({ params: tokenParams(codeIn(decided.redirectTo)!) }, deps(db, config));
+  if (!exchanged.ok) throw new Error(`exchange failed: ${exchanged.error}`);
+  const verified = await verifyBearer(mcpPost(callBody("list_tasks", {}), { bearer: exchanged.body.access_token }), {
+    db,
+    config,
+    clock: fixedClock(NOW),
+  });
+  if (!verified.ok) throw new Error("bearer not verified");
+  return { db, config, userId, connectionId: verified.connectionId };
+}
+
+async function callTool(
+  ctx: { db: Db; config: Config; connectionId: string },
+  name: string,
+  args: unknown,
+): Promise<string> {
+  const res = await createMcpDispatch({ db: ctx.db, config: ctx.config })(ctx.connectionId, mcpPost(callBody(name, args)));
+  return contentText((await readRpc(res)).result);
+}
+
+test("A2: a Standard agent with no services ticked can use tasks and life-admin records", async () => {
+  const ctx = await connectWith({ template: "standard" });
+  try {
+    for (const [tool, args] of [
+      ["list_tasks", {}],
+      ["create_task", { title: "Book removalists" }],
+      ["list_records", {}],
+    ] as const) {
+      const text = await callTool(ctx, tool, args);
+      assert.ok(!/does not have permission/i.test(text), `${tool} is allowed for Standard, got: ${text}`);
+    }
+  } finally {
+    await ctx.db.close();
+  }
+});
+
+test("A2: a Minimal agent is refused tasks and records", async () => {
+  const ctx = await connectWith({ template: "minimal" });
+  try {
+    for (const tool of ["list_tasks", "list_records"]) {
+      const text = await callTool(ctx, tool, {});
+      assert.match(text, /does not have permission/i, `${tool} is refused for Minimal`);
+    }
+  } finally {
+    await ctx.db.close();
+  }
+});
+
+test("A2: the person's toggles override the starting set, and the stored grants match them", async () => {
+  const ctx = await connectWith({
+    template: "standard",
+    identity: false,
+    memoryRead: false,
+    tasks: false,
+    records: true,
+    highTier: true,
+    card: true,
+    cardBudget: { amount: 200, currency: "AUD", period: "month" },
+    learningSharing: true,
+  });
+  try {
+    const grants = await getConnectionPermissions(ctx.db, ctx.userId, ctx.connectionId);
+    assert.ok(grants != null);
+    assert.equal(grants!.identityAccess, false, "unticked basic profile is not granted");
+    assert.equal(grants!.memoryRead, false, "unticked shared memory is not granted");
+    assert.equal(grants!.tasksAccess, false, "unticked tasks is not granted");
+    assert.equal(grants!.recordsAccess, true, "ticked records is granted");
+    assert.equal(grants!.highTierAccess, true);
+    assert.equal(grants!.cardAccess, true);
+    assert.deepEqual(grants!.cardBudget, { amount: 200, currency: "AUD", period: "month" });
+    assert.equal(grants!.sharing, true);
+
+    assert.match(await callTool(ctx, "list_tasks", {}), /does not have permission/i, "tasks refused as chosen");
+    assert.doesNotMatch(await callTool(ctx, "list_records", {}), /does not have permission/i, "records allowed");
+  } finally {
+    await ctx.db.close();
+  }
+});
+
+test("A2: a ticked service is granted only when the person has connected it", async () => {
+  const db = await freshDb();
+  try {
+    const config = devConfig();
+    await createClient(db, { clientId: CLIENT_ID, registration: "cimd", redirectUris: [REDIRECT_URI] });
+    const { userId, dek } = await makePerson(db, config);
+    await createConnection(
+      db,
+      { userId, connectorId: "gmail", accountLabel: "me@example.com", credentials: { token: "x" } },
+      dek,
+      fixedClock(NOW),
+    );
+    const session = sessionFor(userId);
+    const begun = await beginAuthorization({ params: authorizeParams(), session }, deps(db, config));
+    if (!begun.ok) throw new Error("unreachable");
+    const decided = await createAuthorizeActions(deps(db, config)).approve(
+      session,
+      begun.handle,
+      approval({ template: "standard", tickedServices: ["gmail", "not-connected-service"] }),
+    );
+    assert.ok(decided.ok);
+    const agents = await listAgentsForUser(db, userId);
+    const grants = await getConnectionPermissions(db, userId, agents[0]!.connectionId);
+    assert.deepEqual(grants!.grantedConnectors, ["gmail"], "only the person's own connected service is granted");
+    assert.equal(grants!.readTools, true, "its read tools are on");
+    assert.equal(grants!.changeTools, "ask_first", "its changes ask first");
   } finally {
     await db.close();
   }
