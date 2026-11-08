@@ -71,6 +71,9 @@ import { fixedClock } from "../seams/clock";
 import { fixedRandom } from "../seams/random";
 import { localAesKeyWrapper } from "../crypto/key-wrapper";
 import { fakeRateSource } from "../currency/rate-source";
+import { createInMemoryBlobStore } from "../storage/blob";
+import { createUser } from "../db/users";
+import { enqueueAccountPurge } from "../db/account-purge";
 import type { Db } from "../db/index";
 
 const T0 = new Date("2026-03-01T00:00:00.000Z");
@@ -118,6 +121,7 @@ function jobSeams(db: Db) {
       revokeAgentsAndConnections: async (): Promise<void> => {},
     },
     rateSource: fakeRateSource({ rateDate: "2026-03-01", baseCurrency: "AUD", rates: { USD: 0.65 } }),
+    blobStore: createInMemoryBlobStore(),
     publicBaseUrl: "https://warthog.com.au",
   };
 }
@@ -203,6 +207,38 @@ test("the registry splits cleanly: no periodic sweep name is an enqueued dispatc
     for (const type of dispatchKeys) {
       assert.ok(!sweepNames.has(type), `dispatch type "${type}" must not also be a periodic sweep (the halves are disjoint)`);
     }
+  } finally {
+    await db.close();
+  }
+});
+
+// Review fix W3.2 — the account-purge sweep runs with the job runtime's blob store, so a
+// purged person's receipt ciphertext is deleted from storage, not orphaned.
+test("the account-purge sweep deletes a purged person's receipt blobs through the seams' blob store", async () => {
+  const db = await freshDb();
+  try {
+    const seams = jobSeams(db);
+    const user = await createUser(db, { email: "purge-sweep@warthog.com.au", wrappedDek: "d3JhcHBlZA==" });
+    const record = await db.query(
+      `INSERT INTO life_admin_records (user_id, kind, fields, status, source_kind)
+       VALUES ($1, 'receipt_warranty', 'v1:f', 'active', 'person') RETURNING id`,
+      [user.id],
+    );
+    await db.query(
+      `INSERT INTO receipt_files (user_id, record_id, blob_key, nonce, content_type, size)
+       VALUES ($1, $2, 'receipts/sweep', 'n', 'image/png', 1)`,
+      [user.id, record.rows[0]!.id],
+    );
+    await seams.blobStore.put("receipts/sweep", new Uint8Array([9]));
+    await enqueueAccountPurge(db, user.id);
+
+    const sweep = buildPeriodicSweeps(seams).find((s) => s.name === "account-purge");
+    assert.ok(sweep, "the account-purge sweep is registered");
+    await sweep.run();
+
+    assert.equal(await seams.blobStore.get("receipts/sweep"), null, "the receipt blob is deleted");
+    const left = await db.query("SELECT 1 FROM users WHERE id = $1", [user.id]);
+    assert.equal(left.rows.length, 0, "the account is purged");
   } finally {
     await db.close();
   }
