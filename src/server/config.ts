@@ -2,11 +2,15 @@
 // feature code imports typed config from here and never touches the environment
 // directly (constitution: secrets-from-env; INV-103). It also refuses to start an
 // unsafe production process — dev tools or an in-process pglite database must never
-// run in production.
+// run in production — and an incomplete one: production wraps every data key under the
+// Key Vault KEK, so it refuses to load without the vault URL and key name, and it refuses
+// the dev HMAC key published in .env.example.
 //
 // `loadConfig(env)` is a pure function of an env record so the contract is testable
 // without mutating the real environment. `loadConfig()` with no argument reads the
 // real `process.env` (the production call site).
+
+import { createHash } from "node:crypto";
 
 // A local-development fallback only. When the host injects `PORT` (12-factor,
 // INV-104) the server binds that value; this fallback never overrides it.
@@ -102,13 +106,44 @@ function decodeSecret(name: string, raw: string): Uint8Array {
   return new Uint8Array(Buffer.from(raw, "base64"));
 }
 
-// WARTHOG_HMAC_KEY: required in every environment, at least 32 bytes.
-function parseHmacKey(env: NodeJS.ProcessEnv): Uint8Array {
+// SHA-256 of the dev-only WARTHOG_HMAC_KEY published in .env.example. Anyone can read that
+// key, so production refuses it (the fingerprint, not the key, lives in source).
+const PUBLISHED_DEV_HMAC_KEY_SHA256 = "748968db1f82ef9e28babe06d84533dd8d0cf2b3af39da14ed9988fd6de2e89b";
+
+// WARTHOG_HMAC_KEY: required in every environment, at least 32 bytes, and never the published
+// dev key in production.
+function parseHmacKey(env: NodeJS.ProcessEnv, nodeEnv: string): Uint8Array {
   const key = decodeSecret("WARTHOG_HMAC_KEY", required(env, "WARTHOG_HMAC_KEY"));
   if (key.length < 32) {
     throw new Error("Invalid configuration: WARTHOG_HMAC_KEY must decode to at least 32 bytes");
   }
+  if (
+    nodeEnv === "production" &&
+    createHash("sha256").update(key).digest("hex") === PUBLISHED_DEV_HMAC_KEY_SHA256
+  ) {
+    throw new Error("Refusing to start in production with the published dev WARTHOG_HMAC_KEY");
+  }
   return key;
+}
+
+// The Key Vault group: optional outside production (the local KEK wraps data keys there);
+// required in production, where the vault URL must be an https URL. Errors name the variable,
+// never a value.
+function parseKeyVault(env: NodeJS.ProcessEnv, nodeEnv: string): KeyVaultConfig {
+  if (nodeEnv !== "production") {
+    return { url: env.KEY_VAULT_URL, keyName: env.KEY_VAULT_KEY_NAME };
+  }
+  const url = required(env, "KEY_VAULT_URL");
+  let parsed: URL | undefined;
+  try {
+    parsed = new URL(url);
+  } catch {
+    parsed = undefined;
+  }
+  if (parsed?.protocol !== "https:") {
+    throw new Error("Invalid configuration: KEY_VAULT_URL must be an https URL");
+  }
+  return { url, keyName: required(env, "KEY_VAULT_KEY_NAME") };
 }
 
 // WARTHOG_DEV_KEK: refused in production; required and exactly 32 bytes everywhere else.
@@ -149,10 +184,7 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): Config {
     googleEarlyAccess: parseEmailList(env.GOOGLE_EARLY_ACCESS),
     operatorEmail: env.OPERATOR_EMAIL,
     exchangeRateBaseUrl: env.EXCHANGE_RATE_BASE_URL,
-    keyVault: {
-      url: env.KEY_VAULT_URL,
-      keyName: env.KEY_VAULT_KEY_NAME,
-    },
+    keyVault: parseKeyVault(env, nodeEnv),
     acs: {
       emailConnectionString: env.ACS_EMAIL_CONNECTION_STRING,
       smsConnectionString: env.ACS_SMS_CONNECTION_STRING,
@@ -166,7 +198,7 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): Config {
       account: env.STORAGE_ACCOUNT,
       container: env.STORAGE_CONTAINER,
     },
-    hmacKey: parseHmacKey(env),
+    hmacKey: parseHmacKey(env, nodeEnv),
     devKek: parseDevKek(env, nodeEnv),
   };
   assertProductionSafe(config);
