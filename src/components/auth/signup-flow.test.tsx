@@ -661,3 +661,19 @@ test("a throttled send-code (429) stays on the details step and asks the person 
   assertPlainEnglish(state.error, "throttled send-code");
   assert.match(state.error, /minute/i, "the copy tells the person to wait a minute");
 });
+
+// ── Review fix B9 — an address that already has an account (409) says so plainly ──────
+
+test("a 409 at confirm tells the person the address already has an account and does not navigate", async () => {
+  const ctx = setup();
+  await driveToRecovery(ctx);
+  ctx.responders.confirm = () => jsonResponse(409, { error: "account_exists" });
+  ctx.flow.setSavedConfirmed(true);
+  await ctx.flow.confirm();
+
+  const state = ctx.flow.getState();
+  assertPlainEnglish(state.error, "confirm 409");
+  assert.match(state.error, /already/i, "the copy says the address already has an account");
+  assert.match(state.error, /sign in/i, "the copy points to signing in");
+  assert.deepEqual(ctx.navCalls, [], "no navigation");
+});

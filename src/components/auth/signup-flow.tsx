@@ -93,6 +93,10 @@ function stepErrorCopy(step: StepPath): string {
 const CODE_THROTTLED_COPY =
   "We sent a code to this address a moment ago. Check your email, or wait a minute and try again.";
 
+// Confirm found the address already has an account (409).
+const ACCOUNT_EXISTS_COPY =
+  "There's already an account for this email address. Sign in instead, or recover your account if you've lost your passkey.";
+
 const PASSKEY_CANCELLED_COPY =
   "Setting up your passkey was cancelled. You can try again when you're ready.";
 
@@ -196,7 +200,7 @@ export function createSignupFlow(deps: SignupFlowDeps): SignupFlowController {
 
     const response = await post("confirm", { signupId, savedConfirmed: true });
     if (!response || !response.ok) {
-      set({ error: stepErrorCopy("confirm") });
+      set({ error: response?.status === 409 ? ACCOUNT_EXISTS_COPY : stepErrorCopy("confirm") });
       return;
     }
     set({ error: undefined });

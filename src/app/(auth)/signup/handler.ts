@@ -54,7 +54,7 @@ import type { KeyWrapper } from "../../../server/crypto/key-wrapper";
 import type { Clock } from "../../../server/seams/clock";
 import type { Random } from "../../../server/seams/random";
 import type { EmailSender } from "../../../server/notify/senders";
-import type { Db } from "../../../server/db/index";
+import { withTransaction, type Db } from "../../../server/db/index";
 import { pendingStore } from "../../../server/auth/pending-store";
 
 // The dependency bundle. Each step reads the subset it needs; the superset is
@@ -174,6 +174,13 @@ const confirmSignupSchema = z.object({
   signupId: z.string().min(1).max(200),
   savedConfirmed: z.boolean(),
 });
+
+// Whether a write failed because the address already has an account: a unique
+// violation (SQLSTATE 23505) on the users table (its email / lower(email) index).
+function isEmailTaken(error: unknown): boolean {
+  const e = error as { code?: unknown; table?: unknown } | null;
+  return e?.code === "23505" && e.table === "users";
+}
 
 // A JSON response with a status.
 function json(status: number, body: unknown): Response {
@@ -360,29 +367,14 @@ export function createSignupHandler(deps: SignupHandlerDeps): SignupHandler {
 
       // The account: a fresh 256-bit DEK stored only WRAPPED (design §4.1). The
       // plaintext DEK is kept just long enough to encrypt the person's low-tier
-      // name under it, then falls out of scope.
+      // name under it, then falls out of scope. Wrapping (a Key Vault call in
+      // production) happens before the transaction opens.
       const dek = random.randomBytes(32);
       const wrappedDek = await keyWrapper.wrap(dek);
-      const user = await createUser(db, { email: pending.email, wrappedDek });
-
-      // Keep the name entered at sign-up as the person's low-tier 'name' identity
-      // field, DEK-encrypted — never written to a plaintext users column.
-      if (pending.name !== undefined) {
-        await saveIdentityField(db, { userId: user.id, kind: "name", value: pending.name }, dek);
-      }
-
-      // Persist the passkey registered at step 2 for the new account (mirrors the
-      // passkeys storage in finishPasskeyRegistration; the credential was already
-      // verified, so here it is only stored — bound as parameters, INV-102).
-      await db.query(
-        `INSERT INTO passkeys (user_id, credential_id, public_key, counter)
-         VALUES ($1, $2, $3, $4)`,
-        [user.id, pending.credential.id, pending.credential.publicKey, pending.credential.counter],
-      );
+      const { credential, recoveryDraws: draws } = pending;
 
       // Persist the SAME recovery code shown at step 2 by replaying its recorded
       // entropy through the real issuer, so it verifies against the new account.
-      const draws = pending.recoveryDraws;
       let drawIndex = 0;
       const replayRandom: Random = {
         randomBytes(n) {
@@ -393,10 +385,44 @@ export function createSignupHandler(deps: SignupHandlerDeps): SignupHandler {
           return next;
         },
       };
-      await issueRecoveryCode(db, user.id, { random: replayRandom });
 
-      // The signed-in session, host-locked in the `__Host-wh_session` cookie.
-      const created = await createSession(db, user.id, { clock, random });
+      // Every write that makes the account — the person, their name, the passkey, the
+      // recovery code and the session — commits together or not at all (review fix B9):
+      // a failure part-way leaves no half-made account holding the address, so the
+      // person can simply sign up again. An address taken in the meantime (in any case)
+      // is a clear 409, never a 500.
+      let created;
+      try {
+        created = await withTransaction(db, async (tx) => {
+          const user = await createUser(tx, { email: pending.email, wrappedDek });
+
+          // Keep the name entered at sign-up as the person's low-tier 'name' identity
+          // field, DEK-encrypted — never written to a plaintext users column.
+          if (pending.name !== undefined) {
+            await saveIdentityField(tx, { userId: user.id, kind: "name", value: pending.name }, dek);
+          }
+
+          // Persist the passkey registered at step 2 for the new account (mirrors the
+          // passkeys storage in finishPasskeyRegistration; the credential was already
+          // verified, so here it is only stored — bound as parameters, INV-102).
+          await tx.query(
+            `INSERT INTO passkeys (user_id, credential_id, public_key, counter)
+             VALUES ($1, $2, $3, $4)`,
+            [user.id, credential.id, credential.publicKey, credential.counter],
+          );
+
+          await issueRecoveryCode(tx, user.id, { random: replayRandom });
+
+          // The signed-in session, host-locked in the `__Host-wh_session` cookie.
+          return createSession(tx, user.id, { clock, random });
+        });
+      } catch (error) {
+        if (isEmailTaken(error)) {
+          pendingSignups.delete(signupId);
+          return json(409, { error: "account_exists" });
+        }
+        throw error;
+      }
 
       pendingSignups.delete(signupId);
       return new Response(null, {
