@@ -455,3 +455,31 @@ test("a well-formed attestation carrying extra keys still registers (extra keys 
     await db.close();
   }
 });
+
+// =====================================================================================
+// Review fix B1 — send-code is throttled per address, so it cannot be used to flood an
+// inbox or to keep many codes live at once.
+// =====================================================================================
+
+test("a second send-code for one address inside a minute is refused with 429 and sends nothing", async () => {
+  const outbox = createOutbox();
+  const db = await freshDb();
+  try {
+    const handler = makeHandler(db, outbox, fixedClock(T0));
+    const email = "flooded@warthog.com.au";
+
+    const first = await handler.sendCode(signupRequest({ email }));
+    assert.equal(first.status, 200);
+    const second = await handler.sendCode(signupRequest({ email }));
+    assert.equal(second.status, 429, "a repeat send inside the minute is throttled");
+    assert.ok(Number(second.headers.get("retry-after")) > 0, "the refusal carries Retry-After");
+    assert.equal(emailsTo(outbox, email).length, 1, "only the first code was emailed");
+
+    // The first code is still the live one and verifies.
+    const code = extractCode(emailsTo(outbox, email)[0]!.body);
+    const verified = await handler.verifyEmail(signupRequest({ email, code }));
+    assert.equal(verified.status, 200, "the code from the first send still verifies");
+  } finally {
+    await db.close();
+  }
+});

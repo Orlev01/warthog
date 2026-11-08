@@ -89,6 +89,10 @@ function stepErrorCopy(step: StepPath): string {
   }
 }
 
+// A send-code refused because this address was sent a code moments ago (429).
+const CODE_THROTTLED_COPY =
+  "We sent a code to this address a moment ago. Check your email, or wait a minute and try again.";
+
 const PASSKEY_CANCELLED_COPY =
   "Setting up your passkey was cancelled. You can try again when you're ready.";
 
@@ -137,7 +141,7 @@ export function createSignupFlow(deps: SignupFlowDeps): SignupFlowController {
   async function submitEmail(): Promise<void> {
     const response = await post("send-code", { email: state.email, name: state.name });
     if (!response || !response.ok) {
-      set({ error: stepErrorCopy("send-code") });
+      set({ error: response?.status === 429 ? CODE_THROTTLED_COPY : stepErrorCopy("send-code") });
       return;
     }
     set({ phase: "code", error: undefined });

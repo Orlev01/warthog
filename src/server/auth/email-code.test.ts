@@ -431,3 +431,191 @@ test("the email_codes migration applies and re-running every migration changes n
     await db.close();
   }
 });
+
+// =====================================================================================
+// Review fix B1 — the attempt limit holds under concurrency, only the newest code
+// verifies, and issuing codes is itself throttled per address.
+// =====================================================================================
+
+// A Random whose every byte is `value`: four bytes of 0x00 draw the code "000000",
+// so a test knows the issued code without reading it back from the outbox.
+function constantRandom(value: number): Random {
+  return {
+    randomBytes(n: number): Uint8Array {
+      return new Uint8Array(n).fill(value);
+    },
+  };
+}
+
+// The 6-digit code constantRandom(value) draws (32 bits of `value` bytes mod 10^6).
+function codeFor(value: number): string {
+  const n = Buffer.from(new Uint8Array(4).fill(value)).readUInt32BE(0) % 1_000_000;
+  return String(n).padStart(6, "0");
+}
+
+// The alert emails (every email to the address except code deliveries).
+function alertsTo(outbox: Outbox, recipient: string): SentMessage[] {
+  return emailsTo(outbox, recipient).filter((m) => !/verification code is \d{6}/.test(m.body));
+}
+
+async function countRows(db: Db, sql: string, values: unknown[]): Promise<number> {
+  const result = await db.query(sql, values);
+  return Number(result.rows[0]?.n ?? 0);
+}
+
+test("parallel guesses cannot beat the five-failure limit, and the holder gets exactly one alert", async () => {
+  const { clock } = mutableClock(T0);
+  const outbox = createOutbox();
+  const db = await freshDb();
+  try {
+    await issueEmailCode(db, EMAIL, issueDeps(clock, outbox, HMAC_KEY_A, constantRandom(0)));
+    const code = codeFor(0);
+    const wrong = wrongCode(code);
+
+    // Twenty wrong guesses and the correct code, all in flight at once.
+    const guesses = [...Array.from({ length: 20 }, () => wrong), code];
+    const results = await Promise.all(
+      guesses.map((g) => verifyEmailCode(db, EMAIL, g, verifyDeps(clock, outbox))),
+    );
+
+    const evaluated = results.filter((r) => !r.ok && r.reason === "invalid").length;
+    assert.ok(evaluated <= 5, `at most five guesses may be judged in the window (judged ${evaluated})`);
+    assert.equal(results[results.length - 1]!.ok, false, "the correct code sent in the burst is refused");
+    assert.ok(
+      (await countRows(db, "SELECT COUNT(*)::int AS n FROM email_code_attempts WHERE email = $1", [EMAIL])) <= 5,
+      "no more than five failures are ever recorded for the window",
+    );
+    assert.equal(alertsTo(outbox, EMAIL).length, 1, "exactly one alert reaches the holder");
+  } finally {
+    await db.close();
+  }
+});
+
+test("five failures sent in parallel throttle the next attempt and alert exactly once", async () => {
+  const { clock } = mutableClock(T0);
+  const outbox = createOutbox();
+  const db = await freshDb();
+  try {
+    await issueEmailCode(db, EMAIL, issueDeps(clock, outbox, HMAC_KEY_A, constantRandom(0)));
+    const code = codeFor(0);
+    const wrong = wrongCode(code);
+
+    await Promise.all(
+      Array.from({ length: 5 }, () => verifyEmailCode(db, EMAIL, wrong, verifyDeps(clock, outbox))),
+    );
+    const next = await verifyEmailCode(db, EMAIL, code, verifyDeps(clock, outbox));
+    assert.equal(next.ok, false);
+    assert.equal(next.ok === false && next.reason, "throttled");
+    const again = await verifyEmailCode(db, EMAIL, code, verifyDeps(clock, outbox));
+    assert.equal(again.ok === false && again.reason, "throttled");
+    assert.equal(alertsTo(outbox, EMAIL).length, 1, "one alert per window, however many refusals follow");
+  } finally {
+    await db.close();
+  }
+});
+
+test("issuing a new code retires every earlier one: only the newest code verifies", async () => {
+  const c = mutableClock(T0);
+  const outbox = createOutbox();
+  const db = await freshDb();
+  try {
+    await issueEmailCode(db, EMAIL, issueDeps(c.clock, outbox, HMAC_KEY_A, constantRandom(1)));
+    c.advance(61 * SECOND_MS);
+    await issueEmailCode(db, EMAIL, issueDeps(c.clock, outbox, HMAC_KEY_A, constantRandom(2)));
+
+    const older = await verifyEmailCode(db, EMAIL, codeFor(1), verifyDeps(c.clock, outbox));
+    assert.equal(older.ok, false, "the earlier code no longer verifies");
+    const newer = await verifyEmailCode(db, EMAIL, codeFor(2), verifyDeps(c.clock, outbox));
+    assert.equal(newer.ok, true, "the newest code verifies");
+  } finally {
+    await db.close();
+  }
+});
+
+test("issuing is throttled per address: one code a minute, five an hour, and a refused issue sends nothing", async () => {
+  const c = mutableClock(T0);
+  const outbox = createOutbox();
+  const db = await freshDb();
+  try {
+    const first = await issueEmailCode(db, EMAIL, issueDeps(c.clock, outbox));
+    assert.deepEqual(first, { ok: true });
+
+    const tooSoon = await issueEmailCode(db, EMAIL, issueDeps(c.clock, outbox));
+    assert.equal(tooSoon.ok, false, "a second code inside a minute is refused");
+    assert.equal(tooSoon.ok === false && tooSoon.reason, "throttled");
+    assert.ok(tooSoon.ok === false && tooSoon.retryAfterMs > 0, "the refusal says how long to wait");
+    assert.equal(emailsTo(outbox, EMAIL).length, 1, "a refused issue sends no email");
+
+    // Four more, each a minute apart, fill the hour's budget of five.
+    for (let i = 0; i < 4; i += 1) {
+      c.advance(61 * SECOND_MS);
+      const ok = await issueEmailCode(db, EMAIL, issueDeps(c.clock, outbox));
+      assert.deepEqual(ok, { ok: true }, `issue ${i + 2} inside the hour is allowed`);
+    }
+    c.advance(61 * SECOND_MS);
+    const sixth = await issueEmailCode(db, EMAIL, issueDeps(c.clock, outbox));
+    assert.equal(sixth.ok, false, "a sixth code inside the hour is refused");
+    assert.equal(emailsTo(outbox, EMAIL).length, 5, "only five codes were ever sent");
+
+    // A different address has its own budget.
+    const other = await issueEmailCode(db, "someone.else@warthog.com.au", issueDeps(c.clock, outbox));
+    assert.deepEqual(other, { ok: true });
+
+    // Once the hour has passed, codes flow again.
+    c.advance(60 * MINUTE_MS);
+    assert.deepEqual(await issueEmailCode(db, EMAIL, issueDeps(c.clock, outbox)), { ok: true });
+  } finally {
+    await db.close();
+  }
+});
+
+test("concurrent issues for one address send at most one code", async () => {
+  const { clock } = mutableClock(T0);
+  const outbox = createOutbox();
+  const db = await freshDb();
+  try {
+    await Promise.all(
+      Array.from({ length: 10 }, () => issueEmailCode(db, EMAIL, issueDeps(clock, outbox))),
+    );
+    assert.ok(emailsTo(outbox, EMAIL).length <= 1, "a burst of issues sends at most one code");
+    assert.ok(
+      (await countRows(
+        db,
+        "SELECT COUNT(*)::int AS n FROM email_codes WHERE email = $1 AND consumed_at IS NULL",
+        [EMAIL],
+      )) <= 1,
+      "at most one live code exists for the address",
+    );
+  } finally {
+    await db.close();
+  }
+});
+
+test("a code whose email could not be sent is never left usable", async () => {
+  const { clock } = mutableClock(T0);
+  const outbox = createOutbox();
+  const failing = {
+    async sendEmail(): Promise<void> {
+      throw new Error("email provider down");
+    },
+  };
+  const db = await freshDb();
+  try {
+    await assert.rejects(
+      issueEmailCode(db, EMAIL, { clock, random: constantRandom(0), hmacKey: HMAC_KEY_A, emailSender: failing }),
+    );
+    assert.equal(
+      await countRows(
+        db,
+        "SELECT COUNT(*)::int AS n FROM email_codes WHERE email = $1 AND consumed_at IS NULL",
+        [EMAIL],
+      ),
+      0,
+      "no live code remains after a failed send",
+    );
+    const result = await verifyEmailCode(db, EMAIL, codeFor(0), verifyDeps(clock, outbox));
+    assert.equal(result.ok, false, "the undelivered code does not verify");
+  } finally {
+    await db.close();
+  }
+});

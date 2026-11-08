@@ -646,3 +646,18 @@ test("GET /signup renders the flow's first step: an accessibly-labelled email en
     `the first step must offer a live, named control to continue (not a dead screen), got: ${markup}`,
   );
 });
+
+// ── Review fix B1 — a throttled send-code says to wait, in plain English ──────────────
+
+test("a throttled send-code (429) stays on the details step and asks the person to wait", async () => {
+  const ctx = setup();
+  ctx.responders["send-code"] = () => jsonResponse(429, { error: "throttled" });
+
+  ctx.flow.setEmail(EMAIL);
+  await ctx.flow.submitEmail();
+
+  const state = ctx.flow.getState();
+  assert.equal(state.phase, "details", "no code step without a sent code");
+  assertPlainEnglish(state.error, "throttled send-code");
+  assert.match(state.error, /minute/i, "the copy tells the person to wait a minute");
+});

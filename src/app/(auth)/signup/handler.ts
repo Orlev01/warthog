@@ -178,6 +178,17 @@ function json(status: number, body: unknown): Response {
   });
 }
 
+// A 429 for a rate-limited step, with Retry-After in whole seconds (at least one).
+function throttled(retryAfterMs: number): Response {
+  return new Response(JSON.stringify({ error: "throttled" }), {
+    status: 429,
+    headers: {
+      "content-type": "application/json",
+      "retry-after": String(Math.max(1, Math.ceil(retryAfterMs / 1000))),
+    },
+  });
+}
+
 export function createSignupHandler(deps: SignupHandlerDeps): SignupHandler {
   const { db, clock, random, hmacKey, emailSender, keyWrapper, rpId, publicOrigin } = deps;
 
@@ -198,7 +209,8 @@ export function createSignupHandler(deps: SignupHandlerDeps): SignupHandler {
   // foreign Origin is 403 and sends nothing). The body { email } is validated at the
   // boundary, then the real issuer draws a code, stores only its HMAC and delivers it
   // in one email (bound as parameters, INV-102). The SAME 200 is returned for any
-  // well-formed email, whether or not an account already exists — no existence leak.
+  // well-formed email, whether or not an account already exists — no existence leak;
+  // a 429 means only that this address was sent a code very recently.
   async function sendCode(request: Request): Promise<Response> {
     if (!sameOrigin(request)) return json(403, { error: "forbidden" });
     try {
@@ -206,7 +218,12 @@ export function createSignupHandler(deps: SignupHandlerDeps): SignupHandler {
         maxBytes: MAX_BODY_BYTES,
       });
 
-      await issueEmailCode(db, email, { clock, random, hmacKey, emailSender });
+      // Codes to one address are rate-limited (one a minute, five an hour), so this
+      // step cannot flood an inbox or keep many codes live. A throttled send emails
+      // nothing and says when to try again; the limit is per address, whether or not an
+      // account exists, so the refusal reveals nothing about existence.
+      const issued = await issueEmailCode(db, email, { clock, random, hmacKey, emailSender });
+      if (!issued.ok) return throttled(issued.retryAfterMs);
       // Park the name against the email until verify-email mints a signupId and
       // takes it onto the pending sign-up (never a plaintext column).
       if (name !== undefined) {
