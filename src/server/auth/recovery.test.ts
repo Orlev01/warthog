@@ -432,3 +432,29 @@ test("verifying for an account with no recovery code (or none at all) costs the 
     await db.close();
   }
 });
+
+// =====================================================================================
+// Review fix B10 — the code is accepted however a person writes it back: any case,
+// spaces, dashes or other grouping, and the look-alike digits 0 and 1 for O and I.
+// =====================================================================================
+
+test("verifyRecoveryCode accepts the code in any case, with spaces, dashes or grouping", async () => {
+  const db = await freshDb();
+  try {
+    const user = await freshUser(db, "handwritten");
+    const { code } = await issueRecoveryCode(db, user.id, deps);
+    const grouped = code.match(/.{1,4}/g)!.join(" ");
+    const dashed = code.match(/.{1,5}/g)!.join("-");
+
+    for (const variant of [code.toLowerCase(), ` ${code} `, grouped, dashed, `\t${grouped.toLowerCase()}\n`]) {
+      assert.equal(await verifyRecoveryCode(db, user.id, variant), true, `"${variant}" must verify`);
+    }
+    // 0 and 1 are not in the base32 alphabet; read back as O and I.
+    const lookalike = code.replace(/O/g, "0").replace(/I/g, "1");
+    assert.equal(await verifyRecoveryCode(db, user.id, lookalike), true, "0/1 read as O/I");
+    // Normalising never makes a wrong code right.
+    assert.equal(await verifyRecoveryCode(db, user.id, wrongVariant(code).toLowerCase()), false);
+  } finally {
+    await db.close();
+  }
+});

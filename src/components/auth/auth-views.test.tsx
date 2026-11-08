@@ -458,3 +458,18 @@ test("SignupView 'details' step collects name and email via accessibly-labelled 
   assert.match(labelBlob, /name/i, `a field must be labelled for the person's name, got labels: "${labelBlob}"`);
   assert.match(labelBlob, /email/i, `a field must be labelled for the email, got labels: "${labelBlob}"`);
 });
+
+// Review fix B10 — a raw 26-character recovery code is shown in groups of four, so it is
+// easy to copy down by hand (the server accepts it back with or without the spaces).
+test("a raw recovery code is shown in groups of four characters", () => {
+  const raw = "ABCDEFGHIJKLMNOPQRSTUVWXYZ";
+  for (const markup of [
+    renderToStaticMarkup(<SignupView step="recovery" recoveryCode={raw} />),
+    renderToStaticMarkup(<RecoverView step="new-recovery" recoveryCode={raw} />),
+  ]) {
+    assert.ok(
+      visibleText(markup).includes("ABCD EFGH IJKL MNOP QRST UVWX YZ"),
+      `the code must be grouped in fours, got: "${visibleText(markup)}"`,
+    );
+  }
+});

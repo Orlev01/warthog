@@ -38,6 +38,14 @@ function AuthScreen({
   );
 }
 
+// A raw base32 recovery code shown in groups of four ("ABCD EFGH …", design §4.2), so it
+// is easy to copy by hand; the server accepts it back with or without the spaces. A code
+// that already carries separators is shown as given.
+function groupRecoveryCode(code: string | undefined): string | undefined {
+  if (code === undefined || !/^[A-Z2-7]{8,}$/.test(code)) return code;
+  return code.match(/.{1,4}/g)!.join(" ");
+}
+
 // The read-only, shown-once recovery code, a tick to confirm it is saved, and the
 // gated Continue. The code is rendered as plain text (never prefilled into an editable
 // input) so it is never carried as a form value — the person reads it and writes it
@@ -62,7 +70,7 @@ function SaveRecoveryCode({
       <div className="flex flex-col gap-1.5">
         <span className="text-sm font-medium text-fg">Your recovery code</span>
         <p className="rounded-card border border-line bg-surface-muted px-3 py-3 text-center font-mono text-lg tracking-widest text-fg">
-          {code}
+          {groupRecoveryCode(code)}
         </p>
       </div>
       <label htmlFor={checkboxId} className="flex items-start gap-2 text-sm text-fg">
