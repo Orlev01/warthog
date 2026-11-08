@@ -608,3 +608,20 @@ test("the sessions migration applies and re-running every migration changes noth
     await db.close();
   }
 });
+
+// Review (unverified, low) — the cookie must outlive the browser session: without
+// Max-Age it is a session cookie, dropped when the browser (or an installed iOS web app)
+// closes, long before the 14-day idle / 30-day absolute windows the server enforces.
+test("the session cookie persists for the 30-day absolute window (Max-Age)", async () => {
+  const { clock } = mutableClock(T0);
+  const { random } = countingRandom();
+  const db = await freshDb();
+  try {
+    const userId = await makeUser(db, "erin");
+    const created = await createSession(db, userId, { clock, random });
+    const cookie = parseSetCookie(created.cookie);
+    assert.equal(cookie.attrs.get("max-age"), String(30 * 24 * 60 * 60), "Max-Age is the absolute window");
+  } finally {
+    await db.close();
+  }
+});
