@@ -13,10 +13,13 @@
 // and the person's OWN connections (never credentials). The connect / disconnect / request
 // controls are bound to these actions by the page when it mounts the view.
 //
-// disconnectService is the one that CHANGES data: it removes EVERY one of the person's
-// agents' access to the disconnected service (the connector slug is stripped from each
-// agent's grants, in one transaction) AND revokes the stored provider access where the
-// provider allows it (the oauth2 provider-sign-in kind, whose tokens Warthog holds).
+// disconnectService is the one that CHANGES data (brief: "disconnect in one click, which
+// immediately removes every agent's access to that service and revokes Warthog's stored
+// access to the provider"): it asks the provider to revoke the stored access where the
+// provider allows it (the oauth2 provider-sign-in kind, whose tokens Warthog holds — best
+// effort, while the tokens still exist), then in ONE transaction strips the connector slug
+// from every one of the person's agents' grants, DELETES the connection with its encrypted
+// credentials, and records the disconnection in the person's activity.
 //
 // Security (each a reviewer veto):
 //   • Every read/write is member-scoped by `session.userId` — never a client value
@@ -42,7 +45,8 @@ import type { Clock } from "@/server/seams/clock";
 import type { Session } from "@/server/auth/session";
 import type { EmailSender } from "@/server/notify/senders";
 import { getUserById } from "@/server/db/users";
-import { getConnectionById } from "@/server/db/connections";
+import { getConnectionById, getConnectionCredentials } from "@/server/db/connections";
+import { createDbRecorder } from "@/server/activity/writer";
 import { listAgentsForUser } from "@/server/db/agents";
 import { getConnectionPermissions, upsertPermissions } from "@/server/db/agent-permissions";
 import {
@@ -73,13 +77,16 @@ import type {
   ToolItem,
 } from "@/components/connectors/connectors-view";
 
-// What the provider-revocation seam is told: the acting person and the connection whose
-// stored provider access to revoke (and its connector slug, for the provider adapter).
-// Identity is the session's, never a caller value.
+// What the provider-revocation seam is told: the acting person, the connection whose
+// stored provider access to revoke, its connector slug (for the provider adapter) and the
+// stored token set (decrypted in memory only, so the adapter can present the tokens to the
+// provider's revocation endpoint; never logged or recorded). Identity is the session's,
+// never a caller value.
 export interface RevokeProviderAccessInput {
   readonly userId: string;
   readonly connectionId: string;
   readonly connectorId: string;
+  readonly credentials: Record<string, unknown>;
 }
 
 // Every seam injected — no process.env, no secret (INV-103).
@@ -338,10 +345,12 @@ export function createConnectorsActions(deps: ConnectorsActionsDeps): Connectors
   }
 
   // Disconnect ONE of the session user's own connected services. Shape-guard the id at the
-  // boundary (a 4xx before any query), resolve it member-scoped (another person's id is
-  // refused), then strip the service's connector from EVERY one of the person's agents'
-  // grants in one transaction and — where the provider allows it — revoke the stored provider
-  // access after the commit.
+  // boundary (a 4xx before any query) and resolve it member-scoped (another person's id is
+  // refused). Then ask the provider to revoke the stored access where it allows it — best
+  // effort, BEFORE the tokens are deleted, so a provider outage never keeps the person
+  // connected — and in one transaction strip the service's connector from EVERY one of the
+  // person's agents' grants, delete the connection with its encrypted credentials, and
+  // record the disconnection.
   async function disconnectService(
     session: Session,
     connectionId: string,
@@ -357,8 +366,25 @@ export function createConnectorsActions(deps: ConnectorsActionsDeps): Connectors
     }
     const connectorId = connection.connectorId;
 
-    // Strip the disconnected service's connector from every one of the person's own agents'
-    // grants, in one transaction so they all commit together or roll back together.
+    // Revoke the stored provider access WHERE THE PROVIDER ALLOWS IT: a provider sign-in
+    // (oauth2) service is one whose tokens Warthog holds, so the provider can revoke them; an
+    // api-key / provider-mcp service carries nothing Warthog revokes server-side. Scoped to
+    // the session user and THIS connection (never a caller identity). A failure is recorded,
+    // never allowed to block the disconnect itself.
+    const entry = catalogue.get(connectorId);
+    let providerRevoked: boolean | null = null;
+    if (entry?.auth_kind === "oauth2") {
+      try {
+        const credentials = await getConnectionCredentials(db, userId, id, await dekFor(userId));
+        await revokeProviderAccess({ userId, connectionId: id, connectorId, credentials: credentials ?? {} });
+        providerRevoked = true;
+      } catch {
+        providerRevoked = false;
+      }
+    }
+
+    // One transaction: the grant strip, the delete and the activity record commit together
+    // or not at all. The record is LAST, so a failure in any step rolls the others back.
     const agents = await listAgentsForUser(db, userId);
     await withTransaction(db, async (tx) => {
       for (const agent of agents) {
@@ -369,16 +395,26 @@ export function createConnectorsActions(deps: ConnectorsActionsDeps): Connectors
           grantedConnectors: grants.grantedConnectors.filter((slug) => slug !== connectorId),
         });
       }
-    });
 
-    // Revoke the stored provider access WHERE THE PROVIDER ALLOWS IT: a provider sign-in
-    // (oauth2) service is one whose tokens Warthog holds, so the provider can revoke them; an
-    // api-key / provider-mcp service carries nothing Warthog revokes server-side. Fired after
-    // the commit, scoped to the session user and THIS connection (never a caller identity).
-    const entry = catalogue.get(connectorId);
-    if (entry?.auth_kind === "oauth2") {
-      await revokeProviderAccess({ userId, connectionId: id, connectorId });
-    }
+      // Forget the connection and its credentials (member-scoped). Nothing references a
+      // connection row, so re-granting the connector later cannot revive the old credential.
+      await tx.query("DELETE FROM connections WHERE id = $1 AND user_id = $2", [id, userId]);
+
+      // Warthog writes the record (principle 14): which service and account went, and whether
+      // the provider confirmed the revocation (null when the kind has nothing to revoke).
+      await createDbRecorder({ db: tx, clock, dekFor }).record({
+        userId,
+        kind: "connection_change",
+        source: "warthog",
+        connectorId,
+        outcome: "disconnected",
+        payload: {
+          service: entry?.name ?? connectorId,
+          accountLabel: connection.accountLabel,
+          providerRevoked,
+        },
+      });
+    });
 
     return { ok: true };
   }

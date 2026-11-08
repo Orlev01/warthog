@@ -112,9 +112,13 @@ function buildActions(db: Db, config: Config): ConnectorsActions {
     // The concrete MCP tool-listing transport is a later task; until then a connect lists no
     // tools (they are filled once the MCP client lands).
     listProviderTools: async () => [],
-    // The provider-side revocation client is a later task; the seam is wired so disconnect
-    // calls it for a provider-sign-in service the moment that client exists.
-    revokeProviderAccess: async () => {},
+    // The provider-side revocation client is a later task (no provider sign-in client is
+    // registered yet, so no oauth2 connection can exist). Until it lands the seam refuses
+    // loudly rather than pretending: disconnect still deletes the stored tokens and records
+    // that the provider access was not revoked (never a silent success).
+    revokeProviderAccess: async () => {
+      throw new Error("Provider revocation is not configured");
+    },
   });
 }
 
