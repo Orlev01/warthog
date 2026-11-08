@@ -81,6 +81,10 @@ export interface ActivityActionsDeps {
   // How many of the newest entries one view reads and decrypts (default
   // ACTIVITY_PAGE_LIMIT), so a long history is never decrypted whole.
   readonly pageLimit?: number;
+  // Names a connected service through the connector catalogue (the page passes the
+  // process-wide index), so entries and the service filter show "Google Calendar" rather
+  // than its id; absent, or a service the catalogue doesn't know, ⇒ the id is shown.
+  readonly serviceName?: (connectorId: string) => string | undefined;
 }
 
 // The newest entries the Activity screen shows (and searches) at once.
@@ -186,7 +190,10 @@ const DISPUTE_REFUSED = "dispute_refused";
 const UNDO_REFUSED = "undo_refused";
 
 export function createActivityActions(deps: ActivityActionsDeps): ActivityActions {
-  const { db, disputes, undo, keyWrapper, reversalFor } = deps;
+  const { db, disputes, undo, keyWrapper, reversalFor, serviceName } = deps;
+
+  // A connected service's display name (its catalogue name, else its id).
+  const serviceLabel = (connectorId: string): string => serviceName?.(connectorId) ?? connectorId;
 
   // Dispute one of the acting person's OWN entries. Validate the id + note shape at
   // the boundary first (a bad id or an empty/oversized note throws a 4xx and never
@@ -255,7 +262,7 @@ export function createActivityActions(deps: ActivityActionsDeps): ActivityAction
       title: entryTitle(entry),
       source: entry.source,
       agent: agentLabel(agentNames, entry.agentId),
-      service: entry.connectorId,
+      service: entry.connectorId === undefined ? undefined : serviceLabel(entry.connectorId),
       outcome: entry.outcome === undefined ? "" : humanise(entry.outcome),
       at: formatAt(entry.occurredAt),
       summary: payloadText(entry.payload, "summary"),
@@ -294,6 +301,7 @@ export function createActivityActions(deps: ActivityActionsDeps): ActivityAction
     const filterOptions: ActivityViewProps["filterOptions"] = {
       ...facets,
       agents: facets.agents.map((id) => ({ value: id, label: agentLabel(agentNames, id) ?? id })),
+      services: facets.services.map((id) => ({ value: id, label: serviceLabel(id) })),
     };
 
     // The facet/date filters the view posts back: `agent`→agentId, `service`→

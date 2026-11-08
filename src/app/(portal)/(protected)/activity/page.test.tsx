@@ -621,12 +621,13 @@ test("the filter dropdowns offer the person's own agents and services as filter 
 
     // Each facet option's VALUE is posted back verbatim as the filter value, so the values
     // must BE the filterable values present in Alice's entries (the round-trip the AC needs).
-    // An agent option is labelled by the agent's name (review fix W2.4) but still posts its id.
+    // An agent (or service) option is labelled by its name (review fix W2.4) but still posts
+    // its id.
     for (const agent of ["agent-claude", "agent-gpt"]) {
       assert.ok(optionValues(view.filterOptions.agents).includes(agent), `the agent filter offers "${agent}"`);
     }
     for (const service of ["google_calendar", "gmail"]) {
-      assert.ok(view.filterOptions.services.includes(service), `the service filter offers "${service}"`);
+      assert.ok(optionValues(view.filterOptions.services).includes(service), `the service filter offers "${service}"`);
     }
   } finally {
     await db.close();

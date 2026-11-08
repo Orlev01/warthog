@@ -188,3 +188,37 @@ test("the agent filter offers agents by name and still filters by id", async () 
     await db.close();
   }
 });
+
+test("a connected service is shown and offered by its catalogue name, and still filtered by its id", async () => {
+  const db = await freshDb();
+  try {
+    const keyWrapper = localAesKeyWrapper(randomBytes(32));
+    const alice = await makePerson(db, keyWrapper, "alice");
+    const recorder = createDbRecorder({ db, clock, dekFor: async () => alice.dek });
+    await recorder.record({
+      userId: alice.userId,
+      kind: "tool_call",
+      source: "warthog",
+      connectorId: "google-calendar",
+      tool: "google-calendar__list_events",
+      outcome: "executed",
+    });
+
+    const loader = createActivityActions({
+      db,
+      keyWrapper,
+      disputes: { fileDispute: async () => undefined },
+      undo: { undo: async () => ({ ok: false, reason: "unused" }) },
+      serviceName: (id) => (id === "google-calendar" ? "Google Calendar" : undefined),
+    });
+    const view = await loader.load(alice.session, { service: "google-calendar" });
+    assert.equal(view.entries.length, 1, "the service filter still narrows by the connector id");
+    assert.equal(view.entries[0]!.service, "Google Calendar");
+    assert.equal(view.entries[0]!.title, "List events");
+    assert.deepEqual(view.filterOptions.services, [{ value: "google-calendar", label: "Google Calendar" }]);
+    const shown = text(renderToStaticMarkup(<ActivityView {...view} />));
+    assert.ok(shown.includes("Service: Google Calendar"), shown);
+  } finally {
+    await db.close();
+  }
+});
