@@ -692,3 +692,117 @@ test("runs from injected deps alone: no secret and no ambient configuration are 
     await db.close();
   }
 });
+
+// ===========================================================================
+// One channel's failure never costs the other, and a retry sends only what has not gone yet
+// (review finding: the link was issued BEFORE either send, and "a link exists" was the
+// idempotency marker — so an SMS provider blip made the retried job see the link and return,
+// and neither the SMS nor the email was ever sent; an email failure after a successful SMS
+// skipped the email for good). And an approval that is past its expiry is never fallen back
+// on, even before the expiry sweep has marked it.
+// ===========================================================================
+
+// Senders whose `failing` channels throw on their first `failures` calls, recording every
+// message that does go out.
+function flakySenders(failing: { sms?: number; email?: number }): ReturnType<typeof recordingSenders> {
+  const base = recordingSenders();
+  let smsFailures = failing.sms ?? 0;
+  let emailFailures = failing.email ?? 0;
+  return {
+    ...base,
+    senders: {
+      push: base.senders.push,
+      sms: {
+        async sendSms(message: OutgoingMessage): Promise<void> {
+          if (smsFailures > 0) {
+            smsFailures -= 1;
+            throw new Error("SMS provider unavailable");
+          }
+          await base.senders.sms.sendSms(message);
+        },
+      },
+      email: {
+        async sendEmail(message: OutgoingMessage): Promise<void> {
+          if (emailFailures > 0) {
+            emailFailures -= 1;
+            throw new Error("email provider unavailable");
+          }
+          await base.senders.email.sendEmail(message);
+        },
+      },
+    },
+  };
+}
+
+test("a failed SMS still lets the email go, and the retry sends only the SMS", async () => {
+  const db = await freshDb();
+  try {
+    const clock = fixedClock(NOW);
+    const { userId, dek } = await makePerson(db, "flaky-sms");
+    await addVerifiedNumber(db, userId, "+61400111333", clock);
+    const approvalId = await createPendingApproval(db, userId, dek, clock);
+    const flaky = flakySenders({ sms: 1 });
+    const deps = { db, clock, random: systemRandom, senders: flaky.senders, publicBaseUrl: PUBLIC_BASE_URL };
+
+    await assert.rejects(runApprovalFallback(deps, { approvalId }), /SMS provider/, "the failure surfaces so the job retries");
+    assert.equal(flaky.sms.length, 0, "the SMS did not go");
+    assert.equal(flaky.email.length, 1, "the email still went");
+
+    await runApprovalFallback(deps, { approvalId });
+    assert.equal(flaky.sms.length, 1, "the retry sent the SMS");
+    assert.equal(flaky.email.length, 1, "and did not send the email again");
+    assert.ok(flaky.sms[0]!.link, "the retried SMS carries a working single-use link");
+    const redeemed = await redeemApprovalLink(
+      db,
+      { token: new URL(flaky.sms[0]!.link!).searchParams.get("token")! },
+      { clock },
+    );
+    assert.equal(redeemed.ok, true, "the retried SMS's link opens the approval");
+
+    await runApprovalFallback(deps, { approvalId });
+    assert.equal(flaky.sms.length + flaky.email.length, 2, "once every channel has gone, a re-run sends nothing");
+  } finally {
+    await db.close();
+  }
+});
+
+test("an email that fails after the SMS went is retried on its own", async () => {
+  const db = await freshDb();
+  try {
+    const clock = fixedClock(NOW);
+    const { userId, dek } = await makePerson(db, "flaky-email");
+    await addVerifiedNumber(db, userId, "+61400111444", clock);
+    const approvalId = await createPendingApproval(db, userId, dek, clock);
+    const flaky = flakySenders({ email: 1 });
+    const deps = { db, clock, random: systemRandom, senders: flaky.senders, publicBaseUrl: PUBLIC_BASE_URL };
+
+    await assert.rejects(runApprovalFallback(deps, { approvalId }), /email provider/);
+    assert.deepEqual([flaky.sms.length, flaky.email.length], [1, 0]);
+
+    await runApprovalFallback(deps, { approvalId });
+    assert.deepEqual([flaky.sms.length, flaky.email.length], [1, 1], "only the email was retried");
+  } finally {
+    await db.close();
+  }
+});
+
+test("an approval past its expiry is not fallen back on, even while it still reads pending", async () => {
+  const db = await freshDb();
+  try {
+    const created = fixedClock(NOW);
+    const { userId, dek } = await makePerson(db, "expired-pending");
+    await addVerifiedNumber(db, userId, "+61400111555", created);
+    const approvalId = await createPendingApproval(db, userId, dek, created);
+    const row = await db.query("SELECT expires_at, status FROM approvals WHERE id = $1", [approvalId]);
+    assert.equal(row.rows[0]!.status, "pending");
+
+    // The job runs after the approval's window closed, before the expiry sweep marked it.
+    const late = fixedClock(new Date(toMs(row.rows[0]!.expires_at) + 1));
+    const { senders, sms, email } = recordingSenders();
+    await runApprovalFallback({ db, clock: late, random: systemRandom, senders, publicBaseUrl: PUBLIC_BASE_URL }, { approvalId });
+    assert.deepEqual([sms.length, email.length], [0, 0], "nothing is sent for an expired approval");
+    assert.equal((await linksFor(db, approvalId)).length, 0, "and no link is issued");
+  } finally {
+    await db.close();
+  }
+});
