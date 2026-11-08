@@ -172,8 +172,13 @@ export async function createRecord(
 
 // Update the owner's own record (member-scoped: both id AND user_id are bound),
 // re-encrypting the fields and updating the plaintext metadata. `reminderOffsets`
-// are left unchanged when omitted. THROWS when no such record belongs to this
-// user — so one person can never edit another's record.
+// are left unchanged when omitted. Moving the due date (to another date, or clearing
+// it) starts a FRESH reminder cycle: the sent-markers belonged to the old date, so they
+// are cleared and the new date's reminders fire — a renewal rolled on a year reminds
+// again. An edit that keeps the same date keeps them, so nothing is sent twice. (In the
+// SET list `due_date` still names the row's OLD value, so the comparison is old vs new.)
+// THROWS when no such record belongs to this user — so one person can never edit
+// another's record.
 export async function updateRecord(
   db: Db,
   input: UpdateRecordInput,
@@ -188,7 +193,9 @@ export async function updateRecord(
      SET fields = $3,
          due_date = $4::date,
          status = $5,
-         reminder_offsets = COALESCE($6::int[], reminder_offsets)
+         reminder_offsets = COALESCE($6::int[], reminder_offsets),
+         sent_offsets = CASE WHEN due_date IS DISTINCT FROM $4::date
+                             THEN '{}'::int[] ELSE sent_offsets END
      WHERE id = $1 AND user_id = $2
      RETURNING ${SELECT_COLUMNS}`,
     [input.id, input.userId, envelope, dueDate, input.status, reminderOffsets],

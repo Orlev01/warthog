@@ -1110,3 +1110,86 @@ test("the life_admin_records migration applies and re-running every migration ch
     await db.close();
   }
 });
+
+// =====================================================================================
+// Moving a record's due date starts a fresh reminder cycle (review finding: sent-markers
+// were never reset, so after a subscription's first renewal reminders fired, rolling the
+// due date on a year meant that record never reminded again — silently).
+// =====================================================================================
+
+test("updateRecord with a new due date resets the sent-markers, so the next cycle's reminders fire", async () => {
+  const db = await freshDb();
+  try {
+    const userId = await makeUser(db, "reminder-roll");
+    const dek = freshDek();
+    const saved = (await createRecord(
+      db,
+      { userId, kind: "subscription", fields: subscriptionFields(), dueDate: "2026-12-01", status: "active", source: { kind: "person" } },
+      dek,
+    )) as RecordLike;
+
+    // The first cycle's two reminders fire.
+    const dueDay = fixedClock(new Date("2026-12-01T12:00:00Z"));
+    assert.deepEqual(
+      dueForRecord((await listDueForReminder(db, dueDay)) as DueReminderLike[], saved.id).map((d) => d.offset).sort(),
+      [1, 14],
+    );
+    await markReminderSent(db, { recordId: saved.id, offset: 14 });
+    await markReminderSent(db, { recordId: saved.id, offset: 1 });
+
+    // The renewal rolls on a year.
+    const rolled = (await updateRecord(
+      db,
+      { id: saved.id, userId, fields: subscriptionFields(), dueDate: "2027-12-01", status: "active" },
+      dek,
+    )) as RecordLike;
+    assert.deepEqual(rolled.sentOffsets, [], "a moved due date clears the previous cycle's sent-markers");
+
+    const fourteenBefore = fixedClock(new Date("2027-11-17T12:00:00Z"));
+    assert.deepEqual(
+      dueForRecord((await listDueForReminder(db, fourteenBefore)) as DueReminderLike[], saved.id).map((d) => d.offset),
+      [14],
+      "the new cycle's 14-day reminder is due",
+    );
+    await markReminderSent(db, { recordId: saved.id, offset: 14 });
+    const dayBefore = fixedClock(new Date("2027-11-30T12:00:00Z"));
+    assert.deepEqual(
+      dueForRecord((await listDueForReminder(db, dayBefore)) as DueReminderLike[], saved.id).map((d) => d.offset),
+      [1],
+      "and then its 1-day reminder",
+    );
+  } finally {
+    await db.close();
+  }
+});
+
+test("updateRecord that keeps the same due date keeps the sent-markers, so nothing fires twice", async () => {
+  const db = await freshDb();
+  try {
+    const userId = await makeUser(db, "reminder-same-date");
+    const dek = freshDek();
+    const saved = (await createRecord(
+      db,
+      { userId, kind: "subscription", fields: subscriptionFields(), dueDate: "2026-12-01", status: "active", source: { kind: "person" } },
+      dek,
+    )) as RecordLike;
+    await markReminderSent(db, { recordId: saved.id, offset: 14 });
+    await markReminderSent(db, { recordId: saved.id, offset: 1 });
+
+    // A fields/status edit on the same date.
+    const edited = (await updateRecord(
+      db,
+      { id: saved.id, userId, fields: { ...subscriptionFields(), note: "edited" }, dueDate: "2026-12-01", status: "cancelled" },
+      dek,
+    )) as RecordLike;
+    assert.deepEqual([...edited.sentOffsets].sort(), [1, 14], "the sent-markers survive an edit that keeps the date");
+    const dueDay = fixedClock(new Date("2026-12-01T12:00:00Z"));
+    assert.deepEqual(
+      dueForRecord((await listDueForReminder(db, dueDay)) as DueReminderLike[], saved.id),
+      [],
+      "no reminder is sent twice",
+    );
+  } finally {
+    await db.close();
+  }
+});

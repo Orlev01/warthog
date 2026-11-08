@@ -12,7 +12,8 @@
 //     to the record (its opaque id — the app resolves it after sign-in) and NO personal
 //     content; then
 //   • marks that offset sent (`markReminderSent`), so `listDueForReminder` stops returning
-//     it and the reminder never fires again.
+//     it and that reminder never fires again for this due date (moving the due date
+//     clears the markers, so the next cycle's reminders fire).
 //
 // The defaults (14 days and 1 day before the due date) and any per-record override live on
 // the record's own reminder offsets, so this job honours whatever the store hands it — it
