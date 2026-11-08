@@ -55,7 +55,7 @@ import { test } from "node:test";
 import assert from "node:assert/strict";
 import { renderToStaticMarkup } from "react-dom/server";
 
-import { InboxView, createReleaseFlow } from "./inbox-view";
+import { InboxView, createReleaseFlow, focusApprovalElement } from "./inbox-view";
 import { ReleaseRejectedError } from "@/client/vault/release";
 
 // ─── the prop shapes this task introduces (described here as the contract) ───────────
@@ -1091,4 +1091,65 @@ test("a long unbroken detail value can wrap: the value column may shrink and eve
     assert.match(cls, /overflow-wrap:anywhere|wrap-anywhere|break-all/, `every value wraps anywhere, got class "${cls}"`);
     assert.match(cls, /min-w-0/, `every value may shrink, got class "${cls}"`);
   }
+});
+
+// ═══ Review fix W4.2 — a notification tap opens straight onto its approval ═════════════
+//
+// A push notification opens /inbox?approval=<id>. The page hands that id to the view,
+// which marks THAT request (in words and an icon, never colour alone) and, once mounted,
+// scrolls it into view and moves focus to it. A request that has already been decided,
+// or one that is gone, gets a plain notice instead of silently showing the list.
+
+// The <li> that carries a given approval's element id.
+function itemFor(markup: string, id: string): El | undefined {
+  return findAll(markup, "li").find((li) => attr(li.attrs, "id") === `approval-${id}`);
+}
+
+test("W4.2: the approval a notification opened is marked in words and can take focus", () => {
+  const markup = render(base({ focusApproval: PENDING_HELD.id }));
+  const item = itemFor(markup, PENDING_HELD.id);
+  assert.ok(item, "the opened request carries its approval element id");
+  assert.equal(attr(item.attrs, "tabindex"), "-1", "it can take focus programmatically");
+  assert.match(visibleText(item.inner), /from your notification/i, "it says why it is highlighted, in words");
+
+  const other = itemFor(markup, PENDING_CARD.id);
+  assert.ok(other, "every request carries its element id");
+  assert.doesNotMatch(visibleText(other.inner), /from your notification/i, "only the opened request is marked");
+  assert.equal(attr(other.attrs, "tabindex"), null, "and only it takes focus");
+});
+
+test("W4.2: an opened approval that was already decided shows a plain notice", () => {
+  const markup = render(base({ focusApproval: HIST_DENIED.id }));
+  const text = visibleText(markup);
+  assert.match(text, /already been decided/i, `the person is told it was decided; text="${text}"`);
+  assert.match(text, /history/i, "and where to find it");
+  const item = itemFor(markup, HIST_DENIED.id);
+  assert.ok(item && /from your notification/i.test(visibleText(item.inner)), "the decided entry is marked too");
+});
+
+test("W4.2: an opened approval that is gone shows a plain notice and never echoes the id", () => {
+  const ghost = "12121212-1212-4121-8121-121212121212";
+  const markup = render(base({ focusApproval: ghost }));
+  const text = visibleText(markup);
+  assert.match(text, /couldn.t find that request/i, `the person is told it is gone; text="${text}"`);
+  assert.ok(!markup.includes(ghost), "the id from the address bar is never written into the page");
+});
+
+test("W4.2: with no opened approval there is no notice and nothing is marked", () => {
+  const text = visibleText(render(base()));
+  assert.doesNotMatch(text, /from your notification|couldn.t find that request|already been decided/i);
+});
+
+test("W4.2: focusApprovalElement scrolls the request into view and moves focus to it", () => {
+  const calls: string[] = [];
+  const element = {
+    scrollIntoView: (options?: ScrollIntoViewOptions) => calls.push(`scroll:${options?.block}`),
+    focus: (options?: FocusOptions) => calls.push(`focus:${options?.preventScroll}`),
+  };
+  const doc = {
+    getElementById: (id: string) => (id === `approval-${PENDING_HELD.id}` ? element : null),
+  };
+  assert.equal(focusApprovalElement(doc, PENDING_HELD.id), true);
+  assert.deepEqual(calls, ["scroll:center", "focus:true"]);
+  assert.equal(focusApprovalElement(doc, "missing"), false, "a missing element is not an error");
 });

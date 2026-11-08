@@ -439,3 +439,100 @@ test("renders on design tokens, never a raw hex colour (iOS and Android)", () =>
     );
   }
 });
+
+// ════════════════════════════════════════════════════════════════════════════════════════
+// Review fix W4.1 — mounted on Home without a hydration mismatch, hideable where Settings →
+// Notifications already offers notifications, and a notification tap that really sets up
+// this device for push.
+// ════════════════════════════════════════════════════════════════════════════════════════
+
+// Install browser-like globals for the duration of `fn`, then restore them.
+function withBrowserGlobals(userAgent: string, notification: unknown, fn: () => void): void {
+  const g = globalThis as Record<string, unknown>;
+  const navDescriptor = Object.getOwnPropertyDescriptor(globalThis, "navigator");
+  const hadNotification = Object.hasOwn(globalThis, "Notification");
+  const previousNotification = g.Notification;
+  Object.defineProperty(globalThis, "navigator", { value: { userAgent }, configurable: true, writable: true });
+  g.Notification = notification;
+  try {
+    fn();
+  } finally {
+    if (navDescriptor) Object.defineProperty(globalThis, "navigator", navDescriptor);
+    else delete g.navigator;
+    if (hadNotification) g.Notification = previousNotification;
+    else delete g.Notification;
+  }
+}
+
+test("W4.1: the first render never reads the browser, so server and client markup match", () => {
+  const notif = spyNotification({ permission: "default" });
+  withBrowserGlobals(IOS_UA, notif.seam, () => {
+    const text = visibleText(renderToStaticMarkup(<InstallPrompt />));
+    assert.doesNotMatch(text, /add to home screen/i, `no platform-specific section before mount; text="${text}"`);
+    assert.doesNotMatch(text, /stay in the loop|notifications/i, `no notification section before mount; text="${text}"`);
+  });
+});
+
+test("W4.1: showNotifications={false} hides the notification part (Settings → Notifications offers it)", () => {
+  const notif = spyNotification({ permission: "default" });
+  const markup = renderToStaticMarkup(
+    <InstallPrompt userAgent={IOS_UA} notification={notif.seam} showNotifications={false} />,
+  );
+  assert.equal(findButton(markup, NOTIFY_BUTTON), -1, "no notification control");
+  assert.match(visibleText(markup), /add to home screen/i, "the install part still shows");
+});
+
+test("W4.1: an app already installed to the home screen is not asked to install again", () => {
+  const install = spyInstallEvent();
+  for (const element of [
+    <InstallPrompt key="ios" userAgent={IOS_UA} standalone={true} />,
+    <InstallPrompt key="android" userAgent={ANDROID_UA} installEvent={install.seam} standalone={true} />,
+  ]) {
+    const markup = renderToStaticMarkup(element);
+    assert.doesNotMatch(visibleText(markup), /add to home screen/i);
+    assert.equal(findButton(markup, INSTALL_BUTTON), -1);
+  }
+});
+
+test("W4.1: with a device registrar, turning notifications on sets this device up (and asks only on the tap)", async () => {
+  const notif = spyNotification({ permission: "default" });
+  const registrations: number[] = [];
+  const controller = createInstallPrompt({
+    userAgent: ANDROID_UA,
+    notification: notif.seam,
+    registerDevice: async () => {
+      registrations.push(1);
+      return { ok: true };
+    },
+  });
+  assert.equal(registrations.length, 0, "nothing is set up on load");
+  await controller.enableNotifications();
+  assert.equal(registrations.length, 1, "the tap sets this device up once");
+  assert.equal(notif.calls.length, 0, "the registrar asks for permission itself (permission first, in the tap)");
+  assert.equal(controller.getState().deviceSetup, "done");
+});
+
+test("W4.1: a refused or failed device set-up is reported in plain words, never silently", async () => {
+  for (const [reason, expected] of [
+    ["push_denied", "denied"],
+    ["push_unavailable", "unavailable"],
+    ["register_failed", "failed"],
+  ] as const) {
+    const controller = createInstallPrompt({
+      userAgent: DESKTOP_UA,
+      notification: spyNotification().seam,
+      registerDevice: async () => ({ ok: false, reason }),
+    });
+    await controller.enableNotifications();
+    assert.equal(controller.getState().deviceSetup, expected, reason);
+  }
+  const throwing = createInstallPrompt({
+    userAgent: DESKTOP_UA,
+    notification: spyNotification().seam,
+    registerDevice: async () => {
+      throw new Error("offline");
+    },
+  });
+  await assert.doesNotReject(() => throwing.enableNotifications());
+  assert.equal(throwing.getState().deviceSetup, "failed");
+});

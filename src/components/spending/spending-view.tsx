@@ -1,6 +1,7 @@
 "use client";
 
 import * as React from "react";
+import { AlertTriangle } from "lucide-react";
 
 import { Card } from "@/components/ui/card";
 
@@ -63,22 +64,33 @@ export type SpendingOwn = {
   agents: SpendingOwnAgent[];
 };
 
+// Spend in a currency with no reference rate into the household currency: the amount
+// in its own currency. It is never part of a total (review fix W4.5) — the view flags
+// it in words instead.
+export type SpendingUnconverted = {
+  currency: string;
+  amount: number;
+};
+
 // One household member's totals — a limit and a total, NOTHING else (no merchant, no
 // release entry): `monthlyLimit` is null until set, `spendToDate` is in the household
-// currency.
+// currency, and `unconverted` is their spend that could not be converted into it.
 export type SpendingHouseholdMember = {
   userId: string;
   monthlyLimit: number | null;
   spendToDate: number;
+  unconverted?: SpendingUnconverted[];
 };
 
 // The household spending report: the shared budget and the household total, plus one
-// totals-only entry per member. Every amount is in the household currency.
+// totals-only entry per member. Every amount is in the household currency, except the
+// `unconverted` amounts, which are left out of the totals and flagged.
 export type SpendingHouseholdReport = {
   householdId: string;
   currency: string;
   monthlyBudget: number | null;
   budgetSpendToDate: number;
+  unconverted?: SpendingUnconverted[];
   members: SpendingHouseholdMember[];
 };
 
@@ -133,13 +145,23 @@ function budgetLine(agent: SpendingOwnAgent, accountCurrency: string): string {
   return `${spent} approved · No card budget set`;
 }
 
-// A member's total against their monthly limit (an unset limit reads as plain copy).
+// A member's total against their monthly limit (an unset limit reads as plain copy),
+// plus any of their spend that couldn't be converted, named in its own currency.
 function memberLine(member: SpendingHouseholdMember, currency: string): string {
   const spent = money(member.spendToDate, currency);
-  if (member.monthlyLimit !== null) {
-    return `${spent} of ${money(member.monthlyLimit, currency)} this month`;
-  }
-  return `${spent} · No limit set`;
+  const line =
+    member.monthlyLimit !== null
+      ? `${spent} of ${money(member.monthlyLimit, currency)} this month`
+      : `${spent} · No limit set`;
+  const unconverted = member.unconverted ?? [];
+  if (unconverted.length === 0) return line;
+  return `${line} · plus ${unconverted.map((entry) => money(entry.amount, entry.currency)).join(", ")} not converted`;
+}
+
+// One plain sentence per currency that couldn't be converted: what, why, and that it
+// is left out of the totals (never silently counted as nothing).
+function unconvertedLine(entry: SpendingUnconverted): string {
+  return `Couldn't convert ${money(entry.amount, entry.currency)} — no rate for ${entry.currency} yet, so it's not included in these totals.`;
 }
 
 // The household total against the shared household budget (an unset budget reads as
@@ -242,6 +264,12 @@ export function SpendingView({ own, household, accountCurrency, currencyOptions 
               <span className="font-medium text-fg">Household total</span>
               <span className="font-medium text-fg">{householdLine(household)}</span>
             </div>
+            {(household.unconverted ?? []).map((entry) => (
+              <p key={entry.currency} className="flex items-start gap-2 text-sm text-fg">
+                <AlertTriangle aria-hidden={true} className="mt-0.5 h-4 w-4 shrink-0 text-warning" />
+                {unconvertedLine(entry)}
+              </p>
+            ))}
           </Card>
         </div>
       ) : null}

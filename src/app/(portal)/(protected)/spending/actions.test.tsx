@@ -98,6 +98,7 @@ import { createAgent } from "@/server/db/agents";
 import { upsertPermissions } from "@/server/db/agent-permissions";
 import { recordRelease, periodKeyFor, type PeriodKeys, type StoredRelease } from "@/server/db/card-spend-ledger";
 import { HttpError } from "@/server/http/validate";
+import { savePreferences } from "@/server/db/preferences";
 import { localAesKeyWrapper, type KeyWrapper } from "@/server/crypto/key-wrapper";
 import { fixedClock, type Clock } from "@/server/seams/clock";
 import { systemRandom } from "@/server/seams/random";
@@ -707,5 +708,56 @@ test("the actions read no process.env: a decoy env secret never appears in loade
     await db.close();
     if (prev === undefined) delete process.env.WARTHOG_DECOY_SECRET;
     else process.env.WARTHOG_DECOY_SECRET = prev;
+  }
+});
+
+// ---------------------------------------------------------------------------
+// Review fix W4.3 — the Spending page reads the person's own (local) budget period, in
+// the zone saved in their preferences. At 2026-12-01T05:00Z it is still 30 November in
+// Los Angeles, so a person there still sees November's spend, own and household alike.
+// ---------------------------------------------------------------------------
+
+test("W4.3: the Spending page reads this period in the person's saved time zone", async () => {
+  const db = await freshDb();
+  try {
+    const keyWrapper = keyWrapperFor();
+    const { userId, dek } = await makePerson(db, keyWrapper, "tz-spending");
+    await savePreferences(
+      db,
+      {
+        userId,
+        tone: "warm",
+        length: "short",
+        language: "en-AU",
+        units: "metric",
+        timeZone: "America/Los_Angeles",
+        briefing: "brief",
+      },
+      dek,
+    );
+    const household = await createHousehold(db, { ownerId: userId, currency: "AUD", monthlyBudget: 500 });
+    const connectionId = randomUUID();
+    await createAgent(db, { userId, connectionId, displayName: "Claude", platform: "Claude Desktop" }, clock);
+    await upsertPermissions(db, baseGrants(userId, connectionId));
+    await recordRelease(db, {
+      userId,
+      connectionId,
+      householdId: household.id,
+      amount: 70,
+      currency: "AUD",
+      merchant: "Local November",
+      periodKeys: { day: "2026-11-30", week: "2026-W49", month: "2026-11" },
+    });
+
+    const actions = createSpendingActions({
+      db,
+      clock: fixedClock(new Date("2026-12-01T05:00:00.000Z")),
+      keyWrapper,
+    });
+    const data = await actions.load(await sessionFor(db, userId));
+    assert.equal(data.own.agents[0]?.releases.length, 1, "the person's own November release is still this period");
+    assert.equal(data.household?.budgetSpendToDate, 70, "and so is the household's November total");
+  } finally {
+    await db.close();
   }
 });

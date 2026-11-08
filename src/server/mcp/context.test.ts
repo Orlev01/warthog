@@ -109,6 +109,7 @@ import { createRule, pauseRule } from "../db/rules";
 import { recordRelease } from "../db/card-spend-ledger";
 import { createHousehold, setMemberLimit } from "../db/households";
 import { upsertRate } from "../db/exchange-rates";
+import { savePreferences } from "../db/preferences";
 import { freshDb } from "../../test/db";
 import type { Db } from "../db/index";
 import { parseBody, HttpError } from "../http/validate";
@@ -791,6 +792,68 @@ test("D3: a foreign request gets a household rate and a budget-currency rate", a
     const ctx = await loadAgentContext(connectionFor(userId), depsFor(db, keyWrapper), { amount: 10, currency: "USD" });
     assert.deepEqual(ctx.cardChecks?.rate, { from: "USD", to: "AUD", rate: 1.5, date: DAY_NOW });
     assert.deepEqual(ctx.cardChecks?.household?.rate, { from: "USD", to: "NZD", rate: 1.6, date: DAY_NOW });
+  } finally {
+    await db.close();
+  }
+});
+
+// ---------------------------------------------------------------------------
+// Review fix W4.3 — budget periods follow the person's own time zone. At
+// 2026-12-01T05:00Z it is still 30 November in Los Angeles (already 1 December in
+// Sydney), so a person who lives in Los Angeles is still spending November's budget —
+// the same local bucket the release handler writes.
+// ---------------------------------------------------------------------------
+
+const LA_INSTANT = new Date("2026-12-01T05:00:00.000Z");
+const LA_KEYS: PeriodKeys = { day: "2026-11-30", week: "2026-W49", month: "2026-11" };
+
+async function saveTimeZone(db: Db, userId: string, dek: Uint8Array, timeZone: string): Promise<void> {
+  await savePreferences(
+    db,
+    { userId, tone: "warm", length: "short", language: "en-AU", units: "metric", timeZone, briefing: "brief" },
+    dek,
+  );
+}
+
+test("W4.3: the agent's spend this period is read in the person's own time zone", async () => {
+  const db = await freshDb();
+  try {
+    const keyWrapper = keyWrapperFor();
+    const { userId, dek } = await makePerson(db, "tz-agent", keyWrapper);
+    await saveTimeZone(db, userId, dek, "America/Los_Angeles");
+    await upsertPermissions(
+      db,
+      baseGrants(userId, CONN, { cardAccess: true, cardBudget: { amount: 300, currency: "AUD", period: "month" } }),
+    );
+    await recordRelease(db, release(userId, { amount: 120, periodKeys: LA_KEYS }));
+
+    const ctx = await loadAgentContext(connectionFor(userId), depsFor(db, keyWrapper, LA_INSTANT));
+    assert.equal(Number(ctx.spend), 120, "November's spend still counts in the person's November");
+  } finally {
+    await db.close();
+  }
+});
+
+test("W4.3: the household and member spend for a card request are read in the person's own time zone", async () => {
+  const db = await freshDb();
+  try {
+    const keyWrapper = keyWrapperFor();
+    const { userId, dek } = await makePerson(db, "tz-household", keyWrapper);
+    await saveTimeZone(db, userId, dek, "America/Los_Angeles");
+    await upsertPermissions(
+      db,
+      baseGrants(userId, CONN, { cardAccess: true, cardBudget: { amount: 300, currency: "AUD", period: "month" } }),
+    );
+    const household = await createHousehold(db, { ownerId: userId, currency: "AUD", monthlyBudget: 500 });
+    await setMemberLimit(db, { householdId: household.id, actorId: userId, userId, monthlyLimit: 200 });
+    await recordRelease(db, release(userId, { amount: 80, householdId: household.id, periodKeys: LA_KEYS }));
+
+    const ctx = await loadAgentContext(connectionFor(userId), depsFor(db, keyWrapper, LA_INSTANT), {
+      amount: 50,
+      currency: "AUD",
+    });
+    assert.equal(ctx.cardRequest?.household?.budgetSpendToDate, 80, "the household's November total");
+    assert.equal(ctx.cardRequest?.household?.memberSpendToDate, 80, "this member's November total");
   } finally {
     await db.close();
   }

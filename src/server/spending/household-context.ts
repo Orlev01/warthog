@@ -32,10 +32,14 @@ export interface CardRequest {
   readonly currency: string;
 }
 
-// The injected seams — no process.env.
+// The injected seams — no process.env. `timeZone` is the person's own IANA zone
+// (`./time-zone`, resolved by the caller, which holds their DEK) that the monthly
+// member limit and household budget are bucketed in — the same zone the release
+// handler writes with (review fix W4.3). Sydney when absent.
 export interface CardRequestContextDeps {
   readonly db: Db;
   readonly clock: Clock;
+  readonly timeZone?: string;
 }
 
 // Present only when a FOREIGN amount was converted via a reference rate: the converted
@@ -95,7 +99,7 @@ export async function resolveCardRequestContext(
 
   let household: HouseholdSpendingContext | null = null;
   if (householdRow) {
-    const monthKey = periodKeyFor(PERIOD, now);
+    const monthKey = periodKeyFor(PERIOD, now, deps.timeZone);
     const members = await listMembers(db, householdRow.id, userId);
     const me = members.find((member) => member.userId === userId);
     household = {

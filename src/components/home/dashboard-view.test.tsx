@@ -408,3 +408,20 @@ test("the dashboard uses design tokens, never a raw hex colour (populated and em
     );
   }
 });
+
+// Review fix W4.1 — the install-the-app prompt sits with the set-up checklist ("install the
+// app and turn on notifications"), so a new person is offered it right on Home.
+test("W4.1: Home mounts the install prompt in the set-up section", () => {
+  const markup = renderToStaticMarkup(
+    <DashboardView
+      personName="Sam"
+      checklist={CHECKLIST}
+      pendingApprovals={0}
+      activity={[]}
+      agents={[]}
+      reminders={[]}
+    />,
+  );
+  const setup = markup.slice(markup.indexOf("Set up Warthog"), markup.indexOf("Approvals"));
+  assert.match(setup, /data-install-prompt/, "the install prompt is mounted beside the checklist");
+});
