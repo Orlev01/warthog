@@ -165,6 +165,10 @@ function grantsFor(userId: string, connectionId: string, input: ValidInput): Per
     sharing: input.learningSharing === true,
     rulesScope: [],
     rateLimit: DEFAULT_RATE_LIMIT,
+    // Tasks and life-admin records are their own grants (review fix A2): Standard and
+    // Custom include them, Minimal does not — independent of any ticked service.
+    tasksAccess: set.tasks,
+    recordsAccess: set.lifeAdmin,
   };
 }
 

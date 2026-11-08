@@ -39,6 +39,7 @@ import assert from "node:assert/strict";
 
 import { loadConsentView } from "./actions";
 import { beginAuthorization } from "../../../server/oauth/authorize";
+import { putPendingAuthorization } from "../../../server/oauth/pending";
 
 import { loadConfig, type Config } from "../../../server/config";
 import { fixedClock } from "../../../server/seams/clock";
@@ -98,7 +99,16 @@ function authorizeParams(redirectUri: string): URLSearchParams {
 async function seedPending(db: Db, redirectUri: string): Promise<string> {
   const begun = await beginAuthorization(
     { params: authorizeParams(redirectUri), session: signedInSession() },
-    { db, config: configWithBaseUrl(BASE_URL), clock: fixedClock(NOW), random: systemRandom },
+    {
+      db,
+      config: configWithBaseUrl(BASE_URL),
+      clock: fixedClock(NOW),
+      random: systemRandom,
+      // Review fix A1: authorize now enforces the client's registered redirect URIs, so the
+      // seeded client registers exactly the callback under test.
+      resolveClient: async (clientId) =>
+        clientId === CLIENT_ID ? { clientId, registration: "cimd", redirectUris: [redirectUri] } : null,
+    },
   );
   assert.ok(begun.ok, "seeding the pending authorize request must succeed");
   if (!begun.ok) throw new Error("unreachable: beginAuthorization failed to seed");
@@ -200,4 +210,29 @@ test("loading the consent view does not consume the pending request", async () =
   } finally {
     await db.close();
   }
+});
+
+// =====================================================================================
+// Review fix A1 (defence in depth) — even if a pending request with a hostile redirect
+// were ever held, the consent view never renders it and never marks it verified. Planted
+// straight into the pending store, because `beginAuthorization` itself now refuses them.
+// =====================================================================================
+
+test("a pending request with a javascript:, data: or plain-http redirect renders no consent view", async () => {
+  for (const redirectUri of [
+    "javascript://claude.ai/%0aalert(1)//",
+    "javascript:alert(document.domain)//",
+    "data:text/html,x",
+    "http://claude.ai/api/mcp/auth_callback",
+  ]) {
+    const handle = putPendingAuthorization(authorizeParams(redirectUri), systemRandom);
+    assert.equal(await loadConsentView(handle), null, `no consent view for ${redirectUri}`);
+  }
+});
+
+test("a known host on a non-default port is shown but not marked verified", async () => {
+  const handle = putPendingAuthorization(authorizeParams("https://claude.ai:8443/api/mcp/auth_callback"), systemRandom);
+  const props = await loadConsentView(handle);
+  assert.ok(props != null, "an https callback on another port still renders");
+  assert.equal(props!.redirect.verified, false, "only the platform's default https origin earns the badge");
 });

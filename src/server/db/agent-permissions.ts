@@ -51,10 +51,21 @@ export interface PermissionGrants {
   readonly sharing: boolean;
   readonly rulesScope: string[];
   readonly rateLimit: number;
+  // Review fix A2 — whether the agent may use the person's tasks and life-admin records.
+  // Their own grants, not the connector tool classes above. Optional on WRITE so a caller
+  // that only edits other grants never changes them by accident: an insert that leaves
+  // them out derives them from the tool classes (the old gate), an update keeps the
+  // stored value. Always present on READ.
+  readonly tasksAccess?: boolean;
+  readonly recordsAccess?: boolean;
 }
 
-// Read back in the same shape they were written.
-export type ConnectionPermissions = PermissionGrants;
+// Read back in the same shape they were written, with the tasks and records grants
+// always resolved.
+export type ConnectionPermissions = PermissionGrants & {
+  readonly tasksAccess: boolean;
+  readonly recordsAccess: boolean;
+};
 
 // The columns every read returns, kept in one place so the lookup hands back the
 // same shape. The collection and structured fields are jsonb (round-tripped
@@ -62,7 +73,7 @@ export type ConnectionPermissions = PermissionGrants;
 const COLUMNS =
   "user_id, connection_id, granted_connectors, read_tools, change_tools, " +
   "identity_access, high_tier_access, card_access, card_budget, skills_scope, " +
-  "memory_read, sharing, rules_scope, rate_limit";
+  "memory_read, sharing, rules_scope, rate_limit, tasks_access, records_access";
 
 // Map a raw row to the grants shape, translating the snake_case columns to the
 // module's camelCase fields. jsonb comes back already parsed (so the connector /
@@ -84,6 +95,8 @@ function toPermissions(row: Row): ConnectionPermissions {
     sharing: row.sharing as boolean,
     rulesScope: row.rules_scope as string[],
     rateLimit: Number(row.rate_limit),
+    tasksAccess: row.tasks_access as boolean,
+    recordsAccess: row.records_access as boolean,
   };
 }
 
@@ -109,6 +122,11 @@ export async function getConnectionPermissions(
 // user id is bound, so an upsert on another person's connection id writes the
 // caller's OWN row and leaves the other person's grants untouched.
 //
+// The tasks and records grants are written only when stated (review fix A2): an insert
+// that leaves one out derives it from the tool classes — read tools on, or change tools
+// not off, the gate those tools used before — and an update that leaves one out keeps
+// the stored value.
+//
 // REFUSES (throws, never silently) when card access is on but no budget is set —
 // the check runs BEFORE any query, so a refused upsert writes no row (never a
 // silent half-write). Returns the stored grants.
@@ -120,15 +138,18 @@ export async function upsertPermissions(
     throw new Error("upsertPermissions: card access cannot be enabled without a budget");
   }
 
-  await db.query(
+  const result = await db.query(
     `INSERT INTO agent_permissions (
        user_id, connection_id, granted_connectors, read_tools, change_tools,
        identity_access, high_tier_access, card_access, card_budget,
-       skills_scope, memory_read, sharing, rules_scope, rate_limit
+       skills_scope, memory_read, sharing, rules_scope, rate_limit,
+       tasks_access, records_access
      ) VALUES (
        $1, $2, $3::jsonb, $4, $5,
        $6, $7, $8, $9::jsonb,
-       $10::jsonb, $11, $12, $13::jsonb, $14
+       $10::jsonb, $11, $12, $13::jsonb, $14,
+       COALESCE($15::boolean, $4 OR $5 <> 'off'),
+       COALESCE($16::boolean, $4 OR $5 <> 'off')
      )
      ON CONFLICT (user_id, connection_id) DO UPDATE SET
        granted_connectors = EXCLUDED.granted_connectors,
@@ -142,7 +163,10 @@ export async function upsertPermissions(
        memory_read        = EXCLUDED.memory_read,
        sharing            = EXCLUDED.sharing,
        rules_scope        = EXCLUDED.rules_scope,
-       rate_limit         = EXCLUDED.rate_limit`,
+       rate_limit         = EXCLUDED.rate_limit,
+       tasks_access       = COALESCE($15::boolean, agent_permissions.tasks_access),
+       records_access     = COALESCE($16::boolean, agent_permissions.records_access)
+     RETURNING tasks_access, records_access`,
     [
       grants.userId,
       grants.connectionId,
@@ -158,8 +182,11 @@ export async function upsertPermissions(
       grants.sharing,
       JSON.stringify(grants.rulesScope),
       grants.rateLimit,
+      grants.tasksAccess ?? null,
+      grants.recordsAccess ?? null,
     ],
   );
+  const stored = result.rows[0];
 
   return {
     userId: grants.userId,
@@ -176,5 +203,7 @@ export async function upsertPermissions(
     sharing: grants.sharing,
     rulesScope: grants.rulesScope,
     rateLimit: grants.rateLimit,
+    tasksAccess: stored?.tasks_access as boolean,
+    recordsAccess: stored?.records_access as boolean,
   };
 }

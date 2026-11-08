@@ -24,6 +24,16 @@
 //     connection's tokens are revoked and the request is rejected with invalid_grant,
 //     so the then-current refresh token stops working too.
 //
+// Review fix A3 — single use is ATOMIC and a retried refresh is safe. The code is
+// consumed by one `DELETE … RETURNING` and a refresh token claimed by one conditional
+// `UPDATE … WHERE expires_at > now RETURNING`, so of two concurrent requests exactly one
+// wins (before, both read the row and both minted a pair). The successor refresh token is
+// DERIVED from the presented one with the server HMAC key (an unguessable 256-bit value;
+// still stored only as its hash), so a client that retries a refresh within a short grace
+// window — its first response lost to a timeout, or two requests sent at once — is handed
+// the SAME successor back instead of having its connection revoked as a replay. Past the
+// window, or once that successor has itself been used, a replay revokes as before.
+//
 // The endpoint never takes a connection from the caller (constitution: connection
 // scope is never read from the request): the connection is resolved from the code or
 // from the presented refresh token. Tokens are opaque high-entropy bearers drawn from
@@ -32,7 +42,8 @@
 
 import { createHash } from "node:crypto";
 
-import { createToken, getAuthCode, resolveToken } from "./store";
+import { consumeAuthCode, createToken, resolveToken } from "./store";
+import { hmac } from "../crypto/hmac";
 import type { Db } from "../db/index";
 import type { Clock } from "../seams/clock";
 import type { Random } from "../seams/random";
@@ -47,17 +58,28 @@ const ACCESS_EXPIRES_IN_S = ACCESS_TTL_MS / 1000;
 // 256 bits of entropy, rendered as hex — the same opaque-bearer shape codes/sessions use.
 const TOKEN_ENTROPY_BYTES = 32;
 
+// How long after a refresh token is rotated a retry of it is answered with the same
+// successor rather than treated as a replay (review fix A3). Long enough for an HTTP
+// client's timeout-and-retry, short enough that a stolen token's window stays narrow.
+export const REFRESH_REUSE_GRACE_MS = 30_000;
+
+// Domain separation for the derived successor refresh token (the server HMAC key has
+// other uses).
+const SUCCESSOR_LABEL = "warthog/oauth/refresh-successor/v1:";
+
 // The parsed form-urlencoded request body.
 export interface TokenInput {
   readonly params: URLSearchParams;
 }
 
 // The seams the token exchange depends on: the db (store), a clock (TTLs and the
-// current-vs-retired check) and a randomness source (the opaque bearers).
+// current-vs-retired check), a randomness source (the opaque bearers) and the server
+// HMAC key (`config.hmacKey`; the retry-safe successor refresh token is derived with it).
 export interface TokenDeps {
   readonly db: Db;
   readonly clock: Clock;
   readonly random: Random;
+  readonly hmacKey: Uint8Array;
 }
 
 // The JSON the endpoint returns on success (RFC 6749 §5.1).
@@ -89,6 +111,14 @@ function mintBearer(random: Random): string {
   return Buffer.from(random.randomBytes(TOKEN_ENTROPY_BYTES)).toString("hex");
 }
 
+// The refresh token that succeeds `presented` on rotation: HMAC-SHA256 under the server
+// key, so it is as unguessable as a random bearer to anyone without the key, yet the
+// same every time the same token is rotated — which is what lets a retry be answered
+// with it again without ever storing a bearer in plain text.
+function successorOf(presented: string, hmacKey: Uint8Array): string {
+  return hmac(hmacKey, `${SUCCESSOR_LABEL}${presented}`);
+}
+
 export async function exchangeToken(input: TokenInput, deps: TokenDeps): Promise<TokenResult> {
   const grantType = input.params.get("grant_type");
   if (grantType === "authorization_code") return exchangeAuthorizationCode(input.params, deps);
@@ -112,11 +142,12 @@ async function exchangeAuthorizationCode(
     return { ok: false, error: "invalid_request" };
   }
 
-  // Resolve the code by its hash (the raw code is never a stored key); then consume it
-  // so it can never be exchanged a second time, regardless of how this attempt ends.
-  const authCode = await getAuthCode(db, sha256Hex(code));
+  // Resolve AND consume the code by its hash in one statement (the raw code is never a
+  // stored key): only the request whose DELETE returns the row may continue, so a code
+  // can never be exchanged twice — not even by two requests at once — however this
+  // attempt then ends.
+  const authCode = await consumeAuthCode(db, sha256Hex(code));
   if (authCode == null) return { ok: false, error: "invalid_grant" };
-  await deleteAuthCode(db, authCode.codeHash);
 
   // An expired code is no longer exchangeable.
   if (authCode.expiresAt.getTime() <= clock.now().getTime()) {
@@ -136,43 +167,71 @@ async function exchangeAuthorizationCode(
   return mintTokenPair(deps, authCode.connectionId);
 }
 
-// refresh_token grant: rotate a current refresh token; detect and punish replay of a
-// retired one.
+// refresh_token grant: rotate a current refresh token; answer a quick retry with the
+// same successor; detect and punish replay of a retired one.
 async function exchangeRefreshToken(
   params: URLSearchParams,
   deps: TokenDeps,
 ): Promise<TokenResult> {
-  const { db, clock } = deps;
+  const { db, clock, hmacKey } = deps;
 
   const presented = params.get("refresh_token");
   if (!presented) return { ok: false, error: "invalid_request" };
+  const presentedHash = sha256Hex(presented);
+  const now = clock.now();
 
-  const token = await resolveToken(db, sha256Hex(presented));
+  // Current: claim it — retire it in the same statement that checks it is current, so of
+  // two concurrent refreshes only one rotates — and mint the pair with the derived
+  // successor, bound to the same connection.
+  const claimed = await claimRefreshToken(db, presentedHash, now);
+  if (claimed != null) {
+    return mintTokenPair(deps, claimed, successorOf(presented, hmacKey));
+  }
+
+  const token = await resolveToken(db, presentedHash);
   if (token == null || token.kind !== "refresh") {
     return { ok: false, error: "invalid_grant" };
   }
 
-  // A refresh token that resolves but is no longer current (retired by an earlier
-  // rotation, or lapsed) is a replay: revoke every token on the connection so the
-  // then-current refresh token stops working too, and reject.
-  if (token.expiresAt.getTime() <= clock.now().getTime()) {
-    await revokeConnectionTokens(db, token.connectionId);
-    return { ok: false, error: "invalid_grant" };
+  // Retired moments ago: a retry (or a request racing the one that rotated it). If the
+  // successor it was rotated to is still current, hand that same successor back with a
+  // fresh access token. If the successor is not there yet (the rotating request is still
+  // writing it), refuse without revoking — the client is about to hold it.
+  if (now.getTime() - token.expiresAt.getTime() < REFRESH_REUSE_GRACE_MS) {
+    const successor = successorOf(presented, hmacKey);
+    const next = await resolveToken(db, sha256Hex(successor));
+    if (next == null) return { ok: false, error: "invalid_grant" };
+    if (
+      next.kind === "refresh" &&
+      next.connectionId === token.connectionId &&
+      next.expiresAt.getTime() > now.getTime()
+    ) {
+      return mintTokenPair(deps, token.connectionId, successor, { refreshExists: true });
+    }
   }
 
-  // Current: rotate on every use — retire the presented token and mint a fresh pair
-  // bound to the same connection.
-  await retireToken(db, token.tokenHash, clock.now());
-  return mintTokenPair(deps, token.connectionId);
+  // A refresh token that resolves but is no longer current (retired by an earlier
+  // rotation past the grace window, rotated onward already, or lapsed) is a replay:
+  // revoke every token on the connection so the then-current refresh token stops working
+  // too, and reject.
+  await revokeConnectionTokens(db, token.connectionId);
+  return { ok: false, error: "invalid_grant" };
 }
 
 // Mint and store an access/refresh pair bound to a connection, and return the response.
-async function mintTokenPair(deps: TokenDeps, connectionId: string): Promise<TokenResult> {
+// The access token is always fresh; the refresh token is a fresh random one (a code
+// exchange) or the derived successor of a rotated one — already stored when a retry is
+// being answered with it (`refreshExists`).
+async function mintTokenPair(
+  deps: TokenDeps,
+  connectionId: string,
+  refreshToken: string = mintBearer(deps.random),
+  opts: { readonly refreshExists?: boolean } = {},
+): Promise<TokenResult> {
   const { db, clock, random } = deps;
   const now = clock.now();
 
   const accessToken = mintBearer(random);
-  const refreshToken = mintBearer(random);
 
   await createToken(db, {
     tokenHash: sha256Hex(accessToken),
@@ -180,12 +239,14 @@ async function mintTokenPair(deps: TokenDeps, connectionId: string): Promise<Tok
     kind: "access",
     expiresAt: new Date(now.getTime() + ACCESS_TTL_MS),
   });
-  await createToken(db, {
-    tokenHash: sha256Hex(refreshToken),
-    connectionId,
-    kind: "refresh",
-    expiresAt: new Date(now.getTime() + REFRESH_TTL_MS),
-  });
+  if (!opts.refreshExists) {
+    await createToken(db, {
+      tokenHash: sha256Hex(refreshToken),
+      connectionId,
+      kind: "refresh",
+      expiresAt: new Date(now.getTime() + REFRESH_TTL_MS),
+    });
+  }
 
   return {
     ok: true,
@@ -198,19 +259,20 @@ async function mintTokenPair(deps: TokenDeps, connectionId: string): Promise<Tok
   };
 }
 
-// Consume a one-time authorization code: once resolved it is removed, so a replayed
-// code finds nothing. (`oauth_auth_codes` is not an activity table, so DELETE is fine.)
-async function deleteAuthCode(db: Db, codeHash: string): Promise<void> {
-  await db.query("DELETE FROM oauth_auth_codes WHERE code_hash = $1", [codeHash]);
-}
-
-// Retire a refresh token by expiring it at the current instant: it still resolves (so a
-// later replay is detectable), but no longer counts as current.
-async function retireToken(db: Db, tokenHash: string, now: Date): Promise<void> {
-  await db.query("UPDATE oauth_tokens SET expires_at = $1::timestamptz WHERE token_hash = $2", [
-    now.toISOString(),
-    tokenHash,
-  ]);
+// Claim a CURRENT refresh token by retiring it (expiring it at the current instant) in
+// the same statement that checks it is current: it still resolves afterwards (so a later
+// replay is detectable) but no longer counts as current. Returns its connection, or null
+// when it was not a current refresh token — including when a concurrent request claimed
+// it first.
+async function claimRefreshToken(db: Db, tokenHash: string, now: Date): Promise<string | null> {
+  const result = await db.query(
+    `UPDATE oauth_tokens SET expires_at = $1::timestamptz
+     WHERE token_hash = $2 AND kind = 'refresh' AND expires_at > $1::timestamptz
+     RETURNING connection_id`,
+    [now.toISOString(), tokenHash],
+  );
+  const row = result.rows[0];
+  return row ? (row.connection_id as string) : null;
 }
 
 // Revoke every token bound to a connection (both kinds), used when a retired refresh

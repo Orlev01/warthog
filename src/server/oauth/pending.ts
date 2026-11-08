@@ -34,6 +34,12 @@ export interface PendingAuthorization {
 // and can never be approved late (operator review of E10-S12).
 export const PENDING_TTL_MS = 10 * 60 * 1000;
 
+// At most this many requests wait on the consent screen at once, process-wide; past it
+// the OLDEST is dropped (review fix: the store was unbounded, so one account could grow
+// the heap by opening authorize requests). Ample for real use — a request waits only
+// while a person is looking at the consent screen.
+export const MAX_PENDING_AUTHORIZATIONS = 10_000;
+
 type Entry = { readonly params: URLSearchParams; readonly createdAtMs: number };
 
 const pending = processSingleton(
@@ -56,14 +62,30 @@ function live(handle: string, now: Now): Entry | null {
   return entry;
 }
 
+// Drop expired requests from the front of the store. Entries are kept in insertion
+// (= creation) order, so pruning stops at the first live one — amortised O(1) per insert
+// rather than a scan of the whole store.
+function pruneExpired(now: Now): void {
+  for (const key of pending.keys()) {
+    if (live(key, now) != null) break;
+  }
+}
+
 // Carry an authorize request into the store and return its opaque handle. A copy of
-// the params is stored so a later mutation of the caller's object can't leak in.
+// the params is stored so a later mutation of the caller's object can't leak in. Expired
+// requests are pruned first; if the store is still full, the oldest waiting request is
+// dropped to make room (it then reads as expired).
 export function putPendingAuthorization(
   params: URLSearchParams,
   random: Random,
   now: Now = wallClock,
 ): string {
-  for (const key of [...pending.keys()]) live(key, now); // prune expired requests
+  pruneExpired(now);
+  while (pending.size >= MAX_PENDING_AUTHORIZATIONS) {
+    const oldest = pending.keys().next();
+    if (oldest.done) break;
+    pending.delete(oldest.value);
+  }
   const handle = Buffer.from(random.randomBytes(HANDLE_ENTROPY_BYTES)).toString("hex");
   pending.set(handle, { params: new URLSearchParams(params), createdAtMs: now() });
   return handle;
@@ -87,4 +109,9 @@ export function consumePendingAuthorization(handle: string, now: Now = wallClock
   if (entry == null) return null;
   pending.delete(handle);
   return { params: new URLSearchParams(entry.params) };
+}
+
+// How many requests are waiting (for the store's bound to be observable in tests).
+export function pendingAuthorizationCount(): number {
+  return pending.size;
 }

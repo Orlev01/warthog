@@ -97,6 +97,9 @@ import { createHash } from "node:crypto";
 import { createAuthorizeActions, type ConsentApproval } from "./actions";
 
 import { beginAuthorization } from "../../../server/oauth/authorize";
+import { putPendingAuthorization } from "../../../server/oauth/pending";
+import type { ResolvedClient } from "../../../server/oauth/clients";
+import type { EmailSender, OutgoingMessage } from "../../../server/notify/senders";
 import { getAuthCode } from "../../../server/oauth/store";
 import { listAgentsForUser } from "../../../server/db/agents";
 import { getConnectionPermissions } from "../../../server/db/agent-permissions";
@@ -148,12 +151,30 @@ function configWithBaseUrl(publicBaseUrl: string): Config {
 
 // Build the consent-decision actions under test with the real seams, a frozen clock and
 // the real randomness source (so credentials/connection ids never collide across tests).
-function makeActions(db: Db, base: string = BASE_URL) {
+// Review fix A1: authorize now resolves the client and enforces its registered redirect
+// URIs. The consenting client here registers exactly REDIRECT_URI; anything else is
+// unknown. (A fake resolver — no database row and no CIMD fetch needed.)
+async function resolveClient(clientId: string): Promise<ResolvedClient | null> {
+  return clientId === CLIENT_ID ? { clientId, registration: "cimd", redirectUris: [REDIRECT_URI] } : null;
+}
+
+// Review fix A6: the decision sends the "new agent connection" alert through the email
+// seam. A recording sender stands in (shared, so a test can read what was sent).
+const sentEmails: OutgoingMessage[] = [];
+const recordingEmail: EmailSender = {
+  async sendEmail(message) {
+    sentEmails.push(message);
+  },
+};
+
+function makeActions(db: Db, base: string = BASE_URL, emailSender: EmailSender = recordingEmail) {
   return createAuthorizeActions({
     db,
     config: configWithBaseUrl(base),
     clock: fixedClock(NOW),
     random: systemRandom,
+    resolveClient,
+    alerts: { emailSender },
   });
 }
 
@@ -207,7 +228,7 @@ function authorizeParams(resource: string = MCP_RESOURCE): URLSearchParams {
 async function seedPending(db: Db, base: string = BASE_URL): Promise<string> {
   const begun = await beginAuthorization(
     { params: authorizeParams(`${base}/mcp`), session: sessionFor("pending-seed") },
-    { db, config: configWithBaseUrl(base), clock: fixedClock(NOW), random: systemRandom },
+    { db, config: configWithBaseUrl(base), clock: fixedClock(NOW), random: systemRandom, resolveClient },
   );
   assert.ok(begun.ok, "seeding the pending authorize request must succeed");
   if (!begun.ok) throw new Error("unreachable: beginAuthorization failed to seed a pending request");
@@ -731,6 +752,113 @@ test("replaying a decision (the same handle twice) creates nothing the second ti
       1,
       "the replay creates no second agent (the handle is single-use)",
     );
+  } finally {
+    await db.close();
+  }
+});
+
+// =====================================================================================
+// Review fix A1 (defence in depth) — the decision never redirects to an unvalidated URI.
+// A pending request is planted straight into the store (beginAuthorization now refuses
+// these), so the decision's OWN re-check is what is proven: Refuse returns no redirect and
+// Approve issues no code and creates no agent.
+// =====================================================================================
+
+function plantedPending(redirectUri: string): string {
+  const params = authorizeParams();
+  params.set("redirect_uri", redirectUri);
+  return putPendingAuthorization(params, systemRandom);
+}
+
+test("Refuse and Approve never redirect to a javascript:, data: or unregistered URI", async () => {
+  const db = await freshDb();
+  try {
+    const userId = await makeUser(db, "hostile-redirect");
+    for (const redirectUri of [
+      "javascript://claude.ai/%0aalert(1)//",
+      "javascript:fetch('//attacker.example/x')//",
+      "data:text/html,x",
+      "http://attacker.example/cb",
+      "https://attacker.example/cb",
+    ]) {
+      const refused = await makeActions(db).refuse(sessionFor(userId), plantedPending(redirectUri));
+      assert.equal(refused.ok, false, `refuse returns no redirect for ${redirectUri}`);
+
+      const approved = await makeActions(db).approve(sessionFor(userId), plantedPending(redirectUri), approval());
+      assert.equal(approved.ok, false, `approve returns no redirect for ${redirectUri}`);
+    }
+    assert.equal((await listAgentsForUser(db, userId)).length, 0, "no agent is created for a hostile redirect");
+  } finally {
+    await db.close();
+  }
+});
+
+test("Approve for a client that is no longer known issues no code and creates no agent", async () => {
+  const db = await freshDb();
+  try {
+    const userId = await makeUser(db, "unknown-client");
+    const params = authorizeParams();
+    params.set("client_id", "never-registered-client");
+    const handle = putPendingAuthorization(params, systemRandom);
+
+    const approved = await makeActions(db).approve(sessionFor(userId), handle, approval());
+    assert.equal(approved.ok, false, "an unknown client gets no code");
+    assert.equal((await listAgentsForUser(db, userId)).length, 0, "and no agent row");
+  } finally {
+    await db.close();
+  }
+});
+
+// =====================================================================================
+// Review fix A6 — connecting an agent sends the person the "new agent connection"
+// security alert (design: email alerts for a new passkey, a new agent connection and a
+// new-device sign-in). It goes to the person's own address, names the agent, carries no
+// code or credential, and is never sent for a refusal. A failure to send never undoes or
+// blocks the connection the person just approved.
+// =====================================================================================
+
+test("approving sends the new-agent-connection alert to the person, naming the agent", async () => {
+  const db = await freshDb();
+  try {
+    const userId = await makeUser(db, "alert-approve");
+    sentEmails.length = 0;
+    const result = await makeActions(db).approve(sessionFor(userId), await seedPending(db), approval({ name: "Research Claude" }));
+    assert.ok(result.ok);
+    if (!result.ok) throw new Error("unreachable");
+    const mine = sentEmails.filter((m) => m.recipient === "alert-approve@warthog.com.au");
+    assert.equal(mine.length, 1, "exactly one alert to the person's own address");
+    assert.match(mine[0]!.body, /new agent connected/i);
+    assert.match(mine[0]!.body, /Research Claude/);
+    assert.ok(!mine[0]!.body.includes(codeIn(result.redirectTo)!), "the alert never carries the code");
+  } finally {
+    await db.close();
+  }
+});
+
+test("refusing sends no alert", async () => {
+  const db = await freshDb();
+  try {
+    const userId = await makeUser(db, "alert-refuse");
+    sentEmails.length = 0;
+    await makeActions(db).refuse(sessionFor(userId), await seedPending(db));
+    assert.equal(sentEmails.filter((m) => m.recipient === "alert-refuse@warthog.com.au").length, 0);
+  } finally {
+    await db.close();
+  }
+});
+
+test("an alert that cannot be sent does not block the approval", async () => {
+  const db = await freshDb();
+  try {
+    const userId = await makeUser(db, "alert-broken");
+    const broken: EmailSender = {
+      async sendEmail() {
+        throw new Error("Email sending is not configured");
+      },
+    };
+    const result = await makeActions(db, BASE_URL, broken).approve(sessionFor(userId), await seedPending(db), approval());
+    assert.ok(result.ok, "the person is still sent back to the agent with its code");
+    assert.equal((await listAgentsForUser(db, userId)).length, 1, "the agent stays connected");
   } finally {
     await db.close();
   }

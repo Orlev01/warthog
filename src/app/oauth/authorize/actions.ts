@@ -35,14 +35,17 @@ import { randomUUID } from "node:crypto";
 
 import { z } from "zod";
 
-import { authorize } from "../../../server/oauth/authorize";
+import { authorize, validatedRedirectUri } from "../../../server/oauth/authorize";
+import type { ClientResolver } from "../../../server/oauth/clients";
 import { consumePendingAuthorization } from "../../../server/oauth/pending";
 import { createAgent } from "../../../server/db/agents";
+import { listConnectionsForUser } from "../../../server/db/connections";
 import {
   upsertPermissions,
   type PermissionGrants,
 } from "../../../server/db/agent-permissions";
 import { parseParams } from "../../../server/http/validate";
+import { alertNewAgentConnection, type AlertDeps } from "../../../server/auth/alerts";
 import { permissionTemplate } from "../../../domain/permissions/templates";
 import type { Config } from "../../../server/config";
 import type { Clock } from "../../../server/seams/clock";
@@ -64,15 +67,24 @@ const MAX_SERVICES = 100;
 
 // The person's consent decision, as the consent screen submits it. `template` is the
 // chosen starting set (validated to one of the three names below); `tickedServices`
-// are the service ids whose read tools Standard/Custom grant. High-tier, card and
-// learning-sharing are ALWAYS opt-in — absent/false means off. `card` needs a budget
-// when on. `template` is typed as a plain string here (the untrusted form value); the
-// validation boundary narrows it.
+// are the service ids whose read tools are granted (kept only when the person has
+// actually connected that service). High-tier, card and learning-sharing are ALWAYS
+// opt-in — absent/false means off. `card` needs a budget when on. `template` is typed
+// as a plain string here (the untrusted form value); the validation boundary narrows it.
+//
+// Review fix A2 — `identity`, `memoryRead`, `tasks` and `records` are the screen's own
+// toggles (basic profile, shared memory, tasks, life-admin records). When given they
+// OVERRIDE the starting set, so what the person sees ticked is exactly what is stored;
+// when absent the starting set decides.
 export interface ConsentApproval {
   readonly name: string;
   readonly platform: string;
   readonly template: string;
   readonly tickedServices?: readonly string[];
+  readonly identity?: boolean;
+  readonly memoryRead?: boolean;
+  readonly tasks?: boolean;
+  readonly records?: boolean;
   readonly highTier?: boolean;
   readonly card?: boolean;
   readonly cardBudget?: { amount: number; currency: string; period: string } | null;
@@ -86,13 +98,18 @@ export type DecisionResult =
   | { readonly ok: false; readonly error: string };
 
 // The seams the decision composes: the db (stores), config (the issuer, read through
-// the authorize seam), the clock (the agent's connected-at + the credential expiry)
-// and the randomness source (the opaque credential).
+// the authorize seam), the clock (the agent's connected-at + the credential expiry),
+// the randomness source (the opaque credential), the client resolver (review fix
+// A1: both decisions re-check the client and its registered redirect URI, so neither
+// ever redirects to an unvalidated URI) and the alert senders (review fix A6: the
+// "new agent connection" security email).
 export interface AuthorizeActionsDeps {
   readonly db: Db;
   readonly config: Config;
   readonly clock: Clock;
   readonly random: Random;
+  readonly resolveClient: ClientResolver;
+  readonly alerts: AlertDeps;
 }
 
 // The consent-decision actions the consent screen drives. Each takes an opaque
@@ -122,6 +139,10 @@ const approvalSchema = z
     platform: z.string().min(1).max(MAX_PLATFORM_LENGTH),
     template: z.enum(["minimal", "standard", "custom"]),
     tickedServices: z.array(z.string().max(MAX_SERVICE_LENGTH)).max(MAX_SERVICES).optional(),
+    identity: z.boolean().optional(),
+    memoryRead: z.boolean().optional(),
+    tasks: z.boolean().optional(),
+    records: z.boolean().optional(),
     highTier: z.boolean().optional(),
     card: z.boolean().optional(),
     cardBudget: cardBudgetSchema.nullable().optional(),
@@ -139,38 +160,46 @@ function issuer(config: Config): string {
   return config.publicBaseUrl.replace(/\/$/, "");
 }
 
-// Translate the chosen starting set (template + ticked services, plus the explicit
-// opt-ins) into the one connection's stored grants, member-scoped to `userId`. The
-// template is the one-source-of-truth domain contract; high-tier, card and sharing
-// are off in every template and switch on only when the approval opted in. A card
-// budget is recorded only when card access is on.
+// Translate the person's choices into the one connection's stored grants,
+// member-scoped to `userId`. The starting set (the one-source-of-truth domain contract)
+// supplies every grant the approval does not state; each toggle the screen submits
+// overrides it (review fix A2), so the stored grants match the visible toggles.
+// High-tier, card and sharing are off in every template and switch on only when opted
+// in; a card budget is recorded only when card access is on. `connectedServices` is the
+// person's OWN connected service ids: a ticked service is granted only when it is one of
+// them (never trusting the form for this), with its read tools on and its changes set to
+// "ask me first". Tasks and records are their own grants, not the connector tool classes.
 function grantsFor(
   userId: string,
   connectionId: string,
   approval: ValidApproval,
+  connectedServices: ReadonlySet<string>,
 ): PermissionGrants {
-  const set = permissionTemplate(approval.template, approval.tickedServices ?? []);
+  const set = permissionTemplate(approval.template, []);
+  const services = [...new Set(approval.tickedServices ?? [])].filter((id) => connectedServices.has(id));
   const cardAccess = approval.card === true;
   return {
     userId,
     connectionId,
-    grantedConnectors: set.services.map((s) => s.service),
-    readTools: set.services.length > 0,
-    changeTools: set.services.length > 0 ? "ask_first" : "off",
-    identityAccess: set.lowTierProfile,
+    grantedConnectors: services,
+    readTools: services.length > 0,
+    changeTools: services.length > 0 ? "ask_first" : "off",
+    identityAccess: approval.identity ?? set.lowTierProfile,
     highTierAccess: approval.highTier === true,
     cardAccess,
     cardBudget: cardAccess ? approval.cardBudget ?? null : null,
     skillsScope: [],
-    memoryRead: set.sharedMemoryRead,
+    memoryRead: approval.memoryRead ?? set.sharedMemoryRead,
     sharing: approval.learningSharing === true,
     rulesScope: [],
     rateLimit: DEFAULT_RATE_LIMIT,
+    tasksAccess: approval.tasks ?? set.tasks,
+    recordsAccess: approval.records ?? set.lifeAdmin,
   };
 }
 
 export function createAuthorizeActions(deps: AuthorizeActionsDeps): AuthorizeActions {
-  const { db, config, clock, random } = deps;
+  const { db, config, clock, random, resolveClient, alerts } = deps;
 
   // Approve: validate the untrusted input FIRST (a 4xx before any write), resolve and
   // CONSUME the pending authorize request from its server-side handle (a tampered or
@@ -193,7 +222,7 @@ export function createAuthorizeActions(deps: AuthorizeActionsDeps): AuthorizeAct
 
     const issued = await authorize(
       { params: pending.params, session, connectionId },
-      { db, config, clock, random },
+      { db, config, clock, random, resolveClient },
     );
     if (!issued.ok) return { ok: false, error: issued.error };
 
@@ -209,7 +238,23 @@ export function createAuthorizeActions(deps: AuthorizeActionsDeps): AuthorizeAct
       clock,
     );
 
-    await upsertPermissions(db, grantsFor(session.userId, connectionId, valid));
+    // The person's own connected services (member-scoped by the session's user id): the
+    // only ones a ticked service can grant.
+    const connected = new Set(
+      (await listConnectionsForUser(db, session.userId)).map((c) => c.connectorId),
+    );
+    await upsertPermissions(db, grantsFor(session.userId, connectionId, valid, connected));
+
+    // Tell the person a new agent connected (design: an email alert for each new agent
+    // connection; the alerts module addresses it to the session's own person and scrubs
+    // the agent's name through redaction). The connection is already complete, so a send
+    // failure must not strand the agent mid-handshake: it is logged — with no personal
+    // content — and the approval goes ahead.
+    try {
+      await alertNewAgentConnection(db, { userId: session.userId, agentName: valid.name }, alerts);
+    } catch {
+      console.error("[warthog oauth] the new-agent-connection alert could not be sent");
+    }
 
     return { ok: true, redirectTo: issued.redirectTo };
   }
@@ -217,17 +262,17 @@ export function createAuthorizeActions(deps: AuthorizeActionsDeps): AuthorizeAct
   // Refuse: create no agent, upsert no permissions and issue no credential. Resolve and
   // CONSUME the pending request from its server-side handle (a tampered or replayed
   // handle resolves to nothing, so there is no client to redirect and nothing is
-  // created). Redirect back to the client with `access_denied` (the echoed state and the
-  // configured issuer), carrying no code.
+  // created). Re-check the client and its registered redirect URI (review fix A1) — a
+  // redirect that fails is never followed, so Refuse can't be turned into an open
+  // redirect or a `javascript:` navigation. Redirect back to the client with
+  // `access_denied` (the echoed state and the configured issuer), carrying no code.
   async function refuse(_session: Session, handle: string): Promise<DecisionResult> {
     const pending = consumePendingAuthorization(handle);
     if (pending == null) return { ok: false, error: "invalid_request" };
 
-    const redirectUri = pending.params.get("redirect_uri");
-    if (redirectUri == null || redirectUri === "") {
-      return { ok: false, error: "invalid_request" };
-    }
-    const redirect = new URL(redirectUri);
+    const validated = await validatedRedirectUri(pending.params, resolveClient);
+    if (!validated.ok) return { ok: false, error: validated.error };
+    const redirect = new URL(validated.redirectUri);
     redirect.searchParams.set("error", "access_denied");
     const state = pending.params.get("state");
     if (state != null) redirect.searchParams.set("state", state);

@@ -6,6 +6,7 @@
 // route keys, so the testable logic stays in the sibling server module
 // `src/server/oauth/token.ts` (OBS-025); this file exports just `POST`.
 
+import { loadConfig } from "../../../server/config";
 import { getServerDb } from "../../../server/db/server";
 import { exchangeToken } from "../../../server/oauth/token";
 import { systemClock } from "../../../server/seams/clock";
@@ -20,7 +21,7 @@ export async function POST(request: Request): Promise<Response> {
 
   const result = await exchangeToken(
     { params },
-    { db, clock: systemClock, random: systemRandom },
+    { db, clock: systemClock, random: systemRandom, hmacKey: loadConfig().hmacKey },
   );
 
   if (result.ok) {

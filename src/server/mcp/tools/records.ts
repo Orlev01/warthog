@@ -185,20 +185,19 @@ async function dataKeyFor(db: Db, keyWrapper: KeyWrapper, userId: string): Promi
   return keyWrapper.unwrap(user.wrappedDek);
 }
 
-// The connection's records permission for the given tool class, or null when it has
-// none. The grants carry no dedicated "records" flag, so a READ needs the
-// connection's `readTools` grant and a CHANGE needs its `changeTools` grant to be on
-// (anything but "off"). Keyed by `connection.connectionId` member-scoped by
-// `connection.userId`, exactly the grant the person set.
+// The connection's records permission, or null when it has none: its own `recordsAccess`
+// grant (review fix A2 — the life-admin records grant the person set on the consent screen or
+// permissions page, no longer the connector tool classes `readTools` / `changeTools`).
+// It covers reads and changes alike; `kind` is kept for the callers. Keyed by
+// `connection.connectionId` member-scoped by `connection.userId`, exactly the grant
+// the person set.
 async function recordsPermission(
   db: Db,
   connection: AgentConnection,
-  kind: "read" | "change",
+  _kind: "read" | "change",
 ): Promise<ConnectionPermissions | null> {
   const permissions = await getConnectionPermissions(db, connection.userId, connection.connectionId);
-  if (!permissions) return null;
-  if (kind === "read" && !permissions.readTools) return null;
-  if (kind === "change" && permissions.changeTools === "off") return null;
+  if (!permissions || !permissions.recordsAccess) return null;
   return permissions;
 }
 
