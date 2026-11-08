@@ -77,6 +77,7 @@ const FAKE_DEPS = { marker: Symbol("device-deps") } as unknown as DeviceHandlerD
 // the task names (request / approve / collect), mapped to the new-device handler's own
 // method names (`requestApproval` is reached by the `request` step).
 const STEP_METHOD: ReadonlyArray<readonly [string, keyof DeviceHandler]> = [
+  ["send-code", "sendCode"],
   ["request", "requestApproval"],
   ["approve", "approve"],
   ["collect", "collect"],
@@ -97,6 +98,7 @@ function spyDeviceHandler() {
     return response;
   };
   const handler: DeviceHandler = {
+    sendCode: make("sendCode"),
     requestApproval: make("requestApproval"),
     approve: make("approve"),
     collect: make("collect"),

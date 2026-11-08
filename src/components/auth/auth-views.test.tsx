@@ -40,7 +40,8 @@
 //                       (accessibly-labelled inputs).
 //
 //   RecoverView({ step, recoveryCode? }):   recovery after losing every passkey.
-//     step "identify"      → prove it's you with the emailed one-time code.
+//     step "identify"      → enter your email; a one-time code is emailed to it.
+//     step "email-code"    → prove it's you with the emailed one-time code.
 //     step "recovery-code" → enter your saved recovery code (a labelled input).
 //     step "passkey"       → create a new passkey.
 //     step "new-recovery"  → show the NEW `recoveryCode` once; confirm it's saved.
@@ -232,7 +233,7 @@ const ALL: Rendered[] = [
     step,
     render: () => renderToStaticMarkup(<SigninView step={step} />),
   })),
-  ...(["identify", "recovery-code", "passkey", "new-recovery"] as const).map((step) => ({
+  ...(["identify", "email-code", "recovery-code", "passkey", "new-recovery"] as const).map((step) => ({
     view: "RecoverView",
     step,
     render: () => renderToStaticMarkup(<RecoverView step={step} recoveryCode={RECOVER_CODE} />),
@@ -456,4 +457,70 @@ test("SignupView 'details' step collects name and email via accessibly-labelled 
   const labelBlob = Object.values(labels).join(" ").toLowerCase();
   assert.match(labelBlob, /name/i, `a field must be labelled for the person's name, got labels: "${labelBlob}"`);
   assert.match(labelBlob, /email/i, `a field must be labelled for the email, got labels: "${labelBlob}"`);
+});
+
+// Review fix B10 — a raw 26-character recovery code is shown in groups of four, so it is
+// easy to copy down by hand (the server accepts it back with or without the spaces).
+test("a raw recovery code is shown in groups of four characters", () => {
+  const raw = "ABCDEFGHIJKLMNOPQRSTUVWXYZ";
+  for (const markup of [
+    renderToStaticMarkup(<SignupView step="recovery" recoveryCode={raw} />),
+    renderToStaticMarkup(<RecoverView step="new-recovery" recoveryCode={raw} />),
+  ]) {
+    assert.ok(
+      visibleText(markup).includes("ABCD EFGH IJKL MNOP QRST UVWX YZ"),
+      `the code must be grouped in fours, got: "${visibleText(markup)}"`,
+    );
+  }
+});
+
+// Review fix B11 — every way in is reachable from the screen a person lands on: sign-in
+// links to sign-up, account recovery and approve-from-another-device, and the other
+// screens link back to sign-in.
+function hrefsWithText(markup: string): { href: string; text: string }[] {
+  return [...markup.matchAll(/<a\b[^>]*\bhref="([^"]*)"[^>]*>([\s\S]*?)<\/a>/g)].map((m) => ({
+    href: m[1]!.replace(/&amp;/g, "&"),
+    text: visibleText(m[2]!),
+  }));
+}
+
+test("the sign-in screen links to sign-up, recovery and signing in from another device", () => {
+  for (const step of ["passkey", "code"] as const) {
+    const links = hrefsWithText(renderToStaticMarkup(<SigninView step={step} />));
+    for (const [href, words] of [
+      ["/signup", /create an account/i],
+      ["/recover", /recover/i],
+      ["/device", /another device/i],
+    ] as const) {
+      const link = links.find((l) => l.href === href);
+      assert.ok(link, `sign-in (${step}) links to ${href}, got ${JSON.stringify(links)}`);
+      assert.match(link.text, words, `the ${href} link says where it goes`);
+    }
+  }
+});
+
+test("sign-up, recovery and new-device screens link back to sign-in", () => {
+  for (const markup of [
+    renderToStaticMarkup(<SignupView step="details" />),
+    renderToStaticMarkup(<RecoverView step="identify" />),
+    renderToStaticMarkup(<DeviceView step="code" />),
+  ]) {
+    const link = hrefsWithText(markup).find((l) => l.href === "/signin");
+    assert.ok(link, `the screen links back to sign-in: ${markup}`);
+    assert.match(link.text, /sign in/i);
+  }
+});
+
+// Review (unverified, medium; WCAG 4.1.3) — a step's error is announced to screen readers
+// (role="alert"), and each auth screen is a <main> landmark.
+test("auth step errors are announced, and each auth screen is a main landmark", () => {
+  for (const markup of [
+    renderToStaticMarkup(<SigninView step="passkey" error="We couldn't sign you in." />),
+    renderToStaticMarkup(<SigninView step="code" error="We couldn't sign you in." />),
+    renderToStaticMarkup(<SignupView step="passkey" error="We couldn't sign you in." />),
+    renderToStaticMarkup(<RecoverView step="passkey" error="We couldn't sign you in." />),
+  ]) {
+    assert.match(markup, /<p[^>]*role="alert"[^>]*>We couldn&#x27;t sign you in\.<\/p>/, markup);
+    assert.match(markup, /^<main\b/, "the screen is a main landmark");
+  }
 });

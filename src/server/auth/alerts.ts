@@ -16,6 +16,11 @@
 // high-tier value or card has no business in a security alert — so the redaction
 // pass is asked to match no released values; the card-masking and truncation
 // rules still apply.
+//
+// Alerts report a security event that has ALREADY happened (a session minted, a
+// passkey stored). A delivery failure must not undo or fail that event, so callers
+// send through `deliverAlert`, which reports a failed send to the operator log (the
+// alert kind only — never the recipient or body) instead of throwing.
 
 import { redact } from "../../domain/redaction/redact";
 import { getUserById } from "../db/users";
@@ -43,6 +48,18 @@ async function sendAlert(db: Db, userId: string, body: string, deps: AlertDeps):
   const person = await getUserById(db, userId);
   if (!person) throw new Error("alert: no person for the session userId");
   await deps.emailSender.sendEmail({ recipient: person.email, body: scrub(body) });
+}
+
+// Send an alert without letting a delivery failure fail the security event it reports.
+// The failure is still surfaced (never silently dropped): the operator log gets the
+// alert kind and the error's class, never the recipient, body or error message.
+export async function deliverAlert(kind: string, send: () => Promise<void>): Promise<void> {
+  try {
+    await send();
+  } catch (error) {
+    const name = error instanceof Error ? error.name : "UnknownError";
+    console.error(`[warthog alerts] ${kind} alert not delivered (${name})`);
+  }
 }
 
 // A new passkey was added. Fixed copy — carries no code, token or credential.
@@ -88,6 +105,24 @@ export async function alertNewDeviceSignIn(
     userId,
     `Your Warthog account was signed in to from a new device: ${deviceLabel}. ` +
       "If this wasn't you, sign in and sign out all devices.",
+    deps,
+  );
+}
+
+// The account was recovered with its recovery code (the brief's recovery: email code
+// plus recovery code, then a new passkey and a new recovery code). Fixed copy —
+// carries no code, token or credential.
+export async function alertAccountRecovered(
+  db: Db,
+  { userId }: { userId: string },
+  deps: AlertDeps,
+): Promise<void> {
+  await sendAlert(
+    db,
+    userId,
+    "Your Warthog account was recovered using your recovery code. A new passkey was added " +
+      "and a new recovery code was issued, so your old recovery code no longer works. " +
+      "If this wasn't you, contact support straight away.",
     deps,
   );
 }

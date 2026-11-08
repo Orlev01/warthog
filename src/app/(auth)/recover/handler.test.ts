@@ -34,6 +34,7 @@
 //
 //   createRecoverHandler(deps): {
 //     identify(req: Request):        Promise<Response>  // step 1: { email } -> start recovery
+//     verifyEmail(req: Request):     Promise<Response>  // step 1b: the emailed one-time code
 //     verifyCode(req: Request):      Promise<Response>  // step 2: verify the recovery code
 //     registerPasskey(req: Request): Promise<Response>  // step 3: new passkey + new recovery code
 //     finish(req: Request):          Promise<Response>  // step 4: mint a session -> /home
@@ -41,6 +42,7 @@
 //
 //   deps (one bundle; each step reads the subset it needs):
 //     { db: Db; clock: Clock; random: Random;
+//       hmacKey: Uint8Array; emailSender: EmailSender;   // the email one-time code
 //       rpId: string;            // WebAuthn RP ID (warthog.com.au), from config
 //       publicOrigin: string }   // the configured public origin, for the Origin check
 //
@@ -55,6 +57,11 @@
 //   identify      — body { email }. Resolves the account and starts a pending recovery,
 //     returning 200 { recoveryId } — the handle that carries the remaining steps (the
 //     release-store / new-device pattern, as sign-up's signupId). No session is created.
+//     For an existing account it emails a one-time code (review fix B2: the brief's
+//     recovery is "email code plus recovery code").
+//
+//   verifyEmail   — body { recoveryId, code }. Verifies the emailed one-time code; only a
+//     recovery whose email code verified may present its recovery code.
 //
 //   verifyCode    — body { recoveryId, recoveryCode }. Verifies the presented recovery
 //     code against the pending recovery's account (the real verifyRecoveryCode). A wrong
@@ -101,9 +108,11 @@ import type {
 import { createRecoverHandler } from "./handler";
 
 import { issueRecoveryCode, verifyRecoveryCode } from "../../../server/auth/recovery";
+import { createOutbox, type Outbox } from "../../../server/notify/outbox";
 import { verifySession } from "../../../server/auth/session";
 import {
   beginPasskeyAuthentication,
+  beginPasskeyRegistration,
   finishPasskeyAuthentication,
 } from "../../../server/auth/passkey";
 import { createUser, getUserByEmail, type User } from "../../../server/db/users";
@@ -134,14 +143,42 @@ const WRAPPED_DEK = "wrapped-dek-placeholder";
 // Build the handler under test with the real seams and the test fakes. Recovery drives
 // the recovery/passkey/session modules only — it issues no email and creates no account,
 // so there is no emailSender / keyWrapper in the bundle.
-function makeHandler(db: Db, clock: Clock = fixedClock(T0)) {
-  return createRecoverHandler({
+// The HMAC key the email one-time code is stored under (issue and verify share it).
+const HMAC_KEY = new Uint8Array(Buffer.from("warthog-recover-hmac-key-0123456789abcd", "utf8"));
+
+// The handler under test, with the outbox its email codes and alerts land in attached,
+// so a test reads the emailed code exactly as the person would.
+function makeHandler(db: Db, clock: Clock = fixedClock(T0), outbox: Outbox = createOutbox()) {
+  const handler = createRecoverHandler({
     db,
     clock,
     random: systemRandom,
+    hmacKey: HMAC_KEY,
+    emailSender: outbox,
     rpId: RP_ID,
     publicOrigin: GOOD_ORIGIN,
   });
+  return Object.assign(handler, { outbox });
+}
+
+// The emails the outbox holds for one address, in send order.
+function emailsTo(outbox: Outbox, recipient: string) {
+  return outbox.list().filter((m) => m.channel === "email" && m.recipient === recipient);
+}
+
+// The newest one-time code emailed to `email` (a standalone six-digit run in the body).
+function emailedCode(outbox: Outbox, email: string): string {
+  const latest = emailsTo(outbox, email)
+    .map((m) => m.body.match(/(?<!\d)\d{6}(?!\d)/)?.[0])
+    .filter((c): c is string => c !== undefined)
+    .at(-1);
+  assert.ok(latest, `identify must email a one-time code to ${email}`);
+  return latest;
+}
+
+// A six-digit code that is not `code`.
+function wrongEmailCode(code: string): string {
+  return (code[0] === "0" ? "1" : "0") + code.slice(1);
 }
 
 // A JSON POST request carrying an `Origin` header. `origin: null` sends no Origin at all
@@ -204,14 +241,24 @@ async function startIdentify(handler: ReturnType<typeof makeHandler>, email: str
   return body.recoveryId;
 }
 
-// Steps 1–2 — identify, then verify the recovery code, returning the handle plus the
-// passkey registration options the valid code unlocks.
+// Step 1b — identify, then verify the one-time code identify emailed, returning the
+// handle of a recovery whose email is proven.
+async function throughVerifyEmail(handler: ReturnType<typeof makeHandler>, email: string): Promise<string> {
+  const recoveryId = await startIdentify(handler, email);
+  const code = emailedCode(handler.outbox, email);
+  const res = await handler.verifyEmail(recoverRequest({ recoveryId, code }));
+  assert.equal(res.status, 200, "the emailed one-time code is accepted");
+  return recoveryId;
+}
+
+// Steps 1–2 — identify, verify the email code, then verify the recovery code, returning
+// the handle plus the passkey registration options the valid codes unlock.
 async function throughVerifyCode(
   handler: ReturnType<typeof makeHandler>,
   email: string,
   recoveryCode: string,
 ): Promise<{ recoveryId: string; registrationOptions: PublicKeyCredentialCreationOptionsJSON }> {
-  const recoveryId = await startIdentify(handler, email);
+  const recoveryId = await throughVerifyEmail(handler, email);
 
   const res = await handler.verifyCode(recoverRequest({ recoveryId, recoveryCode }));
   assert.equal(res.status, 200, "a valid recovery code is accepted");
@@ -369,7 +416,7 @@ test("recovery: a wrong recovery code is a 4xx — no session, no new passkey, a
     const handler = makeHandler(db, clock);
     const { user, recoveryCode: oldCode } = await seedAccount(db, "wrong-code");
 
-    const recoveryId = await startIdentify(handler, user.email);
+    const recoveryId = await throughVerifyEmail(handler, user.email);
 
     // A well-formed but wrong code, over a valid Origin, so the ONLY reason to reject is
     // the code itself.
@@ -411,8 +458,9 @@ test("recovery: identify and verify-code refuse a missing or foreign Origin (403
       "identify with no Origin is forbidden",
     );
 
-    // Start a real recovery over the good origin so verify-code has a handle to target.
-    const recoveryId = await startIdentify(handler, user.email);
+    // Start a real recovery over the good origin (its email code verified) so verify-code
+    // has a handle to target.
+    const recoveryId = await throughVerifyEmail(handler, user.email);
 
     // verify-code: the SAME valid code, so the ONLY reason to reject is the Origin.
     assert.equal(
@@ -581,6 +629,220 @@ test("recovery: a SQL-injection probe in the email field is bound as data and ca
       "the baseline account's recovery code still verifies — its row survived",
     );
     await db.query("SELECT 1 FROM recovery_codes LIMIT 1");
+  } finally {
+    await db.close();
+  }
+});
+
+// =====================================================================================
+// Review fix B5 — a pending recovery expires, so an abandoned one is forgotten.
+// =====================================================================================
+
+test("recovery: a pending recovery expires after thirty minutes and its handle stops working", async () => {
+  let now = T0.getTime();
+  const clock: Clock = { now: () => new Date(now) };
+  const db = await freshDb();
+  try {
+    const handler = makeHandler(db, clock);
+    const { user, recoveryCode } = await seedAccount(db, "expired-recovery");
+    const recoveryId = await throughVerifyEmail(handler, user.email);
+
+    now += 31 * 60 * 1000;
+    const res = await handler.verifyCode(recoverRequest({ recoveryId, recoveryCode }));
+    assert.equal(res.status, 400, "an expired pending recovery is unknown");
+  } finally {
+    await db.close();
+  }
+});
+
+// =====================================================================================
+// Review fix B2 — recovery is "email code plus recovery code" (brief): the recovery code
+// alone no longer takes over an account, each step requires the one before it, and the
+// owner is told when their account is recovered.
+// =====================================================================================
+
+test("recovery: identify emails a code to an existing account only, and answers both cases identically", async () => {
+  const db = await freshDb();
+  try {
+    const handler = makeHandler(db);
+    const { user } = await seedAccount(db, "known-recoverer");
+    const unknownEmail = "nobody-here@warthog.com.au";
+
+    const known = await handler.identify(recoverRequest({ email: user.email }));
+    const unknown = await handler.identify(recoverRequest({ email: unknownEmail }));
+    assert.equal(known.status, unknown.status, "the same status whether or not the account exists");
+    assert.deepEqual(
+      Object.keys((await known.json()) as object),
+      Object.keys((await unknown.json()) as object),
+      "the same body shape whether or not the account exists",
+    );
+    assert.equal(emailsTo(handler.outbox, user.email).length, 1, "the account holder is emailed one code");
+    assert.equal(emailsTo(handler.outbox, unknownEmail).length, 0, "no email goes to an address with no account");
+  } finally {
+    await db.close();
+  }
+});
+
+test("recovery: the correct recovery code without the email code is refused — no options, no session, old code intact", async () => {
+  const db = await freshDb();
+  try {
+    const handler = makeHandler(db);
+    const { user, recoveryCode } = await seedAccount(db, "no-email-code");
+    const recoveryId = await startIdentify(handler, user.email);
+
+    const res = await handler.verifyCode(recoverRequest({ recoveryId, recoveryCode }));
+    assert.ok(res.status >= 400 && res.status < 500, `verify-code before the email code is a 4xx, got ${res.status}`);
+    const body = (await res.json()) as { registrationOptions?: unknown };
+    assert.equal(body.registrationOptions, undefined, "no passkey registration is offered");
+
+    const finished = await handler.finish(recoverRequest({ recoveryId }));
+    assert.ok(finished.status >= 400 && finished.status < 500, "finish mints nothing");
+    assert.equal(finished.headers.get("set-cookie"), null, "no session cookie");
+    assert.equal(await countFor(db, "sessions", user.id), 0, "no session exists");
+    assert.equal(await verifyRecoveryCode(db, user.id, recoveryCode), true, "the old recovery code still works");
+  } finally {
+    await db.close();
+  }
+});
+
+test("recovery: a wrong email code is refused and leaves the recovery code step locked", async () => {
+  const db = await freshDb();
+  try {
+    const handler = makeHandler(db);
+    const { user, recoveryCode } = await seedAccount(db, "wrong-email-code");
+    const recoveryId = await startIdentify(handler, user.email);
+    const code = emailedCode(handler.outbox, user.email);
+
+    const wrong = await handler.verifyEmail(recoverRequest({ recoveryId, code: wrongEmailCode(code) }));
+    assert.equal(wrong.status, 400, "a wrong email code is a 400");
+    const locked = await handler.verifyCode(recoverRequest({ recoveryId, recoveryCode }));
+    assert.ok(locked.status >= 400 && locked.status < 500, "the recovery code is still not accepted");
+  } finally {
+    await db.close();
+  }
+});
+
+test("recovery: register-passkey is refused on a recovery whose recovery code never verified", async () => {
+  const db = await freshDb();
+  try {
+    const handler = makeHandler(db);
+    const auth = createAuthenticator();
+    const { user } = await seedAccount(db, "skipped-recovery-code");
+    const recoveryId = await throughVerifyEmail(handler, user.email);
+
+    // A registration challenge for the account exists (as one left by any earlier
+    // ceremony would), but this recovery never proved the recovery code.
+    const options = await beginPasskeyRegistration(
+      db,
+      { userId: user.id, userName: user.email },
+      { rpId: RP_ID, origin: GOOD_ORIGIN },
+    );
+    const registrationResponse = await auth.register(options);
+    const res = await handler.registerPasskey(recoverRequest({ recoveryId, registrationResponse }));
+    assert.ok(res.status >= 400 && res.status < 500, `register-passkey is a 4xx, got ${res.status}`);
+    assert.equal(await countFor(db, "passkeys", user.id), 0, "no passkey was added");
+  } finally {
+    await db.close();
+  }
+});
+
+test("recovery: finishing a recovery emails the account holder an alert that carries no code", async () => {
+  const db = await freshDb();
+  try {
+    const handler = makeHandler(db);
+    const auth = createAuthenticator();
+    const { user, recoveryCode } = await seedAccount(db, "alerted-recoverer");
+    const { recoveryId, newRecoveryCode } = await throughRegisterPasskey(handler, auth, user.email, recoveryCode);
+    const before = emailsTo(handler.outbox, user.email).length;
+
+    const res = await handler.finish(recoverRequest({ recoveryId }));
+    assert.equal(res.status, 303);
+
+    const after = emailsTo(handler.outbox, user.email);
+    assert.equal(after.length, before + 1, "exactly one alert is sent to the account holder");
+    const alert = after.at(-1)!.body;
+    assert.match(alert, /recover/i, "the alert says the account was recovered");
+    assert.ok(!alert.includes(newRecoveryCode) && !alert.includes(recoveryCode), "the alert carries no recovery code");
+    assert.ok(!/(?<!\d)\d{6}(?!\d)/.test(alert), "the alert carries no one-time code");
+  } finally {
+    await db.close();
+  }
+});
+
+test("recovery: an alert that cannot be delivered does not undo a completed recovery", async () => {
+  const db = await freshDb();
+  try {
+    const outbox = createOutbox();
+    let failSends = false;
+    const flaky = Object.assign(Object.create(outbox) as Outbox, {
+      async sendEmail(message: { recipient: string; body: string }) {
+        if (failSends) throw new Error("email provider down");
+        return outbox.sendEmail(message);
+      },
+    });
+    const handler = Object.assign(
+      createRecoverHandler({
+        db,
+        clock: fixedClock(T0),
+        random: systemRandom,
+        hmacKey: HMAC_KEY,
+        emailSender: flaky,
+        rpId: RP_ID,
+        publicOrigin: GOOD_ORIGIN,
+      }),
+      { outbox },
+    );
+    const auth = createAuthenticator();
+    const { user, recoveryCode } = await seedAccount(db, "flaky-alert");
+    const { recoveryId } = await throughRegisterPasskey(handler, auth, user.email, recoveryCode);
+
+    failSends = true;
+    const res = await handler.finish(recoverRequest({ recoveryId }));
+    assert.equal(res.status, 303, "the recovery still completes");
+    assert.ok(res.headers.get("set-cookie"), "and the session is still issued");
+  } finally {
+    await db.close();
+  }
+});
+
+// =====================================================================================
+// Review fix B3 — the recovery code has an attempt limit per recovery.
+// =====================================================================================
+
+test("recovery: after five wrong recovery codes the recovery is closed, even to the correct code", async () => {
+  const db = await freshDb();
+  try {
+    const handler = makeHandler(db);
+    const { user, recoveryCode } = await seedAccount(db, "guesser");
+    const recoveryId = await throughVerifyEmail(handler, user.email);
+
+    const statuses: number[] = [];
+    for (let i = 0; i < 5; i += 1) {
+      const res = await handler.verifyCode(recoverRequest({ recoveryId, recoveryCode: wrongCode(recoveryCode) }));
+      statuses.push(res.status);
+    }
+    assert.equal(statuses.at(-1), 429, "the fifth wrong code closes the recovery (429)");
+
+    const sixth = await handler.verifyCode(recoverRequest({ recoveryId, recoveryCode }));
+    assert.ok(sixth.status >= 400 && sixth.status < 500, `the correct code is now refused, got ${sixth.status}`);
+    const body = (await sixth.json()) as { registrationOptions?: unknown };
+    assert.equal(body.registrationOptions, undefined, "no registration is offered");
+  } finally {
+    await db.close();
+  }
+});
+
+// Review fix B7 — the browser a person recovers on is marked as recognised.
+test("recovery: finishing marks the browser as one the person signs in on", async () => {
+  const db = await freshDb();
+  try {
+    const handler = makeHandler(db);
+    const { user, recoveryCode } = await seedAccount(db, "marked-recovery");
+    const { recoveryId } = await throughRegisterPasskey(handler, createAuthenticator(), user.email, recoveryCode);
+    const res = await handler.finish(recoverRequest({ recoveryId }));
+    const cookies = res.headers.getSetCookie();
+    assert.ok(cookies[0]?.startsWith("__Host-wh_session="), "the session cookie comes first");
+    assert.ok(cookies.some((c) => c.startsWith("__Host-wh_device=")), "the browser is marked");
   } finally {
     await db.close();
   }

@@ -111,6 +111,7 @@ import { createUser, getUserByEmail, type User } from "../../../server/db/users"
 import { systemRandom } from "../../../server/seams/random";
 import { fixedClock, type Clock } from "../../../server/seams/clock";
 import { freshDb } from "../../../test/db";
+import { createOutbox, type Outbox } from "../../../server/notify/outbox";
 import { createAuthenticator, type SoftwareAuthenticator } from "../../../test/authenticator";
 import type { Db } from "../../../server/db/index";
 
@@ -122,6 +123,9 @@ const T0 = new Date("2026-05-01T00:00:00.000Z");
 // The configured WebAuthn RP ID — passed through deps (never a module constant), so the
 // "RP ID from config" discipline is exercised end to end.
 const RP_ID = "warthog.com.au";
+
+// The HMAC key the new-device cookie is bound under (review fix B7).
+const SIGNIN_HMAC_KEY = new Uint8Array(Buffer.from("warthog-signin-device-key-0123456789abcd", "utf8"));
 
 // The configured public origin the handler checks the request `Origin` against, and a
 // foreign origin a cross-site request would carry.
@@ -152,11 +156,18 @@ function totpSecretsOf(entries: Map<string, string>): TotpSecretStore {
 
 // Build the handler under test with the real seams and the test fakes. Each test uses
 // its own db + totp-secret store, so nothing leaks across tests.
-function makeHandler(db: Db, totpSecrets: TotpSecretStore, clock: Clock = fixedClock(T0)) {
+function makeHandler(
+  db: Db,
+  totpSecrets: TotpSecretStore,
+  clock: Clock = fixedClock(T0),
+  outbox: Outbox = createOutbox(),
+) {
   return createSigninHandler({
     db,
     clock,
     random: systemRandom,
+    hmacKey: SIGNIN_HMAC_KEY,
+    emailSender: outbox,
     rpId: RP_ID,
     publicOrigin: GOOD_ORIGIN,
     totpSecrets,
@@ -627,6 +638,159 @@ test("a SQL-injection probe in the email field is bound as data and cannot alter
     );
     await db.query("SELECT 1 FROM sessions LIMIT 1");
     assert.equal(await sessionCount(db), 0, "the probe signed nobody in");
+  } finally {
+    await db.close();
+  }
+});
+
+// =====================================================================================
+// Review fix B4 — one sign-in assertion mints at most one session, even for a synced
+// passkey whose signature counter stays at 0 (modelled by holding the stored counter at 0).
+// =====================================================================================
+
+test("a sign-in assertion replayed to finish-passkey mints no second session", async () => {
+  const clock = fixedClock(T0);
+  const db = await freshDb();
+  try {
+    const handler = makeHandler(db, totpSecretsOf(new Map()), clock);
+    const auth = createAuthenticator();
+    const email = "replayed-signin@warthog.com.au";
+    const user = await freshUser(db, "replayed-signin");
+    await registerPasskeyFor(db, auth, user);
+
+    const options = await beginPasskeyFor(handler, email);
+    const authenticationResponse = await auth.authenticate(options);
+    const first = await handler.finishPasskey(signinRequest({ email, authenticationResponse }));
+    assert.equal(first.status, 303, "the first finish signs the person in");
+
+    await db.query(`UPDATE passkeys SET counter = 0 WHERE user_id = $1`, [user.id]);
+    const replay = await handler.finishPasskey(signinRequest({ email, authenticationResponse }));
+    assert.equal(replay.status, 401, "the replay is refused");
+    assert.equal(await sessionCount(db), 1, "exactly one session was minted");
+  } finally {
+    await db.close();
+  }
+});
+
+// =====================================================================================
+// Review fix B8 — sign-in finds the account whatever case or spacing the email is typed in.
+// =====================================================================================
+
+test("sign-in with a passkey works when the email is typed in another case with spaces", async () => {
+  const clock = fixedClock(T0);
+  const db = await freshDb();
+  try {
+    const handler = makeHandler(db, totpSecretsOf(new Map()), clock);
+    const auth = createAuthenticator();
+    await registerPasskeyFor(db, auth, await freshUser(db, "case-signin"));
+    const typed = "  Case-Signin@Warthog.COM.au ";
+
+    const options = await beginPasskeyFor(handler, typed);
+    const authenticationResponse = await auth.authenticate(options);
+    const res = await handler.finishPasskey(signinRequest({ email: typed, authenticationResponse }));
+    assert.equal(res.status, 303, "the account is found and the person signed in");
+  } finally {
+    await db.close();
+  }
+});
+
+// =====================================================================================
+// Review fix B7 — a sign-in from a browser the person has not signed in on before emails
+// them a new-device alert (no code in it) and marks the browser; a later sign-in from
+// that browser sends nothing. A failed alert never fails the sign-in.
+// =====================================================================================
+
+function signinRequestWithCookie(body: unknown, cookie: string | null, userAgent?: string): Request {
+  const headers: Record<string, string> = { "content-type": "application/json", origin: GOOD_ORIGIN };
+  if (cookie) headers.cookie = cookie;
+  if (userAgent) headers["user-agent"] = userAgent;
+  return new Request("https://warthog.com.au/api/signin", { method: "POST", headers, body: JSON.stringify(body) });
+}
+
+function deviceCookieIn(res: Response): string | null {
+  const cookies = res.headers.getSetCookie();
+  const device = cookies.find((c) => c.startsWith("__Host-wh_device="));
+  return device ? device.split(";")[0]! : null;
+}
+
+test("a sign-in from a new browser alerts the account holder once; the same browser later does not", async () => {
+  const clock = fixedClock(T0);
+  const db = await freshDb();
+  try {
+    const outbox = createOutbox();
+    const handler = makeHandler(db, totpSecretsOf(new Map()), clock, outbox);
+    const auth = createAuthenticator();
+    const user = await freshUser(db, "new-browser");
+    await registerPasskeyFor(db, auth, user);
+    const ua =
+      "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0 Safari/537.36";
+
+    const signIn = async (cookie: string | null) => {
+      const options = await beginPasskeyFor(handler, user.email);
+      const authenticationResponse = await auth.authenticate(options);
+      return handler.finishPasskey(signinRequestWithCookie({ email: user.email, authenticationResponse }, cookie, ua));
+    };
+
+    const first = await signIn(null);
+    assert.equal(first.status, 303);
+    const alerts = outbox.list().filter((m) => m.channel === "email" && m.recipient === user.email);
+    assert.equal(alerts.length, 1, "one new-device alert goes to the account holder");
+    assert.match(alerts[0]!.body, /new device/i);
+    assert.match(alerts[0]!.body, /Chrome on Windows/, "the alert names the browser in plain words");
+    assert.ok(!/(?<!\d)\d{6}(?!\d)/.test(alerts[0]!.body), "the alert carries no code");
+    const cookie = deviceCookieIn(first);
+    assert.ok(cookie, "the browser is marked as one the person has signed in on");
+
+    const second = await signIn(cookie);
+    assert.equal(second.status, 303);
+    assert.equal(
+      outbox.list().filter((m) => m.channel === "email" && m.recipient === user.email).length,
+      1,
+      "a recognised browser sends no further alert",
+    );
+  } finally {
+    await db.close();
+  }
+});
+
+test("a TOTP sign-in from a new browser alerts too", async () => {
+  const clock = fixedClock(T0);
+  const db = await freshDb();
+  try {
+    const outbox = createOutbox();
+    const user = await freshUser(db, "totp-new-browser");
+    const secrets = new Map<string, string>();
+    const secret = await enrolTotpFor(secrets, user.email, user);
+    const handler = makeHandler(db, totpSecretsOf(secrets), clock, outbox);
+
+    const res = await handler.signInWithTotp(
+      signinRequestWithCookie({ email: user.email, totp: codeForStep(secret, stepAt(T0)) }, null),
+    );
+    assert.equal(res.status, 303);
+    assert.equal(outbox.list().filter((m) => m.recipient === user.email).length, 1, "one alert");
+  } finally {
+    await db.close();
+  }
+});
+
+test("an alert that cannot be delivered does not fail the sign-in", async () => {
+  const clock = fixedClock(T0);
+  const db = await freshDb();
+  try {
+    const failing = Object.assign(createOutbox(), {
+      async sendEmail(): Promise<void> {
+        throw new Error("email provider down");
+      },
+    });
+    const handler = makeHandler(db, totpSecretsOf(new Map()), clock, failing);
+    const auth = createAuthenticator();
+    const user = await freshUser(db, "alert-down");
+    await registerPasskeyFor(db, auth, user);
+
+    const options = await beginPasskeyFor(handler, user.email);
+    const authenticationResponse = await auth.authenticate(options);
+    const res = await handler.finishPasskey(signinRequest({ email: user.email, authenticationResponse }));
+    assert.equal(res.status, 303, "the person is still signed in");
   } finally {
     await db.close();
   }

@@ -77,9 +77,13 @@ function toSession(row: Row): Session {
 }
 
 // The Set-Cookie value for a session token: host-locked (`__Host-`), unreadable to
-// script (HttpOnly), HTTPS-only (Secure), SameSite=Lax, Path=/ and no Domain.
+// script (HttpOnly), HTTPS-only (Secure), SameSite=Lax, Path=/ and no Domain. It lives
+// for the 30-day absolute window (Max-Age), so the browser keeps it across restarts —
+// an installed web app drops a plain session cookie whenever it is closed — while the
+// server still enforces the idle and absolute windows on every verify.
 function sessionCookie(token: string): string {
-  return `${COOKIE_NAME}=${token}; Path=/; HttpOnly; Secure; SameSite=Lax`;
+  const maxAgeSeconds = Math.floor(ABSOLUTE_MS / 1000);
+  return `${COOKIE_NAME}=${token}; Path=/; HttpOnly; Secure; SameSite=Lax; Max-Age=${maxAgeSeconds}`;
 }
 
 // Create a session for `userId`: draw a 256-bit id, store it hashed, anchor both

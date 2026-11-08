@@ -22,6 +22,7 @@
 //     (the handler-method kebab slugs, exactly as signin/signup map theirs — NOT the
 //     RecoverView UI step names):
 //       identify         -> identify
+//       verify-email     -> verifyEmail
 //       verify-code      -> verifyCode
 //       register-passkey -> registerPasskey
 //       finish           -> finish
@@ -77,6 +78,7 @@ const FAKE_DEPS = { marker: Symbol("recover-deps") } as unknown as RecoverHandle
 // slugs, as signin/signup — see the header).
 const STEP_METHOD: ReadonlyArray<readonly [string, keyof RecoverHandler]> = [
   ["identify", "identify"],
+  ["verify-email", "verifyEmail"],
   ["verify-code", "verifyCode"],
   ["register-passkey", "registerPasskey"],
   ["finish", "finish"],
@@ -98,6 +100,7 @@ function spyRecoverHandler() {
   };
   const handler: RecoverHandler = {
     identify: make("identify"),
+    verifyEmail: make("verifyEmail"),
     verifyCode: make("verifyCode"),
     registerPasskey: make("registerPasskey"),
     finish: make("finish"),

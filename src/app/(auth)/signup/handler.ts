@@ -13,8 +13,9 @@
 // Until confirmation there is NO `users` row: a pending sign-up (the email, the
 // registration challenge, the verified credential and the recovery code's entropy)
 // lives in PROCESS MEMORY keyed by a random `signupId`, the release-store /
-// new-device pattern — a module-level Map so it survives across the three separate
-// requests, with full-entropy handles so pending sign-ups never collide.
+// new-device pattern — a bounded, expiring process-wide store (pending-store) so it
+// survives across the three separate requests, with full-entropy handles so pending
+// sign-ups never collide.
 //
 // Because there is no account yet at steps 1–2, the real issuing functions
 // (`beginPasskeyRegistration`, `issueRecoveryCode`) — which both PERSIST against a
@@ -47,14 +48,15 @@ import { issueEmailCode, verifyEmailCode } from "../../../server/auth/email-code
 import { beginPasskeyRegistration } from "../../../server/auth/passkey";
 import { issueRecoveryCode } from "../../../server/auth/recovery";
 import { createSession } from "../../../server/auth/session";
+import { deviceCookieFor } from "../../../server/auth/device-recognition";
 import { createUser } from "../../../server/db/users";
 import { saveIdentityField } from "../../../server/db/identity-fields";
 import type { KeyWrapper } from "../../../server/crypto/key-wrapper";
 import type { Clock } from "../../../server/seams/clock";
 import type { Random } from "../../../server/seams/random";
 import type { EmailSender } from "../../../server/notify/senders";
-import type { Db } from "../../../server/db/index";
-import { processSingleton } from "../../../server/seams/process-singleton";
+import { withTransaction, type Db } from "../../../server/db/index";
+import { pendingStore } from "../../../server/auth/pending-store";
 
 // The dependency bundle. Each step reads the subset it needs; the superset is
 // structurally assignable to each. `rpId` is the WebAuthn RP ID (from config, never
@@ -93,19 +95,23 @@ interface PendingSignup {
 }
 
 // The process-wide pending-sign-up store (the new-device / release-store pattern):
-// ESM caches this module, so every import shares one Map, and the three separate
-// requests of one sign-up find their pending row by its random handle.
-// Held through processSingleton (globalThis) so every module graph Next builds shares it.
-const pendingSignups = processSingleton("auth.pendingSignups", () => new Map<string, PendingSignup>());
+// the three separate requests of one sign-up find their pending row by its random
+// handle. Unauthenticated requests create the entries, so the store is bounded and
+// expiring (pending-store): an abandoned sign-up — and the recovery-code entropy it
+// holds — is forgotten after thirty minutes, and a flood cannot grow memory unbounded.
+const pendingSignups = pendingStore<PendingSignup>("auth.pendingSignups", {
+  ttlMs: 30 * 60 * 1000,
+  maxEntries: 10_000,
+});
 
 // The name entered at the details step arrives with send-code, before a signupId
 // exists, so it is parked here keyed by the email until verify-email mints the
 // pending sign-up and takes it over. Held in process memory (the pending-sign-up
-// pattern), never a plaintext column. Shared across module graphs via processSingleton.
-const pendingSignupNames = processSingleton(
-  "auth.pendingSignupNames",
-  () => new Map<string, string>(),
-);
+// pattern), never a plaintext column; it lapses with the code it arrived with.
+const pendingSignupNames = pendingStore<string>("auth.pendingSignupNames", {
+  ttlMs: 15 * 60 * 1000,
+  maxEntries: 10_000,
+});
 
 // A write-discarding `Db`: at the register stage there is no `users` row to hang a
 // challenge or recovery code off, so the real issuing functions are run against this
@@ -131,13 +137,13 @@ const MAX_NAME_LENGTH = 100;
 // characters — a blank or over-long name is refused at the boundary (4xx), and
 // nothing is sent.
 const sendCodeSchema = z.object({
-  email: z.string().min(1).max(320),
+  email: z.string().trim().toLowerCase().min(1).max(320), // normalised (users.normaliseEmail)
   name: z.string().trim().min(1).max(MAX_NAME_LENGTH).optional(),
 });
 
 // verifyEmail: the email + its one-time code.
 const verifyEmailSchema = z.object({
-  email: z.string().min(1).max(320),
+  email: z.string().trim().toLowerCase().min(1).max(320), // normalised (users.normaliseEmail)
   code: z.string().min(1).max(100),
 });
 
@@ -170,11 +176,29 @@ const confirmSignupSchema = z.object({
   savedConfirmed: z.boolean(),
 });
 
+// Whether a write failed because the address already has an account: a unique
+// violation (SQLSTATE 23505) on the users table (its email / lower(email) index).
+function isEmailTaken(error: unknown): boolean {
+  const e = error as { code?: unknown; table?: unknown } | null;
+  return e?.code === "23505" && e.table === "users";
+}
+
 // A JSON response with a status.
 function json(status: number, body: unknown): Response {
   return new Response(JSON.stringify(body), {
     status,
     headers: { "content-type": "application/json" },
+  });
+}
+
+// A 429 for a rate-limited step, with Retry-After in whole seconds (at least one).
+function throttled(retryAfterMs: number): Response {
+  return new Response(JSON.stringify({ error: "throttled" }), {
+    status: 429,
+    headers: {
+      "content-type": "application/json",
+      "retry-after": String(Math.max(1, Math.ceil(retryAfterMs / 1000))),
+    },
   });
 }
 
@@ -198,7 +222,8 @@ export function createSignupHandler(deps: SignupHandlerDeps): SignupHandler {
   // foreign Origin is 403 and sends nothing). The body { email } is validated at the
   // boundary, then the real issuer draws a code, stores only its HMAC and delivers it
   // in one email (bound as parameters, INV-102). The SAME 200 is returned for any
-  // well-formed email, whether or not an account already exists — no existence leak.
+  // well-formed email, whether or not an account already exists — no existence leak;
+  // a 429 means only that this address was sent a code very recently.
   async function sendCode(request: Request): Promise<Response> {
     if (!sameOrigin(request)) return json(403, { error: "forbidden" });
     try {
@@ -206,11 +231,16 @@ export function createSignupHandler(deps: SignupHandlerDeps): SignupHandler {
         maxBytes: MAX_BODY_BYTES,
       });
 
-      await issueEmailCode(db, email, { clock, random, hmacKey, emailSender });
+      // Codes to one address are rate-limited (one a minute, five an hour), so this
+      // step cannot flood an inbox or keep many codes live. A throttled send emails
+      // nothing and says when to try again; the limit is per address, whether or not an
+      // account exists, so the refusal reveals nothing about existence.
+      const issued = await issueEmailCode(db, email, { clock, random, hmacKey, emailSender });
+      if (!issued.ok) return throttled(issued.retryAfterMs);
       // Park the name against the email until verify-email mints a signupId and
       // takes it onto the pending sign-up (never a plaintext column).
       if (name !== undefined) {
-        pendingSignupNames.set(email, name);
+        pendingSignupNames.set(email, name, clock.now());
       }
       return json(200, { ok: true });
     } catch (error) {
@@ -245,9 +275,9 @@ export function createSignupHandler(deps: SignupHandlerDeps): SignupHandler {
 
       // Take the name parked at send-code onto the pending sign-up so it survives
       // to confirm without being re-sent on this or any later step.
-      const name = pendingSignupNames.get(email);
+      const name = pendingSignupNames.get(email, clock.now());
       pendingSignupNames.delete(email);
-      pendingSignups.set(signupId, { email, challenge: registrationOptions.challenge, name });
+      pendingSignups.set(signupId, { email, challenge: registrationOptions.challenge, name }, clock.now());
       return json(200, { signupId, registrationOptions });
     } catch (error) {
       return handleError(error);
@@ -267,7 +297,7 @@ export function createSignupHandler(deps: SignupHandlerDeps): SignupHandler {
         { maxBytes: MAX_BODY_BYTES },
       );
 
-      const pending = pendingSignups.get(signupId);
+      const pending = pendingSignups.get(signupId, clock.now());
       if (!pending) return json(400, { error: "unknown_signup" });
 
       let verification;
@@ -329,7 +359,7 @@ export function createSignupHandler(deps: SignupHandlerDeps): SignupHandler {
         maxBytes: MAX_BODY_BYTES,
       });
 
-      const pending = pendingSignups.get(signupId);
+      const pending = pendingSignups.get(signupId, clock.now());
       if (!pending) return json(400, { error: "unknown_signup" });
       if (!savedConfirmed) return json(400, { error: "not_confirmed" });
       if (!pending.credential || !pending.recoveryDraws) {
@@ -338,29 +368,14 @@ export function createSignupHandler(deps: SignupHandlerDeps): SignupHandler {
 
       // The account: a fresh 256-bit DEK stored only WRAPPED (design §4.1). The
       // plaintext DEK is kept just long enough to encrypt the person's low-tier
-      // name under it, then falls out of scope.
+      // name under it, then falls out of scope. Wrapping (a Key Vault call in
+      // production) happens before the transaction opens.
       const dek = random.randomBytes(32);
       const wrappedDek = await keyWrapper.wrap(dek);
-      const user = await createUser(db, { email: pending.email, wrappedDek });
-
-      // Keep the name entered at sign-up as the person's low-tier 'name' identity
-      // field, DEK-encrypted — never written to a plaintext users column.
-      if (pending.name !== undefined) {
-        await saveIdentityField(db, { userId: user.id, kind: "name", value: pending.name }, dek);
-      }
-
-      // Persist the passkey registered at step 2 for the new account (mirrors the
-      // passkeys storage in finishPasskeyRegistration; the credential was already
-      // verified, so here it is only stored — bound as parameters, INV-102).
-      await db.query(
-        `INSERT INTO passkeys (user_id, credential_id, public_key, counter)
-         VALUES ($1, $2, $3, $4)`,
-        [user.id, pending.credential.id, pending.credential.publicKey, pending.credential.counter],
-      );
+      const { credential, recoveryDraws: draws } = pending;
 
       // Persist the SAME recovery code shown at step 2 by replaying its recorded
       // entropy through the real issuer, so it verifies against the new account.
-      const draws = pending.recoveryDraws;
       let drawIndex = 0;
       const replayRandom: Random = {
         randomBytes(n) {
@@ -371,16 +386,52 @@ export function createSignupHandler(deps: SignupHandlerDeps): SignupHandler {
           return next;
         },
       };
-      await issueRecoveryCode(db, user.id, { random: replayRandom });
 
-      // The signed-in session, host-locked in the `__Host-wh_session` cookie.
-      const created = await createSession(db, user.id, { clock, random });
+      // Every write that makes the account — the person, their name, the passkey, the
+      // recovery code and the session — commits together or not at all (review fix B9):
+      // a failure part-way leaves no half-made account holding the address, so the
+      // person can simply sign up again. An address taken in the meantime (in any case)
+      // is a clear 409, never a 500.
+      let created;
+      try {
+        created = await withTransaction(db, async (tx) => {
+          const user = await createUser(tx, { email: pending.email, wrappedDek });
+
+          // Keep the name entered at sign-up as the person's low-tier 'name' identity
+          // field, DEK-encrypted — never written to a plaintext users column.
+          if (pending.name !== undefined) {
+            await saveIdentityField(tx, { userId: user.id, kind: "name", value: pending.name }, dek);
+          }
+
+          // Persist the passkey registered at step 2 for the new account (mirrors the
+          // passkeys storage in finishPasskeyRegistration; the credential was already
+          // verified, so here it is only stored — bound as parameters, INV-102).
+          await tx.query(
+            `INSERT INTO passkeys (user_id, credential_id, public_key, counter)
+             VALUES ($1, $2, $3, $4)`,
+            [user.id, credential.id, credential.publicKey, credential.counter],
+          );
+
+          await issueRecoveryCode(tx, user.id, { random: replayRandom });
+
+          // The signed-in session, host-locked in the `__Host-wh_session` cookie.
+          return createSession(tx, user.id, { clock, random });
+        });
+      } catch (error) {
+        if (isEmailTaken(error)) {
+          pendingSignups.delete(signupId);
+          return json(409, { error: "account_exists" });
+        }
+        throw error;
+      }
 
       pendingSignups.delete(signupId);
-      return new Response(null, {
-        status: 303,
-        headers: { location: "/home", "set-cookie": created.cookie },
-      });
+      // The session cookie, plus the device cookie marking this browser as one the
+      // person signs in on, so their next sign-in here raises no new-device alert.
+      const headers = new Headers({ location: "/home" });
+      headers.append("set-cookie", created.cookie);
+      headers.append("set-cookie", deviceCookieFor(created.session.userId, { hmacKey, random }));
+      return new Response(null, { status: 303, headers });
     } catch (error) {
       return handleError(error);
     }

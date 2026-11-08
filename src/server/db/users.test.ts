@@ -54,7 +54,7 @@ import { test } from "node:test";
 import assert from "node:assert/strict";
 import { z } from "zod";
 
-import { createUser, getUserById, getUserByEmail } from "./users";
+import { createUser, getUserById, getUserByEmail, normaliseEmail } from "./users";
 import { freshDb } from "../../test/db";
 import { loadMigrations, runMigrations, type Db } from "./index";
 import { parseBody, HttpError } from "../http/validate";
@@ -198,7 +198,9 @@ test("getUserByEmail binds the email as a parameter, never woven into the SQL te
 
   assert.equal(db.calls.length, 1, "email lookup issues exactly one query");
   const call = db.calls[0]!;
-  assert.deepEqual(call.values, [probe], "the email travels as a bound value");
+  // The email travels as a bound value — in its normalised (trimmed, lower-case) form,
+  // review fix B8 — and never as SQL text.
+  assert.deepEqual(call.values, [probe.trim().toLowerCase()], "the email travels as a bound value");
   assert.ok(call.text.includes("$1"), "the statement uses a placeholder, not an inlined value");
   assert.ok(
     !call.text.includes(probe),
@@ -338,7 +340,11 @@ test("a handler cannot be SQL-injected: a probe email is stored as data and the 
     assert.equal(await tableExists(db, "users"), true, "the users table must still exist");
     const stored = await getUserByEmail(db, probeEmail);
     assert.ok(stored != null, "the probe is stored as an ordinary email value");
-    assert.equal(stored?.email, probeEmail, "it is stored verbatim, not interpreted as SQL");
+    assert.equal(
+      stored?.email,
+      normaliseEmail(probeEmail),
+      "it is stored as data (in its normalised, lower-case form), not interpreted as SQL",
+    );
   } finally {
     await db.close();
   }
@@ -370,6 +376,53 @@ test("the users migration applies and re-running every migration changes nothing
     // no throw together prove the migration's second run changes nothing.
     const again = await runMigrations(db, migrations);
     assert.deepEqual(again, [], "a second migration run must change nothing");
+  } finally {
+    await db.close();
+  }
+});
+
+// --- Review fix B8 — one account per address, whatever its case or spacing ---------
+
+test("normaliseEmail trims and lower-cases an address", () => {
+  assert.equal(normaliseEmail("  Oren@Example.COM \t"), "oren@example.com");
+});
+
+test("createUser stores the normalised address and getUserByEmail finds it in any case or spacing", async () => {
+  const db = await freshDb();
+  try {
+    const created = await createUser(db, { email: " Oren@Example.COM ", wrappedDek: wrappedDekFor("oren") });
+    assert.equal(created.email, "oren@example.com", "the stored address is trimmed and lower-cased");
+    for (const variant of ["oren@example.com", "OREN@EXAMPLE.COM", "  Oren@example.com  "]) {
+      assert.equal((await getUserByEmail(db, variant))?.id, created.id, `"${variant}" finds the account`);
+    }
+  } finally {
+    await db.close();
+  }
+});
+
+test("a second account for the same address in a different case is refused", async () => {
+  const db = await freshDb();
+  try {
+    await createUser(db, { email: "Oren@Example.com", wrappedDek: wrappedDekFor("first") });
+    await assert.rejects(
+      createUser(db, { email: "oren@example.com", wrappedDek: wrappedDekFor("second") }),
+      "the address is already taken",
+    );
+    // The database itself refuses a case variant, even written around the module.
+    await assert.rejects(
+      db.query("INSERT INTO users (email, wrapped_dek) VALUES ($1, $2)", ["OREN@EXAMPLE.COM", "x"]),
+      "the unique index on lower(email) refuses a case variant",
+    );
+  } finally {
+    await db.close();
+  }
+});
+
+test("an account stored before normalisation (mixed case) is still found by its address", async () => {
+  const db = await freshDb();
+  try {
+    await db.query("INSERT INTO users (email, wrapped_dek) VALUES ($1, $2)", ["Legacy@Example.com", "x"]);
+    assert.ok(await getUserByEmail(db, "legacy@example.com"), "found by the lower-case address");
   } finally {
     await db.close();
   }

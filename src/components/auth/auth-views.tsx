@@ -3,6 +3,7 @@ import * as React from "react";
 import { Button } from "../ui/button";
 import { Field } from "../ui/field";
 import { Wordmark } from "../shell/wordmark";
+import { withReturnPath } from "../../server/auth/return-path";
 
 // Auth page views (task E04-S12) — the Signup, Signin, Recover and Device screens
 // as plain, step-driven PRESENTATION components. They render from props alone: no
@@ -18,7 +19,9 @@ import { Wordmark } from "../shell/wordmark";
 
 // --- shared layout ---------------------------------------------------------
 
-// One screen: a page heading, an optional plain lead sentence, then the step body.
+// One screen: a page heading, an optional plain lead sentence, then the step body. The
+// screen is the page's <main> landmark, and step errors are rendered with role="alert"
+// so a screen reader announces them when they appear (WCAG 4.1.3).
 function AuthScreen({
   title,
   lead,
@@ -29,14 +32,66 @@ function AuthScreen({
   children: React.ReactNode;
 }) {
   return (
-    <div className="mx-auto flex w-full max-w-sm flex-col gap-6 px-4 py-8 sm:px-6">
+    <main className="mx-auto flex w-full max-w-sm flex-col gap-6 px-4 py-8 sm:px-6">
       <Wordmark href="/" />
       <h1 className="text-2xl font-semibold tracking-tight text-fg">{title}</h1>
       {lead ? <p className="text-sm text-fg-muted">{lead}</p> : null}
       {children}
-    </div>
+    </main>
   );
 }
+
+// A raw base32 recovery code shown in groups of four ("ABCD EFGH …", design §4.2), so it
+// is easy to copy by hand; the server accepts it back with or without the spaces. A code
+// that already carries separators is shown as given.
+function groupRecoveryCode(code: string | undefined): string | undefined {
+  if (code === undefined || !/^[A-Z2-7]{8,}$/.test(code)) return code;
+  return code.match(/.{1,4}/g)!.join(" ");
+}
+
+// The other ways in, as plain links under a screen's main action: sign-in offers
+// sign-up, account recovery and signing in by approving from another device; the other
+// screens lead back to sign-in. Each link carries the return path along (when there is
+// one), so moving between auth screens never loses where the person was going.
+interface AuthLink {
+  readonly href: string;
+  readonly label: string;
+}
+
+function AuthLinks({ links, returnTo }: { links: readonly AuthLink[]; returnTo?: string }) {
+  return (
+    <nav aria-label="Other ways to sign in">
+      <ul className="flex flex-col gap-2 text-sm">
+        {links.map((link) => (
+          <li key={link.href}>
+            <a
+              href={withReturnPath(link.href, returnTo)}
+              className="rounded-card text-accent underline-offset-4 hover:underline focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-focus"
+            >
+              {link.label}
+            </a>
+          </li>
+        ))}
+      </ul>
+    </nav>
+  );
+}
+
+const SIGNIN_LINKS: readonly AuthLink[] = [
+  { href: "/signup", label: "New here? Create an account" },
+  { href: "/recover", label: "Lost your passkey? Recover your account" },
+  { href: "/device", label: "Sign in by approving from another device" },
+];
+
+const SIGNUP_LINKS: readonly AuthLink[] = [
+  { href: "/signin", label: "Already have an account? Sign in" },
+];
+
+const RECOVER_LINKS: readonly AuthLink[] = [
+  { href: "/signin", label: "Found your passkey? Sign in" },
+];
+
+const DEVICE_LINKS: readonly AuthLink[] = [{ href: "/signin", label: "Back to sign in" }];
 
 // The read-only, shown-once recovery code, a tick to confirm it is saved, and the
 // gated Continue. The code is rendered as plain text (never prefilled into an editable
@@ -62,7 +117,7 @@ function SaveRecoveryCode({
       <div className="flex flex-col gap-1.5">
         <span className="text-sm font-medium text-fg">Your recovery code</span>
         <p className="rounded-card border border-line bg-surface-muted px-3 py-3 text-center font-mono text-lg tracking-widest text-fg">
-          {code}
+          {groupRecoveryCode(code)}
         </p>
       </div>
       <label htmlFor={checkboxId} className="flex items-start gap-2 text-sm text-fg">
@@ -78,7 +133,11 @@ function SaveRecoveryCode({
       <Button type="button" variant="primary" disabled={!savedConfirmed} onClick={onContinue}>
         Continue
       </Button>
-      {error ? <p className="text-sm text-danger">{error}</p> : null}
+      {error ? (
+        <p role="alert" className="text-sm text-danger">
+          {error}
+        </p>
+      ) : null}
     </div>
   );
 }
@@ -105,6 +164,9 @@ export interface SignupViewProps {
   onSubmit?: () => void;
   onCreatePasskey?: () => void;
   onConfirm?: () => void;
+  // Where to go after signing in (a validated relative path), carried on the links
+  // to the other auth screens.
+  returnTo?: string;
 }
 
 export function SignupView({
@@ -122,6 +184,7 @@ export function SignupView({
   onSubmit,
   onCreatePasskey,
   onConfirm,
+  returnTo,
 }: SignupViewProps) {
   const handleSubmit = (event: React.FormEvent<HTMLFormElement>) => {
     event.preventDefault();
@@ -153,6 +216,7 @@ export function SignupView({
               Continue
             </Button>
           </form>
+          <AuthLinks links={SIGNUP_LINKS} returnTo={returnTo} />
         </AuthScreen>
       );
     case "code":
@@ -187,7 +251,11 @@ export function SignupView({
           <Button type="button" variant="primary" onClick={onCreatePasskey}>
             Create a passkey
           </Button>
-          {error ? <p className="text-sm text-danger">{error}</p> : null}
+          {error ? (
+            <p role="alert" className="text-sm text-danger">
+              {error}
+            </p>
+          ) : null}
         </AuthScreen>
       );
     case "recovery":
@@ -227,6 +295,9 @@ export interface SigninViewProps {
   onPasskey?: () => void;
   onUseAuthenticatorApp?: () => void;
   onSubmitCode?: () => void;
+  // Where to go after signing in (a validated relative path), carried on the links
+  // to the other auth screens.
+  returnTo?: string;
 }
 
 export function SigninView({
@@ -239,6 +310,7 @@ export function SigninView({
   onPasskey,
   onUseAuthenticatorApp,
   onSubmitCode,
+  returnTo,
 }: SigninViewProps) {
   switch (step) {
     case "passkey":
@@ -266,10 +338,15 @@ export function SigninView({
               Sign in with your passkey
             </Button>
           </form>
-          {error ? <p className="text-sm text-danger">{error}</p> : null}
+          {error ? (
+            <p role="alert" className="text-sm text-danger">
+              {error}
+            </p>
+          ) : null}
           <Button type="button" variant="secondary" onClick={onUseAuthenticatorApp}>
             Use my authenticator app instead
           </Button>
+          <AuthLinks links={SIGNIN_LINKS} returnTo={returnTo} />
         </AuthScreen>
       );
     case "code":
@@ -306,7 +383,12 @@ export function SigninView({
               Sign in
             </Button>
           </form>
-          {error ? <p className="text-sm text-danger">{error}</p> : null}
+          {error ? (
+            <p role="alert" className="text-sm text-danger">
+              {error}
+            </p>
+          ) : null}
+          <AuthLinks links={SIGNIN_LINKS} returnTo={returnTo} />
         </AuthScreen>
       );
   }
@@ -314,50 +396,61 @@ export function SigninView({
 
 // --- recover (after losing every passkey) ----------------------------------
 
-export type RecoverStep = "identify" | "recovery-code" | "passkey" | "new-recovery";
+export type RecoverStep = "identify" | "email-code" | "recovery-code" | "passkey" | "new-recovery";
 
 // RecoverView renders from props alone. The optional interactive wiring is supplied by
 // the client recovery flow (E04-S33) to drive the screen; when it is omitted the view
 // renders as the static copy the render tests pin. `recoveryCode` is the NEW shown-once
 // replacement code (new-recovery step); `recoveryCodeValue` is the existing code the
-// person types at the recovery-code step.
+// person types at the recovery-code step; `emailCode` is the one-time code from the
+// email identify sent (email-code step).
 export interface RecoverViewProps {
   step: RecoverStep;
   recoveryCode?: string;
   email?: string;
+  emailCode?: string;
   recoveryCodeValue?: string;
   error?: string;
   savedConfirmed?: boolean;
   onEmailChange?: (value: string) => void;
+  onEmailCodeChange?: (value: string) => void;
   onRecoveryCodeChange?: (value: string) => void;
   onSavedConfirmedChange?: (value: boolean) => void;
   onSubmitIdentify?: () => void;
+  onSubmitEmailCode?: () => void;
   onSubmitRecoveryCode?: () => void;
   onCreatePasskey?: () => void;
   onConfirm?: () => void;
+  // Where to go after signing in (a validated relative path), carried on the links
+  // to the other auth screens.
+  returnTo?: string;
 }
 
 export function RecoverView({
   step,
   recoveryCode,
   email,
+  emailCode,
   recoveryCodeValue,
   error,
   savedConfirmed,
   onEmailChange,
+  onEmailCodeChange,
   onRecoveryCodeChange,
   onSavedConfirmedChange,
   onSubmitIdentify,
+  onSubmitEmailCode,
   onSubmitRecoveryCode,
   onCreatePasskey,
   onConfirm,
+  returnTo,
 }: RecoverViewProps) {
   switch (step) {
     case "identify":
       return (
         <AuthScreen
           title="Recover your account"
-          lead="First, let's check it's you. Enter your email and the code we'll send you."
+          lead="First, let's check it's you. Enter your email and we'll send you a code."
         >
           <form
             className="flex flex-col gap-4"
@@ -375,7 +468,36 @@ export function RecoverView({
               onChange={(event) => onEmailChange?.(event.target.value)}
               error={error}
             />
-            <Field label="Your code" name="code" type="text" inputMode="numeric" autoComplete="one-time-code" />
+            <Button type="submit" variant="primary">
+              Send me a code
+            </Button>
+          </form>
+          <AuthLinks links={RECOVER_LINKS} returnTo={returnTo} />
+        </AuthScreen>
+      );
+    case "email-code":
+      return (
+        <AuthScreen
+          title="Check your email"
+          lead="If there's an account for that address, we've emailed it a code. Enter it here."
+        >
+          <form
+            className="flex flex-col gap-4"
+            onSubmit={(event) => {
+              event.preventDefault();
+              onSubmitEmailCode?.();
+            }}
+          >
+            <Field
+              label="Your code"
+              name="code"
+              type="text"
+              inputMode="numeric"
+              autoComplete="one-time-code"
+              value={emailCode}
+              onChange={(event) => onEmailCodeChange?.(event.target.value)}
+              error={error}
+            />
             <Button type="submit" variant="primary">
               Continue
             </Button>
@@ -419,7 +541,11 @@ export function RecoverView({
           <Button type="button" variant="primary" onClick={onCreatePasskey}>
             Create a passkey
           </Button>
-          {error ? <p className="text-sm text-danger">{error}</p> : null}
+          {error ? (
+            <p role="alert" className="text-sm text-danger">
+              {error}
+            </p>
+          ) : null}
         </AuthScreen>
       );
     case "new-recovery":
@@ -455,10 +581,17 @@ export interface DeviceViewProps {
   email?: string;
   code?: string;
   error?: string;
+  // A plain status line under the form (e.g. the code was emailed).
+  notice?: string;
   onEmailChange?: (value: string) => void;
   onCodeChange?: (value: string) => void;
+  // "Email me a code": send the one-time code to the email entered above.
+  onSendCode?: () => void;
   onSubmit?: () => void;
   onStartAgain?: () => void;
+  // Where to go after signing in (a validated relative path), carried on the links
+  // to the other auth screens.
+  returnTo?: string;
 }
 
 export function DeviceView({
@@ -466,17 +599,20 @@ export function DeviceView({
   email,
   code,
   error,
+  notice,
   onEmailChange,
   onCodeChange,
+  onSendCode,
   onSubmit,
   onStartAgain,
+  returnTo,
 }: DeviceViewProps) {
   switch (step) {
     case "code":
       return (
         <AuthScreen
           title="Add this device"
-          lead="Enter your email and the code we emailed you to add this device to your account."
+          lead="Enter your email and we'll email you a code. Then enter the code to add this device to your account."
         >
           <form
             className="flex flex-col gap-4"
@@ -493,6 +629,14 @@ export function DeviceView({
               value={email}
               onChange={(event) => onEmailChange?.(event.target.value)}
             />
+            <Button type="button" variant="secondary" onClick={onSendCode}>
+              Email me a code
+            </Button>
+            {notice ? (
+              <p role="status" className="text-sm text-fg-muted">
+                {notice}
+              </p>
+            ) : null}
             <Field
               label="Your code"
               name="code"
@@ -507,6 +651,7 @@ export function DeviceView({
               Continue
             </Button>
           </form>
+          <AuthLinks links={DEVICE_LINKS} returnTo={returnTo} />
         </AuthScreen>
       );
     case "confirm":

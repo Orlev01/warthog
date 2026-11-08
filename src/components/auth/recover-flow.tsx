@@ -8,6 +8,7 @@ import type {
 } from "@simplewebauthn/browser";
 
 import { RecoverView, type RecoverStep } from "./auth-views";
+import { safeReturnPath } from "../../server/auth/return-path";
 
 // E04-S33 — Client account recovery flow.
 //
@@ -17,11 +18,13 @@ import { RecoverView, type RecoverStep } from "./auth-views";
 // `RecoverFlow` component is a thin binding over the controller: inputs read its
 // `state`, buttons call its methods, and a change notifier re-renders.
 //
-// The controller walks a person who has lost every device through the four recovery
+// The controller walks a person who has lost every device through the five recovery
 // requests (the E04-S29 handler, surfaced over HTTP by E04-S30 at
-// POST /api/auth/recover/[step]) and the passkey ceremony between:
+// POST /api/auth/recover/[step]) and the passkey ceremony between. Recovery is "email
+// code plus recovery code" (brief; review fix B2), so the emailed code comes first:
 //
 //   identify       → POST identify        { email }            → keep { recoveryId }
+//   email code     → POST verify-email     { recoveryId, code }
 //   recovery code  → POST verify-code      { recoveryId, recoveryCode }
 //                    → keep { registrationOptions }
 //   new passkey    → startRegistration({ optionsJSON: registrationOptions })
@@ -48,6 +51,9 @@ export interface RecoverFlowDeps {
     useAutoRegister?: boolean;
   }) => Promise<RegistrationResponseJSON>;
   readonly navigate: (path: string) => void;
+  // Where to go after success: the page's validated `?next=` (review fix B6). It is
+  // checked again here, and anything unsafe — or nothing — means /home.
+  readonly returnTo?: string;
   // Optional: the component wires this to re-render after each state change. The
   // controller works standalone (the unit tests) when it is omitted.
   readonly onChange?: () => void;
@@ -56,6 +62,8 @@ export interface RecoverFlowDeps {
 export interface RecoverFlowState {
   readonly phase: RecoverPhase;
   readonly email: string;
+  // The one-time code from the email identify sent.
+  readonly emailCode: string;
   // The EXISTING saved recovery code the person types at the recovery-code step.
   readonly recoveryCode: string;
   readonly savedConfirmed: boolean;
@@ -67,9 +75,11 @@ export interface RecoverFlowState {
 export interface RecoverFlowController {
   getState(): RecoverFlowState;
   setEmail(value: string): void;
+  setEmailCode(value: string): void;
   setRecoveryCode(value: string): void;
   setSavedConfirmed(value: boolean): void;
   submitIdentify(): Promise<void>;
+  submitEmailCode(): Promise<void>;
   submitRecoveryCode(): Promise<void>;
   createPasskey(): Promise<void>;
   confirm(): Promise<void>;
@@ -77,7 +87,7 @@ export interface RecoverFlowController {
 
 const API_BASE = "/api/auth/recover";
 
-type StepPath = "identify" | "verify-code" | "register-passkey" | "finish";
+type StepPath = "identify" | "verify-email" | "verify-code" | "register-passkey" | "finish";
 
 // Plain-English copy for a failed step — a real sentence a person can act on, never a
 // raw machine code (the server speaks `invalid_code`, `unknown_recovery`,
@@ -89,6 +99,8 @@ function stepErrorCopy(step: StepPath): string {
   switch (step) {
     case "identify":
       return "We couldn't start recovering your account. Check your email address and try again.";
+    case "verify-email":
+      return "That code didn't match. Check the code from your email and try again.";
     case "verify-code":
       return "That recovery code didn't match. Check the code you saved and try again.";
     case "register-passkey":
@@ -97,6 +109,14 @@ function stepErrorCopy(step: StepPath): string {
       return "We couldn't finish recovering your account. Please try again.";
   }
 }
+
+// Too many wrong email codes for this address in a short time (429).
+const EMAIL_CODE_THROTTLED_COPY =
+  "Too many tries with that code. Please wait a few minutes, then try again.";
+
+// The recovery was closed after too many wrong recovery codes (429): start again.
+const RECOVERY_CLOSED_COPY =
+  "That recovery code didn't match too many times. Start again, and we'll email you a new code.";
 
 const PASSKEY_CANCELLED_COPY =
   "Setting up your new passkey was cancelled. You can try again when you're ready.";
@@ -110,6 +130,7 @@ export function createRecoverFlow(deps: RecoverFlowDeps): RecoverFlowController 
   let state: RecoverFlowState = {
     phase: "identify",
     email: "",
+    emailCode: "",
     recoveryCode: "",
     savedConfirmed: false,
   };
@@ -149,6 +170,21 @@ export function createRecoverFlow(deps: RecoverFlowDeps): RecoverFlowController 
     }
     const body = await readJson(response);
     recoveryId = typeof body.recoveryId === "string" ? body.recoveryId : undefined;
+    set({ phase: "email-code", error: undefined });
+  }
+
+  async function submitEmailCode(): Promise<void> {
+    if (recoveryId === undefined) {
+      set({ error: stepErrorCopy("verify-email") });
+      return;
+    }
+    const response = await post("verify-email", { recoveryId, code: state.emailCode });
+    if (!response || !response.ok) {
+      set({
+        error: response?.status === 429 ? EMAIL_CODE_THROTTLED_COPY : stepErrorCopy("verify-email"),
+      });
+      return;
+    }
     set({ phase: "recovery-code", error: undefined });
   }
 
@@ -161,6 +197,12 @@ export function createRecoverFlow(deps: RecoverFlowDeps): RecoverFlowController 
       recoveryId,
       recoveryCode: state.recoveryCode,
     });
+    if (response?.status === 429) {
+      // The server closed this recovery: begin again from the email step.
+      recoveryId = undefined;
+      set({ phase: "identify", emailCode: "", recoveryCode: "", error: RECOVERY_CLOSED_COPY });
+      return;
+    }
     if (!response || !response.ok) {
       set({ error: stepErrorCopy("verify-code") });
       return;
@@ -214,15 +256,17 @@ export function createRecoverFlow(deps: RecoverFlowDeps): RecoverFlowController 
       return;
     }
     set({ error: undefined });
-    deps.navigate("/home");
+    deps.navigate(safeReturnPath(deps.returnTo));
   }
 
   return {
     getState: () => state,
     setEmail: (value) => set({ email: value }),
+    setEmailCode: (value) => set({ emailCode: value }),
     setRecoveryCode: (value) => set({ recoveryCode: value }),
     setSavedConfirmed: (value) => set({ savedConfirmed: value }),
     submitIdentify,
+    submitEmailCode,
     submitRecoveryCode,
     createPasskey,
     confirm,
@@ -243,6 +287,8 @@ export interface RecoverFlowProps {
   readonly fetch?: typeof fetch;
   readonly startRegistration?: RecoverFlowDeps["startRegistration"];
   readonly navigate?: (path: string) => void;
+  // The validated return path the page read from `?next=`.
+  readonly returnTo?: string;
 }
 
 export function RecoverFlow(props: RecoverFlowProps = {}): React.ReactElement {
@@ -253,6 +299,7 @@ export function RecoverFlow(props: RecoverFlowProps = {}): React.ReactElement {
       fetch: props.fetch ?? defaultFetch,
       startRegistration: props.startRegistration ?? startRegistration,
       navigate: props.navigate ?? defaultNavigate,
+      returnTo: props.returnTo,
       onChange: () => forceUpdate(),
     });
   }
@@ -261,17 +308,23 @@ export function RecoverFlow(props: RecoverFlowProps = {}): React.ReactElement {
 
   return (
     <RecoverView
+      returnTo={props.returnTo}
       step={state.phase}
       email={state.email}
+      emailCode={state.emailCode}
       recoveryCodeValue={state.recoveryCode}
       recoveryCode={state.newRecoveryCode}
       savedConfirmed={state.savedConfirmed}
       error={state.error}
       onEmailChange={(value) => flow.setEmail(value)}
+      onEmailCodeChange={(value) => flow.setEmailCode(value)}
       onRecoveryCodeChange={(value) => flow.setRecoveryCode(value)}
       onSavedConfirmedChange={(value) => flow.setSavedConfirmed(value)}
       onSubmitIdentify={() => {
         void flow.submitIdentify();
+      }}
+      onSubmitEmailCode={() => {
+        void flow.submitEmailCode();
       }}
       onSubmitRecoveryCode={() => {
         void flow.submitRecoveryCode();

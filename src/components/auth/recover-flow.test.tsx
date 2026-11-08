@@ -12,6 +12,8 @@
 //
 //   identify       → POST /api/auth/recover/identify        { email }
 //                    → keeps the returned { recoveryId }
+//   email code     → POST /api/auth/recover/verify-email     { recoveryId, code }
+//                    (review fix B2: recovery is "email code plus recovery code")
 //   recovery code  → POST /api/auth/recover/verify-code      { recoveryId, recoveryCode }
 //                    → keeps the returned { registrationOptions }
 //   new passkey    → startRegistration({ optionsJSON: registrationOptions })  (@simplewebauthn/browser)
@@ -99,6 +101,7 @@ const EMAIL = "robin@example.com";
 const RECOVERY_ID = "9f3c1a7e5b2d4680ab12cd34ef56a7b89f3c1a7e5b2d4680ab12cd34ef56a7b8";
 const TYPED_RECOVERY_CODE = "OLD1-2222-3333-4444"; // the person's existing saved code (input)
 const NEW_RECOVERY_CODE = "NEW9-3P4R-9XTD-6WHF"; // the replacement shown once, never re-sent
+const EMAIL_CODE = "482913"; // the one-time code identify emailed
 
 // The registration options the server hands back at verify-code and that the flow must
 // forward VERBATIM into the WebAuthn seam (startRegistration's optionsJSON).
@@ -126,7 +129,7 @@ const ATTESTATION = {
 
 // ── A programmable, recording fake fetch keyed by the recovery step path ────────────────
 
-type StepKey = "identify" | "verify-code" | "register-passkey" | "finish";
+type StepKey = "identify" | "verify-email" | "verify-code" | "register-passkey" | "finish";
 
 interface RecordedCall {
   step: StepKey;
@@ -138,6 +141,7 @@ interface RecordedCall {
 
 function stepOf(url: string): StepKey {
   if (url.includes("/api/auth/recover/identify")) return "identify";
+  if (url.includes("/api/auth/recover/verify-email")) return "verify-email";
   if (url.includes("/api/auth/recover/verify-code")) return "verify-code";
   if (url.includes("/api/auth/recover/register-passkey")) return "register-passkey";
   if (url.includes("/api/auth/recover/finish")) return "finish";
@@ -159,6 +163,7 @@ function makeFetch() {
   // confirm) treat success the same way.
   const responders: Record<StepKey, () => Response> = {
     identify: () => jsonResponse(200, { recoveryId: RECOVERY_ID }),
+    "verify-email": () => jsonResponse(200, { ok: true }),
     "verify-code": () => jsonResponse(200, { registrationOptions: REG_OPTIONS }),
     "register-passkey": () => jsonResponse(200, { recoveryCode: NEW_RECOVERY_CODE }),
     finish: () => jsonResponse(200, { ok: true }),
@@ -227,6 +232,8 @@ type Ctx = ReturnType<typeof setup>;
 async function driveToNewRecovery(ctx: Ctx): Promise<void> {
   ctx.flow.setEmail(EMAIL);
   await ctx.flow.submitIdentify();
+  ctx.flow.setEmailCode(EMAIL_CODE);
+  await ctx.flow.submitEmailCode();
   ctx.flow.setRecoveryCode(TYPED_RECOVERY_CODE);
   await ctx.flow.submitRecoveryCode();
   await ctx.flow.createPasskey();
@@ -259,11 +266,13 @@ function assertPlainEnglish(message: unknown, ctx: string): asserts message is s
 
 // ── AC1 — the ordered, correctly-valued request sequence, then navigate to /home ────────
 
-test("posts identify, verify-code, register-passkey and finish in order, then navigates to /home", async () => {
+test("posts identify, verify-email, verify-code, register-passkey and finish in order, then navigates to /home", async () => {
   const ctx = setup();
 
   ctx.flow.setEmail(EMAIL);
   await ctx.flow.submitIdentify();
+  ctx.flow.setEmailCode(EMAIL_CODE);
+  await ctx.flow.submitEmailCode();
   ctx.flow.setRecoveryCode(TYPED_RECOVERY_CODE);
   await ctx.flow.submitRecoveryCode();
   await ctx.flow.createPasskey();
@@ -277,11 +286,11 @@ test("posts identify, verify-code, register-passkey and finish in order, then na
   ctx.flow.setSavedConfirmed(true);
   await ctx.flow.confirm();
 
-  // The four steps, in exactly this order, each a POST.
+  // The five steps, in exactly this order, each a POST.
   assert.deepEqual(
     ctx.calls.map((c) => c.step),
-    ["identify", "verify-code", "register-passkey", "finish"],
-    "the flow must post the four recovery steps in order",
+    ["identify", "verify-email", "verify-code", "register-passkey", "finish"],
+    "the flow must post the five recovery steps in order",
   );
   for (const c of ctx.calls) {
     assert.equal(c.method, "POST", `step "${c.step}" must be a POST`);
@@ -290,10 +299,17 @@ test("posts identify, verify-code, register-passkey and finish in order, then na
   // identify carries the entered email.
   assert.equal(ctx.calls[0]!.body.email, EMAIL, "identify must send the entered email");
 
+  // verify-email carries the recoveryId and the code from the email.
+  assert.deepEqual(
+    ctx.calls[1]!.body,
+    { recoveryId: RECOVERY_ID, code: EMAIL_CODE },
+    "verify-email must carry the returned recoveryId and the emailed code",
+  );
+
   // verify-code carries the server-returned recoveryId and the EXISTING code the person typed.
-  assert.equal(ctx.calls[1]!.body.recoveryId, RECOVERY_ID, "verify-code must carry the returned recoveryId");
+  assert.equal(ctx.calls[2]!.body.recoveryId, RECOVERY_ID, "verify-code must carry the returned recoveryId");
   assert.equal(
-    ctx.calls[1]!.body.recoveryCode,
+    ctx.calls[2]!.body.recoveryCode,
     TYPED_RECOVERY_CODE,
     "verify-code must send the existing recovery code the person typed",
   );
@@ -306,15 +322,15 @@ test("posts identify, verify-code, register-passkey and finish in order, then na
   );
 
   // register-passkey carries the recoveryId and the attestation from the WebAuthn seam.
-  assert.equal(ctx.calls[2]!.body.recoveryId, RECOVERY_ID, "register-passkey must carry the returned recoveryId");
+  assert.equal(ctx.calls[3]!.body.recoveryId, RECOVERY_ID, "register-passkey must carry the returned recoveryId");
   assert.deepEqual(
-    ctx.calls[2]!.body.registrationResponse,
+    ctx.calls[3]!.body.registrationResponse,
     ATTESTATION,
     "register-passkey must post the attestation from the WebAuthn seam",
   );
 
   // finish carries the recoveryId (and nothing the server does not need).
-  assert.equal(ctx.calls[3]!.body.recoveryId, RECOVERY_ID, "finish must carry the returned recoveryId");
+  assert.equal(ctx.calls[4]!.body.recoveryId, RECOVERY_ID, "finish must carry the returned recoveryId");
 
   // ...and the person lands on /home.
   assert.deepEqual(ctx.navCalls, ["/home"], "a successful finish must navigate to /home");
@@ -326,7 +342,12 @@ test("each step advances to a distinct next step", async () => {
 
   ctx.flow.setEmail(EMAIL);
   await ctx.flow.submitIdentify();
+  const p1a = ctx.flow.getState().phase;
+  ctx.flow.setEmailCode(EMAIL_CODE);
+  await ctx.flow.submitEmailCode();
   const p1 = ctx.flow.getState().phase;
+  assert.notEqual(p1a, p0, "identifying must advance to the email-code step");
+  assert.notEqual(p1, p1a, "verifying the email code must advance to the recovery-code step");
 
   ctx.flow.setRecoveryCode(TYPED_RECOVERY_CODE);
   await ctx.flow.submitRecoveryCode();
@@ -465,6 +486,8 @@ test("a 4xx from verify-code keeps the person on the recovery-code step, with th
 
   ctx.flow.setEmail(EMAIL);
   await ctx.flow.submitIdentify();
+  ctx.flow.setEmailCode(EMAIL_CODE);
+  await ctx.flow.submitEmailCode();
   const atRecoveryCode = ctx.flow.getState().phase;
 
   ctx.flow.setRecoveryCode(TYPED_RECOVERY_CODE);
@@ -489,6 +512,8 @@ test("a 4xx from register-passkey keeps the person on the passkey step with plai
 
   ctx.flow.setEmail(EMAIL);
   await ctx.flow.submitIdentify();
+  ctx.flow.setEmailCode(EMAIL_CODE);
+  await ctx.flow.submitEmailCode();
   ctx.flow.setRecoveryCode(TYPED_RECOVERY_CODE);
   await ctx.flow.submitRecoveryCode();
   const atPasskey = ctx.flow.getState().phase;
@@ -533,6 +558,8 @@ test("a cancelled passkey prompt stays on the passkey step, posts nothing, and c
 
   ctx.flow.setEmail(EMAIL);
   await ctx.flow.submitIdentify();
+  ctx.flow.setEmailCode(EMAIL_CODE);
+  await ctx.flow.submitEmailCode();
   ctx.flow.setRecoveryCode(TYPED_RECOVERY_CODE);
   await ctx.flow.submitRecoveryCode();
   const atPasskey = ctx.flow.getState().phase;
@@ -684,4 +711,79 @@ test("GET /recover renders the flow's first step: an accessibly-labelled email e
     live.length >= 1,
     `the first step must offer a live, named control to continue (not a dead screen), got: ${markup}`,
   );
+});
+
+// ── Review fix B2 — the email one-time code step ────────────────────────────────────────
+
+test("identify leads to the email-code step; a wrong email code keeps the person there with plain copy", async () => {
+  const ctx = setup();
+  ctx.flow.setEmail(EMAIL);
+  await ctx.flow.submitIdentify();
+  const atEmailCode = ctx.flow.getState().phase;
+  assert.equal(atEmailCode, "email-code", "identify advances to the email-code step");
+
+  ctx.responders["verify-email"] = () => jsonResponse(400, { error: "invalid_code" });
+  ctx.flow.setEmailCode("000000");
+  await ctx.flow.submitEmailCode();
+  const s = ctx.flow.getState();
+  assert.equal(s.phase, atEmailCode, "a wrong email code keeps the person on the email-code step");
+  assertPlainEnglish(s.error, "verify-email 4xx");
+  assert.equal(ctx.calls.filter((c) => c.step === "verify-code").length, 0, "no recovery code is sent yet");
+});
+
+test("a throttled email code (429) asks the person to wait", async () => {
+  const ctx = setup();
+  ctx.flow.setEmail(EMAIL);
+  await ctx.flow.submitIdentify();
+  ctx.responders["verify-email"] = () => jsonResponse(429, { error: "throttled" });
+  ctx.flow.setEmailCode(EMAIL_CODE);
+  await ctx.flow.submitEmailCode();
+  const s = ctx.flow.getState();
+  assert.equal(s.phase, "email-code");
+  assertPlainEnglish(s.error, "verify-email 429");
+  assert.match(s.error, /wait/i, "the copy asks the person to wait");
+});
+
+test("too many wrong recovery codes (429) sends the person back to the start with plain copy", async () => {
+  const ctx = setup();
+  ctx.flow.setEmail(EMAIL);
+  await ctx.flow.submitIdentify();
+  ctx.flow.setEmailCode(EMAIL_CODE);
+  await ctx.flow.submitEmailCode();
+  ctx.responders["verify-code"] = () => jsonResponse(429, { error: "too_many_attempts" });
+  ctx.flow.setRecoveryCode(TYPED_RECOVERY_CODE);
+  await ctx.flow.submitRecoveryCode();
+  const s = ctx.flow.getState();
+  assert.equal(s.phase, "identify", "the closed recovery restarts from the first step");
+  assert.equal(s.email, EMAIL, "the email the person typed is kept");
+  assertPlainEnglish(s.error, "verify-code 429");
+});
+
+// ── Review fix B6 — recovery goes back to a safe return path after finishing ──────────
+
+test("after finishing, recovery goes to a safe return path, and to /home for an unsafe one", async () => {
+  for (const [returnTo, expected] of [
+    ["/oauth/consent", "/oauth/consent"],
+    ["//evil.example", "/home"],
+  ] as const) {
+    const { fetchImpl } = makeFetch();
+    const start = makeStart();
+    const navCalls: string[] = [];
+    const flow = createRecoverFlow({
+      fetch: fetchImpl as typeof fetch,
+      startRegistration: start.fn,
+      navigate: (path: string) => void navCalls.push(path),
+      returnTo,
+    });
+    flow.setEmail(EMAIL);
+    await flow.submitIdentify();
+    flow.setEmailCode(EMAIL_CODE);
+    await flow.submitEmailCode();
+    flow.setRecoveryCode(TYPED_RECOVERY_CODE);
+    await flow.submitRecoveryCode();
+    await flow.createPasskey();
+    flow.setSavedConfirmed(true);
+    await flow.confirm();
+    assert.deepEqual(navCalls, [expected], `returnTo ${returnTo}`);
+  }
 });

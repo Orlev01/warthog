@@ -614,3 +614,111 @@ test("a SQL-injection probe in the email field is bound as data and cannot alter
     await db.close();
   }
 });
+
+// =====================================================================================
+// Review fix B9 — confirming a sign-up writes the account in ONE transaction: a failure
+// part-way leaves nothing behind (so the address can sign up again), and an address
+// taken in the meantime is a clear 409, not a 500 with a half-made account.
+// =====================================================================================
+
+// A Db that forwards to `db` but fails the first statement matching `pattern` once armed.
+function failingOnce(db: Db, pattern: RegExp): { db: Db; arm(): void } {
+  let armed = false;
+  return {
+    db: {
+      async query(text, values) {
+        if (armed && pattern.test(text)) {
+          armed = false;
+          throw new Error("simulated database failure");
+        }
+        return db.query(text, values);
+      },
+      async close() {},
+    },
+    arm() {
+      armed = true;
+    },
+  };
+}
+
+async function rowsFor(db: Db, email: string): Promise<{ users: number; passkeys: number; recovery: number }> {
+  const users = await db.query(`SELECT id FROM users WHERE lower(email) = $1`, [email]);
+  const id = users.rows[0]?.id ?? null;
+  const count = async (table: string) =>
+    Number((await db.query(`SELECT count(*)::int AS n FROM ${table} WHERE user_id = $1`, [id])).rows[0]?.n ?? 0);
+  return {
+    users: users.rows.length,
+    passkeys: id ? await count("passkeys") : 0,
+    recovery: id ? await count("recovery_codes") : 0,
+  };
+}
+
+test("a failure part-way through confirming leaves no account behind, and the address can sign up again", async () => {
+  const clock = fixedClock(T0);
+  const outbox = createOutbox();
+  const db = await freshDb();
+  try {
+    const flaky = failingOnce(db, /INSERT INTO recovery_codes/);
+    const handler = makeHandler(flaky.db, outbox, clock);
+    const email = "halfway@warthog.com.au";
+    const { signupId } = await throughRegisterPasskey(handler, createAuthenticator(), db, outbox, email, clock);
+
+    flaky.arm();
+    await assert.rejects(handler.confirmSignup(signupRequest({ signupId, savedConfirmed: true })));
+    assert.deepEqual(await rowsFor(db, email), { users: 0, passkeys: 0, recovery: 0 }, "nothing was left behind");
+    assert.equal(await sessionCount(db), 0, "no session was minted");
+
+    // The person tries again (a minute later, so a fresh code may be sent) and succeeds.
+    const later = fixedClock(new Date(T0.getTime() + 61_000));
+    const retryHandler = makeHandler(db, outbox, later);
+    const retry = await throughRegisterPasskey(retryHandler, createAuthenticator(), db, outbox, email, later);
+    const done = await retryHandler.confirmSignup(signupRequest({ signupId: retry.signupId, savedConfirmed: true }));
+    assert.equal(done.status, 303, "the retry creates the account");
+    assert.deepEqual(await rowsFor(db, email), { users: 1, passkeys: 1, recovery: 1 });
+  } finally {
+    await db.close();
+  }
+});
+
+test("confirming for an address that already has an account is a 409 and changes nothing", async () => {
+  const clock = fixedClock(T0);
+  const outbox = createOutbox();
+  const db = await freshDb();
+  try {
+    const handler = makeHandler(db, outbox, clock);
+    const email = "taken-meanwhile@warthog.com.au";
+    const { signupId } = await throughRegisterPasskey(handler, createAuthenticator(), db, outbox, email, clock);
+
+    // Someone completes a sign-up for the same address first (in another case).
+    await db.query(`INSERT INTO users (email, wrapped_dek) VALUES ($1, $2)`, ["Taken-Meanwhile@warthog.com.au", "x"]);
+
+    const res = await handler.confirmSignup(signupRequest({ signupId, savedConfirmed: true }));
+    assert.equal(res.status, 409, "the taken address is reported, not a 500");
+    assert.equal(res.headers.get("set-cookie"), null, "no session cookie");
+    assert.equal(await sessionCount(db), 0, "no session was minted");
+    const passkeys = await db.query(`SELECT count(*)::int AS n FROM passkeys`);
+    assert.equal(Number(passkeys.rows[0]?.n), 0, "no orphan passkey was stored");
+  } finally {
+    await db.close();
+  }
+});
+
+// Review fix B7 — the browser a person signs up on is marked as recognised, so their next
+// sign-in there raises no "new device" alert.
+test("confirming sign-up marks the browser as one the person signs in on", async () => {
+  const clock = fixedClock(T0);
+  const outbox = createOutbox();
+  const db = await freshDb();
+  try {
+    const handler = makeHandler(db, outbox, clock);
+    const { signupId } = await throughRegisterPasskey(
+      handler, createAuthenticator(), db, outbox, "marked-browser@warthog.com.au", clock,
+    );
+    const res = await handler.confirmSignup(signupRequest({ signupId, savedConfirmed: true }));
+    const cookies = res.headers.getSetCookie();
+    assert.ok(cookies[0]?.startsWith("__Host-wh_session="), "the session cookie comes first");
+    assert.ok(cookies.some((c) => c.startsWith("__Host-wh_device=")), "the browser is marked");
+  } finally {
+    await db.close();
+  }
+});

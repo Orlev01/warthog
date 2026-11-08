@@ -355,3 +355,106 @@ test("the recovery migration applies and re-running every migration changes noth
     await db.close();
   }
 });
+
+// =====================================================================================
+// Review fix B3 — verification never blocks the event loop and takes the same time
+// whether or not the account has a recovery code.
+// =====================================================================================
+
+import { scryptSync } from "node:crypto";
+
+// The wall time of one synchronous scrypt at the module's work factors, measured here
+// so the event-loop assertion scales with however loaded the machine is right now.
+function oneSyncScryptMs(): number {
+  const started = performance.now();
+  scryptSync(Buffer.alloc(32, 1), Buffer.alloc(16, 2), 32, { N: 16384, r: 8, p: 1 });
+  return performance.now() - started;
+}
+
+async function median(times: number, run: () => Promise<unknown>): Promise<number> {
+  const samples: number[] = [];
+  for (let i = 0; i < times; i += 1) {
+    const started = performance.now();
+    await run();
+    samples.push(performance.now() - started);
+  }
+  samples.sort((a, b) => a - b);
+  return samples[Math.floor(samples.length / 2)]!;
+}
+
+test("verifyRecoveryCode does not block the event loop while it hashes", async () => {
+  const db = await freshDb();
+  try {
+    const user = await freshUser(db, "event-loop");
+    const { code } = await issueRecoveryCode(db, user.id, deps);
+    const syncMs = Math.max(oneSyncScryptMs(), oneSyncScryptMs());
+
+    // A 1 ms ticker records the longest gap between ticks while verifications run.
+    let last = performance.now();
+    let maxGap = 0;
+    const ticker = setInterval(() => {
+      const now = performance.now();
+      maxGap = Math.max(maxGap, now - last);
+      last = now;
+    }, 1);
+    try {
+      await Promise.all(Array.from({ length: 4 }, () => verifyRecoveryCode(db, user.id, code)));
+      // Close the last interval too: if hashing never yielded, no tick ran at all and the
+      // whole batch is one gap.
+      maxGap = Math.max(maxGap, performance.now() - last);
+    } finally {
+      clearInterval(ticker);
+    }
+    assert.ok(
+      maxGap < syncMs * 0.75,
+      `the event loop stalled ${maxGap.toFixed(1)} ms (one synchronous hash takes ${syncMs.toFixed(1)} ms)`,
+    );
+  } finally {
+    await db.close();
+  }
+});
+
+test("verifying for an account with no recovery code (or none at all) costs the same hash", async () => {
+  const db = await freshDb();
+  try {
+    const withCode = await freshUser(db, "has-code");
+    const { code } = await issueRecoveryCode(db, withCode.id, deps);
+    const withoutCode = await freshUser(db, "no-code");
+
+    const real = await median(5, () => verifyRecoveryCode(db, withCode.id, wrongVariant(code)));
+    const missing = await median(5, () => verifyRecoveryCode(db, withoutCode.id, code));
+    const noAccount = await median(5, () => verifyRecoveryCode(db, null, code));
+
+    assert.ok(missing > real * 0.5, `no stored code answered in ${missing.toFixed(1)} ms vs ${real.toFixed(1)} ms`);
+    assert.ok(noAccount > real * 0.5, `no account answered in ${noAccount.toFixed(1)} ms vs ${real.toFixed(1)} ms`);
+    assert.equal(await verifyRecoveryCode(db, null, code), false, "no account never verifies");
+  } finally {
+    await db.close();
+  }
+});
+
+// =====================================================================================
+// Review fix B10 — the code is accepted however a person writes it back: any case,
+// spaces, dashes or other grouping, and the look-alike digits 0 and 1 for O and I.
+// =====================================================================================
+
+test("verifyRecoveryCode accepts the code in any case, with spaces, dashes or grouping", async () => {
+  const db = await freshDb();
+  try {
+    const user = await freshUser(db, "handwritten");
+    const { code } = await issueRecoveryCode(db, user.id, deps);
+    const grouped = code.match(/.{1,4}/g)!.join(" ");
+    const dashed = code.match(/.{1,5}/g)!.join("-");
+
+    for (const variant of [code.toLowerCase(), ` ${code} `, grouped, dashed, `\t${grouped.toLowerCase()}\n`]) {
+      assert.equal(await verifyRecoveryCode(db, user.id, variant), true, `"${variant}" must verify`);
+    }
+    // 0 and 1 are not in the base32 alphabet; read back as O and I.
+    const lookalike = code.replace(/O/g, "0").replace(/I/g, "1");
+    assert.equal(await verifyRecoveryCode(db, user.id, lookalike), true, "0/1 read as O/I");
+    // Normalising never makes a wrong code right.
+    assert.equal(await verifyRecoveryCode(db, user.id, wrongVariant(code).toLowerCase()), false);
+  } finally {
+    await db.close();
+  }
+});

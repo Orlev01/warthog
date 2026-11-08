@@ -31,6 +31,7 @@ import { getRecoverDeps } from "../../../../../server/auth/compose";
 // resolve to a method.
 const STEP_METHOD = new Map<string, keyof RecoverHandler>([
   ["identify", "identify"],
+  ["verify-email", "verifyEmail"],
   ["verify-code", "verifyCode"],
   ["register-passkey", "registerPasskey"],
   ["finish", "finish"],

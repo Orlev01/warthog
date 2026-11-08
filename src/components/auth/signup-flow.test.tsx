@@ -646,3 +646,61 @@ test("GET /signup renders the flow's first step: an accessibly-labelled email en
     `the first step must offer a live, named control to continue (not a dead screen), got: ${markup}`,
   );
 });
+
+// ── Review fix B1 — a throttled send-code says to wait, in plain English ──────────────
+
+test("a throttled send-code (429) stays on the details step and asks the person to wait", async () => {
+  const ctx = setup();
+  ctx.responders["send-code"] = () => jsonResponse(429, { error: "throttled" });
+
+  ctx.flow.setEmail(EMAIL);
+  await ctx.flow.submitEmail();
+
+  const state = ctx.flow.getState();
+  assert.equal(state.phase, "details", "no code step without a sent code");
+  assertPlainEnglish(state.error, "throttled send-code");
+  assert.match(state.error, /minute/i, "the copy tells the person to wait a minute");
+});
+
+// ── Review fix B9 — an address that already has an account (409) says so plainly ──────
+
+test("a 409 at confirm tells the person the address already has an account and does not navigate", async () => {
+  const ctx = setup();
+  await driveToRecovery(ctx);
+  ctx.responders.confirm = () => jsonResponse(409, { error: "account_exists" });
+  ctx.flow.setSavedConfirmed(true);
+  await ctx.flow.confirm();
+
+  const state = ctx.flow.getState();
+  assertPlainEnglish(state.error, "confirm 409");
+  assert.match(state.error, /already/i, "the copy says the address already has an account");
+  assert.match(state.error, /sign in/i, "the copy points to signing in");
+  assert.deepEqual(ctx.navCalls, [], "no navigation");
+});
+
+// ── Review fix B6 — a new person who arrived from an agent or invite goes back there ──
+
+test("after confirming, sign-up goes to a safe return path, and to /home for an unsafe one", async () => {
+  for (const [returnTo, expected] of [
+    ["/household/join/abc123", "/household/join/abc123"],
+    ["javascript:alert(1)", "/home"],
+  ] as const) {
+    const { fetchImpl } = makeFetch();
+    const start = makeStart();
+    const navCalls: string[] = [];
+    const flow = createSignupFlow({
+      fetch: fetchImpl as typeof fetch,
+      startRegistration: start.fn,
+      navigate: (path: string) => void navCalls.push(path),
+      returnTo,
+    });
+    flow.setEmail(EMAIL);
+    await flow.submitEmail();
+    flow.setCode(CODE);
+    await flow.submitCode();
+    await flow.createPasskey();
+    flow.setSavedConfirmed(true);
+    await flow.confirm();
+    assert.deepEqual(navCalls, [expected], `returnTo ${returnTo}`);
+  }
+});

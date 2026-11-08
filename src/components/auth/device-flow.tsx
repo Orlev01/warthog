@@ -3,6 +3,7 @@
 import * as React from "react";
 
 import { DeviceView } from "./auth-views";
+import { safeReturnPath } from "../../server/auth/return-path";
 
 // E04-S34 — Client new-device flow.
 //
@@ -46,6 +47,9 @@ export type DevicePhase = "code" | "waiting" | "stopped";
 export interface DeviceFlowDeps {
   readonly fetch: typeof fetch;
   readonly navigate: (path: string) => void;
+  // Where to go after success: the page's validated `?next=` (review fix B6). It is
+  // checked again here, and anything unsafe — or nothing — means /home.
+  readonly returnTo?: string;
   // The label naming the approval push on the person's other device. Optional so the
   // page mounts the flow with none; a sensible default is used when omitted.
   readonly deviceLabel?: string;
@@ -60,12 +64,15 @@ export interface DeviceFlowState {
   // The emailed one-time code the person types (the request's first factor).
   readonly code: string;
   readonly error?: string;
+  // A plain, non-error status line (e.g. "we've emailed you a code").
+  readonly notice?: string;
 }
 
 export interface DeviceFlowController {
   getState(): DeviceFlowState;
   setEmail(value: string): void;
   setCode(value: string): void;
+  sendCode(): Promise<void>;
   requestApproval(): Promise<void>;
   poll(): Promise<void>;
   startAgain(): void;
@@ -84,10 +91,16 @@ const DEFAULT_DEVICE_LABEL = "New device";
 // account (the server answers the same either way), so it makes no account claim.
 const REQUEST_FAILED_COPY =
   "We couldn't add this device. Check your email address and the code we emailed you, then try again.";
+const SEND_CODE_FAILED_COPY =
+  "We couldn't send a code just now. Check your email address and try again.";
+// The server answers the same whether or not the address has an account, so the notice
+// makes no account claim either.
+const CODE_SENT_NOTICE =
+  "If there's an account for that address, we've emailed it a code. Enter it below.";
 const REQUEST_GONE_COPY =
   "That approval request has expired or was turned down. You can start again when you're ready.";
 
-type StepPath = "request" | "collect";
+type StepPath = "send-code" | "request" | "collect";
 
 export function createDeviceFlow(deps: DeviceFlowDeps): DeviceFlowController {
   // The collection handle lives in this closure, never in the rendered snapshot — it is
@@ -127,6 +140,16 @@ export function createDeviceFlow(deps: DeviceFlowDeps): DeviceFlowController {
     }
   }
 
+  // Ask for the emailed one-time code the request needs (the first factor).
+  async function sendCode(): Promise<void> {
+    const response = await post("send-code", { email: state.email });
+    if (!response || !response.ok) {
+      set({ error: SEND_CODE_FAILED_COPY, notice: undefined });
+      return;
+    }
+    set({ error: undefined, notice: CODE_SENT_NOTICE });
+  }
+
   async function requestApproval(): Promise<void> {
     const response = await post("request", {
       email: state.email,
@@ -156,7 +179,7 @@ export function createDeviceFlow(deps: DeviceFlowDeps): DeviceFlowController {
     if (response.ok) {
       // Approved: the session cookie rode the followed 303; go to /home.
       set({ error: undefined });
-      deps.navigate("/home");
+      deps.navigate(safeReturnPath(deps.returnTo));
       return;
     }
 
@@ -179,6 +202,7 @@ export function createDeviceFlow(deps: DeviceFlowDeps): DeviceFlowController {
     getState: () => state,
     setEmail: (value) => set({ email: value }),
     setCode: (value) => set({ code: value }),
+    sendCode,
     requestApproval,
     poll,
     startAgain,
@@ -201,6 +225,8 @@ export interface DeviceFlowProps {
   // fakes. The page mounts it with no props.
   readonly fetch?: typeof fetch;
   readonly navigate?: (path: string) => void;
+  // The validated return path the page read from `?next=`.
+  readonly returnTo?: string;
   readonly deviceLabel?: string;
 }
 
@@ -211,6 +237,7 @@ export function DeviceFlow(props: DeviceFlowProps = {}): React.ReactElement {
     flowRef.current = createDeviceFlow({
       fetch: props.fetch ?? defaultFetch,
       navigate: props.navigate ?? defaultNavigate,
+      returnTo: props.returnTo,
       deviceLabel: props.deviceLabel,
       onChange: () => forceUpdate(),
     });
@@ -230,12 +257,17 @@ export function DeviceFlow(props: DeviceFlowProps = {}): React.ReactElement {
 
   return (
     <DeviceView
+      returnTo={props.returnTo}
       step={state.phase}
       email={state.email}
       code={state.code}
       error={state.error}
+      notice={state.notice}
       onEmailChange={(value) => flow.setEmail(value)}
       onCodeChange={(value) => flow.setCode(value)}
+      onSendCode={() => {
+        void flow.sendCode();
+      }}
       onSubmit={() => {
         void flow.requestApproval();
       }}

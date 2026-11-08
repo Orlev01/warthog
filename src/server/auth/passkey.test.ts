@@ -473,3 +473,179 @@ test("the passkeys migration applies and re-running every migration changes noth
     await db.close();
   }
 });
+
+// =====================================================================================
+// Review fix B4 — challenges are single-use, expire after five minutes, are bound to
+// their purpose, and a third party's begin cannot break a ceremony in progress.
+//
+// Synced passkeys (iCloud, Google) always report a signature counter of 0, so the
+// counter check cannot catch a replay. These tests model that by holding the stored
+// counter at 0, which leaves the challenge as the only thing standing in the way.
+// =====================================================================================
+
+import type { Clock } from "../seams/clock";
+
+async function holdCounterAtZero(db: Db, userId: string): Promise<void> {
+  await db.query(`UPDATE passkeys SET counter = 0 WHERE user_id = $1`, [userId]);
+}
+
+function movableClock(start: Date): { clock: Clock; advance(ms: number): void } {
+  let now = start.getTime();
+  return { clock: { now: () => new Date(now) }, advance: (ms) => void (now += ms) };
+}
+
+test("an assertion cannot be finished twice, even when the counter check cannot catch it", async () => {
+  const db = await freshDb();
+  try {
+    const auth = createAuthenticator();
+    const user = await freshUser(db, "synced-replay");
+    await registerPasskey(db, auth, user);
+
+    const options = await beginPasskeyAuthentication(db, { userId: user.id }, deps);
+    const response = await auth.authenticate(options);
+    const first = await finishPasskeyAuthentication(db, { userId: user.id, response }, deps);
+    assert.equal(first.ok, true, "the first finish verifies");
+
+    await holdCounterAtZero(db, user.id);
+    const replay = await finishPasskeyAuthentication(db, { userId: user.id, response }, deps);
+    assert.equal(replay.ok, false, "the challenge was consumed, so the replay is refused");
+  } finally {
+    await db.close();
+  }
+});
+
+test("two finishes of one assertion racing each other: exactly one succeeds", async () => {
+  const db = await freshDb();
+  try {
+    const auth = createAuthenticator();
+    const user = await freshUser(db, "racing-replay");
+    await registerPasskey(db, auth, user);
+    await holdCounterAtZero(db, user.id);
+
+    const options = await beginPasskeyAuthentication(db, { userId: user.id }, deps);
+    const response = await auth.authenticate(options);
+    const results = await Promise.all([
+      finishPasskeyAuthentication(db, { userId: user.id, response }, deps),
+      finishPasskeyAuthentication(db, { userId: user.id, response }, deps),
+    ]);
+    assert.equal(results.filter((r) => r.ok).length, 1, "only one of the racing finishes succeeds");
+  } finally {
+    await db.close();
+  }
+});
+
+test("a challenge older than five minutes is refused", async () => {
+  const db = await freshDb();
+  try {
+    const auth = createAuthenticator();
+    const user = await freshUser(db, "stale-challenge");
+    await registerPasskey(db, auth, user);
+    const c = movableClock(new Date("2026-05-01T00:00:00.000Z"));
+
+    const options = await beginPasskeyAuthentication(db, { userId: user.id }, { ...deps, clock: c.clock });
+    const response = await auth.authenticate(options);
+    c.advance(5 * 60 * 1000 + 1000);
+    const late = await finishPasskeyAuthentication(db, { userId: user.id, response }, { ...deps, clock: c.clock });
+    assert.equal(late.ok, false, "a lapsed challenge does not verify");
+
+    // A fresh ceremony inside the window still works.
+    const fresh = await beginPasskeyAuthentication(db, { userId: user.id }, { ...deps, clock: c.clock });
+    const freshResponse = await auth.authenticate(fresh);
+    c.advance(4 * 60 * 1000);
+    const ok = await finishPasskeyAuthentication(
+      db,
+      { userId: user.id, response: freshResponse },
+      { ...deps, clock: c.clock },
+    );
+    assert.equal(ok.ok, true, "a challenge inside the five minutes verifies");
+  } finally {
+    await db.close();
+  }
+});
+
+test("a registration challenge is single-use and expires too", async () => {
+  const db = await freshDb();
+  try {
+    const user = await freshUser(db, "registration-challenge");
+    const c = movableClock(new Date("2026-05-01T00:00:00.000Z"));
+
+    const options = await beginPasskeyRegistration(
+      db,
+      { userId: user.id, userName: user.email },
+      { ...deps, clock: c.clock },
+    );
+    const late = await createAuthenticator().register(options);
+    c.advance(6 * 60 * 1000);
+    const lapsed = await finishPasskeyRegistration(db, { userId: user.id, response: late }, { ...deps, clock: c.clock });
+    assert.equal(lapsed.ok, false, "a lapsed registration challenge does not verify");
+
+    const again = await beginPasskeyRegistration(
+      db,
+      { userId: user.id, userName: user.email },
+      { ...deps, clock: c.clock },
+    );
+    const firstAuth = createAuthenticator();
+    const response = await firstAuth.register(again);
+    const first = await finishPasskeyRegistration(db, { userId: user.id, response }, { ...deps, clock: c.clock });
+    assert.equal(first.ok, true, "a live registration challenge verifies");
+    const second = await finishPasskeyRegistration(
+      db,
+      { userId: user.id, response: await createAuthenticator().register(again) },
+      { ...deps, clock: c.clock },
+    );
+    assert.equal(second.ok, false, "the same registration challenge cannot register a second passkey");
+  } finally {
+    await db.close();
+  }
+});
+
+test("a sign-in challenge cannot be finished as a step-up, nor a step-up as a sign-in", async () => {
+  const db = await freshDb();
+  try {
+    const auth = createAuthenticator();
+    const user = await freshUser(db, "purpose-bound");
+    await registerPasskey(db, auth, user);
+    await holdCounterAtZero(db, user.id);
+
+    const signin = await beginPasskeyAuthentication(db, { userId: user.id, purpose: "signin" }, deps);
+    const signinResponse = await auth.authenticate(signin);
+    await holdCounterAtZero(db, user.id);
+    const asStepUp = await finishPasskeyAuthentication(
+      db,
+      { userId: user.id, response: signinResponse, purpose: "step_up" },
+      deps,
+    );
+    assert.equal(asStepUp.ok, false, "a sign-in assertion is not a step-up");
+
+    const stepUp = await beginPasskeyAuthentication(db, { userId: user.id, purpose: "step_up" }, deps);
+    const stepUpResponse = await auth.authenticate(stepUp);
+    await holdCounterAtZero(db, user.id);
+    const asSignin = await finishPasskeyAuthentication(
+      db,
+      { userId: user.id, response: stepUpResponse, purpose: "signin" },
+      deps,
+    );
+    assert.equal(asSignin.ok, false, "a step-up assertion is not a sign-in");
+  } finally {
+    await db.close();
+  }
+});
+
+test("someone else starting a sign-in for the same account does not break a ceremony in progress", async () => {
+  const db = await freshDb();
+  try {
+    const auth = createAuthenticator();
+    const user = await freshUser(db, "begin-overwrite");
+    await registerPasskey(db, auth, user);
+
+    const mine = await beginPasskeyAuthentication(db, { userId: user.id }, deps);
+    // A third party asks for a challenge for the same account in between.
+    await beginPasskeyAuthentication(db, { userId: user.id }, deps);
+
+    const response = await auth.authenticate(mine);
+    const result = await finishPasskeyAuthentication(db, { userId: user.id, response }, deps);
+    assert.equal(result.ok, true, "the person's own ceremony still completes");
+  } finally {
+    await db.close();
+  }
+});

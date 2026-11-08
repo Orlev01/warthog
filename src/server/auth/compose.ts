@@ -130,10 +130,10 @@ export async function getStepUpDeps(
 }
 
 // Build the RecoverHandlerDeps bundle from validated config: the shared db, the clock
-// and random that mint the recovery session and new recovery code, the configured RP
-// ID and the origin every recovery step checks the request against. The same shape as
-// sign-in minus the TOTP store — recovery re-establishes the second factor by
-// registering a new passkey, not by verifying an authenticator code.
+// and random that mint the recovery session and new recovery code, the HMAC key and
+// email sender the email one-time code (and the recovery alert) need, the configured RP
+// ID and the origin every recovery step checks the request against. Recovery is email
+// code plus recovery code, then a new passkey (it never verifies an authenticator code).
 export async function getRecoverDeps(
   overrides: ComposeOverrides = {},
 ): Promise<RecoverHandlerDeps> {
@@ -143,6 +143,8 @@ export async function getRecoverDeps(
     db,
     clock: systemClock,
     random: systemRandom,
+    hmacKey: config.hmacKey,
+    emailSender: selectSenders(config, notConfiguredSenders()).email,
     rpId: config.webauthnRpId,
     publicOrigin: publicOrigin(config),
   };
@@ -170,7 +172,9 @@ export async function getDeviceDeps(
   };
 }
 
-// Build the SigninHandlerDeps bundle from validated config.
+// Build the SigninHandlerDeps bundle from validated config: the shared db, clock and
+// random, the HMAC key the new-device cookie is bound under and the email sender that
+// carries the new-device alert, the RP ID, the origin, and the TOTP secret store.
 export async function getSigninDeps(
   overrides: ComposeOverrides = {},
 ): Promise<SigninHandlerDeps> {
@@ -180,6 +184,8 @@ export async function getSigninDeps(
     db,
     clock: systemClock,
     random: systemRandom,
+    hmacKey: config.hmacKey,
+    emailSender: selectSenders(config, notConfiguredSenders()).email,
     rpId: config.webauthnRpId,
     publicOrigin: publicOrigin(config),
     totpSecrets: createTotpSecretStore({ db, keyWrapper: keyWrapperFor(config) }),

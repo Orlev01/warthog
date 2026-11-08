@@ -455,3 +455,78 @@ test("a well-formed attestation carrying extra keys still registers (extra keys 
     await db.close();
   }
 });
+
+// =====================================================================================
+// Review fix B1 — send-code is throttled per address, so it cannot be used to flood an
+// inbox or to keep many codes live at once.
+// =====================================================================================
+
+test("a second send-code for one address inside a minute is refused with 429 and sends nothing", async () => {
+  const outbox = createOutbox();
+  const db = await freshDb();
+  try {
+    const handler = makeHandler(db, outbox, fixedClock(T0));
+    const email = "flooded@warthog.com.au";
+
+    const first = await handler.sendCode(signupRequest({ email }));
+    assert.equal(first.status, 200);
+    const second = await handler.sendCode(signupRequest({ email }));
+    assert.equal(second.status, 429, "a repeat send inside the minute is throttled");
+    assert.ok(Number(second.headers.get("retry-after")) > 0, "the refusal carries Retry-After");
+    assert.equal(emailsTo(outbox, email).length, 1, "only the first code was emailed");
+
+    // The first code is still the live one and verifies.
+    const code = extractCode(emailsTo(outbox, email)[0]!.body);
+    const verified = await handler.verifyEmail(signupRequest({ email, code }));
+    assert.equal(verified.status, 200, "the code from the first send still verifies");
+  } finally {
+    await db.close();
+  }
+});
+
+// =====================================================================================
+// Review fix B5 — a pending sign-up expires, so an abandoned one is forgotten.
+// =====================================================================================
+
+test("a pending sign-up expires after thirty minutes: registering on it afterwards is refused", async () => {
+  let now = T0.getTime();
+  const clock: Clock = { now: () => new Date(now) };
+  const outbox = createOutbox();
+  const db = await freshDb();
+  try {
+    const handler = makeHandler(db, outbox, clock);
+    const auth = createAuthenticator();
+    const { signupId, options } = await startSignup(handler, db, outbox, "slowcoach@warthog.com.au", clock);
+
+    now += 31 * 60 * 1000;
+    const registrationResponse = await auth.register(options);
+    const res = await handler.registerPasskey(signupRequest({ signupId, registrationResponse }));
+    assert.equal(res.status, 400, "an expired pending sign-up is unknown");
+  } finally {
+    await db.close();
+  }
+});
+
+// =====================================================================================
+// Review fix B8 — sign-up treats an address the same whatever its case or spacing.
+// =====================================================================================
+
+test("an address typed in another case is the same address: its code verifies and the account is stored lower-case", async () => {
+  const outbox = createOutbox();
+  const db = await freshDb();
+  try {
+    const handler = makeHandler(db, outbox, fixedClock(T0));
+    const sent = await handler.sendCode(signupRequest({ email: " Mixed.Case@Warthog.com.au " }));
+    assert.equal(sent.status, 200);
+    const code = extractCode(emailsTo(outbox, "mixed.case@warthog.com.au")[0]!.body);
+
+    const verified = await handler.verifyEmail(signupRequest({ email: "MIXED.CASE@warthog.com.au", code }));
+    assert.equal(verified.status, 200, "the code verifies under another spelling of the address");
+
+    // An existing account under one spelling is found under another.
+    await seedAccount(db, "Taken@Warthog.com.au");
+    assert.ok(await getUserByEmail(db, "taken@warthog.com.au"), "stored and found lower-case");
+  } finally {
+    await db.close();
+  }
+});

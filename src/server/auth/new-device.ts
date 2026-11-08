@@ -32,8 +32,9 @@ import type { AuthenticationResponseJSON } from "@simplewebauthn/server";
 import { verifyEmailCode } from "./email-code";
 import { verifyRecoveryCode } from "./recovery";
 import { finishPasskeyAuthentication } from "./passkey";
-import { processSingleton } from "../seams/process-singleton";
+import { pendingStore } from "./pending-store";
 import { createSession, type Session } from "./session";
+import { alertNewDeviceSignIn, deliverAlert } from "./alerts";
 import { requireStepUp } from "./step-up";
 import { getUserByEmail, type User } from "../db/users";
 import type { Clock } from "../seams/clock";
@@ -84,10 +85,12 @@ export interface ApproveDeps {
   readonly clock: Clock;
 }
 
-// Collecting mints the new device's session (clock, random).
+// Collecting mints the new device's session (clock, random) and alerts the account
+// holder (emailSender).
 export interface CollectDeps {
   readonly clock: Clock;
   readonly random: Random;
+  readonly emailSender: EmailSender;
 }
 
 // A pending approval request, held in process memory. `userId` is the account the
@@ -95,14 +98,22 @@ export interface CollectDeps {
 // from the client); `approved` flips true only when the owner approves.
 interface PendingRequest {
   readonly userId: string;
+  // The label the new device gave itself, named in the approval push and the alert.
+  readonly deviceLabel: string;
   approved: boolean;
 }
 
-// The process-wide pending-request store (the release-store pattern): ESM caches
-// this module, so every import shares one Map. Keys are full-entropy random
-// handles, so requests never collide across callers.
-// Held through processSingleton (globalThis) so every module graph Next builds shares it.
-const pendingRequests = processSingleton("auth.newDeviceRequests", () => new Map<string, PendingRequest>());
+// The device label used when a sign-in method carries none of its own.
+const UNNAMED_DEVICE = "a new device";
+
+// The process-wide pending-request store (the release-store pattern). Keys are
+// full-entropy random handles, so requests never collide across callers. It is bounded
+// and expiring (pending-store): a request must be approved and collected within ten
+// minutes, so a stale approved request can never be collected days later.
+const pendingRequests = pendingStore<PendingRequest>("auth.newDeviceRequests", {
+  ttlMs: 10 * 60 * 1000,
+  maxEntries: 10_000,
+});
 
 // Verify the email one-time code (the first factor) and resolve the person it is
 // for. Returns the person on success; null when the code is wrong/expired/
@@ -123,13 +134,19 @@ async function completeFirstFactor(
   return getUserByEmail(db, email);
 }
 
-// Mint a fresh session for `userId` and shape it as a successful NewDeviceResult.
+// Mint a fresh session for `userId`, tell the account holder a new device signed in
+// (review fix B7; best effort — a failed alert never undoes the sign-in), and shape it
+// as a successful NewDeviceResult.
 async function issueSessionFor(
   db: Db,
   userId: string,
-  deps: { clock: Clock; random: Random },
+  deviceLabel: string,
+  deps: { clock: Clock; random: Random; emailSender: EmailSender },
 ): Promise<NewDeviceResult> {
   const created = await createSession(db, userId, { clock: deps.clock, random: deps.random });
+  await deliverAlert("new-device-sign-in", () =>
+    alertNewDeviceSignIn(db, { userId, deviceLabel }, { emailSender: deps.emailSender }),
+  );
   return { ok: true, session: created.session, token: created.token, cookie: created.cookie };
 }
 
@@ -147,12 +164,12 @@ export async function signInNewDeviceWithPasskey(
 
   const assertion = await finishPasskeyAuthentication(
     db,
-    { userId: person.id, response: params.response },
-    { rpId: deps.rpId, origin: deps.origin },
+    { userId: person.id, response: params.response, purpose: "signin" },
+    { rpId: deps.rpId, origin: deps.origin, clock: deps.clock },
   );
   if (!assertion.ok) return { ok: false, reason: assertion.reason };
 
-  return issueSessionFor(db, person.id, deps);
+  return issueSessionFor(db, person.id, UNNAMED_DEVICE, deps);
 }
 
 // Recovery code: email code + the person's current recovery code. A failed code,
@@ -168,7 +185,7 @@ export async function signInNewDeviceWithRecoveryCode(
   const ok = await verifyRecoveryCode(db, person.id, params.recoveryCode);
   if (!ok) return { ok: false, reason: "recovery_rejected" };
 
-  return issueSessionFor(db, person.id, deps);
+  return issueSessionFor(db, person.id, UNNAMED_DEVICE, deps);
 }
 
 // Start an approval-from-a-signed-in-device request. Gated on the email code: a
@@ -186,7 +203,11 @@ export async function requestNewDeviceApproval(
   if (!person) return { ok: false, reason: "invalid_code" };
 
   const requestId = Buffer.from(deps.random.randomBytes(32)).toString("hex");
-  pendingRequests.set(requestId, { userId: person.id, approved: false });
+  pendingRequests.set(
+    requestId,
+    { userId: person.id, deviceLabel: params.deviceLabel, approved: false },
+    deps.clock.now(),
+  );
 
   await deps.pushSender.sendPush({
     recipient: person.id,
@@ -207,7 +228,7 @@ export async function approveNewDeviceRequest(
   params: { requestId: string; approvingSession: Session },
   deps: ApproveDeps,
 ): Promise<{ ok: true } | { ok: false; reason: string }> {
-  const request = pendingRequests.get(params.requestId);
+  const request = pendingRequests.get(params.requestId, deps.clock.now());
   if (!request) return { ok: false, reason: "unknown_request" };
 
   if (!requireStepUp(params.approvingSession, { clock: deps.clock })) {
@@ -231,10 +252,10 @@ export async function collectNewDeviceApproval(
   params: { requestId: string },
   deps: CollectDeps,
 ): Promise<NewDeviceResult> {
-  const request = pendingRequests.get(params.requestId);
+  const request = pendingRequests.get(params.requestId, deps.clock.now());
   if (!request) return { ok: false, reason: "unknown_request" };
   if (!request.approved) return { ok: false, reason: "not_approved" };
 
   pendingRequests.delete(params.requestId);
-  return issueSessionFor(db, request.userId, deps);
+  return issueSessionFor(db, request.userId, request.deviceLabel, deps);
 }

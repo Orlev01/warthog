@@ -593,3 +593,73 @@ test("device: a SQL-injection probe in the email field is bound as data and cann
     await db.close();
   }
 });
+
+// =====================================================================================
+// Review fix B7 — the newly signed-in device is marked as recognised, so its next
+// sign-in does not raise another new-device alert.
+// =====================================================================================
+
+test("device: collecting the session also marks the new browser as recognised", async () => {
+  const clock = fixedClock(T0);
+  const outbox = createOutbox();
+  const db = await freshDb();
+  try {
+    const handler = makeHandler(db, clock, outbox);
+    const person = await freshUser(db, "recognised-device");
+    const code = await issueCodeFor(db, person.email, clock, outbox);
+    const requestId = await startRequest(handler, person.email, code, "Kitchen laptop");
+    const approver = await freshStepUpSession(db, person.id, clock);
+    await handler.approve(deviceRequest({ requestId }, { sessionToken: approver.token }));
+
+    const collected = await handler.collect(deviceRequest({ requestId }));
+    const cookies = collected.headers.getSetCookie();
+    assert.ok(cookies[0]?.startsWith(`${COOKIE_NAME}=`), "the session cookie comes first");
+    assert.ok(
+      cookies.some((c) => c.startsWith("__Host-wh_device=")),
+      "the new device is marked as one the person signs in on",
+    );
+  } finally {
+    await db.close();
+  }
+});
+
+// =====================================================================================
+// Signing in on a new device starts with the emailed one-time code, so the device flow
+// must be able to send it (it could not: nothing issued a code for this flow). The step
+// emails only an existing account and answers the same either way.
+// =====================================================================================
+
+test("device: send-code emails a code to an existing account only, and answers both cases the same", async () => {
+  const clock = fixedClock(T0);
+  const outbox = createOutbox();
+  const db = await freshDb();
+  try {
+    const handler = makeHandler(db, clock, outbox);
+    const person = await freshUser(db, "device-send-code");
+    const unknown = "no-account-here@warthog.com.au";
+
+    const known = await handler.sendCode(deviceRequest({ email: person.email }));
+    const missing = await handler.sendCode(deviceRequest({ email: unknown }));
+    assert.equal(known.status, 200);
+    assert.equal(missing.status, 200, "the same status for an address with no account");
+    assert.deepEqual(await known.json(), await missing.json(), "the same body either way");
+
+    const toPerson = outbox.list().filter((m) => m.channel === "email" && m.recipient === person.email);
+    assert.equal(toPerson.length, 1, "the account holder is emailed one code");
+    assert.equal(outbox.list().filter((m) => m.recipient === unknown).length, 0, "nothing goes to an unknown address");
+
+    // The emailed code is the first factor the approval request accepts.
+    const code = extractCode(toPerson[0]!.body);
+    const requestId = await startRequest(handler, person.email, code, "Office PC");
+    assert.ok(requestId.length > 0);
+
+    // A repeat inside the minute sends nothing more but still answers 200.
+    const again = await handler.sendCode(deviceRequest({ email: person.email }));
+    assert.equal(again.status, 200);
+    assert.equal(outbox.list().filter((m) => m.channel === "email" && m.recipient === person.email).length, 1);
+
+    assert.equal((await handler.sendCode(deviceRequest({ email: person.email }, { origin: null }))).status, 403);
+  } finally {
+    await db.close();
+  }
+});

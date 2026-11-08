@@ -8,6 +8,7 @@ import type {
 } from "@simplewebauthn/browser";
 
 import { SigninView, type SigninStep } from "./auth-views";
+import { safeReturnPath } from "../../server/auth/return-path";
 
 // E04-S25 — Client sign-in flow.
 //
@@ -46,6 +47,9 @@ export interface SigninFlowDeps {
     useBrowserAutofill?: boolean;
   }) => Promise<AuthenticationResponseJSON>;
   readonly navigate: (path: string) => void;
+  // Where to go after success: the page's validated `?next=` (review fix B6). It is
+  // checked again here, and anything unsafe — or nothing — means /home.
+  readonly returnTo?: string;
   // Optional: the component wires this to re-render after each state change. The
   // controller works standalone (the unit tests) when it is omitted.
   readonly onChange?: () => void;
@@ -151,7 +155,7 @@ export function createSigninFlow(deps: SigninFlowDeps): SigninFlowController {
       return;
     }
     set({ error: undefined });
-    deps.navigate("/home");
+    deps.navigate(safeReturnPath(deps.returnTo));
   }
 
   function useAuthenticatorApp(): void {
@@ -167,7 +171,7 @@ export function createSigninFlow(deps: SigninFlowDeps): SigninFlowController {
       return;
     }
     set({ error: undefined });
-    deps.navigate("/home");
+    deps.navigate(safeReturnPath(deps.returnTo));
   }
 
   return {
@@ -194,6 +198,8 @@ export interface SigninFlowProps {
   readonly fetch?: typeof fetch;
   readonly startAuthentication?: SigninFlowDeps["startAuthentication"];
   readonly navigate?: (path: string) => void;
+  // The validated return path the page read from `?next=`.
+  readonly returnTo?: string;
 }
 
 export function SigninFlow(props: SigninFlowProps = {}): React.ReactElement {
@@ -204,6 +210,7 @@ export function SigninFlow(props: SigninFlowProps = {}): React.ReactElement {
       fetch: props.fetch ?? defaultFetch,
       startAuthentication: props.startAuthentication ?? startAuthentication,
       navigate: props.navigate ?? defaultNavigate,
+      returnTo: props.returnTo,
       onChange: () => forceUpdate(),
     });
   }
@@ -212,6 +219,7 @@ export function SigninFlow(props: SigninFlowProps = {}): React.ReactElement {
 
   return (
     <SigninView
+      returnTo={props.returnTo}
       step={state.phase}
       email={state.email}
       code={state.code}

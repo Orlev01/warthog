@@ -46,6 +46,9 @@ import {
   collectNewDeviceApproval,
 } from "../../../server/auth/new-device";
 import { COOKIE_NAME, verifySession } from "../../../server/auth/session";
+import { issueEmailCode } from "../../../server/auth/email-code";
+import { getUserByEmail } from "../../../server/db/users";
+import { deviceCookieFor } from "../../../server/auth/device-recognition";
 import type { Clock } from "../../../server/seams/clock";
 import type { Random } from "../../../server/seams/random";
 import type { EmailSender, PushSender } from "../../../server/notify/senders";
@@ -65,8 +68,9 @@ export interface DeviceHandlerDeps {
   readonly publicOrigin: string;
 }
 
-// The three steps the thin `actions.ts` / route verbs call.
+// The steps the thin `actions.ts` / route verbs call.
 export interface DeviceHandler {
+  sendCode(request: Request): Promise<Response>;
   requestApproval(request: Request): Promise<Response>;
   approve(request: Request): Promise<Response>;
   collect(request: Request): Promise<Response>;
@@ -80,9 +84,14 @@ const MAX_BODY_BYTES = 64 * 1024;
 // approval push. Each is a bounded string, so a non-string / oversized field is a 4xx at
 // the boundary, never a cast that reaches a query.
 const requestApprovalSchema = z.object({
-  email: z.string().min(1).max(320),
+  email: z.string().trim().toLowerCase().min(1).max(320), // normalised (users.normaliseEmail)
   code: z.string().min(1).max(100),
   deviceLabel: z.string().min(1).max(200),
+});
+
+// sendCode: the email of the account the new device is signing in to.
+const sendCodeSchema = z.object({
+  email: z.string().trim().toLowerCase().min(1).max(320), // normalised (users.normaliseEmail)
 });
 
 // approve / collect: the pending request's collection handle alone.
@@ -135,6 +144,25 @@ export function createDeviceHandler(deps: DeviceHandlerDeps): DeviceHandler {
     const token = readCookie(request, COOKIE_NAME);
     if (token == null) return null;
     return verifySession(db, token, { clock });
+  }
+
+  // Step 0 — email the one-time code the approval request is gated on (the FIRST
+  // factor; without this step the flow had no way to receive one). Origin gate first.
+  // Only an existing account is emailed, through the real issuer (rate-limited per
+  // address), and the SAME 200 is returned either way — whether or not an account
+  // exists, and whether or not a code could be issued just now — so nothing leaks.
+  async function sendCode(request: Request): Promise<Response> {
+    if (!sameOrigin(request)) return json(403, { error: "forbidden" });
+    try {
+      const { email } = await parseBody(sendCodeSchema, request, { maxBytes: MAX_BODY_BYTES });
+      const person = await getUserByEmail(db, email);
+      if (person) {
+        await issueEmailCode(db, person.email, { clock, random, hmacKey, emailSender });
+      }
+      return json(200, { ok: true });
+    } catch (error) {
+      return handleError(error);
+    }
   }
 
   // Step 1 — the new device starts the approval request. Origin gate first (a missing or
@@ -202,17 +230,19 @@ export function createDeviceHandler(deps: DeviceHandlerDeps): DeviceHandler {
     try {
       const { requestId } = await parseBody(requestIdSchema, request, { maxBytes: MAX_BODY_BYTES });
 
-      const result = await collectNewDeviceApproval(db, { requestId }, { clock, random });
+      const result = await collectNewDeviceApproval(db, { requestId }, { clock, random, emailSender });
       if (!result.ok) return json(400, { error: result.reason });
 
-      return new Response(null, {
-        status: 303,
-        headers: { location: "/home", "set-cookie": result.cookie },
-      });
+      // The session cookie, plus the device cookie that marks this browser as one the
+      // person signs in on, so its next sign-in raises no new-device alert (review fix B7).
+      const headers = new Headers({ location: "/home" });
+      headers.append("set-cookie", result.cookie);
+      headers.append("set-cookie", deviceCookieFor(result.session.userId, { hmacKey, random }));
+      return new Response(null, { status: 303, headers });
     } catch (error) {
       return handleError(error);
     }
   }
 
-  return { requestApproval, approve, collect };
+  return { sendCode, requestApproval, approve, collect };
 }
