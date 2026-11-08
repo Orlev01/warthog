@@ -1062,3 +1062,33 @@ test("other refusals each get their own plain reason", async () => {
     assert.match(result.error, re, `${code}: the copy says what happened`);
   }
 });
+
+// ═══ Review fix C11 — no sideways scrolling at 360px ═════════════════════════════════════
+//
+// The detail list was `grid-cols-[auto_1fr]` with plain <dd>s: a 1fr track has an auto
+// minimum, so one long unbroken value (an email address, a merchant) set the column wider
+// than a 360px phone and the approval screen scrolled sideways. The value column may now
+// shrink (minmax(0,1fr)) and long values wrap anywhere.
+
+test("a long unbroken detail value can wrap: the value column may shrink and every value wraps anywhere", () => {
+  const LONG = "firstname.lastname.someone@department.example.com.au";
+  const request: PendingRequestView = {
+    ...PENDING_HELD,
+    details: [{ label: "To", value: LONG }],
+    reason: `reply to ${LONG}`,
+  };
+  const markup = render(base({ pending: [request], history: [] }));
+
+  const lists = findAll(markup, "dl");
+  assert.equal(lists.length, 1, "one detail list");
+  const listClass = attr(lists[0]!.attrs, "class") ?? "";
+  assert.match(listClass, /minmax\(0,1fr\)/, "the value column may shrink below its content's width");
+
+  const values = findAll(lists[0]!.inner, "dd");
+  assert.ok(values.length >= 1, "the details render as <dd> values");
+  for (const value of values) {
+    const cls = attr(value.attrs, "class") ?? "";
+    assert.match(cls, /overflow-wrap:anywhere|wrap-anywhere|break-all/, `every value wraps anywhere, got class "${cls}"`);
+    assert.match(cls, /min-w-0/, `every value may shrink, got class "${cls}"`);
+  }
+});

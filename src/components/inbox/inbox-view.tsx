@@ -220,6 +220,11 @@ function AskControl({
 
 // ─── the pending list ────────────────────────────────────────────────────────────────
 
+// A detail value (and any free-text line) may be one long unbroken string — an email
+// address, a merchant name. It must wrap rather than widen the card past a 360px phone
+// (brief: usable from 360px with no horizontal scrolling).
+const WRAP_ANYWHERE = "min-w-0 [overflow-wrap:anywhere]";
+
 function PendingItem({
   request,
   approveAction,
@@ -236,22 +241,22 @@ function PendingItem({
   const isRelease = request.release !== null;
   return (
     <li className="flex flex-col gap-3 rounded-card border border-line bg-surface p-4">
-      <p className="text-fg">
+      <p className={`text-fg ${WRAP_ANYWHERE}`}>
         <span className="font-medium">{request.agent}</span> {request.sentence}
       </p>
-      <dl className="grid grid-cols-[auto_1fr] gap-x-3 gap-y-1 text-sm">
+      <dl className="grid grid-cols-[auto_minmax(0,1fr)] gap-x-3 gap-y-1 text-sm">
         {request.details.map((detail, index) => (
           <React.Fragment key={`${request.id}-detail-${index}`}>
             <dt className="text-fg-muted">{detail.label}</dt>
-            <dd className="text-fg">{detail.value}</dd>
+            <dd className={`text-fg ${WRAP_ANYWHERE}`}>{detail.value}</dd>
           </React.Fragment>
         ))}
         <dt className="text-fg-muted">Why</dt>
-        <dd className="text-fg">{request.reason}</dd>
+        <dd className={`text-fg ${WRAP_ANYWHERE}`}>{request.reason}</dd>
         <dt className="text-fg-muted">Rule</dt>
-        <dd className="text-fg">{request.rule}</dd>
+        <dd className={`text-fg ${WRAP_ANYWHERE}`}>{request.rule}</dd>
         <dt className="text-fg-muted">Time left</dt>
-        <dd className="text-fg">
+        <dd className={`text-fg ${WRAP_ANYWHERE}`}>
           <span className="inline-flex items-center gap-1.5">
             <Clock aria-hidden={true} className="h-4 w-4 shrink-0 text-fg-muted" />
             {request.timeLeft}
@@ -286,14 +291,14 @@ function HistoryItem({ entry }: { entry: DecidedRequestView }) {
   const { Icon, tone } = HISTORY_META[entry.status];
   return (
     <li className="flex flex-col gap-1 rounded-card border border-line bg-surface p-4">
-      <p className="text-fg">
+      <p className={`text-fg ${WRAP_ANYWHERE}`}>
         <span className="font-medium">{entry.agent}</span> {entry.sentence}
       </p>
       <span className={["inline-flex items-center gap-1.5 text-sm font-medium", tone].join(" ")}>
         <Icon aria-hidden={true} className="h-4 w-4 shrink-0" />
         {entry.outcome}
       </span>
-      {entry.question ? <p className="text-sm text-fg-muted">{entry.question}</p> : null}
+      {entry.question ? <p className={`text-sm text-fg-muted ${WRAP_ANYWHERE}`}>{entry.question}</p> : null}
       <p className="text-xs text-fg-muted">{entry.decidedAt}</p>
     </li>
   );
