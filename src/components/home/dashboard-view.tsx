@@ -3,6 +3,7 @@ import * as React from "react";
 import type { SetupChecklistItem } from "@/domain/home/checklist";
 import { SetupChecklist } from "./setup-checklist";
 import { Status, type StatusKey } from "@/components/ui/status";
+import { InstallPrompt, type RegisterPushDeviceAction } from "@/components/pwa/install-prompt";
 
 // DashboardView — the home dashboard (brief "Home dashboard"). It composes, in
 // ONE render-testable component, every section the brief describes so the page
@@ -12,6 +13,12 @@ import { Status, type StatusKey } from "@/components/ui/status";
 // pending-approvals count that links to the inbox, the latest activity across
 // all agents, each agent with its status and spend-this-period against its
 // budget, and the upcoming reminders.
+//
+// Beside the checklist sits the install prompt (review fix W4.1; brief "install the app
+// and turn on notifications"): the iOS Add-to-Home-Screen sheet or the Android install
+// button, and "Turn on notifications", which sets this device up for push through the
+// page's register action. It reads the browser only after mount and hides what is
+// already done (installed, or notifications decided).
 //
 // Every data-bearing section renders a PLAIN empty message when it has no data
 // (no pending approvals, no recent activity, no agents, no reminders) rather
@@ -57,6 +64,10 @@ export type DashboardViewProps = {
   activity: ReadonlyArray<DashboardActivity>;
   agents: ReadonlyArray<DashboardAgent>;
   reminders: ReadonlyArray<DashboardReminder>;
+  // Wiring for the install prompt's "Turn on notifications" (the page passes these in
+  // the running app): the register-this-device server action and the PUBLIC VAPID key.
+  registerPushDevice?: RegisterPushDeviceAction;
+  vapidPublicKey?: string;
 };
 
 // Plain words for the budget period, so spend reads "A$42 of A$200 this month".
@@ -78,6 +89,8 @@ export function DashboardView({
   activity,
   agents,
   reminders,
+  registerPushDevice,
+  vapidPublicKey,
 }: DashboardViewProps) {
   return (
     <div className="mx-auto flex max-w-3xl flex-col gap-8 px-4 py-8 sm:px-6">
@@ -86,6 +99,7 @@ export function DashboardView({
       <section className="flex flex-col gap-3">
         <h2 className="text-lg font-semibold text-fg">Set up Warthog</h2>
         <SetupChecklist items={checklist} />
+        <InstallPrompt registerPushDevice={registerPushDevice} vapidPublicKey={vapidPublicKey} />
       </section>
 
       <section className="flex flex-col gap-3">

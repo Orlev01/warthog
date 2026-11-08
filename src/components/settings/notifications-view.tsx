@@ -7,6 +7,7 @@ import { Button } from "@/components/ui/button";
 import { Card } from "@/components/ui/card";
 import { Field } from "@/components/ui/field";
 import { endpointFingerprint, subscribeThisBrowser } from "./push-subscribe";
+import { InstallPrompt } from "@/components/pwa/install-prompt";
 
 // E12-S18 — Notification settings view component (design §10 Notifications;
 // brief "Notification settings").
@@ -173,6 +174,10 @@ export function NotificationsView({
       {/* ----- Push devices: register one or more devices to be reached on ----- */}
       <div className="flex flex-col gap-3">
         <SectionHeading icon={Bell}>Push notifications</SectionHeading>
+        {/* Install guidance (iOS only delivers web push to an app added to the Home
+            Screen); its own notification part is hidden — "Register this device" below
+            already sets notifications up (review fix W4.1). */}
+        <InstallPrompt showNotifications={false} />
         {hasDevice ? (
           <ul className="flex flex-col gap-2">
             {devices.map((device) => {

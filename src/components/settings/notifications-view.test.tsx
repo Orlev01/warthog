@@ -537,3 +537,13 @@ test("each registered device shows its own label (never every row as 'This devic
   assert.match(removeForms[0]!.inner, /<input[^>]*type="hidden"[^>]*name="id"[^>]*value="11111111-1111-4111-8111-111111111111"/);
   assert.match(removeForms[0]!.inner, /aria-label="Remove Registered 1 Nov 2026, 9:00 am"/);
 });
+
+// Review fix W4.1 — the install prompt is offered here too (iOS only delivers web push to
+// an app added to the Home Screen), with its own notification part hidden because this
+// screen's "Register this device" already sets notifications up.
+test("W4.1: the screen mounts the install prompt without a second notifications control", () => {
+  const markup = render({ devices: [], numbers: [] });
+  assert.match(markup, /data-install-prompt/, "the install prompt is mounted");
+  const section = markup.slice(markup.indexOf("data-install-prompt"));
+  assert.doesNotMatch(section.slice(0, section.indexOf("</div>")), /Turn on notifications/i);
+});
