@@ -92,7 +92,7 @@ import { createInMemoryRecorder } from "../../activity/recorder";
 import { createUser } from "../../db/users";
 import { createAgent } from "../../db/agents";
 import { upsertPermissions, type PermissionGrants } from "../../db/agent-permissions";
-import { decide, getApproval } from "../../db/approvals";
+import { decide, getApproval, markReleased } from "../../db/approvals";
 import { getByApproval } from "../../db/held-requests";
 import { freshDb } from "../../../test/db";
 import { localAesKeyWrapper, type KeyWrapper } from "../../crypto/key-wrapper";
@@ -834,6 +834,30 @@ test("a hold another caller is still running keeps the agent waiting, then retur
     const result = (await tool.handle({ approval_id: arranged.approvalId, wait_seconds: 3 }, arranged.conn)) as CheckResult;
     assert.equal(result.status, "pending", "the agent is told to keep waiting, not refused");
     assert.ok(s.slept.length >= 1, "the tool kept polling while the run was in progress");
+  } finally {
+    await db.close();
+  }
+});
+
+test("once the person's device has handed the value over, the agent is told it was released", async () => {
+  const db = await freshDb();
+  const keyWrapper = keyWrapperFor();
+  try {
+    const arranged = await arrangeHeldCall(db, keyWrapper, "released-card", {}, cardCall as never);
+    await decide(
+      db,
+      { userId: arranged.userId, id: arranged.approvalId, decision: { status: "approved" } },
+      arranged.dek,
+      fixedClock(NOW),
+    );
+    assert.equal(await markReleased(db, { userId: arranged.userId, id: arranged.approvalId }, fixedClock(NOW)), true);
+
+    const result = (await buildTool(db, keyWrapper, arranged, sleeper(NOW.getTime())).handle(
+      { approval_id: arranged.approvalId, wait_seconds: 0 },
+      arranged.conn,
+    )) as CheckResult & { next?: string };
+    assert.equal(result.status, "released", "the agent is told the value has been handed over");
+    assert.equal(result.next, "collect_release", "and to collect it now");
   } finally {
     await db.close();
   }

@@ -10,7 +10,8 @@
 //                  outcome, else `pending`; a pending approval already past its
 //                  window is expired on the spot (stored) and refused at once;
 //   approved     → a RELEASE (card / high-tier) is collected, never run: the agent
-//                  is told `approved` with `next: "collect_release"`. Any other
+//                  is told `released` (once the person's device has handed it over;
+//                  else `approved`) with `next: "collect_release"`. Any other
 //                  held call runs via `executeApprovedHold` EXACTLY ONCE (the
 //                  single-shot claim lives in the pipeline) and its stored outcome
 //                  is returned — the same outcome however often the agent asks,
@@ -79,12 +80,13 @@ export type ApprovedHoldResult =
   | { status: "refused"; reason: string }
   | { status: "in_progress" };
 
-// What check_approval returns to the waiting agent. `approved` + `next` is an approved
-// RELEASE: the agent collects the value with collect_release.
+// What check_approval returns to the waiting agent. `released` / `approved` + `next`
+// is an approved RELEASE: the agent collects the value with collect_release (`released`
+// once the person's device has handed it over).
 export type CheckApprovalResult =
   | { status: "pending"; approval_id: string }
   | { status: "executed"; result: unknown }
-  | { status: "approved"; approval_id: string; next: "collect_release" }
+  | { status: "approved" | "released"; approval_id: string; next: "collect_release" }
   | { status: "refused"; reason: string }
   | { status: "more_detail"; approval_id: string; question: string };
 
@@ -163,7 +165,8 @@ export function createCheckApprovalTool(deps: CheckApprovalDeps): CheckApprovalT
       case "approved": {
         // A release is collected, never run: tell the agent where to get it.
         if (isReleaseRequest(approval.detail.request)) {
-          return { status: "approved", approval_id: approval.id, next: "collect_release" };
+          const status = approval.releasedAt !== undefined ? "released" : "approved";
+          return { status, approval_id: approval.id, next: "collect_release" };
         }
         // Run the held call exactly once (the pipeline's single-shot claim) and hand
         // back its stored outcome; keep waiting while another caller is running it.
