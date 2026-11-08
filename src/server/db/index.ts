@@ -11,8 +11,12 @@
 // A tiny plain-SQL migration runner applies the project's migration files once
 // each and records them in a `schema_migrations` bookkeeping table it owns, so a
 // second run over the same database applies nothing new (idempotent).
+//
+// PGlite is a devDependency and is excluded from the standalone server's file tracing, so the
+// production image does not contain it. It is therefore loaded only when a `pglite:` URL is
+// opened (a dynamic import inside createPgliteDb), never at module load: a `postgres://`
+// process must be able to import this module without PGlite installed.
 
-import { PGlite } from "@electric-sql/pglite";
 import { Pool } from "pg";
 import { mkdir, readFile, readdir } from "node:fs/promises";
 import { join } from "node:path";
@@ -107,6 +111,7 @@ async function createPgliteDb(target: string): Promise<Db> {
   const memory = target === "" || target === "memory";
   const dataDir = memory ? "memory://" : target;
   if (!memory) await mkdir(dataDir, { recursive: true });
+  const { PGlite } = await import("@electric-sql/pglite");
   const pglite = new PGlite(dataDir);
   await pglite.waitReady;
   return {
