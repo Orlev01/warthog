@@ -8,8 +8,13 @@ import { getServerDb } from "@/server/db/server";
 import { verifySession } from "@/server/auth/session";
 import { selectKeyWrapper } from "@/server/crypto/key-wrapper";
 import { systemClock } from "@/server/seams/clock";
+import { HttpError } from "@/server/http/validate";
+import type { Session } from "@/server/auth/session";
 import {
   createIdentityActions,
+  type IdentityActions,
+  type SaveLowTierFieldInput,
+  type UpdateLowTierFieldInput,
   type SaveHighTierFieldInput,
   type RaiseFieldToHighTierInput,
 } from "./actions";
@@ -32,6 +37,78 @@ import { PageContainer } from "@/components/shell/page-container";
 // its own.
 
 const SESSION_COOKIE = "__Host-wh_session";
+
+// Per-request resolution for the low-tier server actions: re-read the cookie, verify the
+// session and build the actions over fresh handles (never the loader's — the
+// server-composition-roots addendum). Null when the session no longer verifies.
+async function requestIdentityActions(): Promise<{
+  session: Session;
+  actions: IdentityActions;
+} | null> {
+  const requestToken = (await cookies()).get(SESSION_COOKIE)?.value ?? null;
+  const requestConfig = loadConfig();
+  const requestDb = await getServerDb();
+  const requestSession = requestToken
+    ? await verifySession(requestDb, requestToken, { clock: systemClock })
+    : null;
+  if (!requestSession) return null;
+  const requestKeyWrapper = selectKeyWrapper({
+    nodeEnv: requestConfig.nodeEnv,
+    localKek: requestConfig.devKek,
+  });
+  return {
+    session: requestSession,
+    actions: createIdentityActions({ db: requestDb, keyWrapper: requestKeyWrapper }),
+  };
+}
+
+// A boundary rejection (a 4xx HttpError — a malformed id, an empty or oversized value, a
+// non-date) comes back to the form as a plain refusal it can explain, never a crash.
+async function reportRefusals(
+  run: () => Promise<{ ok: boolean; reason?: string }>,
+): Promise<{ ok: boolean; reason?: string }> {
+  try {
+    return await run();
+  } catch (error) {
+    if (error instanceof HttpError) return { ok: false, reason: "invalid_request" };
+    throw error;
+  }
+}
+
+// Save a NEW everyday detail for the session person (review fix G1 — the "Add a detail"
+// form). A postal address with a moving-on date also refreshes Life admin, whose loader
+// rebuilds the moving checklist from it.
+async function saveLowTierField(
+  input: SaveLowTierFieldInput,
+): Promise<{ ok: boolean; reason?: string }> {
+  "use server";
+  const request = await requestIdentityActions();
+  if (!request) return { ok: false, reason: "unauthenticated" };
+  const result = await reportRefusals(() => request.actions.saveLowTierField(request.session, input));
+  if (result.ok) {
+    revalidatePath("/vault");
+    if (input.kind === "postal_address") revalidatePath("/life-admin");
+  }
+  return result;
+}
+
+// Re-save one of the session person's OWN everyday details (review fix G1 — the per-field
+// Save), including a postal address's moving-on date.
+async function updateLowTierField(
+  input: UpdateLowTierFieldInput,
+): Promise<{ ok: boolean; reason?: string }> {
+  "use server";
+  const request = await requestIdentityActions();
+  if (!request) return { ok: false, reason: "unauthenticated" };
+  const result = await reportRefusals(() =>
+    request.actions.updateLowTierField(request.session, input),
+  );
+  if (result.ok) {
+    revalidatePath("/vault");
+    if (input.movingOn !== undefined) revalidatePath("/life-admin");
+  }
+  return result;
+}
 
 export default async function VaultPage() {
   // Read the request first: touching the cookie marks the page dynamic, so
@@ -120,6 +197,8 @@ export default async function VaultPage() {
         highTierFields={data.highTierFields}
         saveHighTierField={saveHighTierField}
         raiseFieldToHighTier={raiseFieldToHighTier}
+        saveLowTierField={saveLowTierField}
+        updateLowTierField={updateLowTierField}
       />
     </PageContainer>
   );

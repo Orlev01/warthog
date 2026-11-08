@@ -129,3 +129,36 @@ export async function listIdentityFields(
   }
   return fields;
 }
+
+// What updateIdentityField changes on one existing field: the row id, the owner (the
+// session's id — the UPDATE is scoped to it, so another person's id matches nothing),
+// the new value (re-encrypted under the owner's DEK) and, for a postal address, the
+// moving-on date. `movingOn` undefined leaves the stored date as it is; null clears it.
+export interface IdentityFieldUpdate {
+  readonly id: string;
+  readonly userId: string;
+  readonly value: string;
+  readonly movingOn?: string | null;
+}
+
+// Re-save one of `input.userId`'s own fields: the new value is encrypted under the
+// owner's `dek` with the envelope bound to the SAME row id, and written in one
+// member-scoped UPDATE together with the moving-on date (when given). Returns false when
+// no row of this person has that id (nothing is changed).
+export async function updateIdentityField(
+  db: Db,
+  input: IdentityFieldUpdate,
+  dek: Uint8Array,
+): Promise<boolean> {
+  const envelope = await encrypt(dek, TABLE, VALUE_COLUMN, input.id, input.value);
+  const keepDate = input.movingOn === undefined;
+  const result = await db.query(
+    `UPDATE identity_fields
+        SET value = $3,
+            moving_on = CASE WHEN $5::boolean THEN moving_on ELSE $4::date END
+      WHERE id = $1 AND user_id = $2
+      RETURNING id`,
+    [input.id, input.userId, envelope, input.movingOn ?? null, keepDate],
+  );
+  return result.rows.length > 0;
+}

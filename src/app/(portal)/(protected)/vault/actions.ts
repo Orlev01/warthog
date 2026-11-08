@@ -38,6 +38,7 @@ import { withTransaction, type Db } from "@/server/db/index";
 import { getUserById } from "@/server/db/users";
 import {
   saveIdentityField,
+  updateIdentityField,
   listIdentityFields,
   type IdentityField,
 } from "@/server/db/identity-fields";
@@ -81,6 +82,15 @@ export interface SaveLowTierFieldInput {
   readonly movingOn?: string | null;
 }
 
+// An EXISTING low-tier field re-saved by its owner: the field id, its new plaintext value
+// (re-encrypted server-side) and, for a postal address, the moving-on date — omitted to
+// keep the stored date, null to clear it. The owner is taken from the session.
+export interface UpdateLowTierFieldInput {
+  readonly fieldId: string;
+  readonly value: string;
+  readonly movingOn?: string | null;
+}
+
 // A NEW high-tier field: its type/label (plaintext metadata) and the device-produced
 // ciphertext. The plaintext value NEVER reaches the server.
 export interface SaveHighTierFieldInput {
@@ -108,6 +118,7 @@ export interface SetMovingDateInput {
 export interface IdentityActions {
   load(session: Session): Promise<IdentityViewData>;
   saveLowTierField(session: Session, input: SaveLowTierFieldInput): Promise<ActionResult>;
+  updateLowTierField(session: Session, input: UpdateLowTierFieldInput): Promise<ActionResult>;
   saveHighTierField(session: Session, input: SaveHighTierFieldInput): Promise<ActionResult>;
   raiseFieldToHighTier(session: Session, input: RaiseFieldToHighTierInput): Promise<ActionResult>;
   setMovingDate(session: Session, input: SetMovingDateInput): Promise<ActionResult>;
@@ -148,6 +159,11 @@ const dateSchema = z.iso.date();
 
 const saveLowTierFieldSchema = z.object({
   kind: lowTierKindSchema,
+  value: z.string().min(1).max(VALUE_MAX),
+  movingOn: dateSchema.nullable().optional(),
+});
+const updateLowTierFieldSchema = z.object({
+  fieldId: fieldIdSchema,
   value: z.string().min(1).max(VALUE_MAX),
   movingOn: dateSchema.nullable().optional(),
 });
@@ -211,6 +227,24 @@ export function createIdentityActions(deps: IdentityActionsDeps): IdentityAction
       dek,
     );
     return { ok: true };
+  }
+
+  // Re-save one of the session person's OWN low-tier fields: validate at the boundary (a
+  // malformed id, an empty/oversized value or a non-date is a 4xx before any query), then
+  // re-encrypt the value under their DEK and UPDATE scoped to this person — a field that
+  // is not theirs matches nothing and changes nothing ({ ok: false, reason: "not_found" }).
+  async function updateLowTierField(
+    session: Session,
+    input: UpdateLowTierFieldInput,
+  ): Promise<ActionResult> {
+    const valid = parseParams(updateLowTierFieldSchema, input);
+    const dek = await dataKeyFor(session.userId);
+    const updated = await updateIdentityField(
+      db,
+      { id: valid.fieldId, userId: session.userId, value: valid.value, movingOn: valid.movingOn },
+      dek,
+    );
+    return updated ? { ok: true } : { ok: false, reason: "not_found" };
   }
 
   // Store a NEW high-tier field for the session person — ONLY the device ciphertext
@@ -285,5 +319,12 @@ export function createIdentityActions(deps: IdentityActionsDeps): IdentityAction
     return result.rows.length > 0 ? { ok: true } : { ok: false, reason: "not_found" };
   }
 
-  return { load, saveLowTierField, saveHighTierField, raiseFieldToHighTier, setMovingDate };
+  return {
+    load,
+    saveLowTierField,
+    updateLowTierField,
+    saveHighTierField,
+    raiseFieldToHighTier,
+    setMovingDate,
+  };
 }
