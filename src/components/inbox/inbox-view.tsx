@@ -484,12 +484,22 @@ export interface ReleaseFlowDeps {
   readonly postRelease: (approvalId: string, value: string) => Promise<void>;
 }
 
+// The chosen card's NON-SECRET checkout details (review fix W6), from the loader's
+// SavedCardView: they travel with the decrypted number and the typed security code so the
+// agent can complete a checkout.
+export type CardCheckoutDetails = Pick<
+  SavedCardView,
+  "expiryMonth" | "expiryYear" | "cardholderName" | "billingAddress"
+>;
+
 export interface ReleaseInput {
   readonly approvalId: string;
   readonly unlockRequest: UnlockRequest;
   readonly ciphertext: string;
   // The freshly-entered card security code (card releases only); never stored anywhere.
   readonly securityCode?: string;
+  // The chosen card's checkout details (card releases only).
+  readonly card?: CardCheckoutDetails;
 }
 
 // A failed release carries plain copy and, when the server refused it, the server's
@@ -541,12 +551,21 @@ export function createReleaseFlow(deps: ReleaseFlowDeps): ReleaseFlow {
     }
 
     // A card release hands over the decrypted number together with the freshly-entered
-    // security code (which is never stored); a high-tier release hands over the value
+    // security code (which is never stored) and the card's non-secret checkout details —
+    // expiry, name on card, billing address (review fix W6; an unknown one is null, so
+    // the agent always gets the same shape); a high-tier release hands over the value
     // alone. The plaintext travels only in this single request.
     const payload =
       input.securityCode === undefined
         ? value
-        : JSON.stringify({ number: value, securityCode: input.securityCode });
+        : JSON.stringify({
+            number: value,
+            securityCode: input.securityCode,
+            expiryMonth: input.card?.expiryMonth ?? null,
+            expiryYear: input.card?.expiryYear ?? null,
+            cardholderName: input.card?.cardholderName ?? null,
+            billingAddress: input.card?.billingAddress ?? null,
+          });
 
     // 3. Post the released value to the approval's release endpoint. A refusal with a
     //    known reason is reported in its own plain words (with the reason, so the

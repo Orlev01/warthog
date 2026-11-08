@@ -1153,3 +1153,73 @@ test("W4.2: focusApprovalElement scrolls the request into view and moves focus t
   assert.deepEqual(calls, ["scroll:center", "focus:true"]);
   assert.equal(focusApprovalElement(doc, "missing"), false, "a missing element is not an error");
 });
+
+// ═══ Review fix W6 — a card release hands over everything a checkout needs ═════════════
+//
+// The agent used to collect only {number, securityCode}, which cannot complete a checkout.
+// A card release now posts {number, securityCode, expiryMonth, expiryYear, cardholderName,
+// billingAddress}: the number decrypted on this device, the security code freshly typed
+// (never stored), and the card's non-secret details the loader supplied.
+
+const CARD_DETAILS = {
+  expiryMonth: 11,
+  expiryYear: 2030,
+  cardholderName: "A Q Wren",
+  billingAddress: "12 Banksia Street, Perth WA 6000",
+};
+
+test("W6 — a card release posts the number, security code, expiry, name on card and billing address", async () => {
+  const ctx = setupFlow();
+  const result = await ctx.flow.release({
+    approvalId: APPROVAL_ID,
+    unlockRequest: UNLOCK_REQUEST,
+    ciphertext: CARD_CIPHERTEXT,
+    securityCode: SECURITY_CODE,
+    card: CARD_DETAILS,
+  });
+  assert.deepEqual(result, { ok: true });
+  assert.equal(ctx.postCalls.length, 1, "posted once");
+  assert.deepEqual(
+    JSON.parse(ctx.postCalls[0]!.value),
+    {
+      number: CARD_PLAINTEXT,
+      securityCode: SECURITY_CODE,
+      expiryMonth: 11,
+      expiryYear: 2030,
+      cardholderName: "A Q Wren",
+      billingAddress: "12 Banksia Street, Perth WA 6000",
+    },
+    "the released JSON carries the full set of checkout details",
+  );
+  assert.equal(ctx.decryptCalls[0]!.ciphertext, CARD_CIPHERTEXT, "only the stored number is decrypted");
+});
+
+test("W6 — a card release with no known name or address hands those over as null, keeping the shape", async () => {
+  const ctx = setupFlow();
+  await ctx.flow.release({
+    approvalId: APPROVAL_ID,
+    unlockRequest: UNLOCK_REQUEST,
+    ciphertext: CARD_CIPHERTEXT,
+    securityCode: SECURITY_CODE,
+    card: { expiryMonth: 7, expiryYear: 2029, cardholderName: null, billingAddress: null },
+  });
+  const released = JSON.parse(ctx.postCalls[0]!.value) as Record<string, unknown>;
+  assert.deepEqual(Object.keys(released).sort(), [
+    "billingAddress",
+    "cardholderName",
+    "expiryMonth",
+    "expiryYear",
+    "number",
+    "securityCode",
+  ]);
+  assert.equal(released.cardholderName, null);
+  assert.equal(released.billingAddress, null);
+  assert.equal(released.expiryMonth, 7);
+  assert.equal(released.expiryYear, 2029);
+});
+
+test("W6 — a high-tier release still posts the bare value, with no card details", async () => {
+  const ctx = setupFlow();
+  await ctx.flow.release({ approvalId: APPROVAL_ID, unlockRequest: UNLOCK_REQUEST, ciphertext: HIGH_CIPHERTEXT });
+  assert.equal(ctx.postCalls[0]!.value, HIGH_PLAINTEXT, "the high-tier value is posted as is");
+});
