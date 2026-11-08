@@ -136,13 +136,13 @@ const MAX_NAME_LENGTH = 100;
 // characters — a blank or over-long name is refused at the boundary (4xx), and
 // nothing is sent.
 const sendCodeSchema = z.object({
-  email: z.string().min(1).max(320),
+  email: z.string().trim().toLowerCase().min(1).max(320), // normalised (users.normaliseEmail)
   name: z.string().trim().min(1).max(MAX_NAME_LENGTH).optional(),
 });
 
 // verifyEmail: the email + its one-time code.
 const verifyEmailSchema = z.object({
-  email: z.string().min(1).max(320),
+  email: z.string().trim().toLowerCase().min(1).max(320), // normalised (users.normaliseEmail)
   code: z.string().min(1).max(100),
 });
 

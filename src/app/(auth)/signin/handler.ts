@@ -87,7 +87,7 @@ const MAX_BODY_BYTES = 64 * 1024;
 
 // beginPasskey: the email naming the account to issue a challenge for.
 const beginPasskeySchema = z.object({
-  email: z.string().min(1).max(320),
+  email: z.string().trim().toLowerCase().min(1).max(320), // normalised (users.normaliseEmail)
 });
 
 // finishPasskey: the email + the WebAuthn assertion. The assertion's minimal shape
@@ -110,14 +110,14 @@ const authenticationResponseSchema = z.looseObject({
 });
 
 const finishPasskeySchema = z.object({
-  email: z.string().min(1).max(320),
+  email: z.string().trim().toLowerCase().min(1).max(320), // normalised (users.normaliseEmail)
   authenticationResponse: authenticationResponseSchema,
 });
 
 // signInWithTotp: the email + the authenticator-app code. `verifyTotp` itself
 // rejects anything that is not exactly six digits.
 const totpSchema = z.object({
-  email: z.string().min(1).max(320),
+  email: z.string().trim().toLowerCase().min(1).max(320), // normalised (users.normaliseEmail)
   totp: z.string().min(1).max(100),
 });
 

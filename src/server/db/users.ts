@@ -2,6 +2,12 @@
 // email. Every member-scoped table hangs off this `id` (the session's `userId`),
 // so this is the foundational read/write seam.
 //
+// An address is one address whatever its case or surrounding spaces (review fix B8):
+// every email is stored and looked up through `normaliseEmail` (trimmed, lower-cased),
+// lookups match on lower(email) so rows written before normalisation are still found,
+// and a unique index on lower(email) (0048) refuses a second account for a case
+// variant.
+//
 // Each statement is parameterized through the `Db` seam (INV-102): the email, id
 // and wrapped-DEK reference travel as BOUND values, never concatenated into the
 // SQL text, so a value shaped like SQL is stored as data and cannot alter the
@@ -32,6 +38,13 @@ export interface NewUser {
 // hand back the same shape.
 const RETURNING = "id, email, role, wrapped_dek";
 
+// The canonical form of an email address: surrounding whitespace dropped, lower-cased.
+// Every boundary that takes an address (sign-up, sign-in, recovery, new-device, email
+// codes) uses this, so case or spacing never splits one person into two.
+export function normaliseEmail(email: string): string {
+  return email.trim().toLowerCase();
+}
+
 // Map a raw row to a User, translating the snake_case `wrapped_dek` column to the
 // module's camelCase field.
 function toUser(row: Row): User {
@@ -43,14 +56,15 @@ function toUser(row: Row): User {
   };
 }
 
-// Create a person row storing the wrapped-DEK reference; `role` falls to its
-// column default ('member'). Returns the created user (with its generated id).
+// Create a person row storing the normalised email and the wrapped-DEK reference;
+// `role` falls to its column default ('member'). Returns the created user (with its
+// generated id). An address already taken, in any case, is refused by the database.
 export async function createUser(db: Db, user: NewUser): Promise<User> {
   const result = await db.query(
     `INSERT INTO users (email, wrapped_dek)
      VALUES ($1, $2)
      RETURNING ${RETURNING}`,
-    [user.email, user.wrappedDek],
+    [normaliseEmail(user.email), user.wrappedDek],
   );
   const row = result.rows[0];
   if (!row) throw new Error("createUser: INSERT returned no row");
@@ -64,10 +78,12 @@ export async function getUserById(db: Db, id: string): Promise<User | null> {
   return row ? toUser(row) : null;
 }
 
-// Look a person up by email (bound as a parameter, never woven into the SQL
-// text), or null when none.
+// Look a person up by email, in any case or spacing (normalised, then bound as a
+// parameter, never woven into the SQL text), or null when none.
 export async function getUserByEmail(db: Db, email: string): Promise<User | null> {
-  const result = await db.query(`SELECT ${RETURNING} FROM users WHERE email = $1`, [email]);
+  const result = await db.query(`SELECT ${RETURNING} FROM users WHERE lower(email) = $1`, [
+    normaliseEmail(email),
+  ]);
   const row = result.rows[0];
   return row ? toUser(row) : null;
 }

@@ -619,3 +619,44 @@ test("a code whose email could not be sent is never left usable", async () => {
     await db.close();
   }
 });
+
+// =====================================================================================
+// Review fix B8 — an address is one address whatever its case or spacing: one code, one
+// attempt budget, one issue budget.
+// =====================================================================================
+
+test("case and spacing variants of an address share one code and one budget", async () => {
+  const { clock } = mutableClock(T0);
+  const outbox = createOutbox();
+  const db = await freshDb();
+  try {
+    const issued = await issueEmailCode(db, " Person@Warthog.com.au ", issueDeps(clock, outbox, HMAC_KEY_A, constantRandom(0)));
+    assert.deepEqual(issued, { ok: true });
+    assert.equal(emailsTo(outbox, EMAIL).length, 1, "the code goes to the normalised address");
+
+    const again = await issueEmailCode(db, "PERSON@WARTHOG.COM.AU", issueDeps(clock, outbox));
+    assert.equal(again.ok, false, "a case variant shares the issue budget");
+
+    // Failures under different spellings count against the same window.
+    for (const variant of ["Person@Warthog.com.au", "PERSON@warthog.com.au", " person@warthog.com.au", "person@WARTHOG.com.au", "Person@warthog.COM.au"]) {
+      await verifyEmailCode(db, variant, wrongCode(codeFor(0)), verifyDeps(clock, outbox));
+    }
+    const sixth = await verifyEmailCode(db, EMAIL, codeFor(0), verifyDeps(clock, outbox));
+    assert.equal(sixth.ok === false && sixth.reason, "throttled", "five variant failures throttle the address");
+  } finally {
+    await db.close();
+  }
+});
+
+test("a code issued to one spelling verifies under another", async () => {
+  const { clock } = mutableClock(T0);
+  const outbox = createOutbox();
+  const db = await freshDb();
+  try {
+    await issueEmailCode(db, "Person@Warthog.com.au", issueDeps(clock, outbox, HMAC_KEY_A, constantRandom(0)));
+    const ok = await verifyEmailCode(db, "  person@warthog.com.au", codeFor(0), verifyDeps(clock, outbox));
+    assert.equal(ok.ok, true);
+  } finally {
+    await db.close();
+  }
+});

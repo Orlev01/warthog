@@ -660,3 +660,25 @@ test("a sign-in assertion replayed to finish-passkey mints no second session", a
     await db.close();
   }
 });
+
+// =====================================================================================
+// Review fix B8 — sign-in finds the account whatever case or spacing the email is typed in.
+// =====================================================================================
+
+test("sign-in with a passkey works when the email is typed in another case with spaces", async () => {
+  const clock = fixedClock(T0);
+  const db = await freshDb();
+  try {
+    const handler = makeHandler(db, totpSecretsOf(new Map()), clock);
+    const auth = createAuthenticator();
+    await registerPasskeyFor(db, auth, await freshUser(db, "case-signin"));
+    const typed = "  Case-Signin@Warthog.COM.au ";
+
+    const options = await beginPasskeyFor(handler, typed);
+    const authenticationResponse = await auth.authenticate(options);
+    const res = await handler.finishPasskey(signinRequest({ email: typed, authenticationResponse }));
+    assert.equal(res.status, 303, "the account is found and the person signed in");
+  } finally {
+    await db.close();
+  }
+});

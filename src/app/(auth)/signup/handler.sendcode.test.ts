@@ -506,3 +506,27 @@ test("a pending sign-up expires after thirty minutes: registering on it afterwar
     await db.close();
   }
 });
+
+// =====================================================================================
+// Review fix B8 — sign-up treats an address the same whatever its case or spacing.
+// =====================================================================================
+
+test("an address typed in another case is the same address: its code verifies and the account is stored lower-case", async () => {
+  const outbox = createOutbox();
+  const db = await freshDb();
+  try {
+    const handler = makeHandler(db, outbox, fixedClock(T0));
+    const sent = await handler.sendCode(signupRequest({ email: " Mixed.Case@Warthog.com.au " }));
+    assert.equal(sent.status, 200);
+    const code = extractCode(emailsTo(outbox, "mixed.case@warthog.com.au")[0]!.body);
+
+    const verified = await handler.verifyEmail(signupRequest({ email: "MIXED.CASE@warthog.com.au", code }));
+    assert.equal(verified.status, 200, "the code verifies under another spelling of the address");
+
+    // An existing account under one spelling is found under another.
+    await seedAccount(db, "Taken@Warthog.com.au");
+    assert.ok(await getUserByEmail(db, "taken@warthog.com.au"), "stored and found lower-case");
+  } finally {
+    await db.close();
+  }
+});

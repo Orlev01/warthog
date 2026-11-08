@@ -29,6 +29,7 @@
 // query layer only as bound values, never woven in.
 
 import { hmac, verifyHmac } from "../crypto/hmac";
+import { normaliseEmail } from "../db/users";
 import type { Clock } from "../seams/clock";
 import type { Random } from "../seams/random";
 import type { EmailSender } from "../notify/senders";
@@ -97,7 +98,13 @@ function instant(value: unknown): Date {
 // alone in the minute and sends; the others delete their row and send nothing. Once
 // sent-for, the earlier live codes are retired so only this one verifies. If the
 // email cannot be sent the new code is retired too, and the failure surfaces.
-export async function issueEmailCode(db: Db, email: string, deps: IssueDeps): Promise<IssueResult> {
+export async function issueEmailCode(
+  db: Db,
+  rawEmail: string,
+  deps: IssueDeps,
+): Promise<IssueResult> {
+  // One address whatever its case or spacing: one code, one budget (review fix B8).
+  const email = normaliseEmail(rawEmail);
   const code = drawCode(deps.random);
   const now = deps.clock.now();
   const expiresAt = new Date(now.getTime() + CODE_TTL_MS);
@@ -171,10 +178,11 @@ export async function issueEmailCode(db: Db, email: string, deps: IssueDeps): Pr
 // consumed (single use) and accepted.
 export async function verifyEmailCode(
   db: Db,
-  email: string,
+  rawEmail: string,
   code: string,
   deps: VerifyDeps,
 ): Promise<VerifyResult> {
+  const email = normaliseEmail(rawEmail);
   const now = deps.clock.now();
 
   // Reserve this attempt, then count the window INCLUDING it. Each request counts only

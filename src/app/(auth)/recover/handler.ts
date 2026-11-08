@@ -118,7 +118,7 @@ const MAX_BODY_BYTES = 64 * 1024;
 
 // identify: the email the account is resolved by.
 const identifySchema = z.object({
-  email: z.string().min(1).max(320),
+  email: z.string().trim().toLowerCase().min(1).max(320), // normalised (users.normaliseEmail)
 });
 
 // verifyEmail: the pending handle + the six-digit code emailed at identify.

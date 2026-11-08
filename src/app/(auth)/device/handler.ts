@@ -80,7 +80,7 @@ const MAX_BODY_BYTES = 64 * 1024;
 // approval push. Each is a bounded string, so a non-string / oversized field is a 4xx at
 // the boundary, never a cast that reaches a query.
 const requestApprovalSchema = z.object({
-  email: z.string().min(1).max(320),
+  email: z.string().trim().toLowerCase().min(1).max(320), // normalised (users.normaliseEmail)
   code: z.string().min(1).max(100),
   deviceLabel: z.string().min(1).max(200),
 });
