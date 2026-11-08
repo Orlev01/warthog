@@ -31,6 +31,12 @@ import { inputSchema as collectReleaseSchema } from "./collect-release";
 import { completeTaskSchema, createTaskSchema, listTasksSchema, updateTaskSchema } from "./tasks";
 import { listRecordsSchema, saveRecordSchema, updateRecordSchema } from "./records";
 import { logActivitySchema } from "./log-activity";
+import { requestMakesChange } from "../../connectors/request-tool";
+import {
+  connectorRequestSchema,
+  connectorToolSchema,
+  REQUEST_TOOL,
+} from "../../connectors/tool-routing";
 
 // --- the pinned contract (documented in `registry.test.ts`) ----------------
 
@@ -47,9 +53,22 @@ export interface ToolDefinition {
   handle(input: unknown, connection: AgentConnection): Promise<AgentCallResult>;
 }
 
-// Connector id → its (unqualified) tool names. The resolver namespaces them
-// `<connector>__<tool>` and keeps only the ones a connection is permitted.
-export type ConnectorToolset = Record<string, readonly string[]>;
+// One connector tool as the connector engine declares it: its unqualified name, a plain
+// description, its tool class (absent ⇒ treated as a change, the stricter gate), and —
+// for a tool that sends a message — the channel plus how to read its recipients from the
+// validated body, so the rules engine's send-message and recipient rules can match. The
+// general `request` tool is classified per call by its HTTP method instead.
+export interface ConnectorToolDeclaration {
+  readonly name: string;
+  readonly description?: string;
+  readonly makesChange?: boolean;
+  readonly messageChannel?: "email" | "chat" | "post";
+  readonly recipients?: (body: string | undefined) => readonly string[];
+}
+
+// Connector id → its (unqualified) tools, by bare name or full declaration. The resolver
+// namespaces them `<connector>__<tool>` and keeps only the ones a connection is permitted.
+export type ConnectorToolset = Record<string, readonly (string | ConnectorToolDeclaration)[]>;
 
 export interface ToolRegistry {
   readonly coreTools: readonly ToolDefinition[]; // the always-available core tools
@@ -256,28 +275,35 @@ function buildCoreTool(spec: CoreToolSpec, pipeline: AgentCallPipeline): ToolDef
   };
 }
 
-// Build a permitted connector tool, namespaced `<connector>__<tool>`. Its arguments
-// are validated and classified (reads vs changes) by the connector catalogue (a
-// later task, E09); until then its envelope is the optional `reason` and it routes
-// conservatively as a change, so an unknown tool gets the stricter policy gate.
+// Build a permitted connector tool, namespaced `<connector>__<tool>`, from the connector
+// engine's declaration. The general `request` tool takes {method, path, query, body} and
+// is a read for GET/HEAD and a change otherwise; any other tool takes {query, body} and
+// carries its declared class (an undeclared one routes as a change, the stricter gate),
+// message channel and recipients onto the call the pipeline's policy gate checks.
 function buildConnectorTool(
   connectorId: string,
-  toolName: string,
+  tool: string | ConnectorToolDeclaration,
   pipeline: AgentCallPipeline,
 ): ToolDefinition {
-  const name = `${connectorId}${NAMESPACE}${toolName}`;
+  const declaration: ConnectorToolDeclaration = typeof tool === "string" ? { name: tool } : tool;
+  const name = `${connectorId}${NAMESPACE}${declaration.name}`;
+  const isRequest = declaration.name === REQUEST_TOOL;
+  const schema = isRequest ? connectorRequestSchema : connectorToolSchema;
   return {
     name,
-    description: `Use the ${toolName} tool of the person's ${connectorId} service.`,
-    inputSchema: envelope,
+    description:
+      declaration.description ?? `Use the ${declaration.name} tool of the person's ${connectorId} service.`,
+    inputSchema: schema,
     async handle(input: unknown, connection: AgentConnection): Promise<AgentCallResult> {
-      const parsed = parseParams(envelope, input) as Record<string, unknown>;
+      const parsed = parseParams(schema, input) as Record<string, unknown> & { body?: string };
       const call: AgentCall = {
         connector: connectorId,
         tool: name,
-        makesChange: true,
+        makesChange: isRequest ? requestMakesChange(String(parsed.method)) : (declaration.makesChange ?? true),
+        messageChannel: declaration.messageChannel,
+        recipients: declaration.recipients?.(parsed.body),
         reason: parsed.reason as string | undefined,
-        params: input,
+        params: parsed,
       };
       return pipeline.handleAgentCall(connection, call);
     },
@@ -338,8 +364,8 @@ export function createToolRegistry(deps: ToolRegistryDeps): ToolRegistry {
       for (const connectorId of permissions.grantedConnectors) {
         const tools = connectorTools[connectorId];
         if (!tools) continue;
-        for (const toolName of tools) {
-          connectorDefs.push(buildConnectorTool(connectorId, toolName, pipeline));
+        for (const tool of tools) {
+          connectorDefs.push(buildConnectorTool(connectorId, tool, pipeline));
         }
       }
 

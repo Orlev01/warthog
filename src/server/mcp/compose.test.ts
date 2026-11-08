@@ -83,6 +83,8 @@ import { createHousehold, setHouseholdBudget, setMemberLimit } from "../db/house
 import { upsertRate } from "../db/exchange-rates";
 import { storeFingerprint } from "../db/release-fingerprints";
 import { fingerprint } from "../crypto/hmac";
+import { createConnection } from "../db/connections";
+import { createRule } from "../db/rules";
 import { FALLBACK_JOB_TYPE } from "../notify/approval-notifier";
 import { outbox } from "../notify/outbox";
 import { createToken } from "../oauth/store";
@@ -704,6 +706,166 @@ test("D4: a released value echoed in a later tool call is redacted from the acti
     assert.ok(!stored.includes("PA1234567"), "the released passport number is not stored");
     assert.ok(!/ab 123 456/i.test(stored), "the released licence is not stored in another surface form");
     assert.equal(stored.split("[released value]").length - 1, 2, "both values are replaced by the marker");
+  } finally {
+    await db.close();
+  }
+});
+
+// ===================================================================================
+// Review fix D5 — a connection's permitted connector tools are served over MCP
+// (namespaced <connector>__<tool>) and routed through the pipeline to the connector
+// engine: the general request tool for a service without curated tools, the curated
+// tools (with their read/change and sends-a-message declarations) for Google/Microsoft.
+// ===================================================================================
+
+// A recording upstream: every request the connector engine sends, answered with a fixed body.
+function recordingFetch(): { fetch: typeof fetch; sent: Array<{ url: string; init: RequestInit }> } {
+  const sent: Array<{ url: string; init: RequestInit }> = [];
+  const fake = (async (input: RequestInfo | URL, init?: RequestInit) => {
+    sent.push({ url: String(input), init: init ?? {} });
+    return new Response('{"upstream":"ok"}', { status: 200 });
+  }) as typeof fetch;
+  return { fetch: fake, sent };
+}
+
+async function connectService(
+  db: Db,
+  userId: string,
+  dek: Uint8Array,
+  connectorId: string,
+  credentials: Record<string, unknown>,
+): Promise<void> {
+  await createConnection(db, { userId, connectorId, accountLabel: "me", credentials }, dek, fixedClock(NOW));
+}
+
+test("D5: tools/list serves the granted connector's request tool and nothing for an ungranted one", async () => {
+  const db = await freshDb();
+  try {
+    const config = devConfig();
+    const { userId, connectionId, dek } = await seedConnection(db, config, { grantedConnectors: ["amadeus"] });
+    await connectService(db, userId, dek, "amadeus", { api_key: "sk-test" });
+    await connectService(db, userId, dek, "alpaca", { api_key: "sk-other" });
+    const dispatch = createMcpDispatch({ db, config, fetch: recordingFetch().fetch });
+
+    const tools = (await readRpc(await dispatch(connectionId, mcpPost(LIST_BODY)))).result?.tools ?? [];
+    const names = tools.map((tool) => tool.name);
+    assert.ok(names.includes("amadeus__request"), "the granted, connected service's request tool is served");
+    assert.ok(!names.some((name) => name.startsWith("alpaca__")), "an ungranted service contributes no tools");
+    const request = tools.find((tool) => tool.name === "amadeus__request");
+    assert.deepEqual([...(request?.inputSchema?.required ?? [])].sort(), ["method", "path"]);
+  } finally {
+    await db.close();
+  }
+});
+
+test("D5: a GET through the request tool reaches the catalogue host with the stored credential and is recorded", async () => {
+  const db = await freshDb();
+  try {
+    const config = devConfig();
+    const { userId, connectionId, agentId, dek } = await seedConnection(db, config, { grantedConnectors: ["amadeus"] });
+    await connectService(db, userId, dek, "amadeus", { api_key: "sk-test" });
+    const upstream = recordingFetch();
+    const dispatch = createMcpDispatch({ db, config, fetch: upstream.fetch });
+
+    const rpc = await readRpc(
+      await dispatch(connectionId, mcpPost(callBody("amadeus__request", { method: "GET", path: "/v1/flights" }))),
+    );
+    assert.notEqual(rpc.result?.isError, true, `the read is executed, got: ${JSON.stringify(rpc)}`);
+    assert.match(contentText(rpc.result), /upstream/, "the upstream body is returned to the agent");
+
+    assert.equal(upstream.sent.length, 1);
+    assert.equal(upstream.sent[0]!.url, "https://api.amadeus.com/v1/flights", "only the catalogue host is called");
+    const headers = new Headers(upstream.sent[0]!.init.headers);
+    assert.equal(headers.get("authorization"), "Bearer sk-test", "the stored credential is presented");
+
+    const entries = await listActivity(db, userId, { agentId }, dek);
+    const entry = entries.find((candidate) => candidate.tool === "amadeus__request");
+    assert.ok(entry, "the connector call is recorded");
+    assert.equal(entry!.connectorId, "amadeus");
+    assert.ok(!JSON.stringify(entry!.payload).includes("sk-test"), "the credential never reaches the record");
+  } finally {
+    await db.close();
+  }
+});
+
+test("D5: a change through the request tool follows the ask-first setting and sends nothing", async () => {
+  const db = await freshDb();
+  try {
+    const config = devConfig();
+    const { userId, connectionId, dek } = await seedConnection(db, config, {
+      grantedConnectors: ["amadeus"],
+      changeTools: "ask_first",
+    });
+    await connectService(db, userId, dek, "amadeus", { api_key: "sk-test" });
+    const upstream = recordingFetch();
+    const dispatch = createMcpDispatch({ db, config, fetch: upstream.fetch });
+
+    const rpc = await readRpc(
+      await dispatch(connectionId, mcpPost(callBody("amadeus__request", { method: "POST", path: "/v1/orders", body: "{}" }))),
+    );
+    assert.equal(rpc.result?.structuredContent?.status, "pending_approval", `got: ${JSON.stringify(rpc)}`);
+    assert.equal(upstream.sent.length, 0, "nothing is sent before the person approves");
+  } finally {
+    await db.close();
+  }
+});
+
+test("D5: curated Gmail tools are served (no general request tool) and message rules apply to them", async () => {
+  const db = await freshDb();
+  try {
+    const config = devConfig();
+    const { userId, connectionId, dek } = await seedConnection(db, config, { grantedConnectors: ["google-gmail"] });
+    await connectService(db, userId, dek, "google-gmail", { access_token: "ya29-test" });
+    await createRule(
+      db,
+      {
+        userId,
+        kind: "ask_first",
+        scope: { type: "any_agent" },
+        action: { type: "send_message", channel: "email" },
+        condition: { type: "recipient_in_domain", domain: "example.com" },
+      },
+      dek,
+    );
+    const upstream = recordingFetch();
+    const dispatch = createMcpDispatch({ db, config, fetch: upstream.fetch });
+
+    const names = ((await readRpc(await dispatch(connectionId, mcpPost(LIST_BODY)))).result?.tools ?? []).map((t) => t.name);
+    assert.ok(names.includes("google-gmail__send") && names.includes("google-gmail__search"));
+    assert.ok(!names.includes("google-gmail__request"), "a curated service is not reachable around its curated tools");
+
+    const mime = (to: string) => JSON.stringify({ raw: Buffer.from(`To: ${to}\r\nSubject: hi\r\n\r\nhello`).toString("base64url") });
+    const held = await readRpc(
+      await dispatch(connectionId, mcpPost(callBody("google-gmail__send", { body: mime("Bob <bob@example.com>") }))),
+    );
+    assert.equal(held.result?.structuredContent?.status, "pending_approval", "a send to the ruled domain asks first");
+    assert.equal(upstream.sent.length, 0);
+
+    const sent = await readRpc(await dispatch(connectionId, mcpPost(callBody("google-gmail__send", { body: mime("bob@other.org") }))));
+    assert.notEqual(sent.result?.isError, true, `a send elsewhere goes through, got: ${JSON.stringify(sent)}`);
+    assert.equal(upstream.sent.length, 1);
+    assert.equal(upstream.sent[0]!.url, "https://gmail.googleapis.com/gmail/v1/users/me/messages/send");
+  } finally {
+    await db.close();
+  }
+});
+
+test("D5: a connector revoked from the agent disappears and a direct call is refused", async () => {
+  const db = await freshDb();
+  try {
+    const config = devConfig();
+    const { userId, connectionId, dek } = await seedConnection(db, config, { grantedConnectors: [] });
+    await connectService(db, userId, dek, "amadeus", { api_key: "sk-test" });
+    const upstream = recordingFetch();
+    const dispatch = createMcpDispatch({ db, config, fetch: upstream.fetch });
+
+    const names = ((await readRpc(await dispatch(connectionId, mcpPost(LIST_BODY)))).result?.tools ?? []).map((t) => t.name);
+    assert.ok(!names.includes("amadeus__request"));
+    const rpc = await readRpc(
+      await dispatch(connectionId, mcpPost(callBody("amadeus__request", { method: "GET", path: "/v1/x" }))),
+    );
+    assert.equal(rpc.result?.isError ?? Boolean(rpc.error), true, "the call is refused");
+    assert.equal(upstream.sent.length, 0);
   } finally {
     await db.close();
   }

@@ -25,6 +25,7 @@ import { readdirSync, readFileSync, statSync } from "node:fs";
 import { join } from "node:path";
 
 import { validateCatalogueEntry, type CatalogueEntry } from "../../domain/catalogue/schema";
+import { processSingleton } from "../seams/process-singleton";
 
 // A single connector entry is tiny (well under a kilobyte). A multi-megabyte file is
 // a boot-safety hazard; it is refused on size rather than parsed and indexed.
@@ -143,4 +144,19 @@ export function loadCatalogue(options: LoadCatalogueOptions): CatalogueIndex {
     entries.push(loadEntry(dir, fileName));
   }
   return buildIndex(entries, isOAuthClientConfigured);
+}
+
+// The process-wide catalogue index, built once from the operator's data files
+// (`catalogue/connectors/*.json`, rooted at the working directory — never
+// `import.meta.url`, which the bundler mis-resolves). Shared through processSingleton under
+// the same key the connectors page uses, so the MCP surface and the page read one index.
+// No per-connector OAuth client app is registered in config yet, so no oauth2 connector
+// reports connectable until that operator registration lands.
+export function getProcessCatalogue(): CatalogueIndex {
+  return processSingleton("connectors.catalogue", () =>
+    loadCatalogue({
+      dir: join(process.cwd(), "catalogue", "connectors"),
+      isOAuthClientConfigured: () => false,
+    }),
+  );
 }

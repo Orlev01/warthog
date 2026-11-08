@@ -40,6 +40,9 @@ import { systemClock, type Clock } from "../seams/clock";
 import { getUserById } from "../db/users";
 import { getAgentByConnectionId, getAgentById } from "../db/agents";
 import { getConnectionPermissions } from "../db/agent-permissions";
+import { listConnectionsForUser } from "../db/connections";
+import { getProcessCatalogue, type CatalogueIndex } from "../connectors/catalogue";
+import { connectorToolsetFor, createConnectorToolExecutor } from "../connectors/tool-routing";
 import { HttpError } from "../http/validate";
 import { createGuardedFetch } from "../http/guarded-fetch";
 import { notifyApprovalCreated, type ApprovalPushSender } from "../notify/approval-notifier";
@@ -54,7 +57,7 @@ import {
   type AgentCallPipeline,
   type ApprovedHoldResult,
 } from "./pipeline";
-import { createToolRegistry, type ConnectorToolset, type ToolDefinition } from "./tools/registry";
+import { createToolRegistry, type ToolDefinition } from "./tools/registry";
 import { loadAgentContext, type AgentConnection } from "./context";
 
 import { createRememberTool, createSearchMemoryTool } from "./tools/memory";
@@ -76,10 +79,14 @@ import {
 import { releaseStore } from "../crypto/release-store";
 
 // The two inputs a composition root is handed (design §6.1 addendum): the process-wide
-// migrated db and the parsed runtime config. Everything else is built from these here.
+// migrated db and the parsed runtime config. Everything else is built from these here. The
+// outbound fetch connector calls ride on (default: the SSRF-guarded fetch) and the
+// connector catalogue (default: the process-wide index) may be supplied by a test.
 export interface McpDispatchDeps {
   readonly db: Db;
   readonly config: Config;
+  readonly fetch?: typeof fetch;
+  readonly catalogue?: CatalogueIndex;
 }
 
 // The dispatch the `/mcp` route seam drives after the bearer is verified: the VERIFIED
@@ -228,6 +235,15 @@ function buildAgentPipeline(deps: McpDispatchDeps): AgentCallPipeline {
   const recorder = createRedactingRecorder({ db, clock, dekFor: dataKeyFor });
   const rateLimiter = getRateLimiter();
 
+  // The connector engine an allowed connector call is carried out by: the person's live
+  // connection, its credentials and the catalogue host only, over the SSRF-guarded fetch.
+  const executeConnectorTool = createConnectorToolExecutor({
+    db,
+    catalogue: deps.catalogue ?? getProcessCatalogue(),
+    fetch: deps.fetch ?? createGuardedFetch(),
+    dekFor: dataKeyFor,
+  });
+
   // --- the tool bodies the executor routes executed calls to ------------------
 
   // The pipeline is referenced LATE by the tool executor (check_approval runs an approved
@@ -269,11 +285,15 @@ function buildAgentPipeline(deps: McpDispatchDeps): AgentCallPipeline {
     };
   }
 
-  // The tool-body executor the pipeline runs on ALLOW: route the call to its real body by
+  // The tool-body executor the pipeline runs on ALLOW: a connector tool goes to the
+  // connector engine under the connection's owner; a core tool is routed to its real body by
   // the tool name the registry stamped it with. A tool with no body (a request tool reaches
-  // execute only once approved, via executeApprovedHold; the connector engine is a later
-  // task) fails LOUDLY rather than silently doing nothing.
+  // execute only once approved, via executeApprovedHold) fails LOUDLY rather than silently
+  // doing nothing.
   const executeTool = async (call: AgentCall, connection: AgentConnection): Promise<unknown> => {
+    if (call.connector !== null) {
+      return executeConnectorTool({ ...call, connector: call.connector }, connection.userId);
+    }
     switch (call.tool) {
       case "get_context":
         return getContext(connection);
@@ -339,6 +359,7 @@ function buildAgentPipeline(deps: McpDispatchDeps): AgentCallPipeline {
 
 export function createMcpDispatch(deps: McpDispatchDeps): McpDispatch {
   const { db } = deps;
+  const catalogue = deps.catalogue ?? getProcessCatalogue();
 
   // The pipeline is assembled once here (the composition root's job) and the registry is
   // resolved over it; both are reused for every request this dispatch serves.
@@ -361,11 +382,6 @@ export function createMcpDispatch(deps: McpDispatchDeps): McpDispatch {
     };
   }
 
-  // The connector tools a connection is permitted come from the connector engine (a later
-  // task); until a catalogue of connector toolsets is wired, a connection with no granted
-  // connectors contributes none.
-  const NO_CONNECTOR_TOOLS: ConnectorToolset = {};
-
   // Build a fresh MCP server for one request, registering the tools the registry resolves
   // for the verified connection (core tools + its permitted connector tools). Each handler
   // is bound to the resolved connection, so identity is taken ONLY from the verified bearer.
@@ -378,8 +394,17 @@ export function createMcpDispatch(deps: McpDispatchDeps): McpDispatch {
     let tools: readonly ToolDefinition[];
     if (connection) {
       const permissions = await getConnectionPermissions(db, connection.userId, connection.connectionId);
+      // The connector tools this connection may use: its person's connected services that
+      // this agent is granted (member-scoped by the verified connection's owner).
       tools = permissions
-        ? registry.resolveTools(permissions, NO_CONNECTOR_TOOLS)
+        ? registry.resolveTools(
+            permissions,
+            connectorToolsetFor(
+              await listConnectionsForUser(db, connection.userId),
+              permissions.grantedConnectors,
+              catalogue,
+            ),
+          )
         : registry.coreTools;
     } else {
       // No connection resolved: advertise the core tools so tools/list still answers; a
