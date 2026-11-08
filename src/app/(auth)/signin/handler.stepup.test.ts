@@ -279,12 +279,16 @@ async function enrolTotpFor(
   entries: Map<string, string>,
   email: string,
   user: User,
+  db: Db,
 ): Promise<string> {
   const { secret } = await enrollTotp(
     { account: email, issuer: "Warthog" },
     { random: systemRandom },
   );
   entries.set(user.id, secret);
+  // The account's totp_secrets row, which carries its attempt count and last used step
+  // (review fix W3.5); the secret itself is read through the fake store above.
+  await db.query("INSERT INTO totp_secrets (user_id, secret_enc) VALUES ($1, 'v1:test')", [user.id]);
   return secret;
 }
 
@@ -356,7 +360,7 @@ test("a fresh authenticator-code sign-in records a step-up: requireStepUp passes
     const email = "stepup-totp@warthog.com.au";
 
     const user = await freshUser(db, "stepup-totp");
-    const secret = await enrolTotpFor(entries, email, user);
+    const secret = await enrolTotpFor(entries, email, user, db);
 
     // The code the authenticator app shows for the current 30-second step.
     const totp = codeForStep(secret, stepAt(T0));
@@ -441,7 +445,7 @@ test("a failed authenticator-code sign-in records no step-up and mints no sessio
     const email = "fail-totp@warthog.com.au";
 
     const user = await freshUser(db, "fail-totp");
-    const secret = await enrolTotpFor(entries, email, user);
+    const secret = await enrolTotpFor(entries, email, user, db);
 
     // A code several steps away is outside the accepted {step-1, step, step+1} window.
     // Guard that it differs from every in-window code so the rejection is about the

@@ -308,12 +308,16 @@ async function enrolTotpFor(
   entries: Map<string, string>,
   email: string,
   user: User,
+  db: Db,
 ): Promise<string> {
   const { secret } = await enrollTotp(
     { account: email, issuer: "Warthog" },
     { random: systemRandom },
   );
   entries.set(user.id, secret);
+  // The account's totp_secrets row, which carries its attempt count and last used step
+  // (review fix W3.5); the secret itself is read through the fake store above.
+  await db.query("INSERT INTO totp_secrets (user_id, secret_enc) VALUES ($1, 'v1:test')", [user.id]);
   return secret;
 }
 
@@ -365,7 +369,7 @@ test("sign-in with email plus TOTP mints a session and redirects to /home", asyn
     const email = "totp-signin@warthog.com.au";
 
     const user = await freshUser(db, "totp-signin");
-    const secret = await enrolTotpFor(entries, email, user);
+    const secret = await enrolTotpFor(entries, email, user, db);
 
     // The code the authenticator app shows for the current 30-second step.
     const totp = codeForStep(secret, stepAt(T0));
@@ -431,7 +435,7 @@ test("sign-in rejects a wrong TOTP code and mints no session", async () => {
     const email = "wrong-totp@warthog.com.au";
 
     const user = await freshUser(db, "wrong-totp");
-    const secret = await enrolTotpFor(entries, email, user);
+    const secret = await enrolTotpFor(entries, email, user, db);
 
     // A code several steps away is outside the accepted {step-1, step, step+1} window.
     // Guard that it differs from every in-window code so the rejection is about the
@@ -465,7 +469,7 @@ test("a request from a foreign or missing Origin is refused (403) and mints no s
     const email = "origin-check@warthog.com.au";
 
     const user = await freshUser(db, "origin-check");
-    const secret = await enrolTotpFor(entries, email, user);
+    const secret = await enrolTotpFor(entries, email, user, db);
     const totp = codeForStep(secret, stepAt(T0));
 
     // begin (entry): a foreign Origin and a missing Origin are both forbidden.
@@ -619,7 +623,7 @@ test("a SQL-injection probe in the email field is bound as data and cannot alter
     // A real account exists; if the probe below were concatenated into SQL rather than
     // bound, the trailing statement would drop the table and take this row with it.
     const survivor = await freshUser(db, "survivor");
-    await enrolTotpFor(entries, survivor.email, survivor);
+    await enrolTotpFor(entries, survivor.email, survivor, db);
 
     // Fire the classic injection probe through the email field with a valid Origin. It is
     // handled (a client-side 4xx, never an uncontrolled 500): whether rejected at the
@@ -760,7 +764,7 @@ test("a TOTP sign-in from a new browser alerts too", async () => {
     const outbox = createOutbox();
     const user = await freshUser(db, "totp-new-browser");
     const secrets = new Map<string, string>();
-    const secret = await enrolTotpFor(secrets, user.email, user);
+    const secret = await enrolTotpFor(secrets, user.email, user, db);
     const handler = makeHandler(db, totpSecretsOf(secrets), clock, outbox);
 
     const res = await handler.signInWithTotp(
@@ -791,6 +795,39 @@ test("an alert that cannot be delivered does not fail the sign-in", async () => 
     const authenticationResponse = await auth.authenticate(options);
     const res = await handler.finishPasskey(signinRequest({ email: user.email, authenticationResponse }));
     assert.equal(res.status, 303, "the person is still signed in");
+  } finally {
+    await db.close();
+  }
+});
+
+// =====================================================================================
+// Review fix W3.5 — authenticator-app sign-in is limited and single use: a code that
+// already signed someone in cannot be replayed, and after 5 failures in 15 minutes the
+// account's attempts are slowed (429 with Retry-After), even for the right code.
+// =====================================================================================
+
+test("a TOTP code cannot be used twice, and 5 failures slow further attempts", async () => {
+  const clock = fixedClock(T0);
+  const db = await freshDb();
+  try {
+    const entries = new Map<string, string>();
+    const handler = makeHandler(db, totpSecretsOf(entries), clock);
+    const user = await freshUser(db, "totp-limited");
+    const secret = await enrolTotpFor(entries, user.email, user, db);
+    const totp = codeForStep(secret, stepAt(T0));
+
+    assert.equal((await handler.signInWithTotp(signinRequest({ email: user.email, totp }))).status, 303);
+    const replay = await handler.signInWithTotp(signinRequest({ email: user.email, totp }));
+    assert.equal(replay.status, 401, "the same code is refused the second time");
+
+    const wrong = totp === "000000" ? "111111" : "000000";
+    for (let i = 0; i < 4; i++) {
+      assert.equal((await handler.signInWithTotp(signinRequest({ email: user.email, totp: wrong }))).status, 401);
+    }
+    const nextCode = codeForStep(secret, stepAt(T0) + 1);
+    const slowed = await handler.signInWithTotp(signinRequest({ email: user.email, totp: nextCode }));
+    assert.equal(slowed.status, 429, "after 5 failures even the right code waits");
+    assert.ok(Number(slowed.headers.get("retry-after")) > 0, "it says how long to wait");
   } finally {
     await db.close();
   }

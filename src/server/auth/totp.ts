@@ -116,14 +116,23 @@ export async function enrollTotp(
 // the steps ±1 away (the skew window). Malformed input — anything that is not
 // exactly six digits — is rejected, never thrown.
 export function verifyTotp(secret: string, code: string, deps: { clock: Clock }): boolean {
-  if (!/^[0-9]{6}$/.test(code)) return false;
+  return matchTotpStep(secret, code, deps) !== null;
+}
+
+// The 30-second step a presented code belongs to (the current step or one ±1 away), or
+// null when it matches none — what a single-use check records, so a code (or one from an
+// earlier step) cannot be accepted twice (review fix W3.5, `./totp-attempts`).
+export function matchTotpStep(secret: string, code: string, deps: { clock: Clock }): number | null {
+  if (!/^[0-9]{6}$/.test(code)) return null;
 
   const key = base32Decode(secret);
-  if (key.length === 0) return false;
+  if (key.length === 0) return null;
 
   const step = Math.floor(deps.clock.now().getTime() / 1000 / STEP_SECONDS);
+  let matched: number | null = null;
   for (let offset = -SKEW_STEPS; offset <= SKEW_STEPS; offset += 1) {
-    if (codesEqual(hotpSha1(key, step + offset), code)) return true;
+    // Every candidate is compared (no early exit), so timing does not reveal which matched.
+    if (codesEqual(hotpSha1(key, step + offset), code)) matched = step + offset;
   }
-  return false;
+  return matched;
 }
