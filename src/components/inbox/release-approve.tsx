@@ -10,6 +10,9 @@ import { Label } from "@/components/ui/field";
 import { unlockVault, type UnlockRequest } from "@/client/vault/unlock";
 import { decryptValue } from "@/client/vault/values";
 import { postRelease } from "@/client/vault/release";
+import { createDeviceVault, type PasskeyAssertion } from "@/client/vault/device-vault";
+import { generateRecoveryPhrase } from "@/client/vault/recovery-phrase";
+import { RecoveryPhraseReveal } from "@/components/vault/vault-key-step";
 import {
   createReleaseFlow,
   type ReleaseFlow,
@@ -25,7 +28,8 @@ import {
 // The inbox used to render a card / high-tier release's "Approve and release" DISABLED
 // with a reason, because a signed-in server page cannot hand a React client a callback,
 // so its on-device flow was never wired. This module is that self-wired CLIENT control.
-// On this device it unlocks the vault key (passkey PRF, or a vault passphrase), decrypts
+// On this device it unlocks the vault key (passkey PRF, a vault passphrase or — review fix
+// W1 — the vault recovery phrase), decrypts
 // the chosen saved card number or the requested high-tier value LOCALLY (the existing
 // `src/client/vault` modules), and posts it to the existing approval release endpoint so
 // the agent collects it once (collect_release). The plaintext never reaches the server
@@ -51,7 +55,16 @@ import {
 
 // ─── the controller contract this task introduces ────────────────────────────────────
 
-export type ReleaseMethod = "passkey" | "passphrase";
+// Review fix W1: the vault recovery phrase is a third way to unlock.
+export type ReleaseMethod = "passkey" | "passphrase" | "recovery";
+
+// What runs after a completed release (review fix W1), with the same unlock material: a
+// recovery-phrase unlock re-seals the vault key under this device's passkey (a note says
+// how it went), and a vault with no recovery phrase is handed a new one to save.
+export interface AfterRelease {
+  readonly notice?: string;
+  readonly phrase?: { readonly value: string; readonly save: () => Promise<void> };
+}
 
 // The control's own status alongside the person's entries: idle until they submit,
 // `working` while the hand-over runs, then `released` or `error`.
@@ -60,6 +73,12 @@ export type ReleaseStatus = "idle" | "working" | "released" | "error";
 export interface ReleaseApproveState {
   method: ReleaseMethod;
   passphrase: string;
+  // The recovery phrase typed to unlock (cleared once used).
+  recoveryPhrase: string;
+  // A new vault recovery phrase on screen after the release, its tick and any error.
+  newPhrase: string | null;
+  phraseSaved: boolean;
+  phraseError?: string;
   cardId?: string;
   // The saved high-tier detail chosen for a high-tier release.
   highTierFieldId?: string;
@@ -88,6 +107,12 @@ export interface ReleaseApproveFlowDeps {
   // (or an unusable passphrase) REJECTS → nothing released, plain copy.
   readonly unlockByPassphrase: (passphrase: string) => UnlockRequest | Promise<UnlockRequest>;
   readonly unlockByPasskey: () => Promise<UnlockRequest>;
+  // The vault recovery phrase's unlock material (review fix W1). Optional so a host that
+  // predates it still works; the component always supplies the real one.
+  readonly unlockByRecoveryPhrase?: (phrase: string) => Promise<UnlockRequest>;
+  // Optional follow-up after a completed release (see AfterRelease). It never turns a
+  // completed release into an error.
+  readonly afterRelease?: (unlockRequest: UnlockRequest) => Promise<AfterRelease>;
   // "Confirm it's you": run the step-up ceremony, resolving true once the session has a
   // fresh confirmation (false when it was refused or cancelled). Offered when a release
   // is refused because the step-up lapsed.
@@ -101,6 +126,10 @@ export interface ReleaseApproveController {
   getState(): ReleaseApproveState;
   setMethod(method: ReleaseMethod): void;
   setPassphrase(value: string): void;
+  setRecoveryPhrase(value: string): void;
+  setPhraseSaved(value: boolean): void;
+  // Save the new recovery phrase shown after a release, once "I've saved it" is ticked.
+  confirmRecoveryPhrase(): Promise<void>;
   setCardId(cardId: string): void;
   setHighTierFieldId(fieldId: string): void;
   setSecurityCode(value: string): void;
@@ -119,6 +148,9 @@ const UNLOCK_FAILED_COPY =
   "We couldn't unlock your vault on this device. Check how you unlocked it, then try again.";
 const CONFIRM_FAILED_COPY = "We couldn't check it's you. Please try confirming again.";
 const CONFIRMED_NOTICE = "Thanks, that's confirmed. Approve and release again to hand it over.";
+const PHRASE_NOT_SAVED_COPY = "Tick the box once you've saved your recovery phrase.";
+const PHRASE_FAILED_COPY = "We couldn't save your recovery phrase just now. Please try again.";
+const PHRASE_SAVED_NOTICE = "Your vault recovery phrase is saved.";
 
 // The release refusal reason that "Confirm it's you" resolves.
 const STEP_UP_REQUIRED = "step_up_required";
@@ -129,6 +161,9 @@ export function createReleaseApproveFlow(deps: ReleaseApproveFlowDeps): ReleaseA
   let state: ReleaseApproveState = {
     method: "passkey",
     passphrase: "",
+    recoveryPhrase: "",
+    newPhrase: null,
+    phraseSaved: false,
     cardId: deps.savedCards?.[0]?.id,
     highTierFieldId: deps.request.highTierFields?.[0]?.id,
     securityCode: "",
@@ -144,9 +179,45 @@ export function createReleaseApproveFlow(deps: ReleaseApproveFlowDeps): ReleaseA
   // Gather the opaque unlock material for the chosen method; the controller passes it
   // straight to releaseFlow and never inspects it.
   function gatherUnlock(): UnlockRequest | Promise<UnlockRequest> {
-    return state.method === "passkey"
-      ? deps.unlockByPasskey()
-      : deps.unlockByPassphrase(state.passphrase);
+    if (state.method === "passkey") return deps.unlockByPasskey();
+    if (state.method === "recovery") {
+      if (!deps.unlockByRecoveryPhrase) throw new Error("no recovery-phrase unlock is wired");
+      return deps.unlockByRecoveryPhrase(state.recoveryPhrase);
+    }
+    return deps.unlockByPassphrase(state.passphrase);
+  }
+
+  // The follow-up after a completed release (review fix W1). Best effort: whatever it
+  // does, the release already happened and stays reported as done.
+  let pendingPhraseSave: (() => Promise<void>) | null = null;
+  async function followUp(unlockRequest: UnlockRequest): Promise<void> {
+    if (!deps.afterRelease) return;
+    try {
+      const after = await deps.afterRelease(unlockRequest);
+      if (after.phrase) {
+        pendingPhraseSave = after.phrase.save;
+        set({ newPhrase: after.phrase.value, phraseSaved: false, phraseError: undefined });
+      }
+      if (after.notice) set({ notice: after.notice });
+    } catch {
+      // Nothing to report: the release itself succeeded.
+    }
+  }
+
+  async function confirmRecoveryPhrase(): Promise<void> {
+    if (state.newPhrase === null || pendingPhraseSave === null) return;
+    if (!state.phraseSaved) {
+      set({ phraseError: PHRASE_NOT_SAVED_COPY });
+      return;
+    }
+    try {
+      await pendingPhraseSave();
+    } catch {
+      set({ phraseError: PHRASE_FAILED_COPY });
+      return;
+    }
+    pendingPhraseSave = null;
+    set({ newPhrase: null, phraseSaved: false, phraseError: undefined, notice: PHRASE_SAVED_NOTICE });
   }
 
   // The stored ciphertext this release decrypts: a card release decrypts the CHOSEN saved
@@ -174,7 +245,7 @@ export function createReleaseApproveFlow(deps: ReleaseApproveFlowDeps): ReleaseA
       unlockRequest = await gatherUnlock();
     } catch {
       // Nothing was released; the secrets entered for this attempt are not kept.
-      set({ status: "error", error: UNLOCK_FAILED_COPY, passphrase: "", securityCode: "" });
+      set({ status: "error", error: UNLOCK_FAILED_COPY, passphrase: "", recoveryPhrase: "", securityCode: "" });
       return;
     }
 
@@ -191,14 +262,23 @@ export function createReleaseApproveFlow(deps: ReleaseApproveFlowDeps): ReleaseA
     // Whatever the outcome, the passphrase and security code entered for this attempt are
     // cleared from state at once (a retry asks for them again).
     if (result.ok) {
-      set({ status: "released", error: undefined, passphrase: "", securityCode: "", confirmRequired: false });
+      set({
+        status: "released",
+        error: undefined,
+        passphrase: "",
+        recoveryPhrase: "",
+        securityCode: "",
+        confirmRequired: false,
+      });
       deps.onReleased?.();
+      await followUp(unlockRequest);
     } else {
       // A lapsed step-up is resolved right here ("Confirm it's you"), not by signing out.
       set({
         status: "error",
         error: result.error,
         passphrase: "",
+        recoveryPhrase: "",
         securityCode: "",
         confirmRequired: result.reason === STEP_UP_REQUIRED,
       });
@@ -224,6 +304,9 @@ export function createReleaseApproveFlow(deps: ReleaseApproveFlowDeps): ReleaseA
     getState: () => state,
     setMethod: (method) => set({ method }),
     setPassphrase: (value) => set({ passphrase: value }),
+    setRecoveryPhrase: (value) => set({ recoveryPhrase: value }),
+    setPhraseSaved: (value) => set({ phraseSaved: value }),
+    confirmRecoveryPhrase,
     setCardId: (cardId) => set({ cardId }),
     setHighTierFieldId: (fieldId) => set({ highTierFieldId: fieldId }),
     setSecurityCode: (value) => set({ securityCode: value }),
@@ -267,7 +350,9 @@ function base64UrlToBytes(value: string): Uint8Array<ArrayBuffer> {
   return base64ToBytes(b64 + padding);
 }
 
-async function fetchUnlockMaterial(method: "passkey_prf" | "passphrase"): Promise<ServerUnlockMaterial> {
+async function fetchUnlockMaterial(
+  method: "passkey_prf" | "passphrase" | "recovery",
+): Promise<ServerUnlockMaterial> {
   const response = await globalThis.fetch(`${UNLOCK_MATERIAL_BASE}/${method}`, {
     credentials: "same-origin",
   });
@@ -308,6 +393,45 @@ async function defaultUnlockByPasskey(): Promise<UnlockRequest> {
     throw new Error("this passkey can't unlock your vault");
   }
   return { method: "prf", material: { wrapped: material.wrapped }, secret: base64UrlToBytes(prf) };
+}
+
+// Vault recovery phrase → the recovery unlock material (review fix W1): the envelope sealed
+// under the phrase, with the typed phrase as the secret (unlockVault normalises it).
+async function defaultUnlockByRecoveryPhrase(phrase: string): Promise<UnlockRequest> {
+  const material = await fetchUnlockMaterial("recovery");
+  if (material.wrapped == null) throw new Error("no vault recovery phrase is set");
+  return { method: "recovery", material: { wrapped: material.wrapped }, secret: phrase };
+}
+
+// The follow-up after a completed release (review fix W1), over the shared device vault:
+// recover the vault key from the same unlock material, then re-seal it under this device's
+// passkey after a phrase unlock, or prepare a new recovery phrase when the vault has none.
+const ADOPTED_NOTICE = "This device's passkey can now unlock your vault, so you won't need the phrase here next time.";
+const UNSUPPORTED_NOTICE = "This device's passkey can't unlock your vault, so use your recovery phrase here.";
+const ADOPT_FAILED_NOTICE = "This passkey wasn't set up to unlock your vault. You can use your recovery phrase again next time.";
+
+async function defaultAfterRelease(unlockRequest: UnlockRequest): Promise<AfterRelease> {
+  const vault = createDeviceVault({
+    fetch: (...args) => globalThis.fetch(...args),
+    startAuthentication: async (opts) =>
+      (await startAuthentication({
+        optionsJSON: opts.optionsJSON as PublicKeyCredentialRequestOptionsJSON,
+      })) as unknown as PasskeyAssertion,
+  });
+  // Most vaults already have a phrase: check first, so the vault key is only re-derived
+  // when there is something to do with it.
+  if (unlockRequest.method !== "recovery" && (await vault.hasRecoveryPhrase())) return {};
+  const vaultKey = await unlockVault(unlockRequest);
+  if (unlockRequest.method === "recovery") {
+    try {
+      const outcome = await vault.adoptPasskey(vaultKey);
+      return { notice: outcome === "unsupported" ? UNSUPPORTED_NOTICE : ADOPTED_NOTICE };
+    } catch {
+      return { notice: ADOPT_FAILED_NOTICE };
+    }
+  }
+  const phrase = generateRecoveryPhrase();
+  return { phrase: { value: phrase, save: () => vault.saveRecoveryPhrase(vaultKey, phrase) } };
 }
 
 // "Confirm it's you" — the passkey step-up ceremony (design §5): ask the step-up
@@ -394,6 +518,8 @@ export interface ReleaseApproveProps {
   releaseFlow?: ReleaseFlow;
   unlockByPassphrase?: (passphrase: string) => UnlockRequest | Promise<UnlockRequest>;
   unlockByPasskey?: () => Promise<UnlockRequest>;
+  unlockByRecoveryPhrase?: (phrase: string) => Promise<UnlockRequest>;
+  afterRelease?: (unlockRequest: UnlockRequest) => Promise<AfterRelease>;
   confirmItsYou?: () => Promise<boolean>;
   onReleased?: () => void;
 }
@@ -416,6 +542,8 @@ export function ReleaseApprove(props: ReleaseApproveProps): React.ReactElement {
       releaseFlow: props.releaseFlow ?? getDefaultReleaseFlow(),
       unlockByPassphrase: props.unlockByPassphrase ?? defaultUnlockByPassphrase,
       unlockByPasskey: props.unlockByPasskey ?? defaultUnlockByPasskey,
+      unlockByRecoveryPhrase: props.unlockByRecoveryPhrase ?? defaultUnlockByRecoveryPhrase,
+      afterRelease: props.afterRelease ?? defaultAfterRelease,
       confirmItsYou: props.confirmItsYou ?? defaultConfirmItsYou,
       onChange: () => forceUpdate(),
       onReleased: props.onReleased,
@@ -433,6 +561,7 @@ export function ReleaseApprove(props: ReleaseApproveProps): React.ReactElement {
   const codeFieldId = React.useId();
   const highTierFieldIdAttr = React.useId();
   const passphraseFieldId = React.useId();
+  const recoveryPhraseFieldId = React.useId();
   const methodName = React.useId();
   // Nothing to hand over: no saved card for a card release, or no saved detail for a
   // high-tier one.
@@ -524,6 +653,16 @@ export function ReleaseApprove(props: ReleaseApproveProps): React.ReactElement {
           />
           Use your vault passphrase
         </label>
+        <label className="flex items-center gap-2 text-sm text-fg">
+          <input
+            type="radio"
+            name={methodName}
+            value="recovery"
+            checked={state.method === "recovery"}
+            onChange={() => flow.setMethod("recovery")}
+          />
+          Use your recovery phrase
+        </label>
       </fieldset>
 
       {state.method === "passphrase" ? (
@@ -536,6 +675,22 @@ export function ReleaseApprove(props: ReleaseApproveProps): React.ReactElement {
             autoComplete="off"
             value={state.passphrase}
             onChange={(event) => flow.setPassphrase(event.target.value)}
+          />
+        </div>
+      ) : null}
+
+      {state.method === "recovery" ? (
+        <div className="flex flex-col gap-1.5">
+          <Label htmlFor={recoveryPhraseFieldId}>Recovery phrase</Label>
+          <Input
+            id={recoveryPhraseFieldId}
+            name="recoveryPhrase"
+            autoComplete="off"
+            autoCapitalize="characters"
+            spellCheck={false}
+            placeholder="ABCD-EFGH-…"
+            value={state.recoveryPhrase}
+            onChange={(event) => flow.setRecoveryPhrase(event.target.value)}
           />
         </div>
       ) : null}
@@ -554,6 +709,18 @@ export function ReleaseApprove(props: ReleaseApproveProps): React.ReactElement {
         <p role="status" className="text-sm text-success">
           Handed over — the agent can collect it once.
         </p>
+      ) : null}
+      {state.newPhrase !== null ? (
+        <RecoveryPhraseReveal
+          phrase={state.newPhrase}
+          saved={state.phraseSaved}
+          onSavedChange={(saved) => flow.setPhraseSaved(saved)}
+          onContinue={() => {
+            void flow.confirmRecoveryPhrase();
+          }}
+          error={state.phraseError}
+          continueLabel="Save my recovery phrase"
+        />
       ) : null}
 
       {state.confirmRequired ? (
