@@ -6,7 +6,7 @@
 // then, in ONE transaction and BEFORE it returns, it:
 //   (a) deletes the connection's OAuth tokens AND per-agent access keys, so the
 //       agent's very next request carrying either credential is refused;
-//   (b) denies the connection's PENDING approvals (through the pure state machine's
+//   (b) denies the agent's PENDING approvals (through the pure state machine's
 //       storage skin, `decide`, so only pending ones move and the transition is the
 //       one the inbox uses — one source of truth);
 //   (c) marks the agent disconnected; and
@@ -37,7 +37,7 @@ import { z } from "zod";
 import { parseParams } from "../http/validate";
 import { revokeAccessKey } from "../oauth/access-key";
 import { createDbRecorder } from "../activity/writer";
-import { decide } from "../db/approvals";
+import { ApprovalAlreadyDecidedError, decide } from "../db/approvals";
 import { getAgentById } from "../db/agents";
 import { withTransaction } from "../db/index";
 import { releaseKeyFor } from "../mcp/tools/collect-release";
@@ -110,15 +110,23 @@ export async function disconnectAgent(
     await tx.query("DELETE FROM oauth_tokens WHERE connection_id = $1::uuid", [connectionId]);
     await revokeAccessKey(tx, { connectionId });
 
-    // (b) Deny the connection's PENDING approvals (only pending ones match), each
-    // through the pure state machine's storage skin so the transition and timestamp
-    // are the inbox's own — one source of truth.
+    // (b) Deny the agent's PENDING approvals (only pending ones match), each through
+    // the pure state machine's storage skin so the transition and timestamp are the
+    // inbox's own — one source of truth. Approvals are keyed by the requesting AGENT's
+    // row id (approvals.agent_id = agents.id, as the pipeline writes it), never the
+    // connection id — the two are distinct uuids. A decision that lands first (the
+    // person approving on another device, or the window passing) stands: the store's
+    // compare-and-swap refuses the deny and the disconnect carries on.
     const pending = await tx.query(
       "SELECT id FROM approvals WHERE user_id = $1 AND agent_id = $2::uuid AND status = 'pending'",
-      [userId, connectionId],
+      [userId, agent.id],
     );
     for (const row of pending.rows) {
-      await decide(tx, { userId, id: row.id as string, decision: { status: "denied" } }, dek, clock);
+      try {
+        await decide(tx, { userId, id: row.id as string, decision: { status: "denied" } }, dek, clock);
+      } catch (error) {
+        if (!(error instanceof ApprovalAlreadyDecidedError)) throw error;
+      }
     }
 
     // (c) Mark the agent disconnected (the row survives — the policy engine reads its
