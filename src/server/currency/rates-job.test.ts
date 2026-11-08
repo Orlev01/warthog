@@ -172,7 +172,8 @@ test("the job fetches the day's rates via the source seam and upserts them into 
     const result: RatesJobResult = await runRatesJob({ db, source: fakeRateSource(fixed) });
 
     assert.equal(result.rateDate, "2026-11-06", "the result reports the day whose rates were stored");
-    assert.equal(result.pairsUpserted, 3, "one pair per quote currency was written");
+    // Review fix F12: every ordered pair among EUR, AUD, USD and GBP (4 × 3), not only EUR->X.
+    assert.equal(result.pairsUpserted, 12, "one row per ordered currency pair was written");
 
     // Every fetched pair reads back from the store for its date.
     for (const [quote, rate] of Object.entries(fixed.rates)) {
@@ -196,7 +197,8 @@ test("a second run the same day changes nothing (idempotent: no duplicate rows, 
 
     await runRatesJob({ db, source });
     const rowsAfterFirst = await totalRows(db);
-    assert.equal(rowsAfterFirst, 2, "the first run wrote one row per quote currency");
+    // Review fix F12: every ordered pair among EUR, AUD and USD (3 × 2).
+    assert.equal(rowsAfterFirst, 6, "the first run wrote one row per ordered currency pair");
 
     // A second run with the same day's rates must not throw and must not change the store.
     await runRatesJob({ db, source });
@@ -246,6 +248,66 @@ test("a fetch failure propagates (is reported) and leaves the previously stored 
 // AC4 (validate half) — a trigger handler rejects malformed / oversized input with a 4xx
 // BEFORE the job runs, and accepts a well-formed trigger.
 // ===========================================================================
+
+// Review fix F12 — conversion needs the pair it asks for. The free source publishes one base
+// (EUR), but a card request converts FROM the request currency INTO the account currency (AUD
+// by default) and the lookup is a direct (base, quote) match, so storing only EUR->X meant no
+// conversion ever worked (USD->AUD was never there). The job now stores every ordered pair
+// among the day's currencies, derived from the one published base.
+
+test("the job stores cross rates, so an AUD account can convert USD (and back)", async () => {
+  const db = await freshDb();
+  try {
+    const fixed: DailyRates = { rateDate: "2026-11-06", baseCurrency: "EUR", rates: { AUD: 1.6543, USD: 1.0812 } };
+    await runRatesJob({ db, source: fakeRateSource(fixed) });
+
+    const expect = async (base: string, quote: string, rate: number) => {
+      const lookup = await getRate(db, { on: "2026-11-06", baseCurrency: base, quoteCurrency: quote });
+      assert.equal(lookup.found, true, `${base}->${quote} is stored`);
+      if (lookup.found) {
+        assert.ok(Math.abs(lookup.rate - rate) / rate < 1e-9, `${base}->${quote} is ${rate}, got ${lookup.rate}`);
+        assert.equal(lookup.rateDate, "2026-11-06");
+      }
+    };
+    await expect("USD", "AUD", 1.6543 / 1.0812);
+    await expect("AUD", "USD", 1.0812 / 1.6543);
+    await expect("AUD", "EUR", 1 / 1.6543);
+    await expect("USD", "EUR", 1 / 1.0812);
+    await expect("EUR", "AUD", 1.6543);
+  } finally {
+    await db.close();
+  }
+});
+
+test("currency codes are normalised to upper case, and malformed entries are dropped, not stored", async () => {
+  const db = await freshDb();
+  try {
+    const fixed: DailyRates = {
+      rateDate: "2026-11-06",
+      baseCurrency: "eur",
+      rates: { aud: 1.6543, XX: 2, NZD: -1, JPY: Number.NaN, GBP: 0.8721 },
+    };
+    const result = await runRatesJob({ db, source: fakeRateSource(fixed) });
+    assert.equal(result.pairsUpserted, 6, "EUR, AUD and GBP only (3 × 2)");
+    const lookup = await getRate(db, { on: "2026-11-06", baseCurrency: "GBP", quoteCurrency: "AUD" });
+    assert.equal(lookup.found, true);
+    const bad = await db.query("SELECT count(*)::int AS n FROM exchange_rates WHERE base_currency IN ('NZD','JPY') OR quote_currency IN ('NZD','JPY')");
+    assert.equal(Number(bad.rows[0]?.n), 0);
+  } finally {
+    await db.close();
+  }
+});
+
+test("a day's set with an unusable base currency is reported, and nothing is written", async () => {
+  const db = await freshDb();
+  try {
+    const fixed: DailyRates = { rateDate: "2026-11-06", baseCurrency: "EURO", rates: { AUD: 1.6543 } };
+    await assert.rejects(runRatesJob({ db, source: fakeRateSource(fixed) }));
+    assert.equal(await totalRows(db), 0);
+  } finally {
+    await db.close();
+  }
+});
 
 test("the trigger handler rejects malformed JSON with a 4xx and never runs the job", async () => {
   const db = recordingDb();

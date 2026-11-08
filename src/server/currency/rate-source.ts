@@ -10,8 +10,12 @@
 // no Authorization / api-key header, and it reads no `process.env` (it is built purely
 // from its injected deps, so no ambient value can ride the request — AC5 / INV-103).
 //
-// A network error, a non-OK HTTP status, or a malformed / invalid body is REPORTED by a
-// rejection, never swallowed into a bogus set (AC3): the policy engine must refuse a
+// The request is bounded: it is aborted after a timeout and the body is read under a size cap,
+// so a slow or hostile upstream can neither hold the shared scheduler tick nor make the process
+// buffer an oversized body.
+//
+// A network error, a timeout, a non-OK HTTP status, or a malformed / invalid / oversized body is
+// REPORTED by a rejection, never swallowed into a bogus set (AC3): the policy engine must refuse a
 // conversion when no real rate is available rather than convert against a silent empty
 // or garbage set.
 
@@ -48,6 +52,34 @@ export function fakeRateSource(fixed: DailyRates): RateSource {
 export interface FrankfurterRateSourceDeps {
   readonly baseUrl: string;
   readonly fetchImpl: typeof fetch;
+  // Abort the request (and the body read) after this long. Defaults to 10 seconds.
+  readonly timeoutMs?: number;
+}
+
+const DEFAULT_TIMEOUT_MS = 10_000;
+const MAX_BODY_BYTES = 256 * 1024; // a day's set is a few KiB
+
+// Read a response body under a byte cap, refusing a declared or actual size over it without
+// buffering the rest.
+async function readCapped(response: Response, maxBytes: number): Promise<string> {
+  const tooLarge = () => new Error("Exchange-rate source response exceeds the size cap");
+  const declared = response.headers.get("content-length");
+  if (declared !== null && Number(declared) > maxBytes) throw tooLarge();
+  const reader = response.body?.getReader();
+  if (!reader) return "";
+  const chunks: Uint8Array[] = [];
+  let total = 0;
+  for (;;) {
+    const { done, value } = await reader.read();
+    if (done) break;
+    total += value.byteLength;
+    if (total > maxBytes) {
+      await reader.cancel().catch(() => {});
+      throw tooLarge();
+    }
+    chunks.push(value);
+  }
+  return new TextDecoder().decode(Buffer.concat(chunks));
 }
 
 // The upstream daily-rate payload (what the free official source returns): a base
@@ -73,15 +105,16 @@ export function createFrankfurterRateSource(deps: FrankfurterRateSourceDeps): Ra
 
   return {
     async fetchDailyRates(): Promise<DailyRates> {
-      // A network error here rejects the promise; we do not catch it, so the failure is
-      // reported out of `fetchDailyRates` (AC3).
-      const response = await deps.fetchImpl(url, { headers: { accept: "application/json" } });
+      // A network error or the timeout rejects the promise; we do not catch it, so the
+      // failure is reported out of `fetchDailyRates` (AC3). The signal also bounds the body read.
+      const signal = AbortSignal.timeout(deps.timeoutMs ?? DEFAULT_TIMEOUT_MS);
+      const response = await deps.fetchImpl(url, { headers: { accept: "application/json" }, signal });
       if (!response.ok) {
         throw new Error(`Exchange-rate source returned HTTP ${response.status}`);
       }
 
-      // A non-JSON body makes `.json()` throw; that rejection propagates (reported).
-      const body: unknown = await response.json();
+      // A non-JSON body makes the parse throw; that rejection propagates (reported).
+      const body: unknown = JSON.parse(await readCapped(response, MAX_BODY_BYTES));
 
       const parsed = upstreamPayloadSchema.safeParse(body);
       if (!parsed.success) {
