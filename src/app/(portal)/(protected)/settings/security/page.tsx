@@ -9,6 +9,7 @@ import { AlertTriangle, CheckCircle2 } from "lucide-react";
 
 import { Button } from "@/components/ui/button";
 import { FactorControls } from "@/components/auth/factor-controls";
+import { ConfirmItsYou } from "@/components/ui/confirm-its-you";
 
 import { loadConfig } from "../../../../../server/config";
 import { getServerDb } from "../../../../../server/db/server";
@@ -219,6 +220,9 @@ function SecuritySettings({
       </div>
 
       {notice ? <NoticeBanner notice={notice} /> : null}
+      {notice?.offerConfirm ? (
+        <ConfirmItsYou confirmedText="Thanks — that's confirmed. Make your change again within the next five minutes." />
+      ) : null}
 
       <Section title="Passkeys" lead="Sign in with your fingerprint, face or device PIN.">
         {view.passkeys.length === 0 ? (
