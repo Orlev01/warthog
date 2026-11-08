@@ -133,6 +133,7 @@ const CATEGORY_DISCONNECTED = "disconnected";
 const CATEGORY_RATE_LIMITED = "rate_limited";
 const CATEGORY_DENIED = "denied";
 const CATEGORY_TOOL_ERROR = "tool_error";
+const CATEGORY_TOOL_REFUSED = "tool_refused";
 
 // The pipeline's internal classification of a handled call: the public result plus — on a
 // refusal — the short error-category label the request metrics carry. The outcome dimension
@@ -412,8 +413,15 @@ export function createAgentCallPipeline(deps: PipelineDeps): AgentCallPipeline {
     }
 
     // ALLOW — execute the tool, then record the activity entry BEFORE the result
-    // is returned to the agent.
+    // is returned to the agent. A tool body that refuses (e.g. the connection lacks
+    // the permission it checks) did nothing: it is recorded and returned as refused,
+    // with the body's own plain reason — never as executed.
     const result = await executeTool(call, connection);
+    const refusal = asToolRefusal(result);
+    if (refusal) {
+      await record(connection, call, "refused");
+      return { result: refusal, errorCategory: CATEGORY_TOOL_REFUSED };
+    }
     await record(connection, call, "executed");
     return { result: { status: "executed", result } };
   }

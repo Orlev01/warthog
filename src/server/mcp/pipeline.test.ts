@@ -948,3 +948,66 @@ test("with the real notifier wired, a push failure on an ask decision still sche
     await db.close();
   }
 });
+
+// ===========================================================================
+// Review fix C9 — a tool body that refuses (`{status:"refused", reason}` — e.g. "This
+// agent does not have permission to use memories.") did nothing, so it must not be
+// returned to the agent as a success (isError:false) nor written to the tamper-evident
+// activity record as "executed". It is recorded "refused" and returned as a refusal
+// carrying the body's own plain reason.
+// ===========================================================================
+
+test("a tool body's own refusal is recorded as refused and returned as a refusal, never as executed", async () => {
+  const db = await freshDb();
+  const keyWrapper = keyWrapperFor();
+  try {
+    const { userId } = await makePerson(db, "c9-body-refusal", keyWrapper);
+    await upsertPermissions(db, baseGrants(userId, CONN));
+
+    const reason = "This agent does not have permission to use memories.";
+    const rec = spyRecorder(fixedClock(NOW));
+    const exec = spyExecutor(undefined, { status: "refused", reason });
+    const pipeline = buildPipeline(db, keyWrapper, {
+      clock: fixedClock(NOW),
+      rateLimiter: createRateLimiter(fixedClock(NOW)),
+      recorder: rec.recorder,
+      executeTool: exec.fn,
+    });
+
+    const result = expectRefused(
+      await pipeline.handleAgentCall(connectionFor(userId), callFor({ tool: "search_memory" })),
+    );
+    assert.equal(result.reason, reason, "the agent is handed the body's own plain reason");
+    assert.equal(exec.calls.length, 1, "the body did run (and refused)");
+    assert.equal(rec.entries.length, 1, "exactly one activity entry is recorded");
+    assert.equal(rec.entries[0]!.outcome, "refused", "the activity record says refused, not executed");
+  } finally {
+    await db.close();
+  }
+});
+
+test("a result that merely carries a status field is still executed (only a refusal with a reason is a refusal)", async () => {
+  const db = await freshDb();
+  const keyWrapper = keyWrapperFor();
+  try {
+    const { userId } = await makePerson(db, "c9-not-refusal", keyWrapper);
+    await upsertPermissions(db, baseGrants(userId, CONN));
+
+    const rec = spyRecorder(fixedClock(NOW));
+    const exec = spyExecutor(undefined, { status: "saved", id: "m-1" });
+    const pipeline = buildPipeline(db, keyWrapper, {
+      clock: fixedClock(NOW),
+      rateLimiter: createRateLimiter(fixedClock(NOW)),
+      recorder: rec.recorder,
+      executeTool: exec.fn,
+    });
+
+    const result = expectExecuted(
+      await pipeline.handleAgentCall(connectionFor(userId), callFor({ tool: "search_memory" })),
+    );
+    assert.deepEqual(result.result, { status: "saved", id: "m-1" }, "the body's result is handed back as-is");
+    assert.equal(rec.entries[0]!.outcome, "executed", "and recorded as executed");
+  } finally {
+    await db.close();
+  }
+});
