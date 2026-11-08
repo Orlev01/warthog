@@ -14,6 +14,7 @@ import { systemClock } from "@/server/seams/clock";
 import { processSingleton } from "@/server/seams/process-singleton";
 import { selectSenders, type Senders, type OutgoingMessage } from "@/server/notify/senders";
 import { HttpError } from "@/server/http/validate";
+import { connectCallbackUrl } from "@/server/http/routes";
 import { loadCatalogue, type CatalogueIndex } from "@/server/connectors/catalogue";
 import { createGuardedProviderFetch } from "@/server/connectors/provider-mcp";
 import type { Db } from "@/server/db/index";
@@ -88,7 +89,7 @@ function buildActions(db: Db, config: Config): ConnectorsActions {
     }
     return keyWrapper.unwrap(user.wrappedDek);
   };
-  const redirectUri = new URL("/connectors/callback", config.publicBaseUrl).href;
+  const redirectUri = connectCallbackUrl(config.publicBaseUrl);
   return createConnectorsActions({
     db,
     clock: systemClock,

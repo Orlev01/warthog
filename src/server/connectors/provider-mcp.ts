@@ -43,6 +43,7 @@ import {
   systemResolver,
   type HostResolver,
 } from "../http/guarded-fetch";
+import { connectCallbackUrl } from "../http/routes";
 
 // ===========================================================================
 // 1. The SSRF-guarded outbound fetch.
@@ -329,7 +330,7 @@ async function registerViaDcr(
   const body = {
     client_name: "Warthog",
     client_uri: new URL(config.clientMetadataUrl).origin,
-    redirect_uris: [new URL("/oauth/callback", config.clientMetadataUrl).href],
+    redirect_uris: [connectCallbackUrl(config.clientMetadataUrl)],
     grant_types: ["authorization_code", "refresh_token"],
     response_types: ["code"],
     token_endpoint_auth_method: "none",

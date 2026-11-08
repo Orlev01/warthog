@@ -18,6 +18,7 @@
 // served URL and must not be rewritable by a spoofed Host header.
 
 import type { Config } from "../../../server/config";
+import { connectCallbackUrl } from "../../../server/http/routes";
 
 // Strip a single trailing slash so sub-path endpoints join cleanly whether or not the
 // configured base URL carries one (`https://host/` + `/oauth/...` must not double the
@@ -36,7 +37,7 @@ export function createClientMetadataHandler({
     // The defining CIMD rule: the document URL is the client_id.
     client_id: `${issuer}/oauth/client-metadata.json`,
     // Where a provider returns the authorization code — on Warthog's own host.
-    redirect_uris: [`${issuer}/connectors/callback`],
+    redirect_uris: [connectCallbackUrl(issuer)],
     // Warthog is a public client (PKCE, no client secret).
     token_endpoint_auth_method: "none",
   };
