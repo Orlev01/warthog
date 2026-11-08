@@ -21,33 +21,73 @@
 // changes nothing and reports nothing. The job only ever touches accounts PRESENT on
 // the queue — an account never enqueued is left wholly intact.
 //
-// Takes `db` as its only dependency: it holds no secret and reads no `process.env`
-// (INV-103), and every statement binds the account id as a parameter, never
-// concatenated into the SQL text (INV-102 — a queued value shaped like SQL is handled
-// as data and cannot alter a query).
+// Two things a person owns live outside that cascade, so the job removes them itself
+// (review fix W3.2):
+//   • Receipt files keep their ciphertext in blob storage under `receipt_files.blob_key`.
+//     Every such blob is deleted BEFORE the rows, so the key is never lost while its blob
+//     still exists: a blob delete that fails leaves the account (and its queue entry) for
+//     the next run, which tries again. Blob deletes are idempotent, so a retry after a
+//     partial run is safe.
+//   • The person's agents' OAuth tokens, authorization codes and access keys are keyed by
+//     the agent's connection id with no foreign key to users, so they are deleted, by the
+//     person's own agents, in the same transaction as the account row.
+// Each account is its own unit: a failure is collected and the sweep carries on with the
+// rest, then reports every failure together (one bad account never blocks the others).
+//
+// Takes `db` and the blob store as its dependencies: it holds no secret and reads no
+// `process.env` (INV-103), and every statement binds the account id as a parameter, never
+// concatenated into the SQL text (INV-102 — a queued value shaped like SQL is handled as
+// data and cannot alter a query).
 
 import { listPendingPurges } from "../db/account-purge";
-import type { Db } from "../db/index";
+import { withTransaction, type Db } from "../db/index";
+import type { BlobStore } from "../storage/blob";
 
 // The account ids purged on this run (empty when the queue was empty / already clear).
 export interface PurgeRunResult {
   readonly purged: string[];
 }
 
-// Purge every account currently on the queue. Reads the whole pending queue (E16-S07),
-// then removes each account's `users` row — the cascade carries away all of that
-// account's personal rows across every table (including the append-only activity
-// entries and disputes) and its own queue entry. Returns the account ids purged.
-export async function runAccountPurge(db: Db): Promise<PurgeRunResult> {
+// The blob store receipt ciphertext lives in (the same store the life-admin page writes).
+export interface PurgeDeps {
+  readonly blobStore: BlobStore;
+}
+
+// Purge one account: its receipt blobs, then (in one transaction) its agents' credentials
+// and its `users` row, whose cascade carries away every personal row (including the
+// append-only activity entries and disputes) and its own queue entry. Idempotent: an
+// account whose rows are already partly or wholly gone simply deletes what remains.
+async function purgeAccount(db: Db, userId: string, deps: PurgeDeps): Promise<void> {
+  const receipts = await db.query("SELECT blob_key FROM receipt_files WHERE user_id = $1", [userId]);
+  for (const row of receipts.rows) {
+    await deps.blobStore.delete(String(row.blob_key));
+  }
+  await withTransaction(db, async (tx) => {
+    const agents = "SELECT connection_id FROM agents WHERE user_id = $1";
+    await tx.query(`DELETE FROM oauth_tokens WHERE connection_id IN (${agents})`, [userId]);
+    await tx.query(`DELETE FROM oauth_auth_codes WHERE connection_id IN (${agents})`, [userId]);
+    await tx.query(`DELETE FROM oauth_access_keys WHERE connection_id IN (${agents})`, [userId]);
+    await tx.query("DELETE FROM users WHERE id = $1", [userId]);
+  });
+}
+
+// Purge every account currently on the queue (E16-S07's whole pending queue). Returns the
+// account ids purged; when any account failed, the rest are still purged and the run then
+// throws one AggregateError carrying each failure (the failed accounts stay queued).
+export async function runAccountPurge(db: Db, deps: PurgeDeps): Promise<PurgeRunResult> {
   const pending = await listPendingPurges(db);
   const purged: string[] = [];
+  const failures: unknown[] = [];
   for (const request of pending) {
-    // Delete the account root; the schema's `ON DELETE CASCADE` references remove
-    // every child row (and the queue entry) in one atomic statement. The id is a
-    // bound parameter, never spliced into the SQL. Idempotent: an account whose rows
-    // are already partly or wholly gone simply deletes what remains.
-    await db.query("DELETE FROM users WHERE id = $1", [request.userId]);
-    purged.push(request.userId);
+    try {
+      await purgeAccount(db, request.userId, deps);
+      purged.push(request.userId);
+    } catch (error) {
+      failures.push(error);
+    }
+  }
+  if (failures.length > 0) {
+    throw new AggregateError(failures, `account-purge: ${failures.length} account(s) could not be purged`);
   }
   return { purged };
 }

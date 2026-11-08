@@ -124,7 +124,7 @@ import { test } from "node:test";
 import assert from "node:assert/strict";
 import { z } from "zod";
 
-import { issueInvite, redeemInvite } from "./household-invites";
+import { issueInvite, redeemInvite, InviteRefusedError, INVITES_PER_HOUR } from "./household-invites";
 // Documentary type anchors — the exact names/shapes the implementation exports. Erased at
 // runtime (and test files are excluded from `tsc`), so a rename cannot break these tests;
 // the runtime assertions below are what actually gate behaviour.
@@ -315,15 +315,27 @@ test("the raw token is never stored in the household_invites table (only a hash 
 });
 
 test("the raw token never reaches the query layer as a bound value when issuing", async () => {
-  // A recording db captures every bound value; the token is hashed before it is stored, so
-  // its plaintext must appear in no parameter list.
-  const db = recordingDb();
-  const issued = await issueInvite(
-    db,
-    { householdId: "some-household", email: "invitee@warthog.com.au" },
-    issueDeps(),
-  );
-  assertNeverBound(db, issued.token);
+  // A recording proxy over a real db captures every bound value (issuing now checks the
+  // household's limits, so it needs real rows to succeed); the token is hashed before it is
+  // stored, so its plaintext must appear in no parameter list.
+  const real = await freshDb();
+  try {
+    const owner = await makeUser(real, "ac1-bound-owner");
+    const house = await createHousehold(real, { ownerId: owner.id });
+    const calls: { text: string; values: unknown[] }[] = [];
+    const db: RecordingDb = {
+      calls,
+      query(text: string, values: unknown[] = []): Promise<QueryResult> {
+        calls.push({ text, values });
+        return real.query(text, values);
+      },
+      close: () => real.close(),
+    };
+    const issued = await issueInvite(db, { householdId: house.id, email: "invitee@warthog.com.au" }, issueDeps());
+    assertNeverBound(db, issued.token);
+  } finally {
+    await real.close();
+  }
 });
 
 // ===========================================================================
@@ -471,17 +483,21 @@ test("redeeming into a full household (8 members) is refused with a plain reason
     const alice = await makeUser(db, "ac2-cap-owner");
     const house = await createHousehold(db, { ownerId: alice.id });
 
-    // The owner is member #1. Seven more fill the household to the cap of 8.
-    for (let i = 1; i <= 7; i++) {
+    // The owner is member #1. Six more leave one place, which an invite to a ninth person
+    // takes (a full household can no longer issue an invite at all, review fix W3.1).
+    for (let i = 1; i <= 6; i++) {
       const filler = await makeUser(db, `ac2-cap-filler-${i}`);
       const added = await addMember(db, { householdId: house.id, userId: filler.id });
       assert.equal(added.ok, true, `filler #${i} fits within the cap of 8`);
     }
-    assert.equal((await listMembers(db, house.id, alice.id)).length, 8, "sanity: the household is full at 8 members");
-
-    // A ninth person holds a genuinely-issued, live invite — but the household is full.
     const ninth = await makeUser(db, "ac2-cap-ninth");
     const { token } = await issueInvite(db, { householdId: house.id, email: ninth.email }, issueDeps());
+
+    // The last place is then filled another way, so the ninth person's live invite meets a
+    // full household.
+    const eighth = await makeUser(db, "ac2-cap-filler-7");
+    assert.equal((await addMember(db, { householdId: house.id, userId: eighth.id })).ok, true);
+    assert.equal((await listMembers(db, house.id, alice.id)).length, 8, "sanity: the household is full at 8 members");
 
     const result: RedeemInviteResult = await redeemInvite(db, { token, userId: ninth.id }, redeemDeps());
     assert.deepEqual(
@@ -1008,15 +1024,18 @@ test("two parallel joins into a household with one place left admit exactly one"
   try {
     const owner = await makeUser(db, "race-owner");
     const house = await createHousehold(db, { ownerId: owner.id });
-    for (let i = 1; i <= 6; i++) {
+    for (let i = 1; i <= 5; i++) {
       const filler = await makeUser(db, `race-filler-${i}`);
       assert.equal((await addMember(db, { householdId: house.id, userId: filler.id })).ok, true);
     }
-    // 7 members: one place left, two invitees racing for it.
+    // 6 members: two places, one invite each (open invites never exceed the free places).
     const p = await makeUser(db, "race-p");
     const q = await makeUser(db, "race-q");
     const tp = (await issueInvite(db, { householdId: house.id, email: p.email }, issueDeps())).token;
     const tq = (await issueInvite(db, { householdId: house.id, email: q.email }, issueDeps())).token;
+    // A seventh member joins another way: one place left, two invitees racing for it.
+    const sixth = await makeUser(db, "race-filler-6");
+    assert.equal((await addMember(db, { householdId: house.id, userId: sixth.id })).ok, true);
 
     const results = await Promise.all([
       redeemInvite(db, { token: tp, userId: p.id }, redeemDeps()),
@@ -1052,6 +1071,158 @@ test("the database refuses a second household membership for one person", async 
       ]),
       /unique|duplicate/i,
       "a raw second membership violates the one-household-per-person constraint",
+    );
+  } finally {
+    await db.close();
+  }
+});
+
+// =====================================================================================
+// Review fix W3.1 — invites are capped and throttled. Each invite sends an email, so an
+// owner could otherwise mail any number of addresses. The open (unused, unexpired)
+// invites of a household may never exceed its free places (8 − members), a fresh invite to
+// an address replaces that address's earlier open invite (a resend, not another place),
+// and a household sends at most INVITES_PER_HOUR invites in any hour. The checks and the
+// insert are one locked statement, so parallel invites cannot overshoot either limit.
+// =====================================================================================
+
+// Fill `house` with `count` extra members (the owner is already member #1).
+async function fillHousehold(db: Db, householdId: string, count: number, tag: string): Promise<void> {
+  for (let i = 1; i <= count; i++) {
+    const filler = await makeUser(db, `${tag}-filler-${i}`);
+    assert.equal((await addMember(db, { householdId, userId: filler.id })).ok, true, `filler #${i} fits`);
+  }
+}
+
+// The refusal reason an issueInvite rejected with (or "issued").
+async function issueOutcome(db: Db, householdId: string, email: string, deps = issueDeps()): Promise<string> {
+  try {
+    await issueInvite(db, { householdId, email }, deps);
+    return "issued";
+  } catch (error) {
+    if (error instanceof InviteRefusedError) return error.reason;
+    throw error;
+  }
+}
+
+test("open invites can never exceed the household's free places (8 − members)", async () => {
+  const db = await freshDb();
+  try {
+    const owner = await makeUser(db, "room-owner");
+    const house = await createHousehold(db, { ownerId: owner.id });
+    await fillHousehold(db, house.id, 1, "room"); // 2 members: 6 free places
+
+    for (let i = 1; i <= 6; i++) {
+      assert.equal(await issueOutcome(db, house.id, `room-guest-${i}@warthog.com.au`), "issued", `invite #${i} fits`);
+    }
+    assert.equal(
+      await issueOutcome(db, house.id, "room-guest-7@warthog.com.au"),
+      "no_room",
+      "a seventh open invite would promise more places than the household has",
+    );
+    const open = await db.query("SELECT count(*)::int AS n FROM household_invites WHERE household_id = $1", [house.id]);
+    assert.equal(open.rows[0]?.n, 6, "the refused invite stored nothing");
+  } finally {
+    await db.close();
+  }
+});
+
+test("a full household cannot issue an invite at all", async () => {
+  const db = await freshDb();
+  try {
+    const owner = await makeUser(db, "full-owner");
+    const house = await createHousehold(db, { ownerId: owner.id });
+    await fillHousehold(db, house.id, 7, "full");
+    assert.equal(await issueOutcome(db, house.id, "full-guest@warthog.com.au"), "no_room");
+  } finally {
+    await db.close();
+  }
+});
+
+test("used and expired invites free their place; re-inviting an address replaces its open invite", async () => {
+  const db = await freshDb();
+  try {
+    const owner = await makeUser(db, "resend-owner");
+    const house = await createHousehold(db, { ownerId: owner.id });
+    await fillHousehold(db, house.id, 6, "resend"); // 7 members: one free place
+    const carol = await makeUser(db, "resend-carol");
+
+    const first = await issueInvite(db, { householdId: house.id, email: carol.email }, issueDeps());
+    assert.equal(await issueOutcome(db, house.id, "resend-dave@warthog.com.au"), "no_room", "the one place is promised");
+
+    // A resend to the same address (any case) is allowed and retires the earlier link.
+    const resent = await issueInvite(
+      db,
+      { householdId: house.id, email: carol.email.toUpperCase() },
+      issueDeps({ clock: fixedClock(new Date(T0.getTime() + 60_000)) }),
+    );
+    assert.deepEqual(
+      await redeemInvite(db, { token: first.token, userId: carol.id }, redeemDeps()),
+      { ok: false, reason: "expired" },
+      "the replaced link no longer works",
+    );
+    assert.deepEqual(await redeemInvite(db, { token: resent.token, userId: carol.id }, redeemDeps()), {
+      ok: true,
+      householdId: house.id,
+    });
+
+    // An expired invite holds no place: a full-again household aside, the place it held is free.
+    const owner2 = await makeUser(db, "lapse-owner");
+    const house2 = await createHousehold(db, { ownerId: owner2.id });
+    await fillHousehold(db, house2.id, 6, "lapse");
+    await issueInvite(db, { householdId: house2.id, email: "lapse-a@warthog.com.au" }, issueDeps());
+    assert.equal(
+      await issueOutcome(db, house2.id, "lapse-b@warthog.com.au", issueDeps({ clock: fixedClock(JUST_AFTER) })),
+      "issued",
+      "once the earlier invite lapses its place is free again",
+    );
+  } finally {
+    await db.close();
+  }
+});
+
+test("a household sends at most INVITES_PER_HOUR invites in any hour", async () => {
+  const db = await freshDb();
+  try {
+    const owner = await makeUser(db, "burst-owner");
+    const house = await createHousehold(db, { ownerId: owner.id });
+
+    // Resends to one address never run out of places, so only the hourly throttle applies.
+    for (let i = 0; i < INVITES_PER_HOUR; i++) {
+      const at = fixedClock(new Date(T0.getTime() + i * 1000));
+      assert.equal(await issueOutcome(db, house.id, "burst@warthog.com.au", issueDeps({ clock: at })), "issued");
+    }
+    const sameHour = fixedClock(new Date(T0.getTime() + 59 * 60 * 1000));
+    assert.equal(
+      await issueOutcome(db, house.id, "burst@warthog.com.au", issueDeps({ clock: sameHour })),
+      "throttled",
+      "one more invite inside the hour is refused",
+    );
+    const nextHour = fixedClock(new Date(T0.getTime() + 61 * 60 * 1000));
+    assert.equal(
+      await issueOutcome(db, house.id, "burst@warthog.com.au", issueDeps({ clock: nextHour })),
+      "issued",
+      "an hour later invites can be sent again",
+    );
+  } finally {
+    await db.close();
+  }
+});
+
+test("parallel invites into a household with one free place issue exactly one", async () => {
+  const db = await freshDb();
+  try {
+    const owner = await makeUser(db, "inv-race-owner");
+    const house = await createHousehold(db, { ownerId: owner.id });
+    await fillHousehold(db, house.id, 6, "inv-race");
+
+    const outcomes = await Promise.all(
+      [1, 2, 3, 4, 5].map((i) => issueOutcome(db, house.id, `inv-race-guest-${i}@warthog.com.au`)),
+    );
+    assert.deepEqual(
+      outcomes.sort(),
+      ["issued", "no_room", "no_room", "no_room", "no_room"],
+      "only one of the racing invites gets the last place",
     );
   } finally {
     await db.close();

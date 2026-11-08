@@ -83,9 +83,14 @@ async function dbWithClient(): Promise<Db> {
 }
 
 async function signedInCookie(db: Db): Promise<string> {
+  return (await signedIn(db)).cookie;
+}
+
+// A signed-in person: their id and their session cookie.
+async function signedIn(db: Db): Promise<{ userId: string; cookie: string }> {
   const user = await createUser(db, { email: "authorize-route@warthog.com.au", wrappedDek: "d3JhcHBlZA==" });
   const created = await createSession(db, user.id, { clock: fixedClock(NOW), random: systemRandom });
-  return `__Host-wh_session=${created.token}`;
+  return { userId: user.id, cookie: `__Host-wh_session=${created.token}` };
 }
 
 test("a signed-out valid request is sent to sign in with a relative return path to the same authorize request", async () => {
@@ -108,7 +113,8 @@ test("a signed-out valid request is sent to sign in with a relative return path 
 test("a signed-in valid request goes to the consent screen with the pending-handle cookie", async () => {
   const db = await dbWithClient();
   try {
-    const res = await handlerFor(db)(get(authorizeQuery(), await signedInCookie(db)));
+    const person = await signedIn(db);
+    const res = await handlerFor(db)(get(authorizeQuery(), person.cookie));
     assert.equal(res.status, 302);
     assert.equal(res.headers.get("location"), "/oauth/consent");
     const cookie = res.headers.get("set-cookie") ?? "";
@@ -116,7 +122,7 @@ test("a signed-in valid request goes to the consent screen with the pending-hand
     assert.ok(match, `a host-locked consent cookie is set, got: ${cookie}`);
     assert.match(cookie, /HttpOnly/);
     assert.match(cookie, /Secure/);
-    assert.ok(getPendingAuthorization(match![1]!) != null, "the cookie names the pending request");
+    assert.ok(getPendingAuthorization(match![1]!, person.userId) != null, "the cookie names the signed-in person's pending request");
   } finally {
     await db.close();
   }

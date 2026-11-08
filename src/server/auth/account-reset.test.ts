@@ -120,8 +120,11 @@ import {
   requestAccountReset,
   cancelAccountReset,
   completeAccountReset,
+  getPendingAccountReset,
   type ResetExecutor,
 } from "./account-reset";
+import { createResetExecutor } from "../account/reset-executor";
+import { addCard, listCards } from "../db/cards";
 import { issueEmailCode } from "./email-code";
 import { freshDb } from "../../test/db";
 import { createUser, getUserById, type User } from "../db/users";
@@ -274,6 +277,15 @@ async function scheduledCompletionDelayMs(db: Db, from: Date): Promise<number | 
   return delays.length === 0 ? null : Math.min(...delays);
 }
 
+// Register a mobile number for `userId` (verified or not), as the settings flow leaves it.
+async function addMobile(db: Db, userId: string, number: string, verified: boolean): Promise<void> {
+  await db.query(
+    `INSERT INTO mobile_numbers (user_id, number, verified, code_hmac, code_expires_at, created_at, verified_at)
+     VALUES ($1, $2, $3, NULL, NULL, $4::timestamptz, $5::timestamptz)`,
+    [userId, number, verified, T0.toISOString(), verified ? T0.toISOString() : null],
+  );
+}
+
 // The distinct channels the outbox recorded.
 function channelsIn(outbox: Outbox): Set<string> {
   return new Set(outbox.list().map((m) => m.channel));
@@ -313,6 +325,9 @@ test("the reset request alerts every registered channel (push, email and SMS)", 
   const db = await freshDb();
   try {
     const person = await freshUser(db, "alerts");
+    // SMS reaches a person only on a VERIFIED mobile number (review fix W3.3), so this
+    // person has one registered.
+    await addMobile(db, person.id, "+61 400 000 111", true);
     // The first-factor code was issued on a SEPARATE outbox inside requestResetFor,
     // so alertOutbox holds only the reset alerts (a successful code verify sends
     // nothing to it).
@@ -534,6 +549,184 @@ test("the account-reset migration applies and re-running every migration changes
     // no throw together prove the migration's second run changes nothing (idempotent).
     const again = await runMigrations(db, migrations);
     assert.deepEqual(again, [], "a second migration run must change nothing");
+  } finally {
+    await db.close();
+  }
+});
+
+// =====================================================================================
+// Review fix W3.3 — the alerts reach the person's real channels, each independently, and a
+// completion is marked done only together with the erase and the revoke.
+// =====================================================================================
+
+test("the SMS alert goes to the person's verified mobile number — never their user id or an unverified number", async () => {
+  const clock = fixedClock(T0);
+  const alertOutbox = createOutbox();
+  const { executor } = makeExecutorSpy();
+  const db = await freshDb();
+  try {
+    const person = await freshUser(db, "sms-target");
+    await addMobile(db, person.id, "+61 400 000 222", false);
+    await addMobile(db, person.id, "+61 400 000 333", true);
+    await requestResetFor(db, person, clock, alertOutbox, executor);
+
+    const sms = alertOutbox.list().filter((m) => m.channel === "sms");
+    assert.deepEqual(sms.map((m) => m.recipient), ["+61 400 000 333"], "one SMS, to the verified number");
+    assert.ok(alertOutbox.list().every((m) => m.channel === "push" || m.recipient !== person.id));
+  } finally {
+    await db.close();
+  }
+});
+
+test("a person with no verified mobile number gets no SMS, and the reset still starts", async () => {
+  const clock = fixedClock(T0);
+  const alertOutbox = createOutbox();
+  const { executor } = makeExecutorSpy();
+  const db = await freshDb();
+  try {
+    const person = await freshUser(db, "no-mobile");
+    await requestResetFor(db, person, clock, alertOutbox, executor);
+    assert.equal(alertOutbox.list().filter((m) => m.channel === "sms").length, 0, "nothing is texted");
+    assert.ok(channelsIn(alertOutbox).has("email"), "the email alert still goes out");
+  } finally {
+    await db.close();
+  }
+});
+
+test("a failing channel does not stop the others from being alerted", async () => {
+  const clock = fixedClock(T0);
+  const outbox = createOutbox();
+  const { executor } = makeExecutorSpy();
+  const db = await freshDb();
+  try {
+    const person = await freshUser(db, "one-fails");
+    await addMobile(db, person.id, "+61 400 000 444", true);
+    const code = await issueCodeFor(db, person.email, clock, createOutbox());
+    const deps = {
+      ...makeDeps(clock, outbox, executor),
+      senders: {
+        push: { sendPush: async () => Promise.reject(new Error("push service down")) },
+        email: outbox,
+        sms: outbox,
+      },
+    };
+    const result = await requestAccountReset(db, { email: person.email, code }, deps);
+    assert.deepEqual(result, { ok: true }, "the reset starts");
+    assert.deepEqual([...channelsIn(outbox)].sort(), ["email", "sms"], "email and SMS still go out after push fails");
+  } finally {
+    await db.close();
+  }
+});
+
+test("when no channel can be reached the reset does not start", async () => {
+  const clock = fixedClock(T0);
+  const { executor, erased } = makeExecutorSpy();
+  const db = await freshDb();
+  try {
+    const person = await freshUser(db, "none-reached");
+    const code = await issueCodeFor(db, person.email, clock, createOutbox());
+    const fail = async () => Promise.reject(new Error("down"));
+    const deps = {
+      ...makeDeps(clock, createOutbox(), executor),
+      senders: { push: { sendPush: fail }, email: { sendEmail: fail }, sms: { sendSms: fail } },
+    };
+    const result = await requestAccountReset(db, { email: person.email, code }, deps);
+    assert.deepEqual(result, { ok: false, reason: "alert_failed" }, "nobody could be told, so nothing starts");
+    const pending = await db.query("SELECT 1 FROM account_resets WHERE user_id = $1 AND status = 'pending'", [person.id]);
+    assert.equal(pending.rows.length, 0, "no pending reset is left behind");
+    assert.equal(await scheduledCompletionDelayMs(db, T0), null, "no completion is scheduled");
+    await completeAccountReset(db, { userId: person.id }, makeDeps(clock, createOutbox(), executor));
+    assert.deepEqual(erased, [], "a stray completion erases nothing");
+  } finally {
+    await db.close();
+  }
+});
+
+test("a completion whose erase fails stays pending for the retry, and the retry completes it", async () => {
+  const clock = fixedClock(T0);
+  const { executor, erased } = makeExecutorSpy();
+  const db = await freshDb();
+  try {
+    const person = await freshUser(db, "erase-fails");
+    await requestResetFor(db, person, clock, createOutbox(), executor);
+
+    const failing: ResetExecutor = {
+      ...executor,
+      async eraseVaultData() {
+        throw new Error("storage unavailable");
+      },
+    };
+    await assert.rejects(
+      completeAccountReset(db, { userId: person.id }, makeDeps(clock, createOutbox(), failing)),
+      /storage unavailable/,
+      "the failure surfaces, so the job runner retries",
+    );
+    const status = await db.query("SELECT status FROM account_resets WHERE user_id = $1", [person.id]);
+    assert.equal(status.rows[0]?.status, "pending", "the reset is not marked done");
+
+    assert.deepEqual(await completeAccountReset(db, { userId: person.id }, makeDeps(clock, createOutbox(), executor)), {
+      ok: true,
+    });
+    assert.deepEqual(erased, [person.id], "the retry erases");
+  } finally {
+    await db.close();
+  }
+});
+
+test("the erase, the revoke and the status change commit together: a failed revoke undoes the erase", async () => {
+  const clock = fixedClock(T0);
+  const { executor: spy } = makeExecutorSpy();
+  const real = await freshDb();
+  try {
+    const person = await freshUser(real, "atomic");
+    await requestResetFor(real, person, clock, createOutbox(), spy);
+    await addCard(real, {
+      userId: person.id,
+      brand: "visa",
+      lastFour: "4242",
+      expiryMonth: 12,
+      expiryYear: 2030,
+      nickname: "card",
+      billingAddressId: "addr-1",
+      numberCiphertext: "v1:card",
+    });
+    // A db whose agent revoke fails, after the vault erase has run in the same unit.
+    const db: Db = {
+      query(text, values = []) {
+        if (/UPDATE agents SET status = 'disconnected'/.test(text)) return Promise.reject(new Error("lock timeout"));
+        return real.query(text, values);
+      },
+      close: () => real.close(),
+    };
+    await assert.rejects(
+      completeAccountReset(db, { userId: person.id }, makeDeps(clock, createOutbox(), createResetExecutor(db))),
+      /lock timeout/,
+    );
+    assert.equal((await listCards(real, person.id)).length, 1, "the erase was rolled back with the failed revoke");
+    const status = await real.query("SELECT status FROM account_resets WHERE user_id = $1", [person.id]);
+    assert.equal(status.rows[0]?.status, "pending", "and the reset is still pending");
+  } finally {
+    await real.close();
+  }
+});
+
+test("getPendingAccountReset reports a pending reset's dates to its own person only", async () => {
+  const clock = fixedClock(T0);
+  const { executor } = makeExecutorSpy();
+  const db = await freshDb();
+  try {
+    const person = await freshUser(db, "pending-read");
+    const other = await freshUser(db, "pending-read-other");
+    assert.equal(await getPendingAccountReset(db, { userId: person.id }), null, "nothing pending yet");
+    await requestResetFor(db, person, clock, createOutbox(), executor);
+
+    const pending = await getPendingAccountReset(db, { userId: person.id });
+    assert.equal(pending?.requestedAt.getTime(), T0.getTime());
+    assert.equal(pending?.completesAt.getTime(), T0.getTime() + SEVEN_DAYS_MS);
+    assert.equal(await getPendingAccountReset(db, { userId: other.id }), null, "another person sees nothing");
+
+    await cancelAccountReset(db, { userId: person.id }, {});
+    assert.equal(await getPendingAccountReset(db, { userId: person.id }), null, "a cancelled reset is not pending");
   } finally {
     await db.close();
   }

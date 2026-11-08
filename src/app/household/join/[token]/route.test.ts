@@ -504,21 +504,25 @@ test("[AC2] redeeming into a full household (8 members) is refused with a plain 
     const owner = await seedUser(db, "ac2-cap-owner");
     const house = await createHousehold(db, { ownerId: owner.id });
 
-    // The owner is member #1. Seven more fill the household to the shared cap of 8.
-    for (let i = 1; i <= 7; i++) {
+    // The owner is member #1. Six more leave one place, which an invite to a ninth person
+    // takes (a full household can no longer issue an invite, review fix W3.1).
+    for (let i = 1; i <= 6; i++) {
       const filler = await seedUser(db, `ac2-cap-filler-${i}`);
       const added = await addMember(db, { householdId: house.id, userId: filler.id });
       assert.equal(added.ok, true, `filler #${i} fits within the cap of 8`);
     }
-    assert.equal((await listMembers(db, house.id, owner.id)).length, 8, "sanity: the household is full at 8 members");
-
-    // A ninth person holds a genuinely-issued, live invite — but the household is full.
     const ninth = await seedUser(db, "ac2-cap-ninth");
     const { token } = await issueInvite(
       db,
       { householdId: house.id, email: ninth.email },
       { clock: fixedClock(T0), random: systemRandom },
     );
+
+    // The last place is then filled another way, so the ninth person's live invite meets a
+    // full household.
+    const eighth = await seedUser(db, "ac2-cap-filler-7");
+    assert.equal((await addMember(db, { householdId: house.id, userId: eighth.id })).ok, true);
+    assert.equal((await listMembers(db, house.id, owner.id)).length, 8, "sanity: the household is full at 8 members");
     const cookie = await sessionCookie(db, ninth.id);
 
     const request = confirmRequest(token, { cookie });

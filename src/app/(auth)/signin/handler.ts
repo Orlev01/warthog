@@ -48,7 +48,7 @@ import {
   decoyPasskeyAuthenticationOptions,
   finishPasskeyAuthentication,
 } from "../../../server/auth/passkey";
-import { verifyTotp } from "../../../server/auth/totp";
+import { checkTotpSignIn } from "../../../server/auth/totp-attempts";
 import { createSession, recordStepUp } from "../../../server/auth/session";
 import { alertNewDeviceSignIn, deliverAlert } from "../../../server/auth/alerts";
 import {
@@ -124,7 +124,7 @@ const finishPasskeySchema = z.object({
   authenticationResponse: authenticationResponseSchema,
 });
 
-// signInWithTotp: the email + the authenticator-app code. `verifyTotp` itself
+// signInWithTotp: the email + the authenticator-app code. The TOTP check itself
 // rejects anything that is not exactly six digits.
 const totpSchema = z.object({
   email: z.string().trim().toLowerCase().min(1).max(320), // normalised (users.normaliseEmail)
@@ -247,7 +247,21 @@ export function createSigninHandler(deps: SigninHandlerDeps): SigninHandler {
 
       const secret = await totpSecrets.get(user.id);
       if (!secret) return json(401, { error: "invalid_code" });
-      if (!verifyTotp(secret, totp, { clock })) return json(401, { error: "invalid_code" });
+      // Limited and single use (review fix W3.5): 5 failures in 15 minutes slow further
+      // attempts, and a code (or one from an earlier step) is accepted only once.
+      const checked = await checkTotpSignIn(db, { userId: user.id, secret, code: totp }, { clock });
+      if (!checked.ok) {
+        if (checked.reason === "throttled") {
+          return new Response(JSON.stringify({ error: "throttled" }), {
+            status: 429,
+            headers: {
+              "content-type": "application/json",
+              "retry-after": String(Math.max(1, Math.ceil(checked.retryAfterMs / 1000))),
+            },
+          });
+        }
+        return json(401, { error: "invalid_code" });
+      }
 
       return await mintSession(user.id, request);
     } catch (error) {

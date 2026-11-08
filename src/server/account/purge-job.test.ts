@@ -81,9 +81,11 @@
 
 import { test } from "node:test";
 import assert from "node:assert/strict";
+import { randomUUID } from "node:crypto";
 import { z } from "zod";
 
 import { runAccountPurge } from "./purge-job";
+import { createInMemoryBlobStore, type BlobStore } from "../storage/blob";
 import { createUser } from "../db/users";
 import { enqueueAccountPurge, listPendingPurges } from "../db/account-purge";
 import { freshDb } from "../../test/db";
@@ -530,5 +532,179 @@ test("the job reads no process.env: a decoy secret in the environment never land
     await db.close();
     if (prev === undefined) delete process.env.WARTHOG_DECOY_SECRET;
     else process.env.WARTHOG_DECOY_SECRET = prev;
+  }
+});
+
+// ===========================================================================
+// Review fix W3.2 — the purge removes what lives outside the users cascade, and one
+// failing account never stops the sweep.
+//   • Receipt files keep their ciphertext in blob storage under receipt_files.blob_key. The
+//     job deletes those blobs BEFORE the rows, so a key is never lost while its blob still
+//     exists; a blob delete that fails keeps that account (and its queue entry) for the next
+//     run.
+//   • The person's agent credentials (OAuth tokens, codes and access keys, keyed by the
+//     agent's connection id with no foreign key to users) go with the account.
+//   • A failure on one account is collected, the rest are still purged, and the run then
+//     reports every failure together.
+// ===========================================================================
+
+// Seed one life-admin record carrying a receipt file whose ciphertext is in `blobs` under
+// `key`.
+async function seedReceipt(db: Db, blobs: BlobStore, userId: string, key: string): Promise<void> {
+  const record = await db.query(
+    `INSERT INTO life_admin_records (user_id, kind, fields, status, source_kind)
+     VALUES ($1, 'receipt_warranty', 'v1:fields', 'active', 'person') RETURNING id`,
+    [userId],
+  );
+  await db.query(
+    `INSERT INTO receipt_files (user_id, record_id, blob_key, nonce, content_type, size)
+     VALUES ($1, $2, $3, 'nonce', 'application/pdf', 3)`,
+    [userId, record.rows[0]!.id, key],
+  );
+  await blobs.put(key, new Uint8Array([1, 2, 3]));
+}
+
+test("the job deletes the account's receipt blobs before its rows, and leaves other people's blobs", async () => {
+  const db = await freshDb();
+  try {
+    const blobs = createInMemoryBlobStore();
+    const gone = await makeUser(db, "w3-blob-gone");
+    const kept = await makeUser(db, "w3-blob-kept");
+    await seedReceipt(db, blobs, gone, "receipts/gone-1");
+    await seedReceipt(db, blobs, gone, "receipts/gone-2");
+    await seedReceipt(db, blobs, kept, "receipts/kept-1");
+    await enqueueAccountPurge(db, gone);
+
+    // Each blob delete happens while the account (and so its receipt rows) still exists.
+    const rowsAtDelete: boolean[] = [];
+    const watched: BlobStore = {
+      ...blobs,
+      async delete(key) {
+        rowsAtDelete.push(await usersRowExists(db, gone));
+        await blobs.delete(key);
+      },
+    };
+
+    const result = await runAccountPurge(db, { blobStore: watched });
+    assert.deepEqual(result.purged, [gone]);
+    assert.equal(await blobs.get("receipts/gone-1"), null, "the first receipt blob is deleted");
+    assert.equal(await blobs.get("receipts/gone-2"), null, "the second receipt blob is deleted");
+    assert.deepEqual(rowsAtDelete, [true, true], "blobs are deleted before the rows that name them");
+    assert.equal(await countFor(db, "receipt_files", gone), 0, "the receipt rows are gone");
+    assert.notEqual(await blobs.get("receipts/kept-1"), null, "a bystander's blob is untouched");
+  } finally {
+    await db.close();
+  }
+});
+
+test("the job deletes the person's agent tokens, codes and access keys with the account", async () => {
+  const db = await freshDb();
+  try {
+    const gone = await makeUser(db, "w3-cred-gone");
+    const kept = await makeUser(db, "w3-cred-kept");
+    for (const [userId, tag] of [[gone, "gone"], [kept, "kept"]] as const) {
+      const connectionId = randomUUID();
+      await db.query(
+        `INSERT INTO agents (user_id, connection_id, display_name, platform, status, connected_at)
+         VALUES ($1, $2, 'Agent', 'claude', 'connected', now())`,
+        [userId, connectionId],
+      );
+      await db.query(
+        `INSERT INTO oauth_tokens (token_hash, connection_id, kind, expires_at) VALUES ($1, $2, 'access', now())`,
+        [`tok-${tag}`, connectionId],
+      );
+      await db.query(`INSERT INTO oauth_access_keys (key_hash, connection_id) VALUES ($1, $2)`, [`key-${tag}`, connectionId]);
+      await db.query(
+        `INSERT INTO oauth_auth_codes (code_hash, connection_id, client_id, code_challenge, redirect_uri, resource, expires_at)
+         VALUES ($1, $2, 'c', 'x', 'https://a.example/cb', 'https://warthog.com.au/mcp', now())`,
+        [`code-${tag}`, connectionId],
+      );
+    }
+    await enqueueAccountPurge(db, gone);
+
+    await runAccountPurge(db, { blobStore: createInMemoryBlobStore() });
+
+    for (const [table, column] of [
+      ["oauth_tokens", "token_hash"],
+      ["oauth_access_keys", "key_hash"],
+      ["oauth_auth_codes", "code_hash"],
+    ] as const) {
+      const left = await db.query(`SELECT ${column} AS id FROM ${table} ORDER BY 1`);
+      assert.deepEqual(
+        left.rows.map((r) => r.id),
+        [`${column === "token_hash" ? "tok" : column === "key_hash" ? "key" : "code"}-kept`],
+        `${table}: only the bystander's credential is left`,
+      );
+    }
+  } finally {
+    await db.close();
+  }
+});
+
+test("a blob that fails to delete keeps that account for the next run, and the sweep carries on", async () => {
+  const db = await freshDb();
+  try {
+    const blobs = createInMemoryBlobStore();
+    const stuck = await makeUser(db, "w3-stuck");
+    const fine = await makeUser(db, "w3-fine");
+    await seedReceipt(db, blobs, stuck, "receipts/stuck");
+    await seedReceipt(db, blobs, fine, "receipts/fine");
+    await enqueueAccountPurge(db, stuck);
+    await enqueueAccountPurge(db, fine);
+
+    const flaky: BlobStore = {
+      ...blobs,
+      async delete(key) {
+        if (key === "receipts/stuck") throw new Error("storage unavailable");
+        await blobs.delete(key);
+      },
+    };
+    await assert.rejects(runAccountPurge(db, { blobStore: flaky }), (error: unknown) => {
+      assert.ok(error instanceof AggregateError, "the run reports its failures together");
+      assert.equal(error.errors.length, 1, "one account failed");
+      return true;
+    });
+
+    assert.equal(await usersRowExists(db, fine), false, "the other account was still purged");
+    assert.equal(await blobs.get("receipts/fine"), null);
+    assert.equal(await usersRowExists(db, stuck), true, "the failing account is kept, so its blob key is not lost");
+    assert.deepEqual(
+      (await listPendingPurges(db)).map((p) => p.userId),
+      [stuck],
+      "it stays on the queue for the next run",
+    );
+
+    // The next run, with storage back, completes it.
+    const retry = await runAccountPurge(db, { blobStore: blobs });
+    assert.deepEqual(retry.purged, [stuck]);
+    assert.equal(await blobs.get("receipts/stuck"), null);
+    assert.equal(await usersRowExists(db, stuck), false);
+  } finally {
+    await db.close();
+  }
+});
+
+test("an account whose row delete fails does not stop the others", async () => {
+  const real = await freshDb();
+  try {
+    const broken = await makeUser(real, "w3-broken");
+    const fine = await makeUser(real, "w3-fine-2");
+    await enqueueAccountPurge(real, broken);
+    await enqueueAccountPurge(real, fine);
+    const db: Db = {
+      query(text, values = []) {
+        if (/DELETE FROM users/i.test(text) && values[0] === broken) {
+          return Promise.reject(new Error("deadlock detected"));
+        }
+        return real.query(text, values);
+      },
+      close: () => real.close(),
+    };
+
+    await assert.rejects(runAccountPurge(db, { blobStore: createInMemoryBlobStore() }), AggregateError);
+    assert.equal(await usersRowExists(real, fine), false, "the account after the failing one was purged");
+    assert.equal(await usersRowExists(real, broken), true, "the failing account is left for the next run");
+  } finally {
+    await real.close();
   }
 });

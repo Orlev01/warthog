@@ -18,15 +18,28 @@
 // from the session (or the resolved account), never from a client-supplied value,
 // and every statement is parameterized (INV-102).
 
+//
+// Review fix W3.3: the SMS alert goes to the person's VERIFIED mobile numbers (never their
+// user id, never an unverified number); each channel is alerted independently, so one
+// failing sender never silences the others, and a reset that reached nobody does not
+// start; and a completion is marked done in ONE transaction with the erase and the
+// revoke, so a failure rolls all three back and the job's retry finds the reset still
+// pending.
+
 import { getUserByEmail } from "../db/users";
+import { listMobileNumbers } from "../db/mobile-numbers";
 import { verifyEmailCode } from "./email-code";
 import { enqueue } from "../db/jobs";
+import { withTransaction } from "../db/index";
 import type { Clock } from "../seams/clock";
 import type { Senders } from "../notify/senders";
 import type { Db } from "../db/index";
 
 const MINUTE_MS = 60 * 1000;
 const SEVEN_DAYS_MS = 7 * 24 * 60 * MINUTE_MS;
+
+// How long a requested reset waits before it completes (the brief's 7-day window).
+export const RESET_WAIT_MS = SEVEN_DAYS_MS;
 
 // The background-job type the 7-day timer fires; its payload names the account so
 // the handler can drive completeAccountReset for the right person.
@@ -44,10 +57,12 @@ const ALERT_BODY =
 // The cross-aggregate work a completed reset performs, injected because the vault /
 // agent / connection stores live in other aggregates (and are built later).
 // account-reset owns only the state machine and calls this seam when a
-// still-pending (never a cancelled) reset completes.
+// still-pending (never a cancelled) reset completes. Completion passes its transaction
+// as `tx`, and the executor runs its statements on it, so the work and the status change
+// commit (or roll back) together.
 export interface ResetExecutor {
-  eraseVaultData(userId: string): Promise<void>; // VK-wrapped vault data
-  revokeAgentsAndConnections(userId: string): Promise<void>; // every agent + connection
+  eraseVaultData(userId: string, tx?: Db): Promise<void>; // VK-wrapped vault data
+  revokeAgentsAndConnections(userId: string, tx?: Db): Promise<void>; // every agent + connection
 }
 
 // Each function reads only the subset of the deps bundle it needs; the caller's
@@ -70,8 +85,12 @@ export interface CompleteAccountResetDeps {
 // Start a 7-day account reset for the person owning `email`, gated on the email
 // one-time code (the first factor). A failed code OR no account for the email
 // starts NOTHING — no timer, no alert — and returns { ok: false }. On success it
-// records a 'pending' reset, schedules completion 7 days out on the jobs queue,
-// and alerts every registered channel once (push, email AND sms).
+// records a 'pending' reset and schedules completion 7 days out on the jobs queue (one
+// transaction), then alerts every registered channel once: push, email, and an SMS to
+// each verified mobile number. Each channel is sent independently; when not one of them
+// could be reached the reset is withdrawn and { ok: false, reason: "alert_failed" } is
+// returned, because a reset nobody was told about is exactly what the alerts guard
+// against.
 export async function requestAccountReset(
   db: Db,
   { email, code }: { email: string; code: string },
@@ -89,47 +108,73 @@ export async function requestAccountReset(
 
   const now = deps.clock.now();
 
-  // Record the one pending reset for this person. Re-requesting replaces an
-  // earlier (e.g. cancelled) reset in place, so the row hangs off user_id as its
-  // primary key.
-  await db.query(
-    `INSERT INTO account_resets (user_id, status, requested_at)
-     VALUES ($1, 'pending', $2::timestamptz)
-     ON CONFLICT (user_id)
-     DO UPDATE SET status = 'pending', requested_at = EXCLUDED.requested_at`,
-    [person.id, now.toISOString()],
-  );
+  await withTransaction(db, async (tx) => {
+    // Record the one pending reset for this person. Re-requesting replaces an
+    // earlier (e.g. cancelled) reset in place, so the row hangs off user_id as its
+    // primary key.
+    await tx.query(
+      `INSERT INTO account_resets (user_id, status, requested_at)
+       VALUES ($1, 'pending', $2::timestamptz)
+       ON CONFLICT (user_id)
+       DO UPDATE SET status = 'pending', requested_at = EXCLUDED.requested_at`,
+      [person.id, now.toISOString()],
+    );
 
-  // Supersede any earlier reset's timer before scheduling this one. The reset row
-  // is replaced in place (one per person), but every request also enqueued its own
-  // completion job — so a re-request (after a cancel, OR while a reset was still
-  // pending) would otherwise leave an EARLIER job in the queue that fires first and
-  // completes this fresh reset before its own 7 days have elapsed. Completion is
-  // claimed on status alone (the pending row looks identical whichever timer fires,
-  // and the direct action takes only a userId), so the 7-day window is protected
-  // HERE, by clearing the superseded timer so only this request's job survives to
-  // fire. Scoped to this person's still-pending completion jobs; the id is a bound
-  // value, never woven into the SQL (INV-102).
-  await db.query(
-    `DELETE FROM jobs
-      WHERE type = $1 AND status = 'pending' AND payload->>'userId' = $2`,
-    [COMPLETE_JOB_TYPE, person.id],
-  );
+    // Supersede any earlier reset's timer before scheduling this one. The reset row
+    // is replaced in place (one per person), but every request also enqueued its own
+    // completion job — so a re-request (after a cancel, OR while a reset was still
+    // pending) would otherwise leave an EARLIER job in the queue that fires first and
+    // completes this fresh reset before its own 7 days have elapsed. Completion is
+    // claimed on status alone (the pending row looks identical whichever timer fires,
+    // and the direct action takes only a userId), so the 7-day window is protected
+    // HERE, by clearing the superseded timer so only this request's job survives to
+    // fire. Scoped to this person's still-pending completion jobs; the id is a bound
+    // value, never woven into the SQL (INV-102).
+    await clearCompletionJobs(tx, person.id);
 
-  // The 7-day timer: a background job due now + 7 days that fires completion.
-  await enqueue(db, {
-    type: COMPLETE_JOB_TYPE,
-    payload: { userId: person.id },
-    runAt: new Date(now.getTime() + SEVEN_DAYS_MS),
+    // The 7-day timer: a background job due now + 7 days that fires completion.
+    await enqueue(tx, {
+      type: COMPLETE_JOB_TYPE,
+      payload: { userId: person.id },
+      runAt: new Date(now.getTime() + SEVEN_DAYS_MS),
+    });
   });
 
   // Alert every registered channel once, so the person sees the reset on whatever
-  // they still have access to and can cancel it from a signed-in device.
-  await deps.senders.push.sendPush({ recipient: person.id, body: ALERT_BODY });
-  await deps.senders.email.sendEmail({ recipient: person.email, body: ALERT_BODY });
-  await deps.senders.sms.sendSms({ recipient: person.id, body: ALERT_BODY });
+  // they still have access to and can cancel it from a signed-in device. Push is
+  // addressed to the person (the sender finds their devices); SMS only ever goes to a
+  // number they verified.
+  const mobiles = (await listMobileNumbers(db, person.id)).filter((number) => number.verified);
+  const sends: (() => Promise<void>)[] = [
+    () => deps.senders.push.sendPush({ recipient: person.id, body: ALERT_BODY }),
+    () => deps.senders.email.sendEmail({ recipient: person.email, body: ALERT_BODY }),
+    ...mobiles.map((mobile) => () => deps.senders.sms.sendSms({ recipient: mobile.number, body: ALERT_BODY })),
+  ];
+  // Each send is isolated, even one that throws before returning a promise.
+  const outcomes = await Promise.allSettled(sends.map(async (send) => send()));
+  if (!outcomes.some((outcome) => outcome.status === "fulfilled")) {
+    // Nobody could be told: withdraw the reset and its timer rather than let it run
+    // unannounced. The send errors are not logged (they may name a recipient).
+    await withTransaction(db, async (tx) => {
+      await tx.query(
+        "UPDATE account_resets SET status = 'cancelled' WHERE user_id = $1 AND status = 'pending'",
+        [person.id],
+      );
+      await clearCompletionJobs(tx, person.id);
+    });
+    return { ok: false, reason: "alert_failed" };
+  }
 
   return { ok: true };
+}
+
+// Remove this person's still-pending completion timers.
+async function clearCompletionJobs(db: Db, userId: string): Promise<void> {
+  await db.query(
+    `DELETE FROM jobs
+      WHERE type = $1 AND status = 'pending' AND payload->>'userId' = $2`,
+    [COMPLETE_JOB_TYPE, userId],
+  );
 }
 
 // Cancel the person's pending reset. The userId comes from the session, so ANY
@@ -152,27 +197,49 @@ export async function cancelAccountReset(
   return { ok: true };
 }
 
+// The person's pending reset, for the signed-in banner that offers to cancel it: when it
+// was requested and when it will complete. Member-scoped by the session's user id; null
+// when nothing is pending.
+export async function getPendingAccountReset(
+  db: Db,
+  { userId }: { userId: string },
+): Promise<{ requestedAt: Date; completesAt: Date } | null> {
+  const found = await db.query(
+    "SELECT requested_at FROM account_resets WHERE user_id = $1 AND status = 'pending'",
+    [userId],
+  );
+  const row = found.rows[0];
+  if (!row) return null;
+  const requestedAt = new Date(row.requested_at as string | Date);
+  return { requestedAt, completesAt: new Date(requestedAt.getTime() + RESET_WAIT_MS) };
+}
+
 // The action the 7-day timer fires. Claiming the completion is a guarded, atomic
 // status transition: ONLY a still-'pending' reset moves to 'done' and returns a
 // row. When it does, the erase and the revoke run once each for that person; a
 // cancelled reset, an already-completed one, or no reset at all transitions
 // nothing, so the executor is not called (a cancel wins the race against a firing
 // timer, and a stray fire never wipes a vault that did not request a reset).
+// The claim, the erase and the revoke are ONE transaction: if the erase or the revoke
+// fails, the status change rolls back with it and the error surfaces, so the job runner
+// retries a reset that is still pending — never one marked done but half done.
 // Everything else is kept: the users row and the wrapped DEK are untouched.
 export async function completeAccountReset(
   db: Db,
   { userId }: { userId: string },
   deps: CompleteAccountResetDeps,
 ): Promise<{ ok: true } | { ok: false; reason: string }> {
-  const claimed = await db.query(
-    `UPDATE account_resets SET status = 'done'
-     WHERE user_id = $1 AND status = 'pending'
-     RETURNING user_id`,
-    [userId],
-  );
-  if (claimed.rows.length === 0) return { ok: false, reason: "no_pending_reset" };
+  return withTransaction(db, async (tx) => {
+    const claimed = await tx.query(
+      `UPDATE account_resets SET status = 'done'
+       WHERE user_id = $1 AND status = 'pending'
+       RETURNING user_id`,
+      [userId],
+    );
+    if (claimed.rows.length === 0) return { ok: false, reason: "no_pending_reset" };
 
-  await deps.executor.eraseVaultData(userId);
-  await deps.executor.revokeAgentsAndConnections(userId);
-  return { ok: true };
+    await deps.executor.eraseVaultData(userId, tx);
+    await deps.executor.revokeAgentsAndConnections(userId, tx);
+    return { ok: true };
+  });
 }

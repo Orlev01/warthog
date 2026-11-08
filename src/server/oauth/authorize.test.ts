@@ -405,16 +405,17 @@ test("a signed-in, valid request is carried to the consent screen — no code is
 test("beginAuthorization carries the authorize request SERVER-SIDE under its handle", async () => {
   const db = await dbWithClient();
   try {
-    const begun = await beginAuthorization(
-      { params: authorizeParams(), session: signedInSession() },
-      deps(db),
-    );
+    const session = signedInSession();
+    const begun = await beginAuthorization({ params: authorizeParams(), session }, deps(db));
     assert.ok(begun.ok, "the request begins consent");
     if (!begun.ok) throw new Error("unreachable: beginAuthorization was not ok");
 
     // The request is held server-side and read back WHOLE through the pending store — the
-    // consent page and the decision read it from here, never trusting a form/URL field.
-    const pending = getPendingAuthorization(begun.handle);
+    // consent page and the decision read it from here, never trusting a form/URL field. It
+    // belongs to the signed-in person who began it (review fix W3.4): anyone else reads
+    // nothing.
+    assert.equal(getPendingAuthorization(begun.handle, randomUUID()), null, "another person reads nothing");
+    const pending = getPendingAuthorization(begun.handle, session.userId);
     assert.ok(pending != null, "the authorize request is held server-side under its handle");
     assert.equal(pending!.params.get("client_id"), CLIENT_ID, "the consenting client is carried through");
     assert.equal(pending!.params.get("redirect_uri"), REDIRECT_URI, "the client's redirect URI is carried through");
@@ -424,7 +425,7 @@ test("beginAuthorization carries the authorize request SERVER-SIDE under its han
     assert.equal(pending!.params.get("state"), STATE, "the state is carried through for the final redirect");
 
     // The handle is unguessable: a different handle resolves to nothing.
-    assert.equal(getPendingAuthorization("some-other-handle"), null, "a wrong handle resolves to no request");
+    assert.equal(getPendingAuthorization("some-other-handle", session.userId), null, "a wrong handle resolves to no request");
   } finally {
     await db.close();
   }

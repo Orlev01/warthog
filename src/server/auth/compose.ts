@@ -30,6 +30,7 @@ import type { Db } from "../db/index";
 import type { SignupHandlerDeps } from "../../app/(auth)/signup/handler";
 import type { SigninHandlerDeps } from "../../app/(auth)/signin/handler";
 import type { RecoverHandlerDeps } from "../../app/(auth)/recover/handler";
+import type { ResetHandlerDeps } from "../../app/(auth)/reset/handler";
 import type { DeviceHandlerDeps } from "../../app/(auth)/device/handler";
 import type { SignoutHandlerDeps } from "./signout-handler";
 import type { StepUpHandlerDeps } from "./step-up-handler";
@@ -146,6 +147,23 @@ export async function getRecoverDeps(
     hmacKey: config.hmacKey,
     emailSender: selectSenders(config, notConfiguredSenders()).email,
     rpId: config.webauthnRpId,
+    publicOrigin: publicOrigin(config),
+  };
+}
+
+// Build the ResetHandlerDeps bundle from validated config (review fix W3.3): the shared
+// db, the clock and random the email code uses, the HMAC key it is stored under, every
+// channel sender (the code email and the reset alerts on push, email and SMS) and the
+// origin every reset step checks the request against.
+export async function getResetDeps(overrides: ComposeOverrides = {}): Promise<ResetHandlerDeps> {
+  const config = resolveConfig(overrides);
+  const db = await resolveDb(overrides);
+  return {
+    db,
+    clock: systemClock,
+    random: systemRandom,
+    hmacKey: config.hmacKey,
+    senders: selectSenders(config, notConfiguredSenders()),
     publicOrigin: publicOrigin(config),
   };
 }

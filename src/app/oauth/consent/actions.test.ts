@@ -68,11 +68,14 @@ function configWithBaseUrl(publicBaseUrl: string): Config {
   } as NodeJS.ProcessEnv);
 }
 
+// The signed-in person who begins (and so owns) every seeded request, and who views it.
+const SESSION_USER = "user-consent";
+
 // A signed-in session (the loader only needs the request to have begun; begin validates it).
 function signedInSession(): Session {
   return {
     id: "sess-consent",
-    userId: "user-consent",
+    userId: SESSION_USER,
     createdAt: new Date(NOW.getTime() - 60_000),
     lastSeenAt: new Date(NOW.getTime() - 60_000),
     steppedUpAt: null,
@@ -122,7 +125,7 @@ async function seedPending(db: Db, redirectUri: string): Promise<string> {
 test("renders the consent view for a valid pending request, with the client's callback host", async () => {
   const db = await freshDb();
   try {
-    const props = await loadConsentView(await seedPending(db, "https://claude.ai/api/mcp/auth_callback"));
+    const props = await loadConsentView(await seedPending(db, "https://claude.ai/api/mcp/auth_callback"), SESSION_USER);
 
     assert.ok(props != null, "a valid pending request renders the consent view");
     assert.equal(props!.redirect.host, "claude.ai", "the redirect shows the client's callback host");
@@ -144,7 +147,7 @@ test("a known platform callback is marked verified (the Verified-platform badge)
   const db = await freshDb();
   try {
     for (const host of ["claude.ai", "claude.com", "chatgpt.com"]) {
-      const props = await loadConsentView(await seedPending(db, `https://${host}/callback`));
+      const props = await loadConsentView(await seedPending(db, `https://${host}/callback`), SESSION_USER);
       assert.ok(props != null, `${host}: a valid pending request renders`);
       assert.equal(props!.redirect.host, host, `${host}: the callback host is shown`);
       assert.equal(props!.redirect.verified, true, `${host}: a known platform callback is verified`);
@@ -162,7 +165,7 @@ test("a known platform callback is marked verified (the Verified-platform badge)
 test("an unknown redirect host is not verified", async () => {
   const db = await freshDb();
   try {
-    const props = await loadConsentView(await seedPending(db, "https://relay.some-unknown-agent.example/cb"));
+    const props = await loadConsentView(await seedPending(db, "https://relay.some-unknown-agent.example/cb"), SESSION_USER);
     assert.ok(props != null, "a valid pending request still renders");
     assert.equal(props!.redirect.host, "relay.some-unknown-agent.example", "the unknown host is shown");
     assert.equal(props!.redirect.verified, false, "an unknown platform callback is NOT marked verified");
@@ -176,7 +179,7 @@ test("a look-alike host (ending in a known host) is NOT verified — the match i
   try {
     // `evil-claude.ai` ends with `claude.ai`, so a naive `endsWith`/substring check would
     // wrongly trust it. The known-platform check must be an EXACT host match.
-    const props = await loadConsentView(await seedPending(db, "https://evil-claude.ai/callback"));
+    const props = await loadConsentView(await seedPending(db, "https://evil-claude.ai/callback"), SESSION_USER);
     assert.ok(props != null, "a valid pending request still renders");
     assert.equal(props!.redirect.host, "evil-claude.ai", "the look-alike host is shown");
     assert.equal(props!.redirect.verified, false, "a look-alike of a known host must NOT be verified");
@@ -191,7 +194,7 @@ test("a look-alike host (ending in a known host) is NOT verified — the match i
 // =====================================================================================
 
 test("an unresolvable handle renders no consent view (null)", async () => {
-  const props = await loadConsentView("no-such-pending-handle");
+  const props = await loadConsentView("no-such-pending-handle", SESSION_USER);
   assert.equal(props, null, "an unknown/expired pending handle renders no consent view");
 });
 
@@ -202,10 +205,10 @@ test("loading the consent view does not consume the pending request", async () =
   try {
     const handle = await seedPending(db, "https://claude.ai/api/mcp/auth_callback");
 
-    const first = await loadConsentView(handle);
+    const first = await loadConsentView(handle, SESSION_USER);
     assert.ok(first != null, "the consent view renders the pending request");
 
-    const second = await loadConsentView(handle);
+    const second = await loadConsentView(handle, SESSION_USER);
     assert.ok(second != null, "the pending request is still present after rendering (render is non-consuming)");
   } finally {
     await db.close();
@@ -225,14 +228,27 @@ test("a pending request with a javascript:, data: or plain-http redirect renders
     "data:text/html,x",
     "http://claude.ai/api/mcp/auth_callback",
   ]) {
-    const handle = putPendingAuthorization(authorizeParams(redirectUri), systemRandom);
-    assert.equal(await loadConsentView(handle), null, `no consent view for ${redirectUri}`);
+    const handle = putPendingAuthorization(authorizeParams(redirectUri), SESSION_USER, systemRandom);
+    assert.equal(await loadConsentView(handle, SESSION_USER), null, `no consent view for ${redirectUri}`);
   }
 });
 
 test("a known host on a non-default port is shown but not marked verified", async () => {
-  const handle = putPendingAuthorization(authorizeParams("https://claude.ai:8443/api/mcp/auth_callback"), systemRandom);
-  const props = await loadConsentView(handle);
+  const handle = putPendingAuthorization(authorizeParams("https://claude.ai:8443/api/mcp/auth_callback"), SESSION_USER, systemRandom);
+  const props = await loadConsentView(handle, SESSION_USER);
   assert.ok(props != null, "an https callback on another port still renders");
   assert.equal(props!.redirect.verified, false, "only the platform's default https origin earns the badge");
+});
+
+// Review fix W3.4 — the consent screen renders a pending request only for the person who
+// started it: someone else signed in on the same browser sees the expired notice instead.
+test("another signed-in person gets no consent view for someone's pending request", async () => {
+  const db = await freshDb();
+  try {
+    const handle = await seedPending(db, "https://claude.ai/api/mcp/auth_callback");
+    assert.equal(await loadConsentView(handle, "someone-else"), null, "a different person sees nothing");
+    assert.ok((await loadConsentView(handle, SESSION_USER)) != null, "the person who started it still sees it");
+  } finally {
+    await db.close();
+  }
 });

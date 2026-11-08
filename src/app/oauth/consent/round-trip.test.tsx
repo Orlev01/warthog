@@ -123,7 +123,7 @@ function authorizeParams(): URLSearchParams {
 test("the consent view lists the person's own connected services by name", async () => {
   const { db, userId, handle } = await setUp();
   try {
-    const props = await loadConsentView(handle, { db, userId, nameOf: (id) => (id === "gmail" ? "Gmail" : undefined) });
+    const props = await loadConsentView(handle, userId, { db, nameOf: (id) => (id === "gmail" ? "Gmail" : undefined) });
     assert.deepEqual(props?.services, [{ id: "gmail", name: "Gmail", ticked: false }]);
   } finally {
     await db.close();
@@ -133,7 +133,7 @@ test("the consent view lists the person's own connected services by name", async
 test("the toggles the person leaves on the screen are exactly the grants stored", async () => {
   const { db, userId, handle } = await setUp();
   try {
-    const props = await loadConsentView(handle, { db, userId, nameOf: () => "Gmail" });
+    const props = await loadConsentView(handle, userId, { db, nameOf: () => "Gmail" });
     assert.ok(props != null);
     // The person keeps Standard, unticks shared memory and tasks, ticks Gmail and card
     // requests (leaving the A$200 a month default) and high-tier.
@@ -186,7 +186,7 @@ test("a malformed card budget is refused at the boundary (a 4xx), and the reques
       (err: unknown) => err instanceof HttpError && err.status >= 400 && err.status < 500,
     );
     assert.equal((await listAgentsForUser(db, userId)).length, 0, "nothing is created");
-    assert.ok((await loadConsentView(handle)) != null, "the pending request is still there to retry");
+    assert.ok((await loadConsentView(handle, userId)) != null, "the pending request is still there to retry");
   } finally {
     await db.close();
   }

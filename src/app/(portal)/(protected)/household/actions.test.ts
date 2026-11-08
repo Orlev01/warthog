@@ -590,6 +590,46 @@ test("inviteMember issues an owner's invite (emailed + shown as pending) and ref
   }
 });
 
+// Review fix W3.1 — invites are bounded: past the household's free places, or past the
+// hourly invite allowance, inviteMember refuses with a plain reason and sends nothing.
+test("inviteMember refuses once open invites fill the free places, and when the hourly allowance is spent", async () => {
+  const db = await freshDb();
+  try {
+    const alice = await makeUser(db, "owner");
+    const hid = (await seedHousehold(db, { ownerId: alice.id, currency: "AUD" })).id;
+    for (let i = 0; i < 6; i++) {
+      await seedMember(db, { householdId: hid, userId: (await makeUser(db, `filler-${i}`)).id });
+    }
+
+    const sent: OutgoingMessage[] = [];
+    const email: EmailSender = {
+      async sendEmail(message) {
+        sent.push(message);
+      },
+    };
+    const actions = makeActions(db, { email });
+    const owner = sessionFor(alice.id);
+
+    // 7 members: one free place.
+    expectOk(await actions.inviteMember(owner, { email: "first@invites.example" }), "the last place is invited");
+    const refused = await actions.inviteMember(owner, { email: "second@invites.example" });
+    assert.deepEqual(refused, { ok: false, reason: "invite_no_room" }, "no free place is left for a second invite");
+    assert.equal(sent.length, 1, "a refused invite sends nothing");
+
+    // Resending to the same address is allowed until the hourly allowance runs out.
+    let last: { ok: boolean; reason?: string } = { ok: true };
+    for (let i = 0; i < 20 && last.ok; i++) {
+      last = await actions.inviteMember(owner, { email: "first@invites.example" });
+    }
+    assert.deepEqual(last, { ok: false, reason: "invite_throttled" }, "the hourly allowance is enforced");
+    const sentBefore = sent.length;
+    expectRefused(await actions.inviteMember(owner, { email: "first@invites.example" }), "still throttled");
+    assert.equal(sent.length, sentBefore, "a throttled invite sends nothing");
+  } finally {
+    await db.close();
+  }
+});
+
 // =====================================================================================
 // AC3 [obligation:validate-and-parameterize-input] — a mis-shaped MEMBER id (not a
 // well-formed UUID; see the NOTE at the top on the "positive integer" wording) is rejected

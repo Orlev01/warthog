@@ -37,6 +37,7 @@ import type { Random } from "../seams/random";
 import type { KeyWrapper } from "../crypto/key-wrapper";
 import type { PushSender, Senders } from "../notify/senders";
 import type { RateSource } from "../currency/rate-source";
+import type { BlobStore } from "../storage/blob";
 
 const MINUTE_MS = 60 * 1000;
 const HOUR_MS = 60 * MINUTE_MS;
@@ -60,6 +61,7 @@ export interface JobSeams {
   readonly refresh: RefreshConnection;
   readonly resetExecutor: ResetExecutor;
   readonly rateSource: RateSource;
+  readonly blobStore: BlobStore; // receipt ciphertext, deleted by the account purge
   readonly publicBaseUrl: string;
 }
 
@@ -148,7 +150,7 @@ export function buildPeriodicSweeps(seams: JobSeams): readonly PeriodicSweep[] {
       name: "account-purge",
       intervalMs: HOUR_MS,
       run: async () => {
-        await runAccountPurge(seams.db);
+        await runAccountPurge(seams.db, { blobStore: seams.blobStore });
       },
     },
     { name: "metrics-snapshot", intervalMs: HOUR_MS, run: () => runMetricsSnapshot(seams.db, seams.clock) },
