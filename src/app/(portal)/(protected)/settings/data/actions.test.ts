@@ -764,3 +764,27 @@ test("the actions read no process.env: a decoy env secret never appears in an ex
     else process.env.WARTHOG_DECOY_SECRET = prev;
   }
 });
+
+// Review fix G2 — the delete control is live, so its one domain refusal (the person still
+// owns a household) must come back as a stable code the screen can explain, not a raw
+// sentence that maps to no notice and leaves the person with no feedback.
+test("deleteAccount while the person owns a household is refused with the stable owns_household code", async () => {
+  const { createHousehold } = await import("@/server/db/households");
+  const db = await freshDb();
+  const keyWrapper = keyWrapperFor();
+  try {
+    const owner = await makePerson(db, keyWrapper, "household-owner");
+    await createHousehold(db, { ownerId: owner.userId });
+    const before = await getUserById(db, owner.userId);
+    const { actions, revoked } = makeActions(db, keyWrapper);
+
+    const result = await actions.deleteAccount(await steppedUpSession(db, owner.userId), {
+      confirmation: DELETE_ACCOUNT_CONFIRMATION,
+    });
+    assert.deepEqual(result, { ok: false, reason: "owns_household" });
+    assert.equal((await getUserById(db, owner.userId))!.wrappedDek, before!.wrappedDek, "nothing is shredded");
+    assert.deepEqual(revoked, [], "nothing is revoked");
+  } finally {
+    await db.close();
+  }
+});

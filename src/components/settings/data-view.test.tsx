@@ -567,3 +567,21 @@ test("uses design tokens, never a raw hex colour", () => {
     );
   }
 });
+
+// ================================================================================
+// Review fix G2 — Export really downloads a file, and says what the file holds.
+// ================================================================================
+
+test("the Export control POSTs to the download route, so the browser receives the file", () => {
+  const markup = render(base());
+  const exportForm = findAll(markup, "form").find((f) => EXPORT_RE.test(visibleText(f.inner)) && !/file/i.test(f.attrs));
+  assert.ok(exportForm, "an Export form is rendered");
+  assert.match(exportForm!.attrs, /action="\/settings\/data\/export"/);
+  assert.match(exportForm!.attrs, /method="post"/i);
+});
+
+test("the Export explainer says plainly that cards and protected details stay on the device and are not in the file", () => {
+  const text = visibleText(render(base()));
+  assert.match(text, /cards?[^.]*(not|aren't|isn't)[^.]*(included|in (the|this) file)|(not|aren't)[^.]*included[^.]*cards?/i);
+  assert.ok(!/copy of everything Warthog stores/i.test(text), "the file is not claimed to hold everything");
+});

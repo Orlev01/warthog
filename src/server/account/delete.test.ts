@@ -736,3 +736,61 @@ test("the service reads no process.env: a decoy secret never lands in the email,
     else process.env.WARTHOG_DECOY_SECRET = prev;
   }
 });
+
+// ===========================================================================
+// Review fix G2 — deletion is wired live on the Data & privacy screen, so a finished
+// deletion must also END the person's sessions (every device is signed out: a shredded
+// DEK can no longer back any page), and a confirmation email that fails to send must
+// not turn a completed, irreversible deletion into an error.
+// ===========================================================================
+
+test("a successful deletion ends every session of the person — their old cookies no longer verify", async () => {
+  const { createSession, verifySession } = await import("../auth/session");
+  const { fixedClock } = await import("../seams/clock");
+  const { systemRandom } = await import("../seams/random");
+  const clock = fixedClock(new Date("2026-06-01T00:00:00.000Z"));
+  const db = await freshDb();
+  const outbox = createOutbox();
+  const { revoker } = makeRevokerSpy();
+  try {
+    const person = await makeUser(db, "sessions-end");
+    const bystander = await makeUser(db, "sessions-keep");
+    const phone = await createSession(db, person.id, { clock, random: systemRandom });
+    const laptop = await createSession(db, person.id, { clock, random: systemRandom });
+    const other = await createSession(db, bystander.id, { clock, random: systemRandom });
+
+    const result = await deleteAccount(makeDeps(db, revoker, outbox), { userId: person.id });
+    assert.ok(result.ok);
+
+    assert.equal(await verifySession(db, phone.token, { clock }), null, "the phone session is gone");
+    assert.equal(await verifySession(db, laptop.token, { clock }), null, "the laptop session is gone");
+    assert.ok(await verifySession(db, other.token, { clock }), "another person's session is untouched");
+  } finally {
+    await db.close();
+  }
+});
+
+test("a confirmation email that fails to send does not fail a completed deletion", async () => {
+  const db = await freshDb();
+  const { revoker, revoked } = makeRevokerSpy();
+  const failing = async (): Promise<void> => {
+    throw new Error("email channel down");
+  };
+  try {
+    const person = await makeUser(db, "email-down");
+    const result = await deleteAccount(
+      {
+        db,
+        revoker,
+        senders: { push: { sendPush: failing }, email: { sendEmail: failing }, sms: { sendSms: failing } },
+      },
+      { userId: person.id },
+    );
+    assert.deepEqual(result, { ok: true }, "the deletion is reported as done");
+    assert.equal((await getUserById(db, person.id))?.wrappedDek, "", "the DEK is shredded");
+    assert.deepEqual(revoked, [person.id], "agents and connections were revoked");
+    assert.equal(purgeEntriesFor(await listPendingPurges(db), person.id).length, 1, "the purge is enqueued");
+  } finally {
+    await db.close();
+  }
+});

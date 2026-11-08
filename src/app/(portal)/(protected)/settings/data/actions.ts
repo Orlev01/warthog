@@ -113,6 +113,10 @@ export const DELETE_ACCOUNT_CONFIRMATION = "delete my account";
 // sentences, so no internal detail or ambient value lands in a result.
 const STEP_UP_REQUIRED = "step_up_required";
 const CONFIRMATION_REQUIRED = "confirmation_required";
+// The deletion service's one domain refusal (the person still owns a household), as a
+// stable code the screen maps to plain words — never the service's sentence passed
+// through as a `?notice=` the screen cannot recognise (which showed nothing at all).
+const OWNS_HOUSEHOLD = "owns_household";
 
 // A generous default upload cap — an export legitimately carries a whole account's
 // content and its activity history. An oversized upload is refused at the byte boundary
@@ -282,7 +286,8 @@ export function createDataActions(deps: DataActionsDeps): DataActions {
     if (confirmation !== DELETE_ACCOUNT_CONFIRMATION) {
       return { ok: false, reason: CONFIRMATION_REQUIRED };
     }
-    return deleteAccountService({ db, revoker, senders }, { userId: session.userId });
+    const deleted = await deleteAccountService({ db, revoker, senders }, { userId: session.userId });
+    return deleted.ok ? { ok: true } : { ok: false, reason: OWNS_HOUSEHOLD };
   }
 
   return { load, exportData, importData, deleteAccount };
