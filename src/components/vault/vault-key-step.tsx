@@ -59,7 +59,8 @@ export interface VaultKeyStep {
   setPassphrase(value: string): void;
   setRecoveryPhrase(value: string): void;
   setPhraseSaved(value: boolean): void;
-  obtain(): Promise<ObtainResult>;
+  // With `newPhrase`, always pause on a new phrase after unlocking (replacing the phrase).
+  obtain(opts?: { newPhrase?: boolean }): Promise<ObtainResult>;
   confirmPhrase(): Promise<Uint8Array<ArrayBuffer>>;
   cancelPhrase(): void;
 }
@@ -127,13 +128,16 @@ export function createVaultKeyStep(deps: VaultKeyStepDeps): VaultKeyStep {
     }
   }
 
-  async function obtain(): Promise<ObtainResult> {
+  async function obtain(opts: { newPhrase?: boolean } = {}): Promise<ObtainResult> {
     set({ notice: null });
     const method = state.method;
     const vaultKey = await unlock();
-    // A phrase unlock proves a phrase exists; any other unlock checks, and a vault with
-    // none pauses here on a new phrase before anything is sealed.
-    if (method !== "recovery" && !(await deps.vault.hasRecoveryPhrase())) {
+    // Replacing the phrase always pauses on a new one. Otherwise a phrase unlock proves a
+    // phrase exists; any other unlock checks, and a vault with none pauses here on a new
+    // phrase before anything is sealed.
+    const needsPhrase =
+      opts.newPhrase === true || (method !== "recovery" && !(await deps.vault.hasRecoveryPhrase()));
+    if (needsPhrase) {
       pendingKey = vaultKey;
       set({ newPhrase: generateRecoveryPhrase(), phraseSaved: false });
       return { kind: "reveal" };

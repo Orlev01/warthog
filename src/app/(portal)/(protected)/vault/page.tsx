@@ -19,6 +19,8 @@ import {
   type RaiseFieldToHighTierInput,
 } from "./actions";
 import { IdentityView } from "@/components/vault/identity-view";
+import { RecoveryPhraseSettings } from "@/components/vault/recovery-phrase-settings";
+import { listMethods } from "@/server/db/vault-unlock-methods";
 import { PageContainer } from "@/components/shell/page-container";
 import type { Metadata } from "next";
 
@@ -129,6 +131,9 @@ export default async function VaultPage() {
   // seam unwrap the session person's own DEK to decrypt their low-tier values.
   const keyWrapper = selectKeyWrapper({ nodeEnv: config.nodeEnv, localKek: config.devKek });
   const data = await createIdentityActions({ db, keyWrapper }).load(session);
+  // Which unlock methods the session person has (never a wrapped key), so the recovery
+  // phrase panel can say whether a vault recovery phrase exists (review fix W1).
+  const unlockMethods = await listMethods(db, session.userId);
 
   // The live high-tier flows' submit seams: server actions that re-verify the session and
   // store ONLY the device-sealed submission (ciphertext + metadata) through the tested
@@ -204,6 +209,12 @@ export default async function VaultPage() {
         saveLowTierField={saveLowTierField}
         updateLowTierField={updateLowTierField}
       />
+      <div className="mt-6">
+        <RecoveryPhraseSettings
+          hasRecoveryPhrase={unlockMethods.includes("recovery")}
+          hasVault={unlockMethods.length > 0}
+        />
+      </div>
     </PageContainer>
   );
 }

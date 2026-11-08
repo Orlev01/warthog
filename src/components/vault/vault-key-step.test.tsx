@@ -147,6 +147,15 @@ test("a step-up refusal while saving the phrase propagates and keeps the phrase 
   assert.ok(step.getState().newPhrase, "the phrase stays so the person can try again");
 });
 
+test("obtain({ newPhrase: true }) always pauses on a new phrase, even when one exists (replacing it)", async () => {
+  const { vault, calls } = makeVault({ hasPhrase: true });
+  const step = createVaultKeyStep({ vault, createIfMissing: false });
+  const got = await step.obtain({ newPhrase: true });
+  assert.equal(got.kind, "reveal");
+  assert.ok(step.getState().newPhrase);
+  assert.deepEqual(calls, ["passkey:false"], "no need to ask whether a phrase exists");
+});
+
 // ─── the views ─────────────────────────────────────────────────────────────────────────
 
 test("the reveal shows the phrase once, with real Copy and Download controls and an 'I've saved it' tick", () => {
