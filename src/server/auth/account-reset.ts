@@ -26,12 +26,18 @@
 // revoke, so a failure rolls all three back and the job's retry finds the reset still
 // pending.
 
+import type { RegistrationResponseJSON } from "@simplewebauthn/server";
+
 import { getUserByEmail } from "../db/users";
 import { listMobileNumbers } from "../db/mobile-numbers";
 import { verifyEmailCode } from "./email-code";
+import { finishPasskeyRegistration } from "./passkey";
+import { issueRecoveryCode } from "./recovery";
+import { createSession, type CreatedSession } from "./session";
 import { enqueue } from "../db/jobs";
 import { withTransaction } from "../db/index";
 import type { Clock } from "../seams/clock";
+import type { Random } from "../seams/random";
 import type { Senders } from "../notify/senders";
 import type { Db } from "../db/index";
 
@@ -40,6 +46,13 @@ const SEVEN_DAYS_MS = 7 * 24 * 60 * MINUTE_MS;
 
 // How long a requested reset waits before it completes (the brief's 7-day window).
 export const RESET_WAIT_MS = SEVEN_DAYS_MS;
+
+// How long after a reset completes the person may use it to set up a new passkey (review
+// fix W5). A finished reset is a standing way in for whoever holds the email address, so
+// it does not stay open for ever: after this the person asks for a new reset, with its own
+// 7-day wait and alerts. Measured from requested_at + RESET_WAIT_MS (the earliest the
+// reset can have completed).
+export const REENROL_WINDOW_MS = 30 * 24 * 60 * MINUTE_MS;
 
 // The background-job type the 7-day timer fires; its payload names the account so
 // the handler can drive completeAccountReset for the right person.
@@ -241,5 +254,98 @@ export async function completeAccountReset(
     await deps.executor.eraseVaultData(userId, tx);
     await deps.executor.revokeAgentsAndConnections(userId, tx);
     return { ok: true };
+  });
+}
+
+
+// --- setting up a new passkey after a completed reset (review fix W5) ---------------
+//
+// A completed reset leaves the person with no passkey they can use and no recovery code,
+// so no sign-in path admits them. Re-enrolment is the way back: after the person proves
+// their email again (the handler's email code), a reset whose status is 'done' lets them
+// register ONE new passkey, and is then claimed 'done' → 'reenrolled' so it can never be
+// used again.
+
+// The earliest requested_at a still-usable 'done' reset can carry at `now`.
+function reenrolFloor(now: Date): string {
+  return new Date(now.getTime() - RESET_WAIT_MS - REENROL_WINDOW_MS).toISOString();
+}
+
+// Whether the person has a completed reset they can still use to set up a new passkey.
+// Member-scoped by the verified user id; a pending, cancelled, already-used or lapsed
+// reset (or none) is false.
+export async function hasCompletedReset(
+  db: Db,
+  { userId }: { userId: string },
+  deps: { readonly clock: Clock },
+): Promise<boolean> {
+  const found = await db.query(
+    `SELECT 1 FROM account_resets
+      WHERE user_id = $1 AND status = 'done' AND requested_at > $2::timestamptz`,
+    [userId, reenrolFloor(deps.clock.now())],
+  );
+  return found.rows.length > 0;
+}
+
+// What re-enrolment needs: the WebAuthn RP ID and origin the registration verifies
+// against, the clock, and the randomness the recovery code and session are drawn from.
+export interface ReenrolDeps {
+  readonly rpId: string;
+  readonly origin: string;
+  readonly clock: Clock;
+  readonly random: Random;
+}
+
+export type ReenrolResult =
+  | { ok: true; recoveryCode: string; session: CreatedSession }
+  | { ok: false; reason: "no_completed_reset" | "bad_attestation" };
+
+// Register the person's new passkey and re-enrol them, in ONE transaction:
+//   1. claim the reset: UPDATE … SET status = 'reenrolled' WHERE status = 'done' RETURNING.
+//      Of any number of racing or replayed re-enrolments exactly one gets the row (the row
+//      lock makes the others wait and then find nothing); the rest get nothing at all.
+//   2. register the passkey through the shared seam (its purpose-bound, single-use
+//      challenge). A registration that does not verify puts the reset back to 'done' in the
+//      same transaction, so the person can try again — while the spent challenge stays
+//      spent (passkey.ts burns a challenge even on a failed attempt).
+//   3. remove the lost factors: every other passkey, the authenticator app and every
+//      session. They are what the person lost (and what whoever has the lost device holds),
+//      so after this the account's only ways in are the ones just set up.
+//   4. issue the new recovery code (replacing the old one) and mint the session.
+// The new recovery code is returned once, to be shown once; only its hash is stored.
+export async function reenrolAfterReset(
+  db: Db,
+  { userId, response }: { userId: string; response: RegistrationResponseJSON },
+  deps: ReenrolDeps,
+): Promise<ReenrolResult> {
+  const { rpId, origin, clock, random } = deps;
+  return withTransaction(db, async (tx): Promise<ReenrolResult> => {
+    const claimed = await tx.query(
+      `UPDATE account_resets SET status = 'reenrolled'
+        WHERE user_id = $1 AND status = 'done' AND requested_at > $2::timestamptz
+        RETURNING user_id`,
+      [userId, reenrolFloor(clock.now())],
+    );
+    if (claimed.rows.length === 0) return { ok: false, reason: "no_completed_reset" };
+
+    const registered = await finishPasskeyRegistration(tx, { userId, response }, { rpId, origin, clock });
+    if (!registered.ok) {
+      await tx.query(
+        "UPDATE account_resets SET status = 'done' WHERE user_id = $1 AND status = 'reenrolled'",
+        [userId],
+      );
+      return { ok: false, reason: "bad_attestation" };
+    }
+
+    await tx.query("DELETE FROM passkeys WHERE user_id = $1 AND credential_id <> $2", [
+      userId,
+      registered.credentialId,
+    ]);
+    await tx.query("DELETE FROM totp_secrets WHERE user_id = $1", [userId]);
+    await tx.query("DELETE FROM sessions WHERE user_id = $1", [userId]);
+
+    const { code } = await issueRecoveryCode(tx, userId, { random });
+    const session = await createSession(tx, userId, { clock, random });
+    return { ok: true, recoveryCode: code, session };
   });
 }
