@@ -19,7 +19,9 @@ import { withReturnPath } from "../../server/auth/return-path";
 
 // --- shared layout ---------------------------------------------------------
 
-// One screen: a page heading, an optional plain lead sentence, then the step body.
+// One screen: a page heading, an optional plain lead sentence, then the step body. The
+// screen is the page's <main> landmark, and step errors are rendered with role="alert"
+// so a screen reader announces them when they appear (WCAG 4.1.3).
 function AuthScreen({
   title,
   lead,
@@ -30,12 +32,12 @@ function AuthScreen({
   children: React.ReactNode;
 }) {
   return (
-    <div className="mx-auto flex w-full max-w-sm flex-col gap-6 px-4 py-8 sm:px-6">
+    <main className="mx-auto flex w-full max-w-sm flex-col gap-6 px-4 py-8 sm:px-6">
       <Wordmark href="/" />
       <h1 className="text-2xl font-semibold tracking-tight text-fg">{title}</h1>
       {lead ? <p className="text-sm text-fg-muted">{lead}</p> : null}
       {children}
-    </div>
+    </main>
   );
 }
 
@@ -131,7 +133,11 @@ function SaveRecoveryCode({
       <Button type="button" variant="primary" disabled={!savedConfirmed} onClick={onContinue}>
         Continue
       </Button>
-      {error ? <p className="text-sm text-danger">{error}</p> : null}
+      {error ? (
+        <p role="alert" className="text-sm text-danger">
+          {error}
+        </p>
+      ) : null}
     </div>
   );
 }
@@ -245,7 +251,11 @@ export function SignupView({
           <Button type="button" variant="primary" onClick={onCreatePasskey}>
             Create a passkey
           </Button>
-          {error ? <p className="text-sm text-danger">{error}</p> : null}
+          {error ? (
+            <p role="alert" className="text-sm text-danger">
+              {error}
+            </p>
+          ) : null}
         </AuthScreen>
       );
     case "recovery":
@@ -328,7 +338,11 @@ export function SigninView({
               Sign in with your passkey
             </Button>
           </form>
-          {error ? <p className="text-sm text-danger">{error}</p> : null}
+          {error ? (
+            <p role="alert" className="text-sm text-danger">
+              {error}
+            </p>
+          ) : null}
           <Button type="button" variant="secondary" onClick={onUseAuthenticatorApp}>
             Use my authenticator app instead
           </Button>
@@ -369,7 +383,11 @@ export function SigninView({
               Sign in
             </Button>
           </form>
-          {error ? <p className="text-sm text-danger">{error}</p> : null}
+          {error ? (
+            <p role="alert" className="text-sm text-danger">
+              {error}
+            </p>
+          ) : null}
           <AuthLinks links={SIGNIN_LINKS} returnTo={returnTo} />
         </AuthScreen>
       );
@@ -523,7 +541,11 @@ export function RecoverView({
           <Button type="button" variant="primary" onClick={onCreatePasskey}>
             Create a passkey
           </Button>
-          {error ? <p className="text-sm text-danger">{error}</p> : null}
+          {error ? (
+            <p role="alert" className="text-sm text-danger">
+              {error}
+            </p>
+          ) : null}
         </AuthScreen>
       );
     case "new-recovery":

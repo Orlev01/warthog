@@ -510,3 +510,17 @@ test("sign-up, recovery and new-device screens link back to sign-in", () => {
     assert.match(link.text, /sign in/i);
   }
 });
+
+// Review (unverified, medium; WCAG 4.1.3) — a step's error is announced to screen readers
+// (role="alert"), and each auth screen is a <main> landmark.
+test("auth step errors are announced, and each auth screen is a main landmark", () => {
+  for (const markup of [
+    renderToStaticMarkup(<SigninView step="passkey" error="We couldn't sign you in." />),
+    renderToStaticMarkup(<SigninView step="code" error="We couldn't sign you in." />),
+    renderToStaticMarkup(<SignupView step="passkey" error="We couldn't sign you in." />),
+    renderToStaticMarkup(<RecoverView step="passkey" error="We couldn't sign you in." />),
+  ]) {
+    assert.match(markup, /<p[^>]*role="alert"[^>]*>We couldn&#x27;t sign you in\.<\/p>/, markup);
+    assert.match(markup, /^<main\b/, "the screen is a main landmark");
+  }
+});
