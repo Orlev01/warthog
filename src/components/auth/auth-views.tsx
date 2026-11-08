@@ -82,6 +82,7 @@ const SIGNIN_LINKS: readonly AuthLink[] = [
   { href: "/recover", label: "Lost your passkey? Recover your account" },
   { href: "/device", label: "Sign in by approving from another device" },
   { href: "/reset", label: "Lost everything? Reset your account" },
+  { href: "/reset/setup", label: "Reset finished? Set up a new passkey" },
 ];
 
 const SIGNUP_LINKS: readonly AuthLink[] = [
@@ -94,8 +95,14 @@ const RECOVER_LINKS: readonly AuthLink[] = [
 ];
 
 const RESET_LINKS: readonly AuthLink[] = [
+  { href: "/reset/setup", label: "Reset finished? Set up a new passkey" },
   { href: "/signin", label: "Found your passkey? Sign in" },
   { href: "/recover", label: "Still have your recovery code? Recover your account" },
+];
+
+const RESET_SETUP_LINKS: readonly AuthLink[] = [
+  { href: "/signin", label: "Back to sign in" },
+  { href: "/reset", label: "Haven't reset yet? Reset your account" },
 ];
 
 const DEVICE_LINKS: readonly AuthLink[] = [{ href: "/signin", label: "Back to sign in" }];
@@ -697,7 +704,17 @@ export function DeviceView({
 
 // --- reset (after losing every passkey AND the recovery code) ----------------
 
-export type ResetStep = "identify" | "email-code" | "requested";
+// The first three steps start a reset; the `setup-*` steps (review fix W5) set up a new
+// passkey once a reset has finished: email, code, create a passkey, save the new recovery
+// code.
+export type ResetStep =
+  | "identify"
+  | "email-code"
+  | "requested"
+  | "setup-identify"
+  | "setup-email-code"
+  | "setup-passkey"
+  | "setup-recovery";
 
 // A date in plain words ("8 May 2026"), in Australian time so the server render and the
 // browser render agree.
@@ -716,17 +733,23 @@ function plainDate(iso: string | undefined): string | undefined {
 // ResetView renders from props alone (review fix W3.3); the client reset flow supplies
 // the wiring. The first screen says plainly what a reset does before anything starts: a
 // 7-day wait, alerts everywhere, cancellable from a signed-in device, and the protected
-// details erased. `completesAt` is when a requested reset finishes.
+// details erased. `completesAt` is when a requested reset finishes. `recoveryCode` is the
+// NEW shown-once code of the set-up's last step.
 export interface ResetViewProps {
   step: ResetStep;
   email?: string;
   emailCode?: string;
   completesAt?: string;
+  recoveryCode?: string;
+  savedConfirmed?: boolean;
   error?: string;
   onEmailChange?: (value: string) => void;
   onEmailCodeChange?: (value: string) => void;
   onSubmitIdentify?: () => void;
   onSubmitEmailCode?: () => void;
+  onCreatePasskey?: () => void;
+  onSavedConfirmedChange?: (value: boolean) => void;
+  onConfirm?: () => void;
   returnTo?: string;
 }
 
@@ -735,11 +758,16 @@ export function ResetView({
   email,
   emailCode,
   completesAt,
+  recoveryCode,
+  savedConfirmed,
   error,
   onEmailChange,
   onEmailCodeChange,
   onSubmitIdentify,
   onSubmitEmailCode,
+  onCreatePasskey,
+  onSavedConfirmedChange,
+  onConfirm,
   returnTo,
 }: ResetViewProps) {
   switch (step) {
@@ -822,5 +850,94 @@ export function ResetView({
         </AuthScreen>
       );
     }
+    case "setup-identify":
+      return (
+        <AuthScreen
+          title="Set up a new passkey"
+          lead="Once your reset has finished, enter your email and we'll send you a code. Then you can set up a new passkey."
+        >
+          <form
+            className="flex flex-col gap-4"
+            onSubmit={(event) => {
+              event.preventDefault();
+              onSubmitIdentify?.();
+            }}
+          >
+            <Field
+              label="Email address"
+              name="email"
+              type="email"
+              autoComplete="email"
+              value={email}
+              onChange={(event) => onEmailChange?.(event.target.value)}
+              error={error}
+            />
+            <Button type="submit" variant="primary">
+              Send me a code
+            </Button>
+          </form>
+          <AuthLinks links={RESET_SETUP_LINKS} returnTo={returnTo} />
+        </AuthScreen>
+      );
+    case "setup-email-code":
+      return (
+        <AuthScreen
+          title="Check your email"
+          lead="If that account's reset has finished, we've emailed it a code. Enter it here."
+        >
+          <form
+            className="flex flex-col gap-4"
+            onSubmit={(event) => {
+              event.preventDefault();
+              onSubmitEmailCode?.();
+            }}
+          >
+            <Field
+              label="Your code"
+              name="code"
+              type="text"
+              inputMode="numeric"
+              autoComplete="one-time-code"
+              value={emailCode}
+              onChange={(event) => onEmailCodeChange?.(event.target.value)}
+              error={error}
+            />
+            <Button type="submit" variant="primary">
+              Continue
+            </Button>
+          </form>
+        </AuthScreen>
+      );
+    case "setup-passkey":
+      return (
+        <AuthScreen
+          title="Create a new passkey"
+          lead="Create a passkey on this device to sign in from now on. Your old passkeys will stop working, and any other devices will be signed out."
+        >
+          <Button type="button" variant="primary" onClick={onCreatePasskey}>
+            Create a passkey
+          </Button>
+          {error ? (
+            <p role="alert" className="text-sm text-danger">
+              {error}
+            </p>
+          ) : null}
+        </AuthScreen>
+      );
+    case "setup-recovery":
+      return (
+        <AuthScreen
+          title="Save your new recovery code"
+          lead="Here's your new recovery code. Write it down and keep it safe, and we'll only show it once."
+        >
+          <SaveRecoveryCode
+            code={recoveryCode}
+            savedConfirmed={savedConfirmed}
+            onSavedConfirmedChange={onSavedConfirmedChange}
+            onContinue={onConfirm}
+            error={error}
+          />
+        </AuthScreen>
+      );
   }
 }
