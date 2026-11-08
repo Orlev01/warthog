@@ -51,6 +51,7 @@ function deps(db: Db) {
     config,
     clock: fixedClock(NOW),
     random: systemRandom,
+    alerts: { emailSender: { sendEmail: async () => {} } },
     resolveClient: createClientResolver({
       db,
       fetchCimd: async (clientId: string): Promise<Record<string, unknown>> => {

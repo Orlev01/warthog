@@ -45,6 +45,7 @@ import {
   type PermissionGrants,
 } from "../../../server/db/agent-permissions";
 import { parseParams } from "../../../server/http/validate";
+import { alertNewAgentConnection, type AlertDeps } from "../../../server/auth/alerts";
 import { permissionTemplate } from "../../../domain/permissions/templates";
 import type { Config } from "../../../server/config";
 import type { Clock } from "../../../server/seams/clock";
@@ -98,15 +99,17 @@ export type DecisionResult =
 
 // The seams the decision composes: the db (stores), config (the issuer, read through
 // the authorize seam), the clock (the agent's connected-at + the credential expiry),
-// the randomness source (the opaque credential) and the client resolver (review fix
+// the randomness source (the opaque credential), the client resolver (review fix
 // A1: both decisions re-check the client and its registered redirect URI, so neither
-// ever redirects to an unvalidated URI).
+// ever redirects to an unvalidated URI) and the alert senders (review fix A6: the
+// "new agent connection" security email).
 export interface AuthorizeActionsDeps {
   readonly db: Db;
   readonly config: Config;
   readonly clock: Clock;
   readonly random: Random;
   readonly resolveClient: ClientResolver;
+  readonly alerts: AlertDeps;
 }
 
 // The consent-decision actions the consent screen drives. Each takes an opaque
@@ -196,7 +199,7 @@ function grantsFor(
 }
 
 export function createAuthorizeActions(deps: AuthorizeActionsDeps): AuthorizeActions {
-  const { db, config, clock, random, resolveClient } = deps;
+  const { db, config, clock, random, resolveClient, alerts } = deps;
 
   // Approve: validate the untrusted input FIRST (a 4xx before any write), resolve and
   // CONSUME the pending authorize request from its server-side handle (a tampered or
@@ -241,6 +244,17 @@ export function createAuthorizeActions(deps: AuthorizeActionsDeps): AuthorizeAct
       (await listConnectionsForUser(db, session.userId)).map((c) => c.connectorId),
     );
     await upsertPermissions(db, grantsFor(session.userId, connectionId, valid, connected));
+
+    // Tell the person a new agent connected (design: an email alert for each new agent
+    // connection; the alerts module addresses it to the session's own person and scrubs
+    // the agent's name through redaction). The connection is already complete, so a send
+    // failure must not strand the agent mid-handshake: it is logged — with no personal
+    // content — and the approval goes ahead.
+    try {
+      await alertNewAgentConnection(db, { userId: session.userId, agentName: valid.name }, alerts);
+    } catch {
+      console.error("[warthog oauth] the new-agent-connection alert could not be sent");
+    }
 
     return { ok: true, redirectTo: issued.redirectTo };
   }

@@ -15,6 +15,7 @@ import { HttpError } from "../../../server/http/validate";
 import { systemClientResolver } from "../../../server/oauth/clients";
 import { loadCatalogue, type CatalogueIndex } from "../../../server/connectors/catalogue";
 import { processSingleton } from "../../../server/seams/process-singleton";
+import { selectSenders, type OutgoingMessage, type Senders } from "../../../server/notify/senders";
 import { createAuthorizeActions } from "../authorize/actions";
 import { approvalFromForm, loadConsentView } from "./actions";
 import type { Db } from "../../../server/db/index";
@@ -55,15 +56,32 @@ async function resolveSession(db: Db): Promise<Session | null> {
   return token ? verifySession(db, token, { clock: systemClock }) : null;
 }
 
+// Real senders stand-in: until the Azure channel senders are built, sending through one
+// rejects loudly rather than dropping the message (constitution: never fail silently).
+// With dev tooling on, `selectSenders` routes every channel to the dev outbox instead.
+function notConfiguredSenders(): Senders {
+  const reject = (channel: string) => async (_message: OutgoingMessage): Promise<void> => {
+    throw new Error(`${channel} sending is not configured`);
+  };
+  return {
+    push: { sendPush: reject("Push") },
+    email: { sendEmail: reject("Email") },
+    sms: { sendSms: reject("SMS") },
+  };
+}
+
 // Build the consent decision actions with the real seams (the client resolver re-checks
-// the client and its registered redirect URI before either decision redirects).
+// the client and its registered redirect URI before either decision redirects; the
+// configured email sender carries the new-agent-connection alert).
 function buildActions(db: Db) {
+  const config = loadConfig();
   return createAuthorizeActions({
     db,
-    config: loadConfig(),
+    config,
     clock: systemClock,
     random: systemRandom,
     resolveClient: systemClientResolver(db),
+    alerts: { emailSender: selectSenders(config, notConfiguredSenders()).email },
   });
 }
 

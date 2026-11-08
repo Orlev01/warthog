@@ -95,6 +95,7 @@ function deps(db: Db, config: Config) {
     config,
     clock: fixedClock(NOW),
     random: systemRandom,
+    alerts: { emailSender: { sendEmail: async () => {} } },
     hmacKey: config.hmacKey,
     resolveClient: createClientResolver({
       db,
