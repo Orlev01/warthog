@@ -120,6 +120,7 @@ export default async function CardsPage() {
     <CardsView
       cards={data.cards}
       billingAddresses={data.billingAddresses}
+      defaultCardholderName={data.defaultCardholderName}
       addCard={addCard}
       removeCard={removeCard}
     />

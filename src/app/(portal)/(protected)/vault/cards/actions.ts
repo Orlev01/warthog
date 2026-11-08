@@ -66,10 +66,13 @@ export interface BillingAddress {
 }
 
 // What `load` returns — the owner's cards as METADATA ONLY plus their billing-address
-// choices, the two props <CardsView/> is mounted over.
+// choices, the props <CardsView/> is mounted over, and the person's saved name from About
+// you, which pre-fills the add form's "Name on card" ("" when they have not saved one —
+// review fix W6).
 export interface CardsViewData {
   readonly cards: CardMetadata[];
   readonly billingAddresses: BillingAddress[];
+  readonly defaultCardholderName: string;
 }
 
 // Every mutation reports its outcome — success, or a refusal naming its reason (the
@@ -86,6 +89,8 @@ export interface AddCardInput {
   readonly expiryMonth: number;
   readonly expiryYear: number;
   readonly nickname: string;
+  // The name on the card: printed on it, so plaintext metadata like the expiry (W6).
+  readonly cardholderName: string;
   readonly billingAddressId: string;
   readonly numberCiphertext: string;
 }
@@ -103,7 +108,8 @@ export interface CardsActions {
 
 // ---- boundary validation shapes (INV-102) -----------------------------------------
 //
-// A brand / nickname is bounded free text (a grossly oversized one is rejected); the
+// A brand / nickname / name on the card is bounded free text (a grossly oversized one is
+// rejected; the name on the card is trimmed and must not be blank); the
 // last four is exactly four digits; the device number ciphertext is a short opaque `v1:`
 // envelope, capped well above any genuine one. The billing-address reference and the
 // card id are uuids (identity_fields.id / cards.id — db/migrations), shape-guarded so a
@@ -112,6 +118,7 @@ export interface CardsActions {
 // reaches no column rather than being rejected.
 const BRAND_MAX = 256;
 const NICKNAME_MAX = 256;
+const CARDHOLDER_NAME_MAX = 256;
 const CIPHERTEXT_MAX = 64 * 1024;
 
 const addCardSchema = z.object({
@@ -121,6 +128,7 @@ const addCardSchema = z.object({
   expiryMonth: z.number().int(),
   expiryYear: z.number().int(),
   nickname: z.string().min(1).max(NICKNAME_MAX),
+  cardholderName: z.string().trim().min(1).max(CARDHOLDER_NAME_MAX),
   billingAddressId: z.uuid(),
   // A sealed device envelope (`v1:` …), never a plaintext number stored as "ciphertext".
   numberCiphertext: z.string().min(1).max(CIPHERTEXT_MAX).regex(/^v1:/),
@@ -149,9 +157,10 @@ export function createCardsActions(deps: CardsActionsDeps): CardsActions {
     return keyWrapper.unwrap(user.wrappedDek);
   }
 
-  // Read ONLY the session person's cards (metadata) and their postal addresses (the
-  // billing-address choices, decrypted under their DEK). Member-scoped by
-  // `session.userId` — another person's cards/addresses never appear.
+  // Read ONLY the session person's cards (metadata), their postal addresses (the
+  // billing-address choices, decrypted under their DEK) and their saved name (the
+  // "Name on card" default). Member-scoped by `session.userId` — another person's
+  // cards/addresses/name never appear.
   async function load(session: Session): Promise<CardsViewData> {
     const cards = await listCards(db, session.userId);
     const dek = await dataKeyFor(session.userId);
@@ -159,7 +168,8 @@ export function createCardsActions(deps: CardsActionsDeps): CardsActions {
     const billingAddresses = fields
       .filter((field) => field.kind === "postal_address")
       .map((field) => ({ id: field.id, value: field.value }));
-    return { cards, billingAddresses };
+    const defaultCardholderName = fields.find((field) => field.kind === "name")?.value ?? "";
+    return { cards, billingAddresses, defaultCardholderName };
   }
 
   // Store a NEW card for the session person — ONLY the device ciphertext plus the
@@ -178,6 +188,7 @@ export function createCardsActions(deps: CardsActionsDeps): CardsActions {
       expiryMonth: valid.expiryMonth,
       expiryYear: valid.expiryYear,
       nickname: valid.nickname,
+      cardholderName: valid.cardholderName,
       billingAddressId: valid.billingAddressId,
       numberCiphertext: valid.numberCiphertext,
     });

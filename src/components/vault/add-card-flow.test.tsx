@@ -344,10 +344,11 @@ async function submitThroughPhrase(flow: ReturnType<typeof makeFlow>["flow"]): P
 
 function fillCard(
   flow: ReturnType<typeof makeFlow>["flow"],
-  opts: { number: string; nickname?: string; month?: string; year?: string; billing?: string },
+  opts: { number: string; nickname?: string; cardholderName?: string; month?: string; year?: string; billing?: string },
 ): void {
   flow.setNumber(opts.number);
   flow.setNickname(opts.nickname ?? "Everyday spending");
+  flow.setCardholderName(opts.cardholderName ?? "Oren Levy");
   flow.setExpiryMonth(opts.month ?? "11");
   flow.setExpiryYear(opts.year ?? "2029");
   flow.setBillingAddressId(opts.billing ?? "addr-home");
@@ -1137,4 +1138,71 @@ test("W1 — replacing an existing vault passphrase without a fresh step-up offe
     <AddCardFlow billingAddresses={[ADDR_HOME]} addCard={async () => ({ ok: true })} initialOpen />,
   );
   assert.match(html, /recovery phrase/i, "the open panel offers unlocking with the recovery phrase");
+});
+
+// ═══ Review fix W6 — the name on the card ══════════════════════════════════════════════
+//
+// A checkout needs the cardholder name, so the form asks for it ("Name on card"), pre-filled
+// with the person's saved name from About you, and sends it with the other plaintext metadata.
+
+test("W6 — the open panel has a Name on card field, pre-filled with the person's saved name", () => {
+  const markup = renderToStaticMarkup(
+    <AddCardFlow
+      billingAddresses={[ADDR_HOME, ADDR_WORK]}
+      addCard={noopAddCard}
+      initialOpen={true}
+      defaultCardholderName="Oren Quokka Levy"
+    />,
+  );
+  const field = editableFields(markup).find((f) => /name on card/i.test(f.label));
+  assert.ok(field, `the panel offers a "Name on card" field; fields=${JSON.stringify(editableFields(markup))}`);
+  assert.equal(field!.value, "Oren Quokka Levy", "it starts with the saved name");
+
+  const empty = renderToStaticMarkup(
+    <AddCardFlow billingAddresses={[ADDR_HOME]} addCard={noopAddCard} initialOpen={true} />,
+  );
+  const blank = editableFields(empty).find((f) => /name on card/i.test(f.label));
+  assert.ok(blank, "the field is there with no saved name too");
+  assert.equal(blank!.value, "", "and starts empty");
+});
+
+test("W6 — the name on the card is submitted with the card, and reset to the saved name after", async () => {
+  const server = makeServer();
+  const addCard = makeAddCard();
+  const flow = createAddCardFlow({
+    billingAddresses: [ADDR_HOME],
+    defaultCardholderName: "Oren Quokka Levy",
+    fetch: server.fetch,
+    startAuthentication: makePasskey().fn,
+    createVaultKey: makeCreateKey().fn,
+    addCard: addCard.fn,
+  });
+  assert.equal(flow.getState().cardholderName, "Oren Quokka Levy", "the saved name pre-fills the field");
+  flow.setNumber(VISA_NUMBER);
+  flow.setNickname("Everyday spending");
+  flow.setCardholderName("  O Q Levy  ");
+  flow.setExpiryMonth("11");
+  flow.setExpiryYear("2029");
+  await submitThroughPhrase(flow);
+  assert.equal(addCard.count, 1, "the card is submitted");
+  assert.equal(
+    (addCard.subs[0] as unknown as { cardholderName: string }).cardholderName,
+    "O Q Levy",
+    "the name on the card travels with the metadata, trimmed",
+  );
+  assert.equal(flow.getState().status, "added");
+  assert.equal(flow.getState().cardholderName, "Oren Quokka Levy", "the field goes back to the saved name");
+});
+
+test("W6 — a blank name on the card is refused on the device and nothing is sent", async () => {
+  const server = makeServer();
+  const addCard = makeAddCard();
+  const { flow } = makeFlow(server, makePasskey(), makeCreateKey(), addCard);
+  fillCard(flow, { number: VISA_NUMBER, cardholderName: "   " });
+  await submitThroughPhrase(flow);
+  assert.equal(addCard.count, 0, "nothing is stored");
+  assert.equal(server.gets.length + server.posts.length, 0, "nothing leaves the device");
+  assert.equal(flow.getState().status, "error");
+  assertPlainFailure(flow.getState().error, "blank name on card");
+  assert.match(flow.getState().error ?? "", /name on the card/i, "the copy says what to fix");
 });
