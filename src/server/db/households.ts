@@ -117,13 +117,17 @@ export async function createHousehold(db: Db, input: NewHousehold): Promise<Hous
 }
 
 // The household this user belongs to (member-scoped by userId), or null. A person
-// belongs to one household, so this returns that one.
+// belongs to one household (enforced by addMember and, where it could be added, the
+// unique index of 0060), so this returns that one; the ORDER BY only keeps the answer
+// deterministic — the household they own first — for data from before that was enforced.
 export async function getHouseholdForMember(db: Db, userId: string): Promise<Household | null> {
   const result = await db.query(
     `SELECT h.id, h.owner_id, h.currency, h.monthly_budget, h.pending_owner_id
        FROM households h
        JOIN household_members m ON m.household_id = h.id
-      WHERE m.user_id = $1`,
+      WHERE m.user_id = $1
+      ORDER BY (m.role = 'owner') DESC, h.id
+      LIMIT 1`,
     [userId],
   );
   const row = result.rows[0];
@@ -165,29 +169,52 @@ export async function isHouseholdMember(
   return result.rows.length > 0;
 }
 
+// Why addMember refused.
+export type AddMemberRefusal = "household_full" | "already_member" | "already_in_household";
+
 // Add `userId` as role 'member'. Total membership (incl. the owner) is capped at 8 —
 // the 9th is refused with "household_full"; re-adding an existing member is refused
-// with "already_member" and never duplicates the membership.
+// with "already_member" and never duplicates the membership; a person who already
+// belongs to ANOTHER household (as its owner or a member) is refused with
+// "already_in_household" — a person belongs to one household.
+//
+// Both rules hold under concurrency. The household row is locked first, so on Postgres
+// concurrent adds to one household serialise (call this inside a transaction, as
+// redeemInvite does, so the lock is held until the insert commits); and the insert itself
+// re-checks the cap and the one-household rule in the same statement, so adds that share
+// one session (PGlite) cannot both pass a count taken before either inserted. A clash with
+// the one-household unique index (two joins racing into different households) inserts
+// nothing rather than raising, and is reported as "already_in_household".
 export async function addMember(
   db: Db,
   { householdId, userId }: { householdId: string; userId: string },
-): Promise<{ ok: true; member: HouseholdMember } | { ok: false; reason: "household_full" | "already_member" }> {
-  const members = await db.query(
-    "SELECT user_id FROM household_members WHERE household_id = $1",
-    [householdId],
+): Promise<{ ok: true; member: HouseholdMember } | { ok: false; reason: AddMemberRefusal }> {
+  await db.query("SELECT 1 FROM households WHERE id = $1 FOR UPDATE", [householdId]);
+  const inserted = await db.query(
+    `INSERT INTO household_members (household_id, user_id, role)
+     SELECT $1, $2, 'member'
+      WHERE (SELECT count(*) FROM household_members WHERE household_id = $1) < $3
+        AND NOT EXISTS (SELECT 1 FROM household_members WHERE user_id = $2)
+     ON CONFLICT DO NOTHING
+     RETURNING user_id`,
+    [householdId, userId, MAX_MEMBERS],
   );
-  if (members.rows.some((row) => String(row.user_id) === userId)) {
+  if (inserted.rows.length > 0) {
+    return { ok: true, member: { householdId, userId, role: "member", monthlyLimit: null } };
+  }
+
+  // Nothing was inserted: report why.
+  const memberships = await db.query(
+    "SELECT household_id FROM household_members WHERE user_id = $1",
+    [userId],
+  );
+  if (memberships.rows.some((row) => String(row.household_id) === householdId)) {
     return { ok: false, reason: "already_member" };
   }
-  if (members.rows.length >= MAX_MEMBERS) {
-    return { ok: false, reason: "household_full" };
+  if (memberships.rows.length > 0) {
+    return { ok: false, reason: "already_in_household" };
   }
-  await db.query(
-    `INSERT INTO household_members (household_id, user_id, role)
-     VALUES ($1, $2, 'member')`,
-    [householdId, userId],
-  );
-  return { ok: true, member: { householdId, userId, role: "member", monthlyLimit: null } };
+  return { ok: false, reason: "household_full" };
 }
 
 // Owner-only: remove a member (the target must be a member). The removed person keeps

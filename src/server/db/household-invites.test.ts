@@ -924,3 +924,136 @@ test("the household_invites migration applies and re-running every migration cha
     await db.close();
   }
 });
+
+// =====================================================================================
+// Joins are bound to the invited person, to ONE household per person, and to the 8-member
+// cap even under concurrency (review findings: any signed-in person holding the link joined;
+// a person already in a household — even its owner — could join a second one; and two
+// parallel joins into a household of 7 both succeeded, making 9).
+// =====================================================================================
+
+test("an invite redeems only for the account whose email it was sent to; anyone else is refused and it stays usable", async () => {
+  const db = await freshDb();
+  try {
+    const alice = await makeUser(db, "bind-owner");
+    const bob = await makeUser(db, "bind-invitee");
+    const mallory = await makeUser(db, "bind-other");
+    const house = await createHousehold(db, { ownerId: alice.id });
+    const { token } = await issueInvite(db, { householdId: house.id, email: bob.email }, issueDeps());
+
+    assert.deepEqual(
+      await redeemInvite(db, { token, userId: mallory.id }, redeemDeps()),
+      { ok: false, reason: "wrong_account" },
+      "a different signed-in account cannot use someone else's invite",
+    );
+    assert.equal(await isHouseholdMember(db, house.id, mallory.id), false, "the other account was not added");
+
+    assert.deepEqual(
+      await redeemInvite(db, { token, userId: bob.id }, redeemDeps()),
+      { ok: true, householdId: house.id },
+      "the invite was not consumed by the refusal; the invited person still joins",
+    );
+  } finally {
+    await db.close();
+  }
+});
+
+test("the invited email matches regardless of letter case and surrounding spaces", async () => {
+  const db = await freshDb();
+  try {
+    const alice = await makeUser(db, "case-owner");
+    const bob = await makeUser(db, "case-invitee");
+    const house = await createHousehold(db, { ownerId: alice.id });
+    const { token } = await issueInvite(
+      db,
+      { householdId: house.id, email: `  ${bob.email.toUpperCase()} ` },
+      issueDeps(),
+    );
+    assert.deepEqual(await redeemInvite(db, { token, userId: bob.id }, redeemDeps()), {
+      ok: true,
+      householdId: house.id,
+    });
+  } finally {
+    await db.close();
+  }
+});
+
+test("a person already in a household (as owner or member) cannot join a second one", async () => {
+  const db = await freshDb();
+  try {
+    const alice = await makeUser(db, "multi-owner-a");
+    const bob = await makeUser(db, "multi-owner-b");
+    const carol = await makeUser(db, "multi-member-a");
+    const houseA = await createHousehold(db, { ownerId: alice.id });
+    const houseB = await createHousehold(db, { ownerId: bob.id });
+    assert.equal((await addMember(db, { householdId: houseA.id, userId: carol.id })).ok, true);
+
+    for (const who of [alice, carol]) {
+      const { token } = await issueInvite(db, { householdId: houseB.id, email: who.email }, issueDeps());
+      assert.deepEqual(
+        await redeemInvite(db, { token, userId: who.id }, redeemDeps()),
+        { ok: false, reason: "already_in_household" },
+        "a person already in a household is refused",
+      );
+      assert.equal(await isHouseholdMember(db, houseB.id, who.id), false, "and was not added to the second one");
+      assert.equal((await getHouseholdForMember(db, who.id))?.id, houseA.id, "they stay in their own household");
+    }
+  } finally {
+    await db.close();
+  }
+});
+
+test("two parallel joins into a household with one place left admit exactly one", async () => {
+  const db = await freshDb();
+  try {
+    const owner = await makeUser(db, "race-owner");
+    const house = await createHousehold(db, { ownerId: owner.id });
+    for (let i = 1; i <= 6; i++) {
+      const filler = await makeUser(db, `race-filler-${i}`);
+      assert.equal((await addMember(db, { householdId: house.id, userId: filler.id })).ok, true);
+    }
+    // 7 members: one place left, two invitees racing for it.
+    const p = await makeUser(db, "race-p");
+    const q = await makeUser(db, "race-q");
+    const tp = (await issueInvite(db, { householdId: house.id, email: p.email }, issueDeps())).token;
+    const tq = (await issueInvite(db, { householdId: house.id, email: q.email }, issueDeps())).token;
+
+    const results = await Promise.all([
+      redeemInvite(db, { token: tp, userId: p.id }, redeemDeps()),
+      redeemInvite(db, { token: tq, userId: q.id }, redeemDeps()),
+    ]);
+    assert.deepEqual(
+      results.map((r) => (r.ok ? "joined" : r.reason)).sort(),
+      ["household_full", "joined"],
+      "exactly one parallel join gets the last place",
+    );
+    assert.equal((await listMembers(db, house.id, owner.id)).length, 8, "the household never exceeds 8 members");
+  } finally {
+    await db.close();
+  }
+});
+
+test("the database refuses a second household membership for one person", async () => {
+  const db = await freshDb();
+  try {
+    const alice = await makeUser(db, "unique-owner-a");
+    const bob = await makeUser(db, "unique-owner-b");
+    const carol = await makeUser(db, "unique-member");
+    const houseA = await createHousehold(db, { ownerId: alice.id });
+    const houseB = await createHousehold(db, { ownerId: bob.id });
+    await db.query("INSERT INTO household_members (household_id, user_id, role) VALUES ($1, $2, 'member')", [
+      houseA.id,
+      carol.id,
+    ]);
+    await assert.rejects(
+      db.query("INSERT INTO household_members (household_id, user_id, role) VALUES ($1, $2, 'member')", [
+        houseB.id,
+        carol.id,
+      ]),
+      /unique|duplicate/i,
+      "a raw second membership violates the one-household-per-person constraint",
+    );
+  } finally {
+    await db.close();
+  }
+});

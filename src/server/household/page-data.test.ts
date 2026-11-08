@@ -349,8 +349,9 @@ test("pending invites: lists only unused + unexpired invites, by email, excludin
     const open = await issueInvite(db, { householdId: hid, email: "open@invites.example" }, { clock: fixedClock(NOW), random: systemRandom });
     // (b) An expired invite (issued 8 days ago, so it lapsed one day before NOW).
     await issueInvite(db, { householdId: hid, email: "expired@invites.example" }, { clock: fixedClock(EIGHT_DAYS_AGO), random: systemRandom });
-    // (c) A redeemed invite (used): issue, then redeem it with a signed-in user.
-    const used = await issueInvite(db, { householdId: hid, email: "used@invites.example" }, { clock: fixedClock(NOW), random: systemRandom });
+    // (c) A redeemed invite (used): issue it to the redeemer's email (an invite redeems only
+    // for the account it was sent to), then redeem it with that signed-in user.
+    const used = await issueInvite(db, { householdId: hid, email: "ac1d-redeemer@people.example" }, { clock: fixedClock(NOW), random: systemRandom });
     assert.ok((await redeemInvite(db, { token: used.token, userId: redeemer.id }, { clock: fixedClock(NOW) })).ok);
 
     const data = await readHouseholdPageData(alice.id, { db, keyWrapper, clock: fixedClock(NOW) });

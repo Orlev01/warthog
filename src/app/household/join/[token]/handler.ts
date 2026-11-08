@@ -5,24 +5,37 @@
 // A Next App-Router `route.ts` may export ONLY the known route keys (the HTTP verb(s) +
 // framework config) or `next build` rejects it (OBS-025), so the injectable, unit-testable
 // seam lives HERE, beside the entry; `route.ts` imports `createHouseholdJoinHandler` and
-// exports only `GET`.
+// exports only `GET` and `POST`.
 //
-// `GET /household/join/[token]` redeems the single-use household-invite token for the
-// SIGNED-IN invited person and opens the Household page in-app. The link carries NO
-// authority of its own beyond adding the signed-in user once: it adds nobody until the
-// person is signed in. The order (mirroring the approval-link route `/a/[token]`, E12-S14):
+// Opening the link NEVER joins by itself. The session cookie is SameSite=Lax, so it rides
+// along on any cross-site top-level GET — a link or an auto-redirect from any site — and a
+// GET that joined would let anyone silently enrol a signed-in person in their household
+// (and then see their spending totals and set their limit). So:
+//
+// `GET /household/join/[token]` shows the CONFIRMATION, and changes nothing:
 //   1. validate the token shape at the boundary (INV-102) — a malformed or oversized token
 //      is a 4xx and never reaches the invite store.
 //   2. resolve the session from the `__Host-wh_session` cookie (the real `verifySession`).
-//      No session → redirect to sign-in and redeem NOTHING, so the single-use token
-//      survives for after sign-in and the link adds no member by itself.
-//   3. redeem the token (the real `redeemInvite`) for the SESSION's user id — never a value
-//      from the path/body: a live, unexpired, unused token adds the signed-in person to the
-//      bound household ONCE; a reused, expired or unknown token is rejected and adds no
-//      member; a redemption that would exceed the 8-member cap is refused with a plain
-//      reason.
-//   4. on success, redirect IN-APP to the Household page (`/household`), built from the
-//      CONFIGURED public base URL — never the request host.
+//      No session → redirect to sign-in with `next` set back to this link, and redeem
+//      NOTHING, so the single-use token survives for after sign-in.
+//   3. preview the token for the SESSION's user (the real `previewInvite`): a token that
+//      would be refused (unknown/used, expired, sent to another account's email, or the
+//      person is already in a household) redirects to the Household page with the plain
+//      reason, before any confirmation is offered.
+//   4. otherwise render a small page that says what joining shares, with a form that POSTs
+//      back to this same path.
+//
+// `POST /household/join/[token]` performs the JOIN:
+//   1. validate the token shape (a 4xx otherwise).
+//   2. refuse (403) unless the request's Origin is Warthog's own configured origin — the
+//      form is only ever submitted from the confirmation page, so a cross-site submission
+//      (or one with no Origin) joins no one, independently of the cookie's SameSite.
+//   3. resolve the session; none → sign-in (nothing redeemed).
+//   4. redeem the token (the real `redeemInvite`) for the SESSION's user id — never a value
+//      from the path/body: it re-checks everything the preview did, then adds the person
+//      within the 8-member cap atomically and spends the token; any refusal adds no member
+//      and redirects with its plain reason.
+//   5. on success, redirect IN-APP to the Household page (`/household?notice=joined`).
 //
 // Config flows in through the injected seam, defaulting to the one env reader `loadConfig`
 // (INV-103): the redirect targets are built from the CONFIGURED public base URL, never from
@@ -35,7 +48,7 @@ import { z } from "zod";
 
 import { HttpError, parseParams } from "../../../../server/http/validate";
 import { COOKIE_NAME, verifySession } from "../../../../server/auth/session";
-import { redeemInvite } from "../../../../server/db/household-invites";
+import { previewInvite, redeemInvite } from "../../../../server/db/household-invites";
 import { loadConfig, type Config } from "../../../../server/config";
 import { getServerDb } from "../../../../server/db/server";
 import { systemClock, type Clock } from "../../../../server/seams/clock";
@@ -50,9 +63,10 @@ export interface HouseholdJoinSeams {
   readonly config?: Config;
 }
 
-// The route handlers this factory produces — only the HTTP verb the entry re-exports.
+// The route handlers this factory produces — only the HTTP verbs the entry re-exports.
 export interface HouseholdJoinRouteHandlers {
   GET(request: Request, context: { params: Promise<{ token: string }> }): Promise<Response>;
+  POST(request: Request, context: { params: Promise<{ token: string }> }): Promise<Response>;
 }
 
 // An invite token rides inside a URL, so it is a short, URL-safe opaque string (base64url of
@@ -95,9 +109,121 @@ function redirectTo(baseUrl: string, path: string, notice?: string): Response {
   return new Response(null, { status: 303, headers: { location: target.toString() } });
 }
 
+// The path of this link for a (shape-validated) token — where the confirmation form posts
+// and where sign-in returns to. Relative, starting with a single "/", as `next` requires.
+function joinPath(token: string): string {
+  return `/household/join/${token}`;
+}
+
+// The sign-in redirect for a person who is not signed in, asking sign-in to come back to
+// this link afterwards so the invite still works once they have.
+function toSignin(baseUrl: string, token: string): Response {
+  const target = new URL(SIGNIN_PATH, baseUrl);
+  target.searchParams.set("next", joinPath(token));
+  return new Response(null, { status: 303, headers: { location: target.toString() } });
+}
+
+// Escape a value for an HTML attribute or text node. The only dynamic value on the page is
+// the token, already restricted to [A-Za-z0-9_-] by the schema; escaping anyway keeps the
+// page safe if that ever loosens.
+function escapeHtml(value: string): string {
+  return value
+    .replace(/&/g, "&amp;")
+    .replace(/</g, "&lt;")
+    .replace(/>/g, "&gt;")
+    .replace(/"/g, "&quot;")
+    .replace(/'/g, "&#39;");
+}
+
+// The confirmation page: what joining shares (the brief's household rules, in plain words)
+// and one button that POSTs back to this link. Self-contained (no script); never cached,
+// and never framed.
+function confirmationPage(token: string): Response {
+  const action = escapeHtml(joinPath(token));
+  const html = `<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Join a household · Warthog</title>
+<style>
+  :root { color-scheme: light dark; --fg: #18181b; --muted: #52525b; --bg: #fafafa; --card: #ffffff; --line: #d4d4d8; --accent: #4338ca; --on-accent: #ffffff; }
+  @media (prefers-color-scheme: dark) { :root { --fg: #fafafa; --muted: #a1a1aa; --bg: #09090b; --card: #18181b; --line: #3f3f46; --accent: #a5b4fc; --on-accent: #09090b; } }
+  body { margin: 0; background: var(--bg); color: var(--fg); font: 16px/1.5 system-ui, -apple-system, "Segoe UI", sans-serif; }
+  main { max-width: 32rem; margin: 0 auto; padding: 48px 16px; }
+  .card { background: var(--card); border: 1px solid var(--line); border-radius: 12px; padding: 24px; }
+  h1 { font-size: 1.375rem; margin: 0 0 8px; }
+  p, li { color: var(--muted); }
+  ul { padding-left: 1.25rem; }
+  .actions { display: flex; flex-wrap: wrap; gap: 12px; align-items: center; margin-top: 24px; }
+  button { font: inherit; font-weight: 600; background: var(--accent); color: var(--on-accent); border: 0; border-radius: 8px; padding: 10px 20px; min-height: 44px; cursor: pointer; }
+  a { color: var(--accent); }
+</style>
+</head>
+<body>
+<main>
+  <div class="card">
+    <h1>Join this household?</h1>
+    <p>You've been invited to join a household on Warthog. If you join:</p>
+    <ul>
+      <li>members see the shared address, the member list and the household budget totals;</li>
+      <li>the household owner sets your monthly spending limit, and your agents' card requests count against it and the household budget;</li>
+      <li>nobody sees your vault, cards, memory, agents or activity.</li>
+    </ul>
+    <form method="post" action="${action}">
+      <div class="actions">
+        <button type="submit">Join household</button>
+        <a href="/home">Not now</a>
+      </div>
+    </form>
+  </div>
+</main>
+</body>
+</html>`;
+  return new Response(html, {
+    status: 200,
+    headers: {
+      "content-type": "text/html; charset=utf-8",
+      "cache-control": "no-store",
+      "x-frame-options": "DENY",
+      "referrer-policy": "no-referrer",
+    },
+  });
+}
+
+// Whether a POST came from Warthog's own pages: its Origin header must be exactly the
+// configured public origin. A missing Origin, or the opaque "null", is refused — every
+// browser sends Origin on a form POST, so only a non-browser or a cross-site submission
+// lacks a matching one (fail closed).
+function isSameOrigin(request: Request, baseUrl: string): boolean {
+  const origin = request.headers.get("origin");
+  return origin !== null && origin === new URL(baseUrl).origin;
+}
+
 export function createHouseholdJoinHandler(
   seams: HouseholdJoinSeams = {},
 ): HouseholdJoinRouteHandlers {
+  // Validate the `[token]` param at the boundary: the token, or the 4xx Response to send.
+  async function tokenFrom(context: { params: Promise<{ token: string }> }): Promise<string | Response> {
+    try {
+      const params = await context.params;
+      return parseParams(tokenSchema, params.token);
+    } catch (error) {
+      if (error instanceof HttpError) {
+        return new Response(null, { status: error.status });
+      }
+      throw error;
+    }
+  }
+
+  // The verified session's user id for this request, or null (no cookie, or one the real
+  // verifySession does not admit).
+  async function sessionUserId(request: Request, db: Db, clock: Clock): Promise<string | null> {
+    const sessionToken = readCookie(request, COOKIE_NAME);
+    const session = sessionToken ? await verifySession(db, sessionToken, { clock }) : null;
+    return session ? session.userId : null;
+  }
+
   async function GET(
     request: Request,
     context: { params: Promise<{ token: string }> },
@@ -106,41 +232,58 @@ export function createHouseholdJoinHandler(
     const config = seams.config ?? loadConfig();
     const baseUrl = config.publicBaseUrl;
 
-    // 1. Validate the token shape at the boundary; a malformed/oversized token is a 4xx and
-    //    never reaches the invite store.
-    let token: string;
-    try {
-      const params = await context.params;
-      token = parseParams(tokenSchema, params.token);
-    } catch (error) {
-      if (error instanceof HttpError) {
-        return new Response(null, { status: error.status });
-      }
-      throw error;
+    // 1. Validate the token shape at the boundary.
+    const token = await tokenFrom(context);
+    if (token instanceof Response) return token;
+
+    const db = seams.db ?? (await getServerDb());
+
+    // 2. No session → sign-in, coming back here; the token is NOT redeemed.
+    const userId = await sessionUserId(request, db, clock);
+    if (!userId) return toSignin(baseUrl, token);
+
+    // 3. A token this person could not redeem is refused now, with its plain reason.
+    const preview = await previewInvite(db, { token, userId }, { clock });
+    if (!preview.ok) {
+      return redirectTo(baseUrl, HOUSEHOLD_PATH, preview.reason);
+    }
+
+    // 4. Ask them to confirm. Nothing has changed.
+    return confirmationPage(token);
+  }
+
+  async function POST(
+    request: Request,
+    context: { params: Promise<{ token: string }> },
+  ): Promise<Response> {
+    const clock = seams.clock ?? systemClock;
+    const config = seams.config ?? loadConfig();
+    const baseUrl = config.publicBaseUrl;
+
+    // 1. Validate the token shape at the boundary.
+    const token = await tokenFrom(context);
+    if (token instanceof Response) return token;
+
+    // 2. Only Warthog's own confirmation form may confirm a join.
+    if (!isSameOrigin(request, baseUrl)) {
+      return new Response(null, { status: 403 });
     }
 
     const db = seams.db ?? (await getServerDb());
 
-    // 2. Resolve the session. No session → sign-in; the token is NOT redeemed, so it
-    //    survives for after sign-in and the link adds no member by itself.
-    const sessionToken = readCookie(request, COOKIE_NAME);
-    const session = sessionToken ? await verifySession(db, sessionToken, { clock }) : null;
-    if (!session) {
-      return redirectTo(baseUrl, SIGNIN_PATH);
-    }
+    // 3. No session → sign-in; nothing is redeemed.
+    const userId = await sessionUserId(request, db, clock);
+    if (!userId) return toSignin(baseUrl, token);
 
-    // 3. Redeem the single-use token for the SESSION's user id (never a value from the
-    //    path/body). A live, unused, unexpired token adds this person to the bound household
-    //    ONCE; a reused/expired/unknown token is rejected and adds no member; a full
-    //    household is refused with a plain reason.
-    const redeemed = await redeemInvite(db, { token, userId: session.userId }, { clock });
+    // 4. Redeem for the SESSION's user id; any refusal adds no member.
+    const redeemed = await redeemInvite(db, { token, userId }, { clock });
     if (!redeemed.ok) {
       return redirectTo(baseUrl, HOUSEHOLD_PATH, redeemed.reason);
     }
 
-    // 4. On success, open the Household page in-app.
+    // 5. Joined: open the Household page in-app.
     return redirectTo(baseUrl, HOUSEHOLD_PATH, "joined");
   }
 
-  return { GET };
+  return { GET, POST };
 }

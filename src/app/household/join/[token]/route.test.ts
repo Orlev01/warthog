@@ -156,6 +156,7 @@ function testConfig(baseUrl: string = ORIGIN): Config {
 // runtime name and the GET it returns, not on an exported Seams/Handlers type name.
 type JoinRouteHandlers = {
   GET(request: Request, context: { params: Promise<{ token: string }> }): Promise<Response>;
+  POST(request: Request, context: { params: Promise<{ token: string }> }): Promise<Response>;
 };
 
 // Build the route handler over the test db + a fixed clock (the real session + redeem logic
@@ -183,6 +184,42 @@ function callGet(
   token: string,
 ): Promise<Response> {
   return handlers.GET(request, { params: Promise.resolve({ token }) });
+}
+
+// The confirming POST the join page's form sends to /household/join/<token>. A browser
+// submitting Warthog's own form sends Warthog's Origin; `origin: null` omits the header and
+// any other value forges a cross-site submission.
+function confirmRequest(token: string, opts: { cookie?: string; origin?: string | null } = {}): Request {
+  const headers: Record<string, string> = { "content-type": "application/x-www-form-urlencoded" };
+  if (opts.cookie) headers.cookie = opts.cookie;
+  const origin = opts.origin === undefined ? ORIGIN : opts.origin;
+  if (origin !== null) headers.origin = origin;
+  return new Request(`${ORIGIN}/household/join/${encodeURIComponent(token)}`, {
+    method: "POST",
+    headers,
+    body: "",
+  });
+}
+
+function callPost(
+  handlers: JoinRouteHandlers,
+  request: Request,
+  token: string,
+): Promise<Response> {
+  return handlers.POST(request, { params: Promise.resolve({ token }) });
+}
+
+// Open the link (GET) and confirm the join (POST), as the invited person does: the GET must
+// show the confirmation without joining, and the POST performs the join.
+async function openAndConfirm(
+  handlers: JoinRouteHandlers,
+  token: string,
+  cookie: string,
+): Promise<{ request: Request; response: Response }> {
+  const page = await callGet(handlers, joinRequest(token, { cookie }), token);
+  assert.equal(page.status, 200, `opening the link shows the confirmation page (status ${page.status})`);
+  const request = confirmRequest(token, { cookie });
+  return { request, response: await callPost(handlers, request, token) };
 }
 
 // Resolve a Location header against the request URL (so a relative OR absolute redirect both
@@ -332,10 +369,9 @@ test("[AC1] a live token + the invited user's session joins the household and re
       "the invitee is not a member before redeeming",
     );
 
-    const request = joinRequest(token, { cookie });
-    const res = await callGet(handlerOver(db, fixedClock(WITHIN)), request, token);
+    const { request, response: res } = await openAndConfirm(handlerOver(db, fixedClock(WITHIN)), token, cookie);
 
-    assert.ok(redirectsToHousehold(res, request), `the link opens the Household page in-app (status ${res.status})`);
+    assert.ok(redirectsToHousehold(res, request), `confirming opens the Household page in-app (status ${res.status})`);
     assert.ok(!redirectsToSignin(res, request), "a signed-in invitee is never bounced to sign-in");
 
     // The signed-in user is now a member of exactly the bound household.
@@ -356,15 +392,14 @@ test("[AC1] the invite is single-use: a second click of the same link adds no se
     const cookie = await sessionCookie(db, invitee.id);
     const handlers = handlerOver(db, fixedClock(WITHIN));
 
-    const firstReq = joinRequest(token, { cookie });
-    const first = await callGet(handlers, firstReq, token);
+    const { request: firstReq, response: first } = await openAndConfirm(handlers, token, cookie);
     assert.ok(redirectsToHousehold(first, firstReq), "the first use opens the Household page");
     assert.equal((await listMembers(db, house.id, owner.id)).length, 2, "the first redemption added the invitee");
 
     // A second click presents the same (now-used) token: single-use, so it is rejected and
     // adds no duplicate membership.
-    const secondReq = joinRequest(token, { cookie });
-    const second = await callGet(handlers, secondReq, token);
+    const secondReq = confirmRequest(token, { cookie });
+    const second = await callPost(handlers, secondReq, token);
     assertInApp(second, secondReq);
 
     const members = await listMembers(db, house.id, owner.id);
@@ -386,10 +421,11 @@ test("[AC1] an expired token is rejected and adds no member", async () => {
     const cookie = await sessionCookie(db, invitee.id);
 
     // The session (14-day idle) is still live at +7 days; only the 7-day invite token lapsed.
-    const request = joinRequest(token, { cookie });
-    const res = await callGet(handlerOver(db, fixedClock(TOKEN_EXPIRED)), request, token);
-
-    assertInApp(res, request);
+    for (const request of [joinRequest(token, { cookie }), confirmRequest(token, { cookie })]) {
+      const handlers = handlerOver(db, fixedClock(TOKEN_EXPIRED));
+      const res = await (request.method === "GET" ? callGet : callPost)(handlers, request, token);
+      assertRefusedWithReason(res, request);
+    }
     assert.equal(await isHouseholdMember(db, house.id, invitee.id), false, "an expired token adds no member");
   } finally {
     await db.close();
@@ -403,10 +439,11 @@ test("[AC1] an unknown (never-issued) token is rejected and adds no member", asy
     const { house, invitee } = await setupInvite(db, "ac1-unk-owner", "ac1-unk-invitee");
     const cookie = await sessionCookie(db, invitee.id);
 
-    const request = joinRequest(UNKNOWN_TOKEN, { cookie });
-    const res = await callGet(handlerOver(db, fixedClock(WITHIN)), request, UNKNOWN_TOKEN);
-
-    assertInApp(res, request);
+    for (const request of [joinRequest(UNKNOWN_TOKEN, { cookie }), confirmRequest(UNKNOWN_TOKEN, { cookie })]) {
+      const handlers = handlerOver(db, fixedClock(WITHIN));
+      const res = await (request.method === "GET" ? callGet : callPost)(handlers, request, UNKNOWN_TOKEN);
+      assertRefusedWithReason(res, request);
+    }
     assert.equal(await isHouseholdMember(db, house.id, invitee.id), false, "a token matching no stored invite adds no member");
   } finally {
     await db.close();
@@ -427,6 +464,13 @@ test("[AC2] an unauthenticated click is sent to sign-in and adds no member", asy
     const res = await callGet(handlerOver(db, fixedClock(WITHIN)), request, token);
 
     assert.ok(redirectsToSignin(res, request), `an unauthenticated click goes to sign-in (status ${res.status})`);
+    assert.equal(
+      locationOf(res, request)?.searchParams.get("next"),
+      `/household/join/${token}`,
+      "sign-in is asked to return to this link afterwards (a relative path)",
+    );
+    const posted = confirmRequest(token); // a confirm with no session joins no one either
+    assert.ok(redirectsToSignin(await callPost(handlerOver(db, fixedClock(WITHIN)), posted, token), posted));
     assert.equal(await isHouseholdMember(db, house.id, invitee.id), false, "no member is added without a session");
   } finally {
     await db.close();
@@ -446,8 +490,7 @@ test("[AC2] the invite carries no authority of its own: the token survives an un
 
     // After signing in, the SAME link still joins the household — proof it was not burned.
     const cookie = await sessionCookie(db, invitee.id);
-    const signedIn = joinRequest(token, { cookie });
-    const res = await callGet(handlers, signedIn, token);
+    const { request: signedIn, response: res } = await openAndConfirm(handlers, token, cookie);
     assert.ok(redirectsToHousehold(res, signedIn), "the token still redeems after sign-in — the unauthenticated click did not consume it");
     assert.equal(await isHouseholdMember(db, house.id, invitee.id), true, "the invited person joins once signed in");
   } finally {
@@ -478,8 +521,8 @@ test("[AC2] redeeming into a full household (8 members) is refused with a plain 
     );
     const cookie = await sessionCookie(db, ninth.id);
 
-    const request = joinRequest(token, { cookie });
-    const res = await callGet(handlerOver(db, fixedClock(WITHIN)), request, token);
+    const request = confirmRequest(token, { cookie });
+    const res = await callPost(handlerOver(db, fixedClock(WITHIN)), request, token);
 
     assertRefusedWithReason(res, request);
     assert.equal(await isHouseholdMember(db, house.id, ninth.id), false, "the refused ninth person was not enrolled");
@@ -503,10 +546,12 @@ test("[admin-auth-required] a garbage/unknown session cookie is treated as unaut
 
     // A cookie is present, but its token verifies against no stored session, so the REAL
     // verifySession yields no session and the link adds nothing.
-    const request = joinRequest(token, { cookie: `${COOKIE_NAME}=no-such-session-abcdef0123456789` });
-    const res = await callGet(handlerOver(db, fixedClock(WITHIN)), request, token);
-
-    assert.ok(redirectsToSignin(res, request), `an unverifiable cookie is sent to sign-in (status ${res.status})`);
+    const garbage = `${COOKIE_NAME}=no-such-session-abcdef0123456789`;
+    for (const request of [joinRequest(token, { cookie: garbage }), confirmRequest(token, { cookie: garbage })]) {
+      const handlers = handlerOver(db, fixedClock(WITHIN));
+      const res = await (request.method === "GET" ? callGet : callPost)(handlers, request, token);
+      assert.ok(redirectsToSignin(res, request), `an unverifiable cookie is sent to sign-in (status ${res.status})`);
+    }
     assert.equal(await isHouseholdMember(db, house.id, invitee.id), false, "an unverifiable cookie adds no member");
   } finally {
     await db.close();
@@ -537,11 +582,15 @@ test("[validate-and-parameterize-input] a malformed / injection-shaped / oversiz
       "A".repeat(10_000), // grossly oversized, far beyond any opaque-link length
     ];
     for (const bad of badTokens) {
-      const res = await callGet(handlers, joinRequest(bad, { cookie }), bad);
-      assert.ok(
-        res.status >= 400 && res.status < 500,
-        `a malformed/oversized token ${JSON.stringify(bad.slice(0, 32))} must be a 4xx (never a 5xx), got ${res.status}`,
-      );
+      for (const res of [
+        await callGet(handlers, joinRequest(bad, { cookie }), bad),
+        await callPost(handlers, confirmRequest(bad, { cookie }), bad),
+      ]) {
+        assert.ok(
+          res.status >= 400 && res.status < 500,
+          `a malformed/oversized token ${JSON.stringify(bad.slice(0, 32))} must be a 4xx (never a 5xx), got ${res.status}`,
+        );
+      }
     }
 
     // The injection probes never ran as SQL: every table survives, and no member was added.
@@ -551,8 +600,7 @@ test("[validate-and-parameterize-input] a malformed / injection-shaped / oversiz
     assert.equal(await isHouseholdMember(db, house.id, invitee.id), false, "no malformed token added a member");
 
     // The real token still redeems — proving the tables are intact and the handler functional.
-    const okReq = joinRequest(token, { cookie });
-    const okRes = await callGet(handlers, okReq, token);
+    const { request: okReq, response: okRes } = await openAndConfirm(handlers, token, cookie);
     assert.ok(redirectsToHousehold(okRes, okReq), "the genuine token still redeems after the injection attempts");
     assert.equal(await isHouseholdMember(db, house.id, invitee.id), true, "the invited person joins with the genuine token");
   } finally {
@@ -577,11 +625,14 @@ test("[secrets-from-env] no ambient env secret is folded into a join response (c
 
     // The handler runs purely from its injected seams (db + clock + an explicit config), so
     // no ambient process.env is read — a decoy secret can never surface in the response.
-    const request = joinRequest(token, { cookie });
-    const res = await callGet(handlerOver(db, fixedClock(WITHIN)), request, token);
+    const handlers = handlerOver(db, fixedClock(WITHIN));
+    const page = await callGet(handlers, joinRequest(token, { cookie }), token);
+    const res = await callPost(handlers, confirmRequest(token, { cookie }), token);
 
-    const serialised = await serialiseResponse(res);
-    assert.ok(!serialised.includes(DECOY), "no ambient env secret appears in the join response");
+    for (const response of [page, res]) {
+      const serialised = await serialiseResponse(response);
+      assert.ok(!serialised.includes(DECOY), "no ambient env secret appears in the join responses");
+    }
   } finally {
     await db.close();
     if (prev === undefined) delete process.env.WARTHOG_DECOY_SECRET;
@@ -595,8 +646,9 @@ test("[secrets-from-env] no ambient env secret is folded into a join response (c
 // a non-function framework config export (`runtime` / `dynamic`) is allowed.
 // ===========================================================================
 
-test("[AC3] the /household/join/[token] route entry exports only its GET handler (the seam lives in the sibling)", () => {
+test("[AC3] the /household/join/[token] route entry exports only its GET and POST handlers (the seam lives in the sibling)", () => {
   assert.equal(typeof routeEntry.GET, "function", "the entry must export a GET handler");
+  assert.equal(typeof routeEntry.POST, "function", "the entry must export a POST handler");
 
   const fnExports = Object.entries(routeEntry)
     .filter(([, value]) => typeof value === "function")
@@ -604,11 +656,81 @@ test("[AC3] the /household/join/[token] route entry exports only its GET handler
     .sort();
   assert.deepEqual(
     fnExports,
-    ["GET"],
-    "the entry's only function export is GET — no factory/seam leaked (OBS-025)",
+    ["GET", "POST"],
+    "the entry's only function exports are GET and POST — no factory/seam leaked (OBS-025)",
   );
   assert.ok(
     !("createHouseholdJoinHandler" in routeEntry),
     "the injection factory lives in the sibling handler.ts, never on the route entry",
   );
+});
+
+// ===========================================================================
+// Opening the link never joins by itself (review finding: a plain cross-site GET — a link or
+// an auto-redirect from any site, carrying the SameSite=Lax session cookie — silently added a
+// signed-in victim to an attacker's household, exposing their spending totals and letting
+// the attacker set their limit). The GET only shows a confirmation; the join is a POST from
+// Warthog's own page, refused when it comes from anywhere else.
+// ===========================================================================
+
+test("opening the link shows a confirmation with a join form and adds no member", async () => {
+  const db = await freshDb();
+  try {
+    const { house, invitee, token } = await setupInvite(db, "confirm-owner", "confirm-invitee");
+    const cookie = await sessionCookie(db, invitee.id);
+
+    const res = await callGet(handlerOver(db, fixedClock(WITHIN)), joinRequest(token, { cookie }), token);
+    assert.equal(res.status, 200, "the link renders a page rather than joining");
+    assert.match(res.headers.get("content-type") ?? "", /text\/html/);
+    assert.equal(res.headers.get("cache-control"), "no-store", "the confirmation is never cached");
+    const html = await res.text();
+    assert.match(html, /<form[^>]+method="post"/i, "the page carries a form that confirms with a POST");
+    assert.ok(html.includes(`action="/household/join/${token}"`), "the form posts back to this link");
+    assert.equal(await isHouseholdMember(db, house.id, invitee.id), false, "opening the link added no member");
+  } finally {
+    await db.close();
+  }
+});
+
+test("a confirming POST from another site (or with no Origin) is refused and adds no member", async () => {
+  const db = await freshDb();
+  try {
+    const { house, invitee, token } = await setupInvite(db, "csrf-owner", "csrf-invitee");
+    const cookie = await sessionCookie(db, invitee.id);
+    const handlers = handlerOver(db, fixedClock(WITHIN));
+
+    for (const origin of ["https://evil.example", "null", null]) {
+      const res = await callPost(handlers, confirmRequest(token, { cookie, origin }), token);
+      assert.equal(res.status, 403, `a POST with Origin ${String(origin)} is refused`);
+    }
+    assert.equal(await isHouseholdMember(db, house.id, invitee.id), false, "no cross-site POST added a member");
+
+    // Warthog's own form still works afterwards (the invite was not consumed).
+    const { request, response } = await openAndConfirm(handlers, token, cookie);
+    assert.ok(redirectsToHousehold(response, request));
+    assert.equal(await isHouseholdMember(db, house.id, invitee.id), true);
+  } finally {
+    await db.close();
+  }
+});
+
+test("a signed-in account that is not the invited one is refused on the link itself, before any confirmation", async () => {
+  const db = await freshDb();
+  try {
+    const { house, token } = await setupInvite(db, "other-owner", "other-invitee");
+    const stranger = await seedUser(db, "other-stranger");
+    const cookie = await sessionCookie(db, stranger.id);
+    const handlers = handlerOver(db, fixedClock(WITHIN));
+
+    const request = joinRequest(token, { cookie });
+    const res = await callGet(handlers, request, token);
+    assertRefusedWithReason(res, request);
+    assert.equal(locationOf(res, request)?.searchParams.get("notice"), "wrong_account");
+
+    const posted = confirmRequest(token, { cookie });
+    assertRefusedWithReason(await callPost(handlers, posted, token), posted);
+    assert.equal(await isHouseholdMember(db, house.id, stranger.id), false, "the stranger was not added");
+  } finally {
+    await db.close();
+  }
 });
