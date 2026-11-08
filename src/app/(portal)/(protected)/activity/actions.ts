@@ -38,6 +38,8 @@ import {
 } from "@/server/activity/integrity";
 import { listActivity, listActivityFacets, type ActivityFilters } from "@/server/activity/list";
 import { getUserById } from "@/server/db/users";
+import { agentNamesForUser } from "@/server/db/agents";
+import { agentLabel, entryTitle } from "@/domain/activity/describe";
 import type { KeyWrapper } from "@/server/crypto/key-wrapper";
 import type { ActivityEntry } from "@/server/activity/recorder";
 import type {
@@ -79,6 +81,10 @@ export interface ActivityActionsDeps {
   // How many of the newest entries one view reads and decrypts (default
   // ACTIVITY_PAGE_LIMIT), so a long history is never decrypted whole.
   readonly pageLimit?: number;
+  // Names a connected service through the connector catalogue (the page passes the
+  // process-wide index), so entries and the service filter show "Google Calendar" rather
+  // than its id; absent, or a service the catalogue doesn't know, ⇒ the id is shown.
+  readonly serviceName?: (connectorId: string) => string | undefined;
 }
 
 // The newest entries the Activity screen shows (and searches) at once.
@@ -184,7 +190,10 @@ const DISPUTE_REFUSED = "dispute_refused";
 const UNDO_REFUSED = "undo_refused";
 
 export function createActivityActions(deps: ActivityActionsDeps): ActivityActions {
-  const { db, disputes, undo, keyWrapper, reversalFor } = deps;
+  const { db, disputes, undo, keyWrapper, reversalFor, serviceName } = deps;
+
+  // A connected service's display name (its catalogue name, else its id).
+  const serviceLabel = (connectorId: string): string => serviceName?.(connectorId) ?? connectorId;
 
   // Dispute one of the acting person's OWN entries. Validate the id + note shape at
   // the boundary first (a bad id or an empty/oversized note throws a 4xx and never
@@ -243,14 +252,17 @@ export function createActivityActions(deps: ActivityActionsDeps): ActivityAction
   // Map a decrypted entry to the view's row. `canUndo` is `reversalFor(tool)` — true
   // only where the entry's tool declares a reversal — so the view mounts an Undo
   // control exactly where undoEntry can act and nowhere else (never a dead control).
-  function toEntryView(entry: ActivityEntry): ActivityEntryView {
+  // The agent is shown by the name the person gave it (`agentNames`: their OWN agents,
+  // read member-scoped), never its raw id, and an agent call is titled by its tool.
+  function toEntryView(entry: ActivityEntry, agentNames: ReadonlyMap<string, string>): ActivityEntryView {
     const canUndo = reversalFor !== undefined && reversalFor(entry.tool) !== undefined;
     return {
       seq: entry.seq,
       kind: humanise(entry.kind),
+      title: entryTitle(entry),
       source: entry.source,
-      agent: entry.agentId,
-      service: entry.connectorId,
+      agent: agentLabel(agentNames, entry.agentId),
+      service: entry.connectorId === undefined ? undefined : serviceLabel(entry.connectorId),
       outcome: entry.outcome === undefined ? "" : humanise(entry.outcome),
       at: formatAt(entry.occurredAt),
       summary: payloadText(entry.payload, "summary"),
@@ -280,7 +292,17 @@ export function createActivityActions(deps: ActivityActionsDeps): ActivityAction
     // The person's whole set of facet values backs the filter dropdowns, read from the
     // plaintext metadata columns (nothing decrypted), so neither a narrowing filter nor
     // the page bound hides the other agents/services/kinds/outcomes you could switch to.
-    const filterOptions = await listActivityFacets(db, session.userId);
+    const facets = await listActivityFacets(db, session.userId);
+
+    // The person's OWN agents' names (member-scoped by the session user id), keyed by
+    // agent id and connection id: each entry and the agent filter name the agent, while
+    // the filter still posts (and narrows by) its id.
+    const agentNames = await agentNamesForUser(db, session.userId);
+    const filterOptions: ActivityViewProps["filterOptions"] = {
+      ...facets,
+      agents: facets.agents.map((id) => ({ value: id, label: agentLabel(agentNames, id) ?? id })),
+      services: facets.services.map((id) => ({ value: id, label: serviceLabel(id) })),
+    };
 
     // The facet/date filters the view posts back: `agent`→agentId, `service`→
     // connectorId, kind/outcome verbatim, and from/to only when they are real calendar
@@ -314,7 +336,7 @@ export function createActivityActions(deps: ActivityActionsDeps): ActivityAction
     // The free-text search narrows further, in-app over the decrypted summary (an
     // encrypted column can't be matched in SQL), case-insensitively over the same text
     // the view shows.
-    const views = narrowed.map(toEntryView);
+    const views = narrowed.map((entry) => toEntryView(entry, agentNames));
     const query = firstValue(searchParams.q) ?? "";
     const needle = query.toLowerCase();
     const entries =

@@ -25,6 +25,7 @@
 // first-run empty states exactly as the minimal loader did.
 
 import { computeSetupChecklist } from "@/domain/home/checklist";
+import { entryTitle, humanise } from "@/domain/activity/describe";
 import type {
   DashboardActivity,
   DashboardAgent,
@@ -93,7 +94,9 @@ function formatDue(value: Date | string): string {
 
 // Map one decrypted activity entry to the view's line. The agent is shown by its
 // display name (resolved from the person's own agents), absent when the entry is
-// not attributed to one of them; the summary is the already-redacted payload text.
+// not attributed to one of them; the summary is the already-redacted payload text,
+// or — for an entry with none, such as an agent call — the entry's title in plain
+// words ("Add a task"), with its outcome alongside so a refused call never reads as done.
 function toDashboardActivity(
   entry: ActivityEntry,
   agentNames: Map<string, string>,
@@ -101,7 +104,8 @@ function toDashboardActivity(
   const agent = entry.agentId !== undefined ? agentNames.get(entry.agentId) : undefined;
   return {
     id: entry.entryHash,
-    summary: payloadText(entry.payload, "summary"),
+    summary: payloadText(entry.payload, "summary") || entryTitle(entry),
+    outcome: entry.outcome !== undefined ? humanise(entry.outcome) : undefined,
     agent,
     at: formatAt(entry.occurredAt),
   };

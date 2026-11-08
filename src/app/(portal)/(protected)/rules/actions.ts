@@ -43,7 +43,7 @@ import {
   deleteRule as storeDeleteRule,
 } from "@/server/db/rules";
 import { rulesPageData } from "@/server/rules/page-data";
-import { listAgentsForUser } from "@/server/db/agents";
+import { agentNamesForUser, listAgentsForUser } from "@/server/db/agents";
 import { getUserById } from "@/server/db/users";
 import {
   type RuleKind,
@@ -291,7 +291,14 @@ export function createRulesActions(deps: RulesActionsDeps): RulesActions {
     // the Rules page read lives in exactly one place (one-source-of-truth): every rule
     // the person has written, active AND paused, already rendered as its exact plain
     // sentence with its scope and lifecycle status, member-scoped by the session id.
-    const rules: RulesViewRule[] = await rulesPageData(db, session.userId, dek);
+    // Each chosen-agent scope is named by the agent's CURRENT name from the person's OWN
+    // agents (member-scoped), never a raw connection id stored with an older rule.
+    const rules: RulesViewRule[] = await rulesPageData(
+      db,
+      session.userId,
+      dek,
+      await agentNamesForUser(db, session.userId),
+    );
 
     const agents: RulesViewAgent[] = (await listAgentsForUser(db, session.userId)).map((agent) => ({
       // The connection id is what the policy engine matches a rule's chosen-agent
@@ -325,9 +332,10 @@ export function createRulesActions(deps: RulesActionsDeps): RulesActions {
   async function updateRule(session: Session, id: string, input: unknown): Promise<ActionResult> {
     const ruleId = parseParams(uuidSchema, id);
     const content = parseParams(ruleContentSchema, input);
+    const scope = await resolveScopeName(session.userId, content.scope);
     const dek = await dataKeyFor(session.userId);
     try {
-      await storeUpdateRule(db, session.userId, ruleId, content, dek);
+      await storeUpdateRule(db, session.userId, ruleId, { ...content, scope }, dek);
       return { ok: true };
     } catch {
       return { ok: false, reason: NOT_FOUND };

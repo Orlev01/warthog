@@ -121,7 +121,9 @@ export function createGetContextTool(deps: GetContextDeps): {
           }))
         : [];
 
-      const tasks = permissions.readTools
+      // The agent's own tasks grant (review fix A2 / W2.3), the one list_tasks checks and
+      // the permissions page switches — not the connector read-tools class.
+      const tasks = permissions.tasksAccess
         ? (await tasksForAgent(db, userId, agentId, dek))
             .filter((task) => task.status !== "done")
             .map((task) => ({

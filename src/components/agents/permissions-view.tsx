@@ -36,6 +36,9 @@ const DEFAULT_REQUEST_LIMIT = 120;
 export type ConnectorAccess = {
   id: string;
   name: string;
+  // whether the agent may use this connected service (review fix W2.3): when present, the
+  // service carries its own toggle; absent ⇒ the service is listed as already granted.
+  granted?: boolean;
   // the tool names the agent may use, split into the two groups the brief names:
   // read tools and change-making tools (the latter default to "Ask me first").
   readTools: ReadonlyArray<string>;
@@ -57,6 +60,9 @@ export type PermissionsViewProps = {
   budget: Budget | null;
   // which skills it receives, each grantable.
   skills: ReadonlyArray<SkillGrant>;
+  // the person's tasks and life-admin records (their own grants, migration 0068).
+  tasksAccess: boolean;
+  recordsAccess: boolean;
   // read the person's shared memory; share what it learns with other agents.
   sharedMemoryRead: boolean;
   learningSharing: boolean;
@@ -69,19 +75,27 @@ export type PermissionsViewProps = {
 };
 
 // One capability toggle: a native, user-adjustable checkbox whose initial checked
-// state reflects the prop. The visible label text IS the control's accessible name.
+// state reflects the prop. The visible label text IS the control's accessible name; the
+// stable `name` is what the save reads it by (never the label text, which is copy).
 function Toggle({
+  name,
   on,
   label,
   description,
 }: {
+  name: string;
   on: boolean;
   label: React.ReactNode;
   description?: React.ReactNode;
 }) {
   return (
     <label className="flex items-start gap-3 rounded-card border border-line bg-surface p-3">
-      <input type="checkbox" defaultChecked={on} className="mt-1 h-4 w-4 shrink-0 accent-accent" />
+      <input
+        type="checkbox"
+        name={name}
+        defaultChecked={on}
+        className="mt-1 h-4 w-4 shrink-0 accent-accent"
+      />
       <span className="flex flex-col gap-0.5">
         <span className="text-fg">{label}</span>
         {description ? <span className="text-sm text-fg-muted">{description}</span> : null}
@@ -102,6 +116,8 @@ export function PermissionsView({
   cardAccess,
   budget,
   skills,
+  tasksAccess,
+  recordsAccess,
   sharedMemoryRead,
   learningSharing,
   rules,
@@ -126,38 +142,60 @@ export function PermissionsView({
       {/* Connected services and their tools — reads and changes listed separately. */}
       <div className="flex flex-col gap-3">
         <SectionHeading>Connected services</SectionHeading>
+        {connectors.length === 0 ? (
+          <p className="text-sm text-fg-muted">
+            No services connected yet.{" "}
+            <a href="/connectors" className="font-medium text-accent underline underline-offset-2">
+              Connect one
+            </a>{" "}
+            to let {agentName} use it.
+          </p>
+        ) : null}
         {connectors.map((connector) => (
           <Card key={connector.id} className="flex flex-col gap-3">
-            <h3 className="font-medium text-fg">{connector.name}</h3>
+            {connector.granted === undefined ? (
+              <h3 className="font-medium text-fg">{connector.name}</h3>
+            ) : (
+              <Toggle
+                name={`connector:${connector.id}`}
+                on={connector.granted}
+                label={`Let it use ${connector.name}`}
+                description="It can read without asking, and asks you first before it makes a change."
+              />
+            )}
 
-            <div className="flex flex-col gap-1.5">
-              <h4 className="text-sm font-medium text-fg-muted">Reads</h4>
-              <ul className="flex flex-col gap-1">
-                {connector.readTools.map((tool) => (
-                  <li
-                    key={tool}
-                    className="rounded-card border border-line bg-surface-muted p-2 text-sm text-fg"
-                  >
-                    {tool}
-                  </li>
-                ))}
-              </ul>
-            </div>
+            {connector.readTools.length > 0 ? (
+              <div className="flex flex-col gap-1.5">
+                <h4 className="text-sm font-medium text-fg-muted">Reads</h4>
+                <ul className="flex flex-col gap-1">
+                  {connector.readTools.map((tool) => (
+                    <li
+                      key={tool}
+                      className="rounded-card border border-line bg-surface-muted p-2 text-sm text-fg"
+                    >
+                      {tool}
+                    </li>
+                  ))}
+                </ul>
+              </div>
+            ) : null}
 
-            <div className="flex flex-col gap-1.5">
-              <h4 className="text-sm font-medium text-fg-muted">Makes changes</h4>
-              <ul className="flex flex-col gap-1">
-                {connector.changeTools.map((tool) => (
-                  <li
-                    key={tool}
-                    className="flex flex-wrap items-center justify-between gap-2 rounded-card border border-line bg-surface-muted p-2 text-sm text-fg"
-                  >
-                    <span>{tool}</span>
-                    <span className="font-medium text-fg-muted">Ask me first</span>
-                  </li>
-                ))}
-              </ul>
-            </div>
+            {connector.changeTools.length > 0 ? (
+              <div className="flex flex-col gap-1.5">
+                <h4 className="text-sm font-medium text-fg-muted">Makes changes</h4>
+                <ul className="flex flex-col gap-1">
+                  {connector.changeTools.map((tool) => (
+                    <li
+                      key={tool}
+                      className="flex flex-wrap items-center justify-between gap-2 rounded-card border border-line bg-surface-muted p-2 text-sm text-fg"
+                    >
+                      <span>{tool}</span>
+                      <span className="font-medium text-fg-muted">Ask me first</span>
+                    </li>
+                  ))}
+                </ul>
+              </div>
+            ) : null}
           </Card>
         ))}
       </div>
@@ -166,11 +204,13 @@ export function PermissionsView({
       <div className="flex flex-col gap-3">
         <SectionHeading>Your identity</SectionHeading>
         <Toggle
+          name="identity"
           on={lowTierRead}
           label="Read your low-tier identity details"
           description="Low tier only — the everyday basics, never the sensitive ones."
         />
         <Toggle
+          name="highTier"
           on={highTierRequest}
           label="Let it ask for high-tier identity details"
           description="You approve each request before anything is released."
@@ -182,6 +222,7 @@ export function PermissionsView({
       <div className="flex flex-col gap-3">
         <SectionHeading>Card access</SectionHeading>
         <Toggle
+          name="card"
           on={cardAccess}
           label={
             <span className="inline-flex items-center gap-2">
@@ -194,6 +235,7 @@ export function PermissionsView({
         {cardAccess ? (
           <Card className="flex flex-col gap-2">
             <Field
+              name="cardBudget"
               label={`Budget per ${budgetPeriod} (${currency})`}
               type="number"
               min={0}
@@ -213,15 +255,33 @@ export function PermissionsView({
       <div className="flex flex-col gap-3">
         <SectionHeading>Skills</SectionHeading>
         {skills.map((skill) => (
-          <Toggle key={skill.id} on={skill.granted} label={skill.name} />
+          <Toggle key={skill.id} name={`skill:${skill.id}`} on={skill.granted} label={skill.name} />
         ))}
+      </div>
+
+      {/* The person's tasks and life-admin records — their own grants. */}
+      <div className="flex flex-col gap-3">
+        <SectionHeading>Tasks and records</SectionHeading>
+        <Toggle
+          name="tasks"
+          on={tasksAccess}
+          label="Your tasks"
+          description="See, add and update your tasks."
+        />
+        <Toggle
+          name="records"
+          on={recordsAccess}
+          label="Your life-admin records"
+          description="Subscriptions, receipts and warranties, renewals and appointments."
+        />
       </div>
 
       {/* Shared memory and sharing what it learns. */}
       <div className="flex flex-col gap-3">
         <SectionHeading>Memory and sharing</SectionHeading>
-        <Toggle on={sharedMemoryRead} label="Read your shared memory" />
+        <Toggle name="memoryRead" on={sharedMemoryRead} label="Read your shared memory" />
         <Toggle
+          name="learningSharing"
           on={learningSharing}
           label="Share what it learns with your other agents"
         />
@@ -230,6 +290,15 @@ export function PermissionsView({
       {/* The agent's own rules, each read back as its exact plain-English sentence. */}
       <div className="flex flex-col gap-3">
         <SectionHeading>Rules for {agentName}</SectionHeading>
+        {rules.length === 0 ? (
+          <p className="text-sm text-fg-muted">
+            No rules just for {agentName} yet.{" "}
+            <a href="/rules" className="font-medium text-accent underline underline-offset-2">
+              Add one in Rules
+            </a>
+            .
+          </p>
+        ) : null}
         <ul className="flex flex-col gap-2">
           {rules.map((rule, i) => (
             <li
@@ -247,6 +316,7 @@ export function PermissionsView({
         <summary className="cursor-pointer text-sm font-semibold text-fg">Advanced</summary>
         <div className="mt-3">
           <Field
+            name="requestLimit"
             label="Request limit (per minute)"
             type="number"
             min={1}
@@ -264,7 +334,7 @@ export function PermissionsView({
             Add a budget before you can save card access.
           </p>
         ) : null}
-        <Button type="button" variant="primary" disabled={cardNeedsBudget}>
+        <Button type="button" variant="primary" disabled={cardNeedsBudget} data-action="save">
           Save changes
         </Button>
       </div>

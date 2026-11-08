@@ -293,6 +293,11 @@ function render(
   return renderToStaticMarkup(<ActivityView {...view} {...actions} />);
 }
 
+// The values a facet's options post (an option is a bare value or a { value, label } pair).
+function optionValues(options: ActivityViewProps["filterOptions"]["agents"]): string[] {
+  return options.map((option) => (typeof option === "string" ? option : option.value));
+}
+
 // Visible text with tags stripped — the words a sighted reader actually sees.
 function strip(html: string): string {
   return html
@@ -614,13 +619,15 @@ test("the filter dropdowns offer the person's own agents and services as filter 
 
     const view = await makeLoader(db, keyWrapper).load(aliceSession, {});
 
-    // Each facet option is posted back verbatim as the filter value, so the options must
-    // BE the filterable values present in Alice's entries (the round-trip the AC needs).
+    // Each facet option's VALUE is posted back verbatim as the filter value, so the values
+    // must BE the filterable values present in Alice's entries (the round-trip the AC needs).
+    // An agent (or service) option is labelled by its name (review fix W2.4) but still posts
+    // its id.
     for (const agent of ["agent-claude", "agent-gpt"]) {
-      assert.ok(view.filterOptions.agents.includes(agent), `the agent filter offers "${agent}"`);
+      assert.ok(optionValues(view.filterOptions.agents).includes(agent), `the agent filter offers "${agent}"`);
     }
     for (const service of ["google_calendar", "gmail"]) {
-      assert.ok(view.filterOptions.services.includes(service), `the service filter offers "${service}"`);
+      assert.ok(optionValues(view.filterOptions.services).includes(service), `the service filter offers "${service}"`);
     }
   } finally {
     await db.close();
@@ -910,7 +917,7 @@ test("the loader shows a bounded page of the newest entries; the filters still o
 
     assert.deepEqual(seqsOf(view), [3, 2], "only the newest two entries are read");
     for (const agent of ["agent-claude", "agent-gpt"]) {
-      assert.ok(view.filterOptions.agents.includes(agent), `the agent filter still offers "${agent}"`);
+      assert.ok(optionValues(view.filterOptions.agents).includes(agent), `the agent filter still offers "${agent}"`);
     }
   } finally {
     await db.close();

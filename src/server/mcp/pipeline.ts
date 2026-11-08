@@ -52,7 +52,7 @@ import {
   type HeldOutcome,
   type StoredHeldRequest,
 } from "../db/held-requests";
-import { getAgentById } from "../db/agents";
+import { countAgentRequest, getAgentById } from "../db/agents";
 import { getUserById } from "../db/users";
 import { isReleaseRequest } from "../../domain/approvals/release-kind";
 import type { RateLimiter } from "./rate-limit";
@@ -370,6 +370,11 @@ export function createAgentCallPipeline(deps: PipelineDeps): AgentCallPipeline {
   // side effect (activity entries, held request, approval, the notifier) is exactly as
   // before; only the return shape is enriched so the caller can tag the metrics.
   async function decide(connection: AgentConnection, call: AgentCall): Promise<DecidedCall> {
+    // Every call that reaches the pipeline counts on the agent card: one more request
+    // and a fresh last-active time, in one atomic update (member-scoped by the
+    // connection's own user id; nothing to count for an id that names no agent).
+    await countAgentRequest(db, { userId: connection.userId, id: connection.agentId }, clock);
+
     // Gate 1 — a disconnected or revoked connection: refuse and record, never
     // execute. (The connection's identity is the session's; no body value.)
     if (!connection.active) {

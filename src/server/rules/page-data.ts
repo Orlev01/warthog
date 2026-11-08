@@ -34,16 +34,32 @@ export interface RulesPageItem {
 // sentence (its DEK-encrypted condition decrypted under the injected `dek` first),
 // carrying its scope and lifecycle status. Member-scoped by the passed `userId` alone:
 // another person's rules are never returned.
+//
+// `agentNames` (optional; the caller's OWN agents' names keyed by connection id) names a
+// chosen-agent scope by the agent's CURRENT name before the sentence is rendered, so a
+// scope stored under a raw connection id or an old name reads back naming the agent
+// (review fix W2.1). A scope whose agent is not in it keeps its stored name.
 export async function rulesPageData(
   db: Db,
   userId: string,
   dek: Uint8Array,
+  agentNames?: ReadonlyMap<string, string>,
 ): Promise<RulesPageItem[]> {
   const rules = await listAllRules(db, userId, dek);
-  return rules.map((rule) => ({
-    id: rule.id,
-    sentence: ruleSentence(rule),
-    scope: rule.scope,
-    status: rule.status,
-  }));
+  return rules.map((rule) => {
+    const scope = namedScope(rule.scope, agentNames);
+    return {
+      id: rule.id,
+      sentence: ruleSentence({ ...rule, scope }),
+      scope,
+      status: rule.status,
+    };
+  });
+}
+
+// A chosen-agent scope named by its agent's current name, when `agentNames` knows it.
+function namedScope(scope: RuleScope, agentNames: ReadonlyMap<string, string> | undefined): RuleScope {
+  if (scope.type !== "agent") return scope;
+  const name = agentNames?.get(scope.agentId);
+  return name === undefined ? scope : { ...scope, name };
 }

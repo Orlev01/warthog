@@ -14,6 +14,7 @@ import { createRedactingRecorder } from "@/server/mcp/recorder";
 import { createDisputeRepo } from "@/server/activity/disputes";
 import { createUndoService } from "@/server/activity/undo";
 import { createAgentExecutors } from "@/server/mcp/compose";
+import { getProcessCatalogue } from "@/server/connectors/catalogue";
 import { systemClock } from "@/server/seams/clock";
 import type { Db } from "@/server/db/index";
 import { createActivityActions } from "./actions";
@@ -91,7 +92,11 @@ function buildActions(db: Db, config: Config) {
     runReversal: createAgentExecutors({ db, config }).runReversal,
   });
 
-  return createActivityActions({ db, disputes, undo, keyWrapper, reversalFor });
+  // Connected services are named through the process-wide connector catalogue, the same
+  // index the connectors screen reads.
+  const serviceName = (connectorId: string): string | undefined => getProcessCatalogue().get(connectorId)?.name;
+
+  return createActivityActions({ db, disputes, undo, keyWrapper, reversalFor, serviceName });
 }
 
 // Dispute one of the acting person's OWN entries. A thin server-action wrapper over the

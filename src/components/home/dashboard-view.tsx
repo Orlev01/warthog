@@ -34,11 +34,13 @@ export type DashboardAgent = {
   budgetPeriod: "day" | "week" | "month";
 };
 
-// One latest-activity line: a plain, already-redacted summary, the agent it came
-// from (absent for a Warthog-sourced entry), and a pre-formatted time label.
+// One latest-activity line: a plain, already-redacted summary, its outcome in words
+// (e.g. "Denied"; absent when the entry has none), the agent it came from (absent for a
+// Warthog-sourced entry), and a pre-formatted time label.
 export type DashboardActivity = {
   id: string;
   summary: string;
+  outcome?: string;
   agent?: string;
   at: string;
 };
@@ -111,7 +113,14 @@ export function DashboardView({
                 key={entry.id}
                 className="flex flex-col gap-1 rounded-card border border-line bg-surface p-3"
               >
-                <span className="text-fg">{entry.summary}</span>
+                <span className="flex flex-wrap items-center gap-x-3 gap-y-1">
+                  <span className="text-fg">{entry.summary}</span>
+                  {entry.outcome ? (
+                    <span className="rounded-card bg-surface-muted px-2 py-0.5 text-xs font-medium text-fg-muted">
+                      {entry.outcome}
+                    </span>
+                  ) : null}
+                </span>
                 <span className="text-sm text-fg-muted">
                   {entry.agent ? `${entry.agent} · ${entry.at}` : entry.at}
                 </span>

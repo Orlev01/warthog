@@ -21,12 +21,13 @@ import { collectEdits } from "./permission-edits";
 // server action (passed as a prop — the only callable a server page can hand across the
 // client boundary), reporting every outcome in plain words (never failing silently).
 //
-// It reads the person's edits off the rendered controls by their ACCESSIBLE NAME — the
-// same label contract the view's own locked test keys on — and mirrors card access and its
-// budget back into PermissionsView's props so the budget field appears when card access is
-// switched on and the save control enables once a budget is entered. The server still
-// resolves the agent member-scoped and enforces the card-needs-budget invariant (and
-// validates every field), so this client mirror is convenience, never the authority.
+// It reads the person's edits off the rendered controls by their stable `name` attribute
+// (review fix W2.3: never by visible label text, which a service or skill name could
+// collide with) and mirrors card access and its budget back into PermissionsView's props so
+// the budget field appears when card access is switched on and the save control enables
+// once a budget is entered. The server still resolves the agent member-scoped and enforces
+// the card-needs-budget invariant (and validates every field, and grants only the person's
+// own connected services), so this client mirror is convenience, never the authority.
 
 // The plain-words outcome of the last save — words plus an icon, never colour alone.
 type Notice = { readonly tone: "done" | "problem"; readonly text: string };
@@ -60,9 +61,8 @@ function problemNotice(reason: string): Notice {
   return PROBLEM[reason] ?? INVALID;
 }
 
-// The accessible name of a control — the text of its associated <label> (a wrapping label
-// or one linked by `for`/`id`), or its aria-label. This is the stable contract the view's
-// own test keys controls on, so matching on it couples to behaviour, not to layout.
+// The accessible name of a control — the text of its associated <label>, or its
+// aria-label — carried on each snapshot for diagnostics only; the save matches on `name`.
 function labelText(el: HTMLInputElement): string {
   const labels = el.labels;
   const first = labels && labels.length > 0 ? labels[0] : null;
@@ -116,10 +116,9 @@ export function PermissionsForm({ initial, save }: PermissionsFormProps): React.
     function onEdit(event: Event): void {
       const target = event.target;
       if (!(target instanceof HTMLInputElement)) return;
-      const name = labelText(target);
-      if (target.type === "checkbox" && /card/i.test(name)) {
+      if (target.type === "checkbox" && target.name === "card") {
         setCardOn(target.checked);
-      } else if (target.type === "number" && /budget/i.test(name)) {
+      } else if (target.type === "number" && target.name === "cardBudget") {
         setBudgetAmount(target.value.trim() === "" ? null : Number(target.value));
       }
     }
@@ -134,11 +133,17 @@ export function PermissionsForm({ initial, save }: PermissionsFormProps): React.
       // form cannot find refuses the save rather than silently dropping that edit.
       const snapshot = Array.from(root.querySelectorAll("input")).map((i) => ({
         type: i.type,
+        name: i.name,
         label: labelText(i),
         checked: i.checked,
         value: i.value,
       }));
-      const collected = collectEdits(snapshot, { currency: initial.currency ?? "A$", period });
+      const collected = collectEdits(snapshot, {
+        currency: initial.currency ?? "A$",
+        period,
+        // Every connected service the screen shows carries a toggle the save must find.
+        connectors: initial.connectors.map((connector) => connector.id),
+      });
       if (!collected.ok) {
         setNotice(problemNotice(collected.reason));
         return;
@@ -163,12 +168,13 @@ export function PermissionsForm({ initial, save }: PermissionsFormProps): React.
       }
     }
 
-    // The view's "Save changes" button is a type="button" with no handler; a click on it
-    // (it never fires while the button is disabled) drives the save. Any other click
-    // (a toggle, the Advanced summary) is left to its native behaviour.
+    // The view's "Save changes" button is a type="button" with no handler, marked
+    // data-action="save"; a click on it (it never fires while the button is disabled)
+    // drives the save. Any other click (a toggle, the Advanced summary) is left to its
+    // native behaviour.
     function onClick(event: MouseEvent): void {
       const node = event.target instanceof Element ? event.target.closest("button") : null;
-      if (!node || !/save|apply|update/i.test(node.textContent ?? "")) return;
+      if (!node || node.getAttribute("data-action") !== "save") return;
       event.preventDefault();
       void submit();
     }
