@@ -486,9 +486,13 @@ test("AC3: a denied tools/call (high-tier access off) maps to isError with a pla
     const { userId, connectionId, dek } = await seedConnection(db, config, { highTierAccess: false });
     const dispatch = createMcpDispatch({ db, config });
 
-    const res = await dispatch(connectionId, mcpPost(callBody("request_identity_detail", {})));
+    const res = await dispatch(
+      connectionId,
+      mcpPost(callBody("request_identity_detail", { field: "passport", purpose: "Check in for a flight" })),
+    );
     const rpc = await readRpc(res);
     assert.equal(rpc.result?.isError, true, "a denied request is surfaced as an MCP error (isError)");
+    assert.match(contentText(rpc.result), /high-tier/, "refused by the policy gate, not by input validation");
     assert.ok(contentText(rpc.result).trim().length > 0, "the error carries a plain reason");
 
     const pending = await listPendingForUser(db, userId, dek);
@@ -866,6 +870,39 @@ test("D5: a connector revoked from the agent disappears and a direct call is ref
     );
     assert.equal(rpc.result?.isError ?? Boolean(rpc.error), true, "the call is refused");
     assert.equal(upstream.sent.length, 0);
+  } finally {
+    await db.close();
+  }
+});
+
+// ===================================================================================
+// Review fix D6 — request_identity_detail names WHICH detail it wants and WHY, and both
+// are stored on the approval the person reviews in their inbox.
+// ===================================================================================
+
+test("D6: request_identity_detail requires a field and a purpose and stores both on the approval", async () => {
+  const db = await freshDb();
+  try {
+    const config = devConfig();
+    const { userId, connectionId, dek } = await seedConnection(db, config, { highTierAccess: true });
+    const dispatch = createMcpDispatch({ db, config });
+
+    const missing = await readRpc(await dispatch(connectionId, mcpPost(callBody("request_identity_detail", {}))));
+    assert.equal(missing.result?.isError, true, "a request with no field or purpose is refused");
+    assert.match(contentText(missing.result), /field/);
+    assert.match(contentText(missing.result), /purpose/);
+
+    const rpc = await readRpc(
+      await dispatch(
+        connectionId,
+        mcpPost(callBody("request_identity_detail", { field: "passport", purpose: "Check in for a flight" })),
+      ),
+    );
+    const approvalId = rpc.result?.structuredContent?.approval_id;
+    assert.equal(typeof approvalId, "string", `the request is pending approval, got: ${JSON.stringify(rpc)}`);
+    const approval = (await listPendingForUser(db, userId, dek)).find((entry) => entry.id === approvalId);
+    assert.equal(approval?.detail?.field, "passport", "the approval shows which detail is wanted");
+    assert.equal(approval?.detail?.purpose, "Check in for a flight", "the approval shows the stated purpose");
   } finally {
     await db.close();
   }

@@ -62,6 +62,9 @@ export interface AgentCall {
   readonly merchant?: string;
   readonly recipients?: string | readonly string[] | null;
   readonly messageChannel?: "email" | "chat" | "post";
+  // A high-tier request's field and stated purpose, shown to the person on the approval.
+  readonly field?: string;
+  readonly purpose?: string;
   readonly params?: unknown;
   readonly reason?: string;
 }
@@ -215,6 +218,8 @@ function toApprovalDetail(call: AgentCall): Record<string, unknown> {
     currency: call.currency,
     merchant: call.merchant,
     recipients: call.recipients,
+    field: call.field,
+    purpose: call.purpose,
     reason: call.reason,
   };
 }

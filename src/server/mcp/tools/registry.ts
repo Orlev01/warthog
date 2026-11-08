@@ -94,6 +94,11 @@ const reason = z.string().max(MAX_REASON).optional();
 const MAX_CURRENCY = 10;
 const MAX_MERCHANT = 500;
 
+// Caps for the high-tier request fields: a field name or custom label is short; a purpose
+// is a sentence or two.
+const MAX_FIELD = 100;
+const MAX_PURPOSE = 500;
+
 // Over this many permitted connector tools, the connector set collapses into
 // find_tools + call_tool (design §6.2). Far from any test boundary (a handful stays
 // expanded; a very large set collapses), so the exact figure is this module's call.
@@ -131,6 +136,22 @@ const requestCardSchema = z.object({
   reason,
 });
 
+// request_identity_detail's input: WHICH high-tier detail is wanted and WHY (brief: "request
+// a high-tier identity detail with a stated purpose"; the person sees the agent, the field
+// and the purpose before they decide), plus the universal optional reason.
+const requestIdentityDetailSchema = z.object({
+  field: z
+    .string()
+    .trim()
+    .min(1)
+    .max(MAX_FIELD)
+    .describe(
+      "Which detail you need: date_of_birth, passport, driver_licence, car_registration, or the label of a custom field.",
+    ),
+  purpose: z.string().trim().min(1).max(MAX_PURPOSE).describe("What you will use it for, shown to the person."),
+  reason,
+});
+
 const CORE_TOOL_SPECS: readonly CoreToolSpec[] = [
   {
     name: "get_context",
@@ -150,8 +171,8 @@ const CORE_TOOL_SPECS: readonly CoreToolSpec[] = [
     description:
       "Ask the person to release one high-tier identity detail (such as a passport or driver licence) for a stated purpose. The person approves each request; you get pending_approval, wait with check_approval, then collect the value once with collect_release.",
     makesChange: false,
-    schema: envelope,
-    extra: () => ({ request: "high_tier" }),
+    schema: requestIdentityDetailSchema,
+    extra: (p) => ({ request: "high_tier", field: p.field as string, purpose: p.purpose as string }),
   },
   {
     name: "request_card",
