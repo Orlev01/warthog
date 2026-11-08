@@ -148,7 +148,12 @@ export function createStepUpHandler(deps: StepUpHandlerDeps): StepUpHandler {
     const session = await currentSession(request);
     if (!session) return json(401, { error: "unauthenticated" });
 
-    const options = await beginPasskeyAuthentication(db, { userId: session.userId }, { rpId });
+    // A step-up challenge is its own purpose: a sign-in assertion can never satisfy it.
+    const options = await beginPasskeyAuthentication(
+      db,
+      { userId: session.userId, purpose: "step_up" },
+      { rpId, clock },
+    );
     return json(200, { options });
   }
 
@@ -169,8 +174,12 @@ export function createStepUpHandler(deps: StepUpHandlerDeps): StepUpHandler {
 
       const result = await finishPasskeyAuthentication(
         db,
-        { userId: session.userId, response: authenticationResponse as AuthenticationResponseJSON },
-        { rpId, origin: publicOrigin },
+        {
+          userId: session.userId,
+          response: authenticationResponse as AuthenticationResponseJSON,
+          purpose: "step_up",
+        },
+        { rpId, origin: publicOrigin, clock },
       );
       if (!result.ok) return json(401, { error: "invalid_assertion" });
 

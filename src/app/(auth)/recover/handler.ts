@@ -291,7 +291,7 @@ export function createRecoverHandler(deps: RecoverHandlerDeps): RecoverHandler {
       const registrationOptions = await beginPasskeyRegistration(
         db,
         { userId: pending.userId, userName: pending.email },
-        { rpId, origin: publicOrigin },
+        { rpId, origin: publicOrigin, clock },
       );
       pending.recoveryVerified = true;
 
@@ -323,7 +323,7 @@ export function createRecoverHandler(deps: RecoverHandlerDeps): RecoverHandler {
       const result = await finishPasskeyRegistration(
         db,
         { userId: pending.userId, response: registrationResponse as RegistrationResponseJSON },
-        { rpId, origin: publicOrigin },
+        { rpId, origin: publicOrigin, clock },
       );
       if (!result.ok) return json(400, { error: "bad_attestation" });
 

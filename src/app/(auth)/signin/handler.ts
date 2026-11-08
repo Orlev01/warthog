@@ -172,7 +172,7 @@ export function createSigninHandler(deps: SigninHandlerDeps): SigninHandler {
 
       const user = await getUserByEmail(db, email);
       const options = user
-        ? await beginPasskeyAuthentication(db, { userId: user.id }, { rpId })
+        ? await beginPasskeyAuthentication(db, { userId: user.id, purpose: "signin" }, { rpId, clock })
         : await decoyPasskeyAuthenticationOptions({ rpId });
       return json(200, { options });
     } catch (error) {
@@ -196,8 +196,12 @@ export function createSigninHandler(deps: SigninHandlerDeps): SigninHandler {
 
       const result = await finishPasskeyAuthentication(
         db,
-        { userId: user.id, response: authenticationResponse as AuthenticationResponseJSON },
-        { rpId, origin: publicOrigin },
+        {
+          userId: user.id,
+          response: authenticationResponse as AuthenticationResponseJSON,
+          purpose: "signin",
+        },
+        { rpId, origin: publicOrigin, clock },
       );
       if (!result.ok) return json(401, { error: "invalid_assertion" });
 

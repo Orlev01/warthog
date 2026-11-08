@@ -631,3 +631,32 @@ test("a SQL-injection probe in the email field is bound as data and cannot alter
     await db.close();
   }
 });
+
+// =====================================================================================
+// Review fix B4 — one sign-in assertion mints at most one session, even for a synced
+// passkey whose signature counter stays at 0 (modelled by holding the stored counter at 0).
+// =====================================================================================
+
+test("a sign-in assertion replayed to finish-passkey mints no second session", async () => {
+  const clock = fixedClock(T0);
+  const db = await freshDb();
+  try {
+    const handler = makeHandler(db, totpSecretsOf(new Map()), clock);
+    const auth = createAuthenticator();
+    const email = "replayed-signin@warthog.com.au";
+    const user = await freshUser(db, "replayed-signin");
+    await registerPasskeyFor(db, auth, user);
+
+    const options = await beginPasskeyFor(handler, email);
+    const authenticationResponse = await auth.authenticate(options);
+    const first = await handler.finishPasskey(signinRequest({ email, authenticationResponse }));
+    assert.equal(first.status, 303, "the first finish signs the person in");
+
+    await db.query(`UPDATE passkeys SET counter = 0 WHERE user_id = $1`, [user.id]);
+    const replay = await handler.finishPasskey(signinRequest({ email, authenticationResponse }));
+    assert.equal(replay.status, 401, "the replay is refused");
+    assert.equal(await sessionCount(db), 1, "exactly one session was minted");
+  } finally {
+    await db.close();
+  }
+});

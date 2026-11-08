@@ -64,7 +64,11 @@ import type { StepUpHandler, StepUpHandlerDeps } from "./step-up-handler";
 
 import { createSession, verifySession, COOKIE_NAME } from "./session";
 import { requireStepUp } from "./step-up";
-import { beginPasskeyRegistration, finishPasskeyRegistration } from "./passkey";
+import {
+  beginPasskeyAuthentication,
+  beginPasskeyRegistration,
+  finishPasskeyRegistration,
+} from "./passkey";
 import { createUser, type User } from "../db/users";
 import { fixedClock } from "../seams/clock";
 import { systemRandom } from "../seams/random";
@@ -484,6 +488,55 @@ test("[obligation:validate-and-parameterize-input] a SQL-injection probe in the 
       null,
       "a rejected assertion records no step-up; the probe was data, not SQL",
     );
+  } finally {
+    await db.close();
+  }
+});
+
+// =====================================================================================
+// Review fix B4 — a sign-in assertion never counts as a step-up, and a step-up
+// assertion cannot be replayed to stamp a fresh step-up again.
+// =====================================================================================
+
+test("a sign-in assertion posted to step-up finish is refused and records nothing", async () => {
+  const db = await freshDb();
+  try {
+    const handler = makeHandler(db);
+    const auth = createAuthenticator();
+    const person = await freshUser(db, "stepup-purpose");
+    await registerPasskeyFor(db, auth, person);
+    const created = await createSession(db, person.id, { clock: fixedClock(T0), random: systemRandom });
+
+    // A sign-in ceremony for the same person (as the sign-in page runs it).
+    const signinOptions = await beginPasskeyAuthentication(db, { userId: person.id }, { rpId: RP_ID });
+    const signinAssertion = await auth.authenticate(signinOptions);
+    await db.query(`UPDATE passkeys SET counter = 0 WHERE user_id = $1`, [person.id]);
+
+    const res = await handler.finish(
+      finishRequest({ token: created.token, body: { authenticationResponse: signinAssertion } }),
+    );
+    assert.equal(res.status, 401, "a sign-in assertion is not a step-up");
+    assert.equal(await steppedUpAt(db, created.token), null, "no step-up was recorded");
+  } finally {
+    await db.close();
+  }
+});
+
+test("a step-up assertion cannot be replayed", async () => {
+  const db = await freshDb();
+  try {
+    const handler = makeHandler(db);
+    const auth = createAuthenticator();
+    const person = await freshUser(db, "stepup-replay");
+    await registerPasskeyFor(db, auth, person);
+    const created = await createSession(db, person.id, { clock: fixedClock(T0), random: systemRandom });
+
+    const assertion = await beginAndAuthenticate(handler, auth, created.token);
+    const first = await handler.finish(finishRequest({ token: created.token, body: { authenticationResponse: assertion } }));
+    assert.equal(first.status, 200);
+    await db.query(`UPDATE passkeys SET counter = 0 WHERE user_id = $1`, [person.id]);
+    const replay = await handler.finish(finishRequest({ token: created.token, body: { authenticationResponse: assertion } }));
+    assert.equal(replay.status, 401, "the consumed challenge refuses the replay");
   } finally {
     await db.close();
   }

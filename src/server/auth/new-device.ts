@@ -150,8 +150,8 @@ export async function signInNewDeviceWithPasskey(
 
   const assertion = await finishPasskeyAuthentication(
     db,
-    { userId: person.id, response: params.response },
-    { rpId: deps.rpId, origin: deps.origin },
+    { userId: person.id, response: params.response, purpose: "signin" },
+    { rpId: deps.rpId, origin: deps.origin, clock: deps.clock },
   );
   if (!assertion.ok) return { ok: false, reason: assertion.reason };
 
