@@ -333,3 +333,31 @@ test("the desktop sidebar is sticky to the viewport height with its own overflow
     `the sidebar must scroll its own vertical overflow so Sign out is reachable without scrolling the page; attrs="${cls}"`,
   );
 });
+
+// Review fix G10 — the current section is never shown by colour alone (WCAG 1.4.1; brief
+// "status shown with words and icons not colour alone"). The active item was told apart
+// only by text-accent vs text-fg-muted (1.02:1 light, 1.29:1 dark between them), so a
+// person with colour-vision deficiency or on a dim screen could not see where they were.
+// The current item now also carries a visible indicator bar and heavier weight.
+test("the current item in both navs carries a non-colour cue (indicator bar + weight) that others lack", () => {
+  const markup = renderToStaticMarkup(
+    <AppShell activeSection="inbox">
+      <p>content</p>
+    </AppShell>,
+  );
+  // Nav items only (an item's visible text is its section label — the wordmark's is not).
+  const links = [...markup.matchAll(/<a\b([^>]*)>([\s\S]*?)<\/a>/g)]
+    .filter((m) => /^(Home|Inbox|Activity|Agents|Vault)$/.test(m[2]!.replace(/<[^>]*>/g, "").trim()))
+    .map((m) => m[1]!);
+  const current = links.filter((a) => /aria-current="page"/.test(a));
+  const others = links.filter((a) => !/aria-current/.test(a));
+  assert.equal(current.length, 2, "one current item per nav");
+  for (const a of current) {
+    assert.match(a, /\bfont-(semibold|bold)\b/, `the current item is heavier: ${a}`);
+    assert.match(a, /\bborder-(t|s|b|l)-(2|4)\b/, `the current item has an indicator bar: ${a}`);
+    assert.match(a, /\bborder-accent\b/, `the indicator is drawn: ${a}`);
+  }
+  for (const a of others) {
+    assert.ok(!/\bborder-accent\b/.test(a) && !/\bfont-(semibold|bold)\b/.test(a), `a non-current item has no cue: ${a}`);
+  }
+});
