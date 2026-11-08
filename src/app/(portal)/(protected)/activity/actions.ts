@@ -38,6 +38,8 @@ import {
 } from "@/server/activity/integrity";
 import { listActivity, listActivityFacets, type ActivityFilters } from "@/server/activity/list";
 import { getUserById } from "@/server/db/users";
+import { agentNamesForUser } from "@/server/db/agents";
+import { agentLabel, entryTitle } from "@/domain/activity/describe";
 import type { KeyWrapper } from "@/server/crypto/key-wrapper";
 import type { ActivityEntry } from "@/server/activity/recorder";
 import type {
@@ -243,13 +245,16 @@ export function createActivityActions(deps: ActivityActionsDeps): ActivityAction
   // Map a decrypted entry to the view's row. `canUndo` is `reversalFor(tool)` — true
   // only where the entry's tool declares a reversal — so the view mounts an Undo
   // control exactly where undoEntry can act and nowhere else (never a dead control).
-  function toEntryView(entry: ActivityEntry): ActivityEntryView {
+  // The agent is shown by the name the person gave it (`agentNames`: their OWN agents,
+  // read member-scoped), never its raw id, and an agent call is titled by its tool.
+  function toEntryView(entry: ActivityEntry, agentNames: ReadonlyMap<string, string>): ActivityEntryView {
     const canUndo = reversalFor !== undefined && reversalFor(entry.tool) !== undefined;
     return {
       seq: entry.seq,
       kind: humanise(entry.kind),
+      title: entryTitle(entry),
       source: entry.source,
-      agent: entry.agentId,
+      agent: agentLabel(agentNames, entry.agentId),
       service: entry.connectorId,
       outcome: entry.outcome === undefined ? "" : humanise(entry.outcome),
       at: formatAt(entry.occurredAt),
@@ -280,7 +285,16 @@ export function createActivityActions(deps: ActivityActionsDeps): ActivityAction
     // The person's whole set of facet values backs the filter dropdowns, read from the
     // plaintext metadata columns (nothing decrypted), so neither a narrowing filter nor
     // the page bound hides the other agents/services/kinds/outcomes you could switch to.
-    const filterOptions = await listActivityFacets(db, session.userId);
+    const facets = await listActivityFacets(db, session.userId);
+
+    // The person's OWN agents' names (member-scoped by the session user id), keyed by
+    // agent id and connection id: each entry and the agent filter name the agent, while
+    // the filter still posts (and narrows by) its id.
+    const agentNames = await agentNamesForUser(db, session.userId);
+    const filterOptions: ActivityViewProps["filterOptions"] = {
+      ...facets,
+      agents: facets.agents.map((id) => ({ value: id, label: agentLabel(agentNames, id) ?? id })),
+    };
 
     // The facet/date filters the view posts back: `agent`→agentId, `service`→
     // connectorId, kind/outcome verbatim, and from/to only when they are real calendar
@@ -314,7 +328,7 @@ export function createActivityActions(deps: ActivityActionsDeps): ActivityAction
     // The free-text search narrows further, in-app over the decrypted summary (an
     // encrypted column can't be matched in SQL), case-insensitively over the same text
     // the view shows.
-    const views = narrowed.map(toEntryView);
+    const views = narrowed.map((entry) => toEntryView(entry, agentNames));
     const query = firstValue(searchParams.q) ?? "";
     const needle = query.toLowerCase();
     const entries =

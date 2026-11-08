@@ -34,10 +34,13 @@ import type { IntegrityResult } from "@/server/activity/integrity";
 // fact Warthog recorded itself; "agent_reported" is a summary an agent submitted, shown
 // labelled "Reported by <agent>" and never treated as the source of truth. `agent` is
 // the connected AI client, `service` the connected service it touched (either may be
-// absent). `canUndo` is true ⇔ the entry's tool declares a reversal.
+// absent). `canUndo` is true ⇔ the entry's tool declares a reversal. `title` is the
+// row's headline in plain words — an agent call is titled by its tool ("Save a memory")
+// — and `agent` is the agent's display name, never its raw id.
 export type ActivityEntryView = {
   seq: number;
   kind: string; // display-ready, e.g. "Tool call"
+  title?: string; // display-ready headline, e.g. "Save a memory" (absent ⇒ the kind)
   source: "warthog" | "agent_reported";
   agent?: string;
   service?: string;
@@ -48,13 +51,22 @@ export type ActivityEntryView = {
   canUndo: boolean;
 };
 
+// One filter choice: a plain value shown as itself, or a value posted by the filter with
+// a display label (an agent is filtered by its id but offered by its name).
+export type ActivityFilterOption = string | { readonly value: string; readonly label: string };
+
 // The values each filter dropdown offers (resolved display names / labels).
 export type ActivityFilterOptions = {
-  agents: readonly string[];
-  services: readonly string[];
-  kinds: readonly string[];
-  outcomes: readonly string[];
+  agents: readonly ActivityFilterOption[];
+  services: readonly ActivityFilterOption[];
+  kinds: readonly ActivityFilterOption[];
+  outcomes: readonly ActivityFilterOption[];
 };
+
+// A filter choice as the value it posts and the label it shows.
+function optionParts(option: ActivityFilterOption): { value: string; label: string } {
+  return typeof option === "string" ? { value: option, label: option } : option;
+}
 
 // The applied filter values, keyed by the GET param each control posts.
 export type ActivityActiveFilters = {
@@ -107,7 +119,7 @@ type Facet = {
   name: keyof ActivityActiveFilters;
   label: string;
   all: string;
-  options: readonly string[];
+  options: readonly ActivityFilterOption[];
   value?: string;
 };
 
@@ -118,9 +130,9 @@ function FacetFilter({ name, label, all, options, value }: Facet) {
       <Label htmlFor={id}>{label}</Label>
       <Select id={id} name={name} defaultValue={value ?? ""}>
         <option value="">{all}</option>
-        {options.map((option) => (
-          <option key={option} value={option}>
-            {option}
+        {options.map(optionParts).map((option) => (
+          <option key={option.value} value={option.value}>
+            {option.label}
           </option>
         ))}
       </Select>
@@ -128,11 +140,14 @@ function FacetFilter({ name, label, all, options, value }: Facet) {
   );
 }
 
-// "Filtered by Agent: agent-claude · From 1 Mar 2026" — the applied filters in words.
+// "Filtered by Agent: Claude · From 1 Mar 2026" — the applied filters in words, each
+// named by its option's label (an agent by its name, never the id the filter posts).
 function filterSummary(facets: readonly Facet[], active: ActivityActiveFilters): string[] {
+  const labelOf = (facet: Facet, value: string): string =>
+    facet.options.map(optionParts).find((option) => option.value === value)?.label ?? value;
   const parts = facets
     .filter((facet) => active[facet.name] !== undefined)
-    .map((facet) => `${facet.label}: ${active[facet.name]}`);
+    .map((facet) => `${facet.label}: ${labelOf(facet, active[facet.name]!)}`);
   if (active.from) parts.push(`From ${active.from}`);
   if (active.to) parts.push(`To ${active.to}`);
   return parts;
@@ -259,7 +274,7 @@ function ActivityEntryItem({
   return (
     <li className="flex flex-col gap-2 rounded-card border border-line bg-surface p-4">
       <div className="flex flex-wrap items-center gap-x-3 gap-y-1">
-        <span className="font-medium text-fg">{entry.kind}</span>
+        <span className="font-medium text-fg">{entry.title ?? entry.kind}</span>
         <span className="rounded-card bg-surface-muted px-2 py-0.5 text-xs font-medium text-fg-muted">
           {entry.outcome}
         </span>
