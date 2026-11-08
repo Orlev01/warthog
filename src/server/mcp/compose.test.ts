@@ -78,6 +78,9 @@ import { createAgent } from "../db/agents";
 import { upsertPermissions, type PermissionGrants } from "../db/agent-permissions";
 import { listMemoriesForUser } from "../db/memories";
 import { listPendingForUser } from "../db/approvals";
+import { registerSubscription } from "../db/push-subscriptions";
+import { FALLBACK_JOB_TYPE } from "../notify/approval-notifier";
+import { outbox } from "../notify/outbox";
 import { createToken } from "../oauth/store";
 import { listActivity } from "../activity/list";
 import { verifyBearer, type BearerVerification } from "../oauth/verify-bearer";
@@ -101,7 +104,7 @@ const DEV_KEK_B64 = Buffer.alloc(32, 0x5c).toString("base64");
 const PUBLIC_BASE_URL = "https://warthog.example";
 const REQUEST_HOST = "https://warthog.example";
 
-function devConfig(): Config {
+function devConfig(extra: Record<string, string> = {}): Config {
   return loadConfig({
     NODE_ENV: "development",
     PUBLIC_BASE_URL,
@@ -109,6 +112,7 @@ function devConfig(): Config {
     DATABASE_URL: "pglite:memory",
     WARTHOG_HMAC_KEY: HMAC_KEY_B64,
     WARTHOG_DEV_KEK: DEV_KEK_B64,
+    ...extra,
   } as NodeJS.ProcessEnv);
 }
 
@@ -483,6 +487,104 @@ test("AC3: a denied tools/call (high-tier access off) maps to isError with a pla
 
     const pending = await listPendingForUser(db, userId, dek);
     assert.equal(pending.length, 0, "a denied request holds nothing — no pending approval is created");
+  } finally {
+    await db.close();
+  }
+});
+
+// ===================================================================================
+// Review fix D2 — the composed pipeline is wired to the approval notifier (a push to
+// every registered device plus the scheduled SMS/email fallback) and the request-metrics
+// recorder, so an approval created over MCP actually reaches the person.
+// ===================================================================================
+
+// Register one push device for the person and return its (unique) endpoint.
+async function registerDevice(db: Db, userId: string, dek: Uint8Array): Promise<string> {
+  const endpoint = `https://push.example/${randomUUID()}`;
+  await registerSubscription(
+    db,
+    { userId, endpoint, keys: { p256dh: "p256dh-key", auth: "auth-key" } },
+    dek,
+    fixedClock(NOW),
+  );
+  return endpoint;
+}
+
+// The approval.fallback job rows scheduled for one approval.
+async function fallbackJobsFor(db: Db, approvalId: string): Promise<Array<{ runAt: Date }>> {
+  const rows = await db.query(
+    "SELECT run_at FROM jobs WHERE type = $1 AND payload->>'approvalId' = $2",
+    [FALLBACK_JOB_TYPE, approvalId],
+  );
+  return rows.rows.map((row) => ({ runAt: new Date(row.run_at as string) }));
+}
+
+test("D2: a card request over MCP pushes to the person's device and schedules the fallback", async () => {
+  const db = await freshDb();
+  try {
+    const config = devConfig({ WARTHOG_DEV_TOOLS: "1" });
+    const { userId, connectionId, dek } = await seedConnection(db, config);
+    const endpoint = await registerDevice(db, userId, dek);
+    const dispatch = createMcpDispatch({ db, config });
+
+    const rpc = await readRpc(
+      await dispatch(connectionId, mcpPost(callBody("request_card", { amount: 20, currency: "AUD", merchant: "Shop" }))),
+    );
+    const approvalId = rpc.result?.structuredContent?.approval_id as string;
+    assert.equal(typeof approvalId, "string", `request_card is pending approval, got: ${JSON.stringify(rpc)}`);
+
+    // One fallback job, due at the approval's own created_at + the default 2 minutes.
+    const created = await db.query("SELECT created_at FROM approvals WHERE id = $1", [approvalId]);
+    const createdAt = new Date(created.rows[0]!.created_at as string);
+    const jobs = await fallbackJobsFor(db, approvalId);
+    assert.equal(jobs.length, 1, "exactly one approval.fallback job is scheduled");
+    assert.equal(jobs[0]!.runAt.getTime(), createdAt.getTime() + 2 * 60_000, "due 2 minutes after creation");
+
+    // The dev outbox received the push for this device, carrying the approval id only.
+    const pushes = outbox.list().filter((message) => message.channel === "push" && message.recipient === endpoint);
+    assert.equal(pushes.length, 1, "one push is sent to the registered device");
+    assert.ok(`${pushes[0]!.body} ${pushes[0]!.link ?? ""}`.includes(approvalId), "the push names the approval");
+    assert.ok(!`${pushes[0]!.body} ${pushes[0]!.link ?? ""}`.includes("Shop"), "the push carries no request detail");
+  } finally {
+    await db.close();
+  }
+});
+
+test("D2: a failed push does not fail the request: still pending_approval, fallback still scheduled", async () => {
+  const db = await freshDb();
+  try {
+    // Dev tools off and no VAPID keys: the real Web Push sender refuses every send.
+    const config = devConfig();
+    const { userId, connectionId, dek } = await seedConnection(db, config);
+    await registerDevice(db, userId, dek);
+    const dispatch = createMcpDispatch({ db, config });
+
+    const rpc = await readRpc(
+      await dispatch(connectionId, mcpPost(callBody("request_card", { amount: 20, currency: "AUD", merchant: "Shop" }))),
+    );
+    assert.notEqual(rpc.result?.isError, true, `the request is not an error, got: ${JSON.stringify(rpc)}`);
+    assert.equal(rpc.result?.structuredContent?.status, "pending_approval");
+    const approvalId = rpc.result!.structuredContent!.approval_id as string;
+    assert.equal((await fallbackJobsFor(db, approvalId)).length, 1, "the fallback is still scheduled");
+  } finally {
+    await db.close();
+  }
+});
+
+test("D2: every tools/call records the request count and latency metrics", async () => {
+  const db = await freshDb();
+  try {
+    const config = devConfig();
+    const { connectionId } = await seedConnection(db, config);
+    const dispatch = createMcpDispatch({ db, config });
+
+    await readRpc(await dispatch(connectionId, mcpPost(callBody("get_context", {}))));
+
+    const rows = await db.query("SELECT name, outcome FROM metric_events ORDER BY name");
+    const names = rows.rows.map((row) => String(row.name));
+    assert.ok(names.includes("agent.request"), "a request-count metric is recorded");
+    assert.ok(names.includes("agent.request.latency_ms"), "a request-latency metric is recorded");
+    assert.ok(rows.rows.every((row) => row.outcome === "executed"), "tagged with the call's outcome");
   } finally {
     await db.close();
   }

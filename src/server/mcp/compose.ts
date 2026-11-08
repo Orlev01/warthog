@@ -41,6 +41,11 @@ import { getUserById } from "../db/users";
 import { getAgentByConnectionId, getAgentById } from "../db/agents";
 import { getConnectionPermissions } from "../db/agent-permissions";
 import { HttpError } from "../http/validate";
+import { createGuardedFetch } from "../http/guarded-fetch";
+import { notifyApprovalCreated, type ApprovalPushSender } from "../notify/approval-notifier";
+import { createWebPushSender } from "../notify/web-push";
+import { outbox } from "../notify/outbox";
+import { recordMetricEvent } from "../metrics/record";
 
 import {
   createAgentCallPipeline,
@@ -160,6 +165,34 @@ function errorResult(reason: string): {
   return { content: [{ type: "text", text: reason }], isError: true };
 }
 
+// The push channel approval notifications go out on, chosen by config like every other
+// sender (`selectSenders`): with dev tooling on, the process-wide dev outbox records a push
+// carrying only the approval's inbox link; otherwise the real VAPID Web Push sender over
+// the SSRF-guarded fetch, which refuses loudly while the VAPID keys are unset — the
+// notifier tolerates a failed push and its scheduled SMS/email fallback is the recovery.
+function approvalPushSender(config: Config): ApprovalPushSender {
+  if (config.devTools) {
+    return {
+      sendApprovalPush: (subscription, approvalId) =>
+        outbox.sendPush({
+          recipient: subscription.endpoint,
+          body: "An agent is waiting for your approval.",
+          link: `${config.publicBaseUrl}/inbox?approval=${encodeURIComponent(approvalId)}`,
+        }),
+    };
+  }
+  return createWebPushSender({ vapid: config.vapid, fetch: createGuardedFetch() });
+}
+
+// A best-effort side effect of an agent call (the approval notifier, a metric write) that
+// fails is logged and swallowed, so it can never turn a call that was already handled —
+// an approval and its held request are written before the notifier runs — into an error
+// for the agent. Only a fixed event name and the error's class reach the log, never its
+// message, which could carry personal content (design §4.3).
+function logSideEffectFailure(event: string, err: unknown): void {
+  console.error("[warthog mcp]", JSON.stringify({ event, error: err instanceof Error ? err.name : "unknown" }));
+}
+
 // Build the agent-call pipeline's REAL dependencies from the two composition-root inputs
 // (config + the process db): the KeyWrapper selected from config, the DB-backed recorder,
 // the per-process rate limiter, the tool-body executor and the pure pipeline. The ONE place
@@ -274,7 +307,32 @@ function buildAgentPipeline(deps: McpDispatchDeps): AgentCallPipeline {
     }
   };
 
-  pipeline = createAgentCallPipeline({ db, keyWrapper, clock, rateLimiter, recorder, executeTool });
+  // An approval created by the pipeline notifies the person at once (a push to every
+  // registered device plus the scheduled SMS/email fallback, design §10), and every
+  // handled call records the request count/latency metrics through the guarded recorder.
+  const approvalPush = approvalPushSender(config);
+  pipeline = createAgentCallPipeline({
+    db,
+    keyWrapper,
+    clock,
+    rateLimiter,
+    recorder,
+    executeTool,
+    notifyApprovalCreated: async (input) => {
+      try {
+        await notifyApprovalCreated({ db, clock, push: approvalPush }, input);
+      } catch (err) {
+        logSideEffectFailure("approval_notify_failed", err);
+      }
+    },
+    recordMetric: async (input) => {
+      try {
+        await recordMetricEvent(db, clock, input);
+      } catch (err) {
+        logSideEffectFailure("metric_record_failed", err);
+      }
+    },
+  });
   return pipeline;
 }
 
