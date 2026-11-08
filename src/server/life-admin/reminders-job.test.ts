@@ -628,3 +628,49 @@ test("no ambient env secret reaches a reminder — the job runs from injected de
     else process.env.WARTHOG_DECOY_SECRET = prev;
   }
 });
+
+// ===========================================================================
+// One undeliverable reminder never blocks the rest (review finding: a push that threw ended
+// the sweep, so that reminder — first again every hour — stopped every later reminder for
+// everyone, silently).
+// ===========================================================================
+
+test("a reminder whose push fails is retried next sweep, and every other due reminder still goes", async () => {
+  const db = await freshDb();
+  try {
+    const clock = fixedClock(new Date("2026-11-10T12:00:00Z"));
+    const alice = await makePerson(db, "hol-alice");
+    const bob = await makePerson(db, "hol-bob");
+    const record = (userId: string, dek: Uint8Array, dueDate: string) =>
+      createRecord(
+        db,
+        { userId, kind: "subscription", fields: subscriptionFields(), dueDate, status: "active", source: { kind: "person" } },
+        dek,
+      );
+    // Alice's reminder is due first, so the sweep reaches it before Bob's.
+    const aliceRecord = await record(alice.userId, alice.dek, "2026-11-19");
+    const bobRecord = await record(bob.userId, bob.dek, "2026-11-20");
+
+    // Alice's push channel is broken this sweep; Bob's is fine.
+    const sent: OutgoingMessage[] = [];
+    let aliceBroken = true;
+    const push: PushSender = {
+      async sendPush(message: OutgoingMessage): Promise<void> {
+        if (aliceBroken && message.recipient === alice.userId) throw new Error("push subscription gone");
+        sent.push(message);
+      },
+    };
+
+    await assert.rejects(runLifeAdminReminders({ db, clock, push }), "the failure is surfaced, not swallowed");
+    assert.deepEqual(sent.map((m) => m.recipient), [bob.userId], "Bob's reminder still went");
+    assert.deepEqual(await sentOffsetsOf(db, bob.userId, bob.dek, bobRecord.id), [14]);
+    assert.deepEqual(await sentOffsetsOf(db, alice.userId, alice.dek, aliceRecord.id), [], "Alice's is not marked sent");
+
+    aliceBroken = false;
+    await runLifeAdminReminders({ db, clock, push });
+    assert.deepEqual(sent.map((m) => m.recipient), [bob.userId, alice.userId], "Alice's reminder goes on the next sweep");
+    assert.deepEqual(await sentOffsetsOf(db, alice.userId, alice.dek, aliceRecord.id), [14]);
+  } finally {
+    await db.close();
+  }
+});

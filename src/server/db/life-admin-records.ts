@@ -250,16 +250,17 @@ async function decryptRows(rows: Row[], dek: Uint8Array): Promise<LifeAdminRecor
 // The REMINDERS JOB's read. Deliberately CROSS-USER (no userId, no dek): for EVERY
 // person, return each (record, offset) where the offset's reminder date
 // (due_date − offset days) is at or before `clock.now()`, the offset has NOT been
-// marked sent, and the record has a due date. METADATA ONLY — it never decrypts a
-// field (the fields blob is not even selected), which is exactly design §4.1's
-// "filter without decrypting another person's data".
+// marked sent, and the record has a due date — the earliest reminder date first. METADATA
+// ONLY — it never decrypts a field (the fields blob is not even selected), which is
+// exactly design §4.1's "filter without decrypting another person's data".
 export async function listDueForReminder(db: Db, clock: Clock): Promise<DueReminder[]> {
   const result = await db.query(
     `SELECT r.id AS record_id, r.user_id, r.kind, r.due_date::text AS due_date, o AS "offset"
      FROM life_admin_records r, unnest(r.reminder_offsets) AS o
      WHERE r.due_date IS NOT NULL
        AND NOT (o = ANY(r.sent_offsets))
-       AND (r.due_date - o) <= $1`,
+       AND (r.due_date - o) <= $1
+     ORDER BY (r.due_date - o), r.id, o`,
     [clock.now()],
   );
   return result.rows.map((row) => ({
