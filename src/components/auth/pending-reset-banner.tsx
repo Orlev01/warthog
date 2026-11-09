@@ -4,6 +4,7 @@ import * as React from "react";
 import { AlertTriangle, CheckCircle2 } from "lucide-react";
 
 import { Button } from "../ui/button";
+import { formatAccountTime } from "@/domain/display-time";
 
 // Review fix W3.3 — the banner every signed-in screen shows while an account reset is
 // pending (the brief: the reset "can be cancelled from any signed-in device"). It names
@@ -34,25 +35,16 @@ export function createCancelReset(fetchImpl: typeof fetch): () => Promise<Cancel
   };
 }
 
-// A date in plain words ("8 May 2026"), in Australian time so server and browser agree.
-function plainDate(iso: string): string {
-  return new Date(iso).toLocaleDateString("en-AU", {
-    day: "numeric",
-    month: "long",
-    year: "numeric",
-    timeZone: "Australia/Sydney",
-  });
-}
-
 const defaultFetch: typeof fetch = (...args) => globalThis.fetch(...args);
 
 export interface PendingResetBannerProps {
   readonly requestedAt: string;
   readonly completesAt: string;
+  readonly timeZone?: string;
   readonly fetch?: typeof fetch;
 }
 
-export function PendingResetBanner({ requestedAt, completesAt, fetch: fetchImpl }: PendingResetBannerProps) {
+export function PendingResetBanner({ requestedAt, completesAt, timeZone, fetch: fetchImpl }: PendingResetBannerProps) {
   const [state, setState] = React.useState<"pending" | "busy" | "cancelled">("pending");
   const [error, setError] = React.useState<string | undefined>(undefined);
   const cancel = React.useMemo(() => createCancelReset(fetchImpl ?? defaultFetch), [fetchImpl]);
@@ -72,7 +64,7 @@ export function PendingResetBanner({ requestedAt, completesAt, fetch: fetchImpl 
         <div className="flex items-start gap-3">
           <AlertTriangle aria-hidden={true} className="mt-0.5 h-5 w-5 shrink-0" />
           <p>
-            A reset of your account was asked for on {plainDate(requestedAt)}. On {plainDate(completesAt)} it will
+            A reset of your account was asked for on {formatAccountTime(requestedAt, timeZone)}. On {formatAccountTime(completesAt, timeZone)} it will
             erase your saved cards and protected details and disconnect your agents. If this wasn&apos;t you,
             cancel it now.
           </p>

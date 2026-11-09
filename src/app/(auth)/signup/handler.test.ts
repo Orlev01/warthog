@@ -178,7 +178,7 @@ function extractCode(body: string): string {
 // back from the delivered email — exactly how the person receives it. This is the first
 // factor the sign-up flow verifies; sign-up itself does not issue the code.
 async function issueCodeFor(db: Db, email: string, clock: Clock, outbox: Outbox): Promise<string> {
-  await issueEmailCode(db, email, {
+  await issueEmailCode(db, email, { purpose: "signup",
     clock,
     random: systemRandom,
     hmacKey: HMAC_KEY,

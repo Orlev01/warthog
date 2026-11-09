@@ -123,6 +123,21 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
 
+test("amount rules compare the converted account amount, not the request's face value", () => {
+  const rules: IdentifiedRule[] = [{ id: "limit", kind: "never_allow", scope: { type: "any_agent" }, action: { type: "card_request" }, condition: { type: "amount_over", amount: 100 } }];
+  const ctx = makeCtx({ rules, rate: { from: "USD", to: "AUD", rate: 1.5, date: "2026-03-15" } });
+  assert.equal(evaluate(cardCall({ amount: 80, currency: "USD" }), ctx).ruleId, "limit");
+  const inverse = makeCtx({ rules, rate: { from: "JPY", to: "AUD", rate: 0.01, date: "2026-03-15" } });
+  assert.equal(evaluate(cardCall({ amount: 120, currency: "JPY" }), inverse).decision, "ask");
+});
+
+test("account-denominated rules remain independent of the agent budget currency", () => {
+  const rules: IdentifiedRule[] = [{ id: "limit", kind: "never_allow", scope: { type: "any_agent" }, action: { type: "card_request" }, condition: { type: "amount_over", amount: 100 } }];
+  const ctx = makeCtx({ rules, accountCurrency: "USD", ruleCurrency: "AUD", ruleRate: { from: "USD", to: "AUD", rate: 1.5, date: "2026-03-15" } });
+  assert.equal(evaluate(cardCall({ amount: 80, currency: "USD" }), ctx).ruleId, "limit");
+  assert.equal(evaluate(cardCall({ amount: 80, currency: "USD" }), { ...ctx, ruleRate: null }).decision, "deny");
+});
+
 import {
   evaluate,
   type PolicyCall,
@@ -164,6 +179,13 @@ function makeHousehold(overrides: Partial<HouseholdPolicy> = {}): HouseholdPolic
     ...overrides,
   };
 }
+
+test("missing rates for past household spend refuse a new card request even in the same currency", () => {
+  const household = makeHousehold({ totalsUnavailable: true });
+  const result = evaluate(cardCall({ amount: 1, currency: "AUD" }), makeCtx({ card: makeCard({ household }) }));
+  assert.equal(result.decision, "deny");
+  assert.match(result.reason, /reference rate/i);
+});
 
 function makeCard(overrides: Partial<CardPolicy> = {}): CardPolicy {
   return {

@@ -95,6 +95,7 @@ const EXPECTED_SWEEP_NAMES = [
   "account-purge",
   "metrics-snapshot",
   "daily-integrity-check",
+  "oauth-cleanup",
 ] as const;
 
 // The two registry entries that matched no real enqueued job — removed by this task.
@@ -156,14 +157,13 @@ test("the dispatch table has a handler for every enqueued job type, and only tho
   }
 });
 
-test("the periodic sweeps are the expire-due approval sweep plus the five interval jobs (AC2/AC4)", async () => {
+test("the periodic sweeps include expiry, interval jobs and OAuth cleanup", async () => {
   const db = await freshDb();
   try {
     const sweeps = buildPeriodicSweeps(jobSeams(db));
     const names = sweeps.map((s) => s.name);
 
-    // Exactly the six sweeps, each once.
-    assert.deepEqual([...names].sort(), [...EXPECTED_SWEEP_NAMES].sort(), "the periodic sweeps are exactly the expected six");
+    assert.deepEqual([...names].sort(), [...EXPECTED_SWEEP_NAMES].sort(), "all required sweeps are present exactly once");
     assert.equal(new Set(names).size, sweeps.length, "no duplicate sweep names");
 
     // The approvals expire-due sweep is present (its behaviour is pinned in scheduler.test.ts).

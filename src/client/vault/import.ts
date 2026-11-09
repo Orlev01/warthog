@@ -35,6 +35,10 @@ export interface PlaintextHighTierField {
   value: string;
 }
 export interface PlaintextCard {
+  expiryMonth?: number;
+  expiryYear?: number;
+  cardholderName?: string | null;
+  billingAddressId?: string;
   brand: string;
   lastFour: string;
   nickname: string;
@@ -54,6 +58,10 @@ export interface SealedHighTierField {
   ciphertext: string;
 }
 export interface SealedCard {
+  expiryMonth?: number;
+  expiryYear?: number;
+  cardholderName?: string | null;
+  billingAddressId?: string;
   brand: string;
   lastFour: string;
   nickname: string;
@@ -134,6 +142,10 @@ export async function reprotectDeviceProtected(
       brand: card.brand,
       lastFour: card.lastFour,
       nickname: card.nickname,
+      ...(card.expiryMonth !== undefined ? { expiryMonth: card.expiryMonth } : {}),
+      ...(card.expiryYear !== undefined ? { expiryYear: card.expiryYear } : {}),
+      ...(card.cardholderName !== undefined ? { cardholderName: card.cardholderName } : {}),
+      ...(card.billingAddressId !== undefined ? { billingAddressId: card.billingAddressId } : {}),
       numberCiphertext: await encryptValue(vaultKey, card.number),
     });
   }

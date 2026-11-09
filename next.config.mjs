@@ -11,15 +11,12 @@ const projectRoot = dirname(fileURLToPath(import.meta.url));
 // before the app's config module exists.)
 const isDev = process.env.NODE_ENV !== "production";
 
-// The Content-Security-Policy: every fetch directive defaults to the app's own origin, so an
-// injected script can load no code from elsewhere and send nothing off-site (fetch, images,
-// fonts, frames, workers). Next's App Router bootstraps with inline scripts and React sets
-// inline styles, so script-src/style-src keep 'unsafe-inline' — a per-request nonce policy is
-// the follow-up that would also block inline script. Framing, plugins, <base> hijacking and
-// cross-site form posts stay forbidden.
+// Static fallback for responses outside middleware. Dynamic pages receive the request's
+// nonce policy in middleware; Next reads that same policy to nonce its bootstrap scripts.
+// Production never permits arbitrary inline scripts. Inline styles remain needed by React.
 const CONTENT_SECURITY_POLICY = [
   "default-src 'self'",
-  `script-src 'self' 'unsafe-inline'${isDev ? " 'unsafe-eval'" : ""}`,
+  `script-src 'self'${isDev ? " 'unsafe-inline' 'unsafe-eval'" : ""}`,
   "style-src 'self' 'unsafe-inline'",
   "img-src 'self' data: blob:",
   "font-src 'self' data:",

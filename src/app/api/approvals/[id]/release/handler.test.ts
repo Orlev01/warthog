@@ -104,8 +104,10 @@ import { releaseKeyFor } from "../../../../../server/mcp/tools/collect-release";
 import { fixedClock, type Clock } from "../../../../../server/seams/clock";
 import { systemRandom } from "../../../../../server/seams/random";
 import { freshDb } from "../../../../../test/db";
-import type { Db } from "../../../../../server/db/index";
+import { withTransaction, type Db } from "../../../../../server/db/index";
 import type { AgentConnection } from "../../../../../server/mcp/context";
+import { createHousehold, addMember, setMemberLimit, setHouseholdBudget } from "../../../../../server/db/households";
+import { upsertRate } from "../../../../../server/db/exchange-rates";
 
 // --- fixtures -----------------------------------------------------------------------
 
@@ -124,6 +126,140 @@ const MINUTE_MS = 60 * 1000;
 const PUBLIC_ORIGIN = "https://warthog.com.au";
 const STEP_UP_WINDOW_MS = 5 * MINUTE_MS; // design §5: a step-up is fresh for 5 minutes
 const DAY_MS = 24 * 60 * MINUTE_MS;
+
+for (const hasRate of [true, false]) {
+  test(`release refuses earlier foreign-currency spending ${hasRate ? "over budget after conversion" : "without a reference rate"}`, async () => {
+    const db = await freshDb();
+    try {
+      const keyWrapper = keyWrapperFor();
+      const person = await makePerson(db, "historic-currency-" + hasRate, keyWrapper);
+      const agentId = await makeAgentFor(db, person.userId, { budget: 100 });
+      await recordRelease(db, { userId: person.userId, connectionId: connectionOfAgent.get(agentId)!, householdId: null,
+        amount: 60, currency: "USD", merchant: "Synthetic earlier release",
+        periodKeys: { day: periodKeyFor("day", T0), week: periodKeyFor("week", T0), month: periodKeyFor("month", T0) } });
+      if (hasRate) await upsertRate(db, { rateDate: "2026-11-14", baseCurrency: "USD", quoteCurrency: "AUD", rate: 1.5 });
+      const id = await makePendingApproval(db, { ...person, agentId, detail: { ...CARD_DETAIL, amount: 20 } });
+      const made = makeHandler({ db, keyWrapper, session: sessionFor(person.userId, T0) });
+      const response = await callPost(made.handler, releaseRequest(id, { value: "synthetic-release" }), id);
+      assert.equal(response.status, 409);
+      assert.equal((await response.json()).error, hasRate ? "over_budget" : "agent_rate_unavailable");
+      assert.equal(made.store.size(), 0);
+      assert.equal((await getApproval(db, person.userId, id, person.dek))!.status, "pending");
+    } finally { await db.close(); }
+  });
+}
+
+for (const cap of ["member", "household"] as const) {
+  test(`release rechecks the ${cap} cap across approvals made before either is collected`, async () => {
+    const db = await freshDb();
+    try {
+      const keyWrapper = keyWrapperFor();
+      const owner = await makePerson(db, `cap-owner-${cap}`, keyWrapper);
+      const other = await makePerson(db, `cap-member-${cap}`, keyWrapper);
+      const household = await createHousehold(db, { ownerId: owner.userId, currency: "AUD", monthlyBudget: 1000 });
+      await addMember(db, { householdId: household.id, userId: other.userId });
+      const firstPerson = cap === "household" ? owner : other;
+      const firstAgent = await makeAgentFor(db, firstPerson.userId);
+      const secondAgent = await makeAgentFor(db, other.userId);
+      const first = await makePendingApproval(db, { ...firstPerson, agentId: firstAgent, detail: CARD_DETAIL });
+      const second = await makePendingApproval(db, { ...other, agentId: secondAgent, detail: CARD_DETAIL });
+      if (cap === "member") await setMemberLimit(db, { householdId: household.id, actorId: owner.userId, userId: other.userId, monthlyLimit: 200 });
+      else await setHouseholdBudget(db, { householdId: household.id, actorId: owner.userId, monthlyBudget: 200 });
+      const a = makeHandler({ db, keyWrapper, session: sessionFor(firstPerson.userId, T0) });
+      const b = makeHandler({ db, keyWrapper, session: sessionFor(other.userId, T0) });
+      assert2xx(await callPost(a.handler, releaseRequest(first, { value: "synthetic-one" }), first));
+      const refused = await callPost(b.handler, releaseRequest(second, { value: "synthetic-two" }), second);
+      assert.equal(refused.status, 409);
+      assert.equal((await refused.json()).error, cap === "member" ? "over_member_budget" : "over_household_budget");
+      assert.equal(b.store.size(), 0);
+      assert.equal((await getApproval(db, other.userId, second, other.dek))!.status, "pending");
+      assert.equal((await listReleasesForConnectionPeriod(db, other.userId, connectionOfAgent.get(secondAgent)!, "month", periodKeyFor("month", T0))).length, 0);
+    } finally { await db.close(); }
+  });
+}
+
+for (const hasRate of [true, false]) {
+  test(`release refuses mixed-currency household overspend with ${hasRate ? "a reference rate" : "a missing reference rate"}`, async () => {
+    const db = await freshDb();
+    try {
+      const keyWrapper = keyWrapperFor();
+      const person = await makePerson(db, `mixed-${hasRate}`, keyWrapper);
+      const household = await createHousehold(db, { ownerId: person.userId, currency: "AUD", monthlyBudget: 200 });
+      const agentId = await makeAgentFor(db, person.userId);
+      await recordRelease(db, { userId: person.userId, connectionId: randomUUID(), householdId: household.id, amount: 100, currency: "USD", merchant: "synthetic", periodKeys: { day: periodKeyFor("day", T0), week: periodKeyFor("week", T0), month: periodKeyFor("month", T0) } });
+      if (hasRate) await upsertRate(db, { rateDate: "2026-11-14", baseCurrency: "USD", quoteCurrency: "AUD", rate: 1.5 });
+      const approvalId = await makePendingApproval(db, { ...person, agentId, detail: { ...CARD_DETAIL, amount: 75 } });
+      const { handler, store } = makeHandler({ db, keyWrapper, session: sessionFor(person.userId, T0) });
+      const response = await callPost(handler, releaseRequest(approvalId, { value: "synthetic-value" }), approvalId);
+      assert.equal(response.status, 409);
+      assert.equal((await response.json()).error, hasRate ? "over_household_budget" : "household_rate_unavailable");
+      assert.equal(store.size(), 0);
+      assert.equal((await getApproval(db, person.userId, approvalId, person.dek))!.releasedAt, undefined);
+    } finally { await db.close(); }
+  });
+}
+
+test("household recheck uses the ledger's month when the transaction crosses month-end", async () => {
+  const db = await freshDb();
+  try {
+    const keyWrapper = keyWrapperFor();
+    const person = await makePerson(db, "month-end", keyWrapper);
+    const agentId = await makeAgentFor(db, person.userId);
+    const household = await createHousehold(db, { ownerId: person.userId, currency: "AUD", monthlyBudget: 200 });
+    const before = new Date("2026-11-30T23:59:59Z"); // Shared month ends at UTC midnight.
+    let instant = before;
+    const clock = { now: () => instant };
+    const approvalId = await makePendingApproval(db, { ...person, agentId, detail: CARD_DETAIL, clock });
+    await recordRelease(db, { userId: person.userId, connectionId: randomUUID(), householdId: household.id,
+      amount: 150, currency: "AUD", merchant: "synthetic-only",
+      periodKeys: { day: periodKeyFor("day", before), week: periodKeyFor("week", before), month: periodKeyFor("month", before) } },
+      { householdPeriodMonth: periodKeyFor("month", before, "UTC") });
+    const movingDb: Db = { ...db, async transaction(fn) {
+      instant = new Date("2026-12-01T00:00:01Z");
+      return withTransaction(db, fn);
+    } };
+    const { handler, store } = makeHandler({ db: movingDb, keyWrapper, clock, session: sessionFor(person.userId, before) });
+    const response = await callPost(handler, releaseRequest(approvalId, { value: "synthetic-value" }), approvalId);
+    assert.equal(instant.toISOString(), "2026-12-01T00:00:01.000Z", "the transaction actually crosses the shared month boundary");
+    assert.equal(response.status, 409);
+    assert.deepEqual(await response.json(), { error: "over_household_budget" });
+    assert.equal(store.size(), 0);
+    assert.equal((await getApproval(db, person.userId, approvalId, person.dek))!.releasedAt, undefined);
+  } finally { await db.close(); }
+});
+
+for (const change of ["permission", "connection", "budget"] as const) {
+  test(`release honours a ${change} change after the preliminary read`, async () => {
+    const db = await freshDb();
+    try {
+      const keyWrapper = keyWrapperFor();
+      const person = await makePerson(db, `changed-${change}`, keyWrapper);
+      const agentId = await makeAgentFor(db, person.userId);
+      const connectionId = connectionOfAgent.get(agentId)!;
+      const approvalId = await makePendingApproval(db, { ...person, agentId, detail: CARD_DETAIL });
+      let changed = false;
+      // Emulate a settings/disconnect operation completing after preliminary reads
+      // but before the release transaction. PGlite itself cannot run two sessions.
+      const changingDb: Db = { ...db, async transaction(fn) {
+        if (!changed) {
+          changed = true;
+          if (change === "connection") await db.query("UPDATE agents SET status = 'disconnected' WHERE id = $1 AND user_id = $2", [agentId, person.userId]);
+          else if (change === "permission") await db.query("UPDATE agent_permissions SET card_access = false WHERE user_id = $1 AND connection_id = $2", [person.userId, connectionId]);
+          else await db.query("UPDATE agent_permissions SET card_budget = $3::jsonb WHERE user_id = $1 AND connection_id = $2", [person.userId, connectionId, JSON.stringify({ amount: 100, currency: "AUD", period: "month" })]);
+        }
+        return withTransaction(db, fn);
+      } };
+      const { handler, store } = makeHandler({ db: changingDb, keyWrapper, session: sessionFor(person.userId, T0) });
+      const response = await callPost(handler, releaseRequest(approvalId, { value: "synthetic-value" }), approvalId);
+      assert.equal(changed, true);
+      assert.equal(response.status, change === "budget" ? 409 : 403);
+      assert.deepEqual(await response.json(), { error: change === "budget" ? "over_budget" : "not_releasable" });
+      assert.equal(store.size(), 0);
+      assert.equal((await getApproval(db, person.userId, approvalId, person.dek))!.releasedAt, undefined);
+      assert.equal((await listReleasesForConnectionPeriod(db, person.userId, connectionId, "month", periodKeyFor("month", T0))).length, 0);
+    } finally { await db.close(); }
+  });
+}
 
 // A unique tag so accounts never collide on the users.email UNIQUE across tests.
 function tag(): string {
@@ -231,10 +367,10 @@ function sessionFor(userId: string, steppedUpAt: Date | null): Session {
 // with: the SAME `releaseKeyFor` the collector (`collect_release`) uses, over the
 // agent's REAL connection (its connection id, not its row id) — the real cross-task
 // contract, so "collectable by the agent" is proven, not guessed.
-function keyForApproval(userId: string, agentId: string): string {
+function keyForApproval(userId: string, agentId: string, approvalId: string): string {
   const connectionId = connectionOfAgent.get(agentId) ?? agentId;
   const connection: AgentConnection = { userId, connectionId, agentId, active: true };
-  return releaseKeyFor(connection);
+  return releaseKeyFor(connection, approvalId);
 }
 
 // Read one cookie's value out of a request's Cookie header (the real resolver's job).
@@ -404,7 +540,7 @@ test("AC1: an approved approval for the session user with a fresh step-up stores
     // The value is held in the in-memory release store, collectable under the SAME key
     // the agent's `collect_release` reads (and nowhere else).
     assert.equal(
-      store.collect(keyForApproval(userId, agentId)),
+      store.collect(keyForApproval(userId, agentId, approvalId)),
       VALUE,
       "the decrypted value is placed in the release store for the agent's single collection",
     );
@@ -434,7 +570,7 @@ test("AC1: a post without a recent step-up is rejected and releases nothing", as
     const res = await callPost(handler, releaseRequest(approvalId, { value: `v-${randomUUID()}` }), approvalId);
     assert4xx(res);
 
-    assert.equal(store.collect(keyForApproval(userId, agentId)), undefined, "no value is placed in the release store");
+    assert.equal(store.collect(keyForApproval(userId, agentId, approvalId)), undefined, "no value is placed in the release store");
     assert.deepEqual(await lookupForUser(db, userId, CLOCK), [], "no fingerprint is persisted without a step-up");
   } finally {
     await db.close();
@@ -456,7 +592,7 @@ test("AC1: a step-up older than five minutes is rejected and releases nothing", 
     const res = await callPost(handler, releaseRequest(approvalId, { value: `v-${randomUUID()}` }), approvalId);
     assert4xx(res);
 
-    assert.equal(store.collect(keyForApproval(userId, agentId)), undefined, "a stale step-up releases nothing");
+    assert.equal(store.collect(keyForApproval(userId, agentId, approvalId)), undefined, "a stale step-up releases nothing");
     assert.deepEqual(await lookupForUser(db, userId, CLOCK), [], "and writes no fingerprint");
   } finally {
     await db.close();
@@ -480,7 +616,7 @@ test("AC1: a genuinely verified session that recorded a step-up is admitted (rea
 
     const res = await callPost(handler, releaseRequest(approvalId, { value: VALUE, cookie: token }), approvalId);
     assert2xx(res);
-    assert.equal(store.collect(keyForApproval(userId, agentId)), VALUE, "the value is released for the agent's collection");
+    assert.equal(store.collect(keyForApproval(userId, agentId, approvalId)), VALUE, "the value is released for the agent's collection");
   } finally {
     await db.close();
   }
@@ -500,7 +636,7 @@ test("AC1: a genuinely verified session with NO step-up is rejected (a signed-in
     const { handler, store } = makeHandler({ db, keyWrapper, resolveSession: realResolveSession(db, CLOCK) });
     const res = await callPost(handler, releaseRequest(approvalId, { value: `v-${randomUUID()}`, cookie: token }), approvalId);
     assert4xx(res);
-    assert.equal(store.collect(keyForApproval(userId, agentId)), undefined, "a signed-in-but-not-stepped-up session releases nothing");
+    assert.equal(store.collect(keyForApproval(userId, agentId, approvalId)), undefined, "a signed-in-but-not-stepped-up session releases nothing");
   } finally {
     await db.close();
   }
@@ -524,7 +660,7 @@ test("AC1: a PENDING release approval is approved and released in one step with 
     assert2xx(res);
 
     assert.equal((await getApproval(db, userId, approvalId, dek))!.status, "approved", "the approval is now approved");
-    assert.equal(store.collect(keyForApproval(userId, agentId)), VALUE, "and the value is released for the agent");
+    assert.equal(store.collect(keyForApproval(userId, agentId, approvalId)), VALUE, "and the value is released for the agent");
   } finally {
     await db.close();
   }
@@ -549,7 +685,7 @@ test("AC1: a denied, expired or more-detail approval is never releasable", async
       const { handler, store } = makeHandler({ db, keyWrapper, session: sessionFor(userId, T0) });
       const res = await callPost(handler, releaseRequest(approvalId, { value: `v-${randomUUID()}` }), approvalId);
       assert4xx(res);
-      assert.equal(store.collect(keyForApproval(userId, agentId)), undefined, `${decision.status}: nothing is released`);
+      assert.equal(store.collect(keyForApproval(userId, agentId, approvalId)), undefined, `${decision.status}: nothing is released`);
       assert.deepEqual(await lookupForUser(db, userId, CLOCK), [], `${decision.status}: no fingerprint is written`);
     } finally {
       await db.close();
@@ -613,7 +749,7 @@ test("AC2: a successful release never writes the value to logs/metrics (console)
     assert2xx(res);
 
     // The value still reaches the agent (through the store), but never a log line.
-    assert.equal(store.collect(keyForApproval(userId, agentId)), VALUE, "the value still round-trips to the store for the agent");
+    assert.equal(store.collect(keyForApproval(userId, agentId, approvalId)), VALUE, "the value still round-trips to the store for the agent");
     for (const line of capture.lines) {
       assert.ok(!line.includes(VALUE), "the released value must never be written to logs/metrics in the clear");
     }
@@ -665,8 +801,8 @@ test("AC3: a user cannot release against another user's approval, even when sign
     const res = await callPost(handler, releaseRequest(approvalId, { value: `intrusion-${randomUUID()}` }), approvalId);
     assert4xx(res);
 
-    assert.equal(store.collect(keyForApproval(alice, agentId)), undefined, "nothing is released under the owner's key");
-    assert.equal(store.collect(keyForApproval(bob, agentId)), undefined, "nor under the intruder's key");
+    assert.equal(store.collect(keyForApproval(alice, agentId, approvalId)), undefined, "nothing is released under the owner's key");
+    assert.equal(store.collect(keyForApproval(bob, agentId, approvalId)), undefined, "nor under the intruder's key");
     assert.deepEqual(await lookupForUser(db, alice, CLOCK), [], "no fingerprint is written for the owner");
     assert.deepEqual(await lookupForUser(db, bob, CLOCK), [], "nor for the intruder");
   } finally {
@@ -721,7 +857,7 @@ test("[admin-auth-required] an unauthenticated request (no session) is rejected 
     const res = await callPost(handler, releaseRequest(approvalId, { value: `v-${randomUUID()}` }), approvalId);
 
     assertUnauthenticated(res);
-    assert.equal(store.collect(keyForApproval(userId, agentId)), undefined, "an unauthenticated request releases nothing");
+    assert.equal(store.collect(keyForApproval(userId, agentId, approvalId)), undefined, "an unauthenticated request releases nothing");
     assert.deepEqual(await lookupForUser(db, userId, CLOCK), [], "and writes no fingerprint");
   } finally {
     await db.close();
@@ -744,7 +880,7 @@ test("[admin-auth-required] a garbage/unknown session cookie is treated as unaut
     );
 
     assertUnauthenticated(res);
-    assert.equal(store.collect(keyForApproval(userId, agentId)), undefined, "an unverifiable cookie releases nothing");
+    assert.equal(store.collect(keyForApproval(userId, agentId, approvalId)), undefined, "an unverifiable cookie releases nothing");
   } finally {
     await db.close();
   }
@@ -778,7 +914,7 @@ test("[validate-and-parameterize-input] a malformed or mis-shaped body is a 4xx 
       const { handler, store } = makeHandler({ db, keyWrapper, session: sessionFor(userId, T0) });
       const res = await callPost(handler, build(), approvalId);
       assert4xx(res);
-      assert.equal(store.collect(keyForApproval(userId, agentId)), undefined, "mis-shaped input releases nothing");
+      assert.equal(store.collect(keyForApproval(userId, agentId, approvalId)), undefined, "mis-shaped input releases nothing");
     }
     assert.deepEqual(await lookupForUser(db, userId, CLOCK), [], "mis-shaped input writes no fingerprint");
   } finally {
@@ -800,7 +936,7 @@ test("[validate-and-parameterize-input] an oversized value is rejected with a 4x
     const res = await callPost(handler, releaseRequest(approvalId, { value: huge }), approvalId);
 
     assert4xx(res);
-    assert.equal(store.collect(keyForApproval(userId, agentId)), undefined, "an oversized value releases nothing");
+    assert.equal(store.collect(keyForApproval(userId, agentId, approvalId)), undefined, "an oversized value releases nothing");
     assert.deepEqual(await lookupForUser(db, userId, CLOCK), [], "and writes no fingerprint");
   } finally {
     await db.close();
@@ -824,7 +960,7 @@ test("[validate-and-parameterize-input] a SQL-shaped value is stored only as its
 
     await db.query("SELECT 1 FROM release_fingerprints LIMIT 1");
     assert.equal(await tableExists(db, "release_fingerprints"), true, "the release_fingerprints table survives the probe");
-    assert.equal(store.collect(keyForApproval(userId, agentId)), VALUE, "the SQL-shaped value round-trips verbatim as data to the store");
+    assert.equal(store.collect(keyForApproval(userId, agentId, approvalId)), VALUE, "the SQL-shaped value round-trips verbatim as data to the store");
     assert.ok(
       (await lookupForUser(db, userId, CLOCK)).includes(fingerprint(dek, VALUE)),
       "only the keyed fingerprint of the value is persisted",
@@ -906,8 +1042,8 @@ test("C1: a released value is collected by the requesting agent's own collect_re
     // The agent's connection exactly as the MCP composition root resolves it.
     const connection: AgentConnection = { userId, connectionId, agentId, active: true };
     const collect = createCollectReleaseTool({ releaseStore: store });
-    assert.deepEqual(await collect.handle({}, connection), { status: "collected", value: VALUE }, "the agent collects it");
-    assert.deepEqual(await collect.handle({}, connection), { status: "gone" }, "exactly once");
+    assert.deepEqual(await collect.handle({ approval_id: approvalId }, connection), { status: "collected", value: VALUE }, "the agent collects it");
+    assert.deepEqual(await collect.handle({ approval_id: approvalId }, connection), { status: "gone" }, "exactly once");
   } finally {
     await db.close();
   }
@@ -925,7 +1061,7 @@ test("an approval is released at most once: a second post is refused and never o
     assert2xx(await callPost(handler, releaseRequest(approvalId, { value: "first-value" }), approvalId));
     const again = await callPost(handler, releaseRequest(approvalId, { value: "second-value" }), approvalId);
     assert.equal(again.status, 409, "a second release of the same approval is refused as a conflict");
-    assert.equal(store.collect(keyForApproval(userId, agentId)), "first-value", "the first value is untouched");
+    assert.equal(store.collect(keyForApproval(userId, agentId, approvalId)), "first-value", "the first value is untouched");
   } finally {
     await db.close();
   }
@@ -967,7 +1103,7 @@ test("an approval that is not a card or high-tier release is never releasable", 
     const { handler, store } = makeHandler({ db, keyWrapper, session: sessionFor(userId, T0) });
 
     assert4xx(await callPost(handler, releaseRequest(approvalId, { value: "planted" }), approvalId));
-    assert.equal(store.collect(keyForApproval(userId, agentId)), undefined, "nothing is planted for the agent");
+    assert.equal(store.collect(keyForApproval(userId, agentId, approvalId)), undefined, "nothing is planted for the agent");
   } finally {
     await db.close();
   }
@@ -983,7 +1119,7 @@ test("a release for an agent that has been disconnected is refused and leaves th
     const { handler, store } = makeHandler({ db, keyWrapper, session: sessionFor(userId, T0) });
 
     assert4xx(await callPost(handler, releaseRequest(approvalId, { value: "secret" }), approvalId));
-    assert.equal(store.collect(keyForApproval(userId, agentId)), undefined, "nothing is released to a disconnected agent");
+    assert.equal(store.collect(keyForApproval(userId, agentId, approvalId)), undefined, "nothing is released to a disconnected agent");
     assert.equal((await getApproval(db, userId, approvalId, dek))!.status, "pending", "the approval is not approved");
     assert.deepEqual(await lookupForUser(db, userId, CLOCK), [], "no fingerprint is written");
   } finally {
@@ -1051,12 +1187,12 @@ test("C3: two card approvals made before either was released cannot together exc
     const { handler, store } = makeHandler({ db, keyWrapper, session: sessionFor(userId, T0) });
 
     assert2xx(await callPost(handler, releaseRequest(first, { value: "card-1" }), first));
-    assert.equal(store.collect(keyForApproval(userId, agentId)), "card-1", "the first release goes through");
+    assert.equal(store.collect(keyForApproval(userId, agentId, first)), "card-1", "the first release goes through");
 
     const over = await callPost(handler, releaseRequest(second, { value: "card-2" }), second);
     assert.equal(over.status, 409, "the second would put the agent over its A$200 budget: refused");
     assert.deepEqual(await over.json(), { error: "over_budget" }, "and says why");
-    assert.equal(store.collect(keyForApproval(userId, agentId)), undefined, "nothing more is released");
+    assert.equal(store.collect(keyForApproval(userId, agentId, second)), undefined, "nothing more is released");
     assert.equal((await getApproval(db, userId, second, dek))!.status, "pending", "the refused approval is left pending");
     const rows = await listReleasesForConnectionPeriod(db, userId, connectionOfAgent.get(agentId)!, "month", periodKeyFor("month", T0));
     assert.equal(rows.length, 1, "only the first release counts");
@@ -1139,7 +1275,7 @@ test("a release is refused when the agent's high-tier access was switched off af
     const { handler, store } = makeHandler({ db, keyWrapper, session: sessionFor(userId, T0) });
 
     assert4xx(await callPost(handler, releaseRequest(approvalId, { value: "secret" }), approvalId));
-    assert.equal(store.collect(keyForApproval(userId, agentId)), undefined, "nothing is released");
+    assert.equal(store.collect(keyForApproval(userId, agentId, approvalId)), undefined, "nothing is released");
   } finally {
     await db.close();
   }
@@ -1171,7 +1307,7 @@ test("a release with a missing or foreign Origin, or a non-JSON body, is refused
     for (const [label, headers] of attempts) {
       const res = await callPost(handler, new Request(url, { method: "POST", headers, body }), approvalId);
       assert4xx(res);
-      assert.equal(store.collect(keyForApproval(userId, agentId)), undefined, `${label}: nothing is released`);
+      assert.equal(store.collect(keyForApproval(userId, agentId, approvalId)), undefined, `${label}: nothing is released`);
     }
     assert.equal((await getApproval(db, userId, approvalId, dek))!.status, "pending", "the approval is untouched");
   } finally {
@@ -1264,7 +1400,7 @@ test("W6: a full card payload at the largest legal name and address is released 
     });
     const res = await callPost(handler, releaseRequest(approvalId, { value: card }), approvalId);
     assert2xx(res);
-    assert.equal(store.collect(keyForApproval(userId, agentId)), card, "the agent collects the whole payload, once");
+    assert.equal(store.collect(keyForApproval(userId, agentId, approvalId)), card, "the agent collects the whole payload, once");
   } finally {
     await db.close();
   }
@@ -1288,7 +1424,7 @@ test("W6: a realistic full card payload (multi-line address, accented name) is r
       billingAddress: ("Unit 5, \"The Quokka\"\n12 Banksia Street\nPerth WA 6000\n").repeat(80).slice(0, 4096),
     });
     assert2xx(await callPost(handler, releaseRequest(approvalId, { value: card }), approvalId));
-    assert.equal(store.collect(keyForApproval(userId, agentId)), card);
+    assert.equal(store.collect(keyForApproval(userId, agentId, approvalId)), card);
   } finally {
     await db.close();
   }

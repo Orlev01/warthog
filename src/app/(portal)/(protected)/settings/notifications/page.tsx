@@ -1,3 +1,5 @@
+import { SmsUnavailableError } from "../../../../../server/notify/twilio";
+import { notificationSenders } from "../../../../../server/notify/production";
 import * as React from "react";
 import { cookies } from "next/headers";
 import { redirect } from "next/navigation";
@@ -63,16 +65,7 @@ const SCREEN = "/settings/notifications";
 // Real senders stand-in: until the Azure channel senders are built, sending through one
 // rejects loudly rather than dropping the message (constitution: never fail silently).
 // With dev tooling on, `selectSenders` routes every channel to the dev outbox instead.
-function notConfiguredSenders(): Senders {
-  const reject = (channel: string) => async (_message: OutgoingMessage): Promise<void> => {
-    throw new Error(`${channel} sending is not configured`);
-  };
-  return {
-    push: { sendPush: reject("Push") },
-    email: { sendEmail: reject("Email") },
-    sms: { sendSms: reject("SMS") },
-  };
-}
+
 
 // Build the notifications actions with the real seams. The KeyWrapper (local AES outside
 // production, Key Vault in production) lets the loader resolve the session person's own
@@ -87,7 +80,7 @@ function buildActions(db: Db) {
     random: systemRandom,
     hmacKey: config.hmacKey,
     keyWrapper,
-    senders: selectSenders(config, notConfiguredSenders()),
+    senders: notificationSenders(config, db),
   });
 }
 
@@ -104,6 +97,7 @@ async function resolveSession(db: Db): Promise<Session | null> {
 // security screen's `noticeLocation`).
 function noticeLocation(successCode: string, outcome: ActionResult | unknown): string {
   // A 429 is the verification-text cap (review fix F5), said in plain words.
+  if (outcome instanceof SmsUnavailableError) return `${SCREEN}?notice=sms_unavailable`;
   if (outcome instanceof HttpError && outcome.status === 429) return `${SCREEN}?notice=too_many_texts`;
   if (outcome instanceof HttpError) return `${SCREEN}?notice=invalid_request`;
   if (outcome instanceof Error) throw outcome;
@@ -187,6 +181,7 @@ async function saveNotificationPrefsAction(formData: FormData): Promise<void> {
   try {
     outcome = await buildActions(db).saveNotificationPrefs(session, {
       emailFallback: formData.get("emailFallback") != null,
+      smsFallback: formData.get("smsFallback") != null,
       fallbackDelayMinutes: Number(formData.get("fallbackDelayMinutes")),
     });
   } catch (error) {
@@ -244,7 +239,8 @@ type Notice = { tone: "done" | "problem"; text: string };
 const NOTICES: Record<string, Notice> = {
   device_registered: { tone: "done", text: "This device is set up for push notifications." },
   device_removed: { tone: "done", text: "That device won't get Warthog notifications any more." },
-  code_sent: { tone: "done", text: "We've texted you a 6-digit code. Enter it below to verify your number." },
+  code_sent: { tone: "done", text: "Your code was submitted for delivery. When it arrives, enter it below to verify your number." },
+  sms_unavailable: { tone: "problem", text: "We could not send that text. Check that your country is listed below and your number includes its country code. Email and in-app approvals remain available." },
   number_verified: { tone: "done", text: "Your mobile number is verified." },
   prefs_saved: { tone: "done", text: "Your notification settings are saved." },
   test_sent: { tone: "done", text: "Test notification sent — check your device." },
@@ -329,6 +325,7 @@ export default async function NotificationsPage({
       <NotificationsView
         {...data}
         vapidPublicKey={vapidPublicKey}
+        smsCountries={Object.keys(loadConfig().messaging?.twilio.countryRoutes ?? {})}
         registerPushDevice={registerPushDeviceAction}
         removePushDeviceAction={removePushDeviceAction}
         addMobileNumberAction={addMobileNumberAction}

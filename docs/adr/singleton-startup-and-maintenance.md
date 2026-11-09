@@ -1,0 +1,11 @@
+# Guarded startup and maintenance deployments
+
+Status: local implementation draft, 9 November 2026. Real PostgreSQL, process-failure and Azure revision acceptance remain required.
+
+The app has process-local pending authentication/OAuth flows, vault challenges, releases, locks and a scheduler. A replica maximum of one applies per revision and does not by itself prevent revision overlap. Do not promise a zero-downtime rolling update for this design.
+
+Production startup validates the full runtime contract, then acquires a session-level PostgreSQL advisory lock on a dedicated direct connection before starting scheduled jobs. A second process fails startup while another owns that database. A connection error/end or failed heartbeat terminates the owning process. The heartbeat runs every two seconds with five-second connect/query timeouts. Normal shutdown keeps the lock until the process exits; releasing it before Next drains requests would be unsafe. The database migration advisory lock is separate.
+
+This guard is not a distributed fencing protocol: network partitions, paused processes and in-flight operations can outlive failure detection. It reduces accidental simultaneous starts; it does not prove absolute exclusivity under every failure. Production operation still requires maintenance stop/wait/start and confirmation that the old process is gone. If Azure platform replacements cannot satisfy that requirement in acceptance tests, the release is blocked until the in-memory state is made durable or hosting/replacement behavior changes.
+
+Use one Node server, one active Container Apps revision, min/max replicas 1/1 and no scale-out rule. To replace: announce maintenance; stop the application/old revisions; verify zero running old replicas and no owner connection; then apply the reviewed image/config and start exactly one replica. Verify readiness, migration results, jobs and representative browser flows. Never deploy a second revision alongside the first or forcibly terminate the lock's DB session to make a rollout succeed. Rollback also uses stop/wait/start and must account for irreversible schema changes; do not automatically restore old code over incompatible migrations.

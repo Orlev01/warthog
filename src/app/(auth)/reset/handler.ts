@@ -175,7 +175,7 @@ export function createResetHandler(deps: ResetHandlerDeps): ResetHandler {
       const { email } = await parseBody(sendCodeSchema, request, { maxBytes: MAX_BODY_BYTES });
       const user = await getUserByEmail(db, email);
       if (user) {
-        await issueEmailCode(db, user.email, { clock, random, hmacKey, emailSender: senders.email });
+        await issueEmailCode(db, user.email, { purpose: "reset", clock, random, hmacKey, emailSender: senders.email });
       }
       return json(200, { ok: true });
     } catch (error) {
@@ -224,7 +224,7 @@ export function createResetHandler(deps: ResetHandlerDeps): ResetHandler {
       const { email } = await parseBody(sendCodeSchema, request, { maxBytes: MAX_BODY_BYTES });
       const user = await getUserByEmail(db, email);
       if (user && (await hasCompletedReset(db, { userId: user.id }, { clock }))) {
-        await issueEmailCode(db, user.email, { clock, random, hmacKey, emailSender: senders.email });
+        await issueEmailCode(db, user.email, { purpose: "reset", clock, random, hmacKey, emailSender: senders.email });
       }
       return json(200, { ok: true });
     } catch (error) {
@@ -240,7 +240,7 @@ export function createResetHandler(deps: ResetHandlerDeps): ResetHandler {
     if (!sameOrigin(request)) return json(403, { error: "forbidden" });
     try {
       const { email, code } = await parseBody(requestSchema, request, { maxBytes: MAX_BODY_BYTES });
-      const result = await verifyEmailCode(db, email, code, { clock, hmacKey, emailSender: senders.email });
+      const result = await verifyEmailCode(db, email, code, { purpose: "reset", clock, hmacKey, emailSender: senders.email });
       if (!result.ok) {
         if (result.reason === "throttled") {
           return new Response(JSON.stringify({ error: "throttled" }), {

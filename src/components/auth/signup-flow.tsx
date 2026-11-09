@@ -59,6 +59,9 @@ export interface SignupFlowState {
   readonly savedConfirmed: boolean;
   readonly recoveryCode?: string;
   readonly error?: string;
+  readonly working: boolean;
+  readonly authenticatorSecret?: string;
+  readonly authenticatorQr?: string;
 }
 
 export interface SignupFlowController {
@@ -70,12 +73,14 @@ export interface SignupFlowController {
   submitEmail(): Promise<void>;
   submitCode(): Promise<void>;
   createPasskey(): Promise<void>;
+  useAuthenticatorApp(): Promise<void>;
+  submitAuthenticatorCode(): Promise<void>;
   confirm(): Promise<void>;
 }
 
 const API_BASE = "/api/auth/signup";
 
-type StepPath = "send-code" | "verify-email" | "register-passkey" | "confirm";
+type StepPath = "send-code" | "verify-email" | "register-passkey" | "begin-totp" | "verify-totp" | "confirm";
 
 // Plain-English copy for a failed step — a real sentence a person can act on, never a
 // raw machine code (the server speaks `invalid_code`, `bad_attestation`, …) and never
@@ -90,6 +95,10 @@ function stepErrorCopy(step: StepPath): string {
       return "We couldn't set up your passkey. Please try again.";
     case "confirm":
       return "We couldn't finish creating your account. Please try again.";
+    case "begin-totp":
+      return "We couldn't start authenticator setup. Please try again.";
+    case "verify-totp":
+      return "That authenticator code didn't match. Check your app and try a fresh code.";
   }
 }
 
@@ -117,6 +126,7 @@ export function createSignupFlow(deps: SignupFlowDeps): SignupFlowController {
     email: "",
     code: "",
     savedConfirmed: false,
+    working: false,
   };
 
   function set(patch: Partial<SignupFlowState>): void {
@@ -211,16 +221,49 @@ export function createSignupFlow(deps: SignupFlowDeps): SignupFlowController {
     deps.navigate(safeReturnPath(deps.returnTo));
   }
 
+  async function useAuthenticatorApp(): Promise<void> {
+    if (!signupId) { set({ error: stepErrorCopy("begin-totp") }); return; }
+    const response = await post("begin-totp", { signupId });
+    if (!response?.ok) { set({ error: stepErrorCopy("begin-totp") }); return; }
+    const result = await readJson(response);
+    if (typeof result.secret !== "string" || !result.secret || typeof result.qr !== "string" || !result.qr.startsWith("data:image/png;base64,")) {
+      set({ error: stepErrorCopy("begin-totp") }); return;
+    }
+    set({ phase: "authenticator", authenticatorSecret: result.secret, authenticatorQr: result.qr, code: "", error: undefined });
+  }
+
+  async function submitAuthenticatorCode(): Promise<void> {
+    if (!signupId) { set({ error: stepErrorCopy("verify-totp") }); return; }
+    const response = await post("verify-totp", { signupId, totp: state.code });
+    if (!response?.ok) {
+      set({ error: response?.status === 429
+        ? "Too many incorrect codes. Start signup again to set up your authenticator safely."
+        : stepErrorCopy("verify-totp") }); return;
+    }
+    const result = await readJson(response);
+    if (typeof result.recoveryCode !== "string" || !result.recoveryCode) { set({ error: stepErrorCopy("verify-totp") }); return; }
+    set({ phase: "recovery", recoveryCode: result.recoveryCode, authenticatorSecret: undefined, authenticatorQr: undefined, code: "", savedConfirmed: false, error: undefined });
+  }
+
+  async function transition(action: () => Promise<void>): Promise<void> {
+    if (state.working) return;
+    set({ working: true });
+    try { await action(); } finally { set({ working: false }); }
+  }
+  const edit = (patch: Partial<SignupFlowState>) => { if (!state.working) set(patch); };
+
   return {
     getState: () => state,
-    setName: (value) => set({ name: value }),
-    setEmail: (value) => set({ email: value }),
-    setCode: (value) => set({ code: value }),
-    setSavedConfirmed: (value) => set({ savedConfirmed: value }),
-    submitEmail,
-    submitCode,
-    createPasskey,
-    confirm,
+    setName: (value) => edit({ name: value }),
+    setEmail: (value) => edit({ email: value }),
+    setCode: (value) => edit({ code: value }),
+    setSavedConfirmed: (value) => edit({ savedConfirmed: value }),
+    submitEmail: () => transition(submitEmail),
+    submitCode: () => transition(submitCode),
+    createPasskey: () => transition(createPasskey),
+    useAuthenticatorApp: () => transition(useAuthenticatorApp),
+    submitAuthenticatorCode: () => transition(submitAuthenticatorCode),
+    confirm: () => transition(confirm),
   };
 }
 
@@ -267,12 +310,17 @@ export function SignupFlow(props: SignupFlowProps = {}): React.ReactElement {
       recoveryCode={state.recoveryCode}
       savedConfirmed={state.savedConfirmed}
       error={state.error}
+      working={state.working}
+      authenticatorSecret={state.authenticatorSecret}
+      authenticatorQr={state.authenticatorQr}
+      onUseAuthenticatorApp={() => { void flow.useAuthenticatorApp(); }}
       onNameChange={(value) => flow.setName(value)}
       onEmailChange={(value) => flow.setEmail(value)}
       onCodeChange={(value) => flow.setCode(value)}
       onSavedConfirmedChange={(value) => flow.setSavedConfirmed(value)}
       onSubmit={() => {
-        void (state.phase === "details" ? flow.submitEmail() : flow.submitCode());
+        void (state.phase === "details" ? flow.submitEmail()
+          : state.phase === "authenticator" ? flow.submitAuthenticatorCode() : flow.submitCode());
       }}
       onCreatePasskey={() => {
         void flow.createPasskey();

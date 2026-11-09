@@ -126,6 +126,7 @@ async function completeFirstFactor(
   deps: FirstFactorDeps,
 ): Promise<User | null> {
   const codeResult = await verifyEmailCode(db, email, code, {
+    purpose: "device",
     clock: deps.clock,
     hmacKey: deps.hmacKey,
     emailSender: deps.emailSender,

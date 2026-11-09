@@ -24,6 +24,7 @@
 import { withTransaction } from "../db/index";
 import type { Db } from "../db/index";
 import type { ResetExecutor } from "../auth/account-reset";
+import { lockUserOAuthConnections } from "../oauth/connection-lock";
 
 // Build the production ResetExecutor over the db.
 export function createResetExecutor(db: Db): ResetExecutor {
@@ -47,6 +48,8 @@ export function createResetExecutor(db: Db): ResetExecutor {
         await tx.query("DELETE FROM cards WHERE user_id = $1", [userId]);
         await tx.query("DELETE FROM high_tier_fields WHERE user_id = $1", [userId]);
         await tx.query("DELETE FROM vault_unlock_methods WHERE user_id = $1", [userId]);
+        await tx.query("DELETE FROM vault_passkey_envelopes WHERE user_id = $1", [userId]);
+        await tx.query("DELETE FROM vault_unlock_proofs WHERE user_id = $1", [userId]);
         await tx.query("DELETE FROM vault_prf_salts WHERE user_id = $1", [userId]);
         await tx.query("DELETE FROM vault_recovery_auth WHERE user_id = $1", [userId]);
       });
@@ -64,6 +67,11 @@ export function createResetExecutor(db: Db): ResetExecutor {
     // UPDATE and the service-connection DELETE are each member-scoped by `user_id`.
     async revokeAgentsAndConnections(userId: string, outer?: Db): Promise<void> {
       await inTransaction(outer, async (tx) => {
+        await lockUserOAuthConnections(tx, userId);
+        await tx.query(
+          "DELETE FROM oauth_auth_codes WHERE connection_id IN (SELECT connection_id FROM agents WHERE user_id = $1)",
+          [userId],
+        );
         await tx.query(
           "DELETE FROM oauth_tokens WHERE connection_id IN (SELECT connection_id FROM agents WHERE user_id = $1)",
           [userId],

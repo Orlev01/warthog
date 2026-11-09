@@ -759,3 +759,16 @@ test("the security controls render in plain words with no protocol or security j
     assert.ok(!re.test(text), `the controls must speak plainly — found jargon "${label}" in: "${text}"`);
   }
 });
+
+test("a shared authenticator confirmation resumes only the pending security change once", async () => {
+  const { flow, env, events } = setup();
+  await flow.generateRecoveryCode();
+  assert.equal(flow.getState().confirmRequired, true);
+  env.stepUp = true; // shared confirmation endpoint has authenticated this session
+  await flow.resumeAfterConfirmation();
+  await flow.resumeAfterConfirmation();
+  assert.equal(flow.getState().confirmRequired, false);
+  assert.equal(flow.getState().recoveryCode, NEW_RECOVERY_CODE);
+  assert.equal(events.filter((event) => event === "regenerateRecovery").length, 2);
+  assert.ok(!events.includes("startAuthentication"));
+});

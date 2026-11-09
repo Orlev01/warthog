@@ -207,6 +207,7 @@ export async function callMicrosoftTool(
       path,
       query,
       body: input.body,
+      contentType: "application/json",
     },
     deps,
   );

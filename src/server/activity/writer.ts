@@ -16,7 +16,7 @@
 //       clear;
 //   (c) assigns a contiguous per-user `seq` (1, 2, 3, …) and chains `prev_hash` to
 //       the previous entry's `entry_hash` (a genesis sentinel for the first) — safely
-//       under concurrency: appends for one person are serialised in-process, and an
+//       under concurrency: appends for one person share a transaction-scoped database lock, and an
 //       insert that still loses the seq to another writer (another replica, or an entry
 //       committed by an enclosing transaction) re-reads the head and retries, so a
 //       parallel tool call never loses its entry or fails after it has run; and
@@ -35,10 +35,9 @@
 import { createHash } from "node:crypto";
 
 import type { Clock } from "../seams/clock";
-import { processSingleton } from "../seams/process-singleton";
 import { redact } from "../../domain/redaction/redact";
 import { decrypt, encrypt } from "../crypto/envelope";
-import type { Db, Row } from "../db/index";
+import { withTransaction, type Db, type Row } from "../db/index";
 import type { ActivityEntry, ActivityEntryInput, ActivityRecorder } from "./recorder";
 
 // The envelope's associated data binds each payload ciphertext to its exact
@@ -60,38 +59,24 @@ function payloadRowId(userId: string, seq: number): string {
 }
 
 // How many times one append re-reads the chain head after losing its seq to another
-// writer before it gives up. In-process appends never race (they are serialised below),
-// so a retry only happens when ANOTHER process or an enclosing transaction committed the
-// same seq first; a handful of attempts is ample, and the cap turns a pathological
+// writer before it gives up. Cooperating appends hold the same database lock,
+// so a retry only happens when another writer bypasses that lock and commits the
+// same seq first; the cap turns a pathological
 // livelock into a clear error instead of a hang.
 const MAX_APPEND_ATTEMPTS = 10;
 
-// The tail of each person's in-process append queue. Every recorder instance (the agent
-// pipeline's, the portal's, a disconnect's) chains its appends for a person onto the SAME
-// tail, so the read-head → encrypt → insert sequence never interleaves for one person
-// within this process — on PGlite (one shared session, where database locks cannot
-// serialise anything) and on the single production replica alike. Process-wide so every
-// module copy shares it (see `processSingleton`); an entry is dropped once its queue
-// drains, so the map holds only people with an append in flight.
-const appendQueues = processSingleton(
-  "activity.appendQueues",
-  () => new Map<string, Promise<unknown>>(),
-);
-
-// Run `append` once every earlier append for `userId` in this process has settled, and
-// return its result. A failed append never blocks the ones queued behind it.
-function serialisePerUser<T>(userId: string, append: () => Promise<T>): Promise<T> {
-  const previous = appendQueues.get(userId) ?? Promise.resolve();
-  const run = previous.then(append);
-  const tail = run.then(
-    () => undefined,
-    () => undefined,
-  );
-  appendQueues.set(userId, tail);
-  void tail.then(() => {
-    if (appendQueues.get(userId) === tail) appendQueues.delete(userId);
-  });
-  return run;
+// Serialize in the database, inside the same transaction as the append. A JS
+// queue can deadlock: an outside append owns the queue while waiting for the
+// database, and an enclosing transaction owns the database while waiting for
+// that queue. Transaction-scoped locking also covers independent Pg backends.
+// Activity is written last after account/OAuth mutations; it never acquires an
+// account or OAuth lock while holding this activity lock.
+async function serialisePerUser<T>(db: Db, userId: string, append: (tx: Db) => Promise<T>): Promise<T> {
+  const run = async (tx: Db) => {
+    await tx.query("SELECT pg_advisory_xact_lock(hashtextextended($1, 0))", [`activity-chain:${userId}`]);
+    return append(tx);
+  };
+  return db.inTransaction ? run(db) : withTransaction(db, run);
 }
 
 export interface DbRecorderOptions {
@@ -275,8 +260,8 @@ export function createDbRecorder(options: DbRecorderOptions): ActivityRecorder {
         merchant: input.merchant === undefined ? undefined : text(input.merchant),
       };
 
-      const { seq, occurredAt, prevHash, entryHash } = await serialisePerUser(userId, () =>
-        appendEntry(db, clock, dek, stored, payload),
+      const { seq, occurredAt, prevHash, entryHash } = await serialisePerUser(db, userId, (tx) =>
+        appendEntry(tx, clock, dek, stored, payload),
       );
 
       return {

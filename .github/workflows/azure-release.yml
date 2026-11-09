@@ -1,0 +1,76 @@
+name: Azure application release (manual maintenance)
+
+on:
+  workflow_dispatch:
+    inputs:
+      operation:
+        description: Inspect settings, first creation, or image-only update
+        type: choice
+        options: [inspect, create, update]
+        required: true
+      approval_reference:
+        description: Reviewed image, funding, credentials, migration compatibility and maintenance window
+        type: string
+        required: true
+      image_digest:
+        description: Exact ACR repository@sha256 digest published from this main commit
+        type: string
+      expected_config_sha256:
+        description: Update only - reviewed current configuration hash from inspect
+        type: string
+
+permissions:
+  contents: read
+
+concurrency:
+  group: warthog-azure-production
+  cancel-in-progress: false
+
+jobs:
+  gate:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    steps:
+      - name: Require configured delivery before requesting a private runner
+        env:
+          ENABLED: ${{ vars.AZURE_DELIVERY_ENABLED }}
+        run: |
+          test "$GITHUB_REPOSITORY" = Orlev01/warthog
+          test "$GITHUB_REF" = refs/heads/main
+          test "$ENABLED" = true || { echo 'Azure delivery is disabled pending approved setup.'; exit 1; }
+  release:
+    needs: gate
+    # Dedicated, ephemeral, trusted-main-only runner in the private bootstrap subnet.
+    # Provisioning it is a separate approval; public PRs never execute on it.
+    runs-on: [self-hosted, linux, x64, warthog-production]
+    timeout-minutes: 45
+    environment: azure-production
+    permissions:
+      contents: read
+      id-token: write
+    env:
+      AZURE_DELIVERY_ENABLED: ${{ vars.AZURE_DELIVERY_ENABLED }}
+      APPROVAL_REFERENCE: ${{ inputs.approval_reference }}
+      OPERATION: ${{ inputs.operation }}
+      IMAGE_DIGEST: ${{ inputs.image_digest }}
+      EXPECTED_CONFIG_SHA256: ${{ inputs.expected_config_sha256 }}
+      ACR_NAME: ${{ vars.ACR_NAME }}
+      RESOURCE_GROUP: ${{ vars.RESOURCE_GROUP }}
+      APP_NAME: ${{ vars.APP_NAME }}
+      POSTGRES_FQDN: ${{ vars.POSTGRES_FQDN }}
+      WORKLOAD_PARAMETERS_JSON: ${{ secrets.WORKLOAD_PARAMETERS_JSON }}
+      OWNERSHIP_DATABASE_URL: ${{ secrets.OWNERSHIP_DATABASE_URL }}
+      AZURE_CORE_OUTPUT: none
+      AZURE_EXTENSION_USE_DYNAMIC_INSTALL: "no"
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - name: Exchange production-environment OIDC identity
+        uses: azure/login@a457da9ea143d694b1b9c7c869ebb04ebe844ef5 # v2.3.0
+        with:
+          client-id: ${{ vars.AZURE_CLIENT_ID }}
+          tenant-id: 72277873-e056-4612-9b1c-7ad58e02fcf3
+          subscription-id: e854f594-274f-4051-841b-78df7655d73c
+      - name: Enforce stop, zero replicas, free lock, start and health checks
+        run: python3 scripts/ci/deploy_app.py

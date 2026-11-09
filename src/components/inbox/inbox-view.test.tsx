@@ -1046,6 +1046,9 @@ test("a release refused for a lapsed step-up reports step_up_required with copy 
 test("other refusals each get their own plain reason", async () => {
   for (const [code, re] of [
     ["over_budget", /budget/i],
+    ["over_member_budget", /household spending limit/i],
+    ["over_household_budget", /shared budget/i],
+    ["household_rate_unavailable", /reference rate/i],
     ["expired", /expired/i],
     ["already_released", /already/i],
     ["not_releasable", /can no longer/i],

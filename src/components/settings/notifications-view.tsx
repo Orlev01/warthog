@@ -1,5 +1,7 @@
 "use client";
 
+import { SmsDisclosure } from "../public/sms-disclosure";
+
 import * as React from "react";
 import { Bell, Smartphone, Mail, Send, ShieldCheck, Clock, Trash2 } from "lucide-react";
 
@@ -61,6 +63,8 @@ export type NotificationsViewProps = {
   numbers: ReadonlyArray<NotificationsViewNumber>;
   // whether fallback messages also go by email. Defaults ON (brief default).
   emailFallback?: boolean;
+  smsFallback?: boolean;
+  smsCountries?: readonly string[];
   // the fallback delay in minutes, bounded to the inclusive 1–30 range. Defaults to 2
   // (brief default).
   fallbackDelayMinutes?: number;
@@ -126,6 +130,8 @@ export function NotificationsView({
   devices,
   numbers,
   emailFallback = true,
+  smsFallback = false,
+  smsCountries = [],
   fallbackDelayMinutes = 2,
   vapidPublicKey,
   registerPushDevice,
@@ -227,6 +233,12 @@ export function NotificationsView({
       {/* ----- SMS fallback: add and verify a mobile number with a 6-digit code ----- */}
       <div className="flex flex-col gap-3">
         <SectionHeading icon={Smartphone}>Mobile number for SMS fallback</SectionHeading>
+        <p className="text-sm text-fg-muted">
+          Use + and your country code. SMS is optional and depends on your country and mobile network.
+          {smsCountries.length ? ` Currently enabled: ${smsCountries.map((code) => new Intl.DisplayNames(["en"], { type: "region" }).of(code) ?? code).join(", ")}.` : " No SMS destinations are currently enabled."}
+          {" "}Email, supported push notifications and in-app approvals remain available.
+          Requesting a code sends your number to Twilio for validation and one verification text.
+        </p>
 
         {numbers.length > 0 ? (
           <ul className="flex flex-col gap-2">
@@ -246,7 +258,7 @@ export function NotificationsView({
                         Not verified
                       </span>
                       <p className="text-sm text-fg-muted">
-                        Enter the 6-digit code we texted you, then verify.
+                        If your text arrives, enter its 6-digit code, then verify.
                       </p>
                       <form
                         action={verifyMobileNumberAction}
@@ -284,7 +296,7 @@ export function NotificationsView({
             name="number"
             type="tel"
             inputMode="tel"
-            placeholder="+61 400 000 000"
+            placeholder="+ country code and number"
             className="sm:flex-1"
           />
           <Button type="submit" variant="secondary" className="sm:self-stretch">
@@ -292,6 +304,7 @@ export function NotificationsView({
             Send code
           </Button>
         </form>
+        <SmsDisclosure purpose="verification" />
       </div>
 
       {/* ----- Fallback preferences: email fallback + the delay before it fires ----- */}
@@ -307,6 +320,16 @@ export function NotificationsView({
           />
           <span className="text-fg">Also send fallback alerts by email</span>
         </label>
+
+        <label className="flex items-center gap-3 rounded-card border border-line bg-surface p-3">
+          <input type="checkbox" name="smsFallback" defaultChecked={smsFallback} className="h-4 w-4 accent-accent" />
+          <span className="text-fg">Send approval alerts by SMS to my verified number</span>
+        </label>
+        <p className="text-sm text-fg-muted">
+          SMS alerts are off until you enable them. Turn this off and save to stop future SMS alerts.
+          This setting does not prevent a verification text you explicitly request.
+        </p>
+        <SmsDisclosure purpose="alerts" />
 
         <Field
           label="Fallback delay (minutes)"

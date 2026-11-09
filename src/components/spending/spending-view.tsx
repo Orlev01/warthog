@@ -57,6 +57,7 @@ export type SpendingOwnAgent = {
   displayName: string;
   budget: SpendingCardBudget | null;
   approvedTotal: number | string;
+  unconverted?: readonly SpendingUnconverted[];
   releases: SpendingOwnRelease[];
 };
 
@@ -76,6 +77,7 @@ export type SpendingUnconverted = {
 // release entry): `monthlyLimit` is null until set, `spendToDate` is in the household
 // currency, and `unconverted` is their spend that could not be converted into it.
 export type SpendingHouseholdMember = {
+  periodIncomplete?: boolean;
   userId: string;
   monthlyLimit: number | null;
   spendToDate: number;
@@ -86,6 +88,7 @@ export type SpendingHouseholdMember = {
 // totals-only entry per member. Every amount is in the household currency, except the
 // `unconverted` amounts, which are left out of the totals and flagged.
 export type SpendingHouseholdReport = {
+  periodIncomplete?: boolean;
   householdId: string;
   currency: string;
   monthlyBudget: number | null;
@@ -138,6 +141,9 @@ function periodWords(period: SpendingPeriodKind): string {
 // there is nothing to count against — say so in plain words rather than invent a
 // figure (and never print a null placeholder).
 function budgetLine(agent: SpendingOwnAgent, accountCurrency: string): string {
+  if (agent.unconverted?.length) {
+    return `Total unavailable: a reference rate is missing for ${agent.unconverted.map((entry) => money(entry.amount, entry.currency)).join(", ")}.`;
+  }
   const spent = money(agent.approvedTotal, agent.budget?.currency ?? accountCurrency);
   if (agent.budget) {
     return `${spent} of ${money(agent.budget.amount, agent.budget.currency)} ${periodWords(agent.budget.period)}`;
@@ -148,6 +154,7 @@ function budgetLine(agent: SpendingOwnAgent, accountCurrency: string): string {
 // A member's total against their monthly limit (an unset limit reads as plain copy),
 // plus any of their spend that couldn't be converted, named in its own currency.
 function memberLine(member: SpendingHouseholdMember, currency: string): string {
+  if (member.periodIncomplete) return "Total unavailable: earlier release dates need checking.";
   const spent = money(member.spendToDate, currency);
   const line =
     member.monthlyLimit !== null
@@ -167,6 +174,7 @@ function unconvertedLine(entry: SpendingUnconverted): string {
 // The household total against the shared household budget (an unset budget reads as
 // plain copy).
 function householdLine(household: SpendingHouseholdReport): string {
+  if (household.periodIncomplete) return "Total unavailable: earlier release dates need checking. Contact support before making another release.";
   const spent = money(household.budgetSpendToDate, household.currency);
   if (household.monthlyBudget !== null) {
     return `${spent} of ${money(household.monthlyBudget, household.currency)} this month`;
@@ -248,6 +256,7 @@ export function SpendingView({ own, household, accountCurrency, currencyOptions 
       {household ? (
         <div className="flex flex-col gap-3">
           <h2 className="text-lg font-semibold text-fg">Household</h2>
+          <p className="text-sm text-fg-muted">Shared budgets and member limits reset together at the start of each calendar month in UTC.</p>
           <p className="text-sm text-fg-muted">
             Shared totals only — no one sees another member&apos;s merchants or entries.
           </p>

@@ -214,7 +214,13 @@ export function createGuardedFetch(deps: GuardedFetchDeps = {}): typeof globalTh
             }
           }
 
-          const responseBody = Readable.toWeb(response) as unknown as ReadableStream<Uint8Array>;
+          // Fetch forbids bodies for these statuses; HEAD also has no body even
+          // when the upstream includes representation headers such as a length.
+          // Drain the socket without presenting a stream to Response.
+          const bodyless = request.method === "HEAD" || [204, 205, 304].includes(status);
+          const responseBody = bodyless ? null
+            : Readable.toWeb(response) as unknown as ReadableStream<Uint8Array>;
+          if (bodyless) response.resume();
           resolveResponse(
             new Response(responseBody, {
               status: status || 200,

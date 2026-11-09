@@ -33,6 +33,11 @@
 //   • INJECTED DEPS ONLY: the db, the person's already-unwrapped DEK and the clock are all
 //     passed in; this module reads no `process.env` and holds no key (AC7, INV-103).
 
+import { sealedVaultSchema, type SealedVault } from "../../domain/data-transfer";
+import { addCard } from "../db/cards";
+import { saveHighTierField } from "../db/high-tier-fields";
+import { listMethods } from "../db/vault-unlock-methods";
+import { HttpError } from "../http/validate";
 import { withTransaction, type Db } from "../db/index";
 import { exportDocumentSchema } from "../export/schema";
 import { saveIdentityField, type IdentityFieldKind } from "../db/identity-fields";
@@ -55,6 +60,7 @@ import type { Clock } from "../seams/clock";
 // a faithful round-trip supplies them, so the defaults only guard a sparse file.
 
 interface ProfileFieldDoc {
+  readonly id?: string;
   readonly kind: string;
   readonly value: string;
   readonly movingOn?: string | null;
@@ -150,10 +156,15 @@ export async function importExportDocument(
   document: unknown,
   dek: Uint8Array,
   clock: Clock,
+  protectedVault?: SealedVault,
 ): Promise<ImportSummary> {
   // Validate BEFORE any write: a malformed / wrong-version document is rejected here, so
   // nothing is ever persisted for it (AC4). The envelope's `version: literal(1)` and the
   // per-section kind checks both run in this one pure, in-memory step.
+  if (document && typeof document === "object" && Object.hasOwn(document, "deviceProtected")) {
+    throw new HttpError(400, "Protected values must be encrypted on your device before import");
+  }
+  const sealed = protectedVault === undefined ? undefined : sealedVaultSchema.parse(protectedVault);
   const parsed = exportDocumentSchema.safeParse(document);
   if (!parsed.success) {
     throw new Error("Invalid export document");
@@ -175,12 +186,30 @@ export async function importExportDocument(
   return withTransaction(db, async (tx): Promise<ImportSummary> => {
     // Profile — the full low-tier identity field list (the authoritative profile data),
     // each a fresh row owned by `userId`.
+    const importedAddresses = new Map<string, string>();
     for (const field of profileFields) {
-      await saveIdentityField(
+      const saved = await saveIdentityField(
         tx,
         { userId, kind: field.kind as IdentityFieldKind, value: field.value, movingOn: field.movingOn ?? null },
         dek,
       );
+      if (field.kind === "postal_address" && field.id) {
+        if (importedAddresses.has(field.id)) throw new HttpError(400, "Duplicate address reference");
+        importedAddresses.set(field.id, saved.id);
+      }
+    }
+
+    if (sealed && (sealed.cards.length || sealed.highTierFields.length)) {
+      const methods = await listMethods(tx, userId);
+      if ((!methods.includes("passphrase") && !methods.includes("passkey_prf")) || !methods.includes("recovery")) {
+        throw new HttpError(409, "Set up your vault and save its recovery phrase before importing protected details");
+      }
+      for (const field of sealed.highTierFields) await saveHighTierField(tx, { ...field, userId });
+      for (const card of sealed.cards) {
+        const billingAddressId = importedAddresses.get(card.billingAddressId);
+        if (!billingAddressId) throw new HttpError(400, "A card billing address is missing from the export");
+        await addCard(tx, { ...card, userId, billingAddressId });
+      }
     }
 
     // Preferences — one profile per person. The server-only export emits `{}` when the

@@ -71,7 +71,7 @@
 //     `__Host-wh_session` Set-Cookie. An assertion that is not the claimed person's own
 //     (or otherwise fails to verify) → a 4xx and NO session.
 //
-//   signInWithTotp — body { email, totp }. Resolves the account, reads its TOTP secret
+//   signInWithTotp — body { signinId, totp }. Resolves the email-verified account and reads its TOTP secret
 //     (the injected seam) and verifies the 6-digit code for the current 30-second step
 //     (±1). On success it mints a session and returns a 303 redirect to /home with the
 //     `__Host-wh_session` Set-Cookie. A wrong / out-of-window code → a 4xx and NO session.
@@ -100,8 +100,10 @@ import type {
 } from "@simplewebauthn/server";
 
 import { createSigninHandler } from "./handler";
+import { emailProofFor } from "../../../test/totp-signin";
 
 import { verifySession } from "../../../server/auth/session";
+import { issueEmailCode } from "../../../server/auth/email-code";
 import {
   beginPasskeyRegistration,
   finishPasskeyRegistration,
@@ -374,7 +376,7 @@ test("sign-in with email plus TOTP mints a session and redirects to /home", asyn
     // The code the authenticator app shows for the current 30-second step.
     const totp = codeForStep(secret, stepAt(T0));
 
-    const res = await handler.signInWithTotp(signinRequest({ email, totp }));
+    const res = await handler.signInWithTotp(signinRequest({ signinId: await emailProofFor(handler, db, email, { clock, hmacKey: SIGNIN_HMAC_KEY, origin: GOOD_ORIGIN }), totp }));
     assert.ok(res.status >= 300 && res.status < 400, `TOTP sign-in must redirect, got ${res.status}`);
     assert.equal(res.headers.get("location"), "/home", "on success the person is redirected to /home");
 
@@ -445,7 +447,7 @@ test("sign-in rejects a wrong TOTP code and mints no session", async () => {
     const wrong = codeForStep(secret, step + 5);
     assert.ok(!windowCodes.has(wrong), "the out-of-window code must differ from the in-window codes");
 
-    const res = await handler.signInWithTotp(signinRequest({ email, totp: wrong }));
+    const res = await handler.signInWithTotp(signinRequest({ signinId: await emailProofFor(handler, db, email, { clock, hmacKey: SIGNIN_HMAC_KEY, origin: GOOD_ORIGIN }), totp: wrong }));
     assert.ok(
       res.status >= 400 && res.status < 500,
       `a wrong TOTP code is rejected with a 4xx, got ${res.status}`,
@@ -757,6 +759,68 @@ test("a sign-in from a new browser alerts the account holder once; the same brow
   }
 });
 
+test("TOTP sign-in requires email verification before a session can be minted", async () => {
+  const db = await freshDb();
+  try {
+    const entries = new Map<string, string>();
+    const user = await freshUser(db, "totp-email-proof-required");
+    const secret = await enrolTotpFor(entries, user.email, user, db);
+    const handler = makeHandler(db, totpSecretsOf(entries));
+    const response = await handler.signInWithTotp(signinRequest({ email: user.email, totp: codeForStep(secret, stepAt(T0)) }));
+    assert.ok(response.status >= 400 && response.status < 500, "an email identifier is not a verified first factor");
+    assert.equal(await sessionCount(db), 0);
+  } finally { await db.close(); }
+});
+
+test("email verification and authenticator proof are both required, identity-bound and single-use", async () => {
+  const db = await freshDb();
+  try {
+    const entries = new Map<string, string>();
+    const user = await freshUser(db, "totp-complete-flow");
+    const other = await freshUser(db, "totp-other-account");
+    const secret = await enrolTotpFor(entries, user.email, user, db);
+    const outbox = createOutbox();
+    const handler = makeHandler(db, totpSecretsOf(entries), fixedClock(T0), outbox);
+    assert.equal((await handler.sendTotpEmailCode(signinRequest({ email: user.email }))).status, 200);
+    const code = outbox.list().at(-1)?.body.match(/\b\d{6}\b/)?.[0];
+    assert.ok(code);
+    assert.equal(await sessionCount(db), 0);
+    const verified = await handler.verifyTotpEmail(signinRequest({ email: user.email, code }));
+    assert.equal(verified.status, 200);
+    const { signinId } = await verified.json();
+    assert.equal(await sessionCount(db), 0, "email ownership alone cannot sign in");
+    assert.equal((await handler.verifyTotpEmail(signinRequest({ email: user.email, code }))).status, 401);
+    const signedIn = await handler.signInWithTotp(signinRequest({ signinId, email: other.email, totp: codeForStep(secret, stepAt(T0)) }));
+    assert.equal(signedIn.status, 303);
+    const session = await verifySession(db, sessionTokenFromCookie(signedIn.headers.get("set-cookie")), { clock: fixedClock(T0) });
+    assert.equal(session?.userId, user.id, "identity comes from the verified email handle, never an extra email field");
+    assert.equal((await handler.signInWithTotp(signinRequest({ signinId, totp: codeForStep(secret, stepAt(T0) + 1) }))).status, 401);
+    assert.equal(await sessionCount(db), 1);
+  } finally { await db.close(); }
+});
+
+test("expired email proofs and cross-origin email steps cannot sign in", async () => {
+  const db = await freshDb();
+  try {
+    let now = T0;
+    const clock = { now: () => now };
+    const entries = new Map<string, string>();
+    const user = await freshUser(db, "totp-expired-proof");
+    const secret = await enrolTotpFor(entries, user.email, user, db);
+    const outbox = createOutbox();
+    const handler = makeHandler(db, totpSecretsOf(entries), clock, outbox);
+    for (const origin of [null, FOREIGN_ORIGIN]) {
+      assert.equal((await handler.sendTotpEmailCode(signinRequest({ email: user.email }, origin))).status, 403);
+      assert.equal((await handler.verifyTotpEmail(signinRequest({ email: user.email, code: "123456" }, origin))).status, 403);
+    }
+    assert.equal(outbox.list().length, 0);
+    const signinId = await emailProofFor(handler, db, user.email, { clock, hmacKey: SIGNIN_HMAC_KEY, origin: GOOD_ORIGIN });
+    now = new Date(T0.getTime() + 10 * 60_000);
+    assert.equal((await handler.signInWithTotp(signinRequest({ signinId, totp: codeForStep(secret, stepAt(now)) }))).status, 401);
+    assert.equal(await sessionCount(db), 0);
+  } finally { await db.close(); }
+});
+
 test("a TOTP sign-in from a new browser alerts too", async () => {
   const clock = fixedClock(T0);
   const db = await freshDb();
@@ -768,7 +832,7 @@ test("a TOTP sign-in from a new browser alerts too", async () => {
     const handler = makeHandler(db, totpSecretsOf(secrets), clock, outbox);
 
     const res = await handler.signInWithTotp(
-      signinRequestWithCookie({ email: user.email, totp: codeForStep(secret, stepAt(T0)) }, null),
+      signinRequestWithCookie({ signinId: await emailProofFor(handler, db, user.email, { clock, hmacKey: SIGNIN_HMAC_KEY, origin: GOOD_ORIGIN }), totp: codeForStep(secret, stepAt(T0)) }, null),
     );
     assert.equal(res.status, 303);
     assert.equal(outbox.list().filter((m) => m.recipient === user.email).length, 1, "one alert");
@@ -816,19 +880,78 @@ test("a TOTP code cannot be used twice, and 5 failures slow further attempts", a
     const secret = await enrolTotpFor(entries, user.email, user, db);
     const totp = codeForStep(secret, stepAt(T0));
 
-    assert.equal((await handler.signInWithTotp(signinRequest({ email: user.email, totp }))).status, 303);
-    const replay = await handler.signInWithTotp(signinRequest({ email: user.email, totp }));
+    const firstId = await emailProofFor(handler, db, user.email, { clock, hmacKey: SIGNIN_HMAC_KEY, origin: GOOD_ORIGIN, issuedAt: new Date(T0.getTime() - 61_000) });
+    assert.equal((await handler.signInWithTotp(signinRequest({ signinId: firstId, totp }))).status, 303);
+    const signinId = await emailProofFor(handler, db, user.email, { clock, hmacKey: SIGNIN_HMAC_KEY, origin: GOOD_ORIGIN });
+    const replay = await handler.signInWithTotp(signinRequest({ signinId, totp }));
     assert.equal(replay.status, 401, "the same code is refused the second time");
 
     const wrong = totp === "000000" ? "111111" : "000000";
     for (let i = 0; i < 4; i++) {
-      assert.equal((await handler.signInWithTotp(signinRequest({ email: user.email, totp: wrong }))).status, 401);
+      assert.equal((await handler.signInWithTotp(signinRequest({ signinId, totp: wrong }))).status, 401);
     }
     const nextCode = codeForStep(secret, stepAt(T0) + 1);
-    const slowed = await handler.signInWithTotp(signinRequest({ email: user.email, totp: nextCode }));
+    const slowed = await handler.signInWithTotp(signinRequest({ signinId, totp: nextCode }));
     assert.equal(slowed.status, 429, "after 5 failures even the right code waits");
     assert.ok(Number(slowed.headers.get("retry-after")) > 0, "it says how long to wait");
   } finally {
     await db.close();
   }
+});
+
+
+test("a code issued for account recovery cannot be exchanged for a TOTP sign-in handle", async () => {
+  const db = await freshDb();
+  try {
+    const user = await freshUser(db, "totp-wrong-email-purpose");
+    const outbox = createOutbox();
+    const clock = fixedClock(T0);
+    const handler = makeHandler(db, totpSecretsOf(new Map()), clock, outbox);
+    await issueEmailCode(db, user.email, { purpose: "recovery", clock, random: systemRandom,
+      hmacKey: SIGNIN_HMAC_KEY, emailSender: outbox });
+    const code = outbox.list().at(-1)?.body.match(/\b\d{6}\b/)?.[0];
+    assert.ok(code);
+    const response = await handler.verifyTotpEmail(signinRequest({ email: user.email, code }));
+    assert.equal(response.status, 401);
+    assert.equal((await response.json()).signinId, undefined);
+    assert.equal(await sessionCount(db), 0);
+  } finally { await db.close(); }
+});
+
+test("concurrent exchanges of one email proof mint at most one TOTP session", async () => {
+  const db = await freshDb();
+  try {
+    const user = await freshUser(db, "totp-concurrent-email-proof");
+    const entries = new Map<string, string>();
+    const secret = await enrolTotpFor(entries, user.email, user, db);
+    const clock = fixedClock(T0);
+    const handler = makeHandler(db, totpSecretsOf(entries), clock);
+    const signinId = await emailProofFor(handler, db, user.email,
+      { clock, hmacKey: SIGNIN_HMAC_KEY, origin: GOOD_ORIGIN });
+    const responses = await Promise.all([0, 1].map((offset) => handler.signInWithTotp(
+      signinRequest({ signinId, totp: codeForStep(secret, stepAt(T0) + offset) }),
+    )));
+    assert.equal(responses.filter((response) => response.status === 303).length, 1);
+    assert.equal(responses.filter((response) => response.status === 401).length, 1);
+    assert.equal(await sessionCount(db), 1);
+  } finally { await db.close(); }
+});
+
+
+test("an already verified email and valid TOTP cannot sign back into a deleted account", async () => {
+  const db = await freshDb();
+  try {
+    const user = await freshUser(db, "totp-deleted-account");
+    const entries = new Map<string, string>();
+    const secret = await enrolTotpFor(entries, user.email, user, db);
+    const clock = fixedClock(T0);
+    const handler = makeHandler(db, totpSecretsOf(entries), clock);
+    const signinId = await emailProofFor(handler, db, user.email,
+      { clock, hmacKey: SIGNIN_HMAC_KEY, origin: GOOD_ORIGIN });
+    await db.query("UPDATE users SET wrapped_dek = '' WHERE id = $1", [user.id]);
+    const response = await handler.signInWithTotp(signinRequest({ signinId, totp: codeForStep(secret, stepAt(T0)) }));
+    assert.equal(response.status, 401);
+    assert.equal(await sessionCount(db), 0);
+    assert.equal(response.headers.has("set-cookie"), false);
+  } finally { await db.close(); }
 });

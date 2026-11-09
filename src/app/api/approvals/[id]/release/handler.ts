@@ -61,8 +61,9 @@ import {
 } from "../../../../../server/db/approvals";
 import { getAgentById } from "../../../../../server/db/agents";
 import { getConnectionPermissions } from "../../../../../server/db/agent-permissions";
-import { periodKeyFor, recordRelease, sumForConnectionPeriod } from "../../../../../server/db/card-spend-ledger";
-import { getHouseholdForMember } from "../../../../../server/db/households";
+import { periodKeyFor, recordRelease } from "../../../../../server/db/card-spend-ledger";
+import { readAgentSpending } from "../../../../../server/spending/agent-spending";
+import { checkHouseholdRelease } from "../../../../../server/spending/release-household";
 import { getUserById } from "../../../../../server/db/users";
 import { storeFingerprint } from "../../../../../server/db/release-fingerprints";
 import { timeZoneFor } from "../../../../../server/spending/time-zone";
@@ -73,7 +74,7 @@ import { fingerprint } from "../../../../../server/crypto/hmac";
 import { releaseStore, type ReleaseStore } from "../../../../../server/crypto/release-store";
 import { selectKeyWrapper, type KeyWrapper } from "../../../../../server/crypto/key-wrapper";
 import { releaseKeyFor } from "../../../../../server/mcp/tools/collect-release";
-import { systemClock, type Clock } from "../../../../../server/seams/clock";
+import { fixedClock, systemClock, type Clock } from "../../../../../server/seams/clock";
 import type { Db } from "../../../../../server/db/index";
 
 // A released value is small (a high-tier identity field or card detail), so cap it: an
@@ -304,20 +305,24 @@ export function createReleaseHandler(
       // policy engine and the spending views read.
       const timeZone = spend !== null ? await timeZoneFor(db, userId, dek) : undefined;
       const refused = await withTransaction(db, async (tx): Promise<ReleaseRefused | null> => {
+        // Use the ledger's instant even if waiting for a lock crosses month-end.
+        const householdCheck = spend ? await checkHouseholdRelease(tx, userId, spend, { clock: fixedClock(now), timeZone }) : null;
+        if (householdCheck && !householdCheck.ok) return { status: 409, code: householdCheck.code };
         // Serialise releases for this agent (its row locked for the transaction), so two
         // approvals made before either was released cannot together overspend a budget.
-        await tx.query("SELECT id FROM agents WHERE id = $1 AND user_id = $2 FOR UPDATE", [agent.id, userId]);
+        const currentAgent = await tx.query("SELECT id, status FROM agents WHERE id = $1 AND user_id = $2 FOR UPDATE", [agent.id, userId]);
+        const currentPermissions = await getConnectionPermissions(tx, userId, agent.connectionId, { lock: true });
+        if (currentAgent.rows[0]?.status !== "connected" || !currentPermissions
+          || !(kind === "card" ? currentPermissions.cardAccess : currentPermissions.highTierAccess)) {
+          return { status: 403, code: NOT_RELEASABLE };
+        }
 
-        if (spend !== null && permissions.cardBudget !== null) {
-          const budget = permissions.cardBudget;
-          const spent = await sumForConnectionPeriod(
-            tx,
-            userId,
-            agent.connectionId,
-            budget.period,
-            periodKeyFor(budget.period, now, timeZone),
-          );
-          if (spent + spend.amount > budget.amount) {
+        if (spend !== null) {
+          const budget = currentPermissions.cardBudget;
+          if (!budget || budget.currency !== spend.currency) return { status: 403, code: NOT_RELEASABLE };
+          const spent = await readAgentSpending(tx, userId, agent.connectionId, budget, now, timeZone);
+          if (spent.unconverted.length > 0) return { status: 409, code: "agent_rate_unavailable" };
+          if (spent.total + spend.amount > budget.amount) {
             return { status: 409, code: OVER_BUDGET };
           }
         }
@@ -339,11 +344,10 @@ export function createReleaseHandler(
         }
 
         if (spend !== null) {
-          const household = await getHouseholdForMember(tx, userId);
           await recordRelease(tx, {
             userId,
             connectionId: agent.connectionId,
-            householdId: household?.id ?? null,
+            householdId: householdCheck?.ok ? householdCheck.householdId : null,
             amount: spend.amount,
             currency: spend.currency,
             merchant: spend.merchant,
@@ -353,7 +357,7 @@ export function createReleaseHandler(
               month: periodKeyFor("month", now, timeZone),
             },
             approvalId: id,
-          });
+          }, { householdPeriodMonth: periodKeyFor("month", now, "UTC") });
         }
 
         await storeFingerprint(tx, { userId, fingerprint: fingerprint(dek, value) }, clock);
@@ -386,7 +390,7 @@ export function createReleaseHandler(
       //    under the requesting agent's REAL connection — the SAME key `collect_release`
       //    reads it with (never the agent's row id).
       store.put(
-        releaseKeyFor({ userId, connectionId: agent.connectionId, agentId: agent.id, active: true }),
+        releaseKeyFor({ userId, connectionId: agent.connectionId, agentId: agent.id, active: true }, id),
         value,
       );
 

@@ -1,3 +1,5 @@
+import { formatAccountTime } from "@/server/display-time";
+import { timeZoneFor } from "@/server/spending/time-zone";
 // E13-S11 — Memory page loader + actions (the injectable, unit-testable seam the
 // thin `page.tsx` composes — the convention's `createXActions(deps)` factory, as
 // `skills/actions.ts`, `vault/actions.ts`, `connectors/actions.ts` and
@@ -130,16 +132,6 @@ const editMemorySchema = z.object({ id: memoryIdSchema, content: contentSchema }
 const rescopeMemorySchema = z.object({ id: memoryIdSchema, scope: scopeSchema });
 const deleteMemorySchema = z.object({ id: memoryIdSchema });
 
-// A stored instant → an absolute, readable date label (the view renders it verbatim
-// and reaches for no clock of its own). Shown in UTC so seeded dates are deterministic.
-function formatSavedAt(value: Date | string): string {
-  return new Date(value).toLocaleDateString("en-AU", {
-    timeZone: "UTC",
-    day: "numeric",
-    month: "short",
-    year: "numeric",
-  });
-}
 
 export function createMemoryActions(deps: MemoryActionsDeps): MemoryActions {
   const { db, keyWrapper, clock } = deps;
@@ -166,11 +158,11 @@ export function createMemoryActions(deps: MemoryActionsDeps): MemoryActions {
   // Shape one owner-scoped memory for the view: resolve its source agent id to the
   // owner's agent display name (null when the person added it, or when the id is not
   // one of this person's agents), and format its saved time to a label.
-  function toViewItem(m: MemoryPageItem, agentNameById: ReadonlyMap<string, string>): MemoryViewItem {
+  function toViewItem(m: MemoryPageItem, agentNameById: ReadonlyMap<string, string>, timeZone: string): MemoryViewItem {
     return {
       id: m.id,
       content: m.content,
-      savedAt: formatSavedAt(m.createdAt),
+      savedAt: formatAccountTime(m.createdAt, timeZone, { dateOnly: true }),
       sourceAgentName: m.sourceAgentId != null ? (agentNameById.get(m.sourceAgentId) ?? null) : null,
       scope: m.scope,
     };
@@ -184,6 +176,7 @@ export function createMemoryActions(deps: MemoryActionsDeps): MemoryActions {
   // memory never appears.
   async function load(session: Session, query?: string): Promise<MemoryPageData> {
     const dek = await dataKeyFor(session.userId);
+    const timeZone = await timeZoneFor(db, session.userId, dek);
     const hasQuery = typeof query === "string" && query.trim().length > 0;
     const items = hasQuery
       ? await searchMemories(db, session.userId, dek, query)
@@ -195,7 +188,7 @@ export function createMemoryActions(deps: MemoryActionsDeps): MemoryActions {
     const agentNameById = new Map(agents.map((a) => [a.id, a.displayName]));
 
     return {
-      memories: items.map((m) => toViewItem(m, agentNameById)),
+      memories: items.map((m) => toViewItem(m, agentNameById, timeZone)),
       query: hasQuery ? query : null,
     };
   }

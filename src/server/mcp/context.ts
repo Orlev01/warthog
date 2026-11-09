@@ -22,7 +22,8 @@ import {
   type ConnectionPermissions,
   type PeriodKind,
 } from "../db/agent-permissions";
-import { periodKeyFor, sumForConnectionPeriod } from "../db/card-spend-ledger";
+import { periodKeyFor } from "../db/card-spend-ledger";
+import { readAgentSpending } from "../spending/agent-spending";
 import { getRate } from "../db/exchange-rates";
 import type { Db } from "../db/index";
 import { listRules, type StoredRule } from "../db/rules";
@@ -70,6 +71,7 @@ export interface AgentContext {
   readonly permissions: ConnectionPermissions;
   readonly rules: StoredRule[];
   readonly spend: number;
+  readonly spendUnavailable?: boolean;
   readonly accountCurrency: string;
   readonly cardRequest?: CardRequestContext;
   readonly cardChecks?: CardChecks;
@@ -81,6 +83,8 @@ export interface AgentContext {
 // rather than guess), and the household policy (null outside a household) — this member's
 // limit and the shared budget in the household currency, each with its spend so far.
 export interface CardChecks {
+  readonly ruleCurrency: string;
+  readonly ruleRate: ReferenceRate | null;
   readonly rate: ReferenceRate | null;
   readonly household: HouseholdPolicy | null;
 }
@@ -117,6 +121,7 @@ export function cardPolicyFor(context: AgentContext, now: Date): CardPolicy {
     access: permissions.cardAccess,
     budget,
     releases: spend > 0 ? [{ amount: spend, at: now }] : [],
+    ...(context.spendUnavailable ? { totalsUnavailable: true } : {}),
   };
   const household = context.cardChecks?.household;
   return household ? { ...card, household } : card;
@@ -140,6 +145,8 @@ function householdPolicyFor(
   if (!household) return null;
   const policy: HouseholdPolicy = {
     currency: household.currency,
+    ...(household.totalsUnavailable ? { totalsUnavailable: true } : {}),
+    ...(household.periodUnavailable ? { periodUnavailable: true } : {}),
     budgetReleases: spentSoFar(household.budgetSpendToDate, now),
     memberReleases: spentSoFar(household.memberSpendToDate, now),
     rate: resolved.converted
@@ -251,15 +258,11 @@ export async function loadAgentContext(
   const timeZone = await timeZoneFor(db, connection.userId, dek);
   const budget = permissions.cardBudget;
   const period = budget?.period ?? DEFAULT_PERIOD;
-  const spend = await sumForConnectionPeriod(
-    db,
-    connection.userId,
-    connection.connectionId,
-    period,
-    periodKeyFor(period, clock.now(), timeZone),
-  );
-
   const accountCurrency = budget?.currency ?? DEFAULT_CURRENCY;
+  const spending = await readAgentSpending(db, connection.userId, connection.connectionId,
+    budget ?? { amount: 0, currency: accountCurrency, period }, clock.now(), timeZone);
+  const spend = spending.total;
+  const incomplete = spending.unconverted.length > 0 ? { spendUnavailable: true } : {};
 
   // A card request additionally resolves the household + currency context for the
   // connection's OWNING user (never a client value), delegating to the household-context
@@ -268,11 +271,13 @@ export async function loadAgentContext(
     const resolved = await resolveCardRequestContext(connection.userId, cardRequest, { db, clock, timeZone });
     const now = clock.now();
     const cardChecks: CardChecks = {
+      ruleCurrency: resolved.accountCurrency,
+      ruleRate: await budgetRateFor(db, cardRequest, resolved.accountCurrency, resolved, now),
       rate: await budgetRateFor(db, cardRequest, accountCurrency, resolved, now),
       household: householdPolicyFor(resolved, cardRequest, now),
     };
-    return { permissions, rules, spend, accountCurrency, cardRequest: resolved, cardChecks };
+    return { permissions, rules, spend, ...incomplete, accountCurrency, cardRequest: resolved, cardChecks };
   }
 
-  return { permissions, rules, spend, accountCurrency };
+  return { permissions, rules, spend, ...incomplete, accountCurrency };
 }

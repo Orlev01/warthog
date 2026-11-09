@@ -34,11 +34,12 @@ function showPushNotification(event) {
   };
 
   var payload = readPayload(event);
-  if (payload && typeof payload.approval_id === "string") {
+  var id = approvalId(payload);
+  if (id) {
     // The approval id is not personal content; use it only to coalesce the
     // notification and to route the tap into the app.
-    options.tag = "warthog-approval-" + payload.approval_id;
-    options.data = { approval_id: payload.approval_id };
+    options.tag = "warthog-approval-" + id;
+    options.data = { approval_id: id };
   }
 
   return self.registration.showNotification(title, options);
@@ -65,10 +66,17 @@ self.addEventListener("notificationclick", function (event) {
 });
 
 function targetFor(data) {
-  if (data && typeof data.approval_id === "string" && data.approval_id.length > 0) {
-    return "/inbox?approval=" + encodeURIComponent(data.approval_id);
+  var id = approvalId(data);
+  if (id) {
+    return "/inbox?approval=" + encodeURIComponent(id);
   }
   return "/home";
+}
+
+function approvalId(data) {
+  if (!data) return null;
+  var id = data.approvalId || data.approval_id;
+  return typeof id === "string" && id.length > 0 && id.length <= 256 ? id : null;
 }
 
 // Reuse an open Warthog window when there is one — navigate it to the target, then bring

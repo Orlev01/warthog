@@ -36,11 +36,12 @@ import { z } from "zod";
 
 import { parseParams } from "../http/validate";
 import { revokeAccessKey } from "../oauth/access-key";
+import { lockOAuthConnection } from "../oauth/connection-lock";
 import { createRedactingRecorder } from "../mcp/recorder";
 import { ApprovalAlreadyDecidedError, decide } from "../db/approvals";
 import { getAgentById } from "../db/agents";
 import { withTransaction } from "../db/index";
-import { releaseKeyFor } from "../mcp/tools/collect-release";
+import { releaseScopeFor } from "../mcp/tools/collect-release";
 import type { Db } from "../db/index";
 import type { Clock } from "../seams/clock";
 import type { ReleaseStore } from "../crypto/release-store";
@@ -105,6 +106,8 @@ export async function disconnectAgent(
   // half-disconnected agent; `withTransaction` surfaces that failure (never a silent
   // success).
   await withTransaction(db, async (tx) => {
+    await lockOAuthConnection(tx, connectionId);
+    await tx.query("DELETE FROM oauth_auth_codes WHERE connection_id = $1::uuid", [connectionId]);
     // (a) Revoke both credential kinds for this connection — the next request
     // carrying either the OAuth token or the access key no longer verifies.
     await tx.query("DELETE FROM oauth_tokens WHERE connection_id = $1::uuid", [connectionId]);
@@ -138,7 +141,7 @@ export async function disconnectAgent(
 
     // (d) Record the disconnection — Warthog writes the record (principle 14). LAST,
     // so it is the step that fails under a mid-transaction error.
-    const recorder = createRedactingRecorder({ db: tx, clock, dekFor });
+    const recorder = createRedactingRecorder({ db: tx, clock, dekFor: async () => dek });
     await recorder.record({
       userId,
       kind: "connection_change",
@@ -149,10 +152,9 @@ export async function disconnectAgent(
     });
   });
 
-  // Cancel the uncollected release AFTER the commit: collecting it drops it from the
-  // in-memory store, so the agent can never collect it. Keyed through the collector's
-  // own scheme (one source of truth); a missing release is a harmless no-op.
-  releaseStore.collect(releaseKeyFor({ userId, connectionId, agentId: agent.id, active: false }));
+  // Discard every uncollected approval AFTER commit, scoped by the collector's
+  // shared person/connection prefix. Other connections keep their own releases.
+  releaseStore.discardScope(releaseScopeFor({ userId, connectionId, agentId: agent.id, active: false }));
 
   return { ok: true, agentId: agent.id };
 }

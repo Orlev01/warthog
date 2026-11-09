@@ -120,14 +120,14 @@ export async function createHousehold(db: Db, input: NewHousehold): Promise<Hous
 // belongs to one household (enforced by addMember and, where it could be added, the
 // unique index of 0060), so this returns that one; the ORDER BY only keeps the answer
 // deterministic — the household they own first — for data from before that was enforced.
-export async function getHouseholdForMember(db: Db, userId: string): Promise<Household | null> {
+export async function getHouseholdForMember(db: Db, userId: string, options: { lock?: boolean } = {}): Promise<Household | null> {
   const result = await db.query(
     `SELECT h.id, h.owner_id, h.currency, h.monthly_budget, h.pending_owner_id
        FROM households h
        JOIN household_members m ON m.household_id = h.id
       WHERE m.user_id = $1
       ORDER BY (m.role = 'owner') DESC, h.id
-      LIMIT 1`,
+      LIMIT 1${options.lock ? " FOR UPDATE OF h, m" : ""}`,
     [userId],
   );
   const row = result.rows[0];

@@ -33,13 +33,14 @@ import { listMobileNumbers } from "../db/mobile-numbers";
 import { verifyEmailCode } from "./email-code";
 import { finishPasskeyRegistration } from "./passkey";
 import { issueRecoveryCode } from "./recovery";
-import { createSession, type CreatedSession } from "./session";
+import { createSession, lockActiveAccount, type CreatedSession } from "./session";
 import { enqueue } from "../db/jobs";
 import { withTransaction } from "../db/index";
 import type { Clock } from "../seams/clock";
 import type { Random } from "../seams/random";
 import type { Senders } from "../notify/senders";
 import type { Db } from "../db/index";
+import { releaseStore, type ReleaseStore } from "../crypto/release-store";
 
 const MINUTE_MS = 60 * 1000;
 const SEVEN_DAYS_MS = 7 * 24 * 60 * MINUTE_MS;
@@ -93,6 +94,7 @@ export interface RequestAccountResetDeps {
 // the agents/connections of a reset that is still pending.
 export interface CompleteAccountResetDeps {
   readonly executor: ResetExecutor;
+  readonly releases?: Pick<ReleaseStore, "discardScope">;
 }
 
 // Start a 7-day account reset for the person owning `email`, gated on the email
@@ -110,6 +112,7 @@ export async function requestAccountReset(
   deps: RequestAccountResetDeps,
 ): Promise<{ ok: true } | { ok: false; reason: string }> {
   const verified = await verifyEmailCode(db, email, code, {
+    purpose: "reset",
     clock: deps.clock,
     hmacKey: deps.hmacKey,
     emailSender: deps.senders.email,
@@ -242,19 +245,21 @@ export async function completeAccountReset(
   { userId }: { userId: string },
   deps: CompleteAccountResetDeps,
 ): Promise<{ ok: true } | { ok: false; reason: string }> {
-  return withTransaction(db, async (tx) => {
+  const outcome = await withTransaction(db, async (tx) => {
     const claimed = await tx.query(
       `UPDATE account_resets SET status = 'done'
        WHERE user_id = $1 AND status = 'pending'
        RETURNING user_id`,
       [userId],
     );
-    if (claimed.rows.length === 0) return { ok: false, reason: "no_pending_reset" };
+    if (claimed.rows.length === 0) return { ok: false as const, reason: "no_pending_reset" };
 
     await deps.executor.eraseVaultData(userId, tx);
     await deps.executor.revokeAgentsAndConnections(userId, tx);
-    return { ok: true };
+    return { ok: true as const };
   });
+  if (outcome.ok) (deps.releases ?? releaseStore).discardScope(`${userId}:`);
+  return outcome;
 }
 
 
@@ -320,6 +325,7 @@ export async function reenrolAfterReset(
 ): Promise<ReenrolResult> {
   const { rpId, origin, clock, random } = deps;
   return withTransaction(db, async (tx): Promise<ReenrolResult> => {
+    await lockActiveAccount(tx, userId);
     const claimed = await tx.query(
       `UPDATE account_resets SET status = 'reenrolled'
         WHERE user_id = $1 AND status = 'done' AND requested_at > $2::timestamptz

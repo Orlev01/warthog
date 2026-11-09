@@ -1,3 +1,5 @@
+import { formatAccountTime } from "@/server/display-time";
+import { timeZoneFor } from "@/server/spending/time-zone";
 // E12-S10 — Approval decision actions (the injectable seam the thin inbox
 // `page.tsx` loader + its server-action wrappers compose).
 //
@@ -238,14 +240,6 @@ const OUTCOME: Record<DecidedStatus, string> = {
   more_detail: "You asked for more detail",
 };
 
-// A decided instant as a medium date + short time in Australian English, read in UTC so
-// it is the same wherever the server runs.
-const DECIDED_AT = new Intl.DateTimeFormat("en-AU", {
-  timeZone: "UTC",
-  dateStyle: "medium",
-  timeStyle: "short",
-});
-
 // One pending approval → the view's already-formatted pending row.
 function toPendingView(request: PendingApproval): PendingRequestView {
   return {
@@ -261,14 +255,14 @@ function toPendingView(request: PendingApproval): PendingRequestView {
 }
 
 // One decided approval → the view's already-formatted history row.
-function toDecidedView(entry: DecidedApproval): DecidedRequestView {
+function toDecidedView(entry: DecidedApproval, timeZone: string): DecidedRequestView {
   const view: DecidedRequestView = {
     id: entry.id,
     agent: entry.agent.displayName,
     sentence: text(entry.detail.sentence),
     status: entry.status,
     outcome: OUTCOME[entry.status],
-    decidedAt: entry.decidedAt ? DECIDED_AT.format(entry.decidedAt) : "",
+    decidedAt: entry.decidedAt ? formatAccountTime(entry.decidedAt, timeZone) : "",
   };
   if (entry.question) view.question = entry.question;
   return view;
@@ -502,6 +496,7 @@ export function createInboxActions(deps: InboxActionsDeps): InboxActions {
   // (executeApprovedHold is untouched). A card release additionally needs the saved cards.
   async function load(session: Session): Promise<InboxLoadData> {
     const dek = await dataKeyFor(session.userId);
+    const timeZone = await timeZoneFor(db, session.userId, dek);
     const inbox = await readInbox(db, session.userId, dek, clock);
 
     for (const request of inbox.pending) {
@@ -516,7 +511,7 @@ export function createInboxActions(deps: InboxActionsDeps): InboxActions {
         request.release === "high_tier" ? offerFor(request, inbox.pending[index]!.detail, fields) : request,
       );
     }
-    const history = inbox.history.map(toDecidedView);
+    const history = inbox.history.map((entry) => toDecidedView(entry, timeZone));
     const data: InboxLoadData = { pending, history };
 
     if (pending.some((request) => request.release === "card")) {

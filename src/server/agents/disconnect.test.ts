@@ -216,7 +216,7 @@ async function seedPending(
 // The release store key for a connection — through the SAME scheme the collector uses
 // (one source of truth), so a value put here is exactly where disconnect must cancel it.
 function releaseKey(userId: string, connectionId: string): string {
-  return releaseKeyFor({ userId, connectionId, agentId: connectionId, active: true });
+  return releaseKeyFor({ userId, connectionId, agentId: connectionId, active: true }, "11111111-1111-4111-8111-111111111111");
 }
 
 // A request to the protected resource carrying `cred` as a Bearer — the agent's very
@@ -404,10 +404,14 @@ test("disconnect affects only the named agent — another of the person's agents
 
     const releaseStore = createReleaseStore(fixedClock(NOW));
     releaseStore.put(releaseKey(userId, agentA.connectionId), "A-value");
+    const otherApprovalKey = releaseKeyFor({ userId, connectionId: agentA.connectionId, agentId: agentA.id, active: true }, randomUUID());
+    releaseStore.put(otherApprovalKey, "A-second-value");
     releaseStore.put(releaseKey(userId, agentB.connectionId), "B-value");
 
     const result = await disconnectAgent(disconnectDeps(db, releaseStore), sessionFor(userId), agentA.id);
     assert.ok(result.ok, "disconnecting agent A succeeds");
+    assert.equal(releaseStore.collect(otherApprovalKey), undefined, "all approvals for A are discarded");
+    assert.equal(releaseStore.collect(releaseKey(userId, agentA.connectionId)), undefined);
 
     // Agent A is cut off…
     assert.equal(await nextRequestAccepted(db, keyA), false, "agent A's next request is refused");

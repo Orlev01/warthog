@@ -572,16 +572,25 @@ test("uses design tokens, never a raw hex colour", () => {
 // Review fix G2 — Export really downloads a file, and says what the file holds.
 // ================================================================================
 
-test("the Export control POSTs to the download route, so the browser receives the file", () => {
+test("the Export and Import controls run on the device without a raw-file form", () => {
   const markup = render(base());
-  const exportForm = findAll(markup, "form").find((f) => EXPORT_RE.test(visibleText(f.inner)) && !/file/i.test(f.attrs));
-  assert.ok(exportForm, "an Export form is rendered");
-  assert.match(exportForm!.attrs, /action="\/settings\/data\/export"/);
-  assert.match(exportForm!.attrs, /method="post"/i);
+  const forms = findAll(markup, "form");
+  assert.equal(forms.some((form) => /type="file"/.test(form.inner)), false);
+  assert.ok(hasActionable(markup, /export my data/i));
+  assert.ok(fileInput(markup));
 });
 
-test("the Export explainer says plainly that cards and protected details stay on the device and are not in the file", () => {
+test("the Export explainer warns that opted-in protected details are readable in the file", () => {
   const text = visibleText(render(base()));
-  assert.match(text, /cards?[^.]*(not|aren't|isn't)[^.]*(included|in (the|this) file)|(not|aren't)[^.]*included[^.]*cards?/i);
-  assert.ok(!/copy of everything Warthog stores/i.test(text), "the file is not claimed to hold everything");
+  assert.match(text, /include protected details/i);
+  assert.match(text, /readable card numbers/i);
+  assert.match(text, /anyone with the file can read it/i);
+});
+
+
+test("deletion distinguishes live key-reference removal from retained backup copies", () => {
+  const text = visibleText(render(base()));
+  assert.match(text, /encryption-key reference is removed from the live database/i);
+  assert.match(text, /backups can retain older data/i);
+  assert.doesNotMatch(text, /encryption key is destroyed|everything.*erased for good/i);
 });

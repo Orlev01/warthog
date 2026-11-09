@@ -13,7 +13,7 @@ import assert from "node:assert/strict";
 import { Buffer } from "node:buffer";
 
 import { createDeviceVault, StepUpRequiredError } from "./device-vault";
-import { deriveWrappingKeyFromPrf } from "./derive";
+import { deriveWrappingKeyFromPrf, deriveWrappingKeyFromPassphrase } from "./derive";
 import { unwrapVaultKey, wrapVaultKey } from "./key";
 import { generateRecoveryPhrase, unlockWithRecoveryPhrase, wrapVaultKeyWithRecoveryPhrase } from "./recovery-phrase";
 
@@ -76,6 +76,7 @@ function makeServer(initial: Partial<Record<Method, Row>> = {}) {
         wrapped: row?.wrapped ?? null,
         params: row?.params ?? {},
         options: m === "passkey_prf" ? MATERIAL_OPTIONS : null,
+        proof: { challenge: Buffer.alloc(32, 71).toString("base64url"), mode: Object.keys(store).length ? "prove" : "enroll" },
       });
     }
     if (method === "POST" && url === "/api/vault/unlock-method") {
@@ -127,7 +128,7 @@ function makePasskey(prf: Uint8Array | null, opts: { cancelled?: boolean } = {})
 }
 
 function vaultFor(server: ReturnType<typeof makeServer>, passkey: ReturnType<typeof makePasskey>) {
-  return createDeviceVault({ fetch: server.fetch, startAuthentication: passkey.fn, createVaultKey: () => VK });
+  return createDeviceVault({ fetch: server.fetch, startAuthentication: passkey.fn, createVaultKey: () => VK.slice() });
 }
 
 test("a passkey unlock sets the vault up on first use: a new key, saved sealed under the passkey", async () => {
@@ -242,4 +243,46 @@ test("a cancelled adopt prompt rejects and saves nothing", async () => {
   const before = server.store.passkey_prf!.wrapped;
   await assert.rejects(vaultFor(server, makePasskey(PRF_B, { cancelled: true })).adoptPasskey(VK));
   assert.equal(server.store.passkey_prf!.wrapped, before);
+});
+
+test("a fresh vault can be created with a passphrase without a PRF passkey", async () => {
+  const server = makeServer();
+  const vault = vaultFor(server, makePasskey(null));
+  const key = await vault.unlockWithPassphrase("a sufficiently long vault passphrase", { createIfMissing: true });
+  assert.deepEqual(key, VK);
+  assert.deepEqual(await vault.unlockWithPassphrase("a sufficiently long vault passphrase"), VK);
+  assert.ok(server.store.passphrase);
+  assert.equal(server.bodies.some((body) => body.includes("a sufficiently long vault passphrase")), false);
+});
+
+test("passphrase setup never replaces an existing vault and never creates while exporting", async () => {
+  const server = makeServer({ recovery: { wrapped: await wrapVaultKeyWithRecoveryPhrase(generateRecoveryPhrase(), OTHER_VK), params: {} } });
+  await assert.rejects(vaultFor(server, makePasskey(null)).unlockWithPassphrase("a sufficiently long vault passphrase", { createIfMissing: true }));
+  assert.equal(server.store.passphrase, undefined);
+  const fresh = makeServer();
+  await assert.rejects(vaultFor(fresh, makePasskey(null)).unlockWithPassphrase("a sufficiently long vault passphrase", { createIfMissing: false }));
+  await assert.rejects(vaultFor(fresh, makePasskey(null)).unlockWithPassphrase("short", { createIfMissing: true }));
+  assert.equal(fresh.bodies.length, 0);
+});
+
+test("wrong passphrases fail without rekeying an existing vault", async () => {
+  const server = makeServer();
+  const vault = vaultFor(server, makePasskey(null));
+  await vault.savePassphrase(VK, "original long vault passphrase");
+  const before = server.store.passphrase?.wrapped;
+  await assert.rejects(vault.unlockWithPassphrase("wrong but long vault passphrase", { createIfMissing: true }));
+  assert.equal(server.store.passphrase?.wrapped, before);
+});
+
+
+test("concurrent passphrase setup adopts a compatible winning key and never overwrites it", async () => {
+  const passphrase = "a sufficiently long vault passphrase";
+  const salt = bytes(16, 3);
+  const winningRow = { wrapped: await wrapVaultKey(await deriveWrappingKeyFromPassphrase(passphrase, salt), OTHER_VK), params: { salt: Buffer.from(salt).toString("base64") } };
+  const server = makeServer(); server.loseFirstSaveTo("passphrase", winningRow);
+  assert.deepEqual(await vaultFor(server, makePasskey(null)).unlockWithPassphrase(passphrase, { createIfMissing: true }), OTHER_VK);
+  assert.deepEqual(server.store.passphrase, winningRow);
+  const incompatible = makeServer(); incompatible.loseFirstSaveTo("passphrase", winningRow);
+  await assert.rejects(vaultFor(incompatible, makePasskey(null)).unlockWithPassphrase("a different long vault passphrase", { createIfMissing: true }));
+  assert.deepEqual(incompatible.store.passphrase, winningRow);
 });

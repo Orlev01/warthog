@@ -74,3 +74,15 @@ export async function listPendingPurges(db: Db): Promise<PurgeRequest[]> {
   );
   return result.rows.map(toRequest);
 }
+
+// Jobs use JSON identifiers rather than foreign keys. Remove both supported owner
+// shapes before deleting the approvals/user rows needed to resolve their owner.
+// This also removes completed/failed payloads; other people's jobs remain intact.
+// The caller supplies its deletion/purge transaction.
+export async function deleteAccountJobs(db: Db, userId: string): Promise<void> {
+  await db.query(
+    `DELETE FROM jobs WHERE payload->>'userId' = $1::text
+       OR payload->>'approvalId' IN (SELECT id::text FROM approvals WHERE user_id = $1::uuid)`,
+    [userId],
+  );
+}

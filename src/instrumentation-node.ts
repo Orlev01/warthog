@@ -4,8 +4,10 @@
 // createRegister seam.
 
 import { loadConfig } from "./server/config";
+import { assertProductionReleaseConfiguration } from "./server/production-readiness";
 import { createRegister } from "./server/jobs/start";
 import { getScheduler } from "./server/jobs/scheduler";
+import { startProductionOwnership } from "./server/db/ownership";
 
 // The loop fires on this interval; each periodic sweep gates itself on its own longer interval,
 // so a one-minute tick serves every sweep and drains the queue promptly.
@@ -21,7 +23,19 @@ const startScheduler = createRegister({
 
 // Refuse to start on unsafe or incomplete production config (review fix F8): the same check
 // /api/health makes, at boot, so a bad revision fails loudly instead of serving errors.
-export function registerNode(): void {
-  loadConfig();
-  startScheduler();
+export async function registerNode(): Promise<void> {
+  try {
+    const config = loadConfig();
+    assertProductionReleaseConfiguration(config);
+    await startProductionOwnership(config);
+    startScheduler();
+  } catch (error) {
+    // Next can catch a rejected instrumentation hook and leave its listener alive.
+    // Terminate explicitly without exposing configuration or connection details.
+    if (process.env.NODE_ENV === "production") {
+      console.error("[warthog] production startup failed; terminating");
+      process.exit(1);
+    }
+    throw error;
+  }
 }

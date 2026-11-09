@@ -1,0 +1,64 @@
+-- REVIEW BEFORE EXECUTION. Run once through psql as the PostgreSQL server admin,
+-- initially connected to the postgres database on the dedicated Warthog server.
+-- This file contains no passwords. It creates database/login roles and therefore
+-- requires the user's approved provisioning scope. Do not run against a shared DB.
+\set ON_ERROR_STOP on
+
+DO $$
+BEGIN
+  IF NOT EXISTS (SELECT FROM pg_roles WHERE rolname = 'warthog_app') THEN CREATE ROLE warthog_app NOLOGIN; END IF;
+  IF NOT EXISTS (SELECT FROM pg_roles WHERE rolname = 'warthog_purge') THEN CREATE ROLE warthog_purge NOLOGIN; END IF;
+  IF NOT EXISTS (SELECT FROM pg_roles WHERE rolname = 'warthog_migrate') THEN CREATE ROLE warthog_migrate LOGIN NOSUPERUSER NOCREATEDB NOCREATEROLE; END IF;
+  IF NOT EXISTS (SELECT FROM pg_roles WHERE rolname = 'warthog_runtime') THEN CREATE ROLE warthog_runtime LOGIN NOSUPERUSER NOCREATEDB NOCREATEROLE; END IF;
+  IF NOT EXISTS (SELECT FROM pg_roles WHERE rolname = 'warthog_purger') THEN CREATE ROLE warthog_purger LOGIN NOSUPERUSER NOCREATEDB NOCREATEROLE; END IF;
+  IF EXISTS (SELECT FROM pg_roles WHERE rolname IN ('warthog_migrate','warthog_runtime','warthog_purger','warthog_app','warthog_purge')
+    AND (rolsuper OR rolcreatedb OR rolcreaterole OR rolbypassrls OR rolreplication)) THEN
+    RAISE EXCEPTION 'Unexpected privileged Warthog role; stop and review';
+  END IF;
+  IF EXISTS (SELECT FROM pg_roles WHERE
+    (rolname IN ('warthog_app','warthog_purge') AND rolcanlogin)
+    OR (rolname IN ('warthog_migrate','warthog_runtime','warthog_purger') AND NOT rolcanlogin)) THEN
+    RAISE EXCEPTION 'Unexpected Warthog role login property; stop and review';
+  END IF;
+  IF EXISTS (SELECT FROM pg_auth_members m JOIN pg_roles member ON member.oid=m.member JOIN pg_roles parent ON parent.oid=m.roleid
+    WHERE member.rolname IN ('warthog_migrate','warthog_runtime','warthog_purger','warthog_app','warthog_purge')
+      AND NOT ((member.rolname='warthog_runtime' AND parent.rolname='warthog_app')
+        OR (member.rolname='warthog_purger' AND parent.rolname='warthog_purge'))) THEN
+    RAISE EXCEPTION 'Unexpected Warthog role membership; stop and review';
+  END IF;
+END;
+$$;
+
+-- Review pre-existing role properties/memberships before proceeding on a rerun.
+SELECT rolname, rolcanlogin, rolsuper, rolcreatedb, rolcreaterole
+  FROM pg_roles WHERE rolname IN ('warthog_migrate','warthog_runtime','warthog_purger','warthog_app','warthog_purge');
+GRANT warthog_migrate TO CURRENT_USER;
+GRANT warthog_app TO warthog_runtime;
+GRANT warthog_purge TO warthog_purger;
+SELECT 'CREATE DATABASE warthog OWNER warthog_migrate'
+  WHERE NOT EXISTS (SELECT FROM pg_database WHERE datname = 'warthog')
+\gexec
+
+\connect warthog
+-- Fail closed if the expected database ownership has not been established.
+DO $$
+BEGIN
+  IF NOT EXISTS (SELECT FROM pg_database d JOIN pg_roles r ON r.oid = d.datdba
+    WHERE d.datname = current_database() AND r.rolname = 'warthog_migrate') THEN
+    RAISE EXCEPTION 'Unexpected Warthog database owner; stop and review';
+  END IF;
+END;
+$$;
+ALTER SCHEMA public OWNER TO warthog_migrate;
+REVOKE CREATE ON SCHEMA public FROM PUBLIC;
+REVOKE ALL ON DATABASE warthog FROM PUBLIC;
+GRANT CONNECT ON DATABASE warthog TO warthog_migrate, warthog_runtime, warthog_purger;
+REVOKE warthog_migrate FROM CURRENT_USER;
+
+-- Set three different generated passwords privately using psql's \password
+-- commands after reviewing this procedure. Never place them in this file, a
+-- command argument, terminal transcript or report. Store the resulting URLs in
+-- Key Vault with sslmode=verify-full and URL-encoded usernames/passwords.
+-- \password warthog_migrate
+-- \password warthog_runtime
+-- \password warthog_purger

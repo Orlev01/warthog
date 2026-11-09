@@ -502,11 +502,11 @@ test("the read reads no process.env: a decoy secret in the environment never app
 });
 
 // ---------------------------------------------------------------------------
-// Review fix W4.3 — the household month is the reader's own (local) month. At
-// 2026-12-01T05:00Z it is still November in Los Angeles.
+// AUD-012 supersedes the reader-local household month: at this instant every
+// member is in the shared December UTC budget, even in Los Angeles.
 // ---------------------------------------------------------------------------
 
-test("W4.3: the household totals are read for the month in the given time zone", async () => {
+test("AUD-012: household totals use the shared UTC month regardless of reader time zone", async () => {
   const db = await freshDb();
   try {
     const alice = await makeUser(db, "tz-owner");
@@ -526,7 +526,7 @@ test("W4.3: the household totals are read for the month in the given time zone",
       clock: fixedClock(new Date("2026-12-01T05:00:00.000Z")),
       timeZone: "America/Los_Angeles",
     });
-    assert.equal(report?.budgetSpendToDate, 60, "November's spend still counts this month");
+    assert.equal(report?.budgetSpendToDate, 0, "November's shared budget has ended for every member");
   } finally {
     await db.close();
   }

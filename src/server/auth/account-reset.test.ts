@@ -200,7 +200,7 @@ function extractCode(body: string): string {
 // plaintext back from the one delivered email — exactly how the person receives it.
 // Issued on its OWN outbox, kept apart from the alert outbox under test.
 async function issueCodeFor(db: Db, email: string, clock: Clock, outbox: Outbox): Promise<string> {
-  await issueEmailCode(db, email, { clock, random: systemRandom, hmacKey: HMAC_KEY, emailSender: outbox });
+  await issueEmailCode(db, email, { purpose: "reset", clock, random: systemRandom, hmacKey: HMAC_KEY, emailSender: outbox });
   const emailMsg = outbox
     .list()
     .filter((m) => m.channel === "email" && m.recipient === email)

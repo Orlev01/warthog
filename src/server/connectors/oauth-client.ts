@@ -56,6 +56,7 @@ export interface OAuthClientDeps {
   readonly db: Db;
   readonly clock: Clock;
   readonly fetch: typeof fetch;
+  readonly accountLabelFor?: (entry: CatalogueEntry, tokens: TokenEndpointResponse) => Promise<string>;
 }
 
 // What a built authorize request hands back: the URL the person is sent to, plus the raw
@@ -150,6 +151,10 @@ export async function buildAuthorizeUrl(params: {
   url.searchParams.set("code_challenge", codeChallenge);
   url.searchParams.set("code_challenge_method", "S256");
   url.searchParams.set("state", state);
+  if (new URL(authorizeEndpoint).hostname === "accounts.google.com") {
+    url.searchParams.set("access_type", "offline");
+    url.searchParams.set("prompt", "consent");
+  }
 
   return { url: url.href, codeVerifier, state };
 }
@@ -188,7 +193,7 @@ export async function exchangeCodeForConnection(
     {
       userId: input.userId,
       connectorId: input.entry.id,
-      accountLabel: input.accountLabel,
+      accountLabel: deps.accountLabelFor ? await deps.accountLabelFor(input.entry, tokens) : input.accountLabel,
       credentials: toStoredCredentials(tokens, deps.clock),
       status: input.status,
     },

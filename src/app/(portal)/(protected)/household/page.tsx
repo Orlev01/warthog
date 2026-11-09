@@ -1,3 +1,4 @@
+import { notificationSenders } from "../../../../server/notify/production";
 import * as React from "react";
 import { cookies } from "next/headers";
 import { redirect } from "next/navigation";
@@ -53,16 +54,7 @@ const SCREEN = "/household";
 // Real senders stand-in: until the Azure channel senders are built, sending through one
 // rejects loudly rather than dropping the message (constitution: never fail silently).
 // With dev tooling on, `selectSenders` routes every channel to the dev outbox instead.
-function notConfiguredSenders(): Senders {
-  const reject = (channel: string) => async (_message: OutgoingMessage): Promise<void> => {
-    throw new Error(`${channel} sending is not configured`);
-  };
-  return {
-    push: { sendPush: reject("Push") },
-    email: { sendEmail: reject("Email") },
-    sms: { sendSms: reject("SMS") },
-  };
-}
+
 
 // The shared-address edit notifier seam: a member's shared-address change nudges every
 // OTHER member. Resolve the member's own email and deliver a fixed, personal-content-free
@@ -84,7 +76,7 @@ function buildSharedAddressNotifier(db: Db, senders: Senders): SharedAddressNoti
 function buildActions(db: Db) {
   const config = loadConfig();
   const keyWrapper = selectKeyWrapper({ nodeEnv: config.nodeEnv, localKek: config.devKek });
-  const senders = selectSenders(config, notConfiguredSenders());
+  const senders = notificationSenders(config, db);
   return createHouseholdActions({
     db,
     keyWrapper,

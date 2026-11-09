@@ -1,6 +1,7 @@
 # No trailing slash: a symlinked node_modules (shared across clones) must be ignored too.
 node_modules
 .next/
+.runtime/
 next-env.d.ts
 *.tsbuildinfo
 dist/
@@ -23,3 +24,11 @@ dist/
 *.tfplan
 .claude/settings.local.json
 .claude/worktrees/
+.claude/napkin.md
+__pycache__/
+*.pyc
+# Private delivery inputs and evidence must never be published.
+*.tfvars.json
+*.tfbackend
+*.parameters.json
+.delivery/

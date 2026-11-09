@@ -196,6 +196,7 @@ export default async function RulesPage({
       <RulesView
         rules={view.rules}
         agents={view.agents}
+        currency={view.currency}
         createAction={createAction}
         updateAction={updateAction}
         pauseAction={pauseAction}

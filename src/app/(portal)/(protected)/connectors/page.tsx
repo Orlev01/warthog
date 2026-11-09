@@ -1,3 +1,7 @@
+import { getProcessCatalogue } from "@/server/connectors/catalogue";
+import { createConnectorRuntime } from "@/server/connectors/runtime";
+import { oauthClientFor } from "@/server/connectors/client-config";
+import { notificationSenders } from "../../../../server/notify/production";
 import * as React from "react";
 import { join } from "node:path";
 import { cookies } from "next/headers";
@@ -47,14 +51,7 @@ const SESSION_COOKIE = "__Host-wh_session";
 // (`catalogue/connectors/*.json`, rooted at the working directory — never `import.meta.url`,
 // which the bundler mis-resolves). No per-connector OAuth client app is registered in config
 // yet, so no oauth2 connector reports connectable until that operator registration lands.
-function getCatalogue(): CatalogueIndex {
-  return processSingleton("connectors.catalogue", () =>
-    loadCatalogue({
-      dir: join(process.cwd(), "catalogue", "connectors"),
-      isOAuthClientConfigured: () => false,
-    }),
-  );
-}
+function getCatalogue(): CatalogueIndex { return getProcessCatalogue(loadConfig()); }
 
 // Resolve the signed-in session from the cookie (or null), re-derived wherever it is needed
 // so no handler trusts a client value for identity (design §5).
@@ -66,16 +63,7 @@ async function resolveSession(db: Db): Promise<Session | null> {
 // Real senders stand-in: until the Azure channel senders are built, sending through one
 // rejects loudly rather than dropping the message (constitution: never fail silently). With
 // dev tooling on, `selectSenders` routes every channel to the dev outbox instead.
-function notConfiguredSenders(): Senders {
-  const reject = (channel: string) => async (_message: OutgoingMessage): Promise<void> => {
-    throw new Error(`${channel} sending is not configured`);
-  };
-  return {
-    push: { sendPush: reject("Push") },
-    email: { sendEmail: reject("Email") },
-    sms: { sendSms: reject("SMS") },
-  };
-}
+
 
 // Build the connectors actions with the real seams. The KeyWrapper (local AES outside
 // production, Key Vault in production) lets `dekFor` unwrap the session person's own DEK
@@ -90,23 +78,21 @@ function buildActions(db: Db, config: Config): ConnectorsActions {
     return keyWrapper.unwrap(user.wrappedDek);
   };
   const redirectUri = connectCallbackUrl(config.publicBaseUrl);
+  const runtime = createConnectorRuntime({ config, db });
   return createConnectorsActions({
+    startProviderSignin: runtime.begin,
     db,
     clock: systemClock,
     catalogue: getCatalogue(),
     dekFor,
     fetch: createGuardedProviderFetch(),
-    email: selectSenders(config, notConfiguredSenders()).email,
+    email: notificationSenders(config, db).email,
     operatorEmail: config.operatorEmail ?? "",
     googleEarlyAccess: config.googleEarlyAccess,
     // The operator-registered provider sign-in client is a later task; the redirect URI is
     // derived from the configured public address, the client id/secret flow from config when
     // they exist (never baked into source, INV-103).
-    oauthClientConfigFor: (_connectorId: string): OAuthClientConfig => ({
-      clientId: "",
-      clientSecret: "",
-      redirectUri,
-    }),
+    oauthClientConfigFor: (id) => oauthClientFor(config, id),
     providerMcpConfig: {
       clientMetadataUrl: new URL("/oauth/client-metadata.json", config.publicBaseUrl).href,
     },
@@ -117,9 +103,7 @@ function buildActions(db: Db, config: Config): ConnectorsActions {
     // registered yet, so no oauth2 connection can exist). Until it lands the seam refuses
     // loudly rather than pretending: disconnect still deletes the stored tokens and records
     // that the provider access was not revoked (never a silent success).
-    revokeProviderAccess: async () => {
-      throw new Error("Provider revocation is not configured");
-    },
+    revokeProviderAccess: runtime.revoke,
   });
 }
 
@@ -184,6 +168,8 @@ async function disconnectAction(formData: FormData): Promise<void> {
     const result = await buildActions(db, config).disconnectService(session, connectionId);
     if (!result.ok) {
       notice = "problem";
+    } else if (result.providerRevoked === false) {
+      notice = "provider-revoke-needed";
     }
   } catch (error) {
     if (!(error instanceof HttpError)) {
@@ -219,9 +205,11 @@ async function requestAction(formData: FormData): Promise<void> {
   redirect(`/connectors?notice=${notice}`);
 }
 
-type Notice = "disconnected" | "connected" | "requested" | "key-needed" | "problem";
+type Notice = "provider-revoke-needed" | "connection-declined" | "disconnected" | "connected" | "requested" | "key-needed" | "problem";
 
 const NOTICES: Record<Notice, { done: boolean; text: string }> = {
+  "provider-revoke-needed": { done: true, text: "Disconnected from Warthog. To remove the provider’s consent too, open your Google or Microsoft account’s app permissions and remove Warthog." },
+  "connection-declined": { done: false, text: "The service was not connected. You can try again when you are ready." },
   disconnected: { done: true, text: "Service disconnected." },
   connected: { done: true, text: "Service connected." },
   requested: { done: true, text: "Thanks — we've recorded your request." },

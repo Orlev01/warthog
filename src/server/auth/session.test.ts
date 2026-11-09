@@ -625,3 +625,53 @@ test("the session cookie persists for the 30-day absolute window (Max-Age)", asy
     await db.close();
   }
 });
+
+
+for (const mutation of ["revoke", "expire-idle", "expire-absolute"] as const) {
+  test(`verification fails closed when the session is ${mutation}d before its refresh write`, async () => {
+    const db = await freshDb();
+    try {
+      const userId = await makeUser(db, `race-${mutation}`);
+      const { clock } = mutableClock(T0);
+      const created = await createSession(db, userId, { clock, random: systemRandom });
+      let intercepted = false;
+      const interleaved: Db = {
+        async query(text, values) {
+          if (!intercepted && /UPDATE sessions SET last_seen_at/i.test(text)) {
+            intercepted = true;
+            if (mutation === "revoke") {
+              await db.query("DELETE FROM sessions WHERE id = $1", [created.session.id]);
+            } else {
+              const column = mutation === "expire-idle" ? "last_seen_at" : "created_at";
+              const days = mutation === "expire-idle" ? 14 : 30;
+              await db.query(`UPDATE sessions SET ${column} = $2::timestamptz WHERE id = $1`,
+                [created.session.id, new Date(T0.getTime() - days * DAY_MS - 1).toISOString()]);
+            }
+          }
+          return db.query(text, values);
+        },
+        close: () => db.close(),
+      };
+      assert.equal(await verifySession(interleaved, created.token, { clock }), null);
+      assert.equal(intercepted, true, "exercise revocation/expiry before the write, not an absent initial row");
+      if (mutation === "revoke") {
+        assert.equal((await db.query("SELECT id FROM sessions")).rows.length, 0);
+      }
+    } finally { await db.close(); }
+  });
+}
+
+
+test("a crypto-shredded account cannot mint or verify a session before its purge job runs", async () => {
+  const db = await freshDb();
+  try {
+    const userId = await makeUser(db, "tombstoned-session");
+    const { clock } = mutableClock(T0);
+    const prior = await createSession(db, userId, { clock, random: systemRandom });
+    await db.query("UPDATE users SET wrapped_dek = '' WHERE id = $1", [userId]);
+    assert.equal(await verifySession(db, prior.token, { clock }), null);
+    await assert.rejects(createSession(db, userId, { clock, random: systemRandom }),
+      (error: unknown) => typeof error === "object" && error !== null && "status" in error && error.status === 401);
+    assert.equal((await db.query("SELECT id FROM sessions")).rows.length, 1, "no replacement session was minted");
+  } finally { await db.close(); }
+});

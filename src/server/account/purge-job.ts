@@ -39,9 +39,10 @@
 // concatenated into the SQL text (INV-102 — a queued value shaped like SQL is handled as
 // data and cannot alter a query).
 
-import { listPendingPurges } from "../db/account-purge";
+import { deleteAccountJobs, listPendingPurges } from "../db/account-purge";
 import { withTransaction, type Db } from "../db/index";
 import type { BlobStore } from "../storage/blob";
+import { lockUserOAuthConnections } from "../oauth/connection-lock";
 
 // The account ids purged on this run (empty when the queue was empty / already clear).
 export interface PurgeRunResult {
@@ -63,10 +64,14 @@ async function purgeAccount(db: Db, userId: string, deps: PurgeDeps): Promise<vo
     await deps.blobStore.delete(String(row.blob_key));
   }
   await withTransaction(db, async (tx) => {
+    // Match deletion's user -> OAuth-connection -> agent lock order.
+    await tx.query("SELECT id FROM users WHERE id = $1 FOR NO KEY UPDATE", [userId]);
+    await lockUserOAuthConnections(tx, userId);
     const agents = "SELECT connection_id FROM agents WHERE user_id = $1";
     await tx.query(`DELETE FROM oauth_tokens WHERE connection_id IN (${agents})`, [userId]);
     await tx.query(`DELETE FROM oauth_auth_codes WHERE connection_id IN (${agents})`, [userId]);
     await tx.query(`DELETE FROM oauth_access_keys WHERE connection_id IN (${agents})`, [userId]);
+    await deleteAccountJobs(tx, userId);
     await tx.query("DELETE FROM users WHERE id = $1", [userId]);
   });
 }

@@ -140,7 +140,7 @@ const DRIVE_ENTRY: CatalogueEntry = {
   auth: {
     authorize_url: "https://accounts.google.com/o/oauth2/v2/auth",
     token_url: "https://oauth2.googleapis.com/token",
-    scopes: ["https://www.googleapis.com/auth/drive"],
+    scopes: ["https://www.googleapis.com/auth/drive.readonly"],
   },
   google_early_access: true,
 };
@@ -426,6 +426,7 @@ test("a read tool (calendar list) hits the entry host with the connection's Bear
 
     assert.equal(f.requests.length, 1, "exactly one upstream request is sent");
     const sent = f.requests[0]!;
+    if (sent.body) assert.equal(sent.headers.get("content-type"), "application/json");
     assert.equal(new URL(sent.url).host, GOOGLEAPIS_HOST, "the request goes to the entry's host, never a caller host");
     assert.ok(READ_METHODS.has(sent.method.toUpperCase()), `a read tool uses a read method (was ${sent.method})`);
     assert.ok(
@@ -499,6 +500,7 @@ test("a change tool (calendar create) hits the entry host with the Bearer, using
 
     assert.equal(f.requests.length, 1, "exactly one upstream request is sent");
     const sent = f.requests[0]!;
+    if (sent.body) assert.equal(sent.headers.get("content-type"), "application/json");
     assert.equal(new URL(sent.url).host, GOOGLEAPIS_HOST, "the request goes to the entry's host");
     assert.ok(
       !READ_METHODS.has(sent.method.toUpperCase()),

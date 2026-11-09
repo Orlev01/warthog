@@ -103,6 +103,22 @@ import { randomBytes } from "node:crypto";
 import { z } from "zod";
 
 import { cardPolicyFor, cardRequestOf, loadAgentContext } from "./context";
+import { setAccountCurrency } from "../db/account-currency";
+
+test("rule currency follows the owner account independently of the agent budget", async () => {
+  const db = await freshDb();
+  const keyWrapper = keyWrapperFor();
+  try {
+    const { userId } = await makePerson(db, "audit-rule-currency", keyWrapper);
+    await setAccountCurrency(db, { userId, currency: "NZD" });
+    await upsertPermissions(db, baseGrants(userId, CONN, { cardAccess: true, cardBudget: { amount: 300, currency: "USD", period: "month" } }));
+    await upsertRate(db, { rateDate: DAY_NOW, baseCurrency: "USD", quoteCurrency: "NZD", rate: 1.6 });
+    const ctx = await loadAgentContext(connectionFor(userId), depsFor(db, keyWrapper), { amount: 80, currency: "USD" });
+    assert.equal(ctx.cardChecks?.ruleCurrency, "NZD");
+    assert.deepEqual(ctx.cardChecks?.ruleRate, { from: "USD", to: "NZD", rate: 1.6, date: DAY_NOW });
+    assert.equal(ctx.accountCurrency, "USD");
+  } finally { await db.close(); }
+});
 import { createUser } from "../db/users";
 import { upsertPermissions, getConnectionPermissions } from "../db/agent-permissions";
 import { createRule, pauseRule } from "../db/rules";
@@ -834,7 +850,7 @@ test("W4.3: the agent's spend this period is read in the person's own time zone"
   }
 });
 
-test("W4.3: the household and member spend for a card request are read in the person's own time zone", async () => {
+test("AUD-012: personal November spending is separate from the household's current UTC December", async () => {
   const db = await freshDb();
   try {
     const keyWrapper = keyWrapperFor();
@@ -852,8 +868,9 @@ test("W4.3: the household and member spend for a card request are read in the pe
       amount: 50,
       currency: "AUD",
     });
-    assert.equal(ctx.cardRequest?.household?.budgetSpendToDate, 80, "the household's November total");
-    assert.equal(ctx.cardRequest?.household?.memberSpendToDate, 80, "this member's November total");
+    assert.equal(ctx.spend, 80, "the person's November total still counts toward their agent budget");
+    assert.equal(ctx.cardRequest?.household?.budgetSpendToDate, 0, "the household's December UTC total");
+    assert.equal(ctx.cardRequest?.household?.memberSpendToDate, 0, "this member's December UTC total");
   } finally {
     await db.close();
   }

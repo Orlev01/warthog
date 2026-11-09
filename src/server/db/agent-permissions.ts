@@ -107,9 +107,10 @@ export async function getConnectionPermissions(
   db: Db,
   userId: string,
   connectionId: string,
+  options: { lock?: boolean } = {},
 ): Promise<ConnectionPermissions | null> {
   const result = await db.query(
-    `SELECT ${COLUMNS} FROM agent_permissions WHERE user_id = $1 AND connection_id = $2`,
+    `SELECT ${COLUMNS} FROM agent_permissions WHERE user_id = $1 AND connection_id = $2${options.lock ? " FOR UPDATE" : ""}`,
     [userId, connectionId],
   );
   const row = result.rows[0];

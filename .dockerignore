@@ -1,0 +1,31 @@
+# Only the explicit build inputs below enter the context.
+**
+!Dockerfile
+!.dockerignore
+!package.json
+!package-lock.json
+!next.config.mjs
+!postcss.config.mjs
+!tsconfig.json
+!next-env.d.ts
+!src/
+!src/**
+!public/
+!public/**
+!db/
+!db/migrations/
+!db/migrations/**
+!catalogue/
+!catalogue/connectors/
+!catalogue/connectors/**
+!scripts/
+!scripts/prepare-runtime.mjs
+!scripts/check-local-linux.mjs
+!scripts/verify-local-postgres.ts
+!scripts/verify-local-postgres-security.ts
+**/.env*
+# Public development fixture required by config and bundle-leak checks.
+# Runtime staging rejects all .env files; real environment files stay excluded.
+!.env.example
+**/*.log
+**/.DS_Store

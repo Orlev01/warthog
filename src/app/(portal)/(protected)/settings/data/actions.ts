@@ -39,6 +39,8 @@
 //     confirmation email.
 
 import { z } from "zod";
+import { formatAccountTime } from "@/server/display-time";
+import { timeZoneFor } from "@/server/spending/time-zone";
 
 import { parseParams, HttpError } from "@/server/http/validate";
 import { requireStepUp } from "@/server/auth/step-up";
@@ -139,16 +141,6 @@ function humanise(value: string): string {
 
 // A stored instant → an absolute, readable label (date + time of day), so two entries on
 // the same day read as distinct moments. No clock seam: it shows WHEN the entry occurred.
-function formatAt(at: string | Date): string {
-  return new Date(at).toLocaleString("en-AU", {
-    timeZone: "UTC",
-    day: "numeric",
-    month: "short",
-    year: "numeric",
-    hour: "2-digit",
-    minute: "2-digit",
-  });
-}
 
 // Collapse any run of whitespace to single spaces and trim, so a summary is one line.
 function oneLine(value: string): string {
@@ -178,11 +170,11 @@ function summarise(entry: ImportedEntry): string {
 }
 
 // Map a decrypted archive entry to the view's display-ready row.
-function toImportedView(entry: ImportedEntry): DataViewImportedEntry {
+function toImportedView(entry: ImportedEntry, timeZone: string): DataViewImportedEntry {
   return {
     id: entry.id,
     kind: humanise(entry.kind),
-    at: formatAt(entry.occurredAt),
+    at: formatAccountTime(entry.occurredAt, timeZone),
     summary: summarise(entry),
   };
 }
@@ -218,8 +210,11 @@ export function createDataActions(deps: DataActionsDeps): DataActions {
   // `session.userId`), decrypted under their DEK, and map each row to a display-ready view.
   async function load(session: Session): Promise<DataPageData> {
     const dek = await dataKeyFor(session.userId);
-    const entries = await listImportedEntriesForUser(db, session.userId, dek);
-    return { importedHistory: entries.map(toImportedView) };
+    try {
+      const entries = await listImportedEntriesForUser(db, session.userId, dek);
+      const zone = await timeZoneFor(db, session.userId, dek);
+      return { importedHistory: entries.map((entry) => toImportedView(entry, zone)) };
+    } finally { dek.fill(0); }
   }
 
   // Build the SESSION person's complete export document — but ONLY after a fresh step-up
@@ -231,8 +226,10 @@ export function createDataActions(deps: DataActionsDeps): DataActions {
       return { ok: false, reason: STEP_UP_REQUIRED };
     }
     const dek = await dataKeyFor(session.userId);
-    const document = await buildExportDocument(db, session.userId, dek, clock);
-    return { ok: true, document };
+    try {
+      const document = await buildExportDocument(db, session.userId, dek, clock);
+      return { ok: true, document };
+    } finally { dek.fill(0); }
   }
 
   // Validate an uploaded export and restore it into the SIGNED-IN account. The upload is
@@ -243,8 +240,10 @@ export function createDataActions(deps: DataActionsDeps): DataActions {
   async function importData(session: Session, upload: unknown): Promise<ImportResult> {
     const document = await readUpload(upload);
     const dek = await dataKeyFor(session.userId);
-    const summary = await importExportDocument(db, session.userId, document, dek, clock);
-    return { ok: true, summary };
+    try {
+      const summary = await importExportDocument(db, session.userId, document, dek, clock);
+      return { ok: true, summary };
+    } finally { dek.fill(0); }
   }
 
   // Read and validate the uploaded file at the input boundary: reject a non-file / oversized
@@ -266,6 +265,9 @@ export function createDataActions(deps: DataActionsDeps): DataActions {
     }
     // The envelope's `version: literal(1)` and per-section kind checks run here; a 4xx on
     // failure, so a wrong-version document never reaches the import service.
+    if (json && typeof json === "object" && Object.hasOwn(json, "deviceProtected")) {
+      throw new HttpError(400, "Use the device import controls for protected details");
+    }
     return parseParams(exportDocumentSchema, json);
   }
 

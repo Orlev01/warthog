@@ -1,3 +1,4 @@
+import { notificationSenders } from "../notify/production";
 // E04-S21 — the auth composition root. The sign-up and sign-in handlers are
 // injectable factories (`createSignupHandler` / `createSigninHandler`); this one
 // place builds their dependency bundles from validated config so every thin HTTP
@@ -47,16 +48,7 @@ export interface ComposeOverrides {
 // than silently dropping the message (constitution: never fail silently). With dev
 // tooling on, `selectSenders` routes every channel to the dev outbox instead, so this
 // bundle is only ever reached with dev tools off.
-export function notConfiguredSenders(): Senders {
-  const reject = (channel: string) => async (_message: OutgoingMessage): Promise<void> => {
-    throw new Error(`${channel} sending is not configured`);
-  };
-  return {
-    push: { sendPush: reject("Push") },
-    email: { sendEmail: reject("Email") },
-    sms: { sendSms: reject("SMS") },
-  };
-}
+
 
 // The origin (scheme + host + port) of the configured public base URL — any path or
 // query on it is dropped. This is the value the handlers check every request's Origin
@@ -92,7 +84,7 @@ export async function getSignupDeps(
     clock: systemClock,
     random: systemRandom,
     hmacKey: config.hmacKey,
-    emailSender: selectSenders(config, notConfiguredSenders()).email,
+    emailSender: notificationSenders(config, db).email,
     keyWrapper: keyWrapperFor(config),
     rpId: config.webauthnRpId,
     publicOrigin: publicOrigin(config),
@@ -127,6 +119,7 @@ export async function getStepUpDeps(
     clock: systemClock,
     rpId: config.webauthnRpId,
     publicOrigin: publicOrigin(config),
+    totpSecrets: createTotpSecretStore({ db, keyWrapper: keyWrapperFor(config) }),
   };
 }
 
@@ -145,7 +138,7 @@ export async function getRecoverDeps(
     clock: systemClock,
     random: systemRandom,
     hmacKey: config.hmacKey,
-    emailSender: selectSenders(config, notConfiguredSenders()).email,
+    emailSender: notificationSenders(config, db).email,
     rpId: config.webauthnRpId,
     publicOrigin: publicOrigin(config),
   };
@@ -164,7 +157,7 @@ export async function getResetDeps(overrides: ComposeOverrides = {}): Promise<Re
     clock: systemClock,
     random: systemRandom,
     hmacKey: config.hmacKey,
-    senders: selectSenders(config, notConfiguredSenders()),
+    senders: notificationSenders(config, db),
     rpId: config.webauthnRpId,
     publicOrigin: publicOrigin(config),
   };
@@ -180,7 +173,7 @@ export async function getDeviceDeps(
 ): Promise<DeviceHandlerDeps> {
   const config = resolveConfig(overrides);
   const db = await resolveDb(overrides);
-  const senders = selectSenders(config, notConfiguredSenders());
+  const senders = notificationSenders(config, db);
   return {
     db,
     clock: systemClock,
@@ -205,7 +198,7 @@ export async function getSigninDeps(
     clock: systemClock,
     random: systemRandom,
     hmacKey: config.hmacKey,
-    emailSender: selectSenders(config, notConfiguredSenders()).email,
+    emailSender: notificationSenders(config, db).email,
     rpId: config.webauthnRpId,
     publicOrigin: publicOrigin(config),
     totpSecrets: createTotpSecretStore({ db, keyWrapper: keyWrapperFor(config) }),

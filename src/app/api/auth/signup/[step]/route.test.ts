@@ -100,6 +100,8 @@ const STEP_METHOD: ReadonlyArray<readonly [string, keyof SignupHandler]> = [
   ["send-code", "sendCode"],
   ["verify-email", "verifyEmail"],
   ["register-passkey", "registerPasskey"],
+  ["begin-totp", "beginTotp"],
+  ["verify-totp", "verifyTotp"],
   ["confirm", "confirmSignup"],
 ];
 
@@ -121,6 +123,8 @@ function spySignupHandler() {
     sendCode: make("sendCode"),
     verifyEmail: make("verifyEmail"),
     registerPasskey: make("registerPasskey"),
+    beginTotp: make("beginTotp"),
+    verifyTotp: make("verifyTotp"),
     confirmSignup: make("confirmSignup"),
   };
   return { handler, calls };

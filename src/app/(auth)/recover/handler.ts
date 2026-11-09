@@ -53,7 +53,7 @@ import {
   beginPasskeyRegistration,
   finishPasskeyRegistration,
 } from "../../../server/auth/passkey";
-import { createSession } from "../../../server/auth/session";
+import { recoverSession } from "../../../server/auth/recover-session";
 import { getUserByEmail } from "../../../server/db/users";
 import type { Clock } from "../../../server/seams/clock";
 import type { Random } from "../../../server/seams/random";
@@ -199,7 +199,7 @@ export function createRecoverHandler(deps: RecoverHandlerDeps): RecoverHandler {
 
       const user = await getUserByEmail(db, email);
       if (user) {
-        await issueEmailCode(db, user.email, { clock, random, hmacKey, emailSender });
+        await issueEmailCode(db, user.email, { purpose: "recovery", clock, random, hmacKey, emailSender });
       }
 
       // A full-entropy handle for the pending recovery.
@@ -238,7 +238,7 @@ export function createRecoverHandler(deps: RecoverHandlerDeps): RecoverHandler {
       const pending = pendingRecoveries.get(recoveryId, clock.now());
       if (!pending) return json(400, { error: "invalid_code" });
 
-      const result = await verifyEmailCode(db, pending.email, code, { clock, hmacKey, emailSender });
+      const result = await verifyEmailCode(db, pending.email, code, { purpose: "recovery", clock, hmacKey, emailSender });
       if (!result.ok) {
         if (result.reason === "throttled") {
           return new Response(JSON.stringify({ error: "throttled" }), {
@@ -353,9 +353,8 @@ export function createRecoverHandler(deps: RecoverHandlerDeps): RecoverHandler {
       if (!pending || !pending.userId) return json(400, { error: "unknown_recovery" });
       if (!pending.passkeyRegistered) return json(400, { error: "no_second_factor" });
 
-      const created = await createSession(db, pending.userId, { clock, random });
-
       pendingRecoveries.delete(recoveryId);
+      const created = await recoverSession(db, pending.userId, { clock, random });
       const userId = pending.userId;
       await deliverAlert("account-recovered", () =>
         alertAccountRecovered(db, { userId }, { emailSender }),

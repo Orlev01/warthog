@@ -1,0 +1,11 @@
+# Device-local portability and passphrase vault creation
+
+Status: accepted for local remediation, 2026-11-09 (UI-003, UI-007).
+
+The Data screen must offer a complete export/import without sending device-protected plaintext, vault keys, recovery phrases or passphrases to the server. The existing native upload could transmit a protected section even though the server ignored it. The browser will now read the file, validate protected records, unlock or establish the destination vault, and reseal protected values before a strict ciphertext-only import request. The server imports everyday data and sealed records in one member-scoped transaction. Export requires fresh step-up and returns owned ciphertext to the browser, where optional unlocking adds plaintext only to the local download. Export files contain sensitive plaintext; the user explicitly opts in and must store them securely.
+
+Fresh vault creation may use a passphrase when the server's possession challenge explicitly says `enroll`; it must never replace an existing vault after a failed unlock. The existing PBKDF2-SHA256/AES-GCM and possession-proof protocol remains unchanged. Setup requires at least twelve characters and a saved recovery phrase before any protected records are stored. Export never creates a new vault. Concurrent creation adopts a compatible winner or fails safely.
+
+Account recovery codes and vault recovery phrases remain distinct: an account recovery code restores sign-in, but does not reveal protected data. An import to a new account uses its own new vault key and recovery phrase. Existing card address references are remapped only to imported addresses belonging to the signed-in account; missing address references reject the entire import. File identifiers never select another account's row. Agent connections and provider tokens are not restored.
+
+No dependency, network provider, cloud configuration or spending change is required. Focused tests must prove no protected plaintext crosses fetch, incorrect keys fail closed, only the current member's ciphertext is exported, stale authentication rejects transfers, and malformed imports leave no partial rows. Browser acceptance remains a separate release gate.

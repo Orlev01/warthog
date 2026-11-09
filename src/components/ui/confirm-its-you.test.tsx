@@ -139,3 +139,33 @@ test("the component renders its explanation and a live 'Confirm it's you' button
   assert.match(button![2].replace(/<[^>]*>/g, ""), /Confirm it(&#x27;|')s you/);
   assert.ok(!/(^|\s)disabled(=""|\s|$)/.test(button![1]), "the button is live");
 });
+
+test("authenticator confirmation sends only the code, excludes passkey prompts and notifies once", async () => {
+  const { sent, fetch } = fakeFetch({ "/api/auth/step-up/totp": { status: 200, body: { ok: true } } });
+  let confirmed = 0;
+  const flow = createConfirmItsYou({ fetch, startAuthentication: async () => { throw new Error("must not prompt"); }, onConfirmed: () => { confirmed++; } });
+  assert.equal(await flow.confirmWithTotp("050471"), true);
+  assert.deepEqual(sent, [{ url: "/api/auth/step-up/totp", method: "POST", body: { totp: "050471" } }]);
+  assert.equal(flow.getState().status, "confirmed");
+  assert.equal(confirmed, 1);
+});
+
+test("authenticator failure and throttling do not confirm, leak response content or duplicate requests", async () => {
+  for (const status of [401, 429]) {
+    const { sent, fetch } = fakeFetch({ "/api/auth/step-up/totp": { status, body: { error: "private-provider-value" } } });
+    const flow = createConfirmItsYou({ fetch, startAuthentication: async () => ASSERTION as never });
+    const results = await Promise.all([flow.confirmWithTotp("050471"), flow.confirmWithTotp("050471"), flow.confirm()]);
+    assert.deepEqual(results, [false, false, false]);
+    assert.equal(sent.length, 1);
+    assert.equal(flow.getState().status, "error");
+    assert.ok(!flow.getState().error?.includes("private-provider-value"));
+    if (status === 429) assert.match(flow.getState().error ?? "", /wait/i);
+  }
+});
+
+test("the shared confirmation view offers a labelled authenticator alternative", () => {
+  const markup = renderToStaticMarkup(<ConfirmItsYou />);
+  assert.match(markup, /Authenticator app code/);
+  assert.match(markup, /autocomplete="one-time-code"/i);
+  assert.match(markup, /Confirm with authenticator app/);
+});

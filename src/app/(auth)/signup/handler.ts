@@ -57,6 +57,8 @@ import type { Random } from "../../../server/seams/random";
 import type { EmailSender } from "../../../server/notify/senders";
 import { withTransaction, type Db } from "../../../server/db/index";
 import { pendingStore } from "../../../server/auth/pending-store";
+import { enrollTotp, matchTotpStep } from "../../../server/auth/totp";
+import { encrypt } from "../../../server/crypto/envelope";
 
 // The dependency bundle. Each step reads the subset it needs; the superset is
 // structurally assignable to each. `rpId` is the WebAuthn RP ID (from config, never
@@ -77,6 +79,8 @@ export interface SignupHandler {
   sendCode(request: Request): Promise<Response>;
   verifyEmail(request: Request): Promise<Response>;
   registerPasskey(request: Request): Promise<Response>;
+  beginTotp(request: Request): Promise<Response>;
+  verifyTotp(request: Request): Promise<Response>;
   confirmSignup(request: Request): Promise<Response>;
 }
 
@@ -92,6 +96,8 @@ interface PendingSignup {
   readonly name?: string;
   credential?: { id: string; publicKey: string; counter: number };
   recoveryDraws?: Uint8Array[];
+  processing?: boolean;
+  totp?: { secret: string; qr: string; attempts: number; verifiedStep?: number };
 }
 
 // The process-wide pending-sign-up store (the new-device / release-store pattern):
@@ -175,6 +181,8 @@ const confirmSignupSchema = z.object({
   signupId: z.string().min(1).max(200),
   savedConfirmed: z.boolean(),
 });
+const beginTotpSchema = z.strictObject({ signupId: z.string().min(1).max(200) });
+const verifyTotpSchema = beginTotpSchema.extend({ totp: z.string().regex(/^[0-9]{6}$/) });
 
 // Whether a write failed because the address already has an account: a unique
 // violation (SQLSTATE 23505) on the users table (its email / lower(email) index).
@@ -187,7 +195,7 @@ function isEmailTaken(error: unknown): boolean {
 function json(status: number, body: unknown): Response {
   return new Response(JSON.stringify(body), {
     status,
-    headers: { "content-type": "application/json" },
+    headers: { "content-type": "application/json", "cache-control": "no-store" },
   });
 }
 
@@ -235,7 +243,7 @@ export function createSignupHandler(deps: SignupHandlerDeps): SignupHandler {
       // step cannot flood an inbox or keep many codes live. A throttled send emails
       // nothing and says when to try again; the limit is per address, whether or not an
       // account exists, so the refusal reveals nothing about existence.
-      const issued = await issueEmailCode(db, email, { clock, random, hmacKey, emailSender });
+      const issued = await issueEmailCode(db, email, { purpose: "signup", clock, random, hmacKey, emailSender });
       if (!issued.ok) return throttled(issued.retryAfterMs);
       // Park the name against the email until verify-email mints a signupId and
       // takes it onto the pending sign-up (never a plaintext column).
@@ -258,7 +266,7 @@ export function createSignupHandler(deps: SignupHandlerDeps): SignupHandler {
         maxBytes: MAX_BODY_BYTES,
       });
 
-      const result = await verifyEmailCode(db, email, code, { clock, hmacKey, emailSender });
+      const result = await verifyEmailCode(db, email, code, { purpose: "signup", clock, hmacKey, emailSender });
       if (!result.ok) return json(400, { error: "invalid_code" });
 
       // A full-entropy handle for the pending sign-up.
@@ -290,6 +298,7 @@ export function createSignupHandler(deps: SignupHandlerDeps): SignupHandler {
   // 4xx. Still NO `users` row.
   async function registerPasskey(request: Request): Promise<Response> {
     if (!sameOrigin(request)) return json(403, { error: "forbidden" });
+    let claimed: PendingSignup | undefined;
     try {
       const { signupId, registrationResponse } = await parseBody(
         registerPasskeySchema,
@@ -299,6 +308,9 @@ export function createSignupHandler(deps: SignupHandlerDeps): SignupHandler {
 
       const pending = pendingSignups.get(signupId, clock.now());
       if (!pending) return json(400, { error: "unknown_signup" });
+      if (pending.processing || pending.recoveryDraws) return json(409, { error: "factor_already_in_progress" });
+      pending.processing = true;
+      claimed = pending;
 
       let verification;
       try {
@@ -324,7 +336,18 @@ export function createSignupHandler(deps: SignupHandlerDeps): SignupHandler {
         publicKey: isoBase64URL.fromBuffer(credential.publicKey),
         counter: credential.counter,
       };
+      pending.totp = undefined;
 
+      const code = await prepareRecovery(pending, signupId);
+      return json(200, { recoveryCode: code });
+    } catch (error) {
+      return handleError(error);
+    } finally {
+      if (claimed) claimed.processing = false;
+    }
+  }
+
+  async function prepareRecovery(pending: PendingSignup, signupId: string): Promise<string> {
       // Issue the recovery code through the real issuer, recording the entropy it
       // draws so confirm can REPLAY it and persist the SAME code against the new
       // account. The store write is discarded here (no account yet); the code is
@@ -341,11 +364,48 @@ export function createSignupHandler(deps: SignupHandlerDeps): SignupHandler {
         random: recordingRandom,
       });
       pending.recoveryDraws = recoveryDraws;
+      return code;
+  }
 
-      return json(200, { recoveryCode: code });
-    } catch (error) {
-      return handleError(error);
-    }
+  async function beginTotp(request: Request): Promise<Response> {
+    if (!sameOrigin(request)) return json(403, { error: "forbidden" });
+    let claimed: PendingSignup | undefined;
+    try {
+      const { signupId } = await parseBody(beginTotpSchema, request, { maxBytes: MAX_BODY_BYTES });
+      const pending = pendingSignups.get(signupId, clock.now());
+      if (!pending) return json(400, { error: "unknown_signup" });
+      if (pending.processing || pending.recoveryDraws) return json(409, { error: "factor_already_in_progress" });
+      if (!pending.totp) {
+        pending.processing = true;
+        claimed = pending;
+        pending.credential = undefined;
+        const enrolled = await enrollTotp({ account: pending.email, issuer: "Warthog" }, { random });
+        pending.totp = { secret: enrolled.secret, qr: enrolled.qr, attempts: 0 };
+      }
+      return json(200, { secret: pending.totp.secret, qr: pending.totp.qr });
+    } catch (error) { return handleError(error); }
+    finally { if (claimed) claimed.processing = false; }
+  }
+
+  async function verifyTotp(request: Request): Promise<Response> {
+    if (!sameOrigin(request)) return json(403, { error: "forbidden" });
+    let claimed: PendingSignup | undefined;
+    try {
+      const { signupId, totp } = await parseBody(verifyTotpSchema, request, { maxBytes: MAX_BODY_BYTES });
+      const pending = pendingSignups.get(signupId, clock.now());
+      if (!pending?.totp) return json(400, { error: "unknown_signup" });
+      if (pending.processing || pending.recoveryDraws) return json(409, { error: "factor_already_in_progress" });
+      if (pending.totp.attempts >= 5) return throttled(30 * 60 * 1000);
+      pending.totp.attempts++;
+      const step = matchTotpStep(pending.totp.secret, totp, { clock });
+      if (step === null) return json(400, { error: "invalid_code" });
+      pending.processing = true;
+      claimed = pending;
+      const recoveryCode = await prepareRecovery(pending, signupId);
+      pending.totp.verifiedStep = step;
+      return json(200, { recoveryCode });
+    } catch (error) { return handleError(error); }
+    finally { if (claimed) claimed.processing = false; }
   }
 
   // Step 3 — the front door closes here. Refuse (4xx, nothing created) unless the
@@ -362,7 +422,7 @@ export function createSignupHandler(deps: SignupHandlerDeps): SignupHandler {
       const pending = pendingSignups.get(signupId, clock.now());
       if (!pending) return json(400, { error: "unknown_signup" });
       if (!savedConfirmed) return json(400, { error: "not_confirmed" });
-      if (!pending.credential || !pending.recoveryDraws) {
+      if ((!pending.credential && pending.totp?.verifiedStep === undefined) || !pending.recoveryDraws || pending.processing) {
         return json(400, { error: "no_second_factor" });
       }
 
@@ -406,11 +466,16 @@ export function createSignupHandler(deps: SignupHandlerDeps): SignupHandler {
           // Persist the passkey registered at step 2 for the new account (mirrors the
           // passkeys storage in finishPasskeyRegistration; the credential was already
           // verified, so here it is only stored — bound as parameters, INV-102).
-          await tx.query(
+          if (credential) await tx.query(
             `INSERT INTO passkeys (user_id, credential_id, public_key, counter)
              VALUES ($1, $2, $3, $4)`,
             [user.id, credential.id, credential.publicKey, credential.counter],
           );
+          else if (pending.totp?.verifiedStep !== undefined) {
+            const ciphertext = await encrypt(dek, "totp_secrets", "secret_enc", user.id, pending.totp.secret);
+            await tx.query("INSERT INTO totp_secrets (user_id, secret_enc, last_step) VALUES ($1, $2, $3::bigint)",
+              [user.id, ciphertext, pending.totp.verifiedStep]);
+          }
 
           await issueRecoveryCode(tx, user.id, { random: replayRandom });
 
@@ -437,5 +502,5 @@ export function createSignupHandler(deps: SignupHandlerDeps): SignupHandler {
     }
   }
 
-  return { sendCode, verifyEmail, registerPasskey, confirmSignup };
+  return { sendCode, verifyEmail, registerPasskey, beginTotp, verifyTotp, confirmSignup };
 }

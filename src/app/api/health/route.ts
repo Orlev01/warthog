@@ -6,11 +6,12 @@
 import { loadConfig } from "@/server/config";
 import { getServerDb } from "@/server/db/server";
 import { createHealthHandler } from "./handler";
+import { assertProductionReleaseConfiguration } from "@/server/production-readiness";
 
 // Always evaluated per request: a probe answer must never be prerendered or cached.
 export const dynamic = "force-dynamic";
 
-const handler = createHealthHandler({ loadConfig: () => loadConfig(), getDb: getServerDb });
+const handler = createHealthHandler({ loadConfig: () => assertProductionReleaseConfiguration(loadConfig()), getDb: getServerDb });
 
 export async function GET(): Promise<Response> {
   return handler.ready();

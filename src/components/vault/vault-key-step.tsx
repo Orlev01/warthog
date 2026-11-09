@@ -116,7 +116,7 @@ export function createVaultKeyStep(deps: VaultKeyStepDeps): VaultKeyStep {
       case "passphrase": {
         const passphrase = state.passphrase;
         set({ passphrase: "" });
-        return deps.vault.unlockWithPassphrase(passphrase);
+        return deps.vault.unlockWithPassphrase(passphrase, { createIfMissing: deps.createIfMissing });
       }
       case "recovery": {
         const phrase = state.recoveryPhrase;
@@ -158,6 +158,7 @@ export function createVaultKeyStep(deps: VaultKeyStepDeps): VaultKeyStep {
   }
 
   function cancelPhrase(): void {
+    pendingKey?.fill(0);
     pendingKey = null;
     set({ newPhrase: null, phraseSaved: false });
   }

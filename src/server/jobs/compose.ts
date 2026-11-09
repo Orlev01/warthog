@@ -1,3 +1,4 @@
+import { notificationSenders } from "../notify/production";
 // The job runtime's composition root (E18-S21): the real seams the registry's handlers and
 // sweeps run from, built from validated config on the scheduler's first tick. Pieces that
 // need operator setup not done yet fail loudly when used (the not-configured idiom), and
@@ -12,17 +13,18 @@
 // stays testable without a real environment, the process-wide server database or Azure.
 
 import { loadConfig, type Config } from "../config";
-import { getServerDb } from "../db/server";
+import { getServerDb, getPurgeDb } from "../db/server";
 import { systemClock } from "../seams/clock";
 import { systemRandom } from "../seams/random";
 import { selectSenders } from "../notify/senders";
-import { keyWrapperFor, notConfiguredSenders } from "../auth/compose";
+import { keyWrapperFor } from "../auth/compose";
 import { createFrankfurterRateSource } from "../currency/rate-source";
 import { createResetExecutor } from "../account/reset-executor";
 import { selectBlobStore } from "../storage/blob";
 import { buildDispatchTable, buildPeriodicSweeps, type JobSeams } from "./registry";
 import { createScheduler, type Scheduler } from "./scheduler";
 import type { Db } from "../db/index";
+import { createConnectorRuntime } from "../connectors/runtime";
 
 const FRANKFURTER_BASE_URL = "https://api.frankfurter.app";
 
@@ -31,19 +33,18 @@ export async function composeJobSeams(
 ): Promise<JobSeams> {
   const config = overrides.config ?? loadConfig();
   const db = await (overrides.getDb ?? getServerDb)();
-  const senders = selectSenders(config, notConfiguredSenders());
+  const senders = notificationSenders(config, db);
   return {
     db,
+    getPurgeDb: config.nodeEnv === "production" ? getPurgeDb : async () => db,
     clock: systemClock,
     keyWrapper: keyWrapperFor(config),
     random: systemRandom,
     senders,
     push: senders.push,
-    refresh: async () => {
-      throw new Error("connector token refresh is not configured (operator OAuth clients pending)");
-    },
+    refresh: (target) => createConnectorRuntime({ config, db }).refresh(target),
     resetExecutor: createResetExecutor(db),
-    rateSource: createFrankfurterRateSource({ baseUrl: FRANKFURTER_BASE_URL, fetchImpl: fetch }),
+    rateSource: createFrankfurterRateSource({ baseUrl: config.exchangeRateBaseUrl ?? FRANKFURTER_BASE_URL, fetchImpl: fetch }),
     // The same receipt store the life-admin page writes (built lazily: it opens the
     // container on the first delete, so a purge with no receipts never touches Azure).
     blobStore: selectBlobStore({

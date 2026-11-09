@@ -182,7 +182,8 @@ test("requestConnector emails exactly the configured operator address", async ()
     const emails = emailsOf(box);
     assert.equal(emails.length, 1, "exactly one operator email is sent");
     assert.equal(emails[0]!.recipient, OPERATOR, "it goes to the configured operator address");
-    assert.ok(emails[0]!.body.includes("Dropbox"), "the email names the requested service");
+    assert.ok(!emails[0]!.body.includes("Dropbox"), "free-text requests stay out of provider mail");
+    assert.match(emails[0]!.body, /Review it in Warthog/);
   } finally {
     await db.close();
   }
@@ -636,8 +637,8 @@ test("the operator email is redacted: a card number in the service name is maske
     );
 
     const body = emailsOf(box)[0]!.body;
-    assert.ok(body.includes("Acme"), "the service name is still referenced in the email");
-    assert.ok(body.includes("[card "), "the card number is masked (redaction ran)");
+    assert.ok(!body.includes("Acme"), "the free-text name is not sent overseas");
+    assert.ok(!body.includes("1111"), "even the card suffix stays out of email");
     assert.ok(!body.includes("4111 1111 1111 1111"), "the full grouped card number must not appear");
     assert.ok(!body.includes("4111111111111111"), "nor the full card number with its separators stripped");
   } finally {

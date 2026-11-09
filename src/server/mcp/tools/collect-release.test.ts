@@ -58,10 +58,10 @@
 //   // source of truth. Deterministic per connection, and DISTINCT for distinct
 //   // connections (so a release is scoped to the connection it belongs to, never merely
 //   // to the person).
-//   function releaseKeyFor(connection: AgentConnection): string;
+//   function releaseKeyFor(connection: AgentConnection, approvalId: string): string;
 //
 // A release is arranged by PUTTING a value into the real, already-built release-store seam
-// (`createReleaseStore(clock)`) under `releaseKeyFor(connection)` — the SAME key the tool
+// (`createReleaseStore(clock)`) under `releaseKeyFor(connection, approvalId)` — the SAME key the tool
 // collects with — so no test hard-codes the key format. Time is driven by a controllable
 // clock the store reads through, so the 5-minute TTL is crossed deterministically with no
 // real delay. No test constructs a database: collect_release needs none. The obligation
@@ -74,6 +74,7 @@ import assert from "node:assert/strict";
 import { randomUUID } from "node:crypto";
 
 import { createCollectReleaseTool, releaseKeyFor } from "./collect-release";
+const APPROVAL_ID = "11111111-1111-4111-8111-111111111111";
 import { createReleaseStore } from "../../crypto/release-store";
 import type { ReleaseStore } from "../../crypto/release-store";
 import type { Clock } from "../../seams/clock";
@@ -141,15 +142,15 @@ test("collect_release hands over a released value once; a second call returns go
 
   // Arrange a release for this connection (as the release endpoint would, under the SAME
   // key the tool collects with).
-  store.put(releaseKeyFor(conn), HIGH_TIER);
+  store.put(releaseKeyFor(conn, APPROVAL_ID), HIGH_TIER);
 
   const tool = createCollectReleaseTool({ releaseStore: store });
 
-  const first = (await tool.handle({}, conn)) as CollectResult;
+  const first = (await tool.handle({ approval_id: APPROVAL_ID }, conn)) as CollectResult;
   assert.equal(first.status, "collected", "the first collect hands over the released value");
   assert.equal(first.value, HIGH_TIER, "the value is handed back VERBATIM (the one legitimate hand-over)");
 
-  const second = (await tool.handle({}, conn)) as CollectResult;
+  const second = (await tool.handle({ approval_id: APPROVAL_ID }, conn)) as CollectResult;
   assert.equal(second.status, "gone", "a release is collected ONCE — the second call finds it gone");
   assert.equal(second.value, undefined, "a gone result carries no value");
 });
@@ -163,10 +164,10 @@ test("a release is still collectable within the 5-minute window", async () => {
   const store = createReleaseStore(c.clock);
   const conn = connectionFor("in-window");
 
-  store.put(releaseKeyFor(conn), CARD);
+  store.put(releaseKeyFor(conn, APPROVAL_ID), CARD);
   c.advance(TTL_MS - 1000); // 4m59s — inside the window
 
-  const result = (await tool(store).handle({}, conn)) as CollectResult;
+  const result = (await tool(store).handle({ approval_id: APPROVAL_ID }, conn)) as CollectResult;
   assert.equal(result.status, "collected", "a release younger than 5 minutes is still collectable");
   assert.equal(result.value, CARD, "the card value is handed back within the window");
 });
@@ -183,13 +184,13 @@ test("after 5 minutes the release has expired and collect_release returns gone (
   const store = createReleaseStore(c.clock);
   const conn = connectionFor("expired-release");
 
-  store.put(releaseKeyFor(conn), HIGH_TIER);
+  store.put(releaseKeyFor(conn, APPROVAL_ID), HIGH_TIER);
   c.advance(TTL_MS + 1000); // 5m01s — past the window
 
   // The tool is constructed with ONLY a release store (no db seam). If the value could
   // come from, or expiry could depend on, a database, this db-free setup could not serve
   // the feature at all.
-  const result = (await createCollectReleaseTool({ releaseStore: store }).handle({}, conn)) as CollectResult;
+  const result = (await createCollectReleaseTool({ releaseStore: store }).handle({ approval_id: APPROVAL_ID }, conn)) as CollectResult;
   assert.equal(result.status, "gone", "a release older than 5 minutes has expired and collects as gone");
   assert.equal(result.value, undefined, "an expired release hands back no value");
 });
@@ -203,7 +204,7 @@ test("collect_release returns gone for a connection that has no release", async 
   const store = createReleaseStore(c.clock);
   const conn = connectionFor("no-release");
 
-  const result = (await createCollectReleaseTool({ releaseStore: store }).handle({}, conn)) as CollectResult;
+  const result = (await createCollectReleaseTool({ releaseStore: store }).handle({ approval_id: APPROVAL_ID }, conn)) as CollectResult;
   assert.equal(result.status, "gone", "no release for this connection → gone");
   assert.equal(result.value, undefined, "nothing is handed over");
 });
@@ -234,21 +235,21 @@ test("another connection of the same person cannot collect this connection's rel
 
   // Distinct connections must key to distinct releases (the scoping property itself).
   assert.notEqual(
-    releaseKeyFor(connA),
-    releaseKeyFor(connB),
+    releaseKeyFor(connA, APPROVAL_ID),
+    releaseKeyFor(connB, APPROVAL_ID),
     "distinct connections key to distinct releases — a release is scoped to its connection",
   );
 
-  store.put(releaseKeyFor(connA), HIGH_TIER);
+  store.put(releaseKeyFor(connA, APPROVAL_ID), HIGH_TIER);
   const t = createCollectReleaseTool({ releaseStore: store });
 
   // Connection B cannot see A's release.
-  const bTries = (await t.handle({}, connB)) as CollectResult;
+  const bTries = (await t.handle({ approval_id: APPROVAL_ID }, connB)) as CollectResult;
   assert.equal(bTries.status, "gone", "another connection cannot collect this connection's release");
   assert.equal(bTries.value, undefined, "the released value does not leak to another connection");
 
   // A's release was untouched by B's attempt and is still collectable by A.
-  const aCollects = (await t.handle({}, connA)) as CollectResult;
+  const aCollects = (await t.handle({ approval_id: APPROVAL_ID }, connA)) as CollectResult;
   assert.equal(aCollects.status, "collected", "the owning connection can still collect its own release");
   assert.equal(aCollects.value, HIGH_TIER, "the value is intact for the connection it belongs to");
 });
@@ -260,17 +261,17 @@ test("each connection collects only its own release (independent per connection)
   const connA = connectionFor("person-x", { connectionId: "11111111-1111-1111-1111-111111111111" });
   const connB = connectionFor("person-y", { connectionId: "22222222-2222-2222-2222-222222222222" });
 
-  store.put(releaseKeyFor(connA), "value-for-A");
-  store.put(releaseKeyFor(connB), "value-for-B");
+  store.put(releaseKeyFor(connA, APPROVAL_ID), "value-for-A");
+  store.put(releaseKeyFor(connB, APPROVAL_ID), "value-for-B");
 
   const t = createCollectReleaseTool({ releaseStore: store });
 
   // Collecting one connection's release neither returns nor consumes the other's.
-  const b = (await t.handle({}, connB)) as CollectResult;
+  const b = (await t.handle({ approval_id: APPROVAL_ID }, connB)) as CollectResult;
   assert.equal(b.value, "value-for-B", "connection B collects B's release");
-  const a = (await t.handle({}, connA)) as CollectResult;
+  const a = (await t.handle({ approval_id: APPROVAL_ID }, connA)) as CollectResult;
   assert.equal(a.value, "value-for-A", "connection A still collects A's own release");
-  assert.equal(((await t.handle({}, connA)) as CollectResult).status, "gone", "and only once each");
+  assert.equal(((await t.handle({ approval_id: APPROVAL_ID }, connA)) as CollectResult).status, "gone", "and only once each");
 });
 
 // ===========================================================================
@@ -295,10 +296,10 @@ test("the collect_release tool is named and exposes an optional reason in its sc
 test("a reason, when supplied, does not change the collection outcome", async () => {
   const store = createReleaseStore(controllableClock().clock);
   const conn = connectionFor("with-reason");
-  store.put(releaseKeyFor(conn), CARD);
+  store.put(releaseKeyFor(conn, APPROVAL_ID), CARD);
 
   const result = (await createCollectReleaseTool({ releaseStore: store }).handle(
-    { reason: "collecting the card for the booking" },
+    { approval_id: APPROVAL_ID, reason: "collecting the card for the booking" },
     conn,
   )) as CollectResult;
   assert.equal(result.status, "collected", "a well-formed reason is accepted and the value still collects");

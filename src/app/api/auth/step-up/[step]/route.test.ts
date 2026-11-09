@@ -110,6 +110,7 @@ const FAKE_DEPS = { marker: Symbol("step-up-deps") } as unknown as StepUpHandler
 const STEP_METHOD: ReadonlyArray<readonly [string, keyof StepUpHandler]> = [
   ["begin", "begin"],
   ["finish", "finish"],
+  ["totp", "totp"],
 ];
 
 // A spy step-up handler: each method records the request it received and returns a
@@ -126,7 +127,7 @@ function spyStepUpHandler() {
     calls.push({ method, request, response });
     return response;
   };
-  const handler: StepUpHandler = { begin: make("begin"), finish: make("finish") };
+  const handler: StepUpHandler = { begin: make("begin"), finish: make("finish"), totp: make("totp") };
   return { handler, calls };
 }
 

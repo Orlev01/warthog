@@ -218,6 +218,8 @@ function toPolicyContext(
     permission: toPermission(call, context),
     rules: context.rules as readonly IdentifiedRule[],
     accountCurrency: context.accountCurrency,
+    ruleCurrency: context.cardChecks?.ruleCurrency,
+    ruleRate: context.cardChecks?.ruleRate,
     card: cardPolicyFor(context, now),
     rate: effectiveRate(context, rate),
     now,

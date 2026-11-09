@@ -1034,8 +1034,8 @@ test("requestConnector records a request for the SESSION user and emails the ope
 
     // The operator is emailed at the INJECTED address (config, never baked in).
     assert.ok(
-      emails.some((m) => m.recipient === OPERATOR_EMAIL && m.body.includes("Fancy Spreadsheets")),
-      "the operator is emailed about the requested service at the configured address",
+      emails.some((m) => m.recipient === OPERATOR_EMAIL && m.body.includes("Review it in Warthog") && !m.body.includes("Fancy Spreadsheets")),
+      "the operator gets a generic notice without user-entered request text",
     );
   } finally {
     await db.close();

@@ -1,7 +1,7 @@
 // E01-S10 — notification sender interfaces and config-driven selection
 // (design §10). Every outbound notification channel sits behind its own
 // interface so the correspondence loop depends only on the bundle, never on a
-// concrete Azure sender. In dev/test the single process-wide outbox stands in
+// concrete provider sender. In dev/test the single process-wide outbox stands in
 // for all three channels; in production the real senders (built by later tasks)
 // are injected. Selection is driven by config alone.
 
@@ -19,6 +19,8 @@ export interface OutgoingMessage {
 
 export interface PushSender {
   sendPush(message: OutgoingMessage): Promise<void>;
+  // Used by the notification test action after it has loaded an owned device.
+  sendDevicePush?(subscription: import("./web-push").PushDeviceSubscription): Promise<void>;
 }
 
 export interface EmailSender {
@@ -29,7 +31,7 @@ export interface SmsSender {
   sendSms(message: OutgoingMessage): Promise<void>;
 }
 
-// A full set of senders, one per channel. Both the real Azure senders and the
+// A full set of senders, one per channel. Both the real provider senders and the
 // dev/test outbox satisfy this bundle, so the correspondence loop depends only
 // on it.
 export interface Senders {

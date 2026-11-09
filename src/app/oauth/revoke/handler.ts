@@ -15,7 +15,8 @@
 
 import { createHash } from "node:crypto";
 
-import type { Db } from "../../../server/db/index";
+import { withTransaction, type Db } from "../../../server/db/index";
+import { lockOAuthConnection } from "../../../server/oauth/connection-lock";
 import { readOAuthForm } from "../../../server/oauth/form";
 import { resolveToken } from "../../../server/oauth/store";
 
@@ -46,14 +47,13 @@ export function createRevokeHandler({ db }: { db: Db }): (request: Request) => P
     const resolved = await resolveToken(db, sha256Hex(token));
     if (resolved == null) return ok();
 
-    // Cut the whole connection off: delete every token (access AND refresh) bound to
-    // it, so the agent's next request — and any refresh exchange — is refused.
-    // Scoped to the token's connection (`connection_id` bound as a parameter), so other
-    // connections are untouched; `oauth_tokens` is not an activity table, so DELETE is
-    // fine.
-    await db.query("DELETE FROM oauth_tokens WHERE connection_id = $1::uuid", [
-      resolved.connectionId,
-    ]);
+    await withTransaction(db, async (tx) => {
+      await lockOAuthConnection(tx, resolved.connectionId);
+      // A rotation may have completed while we waited. Revoke the whole family
+      // under the same lock, including pending codes that could mint new tokens.
+      await tx.query("DELETE FROM oauth_tokens WHERE connection_id = $1::uuid", [resolved.connectionId]);
+      await tx.query("DELETE FROM oauth_auth_codes WHERE connection_id = $1::uuid", [resolved.connectionId]);
+    });
     return ok();
   };
 }

@@ -106,7 +106,9 @@ export function createGuardedProviderFetch(
     try {
       const response = await inner(input, { ...init, signal: controller.signal });
       const text = await readBodyCapped(response, MAX_BYTES, controller.signal);
-      return new Response(text, {
+      // Keep null distinct from an empty string: 204/205/304 and HEAD are
+      // bodyless, and reconstructing them with text can turn success into error.
+      return new Response(response.body === null ? null : text, {
         status: response.status,
         statusText: response.statusText,
         headers: response.headers,

@@ -4,9 +4,9 @@
 //
 // Budget periods used to follow UTC, so for a person in Sydney a daily budget reset at
 // 10 or 11 in the morning and a purchase at 8am on 1 December counted toward November.
-// Every place a budget period is written (the release handler) or read (the policy
-// context, the household context, the spending reads, Home) now resolves the person's
-// zone here and hands it to `periodKeyFor`, so a writer and a reader always agree.
+// Personal agent budget periods resolve the person's zone here. Shared household
+// budgets instead use one UTC month for all members (AUD-012); they must not use
+// this reader-specific preference.
 //
 // The zone lives in the person's preferences profile, stored DEK-encrypted
 // (`../db/preferences`), so this read takes the person's already-unwrapped DEK and is
@@ -15,24 +15,13 @@
 // IANA zone falls back to the default rather than breaking every budget read.
 
 import { getPreferences } from "../db/preferences";
-import { DEFAULT_TIME_ZONE } from "../db/card-spend-ledger";
+import { accountTimeZone } from "../../domain/time-zone";
 import type { Db } from "../db/index";
-
-// Whether `value` names a real IANA time zone (Intl refuses anything else).
-function isTimeZone(value: string): boolean {
-  try {
-    new Intl.DateTimeFormat("en-AU", { timeZone: value });
-    return true;
-  } catch {
-    return false;
-  }
-}
 
 // The zone to bucket budget periods in for a saved preference: the preference when it
 // is a real IANA zone, otherwise the default (Sydney).
 export function budgetTimeZone(saved: string | null | undefined): string {
-  const value = saved?.trim() ?? "";
-  return value !== "" && isTimeZone(value) ? value : DEFAULT_TIME_ZONE;
+  return accountTimeZone(saved);
 }
 
 // The person's budget time zone: their own saved preference (decrypted under their

@@ -1,0 +1,92 @@
+{
+  "$schema": "https://schema.management.azure.com/schemas/2019-04-01/deploymentParameters.json#",
+  "contentVersion": "1.0.0.0",
+  "parameters": {
+    "deploymentApproved": {
+      "value": false
+    },
+    "priorReplicasStopped": {
+      "value": false
+    },
+    "appName": {
+      "value": "REQUIRED_REVIEWED_VALUE"
+    },
+    "environmentResourceId": {
+      "value": "REQUIRED_REVIEWED_VALUE"
+    },
+    "managedIdentityResourceId": {
+      "value": "REQUIRED_REVIEWED_VALUE"
+    },
+    "managedIdentityClientId": {
+      "value": "REQUIRED_REVIEWED_VALUE"
+    },
+    "registryServer": {
+      "value": "REQUIRED_REVIEWED_VALUE"
+    },
+    "imageDigest": {
+      "value": "REQUIRED_REVIEWED_VALUE"
+    },
+    "revisionSuffix": {
+      "value": "REQUIRED_REVIEWED_VALUE"
+    },
+    "cpu": {
+      "value": "REQUIRED_REVIEWED_VALUE"
+    },
+    "memory": {
+      "value": "REQUIRED_REVIEWED_VALUE"
+    },
+    "productionEnvironment": {
+      "value": {
+        "PUBLIC_BASE_URL": "REQUIRED_NONSECRET_VALUE",
+        "WEBAUTHN_RP_ID": "REQUIRED_NONSECRET_VALUE",
+        "OPERATOR_EMAIL": "REQUIRED_NONSECRET_VALUE",
+        "EXCHANGE_RATE_BASE_URL": "REQUIRED_NONSECRET_VALUE",
+        "KEY_VAULT_URL": "REQUIRED_NONSECRET_VALUE",
+        "KEY_VAULT_KEY_NAME": "REQUIRED_NONSECRET_VALUE",
+        "STORAGE_ACCOUNT": "REQUIRED_NONSECRET_VALUE",
+        "STORAGE_CONTAINER": "REQUIRED_NONSECRET_VALUE",
+        "RESEND_FROM_ADDRESS": "REQUIRED_NONSECRET_VALUE",
+        "RESEND_SENDING_DOMAIN": "REQUIRED_NONSECRET_VALUE",
+        "RESEND_REPLY_TO_ADDRESS": "REQUIRED_NONSECRET_VALUE",
+        "TWILIO_REGION": "REQUIRED_NONSECRET_VALUE",
+        "SMS_COUNTRY_ROUTES_JSON": "REQUIRED_NONSECRET_VALUE",
+        "SMS_MONTHLY_SEGMENT_LIMIT": "REQUIRED_NONSECRET_VALUE",
+        "SMS_DAILY_SEGMENT_LIMIT": "REQUIRED_NONSECRET_VALUE",
+        "SMS_RECIPIENT_HOURLY_SEGMENT_LIMIT": "REQUIRED_NONSECRET_VALUE",
+        "SMS_RECIPIENT_DAILY_MESSAGE_LIMIT": "REQUIRED_NONSECRET_VALUE",
+        "SMS_MAX_SEGMENTS_PER_MESSAGE": "REQUIRED_NONSECRET_VALUE",
+        "GOOGLE_CLIENT_ID": "REQUIRED_NONSECRET_VALUE",
+        "MICROSOFT_CLIENT_ID": "REQUIRED_NONSECRET_VALUE",
+        "VAPID_SUBJECT": "REQUIRED_NONSECRET_VALUE",
+        "VAPID_PUBLIC_KEY": "REQUIRED_NONSECRET_VALUE"
+      }
+    },
+    "keyVaultSecretUrls": {
+      "value": {
+        "DATABASE_URL": "REQUIRED_VERSIONED_KEY_VAULT_SECRET_URL",
+        "MIGRATION_DATABASE_URL": "REQUIRED_VERSIONED_KEY_VAULT_SECRET_URL",
+        "PURGE_DATABASE_URL": "REQUIRED_VERSIONED_KEY_VAULT_SECRET_URL",
+        "WARTHOG_HMAC_KEY": "REQUIRED_VERSIONED_KEY_VAULT_SECRET_URL",
+        "RESEND_API_KEY": "REQUIRED_VERSIONED_KEY_VAULT_SECRET_URL",
+        "TWILIO_ACCOUNT_SID": "REQUIRED_VERSIONED_KEY_VAULT_SECRET_URL",
+        "TWILIO_API_KEY_SID": "REQUIRED_VERSIONED_KEY_VAULT_SECRET_URL",
+        "TWILIO_API_KEY_SECRET": "REQUIRED_VERSIONED_KEY_VAULT_SECRET_URL",
+        "GOOGLE_CLIENT_SECRET": "REQUIRED_VERSIONED_KEY_VAULT_SECRET_URL",
+        "MICROSOFT_CLIENT_SECRET": "REQUIRED_VERSIONED_KEY_VAULT_SECRET_URL",
+        "GOOGLE_EARLY_ACCESS": "REQUIRED_VERSIONED_KEY_VAULT_SECRET_URL",
+        "VAPID_PRIVATE_KEY": "REQUIRED_VERSIONED_KEY_VAULT_SECRET_URL"
+      }
+    },
+    "traffic": {
+      "value": [
+        {
+          "revisionName": "REQUIRED_EXPLICIT_REVISION_NAME",
+          "weight": 100
+        }
+      ]
+    },
+    "existingCustomDomains": {
+      "value": []
+    }
+  }
+}

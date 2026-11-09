@@ -27,6 +27,10 @@ export interface StoredHighTierField {
   ciphertext: string;
 }
 export interface StoredCard {
+  expiryMonth?: number;
+  expiryYear?: number;
+  cardholderName?: string | null;
+  billingAddressId?: string;
   brand: string;
   lastFour: string;
   nickname: string;
@@ -45,6 +49,10 @@ export interface ExportedHighTierField {
   value: string;
 }
 export interface ExportedCard {
+  expiryMonth?: number;
+  expiryYear?: number;
+  cardholderName?: string | null;
+  billingAddressId?: string;
   brand: string;
   lastFour: string;
   nickname: string;
@@ -82,6 +90,10 @@ export async function buildDeviceProtected(
       brand: card.brand,
       lastFour: card.lastFour,
       nickname: card.nickname,
+      ...(card.expiryMonth !== undefined ? { expiryMonth: card.expiryMonth } : {}),
+      ...(card.expiryYear !== undefined ? { expiryYear: card.expiryYear } : {}),
+      ...(card.cardholderName !== undefined ? { cardholderName: card.cardholderName } : {}),
+      ...(card.billingAddressId !== undefined ? { billingAddressId: card.billingAddressId } : {}),
       number: await decryptValue(vaultKey, card.numberCiphertext),
     })),
   );

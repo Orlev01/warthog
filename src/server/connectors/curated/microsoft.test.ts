@@ -443,6 +443,7 @@ test("a read tool (calendar list) hits the entry host with the connection's Bear
 
     assert.equal(f.requests.length, 1, "exactly one upstream request is sent");
     const sent = f.requests[0]!;
+    if (sent.body) assert.equal(sent.headers.get("content-type"), "application/json");
     assert.equal(new URL(sent.url).host, GRAPH_HOST, "the request goes to the entry's host, never a caller host");
     assert.ok(READ_METHODS.has(sent.method.toUpperCase()), `a read tool uses a read method (was ${sent.method})`);
     assert.ok(
@@ -549,6 +550,7 @@ test("a change tool (calendar create) hits the entry host with the Bearer, using
 
     assert.equal(f.requests.length, 1, "exactly one upstream request is sent");
     const sent = f.requests[0]!;
+    if (sent.body) assert.equal(sent.headers.get("content-type"), "application/json");
     assert.equal(new URL(sent.url).host, GRAPH_HOST, "the request goes to the entry's host");
     assert.ok(
       !READ_METHODS.has(sent.method.toUpperCase()),
@@ -586,6 +588,7 @@ test("a send tool (mail send) uses a change method and presents the connection's
 
     assert.equal(f.requests.length, 1, "exactly one upstream request is sent");
     const sent = f.requests[0]!;
+    if (sent.body) assert.equal(sent.headers.get("content-type"), "application/json");
     assert.equal(new URL(sent.url).host, GRAPH_HOST, "the request goes to the entry's host");
     assert.ok(
       !READ_METHODS.has(sent.method.toUpperCase()),

@@ -28,6 +28,8 @@ import { getSigninDeps } from "../../../../../server/auth/compose";
 const STEP_METHOD = new Map<string, keyof SigninHandler>([
   ["begin-passkey", "beginPasskey"],
   ["finish-passkey", "finishPasskey"],
+  ["send-email-code", "sendTotpEmailCode"],
+  ["verify-email", "verifyTotpEmail"],
   ["totp", "signInWithTotp"],
 ]);
 

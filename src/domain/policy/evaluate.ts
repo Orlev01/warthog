@@ -73,7 +73,9 @@ export interface Permission {
  * from the account currency (otherwise the account-currency amount is used as is).
  */
 export interface HouseholdPolicy {
+  periodUnavailable?: boolean;
   currency: string;
+  totalsUnavailable?: boolean;
   budget?: Budget;
   budgetReleases: readonly Release[];
   memberLimit?: Budget;
@@ -84,6 +86,7 @@ export interface HouseholdPolicy {
 /** The person's card settings (design §8 step 4). Budgets are in the account currency. */
 export interface CardPolicy {
   access: boolean;
+  totalsUnavailable?: boolean;
   budget: Budget;
   releases: readonly Release[];
   perPurchaseLimit?: number;
@@ -99,6 +102,9 @@ export interface PolicyContext {
   permission: Permission;
   rules: readonly IdentifiedRule[];
   accountCurrency: string;
+  /** Rule thresholds use the owner's account currency, independently of an agent budget. */
+  ruleCurrency?: string;
+  ruleRate?: ReferenceRate | null;
   card: CardPolicy;
   rate?: ReferenceRate | null;
   now: Date;
@@ -193,6 +199,7 @@ function evaluateCard(call: PolicyCall, ctx: PolicyContext): PolicyResult | unde
 
   if (!card.access) return deny("Card access is turned off for this agent.");
   if (!budgetAllowsCard(card.budget)) return deny("No card budget is set for this agent.");
+  if (card.totalsUnavailable) return deny("A reference rate is missing for earlier agent spending. The budget cannot be checked yet.");
 
   const requested = call.amount ?? 0;
   let amount = requested;
@@ -212,6 +219,8 @@ function evaluateCard(call: PolicyCall, ctx: PolicyContext): PolicyResult | unde
 
   const household = card.household;
   if (household) {
+    if (household.periodUnavailable) return deny("Earlier household release dates need checking before this budget can be confirmed.");
+    if (household.totalsUnavailable) return deny("A reference rate is missing for earlier household spending. The budget cannot be checked yet.");
     const inHousehold = householdAmount(call, household, ctx, requested, amount);
     if (!inHousehold.ok) return deny(inHousehold.reason);
     if (
@@ -264,8 +273,24 @@ export function evaluate(call: PolicyCall, ctx: PolicyContext): PolicyResult {
     return deny("This agent is not allowed to request high-tier identity details.");
   }
 
+  // Amount conditions use the owner's account currency. Only normalize the rule
+  // comparison; card checks below still need the original amount and currency.
+  let ruleCall = call;
+  const needsAmount = call.amount !== undefined && ctx.rules.some((rule) =>
+    rule.condition?.type === "amount_over" && scopeMatches(rule.scope, ctx.agentId) && actionMatches(rule.action, call));
+  const ruleCurrency = ctx.ruleCurrency ?? ctx.accountCurrency;
+  if (needsAmount && call.amount !== undefined && call.currency !== undefined && call.currency !== ruleCurrency) {
+    const rate = ctx.ruleCurrency === undefined ? ctx.rate : ctx.ruleRate;
+    if (rate?.from !== call.currency || rate.to !== ruleCurrency) {
+      return deny("No reference rate available to check the amount rule.");
+    }
+    const converted = convert(call.amount, rate);
+    if (!converted.ok) return deny(converted.reason);
+    ruleCall = { ...call, amount: converted.converted.amount };
+  }
+
   // 3. a matching never-allow rule denies, carrying its id.
-  const never = firstMatch(ctx.rules, "never_allow", call, ctx);
+  const never = firstMatch(ctx.rules, "never_allow", ruleCall, ctx);
   if (never) return deny("A rule forbids this action.", never.id);
 
   // 4. card-request checks; any failure denies with a plain reason.
@@ -279,7 +304,7 @@ export function evaluate(call: PolicyCall, ctx: PolicyContext): PolicyResult {
   if (call.request === "card") return ask("A card request needs your approval.");
 
   // 6. a matching ask-first rule, or a change-tool class default of "ask me first".
-  const askRule = firstMatch(ctx.rules, "ask_first", call, ctx);
+  const askRule = firstMatch(ctx.rules, "ask_first", ruleCall, ctx);
   if (askRule) return ask("A rule asks for your approval first.", askRule.id);
   if (call.connector !== null && call.makesChange && perm.changes === "ask_first") {
     return ask("Changes with this connector need your approval first.");

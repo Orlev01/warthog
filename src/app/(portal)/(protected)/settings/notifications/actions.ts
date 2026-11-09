@@ -1,3 +1,6 @@
+import { formatAccountTime } from "@/server/display-time";
+import { timeZoneFor } from "@/server/spending/time-zone";
+import { normaliseInternationalPhone } from "../../../../../domain/international-phone";
 // E12-S19 — Notification settings loader + actions (the injectable seam the thin
 // `page.tsx` loader + its server-action wrappers compose).
 //
@@ -94,6 +97,7 @@ export interface NotificationsData {
   readonly devices: ReadonlyArray<{ id: string; label?: string; fingerprint?: string }>;
   readonly numbers: ReadonlyArray<{ id: string; number: string; verified: boolean }>;
   readonly emailFallback: boolean;
+  readonly smsFallback?: boolean;
   readonly fallbackDelayMinutes: number;
 }
 
@@ -117,7 +121,7 @@ export interface NotificationsActions {
   verifyMobileNumber(session: Session, input: { id: string; code: string }): Promise<ActionResult>;
   saveNotificationPrefs(
     session: Session,
-    input: { emailFallback: boolean; fallbackDelayMinutes: number },
+    input: { emailFallback: boolean; smsFallback?: boolean; fallbackDelayMinutes: number },
   ): Promise<ActionResult>;
   sendTestNotification(session: Session): Promise<ActionResult>;
 }
@@ -153,11 +157,10 @@ const registerPushSchema = z.object({
 // digits / spaces / parens / hyphens). An oversized or otherwise mis-shaped value
 // (including a SQL-injection probe) is rejected at the boundary with a 4xx before it
 // reaches a write.
-const mobileNumberSchema = z
-  .string()
-  .min(5)
-  .max(20)
-  .regex(/^\+?[0-9 ()-]+$/);
+const mobileNumberSchema = z.string().max(40).transform((value, ctx) => {
+  try { return normaliseInternationalPhone(value); }
+  catch { ctx.addIssue({ code: "custom", message: "Include + and the country code" }); return z.NEVER; }
+});
 
 // A number id is a well-formed uuid; a malformed value is rejected at the boundary
 // (parseParams throws a 4xx) before it can reach `WHERE id = $1` as a cast (OBS-049).
@@ -167,18 +170,9 @@ const uuidSchema = z.uuid();
 // at the boundary with a 4xx, while a well-formed but wrong code is a domain refusal.
 const codeSchema = z.string().regex(/^\d{6}$/);
 
-// A device's plain label: the day and time it was registered (Australian English, in the
-// AEST/AEDT zone the product serves), e.g. "Registered 15 Nov 2026, 11:00 pm".
-function deviceLabel(createdAt: Date): string {
-  const when = createdAt.toLocaleString("en-AU", {
-    timeZone: "Australia/Sydney",
-    day: "numeric",
-    month: "short",
-    year: "numeric",
-    hour: "numeric",
-    minute: "2-digit",
-  });
-  return `Registered ${when}`;
+// Registration time follows the person's account preference, with an explicit zone.
+function deviceLabel(createdAt: Date, timeZone: string): string {
+  return `Registered ${formatAccountTime(createdAt, timeZone)}`;
 }
 
 // The one-way fingerprint of a push endpoint (matches the browser's endpointFingerprint).
@@ -207,13 +201,14 @@ export function createNotificationsActions(deps: NotificationsActionsDeps): Noti
   // defaults — email on, 2 minutes — when nothing is saved).
   async function load(session: Session): Promise<NotificationsData> {
     const dek = await dataKeyFor(session.userId);
+    const timeZone = await timeZoneFor(db, session.userId, dek);
     const subscriptions = await listSubscriptions(db, session.userId, dek, clock);
     const numbers = await listMobileNumbers(db, session.userId);
     const prefs = await getNotificationPrefs(db, session.userId);
     return {
       devices: subscriptions.map((subscription) => ({
         id: subscription.id,
-        label: deviceLabel(subscription.createdAt),
+        label: deviceLabel(subscription.createdAt, timeZone),
         fingerprint: endpointFingerprint(subscription.endpoint),
       })),
       numbers: numbers.map((number) => ({
@@ -222,6 +217,7 @@ export function createNotificationsActions(deps: NotificationsActionsDeps): Noti
         verified: number.verified,
       })),
       emailFallback: prefs.emailFallback,
+      smsFallback: prefs.smsFallback,
       fallbackDelayMinutes: prefs.fallbackDelayMinutes,
     };
   }
@@ -307,11 +303,12 @@ export function createNotificationsActions(deps: NotificationsActionsDeps): Noti
   // untouched, never clamped).
   async function saveNotificationPrefs(
     session: Session,
-    input: { emailFallback: boolean; fallbackDelayMinutes: number },
+    input: { emailFallback: boolean; smsFallback?: boolean; fallbackDelayMinutes: number },
   ): Promise<ActionResult> {
     const result = await saveNotificationPrefsRepo(db, {
       userId: session.userId,
       emailFallback: input.emailFallback,
+      smsFallback: input.smsFallback === true,
       fallbackDelayMinutes: input.fallbackDelayMinutes,
     });
     return result.ok ? { ok: true } : { ok: false, reason: result.reason };
@@ -328,7 +325,8 @@ export function createNotificationsActions(deps: NotificationsActionsDeps): Noti
       return { ok: false, reason: "no_device" };
     }
     for (const device of devices) {
-      await senders.push.sendPush({ recipient: device.endpoint, body: TEST_PUSH_BODY });
+      if (senders.push.sendDevicePush) await senders.push.sendDevicePush(device);
+      else await senders.push.sendPush({ recipient: device.endpoint, body: TEST_PUSH_BODY });
     }
     return { ok: true };
   }

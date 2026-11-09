@@ -255,7 +255,7 @@ function buildAgentPipeline(deps: McpDispatchDeps): AgentCallPipeline {
   // connection, its credentials and the catalogue host only, over the SSRF-guarded fetch.
   const executeConnectorTool = createConnectorToolExecutor({
     db,
-    catalogue: deps.catalogue ?? getProcessCatalogue(),
+    catalogue: deps.catalogue ?? getProcessCatalogue(config),
     fetch: deps.fetch ?? createGuardedFetch(),
     dekFor: dataKeyFor,
   });
@@ -367,8 +367,8 @@ function buildAgentPipeline(deps: McpDispatchDeps): AgentCallPipeline {
 }
 
 export function createMcpDispatch(deps: McpDispatchDeps): McpDispatch {
-  const { db } = deps;
-  const catalogue = deps.catalogue ?? getProcessCatalogue();
+  const { db, config } = deps;
+  const catalogue = deps.catalogue ?? getProcessCatalogue(config);
 
   // The pipeline is assembled once here (the composition root's job) and the registry is
   // resolved over it; both are reused for every request this dispatch serves.

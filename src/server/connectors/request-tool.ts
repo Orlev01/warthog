@@ -48,6 +48,9 @@ export interface ConnectorRequestInput {
   readonly path: string;
   readonly query?: Record<string, string>;
   readonly body?: string;
+  // Curated REST tools know their payload format. Generic requests keep their
+  // existing raw-body contract; this is not an arbitrary caller header escape.
+  readonly contentType?: "application/json";
 }
 
 // The upstream status and body (truncated to ~100 KB), passed back to the agent.
@@ -132,11 +135,11 @@ export async function sendConnectorRequest(
     // A body only rides on a change method (GET/HEAD carry none).
     if (input.body !== undefined && requestMakesChange(input.method)) {
       init.body = input.body;
+      if (input.contentType) headers["Content-Type"] = input.contentType;
     }
 
     const response = await deps.fetch(url.href, init);
-    const raw = await response.text();
-    return truncate(response.status, raw);
+    return await readResponseCapped(response, controller.signal);
   } finally {
     clearTimeout(timer);
   }
@@ -179,12 +182,38 @@ function buildTemplatedHeader(
   return { name, value };
 }
 
-// Return the upstream body whole when it is within the cap; otherwise keep the leading
-// ~100 KB (content-preserving truncation, not corruption) and flag it truncated.
-function truncate(status: number, raw: string): ConnectorRequestResult {
-  const bytes = Buffer.from(raw, "utf8");
-  if (bytes.byteLength <= MAX_RESPONSE_BYTES) {
-    return { status, body: raw, truncated: false };
+// Bound bytes while reading: reading text() and truncating afterwards can allocate
+// an arbitrarily large provider response in the single application's heap.
+async function readResponseCapped(response: Response, signal: AbortSignal): Promise<ConnectorRequestResult> {
+  signal.throwIfAborted();
+  if (!response.body) return { status: response.status, body: "", truncated: false };
+  const reader = response.body.getReader();
+  const bytes = new Uint8Array(MAX_RESPONSE_BYTES);
+  let length = 0;
+  let truncated = false;
+  const cancel = () => { void reader.cancel().catch(() => {}); };
+  signal.addEventListener("abort", cancel, { once: true });
+  try {
+    while (true) {
+      const chunk = await reader.read();
+      signal.throwIfAborted();
+      if (chunk.done) break;
+      const remaining = MAX_RESPONSE_BYTES - length;
+      const kept = Math.min(remaining, chunk.value.byteLength);
+      bytes.set(chunk.value.subarray(0, kept), length);
+      length += kept;
+      if (chunk.value.byteLength > remaining) {
+        truncated = true;
+        cancel();
+        break;
+      }
+    }
+    // A truncation can split a UTF-8 codepoint: leave only that incomplete tail
+    // buffered in the decoder instead of returning a replacement character.
+    const body = new TextDecoder().decode(bytes.subarray(0, length), { stream: truncated });
+    return { status: response.status, body, truncated };
+  } finally {
+    signal.removeEventListener("abort", cancel);
+    reader.releaseLock();
   }
-  return { status, body: bytes.subarray(0, MAX_RESPONSE_BYTES).toString("utf8"), truncated: true };
 }

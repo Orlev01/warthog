@@ -176,6 +176,7 @@ async function addVerifiedNumber(
     { clock, hmacKey: HMAC_KEY },
   );
   assert.ok(result.ok, "fixture: the number was verified for the test");
+  await db.query("INSERT INTO notification_prefs (user_id, sms_fallback) VALUES ($1, true) ON CONFLICT (user_id) DO UPDATE SET sms_fallback = true", [userId]);
   return number;
 }
 
@@ -366,7 +367,7 @@ test("unopened with email fallback switched OFF ⇒ one SMS but no email", async
     const clock = fixedClock(NOW);
     const { userId, dek } = await makePerson(db, "ac1-emailoff");
     const number = await addVerifiedNumber(db, userId, "+61400777888", clock);
-    const saved = await saveNotificationPrefs(db, { userId, emailFallback: false, fallbackDelayMinutes: 2 });
+    const saved = await saveNotificationPrefs(db, { userId, emailFallback: false, smsFallback: true, fallbackDelayMinutes: 2 });
     assert.ok(saved.ok, "fixture: the email-off preference was saved");
     const approvalId = await createPendingApproval(db, userId, dek, clock);
 
@@ -734,7 +735,7 @@ function flakySenders(failing: { sms?: number; email?: number }): ReturnType<typ
   };
 }
 
-test("a failed SMS still lets the email go, and the retry sends only the SMS", async () => {
+test("an ambiguous SMS failure lets email go and never repeats the paid SMS attempt", async () => {
   const db = await freshDb();
   try {
     const clock = fixedClock(NOW);
@@ -749,18 +750,12 @@ test("a failed SMS still lets the email go, and the retry sends only the SMS", a
     assert.equal(flaky.email.length, 1, "the email still went");
 
     await runApprovalFallback(deps, { approvalId });
-    assert.equal(flaky.sms.length, 1, "the retry sent the SMS");
-    assert.equal(flaky.email.length, 1, "and did not send the email again");
-    assert.ok(flaky.sms[0]!.link, "the retried SMS carries a working single-use link");
-    const redeemed = await redeemApprovalLink(
-      db,
-      { token: new URL(flaky.sms[0]!.link!).searchParams.get("token")! },
-      { clock },
-    );
-    assert.equal(redeemed.ok, true, "the retried SMS's link opens the approval");
-
+    assert.equal(flaky.sms.length, 0, "an ambiguous failure never repeats a paid SMS attempt");
+    assert.equal(flaky.email.length, 1, "and does not repeat the email");
+    const claims = await db.query("SELECT * FROM approval_sms_attempts WHERE approval_id = $1", [approvalId]);
+    assert.equal(claims.rows.length, 1, "the attempt survives worker recreation");
     await runApprovalFallback(deps, { approvalId });
-    assert.equal(flaky.sms.length + flaky.email.length, 2, "once every channel has gone, a re-run sends nothing");
+    assert.equal(flaky.sms.length + flaky.email.length, 1);
   } finally {
     await db.close();
   }
@@ -805,4 +800,19 @@ test("an approval past its expiry is not fallen back on, even while it still rea
   } finally {
     await db.close();
   }
+});
+
+
+test("a verified number alone does not opt in to SMS and opting out keeps email working", async () => {
+  const db = await freshDb();
+  try {
+    const clock = fixedClock(NOW);
+    const { userId, dek } = await makePerson(db, "sms-optout");
+    await addVerifiedNumber(db, userId, "+447700900123", clock);
+    await saveNotificationPrefs(db, { userId, emailFallback: true, smsFallback: false, fallbackDelayMinutes: 2 });
+    const approvalId = await createPendingApproval(db, userId, dek, clock);
+    const { senders, sms, email } = recordingSenders();
+    await runApprovalFallback({ db, clock, random: systemRandom, senders, publicBaseUrl: PUBLIC_BASE_URL }, { approvalId });
+    assert.equal(sms.length, 0); assert.equal(email.length, 1);
+  } finally { await db.close(); }
 });

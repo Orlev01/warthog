@@ -1,3 +1,5 @@
+import { formatAccountTime } from "@/server/display-time";
+import { timeZoneFor } from "@/server/spending/time-zone";
 // E08-S07 — Activity page server actions (dispute, undo, check integrity).
 //
 // The Activity screen's controls must call server-verified actions — the acting
@@ -140,16 +142,7 @@ function humanise(value: string): string {
 // A stored instant → an absolute, readable label. The loader takes no clock seam, so
 // it shows WHEN an entry occurred rather than a relative "two minutes ago" — the DATE
 // and the TIME OF DAY, so two entries on the same day read as distinct moments.
-function formatAt(iso: string): string {
-  return new Date(iso).toLocaleString("en-AU", {
-    timeZone: "UTC",
-    day: "numeric",
-    month: "short",
-    year: "numeric",
-    hour: "2-digit",
-    minute: "2-digit",
-  });
-}
+// The shared formatter below supplies the account zone and labels it explicitly.
 
 // Widen a date-ONLY `to` filter (what the view's `<input type="date">` posts, e.g.
 // "2026-04-20") to the END of that day so the whole day is inside the inclusive upper
@@ -254,7 +247,7 @@ export function createActivityActions(deps: ActivityActionsDeps): ActivityAction
   // control exactly where undoEntry can act and nowhere else (never a dead control).
   // The agent is shown by the name the person gave it (`agentNames`: their OWN agents,
   // read member-scoped), never its raw id, and an agent call is titled by its tool.
-  function toEntryView(entry: ActivityEntry, agentNames: ReadonlyMap<string, string>): ActivityEntryView {
+  function toEntryView(entry: ActivityEntry, agentNames: ReadonlyMap<string, string>, timeZone: string): ActivityEntryView {
     const canUndo = reversalFor !== undefined && reversalFor(entry.tool) !== undefined;
     return {
       seq: entry.seq,
@@ -264,7 +257,7 @@ export function createActivityActions(deps: ActivityActionsDeps): ActivityAction
       agent: agentLabel(agentNames, entry.agentId),
       service: entry.connectorId === undefined ? undefined : serviceLabel(entry.connectorId),
       outcome: entry.outcome === undefined ? "" : humanise(entry.outcome),
-      at: formatAt(entry.occurredAt),
+      at: formatAccountTime(entry.occurredAt, timeZone),
       summary: payloadText(entry.payload, "summary"),
       detail: payloadText(entry.payload, "detail"),
       canUndo,
@@ -288,6 +281,7 @@ export function createActivityActions(deps: ActivityActionsDeps): ActivityAction
       throw new Error("the activity loader found no account for the session");
     }
     const dek = await keyWrapper.unwrap(user.wrappedDek);
+    const timeZone = await timeZoneFor(db, session.userId, dek);
 
     // The person's whole set of facet values backs the filter dropdowns, read from the
     // plaintext metadata columns (nothing decrypted), so neither a narrowing filter nor
@@ -336,7 +330,7 @@ export function createActivityActions(deps: ActivityActionsDeps): ActivityAction
     // The free-text search narrows further, in-app over the decrypted summary (an
     // encrypted column can't be matched in SQL), case-insensitively over the same text
     // the view shows.
-    const views = narrowed.map((entry) => toEntryView(entry, agentNames));
+    const views = narrowed.map((entry) => toEntryView(entry, agentNames, timeZone));
     const query = firstValue(searchParams.q) ?? "";
     const needle = query.toLowerCase();
     const entries =

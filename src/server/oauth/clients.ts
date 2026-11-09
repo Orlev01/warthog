@@ -48,6 +48,9 @@ import {
 const TIMEOUT_MS = 5_000; // abort an in-flight CIMD fetch after 5 seconds
 const MAX_BYTES = 64 * 1024; // refuse a CIMD document larger than 64 KB
 const CACHE_TTL_MS = 24 * 60 * 60 * 1000; // cache a fetched document for 24 hours
+const MAX_CACHE_ENTRIES = 128; // at most 8 MiB of source documents, plus parsed-object overhead
+const MAX_IN_FLIGHT = 16;
+const MAX_CLIENT_ID_LENGTH = 2048;
 
 // The seams the fetcher depends on: outbound HTTP, DNS resolution, and the clock.
 export interface CimdFetcherDeps {
@@ -68,76 +71,105 @@ interface CacheEntry {
   readonly fetchedAtMs: number;
 }
 
+// DNS adapters do not necessarily support cancellation. Stop waiting at the same
+// deadline as HTTP and ignore a late result; never leave a cache slot held forever.
+function withinDeadline<T>(operation: Promise<T>, signal: AbortSignal): Promise<T> {
+  return new Promise<T>((resolve, reject) => {
+    const abort = () => reject(new Error("CIMD fetch timed out"));
+    signal.addEventListener("abort", abort, { once: true });
+    operation.then(resolve, reject).finally(() => signal.removeEventListener("abort", abort));
+    if (signal.aborted) abort();
+  });
+}
+
 // Build a CIMD fetcher closed over its seams. Each fetcher keeps its own 24-hour
 // cache keyed by client_id, so a repeat fetch within the window makes no new request.
 export function createCimdFetcher(
   deps: CimdFetcherDeps,
 ): (clientId: string) => Promise<CimdDocument> {
   const cache = new Map<string, CacheEntry>();
+  let inFlight = 0;
 
   return async function resolve(clientId: string): Promise<CimdDocument> {
+    if (clientId.length > MAX_CLIENT_ID_LENGTH) throw new Error("CIMD client_id is too long");
+    const now = deps.clock.now().getTime();
+    for (const [key, entry] of cache) {
+      if (now - entry.fetchedAtMs >= CACHE_TTL_MS) cache.delete(key);
+    }
     // Serve a still-fresh cached document without re-resolving or re-fetching.
     const cached = cache.get(clientId);
-    if (cached && deps.clock.now().getTime() - cached.fetchedAtMs < CACHE_TTL_MS) {
+    if (cached) {
+      cache.delete(clientId);
+      cache.set(clientId, cached); // recently used entries survive capacity eviction
       return cached.doc;
     }
 
-    // https-only: a non-https (or malformed) client_id is refused before any request.
-    let url: URL;
-    try {
-      url = new URL(clientId);
-    } catch {
-      throw new Error("CIMD client_id is not a valid URL");
-    }
-    if (url.protocol !== "https:") {
-      throw new Error("CIMD client_id must be an https URL");
-    }
-
-    // Address guard: an IP-literal host is classified directly; a hostname is resolved
-    // and EVERY resolved address classified, so a public-looking hostname cannot
-    // override the guard (DNS rebinding / host override) and a single blocked answer
-    // refuses the whole request.
-    const hostname = stripBrackets(url.hostname);
-    if (isBlockedAddress(hostname)) {
-      throw new Error("CIMD host is a private, loopback or link-local address");
-    }
-    const addresses = await deps.lookup(hostname);
-    if (addresses.length === 0) {
-      throw new Error("CIMD host does not resolve to any address");
-    }
-    if (addresses.some(isBlockedAddress)) {
-      throw new Error("CIMD host resolves to a private, loopback or link-local address");
-    }
-
-    // Fetch AND read the body inside one 5-second budget. The timer stays armed until the
-    // body is fully read: a hostile server can send headers at once and then trickle the
-    // body, so clearing the timer when headers arrive would leave the read unbounded.
+    if (inFlight >= MAX_IN_FLIGHT) throw new Error("Too many CIMD fetches in progress");
+    inFlight++;
     const controller = new AbortController();
     const timer = setTimeout(() => controller.abort(), TIMEOUT_MS);
-    let text: string;
     try {
-      const response = await deps.fetch(clientId, {
+      // https-only: a non-https (or malformed) client_id is refused before any request.
+      let url: URL;
+      try {
+        url = new URL(clientId);
+      } catch {
+        throw new Error("CIMD client_id is not a valid URL");
+      }
+      if (url.protocol !== "https:") {
+        throw new Error("CIMD client_id must be an https URL");
+      }
+
+      // Address guard: an IP-literal host is classified directly; a hostname is resolved
+      // and EVERY resolved address classified, so a public-looking hostname cannot
+      // override the guard (DNS rebinding / host override) and a single blocked answer
+      // refuses the whole request.
+      const hostname = stripBrackets(url.hostname);
+      if (isBlockedAddress(hostname)) {
+        throw new Error("CIMD host is a private, loopback or link-local address");
+      }
+      const addresses = await withinDeadline(deps.lookup(hostname), controller.signal);
+      if (addresses.length === 0) {
+        throw new Error("CIMD host does not resolve to any address");
+      }
+      if (addresses.some(isBlockedAddress)) {
+        throw new Error("CIMD host resolves to a private, loopback or link-local address");
+      }
+
+      // Fetch AND read the body inside one 5-second budget. The timer stays armed until the
+      // body is fully read: a hostile server can send headers at once and then trickle the
+      // body, so clearing the timer when headers arrive would leave the read unbounded.
+      const response = await withinDeadline(deps.fetch(clientId, {
         signal: controller.signal,
         // Never follow a redirect to a new host — it would bypass the address guard.
         redirect: "error",
-      });
-      text = await readBodyCapped(response, MAX_BYTES, controller.signal);
+      }), controller.signal);
+      if (!response.ok) {
+        await response.body?.cancel().catch(() => {});
+        throw new Error("CIMD response was not successful");
+      }
+      const text = await readBodyCapped(response, MAX_BYTES, controller.signal);
+      let doc: unknown;
+      try {
+        doc = JSON.parse(text);
+      } catch {
+        throw new Error("CIMD document is not valid JSON");
+      }
+      if (typeof doc !== "object" || doc === null) {
+        throw new Error("CIMD document is not a JSON object");
+      }
+
+      const parsed = doc as CimdDocument;
+      // Concurrent fetches can finish in a different order. Enforce the bound at
+      // insertion as well as removing expired entries before reads.
+      cache.delete(clientId);
+      while (cache.size >= MAX_CACHE_ENTRIES) cache.delete(cache.keys().next().value!);
+      cache.set(clientId, { doc: parsed, fetchedAtMs: deps.clock.now().getTime() });
+      return parsed;
     } finally {
       clearTimeout(timer);
+      inFlight--;
     }
-    let doc: unknown;
-    try {
-      doc = JSON.parse(text);
-    } catch {
-      throw new Error("CIMD document is not valid JSON");
-    }
-    if (typeof doc !== "object" || doc === null) {
-      throw new Error("CIMD document is not a JSON object");
-    }
-
-    const parsed = doc as CimdDocument;
-    cache.set(clientId, { doc: parsed, fetchedAtMs: deps.clock.now().getTime() });
-    return parsed;
   };
 }
 
@@ -174,6 +206,7 @@ async function readBodyCapped(
 ): Promise<string> {
   const declared = response.headers.get("content-length");
   if (declared !== null && Number(declared) > maxBytes) {
+    await response.body?.cancel().catch(() => {});
     throw new Error("CIMD document exceeds the size cap");
   }
 
@@ -214,6 +247,7 @@ async function readBodyCapped(
     }
   } finally {
     signal.removeEventListener("abort", onAbort);
+    reader.releaseLock();
   }
   return Buffer.concat(chunks).toString("utf8");
 }

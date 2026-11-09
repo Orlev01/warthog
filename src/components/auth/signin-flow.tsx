@@ -28,7 +28,8 @@ import { safeReturnPath } from "../../server/auth/return-path";
 //           → POST finish-passkey { email, authenticationResponse } → navigate /home
 //
 //   authenticator-app path ("Use my authenticator app instead"):
-//     email + code → POST totp    { email, totp: code }         → navigate /home
+//     email → POST send-email-code → email code → POST verify-email
+//           → { signinId } + authenticator code → POST totp → navigate /home
 //
 // A successful step answers with a followed 303 → /home (a 2xx — `response.ok`); a
 // failed one answers with a 4xx. The flow reports a failure as one plain-English
@@ -60,6 +61,7 @@ export interface SigninFlowState {
   readonly email: string;
   readonly code: string;
   readonly error?: string;
+  readonly busy?: boolean;
 }
 
 export interface SigninFlowController {
@@ -73,7 +75,7 @@ export interface SigninFlowController {
 
 const API_BASE = "/api/auth/signin";
 
-type StepPath = "begin-passkey" | "finish-passkey" | "totp";
+type StepPath = "begin-passkey" | "finish-passkey" | "send-email-code" | "verify-email" | "totp";
 
 // Plain-English copy for a failed sign-in — a real sentence a person can act on,
 // never a raw machine code (the server speaks `invalid_assertion`, `invalid_code`,
@@ -89,6 +91,7 @@ const PASSKEY_CANCELLED_COPY =
   "Signing in with your passkey was cancelled. You can try again when you're ready.";
 
 export function createSigninFlow(deps: SigninFlowDeps): SigninFlowController {
+  let signinId: string | undefined;
   let state: SigninFlowState = {
     phase: "passkey",
     email: "",
@@ -161,22 +164,49 @@ export function createSigninFlow(deps: SigninFlowDeps): SigninFlowController {
   function useAuthenticatorApp(): void {
     // Switch to the "enter a code" step, keeping the typed email and clearing any
     // error left on the passkey step (no stale message).
-    set({ phase: "code", error: undefined });
+    if (state.busy) return;
+    signinId = undefined;
+    set({ phase: "email", code: "", error: undefined });
   }
 
   async function signInWithCode(): Promise<void> {
-    const response = await post("totp", { email: state.email, totp: state.code });
-    if (!response || !response.ok) {
-      set({ error: CODE_FAILED_COPY });
-      return;
+    if (state.busy) return;
+    set({ busy: true, error: undefined });
+    try {
+      if (state.phase === "email") {
+        const response = await post("send-email-code", { email: state.email });
+        if (!response?.ok) { set({ error: "We couldn't send your email code. Check the address, wait a minute and try again." }); return; }
+        set({ phase: "email-code", code: "" });
+        return;
+      }
+      if (state.phase === "email-code") {
+        const response = await post("verify-email", { email: state.email, code: state.code });
+        const result = response?.ok ? await readJson(response) : {};
+        if (typeof result.signinId !== "string" || !/^[a-f0-9]{64}$/.test(result.signinId)) {
+          set({ error: "We couldn't verify that email code. Check your latest email or start again." }); return;
+        }
+        signinId = result.signinId;
+        set({ phase: "code", code: "" });
+        return;
+      }
+      if (state.phase !== "code" || !signinId) { set({ phase: "email", code: "" }); return; }
+      const response = await post("totp", { signinId, totp: state.code });
+      if (!response?.ok) { set({ error: `${CODE_FAILED_COPY} If your email check expired, start again.` }); return; }
+      signinId = undefined;
+      set({ error: undefined });
+      deps.navigate(safeReturnPath(deps.returnTo));
+    } finally {
+      set({ busy: false });
     }
-    set({ error: undefined });
-    deps.navigate(safeReturnPath(deps.returnTo));
   }
 
   return {
     getState: () => state,
-    setEmail: (value) => set({ email: value }),
+    setEmail: (value) => {
+      if (state.busy) return;
+      signinId = undefined;
+      set({ email: value, ...(state.phase === "passkey" ? {} : { phase: "email" as const, code: "" }) });
+    },
     setCode: (value) => set({ code: value }),
     signInWithPasskey,
     useAuthenticatorApp,
@@ -224,6 +254,7 @@ export function SigninFlow(props: SigninFlowProps = {}): React.ReactElement {
       email={state.email}
       code={state.code}
       error={state.error}
+      busy={state.busy}
       onEmailChange={(value) => flow.setEmail(value)}
       onCodeChange={(value) => flow.setCode(value)}
       onPasskey={() => {

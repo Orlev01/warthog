@@ -45,6 +45,7 @@ import {
 import { rulesPageData } from "@/server/rules/page-data";
 import { agentNamesForUser, listAgentsForUser } from "@/server/db/agents";
 import { getUserById } from "@/server/db/users";
+import { getAccountCurrency } from "@/server/db/account-currency";
 import {
   type RuleKind,
   type RuleScope,
@@ -116,6 +117,7 @@ export interface RuleInput {
 // status, plus the person's own agents (offered as the "chosen agents" scope). The
 // page adds the bound server actions when it renders.
 export interface RulesLoadData {
+  readonly currency: string;
   readonly rules: RulesViewRule[];
   readonly agents: RulesViewAgent[];
 }
@@ -307,7 +309,7 @@ export function createRulesActions(deps: RulesActionsDeps): RulesActions {
       name: agent.displayName,
     }));
 
-    return { rules, agents };
+    return { rules, agents, currency: await getAccountCurrency(db, session.userId) };
   }
 
   // Resolve a chosen-agent scope's display NAME from the person's OWN agent record

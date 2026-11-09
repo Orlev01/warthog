@@ -1,3 +1,5 @@
+import { formatAccountTime } from "@/server/display-time";
+import { timeZoneFor } from "@/server/spending/time-zone";
 // E09-S17 — Connectors page loader + connect/disconnect/request actions (the
 // injectable, unit-testable seam the thin `page.tsx` composes — the convention's
 // `createXActions(deps)` factory, as `agents/actions.ts`, `access-key/actions.ts`,
@@ -91,6 +93,7 @@ export interface RevokeProviderAccessInput {
 
 // Every seam injected — no process.env, no secret (INV-103).
 export interface ConnectorsActionsDeps {
+  readonly startProviderSignin?: (session: Session, connectorId: string) => Promise<{ url: string }>;
   readonly db: Db;
   // Supplies connected-at / requested-at instants, passed through to the stores (never SQL now()).
   readonly clock: Clock;
@@ -127,7 +130,7 @@ export type ConnectorsViewData = Omit<
 // The outcome of a disconnect: success, or a refusal naming its reason (the connection is
 // not this person's / does not exist). Never a silent success.
 export type DisconnectServiceResult =
-  | { readonly ok: true }
+  | { readonly ok: true; readonly providerRevoked?: boolean | null }
   | { readonly ok: false; readonly reason: string };
 
 export interface ConnectorsActions {
@@ -179,16 +182,6 @@ function toStatusKey(status: ConnectionStatus): StatusKey {
   return status === "needs_reconnect" ? "needs-reconnect" : status;
 }
 
-// A stored instant → an absolute, readable date label the view renders verbatim (the view
-// reaches for no clock). Shown in UTC so a seeded instant is deterministic.
-function formatDate(value: Date | string): string {
-  return new Date(value).toLocaleDateString("en-AU", {
-    timeZone: "UTC",
-    day: "numeric",
-    month: "short",
-    year: "numeric",
-  });
-}
 
 export function createConnectorsActions(deps: ConnectorsActionsDeps): ConnectorsActions {
   const {
@@ -232,6 +225,7 @@ export function createConnectorsActions(deps: ConnectorsActionsDeps): Connectors
   function toConnectionItem(
     connection: ConnectionForPage,
     agentsByConnector: ReadonlyMap<string, string[]>,
+    timeZone: string,
   ): ConnectionItem {
     const tools: ToolItem[] = connection.tools.map((tool) => ({
       name: tool.name,
@@ -242,7 +236,7 @@ export function createConnectorsActions(deps: ConnectorsActionsDeps): Connectors
       name: catalogue.get(connection.connectorId)?.name ?? connection.connectorId,
       accountLabel: connection.accountLabel,
       status: toStatusKey(connection.status),
-      connectedAt: formatDate(connection.connectedAt),
+      connectedAt: formatAccountTime(connection.connectedAt, timeZone, { dateOnly: true }),
       tools,
       agents: agentsByConnector.get(connection.connectorId) ?? [],
     };
@@ -273,6 +267,7 @@ export function createConnectorsActions(deps: ConnectorsActionsDeps): Connectors
 
     // The session user's OWN connections (member-scoped, never credentials) and OWN agents
     // (to name which agents use each service).
+    const timeZone = await timeZoneFor(db, userId, await dekFor(userId));
     const connections = await listConnectionsForPage(db, userId, catalogue);
     const agents = await listAgentsForUser(db, userId);
     const agentsByConnector = new Map<string, string[]>();
@@ -288,7 +283,7 @@ export function createConnectorsActions(deps: ConnectorsActionsDeps): Connectors
 
     return {
       groups,
-      connections: connections.map((connection) => toConnectionItem(connection, agentsByConnector)),
+      connections: connections.map((connection) => toConnectionItem(connection, agentsByConnector, timeZone)),
       query: browse.query,
       canRequest: browse.canRequest,
     };
@@ -307,6 +302,7 @@ export function createConnectorsActions(deps: ConnectorsActionsDeps): Connectors
     if (entry.auth_kind !== "oauth2") {
       throw new HttpError(400, "Connector is not a provider sign-in service");
     }
+    if (deps.startProviderSignin) return deps.startProviderSignin(session, connectorId);
     return buildAuthorizeUrl({ entry, config: oauthClientConfigFor(connectorId) });
   }
 
@@ -386,6 +382,7 @@ export function createConnectorsActions(deps: ConnectorsActionsDeps): Connectors
     // One transaction: the grant strip, the delete and the activity record commit together
     // or not at all. The record is LAST, so a failure in any step rolls the others back.
     const agents = await listAgentsForUser(db, userId);
+    const recordingDek = await dekFor(userId);
     await withTransaction(db, async (tx) => {
       for (const agent of agents) {
         const grants = await getConnectionPermissions(tx, userId, agent.connectionId);
@@ -402,7 +399,7 @@ export function createConnectorsActions(deps: ConnectorsActionsDeps): Connectors
 
       // Warthog writes the record (principle 14): which service and account went, and whether
       // the provider confirmed the revocation (null when the kind has nothing to revoke).
-      await createRedactingRecorder({ db: tx, clock, dekFor }).record({
+      await createRedactingRecorder({ db: tx, clock, dekFor: async () => recordingDek }).record({
         userId,
         kind: "connection_change",
         source: "warthog",
@@ -416,7 +413,7 @@ export function createConnectorsActions(deps: ConnectorsActionsDeps): Connectors
       });
     });
 
-    return { ok: true };
+    return { ok: true, providerRevoked };
   }
 
   // Record a "Request a connector" for the session user (member-scoped) and email the

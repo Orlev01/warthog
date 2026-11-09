@@ -149,7 +149,7 @@ async function startSignup(
   email: string,
   clock: Clock,
 ): Promise<{ signupId: string; options: PublicKeyCredentialCreationOptionsJSON }> {
-  await issueEmailCode(db, email, {
+  await issueEmailCode(db, email, { purpose: "signup",
     clock,
     random: systemRandom,
     hmacKey: HMAC_KEY,

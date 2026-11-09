@@ -36,7 +36,8 @@ import { getAccountCurrency } from "../db/account-currency";
 import { getConnectionPermissions } from "../db/agent-permissions";
 import { listAgentsForUser, type AgentStatus } from "../db/agents";
 import { listPendingForUser } from "../db/approvals";
-import { periodKeyFor, sumForConnectionPeriod, type PeriodKind } from "../db/card-spend-ledger";
+import { periodKeyFor, type PeriodKind } from "../db/card-spend-ledger";
+import { readAgentSpending } from "../spending/agent-spending";
 import type { Db } from "../db/index";
 import { listRecordsForUser, type LifeAdminRecord } from "../db/life-admin-records";
 import { getUserById } from "../db/users";
@@ -64,6 +65,7 @@ export interface HomeAgentSpend {
   readonly status: AgentStatus;
   readonly lastActiveAt: Date | string | null;
   readonly spendThisPeriod: number | string;
+  readonly spendUnavailable?: boolean;
   readonly budget: number | string;
   readonly budgetPeriod: PeriodKind;
   readonly currency: string;
@@ -143,24 +145,19 @@ export async function loadHomeMetrics(
     const budget = cardBudget?.amount ?? 0;
     // Only an agent with a card budget has a period to bucket its releases by; the
     // sum uses the SHARED budget-period math to pick the current bucket.
-    const spendThisPeriod = cardBudget
-      ? await sumForConnectionPeriod(
-          db,
-          userId,
-          agent.connectionId,
-          budgetPeriod,
-          periodKeyFor(budgetPeriod, now, timeZone),
-        )
-      : 0;
+    const spending = cardBudget
+      ? await readAgentSpending(db, userId, agent.connectionId, cardBudget, now, timeZone)
+      : { total: 0, unconverted: [] };
     agents.push({
       agentId: agent.id,
       displayName: agent.displayName,
       status: agent.status,
       lastActiveAt: agent.lastActiveAt,
-      spendThisPeriod,
+      spendThisPeriod: spending.total,
+      ...(spending.unconverted.length ? { spendUnavailable: true } : {}),
       budget,
       budgetPeriod,
-      currency,
+      currency: cardBudget?.currency ?? currency,
     });
   }
 

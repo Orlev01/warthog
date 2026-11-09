@@ -159,12 +159,20 @@ export async function issueInvite(
   const refusal = await withTransaction(db, async (tx): Promise<IssueRefusal | null> => {
     // The same household lock addMember takes, so invites and joins serialise on Postgres;
     // the gated insert below re-checks both limits in one statement either way.
-    await tx.query("SELECT 1 FROM households WHERE id = $1 FOR UPDATE", [input.householdId]);
+    const household = await tx.query("SELECT owner_id FROM households WHERE id = $1 FOR UPDATE", [input.householdId]);
+    const ownerId = household.rows[0]?.owner_id;
+    if (typeof ownerId !== "string") return "no_room";
+    // The person-wide allowance survives closing/recreating a household. Serialize
+    // across that person's households as well as the household's own capacity.
+    await tx.query("SELECT pg_advisory_xact_lock(hashtextextended($1, 41))", [ownerId]);
+    await tx.query("DELETE FROM household_invite_sends WHERE user_id = $1 AND sent_at <= $2::timestamptz", [ownerId, hourAgo.toISOString()]);
     const inserted = await tx.query(
       `INSERT INTO household_invites (token_hash, household_id, email, created_at, expires_at)
        SELECT $1, $2, $3, $4::timestamptz, $5::timestamptz
         WHERE (SELECT count(*) FROM household_invites
                 WHERE household_id = $2 AND created_at > $6::timestamptz) < $7::int
+          AND (SELECT count(*) FROM household_invite_sends
+                WHERE user_id = $9 AND sent_at > $6::timestamptz) < $7::int
           AND (SELECT count(*) FROM household_invites
                 WHERE household_id = $2 AND used_at IS NULL AND expires_at > $4::timestamptz
                   AND lower(btrim(email)) <> lower(btrim($3)))
@@ -179,17 +187,21 @@ export async function issueInvite(
         hourAgo.toISOString(),
         INVITES_PER_HOUR,
         MAX_MEMBERS,
+        ownerId,
       ],
     );
     if (inserted.rows.length === 0) {
       // Nothing was stored: name the limit that refused it.
       const sent = await tx.query(
-        `SELECT count(*)::int AS n FROM household_invites
-          WHERE household_id = $1 AND created_at > $2::timestamptz`,
-        [input.householdId, hourAgo.toISOString()],
+        `SELECT GREATEST(
+          (SELECT count(*) FROM household_invites WHERE household_id = $1 AND created_at > $2::timestamptz),
+          (SELECT count(*) FROM household_invite_sends WHERE user_id = $3 AND sent_at > $2::timestamptz)
+        )::int AS n`,
+        [input.householdId, hourAgo.toISOString(), ownerId],
       );
       return Number(sent.rows[0]?.n ?? 0) >= INVITES_PER_HOUR ? "throttled" : "no_room";
     }
+    await tx.query("INSERT INTO household_invite_sends (user_id, sent_at) VALUES ($1, $2::timestamptz)", [ownerId, now.toISOString()]);
     // A resend: the address's earlier open invite stops working now.
     await tx.query(
       `UPDATE household_invites SET expires_at = $3::timestamptz

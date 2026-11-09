@@ -161,8 +161,27 @@ export async function insertWrappedKeyIfAbsent(db: Db, input: SaveWrappedKeyInpu
 // user id is bound). Never another person's, and never the wrapped key itself —
 // only which methods exist. Empty array when the person has saved none.
 export async function listMethods(db: Db, userId: string): Promise<UnlockMethod[]> {
-  const result = await db.query(`SELECT method FROM vault_unlock_methods WHERE user_id = $1`, [userId]);
+  const result = await db.query(`SELECT method FROM vault_unlock_methods WHERE user_id = $1
+    UNION SELECT 'passkey_prf' AS method FROM vault_passkey_envelopes WHERE user_id = $1`, [userId]);
   return result.rows.map((row) => row.method as UnlockMethod);
+}
+
+export interface CredentialEnvelope extends StoredWrappedKey {
+  readonly credentialId: string;
+}
+
+export async function listPasskeyEnvelopes(db: Db, userId: string): Promise<CredentialEnvelope[]> {
+  const result = await db.query("SELECT credential_id, wrapped_key, params FROM vault_passkey_envelopes WHERE user_id = $1 ORDER BY credential_id", [userId]);
+  return result.rows.map((row) => ({ credentialId: String(row.credential_id), wrappedKey: String(row.wrapped_key), params: row.params as UnlockParams }));
+}
+
+// The ownership FK is the final guard, including concurrent credential removal.
+export async function savePasskeyEnvelope(db: Db, input: SaveWrappedKeyInput, credentialId: string, replace: boolean): Promise<boolean> {
+  const conflict = replace ? "DO UPDATE SET wrapped_key = EXCLUDED.wrapped_key, params = EXCLUDED.params" : "DO NOTHING";
+  const result = await db.query(`INSERT INTO vault_passkey_envelopes (user_id, credential_id, wrapped_key, params)
+    VALUES ($1, $2, $3, $4::jsonb) ON CONFLICT (user_id, credential_id) ${conflict} RETURNING credential_id`,
+    [input.userId, credentialId, input.wrappedKey, JSON.stringify(input.params ?? {})]);
+  return result.rows.length > 0;
 }
 
 // The stored wrapped VK + params for `userId` + `method` (to hand the browser so it

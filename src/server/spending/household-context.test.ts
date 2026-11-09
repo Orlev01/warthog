@@ -129,6 +129,37 @@ const NOW = new Date("2026-11-15T12:00:00.000Z");
 const CONN_A = "aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa";
 const CONN_B = "bbbbbbbb-bbbb-bbbb-bbbb-bbbbbbbbbbbb";
 
+test("household policy converts historic currency subtotals just like the spending view", async () => {
+  const db = await freshDb();
+  try {
+    const owner = await makeUser(db, "mixed-owner");
+    const member = await makeUser(db, "mixed-member");
+    const household = await createHousehold(db, { ownerId: owner, currency: "AUD", monthlyBudget: 500 });
+    await addMember(db, { householdId: household.id, userId: member });
+    await setMemberLimit(db, { householdId: household.id, actorId: owner, userId: member, monthlyLimit: 200 });
+    await upsertRate(db, { rateDate: "2026-11-14", baseCurrency: "USD", quoteCurrency: "AUD", rate: 1.5 });
+    await record(db, { userId: owner, householdId: household.id, amount: 40, connectionId: CONN_A });
+    await record(db, { userId: member, householdId: household.id, amount: 100, currency: "USD", connectionId: CONN_B });
+    const resolved = await resolveCardRequestContext(member, { amount: 75, currency: "AUD" }, { db, clock: fixedClock(NOW) });
+    assert.equal(resolved.household?.budgetSpendToDate, 190);
+    assert.equal(resolved.household?.memberSpendToDate, 150);
+    assert.equal(evaluate(cardCall({ amount: 75, currency: "AUD" }), engineCtxFromResolved(resolved, { amount: 75, currency: "AUD" }, NOW)).decision, "deny");
+  } finally { await db.close(); }
+});
+
+test("unconvertible historic spend cannot silently disappear from a same-currency budget check", async () => {
+  const db = await freshDb();
+  try {
+    const userId = await makeUser(db, "missing-historic-rate");
+    const household = await createHousehold(db, { ownerId: userId, currency: "AUD", monthlyBudget: 500 });
+    await record(db, { userId, householdId: household.id, amount: 100, currency: "USD", connectionId: CONN_A });
+    const resolved = await resolveCardRequestContext(userId, { amount: 1, currency: "AUD" }, { db, clock: fixedClock(NOW) });
+    assert.equal(resolved.household?.totalsUnavailable, true);
+    assert.equal(resolved.deniable, true);
+    assert.match(resolved.reason!, /reference rate/i);
+  } finally { await db.close(); }
+});
+
 // The three period buckets NOW falls in (derived through the ledger's own `periodKeyFor`, the
 // one source of truth for its bucket keys — so a release here lands in the month the resolver
 // sums over).

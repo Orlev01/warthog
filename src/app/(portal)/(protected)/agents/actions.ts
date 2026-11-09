@@ -1,3 +1,5 @@
+import { formatAccountTime } from "@/server/display-time";
+import { timeZoneFor } from "@/server/spending/time-zone";
 // E10-S11 — Agents list page loader + disconnect wiring (the injectable, unit-testable
 // seam the thin `page.tsx` loader + its `use server` disconnect wrapper compose, the
 // convention's `createXActions(deps)` factory — as `[id]/actions.ts`, `access-key/
@@ -75,28 +77,18 @@ function toStatusKey(status: Agent["status"]): AgentListItem["status"] {
   return status === "connected" ? "connected" : "needs-reconnect";
 }
 
-// A stored instant → an absolute, readable date label (the view renders "Connected <label>"
-// and reaches for no clock of its own). Shown in UTC so the seeded dates are deterministic.
-function formatDate(value: Date | string): string {
-  return new Date(value).toLocaleDateString("en-AU", {
-    timeZone: "UTC",
-    day: "numeric",
-    month: "short",
-    year: "numeric",
-  });
-}
 
 // Build the view's props for one agent from its plaintext metadata and its stored grants
 // (for the budget). An agent with no grants row is NOT dropped — its budget simply reads
 // as none yet.
-function toListItem(agent: Agent, grants: ConnectionPermissions | null): AgentListItem {
+function toListItem(agent: Agent, grants: ConnectionPermissions | null, timeZone: string): AgentListItem {
   return {
     id: agent.id,
     name: agent.displayName,
     platform: agent.platform,
     status: toStatusKey(agent.status),
-    connectedAt: formatDate(agent.connectedAt),
-    lastActiveAt: agent.lastActiveAt != null ? formatDate(agent.lastActiveAt) : null,
+    connectedAt: formatAccountTime(agent.connectedAt, timeZone, { dateOnly: true }),
+    lastActiveAt: agent.lastActiveAt != null ? formatAccountTime(agent.lastActiveAt, timeZone, { dateOnly: true }) : null,
     requestCount: agent.requestCount,
     spendThisPeriod: 0,
     budget: grants?.cardBudget?.amount ?? 0,
@@ -114,11 +106,12 @@ export function createAgentsActions(deps: AgentsActionsDeps): AgentsActions {
   // session.userId — never a client value) and format each for the view, reading its
   // stored grants for the budget.
   async function load(session: Session): Promise<{ agents: ReadonlyArray<AgentListItem> }> {
+    const timeZone = await timeZoneFor(db, session.userId, await dekFor(session.userId));
     const agents = await listAgentsForUser(db, session.userId);
     const items: AgentListItem[] = [];
     for (const agent of agents) {
       const grants = await getConnectionPermissions(db, session.userId, agent.connectionId);
-      items.push(toListItem(agent, grants));
+      items.push(toListItem(agent, grants, timeZone));
     }
     return { agents: items };
   }

@@ -21,9 +21,10 @@ import { createHash } from "node:crypto";
 import type { Clock } from "../seams/clock";
 import type { Random } from "../seams/random";
 import type { Db, Row } from "../db/index";
+import { HttpError } from "../http/validate";
 
 // The cookie name is a `__Host-` prefix: the browser only accepts it when it is
-// Secure, Path=/ and carries no Domain — i.e. host-locked to warthog.com.au.
+// Secure, Path=/ and carries no Domain — host-locked to the serving application.
 // Exported so sign-out reads and clears exactly this cookie (one source of truth).
 export const COOKIE_NAME = "__Host-wh_session";
 
@@ -86,6 +87,13 @@ function sessionCookie(token: string): string {
   return `${COOKIE_NAME}=${token}; Path=/; HttpOnly; Secure; SameSite=Lax; Max-Age=${maxAgeSeconds}`;
 }
 
+// Authentication transactions that mutate existing factor/session rows take this
+// first, preserving account -> factors/sessions lock order with deletion/purge.
+export async function lockActiveAccount(tx: Db, userId: string): Promise<void> {
+  const active = await tx.query("SELECT id FROM users WHERE id = $1 AND wrapped_dek <> '' FOR SHARE", [userId]);
+  if (!active.rows[0]) throw new HttpError(401, "Authentication failed");
+}
+
 // Create a session for `userId`: draw a 256-bit id, store it hashed, anchor both
 // timers at the clock, and return the session together with the raw token and its
 // cookie. `stepped_up_at` is left unset.
@@ -98,12 +106,18 @@ export async function createSession(
   const now = deps.clock.now().toISOString();
   const result = await db.query(
     `INSERT INTO sessions (user_id, token_hash, created_at, last_seen_at)
-     VALUES ($1, $2, $3::timestamptz, $4::timestamptz)
+     SELECT id, $2, $3::timestamptz, $4::timestamptz FROM users
+     WHERE id = $1 AND wrapped_dek <> ''
+     FOR SHARE
      RETURNING ${RETURNING}`,
     [userId, hashToken(token), now, now],
   );
   const row = result.rows[0];
-  if (!row) throw new Error("createSession: INSERT returned no row");
+  // Deletion keeps a crypto-shredded user row until purge. Retained passkeys,
+  // recovery material or a pending first factor must not reopen that account.
+  // FOR SHARE serializes minting with deletion's user-row update: either the
+  // new session is revoked by deletion, or this insert observes the tombstone.
+  if (!row) throw new HttpError(401, "Authentication failed");
   return { session: toSession(row), token, cookie: sessionCookie(token) };
 }
 
@@ -116,24 +130,21 @@ export async function verifySession(
   token: string,
   deps: { clock: Clock },
 ): Promise<Session | null> {
-  const found = await db.query(
-    `SELECT ${RETURNING} FROM sessions WHERE token_hash = $1`,
-    [hashToken(token)],
-  );
-  const row = found.rows[0];
-  if (!row) return null;
-
-  const session = toSession(row);
   const now = deps.clock.now().getTime();
-  if (now - session.lastSeenAt.getTime() > IDLE_MS) return null;
-  if (now - session.createdAt.getTime() > ABSOLUTE_MS) return null;
-
+  // Verification and idle renewal are one guarded write. A separate SELECT plus
+  // UPDATE can return a previously read session after logout/recovery deleted it.
   const slid = await db.query(
-    `UPDATE sessions SET last_seen_at = $2::timestamptz WHERE id = $1 RETURNING ${RETURNING}`,
-    [session.id, deps.clock.now().toISOString()],
+    `UPDATE sessions SET last_seen_at = GREATEST(last_seen_at, $2::timestamptz)
+     WHERE token_hash = $1
+       AND last_seen_at >= $3::timestamptz
+       AND created_at >= $4::timestamptz
+       AND EXISTS (SELECT 1 FROM users WHERE users.id = sessions.user_id AND wrapped_dek <> '')
+     RETURNING ${RETURNING}`,
+    [hashToken(token), new Date(now).toISOString(), new Date(now - IDLE_MS).toISOString(),
+      new Date(now - ABSOLUTE_MS).toISOString()],
   );
   const updated = slid.rows[0];
-  return updated ? toSession(updated) : session;
+  return updated ? toSession(updated) : null;
 }
 
 // Delete exactly the session the presented token identifies (sign-out): re-hash the

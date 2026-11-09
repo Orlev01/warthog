@@ -69,6 +69,7 @@
 // migrations), so tests share no state.
 
 import { test } from "node:test";
+import { createRevokeHandler } from "../../app/oauth/revoke/handler";
 import assert from "node:assert/strict";
 import { createHash, randomUUID } from "node:crypto";
 
@@ -464,4 +465,68 @@ test("replaying a token whose successor has already been used revokes the connec
   } finally {
     await db.close();
   }
+});
+
+
+function interceptDb(db: Db, intercept: (text: string, values: unknown[] | undefined, run: () => ReturnType<Db["query"]>) => ReturnType<Db["query"]>): Db {
+  return {
+    inTransaction: db.inTransaction,
+    query: (text, values) => intercept(text, values, () => db.query(text, values)),
+    close: () => db.close(),
+    ...(db.transaction ? { transaction: <T>(fn: (tx: Db) => Promise<T>) => db.transaction!((tx) => fn(interceptDb(tx, intercept))) } : {}),
+  };
+}
+
+for (const grant of ["authorization_code", "refresh_token"] as const) {
+  test(`${grant} rolls back its credential claim and access token if refresh insertion fails`, async () => {
+    const db = await dbWithClient();
+    try {
+      const connectionId = randomUUID();
+      const code = await seedAuthCode(db, { connectionId });
+      let params = codeExchangeParams(code);
+      if (grant === "refresh_token") {
+        const first = await exchangeToken({ params }, deps(db));
+        assert.ok(first.ok);
+        params = refreshParams(first.body.refresh_token);
+      }
+      const before = await db.query("SELECT token_hash, kind, expires_at FROM oauth_tokens ORDER BY token_hash");
+      const failing = interceptDb(db, async (text, values, run) => {
+        if (/INSERT INTO oauth_tokens/i.test(text) && values?.includes("refresh")) throw new Error("synthetic refresh insert failure");
+        return run();
+      });
+      await assert.rejects(exchangeToken({ params }, deps(failing)), /synthetic refresh insert failure/);
+      assert.deepEqual((await db.query("SELECT token_hash, kind, expires_at FROM oauth_tokens ORDER BY token_hash")).rows, before.rows);
+      assert.ok((await exchangeToken({ params }, deps(db))).ok, "the original credential still works after rollback");
+    } finally { await db.close(); }
+  });
+}
+
+test("a refresh racing a successful revocation cannot recreate tokens after revocation", async () => {
+  const db = await dbWithClient();
+  try {
+    const connectionId = randomUUID();
+    const first = await exchangeToken({ params: codeExchangeParams(await seedAuthCode(db, { connectionId })) }, deps(db));
+    assert.ok(first.ok);
+    let reached!: () => void;
+    let resume!: () => void;
+    const paused = new Promise<void>((resolve) => { reached = resolve; });
+    const continueRefresh = new Promise<void>((resolve) => { resume = resolve; });
+    const racing = interceptDb(db, async (text, _values, run) => {
+      const result = await run();
+      if (/UPDATE oauth_tokens SET expires_at/i.test(text)) { reached(); await continueRefresh; }
+      return result;
+    });
+    const refreshing = exchangeToken({ params: refreshParams(first.body.refresh_token) }, deps(racing));
+    await paused;
+    const revoking = createRevokeHandler({ db })(new Request("https://warthog.com.au/oauth/revoke", {
+      method: "POST", headers: { "content-type": "application/x-www-form-urlencoded" },
+      body: new URLSearchParams({ token: first.body.refresh_token }),
+    }));
+    await new Promise<void>((resolve) => setImmediate(resolve));
+    resume();
+    const [, revoked] = await Promise.all([refreshing, revoking]);
+    assert.equal(revoked.status, 200);
+    assert.equal((await db.query("SELECT token_hash FROM oauth_tokens WHERE connection_id = $1", [connectionId])).rows.length, 0);
+    assert.equal((await exchangeToken({ params: refreshParams(first.body.refresh_token) }, deps(db))).ok, false);
+  } finally { await db.close(); }
 });

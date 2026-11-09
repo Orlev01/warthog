@@ -12,6 +12,7 @@ import type {
 import { AlertTriangle, CheckCircle2 } from "lucide-react";
 
 import { Button } from "@/components/ui/button";
+import { ConfirmItsYou } from "@/components/ui/confirm-its-you";
 
 // E04-S37 — Security screen factor controls.
 //
@@ -95,6 +96,7 @@ export interface FactorControlsController {
   addPasskey(): Promise<void>;
   generateRecoveryCode(): Promise<void>;
   confirm(): Promise<void>;
+  resumeAfterConfirmation(): Promise<void>;
 }
 
 // The step-up (Confirm it's you) HTTP endpoints — the only `fetch` this component makes.
@@ -236,7 +238,12 @@ export function createFactorControls(deps: FactorControlsDeps): FactorControlsCo
       return;
     }
 
-    // Confirmed — resume the change that was refused (now permitted).
+    await resumeAfterConfirmation();
+  }
+
+  async function resumeAfterConfirmation(): Promise<void> {
+    // Both passkey and authenticator confirmation resume the explicitly requested
+    // change. Clear it first so duplicate callbacks cannot repeat a mutation.
     const resume = pendingResume;
     pendingResume = null;
     if (resume) {
@@ -251,6 +258,7 @@ export function createFactorControls(deps: FactorControlsDeps): FactorControlsCo
     addPasskey,
     generateRecoveryCode,
     confirm,
+    resumeAfterConfirmation,
   };
 }
 
@@ -306,15 +314,9 @@ export function FactorControls(props: FactorControlsProps): React.ReactElement {
       {state.notice ? <NoticeBanner notice={state.notice} /> : null}
 
       {state.confirmRequired ? (
-        <Button
-          type="button"
-          variant="primary"
-          onClick={() => {
-            void flow.confirm();
-          }}
-        >
-          Confirm it&apos;s you
-        </Button>
+        <ConfirmItsYou fetch={props.fetch ?? defaultFetch}
+          startAuthentication={props.startAuthentication ?? startAuthentication}
+          onConfirmed={() => { void flow.resumeAfterConfirmation(); }} />
       ) : null}
 
       <div className="flex flex-col gap-1">

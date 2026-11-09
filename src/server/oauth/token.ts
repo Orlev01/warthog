@@ -42,7 +42,9 @@
 
 import { createHash } from "node:crypto";
 
-import { consumeAuthCode, createToken, resolveToken } from "./store";
+import { consumeAuthCode, createToken, getAuthCode, resolveToken } from "./store";
+import { withTransaction } from "../db/index";
+import { lockOAuthConnection } from "./connection-lock";
 import { hmac } from "../crypto/hmac";
 import type { Db } from "../db/index";
 import type { Clock } from "../seams/clock";
@@ -142,29 +144,21 @@ async function exchangeAuthorizationCode(
     return { ok: false, error: "invalid_request" };
   }
 
-  // Resolve AND consume the code by its hash in one statement (the raw code is never a
-  // stored key): only the request whose DELETE returns the row may continue, so a code
-  // can never be exchanged twice — not even by two requests at once — however this
-  // attempt then ends.
-  const authCode = await consumeAuthCode(db, sha256Hex(code));
-  if (authCode == null) return { ok: false, error: "invalid_grant" };
-
-  // An expired code is no longer exchangeable.
-  if (authCode.expiresAt.getTime() <= clock.now().getTime()) {
-    return { ok: false, error: "invalid_grant" };
-  }
-
-  // The client and redirect URI must match the ones the code was issued to.
-  if (authCode.clientId !== clientId || authCode.redirectUri !== redirectUri) {
-    return { ok: false, error: "invalid_grant" };
-  }
-
-  // PKCE S256: the verifier must hash to the challenge the code was bound to.
-  if (s256Challenge(verifier) !== authCode.codeChallenge) {
-    return { ok: false, error: "invalid_grant" };
-  }
-
-  return mintTokenPair(deps, authCode.connectionId);
+  const identified = await getAuthCode(db, sha256Hex(code));
+  if (!identified) return { ok: false, error: "invalid_grant" };
+  return withTransaction(db, async (tx) => {
+    await lockOAuthConnection(tx, identified.connectionId);
+    // Re-read and consume only after acquiring the same lock revocation uses.
+    const authCode = await consumeAuthCode(tx, sha256Hex(code));
+    if (!authCode || authCode.expiresAt.getTime() <= clock.now().getTime()) {
+      return { ok: false, error: "invalid_grant" };
+    }
+    if (authCode.clientId !== clientId || authCode.redirectUri !== redirectUri ||
+        s256Challenge(verifier) !== authCode.codeChallenge) {
+      return { ok: false, error: "invalid_grant" };
+    }
+    return mintTokenPair({ ...deps, db: tx }, authCode.connectionId);
+  });
 }
 
 // refresh_token grant: rotate a current refresh token; answer a quick retry with the
@@ -173,10 +167,18 @@ async function exchangeRefreshToken(
   params: URLSearchParams,
   deps: TokenDeps,
 ): Promise<TokenResult> {
-  const { db, clock, hmacKey } = deps;
-
   const presented = params.get("refresh_token");
   if (!presented) return { ok: false, error: "invalid_request" };
+  const identified = await resolveToken(deps.db, sha256Hex(presented));
+  if (!identified || identified.kind !== "refresh") return { ok: false, error: "invalid_grant" };
+  return withTransaction(deps.db, async (tx) => {
+    await lockOAuthConnection(tx, identified.connectionId);
+    return rotateRefreshToken(presented, { ...deps, db: tx });
+  });
+}
+
+async function rotateRefreshToken(presented: string, deps: TokenDeps): Promise<TokenResult> {
+  const { db, clock, hmacKey } = deps;
   const presentedHash = sha256Hex(presented);
   const now = clock.now();
 

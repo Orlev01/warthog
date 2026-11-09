@@ -26,6 +26,9 @@ import type { KeyWrapper } from "@/server/crypto/key-wrapper";
 import type { Senders } from "@/server/notify/senders";
 import type { Clock } from "@/server/seams/clock";
 import type { Db } from "@/server/db/index";
+import { exportProtectedVault } from "@/server/export/protected";
+import { listIdentityFields } from "@/server/db/identity-fields";
+import { getUserById } from "@/server/db/users";
 import { createDataActions } from "../actions";
 
 export interface ExportHandlerDeps {
@@ -86,12 +89,24 @@ export function createExportHandler(deps: ExportHandlerDeps): (request: Request)
       });
     }
 
+    const forDevice = new URL(request.url).searchParams.get("device") === "1";
+    const failure = (status: number, error: string) => Response.json({ error }, { status, headers: { "cache-control": "no-store" } });
     const token = readCookie(request, COOKIE_NAME);
     const session = token ? await verifySession(db, token, { clock }) : null;
-    if (!session) return seeOther("/signin");
+    if (!session) return forDevice ? failure(401, "unauthenticated") : seeOther("/signin");
 
     const outcome = await actions.exportData(session);
-    if (!outcome.ok) return seeOther(`${SCREEN}?notice=${encodeURIComponent(outcome.reason)}`);
+    if (!outcome.ok) return forDevice ? failure(403, outcome.reason) : seeOther(`${SCREEN}?notice=${encodeURIComponent(outcome.reason)}`);
+
+    if (forDevice) {
+      const user = await getUserById(db, session.userId);
+      if (!user) return failure(401, "unauthenticated");
+      const dek = await keyWrapper.unwrap(user.wrappedDek);
+      let fields;
+      try { fields = await listIdentityFields(db, session.userId, dek); } finally { dek.fill(0); }
+      const document = { ...outcome.document, profile: { ...outcome.document.profile, fields: fields.map(({ id, kind, value, movingOn }) => ({ id, kind, value, movingOn })) } };
+      return Response.json({ document, protectedVault: await exportProtectedVault(db, session.userId) }, { headers: { "cache-control": "no-store", "x-content-type-options": "nosniff" } });
+    }
 
     const day = clock.now().toISOString().slice(0, 10);
     return new Response(JSON.stringify(outcome.document, null, 2), {

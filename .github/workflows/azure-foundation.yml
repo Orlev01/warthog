@@ -1,0 +1,78 @@
+name: Azure foundation (manual plan or apply)
+
+on:
+  workflow_dispatch:
+    inputs:
+      operation:
+        description: Separate plan and apply approvals; no destroy operation
+        type: choice
+        options: [plan, apply]
+        required: true
+      approval_reference:
+        description: Reference to the reviewed resource quote and credit-only funding approval
+        type: string
+        required: true
+      plan_id:
+        description: Apply only - private plan run ID and attempt (12345-1)
+        type: string
+      plan_sha256:
+        description: Apply only - SHA-256 of the exact reviewed saved plan
+        type: string
+
+permissions:
+  contents: read
+
+concurrency:
+  group: warthog-azure-production
+  cancel-in-progress: false
+
+jobs:
+  gate:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    steps:
+      - name: Require configured delivery and manual main dispatch
+        env:
+          ENABLED: ${{ vars.AZURE_DELIVERY_ENABLED }}
+        run: |
+          test "$GITHUB_REPOSITORY" = Orlev01/warthog
+          test "$GITHUB_REF" = refs/heads/main
+          test "$ENABLED" = true || { echo 'Azure delivery is disabled pending approved setup.'; exit 1; }
+  foundation:
+    needs: gate
+    runs-on: ubuntu-24.04
+    timeout-minutes: 60
+    environment: azure-foundation-${{ inputs.operation }}
+    permissions:
+      contents: read
+      id-token: write
+    env:
+      AZURE_DELIVERY_ENABLED: ${{ vars.AZURE_DELIVERY_ENABLED }}
+      APPROVAL_REFERENCE: ${{ inputs.approval_reference }}
+      OPERATION: ${{ inputs.operation }}
+      PLAN_ID: ${{ inputs.plan_id }}
+      PLAN_SHA256: ${{ inputs.plan_sha256 }}
+      ARM_CLIENT_ID: ${{ vars.AZURE_CLIENT_ID }}
+      FOUNDATION_TFVARS_JSON: ${{ secrets.FOUNDATION_TFVARS_JSON }}
+      FOUNDATION_BACKEND_JSON: ${{ secrets.FOUNDATION_BACKEND_JSON }}
+      TF_VAR_postgres_admin_password: ${{ secrets.POSTGRES_ADMIN_PASSWORD }}
+      PLAN_STORAGE_ACCOUNT: ${{ vars.PLAN_STORAGE_ACCOUNT }}
+      PLAN_CONTAINER: ${{ vars.PLAN_CONTAINER }}
+      AZURE_CORE_OUTPUT: none
+      AZURE_EXTENSION_USE_DYNAMIC_INSTALL: "no"
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: hashicorp/setup-terraform@dfe3c3f87815947d99a8997f908cb6525fc44e9e # v4.0.1
+        with:
+          terraform_version: 1.16.3
+          terraform_wrapper: false
+      - name: Exchange environment-scoped OIDC identity
+        uses: azure/login@a457da9ea143d694b1b9c7c869ebb04ebe844ef5 # v2.3.0
+        with:
+          client-id: ${{ vars.AZURE_CLIENT_ID }}
+          tenant-id: 72277873-e056-4612-9b1c-7ad58e02fcf3
+          subscription-id: e854f594-274f-4051-841b-78df7655d73c
+      - name: Operate on private, exact saved plan
+        run: python3 scripts/ci/foundation.py

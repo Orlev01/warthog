@@ -243,6 +243,7 @@ export async function callGoogleTool(
       path,
       query,
       body: input.body,
+      contentType: "application/json",
     },
     deps,
   );

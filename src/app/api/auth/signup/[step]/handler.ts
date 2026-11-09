@@ -29,6 +29,8 @@ const STEP_METHOD = new Map<string, keyof SignupHandler>([
   ["send-code", "sendCode"],
   ["verify-email", "verifyEmail"],
   ["register-passkey", "registerPasskey"],
+  ["begin-totp", "beginTotp"],
+  ["verify-totp", "verifyTotp"],
   ["confirm", "confirmSignup"],
 ]);
 

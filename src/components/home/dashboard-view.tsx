@@ -39,6 +39,8 @@ export type DashboardAgent = {
   spendThisPeriod: number;
   budget: number;
   budgetPeriod: "day" | "week" | "month";
+  currency?: string;
+  spendUnavailable?: boolean;
 };
 
 // One latest-activity line: a plain, already-redacted summary, its outcome in words
@@ -160,7 +162,9 @@ export function DashboardView({
                   <Status status={agent.status} />
                 </div>
                 <span className="text-sm text-fg-muted">
-                  {`A$${agent.spendThisPeriod} of A$${agent.budget} ${periodLabel(agent.budgetPeriod)}`}
+                  {agent.spendUnavailable
+                    ? "Total unavailable: a reference rate is missing for earlier spending."
+                    : `${agent.currency && agent.currency !== "AUD" ? agent.currency + " " : "A$"}${agent.spendThisPeriod} of ${agent.currency && agent.currency !== "AUD" ? agent.currency + " " : "A$"}${agent.budget} ${periodLabel(agent.budgetPeriod)}`}
                 </span>
               </li>
             ))}

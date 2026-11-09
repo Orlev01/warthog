@@ -44,6 +44,8 @@ import { COOKIE_NAME, verifySession, recordStepUp } from "./session";
 import { beginPasskeyAuthentication, finishPasskeyAuthentication } from "./passkey";
 import type { Clock } from "../seams/clock";
 import type { Db } from "../db/index";
+import type { TotpSecretStore } from "./totp-store";
+import { checkTotpSignIn } from "./totp-attempts";
 
 // The dependency bundle the composition root builds: the shared db, the clock that
 // judges session freshness and stamps the recorded step-up, the configured WebAuthn RP
@@ -54,12 +56,14 @@ export interface StepUpHandlerDeps {
   readonly clock: Clock;
   readonly rpId: string;
   readonly publicOrigin: string;
+  readonly totpSecrets?: Pick<TotpSecretStore, "get">;
 }
 
 // The two methods the thin route dispatcher maps the `[step]` segment to.
 export interface StepUpHandler {
   begin(request: Request): Promise<Response>;
   finish(request: Request): Promise<Response>;
+  totp(request: Request): Promise<Response>;
 }
 
 // A grossly oversized body is rejected before any work; a real WebAuthn assertion is far
@@ -88,6 +92,7 @@ const authenticationResponseSchema = z.looseObject({
 const finishSchema = z.object({
   authenticationResponse: authenticationResponseSchema,
 });
+const totpSchema = z.strictObject({ totp: z.string().regex(/^[0-9]{6}$/) });
 
 // A JSON response with a status.
 function json(status: number, body: unknown): Response {
@@ -190,7 +195,31 @@ export function createStepUpHandler(deps: StepUpHandlerDeps): StepUpHandler {
     }
   }
 
-  return { begin, finish };
+  async function totp(request: Request): Promise<Response> {
+    if (!sameOrigin(request)) return json(403, { error: "forbidden" });
+    const session = await currentSession(request);
+    if (!session) return json(401, { error: "unauthenticated" });
+    try {
+      const { totp: code } = await parseBody(totpSchema, request, { maxBytes: MAX_BODY_BYTES });
+      const secret = await deps.totpSecrets?.get(session.userId);
+      if (!secret) return json(401, { error: "invalid_code" });
+      // The same account-wide counter and accepted step used by signin: neither
+      // parallel guesses nor switching endpoints permits extra attempts or replay.
+      const result = await checkTotpSignIn(db, { userId: session.userId, secret, code }, { clock });
+      if (!result.ok) {
+        if (result.reason === "throttled") {
+          const response = json(429, { error: "too_many_attempts" });
+          response.headers.set("retry-after", String(Math.ceil(result.retryAfterMs / 1000)));
+          return response;
+        }
+        return json(401, { error: "invalid_code" });
+      }
+      await recordStepUp(db, session.id, { clock });
+      return json(200, { ok: true });
+    } catch (error) { return handleError(error); }
+  }
+
+  return { begin, finish, totp };
 }
 
 // The step -> handler-method contract this route implements. A Map is exact-match and
@@ -198,6 +227,7 @@ export function createStepUpHandler(deps: StepUpHandlerDeps): StepUpHandler {
 const STEP_METHOD = new Map<string, keyof StepUpHandler>([
   ["begin", "begin"],
   ["finish", "finish"],
+  ["totp", "totp"],
 ]);
 
 // The injection seams the route entry leaves at their defaults: the composition root

@@ -1,10 +1,11 @@
 "use client";
 
 import * as React from "react";
-import { Download, Upload, Archive, Trash2 } from "lucide-react";
+import { Archive, Trash2 } from "lucide-react";
 
+import { DataTransferControls } from "./data-transfer";
 import { Button } from "@/components/ui/button";
-import { Field, Label } from "@/components/ui/field";
+import { Field } from "@/components/ui/field";
 
 // E16-S10 — Data & privacy view component (src/components/settings/data-view.tsx;
 // brief "Export and portability", constitution 20 "Australian Privacy Act and
@@ -19,15 +20,8 @@ import { Field, Label } from "@/components/ui/field";
 // sensitive-moment explainer), and the destructive control stays locked until the person
 // types an exact confirmation phrase.
 //
-// This is the PURE, prop-driven VIEW (a Client Component, like the sibling
-// NotificationsView): it renders the screen from its props so it can be pinned without a
-// browser, a session or any server plumbing. The real plumbing — the export download, the
-// import upload + validate, the crypto-shredding delete — lives in the server composition
-// root and sibling actions wired by a LATER task; the controls here are native
-// affordances. The confirmation GATE is a conceptually-interactive piece of state: the
-// view seeds the field's initial value from `confirmationInput` (default ""), tracks what
-// is typed, and derives the Delete control's disabled state SOLELY from whether it equals
-// the required phrase. Colour comes from the design tokens (globals.css) — never a raw hex.
+// Transfers are browser-controlled so protected plaintext never enters a native form.
+// Deletion remains a separately gated server action.
 
 // An archived entry brought over by a past import, already display-ready.
 export type DataViewImportedEntry = {
@@ -51,23 +45,13 @@ export type DataViewProps = {
   // the current contents of the confirmation field; seeds its initial value (default "").
   confirmationInput?: string;
 
-  // --- wiring (the page passes these in the running app; omitted in render tests) ---
-  // Export posts natively to the download route (review fix G2), so the browser receives
-  // the file itself; it defaults to that route.
-  exportAction?: string | DataFormAction;
-  importAction?: DataFormAction;
   deleteAccountAction?: DataFormAction;
 };
 
 // The plain default confirmation phrase, used when the page supplies none.
 const DEFAULT_PHRASE = "delete my account";
 
-// The export download route (settings/data/export/route.ts): a same-origin POST answered
-// with the export as a JSON attachment, or a redirect back here when a fresh step-up is
-// needed.
-const EXPORT_URL = "/settings/data/export";
-
-function SectionHeading({ icon: Icon, children }: { icon: typeof Download; children: React.ReactNode }) {
+function SectionHeading({ icon: Icon, children }: { icon: typeof Archive; children: React.ReactNode }) {
   return (
     <h2 className="inline-flex items-center gap-2 text-sm font-semibold text-fg">
       <Icon aria-hidden={true} className="h-4 w-4 shrink-0" />
@@ -80,8 +64,6 @@ export function DataView({
   importedHistory,
   confirmationPhrase = DEFAULT_PHRASE,
   confirmationInput = "",
-  exportAction = EXPORT_URL,
-  importAction,
   deleteAccountAction,
 }: DataViewProps) {
   // The confirmation gate: seed from the prop, track what is typed, and derive the
@@ -91,47 +73,7 @@ export function DataView({
 
   return (
     <section className="flex flex-col gap-8">
-      {/* ----- Export: a live download, with a plain sensitive-moment explainer ----- */}
-      <div className="flex flex-col gap-3">
-        <SectionHeading icon={Download}>Export your data</SectionHeading>
-        <p className="text-sm text-fg-muted">
-          This downloads a file with what Warthog keeps about you — your everyday details,
-          connections, memory and your whole activity record. Your saved cards and protected
-          details stay locked on your device, so they are not included in the file. It is a
-          sensitive file, so keep it somewhere safe.
-        </p>
-        <form action={exportAction} method="post">
-          <Button type="submit" variant="secondary" className="self-start">
-            <Download aria-hidden={true} className="h-4 w-4 shrink-0" />
-            Export my data
-          </Button>
-        </form>
-      </div>
-
-      {/* ----- Import: a live file picker for a previous Warthog export ----- */}
-      <div className="flex flex-col gap-3">
-        <SectionHeading icon={Upload}>Import a previous export</SectionHeading>
-        <p className="text-sm text-fg-muted">
-          Bring the history from an earlier Warthog export back in. It is added to the
-          read-only archive below, never to your live activity record.
-        </p>
-        <form action={importAction} className="flex flex-col gap-3">
-          <div className="flex flex-col gap-1.5">
-            <Label htmlFor="data-import-file">Choose a file to import</Label>
-            <input
-              id="data-import-file"
-              name="file"
-              type="file"
-              accept="application/json,.json"
-              className="min-h-11 w-full rounded-card border border-line bg-surface px-3 py-2 text-sm text-fg file:me-3 file:rounded-card file:border-0 file:bg-surface-muted file:px-3 file:py-1.5 file:text-sm file:text-fg focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-focus focus-visible:ring-offset-2 focus-visible:ring-offset-bg"
-            />
-          </div>
-          <Button type="submit" variant="secondary" className="self-start">
-            <Upload aria-hidden={true} className="h-4 w-4 shrink-0" />
-            Import this file
-          </Button>
-        </form>
-      </div>
+      <DataTransferControls />
 
       {/* ----- Imported history: a clearly-labelled, READ-ONLY archive, kept separate
                from the live activity feed (an import never claims authorship). ----- */}
@@ -167,8 +109,11 @@ export function DataView({
         <SectionHeading icon={Trash2}>Delete account</SectionHeading>
         <p className="text-sm text-fg-muted">
           This is a sensitive step, so take a moment before it goes ahead. Deleting your
-          account is permanent and cannot be undone — everything Warthog stores about you
-          is erased for good, and there is no way to bring it back.
+          account is permanent and cannot be undone. Access is revoked immediately and your
+          account's encryption-key reference is removed from the live database. Remaining
+          live account rows are queued for deletion within 24 hours. Backups can retain older
+          data, and external email or SMS providers retain their own records, for the periods
+          described in the privacy policy.
         </p>
         <form action={deleteAccountAction} className="flex flex-col gap-3">
           <Field

@@ -1,3 +1,4 @@
+import { formatAccountTime } from "@/domain/display-time";
 import * as React from "react";
 
 import { Button } from "../ui/button";
@@ -115,12 +116,14 @@ const DEVICE_LINKS: readonly AuthLink[] = [{ href: "/signin", label: "Back to si
 function SaveRecoveryCode({
   code,
   savedConfirmed = false,
+  working = false,
   onSavedConfirmedChange,
   onContinue,
   error,
 }: {
   code?: string;
   savedConfirmed?: boolean;
+  working?: boolean;
   onSavedConfirmedChange?: (value: boolean) => void;
   onContinue?: () => void;
   error?: string;
@@ -140,11 +143,12 @@ function SaveRecoveryCode({
           type="checkbox"
           className="mt-0.5 h-4 w-4 rounded border-line accent-accent"
           checked={savedConfirmed}
+          disabled={working}
           onChange={(event) => onSavedConfirmedChange?.(event.target.checked)}
         />
         <span>I&apos;ve saved it</span>
       </label>
-      <Button type="button" variant="primary" disabled={!savedConfirmed} onClick={onContinue}>
+      <Button type="button" variant="primary" disabled={!savedConfirmed || working} onClick={onContinue}>
         Continue
       </Button>
       {error ? (
@@ -158,13 +162,17 @@ function SaveRecoveryCode({
 
 // --- sign-up ---------------------------------------------------------------
 
-export type SignupStep = "details" | "code" | "passkey" | "recovery";
+export type SignupStep = "details" | "code" | "passkey" | "authenticator" | "recovery";
 
 // SignupView renders from props alone. The optional interactive wiring is supplied by
 // the client sign-up flow (E04-S24) to drive the screen; when it is omitted the view
 // renders as the static copy the render tests pin.
 export interface SignupViewProps {
   step: SignupStep;
+  working?: boolean;
+  authenticatorSecret?: string;
+  authenticatorQr?: string;
+  onUseAuthenticatorApp?: () => void;
   recoveryCode?: string;
   name?: string;
   email?: string;
@@ -185,6 +193,10 @@ export interface SignupViewProps {
 
 export function SignupView({
   step,
+  working = false,
+  authenticatorSecret,
+  authenticatorQr,
+  onUseAuthenticatorApp,
   recoveryCode,
   name,
   email,
@@ -213,6 +225,7 @@ export function SignupView({
               label="Your name"
               name="name"
               type="text"
+              required disabled={working}
               autoComplete="name"
               value={name ?? ""}
               onChange={(event) => onNameChange?.(event.target.value)}
@@ -221,12 +234,13 @@ export function SignupView({
               label="Email address"
               name="email"
               type="email"
+              required disabled={working}
               autoComplete="email"
               value={email ?? ""}
               onChange={(event) => onEmailChange?.(event.target.value)}
               error={error}
             />
-            <Button type="submit" variant="primary">
+            <Button type="submit" variant="primary" disabled={working}>
               Continue
             </Button>
           </form>
@@ -244,13 +258,14 @@ export function SignupView({
               label="Your code"
               name="code"
               type="text"
+              required disabled={working}
               inputMode="numeric"
               autoComplete="one-time-code"
               value={code}
               onChange={(event) => onCodeChange?.(event.target.value)}
               error={error}
             />
-            <Button type="submit" variant="primary">
+            <Button type="submit" variant="primary" disabled={working}>
               Continue
             </Button>
           </form>
@@ -262,8 +277,11 @@ export function SignupView({
           title="Set up a passkey"
           lead="A passkey lets you sign in with your fingerprint, face or device PIN — there's no password to remember."
         >
-          <Button type="button" variant="primary" onClick={onCreatePasskey}>
+          <Button type="button" variant="primary" onClick={onCreatePasskey} disabled={working}>
             Create a passkey
+          </Button>
+          <Button type="button" variant="secondary" onClick={onUseAuthenticatorApp} disabled={working}>
+            Use an authenticator app
           </Button>
           {error ? (
             <p role="alert" className="text-sm text-danger">
@@ -272,14 +290,29 @@ export function SignupView({
           ) : null}
         </AuthScreen>
       );
+    case "authenticator":
+      return (
+        <AuthScreen title="Set up your authenticator app" lead="Scan this code with your authenticator app, or enter the setup key manually. Then enter the six-digit code it shows.">
+          {authenticatorQr ? <img src={authenticatorQr} alt="Authenticator app setup code" width={256} height={256} /> : null}
+          <p className="break-all rounded-card bg-surface-muted p-3 font-mono text-sm">{authenticatorSecret}</p>
+          <form className="flex flex-col gap-4" onSubmit={handleSubmit}>
+            <Field label="Authenticator app code" name="totp" type="text" inputMode="numeric"
+              autoComplete="one-time-code" required pattern="[0-9]{6}" maxLength={6} disabled={working}
+              value={code ?? ""} onChange={(event) => onCodeChange?.(event.target.value)} error={error} />
+            <Button type="submit" variant="primary" disabled={working}>Confirm authenticator app</Button>
+          </form>
+          <a href="/signup" className="text-sm text-fg-muted underline">Start signup again</a>
+        </AuthScreen>
+      );
     case "recovery":
       return (
         <AuthScreen
           title="Save your recovery code"
-          lead="Write this code down and keep it somewhere safe. It's the only way back in if you ever lose your passkey, and we'll only show it once."
+          lead="Write this code down and keep it somewhere safe. It's the way back in if you lose your sign-in methods, and we'll only show it once."
         >
           <SaveRecoveryCode
             code={recoveryCode}
+            working={working}
             savedConfirmed={savedConfirmed}
             onSavedConfirmedChange={onSavedConfirmedChange}
             onContinue={onConfirm}
@@ -292,7 +325,7 @@ export function SignupView({
 
 // --- sign-in ---------------------------------------------------------------
 
-export type SigninStep = "passkey" | "code";
+export type SigninStep = "passkey" | "email" | "email-code" | "code";
 
 // SigninView renders from props alone. The optional interactive wiring is supplied by
 // the client sign-in flow (E04-S25) to drive the screen; when it is omitted the view
@@ -304,6 +337,7 @@ export interface SigninViewProps {
   email?: string;
   code?: string;
   error?: string;
+  busy?: boolean;
   onEmailChange?: (value: string) => void;
   onCodeChange?: (value: string) => void;
   onPasskey?: () => void;
@@ -319,6 +353,7 @@ export function SigninView({
   email,
   code,
   error,
+  busy,
   onEmailChange,
   onCodeChange,
   onPasskey,
@@ -363,11 +398,15 @@ export function SigninView({
           <AuthLinks links={SIGNIN_LINKS} returnTo={returnTo} />
         </AuthScreen>
       );
+    case "email":
+    case "email-code":
     case "code":
       return (
         <AuthScreen
-          title="Sign in with a code"
-          lead="Enter your email and the code from your authenticator app."
+          title={step === "email" ? "Check your email first" : step === "email-code" ? "Enter your email code" : "Sign in with a code"}
+          lead={step === "email" ? "We'll send a code to your email, then ask for the code from your authenticator app."
+            : step === "email-code" ? "Enter the six-digit code from your latest Warthog email."
+            : "Your email is verified. Enter the code from your authenticator app."}
         >
           <form
             className="flex flex-col gap-4"
@@ -376,25 +415,27 @@ export function SigninView({
               onSubmitCode?.();
             }}
           >
-            <Field
+            {step === "email" ? <Field
               label="Email address"
               name="email"
               type="email"
               autoComplete="email"
               value={email}
               onChange={(event) => onEmailChange?.(event.target.value)}
-            />
-            <Field
-              label="Authenticator code"
+              disabled={busy}
+            /> : <p className="text-sm text-fg-muted">{email}</p>}
+            {step !== "email" ? <Field
+              label={step === "email-code" ? "Email code" : "Authenticator code"}
               name="code"
               type="text"
               inputMode="numeric"
               autoComplete="one-time-code"
               value={code}
               onChange={(event) => onCodeChange?.(event.target.value)}
-            />
-            <Button type="submit" variant="primary">
-              Sign in
+              disabled={busy}
+            /> : null}
+            <Button type="submit" variant="primary" disabled={busy}>
+              {busy ? "Please wait…" : step === "email" ? "Send email code" : step === "email-code" ? "Verify email" : "Sign in"}
             </Button>
           </form>
           {error ? (
@@ -402,6 +443,7 @@ export function SigninView({
               {error}
             </p>
           ) : null}
+          {step !== "email" ? <Button type="button" variant="secondary" disabled={busy} onClick={onUseAuthenticatorApp}>Start again</Button> : null}
           <AuthLinks links={SIGNIN_LINKS} returnTo={returnTo} />
         </AuthScreen>
       );
@@ -716,18 +758,13 @@ export type ResetStep =
   | "setup-passkey"
   | "setup-recovery";
 
-// A date in plain words ("8 May 2026"), in Australian time so the server render and the
-// browser render agree.
+// Before sign-in, no account preference is available: show the exact instant in
+// explicitly labelled UTC, identically in the server and browser render.
 function plainDate(iso: string | undefined): string | undefined {
   if (iso === undefined) return undefined;
   const date = new Date(iso);
   if (Number.isNaN(date.getTime())) return undefined;
-  return date.toLocaleDateString("en-AU", {
-    day: "numeric",
-    month: "long",
-    year: "numeric",
-    timeZone: "Australia/Sydney",
-  });
+  return formatAccountTime(date, "UTC");
 }
 
 // ResetView renders from props alone (review fix W3.3); the client reset flow supplies

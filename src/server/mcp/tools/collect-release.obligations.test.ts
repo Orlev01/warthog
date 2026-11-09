@@ -11,7 +11,7 @@
 //
 // These tests pin BEHAVIOUR, never source text. The pinned tool contract is documented in
 // the sibling `collect-release.test.ts`; this file depends on the same
-// `createCollectReleaseTool(deps)` factory, `releaseKeyFor(connection)` key scheme and
+// `createCollectReleaseTool(deps)` factory, `releaseKeyFor(connection, approvalId)` key scheme and
 // `handle(input, connection)` surface.
 //
 //   AC [obligation:validate-and-parameterize-input] (INV-102) —
@@ -37,6 +37,7 @@ import assert from "node:assert/strict";
 import { randomUUID } from "node:crypto";
 
 import { createCollectReleaseTool, releaseKeyFor } from "./collect-release";
+const APPROVAL_ID = "11111111-1111-4111-8111-111111111111";
 import { createReleaseStore } from "../../crypto/release-store";
 import type { ReleaseStore } from "../../crypto/release-store";
 import { HttpError } from "../../http/validate";
@@ -72,6 +73,7 @@ function landmineStore(): ReleaseStore {
     collect(): string | undefined {
       throw new Error("releaseStore.collect must not run for invalid input");
     },
+    discardScope(): void { throw new Error("must not discard invalid input"); },
     size(): number {
       throw new Error("releaseStore.size must not run for invalid input");
     },
@@ -121,7 +123,7 @@ test("collect_release rejects a mis-shaped input with a 4xx, before the store is
   );
   // A wrong-typed `reason` (it is a string field).
   await assert.rejects(
-    () => tool.handle({ reason: 999 }, conn),
+    () => tool.handle({ approval_id: APPROVAL_ID, reason: 999 }, conn),
     (err: unknown) => is4xx(err),
     "a non-string reason is a 4xx",
   );
@@ -135,7 +137,7 @@ test("collect_release rejects a mis-shaped input with a 4xx, before the store is
 test("collect_release rejects an OVERSIZED reason with a 4xx before the store is touched", async () => {
   const tool = createCollectReleaseTool({ releaseStore: landmineStore() });
   await assert.rejects(
-    () => tool.handle({ reason: "x".repeat(100_000) }, connectionFor("oversize-person")),
+    () => tool.handle({ approval_id: APPROVAL_ID, reason: "x".repeat(100_000) }, connectionFor("oversize-person")),
     (err: unknown) => is4xx(err),
     "an oversized reason must be rejected with a 4xx HttpError",
   );
@@ -154,14 +156,14 @@ test("a SQL-shaped reason is treated as inert data and does not change the colle
   const store = createReleaseStore(fixedClock());
   const conn = connectionFor("sql-probe");
   const VALUE = "tax-file-number-123456789";
-  store.put(releaseKeyFor(conn), VALUE);
+  store.put(releaseKeyFor(conn, APPROVAL_ID), VALUE);
 
   const tool = createCollectReleaseTool({ releaseStore: store });
 
   // A reason shaped like a classic injection. It is only ever a plain string the tool
   // carries as data; nothing is concatenated into SQL (there is no SQL).
   const result = (await tool.handle(
-    { reason: "x'); DROP TABLE releases; --" },
+    { approval_id: APPROVAL_ID, reason: "x'); DROP TABLE releases; --" },
     conn,
   )) as CollectResult;
 
@@ -172,10 +174,10 @@ test("a SQL-shaped reason is treated as inert data and does not change the colle
 test("collect_release accepts a small, well-formed input and reads the store (not a 4xx)", async () => {
   const store = createReleaseStore(fixedClock());
   const conn = connectionFor("accepted");
-  store.put(releaseKeyFor(conn), "a-released-value");
+  store.put(releaseKeyFor(conn, APPROVAL_ID), "a-released-value");
 
   const result = (await createCollectReleaseTool({ releaseStore: store }).handle(
-    { reason: "ok" },
+    { approval_id: APPROVAL_ID, reason: "ok" },
     conn,
   )) as CollectResult;
   assert.equal(result.status, "collected", "a well-formed input is read, not rejected as a 4xx");
@@ -193,9 +195,9 @@ test("collect_release reads no process.env: a decoy env secret never appears in 
   try {
     const store = createReleaseStore(fixedClock());
     const conn = connectionFor("secrets-env");
-    store.put(releaseKeyFor(conn), "the-only-value-that-should-return");
+    store.put(releaseKeyFor(conn, APPROVAL_ID), "the-only-value-that-should-return");
 
-    const result = await createCollectReleaseTool({ releaseStore: store }).handle({ reason: "go" }, conn);
+    const result = await createCollectReleaseTool({ releaseStore: store }).handle({ approval_id: APPROVAL_ID, reason: "go" }, conn);
     assert.ok(
       !JSON.stringify(result ?? {}).includes(DECOY),
       "no ambient env value is folded into the returned result",
@@ -218,13 +220,13 @@ test("collect_release never writes the released value to logs/metrics (console)"
   // A unique canary with characters outside hex/base64, so any appearance in output could
   // only be the raw value leaking.
   const value = `release-canary ∂ ${randomUUID()} !!`;
-  store.put(releaseKeyFor(conn), value);
+  store.put(releaseKeyFor(conn, APPROVAL_ID), value);
 
   const tool = createCollectReleaseTool({ releaseStore: store });
   const capture = captureConsole();
   let got: CollectResult;
   try {
-    got = (await tool.handle({ reason: "collect" }, conn)) as CollectResult;
+    got = (await tool.handle({ approval_id: APPROVAL_ID, reason: "collect" }, conn)) as CollectResult;
   } finally {
     capture.restore();
   }

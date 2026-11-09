@@ -65,6 +65,7 @@ export type IssueResult =
 
 // issue needs entropy to draw a code; verify does not.
 export interface IssueDeps {
+  readonly purpose?: "signup" | "device" | "reset" | "recovery" | "signin_totp";
   readonly clock: Clock;
   readonly random: Random;
   readonly hmacKey: Uint8Array;
@@ -72,6 +73,7 @@ export interface IssueDeps {
 }
 
 export interface VerifyDeps {
+  readonly purpose?: "signup" | "device" | "reset" | "recovery" | "signin_totp";
   readonly clock: Clock;
   readonly hmacKey: Uint8Array;
   readonly emailSender: EmailSender;
@@ -105,14 +107,15 @@ export async function issueEmailCode(
 ): Promise<IssueResult> {
   // One address whatever its case or spacing: one code, one budget (review fix B8).
   const email = normaliseEmail(rawEmail);
+  const purpose = deps.purpose ?? "legacy";
   const code = drawCode(deps.random);
   const now = deps.clock.now();
   const expiresAt = new Date(now.getTime() + CODE_TTL_MS);
   const inserted = await db.query(
-    `INSERT INTO email_codes (email, code_hmac, created_at, expires_at)
-     VALUES ($1, $2, $3::timestamptz, $4::timestamptz)
+    `INSERT INTO email_codes (email, code_hmac, created_at, expires_at, purpose)
+     VALUES ($1, $2, $3::timestamptz, $4::timestamptz, $5)
      RETURNING id`,
-    [email, hmac(deps.hmacKey, code), now.toISOString(), expiresAt.toISOString()],
+    [email, hmac(deps.hmacKey, purpose === "legacy" ? code : `${purpose}:${email}:${code}`), now.toISOString(), expiresAt.toISOString(), purpose],
   );
   const id = inserted.rows[0]?.id as string;
 
@@ -148,8 +151,8 @@ export async function issueEmailCode(
   // Only the newest code may verify: retire every earlier live code for the address.
   await db.query(
     `UPDATE email_codes SET consumed_at = $3::timestamptz
-     WHERE email = $1 AND consumed_at IS NULL AND id <> $2`,
-    [email, id, now.toISOString()],
+     WHERE email = $1 AND consumed_at IS NULL AND id <> $2 AND purpose = $4`,
+    [email, id, now.toISOString(), purpose],
   );
 
   try {
@@ -183,6 +186,7 @@ export async function verifyEmailCode(
   deps: VerifyDeps,
 ): Promise<VerifyResult> {
   const email = normaliseEmail(rawEmail);
+  const purpose = deps.purpose ?? "legacy";
   const now = deps.clock.now();
 
   // Reserve this attempt, then count the window INCLUDING it. Each request counts only
@@ -224,13 +228,13 @@ export async function verifyEmailCode(
   const found = await db.query(
     `SELECT id, code_hmac, expires_at
      FROM email_codes
-     WHERE email = $1 AND consumed_at IS NULL
+     WHERE email = $1 AND consumed_at IS NULL AND purpose = $2
      ORDER BY created_at DESC
      LIMIT 1`,
-    [email],
+    [email, purpose],
   );
   const row = found.rows[0];
-  if (!row || !verifyHmac(deps.hmacKey, code, row.code_hmac as string)) {
+  if (!row || !verifyHmac(deps.hmacKey, purpose === "legacy" ? code : `${purpose}:${email}:${code}`, row.code_hmac as string)) {
     return registerFailure(db, email, now, attempts, deps.emailSender);
   }
 

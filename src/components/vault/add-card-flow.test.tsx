@@ -216,17 +216,19 @@ function makeServer() {
       return json({ ok: true });
     }
     gets.push(url);
+    const proof = { challenge: "A".repeat(43), mode: Object.values(store).some(Boolean) ? "prove" : "enroll" };
     if (url.includes("/vault/unlock-material/recovery")) {
-      return json({ wrapped: store.recovery, params: {}, options: null });
+      return json({ wrapped: store.recovery, params: {}, options: null, proof });
     }
     if (url.includes("/vault/unlock-material/passkey_prf")) {
-      return json({ wrapped: store.passkey_prf, params: null, options: PASSKEY_OPTIONS });
+      return json({ wrapped: store.passkey_prf, params: null, options: PASSKEY_OPTIONS, proof });
     }
     if (url.includes("/vault/unlock-material/passphrase")) {
       return json({
         wrapped: store.passphrase?.wrapped ?? null,
         params: store.passphrase ? { salt: store.passphrase.salt } : null,
         options: null,
+        proof,
       });
     }
     throw new Error(`unexpected fetch to ${url}`);
@@ -251,7 +253,7 @@ function makePasskey(opts: { cancelled?: boolean; prf?: Uint8Array } = {}) {
   const fn = async ({ optionsJSON }: { optionsJSON: unknown }) => {
     calls.push(optionsJSON);
     if (opts.cancelled) throw new Error("The passkey prompt was dismissed.");
-    return { clientExtensionResults: { prf: { results: { first: toBase64Url(opts.prf ?? FIXED_PRF) } } } };
+    return { id: "YQ", clientExtensionResults: { prf: { results: { first: toBase64Url(opts.prf ?? FIXED_PRF) } } } };
   };
   return {
     fn,

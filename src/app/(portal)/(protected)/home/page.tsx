@@ -1,3 +1,4 @@
+import { notificationSenders } from "../../../../server/notify/production";
 import * as React from "react";
 import { cookies } from "next/headers";
 import { redirect } from "next/navigation";
@@ -40,12 +41,7 @@ const SESSION_COOKIE = "__Host-wh_session";
 
 // Registering a device never sends anything, so no real channel is needed here; a send
 // through one rejects loudly rather than dropping a message (never fail silently).
-function noSendSenders(): Senders {
-  const reject = async (): Promise<void> => {
-    throw new Error("Home does not send notifications");
-  };
-  return { push: { sendPush: reject }, email: { sendEmail: reject }, sms: { sendSms: reject } };
-}
+
 
 // Register this browser as a push device from Home's install prompt (review fix W4.1):
 // the same tested seam and the same discipline as Settings → Notifications — re-derive
@@ -67,7 +63,7 @@ async function registerPushDeviceAction(input: RegisterPushDeviceInput): Promise
     random: systemRandom,
     hmacKey: config.hmacKey,
     keyWrapper: selectKeyWrapper({ nodeEnv: config.nodeEnv, localKek: config.devKek }),
-    senders: selectSenders(config, noSendSenders()),
+    senders: notificationSenders(config, db),
   });
   try {
     return await actions.registerPushDevice(session, input);

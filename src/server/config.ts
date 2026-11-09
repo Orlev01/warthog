@@ -11,6 +11,8 @@
 // real `process.env` (the production call site).
 
 import { createHash } from "node:crypto";
+import { parseCountryRoutes, type TwilioConfig } from "./notify/twilio";
+import type { SmsLimits } from "./notify/sms-budget";
 
 // A local-development fallback only. When the host injects `PORT` (12-factor,
 // INV-104) the server binds that value; this fallback never overrides it.
@@ -24,6 +26,10 @@ export interface KeyVaultConfig {
 export interface AcsConfig {
   readonly emailConnectionString: string | undefined;
   readonly smsConnectionString: string | undefined;
+  readonly emailSenderAddress?: string;
+  readonly smsFromNumber?: string;
+  readonly smsAllowedCallingCodes?: readonly string[];
+  readonly smsLimits?: { monthly: number; daily: number; recipientHourly: number };
 }
 
 export interface VapidConfig {
@@ -46,6 +52,8 @@ export interface Config {
   readonly publicBaseUrl: string;
   readonly webauthnRpId: string;
   readonly databaseUrl: string;
+  readonly migrationDatabaseUrl?: string;
+  readonly purgeDatabaseUrl?: string;
   readonly port: number;
   readonly devTools: boolean;
   readonly googleEarlyAccess: readonly string[];
@@ -59,7 +67,17 @@ export interface Config {
   // INV-103 / constitution rule 21) — and undefined when unset.
   readonly exchangeRateBaseUrl: string | undefined;
   readonly keyVault: KeyVaultConfig;
+  // Legacy test/config compatibility only. Production never routes through ACS.
   readonly acs: AcsConfig;
+  readonly messaging?: {
+    readonly email: { readonly apiKey?: string; readonly from?: string; readonly sendingDomain?: string; readonly replyTo?: string };
+    readonly twilio: TwilioConfig;
+    readonly smsLimits: SmsLimits;
+  };
+  readonly connectorClients?: {
+    readonly google: { readonly clientId?: string; readonly clientSecret?: string };
+    readonly microsoft: { readonly clientId?: string; readonly clientSecret?: string };
+  };
   readonly vapid: VapidConfig;
   readonly blob: BlobConfig;
   // Keys the one-way HMAC of codes and link tokens (WARTHOG_HMAC_KEY, >= 32 bytes).
@@ -179,6 +197,8 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): Config {
     publicBaseUrl: required(env, "PUBLIC_BASE_URL"),
     webauthnRpId: required(env, "WEBAUTHN_RP_ID"),
     databaseUrl: required(env, "DATABASE_URL"),
+    migrationDatabaseUrl: env.MIGRATION_DATABASE_URL,
+    purgeDatabaseUrl: env.PURGE_DATABASE_URL,
     port: parsePort(env.PORT),
     devTools: env.WARTHOG_DEV_TOOLS === "1",
     googleEarlyAccess: parseEmailList(env.GOOGLE_EARLY_ACCESS),
@@ -188,6 +208,34 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): Config {
     acs: {
       emailConnectionString: env.ACS_EMAIL_CONNECTION_STRING,
       smsConnectionString: env.ACS_SMS_CONNECTION_STRING,
+      emailSenderAddress: env.ACS_EMAIL_SENDER_ADDRESS,
+      smsFromNumber: env.ACS_SMS_FROM_NUMBER,
+      smsAllowedCallingCodes: (env.SMS_ALLOWED_CALLING_CODES ?? "").split(",").map((code) => code.trim()).filter(Boolean),
+      smsLimits: {
+        monthly: Number(env.SMS_MONTHLY_SEGMENT_LIMIT ?? 0),
+        daily: Number(env.SMS_DAILY_SEGMENT_LIMIT ?? 0),
+        recipientHourly: Number(env.SMS_RECIPIENT_HOURLY_SEGMENT_LIMIT ?? 6),
+      },
+    },
+    messaging: {
+      email: { apiKey: env.RESEND_API_KEY, from: env.RESEND_FROM_ADDRESS,
+        sendingDomain: env.RESEND_SENDING_DOMAIN, replyTo: env.RESEND_REPLY_TO_ADDRESS },
+      twilio: {
+        accountSid: env.TWILIO_ACCOUNT_SID, apiKeySid: env.TWILIO_API_KEY_SID,
+        apiKeySecret: env.TWILIO_API_KEY_SECRET, region: env.TWILIO_REGION,
+        countryRoutes: parseCountryRoutes(env.SMS_COUNTRY_ROUTES_JSON),
+        maxSegmentsPerMessage: Number(env.SMS_MAX_SEGMENTS_PER_MESSAGE ?? 0),
+      },
+      smsLimits: {
+        monthly: Number(env.SMS_MONTHLY_SEGMENT_LIMIT ?? 0),
+        daily: Number(env.SMS_DAILY_SEGMENT_LIMIT ?? 0),
+        recipientHourly: Number(env.SMS_RECIPIENT_HOURLY_SEGMENT_LIMIT ?? 0),
+        recipientDailyMessages: Number(env.SMS_RECIPIENT_DAILY_MESSAGE_LIMIT ?? 0),
+      },
+    },
+    connectorClients: {
+      google: { clientId: env.GOOGLE_CLIENT_ID, clientSecret: env.GOOGLE_CLIENT_SECRET },
+      microsoft: { clientId: env.MICROSOFT_CLIENT_ID, clientSecret: env.MICROSOFT_CLIENT_SECRET },
     },
     vapid: {
       subject: env.VAPID_SUBJECT,
@@ -203,4 +251,27 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): Config {
   };
   assertProductionSafe(config);
   return config;
+}
+
+// Called at production boot and before opening the shared database. Kept separate
+// so build-time imports and configuration-only tooling do not open connections.
+export function assertProductionDatabaseConfiguration(config: Config): void {
+  if (config.nodeEnv !== "production") return;
+  const entries = [["DATABASE_URL", config.databaseUrl], ["MIGRATION_DATABASE_URL", config.migrationDatabaseUrl], ["PURGE_DATABASE_URL", config.purgeDatabaseUrl]] as const;
+  const urls = entries.map(([name, value]) => {
+    try {
+      const url = new URL(value ?? "");
+      // pg accepts host/user/password and repeated SSL overrides in query parameters.
+      // Keep the reviewed authority and TLS contract unambiguous instead of validating
+      // one identity while the driver connects with another.
+      if (!["postgres:", "postgresql:"].includes(url.protocol) || !url.username || !url.password ||
+          !/^[a-zA-Z0-9.-]+$/.test(url.hostname) || url.pathname.length < 2 || url.hash ||
+          [...url.searchParams.keys()].some((key) => key !== "sslmode") ||
+          url.searchParams.getAll("sslmode").length !== 1 || url.searchParams.get("sslmode") !== "verify-full") throw new Error();
+      return url;
+    } catch { throw new Error(`Invalid configuration: ${name} requires a PostgreSQL login with sslmode=verify-full`); }
+  });
+  if (new Set(urls.map((url) => `${url.hostname}:${url.port || "5432"}${url.pathname}`)).size !== 1 || new Set(urls.map((url) => decodeURIComponent(url.username))).size !== 3) {
+    throw new Error("Invalid database configuration: use three distinct logins for the same server and database");
+  }
 }

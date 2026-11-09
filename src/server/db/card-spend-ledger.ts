@@ -22,6 +22,7 @@
 // aggregate the brief exposes — is gated by the caller's MEMBERSHIP of that household
 // (the household_members store, E15-S04).
 
+import { DEFAULT_TIME_ZONE } from "../../domain/time-zone";
 import { randomUUID } from "node:crypto";
 
 import type { Db, Row } from "./index";
@@ -83,7 +84,7 @@ function pad2(value: number): string {
 // and the first members are in Sydney). Review fix W4.3: periods used to follow UTC,
 // so a Sydney daily budget reset mid-morning and 8am on 1 December counted toward
 // November.
-export const DEFAULT_TIME_ZONE = "Australia/Sydney";
+export { DEFAULT_TIME_ZONE } from "../../domain/time-zone";
 
 // One calendar-date formatter per zone, built once (Intl formatters are costly to
 // construct). Only a real IANA zone gets here: an unknown one throws in the
@@ -174,13 +175,15 @@ function sumOf(rows: { total?: unknown }[]): number {
 // came from, and returns the StoredRelease carrying the generated id. No DEK — these
 // columns are plaintext metadata (design §4.1). Throws when the approval has already
 // been recorded (an approval counts against a budget at most once).
-export async function recordRelease(db: Db, input: NewRelease): Promise<StoredRelease> {
+export async function recordRelease(db: Db, input: NewRelease,
+  options: { householdPeriodMonth?: string | null } = {},
+): Promise<StoredRelease> {
   const id = randomUUID();
   await db.query(
     `INSERT INTO card_spend_ledger
        (id, user_id, connection_id, household_id, amount, currency, merchant,
-        period_day, period_week, period_month, approval_id)
-     VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11)`,
+        period_day, period_week, period_month, approval_id, household_period_month)
+     VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12)`,
     [
       id,
       input.userId,
@@ -193,6 +196,10 @@ export async function recordRelease(db: Db, input: NewRelease): Promise<StoredRe
       input.periodKeys.week,
       input.periodKeys.month,
       input.approvalId ?? null,
+      // This low-level store accepts explicit bucket keys. A writer whose personal
+      // month differs from UTC MUST supply the separate household key (the release
+      // handler does). Explicit null represents unresolved legacy/import evidence.
+      options.householdPeriodMonth === undefined ? input.periodKeys.month : options.householdPeriodMonth,
     ],
   );
   return { id, ...input };
@@ -215,6 +222,19 @@ export async function sumForConnectionPeriod(
     [userId, connectionId, periodKey],
   );
   return sumOf(result.rows);
+}
+
+// Keep amounts in unlike currencies separate. Policy and dashboard reads need
+// bounded aggregates, not every merchant/release row in the current period.
+export async function sumByCurrencyForConnectionPeriod(
+  db: Db, userId: string, connectionId: string, period: PeriodKind, periodKey: string,
+): Promise<{ currency: string; total: number }[]> {
+  const result = await db.query(
+    `SELECT currency, SUM(amount) AS total FROM card_spend_ledger
+     WHERE user_id = $1 AND connection_id = $2 AND ${periodColumn(period)} = $3
+     GROUP BY currency`, [userId, connectionId, periodKey],
+  );
+  return result.rows.map((row) => ({ currency: String(row.currency), total: Number(row.total) }));
 }
 
 // Every approved release for THAT connection owned by `userId` in the bucket
@@ -287,7 +307,7 @@ export async function sumByMemberCurrencyForHouseholdPeriod(
   const result = await db.query(
     `SELECT led.user_id, led.currency, COALESCE(SUM(led.amount), 0) AS total
        FROM card_spend_ledger led
-      WHERE led.household_id = $2 AND led.${periodColumn(period)} = $3
+      WHERE led.household_id = $2 AND led.${period === "month" ? "household_period_month" : periodColumn(period)} = $3
         AND EXISTS (
           SELECT 1 FROM household_members mem
            WHERE mem.user_id = $1 AND mem.household_id = $2
@@ -319,7 +339,7 @@ export async function sumForHouseholdPeriod(
   const result = await db.query(
     `SELECT COALESCE(SUM(led.amount), 0) AS total
        FROM card_spend_ledger led
-      WHERE led.household_id = $2 AND led.${periodColumn(period)} = $3
+      WHERE led.household_id = $2 AND led.${period === "month" ? "household_period_month" : periodColumn(period)} = $3
         AND EXISTS (
           SELECT 1 FROM household_members mem
            WHERE mem.user_id = $1 AND mem.household_id = $2
@@ -327,4 +347,24 @@ export async function sumForHouseholdPeriod(
     [userId, householdId, periodKey],
   );
   return sumOf(result.rows);
+}
+
+// A local month in either adjacent UTC month may cross this month's boundary.
+// Unknown historical instants must not silently increase a shared budget.
+export async function membersWithUnresolvedHouseholdPeriods(
+  db: Db, userId: string, householdId: string, monthKey: string,
+): Promise<ReadonlySet<string>> {
+  const [year, month] = monthKey.split("-").map(Number);
+  if (year === undefined || month === undefined || !/^\d{4}-(0[1-9]|1[0-2])$/.test(monthKey)) {
+    throw new Error("Invalid household month");
+  }
+  const candidates = [-1, 0, 1].map((offset) => new Date(Date.UTC(year, month - 1 + offset, 1)).toISOString().slice(0, 7));
+  const result = await db.query(
+    `SELECT DISTINCT led.user_id FROM card_spend_ledger led
+     WHERE led.household_id = $2 AND led.household_period_month IS NULL
+       AND led.period_month = ANY($3::text[])
+       AND EXISTS (SELECT 1 FROM household_members mem WHERE mem.user_id = $1 AND mem.household_id = $2)`,
+    [userId, householdId, candidates],
+  );
+  return new Set(result.rows.map((row) => String(row.user_id)));
 }

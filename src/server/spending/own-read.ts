@@ -28,6 +28,7 @@
 
 import { listAgentsForUser } from "../db/agents";
 import { getConnectionPermissions, type CardBudget } from "../db/agent-permissions";
+import { readAgentSpending, type UnconvertedAgentSpend } from "./agent-spending";
 import { listReleasesForConnectionPeriod, periodKeyFor } from "../db/card-spend-ledger";
 import { listActivity } from "../activity/list";
 import type { Db } from "../db/index";
@@ -55,6 +56,7 @@ export interface OwnSpendingAgent {
   readonly displayName: string;
   readonly budget: CardBudget | null;
   readonly approvedTotal: number | string;
+  readonly unconverted?: readonly UnconvertedAgentSpend[];
   readonly releases: OwnSpendingRelease[];
 }
 
@@ -113,15 +115,12 @@ export async function readOwnSpending(
 
     // Only an agent with a card budget has a period to bucket releases by; without
     // one there is nothing to count against (empty list, zero total).
-    const releases = budget
-      ? await listReleasesForConnectionPeriod(
-          db,
-          userId,
-          agent.connectionId,
-          budget.period,
-          periodKeyFor(budget.period, clock.now(), timeZone),
-        )
-      : [];
+    const now = clock.now();
+    const spending = budget
+      ? await readAgentSpending(db, userId, agent.connectionId, budget, now, timeZone)
+      : { total: 0, unconverted: [] };
+    const releases = budget ? await listReleasesForConnectionPeriod(db, userId, agent.connectionId,
+      budget.period, periodKeyFor(budget.period, now, timeZone)) : [];
 
     const detailed: OwnSpendingRelease[] = releases.map((release) => ({
       id: release.id,
@@ -134,13 +133,14 @@ export async function readOwnSpending(
 
     // Only the APPROVED amounts count toward budget — the reported amounts above are
     // surfaced but never summed here.
-    const approvedTotal = detailed.reduce((sum, release) => sum + Number(release.amount), 0);
+    const approvedTotal = spending.total;
 
     result.push({
       agentId: agent.id,
       displayName: agent.displayName,
       budget,
       approvedTotal,
+      ...(spending.unconverted.length ? { unconverted: spending.unconverted } : {}),
       releases: detailed,
     });
   }

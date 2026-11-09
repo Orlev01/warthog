@@ -8,6 +8,10 @@ import { getPendingAccountReset } from "@/server/auth/account-reset";
 import { systemClock } from "@/server/seams/clock";
 import { PortalChrome } from "@/components/shell/portal-chrome";
 import { PendingResetBanner } from "@/components/auth/pending-reset-banner";
+import { timeZoneFor } from "@/server/spending/time-zone";
+import { getUserById } from "@/server/db/users";
+import { loadConfig } from "@/server/config";
+import { selectKeyWrapper } from "@/server/crypto/key-wrapper";
 
 // The auth-guard layout for the `(protected)` route group (INV-101, design §5): every
 // admin route under it requires an authenticated operator session verified on the server,
@@ -44,12 +48,21 @@ export default async function ProtectedLayout({ children }: { children: React.Re
   if (!result.ok) redirect(result.redirectTo);
 
   const pendingReset = await getPendingAccountReset(db, { userId: result.session.userId });
+  let timeZone: string | undefined;
+  if (pendingReset) {
+    const user = await getUserById(db, result.session.userId);
+    if (!user) redirect("/signin");
+    const config = loadConfig();
+    const wrapper = selectKeyWrapper({ nodeEnv: config.nodeEnv, localKek: config.devKek });
+    timeZone = await timeZoneFor(db, user.id, await wrapper.unwrap(user.wrappedDek));
+  }
   return (
     <PortalChrome>
       {pendingReset ? (
         <PendingResetBanner
           requestedAt={pendingReset.requestedAt.toISOString()}
           completesAt={pendingReset.completesAt.toISOString()}
+          timeZone={timeZone}
         />
       ) : null}
       {children}

@@ -165,9 +165,9 @@ export async function runApprovalFallback(
   // never texted), an email unless the person switched email fallback off — each only if
   // it has not already gone. Member-scoped reads by the owner's id.
   const verified = (await listMobileNumbers(db, state.userId)).find((number) => number.verified);
-  const { emailFallback } = await getNotificationPrefs(db, state.userId);
+  const { emailFallback, smsFallback } = await getNotificationPrefs(db, state.userId);
   const due: FallbackChannel[] = [];
-  if (verified && !state.sent.has("sms")) due.push("sms");
+  if (smsFallback && verified && !state.sent.has("sms")) due.push("sms");
   if (emailFallback && !state.sent.has("email")) due.push("email");
   if (due.length === 0) return;
 
@@ -177,11 +177,16 @@ export async function runApprovalFallback(
   const link = buildLink(publicBaseUrl, issued.token);
 
   // Send every due channel, recording each one that goes; a failure on one never stops
-  // the other. Any failure is rethrown afterwards so the job retries the unsent channel.
+  // the other. Failures surface for monitoring. Email may retry; the SMS claim prevents duplicate paid attempts.
   let failure: unknown;
   for (const channel of due) {
     try {
       if (channel === "sms" && verified) {
+        const claim = await db.query(
+          `INSERT INTO approval_sms_attempts (approval_id, attempted_at) VALUES ($1, $2::timestamptz)
+           ON CONFLICT (approval_id) DO NOTHING RETURNING approval_id`, [approvalId, now.toISOString()],
+        );
+        if (claim.rows.length === 0) continue;
         await senders.sms.sendSms({ recipient: verified.number, body: SMS_BODY, link });
       } else if (channel === "email") {
         await senders.email.sendEmail({ recipient: state.email, body: EMAIL_BODY, link });

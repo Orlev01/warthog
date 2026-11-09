@@ -139,6 +139,7 @@ import type {
 import { createUser } from "./users";
 import {
   createHousehold,
+  closeHousehold,
   addMember,
   isHouseholdMember,
   getHouseholdForMember,
@@ -595,15 +596,19 @@ test("issueInvite binds the household id as a parameter, never woven into the SQ
 });
 
 test("issueInvite binds the invited email as a parameter, never woven into the SQL text", async () => {
-  const db = recordingDb();
+  const real = await freshDb();
   const probe = "e'); DROP TABLE household_invites; --";
-
   try {
-    await issueInvite(db, { householdId: "a-household", email: probe }, issueDeps());
-  } catch {
-    /* tolerate a no-row read: the binding is asserted below regardless */
-  }
-  assertBoundNotSpliced(db, probe);
+    const owner = await makeUser(real, "binding-owner");
+    const house = await createHousehold(real, { ownerId: owner.id });
+    const calls: { text: string; values: unknown[] }[] = [];
+    const db: RecordingDb = { calls, close: () => real.close(), query: (text, values = []) => {
+      calls.push({ text, values }); return real.query(text, values);
+    } };
+    await issueInvite(db, { householdId: house.id, email: probe }, issueDeps());
+    assertBoundNotSpliced(db, probe);
+    assert.equal((await real.query("SELECT email FROM household_invites")).rows[0]?.email, probe);
+  } finally { await real.close(); }
 });
 
 test("redeemInvite binds the user id as a parameter and never splices the presented token", async () => {
@@ -1207,6 +1212,25 @@ test("a household sends at most INVITES_PER_HOUR invites in any hour", async () 
   } finally {
     await db.close();
   }
+});
+
+test("closing and recreating a household cannot reset its owner's invite allowance", async () => {
+  const db = await freshDb();
+  try {
+    const owner = await makeUser(db, "recreate-owner");
+    const first = await createHousehold(db, { ownerId: owner.id });
+    for (let i = 0; i < INVITES_PER_HOUR; i++) {
+      assert.equal(await issueOutcome(db, first.id, "guest@example.test"), "issued");
+    }
+    assert.deepEqual(await closeHousehold(db, { householdId: first.id, actorId: owner.id }), { ok: true });
+    const second = await createHousehold(db, { ownerId: owner.id });
+    assert.equal(await issueOutcome(db, second.id, "guest@example.test"), "throttled");
+    const other = await makeUser(db, "independent-owner");
+    const third = await createHousehold(db, { ownerId: other.id });
+    assert.equal(await issueOutcome(db, third.id, "guest@example.test"), "issued");
+    const later = fixedClock(new Date(T0.getTime() + 61 * 60 * 1000));
+    assert.equal(await issueOutcome(db, second.id, "guest@example.test", issueDeps({ clock: later })), "issued");
+  } finally { await db.close(); }
 });
 
 test("parallel invites into a household with one free place issue exactly one", async () => {

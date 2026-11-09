@@ -1,3 +1,4 @@
+import { notificationSenders } from "../../../../../server/notify/production";
 import * as React from "react";
 import { cookies } from "next/headers";
 import { redirect } from "next/navigation";
@@ -13,7 +14,6 @@ import { ConfirmItsYou } from "@/components/ui/confirm-its-you";
 
 import { loadConfig } from "../../../../../server/config";
 import { getServerDb } from "../../../../../server/db/server";
-import { notConfiguredSenders } from "../../../../../server/auth/compose";
 import { selectSenders } from "../../../../../server/notify/senders";
 import { verifySession, type Session } from "../../../../../server/auth/session";
 import { systemClock } from "../../../../../server/seams/clock";
@@ -28,6 +28,10 @@ import {
 import { noticeLocation, securityNotice, type SecurityNotice } from "./notices";
 import type { Db } from "../../../../../server/db/index";
 import type { Metadata } from "next";
+import { formatAccountTime } from "@/server/display-time";
+import { timeZoneFor } from "@/server/spending/time-zone";
+import { getUserById } from "@/server/db/users";
+import { selectKeyWrapper } from "@/server/crypto/key-wrapper";
 
 // The page title (review fix G8, WCAG 2.4.2): "%s · Warthog" via the root template.
 export const metadata: Metadata = { title: "Security" };
@@ -83,7 +87,7 @@ function buildActions(db: Db) {
     random: systemRandom,
     rpId: loadConfig().webauthnRpId,
     origin: new URL(loadConfig().publicBaseUrl).origin,
-    alerts: { emailSender: selectSenders(loadConfig(), notConfiguredSenders()).email },
+    alerts: { emailSender: notificationSenders(loadConfig(), db).email },
   });
 }
 
@@ -186,12 +190,6 @@ function NoticeBanner({ notice }: { notice: SecurityNotice }) {
   );
 }
 
-// A medium date + short time in Australian English (plain, no protocol jargon).
-const WHEN = new Intl.DateTimeFormat("en-AU", { dateStyle: "medium", timeStyle: "short" });
-function formatWhen(value: Date): string {
-  return WHEN.format(value);
-}
-
 // One titled card section on the screen.
 function Section({ title, lead, children }: { title: string; lead: string; children: React.ReactNode }) {
   return (
@@ -211,10 +209,12 @@ function SecuritySettings({
   view,
   currentSessionId,
   notice,
+  timeZone,
 }: {
   view: SecurityView;
   currentSessionId: string;
   notice: SecurityNotice | null;
+  timeZone: string;
 }) {
   return (
     <div className="mx-auto flex w-full max-w-2xl flex-col gap-6 px-4 py-8 sm:px-6">
@@ -241,7 +241,7 @@ function SecuritySettings({
                 key={passkey.id}
                 className="flex items-center justify-between gap-3 rounded-card border border-line bg-surface-muted px-3 py-2"
               >
-                <span className="text-sm text-fg">Added {formatWhen(passkey.createdAt)}</span>
+                <span className="text-sm text-fg">Added {formatAccountTime(passkey.createdAt, timeZone)}</span>
                 <form action={removePasskeyAction}>
                   <input type="hidden" name="passkeyId" value={passkey.id} />
                   <Button type="submit" variant="secondary">
@@ -269,9 +269,9 @@ function SecuritySettings({
                 <span className="flex flex-col text-sm text-fg">
                   <span>
                     {isCurrent ? "This device" : "Signed in"} · last active{" "}
-                    {formatWhen(session.lastSeenAt)}
+                    {formatAccountTime(session.lastSeenAt, timeZone)}
                   </span>
-                  <span className="text-fg-muted">Signed in {formatWhen(session.createdAt)}</span>
+                  <span className="text-fg-muted">Signed in {formatAccountTime(session.createdAt, timeZone)}</span>
                 </span>
                 {isCurrent ? (
                   <span className="text-sm font-medium text-fg-muted">This device</span>
@@ -320,7 +320,12 @@ export default async function SecurityPage({
     redirect("/signin");
   }
   const view = await buildActions(db).load(session);
+  const user = await getUserById(db, session.userId);
+  if (!user) redirect("/signin");
+  const config = loadConfig();
+  const wrapper = selectKeyWrapper({ nodeEnv: config.nodeEnv, localKek: config.devKek });
+  const timeZone = await timeZoneFor(db, user.id, await wrapper.unwrap(user.wrappedDek));
   // The (portal)/(protected) layout already wraps every page in the app shell (PortalChrome);
   // wrapping again here rendered two sidebars and two <main> landmarks.
-  return <SecuritySettings view={view} currentSessionId={session.id} notice={notice} />;
+  return <SecuritySettings view={view} currentSessionId={session.id} notice={notice} timeZone={timeZone} />;
 }

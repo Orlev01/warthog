@@ -87,7 +87,7 @@ export async function requestConnector(
   await deps.email.sendEmail({
     recipient: deps.operatorEmail,
     body: scrub(
-      `Someone requested a connector that isn't in the catalogue yet: "${input.serviceName}". ` +
+      "Someone requested a connector that is not in the catalogue yet. " +
         "Review it in Warthog and add the service if it fits.",
     ),
   });

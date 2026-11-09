@@ -1,34 +1,13 @@
-// E04-S11 — Sign-in server actions (the injectable seam the thin `actions.ts` /
-// route verbs wrap). A RETURNING person signs in with their second factor and
-// gets a session (brief `sign_in_model`; design §5).
+import { checkPasskeyAttempt } from "../../../server/auth/passkey-attempts";
+// Public sign-in: WebAuthn, or mailbox verification followed by an authenticator
+// code. Email is a first factor, not merely an account identifier. The TOTP path
+// issues a purpose-bound email code, exchanges it for a bounded ten-minute handle,
+// then consumes that account-bound handle after the rate-limited TOTP check.
+// Remembered-device cookies only deduplicate security alerts; they grant no bypass.
+// See docs/adr/audit-totp-signin.md for the tightened public contract.
 //
-// Sign-in offers two methods, each its own request:
-//   - the passkey (a single, phishing-resistant factor), a two-step round trip:
-//       beginPasskey  — { email } -> 200 { options }: resolve the account and
-//                       issue a WebAuthn authentication challenge for it.
-//       finishPasskey — { email, authenticationResponse } -> verify the assertion
-//                       against that person's registered passkey and the challenge
-//                       begin issued, then mint a session and redirect to /home.
-//   - email plus the authenticator-app code, where passkeys are unavailable:
-//       signInWithTotp — { email, totp } -> resolve the account, read its TOTP
-//                       secret and verify the 6-digit code, then mint a session
-//                       and redirect to /home.
-//
-// (The email ONE-TIME code is the separate NEW-DEVICE flow, not this
-// returning-device sign-in.)
-//
-// Why a sibling `handler.ts` (not `actions.ts` or `page.tsx`): a Next "use server"
-// actions file may export only async server actions, and a `page.tsx` entry file
-// only its framework fields — neither can carry an injectable, unit-testable
-// factory without breaking `next build`. So the testable seam lives here (the
-// convention's `createXHandler({ db })` pattern); the thin `actions.ts` / route
-// verbs wrap it.
-//
-// The TOTP secret has no persistence yet (the vault_unlock_methods store is built
-// later, and this task may touch only the sign-in action/handler), so the handler
-// reads it through the injected `totpSecrets` seam — the project's "external
-// services sit behind interfaces with fakes" rule. The real store is wired when it
-// exists.
+// Keep the injectable handler separate from Next's thin routes/server actions so
+// tests exercise the same authentication boundary without framework machinery.
 //
 // Security (each a reviewer veto): every method checks the request `Origin` against
 // the configured `publicOrigin` first — a missing or foreign Origin is 403 and
@@ -49,6 +28,8 @@ import {
   finishPasskeyAuthentication,
 } from "../../../server/auth/passkey";
 import { checkTotpSignIn } from "../../../server/auth/totp-attempts";
+import { issueEmailCode, verifyEmailCode } from "../../../server/auth/email-code";
+import { pendingStore } from "../../../server/auth/pending-store";
 import { createSession, recordStepUp } from "../../../server/auth/session";
 import { alertNewDeviceSignIn, deliverAlert } from "../../../server/auth/alerts";
 import {
@@ -63,8 +44,8 @@ import type { EmailSender } from "../../../server/notify/senders";
 import type { Db } from "../../../server/db/index";
 
 // The injected store the handler reads a person's base32 TOTP secret through: a
-// userId with no enrolled secret returns null. The real store is wired when the
-// vault_unlock_methods persistence exists; the shape matches the test's fake.
+// userId with no enrolled secret returns null. Production decrypts the enrolled
+// secret through the vault unlock-method store; tests supply an isolated fake.
 export interface TotpSecretStore {
   get(userId: string): Promise<string | null>;
 }
@@ -72,7 +53,7 @@ export interface TotpSecretStore {
 // The dependency bundle. Each method reads the subset it needs; the superset is
 // structurally assignable to each. `rpId` is the WebAuthn RP ID (from config, never
 // hard-coded); `publicOrigin` is the origin every method checks the request against.
-// `hmacKey` binds the new-device cookie and `emailSender` carries the new-device alert.
+// `hmacKey` binds email proofs and device cookies; `emailSender` delivers codes and alerts.
 export interface SigninHandlerDeps {
   readonly db: Db;
   readonly clock: Clock;
@@ -88,8 +69,16 @@ export interface SigninHandlerDeps {
 export interface SigninHandler {
   beginPasskey(request: Request): Promise<Response>;
   finishPasskey(request: Request): Promise<Response>;
+  sendTotpEmailCode(request: Request): Promise<Response>;
+  verifyTotpEmail(request: Request): Promise<Response>;
   signInWithTotp(request: Request): Promise<Response>;
 }
+
+const pendingTotpSignins = pendingStore<{ userId: string | null }>("auth.pendingTotpSignins", {
+  ttlMs: 10 * 60_000, maxEntries: 1000,
+});
+const totpEmailSchema = z.object({ email: z.string().trim().toLowerCase().email().max(320) });
+const verifyTotpEmailSchema = totpEmailSchema.extend({ code: z.string().regex(/^\d{6}$/) });
 
 // A grossly oversized body is rejected before any work; a real sign-in body (even a
 // WebAuthn assertion) is far under this.
@@ -124,10 +113,10 @@ const finishPasskeySchema = z.object({
   authenticationResponse: authenticationResponseSchema,
 });
 
-// signInWithTotp: the email + the authenticator-app code. The TOTP check itself
+// signInWithTotp: a verified-email handle + authenticator code. The TOTP check itself
 // rejects anything that is not exactly six digits.
 const totpSchema = z.object({
-  email: z.string().trim().toLowerCase().min(1).max(320), // normalised (users.normaliseEmail)
+  signinId: z.string().regex(/^[a-f0-9]{64}$/),
   totp: z.string().min(1).max(100),
 });
 
@@ -214,7 +203,7 @@ export function createSigninHandler(deps: SigninHandlerDeps): SigninHandler {
       const user = await getUserByEmail(db, email);
       if (!user) return json(401, { error: "invalid_assertion" });
 
-      const result = await finishPasskeyAuthentication(
+      const result = await checkPasskeyAttempt(db, user.id, async () => (await finishPasskeyAuthentication(
         db,
         {
           userId: user.id,
@@ -222,7 +211,8 @@ export function createSigninHandler(deps: SigninHandlerDeps): SigninHandler {
           purpose: "signin",
         },
         { rpId, origin: publicOrigin, clock },
-      );
+      )).ok, { clock, emailSender });
+      if (result.reason === "throttled") return new Response(JSON.stringify({ error: "throttled" }), { status: 429, headers: { "content-type": "application/json", "retry-after": String(Math.ceil((result.retryAfterMs ?? 1000) / 1000)) } });
       if (!result.ok) return json(401, { error: "invalid_assertion" });
 
       return await mintSession(user.id, request);
@@ -231,25 +221,51 @@ export function createSigninHandler(deps: SigninHandlerDeps): SigninHandler {
     }
   }
 
-  // Email + authenticator code — resolve the account, read its TOTP secret (the
+  async function sendTotpEmailCode(request: Request): Promise<Response> {
+    if (!sameOrigin(request)) return json(403, { error: "forbidden" });
+    try {
+      const { email } = await parseBody(totpEmailSchema, request, { maxBytes: MAX_BODY_BYTES });
+      // Same response/delivery path for existing and unknown accounts. Mailbox
+      // verification alone never grants access or discloses account enrollment.
+      const issued = await issueEmailCode(db, email, { purpose: "signin_totp", clock, random, hmacKey, emailSender });
+      if (!issued.ok) return new Response(JSON.stringify({ error: "throttled" }), { status: 429,
+        headers: { "content-type": "application/json", "retry-after": String(Math.ceil(issued.retryAfterMs / 1000)) } });
+      return json(200, { ok: true });
+    } catch (error) { return handleError(error); }
+  }
+
+  async function verifyTotpEmail(request: Request): Promise<Response> {
+    if (!sameOrigin(request)) return json(403, { error: "forbidden" });
+    try {
+      const { email, code } = await parseBody(verifyTotpEmailSchema, request, { maxBytes: MAX_BODY_BYTES });
+      const checked = await verifyEmailCode(db, email, code, { purpose: "signin_totp", clock, hmacKey, emailSender });
+      if (!checked.ok) return json(checked.reason === "throttled" ? 429 : 401, { error: "invalid_code" });
+      const user = await getUserByEmail(db, email);
+      const signinId = Buffer.from(random.randomBytes(32)).toString("hex");
+      pendingTotpSignins.set(signinId, { userId: user?.id ?? null }, clock.now());
+      return json(200, { signinId });
+    } catch (error) { return handleError(error); }
+  }
+
+  // Verified email + authenticator code — resolve the account from its proof, read its TOTP secret (the
   // injected seam) and verify the code for the current 30-second step (±1). A wrong /
   // out-of-window code, or no enrolled secret → 4xx and NO session. On success: mint
   // a session and redirect to /home.
   async function signInWithTotp(request: Request): Promise<Response> {
     if (!sameOrigin(request)) return json(403, { error: "forbidden" });
     try {
-      const { email, totp } = await parseBody(totpSchema, request, {
+      const { signinId, totp } = await parseBody(totpSchema, request, {
         maxBytes: MAX_BODY_BYTES,
       });
 
-      const user = await getUserByEmail(db, email);
-      if (!user) return json(401, { error: "invalid_code" });
+      const pending = pendingTotpSignins.get(signinId, clock.now());
+      if (!pending?.userId) return json(401, { error: "invalid_code" });
 
-      const secret = await totpSecrets.get(user.id);
+      const secret = await totpSecrets.get(pending.userId);
       if (!secret) return json(401, { error: "invalid_code" });
       // Limited and single use (review fix W3.5): 5 failures in 15 minutes slow further
       // attempts, and a code (or one from an earlier step) is accepted only once.
-      const checked = await checkTotpSignIn(db, { userId: user.id, secret, code: totp }, { clock });
+      const checked = await checkTotpSignIn(db, { userId: pending.userId, secret, code: totp }, { clock });
       if (!checked.ok) {
         if (checked.reason === "throttled") {
           return new Response(JSON.stringify({ error: "throttled" }), {
@@ -263,11 +279,15 @@ export function createSigninHandler(deps: SigninHandlerDeps): SigninHandler {
         return json(401, { error: "invalid_code" });
       }
 
-      return await mintSession(user.id, request);
+      // Consume synchronously before the next await. Even concurrent valid codes
+      // cannot exchange the same email proof for two sessions.
+      if (pendingTotpSignins.get(signinId, clock.now()) !== pending) return json(401, { error: "invalid_code" });
+      pendingTotpSignins.delete(signinId);
+      return await mintSession(pending.userId, request);
     } catch (error) {
       return handleError(error);
     }
   }
 
-  return { beginPasskey, finishPasskey, signInWithTotp };
+  return { beginPasskey, finishPasskey, sendTotpEmailCode, verifyTotpEmail, signInWithTotp };
 }

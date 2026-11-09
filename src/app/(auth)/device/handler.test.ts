@@ -172,7 +172,7 @@ function extractCode(body: string): string {
 // back from the one delivered email — exactly how the person receives it. The resulting
 // code is the first factor requestApproval requires.
 async function issueCodeFor(db: Db, email: string, clock: Clock, outbox: Outbox): Promise<string> {
-  await issueEmailCode(db, email, { clock, random: systemRandom, hmacKey: HMAC_KEY, emailSender: outbox });
+  await issueEmailCode(db, email, { purpose: "device", clock, random: systemRandom, hmacKey: HMAC_KEY, emailSender: outbox });
   const msg = outbox
     .list()
     .filter((m) => m.channel === "email" && m.recipient === email)

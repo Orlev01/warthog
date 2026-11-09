@@ -198,7 +198,7 @@ const CORE_TOOL_SPECS: readonly CoreToolSpec[] = [
   {
     name: "collect_release",
     description:
-      "Collect an approved high-tier detail or card. A release can be collected once, within 5 minutes of the person approving it. A high-tier detail comes back as its value. A card comes back as JSON with everything a checkout needs: number, securityCode, expiryMonth, expiryYear, cardholderName and billingAddress (cardholderName or billingAddress is null if the person has not saved one). Use it for the one purchase that was approved, and do not store it.",
+      "Collect an approved high-tier detail or card using its approval_id from check_approval. A release can be collected once, within 5 minutes of the person approving it. A high-tier detail comes back as its value. A card comes back as JSON with everything a checkout needs: number, securityCode, expiryMonth, expiryYear, cardholderName and billingAddress (cardholderName or billingAddress is null if the person has not saved one). Use it for the one purchase that was approved, and do not store it.",
     makesChange: false,
     schema: collectReleaseSchema,
   },

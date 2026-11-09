@@ -1,6 +1,7 @@
 "use client";
 
 import * as React from "react";
+import { useFormStatus } from "react-dom";
 import { Pause, PauseCircle, Plus, Trash2 } from "lucide-react";
 
 import { Button } from "@/components/ui/button";
@@ -187,6 +188,77 @@ function previewSentence(draft: Extract<RuleDraft, { template: RuleTemplate }>):
 // One choice in a radio group: a native, user-adjustable radio whose initial checked
 // state reflects the draft. A disabled choice (a template set elsewhere) uses the
 // native `disabled` attribute so it reads as present-but-not-actionable.
+export interface RuleBuilderState { draft: RuleDraft; detail: string }
+export type RuleBuilderEvent =
+  | { type: "template"; template: RuleTemplate }
+  | { type: "action"; action: RuleAction["type"] }
+  | { type: "channel"; channel: MessageChannel }
+  | { type: "target"; value: string }
+  | { type: "condition"; condition: RuleCondition["type"] | "none" }
+  | { type: "detail"; value: string }
+  | { type: "scope"; scope: RuleScope };
+export function createRuleBuilderState(draft: RuleDraft = DEFAULT_DRAFT): RuleBuilderState {
+  return { draft, detail: draft.template === "ask_first" || draft.template === "never_allow" ? conditionValueText(draft.condition) : "" };
+}
+function conditionFromDetail(type: RuleCondition["type"], value: string): RuleCondition {
+  switch (type) {
+    case "recipient_is": return { type, address: value };
+    case "recipient_in_domain": return { type, domain: value };
+    case "amount_over": return { type, amount: Number.isFinite(Number(value)) ? Number(value) : 0 };
+    case "merchant_in": case "merchant_not_in": return { type, merchants: value.split(",").map((part) => part.trim()).filter(Boolean) };
+  }
+}
+export function updateRuleBuilder(state: RuleBuilderState, event: RuleBuilderEvent): RuleBuilderState {
+  const draft = state.draft;
+  if (event.type === "template") {
+    switch (draft.template) {
+      case "ask_first":
+      case "never_allow":
+        return { ...state, draft: { template: event.template, scope: draft.scope, action: draft.action, ...(draft.condition ? { condition: draft.condition } : {}) } };
+      default:
+        return { detail: "", draft: { template: event.template, scope: draft.scope, action: { type: "send_message", channel: "email" } } };
+    }
+  }
+  if (draft.template !== "ask_first" && draft.template !== "never_allow") return state;
+  switch (event.type) {
+    case "scope": return { ...state, draft: { ...draft, scope: event.scope } };
+    case "action": {
+      const type = event.action;
+      const action: RuleAction = type === "send_message" ? { type, channel: "email" } : type === "specific_tool" ? { type, tool: "" } : type === "service_tool" ? { type, service: "" } : { type };
+      return { ...state, draft: { ...draft, action } };
+    }
+    case "channel": return draft.action.type === "send_message" ? { ...state, draft: { ...draft, action: { type: "send_message", channel: event.channel } } } : state;
+    case "target": {
+      const action = draft.action.type === "specific_tool" ? { type: "specific_tool" as const, tool: event.value } : draft.action.type === "service_tool" ? { type: "service_tool" as const, service: event.value } : draft.action;
+      return { ...state, draft: { ...draft, action } };
+    }
+    case "condition": {
+      const { condition: _previous, ...base } = draft;
+      return { detail: "", draft: event.condition === "none" ? base : { ...base, condition: conditionFromDetail(event.condition, "") } };
+    }
+    case "detail": return draft.condition ? { detail: event.value, draft: { ...draft, condition: conditionFromDetail(draft.condition.type, event.value) } } : state;
+  }
+}
+export function isRuleBuilderComplete(state: RuleBuilderState): boolean {
+  const draft = state.draft;
+  if (draft.template !== "ask_first" && draft.template !== "never_allow") return false;
+  if (draft.action.type === "specific_tool" && !draft.action.tool.trim()) return false;
+  if (draft.action.type === "service_tool" && !draft.action.service.trim()) return false;
+  if (!draft.condition) return true;
+  if (!state.detail.trim()) return false;
+  if (draft.condition.type === "amount_over") return Number.isFinite(Number(state.detail)) && Number(state.detail) >= 0;
+  if (draft.condition.type === "merchant_in" || draft.condition.type === "merchant_not_in") return draft.condition.merchants.length > 0;
+  return true;
+}
+function PendingRuleFields({ children }: { children: React.ReactNode }) {
+  const { pending } = useFormStatus();
+  return <fieldset disabled={pending} className="contents">{children}</fieldset>;
+}
+function AddRuleButton({ complete }: { complete: boolean }) {
+  const { pending } = useFormStatus();
+  return <Button type="submit" variant="primary" disabled={!complete || pending}><Plus aria-hidden={true} className="h-4 w-4 shrink-0" />{pending ? "Adding rule…" : "Add rule"}</Button>;
+}
+
 function Choice({
   name,
   value,
@@ -194,6 +266,7 @@ function Choice({
   label,
   description,
   disabled,
+  onChange,
 }: {
   name: string;
   value: string;
@@ -201,6 +274,7 @@ function Choice({
   label: React.ReactNode;
   description?: React.ReactNode;
   disabled?: boolean;
+  onChange?: () => void;
 }) {
   return (
     <label className="flex items-start gap-3 rounded-card border border-line bg-surface p-3">
@@ -208,7 +282,8 @@ function Choice({
         type="radio"
         name={name}
         value={value}
-        defaultChecked={checked}
+        checked={checked}
+        onChange={onChange ?? (() => {})}
         disabled={disabled}
         className="mt-1 h-4 w-4 shrink-0 accent-accent"
       />
@@ -227,12 +302,16 @@ function SectionHeading({ children }: { children: React.ReactNode }) {
 export function RulesView({
   rules,
   agents,
-  draft = DEFAULT_DRAFT,
+  draft: initialDraft = DEFAULT_DRAFT,
+  currency = "AUD",
   createAction,
   pauseAction,
   deleteAction,
 }: RulesViewProps) {
+  const [builder, dispatch] = React.useReducer(updateRuleBuilder, initialDraft, createRuleBuilderState);
+  const draft = builder.draft;
   const active = draft.template;
+  const complete = isRuleBuilderComplete(builder);
 
   return (
     <section className="flex flex-col gap-8">
@@ -282,7 +361,9 @@ export function RulesView({
 
       {/* ----- Create form: build a rule from a template, previewed as a sentence ----- */}
       <form action={createAction} className="flex flex-col gap-6">
+        <PendingRuleFields>
         <h2 className="text-lg font-semibold text-fg">New rule</h2>
+        <p className="text-sm text-fg-muted">Amount conditions use your account currency ({currency}).</p>
 
         {/* The template picker — the two rule templates live, the rest disabled. */}
         <fieldset className="flex flex-col gap-2">
@@ -294,6 +375,7 @@ export function RulesView({
                 name="rule-template"
                 value={t.value}
                 checked={active === t.value}
+                onChange={() => { if (isRuleTemplate(t.value)) dispatch({ type: "template", template: t.value }); }}
                 disabled={!isRuleTemplate(t.value)}
                 label={t.label}
                 // A disabled template says where it is actually set, in the state a person
@@ -318,6 +400,7 @@ export function RulesView({
                     name="rule-action"
                     value={a.value}
                     checked={draft.action.type === a.value}
+                    onChange={() => dispatch({ type: "action", action: a.value })}
                     label={a.label}
                   />
                 ))}
@@ -331,7 +414,8 @@ export function RulesView({
                 <select
                   id="rule-channel-field"
                   name="rule-channel"
-                  defaultValue={draft.action.channel}
+                  value={draft.action.channel}
+                  onChange={(event) => dispatch({ type: "channel", channel: event.target.value as MessageChannel })}
                   className={SELECT_CLASS}
                 >
                   {CHANNELS.map((c) => (
@@ -347,9 +431,9 @@ export function RulesView({
               <Field
                 label={draft.action.type === "specific_tool" ? "Tool name" : "Service name"}
                 name="rule-target"
-                defaultValue={
-                  draft.action.type === "specific_tool" ? draft.action.tool : draft.action.service
-                }
+                value={draft.action.type === "specific_tool" ? draft.action.tool : draft.action.service}
+                required
+                onChange={(event) => dispatch({ type: "target", value: event.target.value })}
               />
             ) : null}
 
@@ -358,7 +442,9 @@ export function RulesView({
               <legend className="pb-2 text-sm font-medium text-fg">When it applies</legend>
               <select
                 name="rule-condition"
-                defaultValue={draft.condition?.type ?? "none"}
+                aria-label="When it applies"
+                value={draft.condition?.type ?? "none"}
+                onChange={(event) => dispatch({ type: "condition", condition: event.target.value as RuleCondition["type"] | "none" })}
                 className={SELECT_CLASS}
               >
                 {CONDITIONS.map((c) => (
@@ -369,9 +455,14 @@ export function RulesView({
               </select>
               {draft.condition ? (
                 <Field
-                  label="Condition detail"
+                  label={draft.condition.type === "amount_over" ? `Amount (${currency})` : "Condition detail"}
                   name="rule-condition-detail"
-                  defaultValue={conditionValueText(draft.condition)}
+                  value={builder.detail}
+                  type={draft.condition.type === "amount_over" ? "number" : "text"}
+                  min={draft.condition.type === "amount_over" ? 0 : undefined}
+                  step={draft.condition.type === "amount_over" ? "any" : undefined}
+                  required
+                  onChange={(event) => dispatch({ type: "detail", value: event.target.value })}
                 />
               ) : null}
             </fieldset>
@@ -384,6 +475,7 @@ export function RulesView({
                   name="rule-scope"
                   value="any_agent"
                   checked={draft.scope.type === "any_agent"}
+                  onChange={() => dispatch({ type: "scope", scope: { type: "any_agent" } })}
                   label="All agents"
                 />
                 {agents.map((agent) => (
@@ -392,6 +484,7 @@ export function RulesView({
                     name="rule-scope"
                     value={agent.id}
                     checked={draft.scope.type === "agent" && draft.scope.agentId === agent.id}
+                    onChange={() => dispatch({ type: "scope", scope: { type: "agent", agentId: agent.id, name: agent.name } })}
                     label={agent.name}
                   />
                 ))}
@@ -401,14 +494,11 @@ export function RulesView({
             {/* The preview — the exact sentence this rule reads back as, before saving. */}
             <div className="flex flex-col gap-1.5 rounded-card border border-line bg-surface-muted p-3">
               <SectionHeading>Preview</SectionHeading>
-              <p className="text-fg">{previewSentence(draft)}</p>
+              <p className="text-fg" aria-live="polite">{complete ? previewSentence(draft) : "Complete the action and condition details to preview your rule."}</p>
             </div>
 
             {/* The one accent action: add the new rule. */}
-            <Button type="submit" variant="primary">
-              <Plus aria-hidden={true} className="h-4 w-4 shrink-0" />
-              Add rule
-            </Button>
+            <AddRuleButton complete={complete} />
           </>
         ) : (
           // A template that is set elsewhere: no submit (never posted into a
@@ -417,6 +507,7 @@ export function RulesView({
             {SET_ELSEWHERE[draft.template]}
           </p>
         )}
+        </PendingRuleFields>
       </form>
     </section>
   );

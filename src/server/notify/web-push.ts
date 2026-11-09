@@ -57,6 +57,11 @@ export interface WebPushSenderDeps {
 
 export interface WebPushSender {
   sendApprovalPush(subscription: PushDeviceSubscription, approvalId: string): Promise<void>;
+  sendNotificationPush(subscription: PushDeviceSubscription): Promise<void>;
+}
+
+export class PushDeliveryError extends Error {
+  constructor(readonly status: number) { super("Push delivery failed"); }
 }
 
 // Validate the untrusted subscription at the boundary: a non-empty, bounded endpoint
@@ -86,12 +91,7 @@ const approvalIdSchema = z.string().min(1);
 // reported to the caller (rejected), never swallowed, so a fallback channel can run.
 export function createWebPushSender(deps: WebPushSenderDeps): WebPushSender {
   const build = deps.buildRequest ?? buildPushHTTPRequest;
-
-  return {
-    async sendApprovalPush(
-      subscription: PushDeviceSubscription,
-      approvalId: string,
-    ): Promise<void> {
+  async function send(subscription: PushDeviceSubscription, approvalId?: string): Promise<void> {
       // Keys read from config — never a hard-coded fallback. A missing key is
       // reported, not quietly signed, so the absence surfaces to the caller.
       const { subject, privateKey } = deps.vapid;
@@ -105,11 +105,11 @@ export function createWebPushSender(deps: WebPushSenderDeps): WebPushSender {
       // Validate untrusted input before anything is signed or sent (a 4xx on bad
       // input; nothing is POSTed).
       const validSubscription = parseParams(subscriptionSchema, subscription);
-      const validApprovalId = parseParams(approvalIdSchema, approvalId);
+      const validApprovalId = approvalId === undefined ? undefined : parseParams(approvalIdSchema, approvalId);
 
       // The payload carries ONLY the approval id — no personal content. Enforce the
       // 4 KB cap on the plaintext before signing, so an oversized value is refused.
-      const payload = { approvalId: validApprovalId };
+      const payload: Record<string, string> = validApprovalId === undefined ? {} : { approvalId: validApprovalId };
       if (Buffer.byteLength(JSON.stringify(payload), "utf8") > MAX_PAYLOAD_BYTES) {
         throw new HttpError(413, "push payload exceeds the 4 KB limit");
       }
@@ -129,8 +129,11 @@ export function createWebPushSender(deps: WebPushSenderDeps): WebPushSender {
       // A non-2xx from the push service is reported, not swallowed, so the caller can
       // fall back to another channel.
       if (!response.ok) {
-        throw new Error(`Web Push send failed: push service returned ${response.status}`);
+        throw new PushDeliveryError(response.status);
       }
-    },
+  }
+  return {
+    sendApprovalPush: (subscription, approvalId) => send(subscription, approvalId),
+    sendNotificationPush: (subscription) => send(subscription),
   };
 }

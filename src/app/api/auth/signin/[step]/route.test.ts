@@ -103,6 +103,8 @@ const FAKE_DEPS = { marker: Symbol("signin-deps") } as unknown as SigninHandlerD
 const STEP_METHOD: ReadonlyArray<readonly [string, keyof SigninHandler]> = [
   ["begin-passkey", "beginPasskey"],
   ["finish-passkey", "finishPasskey"],
+  ["send-email-code", "sendTotpEmailCode"],
+  ["verify-email", "verifyTotpEmail"],
   ["totp", "signInWithTotp"],
 ];
 
@@ -123,6 +125,8 @@ function spySigninHandler() {
   const handler: SigninHandler = {
     beginPasskey: make("beginPasskey"),
     finishPasskey: make("finishPasskey"),
+    sendTotpEmailCode: make("sendTotpEmailCode"),
+    verifyTotpEmail: make("verifyTotpEmail"),
     signInWithTotp: make("signInWithTotp"),
   };
   return { handler, calls };

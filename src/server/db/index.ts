@@ -35,14 +35,15 @@ export interface QueryResult {
 // parameters; `close` releases the underlying handle (a pg Pool / a PGlite db).
 //
 // `transaction` runs `fn` inside ONE real database transaction, handing it a handle
-// pinned to a single connection: every statement `fn` issues commits together or
-// rolls back together. Only a driver that pools connections needs it (a pg Pool hands
-// out an arbitrary connection per `query`, so BEGIN / COMMIT on bare `query` calls do
-// NOT bracket the writes); an in-process PGlite is already a single connection, so it
-// omits `transaction` and `withTransaction` drives BEGIN / COMMIT / ROLLBACK straight
-// through its `query`. Callers never call this directly — they go through
+// pinned to a single connection: every statement commits or rolls back together.
+// PostgreSQL pins a pool connection; PGlite's native callback serializes access to
+// its single connection. Raw BEGIN on PGlite cannot isolate concurrent callbacks.
+// Callers never call this directly — they go through
 // `withTransaction`, which handles both driver shapes.
 export interface Db {
+  // True only on the scoped handle supplied to a transaction callback. Helpers
+  // may join it without opening/committing a second transaction boundary.
+  readonly inTransaction?: boolean;
   query(text: string, values?: unknown[]): Promise<QueryResult>;
   close(): Promise<void>;
   transaction?<T>(fn: (tx: Db) => Promise<T>): Promise<T>;
@@ -53,17 +54,19 @@ export interface Db {
 // on success and rolls back together — discarding every write — if `fn` or the commit
 // throws. A pooled driver supplies a native `transaction` that checks out one client
 // for the whole unit of work (so the "one transaction" is real against a real pg Pool,
-// not a sequence of statements scattered across pooled connections); an in-process
-// PGlite, already a single connection, has none, so BEGIN / COMMIT / ROLLBACK are driven
-// straight through its own `query`. This is the ONE place a transaction is opened, so
+// not a sequence of statements scattered across pooled connections). PGlite uses
+// its native serialized callback; the raw-query fallback supports injected seams.
+// This is the ONE place a transaction is opened, so
 // every caller gets the same atomicity on either driver (one source of truth).
 export async function withTransaction<T>(db: Db, fn: (tx: Db) => Promise<T>): Promise<T> {
+  if (db.inTransaction) throw new Error("Nested transaction: pass the existing transaction handle directly");
   if (db.transaction) {
     return db.transaction(fn);
   }
   await db.query("BEGIN");
   try {
-    const result = await fn(db);
+    const tx: Db = { inTransaction: true, query: (text, values) => db.query(text, values), async close() {} };
+    const result = await fn(tx);
     await db.query("COMMIT");
     return result;
   } catch (err) {
@@ -145,6 +148,24 @@ async function createPgliteDb(target: string): Promise<Db> {
     async close() {
       await pglite.close();
     },
+    async transaction<T>(fn: (tx: Db) => Promise<T>): Promise<T> {
+      return pglite.transaction(async (native) => {
+        const tx: Db = {
+          inTransaction: true,
+          async query(text, values) {
+            if (values && values.length > 0) {
+              const result = await native.query(text, values);
+              return { rows: result.rows as Row[] };
+            }
+            const results = await native.exec(text);
+            return { rows: (results[results.length - 1]?.rows ?? []) as Row[] };
+          },
+          async close() {},
+          async transaction() { throw new Error("Nested transaction: pass the existing transaction handle directly"); },
+        };
+        return fn(tx);
+      });
+    },
   };
 }
 
@@ -192,6 +213,7 @@ function createPgPoolDb(connectionString: string, options: CreateDbOptions): Db 
     async transaction<T>(fn: (tx: Db) => Promise<T>): Promise<T> {
       const client = await pool.connect();
       const tx: Db = {
+        inTransaction: true,
         async query(text, values) {
           const raw =
             values && values.length > 0 ? await client.query(text, values) : await client.query(text);
@@ -200,6 +222,7 @@ function createPgPoolDb(connectionString: string, options: CreateDbOptions): Db 
         // No-op: the pooled client is released when the transaction ends, below — never
         // by a statement inside it.
         async close() {},
+        async transaction() { throw new Error("Nested transaction: pass the existing transaction handle directly"); },
       };
       try {
         await client.query("BEGIN");

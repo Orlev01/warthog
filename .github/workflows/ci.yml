@@ -1,0 +1,85 @@
+name: Warthog release checks
+
+on:
+  pull_request:
+  push:
+    branches: [main]
+  workflow_dispatch:
+  workflow_call:
+    inputs:
+      node_base_image:
+        type: string
+        default: node:22-bookworm-slim
+
+permissions:
+  contents: read
+
+concurrency:
+  group: warthog-ci-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  delivery-safety:
+    name: Delivery approval and singleton guards
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - run: python3 -m unittest discover -s scripts/ci -p 'test_*.py' -v
+
+  infrastructure-schema:
+    name: Terraform syntax and provider schemas
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    steps:
+      - name: Check out the reviewed source
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - name: Install the reviewed Terraform CLI
+        uses: hashicorp/setup-terraform@dfe3c3f87815947d99a8997f908cb6525fc44e9e # v4.0.1
+        with:
+          terraform_version: 1.16.3
+          terraform_wrapper: false
+      - name: Check formatting
+        run: terraform -chdir=infra fmt -check -recursive
+      - name: Check the separate workload template offline
+        run: python3 infra/workload/check_template.py
+      - name: Initialize providers without a backend or Azure login
+        run: terraform -chdir=infra init -backend=false -input=false
+      - name: Validate provider schemas without an Azure plan or apply
+        run: terraform -chdir=infra validate
+
+  linux-postgres:
+    name: Node 22 Linux and PostgreSQL 16
+    runs-on: ubuntu-24.04
+    timeout-minutes: 45
+    env:
+      NEXT_TELEMETRY_DISABLED: "1"
+      NODE_BASE_IMAGE: ${{ inputs.node_base_image || 'node:22-bookworm-slim' }}
+    steps:
+      - name: Check out the reviewed source
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - name: Validate the disposable test configuration
+        run: docker compose -f scripts/local-postgres-check.compose.yaml config --quiet
+      - name: Build clean Linux verification image
+        run: docker compose -f scripts/local-postgres-check.compose.yaml build --pull --build-arg "NODE_BASE_IMAGE=$NODE_BASE_IMAGE" verification
+      - name: Check types, full suite, runtime and real PostgreSQL
+        run: docker compose -f scripts/local-postgres-check.compose.yaml up --no-build --abort-on-container-exit --exit-code-from verification
+      - name: Remove disposable database and test containers
+        if: always()
+        run: docker compose -f scripts/local-postgres-check.compose.yaml down --volumes --remove-orphans
+      - name: Build the separate non-root runtime image
+        run: docker build --target runtime --platform linux/amd64 --build-arg "NODE_BASE_IMAGE=$NODE_BASE_IMAGE" --label "org.opencontainers.image.revision=$GITHUB_SHA" --iidfile /tmp/warthog-runtime-image-id -t warthog-ci-runtime .
+      - name: Record local image evidence
+        run: |
+          docker image inspect warthog-ci-runtime --format 'Image={{.Id}} Platform={{.Os}}/{{.Architecture}} User={{.Config.User}} Revision={{index .Config.Labels "org.opencontainers.image.revision"}}'
+          container_id=$(docker create warthog-ci-runtime)
+          trap 'docker rm "$container_id" >/dev/null' EXIT
+          docker cp "$container_id:/app/release-manifest.json" /tmp/warthog-release-manifest.json
+          cat /tmp/warthog-release-manifest.json
+          # This image is neither pushed nor started with production credentials.

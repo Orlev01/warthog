@@ -1,0 +1,67 @@
+name: Azure image publication (manual)
+
+on:
+  workflow_dispatch:
+    inputs:
+      node_base_image:
+        description: Reviewed node:22-bookworm-slim@sha256 digest (including OS advisory review)
+        type: string
+        required: true
+      approval_reference:
+        description: Approval for ACR image storage and this release candidate
+        type: string
+        required: true
+
+permissions:
+  contents: read
+
+concurrency:
+  group: warthog-azure-production
+  cancel-in-progress: false
+
+jobs:
+  gate:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    steps:
+      - name: Require explicit delivery setup and immutable Node base
+        env:
+          ENABLED: ${{ vars.AZURE_DELIVERY_ENABLED }}
+          NODE_BASE_IMAGE: ${{ inputs.node_base_image }}
+        run: |
+          test "$GITHUB_REPOSITORY" = Orlev01/warthog
+          test "$GITHUB_REF" = refs/heads/main
+          test "$ENABLED" = true || { echo 'Azure delivery is disabled pending approved setup.'; exit 1; }
+          [[ "$NODE_BASE_IMAGE" =~ ^node:22-bookworm-slim@sha256:[a-f0-9]{64}$ ]]
+  checks:
+    needs: gate
+    uses: ./.github/workflows/ci.yml
+    with:
+      node_base_image: ${{ inputs.node_base_image }}
+  publish:
+    needs: checks
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    environment: azure-images
+    permissions:
+      contents: read
+      id-token: write
+    env:
+      AZURE_DELIVERY_ENABLED: ${{ vars.AZURE_DELIVERY_ENABLED }}
+      APPROVAL_REFERENCE: ${{ inputs.approval_reference }}
+      NODE_BASE_IMAGE: ${{ inputs.node_base_image }}
+      ACR_NAME: ${{ vars.ACR_NAME }}
+      ACR_REPOSITORY: warthog
+      AZURE_CORE_OUTPUT: none
+      AZURE_EXTENSION_USE_DYNAMIC_INSTALL: "no"
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: azure/login@a457da9ea143d694b1b9c7c869ebb04ebe844ef5 # v2.3.0
+        with:
+          client-id: ${{ vars.AZURE_CLIENT_ID }}
+          tenant-id: 72277873-e056-4612-9b1c-7ad58e02fcf3
+          subscription-id: e854f594-274f-4051-841b-78df7655d73c
+      - name: Build and publish immutable candidate, without deploying
+        run: python3 scripts/ci/publish_image.py

@@ -131,8 +131,6 @@ function renderPage(importedHistory: ReadonlyArray<DataViewImportedEntry>): stri
   return renderToStaticMarkup(
     <DataView
       importedHistory={importedHistory}
-      exportAction={noop}
-      importAction={noop}
       deleteAccountAction={noop}
     />,
   );
@@ -197,7 +195,7 @@ test("the rendered page mounts the export, import and delete controls", async ()
     assert.match(text, /export my data/i, "the Export control is mounted");
     // Import — a file picker plus its submit control.
     assert.match(text, /import this file/i, "the Import control is mounted");
-    assert.ok(/name="file"/.test(markup), "the Import control exposes a file input");
+    assert.ok(/type="file"/.test(markup), "the Import control exposes a device-local file input");
     // Delete — a destructive control gated by the typed confirmation.
     assert.match(text, /delete my account/i, "the Delete-account control is mounted");
     assert.ok(/name="confirmation"/.test(markup), "the Delete control exposes its confirmation field");

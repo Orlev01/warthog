@@ -284,6 +284,7 @@ export function HouseholdView({
               budget and the caller's OWN limit, never another member's figure. ----- */}
       <div className="flex flex-col gap-3">
         <h2 className="text-lg font-semibold text-fg">Budget</h2>
+        <p className="text-sm text-fg-muted">Shared budgets and member limits reset together at the start of each calendar month in UTC.</p>
         <Card className="flex flex-col gap-2">
           <div className="flex flex-wrap items-center justify-between gap-2">
             <span className="font-medium text-fg">Household budget</span>

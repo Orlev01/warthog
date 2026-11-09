@@ -22,7 +22,7 @@
 // (INV-103): the db and the clock are INJECTED seams.
 
 import { getHouseholdForMember, listMembers } from "../db/households";
-import { periodKeyFor, sumByMemberCurrencyForHouseholdPeriod } from "../db/card-spend-ledger";
+import { periodKeyFor, sumByMemberCurrencyForHouseholdPeriod, membersWithUnresolvedHouseholdPeriods } from "../db/card-spend-ledger";
 import { getRate } from "../db/exchange-rates";
 import { convert, type ReferenceRate } from "../../domain/currency/convert";
 import type { Db } from "../db/index";
@@ -41,6 +41,7 @@ export interface UnconvertedSpend {
 // converted, NOTHING else: no merchant, no release entry/id, no email, no other
 // personal content.
 export interface HouseholdMemberSpending {
+  readonly periodIncomplete?: boolean;
   readonly userId: string;
   readonly monthlyLimit: number | null; // this member's per-member monthly limit (null until set)
   readonly spendToDate: number; // this member's approved spend this month, in the household currency
@@ -52,6 +53,7 @@ export interface HouseholdMemberSpending {
 // the household currency, except the `unconverted` amounts, which are left out of the
 // totals and listed in their own currency.
 export interface HouseholdSpendingReport {
+  readonly periodIncomplete?: boolean;
   readonly householdId: string;
   readonly currency: string; // the household currency every figure is expressed in
   readonly monthlyBudget: number | null; // the shared monthly household budget (null until set)
@@ -67,10 +69,9 @@ function addUnconverted(list: UnconvertedSpend[], currency: string, amount: numb
   return list.map((entry) => (entry.currency === currency ? { currency, amount: entry.amount + amount } : entry));
 }
 
-// The injected seams — no process.env. `timeZone` is the reader's own IANA zone
-// (`./time-zone`, resolved by the caller, which holds their DEK): "this month" is their
-// local month, the same bucket the release handler writes in (review fix W4.3). Sydney
-// when absent.
+// The injected seams — no process.env. `timeZone` is retained for caller
+// compatibility; the shared budget always uses the UTC month (AUD-012), so every
+// member enforces the same period regardless of personal preferences.
 export interface HouseholdSpendingDeps {
   readonly db: Db;
   readonly clock: Clock;
@@ -97,11 +98,12 @@ export async function readHouseholdSpending(
   if (!household) return null;
 
   const now = clock.now();
-  const monthKey = periodKeyFor(PERIOD, now, deps.timeZone);
+  const monthKey = periodKeyFor(PERIOD, now, "UTC");
   const dayKey = periodKeyFor("day", now);
   const householdCurrency = household.currency;
 
   const members = await listMembers(db, household.id, userId);
+  const unresolved = await membersWithUnresolvedHouseholdPeriods(db, userId, household.id, monthKey);
   const subTotals = await sumByMemberCurrencyForHouseholdPeriod(
     db,
     userId,
@@ -163,6 +165,7 @@ export async function readHouseholdSpending(
     monthlyLimit: member.monthlyLimit,
     spendToDate: perMember.get(member.userId) ?? 0,
     unconverted: unconvertedPerMember.get(member.userId) ?? [],
+    ...(unresolved.has(member.userId) ? { periodIncomplete: true } : {}),
   }));
 
   return {
@@ -172,5 +175,6 @@ export async function readHouseholdSpending(
     budgetSpendToDate,
     unconverted,
     members: memberRows,
+    ...(unresolved.size ? { periodIncomplete: true } : {}),
   };
 }

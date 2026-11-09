@@ -10,16 +10,9 @@
 // EXACTLY ONCE within the 5-minute window, scoped to the calling connection, then
 // the store discards it.
 //
-// A SERVER module built purely from its one INJECTED seam (the in-memory release
-// store): it touches NO database — the value's sole source is the store (AC: the
-// value is never read from the database) — and reads no `process.env`, so it holds
-// no secret (INV-103). The handler VALIDATES its input at the boundary (zod → a 4xx
-// `HttpError` BEFORE the store is touched, INV-102); its one input field (`reason`)
-// is used only as data and never concatenated into a query (there is no query), so
-// a SQL-shaped reason travels inertly. The release is keyed by the session
-// connection through `releaseKeyFor` — never a value from the input — so one
-// connection can never collect another's release. The collected value is returned
-// to the agent only; it is never written to logs or metrics.
+// The approval ID selects a pending release within the authenticated connection's
+// scope. An unknown ID never consumes another approval. Input validation happens
+// before the store is touched; no database, secrets or plaintext logging are used.
 
 import { z } from "zod";
 
@@ -32,10 +25,10 @@ import type { AgentConnection } from "../context";
 // §6.2 "every tool takes an optional reason").
 const MAX_REASON = 2000;
 
-// The validated input: just the universal OPTIONAL `reason` (design §6.2). A
-// z.object, so its `.shape` exposes the field (the registry and tests read
-// `.shape.reason`).
+// An explicit approval ID prevents ambiguous collection when several approvals
+// are pending for the same agent. The universal reason remains optional.
 export const inputSchema = z.object({
+  approval_id: z.string().uuid(),
   reason: z.string().max(MAX_REASON).optional(),
 });
 
@@ -58,12 +51,16 @@ export interface CollectReleaseDeps {
 }
 
 // The single key scheme shared by the releaser (the release endpoint) and the
-// collector (this tool), so both agree on where a connection's release lives — one
+// collector (this tool), so both agree on where an approval's release lives — one
 // source of truth. Deterministic per connection and DISTINCT for distinct
 // connections (so a release is scoped to the connection it belongs to, never merely
 // to the person): keyed by the connection id under its owning person.
-export function releaseKeyFor(connection: AgentConnection): string {
-  return `${connection.userId}:${connection.connectionId}`;
+export function releaseScopeFor(connection: AgentConnection): string {
+  return `${connection.userId}:${connection.connectionId}:`;
+}
+
+export function releaseKeyFor(connection: AgentConnection, approvalId: string): string {
+  return `${releaseScopeFor(connection)}${approvalId}`;
 }
 
 export function createCollectReleaseTool(deps: CollectReleaseDeps): CollectReleaseTool {
@@ -76,14 +73,14 @@ export function createCollectReleaseTool(deps: CollectReleaseDeps): CollectRelea
     async handle(input: unknown, connection: AgentConnection): Promise<CollectReleaseResult> {
       // VALIDATE at the boundary: a bad / oversized / mis-shaped input throws a 4xx
       // `HttpError` BEFORE the store is ever touched. The parsed `reason` is inert
-      // data — the collection is keyed only by the session connection.
-      parseParams(inputSchema, input);
+      // data — the collection is scoped by the session connection plus approval ID.
+      const { approval_id: approvalId } = parseParams(inputSchema, input);
 
       // Collect THIS connection's release from the in-memory store exactly once: the
       // store drops the entry on read and hands back the value only while it is
       // fresh (< 5 min), so a second call, an expired value or no release all collect
       // as `gone`.
-      const value = releaseStore.collect(releaseKeyFor(connection));
+      const value = releaseStore.collect(releaseKeyFor(connection, approvalId));
       if (value === undefined) {
         return { status: "gone" };
       }

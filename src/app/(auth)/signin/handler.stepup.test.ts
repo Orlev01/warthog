@@ -49,6 +49,7 @@ import { createHmac } from "node:crypto";
 import type { PublicKeyCredentialRequestOptionsJSON } from "@simplewebauthn/server";
 
 import { createSigninHandler } from "./handler";
+import { emailProofFor } from "../../../test/totp-signin";
 
 import { verifySession } from "../../../server/auth/session";
 import { requireStepUp } from "../../../server/auth/step-up";
@@ -365,7 +366,7 @@ test("a fresh authenticator-code sign-in records a step-up: requireStepUp passes
     // The code the authenticator app shows for the current 30-second step.
     const totp = codeForStep(secret, stepAt(T0));
 
-    const res = await handler.signInWithTotp(signinRequest({ email, totp }));
+    const res = await handler.signInWithTotp(signinRequest({ signinId: await emailProofFor(handler, db, email, { clock: c.clock, hmacKey: SIGNIN_HMAC_KEY, origin: GOOD_ORIGIN }), totp }));
     assert.ok(
       res.status >= 300 && res.status < 400,
       `the authenticator-code sign-in must succeed (redirect), got ${res.status}`,
@@ -455,7 +456,7 @@ test("a failed authenticator-code sign-in records no step-up and mints no sessio
     const wrong = codeForStep(secret, step + 5);
     assert.ok(!windowCodes.has(wrong), "the out-of-window code must differ from the in-window codes");
 
-    const res = await handler.signInWithTotp(signinRequest({ email, totp: wrong }));
+    const res = await handler.signInWithTotp(signinRequest({ signinId: await emailProofFor(handler, db, email, { clock: c.clock, hmacKey: SIGNIN_HMAC_KEY, origin: GOOD_ORIGIN }), totp: wrong }));
     assert.ok(
       res.status >= 400 && res.status < 500,
       `a wrong TOTP code is rejected with a 4xx, got ${res.status}`,

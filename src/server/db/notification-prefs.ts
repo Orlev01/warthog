@@ -23,6 +23,7 @@ import type { Db, Row } from "./index";
 export interface NotificationPrefs {
   readonly userId: string;
   readonly emailFallback: boolean;
+  readonly smsFallback?: boolean;
   readonly fallbackDelayMinutes: number;
 }
 
@@ -31,6 +32,7 @@ export interface NotificationPrefs {
 export interface SaveNotificationPrefsInput {
   readonly userId: string;
   readonly emailFallback: boolean;
+  readonly smsFallback?: boolean;
   readonly fallbackDelayMinutes: number;
 }
 
@@ -56,6 +58,7 @@ function toPrefs(userId: string, row: Row): NotificationPrefs {
   return {
     userId,
     emailFallback: row.email_fallback as boolean,
+    smsFallback: row.sms_fallback === true,
     fallbackDelayMinutes: Number(row.fallback_delay_minutes),
   };
 }
@@ -65,7 +68,7 @@ function toPrefs(userId: string, row: Row): NotificationPrefs {
 // in code and carrying the queried id — never another person's preferences.
 export async function getNotificationPrefs(db: Db, userId: string): Promise<NotificationPrefs> {
   const result = await db.query(
-    "SELECT email_fallback, fallback_delay_minutes FROM notification_prefs WHERE user_id = $1",
+    "SELECT email_fallback, sms_fallback, fallback_delay_minutes FROM notification_prefs WHERE user_id = $1",
     [userId],
   );
   const row = result.rows[0];
@@ -73,6 +76,7 @@ export async function getNotificationPrefs(db: Db, userId: string): Promise<Noti
     return {
       userId,
       emailFallback: DEFAULT_EMAIL_FALLBACK,
+      smsFallback: false,
       fallbackDelayMinutes: DEFAULT_FALLBACK_DELAY_MINUTES,
     };
   }
@@ -102,12 +106,14 @@ export async function saveNotificationPrefs(
   }
 
   await db.query(
-    `INSERT INTO notification_prefs (user_id, email_fallback, fallback_delay_minutes)
-     VALUES ($1, $2, $3)
+    `INSERT INTO notification_prefs (user_id, email_fallback, fallback_delay_minutes, sms_fallback, sms_consent_updated_at)
+     VALUES ($1, $2, $3, $4, now())
      ON CONFLICT (user_id) DO UPDATE SET
        email_fallback         = EXCLUDED.email_fallback,
+       sms_fallback = EXCLUDED.sms_fallback,
+       sms_consent_updated_at = CASE WHEN notification_prefs.sms_fallback IS DISTINCT FROM EXCLUDED.sms_fallback THEN now() ELSE notification_prefs.sms_consent_updated_at END,
        fallback_delay_minutes = EXCLUDED.fallback_delay_minutes`,
-    [input.userId, input.emailFallback, input.fallbackDelayMinutes],
+    [input.userId, input.emailFallback, input.fallbackDelayMinutes, input.smsFallback === true],
   );
 
   return {
@@ -115,6 +121,7 @@ export async function saveNotificationPrefs(
     prefs: {
       userId: input.userId,
       emailFallback: input.emailFallback,
+      smsFallback: input.smsFallback === true,
       fallbackDelayMinutes: input.fallbackDelayMinutes,
     },
   };

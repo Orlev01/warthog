@@ -293,3 +293,19 @@ test("the privacy page uses design tokens, never a raw hex colour", () => {
     `no raw hex colour may appear in the privacy page markup, got: ${markup}`,
   );
 });
+
+
+test("privacy describes overseas providers and retention without Australia-only promises", () => {
+  const markup = renderToStaticMarkup(<Privacy />);
+  for (const phrase of ["Australia East", "Resend", "Twilio", "United States", "Google", "Microsoft", "30 days", "backups", "not end-to-end encrypted"]) {
+    assert.ok(markup.includes(phrase), phrase);
+  }
+  assert.doesNotMatch(markup, /Every byte.*Australia|never moved.*offshore/);
+});
+
+
+test("deletion policy distinguishes live access removal from backup retention", () => {
+  const markup = renderToStaticMarkup(<Privacy />);
+  assert.match(markup, /cuts off access and schedules removal from the live application/);
+  assert.match(markup, /database backups may retain older data until their retention period ends/);
+});

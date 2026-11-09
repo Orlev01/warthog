@@ -9,6 +9,7 @@ import type {
 import { CheckCircle2, ShieldCheck } from "lucide-react";
 
 import { Button } from "./button";
+import { Field } from "./field";
 
 // ConfirmItsYou — the shared inline step-up ("Confirm it's you") control (review fix G3;
 // brief "Step-up check — a fresh passkey confirmation within the last 5 minutes"; design
@@ -49,6 +50,7 @@ export interface ConfirmItsYouController {
   getState(): ConfirmItsYouState;
   // Resolves true once the session carries a fresh confirmation; false otherwise.
   confirm(): Promise<boolean>;
+  confirmWithTotp(code: string): Promise<boolean>;
 }
 
 const STEP_UP_BASE = "/api/auth/step-up";
@@ -65,7 +67,7 @@ export function createConfirmItsYou(deps: ConfirmItsYouDeps): ConfirmItsYouContr
   }
 
   // POST to a step-up endpoint; a thrown fetch (offline) is null, never a crash.
-  async function post(step: "begin" | "finish", body?: unknown): Promise<Response | null> {
+  async function post(step: "begin" | "finish" | "totp", body?: unknown): Promise<Response | null> {
     try {
       return await deps.fetch(`${STEP_UP_BASE}/${step}`, {
         method: "POST",
@@ -117,7 +119,22 @@ export function createConfirmItsYou(deps: ConfirmItsYouDeps): ConfirmItsYouContr
     return true;
   }
 
-  return { getState: () => state, confirm };
+  async function confirmWithTotp(code: string): Promise<boolean> {
+    if (state.status === "working") return false;
+    set({ status: "working" });
+    const response = await post("totp", { totp: code });
+    if (!response?.ok) {
+      set({ status: "error", error: response?.status === 429
+        ? "Too many attempts. Please wait before trying another authenticator code."
+        : "We couldn't confirm that code. Use a fresh code from your authenticator app and try again." });
+      return false;
+    }
+    set({ status: "confirmed" });
+    deps.onConfirmed?.();
+    return true;
+  }
+
+  return { getState: () => state, confirm, confirmWithTotp };
 }
 
 // ─── the client component ───────────────────────────────────────────────────────────
@@ -136,10 +153,11 @@ export interface ConfirmItsYouProps {
 }
 
 const DEFAULT_EXPLANATION =
-  "This is a sensitive step, so we need to check it's really you. Use your passkey to confirm.";
+  "This is a sensitive step, so we need to check it's really you. Use your passkey or your enrolled authenticator app.";
 const DEFAULT_CONFIRMED = "Thanks — that's confirmed. You can carry on for the next five minutes.";
 
 export function ConfirmItsYou(props: ConfirmItsYouProps): React.ReactElement {
+  const [totpCode, setTotpCode] = React.useState("");
   const [, forceUpdate] = React.useReducer((n: number) => n + 1, 0);
   const flowRef = React.useRef<ConfirmItsYouController | null>(null);
   if (flowRef.current === null) {
@@ -153,8 +171,7 @@ export function ConfirmItsYou(props: ConfirmItsYouProps): React.ReactElement {
   const flow = flowRef.current;
   const state = flow.getState();
 
-  if (state.status === "confirmed") {
-    return (
+  const confirmation = state.status === "confirmed" ? (
       <div
         role="status"
         className="flex items-start gap-3 rounded-card border border-line bg-surface p-4 text-sm text-fg"
@@ -162,11 +179,11 @@ export function ConfirmItsYou(props: ConfirmItsYouProps): React.ReactElement {
         <CheckCircle2 aria-hidden={true} className="mt-0.5 h-5 w-5 shrink-0 text-success" />
         <p>{props.confirmedText ?? DEFAULT_CONFIRMED}</p>
       </div>
-    );
-  }
+    ) : null;
 
   return (
     <div className="flex flex-col gap-3 rounded-card border border-line bg-surface p-4">
+      {confirmation}
       <p className="text-sm text-fg">{props.explanation ?? DEFAULT_EXPLANATION}</p>
       {state.status === "error" && state.error ? (
         <p role="alert" className="text-sm text-danger">
@@ -186,6 +203,20 @@ export function ConfirmItsYou(props: ConfirmItsYouProps): React.ReactElement {
           {state.status === "working" ? "Checking…" : "Confirm it's you"}
         </Button>
       </div>
+      <form className="flex flex-col gap-3" onSubmit={(event) => {
+        event.preventDefault();
+        const code = totpCode;
+        setTotpCode("");
+        void flow.confirmWithTotp(code);
+      }}>
+        <Field label="Authenticator app code" name="totp" type="text" inputMode="numeric"
+          autoComplete="one-time-code" required pattern="[0-9]{6}" maxLength={6}
+          value={totpCode} onChange={(event) => setTotpCode(event.target.value)}
+          disabled={state.status === "working"} />
+        <Button type="submit" variant="secondary" disabled={state.status === "working"}>
+          Confirm with authenticator app
+        </Button>
+      </form>
     </div>
   );
 }

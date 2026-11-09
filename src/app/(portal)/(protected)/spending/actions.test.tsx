@@ -756,7 +756,7 @@ test("W4.3: the Spending page reads this period in the person's saved time zone"
     });
     const data = await actions.load(await sessionFor(db, userId));
     assert.equal(data.own.agents[0]?.releases.length, 1, "the person's own November release is still this period");
-    assert.equal(data.household?.budgetSpendToDate, 70, "and so is the household's November total");
+    assert.equal(data.household?.budgetSpendToDate, 0, "the shared UTC household month has advanced independently of the personal budget");
   } finally {
     await db.close();
   }

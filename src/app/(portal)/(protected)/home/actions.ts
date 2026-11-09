@@ -42,6 +42,8 @@ import type { KeyWrapper } from "@/server/crypto/key-wrapper";
 import type { Clock } from "@/server/seams/clock";
 import type { Session } from "@/server/auth/session";
 import type { Db } from "@/server/db/index";
+import { formatAccountTime } from "@/server/display-time";
+import { timeZoneFor } from "@/server/spending/time-zone";
 
 // The dependency bundle: the database seam, plus the KeyWrapper that unwraps the
 // person's DEK (so the greeting and the two owner-scoped reads can decrypt their
@@ -69,20 +71,8 @@ function payloadText(payload: unknown, key: string): string {
   return "";
 }
 
-// A stored instant → an absolute, readable label (the view renders strings and
-// reaches for no clock of its own). Shown in UTC so seeded dates are deterministic.
-function formatAt(value: Date | string): string {
-  return new Date(value).toLocaleString("en-AU", {
-    timeZone: "UTC",
-    day: "numeric",
-    month: "short",
-    year: "numeric",
-    hour: "2-digit",
-    minute: "2-digit",
-  });
-}
-
-// A stored due date ("YYYY-MM-DD" or Date) → a readable date-only label.
+// Calendar-only due dates are not instants: preserve their stored day, independent
+// of the account's display zone. Activity instants use formatAccountTime instead.
 function formatDue(value: Date | string): string {
   return new Date(value).toLocaleDateString("en-AU", {
     timeZone: "UTC",
@@ -100,6 +90,7 @@ function formatDue(value: Date | string): string {
 function toDashboardActivity(
   entry: ActivityEntry,
   agentNames: Map<string, string>,
+  timeZone: string | undefined,
 ): DashboardActivity {
   const agent = entry.agentId !== undefined ? agentNames.get(entry.agentId) : undefined;
   return {
@@ -107,7 +98,7 @@ function toDashboardActivity(
     summary: payloadText(entry.payload, "summary") || entryTitle(entry),
     outcome: entry.outcome !== undefined ? humanise(entry.outcome) : undefined,
     agent,
-    at: formatAt(entry.occurredAt),
+    at: formatAccountTime(entry.occurredAt, timeZone),
   };
 }
 
@@ -124,6 +115,8 @@ function toDashboardAgent(agent: HomeAgentSpend): DashboardAgent {
     spendThisPeriod: Number(agent.spendThisPeriod),
     budget: Number(agent.budget),
     budgetPeriod: agent.budgetPeriod,
+    currency: agent.currency,
+    ...(agent.spendUnavailable ? { spendUnavailable: true } : {}),
   };
 }
 
@@ -153,8 +146,10 @@ export function createHomeActions(deps: HomeActionsDeps): HomeActions {
     // first, then name, else the email's local part. The fields decrypt only under
     // THIS person's DEK, so the greeting can never name another account.
     let personName = localPart;
+    let timeZone: string | undefined;
     if (user && keyWrapper) {
       const dek = await keyWrapper.unwrap(user.wrappedDek);
+      timeZone = await timeZoneFor(db, user.id, dek);
       const fields = await listIdentityFields(db, user.id, dek);
       const preferred = fields.find((field) => field.kind === "preferred_name")?.value;
       const name = fields.find((field) => field.kind === "name")?.value;
@@ -187,7 +182,7 @@ export function createHomeActions(deps: HomeActionsDeps): HomeActions {
       personName,
       checklist,
       pendingApprovals: metrics.pendingApprovals,
-      activity: metrics.activity.map((entry) => toDashboardActivity(entry, agentNames)),
+      activity: metrics.activity.map((entry) => toDashboardActivity(entry, agentNames, timeZone)),
       agents: metrics.agents.map(toDashboardAgent),
       reminders: metrics.reminders.map(toDashboardReminder),
     };

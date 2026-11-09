@@ -6,13 +6,14 @@
 // unlock endpoints, so the rules live in one place:
 //   • GET  /api/vault/unlock-material/<method>  — the non-secret material for a method;
 //   • POST /api/vault/unlock-method             — save a wrapped vault key. Adding a method
-//     needs only the session; replacing one needs a fresh step-up, otherwise the server
+//     proves possession of the vault key; replacing one also needs fresh step-up, otherwise the server
 //     answers 403 step_up_required and keeps what it had (surfaced as StepUpRequiredError,
 //     so the caller can offer "Confirm it's you").
 //
 // It adds no crypto of its own — it composes derive.ts, key.ts and recovery-phrase.ts —
 // and never sends a secret: the passkey's PRF output, the passphrase, the recovery phrase
-// and the vault key stay on the device; only wrapped envelopes and public salts travel.
+// and the vault key stay on the device. First setup additionally enrols a domain-separated
+// verification key that cannot decrypt the vault; later saves send one-use HMAC proofs.
 //
 // Browser code: the injected `fetch` (same-origin, so the session cookie rides along and
 // the browser sets Origin) and the injected passkey ceremony; WebCrypto, never Node APIs.
@@ -20,6 +21,8 @@
 import { deriveWrappingKeyFromPassphrase, deriveWrappingKeyFromPrf } from "./derive";
 import { unwrapVaultKey, wrapVaultKey } from "./key";
 import { unlockWithRecoveryPhrase, wrapVaultKeyWithRecoveryPhrase } from "./recovery-phrase";
+import { createVaultProof } from "./unlock-proof";
+import type { VaultProofChallenge } from "../../domain/vault-unlock-proof";
 
 export type VaultMethod = "passkey_prf" | "passphrase" | "recovery";
 
@@ -46,7 +49,7 @@ export interface DeviceVault {
   unlockWithPasskey(opts: {
     createIfMissing: boolean;
   }): Promise<{ vaultKey: Uint8Array<ArrayBuffer>; created: boolean }>;
-  unlockWithPassphrase(passphrase: string): Promise<Uint8Array<ArrayBuffer>>;
+  unlockWithPassphrase(passphrase: string, opts?: { createIfMissing: boolean }): Promise<Uint8Array<ArrayBuffer>>;
   unlockWithRecoveryPhrase(phrase: string): Promise<Uint8Array<ArrayBuffer>>;
   hasRecoveryPhrase(): Promise<boolean>;
   // Seal the vault key under a recovery phrase / a passphrase and save it.
@@ -74,8 +77,12 @@ const PASSPHRASE_SALT_BYTES = 16;
 type ServerUnlockMaterial = {
   readonly wrapped: string | null;
   readonly params?: Record<string, unknown> | null;
+  readonly credentials?: readonly { credentialId: string; wrapped: string }[];
   readonly options?: { extensions?: { prf?: unknown } } & Record<string, unknown>;
+  readonly proof: VaultProofChallenge;
 };
+
+class VaultPossessionError extends Error {}
 
 function toBase64(bytes: Uint8Array): string {
   let binary = "";
@@ -109,6 +116,19 @@ function prfOutputOf(assertion: PasskeyAssertion): Uint8Array<ArrayBuffer> | nul
   return typeof first === "string" ? base64UrlToBytes(first) : null;
 }
 
+function credentialIdOf(assertion: PasskeyAssertion): string {
+  if (typeof assertion.id !== "string" || !/^[A-Za-z0-9_-]{1,2048}$/.test(assertion.id)) {
+    throw new Error("the passkey did not identify its credential");
+  }
+  return assertion.id;
+}
+
+function envelopeFor(material: ServerUnlockMaterial, credentialId: string): string | null {
+  // Only unlabelled pre-upgrade envelopes are a fallback. Never select another
+  // credential's envelope or create a new vault key when the existing one fails.
+  return material.credentials?.find((entry) => entry.credentialId === credentialId)?.wrapped ?? material.wrapped;
+}
+
 export function createDeviceVault(deps: DeviceVaultDeps): DeviceVault {
   async function material(method: VaultMethod): Promise<ServerUnlockMaterial> {
     const response = await deps.fetch(`${UNLOCK_MATERIAL_BASE}/${method}`, { credentials: "same-origin" });
@@ -116,14 +136,16 @@ export function createDeviceVault(deps: DeviceVaultDeps): DeviceVault {
     return (await response.json()) as ServerUnlockMaterial;
   }
 
-  async function save(body: { method: VaultMethod; wrapped: string; params?: Record<string, unknown> }): Promise<void> {
+  async function save(vaultKey: Uint8Array<ArrayBuffer>, body: { method: VaultMethod; wrapped: string; params?: Record<string, unknown> }): Promise<void> {
+    const current = await material(body.method);
+    const proof = await createVaultProof(vaultKey, current.proof, body);
     const response = await deps.fetch(UNLOCK_METHOD_URL, {
       method: "POST",
       headers: { "content-type": "application/json" },
-      body: JSON.stringify(body),
+      body: JSON.stringify({ ...body, proof }),
       credentials: "same-origin",
     });
-    if (response.status === 403) {
+    if (response.status === 403 || response.status === 409) {
       let code: unknown = null;
       try {
         code = ((await response.json()) as { error?: unknown }).error;
@@ -131,6 +153,8 @@ export function createDeviceVault(deps: DeviceVaultDeps): DeviceVault {
         code = null;
       }
       if (code === "step_up_required") throw new StepUpRequiredError();
+      if (code === "vault_unlock_required" || code === "vault_setup_conflict") throw new VaultPossessionError("Unlock the existing vault before changing its unlock methods.");
+      if (code === "vault_proof_upgrade_required") throw new Error("This vault needs a security upgrade before its unlock methods can change. Your existing unlock methods still work.");
     }
     if (!response.ok) throw new Error("could not save the vault unlock method");
   }
@@ -151,11 +175,14 @@ export function createDeviceVault(deps: DeviceVaultDeps): DeviceVault {
     const assertion = await deps.startAuthentication({ optionsJSON: passkey.options });
     const prf = prfOutputOf(assertion);
     if (prf === null) throw new Error("this passkey can't unlock your vault");
+    const credentialId = credentialIdOf(assertion);
     const wrappingKey = await deriveWrappingKeyFromPrf(prf);
 
-    if (passkey.wrapped != null) {
-      return { vaultKey: await unwrapVaultKey(wrappingKey, passkey.wrapped), created: false };
+    const wrapped = envelopeFor(passkey, credentialId);
+    if (wrapped != null) {
+      return { vaultKey: await unwrapVaultKey(wrappingKey, wrapped), created: false };
     }
+    if (passkey.proof.mode !== "enroll") throw new Error("Unlock your existing vault with another method, then add this passkey.");
     if (!opts.createIfMissing || !deps.createVaultKey) throw new Error("there is no vault to unlock yet");
 
     // First use: create the vault key and save it sealed under this passkey. The save is
@@ -164,20 +191,37 @@ export function createDeviceVault(deps: DeviceVaultDeps): DeviceVault {
     // leaving two vault keys behind.
     const vaultKey = deps.createVaultKey() as Uint8Array<ArrayBuffer>;
     try {
-      await save({ method: "passkey_prf", wrapped: await wrapVaultKey(wrappingKey, vaultKey) });
+      await save(vaultKey, { method: "passkey_prf", wrapped: await wrapVaultKey(wrappingKey, vaultKey), params: { credentialId } });
       return { vaultKey, created: true };
     } catch (error) {
-      if (!(error instanceof StepUpRequiredError)) throw error;
+      if (!(error instanceof StepUpRequiredError) && !(error instanceof VaultPossessionError)) throw error;
       const winner = await material("passkey_prf");
-      if (winner.wrapped == null) throw error;
-      return { vaultKey: await unwrapVaultKey(wrappingKey, winner.wrapped), created: false };
+      const winnerWrapped = envelopeFor(winner, credentialId);
+      if (winnerWrapped == null) throw error;
+      return { vaultKey: await unwrapVaultKey(wrappingKey, winnerWrapped), created: false };
     }
   }
 
-  async function unlockWithPassphrase(passphrase: string) {
-    const stored = await material("passphrase");
+  async function unlockWithPassphrase(passphrase: string, opts = { createIfMissing: false }) {
+    let stored = await material("passphrase");
+    if (stored.wrapped == null) {
+      if (!opts.createIfMissing || stored.proof.mode !== "enroll" || !deps.createVaultKey) {
+        throw new Error("No vault passphrase is set. Unlock your existing vault with another method.");
+      }
+      if (passphrase.length < 12) throw new Error("Choose a vault passphrase with at least 12 characters.");
+      const vaultKey = deps.createVaultKey() as Uint8Array<ArrayBuffer>;
+      try {
+        await savePassphrase(vaultKey, passphrase);
+        return vaultKey;
+      } catch (error) {
+        vaultKey.fill(0);
+        if (!(error instanceof StepUpRequiredError) && !(error instanceof VaultPossessionError)) throw error;
+        stored = await material("passphrase");
+        if (stored.wrapped == null) throw error;
+      }
+    }
     const salt = stored.params?.salt;
-    if (stored.wrapped == null || typeof salt !== "string") throw new Error("no vault passphrase is set");
+    if (typeof salt !== "string") throw new Error("No vault passphrase is set.");
     const wrappingKey = await deriveWrappingKeyFromPassphrase(passphrase, base64ToBytes(salt));
     return unwrapVaultKey(wrappingKey, stored.wrapped);
   }
@@ -193,13 +237,13 @@ export function createDeviceVault(deps: DeviceVaultDeps): DeviceVault {
   }
 
   async function saveRecoveryPhrase(vaultKey: Uint8Array<ArrayBuffer>, phrase: string) {
-    await save({ method: "recovery", wrapped: await wrapVaultKeyWithRecoveryPhrase(phrase, vaultKey) });
+    await save(vaultKey, { method: "recovery", wrapped: await wrapVaultKeyWithRecoveryPhrase(phrase, vaultKey) });
   }
 
   async function savePassphrase(vaultKey: Uint8Array<ArrayBuffer>, passphrase: string) {
     const salt = crypto.getRandomValues(new Uint8Array(PASSPHRASE_SALT_BYTES));
     const wrappingKey = await deriveWrappingKeyFromPassphrase(passphrase, salt);
-    await save({
+    await save(vaultKey, {
       method: "passphrase",
       wrapped: await wrapVaultKey(wrappingKey, vaultKey),
       params: { salt: toBase64(salt) },
@@ -225,16 +269,18 @@ export function createDeviceVault(deps: DeviceVaultDeps): DeviceVault {
 
     const prf = prfOutputOf(assertion);
     if (prf === null) return "unsupported";
+    const credentialId = credentialIdOf(assertion);
     const wrappingKey = await deriveWrappingKeyFromPrf(prf);
 
-    if (passkey.wrapped != null) {
+    const wrapped = envelopeFor(passkey, credentialId);
+    if (wrapped != null) {
       try {
-        if (sameBytes(await unwrapVaultKey(wrappingKey, passkey.wrapped), vaultKey)) return "unchanged";
+        if (sameBytes(await unwrapVaultKey(wrappingKey, wrapped), vaultKey)) return "unchanged";
       } catch {
         // Sealed under a different passkey: re-seal under this one below.
       }
     }
-    await save({ method: "passkey_prf", wrapped: await wrapVaultKey(wrappingKey, vaultKey) });
+    await save(vaultKey, { method: "passkey_prf", wrapped: await wrapVaultKey(wrappingKey, vaultKey), params: { credentialId } });
     return "adopted";
   }
 

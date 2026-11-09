@@ -781,12 +781,14 @@ test("the activity migration applies and re-running every migration changes noth
 // head read and the insert (an in-process PGlite otherwise answers in lock-step).
 function laggyDb(inner: Db): Db {
   return {
+    inTransaction: inner.inTransaction,
     async query(text, values) {
       const result = await inner.query(text, values);
       await new Promise((resolve) => setTimeout(resolve, 1));
       return result;
     },
     close: () => inner.close(),
+    ...(inner.transaction ? { transaction: <T>(fn: (tx: Db) => Promise<T>) => inner.transaction!((tx) => fn(laggyDb(tx))) } : {}),
   };
 }
 
@@ -1002,4 +1004,28 @@ test("record redacts a card number or released value in the merchant, kind and t
   } finally {
     await db.close();
   }
+});
+
+
+test("an activity append rolled back with its transaction does not block or contaminate a concurrent committed append", async () => {
+  const db = await freshDb();
+  try {
+    const userId = await makeUser(db, "race-rollback-tx");
+    const dek = freshDek();
+    const { withTransaction } = await import("../db/index");
+    const failed = withTransaction(db, async (tx) => {
+      await recorderFor(tx, userId, dek).record({ userId, kind: "connection_change", source: "warthog", payload: { discarded: true } });
+      throw new Error("synthetic enclosing rollback");
+    });
+    void failed.catch(() => {});
+    const committed = recorderFor(laggyDb(db), userId, dek).record({ userId, kind: "tool_call", source: "warthog", payload: { committed: true } });
+    await assert.rejects(failed, /synthetic enclosing rollback/);
+    const entry = await committed;
+    assert.equal(entry.seq, 1);
+    const rows = await readActivity(db, userId, dek);
+    assert.equal(rows.length, 1);
+    assert.deepEqual(rows[0]!.payload, { committed: true });
+    const { checkIntegrity } = await import("./integrity");
+    assert.deepEqual(await checkIntegrity(db, userId), { intact: true, checked: 1, brokenSeq: null });
+  } finally { await db.close(); }
 });

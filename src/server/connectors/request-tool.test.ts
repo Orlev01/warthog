@@ -1023,3 +1023,54 @@ test("the handler is member-scoped: it refuses another person's connection with 
     await db.close();
   }
 });
+
+
+test("oversized connector streams stop being read and cancel upstream at the response cap", async () => {
+  const dek = freshDek();
+  const connectionId = randomUUID();
+  const db = await credentialsDb(connectionId, dek, { api_key: API_KEY_SECRET });
+  let pulled = 0;
+  let cancelled = false;
+  const stream = new ReadableStream<Uint8Array>({
+    pull(controller) {
+      pulled += 1;
+      controller.enqueue(new Uint8Array(64 * 1024).fill(97));
+      if (pulled === 100) controller.close();
+    },
+    cancel() { cancelled = true; },
+  }, { highWaterMark: 0 });
+  const f = recordingFetch(() => new Response(stream));
+  const result = await sendConnectorRequest(
+    { entry: API_KEY_ENTRY, userId: "u", connectionId, dek, method: "GET", path: "/large" },
+    makeDeps(db, f.fetch),
+  );
+  assert.equal(cancelled, true, "cancel the provider response, not merely truncate an allocated string");
+  assert.equal(pulled, 2, "do not consume the remaining provider data");
+  assert.deepEqual(result, { status: 200, body: "a".repeat(100 * 1024), truncated: true });
+});
+
+test("the connector deadline cancels a body stream even after headers arrive", async (t) => {
+  t.mock.timers.enable({ apis: ["setTimeout"] });
+  const dek = freshDek();
+  const connectionId = randomUUID();
+  const db = await credentialsDb(connectionId, dek, { api_key: API_KEY_SECRET });
+  let cancelled = false;
+  let closeStream: (() => void) | undefined;
+  const stream = new ReadableStream<Uint8Array>({
+    start(controller) { closeStream = () => controller.close(); },
+    cancel() { cancelled = true; },
+  });
+  const f = recordingFetch(() => new Response(stream));
+  const pending = sendConnectorRequest(
+    { entry: API_KEY_ENTRY, userId: "u", connectionId, dek, method: "GET", path: "/slow-body" },
+    makeDeps(db, f.fetch),
+  );
+  void pending.catch(() => {});
+  await flushAsync();
+  t.mock.timers.tick(20_001);
+  await flushAsync();
+  if (!cancelled) closeStream?.(); // Let the old implementation settle so RED does not hang.
+  const result = await Promise.allSettled([pending]);
+  assert.equal(cancelled, true, "the timeout also cancels response reads");
+  assert.equal(result[0]?.status, "rejected", "an incomplete timed-out body is not a success");
+});

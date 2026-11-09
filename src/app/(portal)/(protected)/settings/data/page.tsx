@@ -1,3 +1,4 @@
+import { notificationSenders } from "../../../../../server/notify/production";
 import * as React from "react";
 import { cookies } from "next/headers";
 import { redirect } from "next/navigation";
@@ -57,16 +58,7 @@ const SCREEN = "/settings/data";
 // rejects loudly rather than dropping the message (constitution: never fail silently).
 // With dev tooling on, `selectSenders` routes every channel to the dev outbox instead —
 // so the delete confirmation email is readable at `/dev/outbox` in dev.
-function notConfiguredSenders(): Senders {
-  const reject = (channel: string) => async (_message: OutgoingMessage): Promise<void> => {
-    throw new Error(`${channel} sending is not configured`);
-  };
-  return {
-    push: { sendPush: reject("Push") },
-    email: { sendEmail: reject("Email") },
-    sms: { sendSms: reject("SMS") },
-  };
-}
+
 
 // The cross-aggregate revoke the deletion service delegates (cut off every agent + service
 // connection): the production executor over the db (`createResetExecutor`'s transactional
@@ -88,7 +80,7 @@ function buildActions(db: Db, revoker: DeletionExecutor = deletionRevokerFor(db)
     clock: systemClock,
     keyWrapper,
     revoker,
-    senders: selectSenders(config, notConfiguredSenders()),
+    senders: notificationSenders(config, db),
   });
 }
 
@@ -112,28 +104,7 @@ function noticeLocation(successCode: string, outcome: ActionResult | unknown): s
 
 // --- the wired server actions (thin wrappers over the tested seam) ----------------------
 //
-// Export is not a server action: the Export form posts natively to `export/route.ts`, so
-// the browser receives the file as a download (a server action can only redirect).
-
-// Import a previous Warthog export into THIS account. The uploaded file rides in the form
-// data; the seam validates it at the boundary (an oversized / malformed / wrong-version file
-// is a 4xx reported as an invalid request) and restores it member-scoped to the session.
-async function importDataAction(formData: FormData): Promise<void> {
-  "use server";
-  const db = await getServerDb();
-  const session = await resolveSession(db);
-  if (!session) {
-    redirect("/signin");
-  }
-  let outcome: ActionResult | unknown;
-  try {
-    outcome = await buildActions(db).importData(session, formData.get("file"));
-  } catch (error) {
-    outcome = error;
-  }
-  revalidatePath(SCREEN);
-  redirect(noticeLocation("imported", outcome));
-}
+// Export and import run through the device-local transfer controls.
 
 // Delete the session person's account — after a fresh step-up AND the typed confirmation
 // phrase (the seam enforces both). The deletion service shreds the DEK, revokes every agent
@@ -249,14 +220,13 @@ export default async function DataPage({
       {notice ? <NoticeBanner notice={notice} /> : null}
       {needsConfirm ? (
         <ConfirmItsYou
-          explanation="Exporting your data or deleting your account needs a quick check that it's really you. Use your passkey to confirm."
-          confirmedText="Thanks — that's confirmed. You can export your data or delete your account for the next five minutes."
+          explanation="Exporting, importing or deleting data needs a quick check that it's really you. Use a passkey or authenticator code."
+          confirmedText="Thanks — that's confirmed. You can transfer data or delete your account for the next five minutes."
         />
       ) : null}
       <DataView
         importedHistory={data.importedHistory}
         confirmationPhrase={DELETE_ACCOUNT_CONFIRMATION}
-        importAction={importDataAction}
         deleteAccountAction={deleteAccountAction}
       />
     </div>

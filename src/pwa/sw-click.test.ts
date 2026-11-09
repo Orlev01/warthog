@@ -96,6 +96,12 @@ test("tapping an approval notification with no window open opens that approval i
   assert.deepEqual(worker.opened, ["/inbox?approval=ap_123"]);
 });
 
+test("the camel-case approval payload emitted by the production sender opens its approval", async () => {
+  const worker = loadWorker([]);
+  await tap(worker, { approvalId: "production-approval" });
+  assert.deepEqual(worker.opened, ["/inbox?approval=production-approval"]);
+});
+
 test("tapping an approval notification navigates an already-open window to it and focuses it", async () => {
   const open = windowClient("https://warthog.com.au/");
   const worker = loadWorker([open]);

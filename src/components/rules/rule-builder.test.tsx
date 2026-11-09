@@ -1,0 +1,43 @@
+import { test } from "node:test";
+import assert from "node:assert/strict";
+import * as React from "react";
+import { renderToStaticMarkup } from "react-dom/server";
+import { RulesView, createRuleBuilderState, updateRuleBuilder, isRuleBuilderComplete } from "./rules-view";
+import { ruleInputFromForm } from "@/app/(portal)/(protected)/rules/actions";
+
+test("changing a rule action and condition exposes matching required fields and updates the preview", () => {
+  let state = createRuleBuilderState();
+  state = updateRuleBuilder(state, { type: "action", action: "specific_tool" });
+  assert.equal(isRuleBuilderComplete(state), false);
+  state = updateRuleBuilder(state, { type: "target", value: "mail.send" });
+  state = updateRuleBuilder(state, { type: "condition", condition: "recipient_in_domain" });
+  assert.equal(isRuleBuilderComplete(state), false);
+  state = updateRuleBuilder(state, { type: "detail", value: "example.com" });
+  state = updateRuleBuilder(state, { type: "template", template: "never_allow" });
+  state = updateRuleBuilder(state, { type: "scope", scope: { type: "agent", agentId: "agent-one", name: "Helper" } });
+  assert.equal(isRuleBuilderComplete(state), true);
+  const markup = renderToStaticMarkup(<RulesView rules={[]} agents={[{ id: "agent-one", name: "Helper" }]} draft={state.draft} />);
+  assert.match(markup, /name="rule-target"/); assert.match(markup, /value="mail.send"/); assert.match(markup, /name="rule-condition-detail"/); assert.match(markup, /value="example.com"/);
+  assert.match(markup, /Never allow/); assert.match(markup, /Helper/);
+  const form = new FormData(); for (const [key, value] of Object.entries({ "rule-template": "never_allow", "rule-action": "specific_tool", "rule-target": "mail.send", "rule-condition": "recipient_in_domain", "rule-condition-detail": state.detail, "rule-scope": "agent-one" })) form.set(key, value);
+  const input = ruleInputFromForm(form);
+  assert.deepEqual(input.action, { type: "specific_tool", tool: "mail.send" });
+  assert.deepEqual(input.condition, { type: "recipient_in_domain", domain: "example.com" });
+});
+test("changing conditions and actions clears incompatible details and invalid amounts cannot be submitted", () => {
+  let state = updateRuleBuilder(createRuleBuilderState(), { type: "condition", condition: "recipient_is" });
+  state = updateRuleBuilder(state, { type: "detail", value: "someone@example.com" });
+  state = updateRuleBuilder(state, { type: "condition", condition: "amount_over" });
+  assert.equal(state.detail, ""); assert.equal(isRuleBuilderComplete(state), false);
+  state = updateRuleBuilder(state, { type: "detail", value: "-1" }); assert.equal(isRuleBuilderComplete(state), false);
+  state = updateRuleBuilder(state, { type: "detail", value: "Infinity" }); assert.equal(isRuleBuilderComplete(state), false);
+  state = updateRuleBuilder(state, { type: "detail", value: "25.50" }); assert.equal(isRuleBuilderComplete(state), true);
+  const markup = renderToStaticMarkup(<RulesView rules={[]} agents={[]} draft={state.draft} currency="NZD" />);
+  assert.match(markup, /account currency \(NZD\)/); assert.match(markup, /Amount \(NZD\)/);
+  state = updateRuleBuilder(state, { type: "condition", condition: "none" });
+  assert.equal("condition" in state.draft ? state.draft.condition : undefined, undefined);
+  state = updateRuleBuilder(state, { type: "action", action: "service_tool" });
+  state = updateRuleBuilder(state, { type: "target", value: "gmail" });
+  state = updateRuleBuilder(state, { type: "action", action: "specific_tool" });
+  assert.equal(isRuleBuilderComplete(state), false);
+});

@@ -39,6 +39,8 @@ import {
   getWrappedKey,
   insertWrappedKeyIfAbsent,
   listMethods,
+  listPasskeyEnvelopes,
+  savePasskeyEnvelope,
   saveWrappedKey,
   type UnlockMethod,
   type UnlockParams,
@@ -55,6 +57,7 @@ export interface UnlockMaterial {
   readonly method: UnlockMethod;
   readonly wrapped: string | null;
   readonly params: UnlockParams;
+  readonly credentials?: { credentialId: string; wrapped: string; params: UnlockParams }[];
 }
 
 // What the browser hands back to persist a newly wrapped VK for a method: the
@@ -144,6 +147,7 @@ export function createVaultUnlockActions(deps: VaultUnlockActionsDeps): VaultUnl
         method: validMethod,
         wrapped: stored?.wrappedKey ?? null,
         params: stored?.params ?? {},
+        ...(validMethod === "passkey_prf" ? { credentials: (await listPasskeyEnvelopes(db, userId)).map((row) => ({ credentialId: row.credentialId, wrapped: row.wrappedKey, params: row.params })) } : {}),
       };
     },
 
@@ -157,6 +161,14 @@ export function createVaultUnlockActions(deps: VaultUnlockActionsDeps): VaultUnl
     async saveUnlockMethod(userId, input, options = { replace: false }) {
       const valid = parseParams(saveInputSchema, input);
       const row = { userId, method: valid.method, wrappedKey: valid.wrapped, params: valid.params };
+      if (valid.method === "passkey_prf" && typeof valid.params?.credentialId === "string") {
+        const owned = await db.query("SELECT 1 FROM passkeys WHERE user_id = $1 AND credential_id = $2", [userId, valid.params.credentialId]);
+        if (!owned.rows.length) return { ok: false, reason: "invalid_credential" };
+        const saved = await savePasskeyEnvelope(db, row, valid.params.credentialId, options.replace);
+        return saved ? { ok: true } : { ok: false, reason: STEP_UP_REQUIRED };
+      }
+      // Legacy storage helper remains available for existing unlabelled envelopes.
+      // Production saves enter through saveProvenMethod, which requires a credential ID.
       if (options.replace) {
         await saveWrappedKey(db, row);
         return { ok: true };

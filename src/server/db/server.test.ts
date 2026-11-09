@@ -9,6 +9,19 @@ import assert from "node:assert/strict";
 
 import { makeServerDb } from "./server";
 
+test("a separate migration connection closes before requests receive the runtime database", async () => {
+  const calls: string[] = [];
+  const runtime = { query: async () => ({ rows: [] }), close: async () => {} };
+  const migration = { query: async (sql: string) => { calls.push(sql.startsWith("CREATE") ? "migration-ddl" : "migration-query"); return { rows: [] }; }, close: async () => { calls.push("migration-close"); } };
+  const getDb = makeServerDb({ databaseUrl: () => "runtime", migrationDatabaseUrl: () => "migration",
+    openDb: async (url) => { calls.push(`open-${url}`); return url === "migration" ? migration : runtime; } });
+  assert.equal(await getDb(), runtime);
+  assert.ok(calls.includes("migration-ddl"));
+  assert.ok(calls.indexOf("migration-close") < calls.indexOf("open-runtime"));
+  assert.equal(await getDb(), runtime);
+  assert.equal(calls.filter((s) => s === "open-migration").length, 1);
+});
+
 test("the getter returns one shared database across calls, including concurrent first calls", async () => {
   let urlReads = 0;
   const getDb = makeServerDb({ databaseUrl: () => (urlReads++, "pglite:memory") });

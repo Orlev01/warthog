@@ -525,6 +525,11 @@ const RELEASE_FAILED_COPY =
 const REFUSAL_COPY: Record<string, string> = {
   step_up_required: "Please confirm it's you first, then approve and release again.",
   over_budget: "This would put the agent over its card budget, so nothing was handed over.",
+  over_member_budget: "This would put you over your household spending limit, so nothing was handed over.",
+  over_household_budget: "This would put your household over its shared budget, so nothing was handed over.",
+  household_rate_unavailable: "A reference rate is missing for household spending. Nothing was handed over; try again after rates are available.",
+  agent_rate_unavailable: "A reference rate is missing for earlier agent spending. Nothing was handed over; try again after rates are available.",
+  household_period_unavailable: "Earlier household release dates need checking before the budget can be confirmed. Nothing was handed over; contact support.",
   expired: "This request expired before you approved it, so nothing was handed over.",
   already_released: "This has already been handed over to the agent.",
   not_releasable: "This request can no longer be approved and released, so nothing was handed over.",

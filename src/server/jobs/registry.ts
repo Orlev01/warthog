@@ -22,6 +22,7 @@ import { runRatesJob } from "../currency/rates-job";
 import { runAccountPurge } from "../account/purge-job";
 import { runMetricsSnapshot } from "../metrics/snapshot-job";
 import { runDailyIntegrityCheck } from "../activity/integrity-job";
+import { cleanupOAuth } from "../oauth/cleanup";
 import {
   createConnectorJobHandler,
   GOOGLE_LAPSE_TYPE,
@@ -53,6 +54,7 @@ export interface PeriodicSweep {
 // The superset of seams every handler and sweep is wired from.
 export interface JobSeams {
   readonly db: Db;
+  readonly getPurgeDb?: () => Promise<Db>;
   readonly clock: Clock;
   readonly keyWrapper: KeyWrapper;
   readonly random: Random;
@@ -150,10 +152,11 @@ export function buildPeriodicSweeps(seams: JobSeams): readonly PeriodicSweep[] {
       name: "account-purge",
       intervalMs: HOUR_MS,
       run: async () => {
-        await runAccountPurge(seams.db, { blobStore: seams.blobStore });
+        await runAccountPurge(seams.getPurgeDb ? await seams.getPurgeDb() : seams.db, { blobStore: seams.blobStore });
       },
     },
     { name: "metrics-snapshot", intervalMs: HOUR_MS, run: () => runMetricsSnapshot(seams.db, seams.clock) },
+    { name: "oauth-cleanup", intervalMs: HOUR_MS, run: () => cleanupOAuth(seams.db, seams.clock.now()) },
     {
       name: "daily-integrity-check",
       intervalMs: DAY_MS,

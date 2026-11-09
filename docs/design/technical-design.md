@@ -1,6 +1,9 @@
 # Warthog — technical design (v1)
 
-Status: proposed 2026-11-04 by the operator session, for founder review at the architecture gate.
+Status: original design 2026-11-04, amended 2026-11-09 for the founder-approved
+production identity, global messaging and delivery controls. Implementation and
+live acceptance status are in `../production-release.md`; design intent is not
+evidence that infrastructure exists or a feature passed production verification.
 Inputs: `brief.yaml` (ratified + amended), `.agent/architecture.yaml` (Skynet: `nextjs-postgres`,
 monolith, public ingress), and the architecture research of 2026-11-04 (sources in §13).
 
@@ -32,26 +35,35 @@ Background jobs run in the same process. Every job is idempotent and claimed wit
 `SELECT … FOR UPDATE SKIP LOCKED` from a `jobs` table, so a second replica would be safe for jobs
 (not for releases).
 
-## 2. Azure (australiaeast) — all on the founder's sponsorship credit unless noted
+## 2. Production infrastructure
+
+Australia East remains primary hosting. Current founder decisions and unresolved
+funding/provider gates are maintained in `../production-release.md`, with rationale
+in `../adr/global-messaging.md`, `../adr/production-identity-and-email.md` and
+`../adr/production-delivery-controls.md`. These supersede the original ACS,
+Australia-only processing, public database firewall and parent-domain RP proposals.
 
 | Need | Service | Notes |
 |---|---|---|
-| App runtime | Container Apps (Consumption), min=max 1 replica, 0.5 vCPU / 1 GiB | no private endpoints / planned-maintenance (those add ~US$73/mo) |
+| App runtime | Container Apps (Consumption), min=max 1 replica, candidate 0.5 vCPU / 1 GiB | Private VNet integration; manual stop/wait/start revisions; database ownership guard |
 | Images | Container Registry Basic | |
-| Data | PostgreSQL Flexible Server B1MS, v16, 32 GB, TLS required, Entra auth for admin | firewall to the Container Apps outbound IPs; PITR 7 days |
-| Key encryption key | Key Vault **Premium**, one RSA-HSM 3072 key `kek-user-data` | wraps every per-person data key; ~US$1/mo |
-| App secrets | Key Vault (same vault), referenced as Container Apps secrets | OAuth client secrets, VAPID private key, ACS connection strings, session/HMAC secrets |
+| Data | PostgreSQL Flexible Server v16, reviewed General Purpose SKU/storage/backup retention | Private delegated subnet/DNS; no public database access; three application logins with verified TLS; separate private administrator bootstrap |
+| Key encryption key | Key Vault **Premium**, one RSA-HSM 3072 key | Wraps per-person data keys; preserve old versions for live data and retained backups |
+| App secrets | Key Vault (same vault), referenced as Container Apps secrets | Database URLs, OAuth clients, VAPID, messaging credentials and HMAC key; no secret values in source/images/Terraform state |
 | Receipt files | Storage account (blob), private container, no public access, no shared keys | files are encrypted by the app before upload |
-| Email | Communication Services Email, custom domain `warthog.com.au` (SPF/DKIM at GoDaddy DNS) | from `no-reply@warthog.com.au` |
-| SMS | Communication Services SMS on a **separate pay-as-you-go subscription (founder-paid)** with an Australian mobile number | outside the auto-stop; its own budget alert |
-| Logs/metrics | Log Analytics (30-day retention, daily cap) + Application Insights | redaction before logging (§7) |
-| Cost guard | Budget on the subscription: alerts at 50/80/100% of the cap (default US$150/mo); at 100% an action group runs an automation that scales the app to 0 and stops Postgres | |
-| Identity | User-assigned managed identity for the app (Key Vault crypto user + secrets user, blob data contributor, ACS) | no keys in env except ACS SMS connection string from the PAYG sub |
+| Email | Resend Free, approved sending domain | Domain-restricted sending key; international processing/privacy contract and actual account/delivery acceptance remain gates |
+| SMS | Twilio US1, explicit approved ISO-country routes | Separate founder-paid allowance; registration, STOP and body-redaction entitlement/complete price remain gates; no assumption of worldwide coverage |
+| Logs/metrics | Azure Monitor diagnostic routing to Log Analytics, 30-day retention and reviewed daily cap | Redaction before logging; operational alerts/recipients still require configuration and testing |
+| Cost controls | Required approved AUD budget notifications at 50/80/100% actual and 100% forecast | No verified automatic stop or credit-only cash-fallback protection; budget/credit availability is not a hard cap |
+| Identity | User-assigned identity with scoped ACR pull, vault secret/key wrapping and receipt-container access | Azure SDK identity selected with `AZURE_CLIENT_ID`; no subscription-wide application role |
 
-Infra is Terraform/OpenTofu in `infra/` (house pattern from earlier Azure jobs), applied by the
-founder. Domain: `warthog.com.au` stays at GoDaddy DNS; records are entered by hand from
-`terraform output dns_records`. Whether the app is at the apex or `app.` is a deploy-time choice;
-**the WebAuthn RP ID is `warthog.com.au` either way**.
+`infra/` now contains a Terraform foundation draft, not an applied/certified stack.
+It requires Terraform write-only/ephemeral support; OpenTofu compatibility is not
+assumed. CI performs no cloud apply or production CD. Workload rollout uses the
+separate `../singleton-release-runbook.md`. The module does not manage GoDaddy or
+output fabricated DNS records. Preserve all existing records; review exact new
+records after provider generation. The approved application origin and narrow RP
+ID are both `app.warthog.com.au`; email sender identity is validated independently.
 
 ## 3. Libraries (job ADR — extends the bundle allowlist)
 
@@ -80,7 +92,9 @@ Accepted audit/licence notes (2026-11-04): `postcss` inside Next 15 has a high a
 attacker-controlled CSS — Next only processes our own CSS at build time, and the fix is Next 16;
 `sharp` (Next's optional image optimiser) ships `libvips` under LGPL-3.0, dynamically linked and
 unmodified — house precedent (Art to Heart). Explicitly rejected: Nango (Elastic License 2.0, not
-permissive), `web-push` (MPL-2.0), any paid card vault, any hosted auth/SMS/email vendor.
+permissive), `web-push` (MPL-2.0), and any paid card vault. The subsequent explicit
+Twilio/Resend messaging exception supersedes the original hosted-messaging ban;
+it does not approve an unquoted paid plan or change Warthog's own authentication.
 
 ## 4. Data protection
 
@@ -133,7 +147,7 @@ Redaction is a pure module with exhaustive unit tests; the activity writer and t
 
 ## 5. People: sign-in and sessions
 - Email one-time codes: 6 digits, 10-minute expiry, stored as HMAC, max 5 attempts, then backoff.
-- Passkeys via SimpleWebAuthn, RP ID `warthog.com.au` (from config), `residentKey: required`,
+- Passkeys via SimpleWebAuthn, RP ID `app.warthog.com.au` (from config), `residentKey: required`,
   `userVerification: required`, PRF requested on create and get.
 - Authenticator app fallback: RFC 6238 TOTP implemented with `node:crypto` (30 s, 6 digits, ±1 step).
 - Recovery code issued at sign-up (shown once, confirmed saved).
@@ -244,16 +258,18 @@ sentence by a pure function (`ruleSentence`).
 ## 10. Notifications
 - Web Push (VAPID via `@pushforge/builder`), service worker `public/sw.js`, every push shows a
   notification (iOS requirement); payload ≤ 4 KB, contains the approval id only (no personal content).
-- Fallback job at `created_at + fallback_delay`: if the approval is still unopened → one SMS (ACS SMS)
-  and one email (ACS Email) with a single-use link token (256-bit, hashed, 10-minute expiry) that opens
-  the approval after sign-in.
+- Fallback job at `created_at + fallback_delay`: if the approval is still unopened,
+  send through the configured Twilio/Resend adapters subject to channel consent,
+  persistent usage limits and provider suppression. Each link is single-use,
+  hashed and expires after 10 minutes; approval still requires sign-in. A durable
+  SMS attempt claim prevents ambiguous transport retries from duplicating sends.
 - All senders behind an interface with a dev/test **outbox** implementation (`/dev/outbox`, only when
   `WARTHOG_DEV_TOOLS=1`, which the production build refuses to start with).
 
 ## 11. Look and feel
 - Neutral palette (zinc greys, near-black, white), light + dark, **one accent: indigo** (`#4338CA`
   light / `#A5B4FC` dark for text-on-dark; contrast-checked), semantic success/warning/danger.
-- Inter (via `next/font`), Tailwind v4, lucide icons, 8 px spacing grid, cards with subtle borders.
+- Licensed local Inter assets, Tailwind v4, lucide icons, 8 px spacing grid, cards with subtle borders.
 - Mobile: bottom nav (Home, Inbox, Activity, Agents, More); desktop: left sidebar with the same IA.
 - PWA: `manifest.webmanifest` (standalone), icons, service worker; iOS install instructions sheet.
 
@@ -268,6 +284,10 @@ sentence by a pure function (`ruleSentence`).
   so WebAuthn flows are tested end to end without a browser.
 - Dev tools (only with `WARTHOG_DEV_TOOLS=1`): outbox viewer, "sign in as" for the acceptance walk,
   approve-from-outbox links, a fake MCP agent console that calls `/mcp` with a dev access key.
+- The local-only CI workflow reuses the disposable Linux/PostgreSQL 16 Compose
+  harness, followed by a separate non-root runtime image build. Remote CI, Linux
+  execution and production-mode acceptance have not yet been certified; see
+  `../local-release-validation.md` and the current release handoff.
 
 ## 13. Sources (research 2026-11-04)
 MCP spec 2026-07-28 (transports, authorization, client registration); Claude connector auth docs;

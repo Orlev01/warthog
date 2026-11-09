@@ -668,3 +668,18 @@ test("the notification_prefs migration applies and re-running every migration ch
     await db.close();
   }
 });
+
+
+test("SMS fallback requires explicit opt-in and can be withdrawn without disabling email", async () => {
+  const db = await freshDb();
+  try {
+    const result = await db.query("INSERT INTO users (email, wrapped_dek) VALUES ('global-consent@example.test', 'synthetic') RETURNING id");
+    const userId = result.rows[0].id as string;
+    assert.equal((await getNotificationPrefs(db, userId)).smsFallback, false);
+    await saveNotificationPrefs(db, { userId, emailFallback: true, fallbackDelayMinutes: 2, smsFallback: true });
+    assert.equal((await getNotificationPrefs(db, userId)).smsFallback, true);
+    await saveNotificationPrefs(db, { userId, emailFallback: true, fallbackDelayMinutes: 2, smsFallback: false });
+    const prefs = await getNotificationPrefs(db, userId);
+    assert.equal(prefs.smsFallback, false); assert.equal(prefs.emailFallback, true);
+  } finally { await db.close(); }
+});

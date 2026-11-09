@@ -140,7 +140,7 @@ function FacetFilter({ name, label, all, options, value }: Facet) {
   );
 }
 
-// "Filtered by Agent: Claude · From 1 Mar 2026" — the applied filters in words, each
+// "Filtered by Agent: Claude · From 1 Mar 2026 (UTC)" — explicit filter zone;
 // named by its option's label (an agent by its name, never the id the filter posts).
 function filterSummary(facets: readonly Facet[], active: ActivityActiveFilters): string[] {
   const labelOf = (facet: Facet, value: string): string =>
@@ -148,8 +148,8 @@ function filterSummary(facets: readonly Facet[], active: ActivityActiveFilters):
   const parts = facets
     .filter((facet) => active[facet.name] !== undefined)
     .map((facet) => `${facet.label}: ${labelOf(facet, active[facet.name]!)}`);
-  if (active.from) parts.push(`From ${active.from}`);
-  if (active.to) parts.push(`To ${active.to}`);
+  if (active.from) parts.push(`From ${active.from} (UTC)`);
+  if (active.to) parts.push(`To ${active.to} (UTC)`);
   return parts;
 }
 
@@ -361,11 +361,11 @@ export function ActivityView({
               <FacetFilter key={facet.name} {...facet} />
             ))}
             <div className="flex flex-col gap-1.5">
-              <Label htmlFor="activity-from">From</Label>
+              <Label htmlFor="activity-from">From (UTC)</Label>
               <Input id="activity-from" type="date" name="from" defaultValue={activeFilters.from?.slice(0, 10) ?? ""} />
             </div>
             <div className="flex flex-col gap-1.5">
-              <Label htmlFor="activity-to">To</Label>
+              <Label htmlFor="activity-to">To (UTC)</Label>
               <Input id="activity-to" type="date" name="to" defaultValue={activeFilters.to?.slice(0, 10) ?? ""} />
             </div>
           </div>

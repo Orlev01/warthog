@@ -25,6 +25,8 @@ import { getServerDb } from "../../../server/db/server";
 import { verifySession, COOKIE_NAME, type Session } from "../../../server/auth/session";
 import { systemClock } from "../../../server/seams/clock";
 import type { Connection } from "../../../server/db/connections";
+import { pendingConnects } from "../../../server/connectors/pending";
+import { createConnectorRuntime } from "../../../server/connectors/runtime";
 
 // The connect-start secrets stashed for a pending provider sign-in — NOT the user id (the
 // lookup is already scoped by the session user, so the flow needn't carry it).
@@ -36,6 +38,7 @@ export interface PendingConnectFlow {
 
 // What the callback hands the exchange/store step. `userId` is ALWAYS the session's.
 export interface CompleteConnectionInput {
+  readonly state: string;
   readonly userId: string;
   readonly connectorId: string;
   readonly accountLabel: string;
@@ -46,7 +49,7 @@ export interface CompleteConnectionInput {
 // The injectable seams, each optional with a production default (below).
 export interface ConnectCallbackSeams {
   readonly resolveSession?: (request: Request) => Promise<Session | null>;
-  readonly takePendingFlow?: (userId: string, state: string) => Promise<PendingConnectFlow | null>;
+  readonly takePendingFlow?: (userId: string, state: string, sessionId?: string) => Promise<PendingConnectFlow | null>;
   readonly completeConnection?: (input: CompleteConnectionInput) => Promise<Connection>;
   readonly config?: Config;
 }
@@ -88,16 +91,16 @@ async function defaultResolveSession(request: Request): Promise<Session | null> 
 // No pending-flow store is composed yet (connect-start, which stashes a flow under
 // (userId, state), is a sibling task). Until it wires a real `takePendingFlow`, a callback
 // matches no flow for its session user and is cleanly rejected — never a false success.
-async function defaultTakePendingFlow(): Promise<PendingConnectFlow | null> {
-  return null;
+async function defaultTakePendingFlow(userId: string, state: string, sessionId?: string): Promise<PendingConnectFlow | null> {
+  return sessionId ? pendingConnects().take(userId, sessionId, state) : null;
 }
 
 // The exchange/store step is driven by the connector engine's composition (the catalogue
 // entry for the host, the operator OAuth client, and the person's data key), wired when
 // connect-start lands. The default is unreachable in the default composition (no flow is
 // ever found above), and fails loudly rather than silently if ever reached.
-async function defaultCompleteConnection(): Promise<Connection> {
-  throw new Error("connect-callback: completeConnection seam is not composed");
+async function defaultCompleteConnection(input: CompleteConnectionInput, config: Config): Promise<Connection> {
+  return createConnectorRuntime({ config, db: await getServerDb() }).complete(input);
 }
 
 // --- responses ----------------------------------------------------------------------
@@ -107,13 +110,13 @@ function appUrl(config: Config, path: string): string {
 }
 
 function redirect(location: string): Response {
-  return new Response(null, { status: 303, headers: { location } });
+  return new Response(null, { status: 303, headers: { location, "cache-control": "no-store", "referrer-policy": "no-referrer" } });
 }
 
 function badRequest(message: string): Response {
   return new Response(message, {
     status: 400,
-    headers: { "content-type": "text/plain; charset=utf-8" },
+    headers: { "content-type": "text/plain; charset=utf-8", "cache-control": "no-store", "referrer-policy": "no-referrer" },
   });
 }
 
@@ -124,7 +127,7 @@ export function createConnectCallbackHandler(
 ): { GET(request: Request): Promise<Response> } {
   const resolveSession = seams.resolveSession ?? defaultResolveSession;
   const takePendingFlow = seams.takePendingFlow ?? defaultTakePendingFlow;
-  const completeConnection = seams.completeConnection ?? defaultCompleteConnection;
+  const completeConnection = seams.completeConnection;
 
   async function GET(request: Request): Promise<Response> {
     const config = seams.config ?? loadConfig();
@@ -134,6 +137,13 @@ export function createConnectCallbackHandler(
     const session = await resolveSession(request);
     if (session == null) {
       return redirect(appUrl(config, "/signin"));
+    }
+
+    const query = new URL(request.url).searchParams;
+    if (query.has("error")) {
+      const state = query.get("state");
+      if (!state || state.length > MAX_FIELD || !(await takePendingFlow(session.userId, state, session.id))) return badRequest("This sign-in link has expired or is invalid.");
+      return redirect(appUrl(config, "/connectors?notice=connection-declined"));
     }
 
     // 2. Validate the provider's redirect query (INV-102): a missing or oversized value is
@@ -150,20 +160,26 @@ export function createConnectCallbackHandler(
     //    connect-start — looked up by (SESSION userId, state), never the state alone. A
     //    state that maps to no flow for this user (missing, expired, forged, or another
     //    person's) completes nothing.
-    const flow = await takePendingFlow(session.userId, state);
+    const flow = await takePendingFlow(session.userId, state, session.id);
     if (flow == null) {
       return badRequest("This sign-in link has expired or is invalid. Please try connecting again.");
     }
 
     // 4. Exchange the code and store the connection, bound to the SESSION user: the
     //    connector/label/verifier come from the stashed flow, the code from the query.
-    await completeConnection({
+    const input = {
       userId: session.userId,
+      state,
       connectorId: flow.connectorId,
       accountLabel: flow.accountLabel,
       code,
       codeVerifier: flow.codeVerifier,
-    });
+    };
+    if (completeConnection) await completeConnection(input);
+    else {
+      try { await defaultCompleteConnection(input, config); }
+      catch { return redirect(appUrl(config, "/connectors?notice=problem")); }
+    }
 
     // Land the person back in the app — never bounced to the provider.
     return redirect(appUrl(config, "/connectors"));

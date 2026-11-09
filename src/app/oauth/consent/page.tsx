@@ -1,3 +1,5 @@
+import { getProcessCatalogue } from "../../../server/connectors/catalogue";
+import { notificationSenders } from "../../../server/notify/production";
 import * as React from "react";
 import { join } from "node:path";
 import { cookies } from "next/headers";
@@ -59,16 +61,7 @@ async function resolveSession(db: Db): Promise<Session | null> {
 // Real senders stand-in: until the Azure channel senders are built, sending through one
 // rejects loudly rather than dropping the message (constitution: never fail silently).
 // With dev tooling on, `selectSenders` routes every channel to the dev outbox instead.
-function notConfiguredSenders(): Senders {
-  const reject = (channel: string) => async (_message: OutgoingMessage): Promise<void> => {
-    throw new Error(`${channel} sending is not configured`);
-  };
-  return {
-    push: { sendPush: reject("Push") },
-    email: { sendEmail: reject("Email") },
-    sms: { sendSms: reject("SMS") },
-  };
-}
+
 
 // Build the consent decision actions with the real seams (the client resolver re-checks
 // the client and its registered redirect URI before either decision redirects; the
@@ -81,20 +74,13 @@ function buildActions(db: Db) {
     clock: systemClock,
     random: systemRandom,
     resolveClient: systemClientResolver(db),
-    alerts: { emailSender: selectSenders(config, notConfiguredSenders()).email },
+    alerts: { emailSender: notificationSenders(config, db).email },
   });
 }
 
 // The connector catalogue (the same process-wide index the connectors screen builds), so
 // the person's connected services are named on the consent screen as they are elsewhere.
-function getCatalogue(): CatalogueIndex {
-  return processSingleton("connectors.catalogue", () =>
-    loadCatalogue({
-      dir: join(process.cwd(), "catalogue", "connectors"),
-      isOAuthClientConfigured: () => false,
-    }),
-  );
-}
+function getCatalogue(): CatalogueIndex { return getProcessCatalogue(loadConfig()); }
 
 // Approve the consent: re-derive the verified session (never trusting a client value),
 // take the pending request from the cookie handle, and run the tested decision — which

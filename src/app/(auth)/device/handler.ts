@@ -157,7 +157,7 @@ export function createDeviceHandler(deps: DeviceHandlerDeps): DeviceHandler {
       const { email } = await parseBody(sendCodeSchema, request, { maxBytes: MAX_BODY_BYTES });
       const person = await getUserByEmail(db, email);
       if (person) {
-        await issueEmailCode(db, person.email, { clock, random, hmacKey, emailSender });
+        await issueEmailCode(db, person.email, { purpose: "device", clock, random, hmacKey, emailSender });
       }
       return json(200, { ok: true });
     } catch (error) {

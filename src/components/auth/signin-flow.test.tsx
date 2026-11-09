@@ -119,7 +119,7 @@ const ASSERTION = {
 
 // ── A programmable, recording fake fetch keyed by the sign-in step path ─────────────────
 
-type StepKey = "begin-passkey" | "finish-passkey" | "totp";
+type StepKey = "begin-passkey" | "finish-passkey" | "send-email-code" | "verify-email" | "totp";
 
 interface RecordedCall {
   step: StepKey;
@@ -132,6 +132,8 @@ interface RecordedCall {
 function stepOf(url: string): StepKey {
   if (url.includes("/api/auth/signin/begin-passkey")) return "begin-passkey";
   if (url.includes("/api/auth/signin/finish-passkey")) return "finish-passkey";
+  if (url.includes("/api/auth/signin/send-email-code")) return "send-email-code";
+  if (url.includes("/api/auth/signin/verify-email")) return "verify-email";
   if (url.includes("/api/auth/signin/totp")) return "totp";
   throw new Error(`the sign-in flow posted to an unexpected URL: ${url}`);
 }
@@ -152,6 +154,8 @@ function makeFetch() {
   const responders: Record<StepKey, () => Response> = {
     "begin-passkey": () => jsonResponse(200, { options: AUTH_OPTIONS }),
     "finish-passkey": () => jsonResponse(200, { ok: true }),
+    "send-email-code": () => jsonResponse(200, { ok: true }),
+    "verify-email": () => jsonResponse(200, { signinId: "a".repeat(64) }),
     totp: () => jsonResponse(200, { ok: true }),
   };
   const fetchImpl = async (input: RequestInfo | URL, init?: RequestInit): Promise<Response> => {
@@ -326,23 +330,62 @@ test("the passkey path runs the WebAuthn prompt between begin-passkey and finish
 
 // ── AC2 — the authenticator-app path: email + code → totp → /home ───────────────────────
 
-test("the authenticator-app path posts the email and six-digit code to the totp step, then navigates to /home", async () => {
+async function advanceToAuthenticator(ctx: ReturnType<typeof setup>) {
+  ctx.flow.useAuthenticatorApp();
+  ctx.flow.setEmail(EMAIL);
+  await ctx.flow.signInWithCode();
+  assert.equal(ctx.flow.getState().phase, "email-code");
+  ctx.flow.setCode("123456");
+  await ctx.flow.signInWithCode();
+  assert.equal(ctx.flow.getState().phase, "code");
+}
+
+test("failed email delivery or verification never advances to authenticator sign-in", async () => {
+  const ctx = setup();
+  ctx.flow.useAuthenticatorApp(); ctx.flow.setEmail(EMAIL);
+  ctx.responders["send-email-code"] = () => jsonResponse(429);
+  await ctx.flow.signInWithCode();
+  assert.equal(ctx.flow.getState().phase, "email");
+  assert.ok(ctx.flow.getState().error);
+  ctx.responders["send-email-code"] = () => jsonResponse(200);
+  await ctx.flow.signInWithCode();
+  ctx.flow.setCode("123456");
+  ctx.responders["verify-email"] = () => jsonResponse(401);
+  await ctx.flow.signInWithCode();
+  assert.equal(ctx.flow.getState().phase, "email-code");
+  assert.ok(ctx.flow.getState().error);
+  assert.deepEqual(ctx.navCalls, []);
+  assert.equal(ctx.calls.some((c) => c.step === "totp"), false);
+});
+
+test("changing the email discards a verified first-factor handle", async () => {
+  const ctx = setup(); await advanceToAuthenticator(ctx);
+  ctx.flow.setEmail("different@example.test");
+  assert.equal(ctx.flow.getState().phase, "email");
+  assert.equal(ctx.flow.getState().code, "");
+  await ctx.flow.signInWithCode();
+  assert.equal(ctx.calls.at(-1)?.step, "send-email-code");
+  assert.deepEqual(ctx.navCalls, []);
+});
+
+test("the authenticator-app path verifies email before exchanging the proof and authenticator code", async () => {
   const ctx = setup();
 
   // "Use my authenticator app instead".
-  ctx.flow.useAuthenticatorApp();
-  ctx.flow.setEmail(EMAIL);
+  await advanceToAuthenticator(ctx);
   ctx.flow.setCode(CODE);
   await ctx.flow.signInWithCode();
 
   assert.deepEqual(
     ctx.calls.map((c) => c.step),
-    ["totp"],
-    "the authenticator-app path must post the totp step (and no passkey steps)",
+    ["send-email-code", "verify-email", "totp"],
+    "email must be verified before the authenticator step",
   );
   assert.equal(ctx.calls[0]!.method, "POST", "the totp step must be a POST");
-  assert.equal(ctx.calls[0]!.body.email, EMAIL, "totp must send the entered email");
-  assert.equal(ctx.calls[0]!.body.totp, CODE, "totp must send the entered six-digit code as `totp`");
+  assert.equal(ctx.calls[0]!.body.email, EMAIL);
+  assert.equal(ctx.calls[2]!.body.signinId, "a".repeat(64));
+  assert.equal(ctx.calls[2]!.body.email, undefined, "the verified identity cannot be replaced by a caller email");
+  assert.equal(ctx.calls[2]!.body.totp, CODE);
 
   // The code method never touches the WebAuthn prompt.
   assert.equal(ctx.start.calls.length, 0, "the authenticator-app path must not run the passkey prompt");
@@ -391,8 +434,7 @@ test("a failed passkey sign-in keeps the person on the passkey step with one pla
 
 test("a failed authenticator-app sign-in keeps the person on the code step with one plain, non-enumerating message", async () => {
   const ctx = setup();
-  ctx.flow.useAuthenticatorApp();
-  ctx.flow.setEmail(EMAIL);
+  await advanceToAuthenticator(ctx);
   ctx.flow.setCode(CODE);
   const atCode = ctx.flow.getState().phase;
 
@@ -672,8 +714,7 @@ test("after a passkey or code sign-in the flow goes back to a safe return path",
   assert.deepEqual(passkey.navCalls, [next], "the passkey sign-in returns to the authorize request");
 
   const code = setupReturning(next);
-  code.flow.setEmail(EMAIL);
-  code.flow.useAuthenticatorApp();
+  await advanceToAuthenticator(code);
   code.flow.setCode(CODE);
   await code.flow.signInWithCode();
   assert.deepEqual(code.navCalls, [next], "the code sign-in returns to the authorize request");

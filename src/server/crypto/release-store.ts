@@ -26,6 +26,8 @@ interface Entry {
 export interface ReleaseStore {
   put(key: string, value: string): void;
   collect(key: string): string | undefined;
+  // Discard all approvals under an authenticated connection's exact scope.
+  discardScope(scope: string): void;
   // How many released values are held in memory right now (expired ones are swept
   // first, so they are never counted).
   size(): number;
@@ -96,6 +98,12 @@ export function createReleaseStore(
     size(): number {
       sweep();
       return entries.size;
+    },
+    discardScope(scope: string): void {
+      sweep();
+      for (const key of entries.keys()) {
+        if (key.startsWith(scope)) drop(key);
+      }
     },
   };
 }

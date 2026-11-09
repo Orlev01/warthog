@@ -98,7 +98,10 @@ import {
 import { systemRandom } from "../seams/random";
 import { fixedClock, type Clock } from "../seams/clock";
 import { freshDb } from "../../test/db";
+import { listPasskeyEnvelopes, savePasskeyEnvelope } from "../db/vault-unlock-methods";
 import type { Db } from "../db/index";
+import { createVaultProof, deriveVaultVerifier } from "../../client/vault/unlock-proof";
+import { encrypt } from "../crypto/envelope";
 
 // --- fixtures ------------------------------------------------------------------------------
 
@@ -111,6 +114,8 @@ const ORIGIN = "https://warthog.com.au";
 // A frozen instant for the real session path (createSession / verifySession read it).
 const T0 = new Date("2026-11-15T12:00:00.000Z");
 const CLOCK: Clock = fixedClock(T0);
+const TEST_VAULT_KEY = new Uint8Array(32).fill(28);
+const TEST_DEK = new Uint8Array(32).fill(61);
 
 // A unique tag so accounts never collide on the users.email UNIQUE across tests.
 function tag(): string {
@@ -129,6 +134,12 @@ async function makeUser(db: Db, who: string): Promise<string> {
     email: `${who}-${tag()}@warthog.com.au`,
     wrappedDek: wrappedDekFor(who),
   });
+  // These boundary tests model an already enrolled verifier. First enrolment,
+  // legacy vaults and missing/tampered proofs are exercised by unlock-proof.test.
+  const verifier = Buffer.from(await deriveVaultVerifier(TEST_VAULT_KEY)).toString("base64url");
+  await db.query("INSERT INTO vault_unlock_proofs (user_id, encrypted_key) VALUES ($1, $2)",
+    [user.id, await encrypt(TEST_DEK, "vault_unlock_proofs", "encrypted_key", user.id, verifier)]);
+  await db.query("INSERT INTO passkeys (user_id, credential_id, public_key, counter) VALUES ($1, $2, 'fixture', 0)", [user.id, user.id]);
   return user.id;
 }
 
@@ -224,6 +235,7 @@ function makeHandlers(opts: {
     publicOrigin: opts.publicOrigin ?? ORIGIN,
     clock: opts.clock ?? CLOCK,
     resolveSession,
+    getDek: async () => TEST_DEK.slice(),
   });
   return { handlers };
 }
@@ -246,7 +258,21 @@ function saveMethodFn(handlers: unknown): (r: Request) => Promise<Response> {
   if (typeof fn !== "function") {
     throw new Error("the vault-unlock handlers expose no POST unlock-method handler");
   }
-  return (fn as (r: Request) => Promise<Response>).bind(handlers);
+  // Sign valid fixture requests with the device-held test vault key. Invalid
+  // bodies/origins/sessions still reach the raw boundary untouched. This helper
+  // does not bypass verification or mock the server's proof check.
+  return async (request) => {
+    let body;
+    try { body = await request.clone().json(); } catch { return (fn as (r: Request) => Promise<Response>).call(handlers, request); }
+    if (request.headers.get("origin") === ORIGIN && ["passkey_prf", "passphrase", "recovery"].includes(body?.method) && typeof body?.wrapped === "string") {
+      const material = await getMaterialFn(handlers)(request, body.method);
+      if (material.ok) {
+        const proof = await createVaultProof(TEST_VAULT_KEY, (await material.json()).proof, body);
+        request = new Request(request.url, { method: "POST", headers: request.headers, body: JSON.stringify({ ...body, proof }) });
+      }
+    }
+    return (fn as (r: Request) => Promise<Response>).call(handlers, request);
+  };
 }
 
 // Decode a WebAuthn PRF eval input to bytes. A JSON options object carries the eval input as
@@ -475,12 +501,12 @@ test("AC2: a re-save for a method replaces its wrapped key (one wrapped key per 
 
     const first = wrappedEnvelope("first");
     const second = wrappedEnvelope("second");
-    assert2xx(await save(postRequest({ body: { method: "passkey_prf", wrapped: first }, origin: ORIGIN })));
-    assert2xx(await save(postRequest({ body: { method: "passkey_prf", wrapped: second }, origin: ORIGIN })));
+    assert2xx(await save(postRequest({ body: { method: "passkey_prf", wrapped: first, params: { credentialId: a } }, origin: ORIGIN })));
+    assert2xx(await save(postRequest({ body: { method: "passkey_prf", wrapped: second, params: { credentialId: a } }, origin: ORIGIN })));
 
     const get = await getMaterialFn(handlers)(getRequest("passkey_prf", { origin: ORIGIN }), "passkey_prf");
-    const body = (await get.json()) as { wrapped: unknown };
-    assert.equal(body.wrapped, second, "the latest wrapped key replaces the earlier one");
+    const body = (await get.json()) as { credentials: { credentialId: string; wrapped: string }[] };
+    assert.equal(body.credentials.find((row) => row.credentialId === a)?.wrapped, second, "the latest envelope replaces only this credential");
   } finally {
     await db.close();
   }
@@ -837,7 +863,7 @@ test("[no-secret] the GET response never carries the session token and is limite
     // The response carries only the opaque wrapped envelope, salts (in params) and public
     // options — no internal fields (the DEK, the raw salt as a top-level secret, etc.).
     const body = (await res.json()) as Record<string, unknown>;
-    const allowed = new Set(["wrapped", "params", "options"]);
+    const allowed = new Set(["wrapped", "params", "options", "proof"]);
     for (const key of Object.keys(body)) {
       assert.ok(allowed.has(key), `the response must carry only { wrapped, params, options }; found "${key}"`);
     }
@@ -906,17 +932,19 @@ test("W1: overwriting an existing method without a step-up is 403 step_up_requir
     const a = await makeUser(db, "overwrite-no-step-up");
     for (const method of ["passkey_prf", "passphrase", "recovery"] as const) {
       const kept = wrappedEnvelope(`kept-${method}`);
-      await saveWrappedKey(db, { userId: a, method, wrappedKey: kept, params: { salt: "kept" } });
+      const params = { salt: "kept", ...(method === "passkey_prf" ? { credentialId: a } : {}) };
+      if (method === "passkey_prf") await savePasskeyEnvelope(db, { userId: a, method, wrappedKey: kept, params }, a, false);
+      else await saveWrappedKey(db, { userId: a, method, wrappedKey: kept, params });
 
       const { handlers } = makeHandlers({ db, session: sessionFor(a) });
       const res = await saveMethodFn(handlers)(
-        postRequest({ body: { method, wrapped: wrappedEnvelope(`garbage-${method}`), params: { salt: "x" } }, origin: ORIGIN }),
+        postRequest({ body: { method, wrapped: wrappedEnvelope(`garbage-${method}`), params: { ...params, salt: "x" } }, origin: ORIGIN }),
       );
       assert.equal(res.status, 403, `replacing ${method} with no step-up is refused`);
       assert.deepEqual(await res.json(), { error: "step_up_required" });
-      const stored = await getWrappedKey(db, a, method);
+      const stored = method === "passkey_prf" ? (await listPasskeyEnvelopes(db, a))[0] : await getWrappedKey(db, a, method);
       assert.equal(stored?.wrappedKey, kept, `the ${method} envelope is unchanged`);
-      assert.deepEqual(stored?.params, { salt: "kept" }, `the ${method} params are unchanged`);
+      assert.deepEqual(stored?.params, params, `the ${method} params are unchanged`);
     }
   } finally {
     await db.close();
@@ -960,13 +988,13 @@ test("W1: concurrent first saves without a step-up keep exactly one envelope; th
     const save = saveMethodFn(handlers);
     const envelopes = ["one", "two", "three"].map((seed) => wrappedEnvelope(seed));
     const responses = await Promise.all(
-      envelopes.map((wrapped) => save(postRequest({ body: { method: "passkey_prf", wrapped }, origin: ORIGIN }))),
+      envelopes.map((wrapped) => save(postRequest({ body: { method: "passkey_prf", wrapped, params: { credentialId: a } }, origin: ORIGIN }))),
     );
     const statuses = responses.map((r) => r.status);
     assert.equal(statuses.filter((s) => s === 200).length, 1, `exactly one first save wins; got ${statuses}`);
     assert.equal(statuses.filter((s) => s === 403).length, 2, "the losers are told a step-up is needed to replace it");
     const winner = envelopes[statuses.indexOf(200)];
-    assert.equal((await getWrappedKey(db, a, "passkey_prf"))?.wrappedKey, winner, "the stored vault key is the winner's");
+    assert.equal((await listPasskeyEnvelopes(db, a))[0]?.wrappedKey, winner, "the stored vault key is the winner's");
   } finally {
     await db.close();
   }

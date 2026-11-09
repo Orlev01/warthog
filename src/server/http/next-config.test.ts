@@ -51,7 +51,7 @@ test("the Server Action body limit admits the largest app-level upload with its 
 // The CSP used to restrict only framing, plugins, <base> and form targets, so an injected script
 // could load code from anywhere and send vault data to any host. It now defaults every fetch
 // directive to the app's own origin. Next's App Router bootstraps with inline scripts, so
-// script-src keeps 'unsafe-inline' (a nonce-based policy is the follow-up), but no external
+// dynamic pages use a per-request nonce, and the static fallback allows no inline script. No external
 // script source, no eval in production, and no off-site connect/img/font/frame target is
 // allowed. HSTS covers subdomains.
 
@@ -96,6 +96,7 @@ test("the production CSP confines every fetch directive to the app's own origin"
   const script = csp.get("script-src") ?? [];
   assert.ok(script.includes("'self'"));
   assert.ok(!script.includes("'unsafe-eval'"), "no eval in production");
+  assert.ok(!script.includes("'unsafe-inline'"), "no arbitrary inline script in production's fallback");
   for (const directive of ["script-src", "style-src", "img-src", "font-src", "connect-src", "worker-src", "frame-src"]) {
     for (const source of csp.get(directive) ?? []) {
       assert.ok(

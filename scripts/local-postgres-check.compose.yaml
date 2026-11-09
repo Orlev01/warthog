@@ -1,0 +1,33 @@
+name: warthog-local-certification
+services:
+  database:
+    image: postgres:16-bookworm
+    command: ["postgres", "-c", "cluster_name=warthog-local-certification"]
+    environment:
+      # Disposable database on an internal, unexposed network only. No real data.
+      POSTGRES_HOST_AUTH_METHOD: trust
+    tmpfs:
+      - /var/lib/postgresql/data
+    volumes:
+      - ../db/bootstrap.psql:/docker-entrypoint-initdb.d/010-bootstrap.sql:ro
+    networks:
+      local-check:
+        aliases: [warthog-postgres-check]
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U postgres -d warthog"]
+      interval: 2s
+      timeout: 3s
+      retries: 30
+  verification:
+    build:
+      context: ..
+      target: verification
+    depends_on:
+      database:
+        condition: service_healthy
+    environment:
+      WARTHOG_LOCAL_PG_CHECK: "1"
+    networks: [local-check]
+networks:
+  local-check:
+    internal: true
