@@ -1,15 +1,20 @@
 # Current status — repository publication and Azure delivery, 10 November 2026
 
-The founder now authorizes publishing all source/history to the public
-`https://github.com/Orlev01/warthog` repository using only the personal `Orlev01`
-GitHub credential. That credential has been verified through the GitHub API;
-Eucalyptus authentication/global Git settings are not used or changed. The existing
-local `origin` remains intact. This supersedes the earlier publication hold below.
+All source and the existing 718-commit history are now published to the public
+[Orlev01/warthog](https://github.com/Orlev01/warthog) repository, as authorized by
+the founder. Only the verified personal `Orlev01` GitHub credential was used;
+new commits use the personal author and SSH signing identity. Eucalyptus
+authentication was not used, and global Git settings are unchanged. The existing
+local `origin` remains intact; `github` is the new remote. This supersedes the
+earlier publication hold below.
 
 Added manual Azure foundation plan/apply, image publication and application release
 workflows, plus the [complete setup/release guide](docs/azure-delivery.md). GitHub's
 four environments require `Orlev01` review, allow only the `main` branch and forbid
 administrator bypass. `AZURE_DELIVERY_ENABLED=false` keeps all cloud steps disabled.
+All external contributors' fork workflow runs require maintainer approval; any
+future private deployment runner must be ephemeral and reserved for an approved
+production run, as detailed in the delivery guide.
 No Azure identity/federation, secret, resource, provider registration, deployment,
 spend or DNS change has been made. Actual cloud execution still needs the existing
 specific approvals, private state/plan storage, OIDC identities and private runner.
@@ -21,12 +26,17 @@ prove zero old replicas/free database ownership before start, verify health and
 traffic, and retain an outage on failure without automatic rollback. First creation
 uses the existing complete workload template with approved Key Vault references.
 
-Local delivery regression tests, Actionlint, Terraform schema checks and the workload
-guard pass. Publication scans covered 718 existing commits and the complete source
-tree; findings were individually reviewed synthetic fixtures/public development
-values, with no detected live credential. Publication/remote CI results are recorded
-in the audit as they complete. The following local image/browser evidence predates
-the publication and remains valid within its stated limits.
+The [remote CI run](https://github.com/Orlev01/warthog/actions/runs/42715858437)
+passed all six jobs on source commit
+`bcc5b6907488eee004509b5760b7d5f761decb56`: four complete-suite shards on standard
+Ubuntu/Linux AMD64 runners (**5,072 passed, zero failures/cancellations/skips**),
+18 delivery regression tests and Terraform schema checks. Real PostgreSQL checks,
+types, production builds and non-root runtime packaging also pass. Local Actionlint
+and the workload guard pass. Publication scans
+covered 718 existing commits and the complete source tree; findings were
+individually reviewed synthetic fixtures/public development values, with no
+detected live credential. The audit records detailed CI evidence. The following
+local image/browser evidence predates publication and retains its stated limits.
 
 ## Resumed local validation
 
@@ -58,7 +68,9 @@ test/bootstrap files, and explicitly exits 1 when production configuration is
 missing. Image ID and source fingerprint are in the audit register. Unused global
 npm/npx were removed from the runtime stage; the final offline scan reports zero
 Node-package findings. Debian OS findings still require applicability/remediation
-review before image approval. The base remains unpinned and nothing was pushed.
+review before image approval. The ordinary Dockerfile default remains a mutable
+base tag; the new release workflow requires an explicitly reviewed immutable base.
+No image has been pushed to a registry.
 
 Chrome local smoke checks cover signup keyboard navigation, disabled pending
 controls, invalid-code feedback, synthetic email verification, authenticator
@@ -66,12 +78,13 @@ fallback and a 390×844 layout. Full passkey/TOTP/vault/transfer/rules and assis
 technology acceptance remain open. The preview, disposable DB and browser tabs
 were cleaned up. No live provider message or real credential was created.
 
-Image advisory applicability/remediation, immutable release approval and remote CI
-remain gates, alongside approved Terraform plan/live ARM checks, provider/full
+Image advisory applicability/remediation and immutable release approval remain
+gates, alongside approved Terraform plan/live ARM checks, provider/full
 browser acceptance, 26 MiB ingress, credit-only funding and coordinated restore/
 deletion reconciliation. Purchases, credentials, deployment and exact DNS changes
-retain their existing separate approvals. Changes remain local/uncommitted. Earlier
-socket/Docker/browser failures below are historical, not the current result.
+retain their existing separate approvals. Source is published; no cloud release
+has run. Earlier socket/Docker/browser failures below are historical, not the
+current result.
 
 Founder approval is recorded in `docs/adr/global-messaging.md`: Twilio + Resend local
 integration and disclosed overseas processing approved; Warthog is global, Azure

@@ -126,8 +126,14 @@ disabled. Test these tools and the private database path before approving a job.
 Do not reuse a shared Eucalyptus runner or a persistent personal workstation.
 
 Provisioning/operating this runner requires its own resource and cost approval.
-Restrict its runner group/repository access to this protected workflow on trusted
-main. Public PR checks run only on disposable GitHub-hosted runners. Do not attach
+The public repository is configured to require maintainer approval for **all
+external contributors' fork workflow runs**, not just first-time contributors.
+Review every fork's workflow changes before approval; never approve a fork job
+requesting a private runner. Provision a fresh single-job runner only for the
+approved production run, with external teardown after success, failure or timeout.
+Where runner-group workflow restrictions are available, allow only this workflow
+on trusted main; labels alone are not an access-control boundary. Public PR checks
+run only on disposable GitHub-hosted runners. Do not attach
 an ambient privileged Azure identity, reusable GitHub PAT, application credentials,
 or user data to the runner. Destroy it after each job, including failure/cancellation;
 the workflow's temporary files and Docker config are additionally cleaned normally.

@@ -1,12 +1,15 @@
 # Warthog comprehensive engineering audit
 
-**Publication and delivery follow-up, 10 November:** the founder authorized all
-source/history to `Orlev01/warthog` using the verified personal account, and requested
+**Publication and delivery follow-up, 10 November:** all source and existing history
+are published to [Orlev01/warthog](https://github.com/Orlev01/warthog) using the
+verified personal account and personal signing identity. The founder also requested
 Azure CI/CD. The [delivery guide](../azure-delivery.md) records the new manual
 Terraform plan/apply, ACR publication and singleton-release workflows. Four GitHub
 environments require founder approval and main-only dispatch; Azure delivery is
-disabled until existing funding/credential/deployment gates are met. No cloud or
-DNS operation was performed. Historical statements below about uncommitted work
+disabled until existing funding/credential/deployment gates are met. All six jobs in
+[remote CI](https://github.com/Orlev01/warthog/actions/runs/42715858437) passed on
+source commit `bcc5b6907488eee004509b5760b7d5f761decb56`; evidence is recorded below.
+No cloud or DNS operation was performed. Historical statements about uncommitted work
 and pending publication describe their original checkpoints.
 
 Started 9 November 2026. Scope: the complete current `codex/production-release`
@@ -96,7 +99,7 @@ it does not imply cloud or real-browser acceptance.
 | --- | --- | --- | --- | --- |
 | AUD-001 | High | HTTP transports mishandle successful bodyless responses, reporting successful connector changes as failures | Fixed locally | Two transport layers corrected; eight failing regressions observed, 130 focused checks pass |
 | AUD-002 | High | Authenticator-only accounts cannot complete in-session security confirmation | Fixed locally | Session-bound, rate-limited TOTP step-up and shared UI; eight failing regressions observed, 51 focused checks pass |
-| AUD-003 | High | No automated CI/clean Linux and real PostgreSQL gate | Remote CI execution gate | Workflow and Linux harness added; Docker now accessible, real PG16 migration/role/contention checks pass. Fixed the missing public test fixture discovered by the first Linux run; integrated rerun recorded below. Remote CI remains pending. |
+| AUD-003 | High | No automated CI/clean Linux and real PostgreSQL gate | Fixed; local and remote CI verified | Workflow and Linux harness added; clean local ARM64 and remote AMD64 suites, real PG16 migration/role/contention checks, runtime builds and packaging pass. Remote CI runs the entire suite in four required shards; evidence below. |
 | AUD-004 | High | Infrastructure described as implemented but no IaC exists | External validation gate | Foundation Terraform, separate ACA workload template, offline guard and singleton runbook added. Provider initialization, lockfile and schema validation now pass after six schema errors were corrected; ARM validation and an approved plan remain outstanding. |
 | AUD-005 | High | Unauthenticated TOTP sign-in bypasses the required email ownership check | Fixed locally | Purpose-bound mailbox code before one-use TOTP challenge; 122 focused auth/UI checks pass |
 | AUD-006 | High | Curated connector JSON writes omit JSON content type | Fixed locally | Curated JSON transport corrected; included in 97 passing connector checks |
@@ -176,7 +179,7 @@ containers/network were removed after each run.
 
 The independent Linux AMD64 runtime build and final image inventory are recorded
 with the image evidence below. Linux ARM64 test execution is not claimed as an
-AMD64 full-suite run; the prepared remote CI job remains unexecuted.
+AMD64 full-suite run. The later remote CI checkpoint below supplies that evidence.
 
 Current logs: `/tmp/warthog-resume-linux-validated-20261110.log`,
 `/tmp/warthog-resume-ownership-lifecycle-20261110.log`,
@@ -188,6 +191,59 @@ The [delivery follow-up](delivery-infrastructure-review.md#local-execution-follo
 records reproductions, dependency sources and the raw base-image scan; the
 [UI report](product-ui-review.md#remaining-acceptance-work) records exact browser
 coverage. Screenshot: `/tmp/warthog-local-mobile-signin-20261110.jpg`.
+
+## Published source and remote CI — 10 November 2026
+
+The personal account published the existing 718-commit ancestry and all current
+source to `main` in `Orlev01/warthog`. New commits use the personal author/signing
+identity; no Eucalyptus credential or global Git change was used. The local bare
+`origin` remains unchanged. Gitleaks examined the history and complete source tree;
+all reported findings were reviewed synthetic fixtures/public development values,
+with no detected live credential. Private environment/configuration files and
+local generated artifacts were excluded.
+
+[CI run 42715858437](https://github.com/Orlev01/warthog/actions/runs/42715858437)
+passed all six jobs on `bcc5b6907488eee004509b5760b7d5f761decb56`.
+This is the published source checkpoint; the subsequent documentation-only commit
+records its evidence without rerunning unchanged code. Earlier monolithic runs
+were cancelled/superseded after observing slow hosted database tests; their
+cancellation is not reported as a pass. Node's four test-file shards cover the
+same complete suite, and every shard is required. Standard public-repository
+Ubuntu runners were used, without larger paid runners.
+
+| Linux AMD64 shard | Passed | Failed / cancelled / skipped |
+| --- | --- | --- |
+| 1/4 | 1,309 | 0 / 0 / 0 |
+| 2/4 | 1,363 | 0 / 0 / 0 |
+| 3/4 | 1,312 | 0 / 0 / 0 |
+| 4/4 | 1,088 | 0 / 0 / 0 |
+| **Total** | **5,072** | **0 / 0 / 0** |
+
+Each shard also passed TypeScript, real PostgreSQL 16 migration/idempotence,
+role/purge/ownership and security/household contention checks, and runtime staging
+with 70 migrations and 106 connectors. All four separate Linux AMD64 runtime builds
+completed as user `node` and recorded this source revision in their labels. Clean
+production builds completed during verification-image construction; the boot
+tests retain the documented development/PGlite seam. These images were neither
+pushed nor started with production credentials. Downloaded evidence is retained at
+`/tmp/warthog-ci-final-20261110.log` and `/tmp/warthog-ci-final-20261110.zip`.
+
+The delivery guard job passes 18 offline regressions. They cover repository/main/
+manual/approval/scope checks, saved-plan integrity/age/input binding, separate plan
+and apply identities, configuration preservation/drift, zero-replica and ownership
+ordering, explicit private libpq connection settings, and failed-start cleanup
+without automatic rollback. Terraform formatting, offline workload checks,
+provider initialization without a backend and schema validation pass. Local
+Actionlint also passes. A separate local AMD64 build using the immutable Node base
+completed successfully; it is not an approved registry release digest.
+
+Four configured GitHub environments require founder review, allow only main and
+disable administrator bypass. All external fork workflow runs require maintainer
+approval. `AZURE_DELIVERY_ENABLED=false`; no Azure workflow has run. OIDC identities,
+private backend/plan storage, the ephemeral private runner and approved secrets
+remain setup requirements. Cloud CLI behavior and actual deployment remain
+unexecuted. See the [delivery guide](../azure-delivery.md) for exact settings and
+the preserved spending, credentials, deployment and DNS approval boundaries.
 
 ## Final local image evidence
 
@@ -229,9 +285,9 @@ remain available; no production process is running.
 
 ## Remaining acceptance and operational work
 
-1. The prepared [isolated Linux/PostgreSQL 16 checks](../local-release-validation.md)
-   have passed locally. Run remote CI on the reviewed commit, resolve the remaining
-   image-advisory applicability/remediation review, refresh scan evidence, and pin
+1. The [isolated Linux/PostgreSQL 16 checks](../local-release-validation.md)
+   have passed locally and in remote CI on the published source commit. Resolve the
+   remaining image-advisory applicability/remediation review, refresh scan evidence, and pin
    and approve an immutable release/base image. A local image tag is not approval.
 2. Provider/schema/lockfile checks for [foundation Terraform](../../infra/README.md)
    now pass. Validate an approved account-specific plan and
