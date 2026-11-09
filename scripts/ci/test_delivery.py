@@ -54,6 +54,18 @@ class DeliveryGateTests(unittest.TestCase):
 
 
 class PlanTests(unittest.TestCase):
+    def test_saved_backend_does_not_bind_apply_to_plan_identity(self):
+        coordinates = dict(resource_group_name="reviewed", storage_account_name="reviewed",
+                           container_name="state", key="prod.tfstate")
+        with patch.dict(os.environ, ARM_CLIENT_ID="plan-principal"):
+            planned = foundation.backend_configuration(coordinates)
+        with patch.dict(os.environ, ARM_CLIENT_ID="apply-principal"):
+            applied = foundation.backend_configuration(coordinates)
+        self.assertEqual(planned, applied)
+        self.assertNotIn("client_id", planned)
+        self.assertTrue(planned["use_oidc"])
+        self.assertTrue(planned["use_azuread_auth"])
+
     def test_apply_rejects_tamper_wrong_commit_inputs_expiry_and_scope(self):
         data = b"saved plan fixture"
         manifest = {"commit": "a" * 40, "sha256": common.digest(data), "inputs_sha256": "inputs",

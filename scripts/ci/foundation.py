@@ -29,6 +29,13 @@ def validate_plan(manifest, plan, *, commit, inputs_hash, expected_hash, now):
     require(0 <= now - manifest.get("created_at", 0) <= 86400, "Plan expired; make a new plan")
 
 
+def backend_configuration(backend):
+    # Keep stage-specific identity in ARM_CLIENT_ID, not backend configuration:
+    # saved plans retain backend config, while plan and apply use distinct principals.
+    return dict(backend, subscription_id=SUBSCRIPTION, tenant_id=TENANT,
+                use_oidc=True, use_azuread_auth=True)
+
+
 def blob(operation, plan_id, filename, path):
     command(["az", "storage", "blob", operation, "--auth-mode", "login",
              "--account-name", setting("PLAN_STORAGE_ACCOUNT", r"[a-z0-9]{3,24}"),
@@ -45,6 +52,7 @@ def run():
     backend = json.loads(setting("FOUNDATION_BACKEND_JSON"))
     validate_inputs(values, backend)
     setting("TF_VAR_postgres_admin_password")
+    setting("ARM_CLIENT_ID")
     # Avoid inherited verbose logging and CLI options changing a saved-plan operation.
     for key in list(os.environ):
         if key.startswith(("TF_LOG", "TF_CLI_ARGS")) or key == "LOG_SENSITIVE_DATA":
@@ -59,8 +67,7 @@ def run():
         # Backend cache also stays off the persistent runner workspace.
         os.environ["TF_DATA_DIR"] = str(scratch / "terraform-data")
         config = scratch / "backend.tfbackend"
-        actual_backend = dict(backend, subscription_id=SUBSCRIPTION, tenant_id=TENANT,
-                              client_id=setting("ARM_CLIENT_ID"), use_oidc=True, use_azuread_auth=True)
+        actual_backend = backend_configuration(backend)
         config.write_text("\n".join(f"{key} = {json.dumps(value)}" for key, value in actual_backend.items()))
         variables = scratch / "approved.tfvars.json"
         variables.write_bytes(canonical(values))
