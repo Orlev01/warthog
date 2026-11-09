@@ -244,11 +244,18 @@ class SingletonTests(unittest.TestCase):
 
     def test_ownership_uses_private_connection_env_not_arguments_and_closes_session(self):
         env = {"APP_NAME": "warthog", "RESOURCE_GROUP": "test-group", "POSTGRES_FQDN": "test.postgres.database.azure.com",
-               "OWNERSHIP_DATABASE_URL": "postgresql://fixture:fixture@test.postgres.database.azure.com/warthog?sslmode=verify-full"}
+               "OWNERSHIP_DATABASE_URL": "postgresql://fixture:fixture%40encoded@test.postgres.database.azure.com/warthog?sslmode=verify-full",
+               "PGSERVICE": "unrelated-profile", "PGHOST": "wrong-host"}
         with patch.dict(os.environ, env), patch.object(deploy_app, "command", return_value="t\nt\n") as run:
             deploy_app.Platform().ownership(expected_free=True)
             self.assertNotIn("fixture", str(run.call_args.args))
             self.assertIn("pg_advisory_unlock", run.call_args.kwargs["input_text"])
+            connection_env = run.call_args.kwargs["env"]
+            self.assertEqual(connection_env["PGDATABASE"], "warthog")
+            self.assertEqual(connection_env["PGHOST"], "test.postgres.database.azure.com")
+            self.assertEqual(connection_env["PGPASSWORD"], "fixture@encoded")
+            self.assertEqual(connection_env["PGSSLMODE"], "verify-full")
+            self.assertNotIn("PGSERVICE", connection_env)
         env["OWNERSHIP_DATABASE_URL"] = "postgresql://fixture:fixture@other.example/warthog?sslmode=verify-full"
         with patch.dict(os.environ, env), patch.object(deploy_app, "command") as run:
             with self.assertRaises(RuntimeError):

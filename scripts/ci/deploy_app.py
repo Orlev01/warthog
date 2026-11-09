@@ -8,7 +8,7 @@ import signal
 import tempfile
 import time
 import urllib.request
-from urllib.parse import parse_qs, urlparse
+from urllib.parse import parse_qs, unquote, urlparse
 
 from common import (ROOT, account, azure, canonical, command, digest, gate,
                     main_guard, require, setting, summary)
@@ -90,12 +90,23 @@ class Platform:
     def ownership(self, expected_free):
         connection = setting("OWNERSHIP_DATABASE_URL")
         parsed = urlparse(connection)
+        query = parse_qs(parsed.query)
         require(parsed.scheme in ("postgres", "postgresql") and parsed.path == "/warthog"
                 and parsed.hostname == setting("POSTGRES_FQDN", r"[a-z0-9-]+\.postgres\.database\.azure\.com")
-                and parse_qs(parsed.query).get("sslmode") == ["verify-full"],
+                and (parsed.port or 5432) == 5432 and parsed.username and parsed.password
+                and query.get("sslmode") == ["verify-full"]
+                and set(query) <= {"sslmode", "sslrootcert"}
+                and all(len(values) == 1 for values in query.values()),
                 "Ownership client must target the approved Warthog database with verified TLS")
-        environment = os.environ.copy()
-        environment.update(PGDATABASE=connection, PGCONNECT_TIMEOUT="10", PGOPTIONS="-c statement_timeout=10000")
+        # libpq does not expand a URI in PGDATABASE. Use explicit connection fields,
+        # discarding ambient PG settings so another profile cannot redirect the check.
+        environment = {key: value for key, value in os.environ.items() if not key.startswith("PG")}
+        environment.update(PGHOST=parsed.hostname, PGPORT="5432", PGDATABASE="warthog",
+                           PGUSER=unquote(parsed.username), PGPASSWORD=unquote(parsed.password),
+                           PGSSLMODE="verify-full", PGCONNECT_TIMEOUT="10",
+                           PGAPPNAME="warthog-release-ownership-check", PGOPTIONS="-c statement_timeout=10000")
+        if "sslrootcert" in query:
+            environment["PGSSLROOTCERT"] = query["sslrootcert"][0]
         result = command(["psql", "-X", "--no-password", "-At", "-v", "ON_ERROR_STOP=1"], env=environment,
             input_text="SELECT pg_try_advisory_lock(1463898708, 1);\nSELECT pg_advisory_unlock(1463898708, 1);\n", timeout=30)
         expected = ["t", "t"] if expected_free else ["f", "f"]

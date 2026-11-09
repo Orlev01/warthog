@@ -101,8 +101,12 @@ deliberately invalid production inputs.
 application, match `POSTGRES_FQDN` from the approved foundation, and use
 `sslmode=verify-full`. Use the approved least-privilege login with advisory-lock
 access, not an administrator credential. It is passed to libpq via the child
-environment, never command-line arguments or logs. Its private client needs the
-reviewed CA trust and DNS/network path.
+environment as explicit `PGHOST`/`PGDATABASE`/`PGUSER`/`PGPASSWORD`/TLS fields,
+never command-line arguments or logs. URL-encoded credentials are decoded once.
+Its private client needs the reviewed CA trust and DNS/network path. The supported
+URL query options are `sslmode=verify-full` and optional `sslrootcert`; put the
+approved CA at libpq's default root-certificate location or supply that file path.
+Ambient PostgreSQL service/host settings are discarded.
 
 ## Private deployment runner
 
