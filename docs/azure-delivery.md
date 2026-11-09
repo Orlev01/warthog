@@ -21,6 +21,13 @@ performs DNS changes, creates application credentials, upgrades messaging plans,
 registers Azure providers, provisions a runner/backend, or automatically rolls back.
 There is no automatic cloud deployment after a push or PR merge.
 
+The Linux suite is divided with Node's built-in `--test-shard` across four standard
+Ubuntu jobs, and all four must pass. Each gets its own disposable PostgreSQL
+container and performs the real database checks. Local validation defaults to the
+complete unsharded suite. This avoids the much slower hosted database tests pushing
+one monolithic job towards its timeout; it does not skip tests or use larger paid
+runners. [Standard public-repository runner billing](https://docs.github.com/en/billing/concepts/product-billing/github-actions).
+
 ## GitHub protection and Azure identity setup
 
 Create the four environments below with `Orlev01` as required reviewer, a selected
@@ -112,7 +119,8 @@ Ambient PostgreSQL service/host settings are discarded.
 
 `azure-production` requires a dedicated, ephemeral Linux x64 runner labelled
 `warthog-production` in the approved bootstrap subnet. It needs Python 3, Docker,
-Git, the Azure CLI with Container Apps commands already installed, PostgreSQL 16
+Git, a current GitHub runner supporting Node 24 actions, the Azure CLI with
+Container Apps commands already installed, PostgreSQL 16
 `psql`, and the required root CA trust. Dynamic Azure extension installation is
 disabled. Test these tools and the private database path before approving a job.
 Do not reuse a shared Eucalyptus runner or a persistent personal workstation.

@@ -53,12 +53,17 @@ jobs:
         run: terraform -chdir=infra validate
 
   linux-postgres:
-    name: Node 22 Linux and PostgreSQL 16
+    name: Node 22 Linux and PostgreSQL 16 (${{ matrix.shard }})
     runs-on: ubuntu-24.04
     timeout-minutes: 45
+    strategy:
+      fail-fast: false
+      matrix:
+        shard: ["1/4", "2/4", "3/4", "4/4"]
     env:
       NEXT_TELEMETRY_DISABLED: "1"
       NODE_BASE_IMAGE: ${{ inputs.node_base_image || 'node:22-bookworm-slim' }}
+      WARTHOG_TEST_SHARD: ${{ matrix.shard }}
     steps:
       - name: Check out the reviewed source
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1

@@ -27,6 +27,7 @@ services:
         condition: service_healthy
     environment:
       WARTHOG_LOCAL_PG_CHECK: "1"
+      WARTHOG_TEST_SHARD: ${WARTHOG_TEST_SHARD:-}
     networks: [local-check]
 networks:
   local-check:
