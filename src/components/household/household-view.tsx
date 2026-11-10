@@ -212,8 +212,8 @@ export function HouseholdView({
                   key={member.userId}
                   className="flex flex-wrap items-center justify-between gap-2"
                 >
-                  <span className="flex flex-wrap items-center gap-2">
-                    <span className="text-fg">{member.userId}</span>
+                  <span className="flex min-w-0 flex-wrap items-center gap-2">
+                    <span className="min-w-0 text-fg [overflow-wrap:anywhere]">{member.userId}</span>
                     {memberIsYou ? <span className="text-sm text-fg-muted">(You)</span> : null}
                     <span className="rounded-card border border-line bg-surface-muted px-2 py-0.5 text-xs font-medium text-fg-muted">
                       {memberIsOwner ? "Owner" : "Member"}
@@ -323,7 +323,7 @@ export function HouseholdView({
             {household.pendingInvites.length > 0 ? (
               <ul className="flex flex-col gap-1.5">
                 {household.pendingInvites.map((invite) => (
-                  <li key={invite.email} className="text-sm text-fg-muted">
+                  <li key={invite.email} className="text-sm text-fg-muted [overflow-wrap:anywhere]">
                     {invite.email} — invited, awaiting sign-up
                   </li>
                 ))}

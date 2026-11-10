@@ -11,6 +11,7 @@ import { systemClock } from "@/server/seams/clock";
 import { HttpError } from "@/server/http/validate";
 import { createCardsActions } from "./actions";
 import { CardsView } from "@/components/vault/cards-view";
+import { PageContainer } from "@/components/shell/page-container";
 import type { CardSubmission } from "@/components/vault/cards-view";
 import type { Metadata } from "next";
 
@@ -117,12 +118,14 @@ export default async function CardsPage() {
   }
 
   return (
-    <CardsView
-      cards={data.cards}
-      billingAddresses={data.billingAddresses}
-      defaultCardholderName={data.defaultCardholderName}
-      addCard={addCard}
-      removeCard={removeCard}
-    />
+    <PageContainer>
+      <CardsView
+        cards={data.cards}
+        billingAddresses={data.billingAddresses}
+        defaultCardholderName={data.defaultCardholderName}
+        addCard={addCard}
+        removeCard={removeCard}
+      />
+    </PageContainer>
   );
 }

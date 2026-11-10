@@ -157,11 +157,11 @@ export function DashboardView({
                 key={agent.id}
                 className="flex flex-col gap-2 rounded-card border border-line bg-surface p-3 sm:flex-row sm:items-center sm:justify-between"
               >
-                <div className="flex flex-col gap-1">
-                  <span className="font-medium text-fg">{agent.name}</span>
+                <div className="flex min-w-0 flex-col gap-1">
+                  <span className="font-medium text-fg [overflow-wrap:anywhere]">{agent.name}</span>
                   <Status status={agent.status} />
                 </div>
-                <span className="text-sm text-fg-muted">
+                <span className="min-w-0 text-sm text-fg-muted sm:max-w-64 sm:shrink-0">
                   {agent.spendUnavailable
                     ? "Total unavailable: a reference rate is missing for earlier spending."
                     : `${agent.currency && agent.currency !== "AUD" ? agent.currency + " " : "A$"}${agent.spendThisPeriod} of ${agent.currency && agent.currency !== "AUD" ? agent.currency + " " : "A$"}${agent.budget} ${periodLabel(agent.budgetPeriod)}`}
@@ -183,7 +183,7 @@ export function DashboardView({
                 key={reminder.id}
                 className="flex flex-col gap-1 rounded-card border border-line bg-surface p-3"
               >
-                <span className="text-fg">{reminder.title}</span>
+                <span className="text-fg [overflow-wrap:anywhere]">{reminder.title}</span>
                 <span className="text-sm text-fg-muted">Due {reminder.due}</span>
               </li>
             ))}

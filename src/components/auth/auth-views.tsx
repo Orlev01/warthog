@@ -293,7 +293,7 @@ export function SignupView({
     case "authenticator":
       return (
         <AuthScreen title="Set up your authenticator app" lead="Scan this code with your authenticator app, or enter the setup key manually. Then enter the six-digit code it shows.">
-          {authenticatorQr ? <img src={authenticatorQr} alt="Authenticator app setup code" width={256} height={256} /> : null}
+          {authenticatorQr ? <img src={authenticatorQr} alt="Authenticator app setup code" width={256} height={256} className="h-auto max-w-full self-center" /> : null}
           <p className="break-all rounded-card bg-surface-muted p-3 font-mono text-sm">{authenticatorSecret}</p>
           <form className="flex flex-col gap-4" onSubmit={handleSubmit}>
             <Field label="Authenticator app code" name="totp" type="text" inputMode="numeric"

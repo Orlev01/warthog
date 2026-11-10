@@ -6,7 +6,7 @@ import * as React from "react";
 
 type ButtonVariant = "primary" | "secondary";
 
-export type ButtonProps = React.ButtonHTMLAttributes<HTMLButtonElement> & {
+export type ButtonProps = React.ComponentPropsWithRef<"button"> & {
   variant?: ButtonVariant;
 };
 

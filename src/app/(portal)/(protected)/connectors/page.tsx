@@ -7,7 +7,8 @@ import { join } from "node:path";
 import { cookies } from "next/headers";
 import { redirect } from "next/navigation";
 import { revalidatePath } from "next/cache";
-import { AlertTriangle, CheckCircle2 } from "lucide-react";
+import { Notice } from "@/components/ui/notice";
+import { connectorNotice } from "./notices";
 
 import { loadConfig, type Config } from "@/server/config";
 import { getServerDb } from "@/server/db/server";
@@ -205,46 +206,6 @@ async function requestAction(formData: FormData): Promise<void> {
   redirect(`/connectors?notice=${notice}`);
 }
 
-type Notice = "provider-revoke-needed" | "connection-declined" | "disconnected" | "connected" | "requested" | "key-needed" | "problem";
-
-const NOTICES: Record<Notice, { done: boolean; text: string }> = {
-  "provider-revoke-needed": { done: true, text: "Disconnected from Warthog. To remove the provider’s consent too, open your Google or Microsoft account’s app permissions and remove Warthog." },
-  "connection-declined": { done: false, text: "The service was not connected. You can try again when you are ready." },
-  disconnected: { done: true, text: "Service disconnected." },
-  connected: { done: true, text: "Service connected." },
-  requested: { done: true, text: "Thanks — we've recorded your request." },
-  "key-needed": { done: true, text: "Enter your key to finish connecting this service." },
-  problem: { done: false, text: "Something went wrong. Please try again." },
-};
-
-// The outcome of the last action, in words plus an icon (never colour alone). A problem is
-// announced immediately (alert); a success politely (status).
-function NoticeBanner({ notice }: { notice: Notice }) {
-  const { done, text } = NOTICES[notice];
-  const Icon = done ? CheckCircle2 : AlertTriangle;
-  return (
-    <div className="mx-auto w-full max-w-3xl px-4 pt-8 sm:px-6">
-      <div
-        role={done ? "status" : "alert"}
-        className="flex items-start gap-3 rounded-card border border-line bg-surface p-4 text-sm text-fg"
-      >
-        <Icon aria-hidden={true} className="mt-0.5 h-5 w-5 shrink-0" />
-        <p>{text}</p>
-      </div>
-    </div>
-  );
-}
-
-function toNotice(raw: string | string[] | undefined): Notice | null {
-  return raw === "disconnected" ||
-    raw === "connected" ||
-    raw === "requested" ||
-    raw === "key-needed" ||
-    raw === "problem"
-    ? raw
-    : null;
-}
-
 export default async function ConnectorsPage({
   searchParams,
 }: {
@@ -254,7 +215,7 @@ export default async function ConnectorsPage({
   // `next build` never prerenders it (and never opens the database at build time).
   const params = await searchParams;
   const query = typeof params.q === "string" ? params.q : undefined;
-  const notice = toNotice(params.notice);
+  const notice = connectorNotice(params.notice);
   const config = loadConfig();
   const db = await getServerDb();
   const session = await resolveSession(db);
@@ -268,7 +229,7 @@ export default async function ConnectorsPage({
   );
   return (
     <>
-      {notice ? <NoticeBanner notice={notice} /> : null}
+      {notice ? <div className="mx-auto w-full max-w-3xl px-4 pt-8 sm:px-6"><Notice tone={notice.tone}>{notice.text}</Notice></div> : null}
       <ConnectorsView
         {...data}
         connectAction={connectAction}

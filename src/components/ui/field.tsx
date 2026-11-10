@@ -24,18 +24,19 @@ export type FieldProps = InputProps & {
   error?: string;
 };
 
-export function Field({ label, error, id, ...inputProps }: FieldProps) {
+export function Field({ label, error, id, "aria-describedby": describedBy, "aria-invalid": invalid, ...inputProps }: FieldProps) {
   const generatedId = React.useId();
   const inputId = id ?? generatedId;
   const errorId = `${inputId}-error`;
   const hasError = Boolean(error);
+  const descriptionIds = [...new Set([...(describedBy?.split(/\s+/).filter(Boolean) ?? []), ...(hasError ? [errorId] : [])])];
   return (
-    <div className="flex flex-col gap-1.5">
+    <div className="flex min-w-0 flex-col gap-1.5">
       <Label htmlFor={inputId}>{label}</Label>
       <Input
         id={inputId}
-        aria-invalid={hasError ? true : undefined}
-        aria-describedby={hasError ? errorId : undefined}
+        aria-invalid={hasError ? true : invalid}
+        aria-describedby={descriptionIds.join(" ") || undefined}
         {...inputProps}
       />
       {hasError ? (

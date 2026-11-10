@@ -215,7 +215,7 @@ function SavedCardRow({ card, removeCard }: { card: SavedCard; removeCard: Remov
 
   if (stage === "removed") {
     return (
-      <p role="status" className="text-sm text-fg-muted">
+      <p role="status" className="text-sm text-fg-muted [overflow-wrap:anywhere]">
         {card.nickname} was removed from your vault.
       </p>
     );
@@ -223,10 +223,10 @@ function SavedCardRow({ card, removeCard }: { card: SavedCard; removeCard: Remov
 
   return (
     <Card className="flex flex-col gap-3">
-      <div className="flex items-start justify-between gap-3">
-        <div className="flex items-start gap-3">
+      <div className="flex flex-col items-start justify-between gap-3 sm:flex-row">
+        <div className="flex min-w-0 items-start gap-3">
           <CreditCard aria-hidden={true} className="mt-0.5 h-5 w-5 shrink-0 text-fg-muted" />
-          <div className="flex flex-col gap-0.5">
+          <div className="flex min-w-0 flex-col gap-0.5 [overflow-wrap:anywhere]">
             <span className="font-medium text-fg">{card.nickname}</span>
             <span className="text-sm text-fg-muted">
               {card.brand} •••• {card.lastFour}
@@ -240,6 +240,7 @@ function SavedCardRow({ card, removeCard }: { card: SavedCard; removeCard: Remov
           <Button
             variant="secondary"
             type="button"
+            className="shrink-0"
             aria-label={`Remove ${card.nickname}`}
             onClick={() => flow.ask()}
           >

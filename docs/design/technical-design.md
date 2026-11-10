@@ -267,6 +267,12 @@ sentence by a pure function (`ruleSentence`).
   `WARTHOG_DEV_TOOLS=1`, which the production build refuses to start with).
 
 ## 11. Look and feel
+- Contributor rules: [Warthog design system](../../.agents/skills/warthog-design-system/SKILL.md),
+  with focused [mobile](../../.agents/skills/warthog-mobile-design/SKILL.md),
+  [desktop](../../.agents/skills/warthog-desktop-design/SKILL.md),
+  [feedback](../../.agents/skills/warthog-feedback/SKILL.md) and
+  [media](../../.agents/skills/warthog-media/SKILL.md) skills. These preserve the
+  design below and define responsive sizing and interaction conventions.
 - Neutral palette (zinc greys, near-black, white), light + dark, **one accent: indigo** (`#4338CA`
   light / `#A5B4FC` dark for text-on-dark; contrast-checked), semantic success/warning/danger.
 - Licensed local Inter assets, Tailwind v4, lucide icons, 8 px spacing grid, cards with subtle borders.

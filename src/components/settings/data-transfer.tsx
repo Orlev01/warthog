@@ -140,15 +140,15 @@ export function DataTransferControls() {
   return <section className="flex flex-col gap-4" aria-label="Export and import your data">
     <h2 className="text-sm font-semibold text-fg">Export your data</h2>
     <p className="text-sm text-fg-muted">Downloads your everyday details and activity. If you include protected details, the file also contains readable card numbers and sensitive identity details. Store it privately; anyone with the file can read it.</p>
-    <fieldset disabled={state.working || unlock.newPhrase !== null} className="flex flex-col gap-4">
-      <label className="flex items-center gap-2 text-sm"><input type="checkbox" checked={state.includeProtected} onChange={(event) => flow.setIncludeProtected(event.target.checked)} />Include protected details and saved cards</label>
+    <fieldset disabled={state.working || unlock.newPhrase !== null} className="flex min-w-0 flex-col gap-4">
+      <label className="flex min-h-11 items-center gap-2 text-sm"><input type="checkbox" checked={state.includeProtected} onChange={(event) => flow.setIncludeProtected(event.target.checked)} />Include protected details and saved cards</label>
       <p className="text-sm text-fg-muted">Unlock only when including protected details or importing them. For a new vault, choose a passphrase of at least 12 characters if your passkey cannot unlock it. Save the new vault recovery phrase before importing; your account recovery code is different.</p>
       <VaultUnlockChoice state={unlock} onMethod={(method) => flow.keyStep.setMethod(method)} onPassphrase={(value) => flow.keyStep.setPassphrase(value)} onRecoveryPhrase={(value) => flow.keyStep.setRecoveryPhrase(value)} />
       <p className="text-sm text-fg-muted">This is a sensitive download. Keep the file somewhere safe.</p>
       <Button type="button" variant="secondary" onClick={() => void flow.exportData()}>Export my data</Button>
       <h2 className="text-sm font-semibold text-fg">Import a previous export</h2>
       <p className="text-sm text-fg-muted">Adds the file's details to this account; repeated imports add duplicates. Protected values are encrypted on this device before upload. Activity goes into a read-only archive. Reconnect agents and services separately.</p>
-      <label className="flex flex-col gap-2 text-sm">Choose a file to import<input type="file" accept="application/json,.json" onChange={(event) => flow.setFile(event.target.files?.[0] ?? null)} /></label>
+      <label className="flex min-w-0 flex-col gap-2 text-sm">Choose a file to import<input type="file" className="min-h-11 min-w-0 max-w-full text-base sm:text-sm" accept="application/json,.json" onChange={(event) => flow.setFile(event.target.files?.[0] ?? null)} /></label>
       <Button type="button" variant="secondary" disabled={!state.hasFile} onClick={() => void flow.importData()}>Import this file</Button>
     </fieldset>
     {unlock.newPhrase ? <RecoveryPhraseReveal phrase={unlock.newPhrase} saved={unlock.phraseSaved} onSavedChange={(saved) => flow.keyStep.setPhraseSaved(saved)} onContinue={() => void flow.confirmRecovery()} working={state.working} continueLabel="Save phrase and import" /> : null}

@@ -187,3 +187,19 @@ test("Field uses design tokens, never a raw hex colour", () => {
     "no raw hex colour may appear in the Field's rendered markup",
   );
 });
+
+test("Field keeps external help associated alongside its error", () => {
+  const markup = renderToStaticMarkup(
+    <Field label="Email address" id="email" error="Check your email" aria-describedby="email-help" aria-invalid={false} />,
+  );
+  const input = firstTagAttrs(markup, "input");
+  assert.deepEqual(input["aria-describedby"].split(/\s+/), ["email-help", "email-error"]);
+  assert.equal(input["aria-invalid"], "true");
+});
+
+test("Field preserves an external invalid state when no inline error is given", () => {
+  const markup = renderToStaticMarkup(<Field label="Email address" aria-describedby="help" aria-invalid="grammar" />);
+  const input = firstTagAttrs(markup, "input");
+  assert.equal(input["aria-describedby"], "help");
+  assert.equal(input["aria-invalid"], "grammar");
+});

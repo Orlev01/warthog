@@ -1,9 +1,8 @@
 "use client";
 
 import * as React from "react";
-import { Copy } from "lucide-react";
 
-import { Button } from "@/components/ui/button";
+import { CopyButton } from "@/components/ui/copy-button";
 
 // E10-S04 — Guided connect view per platform (brief "Connect an agent").
 //
@@ -91,27 +90,6 @@ const PLATFORMS: Platform[] = [
   },
 ];
 
-// The live Copy control: a client-side affordance that copies the address to the
-// clipboard on click and confirms it did (reporting success, never a silent dead button).
-function CopyButton({ value }: { value: string }) {
-  const [copied, setCopied] = React.useState(false);
-  return (
-    <Button
-      type="button"
-      variant="secondary"
-      onClick={() => {
-        navigator.clipboard?.writeText(value).then(
-          () => setCopied(true),
-          () => setCopied(false),
-        );
-      }}
-    >
-      <Copy aria-hidden={true} className="h-4 w-4 shrink-0" />
-      {copied ? "Copied" : "Copy"}
-    </Button>
-  );
-}
-
 export function ConnectGuide({ connectorAddress }: { connectorAddress: string }) {
   return (
     <section className="flex flex-col gap-8">
@@ -129,7 +107,7 @@ export function ConnectGuide({ connectorAddress }: { connectorAddress: string })
           Copy this and paste it in when your agent asks for a custom connector.
         </p>
         <div className="flex flex-col gap-2 sm:flex-row sm:items-center">
-          <code className="block flex-1 overflow-x-auto rounded-card border border-line bg-surface-muted px-3 py-2 font-mono text-sm text-fg">
+          <code className="block min-w-0 flex-1 select-all overflow-x-auto rounded-card border border-line bg-surface-muted px-3 py-2 font-mono text-sm text-fg">
             {connectorAddress}
           </code>
           <CopyButton value={connectorAddress} />

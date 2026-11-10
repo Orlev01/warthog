@@ -2,7 +2,7 @@ import * as React from "react";
 import { cookies } from "next/headers";
 import { redirect } from "next/navigation";
 import { revalidatePath } from "next/cache";
-import { AlertTriangle, CheckCircle2 } from "lucide-react";
+import { Notice as InlineNotice } from "@/components/ui/notice";
 
 import { RulesView } from "@/components/rules/rules-view";
 import { loadConfig } from "@/server/config";
@@ -160,17 +160,8 @@ async function deleteAction(formData: FormData): Promise<void> {
 // resolved by the sibling `rulesNotice` seam (one source of truth) — this page holds
 // no copy of its own.
 function NoticeBanner({ notice }: { notice: RulesNotice }) {
-  const Icon = notice.tone === "done" ? CheckCircle2 : AlertTriangle;
   return (
-    <div className="mx-auto w-full max-w-3xl px-4 pt-8 sm:px-6">
-      <div
-        role={notice.tone === "done" ? "status" : "alert"}
-        className="flex items-start gap-3 rounded-card border border-line bg-surface p-4 text-sm text-fg"
-      >
-        <Icon aria-hidden={true} className="mt-0.5 h-5 w-5 shrink-0" />
-        <p>{notice.text}</p>
-      </div>
-    </div>
+    <InlineNotice tone={notice.tone === "done" ? "success" : "error"}>{notice.text}</InlineNotice>
   );
 }
 
@@ -191,7 +182,7 @@ export default async function RulesPage({
 
   const view = await buildActions(db).load(session);
   return (
-    <div className="mx-auto w-full max-w-3xl px-4 py-8 sm:px-6">
+    <div className="mx-auto flex w-full max-w-3xl flex-col gap-6 px-4 py-8 sm:px-6">
       {notice ? <NoticeBanner notice={notice} /> : null}
       <RulesView
         rules={view.rules}

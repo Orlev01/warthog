@@ -107,10 +107,10 @@ function MemoryCard({
   const targetScope: MemoryScope = memory.scope === "shared" ? "kept" : "shared";
   return (
     <Card className="flex flex-col gap-3">
-      <p className="text-fg">{memory.content}</p>
+      <p className="min-w-0 whitespace-pre-wrap text-fg [overflow-wrap:anywhere]">{memory.content}</p>
 
       <div className="flex flex-wrap items-center gap-x-3 gap-y-1 text-sm text-fg-muted">
-        <span className="inline-flex items-center gap-1.5">
+        <span className="inline-flex min-w-0 items-center gap-1.5 [overflow-wrap:anywhere]">
           <Bot aria-hidden={true} className="h-4 w-4 shrink-0" />
           Saved by {savedBy} · {memory.scope}
         </span>
@@ -184,7 +184,7 @@ export function MemoryView({
 
       {/* ----- Search over the memories (a GET the loader reads) ----- */}
       <form method="get" className="flex flex-col gap-2 sm:flex-row sm:items-end">
-        <div className="flex flex-1 flex-col gap-1.5">
+        <div className="flex min-w-0 flex-1 flex-col gap-1.5">
           <Label htmlFor="memory-search">Search</Label>
           <Input
             id="memory-search"

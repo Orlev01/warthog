@@ -2,6 +2,7 @@ import * as React from "react";
 
 import { loadConfig } from "@/server/config";
 import { ConnectGuide } from "@/components/agents/connect-guide";
+import { PageContainer } from "@/components/shell/page-container";
 
 // E10-S05 — Agents connect page loader. The `/agents/connect` page the Agents screen
 // links to, inside the `(protected)` route group (the auth guard is the group layout's
@@ -29,7 +30,7 @@ export default async function ConnectPage({
   const config = loadConfig();
   const connectorAddress = `${config.publicBaseUrl.replace(/\/+$/, "")}/mcp`;
   return (
-    <div className="flex flex-col gap-8">
+    <PageContainer className="flex flex-col gap-8">
       <ConnectGuide connectorAddress={connectorAddress} />
       <section className="flex flex-col gap-3 rounded-card border border-line bg-surface p-4">
         <h2 className="text-base font-medium text-fg">Can&rsquo;t use a connector?</h2>
@@ -44,6 +45,6 @@ export default async function ConnectPage({
           Create an access key
         </a>
       </section>
-    </div>
+    </PageContainer>
   );
 }

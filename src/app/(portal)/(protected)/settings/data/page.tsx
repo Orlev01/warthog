@@ -3,7 +3,7 @@ import * as React from "react";
 import { cookies } from "next/headers";
 import { redirect } from "next/navigation";
 import { revalidatePath } from "next/cache";
-import { AlertTriangle, CheckCircle2 } from "lucide-react";
+import { Notice as InlineNotice } from "@/components/ui/notice";
 
 import { DataView } from "@/components/settings/data-view";
 import { ConfirmItsYou } from "@/components/ui/confirm-its-you";
@@ -175,15 +175,8 @@ function dataNotice(code: string | undefined): Notice | null {
 }
 
 function NoticeBanner({ notice }: { notice: Notice }) {
-  const Icon = notice.tone === "done" ? CheckCircle2 : AlertTriangle;
   return (
-    <div
-      role={notice.tone === "done" ? "status" : "alert"}
-      className="flex items-start gap-3 rounded-card border border-line bg-surface p-4 text-sm text-fg"
-    >
-      <Icon aria-hidden={true} className="mt-0.5 h-5 w-5 shrink-0" />
-      <p>{notice.text}</p>
-    </div>
+    <InlineNotice tone={notice.tone === "done" ? "success" : "error"}>{notice.text}</InlineNotice>
   );
 }
 

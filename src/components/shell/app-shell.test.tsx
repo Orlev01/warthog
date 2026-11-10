@@ -304,7 +304,7 @@ test("the shell uses design tokens, never a raw hex colour", () => {
 // test above — the only thing the SSR markup exposes is the sidebar nav's class list:
 // it is sticky-positioned, anchored to the top, capped at the viewport height, and
 // scrolls its own vertical overflow. Patterns are lenient (breakpoint prefixes;
-// dvh/svh/lvh units; overflow-auto vs overflow-y-auto; top-0 vs an inset utility) so a
+// dvh/svh/lvh units; overflow-auto vs overflow-y-auto; top-0 or a safe-area inset) so a
 // behaviour-preserving restyle stays green, and the viewport-height check is written so
 // a mere `min-h-*` (which does NOT cap height, so would not make the footer reachable)
 // cannot satisfy it.
@@ -319,12 +319,12 @@ test("the desktop sidebar is sticky to the viewport height with its own overflow
   );
   assert.match(
     cls,
-    /(?:^|\s|:)(?:top-0|inset-0|inset-y-0|inset-block-start-0)\b/,
+    /(?:^|\s|:)(?:top-0\b|inset-0\b|inset-y-0\b|inset-block-start-0\b|top-\[env\(safe-area-inset-top\)\])/,
     `the sticky sidebar must anchor to the top so it stays in view; attrs="${cls}"`,
   );
   assert.match(
     cls,
-    /(?:^|\s|:)(?:max-)?h-(?:screen|dvh|svh|lvh)\b/,
+    /(?:^|\s|:)(?:max-)?h-(?:(?:screen|dvh|svh|lvh)\b|\[calc\(100dvh-env\(safe-area-inset-top\)-env\(safe-area-inset-bottom\)\)\])/,
     `the sidebar must be capped at the viewport height so its footer can sit at the bottom; attrs="${cls}"`,
   );
   assert.match(

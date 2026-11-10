@@ -124,14 +124,14 @@ function SidebarLink({ item, active }: { item: NavItem; active: boolean }) {
 
 export function AppShell({ activeSection, children, sidebarFooter }: AppShellProps) {
   return (
-    <div className="min-h-screen bg-bg text-fg lg:flex">
+    <div className="min-h-[calc(100dvh-env(safe-area-inset-top)-env(safe-area-inset-bottom))] bg-bg text-fg lg:flex">
       {/* Desktop sidebar (≥1024px): the five sections plus the More children.
           Sticky to the viewport height with its own overflow scroll, so its
           footer (Sign out) stays reachable at short viewport heights without
           scrolling the page. */}
       <nav
         aria-label="Primary"
-        className="hidden shrink-0 border-e border-line bg-surface p-3 lg:sticky lg:top-0 lg:flex lg:h-screen lg:w-64 lg:flex-col lg:gap-1 lg:overflow-y-auto"
+        className="hidden shrink-0 border-e border-line bg-surface p-3 lg:sticky lg:top-[env(safe-area-inset-top)] lg:flex lg:h-[calc(100dvh-env(safe-area-inset-top)-env(safe-area-inset-bottom))] lg:w-64 lg:flex-col lg:gap-1 lg:overflow-y-auto"
       >
         <div className="px-1 pb-3 pt-1">
           <Wordmark href="/home" />
@@ -152,12 +152,12 @@ export function AppShell({ activeSection, children, sidebarFooter }: AppShellPro
       </nav>
 
       {/* Page content. Extra block padding on mobile clears the fixed bottom nav. */}
-      <main className="flex-1 pb-20 lg:pb-0">{children}</main>
+      <main className="min-w-0 flex-1 pb-[calc(5rem+env(safe-area-inset-bottom))] lg:pb-0">{children}</main>
 
       {/* Mobile bottom nav (<1024px): exactly the five top-level sections. */}
       <nav
         aria-label="Primary"
-        className="fixed bottom-0 start-0 end-0 flex border-t border-line bg-surface lg:hidden"
+        className="fixed bottom-0 start-0 end-0 z-30 flex border-t border-line bg-surface pb-[env(safe-area-inset-bottom)] ps-[env(safe-area-inset-left)] pe-[env(safe-area-inset-right)] lg:hidden"
       >
         {BOTTOM_ITEMS.map((item) => (
           <BottomItem key={item.key} item={item} active={item.key === activeSection} />

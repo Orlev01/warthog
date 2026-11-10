@@ -123,7 +123,7 @@ function AgentCard({
   return (
     <li className="flex flex-col gap-3 rounded-card border border-line bg-surface p-4">
       <div className="flex flex-wrap items-start justify-between gap-2">
-        <div className="flex flex-col gap-0.5">
+        <div className="flex min-w-0 flex-col gap-0.5 [overflow-wrap:anywhere]">
           <span className="font-medium text-fg">{agent.name}</span>
           <span className="text-sm text-fg-muted">{agent.platform}</span>
         </div>

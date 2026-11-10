@@ -2,7 +2,6 @@ import * as React from "react";
 import { cookies } from "next/headers";
 import { redirect } from "next/navigation";
 import { revalidatePath } from "next/cache";
-import { AlertTriangle, CheckCircle2 } from "lucide-react";
 
 import { loadConfig } from "@/server/config";
 import { getServerDb } from "@/server/db/server";
@@ -13,6 +12,8 @@ import { HttpError } from "@/server/http/validate";
 import type { Db } from "@/server/db/index";
 import { createMemoryActions, type MemoryActions } from "./actions";
 import { MemoryView } from "@/components/memory/memory-view";
+import { PageContainer } from "@/components/shell/page-container";
+import { Notice as InlineNotice } from "@/components/ui/notice";
 
 // E13-S11 — Memory page (the thin protected-page loader + action wiring over the tested
 // `createMemoryActions` seam, `./actions`). It reads the signed-in session from the
@@ -139,17 +140,8 @@ function toNotice(raw: string | string[] | undefined): Notice | null {
 // is announced immediately (alert); a success politely (status).
 function NoticeBanner({ notice }: { notice: Notice }) {
   const { done, text } = NOTICES[notice];
-  const Icon = done ? CheckCircle2 : AlertTriangle;
   return (
-    <div className="mx-auto w-full max-w-3xl px-4 pt-8 sm:px-6">
-      <div
-        role={done ? "status" : "alert"}
-        className="flex items-start gap-3 rounded-card border border-line bg-surface p-4 text-sm text-fg"
-      >
-        <Icon aria-hidden={true} className="mt-0.5 h-5 w-5 shrink-0" />
-        <p>{text}</p>
-      </div>
-    </div>
+    <InlineNotice tone={done ? "success" : "error"}>{text}</InlineNotice>
   );
 }
 
@@ -176,7 +168,7 @@ export default async function MemoryPage({
   const data = await buildActions(db).load(session, query);
 
   return (
-    <>
+    <PageContainer className="flex flex-col gap-6">
       {notice ? <NoticeBanner notice={notice} /> : null}
       <MemoryView
         memories={data.memories}
@@ -186,6 +178,6 @@ export default async function MemoryPage({
         rescopeAction={rescopeMemoryAction}
         deleteAction={deleteMemoryAction}
       />
-    </>
+    </PageContainer>
   );
 }

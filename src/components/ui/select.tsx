@@ -8,7 +8,7 @@ import * as React from "react";
 export type SelectProps = React.SelectHTMLAttributes<HTMLSelectElement>;
 
 export const SELECT_CLASS =
-  "min-h-11 w-full rounded-card border border-line-input bg-surface px-3 text-sm text-fg focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-focus focus-visible:ring-offset-2 focus-visible:ring-offset-bg aria-invalid:border-danger";
+  "min-h-11 min-w-0 w-full max-w-full rounded-card border border-line-input bg-surface px-3 text-base sm:text-sm text-fg focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-focus focus-visible:ring-offset-2 focus-visible:ring-offset-bg aria-invalid:border-danger";
 
 export function Select({ className, children, ...props }: SelectProps) {
   return (

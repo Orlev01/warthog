@@ -2,7 +2,7 @@ import * as React from "react";
 import { cookies } from "next/headers";
 import { redirect } from "next/navigation";
 import { revalidatePath } from "next/cache";
-import { AlertTriangle, CheckCircle2 } from "lucide-react";
+import { Notice as InlineNotice } from "@/components/ui/notice";
 
 import { loadConfig } from "@/server/config";
 import { getServerDb } from "@/server/db/server";
@@ -99,17 +99,10 @@ async function disconnectAction(formData: FormData): Promise<void> {
 // is announced immediately (alert); a success politely (status).
 function NoticeBanner({ notice }: { notice: "disconnected" | "problem" }) {
   const done = notice === "disconnected";
-  const Icon = done ? CheckCircle2 : AlertTriangle;
   const text = done ? "Agent disconnected." : "We couldn't disconnect that agent. Please try again.";
   return (
     <div className="mx-auto w-full max-w-3xl px-4 pt-8 sm:px-6">
-      <div
-        role={done ? "status" : "alert"}
-        className="flex items-start gap-3 rounded-card border border-line bg-surface p-4 text-sm text-fg"
-      >
-        <Icon aria-hidden={true} className="mt-0.5 h-5 w-5 shrink-0" />
-        <p>{text}</p>
-      </div>
+      <InlineNotice tone={done ? "success" : "error"}>{text}</InlineNotice>
     </div>
   );
 }

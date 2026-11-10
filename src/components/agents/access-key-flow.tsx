@@ -1,11 +1,12 @@
 "use client";
 
 import * as React from "react";
-import { KeyRound, Copy, Check, AlertTriangle, TriangleAlert } from "lucide-react";
+import { KeyRound, AlertTriangle, TriangleAlert } from "lucide-react";
 
 import { Button } from "@/components/ui/button";
 import { Card } from "@/components/ui/card";
 import { Field } from "@/components/ui/field";
+import { CopyButton } from "@/components/ui/copy-button";
 
 // E10-S13 — Access-key flow (brief "Connect an agent" — "For a platform that cannot use
 // the standard connector sign-in, 'Create an access key' lets the person name the agent
@@ -165,31 +166,6 @@ const STARTING_SETS: ReadonlyArray<{
   { value: "custom", label: "Custom", description: "Start from Standard, then change anything later." },
 ];
 
-// ─── the live Copy control (a client-side affordance, never a dead button) ─────────────
-
-function CopyButton({ value }: { value: string }) {
-  const [copied, setCopied] = React.useState(false);
-  return (
-    <Button
-      type="button"
-      variant="secondary"
-      onClick={() => {
-        navigator.clipboard?.writeText(value).then(
-          () => setCopied(true),
-          () => setCopied(false),
-        );
-      }}
-    >
-      {copied ? (
-        <Check aria-hidden={true} className="h-4 w-4 shrink-0" />
-      ) : (
-        <Copy aria-hidden={true} className="h-4 w-4 shrink-0" />
-      )}
-      {copied ? "Copied" : "Copy"}
-    </Button>
-  );
-}
-
 // ─── the key-shown surface (the key once, a Copy control, instructions, a warning) ─────
 
 function IssuedPanel({ keyValue }: { keyValue: string }) {
@@ -204,10 +180,10 @@ function IssuedPanel({ keyValue }: { keyValue: string }) {
 
       <Card className="flex flex-col gap-3">
         <div className="flex flex-col gap-2 sm:flex-row sm:items-center">
-          <code className="block flex-1 overflow-x-auto rounded-card border border-line bg-surface-muted px-3 py-2 font-mono text-sm text-fg">
+          <code className="block min-w-0 flex-1 select-all overflow-x-auto rounded-card border border-line bg-surface-muted px-3 py-2 font-mono text-sm text-fg">
             {keyValue}
           </code>
-          <CopyButton value={keyValue} />
+          <CopyButton value={keyValue} successMessage="Access key copied. Paste it into your agent, then clear your clipboard." />
         </div>
         <p className="inline-flex items-center gap-2 text-sm font-medium text-warning">
           <TriangleAlert aria-hidden={true} className="h-4 w-4 shrink-0" />
@@ -286,7 +262,7 @@ export function AccessKeyFlow(props: AccessKeyFlowProps): React.ReactElement {
         <div className="flex flex-col gap-2">
           {STARTING_SETS.map((set) => (
             <div key={set.value} className="rounded-card border border-line bg-surface p-3">
-              <label className="flex items-center gap-3">
+              <label className="flex min-h-11 items-center gap-3">
                 <input
                   type="radio"
                   name={setGroupName}

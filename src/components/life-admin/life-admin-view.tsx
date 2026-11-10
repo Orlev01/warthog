@@ -104,7 +104,7 @@ const TAB_INACTIVE = `${BTN_BASE} border border-transparent text-fg-muted hover:
 const SUMMARY_CLASS =
   "inline-flex w-fit cursor-pointer items-center gap-2 text-sm font-medium text-fg";
 const FILE_INPUT_CLASS =
-  "text-sm text-fg file:me-3 file:rounded-card file:border file:border-line file:bg-surface file:px-3 file:py-2 file:text-sm file:text-fg";
+  "min-h-11 min-w-0 w-full max-w-full text-base text-fg file:me-3 file:rounded-card file:border file:border-line file:bg-surface file:px-3 file:py-2 file:text-sm file:text-fg sm:text-sm";
 
 // ─── a present-but-not-actionable control (no dead controls) ─────────────────────────
 //
@@ -292,11 +292,11 @@ function RecordCard({
 }) {
   return (
     <li className="flex flex-col gap-3 rounded-card border border-line bg-surface p-4">
-      <dl className="grid grid-cols-[auto_1fr] gap-x-3 gap-y-1 text-sm">
+      <dl className="grid min-w-0 grid-cols-1 gap-x-3 gap-y-1 text-sm sm:grid-cols-[minmax(0,1fr)_minmax(0,2fr)]">
         {Object.entries(record.fields).map(([key, fieldValue]) => (
           <React.Fragment key={key}>
-            <dt className="text-fg-muted">{key}</dt>
-            <dd className="text-fg">{fieldValue}</dd>
+            <dt className="min-w-0 text-fg-muted [overflow-wrap:anywhere]">{key}</dt>
+            <dd className="mb-2 min-w-0 text-fg [overflow-wrap:anywhere] sm:mb-0">{fieldValue}</dd>
           </React.Fragment>
         ))}
       </dl>
@@ -386,7 +386,7 @@ function TickControl({
   if (!tickOffAction) {
     return (
       <div className="flex flex-col gap-1">
-        <label className="inline-flex items-center gap-2 text-sm text-fg">
+        <label className="inline-flex min-h-11 items-center gap-2 text-sm text-fg">
           <input type="checkbox" className="size-4" defaultChecked={item.done} disabled />
           Done
         </label>
@@ -397,7 +397,7 @@ function TickControl({
   return (
     <form action={tickOffAction}>
       <input type="hidden" name="itemId" value={item.id} />
-      <label className="inline-flex items-center gap-2 text-sm text-fg">
+      <label className="inline-flex min-h-11 items-center gap-2 text-sm text-fg">
         <input
           type="checkbox"
           name="done"

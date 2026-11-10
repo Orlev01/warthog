@@ -197,10 +197,10 @@ export function VaultUnlockChoice(props: VaultUnlockChoiceProps): React.ReactEle
   ];
   return (
     <div className="flex flex-col gap-3">
-      <fieldset className="flex flex-col gap-2">
+      <fieldset className="flex min-w-0 flex-col gap-2">
         <legend className="text-sm font-medium text-fg">How would you like to unlock your vault?</legend>
         {options.map((option) => (
-          <label key={option.value} className="flex items-center gap-2 text-sm text-fg">
+          <label key={option.value} className="flex min-h-11 items-center gap-2 text-sm text-fg">
             <input
               type="radio"
               name={name}
@@ -311,7 +311,7 @@ export function RecoveryPhraseReveal(props: RecoveryPhraseRevealProps): React.Re
           We couldn&apos;t copy it here. Write it down or use Download instead.
         </p>
       ) : null}
-      <label htmlFor={tickId} className="flex items-center gap-2 text-sm text-fg">
+      <label htmlFor={tickId} className="flex min-h-11 items-center gap-2 text-sm text-fg">
         <input
           id={tickId}
           type="checkbox"
