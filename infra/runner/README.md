@@ -22,6 +22,9 @@ installs tools. This VM is dedicated to one job, not a build/test worker.
 
 Example operator sequence, using an absolute ignored directory:
 
+For a release, first dispatch the approved workflow and wait for its hosted `gate`
+job to pass. Use that run ID as the lease ID; provision no VM for a rejected input.
+
 ```sh
 python3 scripts/delivery/runner.py plan --directory /path/to/repo/.delivery/runner-LEASE
 # Inspect plan.json; save the printed hash. Review expiry and exact resources.

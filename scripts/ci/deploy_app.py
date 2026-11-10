@@ -47,7 +47,7 @@ def validate_live(app):
             and ingress["targetPort"] == 3000, "Unexpected ingress configuration")
     require(all(not rule.get("latestRevision") for rule in ingress.get("traffic", [])),
             "Latest-revision traffic could expose a new revision before validation")
-    require(not c.get("dapr", {}).get("enabled"), "Dapr is outside this release contract")
+    require(not (c.get("dapr") or {}).get("enabled"), "Dapr is outside this release contract")
     require(all(s.get("keyVaultUrl") and not s.get("value") for s in c["secrets"]),
             "Only existing Key Vault secret references are supported")
     env = {item["name"]: item for item in container["env"]}

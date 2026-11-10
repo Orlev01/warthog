@@ -31,13 +31,14 @@ jobs:
     runs-on: ubuntu-24.04
     timeout-minutes: 5
     steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
       - name: Require configured delivery before requesting a private runner
         env:
-          ENABLED: ${{ vars.AZURE_DELIVERY_ENABLED }}
-        run: |
-          test "$GITHUB_REPOSITORY" = Orlev01/warthog
-          test "$GITHUB_REF" = refs/heads/main
-          test "$ENABLED" = true || { echo 'Azure delivery is disabled pending approved setup.'; exit 1; }
+          AZURE_DELIVERY_ENABLED: ${{ vars.AZURE_DELIVERY_ENABLED }}
+          APPROVAL_REFERENCE: ${{ inputs.approval_reference }}
+        run: PYTHONPATH=scripts/ci python3 -c 'from common import gate; gate()'
   release:
     needs: gate
     # Dedicated, ephemeral, trusted-main-only runner in the private bootstrap subnet.

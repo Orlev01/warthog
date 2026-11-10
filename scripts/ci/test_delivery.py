@@ -37,7 +37,7 @@ class DeliveryGateTests(unittest.TestCase):
             common.gate()
         for key, value in [("GITHUB_REPOSITORY", "other/warthog"), ("GITHUB_REF", "refs/heads/feature"),
                            ("GITHUB_EVENT_NAME", "pull_request"), ("AZURE_DELIVERY_ENABLED", "false"),
-                           ("APPROVAL_REFERENCE", "")]:
+                           ("APPROVAL_REFERENCE", ""), ("APPROVAL_REFERENCE", "approved; reviewed")]:
             with self.subTest(key=key), patch.dict(os.environ, dict(approved, **{key: value}), clear=True):
                 with self.assertRaises(RuntimeError):
                     common.gate()
@@ -148,6 +148,14 @@ class SingletonTests(unittest.TestCase):
         bad["properties"]["configuration"]["ingress"]["traffic"] = [{"latestRevision": True, "weight": 100}]
         with self.assertRaises(RuntimeError):
             deploy_app.validate_live(bad)
+
+    def test_live_guard_accepts_azure_null_dapr_but_rejects_enabled_dapr(self):
+        app = app_fixture()
+        app["properties"]["configuration"]["dapr"] = None
+        deploy_app.validate_live(app)
+        app["properties"]["configuration"]["dapr"] = {"enabled": True}
+        with self.assertRaisesRegex(RuntimeError, "Dapr"):
+            deploy_app.validate_live(app)
 
     def run_update(self, platform):
         with tempfile.TemporaryDirectory() as path:
