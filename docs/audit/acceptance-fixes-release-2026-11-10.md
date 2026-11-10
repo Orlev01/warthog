@@ -19,7 +19,10 @@ briefly stops the old replica before the new replica acquires database ownership
 - Confirm agent disconnection in an accessible in-page dialog with explicit
   cancellation, replacing the native confirmation that blocked UI acceptance.
 - Link Privacy and Terms from public entry pages and correct the Terms title.
-- Enforce receipt file limits in the browser and server; provide owner-only
+- Enforce receipt file limits in the browser and server; reject declared upload
+  envelopes above 26 MiB with HTTP 413 before Next's generic multipart error.
+  The framework streaming limit remains in place for undeclared/chunked bodies.
+  Provide owner-only
   authenticated downloads as attachments with private/no-store headers.
 - Add explicit record-and-attachment deletion. Serialize uploads and record
   deletion with a parent-row lock; delete blobs before removing their metadata

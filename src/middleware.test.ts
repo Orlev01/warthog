@@ -23,3 +23,16 @@ test("middleware replaces supplied nonces and gives Next and the browser the sam
     else (process.env as Record<string, string>).NODE_ENV = saved;
   }
 });
+
+
+test("oversized declared multipart uploads receive 413 before framework actions", async () => {
+  for (const path of ["/life-admin", "/settings/data"]) {
+    for (const size of [26 * 1024 * 1024, 26 * 1024 * 1024 + 1]) {
+      const response = middleware(new NextRequest("https://app.example.test" + path, {
+        method: "POST", headers: { "content-type": "multipart/form-data; boundary=synthetic", "content-length": String(size) },
+      }));
+      assert.equal(response.status, size > 26 * 1024 * 1024 ? 413 : 200);
+      if (response.status === 413) assert.match((await response.json()).error, /too large/i);
+    }
+  }
+});

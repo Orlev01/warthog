@@ -8,6 +8,15 @@ export function middleware(request: NextRequest) {
   // read here. Runtime application configuration remains in server/config.ts.
   const development = process.env.NODE_ENV !== "production";
   const path = request.nextUrl.pathname;
+  // Next's streaming action cap still protects undeclared/chunked bodies, but
+  // reports an oversized multipart form as 500. Reject declared file uploads
+  // before that parser so normal HTTP clients receive an actionable 413.
+  if (request.method === "POST" && (path === "/life-admin" || path === "/settings/data")
+      && request.headers.get("content-type")?.toLowerCase().startsWith("multipart/form-data")
+      && Number(request.headers.get("content-length")) > 26 * 1024 * 1024) {
+    return NextResponse.json({ error: "The upload request is too large. Choose a smaller file." },
+      { status: 413, headers: { "cache-control": "private, no-store" } });
+  }
   if (request.method === "POST" && (path.startsWith("/api/auth/") || path === "/oauth/register")) {
     const limiter = processSingleton("http.authIpLimiter", () => createAuthIpLimiter());
     if (!limiter.allow(request.headers.get("x-forwarded-for"), Date.now())) {

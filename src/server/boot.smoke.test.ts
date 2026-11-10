@@ -408,6 +408,16 @@ describe("production build and boot of the whole app (E18-S12)", () => {
   // Instrumentation's register() runs on boot (Node runtime). The started server announces
   // the scheduler on the app's own `[warthog jobs]` log channel, the observable signal a
   // Deploy smoke check needs that the scheduler is running.
+  test("oversized declared upload envelope is rejected with 413 over real HTTP", async () => {
+    const response = await fetch(ctx.baseUrl + "/life-admin", {
+      method: "POST", redirect: "manual",
+      headers: { "content-type": "multipart/form-data; boundary=synthetic", origin: ctx.baseUrl },
+      body: Buffer.alloc(27 * 1024 * 1024, "x"),
+    });
+    assert.equal(response.status, 413);
+    assert.match((await response.json()).error, /too large/i);
+  });
+
   test("on boot the in-process job scheduler is started from instrumentation", { timeout: SCHEDULER_TIMEOUT_MS + 10_000 }, async () => {
     assert.ok(ctx.ready, `the started server must boot and serve.\n${ctx.bootDiag}`);
 
