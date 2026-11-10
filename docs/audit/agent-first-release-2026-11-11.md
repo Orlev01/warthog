@@ -1,8 +1,7 @@
 # Agent-first integration release — 11 November 2026
 
-Status: local integration complete; release checks and deployment pending. No
-production change is implied by this source record. The deployment outcome will
-be appended after the protected workflow completes.
+Status: integrated, deployed and verified in production on 11 November 2026
+(Sydney time). Temporary runner cleanup is complete and independently verified.
 
 The founder requested a comprehensive agent-first review, completion of its
 follow-ups, integration of the parallel skills library and deployment. Work is
@@ -37,12 +36,18 @@ keeps controls disabled until hydration completes. A library page renders at mos
 
 ## Validation before publication
 
-The first complete local run exercised 5,152 tests: 5,151 passed and one outdated
-expectation failed because it expected malformed task assignees to be accepted.
-That test now checks both rejection without a write and inert free-text SQL
-probes; all 21 task regressions pass. Focused UI/tool/collection checks passed 127
-tests, with 98 render regressions after the library paging change. Counts overlap.
-The final whole-suite CI result is recorded below when available.
+The final complete local run passed all 5,152 tests, with no failures or skips.
+The initial run found one outdated expectation that malformed task assignees were
+accepted. The corrected regression verifies rejection without a write and retains
+inert free-text SQL probes. All 21 task regressions pass. Focused UI/tool/collection
+checks passed 127 tests, with 98 render regressions after the library paging
+change. Counts overlap.
+
+Both [source CI](https://github.com/Orlev01/warthog/actions/runs/42910141510) and
+the [pinned image publication](https://github.com/Orlev01/warthog/actions/runs/42911453253)
+passed all 5,152 tests across four Linux shards, with no failures, cancellations or
+skips. Each shard also passed the actual PostgreSQL checks. Delivery,
+infrastructure, cost and runtime checks passed.
 
 Final browser acceptance passed 112 route/viewport combinations (320–1440 px),
 seven workspace interactions, 30 library checks, six combined audience/paging
@@ -66,8 +71,11 @@ Five additive migrations (`0100`–`0104`) add library packages, agent controls,
 task claims, durable provider OAuth flows and resource audiences. Existing memory
 write behavior is preserved; existing ambiguous multi-account connector grants
 require an explicit account selection. No existing data is deleted by quotas.
-Old application code can ignore the added columns/tables, but any rollback must
-still follow the singleton maintenance and schema-compatibility runbook.
+Older images ignore the new per-field and resource-audience restrictions.
+Additive schema compatibility therefore does not establish authorization
+compatibility: any rollback requires a permission-policy review as well as the
+singleton maintenance and schema-compatibility runbook. The workflow does not
+automatically reactivate an old image.
 
 The deployment uses the existing application allocation, secret references,
 hostname, SMS-off configuration and approved ephemeral runner profile. It is an
@@ -79,6 +87,61 @@ consent with every real provider. Dots and Instinct are explicitly unverified;
 no direct connection contract was established from their official information.
 Warthog governs traffic through its own connection and does not control a provider's
 separate runtime, direct tools, private memory or billing.
+
+## Published image review
+
+Application source: `58beb72d27edd43ca6e318451605c2335c1e2963`.
+
+Reviewed immutable image:
+`crwarthogprodauee854.azurecr.io/warthog@sha256:d0586fb120214a1df3e0aa8c811cf473c406738e6386ed1091f5561ea6923813`.
+
+Its source/base labels, Linux AMD64 platform, non-root user and absence of
+setuid/setgid bits were independently checked. All 75 migration hashes, 106
+catalogue hashes and the lockfile hash match the source. The pinned Node base is
+`node:22-bookworm-slim@sha256:5ec23b7c622b00547753bc6ffd78085dd868a68aeb41c8e0a1418f033e13d96d`.
+
+A fresh Trivy scan has the same 215 OS package/advisory pairs as the previous
+reviewed image: one critical, 34 high, 95 medium and 85 low, with no additions or
+removals and no non-OS/Node findings. This is not a vulnerability-free image; the
+[existing applicability review](runtime-image-review-2026-11-10.md) remains
+relevant. ZIP import uses bounded Node zlib, and the library never executes
+uploaded scripts/hooks or OS archive tools.
+
+## Production outcome
+
+The founder separately approved image publication and the protected production
+environment in GitHub. [Production release 42914641971](https://github.com/Orlev01/warthog/actions/runs/42914641971)
+completed successfully at approximately 22:43 UTC on 10 November (09:43 Sydney
+time on 11 November). [Warthog](https://app.warthog.com.au) serves the reviewed
+application source and digest above as revision `warthog--r42914641971a1`.
+
+Independent Azure inspection confirmed one healthy replica, explicit 100% traffic
+to that revision, all older revisions inactive with zero replicas, and unchanged
+application configuration apart from the image, revision suffix and traffic
+target. The workflow verified the database ownership lock was free after stopping
+the old process and held after starting the new one. Successful readiness follows
+startup migrations; no separate remote migration-table query is claimed.
+
+All 16 live public checks passed: readiness/liveness, signed-out access, MCP
+authentication/origin/method handling, exact OAuth loopback redirect and state,
+PKCE/resource rejection, receipt authentication and terms. Browser checks passed
+at 320, 390 and 1440 px with no page errors or horizontal overflow; the 390 px
+check verified emulated safe-area padding. Authenticated resource and upload flows
+were exercised with synthetic local fixtures before publication, not by modifying
+production user data.
+
+Release logs, immutable image review, live snapshots and acceptance evidence are
+retained privately under `.delivery/agent-first-release/`.
+
+The isolated runner was destroyed after the successful release. Independent
+inspection at 22:46 UTC confirmed the lease resource group, VM, disk, NIC, NAT,
+egress public IP and scoped role assignments were absent; the shared subnet's NAT
+was detached; and the GitHub runner was deregistered. The local ephemeral SSH
+private key and registry credentials were removed. Application infrastructure was
+not part of that teardown.
+
+The documentation commit containing this outcome follows the deployed application
+commit; it does not change the running source or require another deployment.
 
 [Review and follow-up disposition](agent-first-review-2026-11-10.md),
 [agent-first decision](../adr/agent-first-management.md),

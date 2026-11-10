@@ -58,7 +58,7 @@ Key evidence: `src/app/(portal)/(protected)/agents/[id]/actions.ts`,
 | Account and household | Deletion/reset/purge, invitations, address sharing, budgets | New tables cascade with account deletion; household does not confer access to another member's private agent resources |
 | Portability | Export schema/builder, import transaction, protected device transfer | Corrected skill scope/enable widening; agent grants exported as reference and require reconnect/review |
 | Notifications | Notification prefs/outbox, push/fallback/SMS budgets, provider senders | Account-wide delivery channels; no outbound messages sent by this review |
-| Deployment and infrastructure | Docker/Next build, runtime config validation, private DB/TLS settings, CI/runbooks/singleton guards | Single-replica release-store assumption remains; no cloud mutation or deployment performed |
+| Deployment and infrastructure | Docker/Next build, runtime config validation, private DB/TLS settings, CI/runbooks/singleton guards | Single-replica release-store assumption remains; the [integrated release record](agent-first-release-2026-11-11.md) documents the subsequent approved deployment |
 | Dependencies and quality | Lockfile audit, typecheck, existing and new regression suites, scaffold/placeholder scan | No runtime dependency added; rendered-flow tests exposed gaps missed by large unit-test count |
 
 ## Follow-up disposition — 11 November 2026
@@ -95,7 +95,7 @@ this is consistent with MCP's prohibition on token passthrough.
 
 ## Original review validation
 
-The integrated release validation is recorded in the follow-up release record.
+The integrated release validation is recorded in the [follow-up release record](agent-first-release-2026-11-11.md).
 These counts describe the original pre-integration source review.
 
 
