@@ -65,7 +65,7 @@ const CURRENCY = "A$";
 // Everything here is the neutral surface variant (the accent is reserved for a screen's
 // one primary action). Styled through tokens, no raw colour. (Same pattern as ActivityView.)
 const BTN_BASE =
-  "inline-flex min-h-11 items-center justify-center gap-2 rounded-card px-4 text-sm font-medium transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-focus focus-visible:ring-offset-2 focus-visible:ring-offset-bg";
+  "inline-flex min-h-11 items-center justify-center gap-2 rounded-full px-4 text-sm font-medium transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-focus focus-visible:ring-offset-2 focus-visible:ring-offset-bg";
 const BTN_PRIMARY = `${BTN_BASE} bg-accent text-accent-fg hover:bg-accent-hover`;
 const BTN_SECONDARY = `${BTN_BASE} border border-line bg-surface text-fg hover:bg-surface-muted`;
 // A control that is present but not actionable (Disconnect when no action is configured):
@@ -102,7 +102,9 @@ function DisconnectControl({
         <button type="button" disabled className={BTN_DISABLED}>
           Disconnect
         </button>
-        <p className="text-xs text-fg-muted">Disconnecting isn&apos;t available just now.</p>
+        <p className="text-xs text-fg-muted">
+          Disconnecting isn&apos;t available just now.
+        </p>
       </div>
     );
   }
@@ -124,42 +126,76 @@ function AgentCard({
   disconnectAction?: (formData: FormData) => void | Promise<void>;
 }) {
   return (
-    <li className="flex flex-col gap-3 rounded-card border border-line bg-surface p-4">
-      <div className="flex flex-wrap items-start justify-between gap-2">
-        <div className="flex min-w-0 flex-col gap-0.5 [overflow-wrap:anywhere]">
-          <a href={`/agents/${agent.id}`} className="font-medium text-fg underline underline-offset-2">{agent.name}</a>
-          <span className="text-sm text-fg-muted">{agent.platform}</span>
+    <li className="grid min-w-0 gap-4 py-5 md:grid-cols-[minmax(0,1fr)_auto] md:items-start">
+      <div className="flex min-w-0 flex-col gap-3">
+        <div className="flex items-start justify-between gap-3">
+          <div className="flex min-w-0 flex-1 flex-col gap-0.5 [overflow-wrap:anywhere]">
+            <a
+              href={`/agents/${agent.id}`}
+              className="line-clamp-2 font-medium text-fg underline underline-offset-2"
+            >
+              {agent.name}
+            </a>
+            <span className="text-sm text-fg-muted">{agent.platform}</span>
+          </div>
+          <Status status={agent.status} />
         </div>
-        <Status status={agent.status} />
+
+        <p className="text-sm text-fg-muted">
+          Connected {agent.connectedAt} ·{" "}
+          {agent.lastActiveAt
+            ? `Last active ${agent.lastActiveAt}`
+            : "Never active"}
+        </p>
+
+        <p className="text-sm text-fg-muted">
+          {agent.requestCount} request{agent.requestCount === 1 ? "" : "s"} ·{" "}
+          {agent.hasBudget === false
+            ? "No card budget"
+            : `${agent.currency ?? CURRENCY} ${agent.spendThisPeriod} of ${agent.currency ?? CURRENCY} ${agent.budget} ${periodLabel(agent.budgetPeriod)} approved`}
+          {agent.spendIncomplete
+            ? " · Total incomplete: exchange rate unavailable"
+            : null}
+        </p>
       </div>
-
-      <p className="text-sm text-fg-muted">
-        Connected {agent.connectedAt} ·{" "}
-        {agent.lastActiveAt ? `Last active ${agent.lastActiveAt}` : "Never active"}
-      </p>
-
-      <p className="text-sm text-fg-muted">
-        {agent.requestCount} request{agent.requestCount === 1 ? "" : "s"} · {agent.hasBudget === false ? "No card budget" : `${agent.currency ?? CURRENCY} ${agent.spendThisPeriod} of ${agent.currency ?? CURRENCY} ${agent.budget} ${periodLabel(agent.budgetPeriod)} approved`}
-        {agent.spendIncomplete ? " · Total incomplete: exchange rate unavailable" : null}
-      </p>
-
-      <div className="flex flex-wrap items-center gap-2">
-        <a href={`/agents/${agent.id}`} className={BTN_SECONDARY}>Manage agent</a>
+      <div className="flex flex-wrap items-center gap-2 md:max-w-80 md:justify-end">
+        <a href={`/agents/${agent.id}`} className={BTN_SECONDARY}>
+          Manage agent
+        </a>
         <a href={agent.activityHref} className={BTN_SECONDARY}>
           View activity
         </a>
-        <DisconnectControl agentId={agent.id} disconnectAction={disconnectAction} />
+        <DisconnectControl
+          agentId={agent.id}
+          disconnectAction={disconnectAction}
+        />
       </div>
     </li>
   );
 }
 
-export function AgentListView({ agents, disconnectAction }: AgentListViewProps) {
+export function AgentListView({
+  agents,
+  disconnectAction,
+}: AgentListViewProps) {
   return (
-    <div className="mx-auto flex max-w-3xl flex-col gap-6 px-4 py-8 sm:px-6">
-      <header className="flex flex-col gap-3"><h1 className="text-2xl font-semibold tracking-tight text-fg">Your agents</h1>
-        <p className="text-sm text-fg-muted">Choose an agent to manage its connectors, vault access, skills, memory, spending and audit log.</p>
-        <div className="flex flex-wrap gap-2"><a href="/agents/connect" className={BTN_PRIMARY}>Connect an agent</a><a href="/settings/agents" className={BTN_SECONDARY}>Global agent settings</a></div>
+    <div className="wh-page flex flex-col gap-6">
+      <header className="flex flex-col gap-3">
+        <h1 className="text-2xl font-semibold tracking-tight text-fg">
+          Your agents
+        </h1>
+        <p className="text-sm text-fg-muted">
+          Choose an agent to manage its connectors, vault access, skills,
+          memory, spending and audit log.
+        </p>
+        <div className="flex flex-wrap gap-2">
+          <a href="/agents/connect" className={BTN_PRIMARY}>
+            Connect an agent
+          </a>
+          <a href="/settings/agents" className={BTN_SECONDARY}>
+            Global agent settings
+          </a>
+        </div>
       </header>
 
       {agents.length === 0 ? (
@@ -173,9 +209,13 @@ export function AgentListView({ agents, disconnectAction }: AgentListViewProps) 
           }
         />
       ) : (
-        <ul className="flex flex-col gap-3">
+        <ul className="divide-y divide-line border-t border-line">
           {agents.map((agent) => (
-            <AgentCard key={agent.id} agent={agent} disconnectAction={disconnectAction} />
+            <AgentCard
+              key={agent.id}
+              agent={agent}
+              disconnectAction={disconnectAction}
+            />
           ))}
         </ul>
       )}

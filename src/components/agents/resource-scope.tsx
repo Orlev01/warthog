@@ -46,15 +46,21 @@ export function ResourceScope({
   const resource = RESOURCES[key];
   if (!resource) return null;
   return (
-    <aside
-      aria-label="Resource scope"
-      className="mx-auto flex w-full max-w-3xl flex-col gap-3 px-4 pt-6 sm:px-6"
-    >
-      <div className="rounded-card border border-line bg-surface-muted p-4">
-        <p className="text-sm font-semibold">Account resources · all agents</p>
-        <p className="mt-1 text-sm text-fg-muted">{resource.description}</p>
+    <aside aria-label="Resource scope" className="wh-resource-scope">
+      <div className="wh-resource-scope-inner">
+        <div className="flex min-w-0 flex-1 flex-wrap items-center gap-x-4">
+          <p className="text-sm font-medium">Account resources</p>
+          <details className="text-xs text-fg-muted">
+            <summary className="inline-flex min-h-11 cursor-pointer items-center underline decoration-line-strong underline-offset-4 sm:min-h-8">
+              How access works
+            </summary>
+            <p className="max-w-xl pb-2 text-sm leading-relaxed">
+              {resource.description}
+            </p>
+          </details>
+        </div>
         {agents.length ? (
-          <label className="mt-3 flex flex-col gap-2 text-sm font-medium">
+          <label className="flex min-w-0 w-full flex-col gap-1.5 text-xs text-fg-muted sm:w-64">
             Manage for an agent
             <Select
               value=""
@@ -65,7 +71,7 @@ export function ResourceScope({
                   );
               }}
             >
-              <option value="">Choose an agent</option>
+              <option value="">Choose an agent…</option>
               {agents.map((agent) => (
                 <option key={agent.id} value={agent.id}>
                   {agent.name}
@@ -76,7 +82,7 @@ export function ResourceScope({
         ) : (
           <a
             href="/agents/connect"
-            className="mt-3 inline-flex min-h-11 items-center text-sm text-accent underline"
+            className="inline-flex min-h-11 items-center text-sm font-medium text-accent underline underline-offset-4"
           >
             Connect your first agent
           </a>

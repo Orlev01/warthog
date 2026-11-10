@@ -17,11 +17,8 @@ import {
 import { PORTAL_NAV } from "@/components/shell/nav";
 import { SignOutControl } from "@/components/shell/sign-out";
 
-// MoreMenu — the mobile "More" menu (brief design_ux, technical-design §12). On
-// mobile the bottom nav's "More" tab is the only way into the More sections, so
-// this screen lists every one of them as a full-width link, keeping everything
-// two taps away. The desktop sidebar shows these same children inline, so this
-// page is the mobile counterpart of that list.
+// MoreMenu keeps the legacy /more route useful for bookmarks. The grouped desktop
+// sidebar and mobile drawer now expose these destinations directly.
 //
 // The destinations — their labels and IA routes, in order — come from the ONE
 // source of truth, the portal IA (`@/components/shell/nav`): this component reads
@@ -55,7 +52,7 @@ const MORE_CHILDREN = PORTAL_NAV.find((n) => n.key === "more")?.children ?? [];
 
 export function MoreMenu() {
   return (
-    <div className="mx-auto flex max-w-3xl flex-col gap-6 px-4 py-8 sm:px-6">
+    <div className="wh-page flex flex-col gap-6">
       <h1 className="text-2xl font-semibold tracking-tight text-fg">More</h1>
 
       <nav aria-label="More" className="flex flex-col gap-2">

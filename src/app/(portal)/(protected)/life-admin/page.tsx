@@ -1,4 +1,5 @@
 import * as React from "react";
+import { NavigationTabs } from "@/components/shell/section-navigation";
 import { cookies } from "next/headers";
 import { redirect } from "next/navigation";
 import { revalidatePath } from "next/cache";
@@ -245,32 +246,11 @@ function NoticeBanner({ notice }: { notice: Notice }) {
 // navigable.
 type LifeAdminTab = "life" | "tasks";
 
-const TAB_BASE =
-  "inline-flex min-h-11 items-center justify-center rounded-card px-4 text-sm font-medium transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-focus focus-visible:ring-offset-2 focus-visible:ring-offset-bg";
-const TAB_ACTIVE = `${TAB_BASE} border border-line bg-surface-muted text-fg`;
-const TAB_INACTIVE = `${TAB_BASE} text-fg-muted hover:bg-surface-muted`;
-
 function SectionTabs({ active }: { active: LifeAdminTab }) {
-  return (
-    <div className="mx-auto w-full max-w-3xl px-4 pt-6 sm:px-6">
-      <nav className="flex flex-wrap gap-2" aria-label="Life admin sections">
-        <a
-          href="/life-admin?view=life"
-          aria-current={active === "life" ? "page" : undefined}
-          className={active === "life" ? TAB_ACTIVE : TAB_INACTIVE}
-        >
-          Life admin
-        </a>
-        <a
-          href="/life-admin?view=tasks"
-          aria-current={active === "tasks" ? "page" : undefined}
-          className={active === "tasks" ? TAB_ACTIVE : TAB_INACTIVE}
-        >
-          Tasks
-        </a>
-      </nav>
-    </div>
-  );
+  return <div className="wh-section-navigation"><NavigationTabs label="Life admin views" items={[
+    {label: "Records & reminders", href: "/life-admin?view=life", active: active === "life"},
+    {label: "Tasks", href: "/life-admin?view=tasks", active: active === "tasks"},
+  ]}/></div>;
 }
 
 export default async function LifeAdminPage({
@@ -303,7 +283,7 @@ export default async function LifeAdminPage({
       {notice ? <NoticeBanner notice={notice} /> : null}
       <SectionTabs active={active} />
       {active === "tasks" ? (
-        <div className="mx-auto w-full max-w-3xl px-4 py-8 sm:px-6">
+        <div className="wh-page">
           <TasksView
             tasks={data.tasks}
             agents={data.agents}
@@ -315,6 +295,7 @@ export default async function LifeAdminPage({
         </div>
       ) : (
         <LifeAdminView
+          initialTab={params.tab === "receipts" || params.tab === "renewals" || params.tab === "checklist" ? params.tab : "subscriptions"}
           subscriptions={data.subscriptions}
           receipts={data.receipts}
           renewals={data.renewals}

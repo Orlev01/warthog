@@ -365,7 +365,7 @@ function NoticeBanner({ notice }: { notice: Notice }) {
 // Offered to a person in no household: the one control that starts one they own.
 function CreateHouseholdPrompt() {
   return (
-    <section className="mx-auto flex max-w-3xl flex-col gap-4 px-4 py-8 sm:px-6">
+    <section className="wh-page wh-page--reading flex flex-col gap-4">
       <h1 className="text-2xl font-semibold tracking-tight text-fg">Household</h1>
       <Card className="flex flex-col gap-3">
         <p className="text-fg">

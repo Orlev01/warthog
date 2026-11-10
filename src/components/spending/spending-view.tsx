@@ -184,7 +184,7 @@ function householdLine(household: SpendingHouseholdReport): string {
 
 export function SpendingView({ own, household, accountCurrency, currencyOptions }: SpendingViewProps) {
   return (
-    <section className="mx-auto flex max-w-3xl flex-col gap-8 px-4 py-8 sm:px-6">
+    <section className="wh-page flex flex-col gap-8 [overflow-wrap:anywhere]">
       {/* ----- Title + the account-currency selector ----- */}
       <div className="flex flex-col gap-3 sm:flex-row sm:items-end sm:justify-between">
         <h1 className="text-2xl font-semibold tracking-tight text-fg">Spending</h1>

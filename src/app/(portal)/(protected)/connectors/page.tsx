@@ -239,6 +239,7 @@ export default async function ConnectorsPage({
     <>
       {notice ? <div className="mx-auto w-full max-w-3xl px-4 pt-8 sm:px-6"><Notice tone={notice.tone}>{notice.text}</Notice></div> : null}
       <ConnectorsView
+        initialView={typeof params.view === "string" ? params.view : undefined}
         {...data}
         connectAction={connectAction}
         disconnectAction={disconnectAction}

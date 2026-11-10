@@ -2,7 +2,7 @@
 // active-section resolver — a pure module, no React and no I/O. It is the single
 // canonical list of portal destinations: the AppShell (app-shell.tsx) is
 // prop-driven and pages pass an `activeSection` string, so both the mobile
-// bottom nav and the desktop sidebar read their destinations from here, and
+// drawer and the desktop sidebar read their destinations from here, and
 // activeSectionForPath turns the current pathname into the `key` that lights the
 // matching item. The `key` values ARE the AppShell `activeSection` values — a
 // real cross-task contract, not an arbitrary naming choice.
@@ -25,8 +25,8 @@ const SETTINGS_CHILDREN: readonly NavNode[] = [
   { key: "data", label: "Data & privacy", href: "/settings/data" },
 ];
 
-// The "More" group — reachable directly in the desktop sidebar and behind "More"
-// on mobile. Copy and routes per the brief (design_ux) and technical-design §1.
+// The legacy "More" group remains a stable route inventory. The current shell
+// organizes these destinations into the groups in workspace-navigation.ts.
 const MORE_CHILDREN: readonly NavNode[] = [
   { key: "vault", label: "Vault", href: "/vault" },
   { key: "connectors", label: "Connectors", href: "/connectors" },
@@ -40,8 +40,7 @@ const MORE_CHILDREN: readonly NavNode[] = [
   { key: "help", label: "Help", href: "/help" },
 ];
 
-// The portal IA: the five primary sections in documented left-to-right order.
-// Home, Inbox, Activity and Agents are leaves; More groups the rest.
+// Stable portal route inventory, including the legacy /more destination.
 export const PORTAL_NAV: readonly NavNode[] = [
   { key: "home", label: "Home", href: "/home" },
   { key: "inbox", label: "Inbox", href: "/inbox" },

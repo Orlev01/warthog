@@ -14,9 +14,17 @@ import { renderToStaticMarkup } from "react-dom/server";
 
 import { LifeAdminView, nextTabIndex } from "./life-admin-view";
 
-function render(initialTab?: "subscriptions" | "receipts" | "renewals" | "checklist"): string {
+function render(
+  initialTab?: "subscriptions" | "receipts" | "renewals" | "checklist",
+): string {
   return renderToStaticMarkup(
-    <LifeAdminView subscriptions={[]} receipts={[]} renewals={[]} checklist={[]} initialTab={initialTab} />,
+    <LifeAdminView
+      subscriptions={[]}
+      receipts={[]}
+      renewals={[]}
+      checklist={[]}
+      initialTab={initialTab}
+    />,
   );
 }
 
@@ -30,32 +38,55 @@ test("the section buttons are tabs in a labelled tablist, exactly one selected, 
   assert.ok(tablist, "a tablist is rendered");
   assert.ok(attr(tablist![1]!, "aria-label"), "the tablist is labelled");
 
-  const tabs = [...markup.matchAll(/<button\b([^>]*role="tab"[^>]*)>([\s\S]*?)<\/button>/g)].map((m) => ({
+  const tabs = [
+    ...markup.matchAll(/<button\b([^>]*role="tab"[^>]*)>([\s\S]*?)<\/button>/g),
+  ].map((m) => ({
     attrs: m[1]!,
-    text: m[2]!.replace(/<[^>]*>/g, "").replace(/&amp;/g, "&").trim(),
+    text: m[2]!
+      .replace(/<[^>]*>/g, "")
+      .replace(/&amp;/g, "&")
+      .trim(),
   }));
   assert.deepEqual(
     tabs.map((t) => t.text),
-    ["Subscriptions", "Receipts & warranties", "Renewals & appointments", "Moving checklist"],
+    [
+      "Subscriptions",
+      "Receipts & warranties",
+      "Renewals & appointments",
+      "Moving checklist",
+    ],
   );
-  const selected = tabs.filter((t) => attr(t.attrs, "aria-selected") === "true");
+  const selected = tabs.filter(
+    (t) => attr(t.attrs, "aria-selected") === "true",
+  );
   assert.equal(selected.length, 1);
   assert.equal(selected[0]!.text, "Receipts & warranties");
-  assert.equal(tabs.filter((t) => attr(t.attrs, "aria-selected") === "false").length, 3);
+  assert.equal(
+    tabs.filter((t) => attr(t.attrs, "aria-selected") === "false").length,
+    3,
+  );
   // Roving tabindex: only the selected tab is in the tab order.
-  assert.deepEqual(tabs.map((t) => attr(t.attrs, "tabindex")), ["-1", "0", "-1", "-1"]);
+  assert.deepEqual(
+    tabs.map((t) => attr(t.attrs, "tabindex")),
+    ["-1", "0", "-1", "-1"],
+  );
 
   const panelId = attr(selected[0]!.attrs, "aria-controls");
   assert.ok(panelId);
   const panel = new RegExp(`<div\\b([^>]*id="${panelId}"[^>]*)>`).exec(markup);
   assert.ok(panel, "aria-controls points at a rendered element");
   assert.equal(attr(panel![1]!, "role"), "tabpanel");
-  assert.equal(attr(panel![1]!, "aria-labelledby"), attr(selected[0]!.attrs, "id"));
+  assert.equal(
+    attr(panel![1]!, "aria-labelledby"),
+    attr(selected[0]!.attrs, "id"),
+  );
 });
 
 test("the selected tab is marked by more than colour", () => {
   const markup = render("subscriptions");
-  const selected = /<button\b([^>]*aria-selected="true"[^>]*)>/.exec(markup)![1]!;
+  const selected = /<button\b([^>]*aria-selected="true"[^>]*)>/.exec(
+    markup,
+  )![1]!;
   const other = /<button\b([^>]*aria-selected="false"[^>]*)>/.exec(markup)![1]!;
   assert.match(selected, /\bfont-semibold\b/);
   assert.ok(!/\bfont-semibold\b/.test(other));
@@ -68,4 +99,13 @@ test("arrow keys, Home and End move between tabs, wrapping at the ends", () => {
   assert.equal(nextTabIndex(2, "Home", 4), 0);
   assert.equal(nextTabIndex(1, "End", 4), 3);
   assert.equal(nextTabIndex(1, "a", 4), null, "other keys are left alone");
+});
+
+test("record panels stay mounted with only the selected panel visible", () => {
+  const markup = render("receipts");
+  const panels = [
+    ...markup.matchAll(/<div\b([^>]*role="tabpanel"[^>]*)>/g),
+  ].map((match) => match[1]!);
+  assert.equal(panels.length, 4);
+  assert.equal(panels.filter((attrs) => /\bhidden=""/.test(attrs)).length, 3);
 });

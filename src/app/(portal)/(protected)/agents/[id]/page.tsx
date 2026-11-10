@@ -151,7 +151,7 @@ export default async function AgentPermissionsPage({
   );
   if (!data) notFound();
   return (
-    <div className="mx-auto flex w-full max-w-2xl flex-col gap-6 px-4 py-8 [overflow-wrap:anywhere] sm:px-6">
+    <div className="wh-page wh-page--reading flex flex-col gap-6 [overflow-wrap:anywhere]">
       <AgentWorkspaceHeader data={data} section={section} />
       {section === "overview" ? (
         <AgentOverview data={data} permissions={props} />

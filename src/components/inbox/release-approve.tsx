@@ -467,7 +467,7 @@ function getDefaultReleaseFlow(): ReleaseFlow {
 // ─── styling (design tokens; no raw hex) ──────────────────────────────────────────────
 
 const BTN_BASE =
-  "inline-flex min-h-11 items-center justify-center gap-2 rounded-card px-4 text-sm font-medium transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-focus focus-visible:ring-offset-2 focus-visible:ring-offset-bg";
+  "inline-flex min-h-11 items-center justify-center gap-2 rounded-full px-4 text-sm font-medium transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-focus focus-visible:ring-offset-2 focus-visible:ring-offset-bg";
 // Deliberately omits any `disabled:` utility variant so a LIVE control's class never
 // reads as "disabled" to a markup scan; the native `disabled` attribute disables it.
 const BTN_PRIMARY = `${BTN_BASE} bg-accent text-accent-fg hover:bg-accent-hover`;

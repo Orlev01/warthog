@@ -1,51 +1,45 @@
 ---
 name: warthog-desktop-design
-description: Polish Warthog's desktop and wide-screen content widths, page composition, sidebar layout and keyboard access while preserving mobile reflow. Use for stretched forms, oversized cards or desktop density changes.
+description: Compose Warthog's admin-console desktop frame, bounded workspace content, grouped navigation and route/sub-view tabs while preserving mobile reflow.
 ---
 
 # Warthog desktop design
 
-Use [Warthog's foundations](../warthog-design-system/SKILL.md). Extra viewport width
-is available space, not an instruction to enlarge every card or form.
+Use the [foundations](../warthog-design-system/SKILL.md) and
+[measured reference](../../../docs/design/admin-console-reference.md).
 
-## Choose a width by purpose
+## Frame and width
 
-| Surface | Existing starting point |
-| --- | --- |
-| Authentication and one-task entry | `max-w-sm` (24rem), as in `auth-views.tsx` |
-| Focused settings, detail lists and forms | `max-w-2xl` (42rem), the `PageContainer` default |
-| Dashboard, spending and broader summaries | `max-w-3xl` (48rem), as in their existing views |
-| Long-form prose | A readable prose measure within its page container |
+- `AppShell` owns a 260px sidebar at 1024px and above. Its navigation scrolls
+  independently; the brand and account footer remain reachable on short screens.
+- The shared 52px header and optional route tabs span the main area. The main
+  flex child must have `min-width: 0`; large content must not move the sidebar.
+- `wh-page` owns gutters and caps broad lists/dashboards at 1216px. Use one outer
+  width owner, never a page container nested inside another page container.
+- `PageContainer` defaults to the 896px reading width. Use `size="form"` for a
+  768px focused flow, or `size="wide"` for a comparative workspace/library.
+  Individual forms and prose may need a narrower local maximum.
+- Do not override these unlayered workspace CSS classes with contradictory
+  Tailwind width/padding utilities. Use the explicit size/modifier API.
 
-These are defaults, not reasons to normalize every existing screen. A genuinely
-comparative workspace can justify more space, but document the content need and
-check both narrow and wide behavior. Do not replace content caps with `w-screen`
-or unrestricted `w-full` to fill the monitor.
+## Composition
 
-## Compose the page
+- Start with grouped navigation, a page heading and one clear active task.
+  Use real route tabs to coordinate related screens; use an in-page panel when
+  the same loaded workspace switches views. Keep link and tab semantics distinct.
+- Agent resource and control sub-tabs stay within the same agent. Account-level
+  resource scope is a compact toolbar; do not obscure which grants are edited.
+- Use 32px desktop content gutters, 24–32px section gaps, subtle dividers and
+  aligned rows. Avoid a border around every paragraph or excessive nested cards.
+- Additional columns must support comparison or adjacent tasks. Use shrinking
+  tracks such as `minmax(0,1fr)`; preserve reading order when columns collapse.
+- Short actions stay compact. Long names wrap. Tables use labelled local scrolling
+  when necessary; the document itself must not scroll horizontally.
+- Active tabs have a visible underline or shape cue. Hover-only actions must also
+  work on focus. Preserve focus visibility at every container boundary.
 
-- Use one centered outer width/gutter owner. Inspect the view before adding
-  [PageContainer](../../../src/components/shell/page-container.tsx); some views
-  already own their container. Keep titles, section edges and primary content aligned.
-- [AppShell](../../../src/components/shell/app-shell.tsx) switches to its 16rem
-  sidebar at `lg` (1024px). The main flex child must be allowed to shrink with
-  `min-w-0`. A wide child must not push the sidebar or document off-screen.
-- Use multiple columns for related information people compare or use together.
-  Keep long forms in one readable column; pair short fields only when their
-  relationship is clear. Do not stretch a short action to full desktop width.
-- Give grid tracks explicit shrink behavior (`minmax(0,1fr)` where appropriate).
-  Make page headers wrap or stack when their title and actions compete for space.
-- Preserve comfortable 24–32px section spacing. Avoid huge blank card interiors,
-  arbitrary equal heights and nested containers introduced only for symmetry.
-- Keep sidebar navigation and its footer reachable on short screens. For dialogs,
-  cap width for the task and height for the viewport; preserve internal scrolling.
-- Mouse convenience does not replace keyboard access. Actions revealed on hover
-  must also be available on focus, with visible focus that is not clipped.
+## Verification
 
-## Review evidence
-
-Inspect just below and above the 1024px navigation change, then at 1440px and a
-wider monitor width if the change concerns stretching. Include a short viewport,
-long labels/values and browser zoom. Verify deliberate content caps and whitespace,
-stable sidebar placement, reachable controls and no document-level horizontal
-scroll. Recheck the mobile layout after altering any shared container or primitive.
+Check 1023px, 1024px, 1440px and a wider monitor, plus a short viewport and zoom.
+Confirm intended width caps, sidebar/footer reachability, tab overflow containment
+and deliberate whitespace. Recheck phones after changing shared primitives.

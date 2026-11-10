@@ -35,7 +35,7 @@
 //       with NO prop, so a propless render must work (it reads usePathname at
 //       runtime), and the tests that need to control the path pass `pathname`.
 //     • Derives the active section with activeSectionForPath(path) (from ./nav) and
-//       renders the shared app shell — BOTH the mobile bottom nav and the desktop
+//       renders the shared app shell — BOTH the mobile drawer and the desktop
 //       sidebar — with that section marked current, the full IA linked to its real
 //       routes, and the page content rendered inside the <main> content region.
 //
@@ -117,6 +117,8 @@ function accessibleName(attrs: string, inner: string): string {
 // do not nest anchors, so the non-greedy match to the first close tag is correct).
 function parseItems(markup: string): Item[] {
   const items: Item[] = [];
+  // Route tabs can mark their own current sub-page; this test concerns primary navigation.
+  markup = [...markup.matchAll(/<nav\b[^>]*aria-label="(?:Primary|Mobile navigation)"[^>]*>([\s\S]*?)<\/nav>/g)].map(m => m[1]).join("");
   for (const m of markup.matchAll(/<(a|button)\b([^>]*)>([\s\S]*?)<\/\1>/gi)) {
     const tag = m[1].toLowerCase();
     const itemAttrs = m[2];
@@ -158,12 +160,12 @@ test("renders the page content inside the app shell's <main> region", () => {
   );
 });
 
-test("renders both shared navigation surfaces (the mobile bottom nav and the desktop sidebar)", () => {
+test("renders both shared navigation surfaces (the mobile drawer and the desktop sidebar)", () => {
   const markup = render("/home");
   const navCount = [...markup.matchAll(/<nav\b/gi)].length;
   assert.ok(
     navCount >= 2,
-    `PortalChrome must render the two nav surfaces (bottom nav + sidebar), got ${navCount}`,
+    `PortalChrome must render the two nav surfaces (drawer + sidebar), got ${navCount}`,
   );
 });
 
@@ -173,7 +175,7 @@ test("every primary section and More child links to its real route from the IA",
   const markup = render("/home");
   const links = parseItems(markup).filter((it) => it.tag === "a" && it.href != null);
 
-  for (const node of DESTINATIONS) {
+  for (const node of DESTINATIONS.filter(node => node.key !== "more")) {
     const href = node.href!;
     // Settings leads into the /settings area; nav.ts leaves its exact href free
     // (it may be /settings or a first sub-page), so match it by prefix — every
@@ -232,6 +234,7 @@ for (const path of PATH_CASES) {
     const stem = label!.split(/[\s&]+/).filter(Boolean)[0] ?? label!;
 
     const current = parseItems(render(path)).filter((it) => it.current);
+    if (key === "more") { assert.equal(current.length, 0); return; }
     assert.ok(
       current.length >= 1,
       `${path} must light its nav item (expected the "${label}" section), but nothing is marked current`,

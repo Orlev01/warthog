@@ -3,7 +3,9 @@
 Warthog is the Next.js personal agent home described in [brief.yaml](brief.yaml).
 Read [CLAUDE.md](CLAUDE.md) and the relevant sections of the
 [technical design](docs/design/technical-design.md) before changing behavior.
-Preserve the existing visual identity; UI work should improve the affected flow.
+Follow the [admin console design decision](docs/adr/admin-console-design.md) and
+[measured reference](docs/design/admin-console-reference.md). Preserve Warthog's
+identity and functionality within that visual system.
 
 For UI changes, use [warthog-design-system](.agents/skills/warthog-design-system/SKILL.md)
 and only the focused skills relevant to the change:
