@@ -100,7 +100,11 @@ function authorizationServer(entry: CatalogueEntry): AuthorizationServer {
     throw new Error(`connector ${entry.id} has no token endpoint`);
   }
   return {
-    issuer: new URL(tokenUrl).origin,
+    // Google publishes a distinct issuer and token endpoint origin. Identity
+    // scopes can return an ID token, whose issuer must still be checked exactly.
+    // https://accounts.google.com/.well-known/openid-configuration
+    issuer: tokenUrl === "https://oauth2.googleapis.com/token"
+      ? "https://accounts.google.com" : new URL(tokenUrl).origin,
     authorization_endpoint: entry.auth.authorize_url,
     token_endpoint: tokenUrl,
   };

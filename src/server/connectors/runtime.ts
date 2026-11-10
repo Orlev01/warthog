@@ -18,6 +18,17 @@ import { scheduleConnectionRefresh, scheduleGoogleLapse } from "./jobs";
 import { HttpError } from "../http/validate";
 import type { CatalogueEntry } from "../../domain/catalogue/schema";
 
+function reportConnectorFailure(stage: string, error: unknown) {
+  const detail = error as { code?: unknown; cause?: { claim?: unknown } } | null;
+  const allowedCodes = new Set(["OAUTH_JWT_CLAIM_COMPARISON_FAILED", "OAUTH_JWT_TIMESTAMP_CHECK_FAILED",
+    "OAUTH_INVALID_RESPONSE", "OAUTH_RESPONSE_BODY_ERROR", "OAUTH_RESPONSE_IS_NOT_JSON"]);
+  const code = typeof detail?.code === "string" && allowedCodes.has(detail.code) ? detail.code : "unexpected";
+  const claim = typeof detail?.cause?.claim === "string" && ["iss", "aud", "exp", "iat", "nonce"].includes(detail.cause.claim)
+    ? detail.cause.claim : undefined;
+  // No provider response body, raw error, claims, identity or credential values.
+  console.error("[warthog connector]", JSON.stringify({ stage, code, ...(claim ? { claim } : {}) }));
+}
+
 export interface CompleteConnectorInput extends PendingConnectFlow { readonly userId: string; readonly code: string; readonly state: string }
 
 export function createConnectorRuntime(deps: {
@@ -76,16 +87,22 @@ export function createConnectorRuntime(deps: {
       const entry = entryFor(input.connectorId);
       await allowed(input.userId, entry);
       const dek = await keyFor(input.userId);
+      let stage = "token_exchange";
       try {
         return await withTransaction(db, async (tx) => {
           const connection = await exchangeCodeForConnection({ ...input, entry, config: oauthClientFor(config, entry.id), dek }, { db: tx, clock, fetch: request, accountLabelFor });
+          stage = "schedule_refresh";
           await schedule(tx, input.userId, connection.id, dek);
           if (entry.google_early_access) await scheduleGoogleLapse(tx, { userId: input.userId, connectionId: connection.id, connectedAt: clock.now() });
+          stage = "record_activity";
           await createRedactingRecorder({ db: tx, clock, dekFor: async () => dek }).record({ userId: input.userId,
             kind: "connection_change", source: "warthog", connectorId: entry.id, outcome: "connected", payload: { service: entry.name } });
           return connection;
         });
-      } catch { throw new HttpError(502, "The service could not be connected. Try connecting again."); }
+      } catch (error) {
+        reportConnectorFailure(stage, error);
+        throw new HttpError(502, "The service could not be connected. Try connecting again.");
+      }
       finally { dek.fill(0); }
     },
     async refresh(target: { userId: string; connectionId: string }) {

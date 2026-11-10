@@ -1,5 +1,6 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
+import { generateKeyPairSync, sign } from "node:crypto";
 import { createConnectorRuntime } from "./runtime";
 import { loadConfig } from "../config";
 import { createDb, loadMigrations, runMigrations } from "../db/index";
@@ -55,7 +56,8 @@ test("Microsoft completes and refreshes an owned connection using the returned a
   } finally { await db.close(); }
 });
 
-test("Google connector completes PKCE, stores encrypted tokens, schedules refresh/lapse and refreshes without losing its refresh token", async () => {
+test("Google connector completes PKCE, stores encrypted tokens, schedules refresh/lapse and refreshes without losing its refresh token", async (t) => {
+  const diagnostic = t.mock.method(console, "error", () => {});
   const db = await createDb("pglite:memory");
   try {
     await runMigrations(db, await loadMigrations());
@@ -63,13 +65,22 @@ test("Google connector completes PKCE, stores encrypted tokens, schedules refres
     const session = { id: "initiating-session", userId: user.id, createdAt: now, lastSeenAt: now, steppedUpAt: now };
     const dek = new Uint8Array(32).fill(8);
     const requests: { url: string; body: string }[] = [];
+    const { privateKey } = generateKeyPairSync("rsa", { modulusLength: 2048 });
+    let issuer = "https://accounts.google.com";
+    let audience = "test-google";
+    const idToken = () => {
+      const issued = Math.floor(Date.now() / 1000);
+      const body = [ { alg: "RS256" }, { iss: issuer, aud: audience, sub: "synthetic-google-user", iat: issued, exp: issued + 3600 } ]
+        .map((value) => Buffer.from(JSON.stringify(value)).toString("base64url")).join(".");
+      return body + "." + sign("RSA-SHA256", Buffer.from(body), privateKey).toString("base64url");
+    };
     const runtime = createConnectorRuntime({ db, config, clock: { now: () => now }, keyWrapper: { wrap: async () => "unused", unwrap: async () => dek.slice() },
       fetch: async (url, init) => {
         requests.push({ url: String(url), body: String(init?.body ?? "") });
         if (String(url).includes("userinfo")) return Response.json({ email: "connected@gmail.test" });
         if (String(url).includes("/revoke")) return new Response(null, { status: 200 });
         const refresh = String(init?.body).includes("grant_type=refresh_token");
-        return Response.json({ access_token: refresh ? "new-access-token" : "first-access-token", token_type: "Bearer", expires_in: 3600,
+        return Response.json({ access_token: refresh ? "new-access-token" : "first-access-token", token_type: "Bearer", expires_in: 3600, id_token: idToken(),
           ...(refresh ? {} : { refresh_token: "refresh-token" }) });
       } });
     const drive = new URL((await runtime.begin(session, "google-drive")).url);
@@ -101,6 +112,16 @@ test("Google connector completes PKCE, stores encrypted tokens, schedules refres
     assert.equal(credentials?.refresh_token, "refresh-token");
     await runtime.revoke({ userId: user.id, connectionId: connection.id, connectorId: "google-gmail", credentials: credentials! });
     assert.ok(requests.some((r) => r.url === "https://oauth2.googleapis.com/revoke"));
+    for (const claim of ["iss", "aud"] as const) {
+      issuer = claim === "iss" ? "https://wrong-issuer.example.test" : "https://accounts.google.com";
+      audience = claim === "aud" ? "another-client" : "test-google";
+      const retry = new URL((await runtime.begin(session, "google-gmail")).url);
+      const retryState = retry.searchParams.get("state")!;
+      await assert.rejects(runtime.complete({ ...runtime.take(session, retryState)!, userId: user.id, state: retryState, code: "synthetic-wrong-claim" }), /could not be connected/);
+      const entry = JSON.parse(diagnostic.mock.calls.at(-1)!.arguments[1] as string);
+      assert.deepEqual(entry, { stage: "token_exchange", code: "OAUTH_JWT_CLAIM_COMPARISON_FAILED", claim });
+    }
+    assert.equal((await db.query("SELECT id FROM connections WHERE user_id=$1", [user.id])).rows.length, 1, "rejected identity claims create no connection");
   } finally { await db.close(); }
 });
 

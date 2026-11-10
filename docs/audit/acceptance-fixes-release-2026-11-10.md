@@ -19,6 +19,13 @@ briefly stops the old replica before the new replica acquires database ownership
 - Confirm agent disconnection in an accessible in-page dialog with explicit
   cancellation, replacing the native confirmation that blocked UI acceptance.
 - Link Privacy and Terms from public entry pages and correct the Terms title.
+- Use Google's published issuer (`https://accounts.google.com`) for its exact
+  token endpoint instead of assuming the token-server origin is the issuer.
+  Realistic identity-token tests reproduce the failure and cover completion,
+  refresh and rejection of wrong issuer/audience claims. Provider account labels
+  still come from authenticated userinfo. Callback failures log only safe phase,
+  error-code and claim-name diagnostics, without raw errors or identity values.
+  Source: [Google discovery metadata](https://accounts.google.com/.well-known/openid-configuration).
 - Enforce receipt file limits in the browser and server; reject declared upload
   envelopes above 26 MiB with HTTP 413 before Next's generic multipart error.
   The framework streaming limit remains in place for undeclared/chunked bodies.
@@ -62,8 +69,11 @@ approved private, single-job profile and is removed after the release.
 A fresh production sign-in with email plus the founder's Authenticator passed.
 Exactly one approved Chrome test push was reported sent; the founder is unsure
 whether an OS notification appeared, so desktop delivery remains unconfirmed.
-No repeat push is authorized by that result. Provider consents and isolated
-coordinated recovery remain separate acceptance work; no real account is reset.
+No repeat push is authorized by that result. The founder approved the initial Gmail connection and labels-only read test.
+Google accepted consent, but the first app callback failed; a Google-style ID
+response reproduces the issuer defect above. Live retry and labels verification
+remain pending deployment. Other provider consents and isolated coordinated
+recovery remain separate acceptance work; no real account is reset.
 
 ## Receipt reconciliation operations
 
