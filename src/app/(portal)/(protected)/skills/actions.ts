@@ -74,13 +74,19 @@ export interface SkillsActionsDeps {
 export interface SkillsPageData {
   readonly skills: Skill[];
   readonly preferences: PreferencesProfile | null;
-  readonly houseSkill: { readonly title: string; readonly useThisWhen: string; readonly alwaysIncluded: true };
+  readonly houseSkill: {
+    readonly title: string;
+    readonly useThisWhen: string;
+    readonly alwaysIncluded: true;
+  };
 }
 
 // Every mutation reports its outcome — success, or a refusal naming its reason (the
 // row/agent is not this person's). Never a silent success (conventions: a server
 // action reports success, the refusal reason, or a 4xx).
-export type ActionResult = { readonly ok: true } | { readonly ok: false; readonly reason: string };
+export type ActionResult =
+  | { readonly ok: true }
+  | { readonly ok: false; readonly reason: string };
 
 // The six communication-style fields of the ONE profile. The owner is taken from the
 // session, never from this input.
@@ -122,7 +128,10 @@ export interface ToggleSkillInput {
 
 export interface SkillsActions {
   load(session: Session): Promise<SkillsPageData>;
-  savePreferences(session: Session, input: SavePreferencesInput): Promise<ActionResult>;
+  savePreferences(
+    session: Session,
+    input: SavePreferencesInput,
+  ): Promise<ActionResult>;
   createSkill(session: Session, input: CreateSkillInput): Promise<ActionResult>;
   editSkill(session: Session, input: EditSkillInput): Promise<ActionResult>;
   duplicateSkill(session: Session, input: SkillIdInput): Promise<ActionResult>;
@@ -187,7 +196,10 @@ export function createSkillsActions(deps: SkillsActionsDeps): SkillsActions {
   // Whether EVERY listed agent id is one of this person's OWN agents (member-scoped:
   // getAgentById binds id AND user_id, so a foreign or nonexistent id yields null).
   // An empty list is trivially owned.
-  async function allAgentsOwned(userId: string, agentIds: readonly string[]): Promise<boolean> {
+  async function allAgentsOwned(
+    userId: string,
+    agentIds: readonly string[],
+  ): Promise<boolean> {
     for (const agentId of agentIds) {
       if (!(await getAgentById(db, userId, agentId))) return false;
     }
@@ -198,7 +210,10 @@ export function createSkillsActions(deps: SkillsActionsDeps): SkillsActions {
   // bound). Used to refuse a cross-user edit / duplicate up front rather than letting
   // the store throw — so the refusal is a reported { ok: false }, never a raw 500.
   async function ownsSkill(userId: string, id: string): Promise<boolean> {
-    const result = await db.query("SELECT id FROM skills WHERE id = $1 AND user_id = $2", [id, userId]);
+    const result = await db.query(
+      "SELECT id FROM skills WHERE id = $1 AND user_id = $2",
+      [id, userId],
+    );
     return result.rows.length > 0;
   }
 
@@ -207,7 +222,13 @@ export function createSkillsActions(deps: SkillsActionsDeps): SkillsActions {
   // skill. Another person's content never appears.
   async function load(session: Session): Promise<SkillsPageData> {
     const dek = await dataKeyFor(session.userId);
-    const skills = await effectiveSkillAudiences(db, session.userId, await listSkillsForUser(db, session.userId, dek));
+    const skills = await effectiveSkillAudiences(
+      db,
+      session.userId,
+      await listSkillsForUser(db, session.userId, dek, {
+        omitPackageText: true,
+      }),
+    );
     const preferences = await getPreferences(db, session.userId, dek);
     return {
       skills,
@@ -223,7 +244,10 @@ export function createSkillsActions(deps: SkillsActionsDeps): SkillsActions {
   // Upsert the session person's ONE communication-style profile (one row per person).
   // Validate at the boundary first (a 4xx before any write); the owner is the
   // session's id, so a userId smuggled in the input is ignored.
-  async function savePreferences(session: Session, input: SavePreferencesInput): Promise<ActionResult> {
+  async function savePreferences(
+    session: Session,
+    input: SavePreferencesInput,
+  ): Promise<ActionResult> {
     const valid = parseParams(savePreferencesSchema, input);
     const dek = await dataKeyFor(session.userId);
     await savePreferencesRow(db, { userId: session.userId, ...valid }, dek);
@@ -233,10 +257,16 @@ export function createSkillsActions(deps: SkillsActionsDeps): SkillsActions {
   // Create a NEW skill for the session person (content DEK-encrypted by the store).
   // Validate at the boundary first (a 4xx before any write); a 'chosen' scope is
   // refused — storing nothing — unless every named agent is this person's own.
-  async function createSkill(session: Session, input: CreateSkillInput): Promise<ActionResult> {
+  async function createSkill(
+    session: Session,
+    input: CreateSkillInput,
+  ): Promise<ActionResult> {
     const valid = parseParams(createSkillSchema, input);
     const scopedAgentIds = valid.scopedAgentIds ?? [];
-    if (valid.scope === "chosen" && !(await allAgentsOwned(session.userId, scopedAgentIds))) {
+    if (
+      valid.scope === "chosen" &&
+      !(await allAgentsOwned(session.userId, scopedAgentIds))
+    ) {
       return { ok: false, reason: "unknown_agent" };
     }
     const dek = await dataKeyFor(session.userId);
@@ -259,32 +289,42 @@ export function createSkillsActions(deps: SkillsActionsDeps): SkillsActions {
   // malformed id is a 4xx before any query); a 'chosen' scope is refused — leaving the
   // skill unchanged — unless every named agent is this person's own; a skill that is
   // not this person's is refused and left unchanged.
-  async function editSkill(session: Session, input: EditSkillInput): Promise<ActionResult> {
+  async function editSkill(
+    session: Session,
+    input: EditSkillInput,
+  ): Promise<ActionResult> {
     const valid = parseParams(editSkillSchema, input);
-    if (await isPackagedSkill(db, session.userId, valid.id)) return { ok: false, reason: "edit_package" };
+    if (await isPackagedSkill(db, session.userId, valid.id))
+      return { ok: false, reason: "edit_package" };
     const scopedAgentIds = valid.scopedAgentIds ?? [];
-    if (valid.scope === "chosen" && !(await allAgentsOwned(session.userId, scopedAgentIds))) {
+    if (
+      valid.scope === "chosen" &&
+      !(await allAgentsOwned(session.userId, scopedAgentIds))
+    ) {
       return { ok: false, reason: "unknown_agent" };
     }
     if (!(await ownsSkill(session.userId, valid.id))) {
       return { ok: false, reason: "not_found" };
     }
     const dek = await dataKeyFor(session.userId);
-    await withTransaction(db, async tx => {
-    await editSkillRow(
-      tx,
-      session.userId,
-      valid.id,
-      {
-        title: valid.title,
-        useThisWhen: valid.useThisWhen,
-        fullText: valid.fullText,
-        scope: valid.scope,
-        scopedAgentIds,
-      },
-      dek,
-    );
-      await tx.query("DELETE FROM agent_skill_access WHERE user_id = $1 AND skill_id = $2", [session.userId, valid.id]);
+    await withTransaction(db, async (tx) => {
+      await editSkillRow(
+        tx,
+        session.userId,
+        valid.id,
+        {
+          title: valid.title,
+          useThisWhen: valid.useThisWhen,
+          fullText: valid.fullText,
+          scope: valid.scope,
+          scopedAgentIds,
+        },
+        dek,
+      );
+      await tx.query(
+        "DELETE FROM agent_skill_access WHERE user_id = $1 AND skill_id = $2",
+        [session.userId, valid.id],
+      );
     });
     return { ok: true };
   }
@@ -292,9 +332,13 @@ export function createSkillsActions(deps: SkillsActionsDeps): SkillsActions {
   // Copy an OWNED skill into a new one. Validate the id at the boundary (a 4xx before
   // any query), refuse up front when the skill is not this person's (so nothing is
   // created), then duplicate through the store (re-encrypting under the new row's id).
-  async function duplicateSkill(session: Session, input: SkillIdInput): Promise<ActionResult> {
+  async function duplicateSkill(
+    session: Session,
+    input: SkillIdInput,
+  ): Promise<ActionResult> {
     const valid = parseParams(skillIdInputSchema, input);
-    if (await isPackagedSkill(db, session.userId, valid.id)) return { ok: false, reason: "edit_package" };
+    if (await isPackagedSkill(db, session.userId, valid.id))
+      return { ok: false, reason: "edit_package" };
     if (!(await ownsSkill(session.userId, valid.id))) {
       return { ok: false, reason: "not_found" };
     }
@@ -306,24 +350,41 @@ export function createSkillsActions(deps: SkillsActionsDeps): SkillsActions {
   // Switch an OWNED skill on/off. Validate at the boundary (a malformed id or a
   // non-boolean is a 4xx before any query), then flip `enabled` member-scoped (id AND
   // user_id bound): a skill that is not this person's matches nothing and is refused.
-  async function toggleSkill(session: Session, input: ToggleSkillInput): Promise<ActionResult> {
+  async function toggleSkill(
+    session: Session,
+    input: ToggleSkillInput,
+  ): Promise<ActionResult> {
     const valid = parseParams(toggleSkillSchema, input);
     const result = await db.query(
       "UPDATE skills SET enabled = $3 WHERE id = $1 AND user_id = $2 RETURNING id",
       [valid.id, session.userId, valid.enabled],
     );
-    return result.rows.length > 0 ? { ok: true } : { ok: false, reason: "not_found" };
+    return result.rows.length > 0
+      ? { ok: true }
+      : { ok: false, reason: "not_found" };
   }
 
   // Delete an OWNED skill. Validate the id at the boundary (a 4xx before any query),
   // then delete member-scoped (id AND user_id bound): a skill that is not this
   // person's removes nothing and is a safe no-op refusal.
-  async function deleteSkill(session: Session, input: SkillIdInput): Promise<ActionResult> {
+  async function deleteSkill(
+    session: Session,
+    input: SkillIdInput,
+  ): Promise<ActionResult> {
     const valid = parseParams(skillIdInputSchema, input);
-    if (await isPackagedSkill(db, session.userId, valid.id)) return { ok: false, reason: "edit_package" };
+    if (await isPackagedSkill(db, session.userId, valid.id))
+      return { ok: false, reason: "edit_package" };
     const removed = await deleteSkillRow(db, session.userId, valid.id);
     return removed ? { ok: true } : { ok: false, reason: "not_found" };
   }
 
-  return { load, savePreferences, createSkill, editSkill, duplicateSkill, toggleSkill, deleteSkill };
+  return {
+    load,
+    savePreferences,
+    createSkill,
+    editSkill,
+    duplicateSkill,
+    toggleSkill,
+    deleteSkill,
+  };
 }

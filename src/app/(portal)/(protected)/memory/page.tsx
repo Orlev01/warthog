@@ -52,7 +52,10 @@ async function resolveSession(db: Db): Promise<Session | null> {
 // to decrypt/encrypt their memory content; the system clock stamps a newly added memory.
 function buildActions(db: Db): MemoryActions {
   const config = loadConfig();
-  const keyWrapper = selectKeyWrapper({ nodeEnv: config.nodeEnv, localKek: config.devKek });
+  const keyWrapper = selectKeyWrapper({
+    nodeEnv: config.nodeEnv,
+    localKek: config.devKek,
+  });
   return createMemoryActions({ db, keyWrapper, clock: systemClock });
 }
 
@@ -73,7 +76,10 @@ function scopeOf(formData: FormData): "kept" | "shared" {
 // genuine fault rethrows.
 async function run(
   success: Notice,
-  mutate: (actions: MemoryActions, session: Session) => Promise<{ ok: boolean }>,
+  mutate: (
+    actions: MemoryActions,
+    session: Session,
+  ) => Promise<{ ok: boolean }>,
 ): Promise<never> {
   const db = await getServerDb();
   const session = await resolveSession(db);
@@ -90,7 +96,7 @@ async function run(
     if (!(error instanceof HttpError)) {
       throw error;
     }
-    notice = "problem";
+    notice = error.status === 409 ? "storage_full" : "problem";
   }
   revalidatePath("/memory");
   redirect(`/memory?notice=${notice}`);
@@ -99,30 +105,47 @@ async function run(
 async function addMemoryAction(formData: FormData): Promise<void> {
   "use server";
   await run("added", (actions, session) =>
-    actions.addMemory(session, { content: str(formData, "content"), scope: scopeOf(formData) }),
+    actions.addMemory(session, {
+      content: str(formData, "content"),
+      scope: scopeOf(formData),
+    }),
   );
 }
 
 async function editMemoryAction(formData: FormData): Promise<void> {
   "use server";
   await run("updated", (actions, session) =>
-    actions.editMemory(session, { id: str(formData, "id"), content: str(formData, "content") }),
+    actions.editMemory(session, {
+      id: str(formData, "id"),
+      content: str(formData, "content"),
+    }),
   );
 }
 
 async function rescopeMemoryAction(formData: FormData): Promise<void> {
   "use server";
   await run("rescoped", (actions, session) =>
-    actions.rescopeMemory(session, { id: str(formData, "id"), scope: scopeOf(formData) }),
+    actions.rescopeMemory(session, {
+      id: str(formData, "id"),
+      scope: scopeOf(formData),
+    }),
   );
 }
 
 async function deleteMemoryAction(formData: FormData): Promise<void> {
   "use server";
-  await run("deleted", (actions, session) => actions.deleteMemory(session, { id: str(formData, "id") }));
+  await run("deleted", (actions, session) =>
+    actions.deleteMemory(session, { id: str(formData, "id") }),
+  );
 }
 
-type Notice = "added" | "updated" | "rescoped" | "deleted" | "problem";
+type Notice =
+  | "added"
+  | "updated"
+  | "rescoped"
+  | "deleted"
+  | "problem"
+  | "storage_full";
 
 const NOTICES: Record<Notice, { done: boolean; text: string }> = {
   added: { done: true, text: "Memory added." },
@@ -130,6 +153,10 @@ const NOTICES: Record<Notice, { done: boolean; text: string }> = {
   rescoped: { done: true, text: "Memory updated." },
   deleted: { done: true, text: "Memory deleted." },
   problem: { done: false, text: "Something went wrong. Please try again." },
+  storage_full: {
+    done: false,
+    text: "Storage limit reached. Remove unused items or reduce their size before saving.",
+  },
 };
 
 function toNotice(raw: string | string[] | undefined): Notice | null {
@@ -140,9 +167,7 @@ function toNotice(raw: string | string[] | undefined): Notice | null {
 // is announced immediately (alert); a success politely (status).
 function NoticeBanner({ notice }: { notice: Notice }) {
   const { done, text } = NOTICES[notice];
-  return (
-    <InlineNotice tone={done ? "success" : "error"}>{text}</InlineNotice>
-  );
+  return <InlineNotice tone={done ? "success" : "error"}>{text}</InlineNotice>;
 }
 
 function queryOf(raw: string | string[] | undefined): string | undefined {
@@ -165,7 +190,11 @@ export default async function MemoryPage({
     redirect("/signin");
   }
 
-  const data = await buildActions(db).load(session, query);
+  const data = await buildActions(db).load(
+    session,
+    query,
+    typeof params.cursor === "string" ? params.cursor : undefined,
+  );
 
   return (
     <PageContainer className="flex flex-col gap-6">
@@ -173,6 +202,8 @@ export default async function MemoryPage({
       <MemoryView
         memories={data.memories}
         query={data.query}
+        nextCursor={data.nextCursor}
+        hasPreviousPage={typeof params.cursor === "string"}
         addAction={addMemoryAction}
         editAction={editMemoryAction}
         rescopeAction={rescopeMemoryAction}

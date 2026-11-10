@@ -1,4 +1,10 @@
-import { agentMemoryChoices, setAgentMemoryAccess, vaultChoices, ownsVaultFields } from "../../../../../server/agents/resource-access";
+import { pageSkillChoices } from "../../../../../server/db/skills";
+import { agentMemoryChoicesPage } from "../../../../../server/agents/resource-access";
+import {
+  setAgentMemoryAccess,
+  vaultChoices,
+  ownsVaultFields,
+} from "../../../../../server/agents/resource-access";
 // E10-S08 — Per-agent permissions page loader + save action (design §7 connector
 // engine, §8 policy step 2; brief "Per-agent permissions page" — "Each agent's reach
 // is shaped on one screen … card access cannot be switched on without a budget …
@@ -36,11 +42,14 @@ import { agentMemoryChoices, setAgentMemoryAccess, vaultChoices, ownsVaultFields
 //     it persists or the screen it loads.
 
 import { z } from "zod";
-import { getAccountCurrency, isKnownCurrency } from "@/server/db/account-currency";
+import {
+  getAccountCurrency,
+  isKnownCurrency,
+} from "@/server/db/account-currency";
 import { withTransaction } from "@/server/db/index";
 import { systemClock, type Clock } from "@/server/seams/clock";
 import { createRedactingRecorder } from "@/server/mcp/recorder";
-import { agentSkillChoices, setAgentSkillAccess } from "@/server/agents/skill-access";
+import { setAgentSkillAccess } from "@/server/agents/skill-access";
 import { lockOAuthConnection } from "@/server/oauth/connection-lock";
 
 import { getAgentById } from "../../../../../server/db/agents";
@@ -87,7 +96,12 @@ const uuidSchema = z.uuid();
 // the merge so a zero/negative budget is a reported refusal, not a shape error.
 const cardBudgetSchema = z.object({
   amount: z.number(),
-  currency: z.string().min(1).max(MAX_CURRENCY_LENGTH).transform(value => value === "A$" ? "AUD" : value.trim().toUpperCase()).refine(isKnownCurrency),
+  currency: z
+    .string()
+    .min(1)
+    .max(MAX_CURRENCY_LENGTH)
+    .transform((value) => (value === "A$" ? "AUD" : value.trim().toUpperCase()))
+    .refine(isKnownCurrency),
   period: z.enum(["day", "week", "month"]),
 });
 
@@ -104,13 +118,28 @@ const inputSchema = z.object({
   memoryWrite: z.boolean().optional(),
   readTools: z.boolean().optional(),
   changeTools: z.enum(["off", "allow", "ask_first"]).optional(),
-  skills: z.array(z.object({ id: z.uuid(), granted: z.boolean() })).max(1000).optional(),
+  skills: z
+    .array(z.object({ id: z.uuid(), granted: z.boolean() }))
+    .max(1000)
+    .optional(),
   // The screen's identity and memory toggles (low-tier read, high-tier ask, shared-memory
   // read) — rendered on the screen, so every one of them persists (E10-S08 review).
   identity: z.boolean().optional(),
   identityFields: z.array(z.uuid()).max(1000).nullable().optional(),
-  memories: z.array(z.object({id:z.uuid(),granted:z.boolean()})).max(1000).optional(),
-  connectorPolicies: z.record(z.string().max(MAX_SERVICE_LENGTH),z.object({readTools:z.boolean().optional(),changeTools:z.enum(["off","allow","ask_first"]).optional()})).refine(p=>Object.keys(p).length<=MAX_SERVICES).optional(),
+  memories: z
+    .array(z.object({ id: z.uuid(), granted: z.boolean() }))
+    .max(1000)
+    .optional(),
+  connectorPolicies: z
+    .record(
+      z.string().max(MAX_SERVICE_LENGTH),
+      z.object({
+        readTools: z.boolean().optional(),
+        changeTools: z.enum(["off", "allow", "ask_first"]).optional(),
+      }),
+    )
+    .refine((p) => Object.keys(p).length <= MAX_SERVICES)
+    .optional(),
   highTier: z.boolean().optional(),
   memoryRead: z.boolean().optional(),
   // Review fix W2.3 — the tasks and life-admin records grants (migration 0068) and the
@@ -118,8 +147,14 @@ const inputSchema = z.object({
   // every one of the person's connected services being shown (an absent id is unticked).
   tasks: z.boolean().optional(),
   records: z.boolean().optional(),
-  connectorAccounts: z.record(z.string().min(1).max(MAX_SERVICE_LENGTH), z.uuid()).refine(accounts => Object.keys(accounts).length <= MAX_SERVICES).optional(),
-  connectors: z.array(z.string().min(1).max(MAX_SERVICE_LENGTH)).max(MAX_SERVICES).optional(),
+  connectorAccounts: z
+    .record(z.string().min(1).max(MAX_SERVICE_LENGTH), z.uuid())
+    .refine((accounts) => Object.keys(accounts).length <= MAX_SERVICES)
+    .optional(),
+  connectors: z
+    .array(z.string().min(1).max(MAX_SERVICE_LENGTH))
+    .max(MAX_SERVICES)
+    .optional(),
 });
 
 // The save input, as the permissions screen submits it (a partial edit).
@@ -128,7 +163,9 @@ export type PermissionsSaveInput = z.infer<typeof inputSchema>;
 // The outcome of a save: success, or a refusal naming its reason (the agent is not this
 // person's, or card access was asked for without a budget that allows it). Never a silent
 // success.
-export type SaveResult = { readonly ok: true } | { readonly ok: false; readonly reason: string };
+export type SaveResult =
+  | { readonly ok: true }
+  | { readonly ok: false; readonly reason: string };
 
 // The seams the flow composes: the database seam (the agents, agent-permissions,
 // connections and rules stores), an optional catalogue lookup that names a connected service
@@ -147,10 +184,18 @@ export interface PermissionsActionsDeps {
 export interface PermissionsActions {
   // Assemble the screen's props for the session user's own agent, or null when the agent
   // id is not this person's (member-scoped — never a client value).
-  load(session: Session, agentId: string): Promise<PermissionsViewProps | null>;
+  load(
+    session: Session,
+    agentId: string,
+    options?: { memoryCursor?: string; skillCursor?: string },
+  ): Promise<PermissionsViewProps | null>;
   // Persist a partial edit of the connection's permissions for the session user's own
   // agent, or refuse (the agent is not this person's, or card-without-budget).
-  save(session: Session, agentId: string, input: PermissionsSaveInput): Promise<SaveResult>;
+  save(
+    session: Session,
+    agentId: string,
+    input: PermissionsSaveInput,
+  ): Promise<SaveResult>;
 }
 
 // Build the screen's props from the agent and its stored grants. The policy-relevant
@@ -161,7 +206,11 @@ export interface PermissionsActions {
 function toViewProps(
   agentName: string,
   grants: ConnectionPermissions,
-  services: readonly { id: string; name: string; accounts: { id: string; label: string }[] }[],
+  services: readonly {
+    id: string;
+    name: string;
+    accounts: { id: string; label: string }[];
+  }[],
   rules: readonly Rule[],
 ): PermissionsViewProps {
   return {
@@ -175,7 +224,9 @@ function toViewProps(
       name: service.name,
       policy: grants.connectorPolicies?.[service.id],
       accounts: service.accounts,
-      accountId: grants.connectorAccounts?.[service.id] ?? (service.accounts.length === 1 ? service.accounts[0]!.id : ""),
+      accountId:
+        grants.connectorAccounts?.[service.id] ??
+        (service.accounts.length === 1 ? service.accounts[0]!.id : ""),
       granted: grants.grantedConnectors.includes(service.id),
       readTools: [],
       changeTools: [],
@@ -210,18 +261,27 @@ function mergeConnectors(
   connected: ReadonlySet<string>,
 ): Pick<PermissionGrants, "grantedConnectors" | "readTools" | "changeTools"> {
   if (ticked === undefined) {
-    return { grantedConnectors: stored.grantedConnectors, readTools: stored.readTools, changeTools: stored.changeTools };
+    return {
+      grantedConnectors: stored.grantedConnectors,
+      readTools: stored.readTools,
+      changeTools: stored.changeTools,
+    };
   }
   const kept = stored.grantedConnectors.filter((id) => !connected.has(id));
   const granted = ticked.filter((id) => connected.has(id));
   const grantedConnectors = [...new Set([...kept, ...granted])];
   if (granted.length === 0) {
-    return { grantedConnectors, readTools: stored.readTools, changeTools: stored.changeTools };
+    return {
+      grantedConnectors,
+      readTools: stored.readTools,
+      changeTools: stored.changeTools,
+    };
   }
   return {
     grantedConnectors,
     readTools: true,
-    changeTools: stored.changeTools === "off" ? "ask_first" : stored.changeTools,
+    changeTools:
+      stored.changeTools === "off" ? "ask_first" : stored.changeTools,
   };
 }
 
@@ -240,42 +300,71 @@ function mergeGrants(
     ...stored,
     ...mergeConnectors(stored, input.connectors, connected),
     ...(input.readTools !== undefined ? { readTools: input.readTools } : {}),
-    ...(input.changeTools !== undefined ? { changeTools: input.changeTools } : {}),
+    ...(input.changeTools !== undefined
+      ? { changeTools: input.changeTools }
+      : {}),
     userId,
     connectionId,
     connectorAccounts: input.connectorAccounts ?? stored.connectorAccounts,
     connectorPolicies: input.connectorPolicies ?? stored.connectorPolicies,
-    identityFields: input.identityFields !== undefined ? input.identityFields : stored.identityFields,
+    identityFields:
+      input.identityFields !== undefined
+        ? input.identityFields
+        : stored.identityFields,
     cardAccess: input.card !== undefined ? input.card : stored.cardAccess,
-    cardBudget: input.cardBudget !== undefined ? input.cardBudget : stored.cardBudget,
-    sharing: input.learningSharing !== undefined ? input.learningSharing : stored.sharing,
-    rateLimit: input.requestLimit !== undefined ? input.requestLimit : stored.rateLimit,
-    identityAccess: input.identity !== undefined ? input.identity : stored.identityAccess,
-    highTierAccess: input.highTier !== undefined ? input.highTier : stored.highTierAccess,
-    memoryRead: input.memoryRead !== undefined ? input.memoryRead : stored.memoryRead,
+    cardBudget:
+      input.cardBudget !== undefined ? input.cardBudget : stored.cardBudget,
+    sharing:
+      input.learningSharing !== undefined
+        ? input.learningSharing
+        : stored.sharing,
+    rateLimit:
+      input.requestLimit !== undefined ? input.requestLimit : stored.rateLimit,
+    identityAccess:
+      input.identity !== undefined ? input.identity : stored.identityAccess,
+    highTierAccess:
+      input.highTier !== undefined ? input.highTier : stored.highTierAccess,
+    memoryRead:
+      input.memoryRead !== undefined ? input.memoryRead : stored.memoryRead,
     memoryWrite: input.memoryWrite ?? stored.memoryWrite,
     tasksAccess: input.tasks !== undefined ? input.tasks : stored.tasksAccess,
-    recordsAccess: input.records !== undefined ? input.records : stored.recordsAccess,
+    recordsAccess:
+      input.records !== undefined ? input.records : stored.recordsAccess,
   };
 }
 
-export function createPermissionsActions(deps: PermissionsActionsDeps): PermissionsActions {
+export function createPermissionsActions(
+  deps: PermissionsActionsDeps,
+): PermissionsActions {
   const { db, nameOf, keyWrapper } = deps;
 
   // The agent's OWN active rules — the ones the person scoped to this agent's connection —
   // read member-scoped by the session's user id with their conditions decrypted under that
   // person's DEK, each naming the agent by its current name (never a raw connection id
   // stored with an older rule). Rules for all agents live on the Rules page.
-  async function agentRules(userId: string, connectionId: string, agentName: string): Promise<Rule[]> {
+  async function agentRules(
+    userId: string,
+    connectionId: string,
+    agentName: string,
+  ): Promise<Rule[]> {
     if (!keyWrapper) return [];
     const user = await getUserById(db, userId);
     if (!user) return [];
     const dek = await keyWrapper.unwrap(user.wrappedDek);
     return (await listAllRules(db, userId, dek))
-      .filter((rule) => rule.status === "active" && (rule.scope.type === "any_agent" || (rule.scope.type === "agent" && rule.scope.agentId === connectionId)))
+      .filter(
+        (rule) =>
+          rule.status === "active" &&
+          (rule.scope.type === "any_agent" ||
+            (rule.scope.type === "agent" &&
+              rule.scope.agentId === connectionId)),
+      )
       .map((rule) => ({
         kind: rule.kind,
-        scope: rule.scope.type === "any_agent" ? rule.scope : { type: "agent", agentId: connectionId, name: agentName },
+        scope:
+          rule.scope.type === "any_agent"
+            ? rule.scope
+            : { type: "agent", agentId: connectionId, name: agentName },
         action: rule.action,
         condition: rule.condition,
       }));
@@ -285,19 +374,36 @@ export function createPermissionsActions(deps: PermissionsActionsDeps): Permissi
   // service however many accounts of it are connected, named through the catalogue.
   async function connectedServices(userId: string) {
     const connections = await listConnectionsForUser(db, userId);
-    const ids = [...new Set(connections.map(c => c.connectorId))];
-    return ids.map(id => ({ id, name: nameOf?.(id) ?? id, accounts: connections.filter(c => c.connectorId === id).map(c => ({ id: c.id, label: `${c.accountLabel}${c.status === "connected" ? "" : " (reconnect needed)"}` })) }));
+    const ids = [...new Set(connections.map((c) => c.connectorId))];
+    return ids.map((id) => ({
+      id,
+      name: nameOf?.(id) ?? id,
+      accounts: connections
+        .filter((c) => c.connectorId === id)
+        .map((c) => ({
+          id: c.id,
+          label: `${c.accountLabel}${c.status === "connected" ? "" : " (reconnect needed)"}`,
+        })),
+    }));
   }
 
   // Load: resolve the agent by (session.userId, agentId) FIRST — another person's id (or a
   // malformed one) matches nothing and reads null, never their permissions — then read its
   // stored grants and assemble the screen's props.
-  async function load(session: Session, agentId: string): Promise<PermissionsViewProps | null> {
+  async function load(
+    session: Session,
+    agentId: string,
+    options: { memoryCursor?: string; skillCursor?: string } = {},
+  ): Promise<PermissionsViewProps | null> {
     const id = uuidSchema.safeParse(agentId);
     if (!id.success) return null;
     const agent = await getAgentById(db, session.userId, id.data);
     if (agent == null) return null;
-    const grants = await getConnectionPermissions(db, session.userId, agent.connectionId);
+    const grants = await getConnectionPermissions(
+      db,
+      session.userId,
+      agent.connectionId,
+    );
     if (grants == null) return null;
     const props = toViewProps(
       agent.displayName,
@@ -305,12 +411,40 @@ export function createPermissionsActions(deps: PermissionsActionsDeps): Permissi
       await connectedServices(session.userId),
       await agentRules(session.userId, agent.connectionId, agent.displayName),
     );
-    props.currency = grants.cardBudget?.currency ?? await getAccountCurrency(db, session.userId);
+    props.currency =
+      grants.cardBudget?.currency ??
+      (await getAccountCurrency(db, session.userId));
     if (!keyWrapper) return props;
     const user = await getUserById(db, session.userId);
     if (!user) return null;
     const dek = await keyWrapper.unwrap(user.wrappedDek);
-    return { ...props, skills: await agentSkillChoices(db, session.userId, agent.id, dek), memories:await agentMemoryChoices(db,session.userId,agent.id,dek), vaultFields:await vaultChoices(db,session.userId,dek,grants) };
+    const skills = await pageSkillChoices(db, session.userId, agent.id, dek, {
+      cursor: options.skillCursor,
+    });
+    const memories = await agentMemoryChoicesPage(
+      db,
+      session.userId,
+      agent.id,
+      dek,
+      { cursor: options.memoryCursor },
+    );
+    const skillCount = Number(
+      (
+        await db.query(
+          "SELECT count(*) AS n FROM skills s LEFT JOIN agent_skill_access a ON a.user_id=s.user_id AND a.skill_id=s.id AND a.agent_id=$2 WHERE s.user_id=$1 AND s.enabled=true AND COALESCE(a.allowed,s.scope='all' OR s.scoped_agent_ids ? $3)",
+          [session.userId, agent.id, agent.id],
+        )
+      ).rows[0]?.n ?? 0,
+    );
+    return {
+      ...props,
+      skills: skills.items,
+      memories: memories.items,
+      skillCount,
+      nextSkillCursor: skills.nextCursor,
+      nextMemoryCursor: memories.nextCursor,
+      vaultFields: await vaultChoices(db, session.userId, dek, grants),
+    };
   }
 
   // Save: validate the agent id shape and the input at the boundary FIRST (a 4xx before any
@@ -332,37 +466,94 @@ export function createPermissionsActions(deps: PermissionsActionsDeps): Permissi
     return withTransaction(db, async (tx) => {
       await lockOAuthConnection(tx, agent.connectionId);
       const current = await getAgentById(tx, session.userId, id);
-      if (!current || current.status !== "connected") return { ok: false, reason: "disconnected" };
-      const stored = await getConnectionPermissions(tx, session.userId, agent.connectionId, { lock: true });
+      if (!current || current.status !== "connected")
+        return { ok: false, reason: "disconnected" };
+      const stored = await getConnectionPermissions(
+        tx,
+        session.userId,
+        agent.connectionId,
+        { lock: true },
+      );
       if (!stored) return { ok: false, reason: "not_found" };
       const connections = await listConnectionsForUser(tx, session.userId);
-      const connected = new Set(connections.map(c => c.connectorId));
-      if (valid.connectorAccounts && Object.entries(valid.connectorAccounts).some(([service, account]) => !connections.some(c => c.connectorId === service && c.id === account))) {
+      const connected = new Set(connections.map((c) => c.connectorId));
+      if (
+        valid.connectorAccounts &&
+        Object.entries(valid.connectorAccounts).some(
+          ([service, account]) =>
+            !connections.some(
+              (c) => c.connectorId === service && c.id === account,
+            ),
+        )
+      ) {
         return { ok: false, reason: "invalid_request" };
       }
-      if (valid.connectorPolicies && Object.keys(valid.connectorPolicies).some(id=>!connected.has(id))) return {ok:false,reason:"invalid_request"};
-      if (valid.identityFields && !(await ownsVaultFields(tx,session.userId,valid.identityFields))) return {ok:false,reason:"invalid_request"};
+      if (
+        valid.connectorPolicies &&
+        Object.keys(valid.connectorPolicies).some((id) => !connected.has(id))
+      )
+        return { ok: false, reason: "invalid_request" };
+      if (
+        valid.identityFields &&
+        !(await ownsVaultFields(tx, session.userId, valid.identityFields))
+      )
+        return { ok: false, reason: "invalid_request" };
       if (valid.memories) {
-        const owned=await tx.query("SELECT id FROM memories WHERE user_id = $1 AND id = ANY($2::uuid[]) ORDER BY id FOR UPDATE",[session.userId,valid.memories.map(m=>m.id)]);
-        const ids=new Set(owned.rows.map(r=>String(r.id)));
-        if(valid.memories.some(m=>!ids.has(m.id))) return {ok:false,reason:"invalid_request"};
+        const owned = await tx.query(
+          "SELECT id FROM memories WHERE user_id = $1 AND id = ANY($2::uuid[]) ORDER BY id FOR UPDATE",
+          [session.userId, valid.memories.map((m) => m.id)],
+        );
+        const ids = new Set(owned.rows.map((r) => String(r.id)));
+        if (valid.memories.some((m) => !ids.has(m.id)))
+          return { ok: false, reason: "invalid_request" };
       }
-      const next = mergeGrants(stored, valid, session.userId, agent.connectionId, connected);
-      if (next.cardAccess && (next.cardBudget == null || !budgetAllowsCard(next.cardBudget))) {
+      const next = mergeGrants(
+        stored,
+        valid,
+        session.userId,
+        agent.connectionId,
+        connected,
+      );
+      if (
+        next.cardAccess &&
+        (next.cardBudget == null || !budgetAllowsCard(next.cardBudget))
+      ) {
         return { ok: false, reason: "card_needs_budget" };
       }
-      if (valid.skills && !(await setAgentSkillAccess(tx, session.userId, agent.id, valid.skills))) {
+      if (
+        valid.skills &&
+        !(await setAgentSkillAccess(tx, session.userId, agent.id, valid.skills))
+      ) {
         return { ok: false, reason: "invalid_request" };
       }
-      if (valid.memories) await setAgentMemoryAccess(tx,session.userId,agent.id,valid.memories);
+      if (valid.memories)
+        await setAgentMemoryAccess(
+          tx,
+          session.userId,
+          agent.id,
+          valid.memories,
+        );
       await upsertPermissions(tx, next);
       if (keyWrapper) {
         const user = await getUserById(tx, session.userId);
         if (!user) throw new Error("No account for permission change");
         const dek = await keyWrapper.unwrap(user.wrappedDek);
-        await createRedactingRecorder({ db: tx, clock: deps.clock ?? systemClock, dekFor: async () => dek }).record({
-          userId: session.userId, agentId: agent.id, kind: "permission_change", source: "warthog", outcome: "saved",
-          payload: { before: stored, after: next, skillChoices: valid.skills, memoryChoices:valid.memories },
+        await createRedactingRecorder({
+          db: tx,
+          clock: deps.clock ?? systemClock,
+          dekFor: async () => dek,
+        }).record({
+          userId: session.userId,
+          agentId: agent.id,
+          kind: "permission_change",
+          source: "warthog",
+          outcome: "saved",
+          payload: {
+            before: stored,
+            after: next,
+            skillChoices: valid.skills,
+            memoryChoices: valid.memories,
+          },
         });
       }
       return { ok: true };

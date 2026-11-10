@@ -81,7 +81,7 @@ export function AgentOverview({
     [
       "skills",
       "Skills",
-      `${permissions.skills.filter((s) => s.granted).length} personal skills available`,
+      `${permissions.skillCount ?? permissions.skills.filter((s) => s.granted).length} personal skills available`,
     ],
     [
       "memory",
@@ -181,11 +181,11 @@ export function AgentResources({
                 <p className="mt-2 text-xs text-fg-muted">
                   {item.scope === "shared"
                     ? "Shared with permitted agents"
-                    : "Private to this agent"}{" "}
+                    : "Available to this agent"}{" "}
                   ·{" "}
                   {item.own
                     ? "Saved by this agent"
-                    : "Shared by you or another agent"}{" "}
+                    : "Saved by you or another agent"}{" "}
                   · {item.savedAt}
                 </p>
               </li>

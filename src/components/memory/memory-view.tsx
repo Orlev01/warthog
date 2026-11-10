@@ -44,7 +44,7 @@ export type MemoryViewItem = {
   savedAt: string;
   sourceAgentName: string | null;
   scope: MemoryScope;
-  audience?:readonly string[];
+  audience?: readonly string[];
 };
 
 // A control bound to a server action the page passes.
@@ -54,6 +54,8 @@ export type MemoryViewProps = {
   memories: ReadonlyArray<MemoryViewItem>;
   // The search term echoed back so the search box stays prefilled after a search.
   query?: string | null;
+  nextCursor?: string | null;
+  hasPreviousPage?: boolean;
   // Controls bound to the server actions the page passes. OPTIONAL: the view renders its
   // controls live regardless (they submit to these when supplied); the page always
   // supplies them, so in the running app every control acts — never a dead button.
@@ -105,11 +107,22 @@ function MemoryCard({
   deleteAction?: MemoryAction;
 }) {
   const savedBy = memory.sourceAgentName ?? "you";
-  const targetScope: MemoryScope = memory.scope === "shared" ? "kept" : "shared";
+  const targetScope: MemoryScope =
+    memory.scope === "shared" ? "kept" : "shared";
   return (
     <Card className="flex flex-col gap-3">
-      <p className="min-w-0 whitespace-pre-wrap text-fg [overflow-wrap:anywhere]">{memory.content}</p>
-      {memory.audience && <p className="text-sm text-fg-muted">Available to: {memory.audience.length ? memory.audience.join(", ") : "no agents"}. <a href="/agents" className="text-accent underline">Manage agent access</a></p>}
+      <p className="min-w-0 whitespace-pre-wrap text-fg [overflow-wrap:anywhere]">
+        {memory.content}
+      </p>
+      {memory.audience && (
+        <p className="text-sm text-fg-muted">
+          Available to:{" "}
+          {memory.audience.length ? memory.audience.join(", ") : "no agents"}.{" "}
+          <a href="/agents" className="text-accent underline">
+            Manage agent access
+          </a>
+        </p>
+      )}
 
       <div className="flex flex-wrap items-center gap-x-3 gap-y-1 text-sm text-fg-muted">
         <span className="inline-flex min-w-0 items-center gap-1.5 [overflow-wrap:anywhere]">
@@ -169,6 +182,8 @@ function MemoryCard({
 export function MemoryView({
   memories,
   query,
+  nextCursor,
+  hasPreviousPage,
   editAction,
   rescopeAction,
   deleteAction,
@@ -180,12 +195,16 @@ export function MemoryView({
       <div className="flex flex-col gap-1">
         <h1 className="text-xl font-semibold text-fg">Memory</h1>
         <p className="text-sm text-fg-muted">
-          What your agents remember about you, and who each memory is shared with.
+          What your agents remember about you, and who each memory is shared
+          with.
         </p>
       </div>
 
       {/* ----- Search over the memories (a GET the loader reads) ----- */}
-      <form method="get" className="flex flex-col gap-2 sm:flex-row sm:items-end">
+      <form
+        method="get"
+        className="flex flex-col gap-2 sm:flex-row sm:items-end"
+      >
         <div className="flex min-w-0 flex-1 flex-col gap-1.5">
           <Label htmlFor="memory-search">Search</Label>
           <Input
@@ -211,7 +230,12 @@ export function MemoryView({
           <ContentField />
           <div className="flex flex-col gap-1.5">
             <Label htmlFor={scopeId}>Who can see it</Label>
-            <select id={scopeId} name="scope" className={`${CONTROL_BASE} min-h-11`} defaultValue="shared">
+            <select
+              id={scopeId}
+              name="scope"
+              className={`${CONTROL_BASE} min-h-11`}
+              defaultValue="shared"
+            >
               <option value="shared">Shared with your other agents</option>
               <option value="kept">Kept to this memory only</option>
             </select>
@@ -244,6 +268,35 @@ export function MemoryView({
             </li>
           ))}
         </ul>
+      )}
+      {(nextCursor || hasPreviousPage) && (
+        <nav
+          aria-label="Memory pages"
+          className="flex flex-wrap items-center gap-4 text-sm"
+        >
+          {hasPreviousPage && (
+            <a
+              className="text-accent underline"
+              href={`/memory?${new URLSearchParams(query ? { q: query } : {})}`}
+            >
+              First page
+            </a>
+          )}
+          {nextCursor && (
+            <a
+              className="text-accent underline"
+              href={`/memory?${new URLSearchParams({ ...(query ? { q: query } : {}), cursor: nextCursor })}`}
+            >
+              {query ? "Search older memories" : "Older memories"}
+            </a>
+          )}
+          {query && nextCursor && (
+            <span className="text-fg-muted">
+              Search continues on the next page, even if this page has no
+              matches.
+            </span>
+          )}
+        </nav>
       )}
     </section>
   );

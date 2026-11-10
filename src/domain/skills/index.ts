@@ -35,6 +35,8 @@ export interface Skill {
  * line — nothing else (not the on/off switch, the scope, or the full text).
  */
 export interface SkillIndexEntry {
+  /** Stored skills expose an ID for direct retrieval; the built-in house skill has none. */
+  id?: string;
   title: string;
   useThisWhen: string;
 }

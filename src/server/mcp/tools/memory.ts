@@ -29,8 +29,15 @@
 import { z } from "zod";
 
 import { parseParams } from "../../http/validate";
-import { getConnectionPermissions, type ConnectionPermissions } from "../../db/agent-permissions";
-import { createMemory, memoriesForAgent, type MemoryScope } from "../../db/memories";
+import {
+  getConnectionPermissions,
+  type ConnectionPermissions,
+} from "../../db/agent-permissions";
+import {
+  createMemory,
+  pageMemories,
+  type MemoryScope,
+} from "../../db/memories";
 import { getUserById } from "../../db/users";
 import type { KeyWrapper } from "../../crypto/key-wrapper";
 import type { Clock } from "../../seams/clock";
@@ -53,9 +60,10 @@ export const rememberSchema = z.object({
   reason: z.string().max(MAX_REASON).optional(),
 });
 
-// search_memory's input: an OPTIONAL `query` (a bare search returns everything
-// readable) plus the universal OPTIONAL `reason`.
+// Search one bounded page. Follow nextCursor even when this page has no matches.
 export const searchMemorySchema = z.object({
+  cursor: z.string().max(256).optional(),
+  limit: z.number().int().min(1).max(200).optional(),
   query: z.string().max(MAX_QUERY).optional(),
   reason: z.string().max(MAX_REASON).optional(),
 });
@@ -94,22 +102,35 @@ export interface SearchedMemory {
 // What search_memory hands back: the readable memories, or a plain refusal for a
 // connection without memory permission.
 export type SearchMemoryResult =
-  | { status: "ok"; memories: ReadonlyArray<SearchedMemory> }
+  | {
+      status: "ok";
+      memories: ReadonlyArray<SearchedMemory>;
+      nextCursor?: string | null;
+      scanned?: number;
+    }
   | { status: "refused"; reason: string };
 
 export interface SearchMemoryTool {
   readonly name: string;
   readonly inputSchema: z.ZodType;
-  handle(input: unknown, connection: AgentConnection): Promise<SearchMemoryResult>;
+  handle(
+    input: unknown,
+    connection: AgentConnection,
+  ): Promise<SearchMemoryResult>;
 }
 
 // The plain refusal a connection without memory permission gets.
-const NO_PERMISSION_REASON = "This agent does not have permission to use memories.";
+const NO_PERMISSION_REASON =
+  "This agent does not have permission to use memories.";
 
 // Resolve the person's unwrapped 256-bit DEK: read their wrapped DEK member-scoped by
 // `userId` (the session's, never a client value) and unwrap it through the KeyWrapper
 // seam. Throws when the person has no row — never fails silently.
-async function dataKeyFor(db: Db, keyWrapper: KeyWrapper, userId: string): Promise<Uint8Array> {
+async function dataKeyFor(
+  db: Db,
+  keyWrapper: KeyWrapper,
+  userId: string,
+): Promise<Uint8Array> {
   const user = await getUserById(db, userId);
   if (!user) {
     throw new Error("memory tool: no data key for this user");
@@ -125,7 +146,11 @@ async function memoryPermission(
   connection: AgentConnection,
   access: "memoryRead" | "memoryWrite",
 ): Promise<ConnectionPermissions | null> {
-  const permissions = await getConnectionPermissions(db, connection.userId, connection.connectionId);
+  const permissions = await getConnectionPermissions(
+    db,
+    connection.userId,
+    connection.connectionId,
+  );
   if (!permissions || !permissions[access]) return null;
   return permissions;
 }
@@ -137,7 +162,10 @@ export function createRememberTool(deps: MemoryToolDeps): RememberTool {
     name: "remember",
     inputSchema: rememberSchema,
 
-    async handle(input: unknown, connection: AgentConnection): Promise<RememberResult> {
+    async handle(
+      input: unknown,
+      connection: AgentConnection,
+    ): Promise<RememberResult> {
       // VALIDATE at the boundary: a bad / oversized / mis-shaped input throws a 4xx
       // `HttpError` BEFORE any db access or crypto work (INV-102).
       const parsed = parseParams(rememberSchema, input);
@@ -155,7 +183,12 @@ export function createRememberTool(deps: MemoryToolDeps): RememberTool {
       const dek = await dataKeyFor(db, keyWrapper, connection.userId);
       const saved = await createMemory(
         db,
-        { userId: connection.userId, content: parsed.content, sourceAgentId: connection.agentId, scope },
+        {
+          userId: connection.userId,
+          content: parsed.content,
+          sourceAgentId: connection.agentId,
+          scope,
+        },
         dek,
         clock,
       );
@@ -172,7 +205,10 @@ export function createSearchMemoryTool(deps: MemoryToolDeps): SearchMemoryTool {
     name: "search_memory",
     inputSchema: searchMemorySchema,
 
-    async handle(input: unknown, connection: AgentConnection): Promise<SearchMemoryResult> {
+    async handle(
+      input: unknown,
+      connection: AgentConnection,
+    ): Promise<SearchMemoryResult> {
       // VALIDATE at the boundary (INV-102) BEFORE any db access or crypto work.
       const parsed = parseParams(searchMemorySchema, input);
 
@@ -186,7 +222,12 @@ export function createSearchMemoryTool(deps: MemoryToolDeps): SearchMemoryTool {
       // member-scoped by the CONNECTION's person and filtered by the CONNECTION's agent
       // (both taken from the session, never the input), decrypted under the owner's DEK.
       const dek = await dataKeyFor(db, keyWrapper, connection.userId);
-      const readable = await memoriesForAgent(db, connection.userId, connection.agentId, dek);
+      const page = await pageMemories(db, connection.userId, dek, {
+        agentId: connection.agentId,
+        cursor: parsed.cursor,
+        limit: parsed.limit ?? 100,
+      });
+      const readable = page.items;
 
       // The optional `query` filters IN THE APP over the owner-scoped set (a
       // case-insensitive substring over the decrypted content) — it is never SQL, so a
@@ -205,7 +246,12 @@ export function createSearchMemoryTool(deps: MemoryToolDeps): SearchMemoryTool {
         createdAt: m.createdAt,
       }));
 
-      return { status: "ok", memories };
+      return {
+        status: "ok",
+        memories,
+        nextCursor: page.nextCursor,
+        scanned: readable.length,
+      };
     },
   };
 }

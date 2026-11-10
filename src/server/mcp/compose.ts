@@ -335,7 +335,7 @@ function buildAgentPipeline(deps: McpDispatchDeps): AgentCallPipeline {
       }
       case "call_tool": return {status:"refused",reason:"That tool is not available to this agent. Use find_tools for its current tools."};
       case "get_context":
-        return getContextTool.handle(connection);
+        return getContextTool.handle(connection,call.params);
       case "get_skill":
         return getSkillTool.handle(call.params, connection);
       case "remember":

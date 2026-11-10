@@ -42,7 +42,20 @@ const MAX_REASON = 2000;
 // field (the registry and tests read `.shape.title` / `.shape.reason`).
 export const getSkillSchema = z.object({
   title: z.string().max(MAX_TITLE),
-  file: z.string().min(1).max(300).optional().describe("Optional supporting file path listed in the skill. Omit to read its instructions."),
+  id: z
+    .uuid()
+    .optional()
+    .describe(
+      "Skill ID from get_context; avoids scanning the library by title.",
+    ),
+  file: z
+    .string()
+    .min(1)
+    .max(300)
+    .optional()
+    .describe(
+      "Optional supporting file path listed in the skill. Omit to read its instructions.",
+    ),
   reason: z.string().max(MAX_REASON).optional(),
 });
 
@@ -108,7 +121,10 @@ export function createGetSkillTool(deps: GetSkillDeps): GetSkillTool {
     name: "get_skill",
     inputSchema: getSkillSchema,
 
-    async handle(input: unknown, connection: AgentConnection): Promise<GetSkillResult> {
+    async handle(
+      input: unknown,
+      connection: AgentConnection,
+    ): Promise<GetSkillResult> {
       // VALIDATE at the boundary: a bad / oversized / mis-shaped input throws a 4xx
       // `HttpError` BEFORE any db access or crypto work (INV-102).
       const parsed = parseParams(getSkillSchema, input);
@@ -117,7 +133,11 @@ export function createGetSkillTool(deps: GetSkillDeps): GetSkillTool {
       // person's skills or scope — the index advertises its title and this supplies
       // the body. Matched by the canonical index title (one source of truth).
       if (parsed.title === HOUSE_SKILL.title && !parsed.file) {
-        return { status: "found", title: HOUSE_SKILL.title, text: HOUSE_SKILL_BODY };
+        return {
+          status: "found",
+          title: HOUSE_SKILL.title,
+          text: HOUSE_SKILL_BODY,
+        };
       }
 
       // A personal skill: taking the OWNING person and the agent from the connection
@@ -125,7 +145,15 @@ export function createGetSkillTool(deps: GetSkillDeps): GetSkillTool {
       // its scope covers this agent. The store binds `user_id` as a parameter and
       // matches the (encrypted) title in application code, so the title is inert data.
       const dek = await dataKeyFor(connection.userId);
-      const text = await getSkillText(db, connection.userId, connection.agentId, parsed.title, dek, parsed.file);
+      const text = await getSkillText(
+        db,
+        connection.userId,
+        connection.agentId,
+        parsed.title,
+        dek,
+        parsed.file,
+        parsed.id,
+      );
       if (text === null) {
         return { status: "not_available", reason: NOT_AVAILABLE_REASON };
       }

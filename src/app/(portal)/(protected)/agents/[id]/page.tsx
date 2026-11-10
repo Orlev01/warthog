@@ -1,7 +1,11 @@
 import { agentSection } from "@/domain/permissions/workspace";
 import { getUserById } from "@/server/db/users";
 import { agentWorkspaceData } from "@/server/agents/workspace-data";
-import { AgentWorkspaceHeader, AgentOverview, AgentResources } from "@/components/agents/agent-workspace";
+import {
+  AgentWorkspaceHeader,
+  AgentOverview,
+  AgentResources,
+} from "@/components/agents/agent-workspace";
 import * as React from "react";
 import { cookies } from "next/headers";
 import { notFound, redirect } from "next/navigation";
@@ -13,7 +17,11 @@ import { HttpError } from "@/server/http/validate";
 import { getProcessCatalogue } from "@/server/connectors/catalogue";
 import { loadConfig } from "@/server/config";
 import { selectKeyWrapper } from "@/server/crypto/key-wrapper";
-import { createPermissionsActions, type PermissionsSaveInput, type SaveResult } from "./actions";
+import {
+  createPermissionsActions,
+  type PermissionsSaveInput,
+  type SaveResult,
+} from "./actions";
 import { PermissionsForm } from "./permissions-form";
 import type { Db } from "@/server/db/index";
 
@@ -53,7 +61,10 @@ async function resolveSession(db: Db): Promise<Session | null> {
 // outcome. A malformed / oversized edit throws a 4xx `HttpError` at the seam's boundary —
 // caught here and reported as a plain refusal rather than a crash; a genuine fault is
 // rethrown.
-async function savePermissions(agentId: string, input: PermissionsSaveInput): Promise<SaveResult> {
+async function savePermissions(
+  agentId: string,
+  input: PermissionsSaveInput,
+): Promise<SaveResult> {
   "use server";
   const db = await getServerDb();
   const session = await resolveSession(db);
@@ -62,10 +73,18 @@ async function savePermissions(agentId: string, input: PermissionsSaveInput): Pr
   }
   try {
     const config = loadConfig();
-    const keyWrapper = selectKeyWrapper({ nodeEnv: config.nodeEnv, localKek: config.devKek });
-    return await createPermissionsActions({ db, nameOf: serviceName, keyWrapper }).save(session, agentId, input);
+    const keyWrapper = selectKeyWrapper({
+      nodeEnv: config.nodeEnv,
+      localKek: config.devKek,
+    });
+    return await createPermissionsActions({
+      db,
+      nameOf: serviceName,
+      keyWrapper,
+    }).save(session, agentId, input);
   } catch (error) {
-    if (error instanceof HttpError) return { ok: false, reason: "invalid_request" };
+    if (error instanceof HttpError)
+      return { ok: false, reason: "invalid_request" };
     throw error;
   }
 }
@@ -82,13 +101,15 @@ function serviceName(connectorId: string): string | undefined {
 // 404. The (protected) layout already wraps every page in the app shell (PortalChrome), so
 // this entry renders only its own content column.
 export default async function AgentPermissionsPage({
-  params, searchParams,
+  params,
+  searchParams,
 }: {
   params: Promise<{ id: string }>;
   searchParams: Promise<Record<string, string | string[] | undefined>>;
 }) {
   const { id } = await params;
-  const section = agentSection((await searchParams).section);
+  const search = await searchParams;
+  const section = agentSection(search.section);
   if (!section) notFound();
 
   const db = await getServerDb();
@@ -100,25 +121,79 @@ export default async function AgentPermissionsPage({
   // The KeyWrapper (local AES outside production, Key Vault in production) unwraps the
   // person's DEK so the agent's own rules, whose conditions are encrypted, can be listed.
   const config = loadConfig();
-  const keyWrapper = selectKeyWrapper({ nodeEnv: config.nodeEnv, localKek: config.devKek });
-  const props = await createPermissionsActions({ db, nameOf: serviceName, keyWrapper }).load(session, id);
+  const keyWrapper = selectKeyWrapper({
+    nodeEnv: config.nodeEnv,
+    localKek: config.devKek,
+  });
+  const props = await createPermissionsActions({
+    db,
+    nameOf: serviceName,
+    keyWrapper,
+  }).load(session, id, {
+    memoryCursor:
+      typeof search.memoryCursor === "string" ? search.memoryCursor : undefined,
+    skillCursor:
+      typeof search.skillCursor === "string" ? search.skillCursor : undefined,
+  });
   if (props == null) {
     notFound();
   }
 
   const user = await getUserById(db, session.userId);
   if (!user) notFound();
-  const data = await agentWorkspaceData(db, session.userId, id, await keyWrapper.unwrap(user.wrappedDek), systemClock, section);
+  const data = await agentWorkspaceData(
+    db,
+    session.userId,
+    id,
+    await keyWrapper.unwrap(user.wrappedDek),
+    systemClock,
+    section,
+  );
   if (!data) notFound();
   return (
     <div className="mx-auto flex w-full max-w-2xl flex-col gap-6 px-4 py-8 [overflow-wrap:anywhere] sm:px-6">
       <AgentWorkspaceHeader data={data} section={section} />
-      {section === "overview" ? <AgentOverview data={data} permissions={props} /> : <>
-        <AgentResources data={data} section={section} />
-        {section !== "activity" ? <fieldset disabled={data.agent.status !== "connected"} className="min-w-0">
-          <PermissionsForm key={section} initial={{ ...props, section, embedded: true }} save={savePermissions.bind(null, id)} />
-        </fieldset> : null}
-      </>}
+      {section === "overview" ? (
+        <AgentOverview data={data} permissions={props} />
+      ) : (
+        <>
+          <AgentResources data={data} section={section} />
+          {section !== "activity" ? (
+            <fieldset
+              disabled={data.agent.status !== "connected"}
+              className="min-w-0"
+            >
+              <PermissionsForm
+                key={`${section}:${String(search.memoryCursor ?? search.skillCursor ?? "")}`}
+                initial={{ ...props, section, embedded: true }}
+                save={savePermissions.bind(null, id)}
+              />
+            </fieldset>
+          ) : null}
+          {((section === "memory" && search.memoryCursor) ||
+            (section === "skills" && search.skillCursor)) && (
+            <a className="text-accent underline" href={`?section=${section}`}>
+              First page — save changes first
+            </a>
+          )}
+          {section === "memory" && props.nextMemoryCursor && (
+            <a
+              className="text-accent underline"
+              href={`?section=memory&memoryCursor=${encodeURIComponent(props.nextMemoryCursor)}`}
+            >
+              Next memory page — save changes first
+            </a>
+          )}
+          {section === "skills" && props.nextSkillCursor && (
+            <a
+              className="text-accent underline"
+              href={`?section=skills&skillCursor=${encodeURIComponent(props.nextSkillCursor)}`}
+            >
+              Next skill page — save changes first
+            </a>
+          )}
+        </>
+      )}
     </div>
   );
 }

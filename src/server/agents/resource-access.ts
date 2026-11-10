@@ -1,5 +1,5 @@
 import { withTransaction, type Db } from "../db/index";
-import { listMemoriesForUser } from "../db/memories";
+import { listMemoriesForUser, pageMemories } from "../db/memories";
 import { listHighTierFields } from "../db/high-tier-fields";
 import { listIdentityFields } from "../db/identity-fields";
 import type { ConnectionPermissions } from "../db/agent-permissions";
@@ -128,4 +128,33 @@ export async function mayCollectReleasedField(
   return (await listHighTierFields(db, userId)).some(
     (f) => f.id === row.released_field_id,
   );
+}
+
+export async function agentMemoryChoicesPage(
+  db: Db,
+  userId: string,
+  agentId: string,
+  dek: Uint8Array,
+  input: { cursor?: string; limit?: number } = {},
+) {
+  const page = await pageMemories(db, userId, dek, input);
+  const rows = (
+    await db.query(
+      "SELECT memory_id,allowed FROM agent_memory_access WHERE user_id=$1 AND agent_id=$2 AND memory_id=ANY($3::uuid[])",
+      [userId, agentId, page.items.map((m) => m.id)],
+    )
+  ).rows;
+  const overrides = new Map(
+    rows.map((r) => [String(r.memory_id), Boolean(r.allowed)]),
+  );
+  return {
+    items: page.items.map((m) => ({
+      id: m.id,
+      name: m.content,
+      granted:
+        overrides.get(m.id) ??
+        (m.scope === "shared" || m.sourceAgentId === agentId),
+    })),
+    nextCursor: page.nextCursor,
+  };
 }

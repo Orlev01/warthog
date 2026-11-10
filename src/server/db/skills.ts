@@ -1,3 +1,7 @@
+import { pageOptions, pageCursor, cursorTimestamp } from "./pagination";
+import { HttpError } from "../http/validate";
+import { assertCollectionCapacity } from "./collection-limits";
+import { withTransaction } from "./index";
 // The skills aggregate's data access (brief "Skills, preferences and shared
 // memory"; design §4.1). A skill is an INSTRUCTION DOCUMENT a person writes for
 // specific tasks — a title, a one-line "use this when" description and the full
@@ -83,8 +87,14 @@ export interface SkillIndexEntry {
 
 // Does a skill with this scope + chosen-agent list apply to `agentId`? An 'all'
 // skill covers every agent; a 'chosen' skill covers only the agents it lists.
-function scopeCovers(scope: SkillScope, scopedAgentIds: string[], agentId: string): boolean {
-  return scope === "all" || (scope === "chosen" && scopedAgentIds.includes(agentId));
+function scopeCovers(
+  scope: SkillScope,
+  scopedAgentIds: string[],
+  agentId: string,
+): boolean {
+  return (
+    scope === "all" || (scope === "chosen" && scopedAgentIds.includes(agentId))
+  );
 }
 
 // Encrypt the three content fields under the owner's DEK, each bound to its row by
@@ -106,11 +116,23 @@ async function encryptContent(
 // plus the plaintext scope / chosen agents / enabled flag. The id is generated up
 // front so the envelopes bind to the row; the returned Skill is assembled from the
 // inputs (no dependency on a RETURNING read). Member-scoped: the user id is bound.
-export async function createSkill(db: Db, input: NewSkill, dek: Uint8Array): Promise<Skill> {
+export async function createSkill(
+  db: Db,
+  input: NewSkill,
+  dek: Uint8Array,
+): Promise<Skill> {
+  if (!db.inTransaction)
+    return withTransaction(db, (tx) => createSkill(tx, input, dek));
   const id = randomUUID();
   const scopedAgentIds = input.scopedAgentIds ?? [];
   const enabled = input.enabled ?? true;
   const content = await encryptContent(dek, id, input);
+  await assertCollectionCapacity(
+    db,
+    input.userId,
+    "skills",
+    content.title.length + content.useThisWhen.length + content.fullText.length,
+  );
 
   await db.query(
     `INSERT INTO skills (id, user_id, title, use_this_when, full_text, scope, scoped_agent_ids, enabled)
@@ -150,15 +172,32 @@ export async function editSkill(
   edits: SkillEdits,
   dek: Uint8Array,
 ): Promise<Skill> {
+  if (!db.inTransaction)
+    return withTransaction(db, (tx) => editSkill(tx, userId, id, edits, dek));
   const scopedAgentIds = edits.scopedAgentIds ?? [];
   const content = await encryptContent(dek, id, edits);
+  await assertCollectionCapacity(
+    db,
+    userId,
+    "skills",
+    content.title.length + content.useThisWhen.length + content.fullText.length,
+    id,
+  );
 
   const result = await db.query(
     `UPDATE skills
        SET title = $1, use_this_when = $2, full_text = $3, scope = $4, scoped_agent_ids = $5::jsonb
      WHERE id = $6 AND user_id = $7
      RETURNING enabled`,
-    [content.title, content.useThisWhen, content.fullText, edits.scope, JSON.stringify(scopedAgentIds), id, userId],
+    [
+      content.title,
+      content.useThisWhen,
+      content.fullText,
+      edits.scope,
+      JSON.stringify(scopedAgentIds),
+      id,
+      userId,
+    ],
   );
   const row = result.rows[0];
   if (!row) throw new Error("editSkill: no such skill for this user");
@@ -213,18 +252,27 @@ export async function duplicateSkill(
 // Switch an OWNED skill OFF (enabled = false); it persists, it is not deleted.
 // Member-scoped (id AND user_id bound). THROWS when there is no such skill for this
 // user, so a cross-user disable cannot silently no-op.
-export async function disableSkill(db: Db, userId: string, id: string): Promise<void> {
+export async function disableSkill(
+  db: Db,
+  userId: string,
+  id: string,
+): Promise<void> {
   const result = await db.query(
     `UPDATE skills SET enabled = false WHERE id = $1 AND user_id = $2 RETURNING id`,
     [id, userId],
   );
-  if (result.rows.length === 0) throw new Error("disableSkill: no such skill for this user");
+  if (result.rows.length === 0)
+    throw new Error("disableSkill: no such skill for this user");
 }
 
 // Delete an OWNED skill; true when a row was removed, false when there was none for
 // this user (so another person's delete is a no-op). Member-scoped (id AND user_id
 // bound).
-export async function deleteSkill(db: Db, userId: string, id: string): Promise<boolean> {
+export async function deleteSkill(
+  db: Db,
+  userId: string,
+  id: string,
+): Promise<boolean> {
   const result = await db.query(
     `DELETE FROM skills WHERE id = $1 AND user_id = $2 RETURNING id`,
     [id, userId],
@@ -244,7 +292,9 @@ async function decryptRow(dek: Uint8Array, row: Row): Promise<Skill> {
   const [title, useThisWhen, fullText] = await Promise.all([
     decrypt(dek, TABLE, "title", id, row.title as string),
     decrypt(dek, TABLE, "use_this_when", id, row.use_this_when as string),
-    decrypt(dek, TABLE, "full_text", id, row.full_text as string),
+    row.full_text === null
+      ? Promise.resolve("")
+      : decrypt(dek, TABLE, "full_text", id, row.full_text as string),
   ]);
   return {
     id,
@@ -262,9 +312,14 @@ async function decryptRow(dek: Uint8Array, row: Row): Promise<Skill> {
 // DECRYPTED under the owner's `dek`, carrying its scope and enabled state.
 // Member-scoped (user_id bound); never another person's. An empty array when the
 // person has none. A wrong DEK fails the GCM tag and rejects.
-export async function listSkillsForUser(db: Db, userId: string, dek: Uint8Array): Promise<Skill[]> {
+export async function listSkillsForUser(
+  db: Db,
+  userId: string,
+  dek: Uint8Array,
+  options: { summaryOnly?: boolean; omitPackageText?: boolean } = {},
+): Promise<Skill[]> {
   const result = await db.query(
-    `SELECT ${SELECT_COLUMNS} FROM skills WHERE user_id = $1 ORDER BY created_at`,
+    `SELECT ${SELECT_COLUMNS.replace("full_text", options.summaryOnly ? "NULL AS full_text" : options.omitPackageText ? "CASE WHEN EXISTS (SELECT 1 FROM skill_package_members p WHERE p.skill_id = skills.id AND p.user_id = skills.user_id) THEN NULL ELSE full_text END AS full_text" : "full_text")} FROM skills WHERE user_id = $1 ORDER BY created_at`,
     [userId],
   );
 
@@ -295,7 +350,13 @@ export async function skillsForAgent(
   const index: SkillIndexEntry[] = [];
   for (const row of result.rows) {
     const scopedAgentIds = (row.scoped_agent_ids as string[]) ?? [];
-    if (!(row.allowed ?? scopeCovers(row.scope as SkillScope, scopedAgentIds, agentId))) continue;
+    if (
+      !(
+        row.allowed ??
+        scopeCovers(row.scope as SkillScope, scopedAgentIds, agentId)
+      )
+    )
+      continue;
     const id = row.id as string;
     const [title, useThisWhen] = await Promise.all([
       decrypt(dek, TABLE, "title", id, row.title as string),
@@ -318,24 +379,139 @@ export async function getSkillText(
   title: string,
   dek: Uint8Array,
   file?: string,
+  skillId?: string,
 ): Promise<string | null> {
   const result = await db.query(
     `SELECT s.id, s.title, s.full_text, s.scope, s.scoped_agent_ids, a.allowed
      FROM skills s LEFT JOIN agent_skill_access a ON a.skill_id = s.id AND a.user_id = s.user_id AND a.agent_id::text = $2
-     WHERE s.user_id = $1 AND s.enabled = true`,
-    [userId, agentId],
+     WHERE s.user_id = $1 AND s.enabled = true AND ($3::uuid IS NULL OR s.id = $3::uuid) LIMIT 1001`,
+    [userId, agentId, skillId ?? null],
   );
 
+  if (result.rows.length > 1000)
+    throw new HttpError(
+      409,
+      "Use the skill ID from get_context to fetch from a large library.",
+    );
   for (const row of result.rows) {
     const scopedAgentIds = (row.scoped_agent_ids as string[]) ?? [];
-    if (!(row.allowed ?? scopeCovers(row.scope as SkillScope, scopedAgentIds, agentId))) continue;
+    if (
+      !(
+        row.allowed ??
+        scopeCovers(row.scope as SkillScope, scopedAgentIds, agentId)
+      )
+    )
+      continue;
     const id = row.id as string;
-    const rowTitle = await decrypt(dek, TABLE, "title", id, row.title as string);
+    const rowTitle = await decrypt(
+      dek,
+      TABLE,
+      "title",
+      id,
+      row.title as string,
+    );
     if (rowTitle !== title) continue;
     if (file) return packageFileForSkill(db, userId, id, file, dek);
-    const body = await decrypt(dek, TABLE, "full_text", id, row.full_text as string);
+    const body = await decrypt(
+      dek,
+      TABLE,
+      "full_text",
+      id,
+      row.full_text as string,
+    );
     const files = await packageFilesForSkill(db, userId, id, dek);
-    return files.length ? `${body}\n\nSupporting files (fetch with get_skill using this title and the file path):\n${files.map((f) => `- ${f.path}`).join("\n")}` : body;
+    return files.length
+      ? `${body}\n\nSupporting files (fetch with get_skill using this title and the file path):\n${files.map((f) => `- ${f.path}`).join("\n")}`
+      : body;
   }
   return null;
+}
+
+/** Bounded metadata index; an ungranted skill is filtered before decryption. */
+export async function pageSkillsForAgent(
+  db: Db,
+  userId: string,
+  agentId: string,
+  dek: Uint8Array,
+  input: { cursor?: string; limit?: number } = {},
+) {
+  const { limit, cursor } = pageOptions(input);
+  const result = await db.query(
+    `SELECT s.id,s.title,s.use_this_when,s.created_at,${cursorTimestamp("s.created_at")} FROM skills s
+ LEFT JOIN agent_skill_access a ON a.user_id=s.user_id AND a.skill_id=s.id AND a.agent_id::text=$2
+ WHERE s.user_id=$1 AND s.enabled=true AND COALESCE(a.allowed,s.scope='all' OR s.scoped_agent_ids ? $2)
+ AND ($3::timestamptz IS NULL OR (s.created_at,s.id)<($3::timestamptz,$4::uuid))
+ ORDER BY s.created_at DESC,s.id DESC LIMIT $5`,
+    [userId, agentId, cursor?.at ?? null, cursor?.id ?? null, limit + 1],
+  );
+  const rows = result.rows.slice(0, limit);
+  const items = await Promise.all(
+    rows.map(async (row) => ({
+      id: String(row.id),
+      title: await decrypt(
+        dek,
+        TABLE,
+        "title",
+        String(row.id),
+        String(row.title),
+      ),
+      useThisWhen: await decrypt(
+        dek,
+        TABLE,
+        "use_this_when",
+        String(row.id),
+        String(row.use_this_when),
+      ),
+    })),
+  );
+  const last = rows[rows.length - 1];
+  return {
+    items,
+    nextCursor:
+      result.rows.length > limit && last
+        ? pageCursor({ id: String(last.id), createdAt: String(last.cursor_at) })
+        : null,
+  };
+}
+
+export async function pageSkillChoices(
+  db: Db,
+  userId: string,
+  agentId: string,
+  dek: Uint8Array,
+  input: { cursor?: string; limit?: number } = {},
+) {
+  const { limit, cursor } = pageOptions(input);
+  const rows = (
+    await db.query(
+      `SELECT s.id,s.title,s.created_at,${cursorTimestamp("s.created_at")},COALESCE(a.allowed,s.scope='all' OR s.scoped_agent_ids ? $2) AS allowed
+ FROM skills s LEFT JOIN agent_skill_access a ON a.user_id=s.user_id AND a.skill_id=s.id AND a.agent_id::text=$2
+ WHERE s.user_id=$1 AND s.enabled=true AND ($3::timestamptz IS NULL OR (s.created_at,s.id)<($3::timestamptz,$4::uuid))
+ ORDER BY s.created_at DESC,s.id DESC LIMIT $5`,
+      [userId, agentId, cursor?.at ?? null, cursor?.id ?? null, limit + 1],
+    )
+  ).rows;
+  const items = await Promise.all(
+    rows
+      .slice(0, limit)
+      .map(async (row) => ({
+        id: String(row.id),
+        name: await decrypt(
+          dek,
+          TABLE,
+          "title",
+          String(row.id),
+          String(row.title),
+        ),
+        granted: Boolean(row.allowed),
+      })),
+  );
+  const last = rows[Math.min(rows.length, limit) - 1];
+  return {
+    items,
+    nextCursor:
+      rows.length > limit && last
+        ? pageCursor({ id: String(last.id), createdAt: String(last.cursor_at) })
+        : null,
+  };
 }

@@ -54,7 +54,10 @@ async function resolveSession(db: Db): Promise<Session | null> {
 // to decrypt/encrypt their skills + preferences content.
 function buildActions(db: Db): SkillsActions {
   const config = loadConfig();
-  const keyWrapper = selectKeyWrapper({ nodeEnv: config.nodeEnv, localKek: config.devKek });
+  const keyWrapper = selectKeyWrapper({
+    nodeEnv: config.nodeEnv,
+    localKek: config.devKek,
+  });
   return createSkillsActions({ db, keyWrapper });
 }
 
@@ -93,7 +96,10 @@ function skillContentOf(formData: FormData) {
 // genuine fault rethrows.
 async function run(
   success: Notice,
-  mutate: (actions: SkillsActions, session: Session) => Promise<{ ok: boolean }>,
+  mutate: (
+    actions: SkillsActions,
+    session: Session,
+  ) => Promise<{ ok: boolean }>,
 ): Promise<never> {
   const db = await getServerDb();
   const session = await resolveSession(db);
@@ -110,7 +116,7 @@ async function run(
     if (!(error instanceof HttpError)) {
       throw error;
     }
-    notice = "problem";
+    notice = error.status === 409 ? "storage_full" : "problem";
   }
   revalidatePath("/skills");
   redirect(`/skills?notice=${notice}`);
@@ -132,13 +138,18 @@ async function saveProfileAction(formData: FormData): Promise<void> {
 
 async function createSkillAction(formData: FormData): Promise<void> {
   "use server";
-  await run("created", (actions, session) => actions.createSkill(session, skillContentOf(formData)));
+  await run("created", (actions, session) =>
+    actions.createSkill(session, skillContentOf(formData)),
+  );
 }
 
 async function editSkillAction(formData: FormData): Promise<void> {
   "use server";
   await run("updated", (actions, session) =>
-    actions.editSkill(session, { id: str(formData, "id"), ...skillContentOf(formData) }),
+    actions.editSkill(session, {
+      id: str(formData, "id"),
+      ...skillContentOf(formData),
+    }),
   );
 }
 
@@ -152,7 +163,10 @@ async function duplicateSkillAction(formData: FormData): Promise<void> {
 async function toggleSkillAction(formData: FormData): Promise<void> {
   "use server";
   await run("switched", (actions, session) =>
-    actions.toggleSkill(session, { id: str(formData, "id"), enabled: str(formData, "enabled") === "true" }),
+    actions.toggleSkill(session, {
+      id: str(formData, "id"),
+      enabled: str(formData, "enabled") === "true",
+    }),
   );
 }
 
@@ -163,7 +177,15 @@ async function deleteSkillAction(formData: FormData): Promise<void> {
   );
 }
 
-type Notice = "saved" | "created" | "updated" | "duplicated" | "switched" | "deleted" | "problem";
+type Notice =
+  | "saved"
+  | "created"
+  | "updated"
+  | "duplicated"
+  | "switched"
+  | "deleted"
+  | "problem"
+  | "storage_full";
 
 const NOTICES: Record<Notice, { done: boolean; text: string }> = {
   saved: { done: true, text: "Your style profile was saved." },
@@ -173,6 +195,10 @@ const NOTICES: Record<Notice, { done: boolean; text: string }> = {
   switched: { done: true, text: "Skill updated." },
   deleted: { done: true, text: "Skill deleted." },
   problem: { done: false, text: "Something went wrong. Please try again." },
+  storage_full: {
+    done: false,
+    text: "Storage limit reached. Remove unused items or reduce their size before saving.",
+  },
 };
 
 function toNotice(raw: string | string[] | undefined): Notice | null {
@@ -184,7 +210,9 @@ function toNotice(raw: string | string[] | undefined): Notice | null {
 function NoticeBanner({ notice }: { notice: Notice }) {
   const { done, text } = NOTICES[notice];
   return (
-    <InlineNotice tone={done ? "success" : "error"} className="mb-8">{text}</InlineNotice>
+    <InlineNotice tone={done ? "success" : "error"} className="mb-8">
+      {text}
+    </InlineNotice>
   );
 }
 
@@ -207,18 +235,29 @@ export default async function SkillsPage({
   const config = loadConfig();
   const user = await getUserById(db, session.userId);
   if (!user) redirect("/signin");
-  const dek = await selectKeyWrapper({ nodeEnv: config.nodeEnv, localKek: config.devKek }).unwrap(user.wrappedDek);
+  const dek = await selectKeyWrapper({
+    nodeEnv: config.nodeEnv,
+    localKek: config.devKek,
+  }).unwrap(user.wrappedDek);
   const packages = await listPackageSummaries(db, session.userId, dek);
-  const packagedIds = new Set(packages.flatMap((p) => p.members.map((m) => m.skillId)));
+  const packagedIds = new Set(
+    packages.flatMap((p) => p.members.map((m) => m.skillId)),
+  );
   const agents = await listAgentsForUser(db, session.userId);
 
   return (
     <PageContainer className="max-w-5xl">
       {notice ? <NoticeBanner notice={notice} /> : null}
       <SkillsView
-        skills={data.skills.map((s) => packagedIds.has(s.id) ? { ...s, fullText: undefined } : s)}
+        skills={data.skills.map((s) =>
+          packagedIds.has(s.id) ? { ...s, fullText: undefined } : s,
+        )}
         packages={packages}
-        agents={agents.map((a) => ({ id: a.id, displayName: a.displayName, status: a.status }))}
+        agents={agents.map((a) => ({
+          id: a.id,
+          displayName: a.displayName,
+          status: a.status,
+        }))}
         preferences={data.preferences}
         houseSkill={data.houseSkill}
         saveProfileAction={saveProfileAction}

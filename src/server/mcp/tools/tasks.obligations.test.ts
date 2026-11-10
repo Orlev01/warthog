@@ -243,8 +243,8 @@ test("the task tools accept small, well-formed input and reach the store (not a 
 
 // ===========================================================================
 // AC [validate-and-parameterize-input] — a SQL-injection probe is inert: create_task
-// stores its title DEK-encrypted and binds the plaintext assignee as a value, so the
-// probe drops nothing, is stored verbatim, and the real task survives and stays readable.
+// stores free text DEK-encrypted and rejects an invalid assignee before writing.
+// Neither probe changes SQL; the real task survives and stays readable.
 // Parameter binding is proven on the recording db.
 // ===========================================================================
 
@@ -265,8 +265,11 @@ test("a SQL-shaped create_task is inert data: saved, nothing dropped, the real t
 
     const titleProbe = "Buy milk'; DROP TABLE tasks; --";
     const assigneeProbe = "any'; DROP TABLE tasks; --";
-    const result = (await tool.handle({ title: titleProbe, assignee: assigneeProbe }, conn)) as TaskToolResult;
-    assert.equal(result.status, "created", "the probe content is stored as ordinary data");
+    const rejected = (await tool.handle({ title: titleProbe, assignee: assigneeProbe }, conn)) as TaskToolResult;
+    assert.equal(rejected.status, "refused", "an assignee must be any or an owned connected agent");
+    assert.equal((await listTasksForUser(real, userId, dek)).length, 1, "invalid assignment writes nothing");
+    const result = (await tool.handle({ title: titleProbe, assignee: "any" }, conn)) as TaskToolResult;
+    assert.equal(result.status, "created", "free-text probe content is stored as ordinary data");
 
     // If a probe had been spliced into SQL, the tasks table would be gone; it is not —
     // the canary AND the probe-as-literal-data are both readable.
@@ -275,7 +278,7 @@ test("a SQL-shaped create_task is inert data: saved, nothing dropped, the real t
     assert.ok(titles.includes(CANARY), "the tasks table survived — the canary is intact");
     assert.ok(titles.includes(titleProbe), "the title probe was stored verbatim as inert data, not executed");
     const probed = stored.find((t) => t.title === titleProbe);
-    assert.equal(probed!.assignee, assigneeProbe, "the assignee probe was stored verbatim as inert data");
+    assert.equal(probed!.assignee, "any", "the valid assignment is preserved");
 
     // Parameter binding: neither attacker string ever appears in any SQL TEXT, and the
     // owning user id and the plaintext assignee travel as BOUND values.
@@ -289,7 +292,7 @@ test("a SQL-shaped create_task is inert data: saved, nothing dropped, the real t
       "the owning user id travels as a BOUND value (member-scoped, parameterized)",
     );
     assert.ok(
-      rec.calls.some((c) => c.values.includes(assigneeProbe)),
+      rec.calls.some((c) => c.values.includes("any")),
       "the plaintext assignee travels as a BOUND value, never spliced into the SQL",
     );
   } finally {

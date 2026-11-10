@@ -1,3 +1,5 @@
+import { assertCollectionCapacity } from "./collection-limits";
+import { pageOptions, pageCursor, cursorTimestamp } from "./pagination";
 // The shared-memory aggregate's data access (brief "Skills, preferences and shared
 // memory"; design §4.1). A memory is a short fact or note an agent (with permission)
 // or the person saves, carrying the source agent and the time it was saved. Each
@@ -66,7 +68,8 @@ export interface Memory {
 
 // The columns a full read returns, kept in one place; `content` comes back as
 // ciphertext and is decrypted separately.
-const SELECT_COLUMNS = "id, user_id, content, source_agent_id, scope, created_at";
+const SELECT_COLUMNS =
+  "id, user_id, content, source_agent_id, scope, created_at";
 
 // A stored instant comes back as a Date or an ISO/epoch representation depending on
 // the driver; normalise to a Date.
@@ -77,7 +80,13 @@ function toDate(value: unknown): Date {
 // Decrypt a raw row's content under the owner's DEK and assemble a Memory.
 async function decryptRow(dek: Uint8Array, row: Row): Promise<Memory> {
   const id = row.id as string;
-  const content = await decrypt(dek, TABLE, "content", id, row.content as string);
+  const content = await decrypt(
+    dek,
+    TABLE,
+    "content",
+    id,
+    row.content as string,
+  );
   return {
     id,
     userId: row.user_id as string,
@@ -100,14 +109,24 @@ export async function createMemory(
   dek: Uint8Array,
   clock: Clock,
 ): Promise<Memory> {
+  if (!db.inTransaction)
+    return withTransaction(db, (tx) => createMemory(tx, input, dek, clock));
   const id = randomUUID();
   const createdAt = clock.now();
   const content = await encrypt(dek, TABLE, "content", id, input.content);
+  await assertCollectionCapacity(db, input.userId, "memories", content.length);
 
   await db.query(
     `INSERT INTO memories (id, user_id, content, source_agent_id, scope, created_at)
      VALUES ($1, $2, $3, $4, $5, $6::timestamptz)`,
-    [id, input.userId, content, input.sourceAgentId, input.scope, createdAt.toISOString()],
+    [
+      id,
+      input.userId,
+      content,
+      input.sourceAgentId,
+      input.scope,
+      createdAt.toISOString(),
+    ],
   );
 
   return {
@@ -131,7 +150,12 @@ export async function editMemory(
   content: string,
   dek: Uint8Array,
 ): Promise<Memory> {
+  if (!db.inTransaction)
+    return withTransaction(db, (tx) =>
+      editMemory(tx, userId, id, content, dek),
+    );
   const ciphertext = await encrypt(dek, TABLE, "content", id, content);
+  await assertCollectionCapacity(db, userId, "memories", ciphertext.length, id);
 
   const result = await db.query(
     `UPDATE memories SET content = $1
@@ -161,19 +185,28 @@ export async function rescopeMemory(
   id: string,
   scope: MemoryScope,
 ): Promise<void> {
-  if (!db.inTransaction) return withTransaction(db, tx => rescopeMemory(tx,userId,id,scope));
+  if (!db.inTransaction)
+    return withTransaction(db, (tx) => rescopeMemory(tx, userId, id, scope));
   const result = await db.query(
     `UPDATE memories SET scope = $1 WHERE id = $2 AND user_id = $3 RETURNING id`,
     [scope, id, userId],
   );
-  if (result.rows.length === 0) throw new Error("rescopeMemory: no such memory for this user");
-  await db.query("DELETE FROM agent_memory_access WHERE user_id = $1 AND memory_id = $2",[userId,id]);
+  if (result.rows.length === 0)
+    throw new Error("rescopeMemory: no such memory for this user");
+  await db.query(
+    "DELETE FROM agent_memory_access WHERE user_id = $1 AND memory_id = $2",
+    [userId, id],
+  );
 }
 
 // Delete an OWNED memory; true when a row was removed, false when there was none for
 // this user (so another person's delete is a no-op). Member-scoped (id AND user_id
 // bound).
-export async function deleteMemory(db: Db, userId: string, id: string): Promise<boolean> {
+export async function deleteMemory(
+  db: Db,
+  userId: string,
+  id: string,
+): Promise<boolean> {
   const result = await db.query(
     `DELETE FROM memories WHERE id = $1 AND user_id = $2 RETURNING id`,
     [id, userId],
@@ -225,4 +258,38 @@ export async function memoriesForAgent(
     memories.push(await decryptRow(dek, row));
   }
   return memories;
+}
+
+/** Newest-first bounded page; visibility is enforced in SQL before decryption. */
+export async function pageMemories(
+  db: Db,
+  userId: string,
+  dek: Uint8Array,
+  input: { cursor?: string; limit?: number; agentId?: string } = {},
+) {
+  const { limit, cursor } = pageOptions(input);
+  const result = await db.query(
+    `SELECT ${SELECT_COLUMNS}, ${cursorTimestamp("created_at")} FROM memories
+ WHERE user_id = $1 AND ($2::text IS NULL OR COALESCE((SELECT allowed FROM agent_memory_access a WHERE a.user_id = memories.user_id AND a.memory_id = memories.id AND a.agent_id::text = $2),scope = 'shared' OR source_agent_id = $2))
+ AND ($3::timestamptz IS NULL OR (created_at,id) < ($3::timestamptz,$4::uuid))
+ ORDER BY created_at DESC,id DESC LIMIT $5`,
+    [
+      userId,
+      input.agentId ?? null,
+      cursor?.at ?? null,
+      cursor?.id ?? null,
+      limit + 1,
+    ],
+  );
+  const items = await Promise.all(
+    result.rows.slice(0, limit).map((row) => decryptRow(dek, row)),
+  );
+  const last = result.rows[Math.min(result.rows.length, limit) - 1];
+  return {
+    items,
+    nextCursor:
+      result.rows.length > limit && last
+        ? pageCursor({ id: String(last.id), createdAt: String(last.cursor_at) })
+        : null,
+  };
 }

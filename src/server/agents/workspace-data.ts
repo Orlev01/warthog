@@ -1,6 +1,6 @@
 import { getAgentById } from "../db/agents";
 import { getConnectionPermissions } from "../db/agent-permissions";
-import { memoriesForAgent } from "../db/memories";
+import { pageMemories } from "../db/memories";
 import { listActivity } from "../activity/list";
 import { readAgentSpending } from "../spending/agent-spending";
 import { timeZoneFor } from "../spending/time-zone";
@@ -36,16 +36,15 @@ export async function agentWorkspaceData(
       : null;
   const memory =
     section === "memory" && grants.memoryRead && agent.status === "connected"
-      ? (await memoriesForAgent(db, userId, agent.id, dek))
-          .slice(-50)
-          .reverse()
-          .map((item) => ({
-            id: item.id,
-            content: item.content,
-            scope: item.scope,
-            own: item.sourceAgentId === agent.id,
-            savedAt: formatAccountTime(item.createdAt, timeZone),
-          }))
+      ? (
+          await pageMemories(db, userId, dek, { agentId: agent.id, limit: 50 })
+        ).items.map((item) => ({
+          id: item.id,
+          content: item.content,
+          scope: item.scope,
+          own: item.sourceAgentId === agent.id,
+          savedAt: formatAccountTime(item.createdAt, timeZone),
+        }))
       : [];
   const activity =
     section === "activity"

@@ -15,13 +15,13 @@ connection for each agent that needs separate control.
 | Resource | Account responsibility | Individual agent responsibility |
 | --- | --- | --- |
 | Connectors | Connect, renew and remove service accounts; store encrypted credentials | Grant service access; select the specific account; allow reads and choose off / ask / allow for changes |
-| Vault | Maintain everyday and protected identity fields | Allow everyday profile reads; permit requests for protected details; each protected release requires approval |
+| Vault | Maintain everyday and protected identity fields | Choose all or specific fields; allow everyday reads and protected requests; each protected release requires approval |
 | Cards | Maintain device-encrypted card data | Permit requests, set amount/currency/period budget; each release needs approval |
 | Skills | Maintain enabled skills and their default audience (all or chosen agents) | Explicit assignments override that audience for this agent; disabling the source skill disables it everywhere |
-| Memory | View, edit, delete and change private/shared scope | Independent read and write permission; sharing flag controls new memories; read sees shared plus own private memories |
+| Memory | View, edit, delete and change private/shared scope | Independent read/write permission; sharing flag controls new memories; explicit per-memory agent audiences override the source default |
 | Rules | Global restrictions apply on every request | Agent rules add restrictions; they cannot override a global denial |
 | Activity | Account-wide, append-only record and integrity verification | Filter by agent; show Warthog-observed actions separately from agent reports |
-| Tasks and records | Own shared tasks, hand-offs and records | Explicit capability grants; task reads/updates are limited to assigned or unassigned tasks |
+| Tasks and records | Own shared tasks, hand-offs and records | Explicit capability grants; owned connected assignees, atomic updates and renewable claims on unassigned tasks |
 | Preferences | Account profile and working preferences | Currently shared with all connected agents; no per-agent preference override |
 | Notifications and household | Account notification channels; separately authorised household address and aggregate budgets | Agent requests trigger those policies; a household does not share members' agents or private resources |
 
@@ -82,13 +82,14 @@ platform's separate direct tools, private model memory, billing, or runtime. A
 service connector is not an agent registration. A provider's support for remote
 MCP does not establish that its integration has passed a live Warthog test.
 
-The provider-hosted MCP client still lacks a complete production authorisation
-and tool-call flow. Those catalogue entries are unavailable in the portal, and
-are excluded from executable service tools. Incoming remote MCP agent connections
-continue to work; these are different directions of integration.
+Outbound provider MCP now uses the pinned SDK with encrypted, session-bound OAuth
+state, authenticated discovery, refresh, reconnect and approved calls. See
+[the provider MCP decision](provider-mcp-client.md). Provider tools always require
+approval because their effect annotations are untrusted. Each real provider still
+needs authenticated acceptance before being labelled verified.
 
-Memory scopes remain private-to-source or shared-with-permitted-readers. Arbitrary
-subsets per memory, per-field vault grants, per-service tool-class policies and
-provider-runtime lifecycle control are separate future capabilities, not implied
-by the workspace tabs. Connector read/change class settings currently apply to all
-services granted to one agent.
+[Resource audiences](resource-audiences.md) adds arbitrary per-memory audiences,
+per-field vault grants and per-service read/change overrides. [Collection bounds](collection-bounds.md)
+describes pagination and storage limits. Provider-runtime lifecycle control remains
+outside Warthog's connection: Dots and Instinct have no verified direct integration
+contract, so the product does not invent setup steps for them.

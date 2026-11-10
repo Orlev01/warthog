@@ -1,3 +1,4 @@
+import { pageMemories } from "../../../../server/db/memories";
 import { withTransaction } from "../../../../server/db/index";
 import { createRedactingRecorder } from "../../../../server/mcp/recorder";
 import { formatAccountTime } from "@/server/display-time";
@@ -45,7 +46,7 @@ import {
   deleteMemory as deleteMemoryRow,
   type MemoryScope,
 } from "@/server/db/memories";
-import { memoriesPageData, searchMemories, type MemoryPageItem } from "@/server/memory/page-data";
+import { type MemoryPageItem } from "@/server/memory/page-data";
 import type { KeyWrapper } from "@/server/crypto/key-wrapper";
 import type { Clock } from "@/server/seams/clock";
 import type { Session } from "@/server/auth/session";
@@ -77,12 +78,15 @@ export interface MemoryViewItem {
 export interface MemoryPageData {
   readonly memories: MemoryViewItem[];
   readonly query: string | null;
+  readonly nextCursor?: string | null;
 }
 
 // Every mutation reports its outcome — success, or a refusal naming its reason (the
 // row is not this person's). Never a silent success (conventions: a server action
 // reports success, the refusal reason, or a 4xx).
-export type ActionResult = { readonly ok: true } | { readonly ok: false; readonly reason: string };
+export type ActionResult =
+  | { readonly ok: true }
+  | { readonly ok: false; readonly reason: string };
 
 // Add the PERSON's OWN memory (no source agent): its content and scope.
 export interface AddMemoryInput {
@@ -108,11 +112,21 @@ export interface DeleteMemoryInput {
 }
 
 export interface MemoryActions {
-  load(session: Session, query?: string): Promise<MemoryPageData>;
+  load(
+    session: Session,
+    query?: string,
+    cursor?: string,
+  ): Promise<MemoryPageData>;
   addMemory(session: Session, input: AddMemoryInput): Promise<ActionResult>;
   editMemory(session: Session, input: EditMemoryInput): Promise<ActionResult>;
-  rescopeMemory(session: Session, input: RescopeMemoryInput): Promise<ActionResult>;
-  deleteMemory(session: Session, input: DeleteMemoryInput): Promise<ActionResult>;
+  rescopeMemory(
+    session: Session,
+    input: RescopeMemoryInput,
+  ): Promise<ActionResult>;
+  deleteMemory(
+    session: Session,
+    input: DeleteMemoryInput,
+  ): Promise<ActionResult>;
 }
 
 // ---- boundary validation shapes (INV-102) -----------------------------------------
@@ -129,11 +143,19 @@ const memoryIdSchema = z.uuid();
 const scopeSchema = z.enum(["kept", "shared"]);
 const contentSchema = z.string().min(1).max(CONTENT_MAX);
 
-const addMemorySchema = z.object({ content: contentSchema, scope: scopeSchema });
-const editMemorySchema = z.object({ id: memoryIdSchema, content: contentSchema });
-const rescopeMemorySchema = z.object({ id: memoryIdSchema, scope: scopeSchema });
+const addMemorySchema = z.object({
+  content: contentSchema,
+  scope: scopeSchema,
+});
+const editMemorySchema = z.object({
+  id: memoryIdSchema,
+  content: contentSchema,
+});
+const rescopeMemorySchema = z.object({
+  id: memoryIdSchema,
+  scope: scopeSchema,
+});
 const deleteMemorySchema = z.object({ id: memoryIdSchema });
-
 
 export function createMemoryActions(deps: MemoryActionsDeps): MemoryActions {
   const { db, keyWrapper, clock } = deps;
@@ -153,19 +175,29 @@ export function createMemoryActions(deps: MemoryActionsDeps): MemoryActions {
   // bound). Used to refuse a cross-user edit / re-scope up front rather than letting
   // the store throw — so the refusal is a reported { ok: false }, never a raw 500.
   async function ownsMemory(userId: string, id: string): Promise<boolean> {
-    const result = await db.query("SELECT id FROM memories WHERE id = $1 AND user_id = $2", [id, userId]);
+    const result = await db.query(
+      "SELECT id FROM memories WHERE id = $1 AND user_id = $2",
+      [id, userId],
+    );
     return result.rows.length > 0;
   }
 
   // Shape one owner-scoped memory for the view: resolve its source agent id to the
   // owner's agent display name (null when the person added it, or when the id is not
   // one of this person's agents), and format its saved time to a label.
-  function toViewItem(m: MemoryPageItem, agentNameById: ReadonlyMap<string, string>, timeZone: string): MemoryViewItem {
+  function toViewItem(
+    m: MemoryPageItem,
+    agentNameById: ReadonlyMap<string, string>,
+    timeZone: string,
+  ): MemoryViewItem {
     return {
       id: m.id,
       content: m.content,
       savedAt: formatAccountTime(m.createdAt, timeZone, { dateOnly: true }),
-      sourceAgentName: m.sourceAgentId != null ? (agentNameById.get(m.sourceAgentId) ?? null) : null,
+      sourceAgentName:
+        m.sourceAgentId != null
+          ? (agentNameById.get(m.sourceAgentId) ?? null)
+          : null,
       scope: m.scope,
     };
   }
@@ -176,27 +208,57 @@ export function createMemoryActions(deps: MemoryActionsDeps): MemoryActions {
   // non-empty `query` filters to the matching memories (within the owner set, matched
   // over the decrypted content in the app) and is echoed back. Another person's
   // memory never appears.
-  async function load(session: Session, query?: string): Promise<MemoryPageData> {
+  async function load(
+    session: Session,
+    query?: string,
+    cursor?: string,
+  ): Promise<MemoryPageData> {
     const dek = await dataKeyFor(session.userId);
     const timeZone = await timeZoneFor(db, session.userId, dek);
     const hasQuery = typeof query === "string" && query.trim().length > 0;
+    const page = await pageMemories(db, session.userId, dek, {
+      cursor,
+      limit: hasQuery ? 200 : 50,
+    });
     const items = hasQuery
-      ? await searchMemories(db, session.userId, dek, query)
-      : await memoriesPageData(db, session.userId, dek);
+      ? page.items.filter((m) =>
+          m.content.toLowerCase().includes(query!.toLowerCase()),
+        )
+      : page.items;
 
     // Resolve source agent ids to display names from the person's OWN agents only
     // (member-scoped), in one read rather than per memory.
     const agents = await listAgentsForUser(db, session.userId);
     const agentNameById = new Map(agents.map((a) => [a.id, a.displayName]));
 
-    const active=(await db.query("SELECT a.id, a.display_name FROM agents a JOIN agent_permissions p ON p.user_id = a.user_id AND p.connection_id = a.connection_id WHERE a.user_id = $1 AND a.status = 'connected' AND p.memory_read = true",[session.userId])).rows;
-    const overrides=(await db.query("SELECT memory_id, agent_id, allowed FROM agent_memory_access WHERE user_id = $1",[session.userId])).rows;
+    const active = (
+      await db.query(
+        "SELECT a.id, a.display_name FROM agents a JOIN agent_permissions p ON p.user_id = a.user_id AND p.connection_id = a.connection_id WHERE a.user_id = $1 AND a.status = 'connected' AND p.memory_read = true",
+        [session.userId],
+      )
+    ).rows;
+    const overrides = (
+      await db.query(
+        "SELECT memory_id, agent_id, allowed FROM agent_memory_access WHERE user_id = $1 AND memory_id = ANY($2::uuid[])",
+        [session.userId, items.map((m) => m.id)],
+      )
+    ).rows;
     return {
-      memories: items.map((m) => ({...toViewItem(m, agentNameById, timeZone),audience:active.filter(a=>{
-        const override=overrides.find(o=>o.memory_id===m.id&&o.agent_id===a.id);
-        return override ? override.allowed : m.scope === "shared" || m.sourceAgentId === a.id;
-      }).map(a=>String(a.display_name))})),
+      memories: items.map((m) => ({
+        ...toViewItem(m, agentNameById, timeZone),
+        audience: active
+          .filter((a) => {
+            const override = overrides.find(
+              (o) => o.memory_id === m.id && o.agent_id === a.id,
+            );
+            return override
+              ? override.allowed
+              : m.scope === "shared" || m.sourceAgentId === a.id;
+          })
+          .map((a) => String(a.display_name)),
+      })),
       query: hasQuery ? query : null,
+      nextCursor: page.nextCursor,
     };
   }
 
@@ -204,12 +266,20 @@ export function createMemoryActions(deps: MemoryActionsDeps): MemoryActions {
   // first (a 4xx before any write); the owner is the session's id, so a userId
   // smuggled in the input is ignored. The content is DEK-encrypted by the store before
   // it is bound as a parameter.
-  async function addMemory(session: Session, input: AddMemoryInput): Promise<ActionResult> {
+  async function addMemory(
+    session: Session,
+    input: AddMemoryInput,
+  ): Promise<ActionResult> {
     const valid = parseParams(addMemorySchema, input);
     const dek = await dataKeyFor(session.userId);
     await createMemoryRow(
       db,
-      { userId: session.userId, content: valid.content, sourceAgentId: null, scope: valid.scope },
+      {
+        userId: session.userId,
+        content: valid.content,
+        sourceAgentId: null,
+        scope: valid.scope,
+      },
       dek,
       clock,
     );
@@ -219,7 +289,10 @@ export function createMemoryActions(deps: MemoryActionsDeps): MemoryActions {
   // Replace an OWNED memory's content in place. Validate at the boundary first (a
   // malformed id or content is a 4xx before any query); a memory that is not this
   // person's is refused and left unchanged.
-  async function editMemory(session: Session, input: EditMemoryInput): Promise<ActionResult> {
+  async function editMemory(
+    session: Session,
+    input: EditMemoryInput,
+  ): Promise<ActionResult> {
     const valid = parseParams(editMemorySchema, input);
     if (!(await ownsMemory(session.userId, valid.id))) {
       return { ok: false, reason: "not_found" };
@@ -232,15 +305,32 @@ export function createMemoryActions(deps: MemoryActionsDeps): MemoryActions {
   // Change an OWNED memory's scope (kept ⇄ shared). Validate at the boundary first (a
   // malformed id or unknown scope is a 4xx before any query); a memory that is not
   // this person's is refused and left unchanged.
-  async function rescopeMemory(session: Session, input: RescopeMemoryInput): Promise<ActionResult> {
+  async function rescopeMemory(
+    session: Session,
+    input: RescopeMemoryInput,
+  ): Promise<ActionResult> {
     const valid = parseParams(rescopeMemorySchema, input);
     if (!(await ownsMemory(session.userId, valid.id))) {
       return { ok: false, reason: "not_found" };
     }
-    const dek=await dataKeyFor(session.userId);
-    await withTransaction(db,async tx=>{
+    const dek = await dataKeyFor(session.userId);
+    await withTransaction(db, async (tx) => {
       await rescopeMemoryRow(tx, session.userId, valid.id, valid.scope);
-      await createRedactingRecorder({db:tx,clock,dekFor:async()=>dek}).record({userId:session.userId,kind:"memory_scope_change",source:"warthog",outcome:"saved",payload:{memoryId:valid.id,scope:valid.scope,replacedAgentOverrides:true}});
+      await createRedactingRecorder({
+        db: tx,
+        clock,
+        dekFor: async () => dek,
+      }).record({
+        userId: session.userId,
+        kind: "memory_scope_change",
+        source: "warthog",
+        outcome: "saved",
+        payload: {
+          memoryId: valid.id,
+          scope: valid.scope,
+          replacedAgentOverrides: true,
+        },
+      });
     });
     return { ok: true };
   }
@@ -248,7 +338,10 @@ export function createMemoryActions(deps: MemoryActionsDeps): MemoryActions {
   // Delete an OWNED memory. Validate the id at the boundary (a 4xx before any query),
   // then delete member-scoped (id AND user_id bound): a memory that is not this
   // person's removes nothing and is a safe no-op refusal.
-  async function deleteMemory(session: Session, input: DeleteMemoryInput): Promise<ActionResult> {
+  async function deleteMemory(
+    session: Session,
+    input: DeleteMemoryInput,
+  ): Promise<ActionResult> {
     const valid = parseParams(deleteMemorySchema, input);
     const removed = await deleteMemoryRow(db, session.userId, valid.id);
     return removed ? { ok: true } : { ok: false, reason: "not_found" };

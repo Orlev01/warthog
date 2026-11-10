@@ -1,3 +1,4 @@
+import { getContextSchema } from "./get-context";
 // E07-S11 — MCP core tool registry (design §6.2 MCP server; constitution principle
 // 13 "deterministic code", 15 "agents reach services only through Warthog").
 //
@@ -21,15 +22,28 @@
 import { z } from "zod";
 
 import { parseParams } from "../../http/validate";
-import type { AgentCall, AgentCallResult, AgentCallPipeline } from "../pipeline";
+import type {
+  AgentCall,
+  AgentCallResult,
+  AgentCallPipeline,
+} from "../pipeline";
 import type { AgentConnection } from "../context";
 import type { ConnectionPermissions } from "../../db/agent-permissions";
 import { rememberSchema, searchMemorySchema } from "./memory";
 import { getSkillSchema } from "./get-skill";
 import { inputSchema as checkApprovalSchema } from "./check-approval";
 import { inputSchema as collectReleaseSchema } from "./collect-release";
-import { completeTaskSchema, createTaskSchema, listTasksSchema, updateTaskSchema } from "./tasks";
-import { listRecordsSchema, saveRecordSchema, updateRecordSchema } from "./records";
+import {
+  completeTaskSchema,
+  createTaskSchema,
+  listTasksSchema,
+  updateTaskSchema,
+} from "./tasks";
+import {
+  listRecordsSchema,
+  saveRecordSchema,
+  updateRecordSchema,
+} from "./records";
 import { logActivitySchema } from "./log-activity";
 import { requestMakesChange } from "../../connectors/request-tool";
 import {
@@ -70,7 +84,10 @@ export interface ConnectorToolDeclaration {
 
 // Connector id → its (unqualified) tools, by bare name or full declaration. The resolver
 // namespaces them `<connector>__<tool>` and keeps only the ones a connection is permitted.
-export type ConnectorToolset = Record<string, readonly (string | ConnectorToolDeclaration)[]>;
+export type ConnectorToolset = Record<
+  string,
+  readonly (string | ConnectorToolDeclaration)[]
+>;
 
 export interface ToolRegistry {
   readonly coreTools: readonly ToolDefinition[]; // the always-available core tools
@@ -78,7 +95,7 @@ export interface ToolRegistry {
   resolveTools( // the list served to a connection
     permissions: ConnectionPermissions,
     connectorTools: ConnectorToolset,
-    options?: {expanded?:boolean},
+    options?: { expanded?: boolean },
   ): readonly ToolDefinition[];
 }
 
@@ -92,9 +109,22 @@ export interface ToolRegistryDeps {
 // oversized input is refused at validation before the pipeline runs (INV-102).
 const MAX_REASON = 2000;
 const reason = z.string().max(MAX_REASON).optional();
-export const findToolsSchema=z.object({query:z.string().max(200).optional(),cursor:z.number().int().nonnegative().max(100_000).optional(),limit:z.number().int().min(1).max(50).optional(),reason});
-export const callToolSchema=z.object({name:z.string().min(1).max(256),arguments:z.record(z.string(),z.unknown()).default({}),reason}).refine(v=>JSON.stringify(v).length<=64_000,"Tool arguments are too large");
-
+export const findToolsSchema = z.object({
+  query: z.string().max(200).optional(),
+  cursor: z.number().int().nonnegative().max(100_000).optional(),
+  limit: z.number().int().min(1).max(50).optional(),
+  reason,
+});
+export const callToolSchema = z
+  .object({
+    name: z.string().min(1).max(256),
+    arguments: z.record(z.string(), z.unknown()).default({}),
+    reason,
+  })
+  .refine(
+    (v) => JSON.stringify(v).length <= 64_000,
+    "Tool arguments are too large",
+  );
 
 // Caps for the card-request fields, so an oversized value is refused at the boundary.
 const MAX_CURRENCY = 10;
@@ -130,15 +160,26 @@ interface CoreToolSpec {
   readonly extra?: (parsed: Record<string, unknown>) => Partial<AgentCall>;
 }
 
-// A tool whose only argument is the optional `reason` (get_context takes nothing else).
+// Schema for core tools that take only an optional reason.
 const envelope = z.object({ reason });
 
 // request_card's input: the purchase it is for (amount, currency, merchant) plus the
 // universal optional reason, shown to the person when they decide.
 const requestCardSchema = z.object({
-  amount: z.number().positive().describe("The purchase amount, in major units (e.g. 49.95)."),
-  currency: z.string().min(1).max(MAX_CURRENCY).describe("The ISO 4217 currency code, e.g. AUD."),
-  merchant: z.string().min(1).max(MAX_MERCHANT).describe("Who the purchase is with."),
+  amount: z
+    .number()
+    .positive()
+    .describe("The purchase amount, in major units (e.g. 49.95)."),
+  currency: z
+    .string()
+    .min(1)
+    .max(MAX_CURRENCY)
+    .describe("The ISO 4217 currency code, e.g. AUD."),
+  merchant: z
+    .string()
+    .min(1)
+    .max(MAX_MERCHANT)
+    .describe("Who the purchase is with."),
   reason,
 });
 
@@ -154,7 +195,12 @@ const requestIdentityDetailSchema = z.object({
     .describe(
       "Which detail you need: date_of_birth, passport, driver_licence, car_registration, or the label of a custom field.",
     ),
-  purpose: z.string().trim().min(1).max(MAX_PURPOSE).describe("What you will use it for, shown to the person."),
+  purpose: z
+    .string()
+    .trim()
+    .min(1)
+    .max(MAX_PURPOSE)
+    .describe("What you will use it for, shown to the person."),
   reason,
 });
 
@@ -162,13 +208,14 @@ const CORE_TOOL_SPECS: readonly CoreToolSpec[] = [
   {
     name: "get_context",
     description:
-      "Fetch everything you have been granted in one call: the person's profile you may see, the skills and preferences scoped to you, the rules you must follow, the shared memory you may read, your open tasks and Warthog's house skill. Call this first.",
+      "Fetch your granted context: the person's profile you may see, the skills and preferences scoped to you, the rules you must follow, the shared memory you may read, your open tasks and Warthog's house skill. Call this first. Follow next.memory and next.skills with memory_cursor and skill_cursor to retrieve further pages.",
     makesChange: false,
-    schema: envelope,
+    schema: getContextSchema,
   },
   {
     name: "get_skill",
-    description: "Fetch the full text of one skill by its title (get_context lists the titles you can use).",
+    description:
+      "Fetch a skill by title and, when available, its ID from get_context. Supporting files use the optional file path.",
     makesChange: false,
     schema: getSkillSchema,
   },
@@ -178,7 +225,11 @@ const CORE_TOOL_SPECS: readonly CoreToolSpec[] = [
       "Ask the person to release one high-tier identity detail (such as a passport or driver licence) for a stated purpose. The person approves each request; you get pending_approval, wait with check_approval, then collect the value once with collect_release.",
     makesChange: false,
     schema: requestIdentityDetailSchema,
-    extra: (p) => ({ request: "high_tier", field: p.field as string, purpose: p.purpose as string }),
+    extra: (p) => ({
+      request: "high_tier",
+      field: p.field as string,
+      purpose: p.purpose as string,
+    }),
   },
   {
     name: "request_card",
@@ -217,25 +268,29 @@ const CORE_TOOL_SPECS: readonly CoreToolSpec[] = [
   },
   {
     name: "search_memory",
-    description: "Search the memories you may read (shared memories plus your own), optionally filtered by a text query.",
+    description:
+      "Search a bounded page of memories you may read, optionally filtered by text. Follow nextCursor with cursor until null, even if a page has no matches.",
     makesChange: false,
     schema: searchMemorySchema,
   },
   {
     name: "list_tasks",
-    description: "List the person's tasks that are assigned to you or to any agent.",
+    description:
+      "List the person's tasks that are assigned to you or to any agent.",
     makesChange: false,
     schema: listTasksSchema,
   },
   {
     name: "create_task",
-    description: "Create a task with a title, optionally assigned to one agent (otherwise any agent may pick it up).",
+    description:
+      "Create a task with a title, optionally assigned to one agent (otherwise any agent may pick it up).",
     makesChange: true,
     schema: createTaskSchema,
   },
   {
     name: "update_task",
-    description: "Update one of your tasks by id: change status or append a note. Updating a shared task claims it for ten minutes; further updates renew the claim. Set status open to release it. Another agent cannot change it until the claim expires.",
+    description:
+      "Update one of your tasks by id: change status or append a note. Updating a shared task claims it for ten minutes; further updates renew the claim. Set status open to release it. Another agent cannot change it until the claim expires.",
     makesChange: true,
     schema: updateTaskSchema,
   },
@@ -261,7 +316,8 @@ const CORE_TOOL_SPECS: readonly CoreToolSpec[] = [
   },
   {
     name: "update_record",
-    description: "Update a life-admin record by id, resupplying its details and optionally its status or due date.",
+    description:
+      "Update a life-admin record by id, resupplying its details and optionally its status or due date.",
     makesChange: true,
     schema: updateRecordSchema,
   },
@@ -281,12 +337,18 @@ const CORE_TOOL_SPECS: readonly CoreToolSpec[] = [
 // routed), map it to an `AgentCall` (a core tool has no connector), and route it
 // through the pipeline under the SESSION connection — the caller's identity is
 // always the connection's, never a value in the input.
-function buildCoreTool(spec: CoreToolSpec, pipeline: AgentCallPipeline): ToolDefinition {
+function buildCoreTool(
+  spec: CoreToolSpec,
+  pipeline: AgentCallPipeline,
+): ToolDefinition {
   return {
     name: spec.name,
     description: spec.description,
     inputSchema: spec.schema,
-    async handle(input: unknown, connection: AgentConnection): Promise<AgentCallResult> {
+    async handle(
+      input: unknown,
+      connection: AgentConnection,
+    ): Promise<AgentCallResult> {
       const parsed = parseParams(spec.schema, input) as Record<string, unknown>;
       // The VALIDATED fields are what travel on (and are recorded): an extra field the
       // schema does not know is dropped here rather than forwarded or stored.
@@ -313,21 +375,32 @@ function buildConnectorTool(
   tool: string | ConnectorToolDeclaration,
   pipeline: AgentCallPipeline,
 ): ToolDefinition {
-  const declaration: ConnectorToolDeclaration = typeof tool === "string" ? { name: tool } : tool;
+  const declaration: ConnectorToolDeclaration =
+    typeof tool === "string" ? { name: tool } : tool;
   const name = `${connectorId}${NAMESPACE}${declaration.name}`;
   const isRequest = declaration.name === REQUEST_TOOL;
-  const schema = declaration.schema ?? (isRequest ? connectorRequestSchema : connectorToolSchema);
+  const schema =
+    declaration.schema ??
+    (isRequest ? connectorRequestSchema : connectorToolSchema);
   return {
     name,
     description:
-      declaration.description ?? `Use the ${declaration.name} tool of the person's ${connectorId} service.`,
+      declaration.description ??
+      `Use the ${declaration.name} tool of the person's ${connectorId} service.`,
     inputSchema: schema,
-    async handle(input: unknown, connection: AgentConnection): Promise<AgentCallResult> {
-      const parsed = parseParams(schema, input) as Record<string, unknown> & { body?: string };
+    async handle(
+      input: unknown,
+      connection: AgentConnection,
+    ): Promise<AgentCallResult> {
+      const parsed = parseParams(schema, input) as Record<string, unknown> & {
+        body?: string;
+      };
       const call: AgentCall = {
         connector: connectorId,
         tool: name,
-        makesChange: isRequest ? requestMakesChange(String(parsed.method)) : (declaration.makesChange ?? true),
+        makesChange: isRequest
+          ? requestMakesChange(String(parsed.method))
+          : (declaration.makesChange ?? true),
         requiresApproval: declaration.requiresApproval,
         messageChannel: declaration.messageChannel,
         recipients: declaration.recipients?.(parsed.body),
@@ -355,7 +428,8 @@ export function createToolRegistry(deps: ToolRegistryDeps): ToolRegistry {
     buildCoreTool(
       {
         name: "find_tools",
-        description: "Find permitted connected-service tools by name or description. Results include schemas and a pagination cursor.",
+        description:
+          "Find permitted connected-service tools by name or description. Results include schemas and a pagination cursor.",
         makesChange: false,
         schema: findToolsSchema,
       },
@@ -364,7 +438,8 @@ export function createToolRegistry(deps: ToolRegistryDeps): ToolRegistry {
     buildCoreTool(
       {
         name: "call_tool",
-        description: "Call a permitted tool from find_tools with its exact name and input object in arguments.",
+        description:
+          "Call a permitted tool from find_tools with its exact name and input object in arguments.",
         makesChange: false,
         schema: callToolSchema,
       },
@@ -386,7 +461,7 @@ export function createToolRegistry(deps: ToolRegistryDeps): ToolRegistry {
     resolveTools(
       permissions: ConnectionPermissions,
       connectorTools: ConnectorToolset,
-      options: {expanded?:boolean} = {},
+      options: { expanded?: boolean } = {},
     ): readonly ToolDefinition[] {
       // Namespace each PERMITTED connector's tools; a connector that is not granted
       // contributes nothing.
@@ -394,11 +469,19 @@ export function createToolRegistry(deps: ToolRegistryDeps): ToolRegistry {
       for (const connectorId of permissions.grantedConnectors) {
         const tools = connectorTools[connectorId];
         if (!tools) continue;
-        const policy=permissions.connectorPolicies?.[connectorId];
-        const reads=policy?.readTools ?? permissions.readTools, changes=policy?.changeTools ?? permissions.changeTools;
+        const policy = permissions.connectorPolicies?.[connectorId];
+        const reads = policy?.readTools ?? permissions.readTools,
+          changes = policy?.changeTools ?? permissions.changeTools;
         for (const tool of tools) {
-          const declaration=typeof tool === "string" ? {name:tool} : tool;
-          if(declaration.name === REQUEST_TOOL ? !reads && changes === "off" : (declaration.makesChange ?? true) ? changes === "off" : !reads) continue;
+          const declaration = typeof tool === "string" ? { name: tool } : tool;
+          if (
+            declaration.name === REQUEST_TOOL
+              ? !reads && changes === "off"
+              : (declaration.makesChange ?? true)
+                ? changes === "off"
+                : !reads
+          )
+            continue;
           connectorDefs.push(buildConnectorTool(connectorId, tool, pipeline));
         }
       }
@@ -406,14 +489,25 @@ export function createToolRegistry(deps: ToolRegistryDeps): ToolRegistry {
       // Over the limit the connector tools collapse into find_tools + call_tool; the
       // core tools are always served either way.
       if (!options.expanded && connectorDefs.length > CONNECTOR_TOOL_LIMIT) {
-        const callTool:ToolDefinition={...collapseHelpers[1]!,async handle(input,connection){
-          const parsed=parseParams(callToolSchema,input);
-          const target=connectorDefs.find(tool=>tool.name===parsed.name);
-          // The actual tool is audited and gated with its own trusted declaration.
-          // Unknown targets take the normal audited refusal path.
-          if(!target) return collapseHelpers[1]!.handle(parsed,connection);
-          return target.handle({...parsed.arguments,...(parsed.reason?{reason:parsed.reason}:{})},connection);
-        }};
+        const callTool: ToolDefinition = {
+          ...collapseHelpers[1]!,
+          async handle(input, connection) {
+            const parsed = parseParams(callToolSchema, input);
+            const target = connectorDefs.find(
+              (tool) => tool.name === parsed.name,
+            );
+            // The actual tool is audited and gated with its own trusted declaration.
+            // Unknown targets take the normal audited refusal path.
+            if (!target) return collapseHelpers[1]!.handle(parsed, connection);
+            return target.handle(
+              {
+                ...parsed.arguments,
+                ...(parsed.reason ? { reason: parsed.reason } : {}),
+              },
+              connection,
+            );
+          },
+        };
         return [...coreTools, collapseHelpers[0]!, callTool];
       }
       return [...coreTools, ...connectorDefs];

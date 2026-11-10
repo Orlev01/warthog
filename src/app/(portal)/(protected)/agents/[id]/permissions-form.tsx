@@ -4,8 +4,15 @@ import * as React from "react";
 import { useRouter } from "next/navigation";
 import { Notice as InlineNotice } from "@/components/ui/notice";
 
-import { PermissionsView, type PermissionsViewProps } from "@/components/agents/permissions-view";
-import { DEFAULT_CARD_BUDGET, type Budget, type PeriodKind } from "@/domain/budget/budget";
+import {
+  PermissionsView,
+  type PermissionsViewProps,
+} from "@/components/agents/permissions-view";
+import {
+  DEFAULT_CARD_BUDGET,
+  type Budget,
+  type PeriodKind,
+} from "@/domain/budget/budget";
 import type { PermissionsSaveInput, SaveResult } from "./actions";
 import { collectEdits } from "./permission-edits";
 
@@ -45,8 +52,14 @@ const INVALID: Notice = {
 };
 
 const PROBLEM: Record<string, Notice> = {
-  disconnected: { tone: "problem", text: "This agent is disconnected. Connect it again before changing access." },
-  not_found: { tone: "problem", text: "Nothing was changed: that agent is no longer on your account." },
+  disconnected: {
+    tone: "problem",
+    text: "This agent is disconnected. Connect it again before changing access.",
+  },
+  not_found: {
+    tone: "problem",
+    text: "Nothing was changed: that agent is no longer on your account.",
+  },
   card_needs_budget: {
     tone: "problem",
     text: "Nothing was changed: add a budget before you can switch on card access.",
@@ -74,7 +87,9 @@ function labelText(el: HTMLInputElement): string {
 // (status). Colour comes from the design tokens — never a raw hex.
 function NoticeBanner({ notice }: { notice: Notice }) {
   return (
-    <InlineNotice tone={notice.tone === "done" ? "success" : "error"}>{notice.text}</InlineNotice>
+    <InlineNotice tone={notice.tone === "done" ? "success" : "error"}>
+      {notice.text}
+    </InlineNotice>
   );
 }
 
@@ -85,114 +100,132 @@ export interface PermissionsFormProps {
   readonly save: (input: PermissionsSaveInput) => Promise<SaveResult>;
 }
 
-export function PermissionsForm({ initial, save }: PermissionsFormProps): React.ReactElement {
+export function PermissionsForm({
+  initial,
+  save,
+}: PermissionsFormProps): React.ReactElement {
   const router = useRouter();
   const [saving, setSaving] = React.useState(false);
+  const [ready, setReady] = React.useState(false);
+  React.useEffect(() => setReady(true), []);
   const [notice, setNotice] = React.useState<Notice | null>(null);
   // Card access and its amount are mirrored into state so the view reflects an edit live:
   // switching card on reveals the budget field, and entering a budget enables the save
   // control. Every other control stays uncontrolled and is read from the DOM on save.
   const [cardOn, setCardOn] = React.useState(initial.cardAccess);
-  const [budgetAmount, setBudgetAmount] = React.useState<number | null>(initial.budget?.amount ?? null);
+  const [budgetAmount, setBudgetAmount] = React.useState<number | null>(
+    initial.budget?.amount ?? null,
+  );
   const containerRef = React.useRef<HTMLDivElement | null>(null);
   const pendingRef = React.useRef(false);
 
   // Use the stored period as the initial value. The save reads the edited select.
   // Mirror the amount into state so card access can require a valid budget.
-  const period: PeriodKind = initial.budget?.period ?? DEFAULT_CARD_BUDGET.period;
-  const budget: Budget | null = budgetAmount != null ? { amount: budgetAmount, period } : initial.budget;
+  const period: PeriodKind =
+    initial.budget?.period ?? DEFAULT_CARD_BUDGET.period;
+  const budget: Budget | null =
+    budgetAmount != null ? { amount: budgetAmount, period } : initial.budget;
 
-  React.useEffect(() => {
-    const el = containerRef.current;
-    if (!el) return;
-
-    // Mirror the two live controls into state as the person edits them.
-    function onEdit(event: Event): void {
-      const target = event.target;
-      if (!(target instanceof HTMLInputElement)) return;
-      if (target.type === "checkbox" && target.name === "card") {
-        setCardOn(target.checked);
-      } else if (target.type === "number" && target.name === "cardBudget") {
-        setBudgetAmount(target.value.trim() === "" ? null : Number(target.value));
-      }
+  // React handlers participate in hydration event replay. A native listener installed
+  // by an effect could miss a fast save immediately after paging or navigation.
+  // Mirror the two live controls into state as the person edits them.
+  function onEdit(event: React.ChangeEvent<HTMLDivElement>): void {
+    const target = event.target;
+    if (!(target instanceof HTMLInputElement)) return;
+    if (target.type === "checkbox" && target.name === "card") {
+      setCardOn(target.checked);
+    } else if (target.type === "number" && target.name === "cardBudget") {
+      setBudgetAmount(target.value.trim() === "" ? null : Number(target.value));
     }
+  }
 
-    // Gather the current edits off the rendered controls and drive the save action.
-    async function submit(): Promise<void> {
-      if (pendingRef.current) return;
-      const root = containerRef.current;
-      if (!root) return;
+  // Gather the current edits off the rendered controls and drive the save action.
+  async function submit(): Promise<void> {
+    if (pendingRef.current) return;
+    const root = containerRef.current;
+    if (!root) return;
 
-      // Every control on the screen is carried with its explicit on/off state; a control the
-      // form cannot find refuses the save rather than silently dropping that edit.
-      const snapshot = Array.from(root.querySelectorAll<HTMLInputElement | HTMLSelectElement>("input, select")).map((i) => ({
-        type: i.type,
-        name: i.name,
-        label: i instanceof HTMLInputElement ? labelText(i) : "",
-        checked: i instanceof HTMLInputElement ? i.checked : false,
-        value: i.value,
-      }));
-      const collected = collectEdits(snapshot, {
-        currency: initial.currency ?? "A$",
-        period,
-        // Every connected service the screen shows carries a toggle the save must find.
-        connectors: initial.connectors.map((connector) => connector.id),
-        skills: initial.skills.map(skill => skill.id),
-        memories:initial.memories?.map(m=>m.id),
-        vaultFields:initial.vaultFields?.map(f=>f.id),
-        section: initial.section ?? "all",
-      });
-      if (!collected.ok) {
-        setNotice(problemNotice(collected.reason));
-        return;
-      }
-      const input: PermissionsSaveInput = collected.input;
-
-      pendingRef.current = true;
-      setSaving(true);
-      try {
-        const result = await save(input);
-        if (result.ok) {
-          setNotice(SAVED);
-          // Re-run the loader so the screen reflects the persisted grants.
-          router.refresh();
-        } else {
-          setNotice(problemNotice(result.reason));
-        }
-      } catch {
-        // A boundary 4xx (or any transport fault) is reported, never swallowed.
-        setNotice(problemNotice("invalid_request"));
-      } finally {
-        pendingRef.current = false;
-        setSaving(false);
-      }
+    // Every control on the screen is carried with its explicit on/off state; a control the
+    // form cannot find refuses the save rather than silently dropping that edit.
+    const snapshot = Array.from(
+      root.querySelectorAll<HTMLInputElement | HTMLSelectElement>(
+        "input, select",
+      ),
+    ).map((i) => ({
+      type: i.type,
+      name: i.name,
+      label: i instanceof HTMLInputElement ? labelText(i) : "",
+      checked: i instanceof HTMLInputElement ? i.checked : false,
+      value: i.value,
+    }));
+    const collected = collectEdits(snapshot, {
+      currency: initial.currency ?? "A$",
+      period,
+      // Every connected service the screen shows carries a toggle the save must find.
+      connectors: initial.connectors.map((connector) => connector.id),
+      skills: initial.skills.map((skill) => skill.id),
+      memories: initial.memories?.map((m) => m.id),
+      vaultFields: initial.vaultFields?.map((f) => f.id),
+      section: initial.section ?? "all",
+    });
+    if (!collected.ok) {
+      setNotice(problemNotice(collected.reason));
+      return;
     }
+    const input: PermissionsSaveInput = collected.input;
 
-    // The view's "Save changes" button is a type="button" with no handler, marked
-    // data-action="save"; a click on it (it never fires while the button is disabled)
-    // drives the save. Any other click (a toggle, the Advanced summary) is left to its
-    // native behaviour.
-    function onClick(event: MouseEvent): void {
-      const node = event.target instanceof Element ? event.target.closest("button") : null;
-      if (!node || node.getAttribute("data-action") !== "save") return;
-      event.preventDefault();
-      void submit();
+    pendingRef.current = true;
+    setSaving(true);
+    try {
+      const result = await save(input);
+      if (result.ok) {
+        setNotice(SAVED);
+        // Re-run the loader so the screen reflects the persisted grants.
+        router.refresh();
+      } else {
+        setNotice(problemNotice(result.reason));
+      }
+    } catch {
+      // A boundary 4xx (or any transport fault) is reported, never swallowed.
+      setNotice(problemNotice("invalid_request"));
+    } finally {
+      pendingRef.current = false;
+      setSaving(false);
     }
+  }
 
-    el.addEventListener("input", onEdit);
-    el.addEventListener("change", onEdit);
-    el.addEventListener("click", onClick);
-    return () => {
-      el.removeEventListener("input", onEdit);
-      el.removeEventListener("change", onEdit);
-      el.removeEventListener("click", onClick);
-    };
-  }, [initial, save, router, period]);
+  // The view's "Save changes" button is a type="button" with no handler, marked
+  // data-action="save"; a click on it (it never fires while the button is disabled)
+  // drives the save. Any other click (a toggle, the Advanced summary) is left to its
+  // native behaviour.
+  function onClick(event: React.MouseEvent<HTMLDivElement>): void {
+    const node =
+      event.target instanceof Element ? event.target.closest("button") : null;
+    if (!node || node.getAttribute("data-action") !== "save") return;
+    event.preventDefault();
+    void submit();
+  }
 
   return (
-    <div ref={containerRef} className="flex flex-col gap-6">
+    <div
+      ref={containerRef}
+      onChange={onEdit}
+      onClick={onClick}
+      className="flex flex-col gap-6"
+    >
       {notice ? <NoticeBanner notice={notice} /> : null}
-      <PermissionsView {...initial} saving={saving} cardAccess={cardOn} budget={budget} />
+      <fieldset
+        disabled={!ready}
+        aria-busy={!ready}
+        className="m-0 min-w-0 border-0 p-0"
+      >
+        <PermissionsView
+          {...initial}
+          saving={saving}
+          cardAccess={cardOn}
+          budget={budget}
+        />
+      </fieldset>
     </div>
   );
 }

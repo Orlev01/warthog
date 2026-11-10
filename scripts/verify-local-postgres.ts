@@ -8,6 +8,7 @@ import { createHousehold, addMember } from "../src/server/db/households";
 import { recordRelease, periodKeyFor } from "../src/server/db/card-spend-ledger";
 import { checkHouseholdRelease } from "../src/server/spending/release-household";
 import { randomUUID } from "node:crypto";
+import { verifyPostgresAgentControls } from "./verify-local-postgres-agents";
 import { verifyPostgresSecurityContention } from "./verify-local-postgres-security";
 
 if (process.platform !== "linux" || process.env.WARTHOG_LOCAL_PG_CHECK !== "1") throw new Error("Local Compose check required");
@@ -96,6 +97,7 @@ try {
   owner = await acquire();
   await verifyConcurrentHouseholdReleases();
   await verifyPostgresSecurityContention(runtime, purge);
+  await verifyPostgresAgentControls(runtime, purge);
   console.log(`PostgreSQL 16: ${migrations.length} migrations, idempotence, role separation, cascade purge, exclusive ownership and concurrent household-budget checks passed.`);
 } finally {
   await owner?.close();

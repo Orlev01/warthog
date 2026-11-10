@@ -1,3 +1,13 @@
+import { z } from "zod";
+import { parseParams } from "../../http/validate";
+import { pageMemories } from "../../db/memories";
+import { pageSkillsForAgent } from "../../db/skills";
+export const getContextSchema = z.object({
+  memory_cursor: z.string().max(256).optional(),
+  skill_cursor: z.string().max(256).optional(),
+  limit: z.number().int().min(1).max(100).optional(),
+  reason: z.string().max(2000).optional(),
+});
 import { vaultFieldAllowed } from "../../agents/resource-access";
 // Review fix D7 — the `get_context` core tool (design §6.2 MCP core tools; brief "Agent
 // context on connect — any agent can fetch, in one call, everything it has been granted:
@@ -18,12 +28,13 @@ import { vaultFieldAllowed } from "../../agents/resource-access";
 // `process.env` and holds no secret (INV-103). Every read is member-scoped by the session
 // connection's user id and parameter-bound by the stores (INV-102).
 
-import { buildSkillIndex, type SkillIndexEntry } from "../../../domain/skills/index";
+import {
+  buildSkillIndex,
+  type SkillIndexEntry,
+} from "../../../domain/skills/index";
 import { ruleSentence } from "../../../domain/rules/rules";
 import { listIdentityFields } from "../../db/identity-fields";
 import { getPreferences } from "../../db/preferences";
-import { skillsForAgent } from "../../db/skills";
-import { memoriesForAgent } from "../../db/memories";
 import { tasksForAgent } from "../../db/tasks";
 import { getUserById } from "../../db/users";
 import type { KeyWrapper } from "../../crypto/key-wrapper";
@@ -44,18 +55,31 @@ export interface ProfileField {
   readonly movingOn?: string;
 }
 
-// Everything the agent has been granted, without internal ids.
+// Granted context with bounded skill/memory pages and opaque continuation cursors.
 export interface AgentContextView {
   readonly profile: readonly ProfileField[] | null;
+  readonly next?: { memory: string | null; skills: string | null };
   readonly preferences: Record<string, string> | null;
   readonly skills: readonly SkillIndexEntry[];
   readonly rules: readonly string[];
-  readonly memory: ReadonlyArray<{ content: string; shared: boolean; savedAt: string }>;
-  readonly tasks: ReadonlyArray<{ id: string; title: string; status: string; assignedTo: "you" | "any agent" }>;
+  readonly memory: ReadonlyArray<{
+    content: string;
+    shared: boolean;
+    savedAt: string;
+  }>;
+  readonly tasks: ReadonlyArray<{
+    id: string;
+    title: string;
+    status: string;
+    assignedTo: "you" | "any agent";
+  }>;
   readonly permissions: {
     readonly services: readonly string[];
-    readonly servicePolicies?: Record<string,{readTools?:boolean;changeTools?:string}>;
-    readonly vaultScope?: "all"|"chosen";
+    readonly servicePolicies?: Record<
+      string,
+      { readTools?: boolean; changeTools?: string }
+    >;
+    readonly vaultScope?: "all" | "chosen";
     readonly readTools: boolean;
     readonly changeTools: string;
     readonly profile: boolean;
@@ -65,7 +89,10 @@ export interface AgentContextView {
     readonly memoryWrite?: boolean;
     readonly sharing: boolean;
   };
-  readonly card: { readonly budget: { amount: number; currency: string; period: string }; readonly spentThisPeriod: number } | null;
+  readonly card: {
+    readonly budget: { amount: number; currency: string; period: string };
+    readonly spentThisPeriod: number;
+  } | null;
 }
 
 // A stored instant as an ISO-8601 string.
@@ -74,7 +101,10 @@ function iso(value: Date | string): string {
 }
 
 export function createGetContextTool(deps: GetContextDeps): {
-  handle(connection: AgentConnection): Promise<AgentContextView>;
+  handle(
+    connection: AgentConnection,
+    input?: unknown,
+  ): Promise<AgentContextView>;
 } {
   const { db, keyWrapper, clock } = deps;
 
@@ -87,18 +117,28 @@ export function createGetContextTool(deps: GetContextDeps): {
   }
 
   return {
-    async handle(connection: AgentConnection): Promise<AgentContextView> {
+    async handle(
+      connection: AgentConnection,
+      input: unknown = {},
+    ): Promise<AgentContextView> {
+      const pageInput = parseParams(getContextSchema, input);
       const { userId, agentId } = connection;
-      const context = await loadAgentContext(connection, { db, keyWrapper, clock });
+      const context = await loadAgentContext(connection, {
+        db,
+        keyWrapper,
+        clock,
+      });
       const { permissions } = context;
       const dek = await dataKeyFor(userId);
 
       const profile = permissions.identityAccess
-        ? (await listIdentityFields(db, userId, dek)).filter(field=>vaultFieldAllowed(permissions,field.id)).map((field) => ({
-            kind: field.kind,
-            value: field.value,
-            ...(field.movingOn ? { movingOn: String(field.movingOn) } : {}),
-          }))
+        ? (await listIdentityFields(db, userId, dek))
+            .filter((field) => vaultFieldAllowed(permissions, field.id))
+            .map((field) => ({
+              kind: field.kind,
+              value: field.value,
+              ...(field.movingOn ? { movingOn: String(field.movingOn) } : {}),
+            }))
         : null;
 
       const stored = await getPreferences(db, userId, dek);
@@ -114,11 +154,21 @@ export function createGetContextTool(deps: GetContextDeps): {
         : null;
 
       // The house skill first, then the person's enabled skills scoped to this agent.
-      const personal = await skillsForAgent(db, userId, agentId, dek);
-      const skills = [...buildSkillIndex([], agentId), ...personal];
+      const skillPage = await pageSkillsForAgent(db, userId, agentId, dek, {
+        cursor: pageInput.skill_cursor,
+        limit: pageInput.limit,
+      });
+      const skills = [...buildSkillIndex([], agentId), ...skillPage.items];
+      const memoryPage = permissions.memoryRead
+        ? await pageMemories(db, userId, dek, {
+            agentId,
+            cursor: pageInput.memory_cursor,
+            limit: pageInput.limit,
+          })
+        : { items: [], nextCursor: null };
 
       const memory = permissions.memoryRead
-        ? (await memoriesForAgent(db, userId, agentId, dek)).map((m) => ({
+        ? memoryPage.items.map((m) => ({
             content: m.content,
             shared: m.scope === "shared",
             savedAt: iso(m.createdAt),
@@ -134,12 +184,16 @@ export function createGetContextTool(deps: GetContextDeps): {
               id: task.id,
               title: task.title,
               status: task.status,
-              assignedTo: task.assignee === agentId ? ("you" as const) : ("any agent" as const),
+              assignedTo:
+                task.assignee === agentId
+                  ? ("you" as const)
+                  : ("any agent" as const),
             }))
         : [];
 
       return {
         profile,
+        next: { memory: memoryPage.nextCursor, skills: skillPage.nextCursor },
         preferences,
         skills,
         rules: context.rules.map((rule) => ruleSentence(rule)),
