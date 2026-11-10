@@ -1,5 +1,35 @@
 # Delivery status — 10 November 2026
 
+**The design polish is live at [app.warthog.com.au](https://app.warthog.com.au).**
+Source `7e61d3d12d3fbd661d41f750551a8bf4bd019d1a` is deployed as
+`warthog--r42809708265a1`, with one healthy replica and explicit 100% traffic.
+The [production workflow](https://github.com/Orlev01/warthog/actions/runs/42809708265)
+succeeded; independent checks confirm the exact image, unchanged configuration,
+zero old replicas and healthy HTTPS/database readiness. See the
+[release record](docs/audit/design-polish-release-2026-11-10.md).
+
+Five contributor skills now define design-system, mobile, desktop, feedback and
+media conventions. Layout bounds, long content, safe areas, forms, notices, copy
+feedback and dialogs are polished. Publication CI passes 5,105 application tests;
+local browser checks pass 72 viewport/route cases and 18 interaction/display cases.
+All 16 public post-release checks and three production sign-in layout checks pass,
+including simulated phone safe areas. The image retains the same reviewed OS
+findings with no Node findings. No migration or dependency change was introduced.
+
+The application remains one 0.5-vCPU/1-GiB replica with SMS disabled and the
+existing credentials, hostname and usage alert. Independent inventory verifies
+the temporary runner and all associated resources and grants are deleted, with
+no shared-subnet NAT association or GitHub runner remaining. Required human
+GitHub environment approvals remain in place. Private evidence is under ignored
+`.delivery/design-polish/`.
+
+Earlier provider and receipt acceptance remains recorded below. Desktop push
+receipt, additional provider consents and isolated coordinated recovery remain
+unconfirmed; no messages, consent flows or production user-data tests were added
+by this design release. Earlier checkpoints are historical where superseded.
+
+# Historical acceptance-fixes status — 10 November 2026
+
 **Warthog is available at [app.warthog.com.au](https://app.warthog.com.au).**
 The acceptance fixes are deployed from source
 `09e13608110ef6419d6dd876faba17582b291596`, as revision

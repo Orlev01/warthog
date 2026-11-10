@@ -1,5 +1,16 @@
 # Warthog comprehensive engineering audit
 
+**Design polish deployed, 10 November:** source `7e61d3d` is live with one healthy
+replica and 100% traffic. The production workflow succeeded. Five contributor
+design skills and responsive/accessibility improvements passed 5,105 CI tests,
+72 local layout cases and 18 interaction/display checks. All 16 public acceptance
+checks and three production sign-in layout checks pass. The immutable image,
+retained OS findings and deployment evidence are in the
+[current release record](design-polish-release-2026-11-10.md).
+See [current state](../../state.md) for remaining acceptance boundaries.
+
+## Historical checkpoints
+
 **Acceptance fixes deployed, 10 November:** source `09e1360` is live with one
 healthy replica and explicit 100% traffic. Publication CI passes 5,092 application
 tests; all 16 public post-release checks pass. Fresh Authenticator sign-in and
@@ -12,8 +23,6 @@ Azure serialization guard failure, tested correction and successful operator
 continuation of the same reviewed image; the GitHub release run remains failed.
 Desktop push receipt and isolated coordinated recovery remain unconfirmed.
 See [current state](../../state.md) for the authoritative status and boundaries.
-
-## Historical checkpoints
 
 **Live acceptance follow-up, 10 November:** Memory and Skill CRUD/cleanup, eleven
 public security-boundary checks, approved temporary-agent OAuth/MCP, permission
