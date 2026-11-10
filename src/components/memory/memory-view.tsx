@@ -44,6 +44,7 @@ export type MemoryViewItem = {
   savedAt: string;
   sourceAgentName: string | null;
   scope: MemoryScope;
+  audience?:readonly string[];
 };
 
 // A control bound to a server action the page passes.
@@ -108,11 +109,12 @@ function MemoryCard({
   return (
     <Card className="flex flex-col gap-3">
       <p className="min-w-0 whitespace-pre-wrap text-fg [overflow-wrap:anywhere]">{memory.content}</p>
+      {memory.audience && <p className="text-sm text-fg-muted">Available to: {memory.audience.length ? memory.audience.join(", ") : "no agents"}. <a href="/agents" className="text-accent underline">Manage agent access</a></p>}
 
       <div className="flex flex-wrap items-center gap-x-3 gap-y-1 text-sm text-fg-muted">
         <span className="inline-flex min-w-0 items-center gap-1.5 [overflow-wrap:anywhere]">
           <Bot aria-hidden={true} className="h-4 w-4 shrink-0" />
-          Saved by {savedBy} · {memory.scope}
+          Saved by {savedBy} · default: {memory.scope}
         </span>
         <time className="text-xs">{memory.savedAt}</time>
       </div>

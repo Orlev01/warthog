@@ -1,3 +1,5 @@
+import { withTransaction } from "../../../../server/db/index";
+import { createRedactingRecorder } from "../../../../server/mcp/recorder";
 import { formatAccountTime } from "@/server/display-time";
 import { timeZoneFor } from "@/server/spending/time-zone";
 // E13-S11 — Memory page loader + actions (the injectable, unit-testable seam the
@@ -187,8 +189,13 @@ export function createMemoryActions(deps: MemoryActionsDeps): MemoryActions {
     const agents = await listAgentsForUser(db, session.userId);
     const agentNameById = new Map(agents.map((a) => [a.id, a.displayName]));
 
+    const active=(await db.query("SELECT a.id, a.display_name FROM agents a JOIN agent_permissions p ON p.user_id = a.user_id AND p.connection_id = a.connection_id WHERE a.user_id = $1 AND a.status = 'connected' AND p.memory_read = true",[session.userId])).rows;
+    const overrides=(await db.query("SELECT memory_id, agent_id, allowed FROM agent_memory_access WHERE user_id = $1",[session.userId])).rows;
     return {
-      memories: items.map((m) => toViewItem(m, agentNameById, timeZone)),
+      memories: items.map((m) => ({...toViewItem(m, agentNameById, timeZone),audience:active.filter(a=>{
+        const override=overrides.find(o=>o.memory_id===m.id&&o.agent_id===a.id);
+        return override ? override.allowed : m.scope === "shared" || m.sourceAgentId === a.id;
+      }).map(a=>String(a.display_name))})),
       query: hasQuery ? query : null,
     };
   }
@@ -230,7 +237,11 @@ export function createMemoryActions(deps: MemoryActionsDeps): MemoryActions {
     if (!(await ownsMemory(session.userId, valid.id))) {
       return { ok: false, reason: "not_found" };
     }
-    await rescopeMemoryRow(db, session.userId, valid.id, valid.scope);
+    const dek=await dataKeyFor(session.userId);
+    await withTransaction(db,async tx=>{
+      await rescopeMemoryRow(tx, session.userId, valid.id, valid.scope);
+      await createRedactingRecorder({db:tx,clock,dekFor:async()=>dek}).record({userId:session.userId,kind:"memory_scope_change",source:"warthog",outcome:"saved",payload:{memoryId:valid.id,scope:valid.scope,replacedAgentOverrides:true}});
+    });
     return { ok: true };
   }
 

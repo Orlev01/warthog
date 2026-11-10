@@ -1,3 +1,4 @@
+import { agentMemoryChoices, setAgentMemoryAccess, vaultChoices, ownsVaultFields } from "../../../../../server/agents/resource-access";
 // E10-S08 — Per-agent permissions page loader + save action (design §7 connector
 // engine, §8 policy step 2; brief "Per-agent permissions page" — "Each agent's reach
 // is shaped on one screen … card access cannot be switched on without a budget …
@@ -107,6 +108,9 @@ const inputSchema = z.object({
   // The screen's identity and memory toggles (low-tier read, high-tier ask, shared-memory
   // read) — rendered on the screen, so every one of them persists (E10-S08 review).
   identity: z.boolean().optional(),
+  identityFields: z.array(z.uuid()).max(1000).nullable().optional(),
+  memories: z.array(z.object({id:z.uuid(),granted:z.boolean()})).max(1000).optional(),
+  connectorPolicies: z.record(z.string().max(MAX_SERVICE_LENGTH),z.object({readTools:z.boolean().optional(),changeTools:z.enum(["off","allow","ask_first"]).optional()})).refine(p=>Object.keys(p).length<=MAX_SERVICES).optional(),
   highTier: z.boolean().optional(),
   memoryRead: z.boolean().optional(),
   // Review fix W2.3 — the tasks and life-admin records grants (migration 0068) and the
@@ -165,9 +169,11 @@ function toViewProps(
     readTools: grants.readTools,
     changeTools: grants.changeTools,
     memoryWrite: grants.memoryWrite ?? grants.memoryRead,
+    identityFields: grants.identityFields ?? null,
     connectors: services.map((service) => ({
       id: service.id,
       name: service.name,
+      policy: grants.connectorPolicies?.[service.id],
       accounts: service.accounts,
       accountId: grants.connectorAccounts?.[service.id] ?? (service.accounts.length === 1 ? service.accounts[0]!.id : ""),
       granted: grants.grantedConnectors.includes(service.id),
@@ -238,6 +244,8 @@ function mergeGrants(
     userId,
     connectionId,
     connectorAccounts: input.connectorAccounts ?? stored.connectorAccounts,
+    connectorPolicies: input.connectorPolicies ?? stored.connectorPolicies,
+    identityFields: input.identityFields !== undefined ? input.identityFields : stored.identityFields,
     cardAccess: input.card !== undefined ? input.card : stored.cardAccess,
     cardBudget: input.cardBudget !== undefined ? input.cardBudget : stored.cardBudget,
     sharing: input.learningSharing !== undefined ? input.learningSharing : stored.sharing,
@@ -302,7 +310,7 @@ export function createPermissionsActions(deps: PermissionsActionsDeps): Permissi
     const user = await getUserById(db, session.userId);
     if (!user) return null;
     const dek = await keyWrapper.unwrap(user.wrappedDek);
-    return { ...props, skills: await agentSkillChoices(db, session.userId, agent.id, dek) };
+    return { ...props, skills: await agentSkillChoices(db, session.userId, agent.id, dek), memories:await agentMemoryChoices(db,session.userId,agent.id,dek), vaultFields:await vaultChoices(db,session.userId,dek,grants) };
   }
 
   // Save: validate the agent id shape and the input at the boundary FIRST (a 4xx before any
@@ -332,6 +340,13 @@ export function createPermissionsActions(deps: PermissionsActionsDeps): Permissi
       if (valid.connectorAccounts && Object.entries(valid.connectorAccounts).some(([service, account]) => !connections.some(c => c.connectorId === service && c.id === account))) {
         return { ok: false, reason: "invalid_request" };
       }
+      if (valid.connectorPolicies && Object.keys(valid.connectorPolicies).some(id=>!connected.has(id))) return {ok:false,reason:"invalid_request"};
+      if (valid.identityFields && !(await ownsVaultFields(tx,session.userId,valid.identityFields))) return {ok:false,reason:"invalid_request"};
+      if (valid.memories) {
+        const owned=await tx.query("SELECT id FROM memories WHERE user_id = $1 AND id = ANY($2::uuid[]) ORDER BY id FOR UPDATE",[session.userId,valid.memories.map(m=>m.id)]);
+        const ids=new Set(owned.rows.map(r=>String(r.id)));
+        if(valid.memories.some(m=>!ids.has(m.id))) return {ok:false,reason:"invalid_request"};
+      }
       const next = mergeGrants(stored, valid, session.userId, agent.connectionId, connected);
       if (next.cardAccess && (next.cardBudget == null || !budgetAllowsCard(next.cardBudget))) {
         return { ok: false, reason: "card_needs_budget" };
@@ -339,6 +354,7 @@ export function createPermissionsActions(deps: PermissionsActionsDeps): Permissi
       if (valid.skills && !(await setAgentSkillAccess(tx, session.userId, agent.id, valid.skills))) {
         return { ok: false, reason: "invalid_request" };
       }
+      if (valid.memories) await setAgentMemoryAccess(tx,session.userId,agent.id,valid.memories);
       await upsertPermissions(tx, next);
       if (keyWrapper) {
         const user = await getUserById(tx, session.userId);
@@ -346,7 +362,7 @@ export function createPermissionsActions(deps: PermissionsActionsDeps): Permissi
         const dek = await keyWrapper.unwrap(user.wrappedDek);
         await createRedactingRecorder({ db: tx, clock: deps.clock ?? systemClock, dekFor: async () => dek }).record({
           userId: session.userId, agentId: agent.id, kind: "permission_change", source: "warthog", outcome: "saved",
-          payload: { before: stored, after: next, skillChoices: valid.skills },
+          payload: { before: stored, after: next, skillChoices: valid.skills, memoryChoices:valid.memories },
         });
       }
       return { ok: true };

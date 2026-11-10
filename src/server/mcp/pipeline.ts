@@ -1,3 +1,4 @@
+import { highTierRequestAllowed } from "../agents/resource-access";
 // E07-S16 — Agent call pipeline: gatekeeping and the allow/deny decision
 // (design §6.1 pipeline, §8 policy engine; constitution principle 14 "Warthog
 // writes the record", 15 "agents reach services only through Warthog").
@@ -198,8 +199,8 @@ function toPermission(call: AgentCall, context: AgentContext): Permission {
   return {
     connectorGranted: call.connector !== null && permissions.grantedConnectors.includes(call.connector),
     grantedTools: [call.tool],
-    readsAllowed: permissions.readTools,
-    changes: permissions.changeTools,
+    readsAllowed: (call.connector ? permissions.connectorPolicies?.[call.connector]?.readTools : undefined) ?? permissions.readTools,
+    changes: (call.connector ? permissions.connectorPolicies?.[call.connector]?.changeTools : undefined) ?? permissions.changeTools,
     highTierAllowed: permissions.highTierAccess,
   };
 }
@@ -398,6 +399,10 @@ export function createAgentCallPipeline(deps: PipelineDeps): AgentCallPipeline {
     // person's configured per-connection rate limit, used next.
     // A card request also loads its household + currency context (design §8 step 4).
     const context = await loadAgentContext(connection, { db, keyWrapper, clock }, cardRequestOf(call));
+    if(call.request === "high_tier" && !(await highTierRequestAllowed(db,connection.userId,context.permissions,call.field))) {
+      await record(connection,call,"denied");
+      return {result:{status:"refused",reason:"This agent cannot request that vault field."},errorCategory:CATEGORY_DENIED};
+    }
 
     // Gate 2 — the per-connection rate limit. A burst over the limit is refused
     // and recorded as ONE summarising entry for the streak, not one per call.

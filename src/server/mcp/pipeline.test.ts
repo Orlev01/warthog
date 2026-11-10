@@ -1073,3 +1073,18 @@ test("unclassified provider tools always ask and cannot evade never-send rules",
     assert.equal(exec.calls.length,0);
   } finally {await db.close();}
 });
+
+test("each service's read and change policies override agent defaults",async()=>{
+ const db=await freshDb(),keyWrapper=keyWrapperFor();
+ try {
+  const {userId}=await makePerson(db,"service-policy",keyWrapper);
+  await upsertPermissions(db,baseGrants(userId,CONN,{grantedConnectors:["gmail","notion"],readTools:false,changeTools:"allow",connectorPolicies:{gmail:{readTools:true,changeTools:"off"},notion:{changeTools:"ask_first"}}}));
+  const clock=fixedClock(NOW),exec=spyExecutor();
+  const pipeline=buildPipeline(db,keyWrapper,{clock,rateLimiter:createRateLimiter(clock),recorder:spyRecorder(clock).recorder,executeTool:exec.fn});
+  expectExecuted(await pipeline.handleAgentCall(connectionFor(userId),callFor({connector:"gmail",tool:"gmail__read",makesChange:false})));
+  expectRefused(await pipeline.handleAgentCall(connectionFor(userId),callFor({connector:"notion",tool:"notion__read",makesChange:false})));
+  expectRefused(await pipeline.handleAgentCall(connectionFor(userId),callFor({connector:"gmail",tool:"gmail__send",makesChange:true})));
+  expectPendingApproval(await pipeline.handleAgentCall(connectionFor(userId),callFor({connector:"notion",tool:"notion__edit",makesChange:true})));
+  assert.equal(exec.calls.length,1);
+ } finally {await db.close();}
+});

@@ -138,6 +138,8 @@ export function PermissionsForm({ initial, save }: PermissionsFormProps): React.
         // Every connected service the screen shows carries a toggle the save must find.
         connectors: initial.connectors.map((connector) => connector.id),
         skills: initial.skills.map(skill => skill.id),
+        memories:initial.memories?.map(m=>m.id),
+        vaultFields:initial.vaultFields?.map(f=>f.id),
         section: initial.section ?? "all",
       });
       if (!collected.ok) {

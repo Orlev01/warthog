@@ -1171,3 +1171,23 @@ test("an approved connector hold cannot switch to a different service account", 
     assert.equal(upstream.sent.length, 0);
   } finally { await db.close(); }
 });
+
+test("large provider inventories support discovery, pagination and policy-gated calls",async()=>{
+ const db=await freshDb();
+ try {
+  const {createConnection}=await import("../db/connections");
+  const config=devConfig(),{userId,connectionId,dek}=await seedConnection(db,config,{grantedConnectors:["notion"]});
+  const tools=Array.from({length:90},(_,i)=>({name:`tool_${i}`,description:`Tool ${i}`,inputSchema:{type:"object",properties:{}}}));
+  await createConnection(db,{userId,connectorId:"notion",accountLabel:"Fixture",credentials:{providerMcp:{tools,tokens:{access_token:"synthetic",token_type:"Bearer"}}}},dek,fixedClock(NOW));
+  const dispatch=createMcpDispatch({db,config});
+  const listed=await readRpc(await dispatch(connectionId,mcpPost(LIST_BODY)));
+  assert.ok(listed.result?.tools?.some(t=>t.name==="find_tools"));
+  const found=await readRpc(await dispatch(connectionId,mcpPost(callBody("find_tools",{limit:10}))));
+  const page=JSON.parse(contentText(found.result));
+  assert.equal(page.tools.length,10);assert.equal(page.nextCursor,10);assert.ok(page.tools[0].inputSchema);
+  const called=await readRpc(await dispatch(connectionId,mcpPost(callBody("call_tool",{name:"notion__tool_0",arguments:{arguments:{}}}))));
+  assert.equal(JSON.parse(contentText(called.result)).status,"pending_approval");
+  const unknown=await readRpc(await dispatch(connectionId,mcpPost(callBody("call_tool",{name:"gmail__send",arguments:{}}))));
+  assert.equal(unknown.result?.isError,true);
+ } finally {await db.close();}
+});

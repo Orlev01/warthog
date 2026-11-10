@@ -36,7 +36,7 @@ const CARD_BUDGET = "cardBudget";
 
 export function collectEdits(
   controls: readonly ControlSnapshot[],
-  opts: { readonly currency: string; readonly period: PeriodKind; readonly connectors: readonly string[]; readonly skills?: readonly string[]; readonly section?: PermissionsSection },
+  opts: { readonly currency: string; readonly period: PeriodKind; readonly connectors: readonly string[]; readonly skills?: readonly string[]; readonly memories?:readonly string[]; readonly vaultFields?:readonly string[]; readonly section?: PermissionsSection },
 ): CollectResult {
   const find = (type: string, name: string) => controls.find((c) => c.type === type && c.name === name);
 
@@ -53,7 +53,9 @@ export function collectEdits(
   if (includes("settings") && !find("number", REQUEST_LIMIT)) missing.push(REQUEST_LIMIT);
   const connectorIds = includes("connectors") ? opts.connectors : [];
   const skillIds = includes("skills") ? opts.skills ?? [] : [];
-  for (const name of [...connectorIds.map(connectorControlName), ...skillIds.map(id => `skill:${id}`)]) {
+  const memoryIds=includes("memory") ? opts.memories ?? [] : [];
+  const vaultIds=includes("vault") && controls.find(c=>c.name==="identityScope")?.value==="chosen" ? opts.vaultFields ?? [] : [];
+  for (const name of [...connectorIds.map(connectorControlName), ...skillIds.map(id => `skill:${id}`), ...memoryIds.map(id=>`memory:${id}`), ...vaultIds.map(id=>`vaultField:${id}`)]) {
     if (!find("checkbox", name)) missing.push(name);
   }
   const changes = controls.find(c => c.name === "changeTools");
@@ -64,9 +66,17 @@ export function collectEdits(
   if (includes("connectors")) {
     input.connectors = connectorIds.filter(id => find("checkbox", connectorControlName(id))!.checked);
     input.connectorAccounts = Object.fromEntries(controls.filter(c => c.name.startsWith("connectorAccount:") && c.value).map(c => [c.name.slice("connectorAccount:".length), c.value]));
+    if (controls.some(c=>c.name.startsWith("connectorPolicy"))) input.connectorPolicies = Object.fromEntries(connectorIds.map(id=>{
+      const read=controls.find(c=>c.name===`connectorPolicyRead:${id}`)?.value;
+      const change=controls.find(c=>c.name===`connectorPolicyChange:${id}`)?.value;
+      return [id,{...(read&&read!=="default"?{readTools:read==="on"}:{}),...(change&&change!=="default"?{changeTools:change as "off"|"allow"|"ask_first"}:{})}];
+    }));
     if (changes) input.changeTools = changes.value as PermissionsSaveInput["changeTools"];
   }
   if (includes("skills") && opts.skills) input.skills = skillIds.map(id => ({ id, granted: find("checkbox", `skill:${id}`)!.checked }));
+  if(includes("memory") && opts.memories) input.memories=memoryIds.map(id=>({id,granted:find("checkbox",`memory:${id}`)!.checked}));
+  const identityScope=controls.find(c=>c.name==="identityScope");
+  if(includes("vault") && identityScope) input.identityFields=identityScope.value==="all"?null:vaultIds.filter(id=>find("checkbox",`vaultField:${id}`)!.checked);
   const limit = includes("settings") ? find("number", REQUEST_LIMIT)?.value.trim() : undefined;
   if (limit) input.requestLimit = Number(limit);
   const budget = find("number", CARD_BUDGET);

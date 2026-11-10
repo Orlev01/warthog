@@ -49,12 +49,12 @@ async function errorCodeOf(response: Response): Promise<string | null> {
 // Hand the decrypted value to Warthog for its single release. Resolves on a 2xx;
 // rejects with a ReleaseRejectedError (that never names the value) on a non-2xx, and
 // lets a thrown request (offline) surface as a rejection rather than resolving silently.
-export async function postRelease(approvalId: string, value: string): Promise<void> {
+export async function postRelease(approvalId: string, value: string, fieldId?:string): Promise<void> {
   const response = await fetch(releaseUrl(approvalId), {
     method: "POST",
     credentials: "same-origin",
     headers: { "content-type": "application/json" },
-    body: JSON.stringify({ value }),
+    body: JSON.stringify({ value, ...(fieldId?{fieldId}:{}) }),
   });
 
   if (!response.ok) {

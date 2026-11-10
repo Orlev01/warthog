@@ -1,3 +1,4 @@
+import { vaultFieldAllowed } from "../../agents/resource-access";
 // Review fix D7 — the `get_context` core tool (design §6.2 MCP core tools; brief "Agent
 // context on connect — any agent can fetch, in one call, everything it has been granted:
 // the person's low-tier profile, the skills and preferences scoped to it, the rules it must
@@ -53,6 +54,8 @@ export interface AgentContextView {
   readonly tasks: ReadonlyArray<{ id: string; title: string; status: string; assignedTo: "you" | "any agent" }>;
   readonly permissions: {
     readonly services: readonly string[];
+    readonly servicePolicies?: Record<string,{readTools?:boolean;changeTools?:string}>;
+    readonly vaultScope?: "all"|"chosen";
     readonly readTools: boolean;
     readonly changeTools: string;
     readonly profile: boolean;
@@ -91,7 +94,7 @@ export function createGetContextTool(deps: GetContextDeps): {
       const dek = await dataKeyFor(userId);
 
       const profile = permissions.identityAccess
-        ? (await listIdentityFields(db, userId, dek)).map((field) => ({
+        ? (await listIdentityFields(db, userId, dek)).filter(field=>vaultFieldAllowed(permissions,field.id)).map((field) => ({
             kind: field.kind,
             value: field.value,
             ...(field.movingOn ? { movingOn: String(field.movingOn) } : {}),
@@ -144,6 +147,8 @@ export function createGetContextTool(deps: GetContextDeps): {
         tasks,
         permissions: {
           services: permissions.grantedConnectors,
+          servicePolicies: permissions.connectorPolicies ?? {},
+          vaultScope: permissions.identityFields == null ? "all" : "chosen",
           readTools: permissions.readTools,
           changeTools: permissions.changeTools,
           profile: permissions.identityAccess,

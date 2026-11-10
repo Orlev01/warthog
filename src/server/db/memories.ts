@@ -33,7 +33,7 @@ import { randomUUID } from "node:crypto";
 
 import { decrypt, encrypt } from "../crypto/envelope";
 import type { Clock } from "../seams/clock";
-import type { Db, Row } from "./index";
+import { withTransaction, type Db, type Row } from "./index";
 
 // The envelope's associated data binds each field's ciphertext to its exact location,
 // so a row lifted into another row/column/table fails to decrypt.
@@ -161,11 +161,13 @@ export async function rescopeMemory(
   id: string,
   scope: MemoryScope,
 ): Promise<void> {
+  if (!db.inTransaction) return withTransaction(db, tx => rescopeMemory(tx,userId,id,scope));
   const result = await db.query(
     `UPDATE memories SET scope = $1 WHERE id = $2 AND user_id = $3 RETURNING id`,
     [scope, id, userId],
   );
   if (result.rows.length === 0) throw new Error("rescopeMemory: no such memory for this user");
+  await db.query("DELETE FROM agent_memory_access WHERE user_id = $1 AND memory_id = $2",[userId,id]);
 }
 
 // Delete an OWNED memory; true when a row was removed, false when there was none for
@@ -213,7 +215,7 @@ export async function memoriesForAgent(
 ): Promise<Memory[]> {
   const result = await db.query(
     `SELECT ${SELECT_COLUMNS} FROM memories
-     WHERE user_id = $1 AND (scope = 'shared' OR source_agent_id = $2)
+     WHERE user_id = $1 AND COALESCE((SELECT allowed FROM agent_memory_access a WHERE a.user_id = memories.user_id AND a.memory_id = memories.id AND a.agent_id::text = $2), (scope = 'shared' OR source_agent_id = $2))
      ORDER BY created_at`,
     [userId, agentId],
   );

@@ -126,6 +126,7 @@ export async function buildExportDocument(
   const agentSettings = {
     defaults: await getAgentDefaults(db, userId),
     agents: await Promise.all(agents.map(async agent => ({ id: agent.id, name: agent.displayName, platform: agent.platform, permissions: await getConnectionPermissions(db, userId, agent.connectionId) }))),
+    memoryAccess: (await db.query("SELECT agent_id, memory_id, allowed FROM agent_memory_access WHERE user_id = $1", [userId])).rows,
     skillAccess: (await db.query("SELECT agent_id, skill_id, allowed FROM agent_skill_access WHERE user_id = $1", [userId])).rows,
     note: "Reference only. Agent credentials and assignments are not restored on import; reconnect and review access.",
   };

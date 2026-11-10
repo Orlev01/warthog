@@ -271,6 +271,7 @@ export function createReleaseApproveFlow(deps: ReleaseApproveFlowDeps): ReleaseA
       approvalId: deps.approvalId ?? deps.request.id,
       unlockRequest,
       ciphertext: ciphertextToRelease(),
+      fieldId: isCard ? undefined : state.highTierFieldId || deps.request.highTierFields?.[0]?.id,
       securityCode: isCard ? state.securityCode : undefined,
       card: isCard ? cardDetailsToRelease() : undefined,
     });

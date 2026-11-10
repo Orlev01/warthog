@@ -1,3 +1,6 @@
+import { vaultFieldAllowed } from "../../../../server/agents/resource-access";
+import { getAgentById } from "../../../../server/db/agents";
+import { getConnectionPermissions } from "../../../../server/db/agent-permissions";
 import { formatAccountTime } from "@/server/display-time";
 import { timeZoneFor } from "@/server/spending/time-zone";
 // E12-S10 — Approval decision actions (the injectable seam the thin inbox
@@ -509,9 +512,13 @@ export function createInboxActions(deps: InboxActionsDeps): InboxActions {
     // A high-tier release needs the person's saved detail to decrypt on their device.
     if (pending.some((request) => request.release === "high_tier")) {
       const fields = await loadHighTierFields(session.userId);
-      pending = pending.map((request, index) =>
-        request.release === "high_tier" ? offerFor(request, inbox.pending[index]!.detail, fields) : request,
-      );
+      pending = await Promise.all(pending.map(async(request,index)=>{
+        if(request.release !== "high_tier") return request;
+        const original=inbox.pending[index]!;
+        const agent=await getAgentById(db,session.userId,original.agent.id);
+        const grants=agent ? await getConnectionPermissions(db,session.userId,agent.connectionId) : null;
+        return offerFor(request,original.detail,grants?.highTierAccess ? fields.filter(f=>vaultFieldAllowed(grants,f.view.id)) : []);
+      }));
     }
     const history = inbox.history.map((entry) => toDecidedView(entry, timeZone));
     const data: InboxLoadData = { pending, history };

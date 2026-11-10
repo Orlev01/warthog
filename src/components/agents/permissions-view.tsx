@@ -38,6 +38,7 @@ const DEFAULT_REQUEST_LIMIT = 120;
 export type ConnectorAccess = {
   accounts?: readonly { id: string; label: string }[];
   accountId?: string;
+  policy?: {readTools?:boolean; changeTools?:"off"|"allow"|"ask_first"};
   id: string;
   name: string;
   // whether the agent may use this connected service (review fix W2.3): when present, the
@@ -58,6 +59,9 @@ export type PermissionsViewProps = {
   readTools?: boolean;
   changeTools?: "off" | "allow" | "ask_first";
   memoryWrite?: boolean;
+  identityFields?: readonly string[] | null;
+  vaultFields?: ReadonlyArray<SkillGrant & {tier:"low"|"high"}>;
+  memories?: ReadonlyArray<SkillGrant>;
   embedded?: boolean;
   saving?: boolean;
   // granted connectors and the tools it may use, reads and changes listed apart.
@@ -124,6 +128,7 @@ export function PermissionsView({
   connectors,
   lowTierRead,
   highTierRequest,
+  identityFields = null, vaultFields = [], memories = [],
   cardAccess,
   budget,
   skills,
@@ -135,6 +140,7 @@ export function PermissionsView({
   requestLimit,
   currency = "A$",
 }: PermissionsViewProps) {
+  const [vaultScope,setVaultScope]=React.useState(identityFields===null?"all":"chosen");
   // Card access cannot be switched on without a budget (and that budget must allow
   // it): the save control is disabled with a stated reason until one is set.
   const cardNeedsBudget = cardAccess && (budget === null || !budgetAllowsCard(budget));
@@ -190,6 +196,19 @@ export function PermissionsView({
               </Select>
               <span className="text-xs font-normal text-fg-muted">When more than one account is connected, this agent must have an account selected before it can use the service.</span>
             </label> : null}
+            <div className="grid gap-3 sm:grid-cols-2">
+              <label className="flex flex-col gap-1 text-sm">Read tools
+                <Select name={`connectorPolicyRead:${connector.id}`} defaultValue={connector.policy?.readTools === undefined ? "default" : connector.policy.readTools ? "on" : "off"}>
+                  <option value="default">Use agent default</option><option value="on">Allow reads</option><option value="off">Off</option>
+                </Select>
+              </label>
+              <label className="flex flex-col gap-1 text-sm">Change tools
+                <Select name={`connectorPolicyChange:${connector.id}`} defaultValue={connector.policy?.changeTools ?? "default"}>
+                  <option value="default">Use agent default</option><option value="off">Off</option><option value="ask_first">Ask me first</option><option value="allow">Allow, subject to rules</option>
+                </Select>
+              </label>
+            </div>
+            <p className="text-sm text-fg-muted">Provider-hosted tools still require approval until their effects are verified.</p>
             {connector.readTools.length > 0 ? (
               <div className="flex flex-col gap-1.5">
                 <h4 className="text-sm font-medium text-fg-muted">Reads</h4>
@@ -232,6 +251,13 @@ export function PermissionsView({
       {/* Identity: low-tier read vs. the high-tier REQUEST toggle. */}
       <div className="flex flex-col gap-3">
         <SectionHeading>Your identity</SectionHeading>
+        <label className="flex flex-col gap-1 text-sm">Vault fields
+          <Select name="identityScope" value={vaultScope} onChange={event=>setVaultScope(event.target.value)}>
+            <option value="all">All fields, including future fields</option><option value="chosen">Only chosen fields</option>
+          </Select>
+        </label>
+        {vaultScope === "chosen" && <div className="flex flex-col gap-2">{vaultFields.map(field=><Toggle key={field.id} name={`vaultField:${field.id}`} on={field.granted} label={field.name} description={field.tier === "high" ? "Sensitive · always asks first" : "Everyday detail"}/>)}</div>}
+
         <p className="text-sm text-fg-muted">Your vault is shared storage owned by you. These controls apply only to this agent. Sensitive details always need your approval. <a href="/vault" className="text-accent underline">Manage vault contents</a></p>
         <Toggle
           name="identity"
@@ -329,8 +355,9 @@ export function PermissionsView({
       {/* Shared memory and sharing what it learns. */}
       <div className="flex flex-col gap-3">
         <SectionHeading>Memory and sharing</SectionHeading>
-        <p className="text-sm text-fg-muted">An agent can read shared memories and its own private memories when reading is on. Other agents’ private memories stay private.</p>
+        <p className="text-sm text-fg-muted">Shared and source-agent memory are the defaults. Choose individual memories below to override access for this agent; reading must also be on.</p>
         <Toggle name="memoryRead" on={sharedMemoryRead} label="Read shared memory and its own memories" />
+        <div className="flex flex-col gap-2">{memories.map(memory=><Toggle key={memory.id} name={`memory:${memory.id}`} on={memory.granted} label={memory.name}/>)}</div>
         <Toggle name="memoryWrite" on={memoryWrite} label="Save memories" description="Allow this agent to add memories independently of reading them." />
         <Toggle
           name="learningSharing"

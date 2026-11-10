@@ -284,7 +284,7 @@ test("AC1: a valid export restores every content section, readable under the ses
     const memories = await listMemoriesForUser(db, userId, dek);
     assert.equal(memories.length, 1, "one memory is restored");
     assert.equal(memories[0]!.content, `Prefers a window seat ${t}`, "the memory content round-trips");
-    assert.equal(memories[0]!.scope, "shared", "the memory scope round-trips");
+    assert.equal(memories[0]!.scope, "kept", "imported memory is private until the owner reassigns its audience");
     assert.equal(memories[0]!.sourceAgentId, null, "a person-authored memory keeps a null source");
 
     // rules — kind, scope, action and condition round-trip (decrypted under the dek).

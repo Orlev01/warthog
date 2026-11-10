@@ -1429,3 +1429,27 @@ test("W6: a realistic full card payload (multi-line address, accented name) is r
     await db.close();
   }
 });
+
+test("a chosen vault field is required at release and remains revocable before collection",async()=>{
+ const db=await freshDb();
+ try {
+  const {saveHighTierField}=await import("../../../../../server/db/high-tier-fields");
+  const {getConnectionPermissions}=await import("../../../../../server/db/agent-permissions");
+  const {mayCollectReleasedField}=await import("../../../../../server/agents/resource-access");
+  const keyWrapper=keyWrapperFor(),{userId,dek}=await makePerson(db,"field-scope",keyWrapper);
+  const agentId=await makeAgentFor(db,userId),connectionId=connectionOfAgent.get(agentId)!;
+  const chosen=await saveHighTierField(db,{userId,type:"passport",label:"Chosen",ciphertext:"opaque"});
+  const other=await saveHighTierField(db,{userId,type:"passport",label:"Other",ciphertext:"opaque"});
+  const initial=(await getConnectionPermissions(db,userId,connectionId))!;
+  await upsertPermissions(db,{...initial,identityFields:[chosen.id]});
+  const approvalId=await makeApprovedApproval(db,{userId,agentId,dek});
+  const {handler,store}=makeHandler({db,keyWrapper,session:sessionFor(userId,CLOCK.now())});
+  assert4xx(await callPost(handler,releaseRequest(approvalId,{value:"synthetic"}),approvalId));
+  assert4xx(await callPost(handler,releaseRequest(approvalId,{body:{value:"synthetic",fieldId:other.id}}),approvalId));
+  assert.equal(store.collect(keyForApproval(userId,agentId,approvalId)),undefined);
+  assert2xx(await callPost(handler,releaseRequest(approvalId,{body:{value:"synthetic",fieldId:chosen.id}}),approvalId));
+  assert.equal(await mayCollectReleasedField(db,userId,approvalId,(await getConnectionPermissions(db,userId,connectionId))!),true);
+  await upsertPermissions(db,{...initial,identityFields:[]});
+  assert.equal(await mayCollectReleasedField(db,userId,approvalId,(await getConnectionPermissions(db,userId,connectionId))!),false);
+ } finally {await db.close();}
+});

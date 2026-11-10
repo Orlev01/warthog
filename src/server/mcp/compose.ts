@@ -1,3 +1,6 @@
+import { z } from "zod";
+import { findToolsSchema } from "./tools/registry";
+import { mayCollectReleasedField } from "../agents/resource-access";
 import { createProviderRuntime } from "../connectors/provider-runtime";
 // E07-S19 — the MCP composition root (design §6.1/§6.2; constitution 13/14/15; INV-102).
 //
@@ -280,7 +283,7 @@ function buildAgentPipeline(deps: McpDispatchDeps): AgentCallPipeline {
     if (!approval || approval.agentId !== connection.agentId || approval.status !== "approved") return false;
     const grants = await getConnectionPermissions(db, connection.userId, connection.connectionId);
     const kind = (approval.detail as { request?: unknown }).request;
-    return kind === "card" ? grants?.cardAccess === true : kind === "high_tier" && grants?.highTierAccess === true;
+    return kind === "card" ? grants?.cardAccess === true : kind === "high_tier" && grants?.highTierAccess === true && await mayCollectReleasedField(db,connection.userId,approvalId,grants);
   } });
   const logActivityTool = createLogActivityTool({ recorder });
   const listTasksTool = createListTasksTool({ db, keyWrapper });
@@ -318,6 +321,19 @@ function buildAgentPipeline(deps: McpDispatchDeps): AgentCallPipeline {
       return executeConnectorTool({ ...call, connector: call.connector }, connection.userId, call.connectorAccountId);
     }
     switch (call.tool) {
+      case "find_tools": {
+        const query=findToolsSchema.parse(call.params);
+        const grants=await getConnectionPermissions(db,connection.userId,connection.connectionId);
+        if(!grants) return {tools:[],nextCursor:null};
+        const catalogue=deps.catalogue ?? getProcessCatalogue(config);
+        const connections=await listConnectionsForUser(db,connection.userId);
+        const selected=connections.filter(c=>grants.grantedConnectors.includes(c.connectorId)&&selectConnectorAccount(connections,c.connectorId,grants.connectorAccounts?.[c.connectorId])?.id===c.id);
+        const declarations=connectorToolsetFor(connections,grants.grantedConnectors,catalogue,grants.connectorAccounts,await provider.toolsets(connection.userId,selected));
+        const all=createToolRegistry({pipeline}).resolveTools(grants,declarations,{expanded:true}).filter(t=>t.name.includes("__")&&(!query.query||`${t.name} ${t.description}`.toLowerCase().includes(query.query.toLowerCase())));
+        const start=query.cursor??0,end=start+(query.limit??20);
+        return {tools:all.slice(start,end).map(t=>({name:t.name,description:t.description,inputSchema:z.toJSONSchema(t.inputSchema)})),nextCursor:end<all.length?end:null};
+      }
+      case "call_tool": return {status:"refused",reason:"That tool is not available to this agent. Use find_tools for its current tools."};
       case "get_context":
         return getContextTool.handle(connection);
       case "get_skill":

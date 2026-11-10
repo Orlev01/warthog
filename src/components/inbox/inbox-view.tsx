@@ -481,7 +481,7 @@ export interface ReleaseFlowDeps {
   readonly decrypt: (vaultKey: Uint8Array, ciphertext: string) => Promise<string>;
   // Post the released plaintext to the approval's release endpoint (client/vault
   // postRelease). The server stores only ciphertext at rest; this is the single hand-over.
-  readonly postRelease: (approvalId: string, value: string) => Promise<void>;
+  readonly postRelease: (approvalId: string, value: string, fieldId?:string) => Promise<void>;
 }
 
 // The chosen card's NON-SECRET checkout details (review fix W6), from the loader's
@@ -493,6 +493,7 @@ export type CardCheckoutDetails = Pick<
 >;
 
 export interface ReleaseInput {
+  readonly fieldId?:string;
   readonly approvalId: string;
   readonly unlockRequest: UnlockRequest;
   readonly ciphertext: string;
@@ -576,7 +577,8 @@ export function createReleaseFlow(deps: ReleaseFlowDeps): ReleaseFlow {
     //    known reason is reported in its own plain words (with the reason, so the
     //    control can offer e.g. "Confirm it's you"); anything else is the generic copy.
     try {
-      await deps.postRelease(input.approvalId, payload);
+      if(input.fieldId) await deps.postRelease(input.approvalId,payload,input.fieldId);
+      else await deps.postRelease(input.approvalId, payload);
     } catch (error) {
       const reason = error instanceof ReleaseRejectedError ? error.code : null;
       if (reason !== null && REFUSAL_COPY[reason] !== undefined) {

@@ -1,3 +1,5 @@
+import { vaultFieldAllowed } from "../../../../../server/agents/resource-access";
+import { listHighTierFields } from "../../../../../server/db/high-tier-fields";
 // E11-S10 — Approval release endpoint: the injectable sibling handler (design §4.2
 // "Release" + the in-memory release store; §4.3 the released-value fingerprint; §5
 // step-up; brief "release — one-time hand-over of a high-tier value or card").
@@ -93,6 +95,7 @@ const MAX_BODY_BYTES = 4 * MAX_VALUE_CHARS;
 // never the body. A non-string / empty / oversized value is a 4xx, never a 500.
 const bodySchema = z.object({
   value: z.string().min(1).max(MAX_VALUE_CHARS),
+  fieldId: z.uuid().optional(),
 });
 
 // Every approval id is a UUID (`approvals.id` is uuid-typed, created with
@@ -293,7 +296,7 @@ export function createReleaseHandler(
 
       // 6. Validate the body (`{ value }`): malformed / oversized / mis-shaped is a 4xx
       //    (never a 500), before any store or db write.
-      const { value } = await parseBody(bodySchema, request, { maxBytes: MAX_BODY_BYTES });
+      const { value, fieldId } = await parseBody(bodySchema, request, { maxBytes: MAX_BODY_BYTES });
 
       // 7. ONE transaction: approve (if pending), mark released exactly once, count a
       //    card's spend, and persist the keyed one-way fingerprint (the audit record).
@@ -315,6 +318,11 @@ export function createReleaseHandler(
         if (currentAgent.rows[0]?.status !== "connected" || !currentPermissions
           || !(kind === "card" ? currentPermissions.cardAccess : currentPermissions.highTierAccess)) {
           return { status: 403, code: NOT_RELEASABLE };
+        }
+
+        if(kind === "high_tier") {
+          if(currentPermissions.identityFields != null && (!fieldId || !vaultFieldAllowed(currentPermissions,fieldId))) return {status:403,code:NOT_RELEASABLE};
+          if(fieldId && !(await listHighTierFields(tx,userId)).some(f=>f.id===fieldId)) return {status:403,code:NOT_RELEASABLE};
         }
 
         if (spend !== null) {
@@ -360,6 +368,7 @@ export function createReleaseHandler(
           }, { householdPeriodMonth: periodKeyFor("month", now, "UTC") });
         }
 
+        if(kind === "high_tier" && fieldId) await tx.query("UPDATE approvals SET released_field_id = $1 WHERE user_id = $2 AND id = $3",[fieldId,userId,id]);
         await storeFingerprint(tx, { userId, fingerprint: fingerprint(dek, value) }, clock);
 
         // Record the release in the activity feed, in the same transaction (brief: the

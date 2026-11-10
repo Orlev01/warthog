@@ -78,6 +78,7 @@ export interface ToolRegistry {
   resolveTools( // the list served to a connection
     permissions: ConnectionPermissions,
     connectorTools: ConnectorToolset,
+    options?: {expanded?:boolean},
   ): readonly ToolDefinition[];
 }
 
@@ -91,6 +92,9 @@ export interface ToolRegistryDeps {
 // oversized input is refused at validation before the pipeline runs (INV-102).
 const MAX_REASON = 2000;
 const reason = z.string().max(MAX_REASON).optional();
+export const findToolsSchema=z.object({query:z.string().max(200).optional(),cursor:z.number().int().nonnegative().max(100_000).optional(),limit:z.number().int().min(1).max(50).optional(),reason});
+export const callToolSchema=z.object({name:z.string().min(1).max(256),arguments:z.record(z.string(),z.unknown()).default({}),reason}).refine(v=>JSON.stringify(v).length<=64_000,"Tool arguments are too large");
+
 
 // Caps for the card-request fields, so an oversized value is refused at the boundary.
 const MAX_CURRENCY = 10;
@@ -351,18 +355,18 @@ export function createToolRegistry(deps: ToolRegistryDeps): ToolRegistry {
     buildCoreTool(
       {
         name: "find_tools",
-        description: "Find the connected-service tools you may use, when there are too many to list.",
+        description: "Find permitted connected-service tools by name or description. Results include schemas and a pagination cursor.",
         makesChange: false,
-        schema: envelope,
+        schema: findToolsSchema,
       },
       pipeline,
     ),
     buildCoreTool(
       {
         name: "call_tool",
-        description: "Call one of the connected-service tools found with find_tools, by its name.",
-        makesChange: true,
-        schema: envelope,
+        description: "Call a permitted tool from find_tools with its exact name and input object in arguments.",
+        makesChange: false,
+        schema: callToolSchema,
       },
       pipeline,
     ),
@@ -382,6 +386,7 @@ export function createToolRegistry(deps: ToolRegistryDeps): ToolRegistry {
     resolveTools(
       permissions: ConnectionPermissions,
       connectorTools: ConnectorToolset,
+      options: {expanded?:boolean} = {},
     ): readonly ToolDefinition[] {
       // Namespace each PERMITTED connector's tools; a connector that is not granted
       // contributes nothing.
@@ -389,15 +394,27 @@ export function createToolRegistry(deps: ToolRegistryDeps): ToolRegistry {
       for (const connectorId of permissions.grantedConnectors) {
         const tools = connectorTools[connectorId];
         if (!tools) continue;
+        const policy=permissions.connectorPolicies?.[connectorId];
+        const reads=policy?.readTools ?? permissions.readTools, changes=policy?.changeTools ?? permissions.changeTools;
         for (const tool of tools) {
+          const declaration=typeof tool === "string" ? {name:tool} : tool;
+          if(declaration.name === REQUEST_TOOL ? !reads && changes === "off" : (declaration.makesChange ?? true) ? changes === "off" : !reads) continue;
           connectorDefs.push(buildConnectorTool(connectorId, tool, pipeline));
         }
       }
 
       // Over the limit the connector tools collapse into find_tools + call_tool; the
       // core tools are always served either way.
-      if (connectorDefs.length > CONNECTOR_TOOL_LIMIT) {
-        return [...coreTools, ...collapseHelpers];
+      if (!options.expanded && connectorDefs.length > CONNECTOR_TOOL_LIMIT) {
+        const callTool:ToolDefinition={...collapseHelpers[1]!,async handle(input,connection){
+          const parsed=parseParams(callToolSchema,input);
+          const target=connectorDefs.find(tool=>tool.name===parsed.name);
+          // The actual tool is audited and gated with its own trusted declaration.
+          // Unknown targets take the normal audited refusal path.
+          if(!target) return collapseHelpers[1]!.handle(parsed,connection);
+          return target.handle({...parsed.arguments,...(parsed.reason?{reason:parsed.reason}:{})},connection);
+        }};
+        return [...coreTools, collapseHelpers[0]!, callTool];
       }
       return [...coreTools, ...connectorDefs];
     },

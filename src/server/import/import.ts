@@ -255,7 +255,7 @@ export async function importExportDocument(
     for (const memory of memories) {
       await createMemory(
         tx,
-        { userId, content: memory.content ?? "", sourceAgentId: memory.sourceAgentId ?? null, scope: (memory.scope as MemoryScope) ?? "shared" },
+        { userId, content: memory.content ?? "", sourceAgentId: null, scope: "kept" },
         dek,
         clock,
       );
