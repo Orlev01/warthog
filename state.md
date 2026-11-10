@@ -19,6 +19,8 @@ MCP access boundaries, authenticated receipt downloads and the Terms title.
 failed safely after Azure added empty literal fields beside existing environment
 secret references. It stopped the candidate and proved zero replicas/free database
 ownership. A narrowly scoped normalization fix passes all 29 delivery tests.
+[Final CI on the guard fix](https://github.com/Orlev01/warthog/actions/runs/42802425805)
+passes all six jobs and 5,092 application tests with zero failures.
 After exact live configuration and zero-replica checks, the operator resumed the
 same reviewed candidate; HTTPS readiness passed at 10:48:55 UTC. The failed
 workflow remains recorded as failed. Tooling correction `7cae752` is separate

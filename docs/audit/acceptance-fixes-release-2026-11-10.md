@@ -91,6 +91,9 @@ references, ordinary empty literals, domains and other configuration still
 participate in the hash. All 29 delivery tests pass, including the actual
 copy/health/traffic path with Azure's representation. The tooling correction is
 commit `7cae752`; it does not change the deployed application image.
+[Final CI on that tooling commit](https://github.com/Orlev01/warthog/actions/runs/42802425805)
+passes all six jobs: 5,092 application tests, 29 delivery tests, cost checks and
+Terraform schemas. Subsequent commits update documentation only.
 
 Before operator continuation, live configuration was independently matched to
 the reviewed snapshot with only the intended image, suffix and traffic changes.
