@@ -12,7 +12,7 @@ import { Skeleton } from "@/components/ui/skeleton";
 // as a reference for support.
 
 const LINK_CLASS =
-  "inline-flex min-h-11 items-center justify-center gap-2 rounded-card border border-line bg-surface px-4 text-sm font-medium text-fg hover:bg-surface-muted focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-focus focus-visible:ring-offset-2 focus-visible:ring-offset-bg";
+  "inline-flex min-h-11 items-center justify-center gap-2 rounded-full border border-line bg-surface px-4 text-sm font-medium text-fg hover:bg-surface-muted focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-focus focus-visible:ring-offset-2 focus-visible:ring-offset-bg";
 
 function ScreenFrame({ children }: { children: React.ReactNode }) {
   return (

@@ -95,7 +95,7 @@ export default async function AccessKeyPage({
 
   const defaults = await getAgentDefaults(db, session.userId);
   return (
-    <div className="mx-auto flex w-full max-w-3xl flex-col gap-6 px-4 py-8 sm:px-6">
+    <div className="wh-page flex flex-col gap-6">
       <AccessKeyFlow defaultTemplate={defaults.template} create={create} defaultName={defaultName} defaultPlatform={platformParam} />
     </div>
   );

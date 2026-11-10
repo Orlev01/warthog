@@ -119,7 +119,7 @@ async function run(
     notice = error.status === 409 ? "storage_full" : "problem";
   }
   revalidatePath("/skills");
-  redirect(`/skills?notice=${notice}`);
+  redirect(`/skills?notice=${notice}${success === "saved" ? "&view=preferences" : ""}`);
 }
 
 async function saveProfileAction(formData: FormData): Promise<void> {
@@ -246,9 +246,10 @@ export default async function SkillsPage({
   const agents = await listAgentsForUser(db, session.userId);
 
   return (
-    <PageContainer className="max-w-5xl">
+    <PageContainer size="wide">
       {notice ? <NoticeBanner notice={notice} /> : null}
       <SkillsView
+        initialView={typeof params.view === "string" ? params.view : undefined}
         skills={data.skills.map((s) =>
           packagedIds.has(s.id) ? { ...s, fullText: undefined } : s,
         )}

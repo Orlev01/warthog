@@ -16,6 +16,7 @@ import {
   Download,
 } from "lucide-react";
 
+import { ViewPanels } from "@/components/ui/view-tabs";
 import { Button } from "@/components/ui/button";
 import { Card } from "@/components/ui/card";
 import { Field, Label } from "@/components/ui/field";
@@ -93,6 +94,7 @@ export type SkillsViewHouseSkill = {
 };
 
 export type SkillsViewProps = {
+  initialView?: string;
   skills: ReadonlyArray<SkillsViewSkill>;
   packages?: ReadonlyArray<PackageSummary>;
   agents?: ReadonlyArray<SkillAgent>;
@@ -345,6 +347,7 @@ function HouseSkillCard({ houseSkill }: { houseSkill: SkillsViewHouseSkill }) {
 }
 
 export function SkillsView({
+  initialView,
   skills,
   packages = [],
   agents = [],
@@ -426,230 +429,256 @@ export function SkillsView({
           · {skills.filter((s) => s.enabled).length} switched on
         </p>
       </header>
-      <PackageImport onReady={ready} />
       {loadError && <Notice tone="error">{loadError}</Notice>}
       {opening && (
         <p role="status" className="text-sm">
           Opening package…
         </p>
       )}
-      <CreatePackage onReady={ready} />
-      <div className="flex flex-col gap-4">
-        <div className="grid grid-cols-2 gap-3 sm:grid-cols-[minmax(0,1fr)_auto_auto]">
-          <div className="col-span-2 sm:col-span-1">
-            <SearchField
-              label="Search your library"
-              type="search"
-              value={query}
-              onChange={(e) => {
-                setQuery(e.target.value);
-                setPage(0);
-              }}
-              placeholder="Find a skill or plugin…"
-            />
-          </div>
-          <div className="space-y-1.5">
-            <Label htmlFor="library-kind">Type</Label>
-            <select
-              id="library-kind"
-              className={`${CONTROL_BASE} min-h-11`}
-              value={kind}
-              onChange={(e) => {
-                setKind(e.target.value);
-                setPage(0);
-              }}
-            >
-              <option value="all">All types</option>
-              <option value="skill">Skills</option>
-              <option value="plugin">Plugins</option>
-            </select>
-          </div>
-          <div className="space-y-1.5">
-            <Label htmlFor="library-status">Availability</Label>
-            <select
-              id="library-status"
-              className={`${CONTROL_BASE} min-h-11`}
-              value={status}
-              onChange={(e) => {
-                setStatus(e.target.value);
-                setPage(0);
-              }}
-            >
-              <option value="all">All</option>
-              <option value="on">Switched on</option>
-              <option value="off">Switched off</option>
-            </select>
-          </div>
-        </div>
-        <p className="text-sm text-fg-muted" role="status">
-          {visiblePackages.length + visibleSkills.length} of {count} library
-          items
-        </p>
-        {!count ? (
-          <EmptyState
-            heading="No skills yet"
-            description="Import a skill or plugin you already use, or create your first skill above."
-          />
-        ) : !visiblePackages.length && !visibleSkills.length ? (
-          <div className="rounded-card border border-line bg-surface p-6">
-            <p className="font-medium">No matching skills or plugins</p>
-            <p className="mt-1 text-sm text-fg-muted">
-              Try a different name or clear your filters.
-            </p>
-            <Button
-              variant="secondary"
-              className="mt-4"
-              onClick={() => {
-                setQuery("");
-                setKind("all");
-                setStatus("all");
-                setPage(0);
-              }}
-            >
-              Clear filters
-            </Button>
-          </div>
-        ) : null}
-        <ul className="grid min-w-0 gap-4 md:grid-cols-2">
-          {pagedPackages.map((p) => (
-            <li key={p.id} className="min-w-0">
-              <button
-                type="button"
-                className="flex h-full min-h-44 w-full flex-col gap-3 rounded-card border border-line bg-surface p-4 text-start transition-colors hover:border-line-strong focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-focus"
-                disabled={Boolean(opening)}
-                onClick={async () => {
-                  setOpening(p.id);
-                  setLoadError("");
-                  try {
-                    const result = await loadPackageAction(p.id);
-                    if (result.ok) {
-                      setDraft(result.value);
-                      setSkipped([]);
-                    } else setLoadError(result.error);
-                  } catch {
-                    setLoadError(
-                      "Could not open that package. Please try again.",
-                    );
-                  } finally {
-                    setOpening(null);
-                  }
-                }}
-              >
-                <div className="flex w-full items-start justify-between gap-3">
-                  <span className="flex min-w-0 items-start gap-3">
-                    {p.kind === "plugin" ? (
-                      <Layers
-                        aria-hidden
-                        className="mt-1 h-5 w-5 shrink-0 text-accent"
-                      />
-                    ) : (
-                      <FileText
-                        aria-hidden
-                        className="mt-1 h-5 w-5 shrink-0 text-accent"
-                      />
-                    )}
-                    <span className="font-semibold [overflow-wrap:anywhere]">
-                      {p.name}
-                    </span>
-                  </span>
-                  <span className="shrink-0 rounded bg-surface-muted px-2 py-1 text-xs text-fg-muted">
-                    {p.kind === "plugin" ? "Plugin" : "Skill"}
-                  </span>
+      <ViewPanels
+        label="Library views"
+        initialTab={initialView}
+        tabs={[
+          {
+            key: "library",
+            label: "Library",
+            content: (
+              <div className="flex flex-col gap-4">
+                <div className="grid grid-cols-2 gap-3 sm:grid-cols-[minmax(0,1fr)_auto_auto]">
+                  <div className="col-span-2 sm:col-span-1">
+                    <SearchField
+                      label="Search your library"
+                      type="search"
+                      value={query}
+                      onChange={(e) => {
+                        setQuery(e.target.value);
+                        setPage(0);
+                      }}
+                      placeholder="Find a skill or plugin…"
+                    />
+                  </div>
+                  <div className="space-y-1.5">
+                    <Label htmlFor="library-kind">Type</Label>
+                    <select
+                      id="library-kind"
+                      className={`${CONTROL_BASE} min-h-11`}
+                      value={kind}
+                      onChange={(e) => {
+                        setKind(e.target.value);
+                        setPage(0);
+                      }}
+                    >
+                      <option value="all">All types</option>
+                      <option value="skill">Skills</option>
+                      <option value="plugin">Plugins</option>
+                    </select>
+                  </div>
+                  <div className="space-y-1.5">
+                    <Label htmlFor="library-status">Availability</Label>
+                    <select
+                      id="library-status"
+                      className={`${CONTROL_BASE} min-h-11`}
+                      value={status}
+                      onChange={(e) => {
+                        setStatus(e.target.value);
+                        setPage(0);
+                      }}
+                    >
+                      <option value="all">All</option>
+                      <option value="on">Switched on</option>
+                      <option value="off">Switched off</option>
+                    </select>
+                  </div>
                 </div>
-                <p className="text-sm leading-relaxed text-fg-muted [overflow-wrap:anywhere]">
-                  {p.description}
+                <p className="text-sm text-fg-muted" role="status">
+                  {visiblePackages.length + visibleSkills.length} of {count}{" "}
+                  library items
                 </p>
-                <div className="mt-auto flex w-full flex-wrap gap-x-4 gap-y-2 border-t border-line pt-3 text-xs text-fg-muted">
-                  <span>
-                    {p.skills.length}{" "}
-                    {p.skills.length === 1 ? "skill" : "skills"} · {p.fileCount}{" "}
-                    {p.fileCount === 1 ? "file" : "files"}
-                  </span>
-                  <span>
-                    {!p.members.length
-                      ? "Files only"
-                      : enabledCount(p)
-                        ? `${enabledCount(p)} switched on`
-                        : "Switched off"}
-                  </span>
-                  <span className="ms-auto text-sm font-medium text-fg">
-                    Open &amp; edit →
-                  </span>
-                </div>
-              </button>
-            </li>
-          ))}
-          {pagedSkills.map((skill) => (
-            <li key={skill.id} className="min-w-0">
-              <SkillCard
-                skill={skill}
-                agents={agents}
-                editSkillAction={editSkillAction}
-                duplicateSkillAction={duplicateSkillAction}
-                toggleSkillAction={toggleSkillAction}
-                deleteSkillAction={deleteSkillAction}
-              />
-            </li>
-          ))}
-        </ul>
-        {pageCount > 1 && (
-          <nav
-            aria-label="Library pages"
-            className="flex flex-wrap items-center justify-between gap-3"
-          >
-            <Button
-              type="button"
-              variant="secondary"
-              disabled={currentPage === 0}
-              onClick={() => setPage(currentPage - 1)}
-            >
-              Previous page
-            </Button>
-            <span className="text-sm text-fg-muted" role="status">
-              Page {currentPage + 1} of {pageCount}. Search covers your whole
-              library.
-            </span>
-            <Button
-              type="button"
-              variant="secondary"
-              disabled={currentPage + 1 === pageCount}
-              onClick={() => setPage(currentPage + 1)}
-            >
-              Next page
-            </Button>
-          </nav>
-        )}
-      </div>
-      <details className="rounded-card border border-line bg-surface p-4">
-        <summary className="min-h-11 cursor-pointer py-2 font-medium">
-          Your style profile
-        </summary>
-        <p className="mt-2 text-sm text-fg-muted">
-          How you like your agents to communicate with you.
-        </p>
-        <form
-          action={saveProfileAction}
-          className="mt-4 flex max-w-2xl flex-col gap-4"
-        >
-          <div className="grid gap-4 sm:grid-cols-2">
-            {PROFILE_FIELDS.map((f) => (
-              <Field
-                key={f.key}
-                name={f.key}
-                label={f.label}
-                placeholder={f.placeholder}
-                defaultValue={preferences ? preferences[f.key] : undefined}
-              />
-            ))}
-          </div>
-          <div>
-            <Button variant="secondary" type="submit">
-              <Save aria-hidden className="h-4 w-4" />
-              Save profile
-            </Button>
-          </div>
-        </form>
-      </details>
+                {!count ? (
+                  <EmptyState
+                    heading="No skills yet"
+                    description="Open Import & create to bring in a skill or plugin, or create your first skill."
+                  />
+                ) : !visiblePackages.length && !visibleSkills.length ? (
+                  <div className="rounded-card border border-line bg-surface p-6">
+                    <p className="font-medium">No matching skills or plugins</p>
+                    <p className="mt-1 text-sm text-fg-muted">
+                      Try a different name or clear your filters.
+                    </p>
+                    <Button
+                      variant="secondary"
+                      className="mt-4"
+                      onClick={() => {
+                        setQuery("");
+                        setKind("all");
+                        setStatus("all");
+                        setPage(0);
+                      }}
+                    >
+                      Clear filters
+                    </Button>
+                  </div>
+                ) : null}
+                <ul className="grid min-w-0 gap-4 md:grid-cols-2">
+                  {pagedPackages.map((p) => (
+                    <li key={p.id} className="min-w-0">
+                      <button
+                        type="button"
+                        className="flex h-full min-h-44 w-full flex-col gap-3 rounded-card border border-line bg-surface p-4 text-start transition-colors hover:border-line-strong focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-focus"
+                        disabled={Boolean(opening)}
+                        onClick={async () => {
+                          setOpening(p.id);
+                          setLoadError("");
+                          try {
+                            const result = await loadPackageAction(p.id);
+                            if (result.ok) {
+                              setDraft(result.value);
+                              setSkipped([]);
+                            } else setLoadError(result.error);
+                          } catch {
+                            setLoadError(
+                              "Could not open that package. Please try again.",
+                            );
+                          } finally {
+                            setOpening(null);
+                          }
+                        }}
+                      >
+                        <div className="flex w-full items-start justify-between gap-3">
+                          <span className="flex min-w-0 items-start gap-3">
+                            {p.kind === "plugin" ? (
+                              <Layers
+                                aria-hidden
+                                className="mt-1 h-5 w-5 shrink-0 text-accent"
+                              />
+                            ) : (
+                              <FileText
+                                aria-hidden
+                                className="mt-1 h-5 w-5 shrink-0 text-accent"
+                              />
+                            )}
+                            <span className="font-semibold [overflow-wrap:anywhere]">
+                              {p.name}
+                            </span>
+                          </span>
+                          <span className="shrink-0 rounded bg-surface-muted px-2 py-1 text-xs text-fg-muted">
+                            {p.kind === "plugin" ? "Plugin" : "Skill"}
+                          </span>
+                        </div>
+                        <p className="text-sm leading-relaxed text-fg-muted [overflow-wrap:anywhere]">
+                          {p.description}
+                        </p>
+                        <div className="mt-auto flex w-full flex-wrap gap-x-4 gap-y-2 border-t border-line pt-3 text-xs text-fg-muted">
+                          <span>
+                            {p.skills.length}{" "}
+                            {p.skills.length === 1 ? "skill" : "skills"} ·{" "}
+                            {p.fileCount} {p.fileCount === 1 ? "file" : "files"}
+                          </span>
+                          <span>
+                            {!p.members.length
+                              ? "Files only"
+                              : enabledCount(p)
+                                ? `${enabledCount(p)} switched on`
+                                : "Switched off"}
+                          </span>
+                          <span className="ms-auto text-sm font-medium text-fg">
+                            Open &amp; edit →
+                          </span>
+                        </div>
+                      </button>
+                    </li>
+                  ))}
+                  {pagedSkills.map((skill) => (
+                    <li key={skill.id} className="min-w-0">
+                      <SkillCard
+                        skill={skill}
+                        agents={agents}
+                        editSkillAction={editSkillAction}
+                        duplicateSkillAction={duplicateSkillAction}
+                        toggleSkillAction={toggleSkillAction}
+                        deleteSkillAction={deleteSkillAction}
+                      />
+                    </li>
+                  ))}
+                </ul>
+                {pageCount > 1 && (
+                  <nav
+                    aria-label="Library pages"
+                    className="flex flex-wrap items-center justify-between gap-3"
+                  >
+                    <Button
+                      type="button"
+                      variant="secondary"
+                      disabled={currentPage === 0}
+                      onClick={() => setPage(currentPage - 1)}
+                    >
+                      Previous page
+                    </Button>
+                    <span className="text-sm text-fg-muted" role="status">
+                      Page {currentPage + 1} of {pageCount}. Search covers your
+                      whole library.
+                    </span>
+                    <Button
+                      type="button"
+                      variant="secondary"
+                      disabled={currentPage + 1 === pageCount}
+                      onClick={() => setPage(currentPage + 1)}
+                    >
+                      Next page
+                    </Button>
+                  </nav>
+                )}
+              </div>
+            ),
+          },
+          {
+            key: "add",
+            label: "Import & create",
+            content: (
+              <>
+                <PackageImport onReady={ready} />
+                <CreatePackage onReady={ready} />
+              </>
+            ),
+          },
+          {
+            key: "preferences",
+            label: "Preferences",
+            content: (
+              <section className="max-w-2xl">
+                <h2 className="text-lg font-semibold">Your style profile</h2>
+                <p className="mt-2 text-sm text-fg-muted">
+                  How you like your agents to communicate with you.
+                </p>
+                <form
+                  action={saveProfileAction}
+                  className="mt-4 flex max-w-2xl flex-col gap-4"
+                >
+                  <div className="grid gap-4 sm:grid-cols-2">
+                    {PROFILE_FIELDS.map((f) => (
+                      <Field
+                        key={f.key}
+                        name={f.key}
+                        label={f.label}
+                        placeholder={f.placeholder}
+                        defaultValue={
+                          preferences ? preferences[f.key] : undefined
+                        }
+                      />
+                    ))}
+                  </div>
+                  <div>
+                    <Button variant="secondary" type="submit">
+                      <Save aria-hidden className="h-4 w-4" />
+                      Save profile
+                    </Button>
+                  </div>
+                </form>
+              </section>
+            ),
+          },
+        ]}
+      />
       <HouseSkillCard houseSkill={houseSkill} />
       {draft && (
         <PackageModal

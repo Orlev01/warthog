@@ -1,14 +1,11 @@
 import * as React from "react";
-import {
-  AGENT_SECTIONS,
-  type AgentSection,
-} from "@/domain/permissions/workspace";
+import { type AgentSection } from "@/domain/permissions/workspace";
 import type { AgentWorkspaceData } from "@/server/agents/workspace-data";
 import type { PermissionsViewProps } from "./permissions-view";
+import { agentNavigation } from "@/components/shell/workspace-navigation";
+import { NavigationTabs } from "@/components/shell/section-navigation";
 import { Notice } from "@/components/ui/notice";
 
-const LINK =
-  "inline-flex min-h-11 items-center rounded-card px-3 py-2 text-sm font-medium focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-focus";
 export function AgentWorkspaceHeader({
   data,
   section,
@@ -33,21 +30,19 @@ export function AgentWorkspaceHeader({
           </p>
         </div>
       </div>
-      <nav
-        aria-label="Manage this agent"
-        className="flex flex-wrap gap-1 border-b border-line pb-3"
-      >
-        {AGENT_SECTIONS.map(([key, label]) => (
-          <a
-            key={key}
-            href={`/agents/${data.agent.id}?section=${key}`}
-            aria-current={section === key ? "page" : undefined}
-            className={`${LINK} ${section === key ? "bg-accent-soft text-accent" : "text-fg-muted hover:bg-surface-muted"}`}
-          >
-            {label}
-          </a>
-        ))}
-      </nav>
+      <div>
+        <NavigationTabs
+          label="Manage this agent"
+          items={agentNavigation(data.agent.id, section).primary}
+        />
+        {agentNavigation(data.agent.id, section).secondary.length > 0 && (
+          <NavigationTabs
+            label="Agent section"
+            items={agentNavigation(data.agent.id, section).secondary}
+            secondary
+          />
+        )}
+      </div>
       {data.agent.status !== "connected" ? (
         <Notice tone="info" announce={false}>
           This agent is disconnected and cannot use your resources. Its history

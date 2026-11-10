@@ -160,7 +160,7 @@ export function PackageEditor({ draft, agents, skills, onClose, onSaved, onDupli
 export function PackageModal(props: React.ComponentProps<typeof PackageEditor>) {
   const ref = React.useRef<HTMLDialogElement>(null);
   React.useEffect(() => { ref.current?.showModal(); }, []);
-  return <dialog ref={ref} aria-labelledby="package-dialog-title" className="m-auto max-h-[90dvh] w-[calc(100%_-_2rem)] max-w-5xl overflow-y-auto rounded-card border border-line bg-surface p-4 text-fg shadow-xl backdrop:bg-fg/30 sm:p-6">
+  return <dialog ref={ref} aria-labelledby="package-dialog-title" className="m-auto max-h-[90dvh] w-[calc(100%_-_2rem)] max-w-5xl overflow-y-auto rounded-card border border-line bg-surface p-4 text-fg shadow-xl sm:p-6">
     <PackageEditor {...props} />
   </dialog>;
 }

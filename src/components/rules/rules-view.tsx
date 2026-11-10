@@ -287,7 +287,7 @@ function Choice({
         disabled={disabled}
         className="mt-1 h-4 w-4 shrink-0 accent-accent"
       />
-      <span className="flex flex-col gap-0.5">
+      <span className="flex min-w-0 flex-col gap-0.5 [overflow-wrap:anywhere]">
         <span className="font-medium text-fg">{label}</span>
         {description ? <span className="text-sm text-fg-muted">{description}</span> : null}
       </span>
@@ -366,7 +366,7 @@ export function RulesView({
         <p className="text-sm text-fg-muted">Amount conditions use your account currency ({currency}).</p>
 
         {/* The template picker — the two rule templates live, the rest disabled. */}
-        <fieldset className="flex flex-col gap-2">
+        <fieldset className="flex min-w-0 flex-col gap-2">
           <legend className="pb-2 text-sm font-medium text-fg">Choose a template</legend>
           <div className="flex flex-col gap-2">
             {TEMPLATES.map((t) => (
@@ -391,7 +391,7 @@ export function RulesView({
         {draft.template === "ask_first" || draft.template === "never_allow" ? (
           <>
             {/* The brief's six action choices. */}
-            <fieldset className="flex flex-col gap-2">
+            <fieldset className="flex min-w-0 flex-col gap-2">
               <legend className="pb-2 text-sm font-medium text-fg">What the agent is doing</legend>
               <div className="flex flex-col gap-2">
                 {ACTIONS.map((a) => (
@@ -438,7 +438,7 @@ export function RulesView({
             ) : null}
 
             {/* When the rule applies. */}
-            <fieldset className="flex flex-col gap-2">
+            <fieldset className="flex min-w-0 flex-col gap-2">
               <legend className="pb-2 text-sm font-medium text-fg">When it applies</legend>
               <select
                 name="rule-condition"
@@ -468,7 +468,7 @@ export function RulesView({
             </fieldset>
 
             {/* Scope — all agents or a chosen agent. */}
-            <fieldset className="flex flex-col gap-2">
+            <fieldset className="flex min-w-0 flex-col gap-2">
               <legend className="pb-2 text-sm font-medium text-fg">Which agents</legend>
               <div className="flex flex-col gap-2">
                 <Choice

@@ -2,6 +2,7 @@
 
 import * as React from "react";
 
+import { ViewPanels } from "@/components/ui/view-tabs";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/field";
 import { EmptyState } from "@/components/ui/empty";
@@ -34,7 +35,10 @@ import { receiptUploadError } from "@/lib/receipt-upload";
 
 // ─── the prop contract this task introduces ─────────────────────────────────────────
 
-export type RecordKind = "subscription" | "receipt_warranty" | "renewal_appointment";
+export type RecordKind =
+  | "subscription"
+  | "receipt_warranty"
+  | "renewal_appointment";
 
 // One life-admin record as the view renders it, AFTER the loader has decrypted its
 // fields: its id, its kind, its decrypted display fields (key → value), its due date,
@@ -60,7 +64,11 @@ export type ChecklistItemView = {
   linkedTaskId: string | null;
 };
 
-export type LifeAdminTab = "subscriptions" | "receipts" | "renewals" | "checklist";
+export type LifeAdminTab =
+  | "subscriptions"
+  | "receipts"
+  | "renewals"
+  | "checklist";
 
 // A control bound to a server action the page passes.
 type LifeAdminAction = (formData: FormData) => void | Promise<void>;
@@ -91,15 +99,10 @@ export type LifeAdminViewProps = {
 // the sibling inbox / connectors views). The accent fill is a tab's / an Add's one
 // primary action; everything else is the neutral surface.
 const BTN_BASE =
-  "inline-flex min-h-11 items-center justify-center gap-2 rounded-card px-4 text-sm font-medium transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-focus focus-visible:ring-offset-2 focus-visible:ring-offset-bg";
+  "inline-flex min-h-11 items-center justify-center gap-2 rounded-full px-4 text-sm font-medium transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-focus focus-visible:ring-offset-2 focus-visible:ring-offset-bg";
 const BTN_PRIMARY = `${BTN_BASE} bg-accent text-accent-fg hover:bg-accent-hover`;
 const BTN_SECONDARY = `${BTN_BASE} border border-line bg-surface text-fg hover:bg-surface-muted`;
 const BTN_DISABLED = `${BTN_BASE} border border-line bg-surface text-fg-muted opacity-50`;
-
-// The selected tab is marked by more than its fill (review fix G10, WCAG 1.4.1): a visible
-// outline on the form-control token and heavier text.
-const TAB_ACTIVE = `${BTN_BASE} border border-line-input bg-surface-muted font-semibold text-fg`;
-const TAB_INACTIVE = `${BTN_BASE} border border-transparent text-fg-muted hover:bg-surface-muted`;
 
 const SUMMARY_CLASS =
   "inline-flex w-fit cursor-pointer items-center gap-2 text-sm font-medium text-fg";
@@ -141,7 +144,12 @@ function AddControl({
   const fieldId = React.useId();
   const label = ADD_LABELS[kind];
   if (!addRecordAction) {
-    return <DisabledControl label={label} reason="Adding isn't available just now." />;
+    return (
+      <DisabledControl
+        label={label}
+        reason="Adding isn't available just now."
+      />
+    );
   }
   return (
     <details className="flex flex-col gap-3 rounded-card border border-line bg-surface p-4">
@@ -150,7 +158,13 @@ function AddControl({
         <input type="hidden" name="kind" value={kind} />
         <div className="flex flex-col gap-1.5">
           <Label htmlFor={fieldId}>What to add</Label>
-          <Input id={fieldId} name="title" placeholder="Describe it" required maxLength={2000} />
+          <Input
+            id={fieldId}
+            name="title"
+            placeholder="Describe it"
+            required
+            maxLength={2000}
+          />
         </div>
         <div>
           <button type="submit" className={BTN_PRIMARY}>
@@ -179,8 +193,15 @@ function ReminderSetting({
     return (
       <div className="flex flex-col gap-1.5">
         <Label htmlFor={fieldId}>Remind me (days before)</Label>
-        <Input id={fieldId} name="reminderOffsets" defaultValue={value} disabled />
-        <p className="text-xs text-fg-muted">Changing reminders isn't available just now.</p>
+        <Input
+          id={fieldId}
+          name="reminderOffsets"
+          defaultValue={value}
+          disabled
+        />
+        <p className="text-xs text-fg-muted">
+          Changing reminders isn't available just now.
+        </p>
       </div>
     );
   }
@@ -213,8 +234,16 @@ function AttachControl({
     return (
       <div className="flex flex-col gap-1.5">
         <Label htmlFor={fieldId}>Attach a file</Label>
-        <input id={fieldId} type="file" name="file" disabled className={FILE_INPUT_CLASS} />
-        <p className="text-xs text-fg-muted">Attaching a file isn't available just now.</p>
+        <input
+          id={fieldId}
+          type="file"
+          name="file"
+          disabled
+          className={FILE_INPUT_CLASS}
+        />
+        <p className="text-xs text-fg-muted">
+          Attaching a file isn't available just now.
+        </p>
       </div>
     );
   }
@@ -222,14 +251,24 @@ function AttachControl({
     <form action={attachFileAction} className="flex flex-col gap-1.5">
       <input type="hidden" name="recordId" value={record.id} />
       <Label htmlFor={fieldId}>Attach a file</Label>
-      <input id={fieldId} type="file" name="file" required className={FILE_INPUT_CLASS}
+      <input
+        id={fieldId}
+        type="file"
+        name="file"
+        required
+        className={FILE_INPUT_CLASS}
         onChange={(event) => {
           const input = event.currentTarget;
           const file = input.files?.[0];
-          input.setCustomValidity(file ? receiptUploadError(file.size) ?? "" : "Choose a file.");
+          input.setCustomValidity(
+            file ? (receiptUploadError(file.size) ?? "") : "Choose a file.",
+          );
           if (file) input.reportValidity();
-        }} />
-      <p className="text-xs text-fg-muted">Up to 25 MiB per file. Files are encrypted before storage.</p>
+        }}
+      />
+      <p className="text-xs text-fg-muted">
+        Up to 25 MiB per file. Files are encrypted before storage.
+      </p>
       <div>
         <button type="submit" className={BTN_SECONDARY}>
           Attach file
@@ -251,7 +290,12 @@ function EditControl({
 }) {
   const baseId = React.useId();
   if (!editRecordAction) {
-    return <DisabledControl label="Edit" reason="Editing isn't available just now." />;
+    return (
+      <DisabledControl
+        label="Edit"
+        reason="Editing isn't available just now."
+      />
+    );
   }
   return (
     <details className="flex flex-col gap-3">
@@ -295,14 +339,20 @@ function RecordCard({
       <dl className="grid min-w-0 grid-cols-1 gap-x-3 gap-y-1 text-sm sm:grid-cols-[minmax(0,1fr)_minmax(0,2fr)]">
         {Object.entries(record.fields).map(([key, fieldValue]) => (
           <React.Fragment key={key}>
-            <dt className="min-w-0 text-fg-muted [overflow-wrap:anywhere]">{key}</dt>
-            <dd className="mb-2 min-w-0 text-fg [overflow-wrap:anywhere] sm:mb-0">{fieldValue}</dd>
+            <dt className="min-w-0 text-fg-muted [overflow-wrap:anywhere]">
+              {key}
+            </dt>
+            <dd className="mb-2 min-w-0 text-fg [overflow-wrap:anywhere] sm:mb-0">
+              {fieldValue}
+            </dd>
           </React.Fragment>
         ))}
       </dl>
 
       <p className="text-sm text-fg-muted">
-        {record.dueDate ? `Due ${record.dueDate} · ${record.status}` : record.status}
+        {record.dueDate
+          ? `Due ${record.dueDate} · ${record.status}`
+          : record.status}
       </p>
 
       <ReminderSetting record={record} editRecordAction={editRecordAction} />
@@ -311,20 +361,37 @@ function RecordCard({
         <AttachControl record={record} attachFileAction={attachFileAction} />
       ) : null}
 
-      {record.files?.length ? <ul className="flex flex-col gap-2">
-        {record.files.map((file, index) => <li key={file.id}>
-          <a href={`/api/receipts/${file.id}`} className="inline-flex min-h-11 items-center text-sm underline underline-offset-4 focus-visible:outline focus-visible:outline-2 focus-visible:outline-focus">Download attachment {index + 1} ({(file.size / 1024 / 1024).toFixed(2)} MiB)</a>
-        </li>)}
-      </ul> : null}
+      {record.files?.length ? (
+        <ul className="flex flex-col gap-2">
+          {record.files.map((file, index) => (
+            <li key={file.id}>
+              <a
+                href={`/api/receipts/${file.id}`}
+                className="inline-flex min-h-11 items-center text-sm underline underline-offset-4 focus-visible:outline focus-visible:outline-2 focus-visible:outline-focus"
+              >
+                Download attachment {index + 1} (
+                {(file.size / 1024 / 1024).toFixed(2)} MiB)
+              </a>
+            </li>
+          ))}
+        </ul>
+      ) : null}
       <EditControl record={record} editRecordAction={editRecordAction} />
-      {deleteRecordAction ? <details className="mt-2">
-        <summary className={SUMMARY_CLASS}>Delete record</summary>
-        <p className="my-3 text-sm text-fg-muted">Delete this record and all its attached files? This cannot be undone.</p>
-        <form action={deleteRecordAction}>
-          <input type="hidden" name="recordId" value={record.id} />
-          <button type="submit" className={BTN_SECONDARY}>Delete record and files</button>
-        </form>
-      </details> : null}
+      {deleteRecordAction ? (
+        <details className="mt-2">
+          <summary className={SUMMARY_CLASS}>Delete record</summary>
+          <p className="my-3 text-sm text-fg-muted">
+            Delete this record and all its attached files? This cannot be
+            undone.
+          </p>
+          <form action={deleteRecordAction}>
+            <input type="hidden" name="recordId" value={record.id} />
+            <button type="submit" className={BTN_SECONDARY}>
+              Delete record and files
+            </button>
+          </form>
+        </details>
+      ) : null}
     </li>
   );
 }
@@ -363,7 +430,8 @@ function RecordPanel({
               key={record.id}
               record={record}
               editRecordAction={editRecordAction}
-              attachFileAction={attachFileAction} deleteRecordAction={deleteRecordAction}
+              attachFileAction={attachFileAction}
+              deleteRecordAction={deleteRecordAction}
             />
           ))}
         </ul>
@@ -387,10 +455,17 @@ function TickControl({
     return (
       <div className="flex flex-col gap-1">
         <label className="inline-flex min-h-11 items-center gap-2 text-sm text-fg">
-          <input type="checkbox" className="size-4" defaultChecked={item.done} disabled />
+          <input
+            type="checkbox"
+            className="size-4"
+            defaultChecked={item.done}
+            disabled
+          />
           Done
         </label>
-        <p className="text-xs text-fg-muted">Ticking items off isn't available just now.</p>
+        <p className="text-xs text-fg-muted">
+          Ticking items off isn't available just now.
+        </p>
       </div>
     );
   }
@@ -504,23 +579,7 @@ function ChecklistPanel({
 
 // ─── the view ────────────────────────────────────────────────────────────────────────
 
-// The roving-focus step for the tab list (WAI-ARIA tabs pattern): Left/Right move to the
-// previous/next tab, wrapping at the ends; Home/End jump to the first/last. Any other key
-// returns null (left to the browser).
-export function nextTabIndex(current: number, key: string, count: number): number | null {
-  if (key === "ArrowRight") return (current + 1) % count;
-  if (key === "ArrowLeft") return (current - 1 + count) % count;
-  if (key === "Home") return 0;
-  if (key === "End") return count - 1;
-  return null;
-}
-
-const TABS: ReadonlyArray<{ key: LifeAdminTab; label: string }> = [
-  { key: "subscriptions", label: "Subscriptions" },
-  { key: "receipts", label: "Receipts & warranties" },
-  { key: "renewals", label: "Renewals & appointments" },
-  { key: "checklist", label: "Moving checklist" },
-];
+export { nextTabIndex } from "@/components/ui/view-tabs";
 
 export function LifeAdminView({
   subscriptions,
@@ -535,97 +594,71 @@ export function LifeAdminView({
   tickOffAction,
   handToAgentAction,
 }: LifeAdminViewProps) {
-  const [active, setActive] = React.useState<LifeAdminTab>(initialTab ?? "subscriptions");
-  // The section switcher is a WAI-ARIA tab list (review fix G10): role=tab buttons in a
-  // labelled tablist, a roving tabindex with arrow-key movement, and one tabpanel labelled
-  // by the selected tab (aria-selected on a plain button is never announced).
-  const baseId = React.useId();
-  const tabRefs = React.useRef<Array<HTMLButtonElement | null>>([]);
-  const tabId = (key: LifeAdminTab) => `${baseId}-tab-${key}`;
-  const panelId = `${baseId}-panel`;
+  const recordActions = {
+    addRecordAction,
+    editRecordAction,
+    attachFileAction,
+    deleteRecordAction,
+  };
   return (
-    <div className="mx-auto flex max-w-3xl flex-col gap-6 px-4 py-8 sm:px-6">
-      <h1 className="text-2xl font-semibold tracking-tight text-fg">Life admin</h1>
-
-      <div role="tablist" aria-label="Life admin sections" className="flex flex-wrap gap-2">
-        {TABS.map((tab, index) => {
-          const selected = active === tab.key;
-          return (
-            <button
-              key={tab.key}
-              ref={(element) => {
-                tabRefs.current[index] = element;
-              }}
-              type="button"
-              role="tab"
-              id={tabId(tab.key)}
-              aria-selected={selected}
-              aria-controls={panelId}
-              tabIndex={selected ? 0 : -1}
-              className={selected ? TAB_ACTIVE : TAB_INACTIVE}
-              onClick={() => setActive(tab.key)}
-              onKeyDown={(event) => {
-                const next = nextTabIndex(index, event.key, TABS.length);
-                if (next === null) return;
-                event.preventDefault();
-                setActive(TABS[next]!.key);
-                tabRefs.current[next]?.focus();
-              }}
-            >
-              {tab.label}
-            </button>
-          );
-        })}
-      </div>
-
-      <div
-        role="tabpanel"
-        id={panelId}
-        aria-labelledby={tabId(active)}
-        tabIndex={0}
-        className="flex flex-col gap-6"
-      >
-        {active === "subscriptions" ? (
-          <RecordPanel
-            kind="subscription"
-            heading="Subscriptions"
-            records={subscriptions}
-            addRecordAction={addRecordAction}
-            editRecordAction={editRecordAction}
-            attachFileAction={attachFileAction} deleteRecordAction={deleteRecordAction}
-          />
-        ) : null}
-
-        {active === "receipts" ? (
-          <RecordPanel
-            kind="receipt_warranty"
-            heading="Receipts & warranties"
-            records={receipts}
-            addRecordAction={addRecordAction}
-            editRecordAction={editRecordAction}
-            attachFileAction={attachFileAction} deleteRecordAction={deleteRecordAction}
-          />
-        ) : null}
-
-        {active === "renewals" ? (
-          <RecordPanel
-            kind="renewal_appointment"
-            heading="Renewals & appointments"
-            records={renewals}
-            addRecordAction={addRecordAction}
-            editRecordAction={editRecordAction}
-            attachFileAction={attachFileAction} deleteRecordAction={deleteRecordAction}
-          />
-        ) : null}
-
-        {active === "checklist" ? (
-          <ChecklistPanel
-            checklist={checklist}
-            tickOffAction={tickOffAction}
-            handToAgentAction={handToAgentAction}
-          />
-        ) : null}
-      </div>
+    <div className="wh-page flex flex-col gap-6">
+      <h1 className="text-2xl font-semibold tracking-tight text-fg">
+        Life admin
+      </h1>
+      <ViewPanels
+        label="Life admin sections"
+        parameter="tab"
+        initialTab={initialTab}
+        tabs={[
+          {
+            key: "subscriptions",
+            label: "Subscriptions",
+            content: (
+              <RecordPanel
+                kind="subscription"
+                heading="Subscriptions"
+                records={subscriptions}
+                {...recordActions}
+              />
+            ),
+          },
+          {
+            key: "receipts",
+            label: "Receipts & warranties",
+            content: (
+              <RecordPanel
+                kind="receipt_warranty"
+                heading="Receipts & warranties"
+                records={receipts}
+                {...recordActions}
+              />
+            ),
+          },
+          {
+            key: "renewals",
+            label: "Renewals & appointments",
+            content: (
+              <RecordPanel
+                kind="renewal_appointment"
+                heading="Renewals & appointments"
+                records={renewals}
+                {...recordActions}
+              />
+            ),
+          },
+          {
+            key: "checklist",
+            label: "Moving checklist",
+            content: (
+              <ChecklistPanel
+                checklist={checklist}
+                tickOffAction={tickOffAction}
+                handToAgentAction={handToAgentAction}
+              />
+            ),
+          },
+        ]}
+      />
     </div>
   );
 }

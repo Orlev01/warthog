@@ -81,7 +81,7 @@ export function AgentsScreen({ agents, disconnect }: AgentsScreenProps) {
   return <>
     <AgentListView agents={agents} disconnectAction={gated} />
     <dialog ref={dialog} aria-labelledby={titleId} aria-describedby={descriptionId}
-      className="top-[env(safe-area-inset-top)] right-[env(safe-area-inset-right)] bottom-[env(safe-area-inset-bottom)] left-[env(safe-area-inset-left)] m-auto max-h-[calc(100dvh-2rem-env(safe-area-inset-top)-env(safe-area-inset-bottom))] w-[calc(100%-2rem-env(safe-area-inset-left)-env(safe-area-inset-right))] max-w-md overflow-y-auto rounded-card border border-line bg-surface p-4 text-fg shadow-lg backdrop:bg-bg/80 sm:p-6"
+      className="top-[env(safe-area-inset-top)] right-[env(safe-area-inset-right)] bottom-[env(safe-area-inset-bottom)] left-[env(safe-area-inset-left)] m-auto max-h-[calc(100dvh-2rem-env(safe-area-inset-top)-env(safe-area-inset-bottom))] w-[calc(100%-2rem-env(safe-area-inset-left)-env(safe-area-inset-right))] max-w-md overflow-y-auto rounded-card border border-line bg-surface p-4 text-fg shadow-lg sm:p-6"
       onCancel={(event) => { event.preventDefault(); finish(false); }}>
       <h2 id={titleId} className="text-lg font-semibold">Disconnect this agent?</h2>
       <p id={descriptionId} className="mt-3 text-sm text-fg-muted">{CONFIRM_MESSAGE}</p>

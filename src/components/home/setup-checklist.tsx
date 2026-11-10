@@ -23,13 +23,13 @@ export type SetupChecklistProps = {
 
 export function SetupChecklist({ items }: SetupChecklistProps) {
   return (
-    <ul className="flex flex-col gap-2">
+    <ul className="grid gap-2 sm:grid-cols-2 xl:grid-cols-3">
       {items.map((item) => (
         <li
           key={item.href}
-          className="flex items-center justify-between gap-3 rounded-card border border-line bg-surface p-3"
+          className="flex items-center justify-between gap-3 rounded-card border border-line bg-surface px-3 py-1.5"
         >
-          <a className="font-medium text-accent hover:text-accent-hover" href={item.href}>
+          <a className="inline-flex min-h-11 items-center font-medium text-accent hover:text-accent-hover" href={item.href}>
             {item.label}
           </a>
           <ChecklistState done={item.done} />
@@ -47,7 +47,7 @@ function ChecklistState({ done }: { done: boolean }) {
     ? { label: "Done", Icon: CheckCircle, tone: "text-success" }
     : { label: "To do", Icon: Circle, tone: "text-fg-muted" };
   return (
-    <span className={["inline-flex items-center gap-1.5 text-sm font-medium", tone].join(" ")}>
+    <span className={["inline-flex shrink-0 items-center gap-1.5 text-sm font-medium", tone].join(" ")}>
       <Icon aria-hidden={true} className="h-4 w-4 shrink-0" />
       {label}
     </span>

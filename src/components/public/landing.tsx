@@ -8,7 +8,7 @@ import { PolicyLinks } from "./policy-links";
 // built on the same design tokens as the Button primitive (globals.css). The
 // landing's one accent action is Sign up; Sign in is the neutral surface link.
 const CTA_BASE =
-  "inline-flex min-h-11 items-center justify-center gap-2 rounded-card px-4 text-sm font-medium transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-focus focus-visible:ring-offset-2 focus-visible:ring-offset-bg";
+  "inline-flex min-h-11 items-center justify-center gap-2 rounded-full px-4 text-sm font-medium transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-focus focus-visible:ring-offset-2 focus-visible:ring-offset-bg";
 const CTA_PRIMARY = `${CTA_BASE} bg-accent text-accent-fg hover:bg-accent-hover`;
 const CTA_SECONDARY = `${CTA_BASE} border border-line bg-surface text-fg hover:bg-surface-muted`;
 

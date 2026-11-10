@@ -106,7 +106,7 @@ export type ActivityViewProps = {
 // primary action on the screen (Check-integrity); everything else is the neutral
 // surface variant.
 const BTN_BASE =
-  "inline-flex min-h-11 items-center justify-center gap-2 rounded-card px-4 text-sm font-medium transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-focus focus-visible:ring-offset-2 focus-visible:ring-offset-bg";
+  "inline-flex min-h-11 items-center justify-center gap-2 rounded-full px-4 text-sm font-medium transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-focus focus-visible:ring-offset-2 focus-visible:ring-offset-bg";
 const BTN_PRIMARY = `${BTN_BASE} bg-accent text-accent-fg hover:bg-accent-hover`;
 const BTN_SECONDARY = `${BTN_BASE} border border-line bg-surface text-fg hover:bg-surface-muted`;
 // A control that is present but not actionable (e.g. Undo when reversal execution is not
@@ -314,7 +314,7 @@ export function ActivityView({
   const applied = filterSummary(facets, activeFilters);
 
   return (
-    <div className="mx-auto flex max-w-3xl flex-col gap-6 px-4 py-8 sm:px-6">
+    <div className="wh-page flex flex-col gap-6">
       <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
         <h1 className="text-2xl font-semibold tracking-tight text-fg">Activity</h1>
         <form method="get">

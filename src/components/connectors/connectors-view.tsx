@@ -1,5 +1,6 @@
 import * as React from "react";
 
+import { ViewPanels } from "@/components/ui/view-tabs";
 import { Status, type StatusKey } from "@/components/ui/status";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/field";
@@ -70,6 +71,7 @@ export type ConnectionItem = {
 };
 
 export type ConnectorsViewProps = {
+  initialView?: string;
   groups: readonly CatalogueGroup[];
   connections: readonly ConnectionItem[];
   query: string | null; // the search term echoed back (prefill); null = no search
@@ -94,7 +96,7 @@ const REQUEST_LABEL = "Request a connector";
 // AgentListView. Everything is the neutral surface variant (the accent is reserved for a
 // screen's one primary action). Styled through tokens, no raw colour.
 const BTN_BASE =
-  "inline-flex min-h-11 items-center justify-center gap-2 rounded-card px-4 text-sm font-medium transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-focus focus-visible:ring-offset-2 focus-visible:ring-offset-bg";
+  "inline-flex min-h-11 items-center justify-center gap-2 rounded-full px-4 text-sm font-medium transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-focus focus-visible:ring-offset-2 focus-visible:ring-offset-bg";
 const BTN_SECONDARY = `${BTN_BASE} border border-line bg-surface text-fg hover:bg-surface-muted`;
 // A control that is present but not actionable: the neutral surface look, dimmed and
 // non-interactive, the native `disabled` attribute doing the disabling. No raw colour.
@@ -102,7 +104,8 @@ const BTN_DISABLED = `${BTN_BASE} border border-line bg-surface text-fg-muted op
 
 // A small neutral badge for a tool's "reads" / "makes changes" marking — status by WORDS,
 // never by colour alone (brief design_ux.feel). Styled through tokens, no raw colour.
-const MARK_BADGE = "rounded-card bg-surface-muted px-2 py-0.5 text-xs font-medium text-fg-muted";
+const MARK_BADGE =
+  "rounded-card bg-surface-muted px-2 py-0.5 text-xs font-medium text-fg-muted";
 
 // The Connect control for one catalogue entry. LIVE (bound to `connectAction`, carrying
 // THIS entry's connector id) when an action is supplied; otherwise DISABLED with a
@@ -114,14 +117,26 @@ function ConnectControl({
   item: CatalogueItem;
   connectAction?: (formData: FormData) => void | Promise<void>;
 }) {
-  if (!item.connectable) return <div className="flex flex-col gap-1"><button type="button" disabled className={BTN_DISABLED}>Unavailable</button><p className="text-xs text-fg-muted">{item.unavailableReason ?? "Provider sign-in is not configured yet."}</p></div>;
+  if (!item.connectable)
+    return (
+      <div className="flex flex-col gap-1">
+        <button type="button" disabled className={BTN_DISABLED}>
+          Unavailable
+        </button>
+        <p className="text-xs text-fg-muted">
+          {item.unavailableReason ?? "Provider sign-in is not configured yet."}
+        </p>
+      </div>
+    );
   if (!connectAction) {
     return (
       <div className="flex flex-col gap-1">
         <button type="button" disabled className={BTN_DISABLED}>
           Connect
         </button>
-        <p className="text-xs text-fg-muted">Connecting isn&apos;t available just now.</p>
+        <p className="text-xs text-fg-muted">
+          Connecting isn&apos;t available just now.
+        </p>
       </div>
     );
   }
@@ -151,7 +166,9 @@ function AskToJoinControl({
         <button type="button" disabled className={BTN_DISABLED}>
           {EARLY_ACCESS_LABEL}
         </button>
-        <p className="text-xs text-fg-muted">Early access isn&apos;t available just now.</p>
+        <p className="text-xs text-fg-muted">
+          Early access isn&apos;t available just now.
+        </p>
       </div>
     );
   }
@@ -197,10 +214,10 @@ function CategorySection({
 }) {
   return (
     <section className="flex flex-col gap-2">
-      <h3 className="text-sm font-semibold uppercase tracking-wide text-fg-muted">
-        {group.category}
+      <h3 className="text-sm font-medium capitalize text-fg-muted">
+        {group.category.replaceAll("-", " ")}
       </h3>
-      <ul className="flex flex-col gap-2">
+      <ul className="grid gap-3 sm:grid-cols-2 xl:grid-cols-3">
         {group.items.map((item) => (
           <CatalogueEntry
             key={item.id}
@@ -225,13 +242,20 @@ function RequestSection({
   requestAction?: (formData: FormData) => void | Promise<void>;
 }) {
   return (
-    <div className="flex flex-col gap-3 rounded-card border border-line bg-surface p-4">
+    <div className="flex min-w-0 flex-col gap-3 rounded-card border border-line bg-surface p-4 [overflow-wrap:anywhere]">
       <div className="flex flex-col gap-1">
-        <h3 className="text-base font-semibold text-fg">Can&apos;t find what you need?</h3>
-        <p className="text-sm text-fg-muted">Tell us which service to add next.</p>
+        <h3 className="text-base font-semibold text-fg">
+          Can&apos;t find what you need?
+        </h3>
+        <p className="text-sm text-fg-muted">
+          Tell us which service to add next.
+        </p>
       </div>
       {requestAction ? (
-        <form action={requestAction} className="flex flex-col gap-2 sm:flex-row sm:items-end">
+        <form
+          action={requestAction}
+          className="flex flex-col gap-2 sm:flex-row sm:items-end"
+        >
           <div className="flex flex-1 flex-col gap-1.5">
             <Label htmlFor="connector-request-name">Service name</Label>
             <Input
@@ -276,7 +300,9 @@ function DisconnectControl({
         <button type="button" disabled className={BTN_DISABLED}>
           Disconnect
         </button>
-        <p className="text-xs text-fg-muted">Disconnecting isn&apos;t available just now.</p>
+        <p className="text-xs text-fg-muted">
+          Disconnecting isn&apos;t available just now.
+        </p>
       </div>
     );
   }
@@ -300,17 +326,23 @@ function ConnectionCard({
   reconnectAction?: (formData: FormData) => void | Promise<void>;
 }) {
   return (
-    <li className="flex flex-col gap-3 rounded-card border border-line bg-surface p-4">
+    <li className="flex min-w-0 flex-col gap-3 rounded-card border border-line bg-surface p-4 [overflow-wrap:anywhere]">
       <div className="flex flex-wrap items-start justify-between gap-2">
         <div className="flex flex-col gap-0.5">
           <span className="font-medium text-fg">{connection.name}</span>
-          <span className="text-sm text-fg-muted">{connection.accountLabel}</span>
+          <span className="text-sm text-fg-muted">
+            {connection.accountLabel}
+          </span>
         </div>
         <Status status={connection.status} />
       </div>
 
-      <p className="text-sm text-fg-muted">Connected {connection.connectedAt}</p>
-      {connection.unavailableReason ? <p className="text-sm text-warning">{connection.unavailableReason}</p> : null}
+      <p className="text-sm text-fg-muted">
+        Connected {connection.connectedAt}
+      </p>
+      {connection.unavailableReason ? (
+        <p className="text-sm text-warning">{connection.unavailableReason}</p>
+      ) : null}
 
       <div className="flex flex-col gap-1.5">
         <span className="text-sm font-medium text-fg">Tools</span>
@@ -319,9 +351,14 @@ function ConnectionCard({
         ) : (
           <ul className="flex flex-col gap-1.5">
             {connection.tools.map((tool) => (
-              <li key={tool.name} className="flex flex-wrap items-center gap-2 text-sm text-fg">
+              <li
+                key={tool.name}
+                className="flex flex-wrap items-center gap-2 text-sm text-fg"
+              >
                 <span>{tool.name}</span>
-                <span className={MARK_BADGE}>{tool.makesChange ? "Makes changes" : "Reads"}</span>
+                <span className={MARK_BADGE}>
+                  {tool.makesChange ? "Makes changes" : "Reads"}
+                </span>
               </li>
             ))}
           </ul>
@@ -335,14 +372,28 @@ function ConnectionCard({
       </p>
 
       <div className="flex flex-wrap items-center gap-2">
-        {connection.reconnectable && reconnectAction && <form action={reconnectAction}><input type="hidden" name="connectionId" value={connection.id}/><button type="submit" className="rounded-control border border-line px-3 py-2 text-sm font-medium text-fg">Reconnect and refresh tools</button></form>}
-        <DisconnectControl connectionId={connection.id} disconnectAction={disconnectAction} />
+        {connection.reconnectable && reconnectAction && (
+          <form action={reconnectAction}>
+            <input type="hidden" name="connectionId" value={connection.id} />
+            <button
+              type="submit"
+              className="rounded-control border border-line px-3 py-2 text-sm font-medium text-fg"
+            >
+              Reconnect and refresh tools
+            </button>
+          </form>
+        )}
+        <DisconnectControl
+          connectionId={connection.id}
+          disconnectAction={disconnectAction}
+        />
       </div>
     </li>
   );
 }
 
 export function ConnectorsView({
+  initialView,
   groups,
   connections,
   query,
@@ -353,69 +404,106 @@ export function ConnectorsView({
   requestAction,
 }: ConnectorsViewProps) {
   return (
-    <div className="mx-auto flex max-w-3xl flex-col gap-8 px-4 py-8 sm:px-6">
-      <h1 className="text-2xl font-semibold tracking-tight text-fg">Connectors</h1>
+    <div className="wh-page flex flex-col gap-8">
+      <header className="flex flex-col gap-2">
+        <h1 className="text-2xl font-semibold tracking-tight text-fg">
+          Connectors
+        </h1>
+        <p className="max-w-2xl text-sm text-fg-muted">
+          Manage your connected accounts, or browse services to bring into your
+          workspace.
+        </p>
+      </header>
+      <ViewPanels
+        label="Connector views"
+        defaultTab={query ? "catalogue" : "connected"}
+        initialTab={initialView}
+        tabs={[
+          {
+            key: "connected",
+            label: "Connected services",
+            content: (
+              <section className="flex flex-col gap-4">
+                <h2 className="text-lg font-semibold text-fg">
+                  Your connected services
+                </h2>
 
-      <section className="flex flex-col gap-4">
-        <h2 className="text-lg font-semibold text-fg">Browse the catalogue</h2>
+                {connections.length === 0 ? (
+                  <EmptyState
+                    heading="No connected services yet"
+                    description="Once you link a service it'll show here with its status, tools and the agents that use it."
+                  />
+                ) : (
+                  <ul className="flex flex-col gap-3">
+                    {connections.map((connection) => (
+                      <ConnectionCard
+                        key={connection.id}
+                        connection={connection}
+                        reconnectAction={reconnectAction}
+                        disconnectAction={disconnectAction}
+                      />
+                    ))}
+                  </ul>
+                )}
+              </section>
+            ),
+          },
+          {
+            key: "catalogue",
+            label: "Catalogue",
+            content: (
+              <section className="flex flex-col gap-4">
+                <h2 className="text-lg font-semibold text-fg">
+                  Browse the catalogue
+                </h2>
 
-        <form method="get" className="flex flex-col gap-2 sm:flex-row sm:items-end">
-          <div className="flex flex-1 flex-col gap-1.5">
-            <Label htmlFor="connector-search">Search</Label>
-            <Input
-              id="connector-search"
-              type="search"
-              name="q"
-              defaultValue={query ?? ""}
-              placeholder="Search connectors"
-            />
-          </div>
-          <button type="submit" className={BTN_SECONDARY}>
-            Search
-          </button>
-        </form>
+                <form
+                  method="get"
+                  className="flex flex-col gap-2 sm:flex-row sm:items-end"
+                >
+                  <input type="hidden" name="view" value="catalogue" />
+                  <div className="flex flex-1 flex-col gap-1.5">
+                    <Label htmlFor="connector-search">Search</Label>
+                    <Input
+                      id="connector-search"
+                      type="search"
+                      name="q"
+                      defaultValue={query ?? ""}
+                      placeholder="Search connectors"
+                    />
+                  </div>
+                  <button type="submit" className={BTN_SECONDARY}>
+                    Search
+                  </button>
+                </form>
 
-        {groups.length === 0 ? (
-          <p className="text-sm text-fg-muted">
-            {canRequest ? "No connectors matched your search." : "No connectors to show just now."}
-          </p>
-        ) : (
-          <div className="flex flex-col gap-6">
-            {groups.map((group) => (
-              <CategorySection
-                key={group.category}
-                group={group}
-                connectAction={connectAction}
-                requestAction={requestAction}
-              />
-            ))}
-          </div>
-        )}
+                {groups.length === 0 ? (
+                  <p className="text-sm text-fg-muted">
+                    {canRequest
+                      ? "No connectors matched your search."
+                      : "No connectors to show just now."}
+                  </p>
+                ) : (
+                  <div className="flex flex-col gap-6">
+                    {groups.map((group) => (
+                      <CategorySection
+                        key={group.category}
+                        group={group}
+                        connectAction={connectAction}
+                        requestAction={requestAction}
+                      />
+                    ))}
+                  </div>
+                )}
 
-        {canRequest ? <RequestSection query={query} requestAction={requestAction} /> : null}
-      </section>
-
-      <section className="flex flex-col gap-4">
-        <h2 className="text-lg font-semibold text-fg">Your connected services</h2>
-
-        {connections.length === 0 ? (
-          <EmptyState
-            heading="No connected services yet"
-            description="Once you link a service it'll show here with its status, tools and the agents that use it."
-          />
-        ) : (
-          <ul className="flex flex-col gap-3">
-            {connections.map((connection) => (
-              <ConnectionCard
-                key={connection.id}
-                connection={connection}
-                reconnectAction={reconnectAction}
-                disconnectAction={disconnectAction}
-              />
-            ))}
-          </ul>
-        )}
-      </section>
+                {canRequest ? (
+                  <RequestSection query={query} requestAction={requestAction} />
+                ) : null}
+              </section>
+            ),
+          },
+        ]}
+      />
     </div>
   );
 }

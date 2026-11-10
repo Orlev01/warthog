@@ -61,7 +61,7 @@ function tokens(cls: string): string[] {
 // (Home / Rules / Security) uses, independent of the other classes around it.
 function isPageContainer(cls: string): boolean {
   const t = tokens(cls);
-  return t.includes("mx-auto") && t.some((x) => x.startsWith("max-w-"));
+  return t.includes("wh-page");
 }
 
 function pageContainers(markup: string): string[] {
@@ -102,7 +102,7 @@ test("PageContainer renders its children", () => {
   );
 });
 
-test("PageContainer centres its content in the shared max-w-2xl container with px-4 sm:px-6 py-8", () => {
+test("PageContainer uses one shared readable workspace container", () => {
   const markup = renderToStaticMarkup(
     <PageContainer>
       <p>x</p>
@@ -112,7 +112,7 @@ test("PageContainer centres its content in the shared max-w-2xl container with p
   assert.equal(containers.length, 1, "exactly one centred, width-capped container is rendered");
   const t = tokens(containers[0]!);
   // The task's parenthetical spec: centred, max-w-2xl, px-4 sm:px-6, py-8.
-  for (const cls of ["mx-auto", "max-w-2xl", "px-4", "sm:px-6", "py-8"]) {
+  for (const cls of ["wh-page", "wh-page--reading"]) {
     assert.ok(t.includes(cls), `the container carries "${cls}" (classes: "${containers[0]}")`);
   }
 });

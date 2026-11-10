@@ -1,60 +1,48 @@
 ---
 name: warthog-mobile-design
-description: Build and review Warthog's phone and tablet layouts, touch controls, safe areas and mobile navigation. Use when changing responsive UI or fixing narrow-screen clipping, overflow or oversized containers.
+description: Build and review Warthog's phone/tablet drawer navigation, tabs, touch controls, safe areas and responsive content under the admin-console design system.
 ---
 
 # Warthog mobile design
 
-Use [Warthog's foundations](../warthog-design-system/SKILL.md). The brief requires
-usable screens from 360px upward. Test 320px reflow when relevant to zoom or very
-narrow devices; never disable pinch zoom to make a layout fit.
+Use the [foundations](../warthog-design-system/SKILL.md). The brief requires 360px
+upward; include 320px reflow for narrow devices and zoom. Never disable pinch zoom.
 
-## Layout and containment
+## Navigation and layered views
 
-- Start with one column. Stack page actions and label/value pairs before their
-  content becomes cramped. Add columns when the content fits, not merely because
-  the viewport is called a tablet. Keep DOM order equal to reading/focus order.
-- Keep the established 16px horizontal gutter. A page's width cap is a ceiling;
-  content must shrink below it. Avoid fixed widths on forms, cards and media.
-- Put `min-w-0` on shrinking flex/grid content. Use `minmax(0,1fr)` for flexible
-  grid tracks, and wrap user-entered names, addresses and identifiers deliberately.
-  `overflow-wrap:anywhere` is useful for unpredictable long values.
-- Fieldsets have an intrinsic minimum width: use `min-w-0` when a responsive
-  group contains file inputs or long legends, including nested vault controls.
-- Permit horizontal scrolling only inside content that needs it, such as exact
-  code or a comparison table. Do not use global `overflow-x-hidden` to conceal a
-  document-width defect, and do not truncate information needed for approval.
-- Do not add another page wrapper around views that already own their width and
-  gutters. Check [PageContainer](../../../src/components/shell/page-container.tsx)
-  and the affected page before composing it.
+- Below 1024px, the named header menu opens the same grouped navigation as desktop
+  in a native modal drawer. This supersedes the old mobile bottom bar; `/more`
+  remains a compatibility route. Destinations are still within two taps.
+- Preserve drawer focus containment, Escape/backdrop dismissal and focus return.
+  Navigation closes the drawer; resizing to desktop closes it as well. The drawer
+  must scroll and keep sign-out reachable on short screens.
+- Main tabs can scroll in their own track. Sub-tabs can wrap when brief. Neither
+  may widen the document or clip focus. Do not shrink labels to fit a long row.
+- `ViewPanels` preserves drafts and URL selection. Check keyboard arrows,
+  Home/End, refresh and browser Back/Forward after altering its behaviour.
 
-## Touch, navigation and overlays
+## Content, controls and safe areas
 
-- Keep interactive targets at least 44px in each practical touch dimension.
-  Shared buttons and inputs already establish the height. Small icon artwork
-  belongs inside a larger target, and controls need space between them.
-- Use at least 16px input text on phones; changing browser zoom is not a remedy
-  for small fields. Keep labels visible and helper/error text associated with inputs.
-- [AppShell](../../../src/components/shell/app-shell.tsx) shows Home, Inbox,
-  Activity, Agents and More below `lg` (1024px). Preserve these destinations and
-  active-state labels; the desktop navigation has the same information architecture.
-- Treat bottom-navigation safe-area padding and main-content clearance together.
-  A fixed toast or action must sit above navigation and device insets. Check the
-  viewport configuration in [site-metadata.ts](../../../src/app/site-metadata.ts).
-- `viewportFit: "cover"` requires all four safe-area insets: document content
-  owns the top and side padding; sticky navigation and fixed overlays account
-  for their own viewport position. Do not handle only the home-indicator edge.
-- For dialogs, constrain width to the viewport gutters and height to available
-  dynamic viewport space. Scroll the dialog content when necessary. Keep its
-  heading, dismiss action and submit controls reachable with the keyboard open.
-  Preserve the existing focus and confirmation behavior.
-- Do not make essential help or actions hover-only. Honor reduced-motion and
-  system colour preferences through the shared stylesheet.
+- Start with one column and 16px gutters. Use `min-w-0` on shrinking flex/grid
+  children and fieldsets, including file controls. Stack actions and label/value
+  pairs before they compete for space; keep reading and focus order aligned.
+- Wrap unpredictable values with `overflow-wrap:anywhere`. Preserve exact code
+  in a bounded local scroll region when wrapping would obscure it. Never hide a
+  document-width defect with global `overflow-x-hidden`.
+- Keep touch targets at least 44px and text inputs at least 16px. Compact desktop
+  controls do not justify smaller phone targets. Icons need named controls.
+- `viewportFit: "cover"` requires all four safe-area insets. The document owns
+  top/side padding; the fixed drawer, dialogs and toasts account for their own
+  positions. Toasts use viewport clearance, with no old bottom-nav offset.
+- Constrain dialogs to safe gutters and dynamic viewport height. Keep heading,
+  cancellation and submit controls reachable with the keyboard open. Preserve
+  existing sensitive-action confirmation and imperative dialog behaviour.
+- Keep essential help available by touch and keyboard; respect reduced motion
+  and system or explicit colour preferences.
 
-## Review evidence
+## Verification
 
-Inspect the affected flow at 360px and 390px, a tablet width, and a short landscape
-viewport. Include a long unbroken value, an error, the empty state and any open
-dialog. Check the last control above the bottom nav, focus visibility, wrapping
-and document-level overflow. Browser resizing is useful evidence, but does not
-establish real-device keyboard, safe-area or screen-reader acceptance by itself.
+Check 320, 360, 390 and 768px, short landscape, long labels, an error/empty view,
+open navigation and a dialog. Verify no document overflow, reachable last controls
+and visible focus. Simulate actual safe-area insets; resizing alone does not prove
+real-device keyboard or screen-reader acceptance.

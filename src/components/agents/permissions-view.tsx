@@ -611,6 +611,7 @@ export function PermissionsView({
               variant="primary"
               disabled={cardNeedsBudget || saving}
               data-action="save"
+              className="self-start"
             >
               {saving ? "Saving…" : "Save changes"}
             </Button>

@@ -4,6 +4,7 @@ import { ResourceScope, type ScopeAgent } from "@/components/agents/resource-sco
 import * as React from "react";
 import { usePathname } from "next/navigation";
 
+import { SectionNavigation } from "./section-navigation";
 import { AppShell } from "./app-shell";
 import { SignOutControl } from "./sign-out";
 import { activeSectionForPath } from "./nav";
@@ -14,7 +15,7 @@ import { activeSectionForPath } from "./nav";
 // so — like DocumentShell for the root layout — the guard layout delegates the
 // navigation to this plain, render-testable client component. It turns the CURRENT
 // PATH into the lit navigation section and wraps the page in the shared AppShell
-// (both the mobile bottom nav and the desktop sidebar).
+// (both the mobile drawer and the desktop sidebar).
 //
 // The path is the `pathname` prop when given (the SSR / render-test override),
 // otherwise the live path from usePathname() (next/navigation). The layout mounts
@@ -42,10 +43,10 @@ export function PortalChrome({ pathname, children, agents = [] }: PortalChromePr
   const path = pathname ?? livePath ?? "";
   const activeSection = activeSectionForPath(path) ?? "";
 
-  // The 'Sign out' control sits in the desktop sidebar FOOTER (its mobile twin lives
-  // in the More menu, <MoreMenu>); both reuse the one shared SignOutControl.
+  // The desktop sidebar and mobile drawer share the same sign-out control.
   return (
     <AppShell activeSection={activeSection} sidebarFooter={<SignOutControl className="px-3 py-2" />}>
+      <SectionNavigation pathname={path} />
       <ResourceScope pathname={path} agents={agents} />
       {children}
     </AppShell>

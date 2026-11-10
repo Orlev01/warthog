@@ -196,7 +196,7 @@ export function HouseholdView({
     currencyOptions && currencyOptions.length > 0 ? currencyOptions : [household.currency];
 
   return (
-    <section className="mx-auto flex max-w-3xl flex-col gap-8 px-4 py-8 sm:px-6">
+    <section className="wh-page wh-page--reading flex flex-col gap-8">
       <h1 className="text-2xl font-semibold tracking-tight text-fg">Household</h1>
 
       {/* ----- The member list: an entry for every member, marking the owner. ----- */}

@@ -115,7 +115,7 @@ function MemoryCard({
         {memory.content}
       </p>
       {memory.audience && (
-        <p className="text-sm text-fg-muted">
+        <p className="min-w-0 text-sm text-fg-muted [overflow-wrap:anywhere]">
           Available to:{" "}
           {memory.audience.length ? memory.audience.join(", ") : "no agents"}.{" "}
           <a href="/agents" className="text-accent underline">

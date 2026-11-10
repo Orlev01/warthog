@@ -27,7 +27,7 @@ operation completes or show raw exception text to the user.
 
 ## Icons, help and interaction
 
-- Use `lucide-react`: 16px for inline status/action icons and 20px for navigation
+- Use `lucide-react`: 16px for inline status/action icons and 18px for desktop navigation
   are the established sizes. Keep stroke/style consistent and icons `shrink-0`.
 - Icons next to visible labels are decorative (`aria-hidden`). An icon-only
   control needs a specific accessible name and a 44px touch target. A `title`
@@ -48,7 +48,7 @@ operation completes or show raw exception text to the user.
 - The shared `Toast` takes `message` and `onDismiss`, keeps its polite announcer
   mounted, and deliberately has no auto-dismiss timer. Its arrival does not steal
   focus; copy-toast dismissal returns focus to Copy. Preserve wrapping, mobile
-  navigation/safe-area clearance and reduced-motion behavior. Essential recovery
+  viewport/safe-area clearance and reduced-motion behavior. Essential recovery
   must remain available elsewhere after dismissal.
 
 ## Verify behavior
