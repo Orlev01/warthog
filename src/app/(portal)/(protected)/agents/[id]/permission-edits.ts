@@ -9,6 +9,7 @@
 // contains "card" or "learn" can never stand in for the card-access or sharing toggle, and a copy
 // change cannot break saving. The screen's tasks and records grants and one toggle per connected
 // service (`connector:<id>`) are carried the same way.
+import type { PermissionsSection } from "@/domain/permissions/workspace";
 import type { PeriodKind } from "@/domain/budget/budget";
 import type { PermissionsSaveInput } from "./actions";
 
@@ -30,52 +31,47 @@ export function connectorControlName(connectorId: string): string {
 }
 
 // The toggles the screen always renders, by the save field each one feeds (field = input name).
-const REQUIRED_TOGGLES = [
-  "identity",
-  "highTier",
-  "card",
-  "tasks",
-  "records",
-  "memoryRead",
-  "learningSharing",
-] as const;
 const REQUEST_LIMIT = "requestLimit";
 const CARD_BUDGET = "cardBudget";
 
 export function collectEdits(
   controls: readonly ControlSnapshot[],
-  opts: { readonly currency: string; readonly period: PeriodKind; readonly connectors: readonly string[] },
+  opts: { readonly currency: string; readonly period: PeriodKind; readonly connectors: readonly string[]; readonly skills?: readonly string[]; readonly section?: PermissionsSection },
 ): CollectResult {
   const find = (type: string, name: string) => controls.find((c) => c.type === type && c.name === name);
 
-  const missing: string[] = [];
-  for (const name of REQUIRED_TOGGLES) if (!find("checkbox", name)) missing.push(name);
-  if (!find("number", REQUEST_LIMIT)) missing.push(REQUEST_LIMIT);
-  for (const id of opts.connectors) {
-    const name = connectorControlName(id);
+  const section = opts.section ?? "all";
+  const includes = (part: PermissionsSection) => section === "all" || section === part;
+  const names: string[] = [
+    ...(includes("vault") ? ["identity", "highTier"] : []),
+    ...(includes("spending") ? ["card"] : []),
+    ...(includes("settings") ? ["tasks", "records"] : []),
+    ...(includes("memory") ? ["memoryRead", "learningSharing", ...(opts.section ? ["memoryWrite"] : [])] : []),
+    ...(includes("connectors") && opts.section ? ["readTools"] : []),
+  ];
+  const missing = names.filter(name => !find("checkbox", name));
+  if (includes("settings") && !find("number", REQUEST_LIMIT)) missing.push(REQUEST_LIMIT);
+  const connectorIds = includes("connectors") ? opts.connectors : [];
+  const skillIds = includes("skills") ? opts.skills ?? [] : [];
+  for (const name of [...connectorIds.map(connectorControlName), ...skillIds.map(id => `skill:${id}`)]) {
     if (!find("checkbox", name)) missing.push(name);
   }
-  if (missing.length > 0) return { ok: false, reason: "form_incomplete", missing };
-
-  const on = (name: string): boolean => find("checkbox", name)!.checked;
-  const input: PermissionsSaveInput = {
-    identity: on("identity"),
-    highTier: on("highTier"),
-    card: on("card"),
-    tasks: on("tasks"),
-    records: on("records"),
-    memoryRead: on("memoryRead"),
-    learningSharing: on("learningSharing"),
-    // Every service the screen shows is sent, ticked or not, so an untick revokes it.
-    connectors: opts.connectors.filter((id) => on(connectorControlName(id))),
-  };
-  const limit = find("number", REQUEST_LIMIT)!.value.trim();
-  if (limit !== "") input.requestLimit = Number(limit);
-  // The budget field only renders while card access is on; with card off the stored budget is
-  // kept (OBS-022), so nothing is sent.
+  const changes = controls.find(c => c.name === "changeTools");
+  if (includes("connectors") && opts.section && !changes) missing.push("changeTools");
+  if (missing.length) return { ok: false, reason: "form_incomplete", missing };
+  const input: PermissionsSaveInput = {};
+  for (const name of names) Object.assign(input, { [name]: find("checkbox", name)!.checked });
+  if (includes("connectors")) {
+    input.connectors = connectorIds.filter(id => find("checkbox", connectorControlName(id))!.checked);
+    input.connectorAccounts = Object.fromEntries(controls.filter(c => c.name.startsWith("connectorAccount:") && c.value).map(c => [c.name.slice("connectorAccount:".length), c.value]));
+    if (changes) input.changeTools = changes.value as PermissionsSaveInput["changeTools"];
+  }
+  if (includes("skills") && opts.skills) input.skills = skillIds.map(id => ({ id, granted: find("checkbox", `skill:${id}`)!.checked }));
+  const limit = includes("settings") ? find("number", REQUEST_LIMIT)?.value.trim() : undefined;
+  if (limit) input.requestLimit = Number(limit);
   const budget = find("number", CARD_BUDGET);
   if (input.card && budget && budget.value.trim() !== "") {
-    input.cardBudget = { amount: Number(budget.value), currency: opts.currency, period: opts.period };
+    input.cardBudget = { amount: Number(budget.value), currency: controls.find(c => c.name === "cardBudgetCurrency")?.value ?? opts.currency, period: (controls.find(c => c.name === "cardBudgetPeriod")?.value ?? opts.period) as PeriodKind };
   }
   return { ok: true, input };
 }

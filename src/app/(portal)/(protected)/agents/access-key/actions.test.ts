@@ -79,6 +79,8 @@
 // `createUser` minted — never a bare uuid that would trip the foreign key. Entropy (the
 // access keys) is drawn from the REAL randomness seam so two issues never collide.
 
+import { createConnection } from "@/server/db/connections";
+import { randomBytes } from "node:crypto";
 import { test } from "node:test";
 import assert from "node:assert/strict";
 
@@ -192,6 +194,8 @@ test("create names the agent, applies its chosen permissions, and issues a worki
   try {
     const userId = await makeUser(db, "create-ok");
     const actions = makeActions(db);
+
+    await createConnection(db, { userId, connectorId: "gmail", accountLabel: "My account", credentials: { api_key: "test" } }, randomBytes(32), fixedClock(NOW));
 
     const result = await actions.create(
       sessionFor(userId),

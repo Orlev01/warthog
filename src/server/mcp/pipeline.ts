@@ -66,6 +66,8 @@ import { withTransaction, type Db } from "../db/index";
 // and an optional agent `reason`.
 export interface AgentCall {
   readonly connector: string | null;
+  readonly connectorAccountId?: string;
+  readonly connectorAccountLabel?: string;
   readonly tool: string;
   readonly makesChange: boolean;
   readonly request?: "card" | "high_tier";
@@ -113,6 +115,7 @@ export interface PipelineDeps {
   readonly clock: Clock;
   readonly rateLimiter: RateLimiter;
   readonly recorder: ActivityRecorder;
+  readonly prepareCall?: (call: AgentCall, connection: AgentConnection) => Promise<AgentCall | null>;
   readonly executeTool: (call: AgentCall, connection: AgentConnection) => Promise<unknown>;
   readonly rate?: ReferenceRate | null;
   readonly notifyApprovalCreated?: NotifyApprovalCreatedSeam;
@@ -290,6 +293,7 @@ function toApprovalDetail(
   return {
     tool: call.tool,
     connector: call.connector,
+    account: call.connectorAccountLabel,
     request: call.request,
     amount: call.amount,
     currency: call.currency,
@@ -329,7 +333,7 @@ export function createAgentCallPipeline(deps: PipelineDeps): AgentCallPipeline {
       tool: call.tool,
       outcome,
       merchant: call.merchant,
-      payload: { params: call.params, reason: call.reason },
+      payload: { params: call.params, reason: call.reason, connectorAccountId: call.connectorAccountId },
     });
   }
 
@@ -413,6 +417,15 @@ export function createAgentCallPipeline(deps: PipelineDeps): AgentCallPipeline {
     if (decision.decision === "deny") {
       await record(connection, call, "denied");
       return { result: { status: "refused", reason: decision.reason }, errorCategory: CATEGORY_DENIED };
+    }
+
+    if (deps.prepareCall) {
+      const prepared = await deps.prepareCall(call, connection);
+      if (!prepared) {
+        await record(connection, call, "refused");
+        return { result: { status: "refused", reason: "The service account is unavailable or changed. Select an account in this agent’s Connectors settings and submit a new request." }, errorCategory: CATEGORY_DENIED };
+      }
+      call = prepared;
     }
 
     // ASK — the person is needed. Warthog HOLDS the call: it parks the exact
@@ -576,9 +589,17 @@ export function createAgentCallPipeline(deps: PipelineDeps): AgentCallPipeline {
       };
       let outcome: HeldOutcome;
       try {
-        const result = await executeTool(call, connection);
-        const refusal = asToolRefusal(result);
-        outcome = refusal ?? { status: "executed", result };
+        const current = await loadAgentContext(connection, { db, keyWrapper, clock }, cardRequestOf(call));
+        const policy = evaluate(toPolicyCall(call), toPolicyContext(connection, current, call, clock.now(), rate));
+        if (policy.decision === "deny") {
+          outcome = { status: "refused", reason: policy.reason };
+        } else {
+          // Approval satisfies an ask, never a current denial. The tool also checks
+          // its current resource grant and the originally approved service account.
+          const result = await executeTool(call, connection);
+          const refusal = asToolRefusal(result);
+          outcome = refusal ?? { status: "executed", result };
+        }
       } catch (error) {
         // Keep the failure so a later ask is told the request could not be completed
         // (never "already run"), then let the error propagate — never swallowed.

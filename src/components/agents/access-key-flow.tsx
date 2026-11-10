@@ -81,6 +81,7 @@ export interface AccessKeyFlowState {
 
 export interface AccessKeyFlowDeps {
   create: AccessKeyCreate;
+  defaultTemplate?: "minimal" | "standard";
   defaultName?: string; // the proposed agent name (page-supplied)
   defaultPlatform?: string; // the platform the key is for (page-supplied)
   onChange?: () => void; // re-render notifier (the component wires it)
@@ -105,7 +106,7 @@ export function createAccessKeyFlow(deps: AccessKeyFlowDeps): AccessKeyControlle
   let state: AccessKeyFlowState = {
     name: deps.defaultName ?? "",
     platform: deps.defaultPlatform ?? "",
-    template: "standard",
+    template: deps.defaultTemplate ?? "standard",
     status: "idle",
   };
 
@@ -204,6 +205,7 @@ function IssuedPanel({ keyValue }: { keyValue: string }) {
 export interface AccessKeyFlowProps {
   // The page's "use server" wrapper over createAccessKeyActions.create.
   create: AccessKeyCreate;
+  defaultTemplate?: "minimal" | "standard";
   defaultName?: string;
   defaultPlatform?: string;
   // Seed the issued panel for a preview / render test (the production flow reaches it via
@@ -220,6 +222,7 @@ export function AccessKeyFlow(props: AccessKeyFlowProps): React.ReactElement {
   if (flowRef.current === null) {
     flowRef.current = createAccessKeyFlow({
       create: props.create,
+      defaultTemplate: props.defaultTemplate,
       defaultName: props.defaultName,
       defaultPlatform: props.defaultPlatform,
       onChange: () => forceUpdate(),

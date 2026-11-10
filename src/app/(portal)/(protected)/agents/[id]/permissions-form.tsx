@@ -45,6 +45,7 @@ const INVALID: Notice = {
 };
 
 const PROBLEM: Record<string, Notice> = {
+  disconnected: { tone: "problem", text: "This agent is disconnected. Connect it again before changing access." },
   not_found: { tone: "problem", text: "Nothing was changed: that agent is no longer on your account." },
   card_needs_budget: {
     tone: "problem",
@@ -86,6 +87,7 @@ export interface PermissionsFormProps {
 
 export function PermissionsForm({ initial, save }: PermissionsFormProps): React.ReactElement {
   const router = useRouter();
+  const [saving, setSaving] = React.useState(false);
   const [notice, setNotice] = React.useState<Notice | null>(null);
   // Card access and its amount are mirrored into state so the view reflects an edit live:
   // switching card on reveals the budget field, and entering a budget enables the save
@@ -95,9 +97,8 @@ export function PermissionsForm({ initial, save }: PermissionsFormProps): React.
   const containerRef = React.useRef<HTMLDivElement | null>(null);
   const pendingRef = React.useRef(false);
 
-  // The budget period is not editable on this screen; keep whatever is stored (or the
-  // domain default). The amount, once typed, drives the view's budget prop so the save
-  // control enables.
+  // Use the stored period as the initial value. The save reads the edited select.
+  // Mirror the amount into state so card access can require a valid budget.
   const period: PeriodKind = initial.budget?.period ?? DEFAULT_CARD_BUDGET.period;
   const budget: Budget | null = budgetAmount != null ? { amount: budgetAmount, period } : initial.budget;
 
@@ -124,11 +125,11 @@ export function PermissionsForm({ initial, save }: PermissionsFormProps): React.
 
       // Every control on the screen is carried with its explicit on/off state; a control the
       // form cannot find refuses the save rather than silently dropping that edit.
-      const snapshot = Array.from(root.querySelectorAll("input")).map((i) => ({
+      const snapshot = Array.from(root.querySelectorAll<HTMLInputElement | HTMLSelectElement>("input, select")).map((i) => ({
         type: i.type,
         name: i.name,
-        label: labelText(i),
-        checked: i.checked,
+        label: i instanceof HTMLInputElement ? labelText(i) : "",
+        checked: i instanceof HTMLInputElement ? i.checked : false,
         value: i.value,
       }));
       const collected = collectEdits(snapshot, {
@@ -136,6 +137,8 @@ export function PermissionsForm({ initial, save }: PermissionsFormProps): React.
         period,
         // Every connected service the screen shows carries a toggle the save must find.
         connectors: initial.connectors.map((connector) => connector.id),
+        skills: initial.skills.map(skill => skill.id),
+        section: initial.section ?? "all",
       });
       if (!collected.ok) {
         setNotice(problemNotice(collected.reason));
@@ -144,6 +147,7 @@ export function PermissionsForm({ initial, save }: PermissionsFormProps): React.
       const input: PermissionsSaveInput = collected.input;
 
       pendingRef.current = true;
+      setSaving(true);
       try {
         const result = await save(input);
         if (result.ok) {
@@ -158,6 +162,7 @@ export function PermissionsForm({ initial, save }: PermissionsFormProps): React.
         setNotice(problemNotice("invalid_request"));
       } finally {
         pendingRef.current = false;
+        setSaving(false);
       }
     }
 
@@ -185,7 +190,7 @@ export function PermissionsForm({ initial, save }: PermissionsFormProps): React.
   return (
     <div ref={containerRef} className="flex flex-col gap-6">
       {notice ? <NoticeBanner notice={notice} /> : null}
-      <PermissionsView {...initial} cardAccess={cardOn} budget={budget} />
+      <PermissionsView {...initial} saving={saving} cardAccess={cardOn} budget={budget} />
     </div>
   );
 }

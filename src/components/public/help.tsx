@@ -1,3 +1,4 @@
+import { AGENT_PLATFORMS as PLATFORMS } from "@/domain/agents/compatibility";
 import * as React from "react";
 
 import { Wordmark } from "../shell/wordmark";
@@ -16,39 +17,6 @@ import { Wordmark } from "../shell/wordmark";
 
 // The six agent platforms the task/brief name, each with plain connect steps. The
 // steps say exactly where to paste the Warthog address shown above them.
-const PLATFORMS: { name: string; steps: string }[] = [
-  {
-    name: "Claude",
-    steps:
-      "Open Settings, then Connectors. Choose Add custom connector, paste your Warthog address, then sign in and approve what Claude may do.",
-  },
-  {
-    name: "ChatGPT",
-    steps:
-      "Open Settings, then Connectors. Add a custom connector, paste your Warthog address, and sign in to approve it.",
-  },
-  {
-    name: "Gemini",
-    steps:
-      "In the connections or extensions settings, add a custom connector, paste your Warthog address, and sign in to approve it.",
-  },
-  {
-    name: "Grok",
-    steps:
-      "In the connections settings, add a custom connector, paste your Warthog address, and sign in to approve it.",
-  },
-  {
-    name: "Llama",
-    steps:
-      "For Llama-based clients that support custom connectors, add one and paste your Warthog address, then sign in to approve it.",
-  },
-  {
-    name: "Other",
-    steps:
-      "Any agent that supports a custom connector can connect: add a new connector, paste your Warthog address, and sign in to approve it.",
-  },
-];
-
 export function Help({ connectorAddress }: { connectorAddress: string }) {
   return (
     <main className="mx-auto flex w-full max-w-3xl flex-col gap-12 px-4 py-10 sm:px-6">
@@ -58,9 +26,7 @@ export function Help({ connectorAddress }: { connectorAddress: string }) {
           Connect your agents to Warthog
         </h1>
         <p className="max-w-prose text-base text-fg-muted">
-          Warthog works with the agents you already use. Add your Warthog address to
-          each agent below and it connects straight to your home — never with your own
-          logins.
+          Warthog manages each compatible agent’s access to your resources. It observes and controls actions routed through Warthog; it cannot control tools an agent uses directly elsewhere.
         </p>
       </header>
 
@@ -84,7 +50,7 @@ export function Help({ connectorAddress }: { connectorAddress: string }) {
               className="flex flex-col gap-1 rounded-card border border-line bg-surface p-4"
             >
               <dt className="font-medium text-fg">{platform.name}</dt>
-              <dd className="text-sm text-fg-muted">{platform.steps}</dd>
+              <dd className="text-sm text-fg-muted">{platform.steps.join(" ")}{"docs" in platform ? <> <a href={platform.docs} className="text-accent underline">Provider setup guide</a></> : null}</dd>
             </div>
           ))}
         </dl>
@@ -93,8 +59,7 @@ export function Help({ connectorAddress }: { connectorAddress: string }) {
       <section className="flex flex-col gap-4">
         <h2 className="text-lg font-semibold text-fg">If an agent can&#39;t connect yet</h2>
         <p className="max-w-prose text-sm text-fg-muted">
-          Some agents don&#39;t yet support adding a custom connector. For those,
-          create an access key in Warthog and paste that into the agent instead.
+          Some agents don&#39;t yet support remote connections. An access key works only when a client supports remote connections using an access key; it cannot add missing connection support. Connecting a service such as Slack or Notion as a tool does not register that service’s own agents.
         </p>
       </section>
     </main>

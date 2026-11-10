@@ -77,6 +77,8 @@ interface PreferencesDoc {
   readonly briefing?: string;
 }
 interface SkillDoc {
+  readonly scope?: "all" | "chosen";
+  readonly enabled?: boolean;
   readonly title?: string;
   readonly text?: string;
 }
@@ -231,11 +233,11 @@ export async function importExportDocument(
       );
     }
 
-    // Skills — restored to all of the new account's agents (the export does not carry a
-    // scope; "all" is the safe, visible default the person can narrow later).
+    // Preserve disabled skills, but require assignment after every import. A shared
+    // skill may have per-agent denials that cannot safely map to this account.
     for (const skill of skills) {
       const { useThisWhen, fullText } = splitSkillText(skill.text ?? "");
-      await createSkill(tx, { userId, title: skill.title ?? "", useThisWhen, fullText, scope: "all" }, dek);
+      await createSkill(tx, { userId, title: skill.title ?? "", useThisWhen, fullText, scope: "chosen", scopedAgentIds: [], enabled: skill.enabled ?? false }, dek);
     }
 
     // Memory — content, scope and source round-trip; the created-at is stamped from the

@@ -35,6 +35,12 @@
 //     it persists or the screen it loads.
 
 import { z } from "zod";
+import { getAccountCurrency, isKnownCurrency } from "@/server/db/account-currency";
+import { withTransaction } from "@/server/db/index";
+import { systemClock, type Clock } from "@/server/seams/clock";
+import { createRedactingRecorder } from "@/server/mcp/recorder";
+import { agentSkillChoices, setAgentSkillAccess } from "@/server/agents/skill-access";
+import { lockOAuthConnection } from "@/server/oauth/connection-lock";
 
 import { getAgentById } from "../../../../../server/db/agents";
 import { listConnectionsForUser } from "../../../../../server/db/connections";
@@ -80,7 +86,7 @@ const uuidSchema = z.uuid();
 // the merge so a zero/negative budget is a reported refusal, not a shape error.
 const cardBudgetSchema = z.object({
   amount: z.number(),
-  currency: z.string().min(1).max(MAX_CURRENCY_LENGTH),
+  currency: z.string().min(1).max(MAX_CURRENCY_LENGTH).transform(value => value === "A$" ? "AUD" : value.trim().toUpperCase()).refine(isKnownCurrency),
   period: z.enum(["day", "week", "month"]),
 });
 
@@ -93,7 +99,11 @@ const inputSchema = z.object({
   card: z.boolean().optional(),
   cardBudget: cardBudgetSchema.nullable().optional(),
   learningSharing: z.boolean().optional(),
-  requestLimit: z.number().int().positive().optional(),
+  requestLimit: z.number().int().min(1).max(10000).optional(),
+  memoryWrite: z.boolean().optional(),
+  readTools: z.boolean().optional(),
+  changeTools: z.enum(["off", "allow", "ask_first"]).optional(),
+  skills: z.array(z.object({ id: z.uuid(), granted: z.boolean() })).max(1000).optional(),
   // The screen's identity and memory toggles (low-tier read, high-tier ask, shared-memory
   // read) — rendered on the screen, so every one of them persists (E10-S08 review).
   identity: z.boolean().optional(),
@@ -104,6 +114,7 @@ const inputSchema = z.object({
   // every one of the person's connected services being shown (an absent id is unticked).
   tasks: z.boolean().optional(),
   records: z.boolean().optional(),
+  connectorAccounts: z.record(z.string().min(1).max(MAX_SERVICE_LENGTH), z.uuid()).refine(accounts => Object.keys(accounts).length <= MAX_SERVICES).optional(),
   connectors: z.array(z.string().min(1).max(MAX_SERVICE_LENGTH)).max(MAX_SERVICES).optional(),
 });
 
@@ -125,6 +136,7 @@ export interface PermissionsActionsDeps {
   readonly db: Db;
   readonly nameOf?: (connectorId: string) => string | undefined;
   readonly keyWrapper?: KeyWrapper;
+  readonly clock?: Clock;
 }
 
 // The per-agent permissions actions the thin loader + save wrapper drive.
@@ -140,19 +152,24 @@ export interface PermissionsActions {
 // Build the screen's props from the agent and its stored grants. The policy-relevant
 // state the person edits — card access + its budget, the identity/high-tier/memory/
 // sharing toggles, the tasks and records grants, which of the person's connected services
-// it may use and the request limit — is reflected from storage. Skill names and rule
-// objects are assembled by their own screens and render empty here.
+// it may use and the request limit — is reflected from storage. The loader adds the
+// effective skill choices and inherited/individual rules.
 function toViewProps(
   agentName: string,
   grants: ConnectionPermissions,
-  services: readonly { id: string; name: string }[],
+  services: readonly { id: string; name: string; accounts: { id: string; label: string }[] }[],
   rules: readonly Rule[],
 ): PermissionsViewProps {
   return {
     agentName,
+    readTools: grants.readTools,
+    changeTools: grants.changeTools,
+    memoryWrite: grants.memoryWrite ?? grants.memoryRead,
     connectors: services.map((service) => ({
       id: service.id,
       name: service.name,
+      accounts: service.accounts,
+      accountId: grants.connectorAccounts?.[service.id] ?? (service.accounts.length === 1 ? service.accounts[0]!.id : ""),
       granted: grants.grantedConnectors.includes(service.id),
       readTools: [],
       changeTools: [],
@@ -216,8 +233,11 @@ function mergeGrants(
   return {
     ...stored,
     ...mergeConnectors(stored, input.connectors, connected),
+    ...(input.readTools !== undefined ? { readTools: input.readTools } : {}),
+    ...(input.changeTools !== undefined ? { changeTools: input.changeTools } : {}),
     userId,
     connectionId,
+    connectorAccounts: input.connectorAccounts ?? stored.connectorAccounts,
     cardAccess: input.card !== undefined ? input.card : stored.cardAccess,
     cardBudget: input.cardBudget !== undefined ? input.cardBudget : stored.cardBudget,
     sharing: input.learningSharing !== undefined ? input.learningSharing : stored.sharing,
@@ -225,6 +245,7 @@ function mergeGrants(
     identityAccess: input.identity !== undefined ? input.identity : stored.identityAccess,
     highTierAccess: input.highTier !== undefined ? input.highTier : stored.highTierAccess,
     memoryRead: input.memoryRead !== undefined ? input.memoryRead : stored.memoryRead,
+    memoryWrite: input.memoryWrite ?? stored.memoryWrite,
     tasksAccess: input.tasks !== undefined ? input.tasks : stored.tasksAccess,
     recordsAccess: input.records !== undefined ? input.records : stored.recordsAccess,
   };
@@ -243,10 +264,10 @@ export function createPermissionsActions(deps: PermissionsActionsDeps): Permissi
     if (!user) return [];
     const dek = await keyWrapper.unwrap(user.wrappedDek);
     return (await listAllRules(db, userId, dek))
-      .filter((rule) => rule.status === "active" && rule.scope.type === "agent" && rule.scope.agentId === connectionId)
+      .filter((rule) => rule.status === "active" && (rule.scope.type === "any_agent" || (rule.scope.type === "agent" && rule.scope.agentId === connectionId)))
       .map((rule) => ({
         kind: rule.kind,
-        scope: { type: "agent", agentId: connectionId, name: agentName },
+        scope: rule.scope.type === "any_agent" ? rule.scope : { type: "agent", agentId: connectionId, name: agentName },
         action: rule.action,
         condition: rule.condition,
       }));
@@ -254,9 +275,10 @@ export function createPermissionsActions(deps: PermissionsActionsDeps): Permissi
 
   // The person's OWN connected services (member-scoped by the session's user id), one per
   // service however many accounts of it are connected, named through the catalogue.
-  async function connectedServices(userId: string): Promise<{ id: string; name: string }[]> {
-    const ids = [...new Set((await listConnectionsForUser(db, userId)).map((c) => c.connectorId))];
-    return ids.map((id) => ({ id, name: nameOf?.(id) ?? id }));
+  async function connectedServices(userId: string) {
+    const connections = await listConnectionsForUser(db, userId);
+    const ids = [...new Set(connections.map(c => c.connectorId))];
+    return ids.map(id => ({ id, name: nameOf?.(id) ?? id, accounts: connections.filter(c => c.connectorId === id).map(c => ({ id: c.id, label: `${c.accountLabel}${c.status === "connected" ? "" : " (reconnect needed)"}` })) }));
   }
 
   // Load: resolve the agent by (session.userId, agentId) FIRST — another person's id (or a
@@ -269,12 +291,18 @@ export function createPermissionsActions(deps: PermissionsActionsDeps): Permissi
     if (agent == null) return null;
     const grants = await getConnectionPermissions(db, session.userId, agent.connectionId);
     if (grants == null) return null;
-    return toViewProps(
+    const props = toViewProps(
       agent.displayName,
       grants,
       await connectedServices(session.userId),
       await agentRules(session.userId, agent.connectionId, agent.displayName),
     );
+    props.currency = grants.cardBudget?.currency ?? await getAccountCurrency(db, session.userId);
+    if (!keyWrapper) return props;
+    const user = await getUserById(db, session.userId);
+    if (!user) return null;
+    const dek = await keyWrapper.unwrap(user.wrappedDek);
+    return { ...props, skills: await agentSkillChoices(db, session.userId, agent.id, dek) };
   }
 
   // Save: validate the agent id shape and the input at the boundary FIRST (a 4xx before any
@@ -293,17 +321,36 @@ export function createPermissionsActions(deps: PermissionsActionsDeps): Permissi
     const agent = await getAgentById(db, session.userId, id);
     if (agent == null) return { ok: false, reason: "not_found" };
 
-    const stored = await getConnectionPermissions(db, session.userId, agent.connectionId);
-    if (stored == null) return { ok: false, reason: "not_found" };
-
-    const connected = new Set((await connectedServices(session.userId)).map((service) => service.id));
-    const next = mergeGrants(stored, valid, session.userId, agent.connectionId, connected);
-    if (next.cardAccess && (next.cardBudget == null || !budgetAllowsCard(next.cardBudget))) {
-      return { ok: false, reason: "card_needs_budget" };
-    }
-
-    await upsertPermissions(db, next);
-    return { ok: true };
+    return withTransaction(db, async (tx) => {
+      await lockOAuthConnection(tx, agent.connectionId);
+      const current = await getAgentById(tx, session.userId, id);
+      if (!current || current.status !== "connected") return { ok: false, reason: "disconnected" };
+      const stored = await getConnectionPermissions(tx, session.userId, agent.connectionId, { lock: true });
+      if (!stored) return { ok: false, reason: "not_found" };
+      const connections = await listConnectionsForUser(tx, session.userId);
+      const connected = new Set(connections.map(c => c.connectorId));
+      if (valid.connectorAccounts && Object.entries(valid.connectorAccounts).some(([service, account]) => !connections.some(c => c.connectorId === service && c.id === account))) {
+        return { ok: false, reason: "invalid_request" };
+      }
+      const next = mergeGrants(stored, valid, session.userId, agent.connectionId, connected);
+      if (next.cardAccess && (next.cardBudget == null || !budgetAllowsCard(next.cardBudget))) {
+        return { ok: false, reason: "card_needs_budget" };
+      }
+      if (valid.skills && !(await setAgentSkillAccess(tx, session.userId, agent.id, valid.skills))) {
+        return { ok: false, reason: "invalid_request" };
+      }
+      await upsertPermissions(tx, next);
+      if (keyWrapper) {
+        const user = await getUserById(tx, session.userId);
+        if (!user) throw new Error("No account for permission change");
+        const dek = await keyWrapper.unwrap(user.wrappedDek);
+        await createRedactingRecorder({ db: tx, clock: deps.clock ?? systemClock, dekFor: async () => dek }).record({
+          userId: session.userId, agentId: agent.id, kind: "permission_change", source: "warthog", outcome: "saved",
+          payload: { before: stored, after: next, skillChoices: valid.skills },
+        });
+      }
+      return { ok: true };
+    });
   }
 
   return { load, save };

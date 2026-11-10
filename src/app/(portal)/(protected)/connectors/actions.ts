@@ -93,6 +93,7 @@ export interface RevokeProviderAccessInput {
 
 // Every seam injected — no process.env, no secret (INV-103).
 export interface ConnectorsActionsDeps {
+  readonly providerMcpAvailable?: boolean;
   readonly startProviderSignin?: (session: Session, connectorId: string) => Promise<{ url: string }>;
   readonly db: Db;
   // Supplies connected-at / requested-at instants, passed through to the stores (never SQL now()).
@@ -231,14 +232,16 @@ export function createConnectorsActions(deps: ConnectorsActionsDeps): Connectors
       name: tool.name,
       makesChange: tool.makesChange,
     }));
+    const unavailable = deps.providerMcpAvailable === false && catalogue.get(connection.connectorId)?.auth_kind === "provider_mcp";
     return {
+      ...(unavailable ? { unavailableReason: "This saved service account is unavailable until provider connection support is complete." } : {}),
       id: connection.id,
       name: catalogue.get(connection.connectorId)?.name ?? connection.connectorId,
       accountLabel: connection.accountLabel,
-      status: toStatusKey(connection.status),
+      status: unavailable ? "error" : toStatusKey(connection.status),
       connectedAt: formatAccountTime(connection.connectedAt, timeZone, { dateOnly: true }),
-      tools,
-      agents: agentsByConnector.get(connection.connectorId) ?? [],
+      tools: unavailable ? [] : tools,
+      agents: unavailable ? [] : agentsByConnector.get(connection.id) ?? [],
     };
   }
 
@@ -259,7 +262,8 @@ export function createConnectorsActions(deps: ConnectorsActionsDeps): Connectors
         (entry): CatalogueItem => ({
           id: entry.id,
           name: entry.name,
-          connectable: entry.connectable,
+          connectable: entry.connectable && !(deps.providerMcpAvailable === false && catalogue.get(entry.id)?.auth_kind === "provider_mcp"),
+          ...(deps.providerMcpAvailable === false && catalogue.get(entry.id)?.auth_kind === "provider_mcp" ? { unavailableReason: "Provider-hosted MCP sign-in and tool routing are not available yet." } : {}),
           gate: gateFor(entry.id, email),
         }),
       ),
@@ -273,11 +277,14 @@ export function createConnectorsActions(deps: ConnectorsActionsDeps): Connectors
     const agentsByConnector = new Map<string, string[]>();
     for (const agent of agents) {
       const grants = await getConnectionPermissions(db, userId, agent.connectionId);
-      if (!grants) continue;
+      if (!grants || agent.status !== "connected") continue;
       for (const slug of grants.grantedConnectors) {
-        const bucket = agentsByConnector.get(slug);
+        const accounts = connections.filter(c => c.connectorId === slug);
+        const selected = grants.connectorAccounts?.[slug] ?? (accounts.length === 1 ? accounts[0]!.id : undefined);
+        if (!selected) continue;
+        const bucket = agentsByConnector.get(selected);
         if (bucket) bucket.push(agent.displayName);
-        else agentsByConnector.set(slug, [agent.displayName]);
+        else agentsByConnector.set(selected, [agent.displayName]);
       }
     }
 
@@ -328,6 +335,7 @@ export function createConnectorsActions(deps: ConnectorsActionsDeps): Connectors
     session: Session,
     input: { connectorId: string; accountLabel: string },
   ): Promise<unknown> {
+    if (deps.providerMcpAvailable === false) throw new HttpError(409, "Provider-hosted MCP connections are not available yet.");
     const { connectorId, accountLabel } = parseParams(connectProviderMcpSchema, input);
     const entry = requireEntry(connectorId);
     if (entry.auth_kind !== "provider_mcp") {
@@ -385,8 +393,9 @@ export function createConnectorsActions(deps: ConnectorsActionsDeps): Connectors
     const recordingDek = await dekFor(userId);
     await withTransaction(db, async (tx) => {
       for (const agent of agents) {
-        const grants = await getConnectionPermissions(tx, userId, agent.connectionId);
+        const grants = await getConnectionPermissions(tx, userId, agent.connectionId, { lock: true });
         if (!grants || !grants.grantedConnectors.includes(connectorId)) continue;
+        if (grants.connectorAccounts?.[connectorId] && grants.connectorAccounts[connectorId] !== id) continue;
         await upsertPermissions(tx, {
           ...grants,
           grantedConnectors: grants.grantedConnectors.filter((slug) => slug !== connectorId),

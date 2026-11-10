@@ -123,9 +123,10 @@ async function dataKeyFor(db: Db, keyWrapper: KeyWrapper, userId: string): Promi
 async function memoryPermission(
   db: Db,
   connection: AgentConnection,
+  access: "memoryRead" | "memoryWrite",
 ): Promise<ConnectionPermissions | null> {
   const permissions = await getConnectionPermissions(db, connection.userId, connection.connectionId);
-  if (!permissions || !permissions.memoryRead) return null;
+  if (!permissions || !permissions[access]) return null;
   return permissions;
 }
 
@@ -142,7 +143,7 @@ export function createRememberTool(deps: MemoryToolDeps): RememberTool {
       const parsed = parseParams(rememberSchema, input);
 
       // Refuse a connection without memory permission — nothing is saved.
-      const permissions = await memoryPermission(db, connection);
+      const permissions = await memoryPermission(db, connection, "memoryWrite");
       if (!permissions) {
         return { status: "refused", reason: NO_PERMISSION_REASON };
       }
@@ -176,7 +177,7 @@ export function createSearchMemoryTool(deps: MemoryToolDeps): SearchMemoryTool {
       const parsed = parseParams(searchMemorySchema, input);
 
       // Refuse a connection without memory permission — no memories are read.
-      const permissions = await memoryPermission(db, connection);
+      const permissions = await memoryPermission(db, connection, "memoryRead");
       if (!permissions) {
         return { status: "refused", reason: NO_PERMISSION_REASON };
       }

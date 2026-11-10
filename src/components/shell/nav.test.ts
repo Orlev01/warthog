@@ -226,23 +226,24 @@ test("each More-group child carries its real route", () => {
 
 // --- the IA: the Settings sub-group -----------------------------------------
 
-test("the Settings section groups exactly Security, Notifications, Data & privacy", () => {
+test("the Settings section groups agent defaults, security, notifications and data", () => {
   const settings = moreChildren().find((n) => n.key === "settings");
   assert.ok(settings, "a Settings node must exist under the More group");
   const subs = settings!.children;
   assert.ok(Array.isArray(subs), "Settings must group its own children (Security, Notifications, …)");
   assert.equal(
     subs!.length,
-    3,
-    `Settings must have exactly three sub-pages, got ${subs!.length}: ${JSON.stringify(
+    4,
+    `Settings must have exactly four sub-pages, got ${subs!.length}: ${JSON.stringify(
       subs!.map((n) => n.label),
     )}`,
   );
 
   // Labels in documented order (matched by distinctive stem).
-  const security = subs![0]!;
-  const notifications = subs![1]!;
-  const data = subs![2]!;
+  assert.equal(subs![0]!.label, "Global agent settings");
+  const security = subs![1]!;
+  const notifications = subs![2]!;
+  const data = subs![3]!;
   assert.ok(norm(security.label).includes("security"), `Settings[0] must be Security, got "${security.label}"`);
   assert.ok(
     norm(notifications.label).includes("notifications"),
@@ -253,7 +254,7 @@ test("the Settings section groups exactly Security, Notifications, Data & privac
   // Real routes, in order.
   assert.deepEqual(
     subs!.map((n) => n.href),
-    ["/settings/security", "/settings/notifications", "/settings/data"],
+    ["/settings/agents", "/settings/security", "/settings/notifications", "/settings/data"],
     "the Settings sub-pages must link to /settings/security, /settings/notifications, /settings/data in order",
   );
 

@@ -3,6 +3,8 @@ import type { NoticeTone } from "@/components/ui/notice";
 type ConnectorNotice = { readonly tone: NoticeTone; readonly text: string };
 
 const notices: Record<string, ConnectorNotice> = {
+  "key-saved": { tone: "success", text: "Service credential saved. Choose an agent to grant access. Services without a verification check are tested on their first use." },
+  "verification-failed": { tone: "error", text: "The credential was saved, but the service check failed. Remove that connection and try a valid credential." },
   "provider-revoke-needed": { tone: "info", text: "Disconnected from Warthog. To remove the provider’s consent too, open your Google or Microsoft account’s app permissions and remove Warthog." },
   "connection-declined": { tone: "info", text: "The service was not connected. You can try again when you are ready." },
   disconnected: { tone: "success", text: "Service disconnected." },

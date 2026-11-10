@@ -695,3 +695,24 @@ test("a held call whose tool threw keeps the failure, so a later ask is told it 
     await db.close();
   }
 });
+
+test("revoking connector access after approval refuses a held call before execution", async () => {
+  const db = await freshDb();
+  try {
+    const keyWrapper = keyWrapperFor();
+    const { userId, dek } = await makePerson(db, "revoked-after-approval", keyWrapper);
+    const clock = fixedClock(NOW);
+    const agent = await createAgent(db, { userId, connectionId: CONN, displayName: "Agent", platform: "Other" }, clock);
+    await upsertPermissions(db, baseGrants(userId, CONN));
+    let executions = 0;
+    const pipeline = createAgentCallPipeline({ db, keyWrapper, clock, rateLimiter: createRateLimiter(clock), recorder: createInMemoryRecorder({ clock }), executeTool: async () => { executions++; return "done"; } });
+    const pending = await pipeline.handleAgentCall(connectionFor(userId, { agentId: agent.id }), heldChangeCall());
+    assert.equal(pending.status, "pending_approval");
+    if (pending.status !== "pending_approval") throw new Error("expected approval");
+    await decide(db, { userId, id: pending.approval_id, decision: { status: "approved" } }, dek, clock);
+    await upsertPermissions(db, baseGrants(userId, CONN, { grantedConnectors: [] }));
+    assert.equal((await pipeline.executeApprovedHold(userId, pending.approval_id)).status, "refused");
+    assert.equal(executions, 0);
+    assert.equal((await pipeline.executeApprovedHold(userId, pending.approval_id)).status, "refused");
+  } finally { await db.close(); }
+});

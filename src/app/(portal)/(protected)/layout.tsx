@@ -1,3 +1,4 @@
+import { listAgentsForUser } from "@/server/db/agents";
 import * as React from "react";
 import { cookies } from "next/headers";
 import { redirect } from "next/navigation";
@@ -56,8 +57,9 @@ export default async function ProtectedLayout({ children }: { children: React.Re
     const wrapper = selectKeyWrapper({ nodeEnv: config.nodeEnv, localKek: config.devKek });
     timeZone = await timeZoneFor(db, user.id, await wrapper.unwrap(user.wrappedDek));
   }
+  const agents = await listAgentsForUser(db, result.session.userId);
   return (
-    <PortalChrome>
+    <PortalChrome agents={agents.map(agent => ({ id: agent.id, name: agent.displayName }))}>
       {pendingReset ? (
         <PendingResetBanner
           requestedAt={pendingReset.requestedAt.toISOString()}

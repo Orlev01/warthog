@@ -101,7 +101,8 @@ test("the page lists the agent's own active rules, naming the agent by its curre
     );
 
     const props = await createPermissionsActions({ db, keyWrapper }).load(sessionFor(alice.userId), claude.agentId);
-    assert.equal(props!.rules.length, 1, "only Claude's own active rule");
+    assert.equal(props!.rules.length, 2, "Claude’s own rule and the inherited global rule");
+    assert.ok(props!.rules.some(rule => rule.scope.type === "any_agent"));
     const text = strip(renderToStaticMarkup(<PermissionsView {...props!} />));
     assert.ok(text.includes("Claude on my laptop"), text);
     assert.ok(!text.includes(claude.connectionId), "the raw connection id never shows");

@@ -1,5 +1,6 @@
 "use client";
 
+import { AGENT_PLATFORMS as PLATFORMS } from "@/domain/agents/compatibility";
 import * as React from "react";
 
 import { CopyButton } from "@/components/ui/copy-button";
@@ -29,75 +30,13 @@ import { CopyButton } from "@/components/ui/copy-button";
 // jargon reaches a primary screen (brief design_ux.copy). Colour, spacing and radius come
 // from the design tokens (globals.css) — never a raw hex value.
 
-type Platform = {
-  name: string;
-  // Ordered steps saying exactly where to paste the Warthog address shown above.
-  steps: string[];
-  // A platform that cannot yet use a remote connector: the gap, plus what to do instead.
-  gap?: string;
-  alternative?: string;
-};
-
-// The six agent platforms the task/brief name, each with plain connect steps.
-const PLATFORMS: Platform[] = [
-  {
-    name: "Claude",
-    steps: [
-      "Open Settings, then Connectors.",
-      "Choose Add custom connector and paste your Warthog address.",
-      "Sign in and approve what Claude may do.",
-    ],
-  },
-  {
-    name: "ChatGPT",
-    steps: [
-      "Open Settings, then Connectors.",
-      "Add a custom connector and paste your Warthog address.",
-      "Sign in to approve it.",
-    ],
-  },
-  {
-    name: "Gemini",
-    steps: [
-      "Open the connections (or extensions) settings.",
-      "Add a custom connector and paste your Warthog address.",
-      "Sign in to approve it.",
-    ],
-  },
-  {
-    name: "Grok",
-    steps: [
-      "Open the connections settings.",
-      "Add a custom connector and paste your Warthog address.",
-      "Sign in to approve it.",
-    ],
-  },
-  {
-    name: "Llama-based clients",
-    steps: [
-      "For clients that support custom connectors, add one and paste your Warthog address.",
-      "Sign in to approve it.",
-    ],
-    gap: "Some Llama-based clients can't use a remote connector yet.",
-    alternative: "Create an access key in Warthog and paste that in instead.",
-  },
-  {
-    name: "Other",
-    steps: [
-      "Add a new custom connector in your agent.",
-      "Paste your Warthog address, then sign in to approve it.",
-    ],
-  },
-];
-
 export function ConnectGuide({ connectorAddress }: { connectorAddress: string }) {
   return (
     <section className="flex flex-col gap-8">
       <header className="flex flex-col gap-2">
         <h1 className="text-xl font-semibold text-fg">Connect an agent</h1>
         <p className="text-sm text-fg-muted">
-          Add your Warthog address to each agent below and it connects straight to your
-          home — never with your own logins.
+          Connect compatible agents using the address below. Each connection gets its own permissions, memory controls, budget and audit log.
         </p>
       </header>
 
@@ -126,11 +65,7 @@ export function ConnectGuide({ connectorAddress }: { connectorAddress: string })
                 <li key={i}>{step}</li>
               ))}
             </ol>
-            {platform.gap ? (
-              <p className="text-sm text-fg-muted">
-                {platform.gap} {platform.alternative}
-              </p>
-            ) : null}
+            {"docs" in platform ? <a href={platform.docs} className="text-sm text-accent underline" target="_blank" rel="noreferrer">Provider setup guide</a> : null}
           </article>
         ))}
       </div>

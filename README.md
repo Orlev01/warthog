@@ -33,3 +33,15 @@ verified domain activation and remaining live acceptance checks.
 Application: [app.warthog.com.au](https://app.warthog.com.au).
 
 Built by Skynet's build loop, task by task, test-first.
+
+## Agent management
+
+Start with **Agents**, then open an agent's workspace to manage its connectors,
+vault access, skills, memory, spending, rules, audit log and settings. Top-level
+resource screens manage account-owned inventory. **Settings → Global agent
+settings** configures defaults for new connections; global rules apply to all
+agents, including existing ones.
+
+See [the ownership and access model](docs/adr/agent-first-management.md) and
+[the cross-domain review](docs/audit/agent-first-review-2026-11-10.md) for enforced
+behaviour, validation and remaining integration limits.

@@ -1,3 +1,7 @@
+import { agentSection } from "@/domain/permissions/workspace";
+import { getUserById } from "@/server/db/users";
+import { agentWorkspaceData } from "@/server/agents/workspace-data";
+import { AgentWorkspaceHeader, AgentOverview, AgentResources } from "@/components/agents/agent-workspace";
 import * as React from "react";
 import { cookies } from "next/headers";
 import { notFound, redirect } from "next/navigation";
@@ -57,7 +61,9 @@ async function savePermissions(agentId: string, input: PermissionsSaveInput): Pr
     redirect("/signin");
   }
   try {
-    return await createPermissionsActions({ db, nameOf: serviceName }).save(session, agentId, input);
+    const config = loadConfig();
+    const keyWrapper = selectKeyWrapper({ nodeEnv: config.nodeEnv, localKek: config.devKek });
+    return await createPermissionsActions({ db, nameOf: serviceName, keyWrapper }).save(session, agentId, input);
   } catch (error) {
     if (error instanceof HttpError) return { ok: false, reason: "invalid_request" };
     throw error;
@@ -76,11 +82,14 @@ function serviceName(connectorId: string): string | undefined {
 // 404. The (protected) layout already wraps every page in the app shell (PortalChrome), so
 // this entry renders only its own content column.
 export default async function AgentPermissionsPage({
-  params,
+  params, searchParams,
 }: {
   params: Promise<{ id: string }>;
+  searchParams: Promise<Record<string, string | string[] | undefined>>;
 }) {
   const { id } = await params;
+  const section = agentSection((await searchParams).section);
+  if (!section) notFound();
 
   const db = await getServerDb();
   const session = await resolveSession(db);
@@ -97,9 +106,19 @@ export default async function AgentPermissionsPage({
     notFound();
   }
 
+  const user = await getUserById(db, session.userId);
+  if (!user) notFound();
+  const data = await agentWorkspaceData(db, session.userId, id, await keyWrapper.unwrap(user.wrappedDek), systemClock, section);
+  if (!data) notFound();
   return (
-    <div className="mx-auto flex w-full max-w-2xl flex-col gap-6 px-4 py-8 sm:px-6">
-      <PermissionsForm initial={props} save={savePermissions.bind(null, id)} />
+    <div className="mx-auto flex w-full max-w-2xl flex-col gap-6 px-4 py-8 [overflow-wrap:anywhere] sm:px-6">
+      <AgentWorkspaceHeader data={data} section={section} />
+      {section === "overview" ? <AgentOverview data={data} permissions={props} /> : <>
+        <AgentResources data={data} section={section} />
+        {section !== "activity" ? <fieldset disabled={data.agent.status !== "connected"} className="min-w-0">
+          <PermissionsForm key={section} initial={{ ...props, section, embedded: true }} save={savePermissions.bind(null, id)} />
+        </fieldset> : null}
+      </>}
     </div>
   );
 }

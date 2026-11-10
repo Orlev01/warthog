@@ -324,3 +324,17 @@ function subschema(
     ?.shape;
   return shape?.[field];
 }
+
+
+test("revoking a sensitive grant discards only that approval release", async () => {
+  const store = createReleaseStore(controllableClock().clock);
+  const conn = connectionFor("revoked");
+  const otherId = "33333333-3333-4333-8333-333333333333";
+  store.put(releaseKeyFor(conn, APPROVAL_ID), CARD);
+  store.put(releaseKeyFor(conn, otherId), HIGH_TIER);
+  const revoked = createCollectReleaseTool({ releaseStore: store, canCollect: async () => false });
+  assert.equal((await revoked.handle({ approval_id: APPROVAL_ID }, conn)).status, "gone");
+  const allowed = createCollectReleaseTool({ releaseStore: store, canCollect: async () => true });
+  assert.equal((await allowed.handle({ approval_id: APPROVAL_ID }, conn)).status, "gone");
+  assert.equal((await allowed.handle({ approval_id: otherId }, conn)).status, "collected");
+});

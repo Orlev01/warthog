@@ -149,13 +149,16 @@ export function connectorToolsetFor(
   connections: readonly Connection[],
   grantedConnectors: readonly string[],
   catalogue: CatalogueIndex,
+  accounts: Readonly<Record<string, string>> = {},
 ): ConnectorToolset {
   const toolset: Record<string, readonly ConnectorToolDeclaration[]> = {};
   for (const connection of connections) {
     const id = connection.connectorId;
     if (connection.status !== "connected" || !grantedConnectors.includes(id) || toolset[id]) continue;
+    const selected = selectConnectorAccount(connections, id, accounts[id]);
+    if (!selected || selected.id !== connection.id) continue;
     const entry = catalogue.get(id);
-    if (!entry) continue;
+    if (!entry || entry.auth_kind === "provider_mcp") continue;
     const curated = CURATED_BY_CONNECTOR.get(id);
     toolset[id] = curated
       ? curated.map((tool) => declarationOf(tool, entry.name))
@@ -190,22 +193,20 @@ export interface ConnectorCall {
 // request is sent.
 export function createConnectorToolExecutor(
   deps: ConnectorToolExecutorDeps,
-): (call: ConnectorCall, userId: string) => Promise<unknown> {
-  return async function executeConnectorTool(call: ConnectorCall, userId: string): Promise<unknown> {
+): (call: ConnectorCall, userId: string, accountId?: string) => Promise<unknown> {
+  return async function executeConnectorTool(call: ConnectorCall, userId: string, accountId?: string): Promise<unknown> {
     const entry = deps.catalogue.get(call.connector);
     const prefix = `${call.connector}${NAMESPACE}`;
-    if (!entry || !call.tool.startsWith(prefix)) {
+    if (!entry || entry.auth_kind === "provider_mcp" || !call.tool.startsWith(prefix)) {
       throw new HttpError(400, "This service tool is not available.");
     }
     const verb = call.tool.slice(prefix.length);
 
     // The person's live connection to this service (member-scoped by the session user).
     const connections = await listConnectionsForUser(deps.db, userId);
-    const connection = connections.find(
-      (candidate) => candidate.connectorId === call.connector && candidate.status === "connected",
-    );
+    const connection = selectConnectorAccount(connections, call.connector, accountId);
     if (!connection) {
-      throw new HttpError(409, "This service is not connected.");
+      throw new HttpError(409, "Choose a connected account for this service in the agent settings.");
     }
     const dek = await deps.dekFor(userId);
     const transport = { db: deps.db, fetch: deps.fetch };
@@ -241,4 +242,13 @@ export function createConnectorToolExecutor(
     if (MICROSOFT_TOOL_NAMES.has(call.tool)) return callMicrosoftTool(input, transport);
     throw new HttpError(400, "This service tool is not available.");
   };
+}
+
+// A service grant never silently picks an arbitrary account. A pinned account
+// never falls back to another one when disconnected.
+export function selectConnectorAccount(connections: readonly Connection[], connectorId: string, accountId?: string): Connection | undefined {
+  const available = connections.filter(c => c.connectorId === connectorId && c.status === "connected");
+  if (accountId) return available.find(c => c.id === accountId);
+  const all = connections.filter(c => c.connectorId === connectorId);
+  return all.length === 1 ? available[0] : undefined;
 }

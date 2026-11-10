@@ -621,3 +621,22 @@ test("AC7: the import runs entirely from its injected seams and folds no ambient
     await db.close();
   }
 });
+
+test("imported skills require assignment and disabled skills remain disabled", async () => {
+  const db = await freshDb();
+  try {
+    const userId = await makeUser(db, "skill-scope");
+    const dek = randomBytes(32);
+    await importExportDocument(db, userId, fullExport(tag(), { skills: [
+      { title: "Previously shared", text: "Instructions", scope: "all", enabled: true },
+      { title: "Disabled", text: "Do not run", scope: "chosen", enabled: false, scopedAgentIds: [randomUUID()] },
+    ] }), dek, CLOCK);
+    const skills = await listSkillsForUser(db, userId, dek);
+    assert.equal(skills.find(s => s.title === "Disabled")?.enabled, false);
+    assert.equal(skills.find(s => s.title === "Previously shared")?.enabled, true);
+    for (const skill of skills) {
+      assert.equal(skill.scope, "chosen");
+      assert.deepEqual(skill.scopedAgentIds, []);
+    }
+  } finally { await db.close(); }
+});

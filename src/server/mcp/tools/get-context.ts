@@ -59,6 +59,7 @@ export interface AgentContextView {
     readonly highTierRequests: boolean;
     readonly cardRequests: boolean;
     readonly memory: boolean;
+    readonly memoryWrite?: boolean;
     readonly sharing: boolean;
   };
   readonly card: { readonly budget: { amount: number; currency: string; period: string }; readonly spentThisPeriod: number } | null;
@@ -149,6 +150,7 @@ export function createGetContextTool(deps: GetContextDeps): {
           highTierRequests: permissions.highTierAccess,
           cardRequests: permissions.cardAccess,
           memory: permissions.memoryRead,
+          memoryWrite: permissions.memoryWrite,
           sharing: permissions.sharing,
         },
         card:

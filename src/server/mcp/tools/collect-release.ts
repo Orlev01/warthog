@@ -48,6 +48,7 @@ export interface CollectReleaseTool {
 // wide singleton the release endpoint puts into; no db (collect_release needs none).
 export interface CollectReleaseDeps {
   readonly releaseStore: ReleaseStore;
+  readonly canCollect?: (connection: AgentConnection, approvalId: string) => Promise<boolean>;
 }
 
 // The single key scheme shared by the releaser (the release endpoint) and the
@@ -80,6 +81,10 @@ export function createCollectReleaseTool(deps: CollectReleaseDeps): CollectRelea
       // store drops the entry on read and hands back the value only while it is
       // fresh (< 5 min), so a second call, an expired value or no release all collect
       // as `gone`.
+      if (deps.canCollect && !(await deps.canCollect(connection, approvalId))) {
+        releaseStore.discardScope(releaseKeyFor(connection, approvalId));
+        return { status: "gone" };
+      }
       const value = releaseStore.collect(releaseKeyFor(connection, approvalId));
       if (value === undefined) {
         return { status: "gone" };

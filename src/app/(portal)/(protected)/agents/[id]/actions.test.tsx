@@ -587,39 +587,16 @@ test("oversized input is rejected with a 4xx and nothing is persisted", async ()
   }
 });
 
-test("a SQL-injection probe in an input field is bound as data: the table survives and the value round-trips", async () => {
+test("a malformed currency is rejected before it can alter permissions", async () => {
   const db = await freshDb();
   try {
     const userId = await makeUser(db, "sqli-probe");
     const { agentId, connectionId } = await seedAgent(db, userId);
-    const actions = makeActions(db);
-
-    // A budget whose currency carries the canonical SQL-breaking metacharacters. If the
-    // value were concatenated into the statement text it would corrupt the query (or
-    // run the trailing statement); bound as a parameter it is inert — stored as data.
-    const probe = "A$';--";
-    const result = await actions.save(
-      sessionFor(userId),
-      agentId,
-      asInput({ card: true, cardBudget: { amount: 75, currency: probe, period: "month" } }),
-    );
-    assert.equal(result.ok, true, "a valid-shaped budget with a SQL-shaped currency is accepted");
-
-    // The agent_permissions table survives (the probe was stored as data, not run).
-    assert.equal(
-      await tableExists(db, "agent_permissions"),
-      true,
-      "the agent_permissions table survives — the probe was bound as a parameter, not concatenated",
-    );
-
-    // …and the value round-trips verbatim through the store (proving it was bound).
-    const grants = await readGrants(db, userId, connectionId);
-    assert.equal(grants.cardAccess, true, "card access was persisted");
-    assert.equal(grants.cardBudget?.amount, 75, "the budget amount round-trips");
-    assert.equal(grants.cardBudget?.currency, probe, "the SQL-shaped currency round-trips verbatim as data");
-  } finally {
-    await db.close();
-  }
+    await assertRejects4xx("invalid currency", () => makeActions(db).save(sessionFor(userId), agentId,
+      asInput({ card: true, cardBudget: { amount: 75, currency: "A$';--", period: "month" } })));
+    assert.equal(await tableExists(db, "agent_permissions"), true);
+    assert.equal((await readGrants(db, userId, connectionId)).cardAccess, false);
+  } finally { await db.close(); }
 });
 
 // =====================================================================================

@@ -1145,3 +1145,29 @@ test("AC6: a SQL-injection probe in an input field is stored as bound data, leav
     await db.close();
   }
 });
+
+test("an approved connector hold cannot switch to a different service account", async () => {
+  const { createAgentExecutors } = await import("./compose");
+  const { getConnectionPermissions } = await import("../db/agent-permissions");
+  const { decide } = await import("../db/approvals");
+  const db = await freshDb();
+  try {
+    const config = devConfig();
+    const { userId, connectionId, dek } = await seedConnection(db, config, { grantedConnectors: ["amadeus"], changeTools: "ask_first" });
+    const first = await createConnection(db, { userId, connectorId: "amadeus", accountLabel: "Personal", credentials: { api_key: "fixture-personal" } }, dek, systemClock);
+    const second = await createConnection(db, { userId, connectorId: "amadeus", accountLabel: "Work", credentials: { api_key: "fixture-work" } }, dek, systemClock);
+    const stored = (await getConnectionPermissions(db, userId, connectionId))!;
+    await upsertPermissions(db, { ...stored, connectorAccounts: { amadeus: first.id } });
+    const upstream = recordingFetch();
+    const dispatch = createMcpDispatch({ db, config, fetch: upstream.fetch });
+    const rpc = await readRpc(await dispatch(connectionId, mcpPost(callBody("amadeus__request", { method: "POST", path: "/v1/orders", body: "{}" }))));
+    assert.equal(rpc.result?.structuredContent?.status, "pending_approval");
+    const approvalId = String(rpc.result?.structuredContent?.approval_id);
+    const approved = await decide(db, { userId, id: approvalId, decision: { status: "approved" } }, dek, systemClock);
+    assert.equal(approved.detail.account, "Personal");
+    await upsertPermissions(db, { ...stored, connectorAccounts: { amadeus: second.id } });
+    const result = await createAgentExecutors({ db, config, fetch: upstream.fetch }).executeApprovedHold(userId, approvalId);
+    assert.equal(result.status, "refused");
+    assert.equal(upstream.sent.length, 0);
+  } finally { await db.close(); }
+});

@@ -1,3 +1,4 @@
+import { getAgentDefaults } from "@/server/db/agent-defaults";
 import * as React from "react";
 import { cookies } from "next/headers";
 import { redirect } from "next/navigation";
@@ -92,9 +93,10 @@ export default async function AccessKeyPage({
     }
   }
 
+  const defaults = await getAgentDefaults(db, session.userId);
   return (
     <div className="mx-auto flex w-full max-w-3xl flex-col gap-6 px-4 py-8 sm:px-6">
-      <AccessKeyFlow create={create} defaultName={defaultName} defaultPlatform={platformParam} />
+      <AccessKeyFlow defaultTemplate={defaults.template} create={create} defaultName={defaultName} defaultPlatform={platformParam} />
     </div>
   );
 }

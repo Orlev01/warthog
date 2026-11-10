@@ -31,9 +31,12 @@
 //   • This module reads no `process.env` and holds no secret: config (the issuer)
 //     flows in through injected `deps.config` alone (INV-103).
 
+import { withTransaction } from "@/server/db/index";
+import { getAgentDefaults } from "@/server/db/agent-defaults";
 import { randomUUID } from "node:crypto";
 
 import { z } from "zod";
+import { getAccountCurrency, isKnownCurrency } from "@/server/db/account-currency";
 
 import { authorize, validatedRedirectUri } from "../../../server/oauth/authorize";
 import type { ClientResolver } from "../../../server/oauth/clients";
@@ -125,7 +128,7 @@ export interface AuthorizeActions {
 // A card spending budget on the approval, validated to the brief's three periods.
 const cardBudgetSchema = z.object({
   amount: z.number().positive(),
-  currency: z.string().min(1).max(8),
+  currency: z.string().min(1).max(8).transform(value => value === "A$" ? "AUD" : value.trim().toUpperCase()).refine(isKnownCurrency),
   period: z.enum(["day", "week", "month"]),
 });
 
@@ -222,30 +225,39 @@ export function createAuthorizeActions(deps: AuthorizeActionsDeps): AuthorizeAct
 
     const connectionId = randomUUID();
 
-    const issued = await authorize(
-      { params: pending.params, session, connectionId },
-      { db, config, clock, random, resolveClient },
-    );
+    // Resolve before opening the transaction: this resolver can read the root DB
+    // or fetch client metadata. Reuse that snapshot for the validated request only.
+    const clientId = pending.params.get("client_id");
+    const client = clientId ? await resolveClient(clientId) : null;
+    const issued = await withTransaction(db, async tx => {
+      const result = await authorize(
+        { params: pending.params, session, connectionId },
+        { db: tx, config, clock, random, resolveClient: async id => id === clientId ? client : null },
+      );
+      if (!result.ok) return result;
+
+      await createAgent(
+        tx,
+        {
+          userId: session.userId,
+          connectionId,
+          displayName: valid.name,
+          platform: valid.platform,
+          status: "connected",
+        },
+        clock,
+      );
+
+      // The person's own connected services (member-scoped by the session's user id): the
+      // only ones a ticked service can grant.
+      const connected = new Set(
+        (await listConnectionsForUser(tx, session.userId)).map((c) => c.connectorId),
+      );
+      await upsertPermissions(tx, { ...grantsFor(session.userId, connectionId, valid, connected), rateLimit: (await getAgentDefaults(tx, session.userId)).rateLimit });
+
+      return result;
+    });
     if (!issued.ok) return { ok: false, error: issued.error };
-
-    await createAgent(
-      db,
-      {
-        userId: session.userId,
-        connectionId,
-        displayName: valid.name,
-        platform: valid.platform,
-        status: "connected",
-      },
-      clock,
-    );
-
-    // The person's own connected services (member-scoped by the session's user id): the
-    // only ones a ticked service can grant.
-    const connected = new Set(
-      (await listConnectionsForUser(db, session.userId)).map((c) => c.connectorId),
-    );
-    await upsertPermissions(db, grantsFor(session.userId, connectionId, valid, connected));
 
     // Tell the person a new agent connected (design: an email alert for each new agent
     // connection; the alerts module addresses it to the session's own person and scrubs

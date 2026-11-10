@@ -31,9 +31,13 @@
 //   • This module reads no `process.env` and holds no secret: the key is minted from
 //     the injected randomness seam alone (INV-103).
 
+import { listConnectionsForUser } from "@/server/db/connections";
+import { withTransaction } from "@/server/db/index";
+import { getAgentDefaults } from "@/server/db/agent-defaults";
 import { randomUUID } from "node:crypto";
 
 import { z } from "zod";
+import { getAccountCurrency, isKnownCurrency } from "@/server/db/account-currency";
 
 import { issueAccessKey, replaceAccessKey, revokeAccessKey } from "../../../../../server/oauth/access-key";
 import { createAgent, getAgentById } from "../../../../../server/db/agents";
@@ -111,7 +115,7 @@ export interface AccessKeyActions {
 // A card spending budget on the create, validated to the brief's three periods.
 const cardBudgetSchema = z.object({
   amount: z.number().positive(),
-  currency: z.string().min(1).max(8),
+  currency: z.string().min(1).max(8).transform(value => value === "A$" ? "AUD" : value.trim().toUpperCase()).refine(isKnownCurrency),
   period: z.enum(["day", "week", "month"]),
 });
 
@@ -182,25 +186,29 @@ export function createAccessKeyActions(deps: AccessKeyActionsDeps): AccessKeyAct
   // its hash is stored.
   async function create(session: Session, input: AccessKeyInput): Promise<CreateResult> {
     const valid = parseParams(inputSchema, input);
-    const connectionId = randomUUID();
+    return withTransaction(db, async tx => {
+      const connected = new Set((await listConnectionsForUser(tx, session.userId)).map(c => c.connectorId));
+      valid.tickedServices = valid.tickedServices?.filter(id => connected.has(id));
+      const connectionId = randomUUID();
 
-    const agent = await createAgent(
-      db,
-      {
-        userId: session.userId,
-        connectionId,
-        displayName: valid.name,
-        platform: valid.platform,
-        status: "connected",
-      },
-      clock,
-    );
+      const agent = await createAgent(
+        tx,
+        {
+          userId: session.userId,
+          connectionId,
+          displayName: valid.name,
+          platform: valid.platform,
+          status: "connected",
+        },
+        clock,
+      );
 
-    await upsertPermissions(db, grantsFor(session.userId, connectionId, valid));
+      await upsertPermissions(tx, { ...grantsFor(session.userId, connectionId, valid), rateLimit: (await getAgentDefaults(tx, session.userId)).rateLimit });
 
-    const { key } = await issueAccessKey(db, { connectionId }, { random });
+      const { key } = await issueAccessKey(tx, { connectionId }, { random });
 
-    return { ok: true, agentId: agent.id, key };
+      return { ok: true, agentId: agent.id, key };
+    });
   }
 
   // Revoke: validate the agent id shape at the boundary first (a malformed id throws a

@@ -19,6 +19,7 @@ export type NavNode = {
 // The Settings sub-pages, in documented order. Settings is one area: every one
 // of these lights the single "settings" section (see activeSectionForPath).
 const SETTINGS_CHILDREN: readonly NavNode[] = [
+  { key: "agent-defaults", label: "Global agent settings", href: "/settings/agents" },
   { key: "security", label: "Security", href: "/settings/security" },
   { key: "notifications", label: "Notifications", href: "/settings/notifications" },
   { key: "data", label: "Data & privacy", href: "/settings/data" },

@@ -12,6 +12,16 @@ read it through `.agent/conventions.md` (which points here and repeats the hard 
 
 ---
 
+## Agent-first amendment (10 November 2026)
+
+The founder's clarified product model is recorded in
+[agent-first management](../adr/agent-first-management.md). Agents are the primary
+management entry point; account resource ownership, per-agent access, global
+new-agent defaults and enforced global rules are separate concepts. That decision
+supersedes earlier navigation, memory-write coupling and skill assignment details.
+See the [review](../audit/agent-first-review-2026-11-10.md) for implemented changes
+and explicit provider integration limits.
+
 ## 1. Shape
 
 One Next.js (App Router, TypeScript, Node runtime) application, one container, **one replica** in v1.

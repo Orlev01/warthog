@@ -1,3 +1,4 @@
+import { readAgentSpending } from "@/server/spending/agent-spending";
 import { formatAccountTime } from "@/server/display-time";
 import { timeZoneFor } from "@/server/spending/time-zone";
 // E10-S11 — Agents list page loader + disconnect wiring (the injectable, unit-testable
@@ -95,7 +96,9 @@ function toListItem(agent: Agent, grants: ConnectionPermissions | null, timeZone
     budgetPeriod: grants?.cardBudget?.period ?? "month",
     // The per-agent link carries THIS agent's row id, distinct per agent — the agent's
     // own permissions page (`[id]/page.tsx`).
-    activityHref: `/agents/${agent.id}`,
+    activityHref: `/activity?agent=${agent.id}`,
+    currency: grants?.cardBudget?.currency ?? "AUD",
+    hasBudget: grants?.cardBudget != null,
   };
 }
 
@@ -111,7 +114,8 @@ export function createAgentsActions(deps: AgentsActionsDeps): AgentsActions {
     const items: AgentListItem[] = [];
     for (const agent of agents) {
       const grants = await getConnectionPermissions(db, session.userId, agent.connectionId);
-      items.push(toListItem(agent, grants, timeZone));
+      const spend = grants?.cardBudget ? await readAgentSpending(db, session.userId, agent.connectionId, grants.cardBudget, clock.now(), timeZone) : null;
+      items.push({ ...toListItem(agent, grants, timeZone), spendThisPeriod: spend?.total ?? 0, spendIncomplete: (spend?.unconverted.length ?? 0) > 0 });
     }
     return { agents: items };
   }

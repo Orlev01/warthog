@@ -40,6 +40,9 @@ export type AgentListItem = {
   budget: number;
   budgetPeriod: "day" | "week" | "month";
   activityHref: string;
+  currency?: string;
+  hasBudget?: boolean;
+  spendIncomplete?: boolean;
 };
 
 export type AgentListViewProps = {
@@ -124,7 +127,7 @@ function AgentCard({
     <li className="flex flex-col gap-3 rounded-card border border-line bg-surface p-4">
       <div className="flex flex-wrap items-start justify-between gap-2">
         <div className="flex min-w-0 flex-col gap-0.5 [overflow-wrap:anywhere]">
-          <span className="font-medium text-fg">{agent.name}</span>
+          <a href={`/agents/${agent.id}`} className="font-medium text-fg underline underline-offset-2">{agent.name}</a>
           <span className="text-sm text-fg-muted">{agent.platform}</span>
         </div>
         <Status status={agent.status} />
@@ -136,12 +139,12 @@ function AgentCard({
       </p>
 
       <p className="text-sm text-fg-muted">
-        {agent.requestCount} request{agent.requestCount === 1 ? "" : "s"} · {CURRENCY}
-        {agent.spendThisPeriod} of {CURRENCY}
-        {agent.budget} {periodLabel(agent.budgetPeriod)}
+        {agent.requestCount} request{agent.requestCount === 1 ? "" : "s"} · {agent.hasBudget === false ? "No card budget" : `${agent.currency ?? CURRENCY} ${agent.spendThisPeriod} of ${agent.currency ?? CURRENCY} ${agent.budget} ${periodLabel(agent.budgetPeriod)} approved`}
+        {agent.spendIncomplete ? " · Total incomplete: exchange rate unavailable" : null}
       </p>
 
       <div className="flex flex-wrap items-center gap-2">
+        <a href={`/agents/${agent.id}`} className={BTN_SECONDARY}>Manage agent</a>
         <a href={agent.activityHref} className={BTN_SECONDARY}>
           View activity
         </a>
@@ -154,7 +157,10 @@ function AgentCard({
 export function AgentListView({ agents, disconnectAction }: AgentListViewProps) {
   return (
     <div className="mx-auto flex max-w-3xl flex-col gap-6 px-4 py-8 sm:px-6">
-      <h1 className="text-2xl font-semibold tracking-tight text-fg">Your agents</h1>
+      <header className="flex flex-col gap-3"><h1 className="text-2xl font-semibold tracking-tight text-fg">Your agents</h1>
+        <p className="text-sm text-fg-muted">Choose an agent to manage its connectors, vault access, skills, memory, spending and audit log.</p>
+        <div className="flex flex-wrap gap-2"><a href="/agents/connect" className={BTN_PRIMARY}>Connect an agent</a><a href="/settings/agents" className={BTN_SECONDARY}>Global agent settings</a></div>
+      </header>
 
       {agents.length === 0 ? (
         <EmptyState

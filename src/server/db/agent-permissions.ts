@@ -40,6 +40,7 @@ export interface PermissionGrants {
   readonly userId: string;
   readonly connectionId: string;
   readonly grantedConnectors: string[];
+  readonly connectorAccounts?: Record<string, string>;
   readonly readTools: boolean;
   readonly changeTools: ChangeTools;
   readonly identityAccess: boolean;
@@ -48,6 +49,7 @@ export interface PermissionGrants {
   readonly cardBudget: CardBudget | null;
   readonly skillsScope: string[];
   readonly memoryRead: boolean;
+  readonly memoryWrite?: boolean;
   readonly sharing: boolean;
   readonly rulesScope: string[];
   readonly rateLimit: number;
@@ -64,6 +66,7 @@ export interface PermissionGrants {
 // always resolved.
 export type ConnectionPermissions = PermissionGrants & {
   readonly tasksAccess: boolean;
+  readonly memoryWrite?: boolean;
   readonly recordsAccess: boolean;
 };
 
@@ -73,7 +76,7 @@ export type ConnectionPermissions = PermissionGrants & {
 const COLUMNS =
   "user_id, connection_id, granted_connectors, read_tools, change_tools, " +
   "identity_access, high_tier_access, card_access, card_budget, skills_scope, " +
-  "memory_read, sharing, rules_scope, rate_limit, tasks_access, records_access";
+  "memory_read, sharing, rules_scope, rate_limit, tasks_access, records_access, memory_write, connector_accounts";
 
 // Map a raw row to the grants shape, translating the snake_case columns to the
 // module's camelCase fields. jsonb comes back already parsed (so the connector /
@@ -84,6 +87,7 @@ function toPermissions(row: Row): ConnectionPermissions {
     userId: row.user_id as string,
     connectionId: row.connection_id as string,
     grantedConnectors: row.granted_connectors as string[],
+    connectorAccounts: (row.connector_accounts ?? {}) as Record<string, string>,
     readTools: row.read_tools as boolean,
     changeTools: row.change_tools as ChangeTools,
     identityAccess: row.identity_access as boolean,
@@ -92,6 +96,7 @@ function toPermissions(row: Row): ConnectionPermissions {
     cardBudget: (row.card_budget as CardBudget | null) ?? null,
     skillsScope: row.skills_scope as string[],
     memoryRead: row.memory_read as boolean,
+    memoryWrite: (row.memory_write ?? row.memory_read) as boolean,
     sharing: row.sharing as boolean,
     rulesScope: row.rules_scope as string[],
     rateLimit: Number(row.rate_limit),
@@ -144,13 +149,15 @@ export async function upsertPermissions(
        user_id, connection_id, granted_connectors, read_tools, change_tools,
        identity_access, high_tier_access, card_access, card_budget,
        skills_scope, memory_read, sharing, rules_scope, rate_limit,
-       tasks_access, records_access
+       tasks_access, records_access, memory_write, connector_accounts
      ) VALUES (
        $1, $2, $3::jsonb, $4, $5,
        $6, $7, $8, $9::jsonb,
        $10::jsonb, $11, $12, $13::jsonb, $14,
        COALESCE($15::boolean, $4 OR $5 <> 'off'),
-       COALESCE($16::boolean, $4 OR $5 <> 'off')
+       COALESCE($16::boolean, $4 OR $5 <> 'off'),
+       COALESCE($17::boolean, $11),
+       COALESCE($18::jsonb, '{}'::jsonb)
      )
      ON CONFLICT (user_id, connection_id) DO UPDATE SET
        granted_connectors = EXCLUDED.granted_connectors,
@@ -166,8 +173,10 @@ export async function upsertPermissions(
        rules_scope        = EXCLUDED.rules_scope,
        rate_limit         = EXCLUDED.rate_limit,
        tasks_access       = COALESCE($15::boolean, agent_permissions.tasks_access),
-       records_access     = COALESCE($16::boolean, agent_permissions.records_access)
-     RETURNING tasks_access, records_access`,
+       records_access     = COALESCE($16::boolean, agent_permissions.records_access),
+       memory_write       = COALESCE($17::boolean, agent_permissions.memory_write),
+       connector_accounts = COALESCE($18::jsonb, agent_permissions.connector_accounts)
+     RETURNING tasks_access, records_access, memory_write, connector_accounts`,
     [
       grants.userId,
       grants.connectionId,
@@ -185,6 +194,8 @@ export async function upsertPermissions(
       grants.rateLimit,
       grants.tasksAccess ?? null,
       grants.recordsAccess ?? null,
+      grants.memoryWrite ?? null,
+      grants.connectorAccounts === undefined ? null : JSON.stringify(grants.connectorAccounts),
     ],
   );
   const stored = result.rows[0];
@@ -193,6 +204,7 @@ export async function upsertPermissions(
     userId: grants.userId,
     connectionId: grants.connectionId,
     grantedConnectors: grants.grantedConnectors,
+    connectorAccounts: stored?.connector_accounts as Record<string, string>,
     readTools: grants.readTools,
     changeTools: grants.changeTools,
     identityAccess: grants.identityAccess,
@@ -201,6 +213,7 @@ export async function upsertPermissions(
     cardBudget: grants.cardBudget,
     skillsScope: grants.skillsScope,
     memoryRead: grants.memoryRead,
+    memoryWrite: stored?.memory_write as boolean,
     sharing: grants.sharing,
     rulesScope: grants.rulesScope,
     rateLimit: grants.rateLimit,

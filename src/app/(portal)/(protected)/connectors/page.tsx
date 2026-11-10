@@ -82,6 +82,7 @@ function buildActions(db: Db, config: Config): ConnectorsActions {
   const runtime = createConnectorRuntime({ config, db });
   return createConnectorsActions({
     startProviderSignin: runtime.begin,
+    providerMcpAvailable: false,
     db,
     clock: systemClock,
     catalogue: getCatalogue(),
@@ -97,9 +98,8 @@ function buildActions(db: Db, config: Config): ConnectorsActions {
     providerMcpConfig: {
       clientMetadataUrl: new URL("/oauth/client-metadata.json", config.publicBaseUrl).href,
     },
-    // The concrete MCP tool-listing transport is a later task; until then a connect lists no
-    // tools (they are filled once the MCP client lands).
-    listProviderTools: async () => [],
+    // Fail closed until authenticated provider MCP discovery and call routing exist.
+    listProviderTools: async () => { throw new HttpError(409, "Provider MCP transport is unavailable."); },
     // The provider-side revocation client is a later task (no provider sign-in client is
     // registered yet, so no oauth2 connection can exist). Until it lands the seam refuses
     // loudly rather than pretending: disconnect still deletes the stored tokens and records
@@ -140,7 +140,7 @@ async function connectAction(formData: FormData): Promise<void> {
       await actions.connectProviderMcp(session, { connectorId, accountLabel: entry.name });
       target = "/connectors?notice=connected";
     } else if (entry) {
-      target = "/connectors?notice=key-needed";
+      target = `/connectors/key?connector=${encodeURIComponent(entry.id)}`;
     }
   } catch (error) {
     if (!(error instanceof HttpError)) {

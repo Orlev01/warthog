@@ -150,7 +150,7 @@ type Notice = { tone: "done" | "problem"; text: string };
 const NOTICES: Record<string, Notice> = {
   imported: {
     tone: "done",
-    text: "Your export file has been imported — its history is in the archive below.",
+    text: "Your export file has been imported — its history is in the archive below. Review and assign imported skills before agents can use them.",
   },
   step_up_required: {
     tone: "problem",

@@ -31,6 +31,9 @@
 
 import { listIdentityFields, type IdentityField, type IdentityFieldKind } from "../db/identity-fields";
 import { getPreferences } from "../db/preferences";
+import { getAgentDefaults } from "../db/agent-defaults";
+import { listAgentsForUser } from "../db/agents";
+import { getConnectionPermissions } from "../db/agent-permissions";
 import { listSkillsForUser, type Skill } from "../db/skills";
 import { listMemoriesForUser } from "../db/memories";
 import { listAllRules } from "../db/rules";
@@ -116,6 +119,13 @@ export async function buildExportDocument(
   const lifeAdmin = await listRecordsForUser(db, userId, dek);
   const connections = await listConnectionsForUser(db, userId);
   const activity = await readFullActivity(db, userId, dek);
+  const agents = await listAgentsForUser(db, userId);
+  const agentSettings = {
+    defaults: await getAgentDefaults(db, userId),
+    agents: await Promise.all(agents.map(async agent => ({ id: agent.id, name: agent.displayName, platform: agent.platform, permissions: await getConnectionPermissions(db, userId, agent.connectionId) }))),
+    skillAccess: (await db.query("SELECT agent_id, skill_id, allowed FROM agent_skill_access WHERE user_id = $1", [userId])).rows,
+    note: "Reference only. Agent credentials and assignments are not restored on import; reconnect and review access.",
+  };
 
   return {
     version: EXPORT_VERSION,
@@ -131,7 +141,9 @@ export async function buildExportDocument(
           briefing: preferences.briefing,
         }
       : {},
+    agentSettings,
     skills: skills.map((skill) => ({
+      scope: skill.scope, enabled: skill.enabled, scopedAgentIds: skill.scopedAgentIds,
       id: skill.id,
       title: skill.title,
       text: renderSkillText(skill),

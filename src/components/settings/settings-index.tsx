@@ -31,6 +31,7 @@ const ICONS: Record<string, LucideIcon> = {
 // The one-line, plain-English description for each settings destination, keyed on
 // its IA `key` — what the screen is for, so the destinations are self-explaining.
 const DESCRIPTIONS: Record<string, string> = {
+  "agent-defaults": "Set defaults for new agents and review controls that apply to all agents.",
   security: "Manage your passkey and second factor for signing in.",
   notifications: "Choose how Warthog lets you know about approvals and alerts.",
   data: "Export everything Warthog holds, or delete your account.",

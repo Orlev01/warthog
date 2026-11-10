@@ -210,6 +210,8 @@ function convertedText(detail: Record<string, unknown>): string {
 // it (an omitted field drops out, exactly as it is stored).
 function detailLines(detail: Record<string, unknown>): RequestDetail[] {
   const lines: RequestDetail[] = [];
+  const account = text(detail.account);
+  if (account) lines.push({ label: "Service account", value: account });
   const recipients = recipientsText(detail);
   if (recipients) lines.push({ label: "To", value: recipients });
   const amount = amountText(detail);

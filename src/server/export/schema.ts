@@ -40,6 +40,9 @@ const preferencesSchema = z.looseObject({
 // --- Array-section elements ----------------------------------------------
 
 const skillSchema = z.looseObject({
+  scope: z.enum(["all", "chosen"]).optional(),
+  enabled: z.boolean().optional(),
+  scopedAgentIds: z.array(z.string()).optional(),
   id: z.string().optional(),
   title: z.string().optional(),
 });

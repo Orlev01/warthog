@@ -20,6 +20,7 @@
 // `getPendingAuthorization`. An unknown or already-consumed handle resolves to null, so the
 // page shows an expired-request message rather than crashing.
 
+import { getAgentDefaults } from "@/server/db/agent-defaults";
 import { getPendingAuthorization } from "../../../server/oauth/pending";
 import { isAllowedRedirectUri } from "../../../server/oauth/clients";
 import { listConnectionsForUser } from "../../../server/db/connections";
@@ -91,7 +92,7 @@ export async function loadConsentView(
     platform,
     defaultName: platform,
     requestedScopes: REQUESTED_SCOPES,
-    template: DEFAULT_TEMPLATE,
+    template: services ? (await getAgentDefaults(services.db, userId)).template : DEFAULT_TEMPLATE,
     redirect: { host, verified },
     ...(services ? { services: await connectedServices(services, userId) } : {}),
   };

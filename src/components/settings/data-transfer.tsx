@@ -65,7 +65,7 @@ export function createDataTransfer(deps: TransferDeps) {
       throw new TransferError("The import response was interrupted. Check this account before choosing the file again, to avoid duplicates.");
     }
     pending = null; file = null; keyStep.cancelPhrase();
-    set({ hasFile: false, needsConfirm: false, notice: "Your data was imported. Reload this page to see the imported history. Agents and service connections must be connected again." });
+    set({ hasFile: false, needsConfirm: false, notice: "Your data was imported. Reload this page to see the imported history. Agents and service connections must be connected again. Review and assign imported skills before agents can use them." });
   }
   return {
     keyStep,

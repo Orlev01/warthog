@@ -285,15 +285,16 @@ export async function skillsForAgent(
   dek: Uint8Array,
 ): Promise<SkillIndexEntry[]> {
   const result = await db.query(
-    `SELECT id, title, use_this_when, scope, scoped_agent_ids
-     FROM skills WHERE user_id = $1 AND enabled = true ORDER BY created_at`,
-    [userId],
+    `SELECT s.id, s.title, s.use_this_when, s.scope, s.scoped_agent_ids, a.allowed
+     FROM skills s LEFT JOIN agent_skill_access a ON a.skill_id = s.id AND a.user_id = s.user_id AND a.agent_id::text = $2
+     WHERE s.user_id = $1 AND s.enabled = true ORDER BY s.created_at`,
+    [userId, agentId],
   );
 
   const index: SkillIndexEntry[] = [];
   for (const row of result.rows) {
     const scopedAgentIds = (row.scoped_agent_ids as string[]) ?? [];
-    if (!scopeCovers(row.scope as SkillScope, scopedAgentIds, agentId)) continue;
+    if (!(row.allowed ?? scopeCovers(row.scope as SkillScope, scopedAgentIds, agentId))) continue;
     const id = row.id as string;
     const [title, useThisWhen] = await Promise.all([
       decrypt(dek, TABLE, "title", id, row.title as string),
@@ -317,14 +318,15 @@ export async function getSkillText(
   dek: Uint8Array,
 ): Promise<string | null> {
   const result = await db.query(
-    `SELECT id, title, full_text, scope, scoped_agent_ids
-     FROM skills WHERE user_id = $1 AND enabled = true`,
-    [userId],
+    `SELECT s.id, s.title, s.full_text, s.scope, s.scoped_agent_ids, a.allowed
+     FROM skills s LEFT JOIN agent_skill_access a ON a.skill_id = s.id AND a.user_id = s.user_id AND a.agent_id::text = $2
+     WHERE s.user_id = $1 AND s.enabled = true`,
+    [userId, agentId],
   );
 
   for (const row of result.rows) {
     const scopedAgentIds = (row.scoped_agent_ids as string[]) ?? [];
-    if (!scopeCovers(row.scope as SkillScope, scopedAgentIds, agentId)) continue;
+    if (!(row.allowed ?? scopeCovers(row.scope as SkillScope, scopedAgentIds, agentId))) continue;
     const id = row.id as string;
     const rowTitle = await decrypt(dek, TABLE, "title", id, row.title as string);
     if (rowTitle !== title) continue;

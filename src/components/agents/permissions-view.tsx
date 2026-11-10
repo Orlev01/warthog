@@ -1,3 +1,5 @@
+import type { PermissionsSection } from "@/domain/permissions/workspace";
+import { Select } from "@/components/ui/select";
 import * as React from "react";
 import { CreditCard, TriangleAlert } from "lucide-react";
 
@@ -34,6 +36,8 @@ import { ruleSentence, type Rule } from "@/domain/rules/rules";
 const DEFAULT_REQUEST_LIMIT = 120;
 
 export type ConnectorAccess = {
+  accounts?: readonly { id: string; label: string }[];
+  accountId?: string;
   id: string;
   name: string;
   // whether the agent may use this connected service (review fix W2.3): when present, the
@@ -50,6 +54,12 @@ export type SkillGrant = { id: string; name: string; granted: boolean };
 export type PermissionsViewProps = {
   // the agent being shaped, named on the screen.
   agentName: string;
+  section?: PermissionsSection;
+  readTools?: boolean;
+  changeTools?: "off" | "allow" | "ask_first";
+  memoryWrite?: boolean;
+  embedded?: boolean;
+  saving?: boolean;
   // granted connectors and the tools it may use, reads and changes listed apart.
   connectors: ReadonlyArray<ConnectorAccess>;
   // low-tier identity read (always low tier only) vs. the high-tier REQUEST toggle.
@@ -110,6 +120,7 @@ function SectionHeading({ children }: { children: React.ReactNode }) {
 
 export function PermissionsView({
   agentName,
+  section = "all", readTools = true, changeTools = "ask_first", memoryWrite = false, embedded = false, saving = false,
   connectors,
   lowTierRead,
   highTierRequest,
@@ -130,18 +141,27 @@ export function PermissionsView({
   const budgetPeriod = budget?.period ?? DEFAULT_CARD_BUDGET.period;
   const limit = requestLimit ?? DEFAULT_REQUEST_LIMIT;
 
+  const show = (part: PermissionsSection) => section === "all" || section === part;
   return (
     <section className="flex flex-col gap-6">
-      <header className="flex flex-col gap-1">
+      {!embedded ? <header className="flex flex-col gap-1">
         <h1 className="text-xl font-semibold text-fg">What {agentName} can do</h1>
         <p className="text-sm text-fg-muted">
           Shape {agentName}&rsquo;s reach. Changes take effect on its next request.
         </p>
-      </header>
+      </header> : null}
 
+      {show("connectors") ? <>
       {/* Connected services and their tools — reads and changes listed separately. */}
       <div className="flex flex-col gap-3">
         <SectionHeading>Connected services</SectionHeading>
+        <p className="text-sm text-fg-muted">Service accounts belong to you. Choose which services this agent may use. Connecting a service does not grant agent access.</p>
+        <Toggle name="readTools" on={readTools} label="Allow reading from granted services" />
+        <label className="flex flex-col gap-2 text-sm font-medium">Changes to granted services
+          <Select name="changeTools" defaultValue={changeTools}>
+            <option value="off">Off</option><option value="ask_first">Ask me first</option><option value="allow">Allow, subject to rules</option>
+          </Select>
+        </label>
         {connectors.length === 0 ? (
           <p className="text-sm text-fg-muted">
             No services connected yet.{" "}
@@ -160,10 +180,16 @@ export function PermissionsView({
                 name={`connector:${connector.id}`}
                 on={connector.granted}
                 label={`Let it use ${connector.name}`}
-                description="It can read without asking, and asks you first before it makes a change."
+                description="Access follows the reading and changes settings above, plus your global and agent rules."
               />
             )}
 
+            {connector.accounts?.length ? <label className="flex flex-col gap-2 text-sm font-medium">{connector.name} account for this agent
+              <Select name={`connectorAccount:${connector.id}`} defaultValue={connector.accountId ?? ""}>
+                <option value="">Choose an account</option>{connector.accounts.map(account => <option key={account.id} value={account.id}>{account.label}</option>)}
+              </Select>
+              <span className="text-xs font-normal text-fg-muted">When more than one account is connected, this agent must have an account selected before it can use the service.</span>
+            </label> : null}
             {connector.readTools.length > 0 ? (
               <div className="flex flex-col gap-1.5">
                 <h4 className="text-sm font-medium text-fg-muted">Reads</h4>
@@ -190,7 +216,7 @@ export function PermissionsView({
                       className="flex flex-wrap items-center justify-between gap-2 rounded-card border border-line bg-surface-muted p-2 text-sm text-fg"
                     >
                       <span>{tool}</span>
-                      <span className="font-medium text-fg-muted">Ask me first</span>
+                      <span className="font-medium text-fg-muted">{changeTools === "off" ? "Off" : changeTools === "allow" ? "Allowed, subject to rules" : "Ask me first"}</span>
                     </li>
                   ))}
                 </ul>
@@ -200,9 +226,13 @@ export function PermissionsView({
         ))}
       </div>
 
+      </> : null}
+
+      {show("vault") ? <>
       {/* Identity: low-tier read vs. the high-tier REQUEST toggle. */}
       <div className="flex flex-col gap-3">
         <SectionHeading>Your identity</SectionHeading>
+        <p className="text-sm text-fg-muted">Your vault is shared storage owned by you. These controls apply only to this agent. Sensitive details always need your approval. <a href="/vault" className="text-accent underline">Manage vault contents</a></p>
         <Toggle
           name="identity"
           on={lowTierRead}
@@ -217,6 +247,9 @@ export function PermissionsView({
         />
       </div>
 
+      </> : null}
+
+      {show("spending") ? <>
       {/* Card access and its spending budget. The budget field shows only alongside
           card access; enabling card access without a budget blocks save. */}
       <div className="flex flex-col gap-3">
@@ -230,7 +263,7 @@ export function PermissionsView({
               Let it ask to use a card
             </span>
           }
-          description="You approve each payment before anything is charged."
+          description="You approve each card release. Warthog records the approved amount; the agent makes the purchase outside Warthog."
         />
         {cardAccess ? (
           <Card className="flex flex-col gap-2">
@@ -239,10 +272,15 @@ export function PermissionsView({
               label={`Budget per ${budgetPeriod} (${currency})`}
               type="number"
               min={0}
-              inputMode="numeric"
+              step="0.01"
+              inputMode="decimal"
               defaultValue={budget ? budget.amount : undefined}
               placeholder={String(DEFAULT_CARD_BUDGET.amount)}
             />
+            <Field name="cardBudgetCurrency" label="Budget currency (three-letter code)" defaultValue={currency} maxLength={3} />
+            <label className="flex flex-col gap-2 text-sm font-medium">Budget period
+              <Select name="cardBudgetPeriod" defaultValue={budgetPeriod}><option value="day">Day</option><option value="week">Week</option><option value="month">Month</option></Select>
+            </label>
             <p className="text-sm text-fg-muted">
               Defaults to {currency}
               {DEFAULT_CARD_BUDGET.amount} per {DEFAULT_CARD_BUDGET.period}.
@@ -251,14 +289,23 @@ export function PermissionsView({
         ) : null}
       </div>
 
+      </> : null}
+
+      {show("skills") ? <>
       {/* Skills it receives. */}
       <div className="flex flex-col gap-3">
         <SectionHeading>Skills</SectionHeading>
+        <p className="text-sm text-fg-muted">Choose skills for this agent. Your choices override each skill’s shared or chosen-agent default; disabled skills remain unavailable. Warthog’s house instructions always apply.</p>
+        {skills.length === 0 ? <p className="text-sm text-fg-muted">No enabled personal skills yet.</p> : null}
+        <a href="/skills" className="text-sm text-accent underline">Manage the shared skills library</a>
         {skills.map((skill) => (
           <Toggle key={skill.id} name={`skill:${skill.id}`} on={skill.granted} label={skill.name} />
         ))}
       </div>
 
+      </> : null}
+
+      {show("settings") ? <>
       {/* The person's tasks and life-admin records — their own grants. */}
       <div className="flex flex-col gap-3">
         <SectionHeading>Tasks and records</SectionHeading>
@@ -276,10 +323,15 @@ export function PermissionsView({
         />
       </div>
 
+      </> : null}
+
+      {show("memory") ? <>
       {/* Shared memory and sharing what it learns. */}
       <div className="flex flex-col gap-3">
         <SectionHeading>Memory and sharing</SectionHeading>
-        <Toggle name="memoryRead" on={sharedMemoryRead} label="Read your shared memory" />
+        <p className="text-sm text-fg-muted">An agent can read shared memories and its own private memories when reading is on. Other agents’ private memories stay private.</p>
+        <Toggle name="memoryRead" on={sharedMemoryRead} label="Read shared memory and its own memories" />
+        <Toggle name="memoryWrite" on={memoryWrite} label="Save memories" description="Allow this agent to add memories independently of reading them." />
         <Toggle
           name="learningSharing"
           on={learningSharing}
@@ -287,9 +339,13 @@ export function PermissionsView({
         />
       </div>
 
+      </> : null}
+
+      {show("rules") ? <>
       {/* The agent's own rules, each read back as its exact plain-English sentence. */}
       <div className="flex flex-col gap-3">
         <SectionHeading>Rules for {agentName}</SectionHeading>
+        <p className="text-sm text-fg-muted">Global rules apply to every agent. Individual settings cannot override a global denial. <a href="/rules" className="text-accent underline">Manage global and agent rules</a></p>
         {rules.length === 0 ? (
           <p className="text-sm text-fg-muted">
             No rules just for {agentName} yet.{" "}
@@ -311,6 +367,9 @@ export function PermissionsView({
         </ul>
       </div>
 
+      </> : null}
+
+      {show("settings") ? <>
       {/* Advanced: the per-minute request limit (default 120/min). */}
       <details className="rounded-card border border-line bg-surface p-3">
         <summary className="cursor-pointer text-sm font-semibold text-fg">Advanced</summary>
@@ -320,12 +379,16 @@ export function PermissionsView({
             label="Request limit (per minute)"
             type="number"
             min={1}
+            max={10000}
             inputMode="numeric"
             defaultValue={limit}
           />
         </div>
       </details>
 
+      </> : null}
+
+      {section !== "rules" ? <>
       {/* Save — disabled with a stated reason when card access has no budget. */}
       <div className="flex flex-col gap-2">
         {cardNeedsBudget ? (
@@ -334,10 +397,11 @@ export function PermissionsView({
             Add a budget before you can save card access.
           </p>
         ) : null}
-        <Button type="button" variant="primary" disabled={cardNeedsBudget} data-action="save">
-          Save changes
+        <Button type="button" variant="primary" disabled={cardNeedsBudget || saving} data-action="save">
+          {saving ? "Saving…" : "Save changes"}
         </Button>
       </div>
+      </> : null}
     </section>
   );
 }

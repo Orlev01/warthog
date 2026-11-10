@@ -1,5 +1,6 @@
 "use client";
 
+import { ResourceScope, type ScopeAgent } from "@/components/agents/resource-scope";
 import * as React from "react";
 import { usePathname } from "next/navigation";
 
@@ -29,11 +30,12 @@ export type PortalChromeProps = {
   // The current path, supplied for SSR / render tests. Optional: the layout mounts
   // PortalChrome propless and the live path is read from usePathname at runtime.
   pathname?: string;
+  agents?: readonly ScopeAgent[];
   // The page content, rendered inside the shell's <main> content region.
   children: React.ReactNode;
 };
 
-export function PortalChrome({ pathname, children }: PortalChromeProps) {
+export function PortalChrome({ pathname, children, agents = [] }: PortalChromeProps) {
   // usePathname is called unconditionally (rules of hooks); the prop overrides it
   // when present. With no router mounted usePathname is null, so default to "".
   const livePath = usePathname();
@@ -44,6 +46,7 @@ export function PortalChrome({ pathname, children }: PortalChromeProps) {
   // in the More menu, <MoreMenu>); both reuse the one shared SignOutControl.
   return (
     <AppShell activeSection={activeSection} sidebarFooter={<SignOutControl className="px-3 py-2" />}>
+      <ResourceScope pathname={path} agents={agents} />
       {children}
     </AppShell>
   );

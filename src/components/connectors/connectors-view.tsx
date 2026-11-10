@@ -36,6 +36,7 @@ export type CatalogueItem = {
   id: string;
   name: string;
   connectable: boolean;
+  unavailableReason?: string;
   gate: "connect" | "ask_to_join";
 };
 
@@ -60,6 +61,7 @@ export type ConnectionItem = {
   id: string;
   name: string;
   accountLabel: string;
+  unavailableReason?: string;
   status: StatusKey;
   connectedAt: string;
   tools: readonly ToolItem[];
@@ -110,6 +112,7 @@ function ConnectControl({
   item: CatalogueItem;
   connectAction?: (formData: FormData) => void | Promise<void>;
 }) {
+  if (!item.connectable) return <div className="flex flex-col gap-1"><button type="button" disabled className={BTN_DISABLED}>Unavailable</button><p className="text-xs text-fg-muted">{item.unavailableReason ?? "Provider sign-in is not configured yet."}</p></div>;
   if (!connectAction) {
     return (
       <div className="flex flex-col gap-1">
@@ -302,6 +305,7 @@ function ConnectionCard({
       </div>
 
       <p className="text-sm text-fg-muted">Connected {connection.connectedAt}</p>
+      {connection.unavailableReason ? <p className="text-sm text-warning">{connection.unavailableReason}</p> : null}
 
       <div className="flex flex-col gap-1.5">
         <span className="text-sm font-medium text-fg">Tools</span>

@@ -34,15 +34,17 @@ import type { Config } from "../config";
 import type { Db } from "../db/index";
 import { selectKeyWrapper, type KeyWrapper } from "../crypto/key-wrapper";
 import { createRedactingRecorder } from "./recorder";
+import { toEntry } from "../activity/writer";
 import { type UndoReversalJob } from "../activity/undo";
 import { getRateLimiter } from "./rate-limit";
 import { systemClock, type Clock } from "../seams/clock";
 import { getUserById } from "../db/users";
 import { getAgentByConnectionId, getAgentById } from "../db/agents";
+import { getApproval } from "../db/approvals";
 import { getConnectionPermissions } from "../db/agent-permissions";
 import { listConnectionsForUser } from "../db/connections";
 import { getProcessCatalogue, type CatalogueIndex } from "../connectors/catalogue";
-import { connectorToolsetFor, createConnectorToolExecutor } from "../connectors/tool-routing";
+import { connectorToolsetFor, createConnectorToolExecutor, selectConnectorAccount } from "../connectors/tool-routing";
 import { HttpError } from "../http/validate";
 import { createGuardedFetch } from "../http/guarded-fetch";
 import { notifyApprovalCreated, type ApprovalPushSender } from "../notify/approval-notifier";
@@ -270,7 +272,13 @@ function buildAgentPipeline(deps: McpDispatchDeps): AgentCallPipeline {
   const rememberTool = createRememberTool({ db, keyWrapper, clock });
   const searchMemoryTool = createSearchMemoryTool({ db, keyWrapper, clock });
   const getSkillTool = createGetSkillTool({ db, keyWrapper });
-  const collectReleaseTool = createCollectReleaseTool({ releaseStore });
+  const collectReleaseTool = createCollectReleaseTool({ releaseStore, canCollect: async (connection, approvalId) => {
+    const approval = await getApproval(db, connection.userId, approvalId, await dataKeyFor(connection.userId));
+    if (!approval || approval.agentId !== connection.agentId || approval.status !== "approved") return false;
+    const grants = await getConnectionPermissions(db, connection.userId, connection.connectionId);
+    const kind = (approval.detail as { request?: unknown }).request;
+    return kind === "card" ? grants?.cardAccess === true : kind === "high_tier" && grants?.highTierAccess === true;
+  } });
   const logActivityTool = createLogActivityTool({ recorder });
   const listTasksTool = createListTasksTool({ db, keyWrapper });
   const createTaskTool = createCreateTaskTool({ db, keyWrapper });
@@ -301,7 +309,10 @@ function buildAgentPipeline(deps: McpDispatchDeps): AgentCallPipeline {
   // doing nothing.
   const executeTool = async (call: AgentCall, connection: AgentConnection): Promise<unknown> => {
     if (call.connector !== null) {
-      return executeConnectorTool({ ...call, connector: call.connector }, connection.userId);
+      const grants = await getConnectionPermissions(db, connection.userId, connection.connectionId);
+      const selected = selectConnectorAccount(await listConnectionsForUser(db, connection.userId), call.connector, grants?.connectorAccounts?.[call.connector]);
+      if (!selected || selected.id !== call.connectorAccountId) return { status: "refused", reason: "The service account changed or is unavailable. Submit a new request." };
+      return executeConnectorTool({ ...call, connector: call.connector }, connection.userId, call.connectorAccountId);
     }
     switch (call.tool) {
       case "get_context":
@@ -348,6 +359,14 @@ function buildAgentPipeline(deps: McpDispatchDeps): AgentCallPipeline {
     rateLimiter,
     recorder,
     executeTool,
+    prepareCall: async (call, connection) => {
+      if (call.connector === null) return call;
+      const grants = await getConnectionPermissions(db, connection.userId, connection.connectionId);
+      const selected = selectConnectorAccount(await listConnectionsForUser(db, connection.userId), call.connector, grants?.connectorAccounts?.[call.connector]);
+      if (!selected) return null;
+      if (call.connectorAccountId && selected.id !== call.connectorAccountId) return null;
+      return { ...call, connectorAccountId: selected.id, connectorAccountLabel: selected.accountLabel };
+    },
     notifyApprovalCreated: async (input) => {
       try {
         await notifyApprovalCreated({ db, clock, push: approvalPush }, input);
@@ -412,6 +431,7 @@ export function createMcpDispatch(deps: McpDispatchDeps): McpDispatch {
               await listConnectionsForUser(db, connection.userId),
               permissions.grantedConnectors,
               catalogue,
+              permissions.connectorAccounts,
             ),
           )
         : registry.coreTools;
@@ -483,7 +503,7 @@ export function createAgentExecutors(deps: McpDispatchDeps): AgentExecutors {
   // §9; constitution 14/15).
   async function runReversal(job: UndoReversalJob): Promise<{ outcome: string }> {
     const found = await db.query(
-      "SELECT agent_id, connector_id FROM activity_entries WHERE user_id = $1 AND seq = $2",
+      "SELECT * FROM activity_entries WHERE user_id = $1 AND seq = $2",
       [job.userId, job.originalSeq],
     );
     const row = found.rows[0];
@@ -515,7 +535,19 @@ export function createAgentExecutors(deps: McpDispatchDeps): AgentExecutors {
     };
 
     try {
-      const result = await pipeline.handleAgentCall(connection, call);
+      // A reversal must use the account on the original action, never the agent's
+      // newly selected account. Legacy entries without that binding fail closed.
+      let boundCall = call;
+      if (call.connector) {
+        const user = await getUserById(db, job.userId);
+        if (!user) return { outcome: REVERSAL_NO_ROUTE };
+        const wrapper = selectKeyWrapper({ nodeEnv: deps.config.nodeEnv, localKek: deps.config.devKek });
+        const entry = await toEntry(row, await wrapper.unwrap(user.wrappedDek));
+        const accountId = (entry.payload as { connectorAccountId?: unknown } | null)?.connectorAccountId;
+        if (typeof accountId !== "string") return { outcome: "This action cannot be undone automatically because its original service account is unknown." };
+        boundCall = { ...call, connectorAccountId: accountId };
+      }
+      const result = await pipeline.handleAgentCall(connection, boundCall);
       return { outcome: reversalOutcome(result) };
     } catch {
       // The pipeline surfaces a policy decision as a result, so a throw here is an
