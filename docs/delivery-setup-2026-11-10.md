@@ -14,8 +14,9 @@ Forge delivery eligibility enabled automatically after its CNAME verified. The
 separately approved [first app release](first-app-release-2026-11-10.md) succeeded
 with SMS off, one healthy replica, 70 migrations and verified runner cleanup.
 The subsequently approved app DNS/certificate binding is verified at
-[app.warthog.com.au](https://app.warthog.com.au). Live acceptance remains pending;
-no message was sent.
+[app.warthog.com.au](https://app.warthog.com.au). The separately approved single
+signup email was delivered and its founder-supplied code verified. The browser
+is at passkey selection; account/MFA and other live acceptance remain pending.
 
 ## Applied and verified
 
@@ -61,7 +62,9 @@ address; the public application contact remains `oren@nava-co.com`. No Google
 user-data authorization or public verification is claimed.
 
 Resend uses a new sending-only key restricted to `mail.warthog.com.au`. The domain
-object and all four approved DNS records are verified; tracking is off. The account remains Free with overages disabled; no email was sent.
+object and all four approved DNS records are verified; tracking is off. The account
+remains Free with overages disabled. One explicitly approved signup email was
+provider-confirmed delivered; no SMS or push was sent.
 
 Twilio uses an isolated Warthog subaccount and a restricted key granting only
 message creation and phone-number lookup. The account is Trial; sender/Messaging

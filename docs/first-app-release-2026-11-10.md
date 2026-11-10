@@ -26,7 +26,8 @@ crwarthogprodauee854.azurecr.io/warthog@sha256:e8b03f1639b68cc8b6765a50ccbeae900
   removed. Independent Azure inventory confirms deletion and subnet detachment;
   GitHub runner inventory is empty.
 - All four approved Resend DNS records are now provider-verified. Tracking remains
-  disabled, Free-plan overages remain off, and no email was sent.
+  disabled and Free-plan overages remain off. The subsequent approved single
+  signup email is provider-confirmed delivered, with founder-confirmed receipt.
 - The separately approved app CNAME and ownership TXT are saved and exact on both
   authoritative nameservers. All eleven prior records remain, for thirteen total.
   A free Azure managed certificate is bound to [app.warthog.com.au](https://app.warthog.com.au);
@@ -35,7 +36,11 @@ crwarthogprodauee854.azurecr.io/warthog@sha256:e8b03f1639b68cc8b6765a50ccbeae900
   domain binding changed; the image, singleton and traffic remain intact.
 - Read-only Chrome checks pass for landing, signup, sign-in, privacy, terms and
   help. Navigation and rendering work at the default desktop viewport, without
-  captured console warnings/errors or TLS interstitials. No form was submitted.
+  captured console warnings/errors or TLS interstitials. Those initial checks
+  submitted no form. A separately approved signup submission later sent exactly
+  one verification email; after the founder supplied the received code, email
+  verification succeeded. The browser remains at the passkey-choice screen,
+  with neither MFA option selected and no account created.
 
 The initial startup probe timed out. Subsequent
 probes became healthy; readiness, replica inventory and HTTPS were checked again
@@ -68,10 +73,10 @@ policy links, although the policy pages work and Help links to Privacy, which
 links to Terms. The terms page has the generic browser title "Warthog". These are
 discoverability/metadata observations, not missing policy pages or new approval gates.
 
-Live signup/email/push, authenticated browser/connector, upload-limit and
-coordinated restore/deletion acceptance are not yet certified. A proposal for one
-signup verification email to the founder is pending explicit approval; no message
-or account creation has occurred. Further DNS, provider purchases/messages and
+The single signup-email delivery and email-code verification checks passed.
+Account completion/MFA, push, authenticated browser/connector, upload-limit and
+coordinated restore/deletion acceptance remain outstanding. No account or
+authenticator has been created. Further DNS, provider purchases/messages and
 future deployments retain their approval boundaries. Account-specific evidence remains in the
 ignored, owner-only `.delivery/activation-2026-11-10/` directory.
 

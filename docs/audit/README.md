@@ -10,7 +10,9 @@ remains pending. The temporary runner and all associated resources are verified 
 Pinned-base publication CI passes 5,078 application, 27 delivery and five cost
 checks; the subsequent live-response delivery correction passes 28 regressions
 and Actionlint. The [image review](runtime-image-review-2026-11-10.md) records
-accepted residual OS findings. No live message or Twilio purchase occurred.
+accepted residual OS findings. A subsequently approved single signup email was
+delivered; the founder supplied its code and email verification passed. No account,
+authenticator, SMS or Twilio purchase resulted from that test.
 See [state](../../state.md) for the current gates; earlier checkpoints below retain
 their historical scope.
 
