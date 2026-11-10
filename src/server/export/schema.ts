@@ -115,6 +115,11 @@ export const exportDocumentSchema = z.looseObject({
   profile: profileSchema,
   preferences: preferencesSchema,
   skills: z.array(skillSchema),
+  skillPackages: z.array(z.object({
+    id: z.uuid().optional(),
+    name: z.string().max(150),
+    files: z.array(z.object({ path: z.string().max(300), content: z.string().max(200_000) })).min(1).max(100),
+  })).max(1000).optional(),
   memory: z.array(memorySchema),
   rules: z.array(ruleSchema),
   tasks: z.array(taskSchema),

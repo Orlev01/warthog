@@ -33,6 +33,7 @@
 //     screen or a stored row.
 
 import { z } from "zod";
+import { isPackagedSkill } from "@/server/db/skill-packages";
 
 import { parseParams } from "@/server/http/validate";
 import type { Db } from "@/server/db/index";
@@ -258,6 +259,7 @@ export function createSkillsActions(deps: SkillsActionsDeps): SkillsActions {
   // not this person's is refused and left unchanged.
   async function editSkill(session: Session, input: EditSkillInput): Promise<ActionResult> {
     const valid = parseParams(editSkillSchema, input);
+    if (await isPackagedSkill(db, session.userId, valid.id)) return { ok: false, reason: "edit_package" };
     const scopedAgentIds = valid.scopedAgentIds ?? [];
     if (valid.scope === "chosen" && !(await allAgentsOwned(session.userId, scopedAgentIds))) {
       return { ok: false, reason: "unknown_agent" };
@@ -287,6 +289,7 @@ export function createSkillsActions(deps: SkillsActionsDeps): SkillsActions {
   // created), then duplicate through the store (re-encrypting under the new row's id).
   async function duplicateSkill(session: Session, input: SkillIdInput): Promise<ActionResult> {
     const valid = parseParams(skillIdInputSchema, input);
+    if (await isPackagedSkill(db, session.userId, valid.id)) return { ok: false, reason: "edit_package" };
     if (!(await ownsSkill(session.userId, valid.id))) {
       return { ok: false, reason: "not_found" };
     }
@@ -312,6 +315,7 @@ export function createSkillsActions(deps: SkillsActionsDeps): SkillsActions {
   // person's removes nothing and is a safe no-op refusal.
   async function deleteSkill(session: Session, input: SkillIdInput): Promise<ActionResult> {
     const valid = parseParams(skillIdInputSchema, input);
+    if (await isPackagedSkill(db, session.userId, valid.id)) return { ok: false, reason: "edit_package" };
     const removed = await deleteSkillRow(db, session.userId, valid.id);
     return removed ? { ok: true } : { ok: false, reason: "not_found" };
   }

@@ -43,6 +43,8 @@ import { exportDocumentSchema } from "../export/schema";
 import { saveIdentityField, type IdentityFieldKind } from "../db/identity-fields";
 import { savePreferences } from "../db/preferences";
 import { createSkill } from "../db/skills";
+import { savePackage } from "../db/skill-packages";
+import { parsePackage } from "../../domain/skills/package";
 import { createMemory, type MemoryScope } from "../db/memories";
 import { createRule } from "../db/rules";
 import type { RuleAction, RuleCondition, RuleKind, RuleScope } from "../../domain/rules/rules";
@@ -77,6 +79,7 @@ interface PreferencesDoc {
   readonly briefing?: string;
 }
 interface SkillDoc {
+  readonly packageId?: string;
   readonly title?: string;
   readonly text?: string;
 }
@@ -170,11 +173,15 @@ export async function importExportDocument(
     throw new Error("Invalid export document");
   }
   const doc = parsed.data;
+  const packages = (doc.skillPackages ?? []).map((p) => parsePackage(p.files, p.name));
 
   // Read each section back from the kind-checked document.
   const profileFields = (doc.profile as ProfileDoc).fields ?? [];
   const preferences = doc.preferences as PreferencesDoc;
-  const skills = doc.skills as SkillDoc[];
+  const packageIds = new Set((doc.skillPackages ?? []).map((p) => p.id).filter(Boolean));
+  // Keep the plain-text fallback for older readers, but restore each packaged
+  // skill once through its complete source package on this version.
+  const skills = (doc.skills as SkillDoc[]).filter((s) => !s.packageId || !packageIds.has(s.packageId));
   const memories = doc.memory as MemoryDoc[];
   const rules = doc.rules as RuleDoc[];
   const tasks = doc.tasks as TaskDoc[];
@@ -236,6 +243,9 @@ export async function importExportDocument(
     for (const skill of skills) {
       const { useThisWhen, fullText } = splitSkillText(skill.text ?? "");
       await createSkill(tx, { userId, title: skill.title ?? "", useThisWhen, fullText, scope: "all" }, dek);
+    }
+    for (const p of packages) {
+      await savePackage(tx, userId, { files: p.files, name: p.name }, dek);
     }
 
     // Memory — content, scope and source round-trip; the created-at is stamped from the
@@ -309,7 +319,7 @@ export async function importExportDocument(
     return {
       profileFields: profileFields.length,
       preferences: hasPreferences,
-      skills: skills.length,
+      skills: skills.length + packages.reduce((sum, p) => sum + p.skills.length, 0),
       memory: memories.length,
       rules: rules.length,
       tasks: tasks.length,

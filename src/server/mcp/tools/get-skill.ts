@@ -42,6 +42,7 @@ const MAX_REASON = 2000;
 // field (the registry and tests read `.shape.title` / `.shape.reason`).
 export const getSkillSchema = z.object({
   title: z.string().max(MAX_TITLE),
+  file: z.string().min(1).max(300).optional().describe("Optional supporting file path listed in the skill. Omit to read its instructions."),
   reason: z.string().max(MAX_REASON).optional(),
 });
 
@@ -115,7 +116,7 @@ export function createGetSkillTool(deps: GetSkillDeps): GetSkillTool {
       // Warthog's own house skill is ALWAYS returned in full, regardless of the
       // person's skills or scope — the index advertises its title and this supplies
       // the body. Matched by the canonical index title (one source of truth).
-      if (parsed.title === HOUSE_SKILL.title) {
+      if (parsed.title === HOUSE_SKILL.title && !parsed.file) {
         return { status: "found", title: HOUSE_SKILL.title, text: HOUSE_SKILL_BODY };
       }
 
@@ -124,7 +125,7 @@ export function createGetSkillTool(deps: GetSkillDeps): GetSkillTool {
       // its scope covers this agent. The store binds `user_id` as a parameter and
       // matches the (encrypted) title in application code, so the title is inert data.
       const dek = await dataKeyFor(connection.userId);
-      const text = await getSkillText(db, connection.userId, connection.agentId, parsed.title, dek);
+      const text = await getSkillText(db, connection.userId, connection.agentId, parsed.title, dek, parsed.file);
       if (text === null) {
         return { status: "not_available", reason: NOT_AVAILABLE_REASON };
       }

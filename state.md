@@ -1,5 +1,19 @@
 # Delivery status — 10 November 2026
 
+## Local Skills library work
+
+`codex/warthog-skills-library` isolates the Grove-inspired private library from
+the concurrent agent-first work. Import/review, skill/plugin creation, file and
+form editing, duplication/deletion, portable downloads, encrypted storage and
+named-agent access are implemented. Verification passed: 5,122 full-suite tests,
+33 final library checks, 153 related regression checks, typecheck, production
+build, 37 browser checks and real PostgreSQL 16 migration/ownership/concurrency
+checks. See [investigation and implementation](docs/adr/private-skills-library.md),
+including the four backend merge points and permission reconciliation required
+before combining with the agent-first branch. This feature has not been deployed.
+
+## Existing deployed release
+
 **The design polish is live at [app.warthog.com.au](https://app.warthog.com.au).**
 Source `7e61d3d12d3fbd661d41f750551a8bf4bd019d1a` is deployed as
 `warthog--r42809708265a1`, with one healthy replica and explicit 100% traffic.

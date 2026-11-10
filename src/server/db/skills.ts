@@ -28,6 +28,7 @@ import { randomUUID } from "node:crypto";
 
 import { decrypt, encrypt } from "../crypto/envelope";
 import type { Db, Row } from "./index";
+import { packageFilesForSkill, packageFileForSkill } from "./skill-packages";
 
 // The envelope's associated data binds each field's ciphertext to its exact
 // location, so a row lifted into another row/column/table fails to decrypt. Each
@@ -315,6 +316,7 @@ export async function getSkillText(
   agentId: string,
   title: string,
   dek: Uint8Array,
+  file?: string,
 ): Promise<string | null> {
   const result = await db.query(
     `SELECT id, title, full_text, scope, scoped_agent_ids
@@ -328,7 +330,10 @@ export async function getSkillText(
     const id = row.id as string;
     const rowTitle = await decrypt(dek, TABLE, "title", id, row.title as string);
     if (rowTitle !== title) continue;
-    return decrypt(dek, TABLE, "full_text", id, row.full_text as string);
+    if (file) return packageFileForSkill(db, userId, id, file, dek);
+    const body = await decrypt(dek, TABLE, "full_text", id, row.full_text as string);
+    const files = await packageFilesForSkill(db, userId, id, dek);
+    return files.length ? `${body}\n\nSupporting files (fetch with get_skill using this title and the file path):\n${files.map((f) => `- ${f.path}`).join("\n")}` : body;
   }
   return null;
 }

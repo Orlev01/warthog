@@ -301,3 +301,13 @@ OpenAI Apps SDK auth; Gemini custom apps OAuth; MCP TS SDK v2 docs; Nango licenc
 W3C WebAuthn L3 + MDN PRF; WebKit web push; Azure Container Apps billing, PostgreSQL pricing, Key Vault
 pricing, ACS SMS concepts/pricing/AU number rules, ACS email limits; Google OAuth testing-mode and
 restricted-scope rules; Microsoft consent policies.
+
+## 14. Private skills library (10 November 2026)
+
+The founder requested Grove-inspired skill/plugin import and editing for one
+person. [Private skills library ADR](../adr/private-skills-library.md) records
+the investigation, encrypted package storage, source-to-skill projection,
+optional supporting-file reads through `get_skill`, export compatibility,
+responsive UI, validation evidence and parallel-branch integration requirements.
+Packages are private content; importing one neither executes code nor connects
+services. New package skills start disabled until the person grants availability.
