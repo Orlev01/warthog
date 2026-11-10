@@ -57,7 +57,9 @@ message creation and phone-number lookup. The account is Trial; sender/Messaging
 Service setup is gated behind an upgrade. No number, plan or registration was
 purchased and no message was sent. Actual routes, registration/STOP acceptance,
 redaction entitlement and a complete A$20 quote remain unresolved; do not invent
-Messaging Service SIDs or imply that credentials alone make SMS usable.
+Messaging Service SIDs or imply that credentials alone make SMS usable. The
+[sales-response review](twilio-pricing-review-2026-11-10.md) corroborates public
+base prices but does not resolve redaction or approve a larger SMS budget.
 
 ## Private execution and remaining release work
 

@@ -12,7 +12,13 @@ unlinked and the approved tester/support addresses. Microsoft OAuth is configure
 (credential expiry 9 May 2027). Resend has a domain-scoped sending key, tracking off
 and Free/no-overage settings; its domain awaits public DNS. Twilio has an isolated
 subaccount and restricted key; Trial sender restrictions, complete pricing and
-registration/STOP acceptance remain external gates.
+registration/STOP acceptance remain external gates. The founder-supplied sales
+reply has now been checked against official sources: all three senders plus 200
+outbound segments are approximately A$21.12–34.96/month before extra fees. The
+A$20 target and 200/month, 10/day caps remain unchanged. Redaction entitlement
+and Editions pricing still need an account-specific human answer. See the
+[Twilio review](docs/twilio-pricing-review-2026-11-10.md); no new inquiry or
+provider mutation was submitted.
 
 The secret-bootstrap VM and separate fresh runner rehearsal are complete and
 removed. The fresh JIT runner was online, private database TLS/DNS passed, and

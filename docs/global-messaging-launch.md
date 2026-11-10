@@ -10,9 +10,11 @@ and RP ID `app.warthog.com.au`; sending domain `mail.warthog.com.au`, From
 `notifications@mail.warthog.com.au`, reply-to/public contact `oren@nava-co.com`.
 AU/US/CA/GB are approved as initial SMS markets subject to sender/registration/live
 acceptance, with 200 segments/month and 10/day across all markets. SMS allowance is
-A$20/month; no complete quote fits that allowance yet. Provider keys, exact DNS,
-purchases and paid upgrades remain separate gates. The founder confirmed sending
-the technical redaction questions in the sales email follow-up; await the answer.
+A$20/month; no complete quote fits that allowance yet. Provider credentials were subsequently authorized and installed as recorded in
+the [delivery setup](delivery-setup-2026-11-10.md); exact public DNS, purchases and
+paid upgrades remain separate. The supplied sales follow-up has now been checked:
+[pricing and entitlement review](twilio-pricing-review-2026-11-10.md). Base rates
+are corroborated, but redaction entitlement and a complete quote remain unresolved.
 
 ## What the application now does
 
