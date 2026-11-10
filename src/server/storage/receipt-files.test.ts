@@ -104,6 +104,7 @@ import {
   saveReceiptFile,
   getReceiptFile,
   deleteReceiptFile,
+  deleteRecordWithFiles,
 } from "./receipt-files";
 // Documentary type anchors — the names/shapes the implementation exports. Erased at runtime, so
 // a rename that preserves behaviour cannot redden the run for the wrong reason; the runtime
@@ -120,6 +121,50 @@ import { parseBody, HttpError } from "../http/validate";
 // --- fixtures ---------------------------------------------------------------------
 
 const DEK_BYTES = 32; // a 256-bit per-person data key
+
+test("record deletion is owner-scoped and removes every encrypted attachment", async () => {
+  const db = await freshDb();
+  try {
+    const owner = await makeUser(db, "delete-owner");
+    const other = await makeUser(db, "delete-other");
+    const dek = freshDek();
+    const recordId = await makeRecord(db, owner, dek);
+    const blob = createInMemoryBlobStore();
+    const files = [];
+    for (let n = 0; n < 2; n++) files.push(await saveReceiptFile(db, blob, { userId: owner, recordId, contentType: "text/plain", bytes: new Uint8Array([n]) }, dek));
+    assert.equal(await deleteRecordWithFiles(db, blob, { userId: other, recordId }), false);
+    assert.notEqual(await blob.get(files[0]!.blobKey), null);
+    assert.equal(await deleteRecordWithFiles(db, blob, { userId: owner, recordId }), true);
+    assert.equal((await db.query("SELECT id FROM life_admin_records WHERE id=$1", [recordId])).rows.length, 0);
+    assert.equal((await db.query("SELECT id FROM receipt_files WHERE record_id=$1", [recordId])).rows.length, 0);
+    for (const file of files) assert.equal(await blob.get(file.blobKey), null);
+    assert.equal(await deleteRecordWithFiles(db, blob, { userId: owner, recordId }), false);
+  } finally { await db.close(); }
+});
+
+test("a failed blob deletion preserves metadata so record deletion can be retried", async () => {
+  const db = await freshDb();
+  try {
+    const owner = await makeUser(db, "retry-owner"), dek = freshDek();
+    const recordId = await makeRecord(db, owner, dek), blob = createInMemoryBlobStore();
+    const file = await saveReceiptFile(db, blob, { userId: owner, recordId, contentType: "text/plain", bytes: new Uint8Array([1]) }, dek);
+    const failing: BlobStore = { ...blob, async delete() { throw new Error("storage unavailable"); } };
+    await assert.rejects(deleteRecordWithFiles(db, failing, { userId: owner, recordId }));
+    assert.equal((await db.query("SELECT id FROM receipt_files WHERE id=$1", [file.id])).rows.length, 1);
+    assert.equal(await deleteRecordWithFiles(db, blob, { userId: owner, recordId }), true);
+  } finally { await db.close(); }
+});
+
+test("upload cannot attach bytes to another owner's record", async () => {
+  const db = await freshDb();
+  try {
+    const owner = await makeUser(db, "upload-owner"), other = await makeUser(db, "upload-other"), dek = freshDek();
+    const recordId = await makeRecord(db, owner, dek), blob = createInMemoryBlobStore();
+    let writes = 0;
+    await assert.rejects(saveReceiptFile(db, { ...blob, async put() { writes++; } }, { userId: other, recordId, contentType: "text/plain", bytes: new Uint8Array([1]) }, dek));
+    assert.equal(writes, 0);
+  } finally { await db.close(); }
+});
 
 // A fresh random 256-bit DEK. The real DEK is unwrapped from the KeyWrapper seam a layer up;
 // this store only ever receives the already-unwrapped bytes.
@@ -937,3 +982,73 @@ test("the receipt_files migration applies and re-running every migration changes
 // Keep the imported type anchors referenced so an unused-import lint cannot strip them; they
 // document the exact exported shapes the store must provide (erased at runtime).
 export type __ReceiptFileContract = NewReceiptFile | ReceiptFileMeta | ReceiptFile;
+
+
+for (const outcome of ["rollback", "committed"] as const) {
+  test(`receipt upload reconciles a ${outcome} after a failed commit response`, async () => {
+    const db = await freshDb(), blob = createInMemoryBlobStore();
+    try {
+      const userId = await makeUser(db, `commit-${outcome}`), dek = freshDek();
+      const recordId = await makeRecord(db, userId, dek);
+      let first = true, blobKey = "";
+      const uncertain: Db = { ...db, transaction: async (fn) => {
+        if (!first) return db.transaction!(fn);
+        first = false;
+        const result = await db.transaction!(async (tx) => {
+          const value = await fn(tx);
+          if (outcome === "rollback") throw new Error("synthetic commit failure");
+          return value;
+        });
+        void result;
+        throw new Error("synthetic commit failure");
+      } };
+      const observed = { ...blob, put: async (key: string, bytes: Uint8Array) => { blobKey = key; await blob.put(key, bytes); } };
+      const saving = saveReceiptFile(uncertain, observed, { userId, recordId, bytes: receiptPlaintext(), contentType: "text/plain" }, dek);
+      if (outcome === "rollback") {
+        await assert.rejects(saving, /synthetic commit failure/);
+        assert.equal(await blob.get(blobKey), null);
+        assert.equal((await db.query("SELECT id FROM receipt_files WHERE record_id=$1", [recordId])).rows.length, 0);
+      } else {
+        const saved = await saving;
+        assert.ok(await blob.get(saved.blobKey));
+        assert.deepEqual((await getReceiptFile(db, blob, { userId, id: saved.id }, dek))?.bytes, receiptPlaintext());
+      }
+    } finally { await db.close(); }
+  });
+}
+
+test("receipt PUT accepted before response failure is cleaned after confirmed rollback", async () => {
+  const db = await freshDb(), blob = createInMemoryBlobStore();
+  try {
+    const userId = await makeUser(db, "put-response-failure"), dek = freshDek();
+    const recordId = await makeRecord(db, userId, dek);
+    let blobKey = "";
+    const uncertain = { ...blob, put: async (key: string, bytes: Uint8Array) => {
+      blobKey = key; await blob.put(key, bytes); throw new Error("synthetic response failure");
+    } };
+    await assert.rejects(saveReceiptFile(db, uncertain, { userId, recordId, bytes: receiptPlaintext(), contentType: "text/plain" }, dek), /synthetic response failure/);
+    assert.equal(await blob.get(blobKey), null);
+  } finally { await db.close(); }
+});
+
+test("unresolved upload compensation retains opaque operator references without content", async (t) => {
+  const db = await freshDb(), blob = createInMemoryBlobStore();
+  const log = t.mock.method(console, "error", () => {});
+  try {
+    const userId = await makeUser(db, "unresolved-upload"), dek = freshDek();
+    const recordId = await makeRecord(db, userId, dek);
+    let blobKey = "";
+    const unavailable = { ...blob,
+      put: async (key: string, bytes: Uint8Array) => { blobKey = key; await blob.put(key, bytes); throw new Error("synthetic failure"); },
+      delete: async () => { throw new Error("synthetic storage outage"); },
+    };
+    await assert.rejects(saveReceiptFile(db, unavailable, { userId, recordId, bytes: receiptPlaintext(), contentType: "text/plain" }, dek), /synthetic failure/);
+    assert.ok(await blob.get(blobKey));
+    assert.equal(log.mock.callCount(), 1);
+    const entry = JSON.parse(log.mock.calls[0]!.arguments[1] as string);
+    assert.deepEqual(Object.keys(entry).sort(), ["blobKey", "event", "fileId", "recordId"]);
+    assert.equal(entry.event, "receipt_upload_reconcile_required");
+    assert.equal(entry.blobKey, blobKey);
+    assert.equal(entry.recordId, recordId);
+  } finally { await db.close(); }
+});

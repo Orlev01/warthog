@@ -231,6 +231,12 @@ function SecuritySettings({
         <ConfirmItsYou confirmedText="Thanks — that's confirmed. Make your change again within the next five minutes." />
       ) : null}
 
+      <Section title="Authenticator app" lead="Use a code from your Authenticator app after checking your email.">
+        <p className="text-sm text-fg">
+          {view.authenticatorEnabled ? "Your Authenticator app is set up." : "You haven’t set up an Authenticator app."}
+        </p>
+      </Section>
+
       <Section title="Passkeys" lead="Sign in with your fingerprint, face or device PIN.">
         {view.passkeys.length === 0 ? (
           <p className="text-sm text-fg-muted">You don&apos;t have any passkeys yet.</p>

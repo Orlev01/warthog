@@ -2,6 +2,7 @@ import * as React from "react";
 import { Link2, Bot, ShieldCheck } from "lucide-react";
 
 import { Wordmark } from "../shell/wordmark";
+import { PolicyLinks } from "./policy-links";
 
 // Shared call-to-action link styling — a ≥44px target with a visible focus ring,
 // built on the same design tokens as the Button primitive (globals.css). The
@@ -118,6 +119,7 @@ export function Landing() {
           ))}
         </ul>
       </section>
+      <footer><PolicyLinks /></footer>
     </main>
   );
 }

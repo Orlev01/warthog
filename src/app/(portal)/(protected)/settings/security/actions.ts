@@ -81,6 +81,7 @@ export interface SessionSummary {
 
 // What the loader returns: only this person's passkeys and sessions.
 export interface SecurityView {
+  readonly authenticatorEnabled: boolean;
   readonly passkeys: PasskeySummary[];
   readonly sessions: SessionSummary[];
 }
@@ -126,6 +127,8 @@ export function createSecurityActions(deps: SecurityActionsDeps): SecurityAction
   // own user id (never a client value). Sessions double as recent sign-ins, so
   // their timestamps come back too; newest activity first.
   async function load(session: Session): Promise<SecurityView> {
+    // Enrollment metadata only: this screen never reads or unwraps the TOTP secret.
+    const factors = await db.query("SELECT EXISTS (SELECT 1 FROM totp_secrets WHERE user_id = $1) AS enabled", [session.userId]);
     const passkeyRows = await db.query(
       `SELECT id, created_at FROM passkeys WHERE user_id = $1 ORDER BY created_at`,
       [session.userId],
@@ -135,6 +138,7 @@ export function createSecurityActions(deps: SecurityActionsDeps): SecurityAction
       [session.userId],
     );
     return {
+      authenticatorEnabled: factors.rows[0]?.enabled === true,
       passkeys: passkeyRows.rows.map((row) => ({
         id: row.id as string,
         createdAt: new Date(row.created_at as string | number | Date),

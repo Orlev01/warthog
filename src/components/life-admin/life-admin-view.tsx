@@ -5,6 +5,7 @@ import * as React from "react";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/field";
 import { EmptyState } from "@/components/ui/empty";
+import { receiptUploadError } from "@/lib/receipt-upload";
 
 // E14-S11 — Life-admin records and checklist view component
 // (src/components/life-admin/life-admin-view.tsx).
@@ -47,6 +48,7 @@ export type LifeAdminRecordView = {
   status: string;
   reminderOffsets: number[];
   hasAttachedFile?: boolean;
+  files?: readonly { id: string; size: number }[];
 };
 
 // One moving-checklist item: its id, its label, whether it is ticked off, and the id of
@@ -76,6 +78,7 @@ export type LifeAdminViewProps = {
   addRecordAction?: LifeAdminAction;
   editRecordAction?: LifeAdminAction;
   attachFileAction?: LifeAdminAction;
+  deleteRecordAction?: LifeAdminAction;
   tickOffAction?: LifeAdminAction;
   handToAgentAction?: LifeAdminAction;
 };
@@ -147,7 +150,7 @@ function AddControl({
         <input type="hidden" name="kind" value={kind} />
         <div className="flex flex-col gap-1.5">
           <Label htmlFor={fieldId}>What to add</Label>
-          <Input id={fieldId} name="title" placeholder="Describe it" />
+          <Input id={fieldId} name="title" placeholder="Describe it" required maxLength={2000} />
         </div>
         <div>
           <button type="submit" className={BTN_PRIMARY}>
@@ -219,7 +222,14 @@ function AttachControl({
     <form action={attachFileAction} className="flex flex-col gap-1.5">
       <input type="hidden" name="recordId" value={record.id} />
       <Label htmlFor={fieldId}>Attach a file</Label>
-      <input id={fieldId} type="file" name="file" className={FILE_INPUT_CLASS} />
+      <input id={fieldId} type="file" name="file" required className={FILE_INPUT_CLASS}
+        onChange={(event) => {
+          const input = event.currentTarget;
+          const file = input.files?.[0];
+          input.setCustomValidity(file ? receiptUploadError(file.size) ?? "" : "Choose a file.");
+          if (file) input.reportValidity();
+        }} />
+      <p className="text-xs text-fg-muted">Up to 25 MiB per file. Files are encrypted before storage.</p>
       <div>
         <button type="submit" className={BTN_SECONDARY}>
           Attach file
@@ -273,10 +283,12 @@ function RecordCard({
   record,
   editRecordAction,
   attachFileAction,
+  deleteRecordAction,
 }: {
   record: LifeAdminRecordView;
   editRecordAction?: LifeAdminAction;
   attachFileAction?: LifeAdminAction;
+  deleteRecordAction?: LifeAdminAction;
 }) {
   return (
     <li className="flex flex-col gap-3 rounded-card border border-line bg-surface p-4">
@@ -299,7 +311,20 @@ function RecordCard({
         <AttachControl record={record} attachFileAction={attachFileAction} />
       ) : null}
 
+      {record.files?.length ? <ul className="flex flex-col gap-2">
+        {record.files.map((file, index) => <li key={file.id}>
+          <a href={`/api/receipts/${file.id}`} className="inline-flex min-h-11 items-center text-sm underline underline-offset-4 focus-visible:outline focus-visible:outline-2 focus-visible:outline-focus">Download attachment {index + 1} ({(file.size / 1024 / 1024).toFixed(2)} MiB)</a>
+        </li>)}
+      </ul> : null}
       <EditControl record={record} editRecordAction={editRecordAction} />
+      {deleteRecordAction ? <details className="mt-2">
+        <summary className={SUMMARY_CLASS}>Delete record</summary>
+        <p className="my-3 text-sm text-fg-muted">Delete this record and all its attached files? This cannot be undone.</p>
+        <form action={deleteRecordAction}>
+          <input type="hidden" name="recordId" value={record.id} />
+          <button type="submit" className={BTN_SECONDARY}>Delete record and files</button>
+        </form>
+      </details> : null}
     </li>
   );
 }
@@ -312,6 +337,7 @@ function RecordPanel({
   addRecordAction,
   editRecordAction,
   attachFileAction,
+  deleteRecordAction,
 }: {
   kind: RecordKind;
   heading: string;
@@ -319,6 +345,7 @@ function RecordPanel({
   addRecordAction?: LifeAdminAction;
   editRecordAction?: LifeAdminAction;
   attachFileAction?: LifeAdminAction;
+  deleteRecordAction?: LifeAdminAction;
 }) {
   return (
     <section className="flex flex-col gap-4">
@@ -336,7 +363,7 @@ function RecordPanel({
               key={record.id}
               record={record}
               editRecordAction={editRecordAction}
-              attachFileAction={attachFileAction}
+              attachFileAction={attachFileAction} deleteRecordAction={deleteRecordAction}
             />
           ))}
         </ul>
@@ -504,6 +531,7 @@ export function LifeAdminView({
   addRecordAction,
   editRecordAction,
   attachFileAction,
+  deleteRecordAction,
   tickOffAction,
   handToAgentAction,
 }: LifeAdminViewProps) {
@@ -564,7 +592,7 @@ export function LifeAdminView({
             records={subscriptions}
             addRecordAction={addRecordAction}
             editRecordAction={editRecordAction}
-            attachFileAction={attachFileAction}
+            attachFileAction={attachFileAction} deleteRecordAction={deleteRecordAction}
           />
         ) : null}
 
@@ -575,7 +603,7 @@ export function LifeAdminView({
             records={receipts}
             addRecordAction={addRecordAction}
             editRecordAction={editRecordAction}
-            attachFileAction={attachFileAction}
+            attachFileAction={attachFileAction} deleteRecordAction={deleteRecordAction}
           />
         ) : null}
 
@@ -586,7 +614,7 @@ export function LifeAdminView({
             records={renewals}
             addRecordAction={addRecordAction}
             editRecordAction={editRecordAction}
-            attachFileAction={attachFileAction}
+            attachFileAction={attachFileAction} deleteRecordAction={deleteRecordAction}
           />
         ) : null}
 

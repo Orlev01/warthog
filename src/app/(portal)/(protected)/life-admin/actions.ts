@@ -38,6 +38,7 @@
 //     loaded screen or a stored row.
 
 import { z } from "zod";
+import { RECEIPT_MAX_BYTES } from "@/lib/receipt-upload";
 
 import { HttpError, parseParams } from "@/server/http/validate";
 import type { Db } from "@/server/db/index";
@@ -66,7 +67,7 @@ import {
   linkTask,
   type ChecklistItem,
 } from "@/server/db/moving-checklist";
-import { saveReceiptFile } from "@/server/storage/receipt-files";
+import { saveReceiptFile, deleteRecordWithFiles } from "@/server/storage/receipt-files";
 import { buildMovingChecklist } from "@/server/moving/checklist";
 import { lifeAdminPageData } from "@/server/life-admin/page-data";
 
@@ -124,7 +125,7 @@ const MAX_FIELDS_CHARS = 100_000;
 const MAX_TITLE = 2000;
 const MAX_NOTE = 4000;
 const MAX_OFFSETS = 50;
-export const MAX_FILE_BYTES = 25 * 1024 * 1024; // a receipt is small; a payload meant to exhaust memory is refused
+export const MAX_FILE_BYTES = RECEIPT_MAX_BYTES;
 const DEFAULT_STATUS = "active";
 
 const uuid = z.uuid();
@@ -223,6 +224,7 @@ export interface LifeAdminActions {
   saveRecord(session: Session, input: SaveRecordInput): Promise<ActionResult>;
   updateRecord(session: Session, input: UpdateRecordInput): Promise<ActionResult>;
   attachReceiptFile(session: Session, input: AttachReceiptFileInput): Promise<ActionResult>;
+  deleteRecord(session: Session, input: IdInput): Promise<ActionResult>;
   setRecordReminders(session: Session, input: SetRemindersInput): Promise<ActionResult>;
   toggleChecklistItem(session: Session, input: IdInput): Promise<ActionResult>;
   handChecklistItemToAgent(session: Session, input: HandToAgentInput): Promise<ActionResult>;
@@ -276,7 +278,7 @@ export function createLifeAdminActions(deps: LifeAdminActionsDeps): LifeAdminAct
     return agents.find((a) => a.id === id)?.displayName ?? "an agent";
   }
 
-  function toRecordView(record: LifeAdminRecord, hasAttachedFile: boolean): LifeAdminRecordView {
+  function toRecordView(record: LifeAdminRecord, hasAttachedFile: boolean, files: { id: string; size: number }[] = []): LifeAdminRecordView {
     const display: Record<string, string> = {};
     for (const [key, value] of Object.entries(record.fields)) {
       display[key] = value == null ? "" : String(value);
@@ -289,6 +291,7 @@ export function createLifeAdminActions(deps: LifeAdminActionsDeps): LifeAdminAct
       status: record.status,
       reminderOffsets: record.reminderOffsets,
       hasAttachedFile,
+      ...(files.length ? { files } : {}),
     };
   }
 
@@ -333,11 +336,13 @@ export function createLifeAdminActions(deps: LifeAdminActionsDeps): LifeAdminAct
     const userId = session.userId;
     const dek = await dataKeyFor(userId);
     const page = await lifeAdminPageData(db, userId, dek);
+    const fileRows = await db.query("SELECT id, record_id, size FROM receipt_files WHERE user_id=$1 ORDER BY id", [userId]);
+    const filesFor = (id: string) => fileRows.rows.filter((r) => r.record_id === id).map((r) => ({ id: r.id as string, size: Number(r.size) }));
     const agents = await listAgentsForUser(db, userId);
 
     return {
       subscriptions: page.subscriptions.map((r) => toRecordView(r, r.hasAttachedFile)),
-      receipts: page.receipts.map((r) => toRecordView(r, r.hasAttachedFile)),
+      receipts: page.receipts.map((r) => toRecordView(r, r.hasAttachedFile, filesFor(r.id))),
       renewals: page.renewals.map((r) => toRecordView(r, r.hasAttachedFile)),
       checklist: page.checklist.map(toChecklistView),
       tasks: page.tasks.map((t) => toTaskView(t, agents)),
@@ -413,11 +418,13 @@ export function createLifeAdminActions(deps: LifeAdminActionsDeps): LifeAdminAct
     if (file.size > MAX_FILE_BYTES) {
       throw new HttpError(413, "File too large");
     }
+    if (file.size <= 0) throw new HttpError(400, "Choose a non-empty file");
     if (!(await ownsRow("life_admin_records", session.userId, recordId))) {
       return { ok: false, reason: "not_found" };
     }
     const dek = await dataKeyFor(session.userId);
     const bytes = new Uint8Array(await file.arrayBuffer());
+    if (bytes.byteLength > MAX_FILE_BYTES) throw new HttpError(413, "File too large");
     await saveReceiptFile(
       db,
       blob,
@@ -565,8 +572,15 @@ export function createLifeAdminActions(deps: LifeAdminActionsDeps): LifeAdminAct
     return { ok: true };
   }
 
+  async function deleteRecord(session: Session, input: IdInput): Promise<ActionResult> {
+    const { id } = parseParams(idOnlySchema, input);
+    return await deleteRecordWithFiles(db, blob, { userId: session.userId, recordId: id })
+      ? { ok: true } : { ok: false, reason: "not_found" };
+  }
+
   return {
     load,
+    deleteRecord,
     saveRecord,
     updateRecord,
     attachReceiptFile,

@@ -108,6 +108,22 @@ const RP_ID = "warthog.com.au";
 
 const clock: Clock = fixedClock(T0);
 
+test("security shows only the owner's Authenticator enrollment without reading its secret", async () => {
+  const db = await freshDb();
+  try {
+    const owner = await createPerson(db, "factor-owner@example.test");
+    const other = await createPerson(db, "factor-other@example.test");
+    await db.query("INSERT INTO totp_secrets (user_id, secret_enc) VALUES ($1, $2)", [other, "opaque-other-secret"]);
+    const session = (await freshSession(db, owner)).session;
+    const actions = makeActions(db);
+    assert.equal((await actions.load(session)).authenticatorEnabled, false);
+    await db.query("INSERT INTO totp_secrets (user_id, secret_enc) VALUES ($1, $2)", [owner, "opaque-owner-secret"]);
+    const view = await actions.load(session);
+    assert.equal(view.authenticatorEnabled, true);
+    assert.ok(!JSON.stringify(view).includes("secret"));
+  } finally { await db.close(); }
+});
+
 // Build the security-settings actions under test with the real seams. Each test uses its
 // own db, so nothing leaks across tests.
 function makeActions(db: Db) {

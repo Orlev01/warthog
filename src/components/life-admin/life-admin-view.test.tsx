@@ -623,10 +623,8 @@ test("a receipt's attach-file control is DISABLED with a reason when no attach a
   const deadControls = attachControls(dead);
   assert.ok(deadControls.length >= 1, "an attach-file affordance still appears when the action is absent");
   assert.ok(deadControls.every(isDisabled), "with no attachFileAction every attach-file control is DISABLED");
-  assert.ok(
-    reasonSurface(dead).length > reasonSurface(live).length,
-    "the disabled attach-file control says WHY it is unavailable — a reason the live control does not carry",
-  );
+  assert.match(visibleText(dead), /Attaching a file isn't available just now/);
+  assert.doesNotMatch(visibleText(live), /Attaching a file isn't available just now/);
 });
 
 // ════════════════════════════════════════════════════════════════════════════════

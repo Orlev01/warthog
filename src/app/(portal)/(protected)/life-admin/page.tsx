@@ -110,7 +110,7 @@ async function run(
     if (!(error instanceof HttpError)) {
       throw error;
     }
-    notice = "problem";
+    notice = error.status === 413 ? "file_too_large" : "problem";
   }
   revalidatePath("/life-admin");
   redirect(`/life-admin?notice=${notice}`);
@@ -147,6 +147,11 @@ async function attachFileAction(formData: FormData): Promise<void> {
   await run("attached", (actions, session) =>
     actions.attachReceiptFile(session, { recordId: str(formData, "recordId"), file: formData.get("file") }),
   );
+}
+
+async function deleteRecordAction(formData: FormData): Promise<void> {
+  "use server";
+  await run("deleted", (actions, session) => actions.deleteRecord(session, { id: str(formData, "recordId") }));
 }
 
 async function tickOffAction(formData: FormData): Promise<void> {
@@ -190,6 +195,8 @@ async function completeAction(formData: FormData): Promise<void> {
 }
 
 type Notice =
+  | "deleted"
+  | "file_too_large"
   | "saved"
   | "updated"
   | "attached"
@@ -203,6 +210,8 @@ type Notice =
   | "problem";
 
 const NOTICES: Record<Notice, { done: boolean; text: string }> = {
+  deleted: { done: true, text: "Record and attached files deleted." },
+  file_too_large: { done: false, text: "Choose a file of 25 MiB or less." },
   saved: { done: true, text: "Saved." },
   updated: { done: true, text: "Changes saved." },
   attached: { done: true, text: "File attached." },
@@ -320,6 +329,7 @@ export default async function LifeAdminPage({
           addRecordAction={addRecordAction}
           editRecordAction={editRecordAction}
           attachFileAction={attachFileAction}
+          deleteRecordAction={deleteRecordAction}
           tickOffAction={tickOffAction}
           handToAgentAction={handToAgentAction}
         />

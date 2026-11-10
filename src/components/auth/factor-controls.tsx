@@ -355,7 +355,7 @@ export function FactorControls(props: FactorControlsProps): React.ReactElement {
           Generate a new recovery code
         </Button>
         <p className="text-sm text-fg-muted">
-          A one-time way back in if you ever lose every passkey. Generating a new one replaces the old.
+          A one-time way back in if you lose access to your passkeys or Authenticator app. Generating a new one replaces the old.
         </p>
       </div>
     </div>

@@ -53,6 +53,25 @@ import { createDisconnectConfirm } from "./disconnect-confirm";
 // action must receive it so it disconnects the right agent.
 const AGENT_ID = "11111111-2222-4333-8444-555555555555";
 
+test("an in-page confirmation waits for the decision and cancellation never disconnects", async () => {
+  let decide!: (approved: boolean) => void;
+  let calls = 0;
+  const action = createDisconnectConfirm({
+    disconnect: async () => { calls++; },
+    confirm: () => new Promise<boolean>((resolve) => { decide = resolve; }),
+  });
+  const cancelled = action(disconnectForm());
+  assert.equal(calls, 0);
+  decide(false);
+  await cancelled;
+  assert.equal(calls, 0);
+  const approved = action(disconnectForm());
+  assert.equal(calls, 0);
+  decide(true);
+  await approved;
+  assert.equal(calls, 1);
+});
+
 type DisconnectAction = (formData: FormData) => void | Promise<void>;
 
 // The returned seam may be the action itself, or an object exposing it as `action`

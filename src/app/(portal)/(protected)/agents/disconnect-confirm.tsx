@@ -16,8 +16,8 @@ import { AgentListView, type AgentListItem } from "@/components/agents/agent-lis
 // As the sibling client flows do (auth factor-controls / sign-in / sign-up export an
 // injectable, framework-free controller alongside their `"use client"` component), the
 // gating logic lives in `createDisconnectConfirm` — a pure controller driven by injected
-// seams — and the `"use client"` component defaults the confirm seam to the browser's
-// `window.confirm`. The controller holds no React and no `window`, so it is unit-tested
+// seams — and the `"use client"` component presents an accessible in-page dialog.
+// The controller holds no React or browser state, so it is unit-tested
 // framework-free.
 
 export type DisconnectAction = (formData: FormData) => void | Promise<void>;
@@ -26,8 +26,8 @@ export interface DisconnectConfirmDeps {
   // The bound disconnect action the page passes (an inline `use server` wrapper that
   // re-derives the session and calls disconnectAgent with the submitted agent id).
   readonly disconnect: DisconnectAction;
-  // The confirm seam (⇐ window.confirm): returns true to proceed, false to cancel.
-  readonly confirm: (message?: string) => boolean;
+  // The confirm seam: resolves true to proceed, false to cancel.
+  readonly confirm: (message?: string) => boolean | Promise<boolean>;
 }
 
 // Plain Australian English, one sentence — what disconnecting does, before it happens.
@@ -40,7 +40,7 @@ const CONFIRM_MESSAGE =
 export function createDisconnectConfirm(deps: DisconnectConfirmDeps): DisconnectAction {
   const { disconnect, confirm } = deps;
   return async (formData: FormData) => {
-    if (!confirm(CONFIRM_MESSAGE)) return;
+    if (!(await confirm(CONFIRM_MESSAGE))) return;
     await disconnect(formData);
   };
 }
@@ -52,13 +52,44 @@ export interface AgentsScreenProps {
 }
 
 // The client wrapper the page mounts: gate the page's disconnect action behind a single
-// `window.confirm`, then render the already-render-tested AgentListView over it.
+// in-page dialog, then render the already-render-tested AgentListView over it.
 export function AgentsScreen({ agents, disconnect }: AgentsScreenProps) {
+  const dialog = React.useRef<HTMLDialogElement>(null);
+  const decision = React.useRef<((approved: boolean) => void) | null>(null);
+  const titleId = React.useId();
+  const descriptionId = React.useId();
+  React.useEffect(() => () => { decision.current?.(false); }, []);
+  function finish(approved: boolean) {
+    const resolve = decision.current;
+    decision.current = null;
+    dialog.current?.close();
+    resolve?.(approved);
+  }
   const gated = createDisconnectConfirm({
     disconnect,
-    confirm: (message) => window.confirm(message),
+    confirm: () => new Promise<boolean>((resolve) => {
+      decision.current?.(false);
+      const modal = dialog.current;
+      if (!modal) { resolve(false); return; }
+      decision.current = resolve;
+      // React form actions run in a transition: state updates can wait for this
+      // promise, so opening through state would deadlock the confirmation.
+      if (!modal.open) modal.showModal();
+    }),
   });
-  return <AgentListView agents={agents} disconnectAction={gated} />;
+  return <>
+    <AgentListView agents={agents} disconnectAction={gated} />
+    <dialog ref={dialog} aria-labelledby={titleId} aria-describedby={descriptionId}
+      className="m-auto max-w-md rounded-card border border-line bg-surface p-6 text-fg shadow-lg backdrop:bg-bg/80"
+      onCancel={(event) => { event.preventDefault(); finish(false); }}>
+      <h2 id={titleId} className="text-lg font-semibold">Disconnect this agent?</h2>
+      <p id={descriptionId} className="mt-3 text-sm text-fg-muted">{CONFIRM_MESSAGE}</p>
+      <div className="mt-5 flex gap-3">
+        <button type="button" autoFocus className="min-h-11 rounded-card border border-line px-4 focus-visible:outline focus-visible:outline-2 focus-visible:outline-focus" onClick={() => finish(false)}>Keep connected</button>
+        <button type="button" className="min-h-11 rounded-card bg-accent px-4 text-accent-fg focus-visible:outline focus-visible:outline-2 focus-visible:outline-focus" onClick={() => finish(true)}>Disconnect agent</button>
+      </div>
+    </dialog>
+  </>;
 }
 
 export default AgentsScreen;

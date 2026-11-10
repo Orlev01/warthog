@@ -28,7 +28,7 @@ import { createCipheriv, createDecipheriv, randomBytes, randomUUID } from "node:
 import { Buffer } from "node:buffer";
 
 import type { BlobStore } from "./blob";
-import type { Db, Row } from "../db/index";
+import { withTransaction, type Db, type Row } from "../db/index";
 
 const AES_GCM = "aes-256-gcm";
 const NONCE_BYTES = 12; // 96-bit nonce per design §4.1
@@ -105,32 +105,54 @@ export async function saveReceiptFile(
 ): Promise<ReceiptFileMeta> {
   const id = randomUUID();
   const blobKey = randomUUID();
-  const { nonce, blob: ciphertext } = encryptBytes(dek, input.bytes);
-
-  await blob.put(blobKey, ciphertext);
-
-  await db.query(
-    `INSERT INTO receipt_files (id, user_id, record_id, blob_key, nonce, content_type, size)
-     VALUES ($1, $2, $3, $4, $5, $6, $7)`,
-    [
-      id,
-      input.userId,
-      input.recordId,
-      blobKey,
-      nonce.toString("base64"),
-      input.contentType,
-      input.bytes.length,
-    ],
-  );
-
-  return {
-    id,
-    userId: input.userId,
-    recordId: input.recordId,
-    blobKey,
-    contentType: input.contentType,
-    size: input.bytes.length,
+  const metadata: ReceiptFileMeta = {
+    id, userId: input.userId, recordId: input.recordId, blobKey,
+    contentType: input.contentType, size: input.bytes.length,
   };
+  let storageAttempted = false;
+  try {
+    return await withTransaction(db, async (tx) => {
+      // Serialize attachment with deletion; retain this lock until COMMIT.
+      const owner = await tx.query(
+        "SELECT id FROM life_admin_records WHERE id = $1 AND user_id = $2 FOR UPDATE",
+        [input.recordId, input.userId],
+      );
+      if (owner.rows.length === 0) throw new Error("Receipt record not found");
+      const { nonce, blob: ciphertext } = encryptBytes(dek, input.bytes);
+      // A failed PUT response may still have stored the ciphertext.
+      storageAttempted = true;
+      await blob.put(blobKey, ciphertext);
+      await tx.query(
+        `INSERT INTO receipt_files (id, user_id, record_id, blob_key, nonce, content_type, size)
+         VALUES ($1, $2, $3, $4, $5, $6, $7)`,
+        [id, input.userId, input.recordId, blobKey, nonce.toString("base64"), input.contentType, input.bytes.length],
+      );
+      return metadata;
+    });
+  } catch (error) {
+    if (storageAttempted) {
+      try {
+        const committed = await withTransaction(db, async (tx) => {
+          // Wait for an ambiguous original transaction to finish before deciding
+          // whether its row exists. Never delete a successfully committed file.
+          await tx.query("SELECT id FROM life_admin_records WHERE id = $1 AND user_id = $2 FOR UPDATE", [input.recordId, input.userId]);
+          const saved = await tx.query("SELECT id FROM receipt_files WHERE id = $1 AND user_id = $2 AND blob_key = $3", [id, input.userId, blobKey]);
+          if (saved.rows.length > 0) return true;
+          await blob.delete(blobKey);
+          return false;
+        });
+        if (committed) return metadata;
+      } catch {
+        // Retain opaque references in private operator logs when neither outcome
+        // can be confirmed. Do not expose content, keys or raw provider errors.
+        console.error("[warthog receipt]", JSON.stringify({
+          event: "receipt_upload_reconcile_required", fileId: id,
+          recordId: input.recordId, blobKey,
+        }));
+      }
+    }
+    throw error;
+  }
 }
 
 // Which of the owner's life-admin records carry a saved receipt file — the
@@ -196,13 +218,32 @@ export async function deleteReceiptFile(
   blob: BlobStore,
   ref: ReceiptFileRef,
 ): Promise<boolean> {
-  const result = await db.query(
-    `DELETE FROM receipt_files WHERE id = $1 AND user_id = $2 RETURNING blob_key`,
-    [ref.id, ref.userId],
-  );
-  const row = result.rows[0] as Row | undefined;
-  if (!row) return false;
+  return withTransaction(db, async (tx) => {
+    const result = await tx.query(
+      `SELECT blob_key FROM receipt_files WHERE id = $1 AND user_id = $2 FOR UPDATE`,
+      [ref.id, ref.userId],
+    );
+    const row = result.rows[0] as Row | undefined;
+    if (!row) return false;
 
-  await blob.delete(row.blob_key as string);
-  return true;
+    await blob.delete(row.blob_key as string);
+    await tx.query("DELETE FROM receipt_files WHERE id = $1 AND user_id = $2", [ref.id, ref.userId]);
+    return true;
+  });
+}
+
+// Delete blobs before their references so a storage failure keeps the keys
+// available for an idempotent retry. A retry can encounter an already-deleted
+// blob; BlobStore.delete treats that as success. The record lock excludes uploads.
+export async function deleteRecordWithFiles(
+  db: Db, blob: BlobStore, ref: { readonly userId: string; readonly recordId: string },
+): Promise<boolean> {
+  return withTransaction(db, async (tx) => {
+    const owner = await tx.query("SELECT id FROM life_admin_records WHERE id = $1 AND user_id = $2 FOR UPDATE", [ref.recordId, ref.userId]);
+    if (owner.rows.length === 0) return false;
+    const files = await tx.query("SELECT blob_key FROM receipt_files WHERE record_id = $1 AND user_id = $2", [ref.recordId, ref.userId]);
+    for (const file of files.rows) await blob.delete(file.blob_key as string);
+    await tx.query("DELETE FROM life_admin_records WHERE id = $1 AND user_id = $2", [ref.recordId, ref.userId]);
+    return true;
+  });
 }

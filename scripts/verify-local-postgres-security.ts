@@ -11,6 +11,9 @@ import { createRevokeHandler } from "../src/app/oauth/revoke/handler";
 import { systemRandom } from "../src/server/seams/random";
 import { createDbRecorder, readActivity } from "../src/server/activity/writer";
 import { checkIntegrity } from "../src/server/activity/integrity";
+import { createRecord } from "../src/server/db/life-admin-records";
+import { createInMemoryBlobStore } from "../src/server/storage/blob";
+import { saveReceiptFile, deleteRecordWithFiles } from "../src/server/storage/receipt-files";
 
 const now = new Date("2026-11-09T00:00:00Z");
 const clock = { now: () => now };
@@ -219,6 +222,59 @@ async function activityChecks(runtime: Db, purge: Db) {
   }
 }
 
+async function receiptChecks(runtime: Db, purge: Db) {
+  const user = await createUser(runtime, { email: `receipt-lock-${randomUUID()}@example.test`, wrappedDek: "synthetic-only" });
+  const dek = new Uint8Array(32).fill(73);
+  try {
+    for (const firstOperation of ["upload", "delete"] as const) {
+      const blob = createInMemoryBlobStore();
+      const record = await createRecord(runtime, { userId: user.id, kind: "receipt_warranty",
+        fields: { title: "Synthetic lock check" }, status: "active", source: { kind: "person" } }, dek);
+      const input = { userId: user.id, recordId: record.id, bytes: new Uint8Array([1, 2, 3]), contentType: "text/plain" };
+      const initial = await saveReceiptFile(runtime, blob, input, dek);
+      const paused = deferred<void>(), resume = deferred<void>(), secondPid = deferred<number>();
+      const waiting = observed(runtime, { pid: secondPid.resolve });
+      let attemptedPut = false;
+      const delayedBlob = { ...blob,
+        put: async (key: string, bytes: Uint8Array) => {
+          attemptedPut = true;
+          if (firstOperation === "upload") { paused.resolve(); await resume.promise; }
+          await blob.put(key, bytes);
+        },
+        delete: async (key: string) => {
+          if (firstOperation === "delete") { paused.resolve(); await resume.promise; }
+          await blob.delete(key);
+        },
+      };
+      const ref = { userId: user.id, recordId: record.id };
+      const first = firstOperation === "upload" ? saveReceiptFile(runtime, delayedBlob, input, dek)
+        : deleteRecordWithFiles(runtime, delayedBlob, ref);
+      let second: Promise<unknown> | undefined;
+      try {
+        await beforeCompletion(paused.promise, first, "receipt first operation");
+        second = firstOperation === "upload" ? deleteRecordWithFiles(waiting, blob, ref)
+          : assert.rejects(saveReceiptFile(waiting, delayedBlob, input, dek), /Receipt record not found/);
+        const pid = await beforeCompletion(secondPid.promise, second, "receipt second connection");
+        await assertBlocked(runtime, pid, "receipt upload/deletion");
+        resume.resolve();
+        const result = await first;
+        await second;
+        assert.equal((await runtime.query("SELECT id FROM life_admin_records WHERE id=$1", [record.id])).rows.length, 0);
+        assert.equal((await runtime.query("SELECT id FROM receipt_files WHERE record_id=$1", [record.id])).rows.length, 0);
+        assert.equal(await blob.get(initial.blobKey), null);
+        if (typeof result !== "boolean") assert.equal(await blob.get(result.blobKey), null);
+        if (firstOperation === "delete") assert.equal(attemptedPut, false, "deleted parent must reject upload before storage");
+      } finally {
+        resume.resolve();
+        await Promise.allSettled([first, second]);
+      }
+    }
+  } finally {
+    await purge.query("DELETE FROM users WHERE id=$1", [user.id]);
+    dek.fill(0);
+  }
+}
+
 export async function verifyPostgresSecurityContention(runtime: Db, purge: Db): Promise<void> {
   if (process.platform !== "linux" || process.env.WARTHOG_LOCAL_PG_CHECK !== "1") throw new Error("Local Compose check required");
   assert.equal((await runtime.query("SHOW cluster_name")).rows[0]?.cluster_name, "warthog-local-certification");
@@ -226,5 +282,6 @@ export async function verifyPostgresSecurityContention(runtime: Db, purge: Db): 
   await registrationCheck(runtime);
   await sessionCheck(runtime, purge);
   await activityChecks(runtime, purge);
-  console.log("PostgreSQL security contention: OAuth rollback/revocation, DCR final-slot capacity, session/deletion and activity-chain locks passed.");
+  await receiptChecks(runtime, purge);
+  console.log("PostgreSQL security contention: OAuth rollback/revocation, DCR final-slot capacity, session/deletion activity-chain and receipt upload/deletion locks passed.");
 }
