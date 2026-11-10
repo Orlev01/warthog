@@ -197,7 +197,9 @@ describe("production build and boot of the whole app (E18-S12)", () => {
       let output = "";
       ctx.serverOutput = () => output;
 
-      const server = spawn("npm", ["start"], {
+      // Match the container's explicit bind hostname. Next otherwise uses a localhost
+      // request origin, which hides its normalization of loopback literals in queries.
+      const server = spawn("npm", ["start", "--", "--hostname", "0.0.0.0"], {
         cwd: ROOT,
         detached: true, // own process group, so teardown kills `next` too, not just `npm`
         stdio: ["ignore", "pipe", "pipe"],
@@ -367,6 +369,39 @@ describe("production build and boot of the whole app (E18-S12)", () => {
       html.includes(email),
       "the sign-up code reached the dev outbox the page reads — one outbox singleton across route and page graphs",
     );
+  });
+
+  test("OAuth preserves loopback callback and opaque state through the HTTP framework", async () => {
+    assert.ok(ctx.ready, `the started server must boot and serve.\n${ctx.bootDiag}`);
+    const redirectUri = "http://127.0.0.1:54321/callback";
+    const registration = await fetch(`${ctx.baseUrl}/oauth/register`, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ redirect_uris: [redirectUri] }),
+    });
+    assert.equal(registration.status, 201);
+    const client = await registration.json() as { client_id: string };
+    const params = new URLSearchParams({
+      response_type: "code",
+      client_id: client.client_id,
+      redirect_uri: redirectUri,
+      code_challenge: "x".repeat(43),
+      code_challenge_method: "S256",
+      resource: `${ctx.baseUrl}/mcp`,
+      state: "opaque-127.0.0.1-state",
+    });
+    const response = await fetch(`${ctx.baseUrl}/oauth/authorize?${params}`, { redirect: "manual" });
+    assert.equal(response.status, 302, "a valid signed-out client must reach sign-in, not a 400 page");
+    const signIn = new URL(response.headers.get("location")!, ctx.baseUrl);
+    assert.equal(signIn.pathname, "/signin");
+    const resumed = new URL(signIn.searchParams.get("next")!, ctx.baseUrl);
+    assert.deepEqual([...resumed.searchParams], [...params], "every OAuth query value must survive unchanged");
+
+    // Do not solve normalization by treating distinct registered hosts as equivalent.
+    params.set("redirect_uri", "http://localhost:54321/callback");
+    const mismatch = await fetch(`${ctx.baseUrl}/oauth/authorize?${params}`, { redirect: "manual" });
+    assert.equal(mismatch.status, 400);
+    assert.equal(mismatch.headers.get("location"), null);
   });
 
   // ── AC3 — on boot the in-process job scheduler is started from instrumentation ─────────

@@ -10,6 +10,13 @@ the live runtime confirms all 70 migrations, PostgreSQL TLS 1.3 and UID 1000.
 See the [release record](docs/first-app-release-2026-11-10.md) for the exact digest
 and evidence. This is infrastructure release completion, not full launch acceptance.
 
+Live acceptance now passes Memory/Skill CRUD and cleanup, eleven public boundary
+checks, approved temporary-agent OAuth/MCP, immediate permission reduction,
+refresh rotation and token revocation. A loopback callback-normalization defect
+and missing Memory browser validation are fixed in source; 45 focused Node 22/Linux
+checks pass. These fixes are not deployed. See the [acceptance record](docs/audit/live-acceptance-2026-11-10.md)
+for remaining sign-in, provider, upload and recovery tests and exact cleanup scope.
+
 SMS is explicitly disabled, with nine core Key Vault references and no Twilio
 configuration injected. Twilio onboarding is deferred and does not block this
 launch. Email/push and connector production configuration remain required.

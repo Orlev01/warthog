@@ -44,6 +44,10 @@ const SECURITY_HEADERS = [
 const nextConfig = {
   reactStrictMode: true,
   poweredByHeader: false,
+  // NextURL can rewrite a loopback literal inside an OAuth query to "localhost".
+  // Preserve the incoming URL so registered callback URIs and opaque state reach
+  // the authorization handler unchanged; redirect validation remains exact.
+  skipMiddlewareUrlNormalize: true,
   // A self-contained server (.next/standalone) for the container image.
   output: "standalone",
   outputFileTracingRoot: projectRoot,

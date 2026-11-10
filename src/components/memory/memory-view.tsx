@@ -77,6 +77,8 @@ function ContentField({ content }: { content?: string }) {
       <textarea
         id={id}
         name="content"
+        required
+        maxLength={20_000}
         rows={3}
         className={`${CONTROL_BASE} min-h-20`}
         placeholder="A short fact or note"

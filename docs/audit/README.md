@@ -1,5 +1,13 @@
 # Warthog comprehensive engineering audit
 
+**Live acceptance follow-up, 10 November:** Memory and Skill CRUD/cleanup, eleven
+public security-boundary checks, approved temporary-agent OAuth/MCP, permission
+reduction, refresh rotation and token revocation pass. Testing found a loopback
+callback URL-normalization defect and missing Memory browser validation; both are
+corrected in source with 45 focused Node 22/Linux checks passing. The source fixes
+are not yet deployed. See the [acceptance record](live-acceptance-2026-11-10.md)
+for evidence, cleanup and the remaining sign-in/provider/upload/recovery work.
+
 **First app release completed, 10 November:** the founder-approved
 [release](../first-app-release-2026-11-10.md) succeeds on f406b2b, with one healthy
 replica, explicit 100% traffic, 70 applied migrations and PostgreSQL TLS 1.3.

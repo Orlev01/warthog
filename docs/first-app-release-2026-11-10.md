@@ -71,6 +71,12 @@ These follow-up delivery changes do not change the deployed application image.
 
 ## Remaining launch work
 
+The subsequent [live acceptance run](audit/live-acceptance-2026-11-10.md) passes
+Memory/Skill CRUD and cleanup, public security boundaries, temporary-agent
+OAuth/MCP, permission reduction, refresh rotation and revocation. It found two
+source fixes (loopback OAuth URL preservation and Memory browser validation),
+verified locally but not yet deployed. The release image above remains unchanged.
+
 Navigation observations for a later UI pass: landing/signup/sign-in lack direct
 policy links, although the policy pages work and Help links to Privacy, which
 links to Terms. The terms page has the generic browser title "Warthog". These are
