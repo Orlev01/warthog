@@ -35,6 +35,7 @@ import { getAgentDefaults } from "../db/agent-defaults";
 import { listAgentsForUser } from "../db/agents";
 import { getConnectionPermissions } from "../db/agent-permissions";
 import { listSkillsForUser, type Skill } from "../db/skills";
+import { listPackages } from "../db/skill-packages";
 import { listMemoriesForUser } from "../db/memories";
 import { listAllRules } from "../db/rules";
 import { listTasksForUser } from "../db/tasks";
@@ -113,6 +114,8 @@ export async function buildExportDocument(
   const identityFields = await listIdentityFields(db, userId, dek);
   const preferences = await getPreferences(db, userId, dek);
   const skills = await listSkillsForUser(db, userId, dek);
+  const packages = await listPackages(db, userId, dek);
+  const packageBySkill = new Map(packages.flatMap((p) => p.members.map((m) => [m.skillId, p.id] as const)));
   const memory = await listMemoriesForUser(db, userId, dek);
   const rules = await listAllRules(db, userId, dek);
   const tasks = await listTasksForUser(db, userId, dek);
@@ -142,9 +145,11 @@ export async function buildExportDocument(
         }
       : {},
     agentSettings,
+    ...(packages.length ? { skillPackages: packages.map((p) => ({ id: p.id, name: p.name, files: p.files })) } : {}),
     skills: skills.map((skill) => ({
       scope: skill.scope, enabled: skill.enabled, scopedAgentIds: skill.scopedAgentIds,
       id: skill.id,
+      ...(packageBySkill.has(skill.id) ? { packageId: packageBySkill.get(skill.id) } : {}),
       title: skill.title,
       text: renderSkillText(skill),
     })),

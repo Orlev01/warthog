@@ -1,3 +1,5 @@
+import { withTransaction } from "@/server/db/index";
+import { effectiveSkillAudiences } from "@/server/agents/skill-access";
 // E13-S08 — Skills page loader + actions (the injectable, unit-testable seam the
 // thin `page.tsx` composes — the convention's `createXActions(deps)` factory, as
 // `vault/actions.ts`, `connectors/actions.ts`, `agents/[id]/actions.ts` and
@@ -33,6 +35,7 @@
 //     screen or a stored row.
 
 import { z } from "zod";
+import { isPackagedSkill } from "@/server/db/skill-packages";
 
 import { parseParams } from "@/server/http/validate";
 import type { Db } from "@/server/db/index";
@@ -204,7 +207,7 @@ export function createSkillsActions(deps: SkillsActionsDeps): SkillsActions {
   // skill. Another person's content never appears.
   async function load(session: Session): Promise<SkillsPageData> {
     const dek = await dataKeyFor(session.userId);
-    const skills = await listSkillsForUser(db, session.userId, dek);
+    const skills = await effectiveSkillAudiences(db, session.userId, await listSkillsForUser(db, session.userId, dek));
     const preferences = await getPreferences(db, session.userId, dek);
     return {
       skills,
@@ -258,6 +261,7 @@ export function createSkillsActions(deps: SkillsActionsDeps): SkillsActions {
   // not this person's is refused and left unchanged.
   async function editSkill(session: Session, input: EditSkillInput): Promise<ActionResult> {
     const valid = parseParams(editSkillSchema, input);
+    if (await isPackagedSkill(db, session.userId, valid.id)) return { ok: false, reason: "edit_package" };
     const scopedAgentIds = valid.scopedAgentIds ?? [];
     if (valid.scope === "chosen" && !(await allAgentsOwned(session.userId, scopedAgentIds))) {
       return { ok: false, reason: "unknown_agent" };
@@ -266,8 +270,9 @@ export function createSkillsActions(deps: SkillsActionsDeps): SkillsActions {
       return { ok: false, reason: "not_found" };
     }
     const dek = await dataKeyFor(session.userId);
+    await withTransaction(db, async tx => {
     await editSkillRow(
-      db,
+      tx,
       session.userId,
       valid.id,
       {
@@ -279,6 +284,8 @@ export function createSkillsActions(deps: SkillsActionsDeps): SkillsActions {
       },
       dek,
     );
+      await tx.query("DELETE FROM agent_skill_access WHERE user_id = $1 AND skill_id = $2", [session.userId, valid.id]);
+    });
     return { ok: true };
   }
 
@@ -287,6 +294,7 @@ export function createSkillsActions(deps: SkillsActionsDeps): SkillsActions {
   // created), then duplicate through the store (re-encrypting under the new row's id).
   async function duplicateSkill(session: Session, input: SkillIdInput): Promise<ActionResult> {
     const valid = parseParams(skillIdInputSchema, input);
+    if (await isPackagedSkill(db, session.userId, valid.id)) return { ok: false, reason: "edit_package" };
     if (!(await ownsSkill(session.userId, valid.id))) {
       return { ok: false, reason: "not_found" };
     }
@@ -312,6 +320,7 @@ export function createSkillsActions(deps: SkillsActionsDeps): SkillsActions {
   // person's removes nothing and is a safe no-op refusal.
   async function deleteSkill(session: Session, input: SkillIdInput): Promise<ActionResult> {
     const valid = parseParams(skillIdInputSchema, input);
+    if (await isPackagedSkill(db, session.userId, valid.id)) return { ok: false, reason: "edit_package" };
     const removed = await deleteSkillRow(db, session.userId, valid.id);
     return removed ? { ok: true } : { ok: false, reason: "not_found" };
   }

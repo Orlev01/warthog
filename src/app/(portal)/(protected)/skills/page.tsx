@@ -14,6 +14,9 @@ import type { Db } from "@/server/db/index";
 import { createSkillsActions, type SkillsActions } from "./actions";
 import { SkillsView } from "@/components/skills/skills-view";
 import { PageContainer } from "@/components/shell/page-container";
+import { listPackageSummaries } from "@/server/db/skill-packages";
+import { listAgentsForUser } from "@/server/db/agents";
+import { getUserById } from "@/server/db/users";
 
 // E13-S08 — Skills page (the thin protected-page loader + action wiring over the tested
 // `createSkillsActions` seam, `./actions`). It reads the signed-in session from the
@@ -201,12 +204,21 @@ export default async function SkillsPage({
   }
 
   const data = await buildActions(db).load(session);
+  const config = loadConfig();
+  const user = await getUserById(db, session.userId);
+  if (!user) redirect("/signin");
+  const dek = await selectKeyWrapper({ nodeEnv: config.nodeEnv, localKek: config.devKek }).unwrap(user.wrappedDek);
+  const packages = await listPackageSummaries(db, session.userId, dek);
+  const packagedIds = new Set(packages.flatMap((p) => p.members.map((m) => m.skillId)));
+  const agents = await listAgentsForUser(db, session.userId);
 
   return (
-    <PageContainer>
+    <PageContainer className="max-w-5xl">
       {notice ? <NoticeBanner notice={notice} /> : null}
       <SkillsView
-        skills={data.skills}
+        skills={data.skills.map((s) => packagedIds.has(s.id) ? { ...s, fullText: undefined } : s)}
+        packages={packages}
+        agents={agents.map((a) => ({ id: a.id, displayName: a.displayName, status: a.status }))}
         preferences={data.preferences}
         houseSkill={data.houseSkill}
         saveProfileAction={saveProfileAction}
