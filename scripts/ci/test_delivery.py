@@ -133,6 +133,25 @@ class SingletonTests(unittest.TestCase):
         changed["properties"]["template"]["containers"][0]["env"].append({"name": "NEW", "value": "value"})
         self.assertNotEqual(deploy_app.fingerprint(old), deploy_app.fingerprint(changed))
 
+    def test_config_hash_normalizes_only_empty_secret_backed_values(self):
+        original = app_fixture()
+        original["properties"]["template"]["containers"][0]["env"].append(
+            {"name": "DATABASE_URL", "secretRef": "database-url"})
+        normalized = copy.deepcopy(original)
+        entry = normalized["properties"]["template"]["containers"][0]["env"][-1]
+        entry["value"] = ""
+        self.assertEqual(deploy_app.fingerprint(original), deploy_app.fingerprint(normalized))
+        self.assertEqual(entry["value"], "")  # Fingerprinting must not mutate its input.
+        for change in [{"value": "literal"}, {"secretRef": "different"}, {"secretRef": ""}]:
+            changed = copy.deepcopy(normalized)
+            changed["properties"]["template"]["containers"][0]["env"][-1].update(change)
+            self.assertNotEqual(deploy_app.fingerprint(original), deploy_app.fingerprint(changed))
+        literal = copy.deepcopy(original)
+        literal["properties"]["template"]["containers"][0]["env"].append({"name": "EMPTY"})
+        changed = copy.deepcopy(literal)
+        changed["properties"]["template"]["containers"][0]["env"][-1]["value"] = ""
+        self.assertNotEqual(deploy_app.fingerprint(literal), deploy_app.fingerprint(changed))
+
     def test_live_guard_rejects_rolling_mode_second_container_and_latest_traffic(self):
         good = app_fixture()
         deploy_app.validate_live(good)
@@ -197,7 +216,10 @@ class SingletonTests(unittest.TestCase):
     def test_success_preserves_domains_and_changes_only_image_revision_traffic(self):
         platform = self.platform()
         old = app_fixture()
+        old["properties"]["template"]["containers"][0]["env"].append(
+            {"name": "DATABASE_URL", "secretRef": "database-url"})
         live = copy.deepcopy(old)
+        live["properties"]["template"]["containers"][0]["env"][-1]["value"] = ""
         live["properties"]["template"]["revisionSuffix"] = "new"
         live["properties"]["template"]["containers"][0]["image"] = "new-digest"
         live["properties"]["configuration"]["ingress"]["traffic"] = [{"revisionName": "warthog--new", "weight": 100}]

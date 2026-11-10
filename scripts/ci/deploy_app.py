@@ -15,7 +15,13 @@ from common import (ROOT, account, azure, canonical, command, digest, gate,
 
 
 def fingerprint(app):
-    properties = app["properties"]
+    properties = copy.deepcopy(app["properties"])
+    # Azure revision copies may serialize an absent secret-backed literal as "".
+    # Normalize only this equivalent representation; retain every real value.
+    for container in (properties.get("template") or {}).get("containers", []):
+        for entry in container.get("env", []):
+            if entry.get("secretRef") and entry.get("value") == "":
+                del entry["value"]
     # These are the mutable app settings relevant to an image-only update.
     return digest(canonical({"identity": app.get("identity"), "tags": app.get("tags"),
         "location": app.get("location"), **{key: properties.get(key) for key in
