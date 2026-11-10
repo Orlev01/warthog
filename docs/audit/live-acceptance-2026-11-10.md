@@ -19,9 +19,14 @@ identity, external services and sharing learned information were off.
 | Revocation | The revocation endpoint succeeds. Both original and rotated access tokens then return 401; both refresh tokens return 400 `invalid_grant`. |
 
 The API-created note was deleted through the UI before permissions were reduced.
-The temporary agent's credentials are revoked. Its final UI disconnection is
-recorded separately in the private cleanup evidence. Browser console captures for
-the Memory and Skill tests contain no errors.
+The temporary agent's credentials are revoked. Chrome's adapter timed out before
+it could accept the disconnect confirmation, and native control could not reach
+that dialog. An operator transaction then marked only the exact founder-owned
+test agent disconnected, under the application's connection lock, after requiring
+zero tokens, codes, access keys and pending approvals. Exactly one agent row
+changed; the private evidence records this cleanup. **UI disconnection remains
+unverified**; operator cleanup is not counted as a UI pass. Browser console
+captures for the Memory and Skill tests contain no errors.
 
 ## Defects and source corrections
 
@@ -43,6 +48,11 @@ The corrected source passes 45 focused checks on Node 22/Linux: the production
 build/HTTP boot suite, Memory rendering, OAuth authorization and route-handler
 tests. Build/type checks and `git diff --check` pass. These source corrections
 have **not been deployed**; production still runs the approved first image.
+
+[Full CI run 42779041795](https://github.com/Orlev01/warthog/actions/runs/42779041795)
+also passes all six jobs on source `0ef32390e2a3289e7d7297e96da90135af2bc382`:
+5,079 application tests with zero failures, real PostgreSQL 16 checks on every
+shard, runtime builds, delivery guards and Terraform provider-schema validation.
 
 ## Remaining acceptance
 

@@ -4,7 +4,8 @@
 public security-boundary checks, approved temporary-agent OAuth/MCP, permission
 reduction, refresh rotation and token revocation pass. Testing found a loopback
 callback URL-normalization defect and missing Memory browser validation; both are
-corrected in source with 45 focused Node 22/Linux checks passing. The source fixes
+corrected in source with 45 focused Node 22/Linux checks passing. Full CI on
+`0ef3239` passes all six jobs and 5,079 application tests. The source fixes
 are not yet deployed. See the [acceptance record](live-acceptance-2026-11-10.md)
 for evidence, cleanup and the remaining sign-in/provider/upload/recovery work.
 

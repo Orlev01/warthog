@@ -14,7 +14,10 @@ Live acceptance now passes Memory/Skill CRUD and cleanup, eleven public boundary
 checks, approved temporary-agent OAuth/MCP, immediate permission reduction,
 refresh rotation and token revocation. A loopback callback-normalization defect
 and missing Memory browser validation are fixed in source; 45 focused Node 22/Linux
-checks pass. These fixes are not deployed. See the [acceptance record](docs/audit/live-acceptance-2026-11-10.md)
+checks pass. Full CI on `0ef3239` passes all six jobs and 5,079 application tests.
+The temporary test agent is disconnected and its credentials revoked; browser
+dialog handling prevented a UI-disconnect pass, so exact operator cleanup is
+recorded instead. These fixes are not deployed. See the [acceptance record](docs/audit/live-acceptance-2026-11-10.md)
 for remaining sign-in, provider, upload and recovery tests and exact cleanup scope.
 
 SMS is explicitly disabled, with nine core Key Vault references and no Twilio
