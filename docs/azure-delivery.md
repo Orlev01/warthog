@@ -261,6 +261,14 @@ and follow the singleton runbook; never infer termination from the workflow stat
 All Azure workflows disable cancellation by a newer run, but manual cancellation
 and infrastructure failures still require operator recovery.
 
+Azure may serialize secret-backed environment entries with `value: ""` after a
+revision copy. Configuration comparison normalizes only that empty field when
+`secretRef` is nonempty; all substantive settings remain protected. The
+[10 November release record](audit/acceptance-fixes-release-2026-11-10.md) records
+the initial false-positive stop, regression fix and verified operator continuation.
+A failed workflow remains failed even when its reviewed candidate is later
+recovered by an operator.
+
 Local tests cover scope/approval guards, private plan integrity/age/input checks,
 configuration drift, stopping before ownership checks, lingering replicas, held
 locks and failed-start cleanup. Actionlint checks all workflow schemas. Azure CLI

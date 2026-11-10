@@ -1,5 +1,20 @@
 # Warthog comprehensive engineering audit
 
+**Acceptance fixes deployed, 10 November:** source `09e1360` is live with one
+healthy replica and explicit 100% traffic. Publication CI passes 5,092 application
+tests; all 16 public post-release checks pass. Fresh Authenticator sign-in and
+approved Gmail connection/labels-only read pass. Production receipt uploads and
+downloads preserve exact bytes up to just below 25 MiB; oversized files are
+rejected and synthetic records/files are removed. The temporary runner and all
+associated resources are independently verified removed. The
+[current release record](acceptance-fixes-release-2026-11-10.md) documents the
+Azure serialization guard failure, tested correction and successful operator
+continuation of the same reviewed image; the GitHub release run remains failed.
+Desktop push receipt and isolated coordinated recovery remain unconfirmed.
+See [current state](../../state.md) for the authoritative status and boundaries.
+
+## Historical checkpoints
+
 **Live acceptance follow-up, 10 November:** Memory and Skill CRUD/cleanup, eleven
 public security-boundary checks, approved temporary-agent OAuth/MCP, permission
 reduction, refresh rotation and token revocation pass. Testing found a loopback

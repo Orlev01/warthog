@@ -1,69 +1,63 @@
 # Delivery status — 10 November 2026
 
 **Warthog is available at [app.warthog.com.au](https://app.warthog.com.au).**
-The first Azure application deployment succeeded. The founder approved image
-publication and the exact workload, including the documented remaining OS findings.
-[Release 42768897430](https://github.com/Orlev01/warthog/actions/runs/42768897430)
-runs source `f406b2b070554d452bbcbf5f966d42428bb0351c` as one healthy replica,
-0.5 vCPU / 1 GiB, with explicit 100% traffic. HTTPS readiness/liveness pass;
-the live runtime confirms all 70 migrations, PostgreSQL TLS 1.3 and UID 1000.
-See the [release record](docs/first-app-release-2026-11-10.md) for the exact digest
-and evidence. This is infrastructure release completion, not full launch acceptance.
+The acceptance fixes are deployed from source
+`09e13608110ef6419d6dd876faba17582b291596`, as revision
+`warthog--r42799281150a1`, with one healthy 0.5-vCPU/1-GiB replica and explicit
+100% traffic. The old revision is inactive with zero replicas. Live checks
+confirm 70 migrations, PostgreSQL TLS 1.3, UID 1000 and one database ownership
+lock. See the [current release record](docs/audit/acceptance-fixes-release-2026-11-10.md)
+for the immutable digest, evidence and limits.
 
-Live acceptance now passes Memory/Skill CRUD and cleanup, eleven public boundary
-checks, approved temporary-agent OAuth/MCP, immediate permission reduction,
-refresh rotation and token revocation. A loopback callback-normalization defect
-and missing Memory browser validation are fixed in source; 45 focused Node 22/Linux
-checks pass. Full CI on `0ef3239` passes all six jobs and 5,079 application tests.
-The temporary test agent is disconnected and its credentials revoked; browser
-dialog handling prevented a UI-disconnect pass, so exact operator cleanup is
-recorded instead. These fixes are not deployed. See the [acceptance record](docs/audit/live-acceptance-2026-11-10.md)
-for remaining sign-in, provider, upload and recovery tests and exact cleanup scope.
+[Pinned-base publication CI](https://github.com/Orlev01/warthog/actions/runs/42796225675)
+passes all six jobs and 5,092 application tests. The published image retains
+exactly the previously reviewed OS findings, with no Node findings. Sixteen
+post-release public checks pass, including OAuth loopback callback/state,
+MCP access boundaries, authenticated receipt downloads and the Terms title.
 
-SMS is explicitly disabled, with nine core Key Vault references and no Twilio
-configuration injected. Twilio onboarding is deferred and does not block this
-launch. Email/push and connector production configuration remain required.
-All four approved Resend DNS additions are now provider-verified. Both subsequent
-app-domain records are saved; all eleven earlier GoDaddy records are preserved
-and the zone has thirteen records. Tracking and paid overages remain off.
-The founder-approved single signup email was submitted once through the live UI
-and Resend reports delivered. The founder confirmed receipt and supplied its code;
-email verification succeeded. The test stopped at authentication setup; the founder
-then completed signup using an Authenticator app. The signed-in home, settings,
-notifications and security pages are verified, including the current-device session
-and SMS-disabled presentation. No SMS or push was sent.
+[Release workflow 42799281150](https://github.com/Orlev01/warthog/actions/runs/42799281150)
+failed safely after Azure added empty literal fields beside existing environment
+secret references. It stopped the candidate and proved zero replicas/free database
+ownership. A narrowly scoped normalization fix passes all 29 delivery tests.
+After exact live configuration and zero-replica checks, the operator resumed the
+same reviewed candidate; HTTPS readiness passed at 10:48:55 UTC. The failed
+workflow remains recorded as failed. Tooling correction `7cae752` is separate
+from the deployed application source; no rollback or app configuration change
+was used.
 
-The founder separately approved the exact app CNAME/asuid TXT and free managed
-certificate. Both authoritative nameservers match, Azure reports an SNI binding,
-and trusted HTTPS verifies the app hostname with certificate expiry 10 May 2027.
-Custom-domain health, signup and sign-in pages return 200. Binding changed only
-the custom-domain configuration; image, singleton replica and traffic are preserved.
-Read-only Chrome checks pass for landing, signup, sign-in, privacy, terms and help;
-navigation works and no console warning/error or TLS interstitial was captured.
-Fresh sign-in, credential/recovery lifecycle, provider, upload-limit and coordinated
-restore/deletion acceptance remain outstanding. Credentials, provider purchases/messages, further DNS and
-future deployment approvals retain their boundaries.
+Fresh email-plus-Authenticator sign-in passes. The approved Gmail connection and
+labels-only read both pass; no message content was read and no mail was sent or
+modified. Google remains in Testing mode. Exactly one approved Chrome test push
+was reported sent, but the founder could not confirm seeing the OS notification.
+Do not resend without separate approval. Local browser tests pass for the new
+agent-disconnection Cancel/Confirm dialog and receipt upload/download/deletion,
+including exact near-limit file bytes and oversized-file rejection. Production
+receipt upload/download repeats pass for 1,024 and 26,213,376 bytes, with exact
+SHA-256 matches. Oversized uploads are rejected before submission; the single
+synthetic record and both files are removed. Production Authenticator status,
+Memory required validation and policy links also pass.
 
-The release used a fresh private one-job runner. Its VM, disk, NIC, NAT, egress IP,
-lease group and grants are deleted; independent inventory confirms no subnet NAT
-or GitHub runner remains. The unused runner from a cancelled input-format attempt
-was also fully removed. `AZURE_DELIVERY_ENABLED=true` now permits manual reviewed
-releases; all required-reviewer/main-only gates remain, with no automatic deployment.
+Earlier production Memory/Skill CRUD and cleanup, temporary-agent OAuth/MCP,
+permission reduction, refresh rotation and token revocation remain recorded in
+the [first acceptance round](docs/audit/live-acceptance-2026-11-10.md). That agent
+is disconnected and its tokens revoked. The approved real Gmail connection is
+retained. Other provider consents and isolated coordinated recovery remain
+separate acceptance work; no real account is reset.
 
-[Publication CI](https://github.com/Orlev01/warthog/actions/runs/42762919981) passes
-5,078 application tests, 27 delivery tests, five cost tests, Terraform schemas,
-real PostgreSQL and runtime builds. Follow-up delivery fixes handle Azure's null
-Dapr response and validate approval references before requesting a private runner;
-all 28 delivery regressions, Actionlint and the live app contract pass. The
-application image remains the approved f406b2b image.
+SMS remains disabled, with nine core Key Vault references and no Twilio
+configuration injected. Twilio is not required for the current app. Previously
+approved Resend DNS and app DNS/certificate remain unchanged and verified.
+Startup-credit linkage was checked before this release; estimated Azure usage
+remains A$430.66/month (A$438.13 for 31 days), before credits/tax/providers. The
+A$440 usage alert is unchanged. It is an alert, not a spending stop.
 
-The existing foundation, scoped permissions, 21 versioned secrets, HSM key,
-private database roles, Google Testing OAuth and Microsoft OAuth remain verified
-as recorded in the [setup report](docs/delivery-setup-2026-11-10.md). Active startup
-credit linkage was checked before release. Azure usage remains estimated at
-A$430.66/month, or A$438.13 for 31 days, before credits/tax/providers; the A$440
-budget alert is unchanged. Private evidence stays under ignored owner-only
-`.delivery/activation-2026-11-10/`.
+The fresh private one-job runner and its VM, disk, NIC, NAT, egress IP, resource
+group and grants are deleted. Independent inventory confirms no shared-subnet
+NAT association or GitHub runner remains. `AZURE_DELIVERY_ENABLED=true` permits
+manual reviewed releases; required-reviewer/main-only gates remain in place.
+Future deployment, credential, message, spending/profile and DNS changes retain
+their approval boundaries. Private evidence stays in the ignored owner-only
+`.delivery/activation-2026-11-10/` directory.
 
 Earlier checkpoints below are historical where superseded by this status.
 

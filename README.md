@@ -24,7 +24,7 @@ Use Node 22. The committed environment file contains public development fixtures
 production requires separately approved credentials and infrastructure. For the
 clean Docker/PostgreSQL checks, see [`docs/local-release-validation.md`](docs/local-release-validation.md).
 The approved Azure foundation, scoped permissions and production credentials are
-installed. The [first approved application release](docs/first-app-release-2026-11-10.md)
+installed. The [acceptance-fixes release](docs/audit/acceptance-fixes-release-2026-11-10.md)
 is running with SMS disabled, one healthy replica and verified private database
 access. Delivery workflows are enabled for manual, reviewed use; future deployments
 still require approval. The release record and [current state](state.md) track

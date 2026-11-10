@@ -1,5 +1,12 @@
 # Live acceptance testing — 10 November 2026
 
+**Superseded by the [deployed acceptance-fixes record](acceptance-fixes-release-2026-11-10.md):**
+source `09e1360` is live. The earlier findings and pending statements below describe
+the first-release test round. Fresh Authenticator sign-in and the approved Gmail
+connection/labels-only request now pass; push delivery at the OS remains unconfirmed.
+
+## First-release test round (historical)
+
 Testing used the deployed `f406b2b` release at `app.warthog.com.au`, the founder's
 authenticated browser session and clearly labelled synthetic data. The founder
 separately approved one temporary Standard agent for API testing. Cards, high-tier
