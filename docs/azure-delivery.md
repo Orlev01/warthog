@@ -45,6 +45,18 @@ behavior before approving chargeable bootstrap resources. Keep account-specific
 billing evidence and support correspondence in ignored private files, not this
 public repository. [MCA credit behavior](https://learn.microsoft.com/en-us/azure/cost-management-billing/benefits/credits/mca-check-azure-credits-balance).
 
+Keep the approved cash ceiling separate from `monthly_azure_budget_aud`, which
+sets a usage notification budget. Cost Management costs exclude credits and taxes;
+credits are applied at billing-profile invoice level. An available credit balance
+can be shared with other subscriptions and does not prove current net cash cost.
+Never copy a cash-after-credit ceiling into the usage budget and describe it as
+cash protection. Azure offers no custom hard spending limit, and budget alerts or
+delayed shutdown automation cannot guarantee one. The founder's cash target does
+not authorize an overshoot. Resolve the control limitation before activation and
+retain the exact resource, identity, credential and DNS review boundaries.
+[Cost data limitations](https://learn.microsoft.com/en-us/azure/cost-management-billing/costs/understand-cost-mgt-data),
+[spending limits](https://learn.microsoft.com/en-us/azure/cost-management-billing/manage/spending-limit).
+
 Each environment needs a separately approved Entra application/service principal
 or user-assigned identity and federated credential. Use OIDC, not an Azure client
 secret or the personal GitHub token. The personal token is only for authorized
