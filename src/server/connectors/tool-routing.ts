@@ -150,6 +150,7 @@ export function connectorToolsetFor(
   grantedConnectors: readonly string[],
   catalogue: CatalogueIndex,
   accounts: Readonly<Record<string, string>> = {},
+  providerTools: Readonly<Record<string, readonly ConnectorToolDeclaration[]>> = {},
 ): ConnectorToolset {
   const toolset: Record<string, readonly ConnectorToolDeclaration[]> = {};
   for (const connection of connections) {
@@ -158,7 +159,11 @@ export function connectorToolsetFor(
     const selected = selectConnectorAccount(connections, id, accounts[id]);
     if (!selected || selected.id !== connection.id) continue;
     const entry = catalogue.get(id);
-    if (!entry || entry.auth_kind === "provider_mcp") continue;
+    if (!entry) continue;
+    if (entry.auth_kind === "provider_mcp") {
+      if (providerTools[connection.id]?.length) toolset[id] = providerTools[connection.id]!;
+      continue;
+    }
     const curated = CURATED_BY_CONNECTOR.get(id);
     toolset[id] = curated
       ? curated.map((tool) => declarationOf(tool, entry.name))
@@ -174,6 +179,7 @@ export function connectorToolsetFor(
 
 // The seams the executor runs on.
 export interface ConnectorToolExecutorDeps {
+  readonly executeProvider?: (userId:string,connectionId:string,tool:string,input:unknown)=>Promise<unknown>;
   readonly db: Db;
   readonly catalogue: CatalogueIndex;
   readonly fetch: typeof fetch;
@@ -197,7 +203,7 @@ export function createConnectorToolExecutor(
   return async function executeConnectorTool(call: ConnectorCall, userId: string, accountId?: string): Promise<unknown> {
     const entry = deps.catalogue.get(call.connector);
     const prefix = `${call.connector}${NAMESPACE}`;
-    if (!entry || entry.auth_kind === "provider_mcp" || !call.tool.startsWith(prefix)) {
+    if (!entry || (entry.auth_kind === "provider_mcp" && !deps.executeProvider) || !call.tool.startsWith(prefix)) {
       throw new HttpError(400, "This service tool is not available.");
     }
     const verb = call.tool.slice(prefix.length);
@@ -208,6 +214,7 @@ export function createConnectorToolExecutor(
     if (!connection) {
       throw new HttpError(409, "Choose a connected account for this service in the agent settings.");
     }
+    if (entry.auth_kind === "provider_mcp") return deps.executeProvider!(userId,connection.id,verb,call.params);
     const dek = await deps.dekFor(userId);
     const transport = { db: deps.db, fetch: deps.fetch };
 

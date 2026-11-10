@@ -59,6 +59,8 @@ export interface ToolDefinition {
 // validated body, so the rules engine's send-message and recipient rules can match. The
 // general `request` tool is classified per call by its HTTP method instead.
 export interface ConnectorToolDeclaration {
+  readonly schema?: z.ZodType;
+  readonly requiresApproval?: boolean;
   readonly name: string;
   readonly description?: string;
   readonly makesChange?: boolean;
@@ -229,7 +231,7 @@ const CORE_TOOL_SPECS: readonly CoreToolSpec[] = [
   },
   {
     name: "update_task",
-    description: "Update one of your tasks by id: change its status or append a note.",
+    description: "Update one of your tasks by id: change status or append a note. Updating a shared task claims it for ten minutes; further updates renew the claim. Set status open to release it. Another agent cannot change it until the claim expires.",
     makesChange: true,
     schema: updateTaskSchema,
   },
@@ -310,7 +312,7 @@ function buildConnectorTool(
   const declaration: ConnectorToolDeclaration = typeof tool === "string" ? { name: tool } : tool;
   const name = `${connectorId}${NAMESPACE}${declaration.name}`;
   const isRequest = declaration.name === REQUEST_TOOL;
-  const schema = isRequest ? connectorRequestSchema : connectorToolSchema;
+  const schema = declaration.schema ?? (isRequest ? connectorRequestSchema : connectorToolSchema);
   return {
     name,
     description:
@@ -322,6 +324,7 @@ function buildConnectorTool(
         connector: connectorId,
         tool: name,
         makesChange: isRequest ? requestMakesChange(String(parsed.method)) : (declaration.makesChange ?? true),
+        requiresApproval: declaration.requiresApproval,
         messageChannel: declaration.messageChannel,
         recipients: declaration.recipients?.(parsed.body),
         reason: parsed.reason as string | undefined,

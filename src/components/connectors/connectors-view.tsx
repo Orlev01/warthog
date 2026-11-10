@@ -62,6 +62,7 @@ export type ConnectionItem = {
   name: string;
   accountLabel: string;
   unavailableReason?: string;
+  reconnectable?: boolean;
   status: StatusKey;
   connectedAt: string;
   tools: readonly ToolItem[];
@@ -79,6 +80,7 @@ export type ConnectorsViewProps = {
   // exactly as AgentListView treats its Disconnect action.
   connectAction?: (formData: FormData) => void | Promise<void>;
   disconnectAction?: (formData: FormData) => void | Promise<void>;
+  reconnectAction?: (formData: FormData) => void | Promise<void>;
   requestAction?: (formData: FormData) => void | Promise<void>;
 };
 
@@ -266,6 +268,7 @@ function DisconnectControl({
 }: {
   connectionId: string;
   disconnectAction?: (formData: FormData) => void | Promise<void>;
+  reconnectAction?: (formData: FormData) => void | Promise<void>;
 }) {
   if (!disconnectAction) {
     return (
@@ -289,10 +292,12 @@ function DisconnectControl({
 
 function ConnectionCard({
   connection,
+  reconnectAction,
   disconnectAction,
 }: {
   connection: ConnectionItem;
   disconnectAction?: (formData: FormData) => void | Promise<void>;
+  reconnectAction?: (formData: FormData) => void | Promise<void>;
 }) {
   return (
     <li className="flex flex-col gap-3 rounded-card border border-line bg-surface p-4">
@@ -330,6 +335,7 @@ function ConnectionCard({
       </p>
 
       <div className="flex flex-wrap items-center gap-2">
+        {connection.reconnectable && reconnectAction && <form action={reconnectAction}><input type="hidden" name="connectionId" value={connection.id}/><button type="submit" className="rounded-control border border-line px-3 py-2 text-sm font-medium text-fg">Reconnect and refresh tools</button></form>}
         <DisconnectControl connectionId={connection.id} disconnectAction={disconnectAction} />
       </div>
     </li>
@@ -342,6 +348,7 @@ export function ConnectorsView({
   query,
   canRequest,
   connectAction,
+  reconnectAction,
   disconnectAction,
   requestAction,
 }: ConnectorsViewProps) {
@@ -402,6 +409,7 @@ export function ConnectorsView({
               <ConnectionCard
                 key={connection.id}
                 connection={connection}
+                reconnectAction={reconnectAction}
                 disconnectAction={disconnectAction}
               />
             ))}

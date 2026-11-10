@@ -1,3 +1,4 @@
+import { createProviderRuntime, type ProviderFlow } from "./provider-runtime";
 import type { TokenEndpointResponse } from "oauth4webapi";
 import type { Config } from "../config";
 import { withTransaction, type Db } from "../db/index";
@@ -29,7 +30,7 @@ function reportConnectorFailure(stage: string, error: unknown) {
   console.error("[warthog connector]", JSON.stringify({ stage, code, ...(claim ? { claim } : {}) }));
 }
 
-export interface CompleteConnectorInput extends PendingConnectFlow { readonly userId: string; readonly code: string; readonly state: string }
+export interface CompleteConnectorInput extends PendingConnectFlow { readonly userId: string; readonly code: string; readonly state: string; readonly iss?:string; readonly providerState?:ProviderFlow["providerState"]; readonly reconnectId?:string }
 
 export function createConnectorRuntime(deps: {
   config: Config; db: Db; clock?: Clock; fetch?: typeof fetch; keyWrapper?: KeyWrapper; catalogue?: CatalogueIndex;
@@ -74,8 +75,11 @@ export function createConnectorRuntime(deps: {
     // Avoid an immediate infinite refresh loop for providers issuing short tokens.
     await scheduleConnectionRefresh(tx, { userId, connectionId, expiresAt: new Date(Math.max(expiry.getTime(), clock.now().getTime() + 360_000)) });
   }
+  const provider = createProviderRuntime({db,catalogue,clock,publicBaseUrl:config.publicBaseUrl,dekFor:keyFor,fetch:deps.fetch});
   return {
-    async begin(session: Session, connectorId: string): Promise<{ url: string }> {
+    takeProvider: provider.take,
+    async begin(session: Session, connectorId: string, reconnectId?:string): Promise<{ url: string }> {
+      if (catalogue.get(connectorId)?.auth_kind === "provider_mcp") return provider.begin(session,connectorId,reconnectId);
       const entry = entryFor(connectorId);
       await allowed(session.userId, entry);
       const auth = await buildAuthorizeUrl({ entry, config: oauthClientFor(config, connectorId) });
@@ -84,6 +88,7 @@ export function createConnectorRuntime(deps: {
     },
     take(session: Pick<Session, "userId" | "id">, state: string) { return pendingConnects().take(session.userId, session.id, state); },
     async complete(input: CompleteConnectorInput) {
+      if (input.providerState) return provider.complete({...input,providerState:input.providerState});
       const entry = entryFor(input.connectorId);
       await allowed(input.userId, entry);
       const dek = await keyFor(input.userId);

@@ -65,6 +65,7 @@ import { withTransaction, type Db } from "../db/index";
 // engine's `PolicyCall`, plus the tool `params` (executed + recorded, redacted)
 // and an optional agent `reason`.
 export interface AgentCall {
+  readonly requiresApproval?: boolean;
   readonly connector: string | null;
   readonly connectorAccountId?: string;
   readonly connectorAccountLabel?: string;
@@ -219,7 +220,11 @@ function toPolicyContext(
     connectionActive: connection.active,
     agentId: connection.connectionId,
     permission: toPermission(call, context),
-    rules: context.rules as readonly IdentifiedRule[],
+    // Unknown provider semantics cannot bypass a never-send or conditional
+    // prohibition by omitting trustworthy channel/recipient/amount metadata.
+    rules: context.rules.map(rule => call.requiresApproval && rule.kind === "never_allow"
+      ? {...rule, condition:undefined, ...(rule.action.type === "send_message" ? {action:{type:"any_change" as const}} : {})}
+      : rule) as readonly IdentifiedRule[],
     accountCurrency: context.accountCurrency,
     ruleCurrency: context.cardChecks?.ruleCurrency,
     ruleRate: context.cardChecks?.ruleRate,
@@ -433,7 +438,7 @@ export function createAgentCallPipeline(deps: PipelineDeps): AgentCallPipeline {
     // one activity entry for the held call, and tells the agent `pending_approval`
     // WITHOUT executing the tool. The person decides it from their inbox; on
     // approval Warthog runs the held call exactly once.
-    if (decision.decision === "ask") {
+    if (decision.decision === "ask" || call.requiresApproval) {
       const dek = await dataKeyFor(connection.userId);
       // The pending approval and the held call it guards are written together: a
       // failure part-way never leaves an approval in the inbox with nothing behind it.
@@ -445,7 +450,7 @@ export function createAgentCallPipeline(deps: PipelineDeps): AgentCallPipeline {
             agentId: connection.agentId,
             // The same rate the engine checked, so the approval's converted amount and
             // the release's ledger amount match it.
-            detail: toApprovalDetail(call, decision, context, effectiveRate(context, rate)),
+            detail: toApprovalDetail(call, call.requiresApproval && decision.decision === "allow" ? {reason:"Provider-hosted tools require approval because their effects are not verified by Warthog."} : decision, context, effectiveRate(context, rate)),
           },
           dek,
           clock,

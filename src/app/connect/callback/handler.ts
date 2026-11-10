@@ -1,3 +1,4 @@
+import type { ProviderFlow } from "../../../server/connectors/provider-runtime";
 // E09-S18 — Provider OAuth callback handler (design §7 connector engine; constitution
 // 15/16; INV-101 admin-auth-required, INV-102 validate-and-parameterize-input,
 // INV-103 secrets-from-env).
@@ -31,13 +32,16 @@ import { createConnectorRuntime } from "../../../server/connectors/runtime";
 // The connect-start secrets stashed for a pending provider sign-in — NOT the user id (the
 // lookup is already scoped by the session user, so the flow needn't carry it).
 export interface PendingConnectFlow {
+  readonly providerState?:ProviderFlow["providerState"];
+  readonly reconnectId?:string;
   readonly connectorId: string;
   readonly accountLabel: string;
   readonly codeVerifier: string;
 }
 
 // What the callback hands the exchange/store step. `userId` is ALWAYS the session's.
-export interface CompleteConnectionInput {
+export interface CompleteConnectionInput extends PendingConnectFlow {
+  readonly iss?:string;
   readonly state: string;
   readonly userId: string;
   readonly connectorId: string;
@@ -62,6 +66,7 @@ const MAX_FIELD = 4096;
 const callbackQuerySchema = z.object({
   code: z.string().min(1).max(MAX_FIELD),
   state: z.string().min(1).max(MAX_FIELD),
+  iss: z.string().min(1).max(MAX_FIELD).optional(),
 });
 
 // --- production defaults ------------------------------------------------------------
@@ -88,17 +93,13 @@ async function defaultResolveSession(request: Request): Promise<Session | null> 
   return verifySession(db, token, { clock: systemClock });
 }
 
-// No pending-flow store is composed yet (connect-start, which stashes a flow under
-// (userId, state), is a sibling task). Until it wires a real `takePendingFlow`, a callback
-// matches no flow for its session user and is cleanly rejected — never a false success.
+// Consume a session-bound single-use flow, including durable provider MCP state.
 async function defaultTakePendingFlow(userId: string, state: string, sessionId?: string): Promise<PendingConnectFlow | null> {
-  return sessionId ? pendingConnects().take(userId, sessionId, state) : null;
+  if (!sessionId) return null;
+  return pendingConnects().take(userId,sessionId,state) ?? await createConnectorRuntime({config:loadConfig(),db:await getServerDb()}).takeProvider(userId,sessionId,state);
 }
 
-// The exchange/store step is driven by the connector engine's composition (the catalogue
-// entry for the host, the operator OAuth client, and the person's data key), wired when
-// connect-start lands. The default is unreachable in the default composition (no flow is
-// ever found above), and fails loudly rather than silently if ever reached.
+// Exchange and persist through the connector runtime after the state check.
 async function defaultCompleteConnection(input: CompleteConnectionInput, config: Config): Promise<Connection> {
   return createConnectorRuntime({ config, db: await getServerDb() }).complete(input);
 }
@@ -174,6 +175,8 @@ export function createConnectCallbackHandler(
       accountLabel: flow.accountLabel,
       code,
       codeVerifier: flow.codeVerifier,
+      ...(flow.providerState ? {providerState:flow.providerState,reconnectId:flow.reconnectId} : {}),
+      ...(parsed.data.iss ? {iss:parsed.data.iss} : {}),
     };
     if (completeConnection) await completeConnection(input);
     else {

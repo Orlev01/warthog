@@ -29,14 +29,13 @@
 
 import { z } from "zod";
 
+import { validTaskAssignee, changeTaskAsAgent } from "../../db/task-handoffs";
+import { systemClock } from "../../seams/clock";
 import { parseParams } from "../../http/validate";
 import { getConnectionPermissions, type ConnectionPermissions } from "../../db/agent-permissions";
 import {
   createTask,
   tasksForAgent,
-  updateTask,
-  addNote,
-  completeTask,
   type Task,
   type TaskStatus,
   type TaskNote,
@@ -107,6 +106,8 @@ export interface TaskView {
   readonly status: TaskStatus;
   readonly notes: ReadonlyArray<TaskNote>;
   readonly createdBy: TaskActor;
+  readonly claimedBy?: string;
+  readonly claimExpiresAt?: string;
 }
 
 export type ListTasksResult =
@@ -118,7 +119,7 @@ export type CreateTaskResult =
   | { status: "refused"; reason: string };
 
 export type UpdateTaskResult =
-  | { status: "updated"; id: string }
+  | { status: "updated"; id: string; claimExpiresAt?: string | null }
   | { status: "refused"; reason: string };
 
 export type CompleteTaskResult =
@@ -153,7 +154,6 @@ export interface CompleteTaskTool {
 // tool has no tasks permission; a change tool against a task that is not the person's
 // own refuses rather than throwing.
 const NO_PERMISSION_REASON = "This agent does not have permission to use tasks.";
-const NO_SUCH_TASK_REASON = "No such task for this person.";
 
 // Map a decrypted store task to the view handed to the agent (the owning userId stays
 // out of the result).
@@ -165,6 +165,7 @@ function toView(task: Task): TaskView {
     status: task.status,
     notes: task.notes,
     createdBy: task.createdBy,
+    ...(task.claimedBy ? {claimedBy:task.claimedBy,claimExpiresAt:task.claimExpiresAt} : {}),
   };
 }
 
@@ -193,18 +194,6 @@ async function tasksPermission(
   const permissions = await getConnectionPermissions(db, connection.userId, connection.connectionId);
   if (!permissions || !permissions.tasksAccess) return null;
   return permissions;
-}
-
-// The task with `id` among those the connection's agent may see — the person's tasks
-// assigned to this agent or to any agent (the list_tasks set) — or undefined.
-async function visibleTask(
-  db: Db,
-  connection: AgentConnection,
-  id: string,
-  dek: Uint8Array,
-): Promise<Task | undefined> {
-  const visible = await tasksForAgent(db, connection.userId, connection.agentId, dek);
-  return visible.find((task) => task.id === id);
 }
 
 export function createListTasksTool(deps: TasksToolDeps): ListTasksTool {
@@ -258,6 +247,9 @@ export function createCreateTaskTool(deps: TasksToolDeps): CreateTaskTool {
       // DEK-encrypted through the parameterized store; the assignee travels as a bound
       // value, so a SQL-shaped field is inert data.
       const dek = await dataKeyFor(db, keyWrapper, connection.userId);
+      if (!(await validTaskAssignee(db, connection.userId, parsed.assignee ?? "any"))) {
+        return { status: "refused", reason: "Choose one of your connected agents or any agent." };
+      }
       const task = await createTask(
         db,
         {
@@ -291,46 +283,13 @@ export function createUpdateTaskTool(deps: TasksToolDeps): UpdateTaskTool {
         return { status: "refused", reason: NO_PERMISSION_REASON };
       }
 
-      // Find the task among those THIS AGENT may see — the person's tasks assigned to it
-      // or to any agent (member-scoped by the connection's userId and filtered by its
-      // agent), exactly what list_tasks shows it — so it can never change another
-      // person's task or one assigned to a different agent. A missing one refuses.
       const dek = await dataKeyFor(db, keyWrapper, connection.userId);
-      const task = await visibleTask(db, connection, parsed.id, dek);
-      if (!task) {
-        return { status: "refused", reason: NO_SUCH_TASK_REASON };
-      }
-
-      // Set the status (pick it up), preserving the title and assignee.
-      if (parsed.status !== undefined) {
-        await updateTask(
-          db,
-          {
-            userId: connection.userId,
-            id: task.id,
-            title: task.title,
-            assignee: task.assignee,
-            status: parsed.status,
-          },
-          dek,
-        );
-      }
-
-      // Append a note authored by the CONNECTION's agent (never a value in the input).
-      if (parsed.note !== undefined) {
-        await addNote(
-          db,
-          {
-            userId: connection.userId,
-            id: task.id,
-            author: { kind: "agent", agentId: connection.agentId },
-            text: parsed.note,
-          },
-          dek,
-        );
-      }
-
-      return { status: "updated", id: task.id };
+      const changed = await changeTaskAsAgent(db, {
+        userId: connection.userId, agentId: connection.agentId,
+        id: parsed.id, status: parsed.status, note: parsed.note,
+      }, dek, (deps.clock ?? systemClock).now());
+      return changed ? { status: "updated", id: parsed.id, ...changed }
+        : { status: "refused", reason: "Task unavailable, completed, or claimed by another agent." };
     },
   };
 }
@@ -352,17 +311,12 @@ export function createCompleteTaskTool(deps: TasksToolDeps): CompleteTaskTool {
         return { status: "refused", reason: NO_PERMISSION_REASON };
       }
 
-      // Mark done only a task THIS AGENT may see (assigned to it or to any agent,
-      // member-scoped by the connection's userId). No match ⇒ a refusal (not a throw) —
-      // it can never complete another person's task or one assigned to another agent.
       const dek = await dataKeyFor(db, keyWrapper, connection.userId);
-      const task = await visibleTask(db, connection, parsed.id, dek);
-      const done = task !== undefined && (await completeTask(db, { userId: connection.userId, id: task.id }));
-      if (!done) {
-        return { status: "refused", reason: NO_SUCH_TASK_REASON };
-      }
-
-      return { status: "completed", id: parsed.id };
+      const done = await changeTaskAsAgent(db, {
+        userId: connection.userId, agentId: connection.agentId, id: parsed.id, status: "done",
+      }, dek, (deps.clock ?? systemClock).now());
+      return done ? { status: "completed", id: parsed.id }
+        : { status: "refused", reason: "Task unavailable, completed, or claimed by another agent." };
     },
   };
 }

@@ -1,3 +1,4 @@
+import { createAgent } from "../../db/agents";
 // E14-S07 — the `list_tasks` / `create_task` / `update_task` / `complete_task` core
 // tools (`src/server/mcp/tools/tasks.ts`, design §6.2 MCP core tools; brief §"Tasks
 // and hand-offs": "a task list the person and agents share: the person (or an agent)
@@ -314,7 +315,8 @@ test("create_task can assign a task to a SPECIFIC agent (an agent hands work to 
   try {
     const { userId, dek } = await makePerson(db, "create-assigned", keyWrapper);
     const maker = connectionFor(userId);
-    const other = connectionFor(userId); // a different agent of the same person
+    const target = await createAgent(db, { userId, connectionId: randomUUID(), displayName: "Other", platform: "Other" }, fixedClock(NOW));
+    const other = connectionFor(userId, {agentId: target.id, connectionId: target.connectionId});
     await grantTasks(db, userId, maker.connectionId);
 
     const tool = createCreateTaskTool(tasksDeps(db, keyWrapper, fixedClock(NOW)));

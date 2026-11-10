@@ -1,3 +1,4 @@
+import { createProviderRuntime } from "../connectors/provider-runtime";
 // E07-S19 — the MCP composition root (design §6.1/§6.2; constitution 13/14/15; INV-102).
 //
 // `createMcpDispatch` is the one place the MCP endpoint's REAL dependencies are built from
@@ -255,7 +256,9 @@ function buildAgentPipeline(deps: McpDispatchDeps): AgentCallPipeline {
 
   // The connector engine an allowed connector call is carried out by: the person's live
   // connection, its credentials and the catalogue host only, over the SSRF-guarded fetch.
+  const provider = createProviderRuntime({db,catalogue:deps.catalogue ?? getProcessCatalogue(config),clock,publicBaseUrl:config.publicBaseUrl,dekFor:dataKeyFor,fetch:deps.fetch});
   const executeConnectorTool = createConnectorToolExecutor({
+    executeProvider:provider.execute,
     db,
     catalogue: deps.catalogue ?? getProcessCatalogue(config),
     fetch: deps.fetch ?? createGuardedFetch(),
@@ -393,6 +396,12 @@ export function createMcpDispatch(deps: McpDispatchDeps): McpDispatch {
   // resolved over it; both are reused for every request this dispatch serves.
   const pipeline = buildAgentPipeline(deps);
   const registry = createToolRegistry({ pipeline });
+  const wrapper=selectKeyWrapper({nodeEnv:config.nodeEnv,localKek:config.devKek});
+  const provider=createProviderRuntime({db,catalogue,clock:systemClock,publicBaseUrl:config.publicBaseUrl,fetch:deps.fetch,dekFor:async userId=>{
+    const user=await getUserById(db,userId);
+    if(!user) throw new Error("No user data key");
+    return wrapper.unwrap(user.wrappedDek);
+  }});
 
   // --- the stateless MCP handler + per-request server -------------------------
 
@@ -424,14 +433,17 @@ export function createMcpDispatch(deps: McpDispatchDeps): McpDispatch {
       const permissions = await getConnectionPermissions(db, connection.userId, connection.connectionId);
       // The connector tools this connection may use: its person's connected services that
       // this agent is granted (member-scoped by the verified connection's owner).
+      const connections = await listConnectionsForUser(db, connection.userId);
+      const providerTools = permissions ? await provider.toolsets(connection.userId,connections.filter(c => permissions.grantedConnectors.includes(c.connectorId) && selectConnectorAccount(connections,c.connectorId,permissions.connectorAccounts?.[c.connectorId])?.id===c.id)) : {};
       tools = permissions
         ? registry.resolveTools(
             permissions,
             connectorToolsetFor(
-              await listConnectionsForUser(db, connection.userId),
+              connections,
               permissions.grantedConnectors,
               catalogue,
               permissions.connectorAccounts,
+              providerTools,
             ),
           )
         : registry.coreTools;

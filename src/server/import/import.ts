@@ -279,7 +279,7 @@ export async function importExportDocument(
           userId,
           title: task.title ?? "",
           notes: task.notes ?? [],
-          assignee: task.assignee ?? "any",
+          assignee: "any", // Agent identities from another account are reference-only.
           status: (task.status as TaskStatus) ?? "open",
           createdBy: task.createdBy ?? { kind: "person" },
         },

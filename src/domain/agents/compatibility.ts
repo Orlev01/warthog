@@ -1,4 +1,4 @@
-// Provider-documented connection paths reviewed 2026-11-10. This is capability
+// Provider-documented connection paths reviewed 2026-11-11. This is capability
 // guidance, not a claim that every provider has passed a live Warthog test.
 export const AGENT_PLATFORMS = [
   {
@@ -49,9 +49,25 @@ export const AGENT_PLATFORMS = [
     ],
   },
   {
+    name: "Dots (OpenAI)",
+    steps: [
+      "Open your dot’s profile and review Customize → Plugins. Available apps use your shared ChatGPT settings.",
+      "OpenAI documents supported connected apps, but Warthog has not verified a direct custom connection for Dots. Do not create an access key unless a documented private credential field requests one.",
+    ],
+    docs: "https://help.openai.com/en/articles/20001530-getting-started-with-your-dot",
+  },
+  {
+    name: "Instinct",
+    steps: [
+      "Instinct’s public site describes a text and phone assistant, without a published custom connection setup.",
+      "A direct Warthog connection is unverified. Check your account for a documented custom connection before attempting setup.",
+    ],
+    docs: "https://instinct.com/",
+  },
+  {
     name: "Other",
     steps: [
-      "For Slack-based agents, Instinct, Dots or another tool, verify the specific client supports a remote custom connection before setting it up.",
+      "For Slack-based agents or another tool, verify the specific client supports a remote custom connection before setting it up.",
       "Use a separate Warthog connection for each agent you want to control independently. A client that does not support remote connections cannot use Warthog; creating a key does not change that.",
     ],
   },

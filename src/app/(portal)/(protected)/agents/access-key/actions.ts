@@ -46,7 +46,7 @@ import {
   type PermissionGrants,
 } from "../../../../../server/db/agent-permissions";
 import { parseParams } from "../../../../../server/http/validate";
-import { permissionTemplate } from "../../../../../domain/permissions/templates";
+import { initialGrants } from "../../../../../server/agents/initial-grants";
 import type { Clock } from "../../../../../server/seams/clock";
 import type { Random } from "../../../../../server/seams/random";
 import type { Db } from "../../../../../server/db/index";
@@ -54,7 +54,6 @@ import type { Session } from "../../../../../server/auth/session";
 
 // The brief's default per-agent request limit (120 requests per minute); the per-agent
 // permissions page lets the person change it later (brief "Per-agent permissions page").
-const DEFAULT_RATE_LIMIT = 120;
 
 // Bounds that keep a malformed or oversized create out of the database. A name must be
 // present and reasonably short; the platform label and ticked-service ids are likewise
@@ -146,36 +145,6 @@ type ValidInput = z.infer<typeof inputSchema>;
 // before any query runs.
 const uuidSchema = z.uuid();
 
-// Translate the chosen starting set (template + ticked services, plus the explicit
-// opt-ins) into the one connection's stored grants, member-scoped to `userId`. The
-// template is the one-source-of-truth domain contract; high-tier, card and sharing are
-// off in every template and switch on only when the input opted in. A card budget is
-// recorded only when card access is on. (The consent flow's `grantsFor` twin.)
-function grantsFor(userId: string, connectionId: string, input: ValidInput): PermissionGrants {
-  const set = permissionTemplate(input.template, input.tickedServices ?? []);
-  const cardAccess = input.card === true;
-  return {
-    userId,
-    connectionId,
-    grantedConnectors: set.services.map((s) => s.service),
-    readTools: set.services.length > 0,
-    changeTools: set.services.length > 0 ? "ask_first" : "off",
-    identityAccess: set.lowTierProfile,
-    highTierAccess: input.highTier === true,
-    cardAccess,
-    cardBudget: cardAccess ? input.cardBudget ?? null : null,
-    skillsScope: [],
-    memoryRead: set.sharedMemoryRead,
-    sharing: input.learningSharing === true,
-    rulesScope: [],
-    rateLimit: DEFAULT_RATE_LIMIT,
-    // Tasks and life-admin records are their own grants (review fix A2): Standard and
-    // Custom include them, Minimal does not — independent of any ticked service.
-    tasksAccess: set.tasks,
-    recordsAccess: set.lifeAdmin,
-  };
-}
-
 export function createAccessKeyActions(deps: AccessKeyActionsDeps): AccessKeyActions {
   const { db, clock, random } = deps;
 
@@ -203,7 +172,7 @@ export function createAccessKeyActions(deps: AccessKeyActionsDeps): AccessKeyAct
         clock,
       );
 
-      await upsertPermissions(tx, { ...grantsFor(session.userId, connectionId, valid), rateLimit: (await getAgentDefaults(tx, session.userId)).rateLimit });
+      await upsertPermissions(tx, { ...initialGrants(session.userId, connectionId, valid), rateLimit: (await getAgentDefaults(tx, session.userId)).rateLimit });
 
       const { key } = await issueAccessKey(tx, { connectionId }, { random });
 

@@ -49,7 +49,7 @@ import {
 } from "../../../server/db/agent-permissions";
 import { parseParams } from "../../../server/http/validate";
 import { alertNewAgentConnection, type AlertDeps } from "../../../server/auth/alerts";
-import { permissionTemplate } from "../../../domain/permissions/templates";
+import { initialGrants } from "../../../server/agents/initial-grants";
 import type { Config } from "../../../server/config";
 import type { Clock } from "../../../server/seams/clock";
 import type { Random } from "../../../server/seams/random";
@@ -58,7 +58,6 @@ import type { Session } from "../../../server/auth/session";
 
 // The brief's default per-agent request limit (120 requests per minute); the per-agent
 // permissions page lets the person change it later (brief "Per-agent permissions page").
-const DEFAULT_RATE_LIMIT = 120;
 
 // Bounds that keep a malformed or oversized approval out of the database. A name must
 // be present and reasonably short; the platform label and ticked-service ids are
@@ -172,35 +171,6 @@ function issuer(config: Config): string {
 // person's OWN connected service ids: a ticked service is granted only when it is one of
 // them (never trusting the form for this), with its read tools on and its changes set to
 // "ask me first". Tasks and records are their own grants, not the connector tool classes.
-function grantsFor(
-  userId: string,
-  connectionId: string,
-  approval: ValidApproval,
-  connectedServices: ReadonlySet<string>,
-): PermissionGrants {
-  const set = permissionTemplate(approval.template, []);
-  const services = [...new Set(approval.tickedServices ?? [])].filter((id) => connectedServices.has(id));
-  const cardAccess = approval.card === true;
-  return {
-    userId,
-    connectionId,
-    grantedConnectors: services,
-    readTools: services.length > 0,
-    changeTools: services.length > 0 ? "ask_first" : "off",
-    identityAccess: approval.identity ?? set.lowTierProfile,
-    highTierAccess: approval.highTier === true,
-    cardAccess,
-    cardBudget: cardAccess ? approval.cardBudget ?? null : null,
-    skillsScope: [],
-    memoryRead: approval.memoryRead ?? set.sharedMemoryRead,
-    sharing: approval.learningSharing === true,
-    rulesScope: [],
-    rateLimit: DEFAULT_RATE_LIMIT,
-    tasksAccess: approval.tasks ?? set.tasks,
-    recordsAccess: approval.records ?? set.lifeAdmin,
-  };
-}
-
 export function createAuthorizeActions(deps: AuthorizeActionsDeps): AuthorizeActions {
   const { db, config, clock, random, resolveClient, alerts } = deps;
 
@@ -253,7 +223,7 @@ export function createAuthorizeActions(deps: AuthorizeActionsDeps): AuthorizeAct
       const connected = new Set(
         (await listConnectionsForUser(tx, session.userId)).map((c) => c.connectorId),
       );
-      await upsertPermissions(tx, { ...grantsFor(session.userId, connectionId, valid, connected), rateLimit: (await getAgentDefaults(tx, session.userId)).rateLimit });
+      await upsertPermissions(tx, { ...initialGrants(session.userId, connectionId, valid, [...new Set(valid.tickedServices ?? [])].filter(id => connected.has(id))), rateLimit: (await getAgentDefaults(tx, session.userId)).rateLimit });
 
       return result;
     });

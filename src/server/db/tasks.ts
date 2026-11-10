@@ -24,7 +24,7 @@
 import { randomUUID } from "node:crypto";
 
 import { decrypt, encrypt } from "../crypto/envelope";
-import type { Db, Row } from "./index";
+import { withTransaction, type Db, type Row } from "./index";
 
 // The envelope's associated data binds each blob to its exact location, so a row's
 // ciphertext lifted into another row/column/table fails to decrypt.
@@ -56,6 +56,8 @@ export interface NewTask {
   readonly assignee: string;
   readonly status?: TaskStatus;
   readonly createdBy: TaskActor;
+  readonly claimedBy?: string;
+  readonly claimExpiresAt?: string;
 }
 
 // What updateTask changes for the owner's own task. Member-scoped by `userId` +
@@ -86,12 +88,14 @@ export interface Task {
   readonly assignee: string;
   readonly status: TaskStatus;
   readonly createdBy: TaskActor;
+  readonly claimedBy?: string;
+  readonly claimExpiresAt?: string;
 }
 
 // The metadata columns every read returns; `title` and `notes` come back as
 // ciphertext and are decrypted separately.
 const SELECT_COLUMNS =
-  "id, user_id, title, notes, assignee, status, created_by_kind, created_by_agent_id";
+  "id, user_id, title, notes, assignee, status, created_by_kind, created_by_agent_id, claimed_by, claim_expires_at";
 
 // Reconstruct the plaintext created-by actor from its two columns.
 function toActor(kind: unknown, agentId: unknown): TaskActor {
@@ -112,6 +116,7 @@ function toTask(row: Row, title: string, notes: TaskNote[]): Task {
     assignee: row.assignee as string,
     status: row.status as TaskStatus,
     createdBy: toActor(row.created_by_kind, row.created_by_agent_id),
+    ...(row.claimed_by ? {claimedBy:row.claimed_by as string, claimExpiresAt:new Date(row.claim_expires_at as string).toISOString()} : {}),
   };
 }
 
@@ -183,7 +188,7 @@ export async function updateTask(db: Db, input: UpdateTaskInput, dek: Uint8Array
 
   const result = await db.query(
     `UPDATE tasks
-     SET title = $3, assignee = $4, status = $5
+     SET title = $3, assignee = $4, status = $5, claimed_by = NULL, claim_expires_at = NULL
      WHERE id = $1 AND user_id = $2
      RETURNING ${SELECT_COLUMNS}`,
     [input.id, input.userId, titleEnvelope, input.assignee, input.status],
@@ -202,8 +207,9 @@ export async function updateTask(db: Db, input: UpdateTaskInput, dek: Uint8Array
 // are bound. THROWS when no such task belongs to this user. Returns the task with
 // the note appended.
 export async function addNote(db: Db, input: AddNoteInput, dek: Uint8Array): Promise<Task> {
+  if (!db.inTransaction) return withTransaction(db, tx => addNote(tx, input, dek));
   const existing = await db.query(
-    `SELECT ${SELECT_COLUMNS} FROM tasks WHERE id = $1 AND user_id = $2`,
+    `SELECT ${SELECT_COLUMNS} FROM tasks WHERE id = $1 AND user_id = $2 FOR UPDATE`,
     [input.id, input.userId],
   );
   const row = existing.rows[0];
@@ -233,7 +239,7 @@ export async function completeTask(
   input: { readonly userId: string; readonly id: string },
 ): Promise<boolean> {
   const result = await db.query(
-    `UPDATE tasks SET status = 'done' WHERE id = $1 AND user_id = $2 RETURNING id`,
+    `UPDATE tasks SET status = 'done', claimed_by = NULL, claim_expires_at = NULL WHERE id = $1 AND user_id = $2 RETURNING id`,
     [input.id, input.userId],
   );
   return result.rows.length > 0;

@@ -1057,3 +1057,19 @@ test("if holding the call fails, no pending approval is left behind", async () =
     await db.close();
   }
 });
+
+test("unclassified provider tools always ask and cannot evade never-send rules", async () => {
+  const db=await freshDb(),keyWrapper=keyWrapperFor();
+  try {
+    const {userId,dek}=await makePerson(db,"provider-policy",keyWrapper);
+    await upsertPermissions(db,baseGrants(userId,CONN,{grantedConnectors:["notion"],changeTools:"allow"}));
+    const clock=fixedClock(NOW),exec=spyExecutor();
+    const pipeline=buildPipeline(db,keyWrapper,{clock,rateLimiter:createRateLimiter(clock),recorder:spyRecorder(clock).recorder,executeTool:exec.fn});
+    const call=callFor({connector:"notion",tool:"notion__unknown_effect",makesChange:true,requiresApproval:true});
+    expectPendingApproval(await pipeline.handleAgentCall(connectionFor(userId),call));
+    assert.equal(exec.calls.length,0);
+    await createRule(db,{userId,kind:"never_allow",scope:ANY_AGENT,action:{type:"send_message",channel:"email"}} as NewRule,dek);
+    expectRefused(await pipeline.handleAgentCall(connectionFor(userId),call));
+    assert.equal(exec.calls.length,0);
+  } finally {await db.close();}
+});

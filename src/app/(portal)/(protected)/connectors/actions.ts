@@ -94,6 +94,8 @@ export interface RevokeProviderAccessInput {
 // Every seam injected — no process.env, no secret (INV-103).
 export interface ConnectorsActionsDeps {
   readonly providerMcpAvailable?: boolean;
+  readonly startProviderMcp?: (session:Session,connectorId:string)=>Promise<{url:string}>;
+  readonly providerToolsets?: (userId:string,connections:readonly ConnectionForPage[])=>Promise<Record<string,readonly {name:string; makesChange?:boolean}[]>>;
   readonly startProviderSignin?: (session: Session, connectorId: string) => Promise<{ url: string }>;
   readonly db: Db;
   // Supplies connected-at / requested-at instants, passed through to the stores (never SQL now()).
@@ -235,6 +237,7 @@ export function createConnectorsActions(deps: ConnectorsActionsDeps): Connectors
     const unavailable = deps.providerMcpAvailable === false && catalogue.get(connection.connectorId)?.auth_kind === "provider_mcp";
     return {
       ...(unavailable ? { unavailableReason: "This saved service account is unavailable until provider connection support is complete." } : {}),
+      reconnectable: deps.providerMcpAvailable === true && catalogue.get(connection.connectorId)?.auth_kind === "provider_mcp",
       id: connection.id,
       name: catalogue.get(connection.connectorId)?.name ?? connection.connectorId,
       accountLabel: connection.accountLabel,
@@ -272,7 +275,9 @@ export function createConnectorsActions(deps: ConnectorsActionsDeps): Connectors
     // The session user's OWN connections (member-scoped, never credentials) and OWN agents
     // (to name which agents use each service).
     const timeZone = await timeZoneFor(db, userId, await dekFor(userId));
-    const connections = await listConnectionsForPage(db, userId, catalogue);
+    let connections = await listConnectionsForPage(db, userId, catalogue);
+    const providerTools = await deps.providerToolsets?.(userId,connections);
+    if (providerTools) connections = connections.map(connection => catalogue.get(connection.connectorId)?.auth_kind === "provider_mcp" ? {...connection,tools:(providerTools[connection.id]??[]).map(tool=>({name:tool.name,makesChange:true}))} : connection);
     const agents = await listAgentsForUser(db, userId);
     const agentsByConnector = new Map<string, string[]>();
     for (const agent of agents) {
@@ -341,6 +346,7 @@ export function createConnectorsActions(deps: ConnectorsActionsDeps): Connectors
     if (entry.auth_kind !== "provider_mcp") {
       throw new HttpError(400, "Connector is not a provider-hosted MCP service");
     }
+    if (deps.startProviderMcp) return deps.startProviderMcp(session,connectorId);
     const dek = await dekFor(session.userId);
     return connectProviderMcpService(
       { entry, config: providerMcpConfig, userId: session.userId, accountLabel, dek },

@@ -55,6 +55,7 @@ export type TaskItemView = {
   notes: ReadonlyArray<TaskNoteView>;
   assignee: TaskAssigneeView;
   status: TaskStatus;
+  claim?: {agentName:string; expiresAt:string};
 };
 
 // A connected agent a task may be assigned to.
@@ -284,6 +285,7 @@ function TaskCard({
       </div>
 
       <p className="text-sm text-fg-muted">{assigneeText(task.assignee)}</p>
+      {task.claim && <p className="text-sm text-fg-muted">Claimed by {task.claim.agentName} until <time dateTime={task.claim.expiresAt}>{task.claim.expiresAt.replace("T", " ").replace(".000Z", " UTC")}</time>. Reassigning releases the claim.</p>}
 
       <TaskNotes notes={task.notes} />
 

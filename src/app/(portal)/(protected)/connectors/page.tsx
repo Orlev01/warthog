@@ -1,3 +1,4 @@
+import { createProviderRuntime } from "@/server/connectors/provider-runtime";
 import { getProcessCatalogue } from "@/server/connectors/catalogue";
 import { createConnectorRuntime } from "@/server/connectors/runtime";
 import { oauthClientFor } from "@/server/connectors/client-config";
@@ -82,7 +83,9 @@ function buildActions(db: Db, config: Config): ConnectorsActions {
   const runtime = createConnectorRuntime({ config, db });
   return createConnectorsActions({
     startProviderSignin: runtime.begin,
-    providerMcpAvailable: false,
+    providerMcpAvailable: true,
+    startProviderMcp:runtime.begin,
+    providerToolsets:createProviderRuntime({db,catalogue:getCatalogue(),clock:systemClock,publicBaseUrl:config.publicBaseUrl,dekFor}).toolsets,
     db,
     clock: systemClock,
     catalogue: getCatalogue(),
@@ -91,19 +94,11 @@ function buildActions(db: Db, config: Config): ConnectorsActions {
     email: notificationSenders(config, db).email,
     operatorEmail: config.operatorEmail ?? "",
     googleEarlyAccess: config.googleEarlyAccess,
-    // The operator-registered provider sign-in client is a later task; the redirect URI is
-    // derived from the configured public address, the client id/secret flow from config when
-    // they exist (never baked into source, INV-103).
     oauthClientConfigFor: (id) => oauthClientFor(config, id),
     providerMcpConfig: {
       clientMetadataUrl: new URL("/oauth/client-metadata.json", config.publicBaseUrl).href,
     },
-    // Fail closed until authenticated provider MCP discovery and call routing exist.
-    listProviderTools: async () => { throw new HttpError(409, "Provider MCP transport is unavailable."); },
-    // The provider-side revocation client is a later task (no provider sign-in client is
-    // registered yet, so no oauth2 connection can exist). Until it lands the seam refuses
-    // loudly rather than pretending: disconnect still deletes the stored tokens and records
-    // that the provider access was not revoked (never a silent success).
+    listProviderTools: async () => { throw new Error("Use the authenticated provider runtime"); },
     revokeProviderAccess: runtime.revoke,
   });
 }
@@ -137,8 +132,8 @@ async function connectAction(formData: FormData): Promise<void> {
       };
       target = authorize.url;
     } else if (entry?.auth_kind === "provider_mcp") {
-      await actions.connectProviderMcp(session, { connectorId, accountLabel: entry.name });
-      target = "/connectors?notice=connected";
+      const authorize = await actions.connectProviderMcp(session, { connectorId, accountLabel: entry.name }) as {url:string};
+      target = authorize.url;
     } else if (entry) {
       target = `/connectors/key?connector=${encodeURIComponent(entry.id)}`;
     }
@@ -149,6 +144,19 @@ async function connectAction(formData: FormData): Promise<void> {
     target = "/connectors?notice=problem";
   }
   revalidatePath("/connectors");
+  redirect(target);
+}
+
+async function reconnectAction(formData:FormData):Promise<void> {
+  "use server";
+  const db=await getServerDb(),session=await resolveSession(db);
+  if(!session) redirect("/signin");
+  const id=formValue(formData,"connectionId");
+  const {getConnectionById}=await import("@/server/db/connections");
+  const connection=await getConnectionById(db,session.userId,id);
+  if(!connection) redirect("/connectors?notice=problem");
+  let target="/connectors?notice=problem";
+  try {target=(await createConnectorRuntime({config:loadConfig(),db}).begin(session,connection.connectorId,id)).url;} catch {}
   redirect(target);
 }
 
@@ -234,6 +242,7 @@ export default async function ConnectorsPage({
         {...data}
         connectAction={connectAction}
         disconnectAction={disconnectAction}
+        reconnectAction={reconnectAction}
         requestAction={requestAction}
       />
     </>

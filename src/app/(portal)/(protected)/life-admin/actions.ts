@@ -1,3 +1,4 @@
+import { validTaskAssignee } from "../../../../server/db/task-handoffs";
 // E14-S13 — Life-admin page loader + actions (the injectable, unit-testable seam the
 // thin `page.tsx` composes — the convention's `createXActions(deps)` factory, as
 // `skills/actions.ts`, `vault/actions.ts`, `connectors/actions.ts` and
@@ -321,6 +322,7 @@ export function createLifeAdminActions(deps: LifeAdminActionsDeps): LifeAdminAct
       notes: task.notes.map((note) => ({ author: toActorView(note.author, agents), text: note.text })),
       assignee: toAssigneeView(task.assignee, agents),
       status: task.status,
+      ...(task.claimedBy ? {claim: {agentName: nameOf(agents,task.claimedBy), expiresAt: task.claimExpiresAt!}} : {}),
     };
   }
 
@@ -472,7 +474,7 @@ export function createLifeAdminActions(deps: LifeAdminActionsDeps): LifeAdminAct
     }
     let assignTo = "any";
     if (valid.agentId !== undefined) {
-      if (!(await getAgentById(db, session.userId, valid.agentId))) {
+      if (!(await validTaskAssignee(db, session.userId, valid.agentId))) {
         return { ok: false, reason: "unknown_agent" };
       }
       assignTo = valid.agentId;
@@ -502,7 +504,7 @@ export function createLifeAdminActions(deps: LifeAdminActionsDeps): LifeAdminAct
     const valid = parseParams(createTaskSchema, input);
     let assignTo = "any";
     if (valid.assignee !== undefined && valid.assignee !== "any") {
-      if (!(await getAgentById(db, session.userId, valid.assignee))) {
+      if (!(await validTaskAssignee(db, session.userId, valid.assignee))) {
         return { ok: false, reason: "unknown_agent" };
       }
       assignTo = valid.assignee;
@@ -521,7 +523,7 @@ export function createLifeAdminActions(deps: LifeAdminActionsDeps): LifeAdminAct
   // person's own agent; a task that is not this person's is refused and left unchanged.
   async function updateTask(session: Session, input: UpdateTaskInput): Promise<ActionResult> {
     const valid = parseParams(updateTaskSchema, input);
-    if (valid.assignee !== "any" && !(await getAgentById(db, session.userId, valid.assignee))) {
+    if (valid.assignee !== "any" && !(await validTaskAssignee(db, session.userId, valid.assignee))) {
       return { ok: false, reason: "unknown_agent" };
     }
     if (!(await ownsRow("tasks", session.userId, valid.id))) {
@@ -549,11 +551,11 @@ export function createLifeAdminActions(deps: LifeAdminActionsDeps): LifeAdminAct
   // a task that is not this person's matches nothing and is refused.
   async function assignTask(session: Session, input: AssignTaskInput): Promise<ActionResult> {
     const valid = parseParams(assignTaskSchema, input);
-    if (valid.assignee !== "any" && !(await getAgentById(db, session.userId, valid.assignee))) {
+    if (valid.assignee !== "any" && !(await validTaskAssignee(db, session.userId, valid.assignee))) {
       return { ok: false, reason: "unknown_agent" };
     }
     const result = await db.query(
-      "UPDATE tasks SET assignee = $3 WHERE id = $1 AND user_id = $2 RETURNING id",
+      "UPDATE tasks SET assignee = $3, claimed_by = NULL, claim_expires_at = NULL WHERE id = $1 AND user_id = $2 RETURNING id",
       [valid.id, session.userId, valid.assignee],
     );
     return result.rows.length > 0 ? { ok: true } : { ok: false, reason: "not_found" };
