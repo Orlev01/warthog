@@ -42,7 +42,7 @@ jobs:
     needs: gate
     # Dedicated, ephemeral, trusted-main-only runner in the private bootstrap subnet.
     # Provisioning it is a separate approval; public PRs never execute on it.
-    runs-on: [self-hosted, linux, x64, warthog-production]
+    runs-on: [self-hosted, linux, x64, warthog-production, 'warthog-run-${{ github.run_id }}']
     timeout-minutes: 45
     environment: azure-production
     permissions:

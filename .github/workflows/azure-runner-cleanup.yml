@@ -1,0 +1,33 @@
+name: Remove expired Azure runner leases
+on:
+  schedule:
+    - cron: '17 * * * *'
+  workflow_dispatch:
+permissions:
+  contents: read
+concurrency:
+  group: warthog-runner-cleanup
+  cancel-in-progress: false
+jobs:
+  cleanup:
+    if: github.repository == 'Orlev01/warthog' && github.ref == 'refs/heads/main' && vars.AZURE_RUNNER_CLEANUP_ENABLED == 'true'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    environment: azure-runner-cleanup
+    permissions:
+      contents: read
+      id-token: write
+    env:
+      AZURE_RUNNER_CLEANUP_ENABLED: ${{ vars.AZURE_RUNNER_CLEANUP_ENABLED }}
+      AZURE_CORE_OUTPUT: none
+      AZURE_EXTENSION_USE_DYNAMIC_INSTALL: 'no'
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: azure/login@a641126d1b8aa4d1fa005f4f92df94a3a4c4c906 # v3.1.0
+        with:
+          client-id: ${{ vars.AZURE_CLIENT_ID }}
+          tenant-id: 72277873-e056-4612-9b1c-7ad58e02fcf3
+          subscription-id: e854f594-274f-4051-841b-78df7655d73c
+      - run: python3 scripts/ci/cleanup_runners.py

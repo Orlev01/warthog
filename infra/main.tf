@@ -7,30 +7,22 @@ locals {
   }
 }
 
-resource "azurerm_resource_group" "warthog" {
-  name     = var.names.resource_group
-  location = local.location
-  tags     = local.tags
-  lifecycle {
-    prevent_destroy = true
-    precondition {
-      condition     = var.provisioning_approved
-      error_message = "The exact paid foundation requires founder approval before provisioning."
-    }
-  }
+# Security anchors are created by the separately operated access bootstrap.
+data "azurerm_resource_group" "warthog" {
+  name = var.names.resource_group
 }
 
 resource "azurerm_virtual_network" "warthog" {
   name                = var.names.virtual_network
   location            = local.location
-  resource_group_name = azurerm_resource_group.warthog.name
+  resource_group_name = data.azurerm_resource_group.warthog.name
   address_space       = var.network.address_space
   tags                = local.tags
 }
 
 resource "azurerm_subnet" "app" {
   name                 = "container-apps"
-  resource_group_name  = azurerm_resource_group.warthog.name
+  resource_group_name  = data.azurerm_resource_group.warthog.name
   virtual_network_name = azurerm_virtual_network.warthog.name
   address_prefixes     = [var.network.app_subnet]
   service_endpoint {
@@ -50,7 +42,7 @@ resource "azurerm_subnet" "app" {
 
 resource "azurerm_subnet" "postgres" {
   name                 = "postgres"
-  resource_group_name  = azurerm_resource_group.warthog.name
+  resource_group_name  = data.azurerm_resource_group.warthog.name
   virtual_network_name = azurerm_virtual_network.warthog.name
   address_prefixes     = [var.network.postgres_subnet]
   service_endpoint {
@@ -67,7 +59,7 @@ resource "azurerm_subnet" "postgres" {
 
 resource "azurerm_subnet" "bootstrap" {
   name                 = "private-bootstrap"
-  resource_group_name  = azurerm_resource_group.warthog.name
+  resource_group_name  = data.azurerm_resource_group.warthog.name
   virtual_network_name = azurerm_virtual_network.warthog.name
   address_prefixes     = [var.network.bootstrap_subnet]
   service_endpoint {
@@ -81,7 +73,7 @@ resource "azurerm_subnet" "bootstrap" {
 resource "azurerm_network_security_group" "postgres" {
   name                = "warthog-postgres"
   location            = local.location
-  resource_group_name = azurerm_resource_group.warthog.name
+  resource_group_name = data.azurerm_resource_group.warthog.name
   tags                = local.tags
   security_rule {
     name                       = "AllowReviewedPostgresClients"
@@ -114,7 +106,7 @@ resource "azurerm_subnet_network_security_group_association" "postgres" {
 
 resource "azurerm_private_dns_zone" "postgres" {
   name                = var.names.postgres_private_dns
-  resource_group_name = azurerm_resource_group.warthog.name
+  resource_group_name = data.azurerm_resource_group.warthog.name
   tags                = local.tags
 }
 
@@ -127,7 +119,7 @@ resource "azurerm_private_dns_zone_virtual_network_link" "postgres" {
 
 resource "azurerm_postgresql_flexible_server" "warthog" {
   name                              = var.names.postgres
-  resource_group_name               = azurerm_resource_group.warthog.name
+  resource_group_name               = data.azurerm_resource_group.warthog.name
   location                          = local.location
   version                           = "16"
   sku_name                          = var.postgres.sku
@@ -153,16 +145,14 @@ resource "azurerm_postgresql_flexible_server" "warthog" {
   lifecycle { prevent_destroy = true }
 }
 
-resource "azurerm_user_assigned_identity" "app" {
+data "azurerm_user_assigned_identity" "app" {
   name                = var.names.identity
-  resource_group_name = azurerm_resource_group.warthog.name
-  location            = local.location
-  tags                = local.tags
+  resource_group_name = data.azurerm_resource_group.warthog.name
 }
 
 resource "azurerm_container_registry" "warthog" {
   name                = var.names.registry
-  resource_group_name = azurerm_resource_group.warthog.name
+  resource_group_name = data.azurerm_resource_group.warthog.name
   location            = local.location
   sku                 = "Basic"
   admin_enabled       = false
@@ -171,7 +161,7 @@ resource "azurerm_container_registry" "warthog" {
 
 resource "azurerm_key_vault" "warthog" {
   name                       = var.names.key_vault
-  resource_group_name        = azurerm_resource_group.warthog.name
+  resource_group_name        = data.azurerm_resource_group.warthog.name
   location                   = local.location
   tenant_id                  = var.tenant_id
   sku_name                   = "premium"
@@ -192,7 +182,7 @@ resource "azurerm_key_vault" "warthog" {
 resource "azapi_resource" "storage" {
   type      = "Microsoft.Storage/storageAccounts@2023-05-01"
   name      = var.names.storage_account
-  parent_id = azurerm_resource_group.warthog.id
+  parent_id = data.azurerm_resource_group.warthog.id
   location  = local.location
   tags      = local.tags
   body = {
@@ -226,7 +216,7 @@ resource "azapi_resource" "receipts" {
 resource "azapi_resource" "logs" {
   type      = "Microsoft.OperationalInsights/workspaces@2022-10-01"
   name      = var.names.logs
-  parent_id = azurerm_resource_group.warthog.id
+  parent_id = data.azurerm_resource_group.warthog.id
   location  = local.location
   tags      = local.tags
   body = {
@@ -242,7 +232,7 @@ resource "azapi_resource" "logs" {
 resource "azapi_resource" "environment" {
   type      = "Microsoft.App/managedEnvironments@2025-01-01"
   name      = var.names.container_environment
-  parent_id = azurerm_resource_group.warthog.id
+  parent_id = data.azurerm_resource_group.warthog.id
   location  = local.location
   tags      = local.tags
   body = {
@@ -265,25 +255,25 @@ resource "azurerm_monitor_diagnostic_setting" "environment" {
 resource "azurerm_role_assignment" "registry_pull" {
   scope                = azurerm_container_registry.warthog.id
   role_definition_name = "AcrPull"
-  principal_id         = azurerm_user_assigned_identity.app.principal_id
+  principal_id         = data.azurerm_user_assigned_identity.app.principal_id
 }
 
 resource "azurerm_role_assignment" "receipt_data" {
   scope                = azapi_resource.receipts.id
   role_definition_name = "Storage Blob Data Contributor"
-  principal_id         = azurerm_user_assigned_identity.app.principal_id
+  principal_id         = data.azurerm_user_assigned_identity.app.principal_id
 }
 
 resource "azurerm_role_assignment" "secrets" {
   scope                = azurerm_key_vault.warthog.id
   role_definition_name = "Key Vault Secrets User"
-  principal_id         = azurerm_user_assigned_identity.app.principal_id
+  principal_id         = data.azurerm_user_assigned_identity.app.principal_id
 }
 
 resource "azurerm_role_assignment" "key_wrapping" {
   scope                = azurerm_key_vault.warthog.id
   role_definition_name = "Key Vault Crypto Service Encryption User"
-  principal_id         = azurerm_user_assigned_identity.app.principal_id
+  principal_id         = data.azurerm_user_assigned_identity.app.principal_id
 }
 
 resource "azurerm_consumption_budget_subscription" "warthog" {

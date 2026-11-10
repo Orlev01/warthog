@@ -1,5 +1,14 @@
 # Azure delivery
 
+**10 November setup authorization:** the founder subsequently requested completion
+of foundation permissions, production secrets and the private runner. See the
+[access module](../infra/access/README.md), [runner procedure](../infra/runner/README.md)
+and current [state](../state.md). This supersedes the older setup-approval holds
+below for those named tasks; app release reviews, provider purchases/messages and
+DNS restrictions remain. A separate main-only cleanup environment has no human
+review gate because it only removes expired runner leases. The original four
+delivery review gates are unchanged.
+
 The founder authorized publishing this source and building CI/CD for
 `Orlev01/warthog` on 10 November 2026. This supersedes the earlier publication
 hold. It does not authorize Azure provisioning, credential creation, expenditure,

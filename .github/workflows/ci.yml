@@ -59,6 +59,13 @@ jobs:
         run: |
           terraform -chdir=infra/bootstrap init -backend=false -input=false -lockfile=readonly
           terraform -chdir=infra/bootstrap validate
+      - name: Validate delivery access and ephemeral runner modules
+        run: |
+          terraform -chdir=infra/access init -backend=false -input=false -lockfile=readonly
+          terraform -chdir=infra/access validate
+          terraform -chdir=infra/runner init -backend=false -input=false -lockfile=readonly
+          terraform -chdir=infra/runner validate
+          bash -n scripts/delivery/prepare-runner.sh
 
   linux-postgres:
     name: Node 22 Linux and PostgreSQL 16 (${{ matrix.shard }})

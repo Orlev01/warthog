@@ -1,3 +1,31 @@
+# Delivery setup in progress — 10 November 2026
+
+The founder explicitly asked to complete foundation permissions, production
+secrets and the private runner, preserving DNS. Scoped foundation/release roles,
+the production resource group/application identity, private network and Premium
+Key Vault are now created. The foundation reads its security anchors from the
+separate [access module](infra/access/README.md). No subscription Owner delegation,
+app deployment or DNS mutation occurred. The database/private-DNS stage awaits
+clarification of whether “DNS untouched” includes internal-only database DNS.
+
+Distinct database passwords, HMAC and matching VAPID keys were generated into
+owner-only private storage. The administrator password is configured in both
+protected foundation environments. Warthog Microsoft Web OAuth is registered
+for the approved callback and personal/multitenant audience, delegated scopes
+only, no tenant-wide admin consent. Its credential expires 9 May 2027. Key Vault
+installation and private runner live verification are in progress; generated
+credentials alone do not mean the database/providers are configured.
+
+The [runner module and controller](infra/runner/README.md) use a fresh identity-free
+VM, no inbound address/ports, a one-job JIT runner and unique release-run label.
+An isolated cleanup identity and main-only cleanup environment support hourly
+lease deletion; the original four founder review gates are unchanged. No runner
+or cleanup workflow is yet claimed verified. Resend/Twilio require account sign-in;
+no Warthog Google OAuth project/client is yet identified. Delivery stays disabled
+until its inputs and required permissions/provider setup are complete.
+
+The earlier statuses below are historical where superseded by this setup work.
+
 # Current status — repository publication and Azure delivery, 10 November 2026
 
 **Cost review and budget follow-up:** the founder requested a small, robust
