@@ -264,14 +264,23 @@ resource "azurerm_role_assignment" "receipt_data" {
   principal_id         = data.azurerm_user_assigned_identity.app.principal_id
 }
 
+# The same vault holds operator-only bootstrap passwords. The application may
+# retrieve only its versioned runtime secrets, never the administrator password,
+# raw database passwords or the delivery ownership connection.
 resource "azurerm_role_assignment" "secrets" {
-  scope                = azurerm_key_vault.warthog.id
+  for_each = toset([
+    "database-url", "migration-database-url", "purge-database-url",
+    "warthog-hmac-key", "resend-api-key", "twilio-account-sid",
+    "twilio-api-key-sid", "twilio-api-key-secret", "google-client-secret",
+    "microsoft-client-secret", "google-early-access", "vapid-private-key",
+  ])
+  scope                = "${azurerm_key_vault.warthog.id}/secrets/${each.key}"
   role_definition_name = "Key Vault Secrets User"
   principal_id         = data.azurerm_user_assigned_identity.app.principal_id
 }
 
 resource "azurerm_role_assignment" "key_wrapping" {
-  scope                = azurerm_key_vault.warthog.id
+  scope                = "${azurerm_key_vault.warthog.id}/keys/warthog-wrap"
   role_definition_name = "Key Vault Crypto Service Encryption User"
   principal_id         = data.azurerm_user_assigned_identity.app.principal_id
 }

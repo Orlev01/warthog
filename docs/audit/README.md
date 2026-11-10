@@ -1,5 +1,12 @@
 # Warthog comprehensive engineering audit
 
+**Delivery setup follow-up, 10 November:** the explicitly authorized foundation,
+scoped permissions, private database and production credentials are now applied
+and live-verified. Internal database DNS was explicitly allowed; public DNS and
+app release remain separate. See the [current setup record](../delivery-setup-2026-11-10.md)
+for exact evidence and remaining provider/runner/release work. This supersedes
+older statements below that no foundation or credentials exist.
+
 **Publication and delivery follow-up, 10 November:** all source and existing history
 are published to [Orlev01/warthog](https://github.com/Orlev01/warthog) using the
 verified personal account and personal signing identity. The founder also requested

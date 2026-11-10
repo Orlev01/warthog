@@ -23,14 +23,25 @@ NAMES = {
     'VAPID_PUBLIC_KEY': 'vapid-public-key',
     'MICROSOFT_CLIENT_ID': 'microsoft-client-id',
     'MICROSOFT_CLIENT_SECRET': 'microsoft-client-secret',
+    'RESEND_API_KEY': 'resend-api-key',
+    'TWILIO_ACCOUNT_SID': 'twilio-account-sid',
+    'TWILIO_API_KEY_SID': 'twilio-api-key-sid',
+    'TWILIO_API_KEY_SECRET': 'twilio-api-key-secret',
+    'GOOGLE_CLIENT_ID': 'google-client-id',
+    'GOOGLE_CLIENT_SECRET': 'google-client-secret',
+    'GOOGLE_EARLY_ACCESS': 'google-early-access',
+    'DATABASE_URL': 'database-url',
+    'MIGRATION_DATABASE_URL': 'migration-database-url',
+    'PURGE_DATABASE_URL': 'purge-database-url',
+    'OWNERSHIP_DATABASE_URL': 'ownership-database-url',
 }
 
 
 def main():
     token = os.environ.pop('WARTHOG_VAULT_TOKEN')
     values = json.loads(os.environ.pop('WARTHOG_SECRET_BUNDLE'))
-    if set(values) != set(NAMES):
-        raise RuntimeError('Unexpected or missing initial secret names')
+    if not values or not set(values).issubset(NAMES) or any(not isinstance(v,str) or not v for v in values.values()):
+        raise RuntimeError('Unexpected or empty secret input')
     def api(path, method='GET', body=None, allow_missing=False):
         request = urllib.request.Request(VAULT+path+'?api-version=7.4', method=method,
             data=None if body is None else json.dumps(body).encode(),
@@ -43,7 +54,8 @@ def main():
                 return None
             raise RuntimeError('Vault operation failed with HTTP '+str(error.code)) from None
     ids = {}
-    for name, secret_name in NAMES.items():
+    for name, value in values.items():
+        secret_name = NAMES[name]
         path = '/secrets/'+secret_name
         old = api(path, allow_missing=True)
         if old is not None:

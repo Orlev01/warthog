@@ -1,20 +1,23 @@
 # Azure delivery
 
-**10 November setup authorization:** the founder subsequently requested completion
-of foundation permissions, production secrets and the private runner. See the
+**10 November setup:** the approved foundation, scoped permissions, private
+database and versioned credentials are applied and verified. See the
+[current setup record](delivery-setup-2026-11-10.md),
 [access module](../infra/access/README.md), [runner procedure](../infra/runner/README.md)
 and current [state](../state.md). This supersedes the older setup-approval holds
 below for those named tasks; app release reviews, provider purchases/messages and
-DNS restrictions remain. A separate main-only cleanup environment has no human
+public DNS restrictions remain; internal database DNS was explicitly allowed.
+A separate main-only cleanup environment has no human
 review gate because it only removes expired runner leases. The original four
 delivery review gates are unchanged.
 
 The founder authorized publishing this source and building CI/CD for
 `Orlev01/warthog` on 10 November 2026. This supersedes the earlier publication
-hold. It does not authorize Azure provisioning, credential creation, expenditure,
-production deployment or DNS changes. The later budget-only authorization and
-creation and the later specifically approved bootstrap are recorded below. The repository-wide
-`AZURE_DELIVERY_ENABLED` variable starts as `false`; missing also means disabled.
+hold. Later explicit authorizations covered the cost profile, budget, bootstrap
+and delivery setup described above. Application release reviews, provider purchases
+and exact public DNS changes remain separate. The repository-wide
+`AZURE_DELIVERY_ENABLED` remains `false` pending complete first-create/provider
+inputs and image/workload review; missing also means disabled.
 
 ## What runs
 
@@ -24,6 +27,7 @@ creation and the later specifically approved bootstrap are recorded below. The r
 | `azure-foundation.yml` | Manual `plan` or `apply` on main | Private saved Terraform plan, then a separately approved apply of its exact SHA-256 |
 | `azure-image.yml` | Manual on main | Full checks with a caller-reviewed immutable Node base, then build/push candidate to existing ACR and record registry digest |
 | `azure-release.yml` | Manual `inspect`, `create` or `update` on main | First app creation or image-only update with an intentional maintenance outage |
+| `azure-runner-cleanup.yml` | Hourly and manual on main | Independently remove expired private runner leases; no app/secret/provisioning permission |
 
 All Azure workflows share a non-cancelling concurrency group. CI has no Azure
 identity or production secrets. Publishing an image does not deploy it. No workflow
@@ -47,13 +51,11 @@ approve a release. The approval click is still required. Do not remove this gate
 or automatically approve waiting jobs. Environment creation alone creates no cloud
 identity, resources or credentials.
 
-Before first activation, inspect the actual subscription's ARM `subscriptionPolicies`
-and its billing-profile credit terms. A sponsorship-labelled quota, an active
-credit grant or an available balance is not proof of an enabled spending limit.
-Resolve any discrepancy between the offer, spending-limit status and cash-fallback
-behavior before approving chargeable bootstrap resources. Keep account-specific
-billing evidence and support correspondence in ignored private files, not this
-public repository. [MCA credit behavior](https://learn.microsoft.com/en-us/azure/cost-management-billing/benefits/credits/mca-check-azure-credits-balance).
+Inspect eligible billing-profile credit availability before further paid stages.
+The founder selected estimate-based usage alerts after reviewing the lack of a
+custom cash cap; do not reopen that superseded decision. Keep account-specific
+billing evidence and support correspondence in ignored private files.
+[MCA credit behavior](https://learn.microsoft.com/en-us/azure/cost-management-billing/benefits/credits/mca-check-azure-credits-balance).
 
 The founder subsequently requested cost-focused production infrastructure and an
 alert at the calculated usage estimate. The [cost review](azure-costs.md) documents
@@ -74,7 +76,8 @@ approved and applied on 10 November 2026. State storage/plan retention, four exa
 GitHub OIDC identities and four container-scoped state grants are verified. Their
 client IDs and foundation backend coordinates are configured in GitHub. The
 source keeps `bootstrap_approved=false` by default; do not create a duplicate
-bootstrap. No production resources or broad foundation permissions were granted.
+bootstrap. Production resources and scoped permissions were added in the later
+authorized setup; do not recreate either stage.
 
 Each environment needs a separately approved Entra application/service principal
 or user-assigned identity and federated credential. Use OIDC, not an Azure client
@@ -96,11 +99,12 @@ The full subject is the prefix plus the table suffix. Issuer:
 `https://token.actions.githubusercontent.com`; audience:
 `api://AzureADTokenExchange`. Recheck the repository OIDC API and claims before
 creating trust; do not assume the older name-only `repo:Orlev01/warthog` subject.
-The four federated credentials and only the bootstrap container-scoped grants
-are created. The broader permissions in the table remain to be reviewed and
-assigned; an identity existing does not prove its foundation/release access.
-Review custom roles/scopes against the actual plan, including role-assignment
-permissions and budget scope; do not grant subscription Owner as a shortcut.
+The four federated credentials, bootstrap grants and scoped permissions in the
+table are configured. The access module constrains assignment writes to the app
+principal and four approved data roles, and scopes budget rights to the existing
+budget. Independent ARM checks verify these grants; app secret/key access is
+additionally tested live. A future permission change still needs review against
+its actual plan; do not grant subscription Owner as a shortcut.
 
 All workflows pin subscription `e854f594-274f-4051-841b-78df7655d73c` and tenant
 `72277873-e056-4612-9b1c-7ad58e02fcf3`, and check the logged-in account again before
@@ -182,9 +186,9 @@ the workflow's temporary files and Docker config are additionally cleaned normal
 ## Release sequence
 
 1. Pass the push CI on the intended main commit. Review its source and the still-open
-   [audit gates](audit/README.md). Separately approve the actual Azure quote,
-   sponsorship-only funding protection, backend, identities, private runner and
-   credentials. Budget notifications do not enforce a spending stop.
+   [audit gates](audit/README.md). Reuse the already-approved setup, recheck eligible
+   credits and approve the exact image/workload and maintenance window. Review
+   any changed resources or costs separately. Budget notifications do not stop spending.
 2. Configure the environment protections, OIDC identities and settings above.
    Verify the private artifact container is not public. Enable
    `AZURE_DELIVERY_ENABLED` only after those approvals, not simply to make a job green.
@@ -244,8 +248,9 @@ and infrastructure failures still require operator recovery.
 Local tests cover scope/approval guards, private plan integrity/age/input checks,
 configuration drift, stopping before ownership checks, lingering replicas, held
 locks and failed-start cleanup. Actionlint checks all workflow schemas. Azure CLI
-operations, OIDC exchange, private networking, ARM deployment and actual release
-behavior remain unexecuted until separately authorized. Generic command failures
+operations, cleanup OIDC exchange, private database networking and foundation
+ARM changes are now verified as recorded in the setup report. Actual application
+release behavior remains unexecuted. Generic command failures
 intentionally omit raw stdout/stderr; investigate with an approved private client,
 not verbose public Actions logs. Do not enable Terraform trace logging.
 

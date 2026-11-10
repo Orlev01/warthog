@@ -1,32 +1,30 @@
-# Delivery setup in progress — 10 November 2026
+# Delivery setup — 10 November 2026
 
-The founder explicitly asked to complete foundation permissions, production
-secrets and the private runner, preserving DNS. Scoped foundation/release roles,
-the production resource group/application identity, private network and Premium
-Key Vault are now created. The foundation reads its security anchors from the
-separate [access module](infra/access/README.md). No subscription Owner delegation,
-app deployment or DNS mutation occurred. The database/private-DNS stage awaits
-clarification of whether “DNS untouched” includes internal-only database DNS.
+The approved Azure foundation and permissions are applied, including the explicitly
+approved internal-only PostgreSQL DNS. Twenty-one versioned vault entries, the HSM
+wrapping key and four private database logins are installed and verified. The app
+identity passes twelve allowed secret reads and six denied operator-secret reads;
+vault listing is denied. Foundation/access plans report no drift. Public DNS is
+untouched and no application has been released.
 
-Distinct database passwords, HMAC and matching VAPID keys were generated into
-owner-only private storage. The administrator password is configured in both
-protected foundation environments. Warthog Microsoft Web OAuth is registered
-for the approved callback and personal/multitenant audience, delegated scopes
-only, no tenant-wide admin consent. Its credential expires 9 May 2027. Key Vault
-installation and private runner live verification are in progress; generated
-credentials alone do not mean the database/providers are configured.
+Google OAuth and Gmail/Calendar/Drive APIs are configured in Testing with billing
+unlinked and the approved tester/support addresses. Microsoft OAuth is configured
+(credential expiry 9 May 2027). Resend has a domain-scoped sending key, tracking off
+and Free/no-overage settings; its domain awaits public DNS. Twilio has an isolated
+subaccount and restricted key; Trial sender restrictions, complete pricing and
+registration/STOP acceptance remain external gates.
 
-The [runner module and controller](infra/runner/README.md) use a fresh identity-free
-VM, no inbound address/ports, a one-job JIT runner and unique release-run label.
-An isolated cleanup identity and main-only cleanup environment support hourly
-lease deletion; the original four founder review gates are unchanged. No runner
-or cleanup workflow is yet claimed verified. Resend/Twilio require account sign-in;
-no Warthog Google OAuth project/client is yet identified. Delivery stays disabled
-until its inputs and required permissions/provider setup are complete.
+The secret-bootstrap VM is removed before the fresh private runner rehearsal.
+Runner registration and actual cleanup verification are in progress. The four
+original GitHub approval gates remain intact, and delivery stays disabled pending
+complete first-create/provider inputs and exact image/workload review.
 
-The earlier statuses below are historical where superseded by this setup work.
+Current launch estimate: A$430.66/month, A$438.13 for 31 days; the A$440 alert is
+unchanged. Full CI on `0ea3ed7` passes all six jobs and 5,072 application tests.
+See the [setup record](docs/delivery-setup-2026-11-10.md) for verified scope, evidence
+and remaining launch work. Older statuses below are historical where superseded.
 
-# Current status — repository publication and Azure delivery, 10 November 2026
+# Historical checkpoint — repository publication and Azure delivery, 10 November 2026
 
 **Cost review and budget follow-up:** the founder requested a small, robust
 production baseline, retaining premium features where they add value, using

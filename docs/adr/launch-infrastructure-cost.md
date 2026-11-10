@@ -22,7 +22,7 @@ no Warthog foundation has been provisioned yet.
 | Registry and blobs | ACR Basic; Hot Standard LRS blobs with existing Entra/RBAC/network restrictions | No Premium registry, geo replication, private endpoint service or Premium blob tier without demonstrated need. Review retained images before exceeding Basic's 10 GiB inclusion; never delete a needed rollback digest. |
 | Logs | Analytics, 30 days, initial 0.1 GB/day ingestion cap | Small launch allowance without longer paid retention. A cap can be exceeded and can interrupt diagnostics; alert on approaching it and revisit after real usage. Keep security/audit data requirements independent of this diagnostic-log cap. |
 | Networking | Existing private PostgreSQL VNet; ACA-managed load balancer and two public IPs | Required network isolation retained. Do not add a second load balancer, NAT for the app, Firewall, Bastion, Front Door or Private DNS Resolver by default. |
-| Deployment runner | Short-lived Linux B2s VM, private subnet, temporary NAT egress, no inbound public IP | Existing release code needs Docker. ACA Jobs cannot run Docker. Delete the runner's disk/NIC/NAT/IP after use; guest shutdown alone keeps charging. The runner lifecycle implementation and acceptance remain required before release. |
+| Deployment runner | Short-lived Linux B2als_v2 VM, private subnet, temporary NAT egress, no inbound public IP | Existing release code needs Docker. ACA Jobs cannot run Docker. Delete the runner's disk/NIC/NAT/IP after use; guest shutdown alone keeps charging. The runner lifecycle implementation and acceptance remain required before release. |
 
 The infrastructure now pins PostgreSQL storage type and exposes its performance
 tier explicitly; the profile selects the smallest disk/tier. Cost data and
@@ -34,8 +34,8 @@ the exact resource/identity approval; this example is not deploy authorization.
 
 ## Expected cost and alert
 
-The [reproducible estimate](../azure-costs.md) is **A$430.78 per average month**,
-or **A$438.25 for a 31-day month**, before credits and tax. It assumes the app is
+The [reproducible estimate](../azure-costs.md) is **A$430.66 per average month**,
+or **A$438.13 for a 31-day month**, before credits and tax. It assumes the app is
 active continuously and takes no shared free grants. Use a **A$440 monthly Azure
 usage alert**, with actual 50/80/100% and forecast 100% thresholds. This follows
 the founder's instruction to alert at the estimated cost. It is not a shutdown

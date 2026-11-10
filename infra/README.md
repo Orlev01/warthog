@@ -1,13 +1,13 @@
 # Warthog Azure foundation — review before provisioning
 
-The [Azure delivery pipeline](../docs/azure-delivery.md) now provides manual private
-plan/apply workflows with separate environment approvals. They are disabled pending
-approved setup and have not operated on Azure. The historical local-validation
-notes below predate repository publication; the infrastructure boundaries still apply.
+The approved foundation is applied and live-verified; follow-up Terraform reports
+no drift. See the [setup record](../docs/delivery-setup-2026-11-10.md).
+The [Azure delivery pipeline](../docs/azure-delivery.md) provides manual private
+plan/apply workflows with separate environment approvals. Its application release
+remains disabled pending complete provider inputs and exact image/workload review.
 
-This is locally prepared infrastructure source, **not a deployment or spending
-authorization**. No Azure resource or provider registration has been created by
-this audit. The module intentionally stops before the application workload,
+Source alone is **not a deployment or spending authorization**. The module
+intentionally stops before the application workload,
 production secrets, HSM key creation, database login bootstrap and public DNS.
 The separately reviewed [application workload template](workload/README.md) takes
 the resulting environment/identity IDs and existing versioned secret URLs. It is
@@ -30,8 +30,10 @@ not applied by this Terraform root or by CI.
 - ACA workload-profile environment with only the Consumption profile. It has no
   app process yet. Azure Monitor routes console/system logs to a workspace with
   30-day retention and a required reviewed daily ingestion cap.
-- Identity roles: ACR pull, receipt-container Blob Data Contributor, vault Secrets
-  User and Crypto Service Encryption User. No identity gets subscription Owner.
+- Identity roles: ACR pull, receipt-container Blob Data Contributor, Secrets User
+  on twelve named application secrets, and Crypto Service Encryption User on the
+  named wrapping key. Operator bootstrap credentials and the delivery connection
+  are excluded. No identity gets subscription Owner.
 - Subscription budget notifications at 50/80/100% actual and 100% forecast. The AUD
   amount and recipients are required inputs, not historical budget proposals.
 
@@ -88,11 +90,10 @@ intended endpoints or network boundaries. Versioned provider references:
 [subnet schema](https://github.com/hashicorp/terraform-provider-azurerm/blob/v5.13.0/website/docs/r/subnet.html.markdown)
 and [DNS link schema](https://github.com/hashicorp/terraform-provider-azurerm/blob/v5.13.0/website/docs/r/private_dns_zone_virtual_network_link.html.markdown).
 
-The generated `.terraform.lock.hcl` records registry-verified provider checksums
-for `darwin_arm64`, `linux_amd64` and `linux_arm64`. It remains local/uncommitted
-with the rest of the release tree. No backend, credentials, Azure plan or resource
-was opened or created. Actual account planning, ARM validation, funding and live
-capacity remain **unverified**; local validation is not deployment certification.
+The committed `.terraform.lock.hcl` records registry-verified provider checksums
+for `darwin_arm64`, `linux_amd64` and `linux_arm64`. The later authorized account
+plan/apply, private backend, live resource verification and no-drift checks are
+recorded in the setup report. Application launch certification remains separate.
 
 Before a real plan: inspect the dedicated subscription, confirm resource-provider
 registration/quota and actual AUD billing scope, verify funding/credit protection,

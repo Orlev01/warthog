@@ -101,7 +101,7 @@ resource "azurerm_linux_virtual_machine" "runner" {
   name                            = "warthog-runner"
   resource_group_name             = azurerm_resource_group.runner.name
   location                        = azurerm_resource_group.runner.location
-  size                            = "Standard_B2s"
+  size                            = "Standard_B2als_v2"
   admin_username                  = "runner"
   disable_password_authentication = true
   network_interface_ids           = [azurerm_network_interface.runner.id]

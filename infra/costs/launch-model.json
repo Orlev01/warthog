@@ -271,14 +271,15 @@
       "note": "Same-region inter-availability-zone transfer has no charge. Historical retail meters remain discoverable but must not be billed in this estimate."
     },
     "runner_vm_hour": {
-      "aud": 0.075037,
+      "aud": 0.0675,
       "unit": "1 Hour",
-      "meter": "B2s",
-      "product": "Virtual Machines BS Series",
+      "meter": "B2als v2",
+      "product": "Virtual Machines Basv2 Series",
       "region": "australiaeast",
-      "meter_id": "00c75076-736a-4ef9-be74-f459f62642cf",
+      "meter_id": "7c2c0beb-6440-5a36-888d-07d8db8e58d7",
       "source": "https://prices.azure.com/api/retail/prices",
-      "observed": "2026-11-10"
+      "observed": "2026-11-10",
+      "note": "Original B2s is unavailable for this subscription in Australia East. Equivalent 2-vCPU/4-GiB B2als_v2 is cheaper; default Retail API AUD precision."
     },
     "runner_disk_month": {
       "aud": 4.6387,

@@ -166,6 +166,14 @@ def operate(check_lease):
         vm_command(directory, 'prepare', (ROOT/'scripts/delivery/prepare-runner.sh').read_text(), {'RUNNER_VERSION':release['version'],'RUNNER_SHA256':release['sha256']})
         print('Private runner tooling and vault TLS reachability verified.')
     elif args.operation == 'register':
+        group = 'rg-warthog-runner-'+config['lease_id']
+        vm = f'/subscriptions/{SUB}/resourceGroups/{group}/providers/Microsoft.Compute/virtualMachines/warthog-runner'
+        commands = azure(vm+'/runCommands?api-version=2024-07-01')
+        # Protected Run Command inputs may remain recoverable by root from the
+        # guest agent cache. Docker jobs are root-equivalent: never reuse a VM
+        # that handled application/bootstrap secrets as a GitHub runner.
+        if commands.get('nextLink') or any(c['name'] != 'prepare' for c in commands.get('value',[])):
+            raise RuntimeError('Registration requires a fresh VM used only for prepare; destroy this bootstrap VM first')
         if args.run_id:
             if args.run_id != config['lease_id']:
                 raise RuntimeError('Lease ID must match approved release run ID')

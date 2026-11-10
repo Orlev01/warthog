@@ -1,7 +1,7 @@
 # Azure launch cost
 
-The selected launch profile costs approximately **A$430.78/month**, or
-**A$438.25 for a 31-day month**, before credits and tax. The founder authorized an
+The selected launch profile costs approximately **A$430.66/month**, or
+**A$438.13 for a 31-day month**, before credits and tax. The founder authorized an
 alert at the expected cost; **A$440/month** rounds the longer-month estimate up
 to the next A$10. The subscription budget was created and independently read
 back on 10 November 2026: actual 50/80/100% and forecast 100%, founder email,
@@ -14,12 +14,16 @@ kept out of this repository. Do not assume credits cover support, Marketplace,
 external providers or commitments. The budget's scheduled expiry needs review
 before 31 October 2027; no recurring automation has been created.
 
+The original B2s size is unavailable for this subscription in Australia East.
+The runner now uses equivalent 2-vCPU/4-GiB B2als_v2 at A$0.0675/hour, slightly
+reducing the estimate. The A$440 budget is unchanged.
+
 ## Calculation
 
 Australia East retail rates observed 10 November 2026; 730 compute hours, one
 0.5 vCPU / 1 GiB app assumed active all month. No ACA, log or bandwidth free grants
 are subtracted because they can be shared or unavailable. If the app qualifies
-for idle billing 75% of the month, the same model is about **A$388.76**. Frequent
+for idle billing 75% of the month, the same model is about **A$388.64**. Frequent
 background scheduling can keep it active, so the alert uses full active usage.
 
 | Component | AUD/month |
@@ -35,9 +39,9 @@ background scheduling can keep it active, so the alert uses full active usage.
 | Receipt/state blobs and operations | 1.24 |
 | Private DNS zone and queries | 1.28 |
 | Internet and inter-zone transfer allowance | 3.41 |
-| Ephemeral private VM runner, NAT, IP and disk | 4.59 |
+| Ephemeral private VM runner, NAT, IP and disk | 4.47 |
 | Operational alert allowance (not yet metered) | 5.00 |
-| **Total** | **430.78** |
+| **Total** | **430.66** |
 
 
 ## What the allowances include
@@ -55,7 +59,7 @@ background scheduling can keep it active, so the alert uses full active usage.
 - One private DNS zone and one million queries; 20 GB billable internet egress
   and 20 GB same-region inter-zone transfer at no charge, per current Azure
   policy. No shared free grants are assumed. Existing public DNS remains with GoDaddy.
-- Four deployments at up to four VM hours each: 16 Linux B2s compute hours,
+- Four deployments at up to four VM hours each: 16 Linux B2als_v2 compute hours,
   24 rounded-up NAT/IP/disk hours allowing setup/teardown, 20 GB NAT data and a
   small disk-operations allowance. This requires deleting VM/disk/NIC/NAT/IP after
   the job. It does not price an always-on runner. A forgotten NAT alone adds about

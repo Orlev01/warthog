@@ -1,6 +1,13 @@
 # Private ephemeral delivery runner
 
-Each authorized release gets a fresh Ubuntu 24.04 x64 B2s VM in the existing
+Secret/database bootstrap uses a separate temporary VM. Destroy it after setup;
+never register that VM as a GitHub runner. Protected Run Command parameters may
+remain in the guest agent's cache, and Docker jobs have root-equivalent access.
+The controller refuses registration when any prior Run Command other than
+`prepare` exists. Each actual release uses a fresh disk/VM with no bootstrap-secret
+history; its only credentials are the transient job/JIT credentials.
+
+Each authorized release gets a fresh Ubuntu 24.04 x64 B2als_v2 VM in the existing
 `private-bootstrap` subnet. The VM has no public NIC address, no inbound traffic,
 no Azure identity, no cloud-init credentials and no persistent GitHub PAT.
 Outbound traffic uses a short-lived NAT/public IP. The founder's personal token
