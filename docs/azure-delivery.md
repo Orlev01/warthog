@@ -17,8 +17,10 @@ hold. Later explicit authorizations covered the cost profile, budget, bootstrap
 and delivery setup described above. Application release reviews, provider purchases
 and exact public DNS changes remain separate. Foundation and image workflows now have independent enabled switches, so completed
 setup can be used for their manual, reviewed operations. The application switch
-`AZURE_DELIVERY_ENABLED` remains `false` pending complete first-create/provider
-inputs and image/workload review. Missing switches mean disabled.
+`AZURE_DELIVERY_ENABLED` is now `true` after the separately approved
+[first release](first-app-release-2026-11-10.md). Every later release remains manual
+and requires its own reviewed image/workload and environment approval. Missing
+switches mean disabled.
 
 ## What runs
 
@@ -124,7 +126,7 @@ creation or rotation. Populated parameters and backend/state/plans stay untracke
 
 | Scope | Variables | Secrets |
 | --- | --- | --- |
-| Repository | `AZURE_FOUNDATION_ENABLED=true`, `AZURE_IMAGE_ENABLED=true`; `AZURE_DELIVERY_ENABLED=false` for app release; separate `AZURE_RUNNER_CLEANUP_ENABLED=true` | None |
+| Repository | `AZURE_FOUNDATION_ENABLED=true`, `AZURE_IMAGE_ENABLED=true`; `AZURE_DELIVERY_ENABLED=true` for manual reviewed app releases; separate `AZURE_RUNNER_CLEANUP_ENABLED=true` | None |
 | Both foundation environments | Their own `AZURE_CLIENT_ID`, `PLAN_STORAGE_ACCOUNT`, `PLAN_CONTAINER` | Identical `FOUNDATION_TFVARS_JSON`, `FOUNDATION_BACKEND_JSON`, approved `POSTGRES_ADMIN_PASSWORD` |
 | `azure-images` | `AZURE_CLIENT_ID`, `ACR_NAME` | None |
 | `azure-production` | `AZURE_CLIENT_ID`, `ACR_NAME`, `RESOURCE_GROUP`, `APP_NAME`, `POSTGRES_FQDN` | `WORKLOAD_PARAMETERS_JSON` for first creation; `OWNERSHIP_DATABASE_URL` for the approved private ownership-check connection |
@@ -230,6 +232,9 @@ the workflow's temporary files and Docker config are additionally cleaned normal
 8. Dispatch `create` for the first app or `update` with the reviewed config hash,
    exact candidate digest and approval reference. Approve `azure-production` only
    for that exact run. The candidate must have been built from this main commit.
+   Wait for the hosted `gate` job to pass before provisioning its private runner.
+   Approval references are 3–200 characters: letters, digits, spaces and
+   `. _ : / -` only. A rejected reference does not justify creating a runner.
    The script deactivates all old revisions, waits for **all** replicas to vanish,
    checks/releases the private ownership lock, rechecks configuration, and only
    then starts the new revision. Existing apps use an image-only revision copy;
@@ -260,8 +265,9 @@ Local tests cover scope/approval guards, private plan integrity/age/input checks
 configuration drift, stopping before ownership checks, lingering replicas, held
 locks and failed-start cleanup. Actionlint checks all workflow schemas. Azure CLI
 operations, cleanup OIDC exchange, private database networking and foundation
-ARM changes are now verified as recorded in the setup report. Actual application
-release behavior remains unexecuted. Generic command failures
+ARM changes are now verified as recorded in the setup report. The first
+application creation has succeeded with singleton/ownership/HTTPS checks and runner
+cleanup; browser/provider/upload/restore acceptance remains pending. Generic command failures
 intentionally omit raw stdout/stderr; investigate with an approved private client,
 not verbose public Actions logs. Do not enable Terraform trace logging.
 

@@ -41,4 +41,6 @@ cover both modes and preserve both approval flags. Azure's read-only Template
 validation succeeds for the prepared SMS-off inputs; a local validation caught
 and corrected the prepared CPU parameter from numeric `0.5` to the required string.
 Validation used a clearly marked synthetic digest and does not authorize or create
-an application. Exact image, release, app DNS and live acceptance remain separate.
+an application. The subsequently approved [first release](first-app-release-2026-11-10.md)
+now runs the exact verified image with SMS off. The subsequently approved app
+DNS/certificate binding is verified; live acceptance remains outstanding.

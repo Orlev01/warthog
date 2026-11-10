@@ -1,65 +1,56 @@
-# Delivery setup — 10 November 2026
+# Delivery status — 10 November 2026
 
-**Current launch decision:** the founder approved proceeding with SMS disabled.
-The [SMS-off implementation](docs/sms-disabled-launch.md) now covers startup,
-settings/server actions, approval fallback, account-reset alerts and direct sender
-calls. Email/push remain available. The Azure template omits Twilio configuration
-and references, requiring nine core secrets, and passes read-only Azure validation.
-Twilio onboarding is a future activation gate, not a blocker for this initial launch.
+**Warthog is available at [app.warthog.com.au](https://app.warthog.com.au).**
+The first Azure application deployment succeeded. The founder approved image
+publication and the exact workload, including the documented remaining OS findings.
+[Release 42768897430](https://github.com/Orlev01/warthog/actions/runs/42768897430)
+runs source `f406b2b070554d452bbcbf5f966d42428bb0351c` as one healthy replica,
+0.5 vCPU / 1 GiB, with explicit 100% traffic. HTTPS readiness/liveness pass;
+the live runtime confirms all 70 migrations, PostgreSQL TLS 1.3 and UID 1000.
+See the [release record](docs/first-app-release-2026-11-10.md) for the exact digest
+and evidence. This is infrastructure release completion, not full launch acceptance.
 
-The founder separately approved four exact email DNS additions and Resend verification.
-All four are saved with one-hour TTL and verified on both authoritative nameservers;
-all seven existing GoDaddy records remain unchanged. Resend currently reports
-DKIM/CNAME verified and MX/SPF pending. Its API confirms open/click tracking false;
-Free plan and paid-overage-off settings are preserved. Resend automatically enabled
-Forge delivery eligibility after the CNAME verified. No email was sent. App DNS
-remains untouched; there is still no Container App hostname to bind.
+SMS is explicitly disabled, with nine core Key Vault references and no Twilio
+configuration injected. Twilio onboarding is deferred and does not block this
+launch. Email/push and connector production configuration remain required.
+All four approved Resend DNS additions are now provider-verified. Both subsequent
+app-domain records are saved; all eleven earlier GoDaddy records are preserved
+and the zone has thirteen records. Tracking and paid overages remain off.
+No live email, SMS or push has been sent.
 
-Final local Node 22 Linux verification passes 119 focused application checks,
-real PostgreSQL 16/70 migrations, role separation, ownership and concurrency checks;
-27 delivery and five cost checks pass. The AMD64 non-root runtime removes OS
-setuid/setgid bits and fails closed without configuration. The
-[image review](docs/audit/runtime-image-review-2026-11-10.md) records retained OS
-findings and the exact candidate/base identities. Full pinned-base CI and the
-protected image-publication review precede registry publication; exact deployment
-and live acceptance remain pending. Application delivery remains disabled.
+The founder separately approved the exact app CNAME/asuid TXT and free managed
+certificate. Both authoritative nameservers match, Azure reports an SNI binding,
+and trusted HTTPS verifies the app hostname with certificate expiry 10 May 2027.
+Custom-domain health, signup and sign-in pages return 200. Binding changed only
+the custom-domain configuration; image, singleton replica and traffic are preserved.
+Read-only Chrome checks pass for landing, signup, sign-in, privacy, terms and help;
+navigation works and no console warning/error or TLS interstitial was captured.
+Live signup/provider, upload-limit and coordinated restore/deletion acceptance
+remain outstanding. Credentials, provider purchases/messages, further DNS and
+future deployment approvals retain their boundaries.
 
-The earlier setup details below remain useful; the SMS and public-email-DNS holds
-are superseded by the decisions and evidence above.
+The release used a fresh private one-job runner. Its VM, disk, NIC, NAT, egress IP,
+lease group and grants are deleted; independent inventory confirms no subnet NAT
+or GitHub runner remains. The unused runner from a cancelled input-format attempt
+was also fully removed. `AZURE_DELIVERY_ENABLED=true` now permits manual reviewed
+releases; all required-reviewer/main-only gates remain, with no automatic deployment.
 
-The approved Azure foundation and permissions are applied, including the explicitly
-approved internal-only PostgreSQL DNS. Twenty-one versioned vault entries, the HSM
-wrapping key and four private database logins are installed and verified. The app
-identity passes twelve allowed secret reads and six denied operator-secret reads;
-vault listing is denied. Foundation/access plans report no drift. No application
-has been released; public-email DNS was subsequently approved and applied above.
+[Publication CI](https://github.com/Orlev01/warthog/actions/runs/42762919981) passes
+5,078 application tests, 27 delivery tests, five cost tests, Terraform schemas,
+real PostgreSQL and runtime builds. Follow-up delivery fixes handle Azure's null
+Dapr response and validate approval references before requesting a private runner;
+all 28 delivery regressions, Actionlint and the live app contract pass. The
+application image remains the approved f406b2b image.
 
-Google OAuth and Gmail/Calendar/Drive APIs are configured in Testing with billing
-unlinked and the approved tester/support addresses. Microsoft OAuth is configured
-(credential expiry 9 May 2027). Resend has a domain-scoped sending key, tracking off
-and Free/no-overage settings; its domain awaits public DNS. Twilio has an isolated
-subaccount and restricted key; Trial sender restrictions, complete pricing and
-registration/STOP acceptance remain external gates. The founder-supplied sales
-reply has now been checked against official sources: all three senders plus 200
-outbound segments are approximately A$21.12–34.96/month before extra fees. The
-A$20 target and 200/month, 10/day caps remain unchanged. Redaction entitlement
-and Editions pricing still need an account-specific human answer. See the
-[Twilio review](docs/twilio-pricing-review-2026-11-10.md); no new inquiry or
-provider mutation was submitted.
+The existing foundation, scoped permissions, 21 versioned secrets, HSM key,
+private database roles, Google Testing OAuth and Microsoft OAuth remain verified
+as recorded in the [setup report](docs/delivery-setup-2026-11-10.md). Active startup
+credit linkage was checked before release. Azure usage remains estimated at
+A$430.66/month, or A$438.13 for 31 days, before credits/tax/providers; the A$440
+budget alert is unchanged. Private evidence stays under ignored owner-only
+`.delivery/activation-2026-11-10/`.
 
-The secret-bootstrap VM and separate fresh runner rehearsal are complete and
-removed. The fresh JIT runner was online, private database TLS/DNS passed, and
-independent cleanup removed the expired group. Inventory confirms no temporary
-runner resources, subnet NAT or GitHub registration remains. The four
-original GitHub approval gates remain intact. Foundation and image workflows are
-independently enabled for manual reviewed use; application delivery stays disabled
-pending complete first-create/provider inputs and exact image/workload review.
-
-Current launch estimate: A$430.66/month, A$438.13 for 31 days; the A$440 alert is
-unchanged. Full [CI on `cd344e5`](https://github.com/Orlev01/warthog/actions/runs/42756304600)
-passes all six jobs, 5,072 application tests and 29 delivery/cost checks.
-See the [setup record](docs/delivery-setup-2026-11-10.md) for verified scope, evidence
-and remaining launch work. Older statuses below are historical where superseded.
+Earlier checkpoints below are historical where superseded by this status.
 
 # Historical checkpoint — repository publication and Azure delivery, 10 November 2026
 

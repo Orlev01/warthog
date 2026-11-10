@@ -1,16 +1,18 @@
 # Warthog comprehensive engineering audit
 
-**SMS-off launch follow-up, 10 November:** the founder explicitly approved deferring
-SMS. [Implementation and regression scope](../sms-disabled-launch.md) cover all
-SMS call paths while retaining email/push. The exact four email DNS records were
-separately approved, saved and independently verified; existing records are preserved.
-Resend DKIM/CNAME are verified and MX/SPF pending; API tracking flags remain false.
-See [state](../../state.md) for the latest distinction between email DNS and app DNS.
-The final local Linux/PG16 checks pass (119 focused application, 27 delivery, five
-cost tests); [runtime image review](runtime-image-review-2026-11-10.md) includes
-non-root/setuid hardening, exact digests and unresolved native-library risk.
-Full pinned-base CI, image-publication review, exact deployment approval and live
-acceptance remain required. No application is live and Twilio has not been purchased.
+**First app release completed, 10 November:** the founder-approved
+[release](../first-app-release-2026-11-10.md) succeeds on f406b2b, with one healthy
+replica, explicit 100% traffic, 70 applied migrations and PostgreSQL TLS 1.3.
+SMS is off and no Twilio configuration is injected. All four Resend DNS records
+are provider-verified; the separately approved app DNS and managed certificate
+are verified at [app.warthog.com.au](https://app.warthog.com.au). Live acceptance
+remains pending. The temporary runner and all associated resources are verified deleted.
+Pinned-base publication CI passes 5,078 application, 27 delivery and five cost
+checks; the subsequent live-response delivery correction passes 28 regressions
+and Actionlint. The [image review](runtime-image-review-2026-11-10.md) records
+accepted residual OS findings. No live message or Twilio purchase occurred.
+See [state](../../state.md) for the current gates; earlier checkpoints below retain
+their historical scope.
 
 **Delivery setup follow-up, 10 November:** the explicitly authorized foundation,
 scoped permissions, private database and production credentials are now applied
@@ -165,6 +167,7 @@ it does not imply cloud or real-browser acceptance.
 | AUD-025 | High | Activity writer process queue can deadlock against an open database transaction | Fixed locally | Transaction-scoped activity locking joins marked transaction handles; original deadlock and new rollback regression pass, 69 affected checks plus 3 marker/nesting checks pass |
 | AUD-026 | High dependency advisory | Next's pinned PostCSS 8.4.31 has published CSS/source-map advisories; Warthog route exploitability is not established | Fixed locally | Scoped PostCSS 8.5.32 override, regenerated lockfile and clean dependency audit (zero reported vulnerabilities); production build and integrated Linux rerun verify compatibility. See delivery report for sources and image-scan limits. |
 | AUD-027 | Medium | Next catches rejected production instrumentation and leaves the container alive after configuration/startup validation fails | Fixed locally | Final-image reproduction and failing process regression; production startup now explicitly exits 1 with a fixed nonsecret error message, while development errors remain inspectable. Sixteen focused checks and TypeScript pass; integrated/image recheck recorded below. |
+| AUD-028 | Medium | Azure returns `dapr: null`, causing the live configuration validator to abort inspection and later updates | Fixed; live response verified | Accept absent/null Dapr, retain the enabled-Dapr rejection; failing real-response regression reproduced, all 28 delivery checks pass, and the actual deployed app contract validates. See the [first release record](../first-app-release-2026-11-10.md). |
 
 The specialist reports retain detailed reproductions, review coverage and
 non-blocking design concerns. Every confirmed local finding from this review has

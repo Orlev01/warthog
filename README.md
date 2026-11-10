@@ -24,9 +24,12 @@ Use Node 22. The committed environment file contains public development fixtures
 production requires separately approved credentials and infrastructure. For the
 clean Docker/PostgreSQL checks, see [`docs/local-release-validation.md`](docs/local-release-validation.md).
 The approved Azure foundation, scoped permissions and production credentials are
-installed. Foundation and image workflows are enabled for manual, reviewed use;
-application release remains disabled pending provider and launch gates. See the
-[verified setup record](docs/delivery-setup-2026-11-10.md). A passing build is not
-production launch approval.
+installed. The [first approved application release](docs/first-app-release-2026-11-10.md)
+is running with SMS disabled, one healthy replica and verified private database
+access. Delivery workflows are enabled for manual, reviewed use; future deployments
+still require approval. The release record and [current state](state.md) track
+verified domain activation and remaining live acceptance checks.
+
+Application: [app.warthog.com.au](https://app.warthog.com.au).
 
 Built by Skynet's build loop, task by task, test-first.

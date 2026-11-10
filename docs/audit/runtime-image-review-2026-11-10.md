@@ -1,5 +1,11 @@
 # SMS-off runtime image review — 10 November 2026
 
+**Subsequent decision:** the founder explicitly approved image publication and
+the exact first deployment including these residual findings. The
+[release record](../first-app-release-2026-11-10.md) identifies the published digest
+and live verification. The analysis below is the original candidate review;
+acceptance does not remove the findings or approve future images automatically.
+
 The reviewed candidate uses official Node 22.23.4 on Debian Bookworm, pinned to
 `node:22-bookworm-slim@sha256:5ec23b7c622b00547753bc6ffd78085dd868a68aeb41c8e0a1418f033e13d96d`.
 The AMD64 manifest is `sha256:aaa4b5baf1ecff3b283486bb1f90405cdda225a3e6f79660d2c559fa510a7292`.

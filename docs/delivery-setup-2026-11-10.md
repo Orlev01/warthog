@@ -8,10 +8,14 @@ separate. This record supersedes earlier setup holds; it is not launch certifica
 **Subsequent approved work:** the founder authorized the
 [SMS-off initial launch](sms-disabled-launch.md) and the exact four Resend DNS
 additions. Both authoritative nameservers match those additions; all seven prior
-records remain. DKIM/CNAME are verified, MX/SPF remain pending. Resend API confirms
+records remain. All four records are now provider-verified. Resend API confirms
 open/click tracking false, and the console still shows Free with overages off.
-Forge delivery eligibility enabled automatically after its CNAME verified. App DNS
-and application deployment are still pending; no message was sent.
+Forge delivery eligibility enabled automatically after its CNAME verified. The
+separately approved [first app release](first-app-release-2026-11-10.md) succeeded
+with SMS off, one healthy replica, 70 migrations and verified runner cleanup.
+The subsequently approved app DNS/certificate binding is verified at
+[app.warthog.com.au](https://app.warthog.com.au). Live acceptance remains pending;
+no message was sent.
 
 ## Applied and verified
 
@@ -57,8 +61,7 @@ address; the public application contact remains `oren@nava-co.com`. No Google
 user-data authorization or public verification is claimed.
 
 Resend uses a new sending-only key restricted to `mail.warthog.com.au`. The domain
-object exists and tracking is off, but verification awaits separately approved
-public DNS. The account remains Free with overages disabled; no email was sent.
+object and all four approved DNS records are verified; tracking is off. The account remains Free with overages disabled; no email was sent.
 
 Twilio uses an isolated Warthog subaccount and a restricted key granting only
 message creation and phone-number lookup. The account is Trial; sender/Messaging
@@ -97,22 +100,24 @@ GitHub has no registered runner. The application foundation remains intact.
 
 Foundation plan/apply and image publication are independently enabled for manual
 use behind their existing required reviews; enabling them does not dispatch a job.
-`AZURE_DELIVERY_ENABLED=false` still prevents application release dispatch. The remaining
-first-create inputs now use the approved SMS-off mode, with nine core secret
-references and no Twilio inputs. Local contract and Azure read-only Template
-validation pass. An approved immutable image and workload/release review are still
-required. Email DNS is applied as described above; app DNS and provider acceptance
-remain separate. No Container App or image publication occurred during setup.
-The [candidate image review](audit/runtime-image-review-2026-11-10.md), browser/provider
-acceptance, 26 MiB ingress and coordinated restore/deletion tests remain launch
-gates in the [audit](audit/README.md).
+`AZURE_DELIVERY_ENABLED=true` now permits manual reviewed app release after the
+separate first-deployment approval. The immutable f406b2b image is deployed with
+nine core secret references and no Twilio inputs. HTTPS/database health, singleton
+traffic and runner cleanup pass. Email DNS is fully verified as described above;
+the subsequently approved app DNS/certificate binding also passes independent
+verification. Provider acceptance and further changes remain separate. No
+automatic deployment is enabled.
+The [image review](audit/runtime-image-review-2026-11-10.md) records the residual
+findings accepted for this release. Browser/provider acceptance, 26 MiB ingress
+and coordinated restore/deletion tests remain launch gates in the [audit](audit/README.md).
 
 The full [CI run on cd344e5](https://github.com/Orlev01/warthog/actions/runs/42756304600)
 passes all six jobs, 5,072 application checks, 24 delivery checks, five cost checks,
 all four Terraform roots, builds/runtime packaging and real PostgreSQL checks.
-The final documentation/workflow-switch follow-up passes Actionlint and explicit
-stage-gate checks; application and delivery Python source are unchanged after that
-full CI. The later SMS-off changes pass 119 focused Node 22 Linux tests, real
+That checkpoint also passed Actionlint and explicit stage-gate checks.
+The later SMS-off changes pass 119 focused Node 22 Linux tests, real
 PostgreSQL checks, 27 delivery tests and five cost tests; pinned-base full CI is
-required again before image publication. Account-specific evidence, populated inputs,
+now complete in run 42762919981 with 5,078 application tests. The subsequent
+release succeeds; 28 delivery regressions and Actionlint cover its follow-up fixes.
+Account-specific evidence, populated inputs,
 plans and state are retained privately under `.delivery/activation-2026-11-10/`.
