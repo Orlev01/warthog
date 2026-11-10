@@ -9,16 +9,27 @@ environments require founder approval and main-only dispatch; Azure delivery is
 disabled until existing funding/credential/deployment gates are met. All six jobs in
 [remote CI](https://github.com/Orlev01/warthog/actions/runs/42715858437) passed on
 source commit `bcc5b6907488eee004509b5760b7d5f761decb56`; evidence is recorded below.
-No cloud or DNS operation was performed. Historical statements about uncommitted work
+That initial publication performed no cloud or DNS operation. Historical statements about uncommitted work
 and pending publication describe their original checkpoints.
 
 **Cost-focused infrastructure follow-up, 10 November:** the founder requested
 an affordable production baseline and an alert at expected usage. The launch
 profile, explicit PostgreSQL disk tier, repeatable cost model and existing-budget
 import are implemented; [details and limits](../azure-costs.md). An A$440/month
-subscription alert is created and independently verified. No foundation, identity,
-secret, runner, workload or DNS was deployed. The prior custom-cash-cap decision
-is superseded by this explicit usage-alert direction.
+subscription alert is created and independently verified. The subsequently
+approved state/identity bootstrap is applied: storage protections, exact OIDC
+subjects and four scoped grants were verified; anonymous container lists are
+denied; Terraform reports no drift. A real apply caught the generated default
+blob-service create/update distinction, which was corrected and verified live.
+No production database, app, secrets, runner or DNS was deployed. The prior
+custom-cash-cap decision is superseded by the explicit usage-alert direction.
+
+The final cost/bootstrap source at `bda2dec3364a502f7b971332a948ed4e3586191b`
+passes [CI run 42734554563](https://github.com/Orlev01/warthog/actions/runs/42734554563):
+all six jobs, 5,072 application checks, 18 delivery and five cost-model checks,
+provider schemas for both Terraform roots, real PG16 and runtime builds. The later
+bootstrap-only generated-service correction is additionally verified by real Azure
+plan/apply and a zero-change follow-up plan; application source is unchanged.
 
 Started 9 November 2026. Scope: the complete current `codex/production-release`
 working tree, including the existing uncommitted production work. Baseline commit

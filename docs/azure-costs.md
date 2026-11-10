@@ -99,8 +99,10 @@ recipients already configured; do not create a second budget. An approved plan
 must still show expected settings and no unwanted replacement before apply.
 
 This budget creation is not evidence of a deployed or certified production
-system. Private delivery identity/state/runner setup, secrets, operational alerts,
-browser/provider acceptance and coordinated recovery tests remain explicit gates.
+system. The separately approved state/identity bootstrap is complete and
+verified. Foundation control-plane permissions, private runner setup, production
+secrets, operational alerts, browser/provider acceptance and coordinated recovery
+tests remain explicit gates.
 
 Sources: [Azure retail API](https://learn.microsoft.com/en-us/rest/api/cost-management/retail-prices/azure-retail-prices),
 [ACA billing](https://learn.microsoft.com/en-us/azure/container-apps/billing),

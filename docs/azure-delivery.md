@@ -4,7 +4,7 @@ The founder authorized publishing this source and building CI/CD for
 `Orlev01/warthog` on 10 November 2026. This supersedes the earlier publication
 hold. It does not authorize Azure provisioning, credential creation, expenditure,
 production deployment or DNS changes. The later budget-only authorization and
-creation are recorded below. The repository-wide
+creation and the later specifically approved bootstrap are recorded below. The repository-wide
 `AZURE_DELIVERY_ENABLED` variable starts as `false`; missing also means disabled.
 
 ## What runs
@@ -60,11 +60,12 @@ budget's dates. The foundation plan must adopt that exact budget rather than
 create a duplicate. Supply its existing founder recipient privately. Verify the
 imported amount, expiry and notifications in the saved plan before applying it.
 
-The separate [bootstrap module](../infra/bootstrap/README.md) now implements the
-state account, plan retention, four exact GitHub OIDC identities and container-only
-state permissions. It is ready for the next resource/identity review, with
-`bootstrap_approved=false` by default. It has not been applied; validate and review
-that small stage before enabling any foundation workflow.
+The separate [bootstrap module](../infra/bootstrap/README.md) was explicitly
+approved and applied on 10 November 2026. State storage/plan retention, four exact
+GitHub OIDC identities and four container-scoped state grants are verified. Their
+client IDs and foundation backend coordinates are configured in GitHub. The
+source keeps `bootstrap_approved=false` by default; do not create a duplicate
+bootstrap. No production resources or broad foundation permissions were granted.
 
 Each environment needs a separately approved Entra application/service principal
 or user-assigned identity and federated credential. Use OIDC, not an Azure client
@@ -86,7 +87,9 @@ The full subject is the prefix plus the table suffix. Issuer:
 `https://token.actions.githubusercontent.com`; audience:
 `api://AzureADTokenExchange`. Recheck the repository OIDC API and claims before
 creating trust; do not assume the older name-only `repo:Orlev01/warthog` subject.
-No federated credential or role assignment has been created by this task.
+The four federated credentials and only the bootstrap container-scoped grants
+are created. The broader permissions in the table remain to be reviewed and
+assigned; an identity existing does not prove its foundation/release access.
 Review custom roles/scopes against the actual plan, including role-assignment
 permissions and budget scope; do not grant subscription Owner as a shortcut.
 

@@ -1,10 +1,18 @@
 # Delivery bootstrap
 
-Reviewable Terraform for the previously missing state/identity stage. It is not
-applied and does not approve its own execution. Use only the personal Warthog
-subscription and tenant. No Eucalyptus credential is needed or permitted.
+The founder approved this exact state/identity stage on 10 November 2026. It is
+now applied and live settings are independently verified; a follow-up plan has no
+changes. No application foundation or DNS was deployed. The source approval flag
+still defaults false and is not authorization for new changes. Use only personal
+Warthog credentials; no Eucalyptus credential is needed or permitted.
 
-## Exact proposed changes
+Azure creates `blobServices/default` with the account. The module configures that
+existing child using `azapi_update_resource`; attempting another create failed
+on the initial apply. The corrected remainder completed without replacing the
+account or changing the approved scope. Private state and both plans are retained
+under `.delivery/activation-2026-11-10/`, not published.
+
+## Approved and completed changes
 
 - Register only `Microsoft.Storage` and `Microsoft.ManagedIdentity` if still
   unregistered, after the stage approval. Providers do not auto-register them.
@@ -63,3 +71,14 @@ client IDs and private backend coordinates from the outputs. Keep
 `AZURE_DELIVERY_ENABLED=false`: foundation control-plane roles, conditional role
 delegation, production secrets, runner lifecycle and the saved foundation plan
 still need their separate review. Bootstrap success alone is not release readiness.
+
+
+## Execution evidence
+
+On 10 November 2026, the approved stage completed after correcting the generated
+blob-service handling. All 18 Terraform instances are recorded in protected local
+state. Independent ARM reads verify storage configuration/retention, both private
+containers, four exact trusts and only four container-scoped grants. Anonymous
+container lists return HTTP409. A fresh plan exits0 with no changes. GitHub client
+IDs and the private foundation backend settings are configured; no end-to-end
+GitHub OIDC foundation run is claimed yet. Production delivery remains disabled.

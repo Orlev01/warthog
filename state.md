@@ -16,20 +16,37 @@ creation. The [architecture decision](docs/adr/launch-infrastructure-cost.md)
 explains upgrade triggers and availability limits. These are source changes, not
 an applied foundation or production certification.
 
-An isolated [bootstrap module](infra/bootstrap/README.md) now supplies executable
-source for state/plan storage, retention, four environment-bound managed identities
-and four container-scoped state grants. It uses a public Entra-authenticated HTTPS
-endpoint for hosted foundation runners. Exact stage approval is still required;
-no identity or storage has been created.
+The founder subsequently approved and executed the exact [bootstrap stage](infra/bootstrap/README.md).
+The delivery resource group, Entra-authenticated LRS state/plan storage, four
+GitHub OIDC managed identities and four container-scoped Blob Data Contributor
+grants are now created. Only Storage and ManagedIdentity provider registrations
+were added. Live ARM reads verify retention, HTTPS/key/anonymous-access controls,
+exact trust subjects and grants; anonymous lists of both containers are denied.
+A fresh Terraform plan reports no changes. The four GitHub client IDs, foundation
+plan-storage variables and private backend identifiers are configured.
 
-Personal Warthog owner access is verified. No Warthog resource groups exist;
-provider registrations, delivery identities, state storage, secrets and the
-private ephemeral runner are still required. Exact resource/credential/deployment
-and DNS approvals remain in place. GitHub delivery remains disabled. The budget
-is the only Azure configuration mutation so far. Private credit/support/budget
-confirmation evidence is in `.delivery/activation-2026-11-10/` (ignored owner-only
-files). Do not duplicate the billing inquiry or repeat the superseded cash-cap
-question; verify actual eligible credit availability before each paid stage.
+Azure auto-creates the default blob service; the first apply exposed that the
+module must configure it with `azapi_update_resource`, not create it. The corrected
+remainder plan applied successfully with no unrelated changes. Protected local
+bootstrap state/evidence is retained in `.delivery/activation-2026-11-10/`;
+operator data-plane access and migration of that bootstrap state are still a
+separate review. The production foundation can use the new remote backend.
+
+GitHub delivery remains disabled until foundation control-plane roles, production
+credentials and a private ephemeral runner are ready. No production database,
+app, production secrets or DNS have been created. The cost alert and approved
+state/identity bootstrap are complete; do not request those approvals again.
+Private credit/support/budget/state confirmation stays in ignored owner-only
+files. Check actual eligible credit availability before each further paid stage.
+
+The [latest full CI run](https://github.com/Orlev01/warthog/actions/runs/42734554563)
+passed all six jobs on `bda2dec3364a502f7b971332a948ed4e3586191b`:
+5,072 application tests, 18 delivery guards, five cost/profile checks, Terraform
+schemas for both roots, types/build/runtime packaging and real PostgreSQL checks.
+The subsequent bootstrap-only blob-service correction passed provider validation,
+actual Azure plan/apply, independent live checks and a zero-change follow-up plan.
+No application code changed after that full CI run; the final record/correction
+commit skips another identical application-suite run.
 
 All source and the existing 718-commit history are now published to the public
 [Orlev01/warthog](https://github.com/Orlev01/warthog) repository, as authorized by
@@ -46,9 +63,10 @@ administrator bypass. `AZURE_DELIVERY_ENABLED=false` keeps all cloud steps disab
 All external contributors' fork workflow runs require maintainer approval; any
 future private deployment runner must be ephemeral and reserved for an approved
 production run, as detailed in the delivery guide.
-No Azure identity/federation, secret, resource, provider registration, deployment,
-spend or DNS change has been made. Actual cloud execution still needs the existing
-specific approvals, private state/plan storage, OIDC identities and private runner.
+The initial publication created no Azure resources. The later approved bootstrap
+above now supplies state/plan storage and OIDC identities; production foundation
+permissions, credentials, runner and workload execution still need their specific
+approvals. No application deployment or DNS change has occurred.
 
 Plans are private, short-lived and bound to source/input hashes; apply requires the
 reviewed saved-plan SHA-256. Image publication runs the clean Linux/PG suite against
@@ -125,7 +143,7 @@ below are historical and superseded.
 
 Subsequent founder approvals: production hostname and passkey RP ID are both `app.warthog.com.au`; sending domain `mail.warthog.com.au` and From `notifications@mail.warthog.com.au`; public replies/support/privacy contact `oren@nava-co.com`. Initial SMS markets AU/US/CA/GB are approved only after registration and delivery/STOP acceptance, with application caps of 200 outbound segments/month and 10/day in total. Exact DNS mutations, credentials, purchases and deployment still need separate approval. The founder confirmed sending the technical questions in response to Twilio sales; entitlement/pricing remain pending.
 
-Latest budget direction: use available Azure sponsorship credits and retain premium features where they add value. The founder explicitly requested cost-focused infrastructure, a calculated monthly estimate and a usage alert when cost exceeds that estimate; the A$440 alert is now created. This supersedes the previous zero-cash and unresolved A$100 cash-cap/alert deliberation. Verify eligibility and shared credit availability before paid provisioning; this is not unlimited cash-fallback permission or an approval of unreviewed resources. Resend Free is selected (3,000 emails/month, 100/day), with paid upgrades/overages unapproved. Twilio allowance remains A$20/month; its complete price including sender rentals, redaction and other fees is unresolved. Earlier A$550/A$600/A$675 proposals are historical, not the current Azure estimate or approved purchases.
+Latest budget direction: use available Azure sponsorship credits and retain premium features where they add value. The founder explicitly requested cost-focused infrastructure, a calculated monthly estimate and a usage alert when cost exceeds that estimate; the A$440 alert is now created. This supersedes the previous zero-cash and unresolved cash-cap/alert deliberation. Verify eligibility and shared credit availability before paid provisioning; this is not unlimited cash-fallback permission or an approval of unreviewed resources. Resend Free is selected (3,000 emails/month, 100/day), with paid upgrades/overages unapproved. Twilio allowance remains A$20/month; its complete price including sender rentals, redaction and other fees is unresolved. Earlier A$550/A$600/A$675 proposals are historical, not the current Azure estimate or approved purchases.
 
 The founder prefers an Azure-native SMS solution if viable, including using sponsorship. Rechecked official sources: the [Twilio connector](https://learn.microsoft.com/en-us/connectors/twilio/) requires a separate Twilio account; [MCA Azure credits](https://learn.microsoft.com/en-us/azure/cost-management-billing/benefits/credits/mca-check-azure-credits-balance) generally exclude partner/third-party Marketplace services. The current [ACS retirement FAQ](https://learn.microsoft.com/en-us/azure/communication-services/acs-retirement-and-breaking-changes-guide#acs-sms) still retires SMS on 30 September 2028 and restricts number acquisition to existing customers with existing ACS phone numbers. Earlier account inspection found none. No eligible isolated Warthog ACS SMS path has been demonstrated. Marketplace procurement/MACC eligibility is not sponsorship-credit coverage. This investigation does not change providers or authorize provisioning; await the actual Twilio redaction/price response.
 

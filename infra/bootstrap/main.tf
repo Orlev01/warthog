@@ -53,10 +53,11 @@ resource "azapi_resource" "state" {
   lifecycle { prevent_destroy = true }
 }
 
-resource "azapi_resource" "blob_service" {
-  type      = "Microsoft.Storage/storageAccounts/blobServices@2023-05-01"
-  name      = "default"
-  parent_id = azapi_resource.state.id
+# Azure creates this child with the account. Configure its retention in place;
+# trying to create it as azapi_resource fails on a new real storage account.
+resource "azapi_update_resource" "blob_service" {
+  type        = "Microsoft.Storage/storageAccounts/blobServices@2023-05-01"
+  resource_id = "${azapi_resource.state.id}/blobServices/default"
   body = {
     properties = {
       isVersioningEnabled            = true
@@ -70,7 +71,7 @@ resource "azapi_resource" "container" {
   for_each  = toset(["tfstate", "plans"])
   type      = "Microsoft.Storage/storageAccounts/blobServices/containers@2023-05-01"
   name      = each.key
-  parent_id = azapi_resource.blob_service.id
+  parent_id = azapi_update_resource.blob_service.id
   body      = { properties = { publicAccess = "None" } }
   lifecycle { prevent_destroy = true }
 }
