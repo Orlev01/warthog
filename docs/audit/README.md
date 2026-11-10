@@ -11,8 +11,9 @@ Pinned-base publication CI passes 5,078 application, 27 delivery and five cost
 checks; the subsequent live-response delivery correction passes 28 regressions
 and Actionlint. The [image review](runtime-image-review-2026-11-10.md) records
 accepted residual OS findings. A subsequently approved single signup email was
-delivered; the founder supplied its code and email verification passed. No account,
-authenticator, SMS or Twilio purchase resulted from that test.
+delivered; the founder supplied its code and email verification passed. The founder
+then completed Authenticator signup. Authenticated home/settings/security and the
+SMS-disabled UI pass read-only checks. No SMS or Twilio purchase occurred.
 See [state](../../state.md) for the current gates; earlier checkpoints below retain
 their historical scope.
 

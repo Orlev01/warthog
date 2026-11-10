@@ -16,7 +16,9 @@ with SMS off, one healthy replica, 70 migrations and verified runner cleanup.
 The subsequently approved app DNS/certificate binding is verified at
 [app.warthog.com.au](https://app.warthog.com.au). The separately approved single
 signup email was delivered and its founder-supplied code verified. The browser
-is at passkey selection; account/MFA and other live acceptance remain pending.
+was left at authentication setup. The founder then completed Authenticator signup;
+the authenticated home/settings/security and SMS-disabled UI pass read-only checks.
+Fresh sign-in, recovery, connector and other live acceptance remain pending.
 
 ## Applied and verified
 

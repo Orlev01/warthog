@@ -18,8 +18,10 @@ app-domain records are saved; all eleven earlier GoDaddy records are preserved
 and the zone has thirteen records. Tracking and paid overages remain off.
 The founder-approved single signup email was submitted once through the live UI
 and Resend reports delivered. The founder confirmed receipt and supplied its code;
-email verification succeeded and the browser is at the passkey-choice step.
-No passkey/authenticator or account was created; no SMS or push was sent.
+email verification succeeded. The test stopped at authentication setup; the founder
+then completed signup using an Authenticator app. The signed-in home, settings,
+notifications and security pages are verified, including the current-device session
+and SMS-disabled presentation. No SMS or push was sent.
 
 The founder separately approved the exact app CNAME/asuid TXT and free managed
 certificate. Both authoritative nameservers match, Azure reports an SNI binding,
@@ -28,8 +30,8 @@ Custom-domain health, signup and sign-in pages return 200. Binding changed only
 the custom-domain configuration; image, singleton replica and traffic are preserved.
 Read-only Chrome checks pass for landing, signup, sign-in, privacy, terms and help;
 navigation works and no console warning/error or TLS interstitial was captured.
-Full account/MFA, provider, upload-limit and coordinated restore/deletion acceptance
-remain outstanding. Credentials, provider purchases/messages, further DNS and
+Fresh sign-in, credential/recovery lifecycle, provider, upload-limit and coordinated
+restore/deletion acceptance remain outstanding. Credentials, provider purchases/messages, further DNS and
 future deployment approvals retain their boundaries.
 
 The release used a fresh private one-job runner. Its VM, disk, NIC, NAT, egress IP,

@@ -39,8 +39,11 @@ crwarthogprodauee854.azurecr.io/warthog@sha256:e8b03f1639b68cc8b6765a50ccbeae900
   captured console warnings/errors or TLS interstitials. Those initial checks
   submitted no form. A separately approved signup submission later sent exactly
   one verification email; after the founder supplied the received code, email
-  verification succeeded. The browser remains at the passkey-choice screen,
-  with neither MFA option selected and no account created.
+  verification succeeded. That test stopped at the passkey-choice screen. The
+  founder then completed signup using an Authenticator app. Read-only Chrome
+  checks verify the authenticated home, settings, notifications and security
+  pages, one current-device session, and the intended SMS-disabled UI. No
+  settings or account data were changed by those checks.
 
 The initial startup probe timed out. Subsequent
 probes became healthy; readiness, replica inventory and HTTPS were checked again
@@ -72,11 +75,14 @@ Navigation observations for a later UI pass: landing/signup/sign-in lack direct
 policy links, although the policy pages work and Help links to Privacy, which
 links to Terms. The terms page has the generic browser title "Warthog". These are
 discoverability/metadata observations, not missing policy pages or new approval gates.
+The Security page also lacks an Authenticator enrollment indicator and describes
+recovery only in terms of losing passkeys. The founder completed Authenticator
+signup; this is an observed presentation gap, not evidence that enrollment failed.
 
 The single signup-email delivery and email-code verification checks passed.
-Account completion/MFA, push, authenticated browser/connector, upload-limit and
-coordinated restore/deletion acceptance remain outstanding. No account or
-authenticator has been created. Further DNS, provider purchases/messages and
+The founder subsequently completed Authenticator signup and initial authenticated
+page checks pass. Fresh sign-in, credential/recovery lifecycle, push, connector,
+upload-limit and coordinated restore/deletion acceptance remain outstanding. Further DNS, provider purchases/messages and
 future deployments retain their approval boundaries. Account-specific evidence remains in the
 ignored, owner-only `.delivery/activation-2026-11-10/` directory.
 
