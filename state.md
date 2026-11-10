@@ -1,11 +1,38 @@
 # Delivery setup — 10 November 2026
 
+**Current launch decision:** the founder approved proceeding with SMS disabled.
+The [SMS-off implementation](docs/sms-disabled-launch.md) now covers startup,
+settings/server actions, approval fallback, account-reset alerts and direct sender
+calls. Email/push remain available. The Azure template omits Twilio configuration
+and references, requiring nine core secrets, and passes read-only Azure validation.
+Twilio onboarding is a future activation gate, not a blocker for this initial launch.
+
+The founder separately approved four exact email DNS additions and Resend verification.
+All four are saved with one-hour TTL and verified on both authoritative nameservers;
+all seven existing GoDaddy records remain unchanged. Resend currently reports
+DKIM/CNAME verified and MX/SPF pending. Its API confirms open/click tracking false;
+Free plan and paid-overage-off settings are preserved. Resend automatically enabled
+Forge delivery eligibility after the CNAME verified. No email was sent. App DNS
+remains untouched; there is still no Container App hostname to bind.
+
+Final local Node 22 Linux verification passes 119 focused application checks,
+real PostgreSQL 16/70 migrations, role separation, ownership and concurrency checks;
+27 delivery and five cost checks pass. The AMD64 non-root runtime removes OS
+setuid/setgid bits and fails closed without configuration. The
+[image review](docs/audit/runtime-image-review-2026-11-10.md) records retained OS
+findings and the exact candidate/base identities. Full pinned-base CI and the
+protected image-publication review precede registry publication; exact deployment
+and live acceptance remain pending. Application delivery remains disabled.
+
+The earlier setup details below remain useful; the SMS and public-email-DNS holds
+are superseded by the decisions and evidence above.
+
 The approved Azure foundation and permissions are applied, including the explicitly
 approved internal-only PostgreSQL DNS. Twenty-one versioned vault entries, the HSM
 wrapping key and four private database logins are installed and verified. The app
 identity passes twelve allowed secret reads and six denied operator-secret reads;
-vault listing is denied. Foundation/access plans report no drift. Public DNS is
-untouched and no application has been released.
+vault listing is denied. Foundation/access plans report no drift. No application
+has been released; public-email DNS was subsequently approved and applied above.
 
 Google OAuth and Gmail/Calendar/Drive APIs are configured in Testing with billing
 unlinked and the approved tester/support addresses. Microsoft OAuth is configured

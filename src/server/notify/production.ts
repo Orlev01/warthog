@@ -10,7 +10,7 @@ import { createResendEmailSender } from "./resend";
 import { createTwilioSmsSender } from "./twilio";
 import { reserveSmsSegments } from "./sms-budget";
 import { createWebPushSender, type PushDeviceSubscription } from "./web-push";
-import { selectSenders, type PushSender, type Senders } from "./senders";
+import { disabledSmsSender, selectSenders, type PushSender, type Senders } from "./senders";
 import { outbox } from "./outbox";
 
 export function createUserPushSender(deps: {
@@ -66,7 +66,7 @@ export function notificationSenders(config: Config, suppliedDb?: Db): Senders {
       if (!config.messaging?.email.apiKey || !config.messaging.email.from) throw new Error("Email sending is not configured");
       await createResendEmailSender(config.messaging.email).sendEmail(message);
     } },
-    sms: { async sendSms(message) {
+    sms: config.smsEnabled === false ? disabledSmsSender : { enabled: true, async sendSms(message) {
       if (!config.messaging) throw new Error("SMS sending is not configured");
       await createTwilioSmsSender({ ...config.messaging.twilio,
         reserve: async (recipient, segments) => reserveSmsSegments(await db(), config.hmacKey,

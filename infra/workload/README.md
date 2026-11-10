@@ -47,14 +47,19 @@ after its relevant approval. Do not commit the populated file. Required facts ar
    These constrained values reflect the proposed initial size, not spend approval.
 4. The complete `productionEnvironment` map in the example: app origin/RP,
    operator/contact and exchange-rate endpoint; wrapping-key URL/name and Blob
-   names; public email settings; Twilio region/country routes and all five SMS
-   limits; OAuth client IDs and VAPID public key/subject. All values are strings;
+   names; public email settings; OAuth client IDs and VAPID public key/subject.
+   The approved initial launch uses `smsEnabled=false`; this omits Twilio settings
+   and secret references and injects `SMS_ENABLED=false`. With separately reviewed
+   SMS activation, supply the Twilio region/country routes and all five SMS limits
+   listed in `variables.smsEnvironment`. All values are strings;
    `SMS_COUNTRY_ROUTES_JSON` is a JSON object encoded as a string. Do not add
    undocumented variables, dev flags, ACS fallbacks or alternate auth hosts.
 5. Existing **version-pinned secret URLs** for each `keyVaultSecretUrls` entry:
-   three distinct database logins, HMAC key, Resend key, Twilio account/key IDs and
-   secret, Google/Microsoft secrets, private Google early-access list and VAPID
-   private JWK. This map contains URLs, never credentials. The public VAPID key
+   three distinct database logins, HMAC key, Resend key, Google/Microsoft secrets,
+   private Google early-access list and VAPID
+   private JWK. This map contains URLs, never credentials. SMS-off has nine
+   references; SMS-on adds the three Twilio account/key references from
+   `variables.smsEnvironment`. The public VAPID key
    must correspond to the private JWK. DB URLs must use the approved private host
    and `sslmode=verify-full`. Bootstrap remains a separate private-client operation.
 6. One explicit revision traffic target (100%; never `latestRevision` or split
@@ -65,9 +70,11 @@ after its relevant approval. Do not commit the populated file. Required facts ar
 The offline guard checks only the documented local contract, not actual account
 eligibility, secret contents, key pairing, capacity, billing or certificate status.
 The application's production-readiness validator remains authoritative for runtime
-values; do not weaken it to pass probes. Resend Free limits, Twilio redaction/STOP
-and A$20 allowance, launch-country acceptance, all six connector setups, Google
+values; do not weaken it to pass probes. Resend Free limits, all six connector setups, Google
 named testers and push acceptance remain independent launch gates.
+Twilio redaction/STOP, the A$20 allowance and country acceptance gate future SMS
+activation, not the explicitly approved SMS-off launch. Existing provider secrets
+and access grants are retained for later review; the running SMS-off app receives none.
 
 Version-pinned Key Vault URLs avoid the automatic rotation behavior of unversioned
 references. Review rotations as releases with the same singleton procedure; never

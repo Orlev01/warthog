@@ -164,7 +164,8 @@ export async function runApprovalFallback(
   // The channels still to send: an SMS only to a VERIFIED number (an unverified number is
   // never texted), an email unless the person switched email fallback off — each only if
   // it has not already gone. Member-scoped reads by the owner's id.
-  const verified = (await listMobileNumbers(db, state.userId)).find((number) => number.verified);
+  const verified = senders.sms.enabled === false ? undefined
+    : (await listMobileNumbers(db, state.userId)).find((number) => number.verified);
   const { emailFallback, smsFallback } = await getNotificationPrefs(db, state.userId);
   const due: FallbackChannel[] = [];
   if (smsFallback && verified && !state.sent.has("sms")) due.push("sms");

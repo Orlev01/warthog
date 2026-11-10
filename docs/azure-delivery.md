@@ -151,6 +151,13 @@ First creation requires an empty custom-domain array. `deploymentApproved` must
 already be true after actual workload/cost approval. The development examples are
 deliberately invalid production inputs.
 
+The founder-approved first launch sets `smsEnabled=false`. Its runtime receives
+`SMS_ENABLED=false` and nine core secret references; omit every Twilio secret URL,
+region, route and SMS limit. The guard rejects extra SMS fields in this mode.
+Email, push and connector readiness remain mandatory. SMS activation is a later
+reviewed configuration release with provider registration, pricing and acceptance;
+the image-only update workflow cannot silently turn it on.
+
 `OWNERSHIP_DATABASE_URL` must connect to the same private `warthog` database as the
 application, match `POSTGRES_FQDN` from the approved foundation, and use
 `sslmode=verify-full`. Use the approved least-privilege login with advisory-lock

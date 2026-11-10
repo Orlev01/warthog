@@ -49,6 +49,23 @@ test("an app-scoped RP ID accepts the separately configured sibling email domain
     WEBAUTHN_RP_ID: "other.example.test" })), /WEBAUTHN_RP_ID/);
 });
 
+test("explicit SMS-off production needs no Twilio settings but still requires email and push", () => {
+  const env = { ...base, SMS_ENABLED: "false" };
+  for (const name of Object.keys(env)) {
+    if (name.startsWith("TWILIO_") || (name.startsWith("SMS_") && name !== "SMS_ENABLED")) delete env[name];
+  }
+  assert.doesNotThrow(() => assertProductionReleaseConfiguration(loadConfig(env)));
+  for (const name of ["RESEND_API_KEY", "VAPID_PRIVATE_KEY", "GOOGLE_CLIENT_SECRET"]) {
+    assert.throws(() => assertProductionReleaseConfiguration(loadConfig({ ...env, [name]: "" })), new RegExp(name));
+  }
+  for (const enabled of [undefined, "true"]) {
+    assert.throws(() => assertProductionReleaseConfiguration(loadConfig({ ...env, SMS_ENABLED: enabled })), /TWILIO/);
+  }
+  for (const enabled of ["", "0", "False", "typo"]) {
+    assert.throws(() => loadConfig({ ...base, SMS_ENABLED: enabled }), /SMS_ENABLED/);
+  }
+});
+
 test("production mail requires an exact sending domain and valid reply-to without leaking input", () => {
   for (const [name, value] of [
     ["RESEND_SENDING_DOMAIN", ""], ["RESEND_SENDING_DOMAIN", "https://mail.example.test"],

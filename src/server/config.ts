@@ -56,6 +56,7 @@ export interface Config {
   readonly purgeDatabaseUrl?: string;
   readonly port: number;
   readonly devTools: boolean;
+  readonly smsEnabled: boolean;
   readonly googleEarlyAccess: readonly string[];
   // The operator address a connector request is emailed to (brief: "emailed to the
   // operator address set in configuration"; design §7). Read from the environment here —
@@ -192,8 +193,14 @@ function assertProductionSafe(config: Config): void {
 
 export function loadConfig(env: NodeJS.ProcessEnv = process.env): Config {
   const nodeEnv = env.NODE_ENV ?? "development";
+  if (env.SMS_ENABLED !== undefined && env.SMS_ENABLED !== "true" && env.SMS_ENABLED !== "false") {
+    throw new Error("Invalid configuration: SMS_ENABLED must be true or false");
+  }
+  // Existing installations stay enabled unless SMS is explicitly switched off.
+  const smsEnabled = env.SMS_ENABLED !== "false";
   const config: Config = {
     nodeEnv,
+    smsEnabled,
     publicBaseUrl: required(env, "PUBLIC_BASE_URL"),
     webauthnRpId: required(env, "WEBAUTHN_RP_ID"),
     databaseUrl: required(env, "DATABASE_URL"),
@@ -223,7 +230,7 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): Config {
       twilio: {
         accountSid: env.TWILIO_ACCOUNT_SID, apiKeySid: env.TWILIO_API_KEY_SID,
         apiKeySecret: env.TWILIO_API_KEY_SECRET, region: env.TWILIO_REGION,
-        countryRoutes: parseCountryRoutes(env.SMS_COUNTRY_ROUTES_JSON),
+        countryRoutes: smsEnabled ? parseCountryRoutes(env.SMS_COUNTRY_ROUTES_JSON) : {},
         maxSegmentsPerMessage: Number(env.SMS_MAX_SEGMENTS_PER_MESSAGE ?? 0),
       },
       smsLimits: {

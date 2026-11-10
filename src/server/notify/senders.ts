@@ -28,8 +28,16 @@ export interface EmailSender {
 }
 
 export interface SmsSender {
+  // Only an explicit false disables an injected sender. Standalone test/provider
+  // senders remain enabled; the runtime composition always supplies its capability.
+  readonly enabled?: boolean;
   sendSms(message: OutgoingMessage): Promise<void>;
 }
+
+export const disabledSmsSender: SmsSender = {
+  enabled: false,
+  async sendSms() { throw new Error("SMS is disabled"); },
+};
 
 // A full set of senders, one per channel. Both the real provider senders and the
 // dev/test outbox satisfy this bundle, so the correspondence loop depends only
@@ -43,9 +51,10 @@ export interface Senders {
 // Selection is driven by config: with dev tooling on (WARTHOG_DEV_TOOLS=1) every
 // channel routes to the one process-wide outbox, so the correspondence loop is
 // drivable without Azure; otherwise the injected real senders are used.
-export function selectSenders(config: { readonly devTools: boolean }, real: Senders): Senders {
+export function selectSenders(config: { readonly devTools: boolean; readonly smsEnabled?: boolean }, real: Senders): Senders {
+  const sms = config.smsEnabled === false ? disabledSmsSender : config.devTools ? outbox : real.sms;
   if (config.devTools) {
-    return { push: outbox, email: outbox, sms: outbox };
+    return { push: outbox, email: outbox, sms };
   }
-  return real;
+  return { ...real, sms };
 }

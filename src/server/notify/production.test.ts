@@ -1,6 +1,24 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { createUserPushSender } from "./production";
+import { createUserPushSender, notificationSenders } from "./production";
+import { loadConfig } from "../config";
+import { outbox } from "./outbox";
+
+test("SMS-off sender refuses direct sends in development and production without database or network access", async () => {
+  const config = loadConfig({ PUBLIC_BASE_URL: "https://app.example.test", WEBAUTHN_RP_ID: "app.example.test",
+    DATABASE_URL: "pglite:memory", WARTHOG_HMAC_KEY: Buffer.alloc(32, 1).toString("base64"),
+    WARTHOG_DEV_KEK: Buffer.alloc(32, 2).toString("base64"), SMS_ENABLED: "false" });
+  for (const devTools of [true, false]) {
+    const senders = notificationSenders({ ...config, devTools });
+    assert.equal(senders.sms.enabled, false);
+    await assert.rejects(senders.sms.sendSms({ recipient: "+61412345678", body: "test" }), /^Error: SMS is disabled$/);
+    if (devTools) {
+      const before = outbox.list().length;
+      await senders.email.sendEmail({ recipient: "test@example.test", body: "email remains available" });
+      assert.equal(outbox.list().length, before + 1);
+    }
+  }
+});
 
 test("generic push resolves owned subscriptions, prunes expired endpoints and never sends message content", async () => {
   const sent: string[] = [], removed: string[] = [];

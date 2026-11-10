@@ -63,6 +63,7 @@ export type NotificationsViewProps = {
   numbers: ReadonlyArray<NotificationsViewNumber>;
   // whether fallback messages also go by email. Defaults ON (brief default).
   emailFallback?: boolean;
+  smsEnabled?: boolean;
   smsFallback?: boolean;
   smsCountries?: readonly string[];
   // the fallback delay in minutes, bounded to the inclusive 1–30 range. Defaults to 2
@@ -130,6 +131,7 @@ export function NotificationsView({
   devices,
   numbers,
   emailFallback = true,
+  smsEnabled = true,
   smsFallback = false,
   smsCountries = [],
   fallbackDelayMinutes = 2,
@@ -231,6 +233,7 @@ export function NotificationsView({
       </div>
 
       {/* ----- SMS fallback: add and verify a mobile number with a 6-digit code ----- */}
+      {smsEnabled ? (
       <div className="flex flex-col gap-3">
         <SectionHeading icon={Smartphone}>Mobile number for SMS fallback</SectionHeading>
         <p className="text-sm text-fg-muted">
@@ -306,6 +309,14 @@ export function NotificationsView({
         </form>
         <SmsDisclosure purpose="verification" />
       </div>
+      ) : (
+        <div className="flex flex-col gap-3">
+          <SectionHeading icon={Smartphone}>SMS notifications</SectionHeading>
+          <p className="text-sm text-fg-muted">
+            SMS is currently unavailable. You can use email, push notifications and in-app approvals.
+          </p>
+        </div>
+      )}
 
       {/* ----- Fallback preferences: email fallback + the delay before it fires ----- */}
       <form action={saveNotificationPrefsAction} className="flex flex-col gap-3">
@@ -321,6 +332,7 @@ export function NotificationsView({
           <span className="text-fg">Also send fallback alerts by email</span>
         </label>
 
+        {smsEnabled ? <>
         <label className="flex items-center gap-3 rounded-card border border-line bg-surface p-3">
           <input type="checkbox" name="smsFallback" defaultChecked={smsFallback} className="h-4 w-4 accent-accent" />
           <span className="text-fg">Send approval alerts by SMS to my verified number</span>
@@ -330,6 +342,7 @@ export function NotificationsView({
           This setting does not prevent a verification text you explicitly request.
         </p>
         <SmsDisclosure purpose="alerts" />
+        </> : null}
 
         <Field
           label="Fallback delay (minutes)"
@@ -341,8 +354,7 @@ export function NotificationsView({
           defaultValue={fallbackDelayMinutes}
         />
         <p className="text-sm text-fg-muted">
-          How long Warthog waits for a push to be seen before falling back to SMS (1–30
-          minutes).
+          How long Warthog waits for an approval to be opened before sending fallback alerts (1–30 minutes).
         </p>
         <Button type="submit" variant="secondary" className="self-start">
           Save preferences

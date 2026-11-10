@@ -342,6 +342,24 @@ test("the reset request alerts every registered channel (push, email and SMS)", 
   }
 });
 
+test("SMS-off account reset keeps email and push alerts without calling a saved mobile", async () => {
+  const db = await freshDb();
+  try {
+    const clock = fixedClock(T0);
+    const alerts = createOutbox();
+    const person = await freshUser(db, "sms-off-reset");
+    await addMobile(db, person.id, "+61400000111", true);
+    const code = await issueCodeFor(db, person.email, clock, createOutbox());
+    const deps = makeDeps(clock, alerts, makeExecutorSpy().executor);
+    let smsCalls = 0;
+    const result = await requestAccountReset(db, { email: person.email, code }, { ...deps,
+      senders: { ...deps.senders, sms: { enabled: false, async sendSms() { smsCalls++; } } } });
+    assert.deepEqual(result, { ok: true });
+    assert.equal(smsCalls, 0);
+    assert.deepEqual(channelsIn(alerts), new Set(["push", "email"]));
+  } finally { await db.close(); }
+});
+
 test("a wrong email code starts no reset — no timer and no alert", async () => {
   const clock = fixedClock(T0);
   const alertOutbox = createOutbox();

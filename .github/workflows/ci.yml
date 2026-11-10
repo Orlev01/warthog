@@ -98,6 +98,7 @@ jobs:
       - name: Record local image evidence
         run: |
           docker image inspect warthog-ci-runtime --format 'Image={{.Id}} Platform={{.Os}}/{{.Architecture}} User={{.Config.User}} Revision={{index .Config.Labels "org.opencontainers.image.revision"}}'
+          docker run --rm --network none --entrypoint sh warthog-ci-runtime -c 'test "$(id -u)" = 1000 && test -z "$(find /usr/bin /usr/sbin -type f -perm /6000)"'
           container_id=$(docker create warthog-ci-runtime)
           trap 'docker rm "$container_id" >/dev/null' EXIT
           docker cp "$container_id:/app/release-manifest.json" /tmp/warthog-release-manifest.json

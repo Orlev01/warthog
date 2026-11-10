@@ -1,5 +1,17 @@
 # Warthog comprehensive engineering audit
 
+**SMS-off launch follow-up, 10 November:** the founder explicitly approved deferring
+SMS. [Implementation and regression scope](../sms-disabled-launch.md) cover all
+SMS call paths while retaining email/push. The exact four email DNS records were
+separately approved, saved and independently verified; existing records are preserved.
+Resend DKIM/CNAME are verified and MX/SPF pending; API tracking flags remain false.
+See [state](../../state.md) for the latest distinction between email DNS and app DNS.
+The final local Linux/PG16 checks pass (119 focused application, 27 delivery, five
+cost tests); [runtime image review](runtime-image-review-2026-11-10.md) includes
+non-root/setuid hardening, exact digests and unresolved native-library risk.
+Full pinned-base CI, image-publication review, exact deployment approval and live
+acceptance remain required. No application is live and Twilio has not been purchased.
+
 **Delivery setup follow-up, 10 November:** the explicitly authorized foundation,
 scoped permissions, private database and production credentials are now applied
 and live-verified. Internal database DNS was explicitly allowed; public DNS and

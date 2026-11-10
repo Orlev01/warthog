@@ -160,7 +160,8 @@ export async function requestAccountReset(
   // they still have access to and can cancel it from a signed-in device. Push is
   // addressed to the person (the sender finds their devices); SMS only ever goes to a
   // number they verified.
-  const mobiles = (await listMobileNumbers(db, person.id)).filter((number) => number.verified);
+  const mobiles = deps.senders.sms.enabled === false ? []
+    : (await listMobileNumbers(db, person.id)).filter((number) => number.verified);
   const sends: (() => Promise<void>)[] = [
     () => deps.senders.push.sendPush({ recipient: person.id, body: ALERT_BODY }),
     () => deps.senders.email.sendEmail({ recipient: person.email, body: ALERT_BODY }),

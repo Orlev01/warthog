@@ -124,6 +124,30 @@ const HMAC_KEY = randomBytes(32);
 const NOW = new Date("2026-11-15T12:00:00.000Z");
 const clock: Clock = fixedClock(NOW);
 
+test("SMS disabled refuses crafted enrolment, verification and opt-in; email preferences and push still work", async () => {
+  const db = await freshDb();
+  try {
+    const keyWrapper = keyWrapperFor();
+    const person = await makePerson(db, keyWrapper, "sms-disabled");
+    const session = await sessionFor(db, person.userId);
+    const outbox = createOutbox();
+    const actions = createNotificationsActions({ db, clock, random: systemRandom, hmacKey: HMAC_KEY, keyWrapper,
+      senders: { push: outbox, email: outbox, sms: { enabled: false, sendSms: (message) => outbox.sendSms(message) } } });
+    assert.deepEqual(await actions.addMobileNumber(session, { number: "+61412345678" }), { ok: false, reason: "sms_disabled" });
+    assert.deepEqual(await actions.verifyMobileNumber(session, { id: person.userId, code: "123456" }), { ok: false, reason: "sms_disabled" });
+    assert.deepEqual(await actions.saveNotificationPrefs(session, { emailFallback: false, smsFallback: true, fallbackDelayMinutes: 5 }), { ok: false, reason: "sms_disabled" });
+    assert.equal((await getNotificationPrefs(db, person.userId)).emailFallback, true);
+    assert.deepEqual(await listMobileNumbers(db, person.userId), []);
+    assert.equal(outbox.list().length, 0);
+    assert.deepEqual(await actions.saveNotificationPrefs(session, { emailFallback: false, fallbackDelayMinutes: 5 }), { ok: true });
+    assert.equal((await actions.load(session)).emailFallback, false);
+    assert.equal((await actions.load(session)).smsEnabled, false);
+    assert.deepEqual(await actions.registerPushDevice(session, subscriptionFor("sms-disabled")), { ok: true });
+    assert.deepEqual(await actions.sendTestNotification(session), { ok: true });
+    assert.deepEqual(outbox.list().map((message) => message.channel), ["push"]);
+  } finally { await db.close(); }
+});
+
 function keyWrapperFor(): KeyWrapper {
   return localAesKeyWrapper(randomBytes(KEK_BYTES));
 }

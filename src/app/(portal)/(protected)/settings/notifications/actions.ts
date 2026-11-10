@@ -97,6 +97,7 @@ export interface NotificationsData {
   readonly devices: ReadonlyArray<{ id: string; label?: string; fingerprint?: string }>;
   readonly numbers: ReadonlyArray<{ id: string; number: string; verified: boolean }>;
   readonly emailFallback: boolean;
+  readonly smsEnabled: boolean;
   readonly smsFallback?: boolean;
   readonly fallbackDelayMinutes: number;
 }
@@ -203,7 +204,8 @@ export function createNotificationsActions(deps: NotificationsActionsDeps): Noti
     const dek = await dataKeyFor(session.userId);
     const timeZone = await timeZoneFor(db, session.userId, dek);
     const subscriptions = await listSubscriptions(db, session.userId, dek, clock);
-    const numbers = await listMobileNumbers(db, session.userId);
+    const smsEnabled = senders.sms.enabled !== false;
+    const numbers = smsEnabled ? await listMobileNumbers(db, session.userId) : [];
     const prefs = await getNotificationPrefs(db, session.userId);
     return {
       devices: subscriptions.map((subscription) => ({
@@ -217,7 +219,8 @@ export function createNotificationsActions(deps: NotificationsActionsDeps): Noti
         verified: number.verified,
       })),
       emailFallback: prefs.emailFallback,
-      smsFallback: prefs.smsFallback,
+      smsEnabled,
+      smsFallback: smsEnabled && prefs.smsFallback,
       fallbackDelayMinutes: prefs.fallbackDelayMinutes,
     };
   }
@@ -270,6 +273,7 @@ export function createNotificationsActions(deps: NotificationsActionsDeps): Noti
     session: Session,
     input: { number: string },
   ): Promise<ActionResult> {
+    if (senders.sms.enabled === false) return { ok: false, reason: "sms_disabled" };
     const number = parseParams(mobileNumberSchema, input.number);
     await addMobileNumberRepo(
       db,
@@ -287,6 +291,7 @@ export function createNotificationsActions(deps: NotificationsActionsDeps): Noti
     session: Session,
     input: { id: string; code: string },
   ): Promise<ActionResult> {
+    if (senders.sms.enabled === false) return { ok: false, reason: "sms_disabled" };
     const id = parseParams(uuidSchema, input.id);
     const code = parseParams(codeSchema, input.code);
     const result = await verifyMobileNumberRepo(
@@ -305,6 +310,7 @@ export function createNotificationsActions(deps: NotificationsActionsDeps): Noti
     session: Session,
     input: { emailFallback: boolean; smsFallback?: boolean; fallbackDelayMinutes: number },
   ): Promise<ActionResult> {
+    if (senders.sms.enabled === false && input.smsFallback === true) return { ok: false, reason: "sms_disabled" };
     const result = await saveNotificationPrefsRepo(db, {
       userId: session.userId,
       emailFallback: input.emailFallback,

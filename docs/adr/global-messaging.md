@@ -1,5 +1,14 @@
 # Global messaging — approved local integration, 9 November 2026
 
+**10 November launch decision:** the founder explicitly approved proceeding with
+SMS disabled while Twilio production onboarding remains unresolved. This supersedes
+the earlier requirement to ship real SMS in the first release. Use `SMS_ENABLED=false`
+(`smsEnabled=false` in the Azure workload); retain email, push and in-app approvals.
+SMS settings, verification, fallback and reset alerts are unavailable in this mode,
+including for previously saved opt-ins. The country/provider/cap contract below
+still applies to any later SMS activation. No sender purchase or plan upgrade is
+authorized by deferring SMS.
+
 The founder approved Twilio SMS and Resend email, including overseas processing,
 and explicitly confirmed that Warthog is a global product. This supersedes the
 Australia-only processing rule and the AU-only pilot suggestion in the earlier

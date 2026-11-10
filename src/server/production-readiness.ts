@@ -53,8 +53,9 @@ export function assertProductionReleaseConfiguration(config: Config): void {
   } catch { throw new Error("Invalid production configuration: VAPID_PRIVATE_KEY"); }
   valid("VAPID_PUBLIC_KEY", config.vapid.publicKey === point.toString("base64url"));
   valid("MESSAGING_CONFIGURATION", config.messaging);
-  validateTwilioConfiguration(config.messaging.twilio);
   createResendEmailSender(config.messaging.email); // construction validates; no network
+  if (config.smsEnabled === false) return;
+  validateTwilioConfiguration(config.messaging.twilio);
   valid("SMS_COUNTRY_ROUTES_JSON", Object.keys(config.messaging.twilio.countryRoutes).length > 0 && !Object.hasOwn(config.messaging.twilio.countryRoutes, "CN"));
   const limits = config.messaging.smsLimits;
   for (const [name, value] of [["SMS_MONTHLY_SEGMENT_LIMIT", limits.monthly], ["SMS_DAILY_SEGMENT_LIMIT", limits.daily],

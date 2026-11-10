@@ -241,6 +241,7 @@ const NOTICES: Record<string, Notice> = {
   device_removed: { tone: "done", text: "That device won't get Warthog notifications any more." },
   code_sent: { tone: "done", text: "Your code was submitted for delivery. When it arrives, enter it below to verify your number." },
   sms_unavailable: { tone: "problem", text: "We could not send that text. Check that your country is listed below and your number includes its country code. Email and in-app approvals remain available." },
+  sms_disabled: { tone: "problem", text: "SMS is currently unavailable. You can use email, push notifications and in-app approvals." },
   number_verified: { tone: "done", text: "Your mobile number is verified." },
   prefs_saved: { tone: "done", text: "Your notification settings are saved." },
   test_sent: { tone: "done", text: "Test notification sent — check your device." },

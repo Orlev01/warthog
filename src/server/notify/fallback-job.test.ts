@@ -110,6 +110,26 @@ const HMAC_KEY = randomBytes(32);
 // arithmetic is unambiguous.
 const NOW = new Date("2026-11-15T12:00:00.000Z");
 
+test("SMS disabled ignores a saved opt-in without claiming a paid attempt; email still delivers once", async () => {
+  const db = await freshDb();
+  try {
+    const clock = fixedClock(NOW);
+    const person = await makePerson(db, "sms-disabled");
+    await addVerifiedNumber(db, person.userId, "+61412345678", clock);
+    const approvalId = await createPendingApproval(db, person.userId, person.dek, clock);
+    const recorded = recordingSenders();
+    const senders = { ...recorded.senders, sms: { ...recorded.senders.sms, enabled: false } };
+    const deps = { db, clock, random: systemRandom, senders, publicBaseUrl: PUBLIC_BASE_URL };
+    await runApprovalFallback(deps, { approvalId });
+    await runApprovalFallback(deps, { approvalId });
+    assert.equal(recorded.sms.length, 0);
+    assert.equal(recorded.email.length, 1);
+    assert.equal(recorded.email[0]!.recipient, person.email);
+    assert.equal((await db.query("SELECT * FROM approval_sms_attempts WHERE approval_id = $1", [approvalId])).rows.length, 0);
+    assert.deepEqual((await db.query("SELECT channel FROM approval_fallback_sends WHERE approval_id = $1", [approvalId])).rows, [{ channel: "email" }]);
+  } finally { await db.close(); }
+});
+
 // Compare the MOMENT, not the representation: a stored timestamptz may come back as a Date or
 // an ISO string — either is fine and must not redden a test.
 const toMs = (value: unknown): number => new Date(value as string | number | Date).getTime();

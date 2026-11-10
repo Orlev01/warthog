@@ -106,6 +106,12 @@
       "metadata": {
         "description": "First creation: explicit empty array. Updates: exact existing approved app custom-domain bindings, copied without changes. No new domain/certificate binding is authorized here."
       }
+    },
+    "smsEnabled": {
+      "type": "bool",
+      "metadata": {
+        "description": "Explicit SMS capability. False omits all Twilio secret references and SMS provider settings. Enabling requires reviewed routes, limits, provider readiness and release approval."
+      }
     }
   },
   "resources": [
@@ -141,68 +147,7 @@
               "identity": "[parameters('managedIdentityResourceId')]"
             }
           ],
-          "secrets": [
-            {
-              "name": "database-url",
-              "keyVaultUrl": "[parameters('keyVaultSecretUrls').DATABASE_URL]",
-              "identity": "[parameters('managedIdentityResourceId')]"
-            },
-            {
-              "name": "migration-database-url",
-              "keyVaultUrl": "[parameters('keyVaultSecretUrls').MIGRATION_DATABASE_URL]",
-              "identity": "[parameters('managedIdentityResourceId')]"
-            },
-            {
-              "name": "purge-database-url",
-              "keyVaultUrl": "[parameters('keyVaultSecretUrls').PURGE_DATABASE_URL]",
-              "identity": "[parameters('managedIdentityResourceId')]"
-            },
-            {
-              "name": "warthog-hmac-key",
-              "keyVaultUrl": "[parameters('keyVaultSecretUrls').WARTHOG_HMAC_KEY]",
-              "identity": "[parameters('managedIdentityResourceId')]"
-            },
-            {
-              "name": "resend-api-key",
-              "keyVaultUrl": "[parameters('keyVaultSecretUrls').RESEND_API_KEY]",
-              "identity": "[parameters('managedIdentityResourceId')]"
-            },
-            {
-              "name": "twilio-account-sid",
-              "keyVaultUrl": "[parameters('keyVaultSecretUrls').TWILIO_ACCOUNT_SID]",
-              "identity": "[parameters('managedIdentityResourceId')]"
-            },
-            {
-              "name": "twilio-api-key-sid",
-              "keyVaultUrl": "[parameters('keyVaultSecretUrls').TWILIO_API_KEY_SID]",
-              "identity": "[parameters('managedIdentityResourceId')]"
-            },
-            {
-              "name": "twilio-api-key-secret",
-              "keyVaultUrl": "[parameters('keyVaultSecretUrls').TWILIO_API_KEY_SECRET]",
-              "identity": "[parameters('managedIdentityResourceId')]"
-            },
-            {
-              "name": "google-client-secret",
-              "keyVaultUrl": "[parameters('keyVaultSecretUrls').GOOGLE_CLIENT_SECRET]",
-              "identity": "[parameters('managedIdentityResourceId')]"
-            },
-            {
-              "name": "microsoft-client-secret",
-              "keyVaultUrl": "[parameters('keyVaultSecretUrls').MICROSOFT_CLIENT_SECRET]",
-              "identity": "[parameters('managedIdentityResourceId')]"
-            },
-            {
-              "name": "google-early-access",
-              "keyVaultUrl": "[parameters('keyVaultSecretUrls').GOOGLE_EARLY_ACCESS]",
-              "identity": "[parameters('managedIdentityResourceId')]"
-            },
-            {
-              "name": "vapid-private-key",
-              "keyVaultUrl": "[parameters('keyVaultSecretUrls').VAPID_PRIVATE_KEY]",
-              "identity": "[parameters('managedIdentityResourceId')]"
-            }
-          ]
+          "secrets": "[concat(variables('baseSecrets'), if(parameters('smsEnabled'), variables('smsSecrets'), json('[]')))]"
         },
         "template": {
           "revisionSuffix": "[parameters('revisionSuffix')]",
@@ -211,160 +156,7 @@
             {
               "name": "warthog",
               "image": "[parameters('imageDigest')]",
-              "env": [
-                {
-                  "name": "NODE_ENV",
-                  "value": "production"
-                },
-                {
-                  "name": "PORT",
-                  "value": "3000"
-                },
-                {
-                  "name": "HOSTNAME",
-                  "value": "0.0.0.0"
-                },
-                {
-                  "name": "AZURE_CLIENT_ID",
-                  "value": "[parameters('managedIdentityClientId')]"
-                },
-                {
-                  "name": "PUBLIC_BASE_URL",
-                  "value": "[string(parameters('productionEnvironment').PUBLIC_BASE_URL)]"
-                },
-                {
-                  "name": "WEBAUTHN_RP_ID",
-                  "value": "[string(parameters('productionEnvironment').WEBAUTHN_RP_ID)]"
-                },
-                {
-                  "name": "OPERATOR_EMAIL",
-                  "value": "[string(parameters('productionEnvironment').OPERATOR_EMAIL)]"
-                },
-                {
-                  "name": "EXCHANGE_RATE_BASE_URL",
-                  "value": "[string(parameters('productionEnvironment').EXCHANGE_RATE_BASE_URL)]"
-                },
-                {
-                  "name": "KEY_VAULT_URL",
-                  "value": "[string(parameters('productionEnvironment').KEY_VAULT_URL)]"
-                },
-                {
-                  "name": "KEY_VAULT_KEY_NAME",
-                  "value": "[string(parameters('productionEnvironment').KEY_VAULT_KEY_NAME)]"
-                },
-                {
-                  "name": "STORAGE_ACCOUNT",
-                  "value": "[string(parameters('productionEnvironment').STORAGE_ACCOUNT)]"
-                },
-                {
-                  "name": "STORAGE_CONTAINER",
-                  "value": "[string(parameters('productionEnvironment').STORAGE_CONTAINER)]"
-                },
-                {
-                  "name": "RESEND_FROM_ADDRESS",
-                  "value": "[string(parameters('productionEnvironment').RESEND_FROM_ADDRESS)]"
-                },
-                {
-                  "name": "RESEND_SENDING_DOMAIN",
-                  "value": "[string(parameters('productionEnvironment').RESEND_SENDING_DOMAIN)]"
-                },
-                {
-                  "name": "RESEND_REPLY_TO_ADDRESS",
-                  "value": "[string(parameters('productionEnvironment').RESEND_REPLY_TO_ADDRESS)]"
-                },
-                {
-                  "name": "TWILIO_REGION",
-                  "value": "[string(parameters('productionEnvironment').TWILIO_REGION)]"
-                },
-                {
-                  "name": "SMS_COUNTRY_ROUTES_JSON",
-                  "value": "[string(parameters('productionEnvironment').SMS_COUNTRY_ROUTES_JSON)]"
-                },
-                {
-                  "name": "SMS_MONTHLY_SEGMENT_LIMIT",
-                  "value": "[string(parameters('productionEnvironment').SMS_MONTHLY_SEGMENT_LIMIT)]"
-                },
-                {
-                  "name": "SMS_DAILY_SEGMENT_LIMIT",
-                  "value": "[string(parameters('productionEnvironment').SMS_DAILY_SEGMENT_LIMIT)]"
-                },
-                {
-                  "name": "SMS_RECIPIENT_HOURLY_SEGMENT_LIMIT",
-                  "value": "[string(parameters('productionEnvironment').SMS_RECIPIENT_HOURLY_SEGMENT_LIMIT)]"
-                },
-                {
-                  "name": "SMS_RECIPIENT_DAILY_MESSAGE_LIMIT",
-                  "value": "[string(parameters('productionEnvironment').SMS_RECIPIENT_DAILY_MESSAGE_LIMIT)]"
-                },
-                {
-                  "name": "SMS_MAX_SEGMENTS_PER_MESSAGE",
-                  "value": "[string(parameters('productionEnvironment').SMS_MAX_SEGMENTS_PER_MESSAGE)]"
-                },
-                {
-                  "name": "GOOGLE_CLIENT_ID",
-                  "value": "[string(parameters('productionEnvironment').GOOGLE_CLIENT_ID)]"
-                },
-                {
-                  "name": "MICROSOFT_CLIENT_ID",
-                  "value": "[string(parameters('productionEnvironment').MICROSOFT_CLIENT_ID)]"
-                },
-                {
-                  "name": "VAPID_SUBJECT",
-                  "value": "[string(parameters('productionEnvironment').VAPID_SUBJECT)]"
-                },
-                {
-                  "name": "VAPID_PUBLIC_KEY",
-                  "value": "[string(parameters('productionEnvironment').VAPID_PUBLIC_KEY)]"
-                },
-                {
-                  "name": "DATABASE_URL",
-                  "secretRef": "database-url"
-                },
-                {
-                  "name": "MIGRATION_DATABASE_URL",
-                  "secretRef": "migration-database-url"
-                },
-                {
-                  "name": "PURGE_DATABASE_URL",
-                  "secretRef": "purge-database-url"
-                },
-                {
-                  "name": "WARTHOG_HMAC_KEY",
-                  "secretRef": "warthog-hmac-key"
-                },
-                {
-                  "name": "RESEND_API_KEY",
-                  "secretRef": "resend-api-key"
-                },
-                {
-                  "name": "TWILIO_ACCOUNT_SID",
-                  "secretRef": "twilio-account-sid"
-                },
-                {
-                  "name": "TWILIO_API_KEY_SID",
-                  "secretRef": "twilio-api-key-sid"
-                },
-                {
-                  "name": "TWILIO_API_KEY_SECRET",
-                  "secretRef": "twilio-api-key-secret"
-                },
-                {
-                  "name": "GOOGLE_CLIENT_SECRET",
-                  "secretRef": "google-client-secret"
-                },
-                {
-                  "name": "MICROSOFT_CLIENT_SECRET",
-                  "secretRef": "microsoft-client-secret"
-                },
-                {
-                  "name": "GOOGLE_EARLY_ACCESS",
-                  "secretRef": "google-early-access"
-                },
-                {
-                  "name": "VAPID_PRIVATE_KEY",
-                  "secretRef": "vapid-private-key"
-                }
-              ],
+              "env": "[concat(variables('baseEnvironment'), if(parameters('smsEnabled'), variables('smsEnvironment'), json('[]')))]",
               "resources": {
                 "cpu": "[json(parameters('cpu'))]",
                 "memory": "[parameters('memory')]"
@@ -420,5 +212,231 @@
         }
       }
     }
-  ]
+  ],
+  "variables": {
+    "baseEnvironment": [
+      {
+        "name": "NODE_ENV",
+        "value": "production"
+      },
+      {
+        "name": "PORT",
+        "value": "3000"
+      },
+      {
+        "name": "HOSTNAME",
+        "value": "0.0.0.0"
+      },
+      {
+        "name": "SMS_ENABLED",
+        "value": "[if(parameters('smsEnabled'), 'true', 'false')]"
+      },
+      {
+        "name": "AZURE_CLIENT_ID",
+        "value": "[parameters('managedIdentityClientId')]"
+      },
+      {
+        "name": "PUBLIC_BASE_URL",
+        "value": "[string(parameters('productionEnvironment').PUBLIC_BASE_URL)]"
+      },
+      {
+        "name": "WEBAUTHN_RP_ID",
+        "value": "[string(parameters('productionEnvironment').WEBAUTHN_RP_ID)]"
+      },
+      {
+        "name": "OPERATOR_EMAIL",
+        "value": "[string(parameters('productionEnvironment').OPERATOR_EMAIL)]"
+      },
+      {
+        "name": "EXCHANGE_RATE_BASE_URL",
+        "value": "[string(parameters('productionEnvironment').EXCHANGE_RATE_BASE_URL)]"
+      },
+      {
+        "name": "KEY_VAULT_URL",
+        "value": "[string(parameters('productionEnvironment').KEY_VAULT_URL)]"
+      },
+      {
+        "name": "KEY_VAULT_KEY_NAME",
+        "value": "[string(parameters('productionEnvironment').KEY_VAULT_KEY_NAME)]"
+      },
+      {
+        "name": "STORAGE_ACCOUNT",
+        "value": "[string(parameters('productionEnvironment').STORAGE_ACCOUNT)]"
+      },
+      {
+        "name": "STORAGE_CONTAINER",
+        "value": "[string(parameters('productionEnvironment').STORAGE_CONTAINER)]"
+      },
+      {
+        "name": "RESEND_FROM_ADDRESS",
+        "value": "[string(parameters('productionEnvironment').RESEND_FROM_ADDRESS)]"
+      },
+      {
+        "name": "RESEND_SENDING_DOMAIN",
+        "value": "[string(parameters('productionEnvironment').RESEND_SENDING_DOMAIN)]"
+      },
+      {
+        "name": "RESEND_REPLY_TO_ADDRESS",
+        "value": "[string(parameters('productionEnvironment').RESEND_REPLY_TO_ADDRESS)]"
+      },
+      {
+        "name": "GOOGLE_CLIENT_ID",
+        "value": "[string(parameters('productionEnvironment').GOOGLE_CLIENT_ID)]"
+      },
+      {
+        "name": "MICROSOFT_CLIENT_ID",
+        "value": "[string(parameters('productionEnvironment').MICROSOFT_CLIENT_ID)]"
+      },
+      {
+        "name": "VAPID_SUBJECT",
+        "value": "[string(parameters('productionEnvironment').VAPID_SUBJECT)]"
+      },
+      {
+        "name": "VAPID_PUBLIC_KEY",
+        "value": "[string(parameters('productionEnvironment').VAPID_PUBLIC_KEY)]"
+      },
+      {
+        "name": "DATABASE_URL",
+        "secretRef": "database-url"
+      },
+      {
+        "name": "MIGRATION_DATABASE_URL",
+        "secretRef": "migration-database-url"
+      },
+      {
+        "name": "PURGE_DATABASE_URL",
+        "secretRef": "purge-database-url"
+      },
+      {
+        "name": "WARTHOG_HMAC_KEY",
+        "secretRef": "warthog-hmac-key"
+      },
+      {
+        "name": "RESEND_API_KEY",
+        "secretRef": "resend-api-key"
+      },
+      {
+        "name": "GOOGLE_CLIENT_SECRET",
+        "secretRef": "google-client-secret"
+      },
+      {
+        "name": "MICROSOFT_CLIENT_SECRET",
+        "secretRef": "microsoft-client-secret"
+      },
+      {
+        "name": "GOOGLE_EARLY_ACCESS",
+        "secretRef": "google-early-access"
+      },
+      {
+        "name": "VAPID_PRIVATE_KEY",
+        "secretRef": "vapid-private-key"
+      }
+    ],
+    "smsEnvironment": [
+      {
+        "name": "TWILIO_REGION",
+        "value": "[if(parameters('smsEnabled'), string(parameters('productionEnvironment').TWILIO_REGION), '')]"
+      },
+      {
+        "name": "SMS_COUNTRY_ROUTES_JSON",
+        "value": "[if(parameters('smsEnabled'), string(parameters('productionEnvironment').SMS_COUNTRY_ROUTES_JSON), '')]"
+      },
+      {
+        "name": "SMS_MONTHLY_SEGMENT_LIMIT",
+        "value": "[if(parameters('smsEnabled'), string(parameters('productionEnvironment').SMS_MONTHLY_SEGMENT_LIMIT), '')]"
+      },
+      {
+        "name": "SMS_DAILY_SEGMENT_LIMIT",
+        "value": "[if(parameters('smsEnabled'), string(parameters('productionEnvironment').SMS_DAILY_SEGMENT_LIMIT), '')]"
+      },
+      {
+        "name": "SMS_RECIPIENT_HOURLY_SEGMENT_LIMIT",
+        "value": "[if(parameters('smsEnabled'), string(parameters('productionEnvironment').SMS_RECIPIENT_HOURLY_SEGMENT_LIMIT), '')]"
+      },
+      {
+        "name": "SMS_RECIPIENT_DAILY_MESSAGE_LIMIT",
+        "value": "[if(parameters('smsEnabled'), string(parameters('productionEnvironment').SMS_RECIPIENT_DAILY_MESSAGE_LIMIT), '')]"
+      },
+      {
+        "name": "SMS_MAX_SEGMENTS_PER_MESSAGE",
+        "value": "[if(parameters('smsEnabled'), string(parameters('productionEnvironment').SMS_MAX_SEGMENTS_PER_MESSAGE), '')]"
+      },
+      {
+        "name": "TWILIO_ACCOUNT_SID",
+        "secretRef": "twilio-account-sid"
+      },
+      {
+        "name": "TWILIO_API_KEY_SID",
+        "secretRef": "twilio-api-key-sid"
+      },
+      {
+        "name": "TWILIO_API_KEY_SECRET",
+        "secretRef": "twilio-api-key-secret"
+      }
+    ],
+    "baseSecrets": [
+      {
+        "name": "database-url",
+        "keyVaultUrl": "[parameters('keyVaultSecretUrls').DATABASE_URL]",
+        "identity": "[parameters('managedIdentityResourceId')]"
+      },
+      {
+        "name": "migration-database-url",
+        "keyVaultUrl": "[parameters('keyVaultSecretUrls').MIGRATION_DATABASE_URL]",
+        "identity": "[parameters('managedIdentityResourceId')]"
+      },
+      {
+        "name": "purge-database-url",
+        "keyVaultUrl": "[parameters('keyVaultSecretUrls').PURGE_DATABASE_URL]",
+        "identity": "[parameters('managedIdentityResourceId')]"
+      },
+      {
+        "name": "warthog-hmac-key",
+        "keyVaultUrl": "[parameters('keyVaultSecretUrls').WARTHOG_HMAC_KEY]",
+        "identity": "[parameters('managedIdentityResourceId')]"
+      },
+      {
+        "name": "resend-api-key",
+        "keyVaultUrl": "[parameters('keyVaultSecretUrls').RESEND_API_KEY]",
+        "identity": "[parameters('managedIdentityResourceId')]"
+      },
+      {
+        "name": "google-client-secret",
+        "keyVaultUrl": "[parameters('keyVaultSecretUrls').GOOGLE_CLIENT_SECRET]",
+        "identity": "[parameters('managedIdentityResourceId')]"
+      },
+      {
+        "name": "microsoft-client-secret",
+        "keyVaultUrl": "[parameters('keyVaultSecretUrls').MICROSOFT_CLIENT_SECRET]",
+        "identity": "[parameters('managedIdentityResourceId')]"
+      },
+      {
+        "name": "google-early-access",
+        "keyVaultUrl": "[parameters('keyVaultSecretUrls').GOOGLE_EARLY_ACCESS]",
+        "identity": "[parameters('managedIdentityResourceId')]"
+      },
+      {
+        "name": "vapid-private-key",
+        "keyVaultUrl": "[parameters('keyVaultSecretUrls').VAPID_PRIVATE_KEY]",
+        "identity": "[parameters('managedIdentityResourceId')]"
+      }
+    ],
+    "smsSecrets": [
+      {
+        "name": "twilio-account-sid",
+        "keyVaultUrl": "[if(parameters('smsEnabled'), parameters('keyVaultSecretUrls').TWILIO_ACCOUNT_SID, '')]",
+        "identity": "[parameters('managedIdentityResourceId')]"
+      },
+      {
+        "name": "twilio-api-key-sid",
+        "keyVaultUrl": "[if(parameters('smsEnabled'), parameters('keyVaultSecretUrls').TWILIO_API_KEY_SID, '')]",
+        "identity": "[parameters('managedIdentityResourceId')]"
+      },
+      {
+        "name": "twilio-api-key-secret",
+        "keyVaultUrl": "[if(parameters('smsEnabled'), parameters('keyVaultSecretUrls').TWILIO_API_KEY_SECRET, '')]",
+        "identity": "[parameters('managedIdentityResourceId')]"
+      }
+    ]
+  }
 }

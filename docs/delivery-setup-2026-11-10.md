@@ -5,6 +5,14 @@ the private runner, and explicitly allowed internal PostgreSQL DNS. Public DNS,
 provider purchases/live messages and the application's release review remain
 separate. This record supersedes earlier setup holds; it is not launch certification.
 
+**Subsequent approved work:** the founder authorized the
+[SMS-off initial launch](sms-disabled-launch.md) and the exact four Resend DNS
+additions. Both authoritative nameservers match those additions; all seven prior
+records remain. DKIM/CNAME are verified, MX/SPF remain pending. Resend API confirms
+open/click tracking false, and the console still shows Free with overages off.
+Forge delivery eligibility enabled automatically after its CNAME verified. App DNS
+and application deployment are still pending; no message was sent.
+
 ## Applied and verified
 
 - The approved Australia East foundation is applied: private PostgreSQL 16
@@ -90,10 +98,12 @@ GitHub has no registered runner. The application foundation remains intact.
 Foundation plan/apply and image publication are independently enabled for manual
 use behind their existing required reviews; enabling them does not dispatch a job.
 `AZURE_DELIVERY_ENABLED=false` still prevents application release dispatch. The remaining
-first-create inputs require actual SMS routes and reviewed messaging controls,
-an approved immutable image and workload/release review. Public DNS and provider
-acceptance must be completed separately. No Container App, image publication or
-public DNS change occurred during setup. Image advisory review, browser/provider
+first-create inputs now use the approved SMS-off mode, with nine core secret
+references and no Twilio inputs. Local contract and Azure read-only Template
+validation pass. An approved immutable image and workload/release review are still
+required. Email DNS is applied as described above; app DNS and provider acceptance
+remain separate. No Container App or image publication occurred during setup.
+The [candidate image review](audit/runtime-image-review-2026-11-10.md), browser/provider
 acceptance, 26 MiB ingress and coordinated restore/deletion tests remain launch
 gates in the [audit](audit/README.md).
 
@@ -102,5 +112,7 @@ passes all six jobs, 5,072 application checks, 24 delivery checks, five cost che
 all four Terraform roots, builds/runtime packaging and real PostgreSQL checks.
 The final documentation/workflow-switch follow-up passes Actionlint and explicit
 stage-gate checks; application and delivery Python source are unchanged after that
-full CI. It skips another identical application-suite run. Account-specific evidence, populated inputs,
+full CI. The later SMS-off changes pass 119 focused Node 22 Linux tests, real
+PostgreSQL checks, 27 delivery tests and five cost tests; pinned-base full CI is
+required again before image publication. Account-specific evidence, populated inputs,
 plans and state are retained privately under `.delivery/activation-2026-11-10/`.

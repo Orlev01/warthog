@@ -77,6 +77,17 @@ import { renderToStaticMarkup } from "react-dom/server";
 
 import { NotificationsView } from "./notifications-view";
 
+test("SMS-off settings show availability without enrolment or opt-in controls", () => {
+  const html = renderToStaticMarkup(<NotificationsView devices={[{ id: "device" }]}
+    numbers={[{ id: "mobile", number: "+61412345678", verified: false }]} smsEnabled={false} smsFallback={true} />);
+  assert.match(html, /SMS is currently unavailable/);
+  for (const name of ["number", "code", "smsFallback"]) assert.ok(!html.includes(`name="${name}"`));
+  assert.ok(!html.includes("+61412345678") && !html.includes("Send code"));
+  assert.match(html, /name="emailFallback"/);
+  assert.match(html, /Register this device/);
+  assert.match(html, /Send a test notification/);
+});
+
 // --- the prop shape this task introduces (described here as the contract) -------
 
 type NotificationsViewDevice = { id: string; label?: string };
