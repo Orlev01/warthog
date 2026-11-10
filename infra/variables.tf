@@ -55,6 +55,7 @@ variable "postgres" {
   type = object({
     sku                   = string
     storage_mb            = number
+    storage_tier          = optional(string)
     backup_retention_days = number
     zone                  = string
     administrator_login   = string
@@ -64,6 +65,7 @@ variable "postgres" {
     condition     = startswith(var.postgres.sku, "GP_") && var.postgres.backup_retention_days >= 7 && var.postgres.backup_retention_days <= 35
     error_message = "Production requires an approved General Purpose SKU and 7–35 day backup retention."
   }
+  description = "Premium SSD v1 only; select an explicit performance tier in the launch profile. Higher storage/performance needs a new cost review; disk shrink is destructive."
 }
 
 variable "postgres_admin_password" {
@@ -82,11 +84,24 @@ variable "log_daily_cap_gb" {
 }
 
 variable "monthly_azure_budget_aud" {
-  type = number
+  type        = number
+  description = "Estimated gross Azure usage before credits/tax, used for notifications only. Not a cash cap. Recalculate with infra/costs/estimate.py when sizing changes."
   validation {
     condition     = var.monthly_azure_budget_aud > 0
     error_message = "Supply the separately approved AUD notification budget, not a historical proposed envelope."
   }
+}
+
+variable "import_existing_budget" {
+  type        = bool
+  default     = false
+  description = "Adopt the existing same-name subscription alert in the reviewed plan instead of attempting duplicate creation."
+}
+
+variable "budget_end_date" {
+  type        = string
+  default     = null
+  description = "Match the existing budget expiry when importing, to avoid silently extending its lifetime."
 }
 
 variable "budget_start_date" {

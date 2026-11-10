@@ -1,0 +1,322 @@
+{
+  "region": "australiaeast",
+  "as_of": "2026-11-10",
+  "currency": "AUD",
+  "basis": "Incremental Azure launch usage before credits/tax; no free grants assumed; no reservations or cash-cap promise.",
+  "assumptions": {
+    "app_vcpu": 0.5,
+    "app_memory_gib": 1,
+    "app_requests_million": 1,
+    "pg_storage_gib": 32,
+    "pg_extra_backup_gib": 16,
+    "hsm_active_versions": 2,
+    "key_operations": 100000,
+    "secret_operations": 10000,
+    "log_gb_per_day": 0.1,
+    "blob_stored_gb": 11,
+    "blob_writes": 100000,
+    "blob_reads": 100000,
+    "blob_lists": 10000,
+    "dns_queries_million": 1,
+    "acr_extra_storage_gb": 0,
+    "lb_processed_gb": 50,
+    "internet_egress_gb": 20,
+    "interzone_gb": 20,
+    "runner_compute_hours": 16,
+    "runner_network_hours": 24,
+    "runner_network_gb": 20,
+    "runner_disk_hours": 24,
+    "runner_disk_operations_allowance_aud": 0.25,
+    "operational_alert_allowance_aud": 5
+  },
+  "rates": {
+    "pg_compute_hour": {
+      "aud": 0.346763,
+      "unit": "1 Hour",
+      "meter": "vCore",
+      "product": "Azure Database for PostgreSQL Flexible Server General Purpose Dadsv5 Series Compute",
+      "region": "australiaeast",
+      "meter_id": "b967055c-3b57-5e9d-82ed-8bc71e6247f3",
+      "source": "https://prices.azure.com/api/retail/prices",
+      "observed": "2026-11-10"
+    },
+    "pg_storage_gib_month": {
+      "aud": 0.19612,
+      "unit": "1 GB/Month",
+      "meter": "Storage Data Stored",
+      "product": "Azure Database for PostgreSQL Flex Server Storage",
+      "region": "australiaeast",
+      "meter_id": "61d63589-b712-54b9-9346-6977b4b5a24a",
+      "source": "https://prices.azure.com/api/retail/prices",
+      "observed": "2026-11-10"
+    },
+    "pg_backup_gib_month": {
+      "aud": 0.13501,
+      "unit": "1 GB/Month",
+      "meter": "Backup Storage LRS Data Stored",
+      "product": "Azure Database for PostgreSQL Flexible Server Backup Storage",
+      "region": "australiaeast",
+      "meter_id": "0b0a7bd8-085b-5917-8f19-179062d42e2e",
+      "source": "https://prices.azure.com/api/retail/prices",
+      "observed": "2026-11-10"
+    },
+    "hsm_version_month": {
+      "aud": 7.105805,
+      "unit": "1",
+      "meter": "Premium HSM-protected Advanced Key",
+      "product": "Key Vault",
+      "region": "australiaeast",
+      "meter_id": "fcd7d1c8-9f04-4567-bac1-90b424c21c05",
+      "source": "https://prices.azure.com/api/retail/prices",
+      "observed": "2026-11-10"
+    },
+    "aca_active_vcpu_second": {
+      "aud": 4.8319474e-05,
+      "usd": 3.4e-05,
+      "unit": "1 Second",
+      "meter": "Standard vCPU Active Usage",
+      "region": "australiaeast",
+      "meter_id": "013772f8-63db-52a2-9c69-f2ae9012ef09",
+      "source": "https://prices.azure.com/api/retail/prices",
+      "observed": "2026-11-10",
+      "conversion": "USD meter times current retail USD/AUD factor 1.421161; avoids six-decimal AUD rounding. Derived from AUD7.105805/USD5 advanced HSM version. Reference only, not invoice FX."
+    },
+    "aca_idle_vcpu_second": {
+      "aud": 5.684644e-06,
+      "usd": 4e-06,
+      "unit": "1 Second",
+      "meter": "Standard vCPU Idle Usage",
+      "region": "australiaeast",
+      "meter_id": "d8b5c482-6b8b-5cd9-baea-9bba06a00b27",
+      "source": "https://prices.azure.com/api/retail/prices",
+      "observed": "2026-11-10",
+      "conversion": "USD meter times current retail USD/AUD factor 1.421161; avoids six-decimal AUD rounding. Derived from AUD7.105805/USD5 advanced HSM version. Reference only, not invoice FX."
+    },
+    "aca_memory_gib_second": {
+      "aud": 5.684644e-06,
+      "usd": 4e-06,
+      "unit": "1 GiB Second",
+      "meter": "Standard Memory Active Usage",
+      "region": "australiaeast",
+      "meter_id": "c35c8b99-9953-57cc-a67f-75365d560cb5",
+      "source": "https://prices.azure.com/api/retail/prices",
+      "observed": "2026-11-10",
+      "conversion": "USD meter times current retail USD/AUD factor 1.421161; avoids six-decimal AUD rounding. Derived from AUD7.105805/USD5 advanced HSM version. Reference only, not invoice FX."
+    },
+    "aca_requests_million": {
+      "aud": 0.568464,
+      "unit": "1M",
+      "meter": "Standard Requests",
+      "product": "Azure Container Apps",
+      "region": "australiaeast",
+      "meter_id": "02f3fee4-2c9c-53f1-b98d-49eb425e0cf6",
+      "source": "https://prices.azure.com/api/retail/prices",
+      "observed": "2026-11-10"
+    },
+    "lb_hour": {
+      "aud": 0.035529,
+      "unit": "1 Hour",
+      "meter": "Standard Included LB Rules and Outbound Rules",
+      "product": "Load Balancer",
+      "region": "Global",
+      "meter_id": "27827eb0-7f60-4928-940b-f5fe15e7a4cb",
+      "source": "https://prices.azure.com/api/retail/prices",
+      "observed": "2026-11-10"
+    },
+    "lb_processed_gb": {
+      "aud": 0.007106,
+      "unit": "1 GB",
+      "meter": "Standard Data Processed",
+      "product": "Load Balancer",
+      "region": "Global",
+      "meter_id": "dfc7cc11-fbe2-41c8-b6fa-24a574223938",
+      "source": "https://prices.azure.com/api/retail/prices",
+      "observed": "2026-11-10"
+    },
+    "ip_hour": {
+      "aud": 0.007106,
+      "unit": "1 Hour",
+      "meter": "Standard IPv4 Static Public IP",
+      "product": "IP Addresses",
+      "region": "australiaeast",
+      "meter_id": "9c150bf9-2bad-430e-a53c-c213804f49ef",
+      "source": "https://prices.azure.com/api/retail/prices",
+      "observed": "2026-11-10"
+    },
+    "acr_day": {
+      "aud": 0.236765,
+      "unit": "1/Day",
+      "meter": "Basic Registry Unit",
+      "product": "Container Registry",
+      "region": "australiaeast",
+      "meter_id": "5c9e7a65-5784-494c-9718-7749d4075dd9",
+      "source": "https://prices.azure.com/api/retail/prices",
+      "observed": "2026-11-10"
+    },
+    "acr_extra_gb_month": {
+      "aud": 0.142116,
+      "unit": "1 GB/Month",
+      "meter": "Data Stored",
+      "product": "Container Registry",
+      "region": "australiaeast",
+      "meter_id": "6331e61c-1b44-4a10-9fb1-e9c0b470c4d5",
+      "source": "https://prices.azure.com/api/retail/prices",
+      "observed": "2026-11-10"
+    },
+    "key_operations_10k": {
+      "aud": 0.213174,
+      "unit": "10K",
+      "meter": "Advanced Key Operations",
+      "product": "Key Vault",
+      "region": "australiaeast",
+      "meter_id": "0e2483c4-e549-4bdf-9f33-82fdfe3abb54",
+      "source": "https://prices.azure.com/api/retail/prices",
+      "observed": "2026-11-10"
+    },
+    "secret_operations_10k": {
+      "aud": 0.042635,
+      "unit": "10K",
+      "meter": "Operations",
+      "product": "Key Vault",
+      "region": "australiaeast",
+      "meter_id": "0f824807-2376-435c-95c9-f992b67a07b0",
+      "source": "https://prices.azure.com/api/retail/prices",
+      "observed": "2026-11-10"
+    },
+    "logs_gb": {
+      "aud": 4.746678,
+      "unit": "1 GB",
+      "meter": "Analytics Logs Data Ingestion",
+      "product": "Log Analytics",
+      "region": "australiaeast",
+      "meter_id": "0d435df8-9c75-482e-a894-cd65c2160c7a",
+      "source": "https://prices.azure.com/api/retail/prices",
+      "observed": "2026-11-10"
+    },
+    "blob_gb_month": {
+      "aud": 0.0284,
+      "unit": "1 GB/Month",
+      "meter": "Hot LRS Data Stored",
+      "product": "General Block Blob v2",
+      "region": "australiaeast",
+      "meter_id": "2f968df1-9a17-4398-bcfb-ad8bf7922321",
+      "source": "https://prices.azure.com/api/retail/prices",
+      "observed": "2026-11-10"
+    },
+    "blob_writes_10k": {
+      "aud": 0.0782,
+      "unit": "10K",
+      "meter": "Hot LRS Write Operations",
+      "product": "General Block Blob v2",
+      "region": "australiaeast",
+      "meter_id": "b1d1445b-213f-499a-bb19-070a2d50248a",
+      "source": "https://prices.azure.com/api/retail/prices",
+      "observed": "2026-11-10"
+    },
+    "blob_reads_10k": {
+      "aud": 0.0063,
+      "unit": "10K",
+      "meter": "Hot Read Operations",
+      "product": "General Block Blob v2",
+      "region": "australiaeast",
+      "meter_id": "f31037d2-678a-4472-9f84-d084817f69f4",
+      "source": "https://prices.azure.com/api/retail/prices",
+      "observed": "2026-11-10"
+    },
+    "blob_lists_10k": {
+      "aud": 0.0782,
+      "unit": "10K",
+      "meter": "LRS List and Create Container Operations",
+      "product": "General Block Blob v2",
+      "region": "australiaeast",
+      "meter_id": "af169c6e-0913-4386-8f3c-0928e8891c1c",
+      "source": "https://prices.azure.com/api/retail/prices",
+      "observed": "2026-11-10"
+    },
+    "dns_zone_month": {
+      "aud": 0.710581,
+      "unit": "1",
+      "meter": "Private Zone",
+      "product": "Azure DNS",
+      "region": "Zone 2",
+      "meter_id": "0b608a26-f611-4232-8192-ce81b6b57194",
+      "source": "https://prices.azure.com/api/retail/prices",
+      "observed": "2026-11-10"
+    },
+    "dns_queries_million": {
+      "aud": 0.568464,
+      "unit": "1M",
+      "meter": "Private Queries",
+      "product": "Azure DNS",
+      "region": "Zone 2",
+      "meter_id": "46cff9cb-4b15-4af0-bf41-25143827fef8",
+      "source": "https://prices.azure.com/api/retail/prices",
+      "observed": "2026-11-10"
+    },
+    "egress_gb": {
+      "aud": 0.170539,
+      "unit": "1 GB",
+      "meter": "Standard Data Transfer Out",
+      "product": "Rtn Preference: MGN",
+      "region": "australiaeast",
+      "meter_id": "fe167397-a38d-43c3-9bb3-8e2907e56a41",
+      "source": "https://prices.azure.com/api/retail/prices",
+      "observed": "2026-11-10"
+    },
+    "interzone_gb": {
+      "aud": 0,
+      "unit": "1 GB",
+      "source": "https://learn.microsoft.com/en-us/azure/reliability/availability-zones-overview",
+      "observed": "2026-11-10",
+      "note": "Same-region inter-availability-zone transfer has no charge. Historical retail meters remain discoverable but must not be billed in this estimate."
+    },
+    "runner_vm_hour": {
+      "aud": 0.075037,
+      "unit": "1 Hour",
+      "meter": "B2s",
+      "product": "Virtual Machines BS Series",
+      "region": "australiaeast",
+      "meter_id": "00c75076-736a-4ef9-be74-f459f62642cf",
+      "source": "https://prices.azure.com/api/retail/prices",
+      "observed": "2026-11-10"
+    },
+    "runner_disk_month": {
+      "aud": 4.6387,
+      "unit": "1/Month",
+      "meter": "E4 LRS Disk",
+      "product": "Standard SSD Managed Disks",
+      "region": "australiaeast",
+      "meter_id": "9228d704-2f8e-4fa8-b7dc-5121222b2272",
+      "source": "https://prices.azure.com/api/retail/prices",
+      "observed": "2026-11-10"
+    },
+    "nat_hour": {
+      "aud": 0.063952,
+      "unit": "1 Hour",
+      "meter": "Standard Gateway",
+      "product": "NAT Gateway",
+      "region": "Global",
+      "meter_id": "ae30040a-67f5-485b-b0f4-a6ef50504d9c",
+      "source": "https://prices.azure.com/api/retail/prices",
+      "observed": "2026-11-10"
+    },
+    "nat_gb": {
+      "aud": 0.063952,
+      "unit": "1 GB",
+      "meter": "Standard Data Processed",
+      "product": "NAT Gateway",
+      "region": "Global",
+      "meter_id": "d32b6352-b66b-4c4c-8f21-60e94058e04d",
+      "source": "https://prices.azure.com/api/retail/prices",
+      "observed": "2026-11-10"
+    }
+  },
+  "configuration": {
+    "postgres_sku": "GP_Standard_D2ads_v5",
+    "postgres_storage_type": "Premium_LRS",
+    "postgres_storage_tier": "P4",
+    "registry_sku": "Basic",
+    "key_vault_sku": "premium",
+    "log_retention_days": 30
+  }
+}

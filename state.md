@@ -1,19 +1,35 @@
 # Current status — repository publication and Azure delivery, 10 November 2026
 
-**Azure activation follow-up:** signed-in browser access and explicitly scoped ARM
-reads now verify the personal Warthog subscription and owner access. No Warthog
-resource groups exist. Required provider registrations, delivery identities,
-backend storage and private runner setup are incomplete. The actual account's
-funding controls still require resolution before provisioning. The founder has
-clarified that the monthly ceiling applies to cash charges after sponsorship
-credits, superseding the earlier zero-cash direction. Azure usage budgets exclude
-credits and cannot enforce that cash ceiling; no replacement control is approved.
-Private account evidence, the exact bootstrap proposal and the founder-approved
-information-only billing inquiry are in
-`.delivery/activation-2026-11-10/README.md` (ignored, owner-only local files).
-No cloud resource, registration, credential, deployment, DNS or billing setting
-was changed. GitHub delivery remains disabled; earlier source/CI evidence below
-is unchanged. Do not duplicate the approved inquiry; consult its private outcome.
+**Cost review and budget follow-up:** the founder requested a small, robust
+production baseline, retaining premium features where they add value, using
+available credits, and setting an alert at the expected usage cost. This replaces
+the earlier unresolved cash-cap/usage-alert decision. The [cost model](docs/azure-costs.md)
+estimates A$430.78/month (A$438.25 for 31 days); the **A$440 monthly budget** was
+created and independently verified in Azure on 10 November. Actual alerts are
+50/80/100% and forecast 100%, to the founder. It is an alert, not a spending stop.
+
+The [launch profile](infra/profiles/launch.tfvars.example.json) keeps General
+Purpose PostgreSQL and HSM-backed Key Vault protection, uses 32 GiB P4 storage,
+Consumption hosting, ACR Basic, LRS blobs and a small log allowance. Terraform
+pins disk type/performance and can import the existing budget without duplicate
+creation. The [architecture decision](docs/adr/launch-infrastructure-cost.md)
+explains upgrade triggers and availability limits. These are source changes, not
+an applied foundation or production certification.
+
+An isolated [bootstrap module](infra/bootstrap/README.md) now supplies executable
+source for state/plan storage, retention, four environment-bound managed identities
+and four container-scoped state grants. It uses a public Entra-authenticated HTTPS
+endpoint for hosted foundation runners. Exact stage approval is still required;
+no identity or storage has been created.
+
+Personal Warthog owner access is verified. No Warthog resource groups exist;
+provider registrations, delivery identities, state storage, secrets and the
+private ephemeral runner are still required. Exact resource/credential/deployment
+and DNS approvals remain in place. GitHub delivery remains disabled. The budget
+is the only Azure configuration mutation so far. Private credit/support/budget
+confirmation evidence is in `.delivery/activation-2026-11-10/` (ignored owner-only
+files). Do not duplicate the billing inquiry or repeat the superseded cash-cap
+question; verify actual eligible credit availability before each paid stage.
 
 All source and the existing 718-commit history are now published to the public
 [Orlev01/warthog](https://github.com/Orlev01/warthog) repository, as authorized by
@@ -109,7 +125,7 @@ below are historical and superseded.
 
 Subsequent founder approvals: production hostname and passkey RP ID are both `app.warthog.com.au`; sending domain `mail.warthog.com.au` and From `notifications@mail.warthog.com.au`; public replies/support/privacy contact `oren@nava-co.com`. Initial SMS markets AU/US/CA/GB are approved only after registration and delivery/STOP acceptance, with application caps of 200 outbound segments/month and 10/day in total. Exact DNS mutations, credentials, purchases and deployment still need separate approval. The founder confirmed sending the technical questions in response to Twilio sales; entitlement/pricing remain pending.
 
-Latest budget direction: Azure should use sponsorship credits first, with a founder-defined monthly cash ceiling after credits. This supersedes the earlier zero-cash requirement; the exact cash amount and account evidence are recorded privately in `.delivery/activation-2026-11-10/budget-decision.md`. It does not set a gross usage budget or approve particular resources. Verify eligibility and shared credit availability before provisioning. Cost Management excludes credits, and its notification budgets cannot enforce a cash ceiling. Do not substitute a usage-alert budget or accept overshoot without the founder's informed decision. Resend Free is selected, with paid upgrades/overages unapproved (3,000 emails/month, 100/day). Twilio allowance is confirmed **A$20/month**. The founder is open to a fixed paid tier instead of prepaid usage, but no applicable tier, price or commitment has been established; this is not authorization for an unquoted upgrade. Include recurring sender costs and outstanding redaction/other fees in the complete quote; no assumption that the four-country/200-segment plan fits. The earlier A$600 overall ceiling remains unapproved and is superseded as a proposal by this service-specific budget direction.
+Latest budget direction: use available Azure sponsorship credits and retain premium features where they add value. The founder explicitly requested cost-focused infrastructure, a calculated monthly estimate and a usage alert when cost exceeds that estimate; the A$440 alert is now created. This supersedes the previous zero-cash and unresolved A$100 cash-cap/alert deliberation. Verify eligibility and shared credit availability before paid provisioning; this is not unlimited cash-fallback permission or an approval of unreviewed resources. Resend Free is selected (3,000 emails/month, 100/day), with paid upgrades/overages unapproved. Twilio allowance remains A$20/month; its complete price including sender rentals, redaction and other fees is unresolved. Earlier A$550/A$600/A$675 proposals are historical, not the current Azure estimate or approved purchases.
 
 The founder prefers an Azure-native SMS solution if viable, including using sponsorship. Rechecked official sources: the [Twilio connector](https://learn.microsoft.com/en-us/connectors/twilio/) requires a separate Twilio account; [MCA Azure credits](https://learn.microsoft.com/en-us/azure/cost-management-billing/benefits/credits/mca-check-azure-credits-balance) generally exclude partner/third-party Marketplace services. The current [ACS retirement FAQ](https://learn.microsoft.com/en-us/azure/communication-services/acs-retirement-and-breaking-changes-guide#acs-sms) still retires SMS on 30 September 2028 and restricts number acquisition to existing customers with existing ACS phone numbers. Earlier account inspection found none. No eligible isolated Warthog ACS SMS path has been demonstrated. Marketplace procurement/MACC eligibility is not sponsorship-credit coverage. This investigation does not change providers or authorize provisioning; await the actual Twilio redaction/price response.
 

@@ -1,0 +1,41 @@
+{
+  "subscription_id": "e854f594-274f-4051-841b-78df7655d73c",
+  "tenant_id": "72277873-e056-4612-9b1c-7ad58e02fcf3",
+  "provisioning_approved": false,
+  "names": {
+    "resource_group": "rg-warthog-prod-aue",
+    "virtual_network": "vnet-warthog-prod-aue",
+    "postgres": "pg-warthog-prod-aue-e854",
+    "postgres_private_dns": "warthog.postgres.database.azure.com",
+    "registry": "crwarthogprodauee854",
+    "key_vault": "kv-warthog-aue-e854",
+    "storage_account": "stwarthogprodauee854",
+    "receipt_container": "receipts",
+    "identity": "id-warthog-app-aue",
+    "logs": "log-warthog-prod-aue",
+    "container_environment": "cae-warthog-prod-aue"
+  },
+  "network": {
+    "address_space": [
+      "10.64.0.0/16"
+    ],
+    "app_subnet": "10.64.0.0/23",
+    "postgres_subnet": "10.64.2.0/27",
+    "bootstrap_subnet": "10.64.3.0/27"
+  },
+  "postgres": {
+    "sku": "GP_Standard_D2ads_v5",
+    "storage_mb": 32768,
+    "storage_tier": "P4",
+    "backup_retention_days": 7,
+    "zone": "1",
+    "administrator_login": "warthog_bootstrap",
+    "password_version": 1
+  },
+  "log_daily_cap_gb": 0.1,
+  "monthly_azure_budget_aud": 440,
+  "budget_start_date": "2026-11-01T00:00:00Z",
+  "budget_end_date": "2027-10-31T00:00:00Z",
+  "import_existing_budget": true,
+  "alert_emails": []
+}

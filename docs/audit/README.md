@@ -12,6 +12,14 @@ source commit `bcc5b6907488eee004509b5760b7d5f761decb56`; evidence is recorded b
 No cloud or DNS operation was performed. Historical statements about uncommitted work
 and pending publication describe their original checkpoints.
 
+**Cost-focused infrastructure follow-up, 10 November:** the founder requested
+an affordable production baseline and an alert at expected usage. The launch
+profile, explicit PostgreSQL disk tier, repeatable cost model and existing-budget
+import are implemented; [details and limits](../azure-costs.md). An A$440/month
+subscription alert is created and independently verified. No foundation, identity,
+secret, runner, workload or DNS was deployed. The prior custom-cash-cap decision
+is superseded by this explicit usage-alert direction.
+
 Started 9 November 2026. Scope: the complete current `codex/production-release`
 working tree, including the existing uncommitted production work. Baseline commit
 `dddd4103c35d03465d2f293049222b7221988171` is a reference, not the reviewed release.

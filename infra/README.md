@@ -20,7 +20,7 @@ not applied by this Terraform root or by CI.
   bootstrap subnet. PostgreSQL has no public endpoint. Its NSG permits port 5432
   only from the app, bootstrap and database subnets; private DNS links to this VNet.
 - PostgreSQL 16 with a caller-selected General Purpose SKU, storage, zone and
-  7–35 day backup retention. This draft has no HA/replica/geo backup and no automatic
+  7–35 day backup retention. This draft has no HA/replica/geo backup and explicit Premium SSD v1 performance tier, with no automatic
   storage growth; those tradeoffs must be included in the actual resource approval.
 - User-assigned identity, ACR Basic with admin authentication off, Premium Key Vault
   with RBAC, purge protection and 90-day soft deletion, and a private LRS receipt
@@ -38,8 +38,13 @@ not applied by this Terraform root or by CI.
 External networking creates Azure-managed load balancer/IP dependencies. Do not
 create duplicate manual load balancers. Registry, storage, database, logs and those
 dependencies can keep charging while the app is stopped. Log caps/budget emails
-do not stop spending, nor guarantee credit-only billing. The founder's no-cash-
-fallback constraint is an unresolved provisioning gate, not enforced by this module.
+do not stop spending or guarantee credit coverage. The founder requested a usage
+alert at the calculated estimate; [A$440/month is now configured](../docs/azure-costs.md).
+The [launch profile](profiles/launch.tfvars.example.json) includes the selected
+sizing, 0.1 GB/day logs and import of that existing alert, with provisioning still
+false. Its empty recipient list must be populated from the reviewed private
+inputs. Do not duplicate the budget or silently change its expiry. Recheck
+available credits and exact resource approvals before paid stages.
 
 ## Secrets and state
 
@@ -94,7 +99,9 @@ registration/quota and actual AUD billing scope, verify funding/credit protectio
 approve the exact resource names/CIDRs/SKU/zone/storage/log quota/budget recipients,
 and approve secure credential handling. Neither provider auto-registers resources.
 Set `provisioning_approved` only after that actual founder approval; the flag is not
-a substitute for it. Required inputs deliberately have no sample paid defaults.
+a substitute for it. The launch profile supplies reviewed design values, but keeps approval false and
+contains no passwords or recipient addresses. It is a proposal for the actual
+resource plan, not permission to provision.
 Ordinary CI never applies resources. Only the separately enabled, manually approved
 foundation workflow can apply an exact reviewed saved plan.
 

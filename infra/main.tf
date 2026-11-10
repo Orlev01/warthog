@@ -133,6 +133,8 @@ resource "azurerm_postgresql_flexible_server" "warthog" {
   sku_name                          = var.postgres.sku
   zone                              = var.postgres.zone
   storage_mb                        = var.postgres.storage_mb
+  storage_type                      = "Premium_LRS"
+  storage_tier                      = var.postgres.storage_tier
   auto_grow_enabled                 = false
   backup_retention_days             = var.postgres.backup_retention_days
   geo_redundant_backup_enabled      = false
@@ -289,15 +291,26 @@ resource "azurerm_consumption_budget_subscription" "warthog" {
   subscription_id = "/subscriptions/${var.subscription_id}"
   amount          = var.monthly_azure_budget_aud
   time_grain      = "Monthly"
-  time_period { start_date = var.budget_start_date }
+  time_period {
+    start_date = var.budget_start_date
+    end_date   = var.budget_end_date
+  }
   dynamic "notification" {
     for_each = { actual50 = [50, "Actual"], actual80 = [80, "Actual"], actual100 = [100, "Actual"], forecast100 = [100, "Forecasted"] }
     content {
       enabled        = true
-      operator       = "GreaterThanOrEqualTo"
+      operator       = "GreaterThan"
       threshold      = notification.value[0]
       threshold_type = notification.value[1]
       contact_emails = var.alert_emails
     }
   }
+}
+
+# Adopt the founder-authorized alert created before the foundation exists.
+# This only reads during plan; applying the reviewed plan records it in state.
+import {
+  for_each = var.import_existing_budget ? toset(["warthog"]) : toset([])
+  to       = azurerm_consumption_budget_subscription.warthog
+  id       = "/subscriptions/${var.subscription_id}/providers/Microsoft.Consumption/budgets/warthog-approved-notifications"
 }

@@ -3,7 +3,8 @@
 The founder authorized publishing this source and building CI/CD for
 `Orlev01/warthog` on 10 November 2026. This supersedes the earlier publication
 hold. It does not authorize Azure provisioning, credential creation, expenditure,
-production deployment or DNS changes. The repository-wide
+production deployment or DNS changes. The later budget-only authorization and
+creation are recorded below. The repository-wide
 `AZURE_DELIVERY_ENABLED` variable starts as `false`; missing also means disabled.
 
 ## What runs
@@ -45,17 +46,25 @@ behavior before approving chargeable bootstrap resources. Keep account-specific
 billing evidence and support correspondence in ignored private files, not this
 public repository. [MCA credit behavior](https://learn.microsoft.com/en-us/azure/cost-management-billing/benefits/credits/mca-check-azure-credits-balance).
 
-Keep the approved cash ceiling separate from `monthly_azure_budget_aud`, which
-sets a usage notification budget. Cost Management costs exclude credits and taxes;
-credits are applied at billing-profile invoice level. An available credit balance
-can be shared with other subscriptions and does not prove current net cash cost.
-Never copy a cash-after-credit ceiling into the usage budget and describe it as
-cash protection. Azure offers no custom hard spending limit, and budget alerts or
-delayed shutdown automation cannot guarantee one. The founder's cash target does
-not authorize an overshoot. Resolve the control limitation before activation and
-retain the exact resource, identity, credential and DNS review boundaries.
-[Cost data limitations](https://learn.microsoft.com/en-us/azure/cost-management-billing/costs/understand-cost-mgt-data),
-[spending limits](https://learn.microsoft.com/en-us/azure/cost-management-billing/manage/spending-limit).
+The founder subsequently requested cost-focused production infrastructure and an
+alert at the calculated usage estimate. The [cost review](azure-costs.md) documents
+the selected launch profile and the A$440 monthly budget now created in Azure.
+This resolves the earlier choice between a custom cash cap and usage monitoring;
+do not reopen that question. `monthly_azure_budget_aud` measures gross Azure usage
+before credits and tax. Credits apply at billing-profile invoice level, and the
+shared balance can lag. Recheck eligible credit availability before paid stages.
+Alerts do not enforce a spending cap or authorize unreviewed resources.
+
+The launch profile sets `import_existing_budget=true` and matches the existing
+budget's dates. The foundation plan must adopt that exact budget rather than
+create a duplicate. Supply its existing founder recipient privately. Verify the
+imported amount, expiry and notifications in the saved plan before applying it.
+
+The separate [bootstrap module](../infra/bootstrap/README.md) now implements the
+state account, plan retention, four exact GitHub OIDC identities and container-only
+state permissions. It is ready for the next resource/identity review, with
+`bootstrap_approved=false` by default. It has not been applied; validate and review
+that small stage before enabling any foundation workflow.
 
 Each environment needs a separately approved Entra application/service principal
 or user-assigned identity and federated credential. Use OIDC, not an Azure client
