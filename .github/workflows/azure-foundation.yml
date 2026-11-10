@@ -9,7 +9,7 @@ on:
         options: [plan, apply]
         required: true
       approval_reference:
-        description: Reference to the reviewed resource quote and credit-only funding approval
+        description: Reference to the reviewed resource plan and current credit/cost approval
         type: string
         required: true
       plan_id:
@@ -33,11 +33,11 @@ jobs:
     steps:
       - name: Require configured delivery and manual main dispatch
         env:
-          ENABLED: ${{ vars.AZURE_DELIVERY_ENABLED }}
+          ENABLED: ${{ vars.AZURE_FOUNDATION_ENABLED }}
         run: |
           test "$GITHUB_REPOSITORY" = Orlev01/warthog
           test "$GITHUB_REF" = refs/heads/main
-          test "$ENABLED" = true || { echo 'Azure delivery is disabled pending approved setup.'; exit 1; }
+          test "$ENABLED" = true || { echo 'Azure foundation delivery is disabled pending approved setup.'; exit 1; }
   foundation:
     needs: gate
     runs-on: ubuntu-24.04
@@ -47,7 +47,7 @@ jobs:
       contents: read
       id-token: write
     env:
-      AZURE_DELIVERY_ENABLED: ${{ vars.AZURE_DELIVERY_ENABLED }}
+      AZURE_DELIVERY_ENABLED: ${{ vars.AZURE_FOUNDATION_ENABLED }}
       APPROVAL_REFERENCE: ${{ inputs.approval_reference }}
       OPERATION: ${{ inputs.operation }}
       PLAN_ID: ${{ inputs.plan_id }}

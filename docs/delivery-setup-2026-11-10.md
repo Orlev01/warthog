@@ -74,11 +74,20 @@ allowance is **A$430.66/month**, **A$438.13 for 31 days**; the existing **A$440 
 is unchanged. These are gross usage estimates before credits/tax and external
 providers, not an enforced spending cap or a measured production bill.
 
-The independent cleanup workflow has passed live OIDC authentication, lock
-acquisition and expired-lease enumeration. Fresh runner registration and full
-cleanup-deletion evidence are being completed before the final setup record.
+A fresh identity-free runner was verified online with its unique JIT label.
+Docker, Azure CLI core Container Apps commands, PostgreSQL 16 and certificate trust
+are installed; private database DNS and TLS chain/hostname checks pass without
+using a database credential. No application job ran during this rehearsal.
 
-`AZURE_DELIVERY_ENABLED=false` still prevents cloud release dispatch. The remaining
+The independent [cleanup run](https://github.com/Orlev01/warthog/actions/runs/42756721647)
+passed live OIDC authentication, lock acquisition, NAT detachment and deletion of
+the expired rehearsal group. Independent inventory confirms both temporary groups
+are gone, no lease VM/disk/NIC/NAT/IP remains, the bootstrap subnet has no NAT, and
+GitHub has no registered runner. The application foundation remains intact.
+
+Foundation plan/apply and image publication are independently enabled for manual
+use behind their existing required reviews; enabling them does not dispatch a job.
+`AZURE_DELIVERY_ENABLED=false` still prevents application release dispatch. The remaining
 first-create inputs require actual SMS routes and reviewed messaging controls,
 an approved immutable image and workload/release review. Public DNS and provider
 acceptance must be completed separately. No Container App, image publication or
@@ -86,9 +95,10 @@ public DNS change occurred during setup. Image advisory review, browser/provider
 acceptance, 26 MiB ingress and coordinated restore/deletion tests remain launch
 gates in the [audit](audit/README.md).
 
-The full [CI run on 0ea3ed7](https://github.com/Orlev01/warthog/actions/runs/42751898166)
-passes all six jobs, 5,072 application checks, 21 delivery checks, five cost checks,
+The full [CI run on cd344e5](https://github.com/Orlev01/warthog/actions/runs/42756304600)
+passes all six jobs, 5,072 application checks, 24 delivery checks, five cost checks,
 all four Terraform roots, builds/runtime packaging and real PostgreSQL checks.
-Subsequent setup-only changes are additionally checked locally and against Azure;
-the application source is unchanged. Account-specific evidence, populated inputs,
+The final documentation/workflow-switch follow-up passes Actionlint and explicit
+stage-gate checks; application and delivery Python source are unchanged after that
+full CI. It skips another identical application-suite run. Account-specific evidence, populated inputs,
 plans and state are retained privately under `.delivery/activation-2026-11-10/`.

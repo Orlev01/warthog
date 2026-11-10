@@ -4,8 +4,11 @@
 scoped permissions, private database and production credentials are now applied
 and live-verified. Internal database DNS was explicitly allowed; public DNS and
 app release remain separate. See the [current setup record](../delivery-setup-2026-11-10.md)
-for exact evidence and remaining provider/runner/release work. This supersedes
-older statements below that no foundation or credentials exist.
+for exact evidence, completed runner/cleanup verification and remaining provider/
+release work. This supersedes
+older statements below that no foundation or credentials exist. Full CI on
+`cd344e5` passes all six jobs: 5,072 application, 24 delivery and five cost checks;
+see [run 42756304600](https://github.com/Orlev01/warthog/actions/runs/42756304600).
 
 **Publication and delivery follow-up, 10 November:** all source and existing history
 are published to [Orlev01/warthog](https://github.com/Orlev01/warthog) using the

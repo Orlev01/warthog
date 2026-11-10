@@ -15,9 +15,10 @@ The founder authorized publishing this source and building CI/CD for
 `Orlev01/warthog` on 10 November 2026. This supersedes the earlier publication
 hold. Later explicit authorizations covered the cost profile, budget, bootstrap
 and delivery setup described above. Application release reviews, provider purchases
-and exact public DNS changes remain separate. The repository-wide
+and exact public DNS changes remain separate. Foundation and image workflows now have independent enabled switches, so completed
+setup can be used for their manual, reviewed operations. The application switch
 `AZURE_DELIVERY_ENABLED` remains `false` pending complete first-create/provider
-inputs and image/workload review; missing also means disabled.
+inputs and image/workload review. Missing switches mean disabled.
 
 ## What runs
 
@@ -29,7 +30,8 @@ inputs and image/workload review; missing also means disabled.
 | `azure-release.yml` | Manual `inspect`, `create` or `update` on main | First app creation or image-only update with an intentional maintenance outage |
 | `azure-runner-cleanup.yml` | Hourly and manual on main | Independently remove expired private runner leases; no app/secret/provisioning permission |
 
-All Azure workflows share a non-cancelling concurrency group. CI has no Azure
+Foundation, image and application workflows share a non-cancelling concurrency
+group. Cleanup uses its own group and the shared private-runner lease. CI has no Azure
 identity or production secrets. Publishing an image does not deploy it. No workflow
 performs DNS changes, creates application credentials, upgrades messaging plans,
 registers Azure providers, provisions a runner/backend, or automatically rolls back.
@@ -122,7 +124,7 @@ creation or rotation. Populated parameters and backend/state/plans stay untracke
 
 | Scope | Variables | Secrets |
 | --- | --- | --- |
-| Repository | `AZURE_DELIVERY_ENABLED=false` initially | None |
+| Repository | `AZURE_FOUNDATION_ENABLED=true`, `AZURE_IMAGE_ENABLED=true`; `AZURE_DELIVERY_ENABLED=false` for app release; separate `AZURE_RUNNER_CLEANUP_ENABLED=true` | None |
 | Both foundation environments | Their own `AZURE_CLIENT_ID`, `PLAN_STORAGE_ACCOUNT`, `PLAN_CONTAINER` | Identical `FOUNDATION_TFVARS_JSON`, `FOUNDATION_BACKEND_JSON`, approved `POSTGRES_ADMIN_PASSWORD` |
 | `azure-images` | `AZURE_CLIENT_ID`, `ACR_NAME` | None |
 | `azure-production` | `AZURE_CLIENT_ID`, `ACR_NAME`, `RESOURCE_GROUP`, `APP_NAME`, `POSTGRES_FQDN` | `WORKLOAD_PARAMETERS_JSON` for first creation; `OWNERSHIP_DATABASE_URL` for the approved private ownership-check connection |
@@ -170,7 +172,8 @@ Container Apps commands already installed, PostgreSQL 16
 disabled. Test these tools and the private database path before approving a job.
 Do not reuse a shared Eucalyptus runner or a persistent personal workstation.
 
-Provisioning/operating this runner requires its own resource and cost approval.
+Use the approved runner profile within the reviewed release. Changes to its size,
+networking or lease allowance need their own resource/cost review.
 The public repository is configured to require maintainer approval for **all
 external contributors' fork workflow runs**, not just first-time contributors.
 Review every fork's workflow changes before approval; never approve a fork job
@@ -190,8 +193,9 @@ the workflow's temporary files and Docker config are additionally cleaned normal
    credits and approve the exact image/workload and maintenance window. Review
    any changed resources or costs separately. Budget notifications do not stop spending.
 2. Configure the environment protections, OIDC identities and settings above.
-   Verify the private artifact container is not public. Enable
-   `AZURE_DELIVERY_ENABLED` only after those approvals, not simply to make a job green.
+   Verify the private artifact container is not public. Foundation and image
+   switches permit their separately reviewed manual jobs. Enable the application
+   `AZURE_DELIVERY_ENABLED` switch only after its inputs and release approvals are ready.
 3. Dispatch foundation `plan` with the approval reference and approve the plan
    environment. It records only a plan ID, SHA-256 and change count in public logs.
    Privately review `foundation/<run-id>-<attempt>/review.txt`, `manifest.json`, and

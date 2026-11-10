@@ -23,7 +23,10 @@ npm run typecheck
 Use Node 22. The committed environment file contains public development fixtures;
 production requires separately approved credentials and infrastructure. For the
 clean Docker/PostgreSQL checks, see [`docs/local-release-validation.md`](docs/local-release-validation.md).
-Azure delivery workflows are manual and disabled until their setup and approval
-gates are satisfied. A passing build is not production launch approval.
+The approved Azure foundation, scoped permissions and production credentials are
+installed. Foundation and image workflows are enabled for manual, reviewed use;
+application release remains disabled pending provider and launch gates. See the
+[verified setup record](docs/delivery-setup-2026-11-10.md). A passing build is not
+production launch approval.
 
 Built by Skynet's build loop, task by task, test-first.

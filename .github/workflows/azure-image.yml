@@ -26,12 +26,12 @@ jobs:
     steps:
       - name: Require explicit delivery setup and immutable Node base
         env:
-          ENABLED: ${{ vars.AZURE_DELIVERY_ENABLED }}
+          ENABLED: ${{ vars.AZURE_IMAGE_ENABLED }}
           NODE_BASE_IMAGE: ${{ inputs.node_base_image }}
         run: |
           test "$GITHUB_REPOSITORY" = Orlev01/warthog
           test "$GITHUB_REF" = refs/heads/main
-          test "$ENABLED" = true || { echo 'Azure delivery is disabled pending approved setup.'; exit 1; }
+          test "$ENABLED" = true || { echo 'Azure image publication is disabled pending approved setup.'; exit 1; }
           [[ "$NODE_BASE_IMAGE" =~ ^node:22-bookworm-slim@sha256:[a-f0-9]{64}$ ]]
   checks:
     needs: gate
@@ -47,7 +47,7 @@ jobs:
       contents: read
       id-token: write
     env:
-      AZURE_DELIVERY_ENABLED: ${{ vars.AZURE_DELIVERY_ENABLED }}
+      AZURE_DELIVERY_ENABLED: ${{ vars.AZURE_IMAGE_ENABLED }}
       APPROVAL_REFERENCE: ${{ inputs.approval_reference }}
       NODE_BASE_IMAGE: ${{ inputs.node_base_image }}
       ACR_NAME: ${{ vars.ACR_NAME }}

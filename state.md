@@ -14,13 +14,17 @@ and Free/no-overage settings; its domain awaits public DNS. Twilio has an isolat
 subaccount and restricted key; Trial sender restrictions, complete pricing and
 registration/STOP acceptance remain external gates.
 
-The secret-bootstrap VM is removed before the fresh private runner rehearsal.
-Runner registration and actual cleanup verification are in progress. The four
-original GitHub approval gates remain intact, and delivery stays disabled pending
-complete first-create/provider inputs and exact image/workload review.
+The secret-bootstrap VM and separate fresh runner rehearsal are complete and
+removed. The fresh JIT runner was online, private database TLS/DNS passed, and
+independent cleanup removed the expired group. Inventory confirms no temporary
+runner resources, subnet NAT or GitHub registration remains. The four
+original GitHub approval gates remain intact. Foundation and image workflows are
+independently enabled for manual reviewed use; application delivery stays disabled
+pending complete first-create/provider inputs and exact image/workload review.
 
 Current launch estimate: A$430.66/month, A$438.13 for 31 days; the A$440 alert is
-unchanged. Full CI on `0ea3ed7` passes all six jobs and 5,072 application tests.
+unchanged. Full [CI on `cd344e5`](https://github.com/Orlev01/warthog/actions/runs/42756304600)
+passes all six jobs, 5,072 application tests and 29 delivery/cost checks.
 See the [setup record](docs/delivery-setup-2026-11-10.md) for verified scope, evidence
 and remaining launch work. Older statuses below are historical where superseded.
 
