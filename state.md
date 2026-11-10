@@ -1,5 +1,17 @@
 # Current status — repository publication and Azure delivery, 10 November 2026
 
+**Azure activation follow-up:** signed-in browser access and explicitly scoped ARM
+reads now verify the personal Warthog subscription and owner access. No Warthog
+resource groups exist. Required provider registrations, delivery identities,
+backend storage and private runner setup are incomplete. The actual account's
+credit-only funding protection still requires resolution before provisioning.
+Private account evidence, the exact bootstrap proposal and the founder-approved
+information-only billing inquiry are in
+`.delivery/activation-2026-11-10/README.md` (ignored, owner-only local files).
+No cloud resource, registration, credential, deployment, DNS or billing setting
+was changed. GitHub delivery remains disabled; earlier source/CI evidence below
+is unchanged. Do not duplicate the approved inquiry; consult its private outcome.
+
 All source and the existing 718-commit history are now published to the public
 [Orlev01/warthog](https://github.com/Orlev01/warthog) repository, as authorized by
 the founder. Only the verified personal `Orlev01` GitHub credential was used;

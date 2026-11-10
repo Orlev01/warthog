@@ -37,6 +37,14 @@ approve a release. The approval click is still required. Do not remove this gate
 or automatically approve waiting jobs. Environment creation alone creates no cloud
 identity, resources or credentials.
 
+Before first activation, inspect the actual subscription's ARM `subscriptionPolicies`
+and its billing-profile credit terms. A sponsorship-labelled quota, an active
+credit grant or an available balance is not proof of an enabled spending limit.
+Resolve any discrepancy between the offer, spending-limit status and cash-fallback
+behavior before approving chargeable bootstrap resources. Keep account-specific
+billing evidence and support correspondence in ignored private files, not this
+public repository. [MCA credit behavior](https://learn.microsoft.com/en-us/azure/cost-management-billing/benefits/credits/mca-check-azure-credits-balance).
+
 Each environment needs a separately approved Entra application/service principal
 or user-assigned identity and federated credential. Use OIDC, not an Azure client
 secret or the personal GitHub token. The personal token is only for authorized
