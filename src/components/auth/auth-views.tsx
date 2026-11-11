@@ -1,9 +1,10 @@
 import { formatAccountTime } from "@/domain/display-time";
 import * as React from "react";
+import { ChevronDown, Fingerprint, KeyRound, Mail, ShieldCheck } from "lucide-react";
 
 import { Button } from "../ui/button";
 import { Field } from "../ui/field";
-import { Wordmark } from "../shell/wordmark";
+import { AuthScreen } from "./auth-screen";
 import { withReturnPath } from "../../server/auth/return-path";
 
 // Auth page views (task E04-S12) — the Signup, Signin, Recover and Device screens
@@ -19,28 +20,6 @@ import { withReturnPath } from "../../server/auth/return-path";
 // radius come from the design tokens (globals.css) via the Button/Field primitives.
 
 // --- shared layout ---------------------------------------------------------
-
-// One screen: a page heading, an optional plain lead sentence, then the step body. The
-// screen is the page's <main> landmark, and step errors are rendered with role="alert"
-// so a screen reader announces them when they appear (WCAG 4.1.3).
-function AuthScreen({
-  title,
-  lead,
-  children,
-}: {
-  title: string;
-  lead?: string;
-  children: React.ReactNode;
-}) {
-  return (
-    <main className="mx-auto flex w-full max-w-sm flex-col gap-6 px-4 py-8 sm:px-6">
-      <Wordmark href="/" />
-      <h1 className="text-2xl font-semibold tracking-tight text-fg">{title}</h1>
-      {lead ? <p className="text-sm text-fg-muted">{lead}</p> : null}
-      {children}
-    </main>
-  );
-}
 
 // A raw base32 recovery code shown in groups of four ("ABCD EFGH …", design §4.2), so it
 // is easy to copy by hand; the server accepts it back with or without the spaces. A code
@@ -61,8 +40,8 @@ interface AuthLink {
 
 function AuthLinks({ links, returnTo }: { links: readonly AuthLink[]; returnTo?: string }) {
   return (
-    <nav aria-label="Other ways to sign in">
-      <ul className="flex flex-col gap-2 text-sm">
+    <nav aria-label="Account navigation" className="wh-auth-links">
+      <ul>
         {links.map((link) => (
           <li key={link.href}>
             <a
@@ -79,7 +58,6 @@ function AuthLinks({ links, returnTo }: { links: readonly AuthLink[]; returnTo?:
 }
 
 const SIGNIN_LINKS: readonly AuthLink[] = [
-  { href: "/signup", label: "New here? Create an account" },
   { href: "/recover", label: "Lost your passkey? Recover your account" },
   { href: "/device", label: "Sign in by approving from another device" },
   { href: "/reset", label: "Lost everything? Reset your account" },
@@ -108,6 +86,18 @@ const RESET_SETUP_LINKS: readonly AuthLink[] = [
 
 const DEVICE_LINKS: readonly AuthLink[] = [{ href: "/signin", label: "Back to sign in" }];
 
+function SigninLinks({ returnTo, showPasskey = false }: { returnTo?: string; showPasskey?: boolean }) {
+  return (
+    <div className="wh-auth-alternatives">
+      <p>New to Warthog? <a href={withReturnPath("/signup", returnTo)}>Create an account</a></p>
+      <details className="wh-auth-help">
+        <summary>Other ways to sign in <ChevronDown size={16} aria-hidden="true" /></summary>
+        <AuthLinks links={showPasskey ? [{ href: "/signin", label: "Use a passkey" }, ...SIGNIN_LINKS] : SIGNIN_LINKS} returnTo={returnTo} />
+      </details>
+    </div>
+  );
+}
+
 // The read-only, shown-once recovery code, a tick to confirm it is saved, and the
 // gated Continue. The code is rendered as plain text (never prefilled into an editable
 // input) so it is never carried as a form value — the person reads it and writes it
@@ -133,7 +123,7 @@ function SaveRecoveryCode({
     <div className="flex flex-col gap-4">
       <div className="flex flex-col gap-1.5">
         <span className="text-sm font-medium text-fg">Your recovery code</span>
-        <p className="rounded-card border border-line bg-surface-muted px-3 py-3 text-center font-mono text-lg tracking-widest text-fg">
+        <p className="break-words rounded-card border border-line bg-surface-muted px-3 py-3 text-center font-mono text-lg tracking-widest text-fg">
           {groupRecoveryCode(code)}
         </p>
       </div>
@@ -219,7 +209,7 @@ export function SignupView({
   switch (step) {
     case "details":
       return (
-        <AuthScreen title="Create your account" lead="Tell us a little about you to get started.">
+        <AuthScreen title="Create your account" lead="Start your personal agent workspace. We’ll email a code to confirm your address." stage={1} icon={ShieldCheck}>
           <form className="flex flex-col gap-4" onSubmit={handleSubmit}>
             <Field
               label="Your name"
@@ -252,6 +242,7 @@ export function SignupView({
         <AuthScreen
           title="Check your email"
           lead="Enter the code we emailed you to confirm it's your address."
+          stage={2} icon={Mail}
         >
           <form className="flex flex-col gap-4" onSubmit={handleSubmit}>
             <Field
@@ -276,6 +267,7 @@ export function SignupView({
         <AuthScreen
           title="Set up a passkey"
           lead="A passkey lets you sign in with your fingerprint, face or device PIN — there's no password to remember."
+          stage={3}
         >
           <Button type="button" variant="primary" onClick={() => { if (!working) onCreatePasskey?.(); }} aria-disabled={working} aria-busy={working} className="aria-disabled:opacity-50">
             Create a passkey
@@ -292,7 +284,7 @@ export function SignupView({
       );
     case "authenticator":
       return (
-        <AuthScreen title="Set up your authenticator app" lead="Scan this code with your authenticator app, or enter the setup key manually. Then enter the six-digit code it shows.">
+        <AuthScreen title="Set up your authenticator app" lead="Scan this code with your authenticator app, or enter the setup key manually. Then enter the six-digit code it shows." stage={3} icon={ShieldCheck}>
           {authenticatorQr ? <img src={authenticatorQr} alt="Authenticator app setup code" width={256} height={256} className="h-auto max-w-full self-center" /> : null}
           <p className="break-all rounded-card bg-surface-muted p-3 font-mono text-sm">{authenticatorSecret}</p>
           <form className="flex flex-col gap-4" onSubmit={handleSubmit}>
@@ -301,7 +293,7 @@ export function SignupView({
               value={code ?? ""} onChange={(event) => onCodeChange?.(event.target.value)} error={error} />
             <Button type="submit" variant="primary" aria-disabled={working} aria-busy={working} className="aria-disabled:opacity-50">Confirm authenticator app</Button>
           </form>
-          <a href="/signup" className="text-sm text-fg-muted underline">Start signup again</a>
+          <a href={withReturnPath("/signup", returnTo)} className="wh-auth-text-link">Start signup again</a>
         </AuthScreen>
       );
     case "recovery":
@@ -309,6 +301,7 @@ export function SignupView({
         <AuthScreen
           title="Save your recovery code"
           lead="Write this code down and keep it somewhere safe. It's the way back in if you lose your sign-in methods, and we'll only show it once."
+          stage={4} icon={KeyRound}
         >
           <SaveRecoveryCode
             code={recoveryCode}
@@ -366,7 +359,7 @@ export function SigninView({
       return (
         <AuthScreen
           title="Welcome back"
-          lead="Enter your email and use your passkey to sign in — your fingerprint, face or device PIN."
+          lead="Sign in to your personal agent workspace with your fingerprint, face or device PIN."
         >
           <form
             className="flex flex-col gap-4"
@@ -383,20 +376,16 @@ export function SigninView({
               value={email}
               onChange={(event) => onEmailChange?.(event.target.value)}
               disabled={busy}
+              error={error}
             />
             <Button type="submit" variant="primary" aria-disabled={busy} aria-busy={busy} className="aria-disabled:opacity-50">
-              {busy ? "Signing in…" : "Sign in with your passkey"}
+              <Fingerprint size={18} aria-hidden="true" /> {busy ? "Signing in…" : "Sign in with your passkey"}
             </Button>
           </form>
-          {error ? (
-            <p role="alert" className="text-sm text-danger">
-              {error}
-            </p>
-          ) : null}
           <Button type="button" variant="secondary" disabled={busy} onClick={onUseAuthenticatorApp}>
             Use my authenticator app instead
           </Button>
-          <AuthLinks links={SIGNIN_LINKS} returnTo={returnTo} />
+          <SigninLinks returnTo={returnTo} />
         </AuthScreen>
       );
     case "email":
@@ -408,6 +397,7 @@ export function SigninView({
           lead={step === "email" ? "We'll send a code to your email, then ask for the code from your authenticator app."
             : step === "email-code" ? "Enter the six-digit code from your latest Warthog email."
             : "Your email is verified. Enter the code from your authenticator app."}
+          icon={step === "code" ? ShieldCheck : Mail}
         >
           <form
             className="flex flex-col gap-4"
@@ -424,7 +414,8 @@ export function SigninView({
               value={email}
               onChange={(event) => onEmailChange?.(event.target.value)}
               disabled={busy}
-            /> : <p className="text-sm text-fg-muted">{email}</p>}
+              error={error}
+            /> : <p className="wh-auth-identity">{email}</p>}
             {step !== "email" ? <Field
               label={step === "email-code" ? "Email code" : "Authenticator code"}
               name="code"
@@ -434,18 +425,14 @@ export function SigninView({
               value={code}
               onChange={(event) => onCodeChange?.(event.target.value)}
               disabled={busy}
+              error={error}
             /> : null}
             <Button type="submit" variant="primary" aria-disabled={busy} aria-busy={busy} className="aria-disabled:opacity-50">
               {busy ? "Please wait…" : step === "email" ? "Send email code" : step === "email-code" ? "Verify email" : "Sign in"}
             </Button>
           </form>
-          {error ? (
-            <p role="alert" className="text-sm text-danger">
-              {error}
-            </p>
-          ) : null}
           {step !== "email" ? <Button type="button" variant="secondary" disabled={busy} onClick={onUseAuthenticatorApp}>Start again</Button> : null}
-          <AuthLinks links={SIGNIN_LINKS} returnTo={returnTo} />
+          <SigninLinks returnTo={returnTo} showPasskey />
         </AuthScreen>
       );
   }

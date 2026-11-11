@@ -35,9 +35,27 @@ redirects to those flows.
 - Keep headlines readable as columns collapse. Navigation, signup, signin and
   disclosures have at least 44px targets. Preserve the skip link, native keyboard
   behaviour, visible focus, semantic headings and useful text beside icons.
+- Keep public navigation sticky, including the section links on phones. Native
+  fragment links scroll smoothly when reduced motion is not requested. Allow
+  clearance for the header and safe area so section headings remain visible.
 - Use local assets and semantic colour variables, including both system themes.
   Avoid remote fonts, decorative dependencies, autoplay or tracking added as
   part of visual polish.
+
+## Account entry
+
+Sign-in and signup use `AuthScreen`: the same bounded public canvas, a focused
+form, a restrained desktop introduction and a visible **Back to home** link on
+every step. Phones show the form directly, without the desktop introduction.
+The brand and home link lead to `/`; account-method links retain the validated
+return destination. Returning to the homepage never submits a form.
+
+Signup shows four stages: details, email verification, sign-in method and saving
+the recovery code. Passkey and authenticator setup are alternatives within the
+same stage. Keep recovery warnings and confirmation visible. Group alternate
+sign-in/recovery routes under a native disclosure, while account creation remains
+visible. Errors stay inline and associated with their field; preserve the existing
+pending guards, required factors and session checks.
 
 ## Verification
 

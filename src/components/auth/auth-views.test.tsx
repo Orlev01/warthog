@@ -484,6 +484,31 @@ function hrefsWithText(markup: string): { href: string; text: string }[] {
   }));
 }
 
+test("every sign-in and signup step offers an explicit home link without carrying the return destination", () => {
+  const returnTo = "/oauth/authorize?state=example";
+  const screens = [
+    ...(["details", "code", "passkey", "authenticator", "recovery"] as const).map((step) => <SignupView key={step} step={step} returnTo={returnTo} />),
+    ...(["passkey", "email", "email-code", "code"] as const).map((step) => <SigninView key={step} step={step} returnTo={returnTo} />),
+  ];
+  for (const screen of screens) {
+    const links = hrefsWithText(renderToStaticMarkup(screen));
+    assert.ok(links.some(({ href, text }) => href === "/" && text === "Back to home"));
+  }
+});
+
+test("signup restart and alternate sign-in methods preserve the pending destination", () => {
+  const returnTo = "/inbox?view=pending";
+  for (const [screen, route] of [
+    [<SignupView step="authenticator" returnTo={returnTo} />, "/signup"],
+    [<SigninView step="email" returnTo={returnTo} />, "/signin"],
+  ] as const) {
+    const links = hrefsWithText(renderToStaticMarkup(screen));
+    const link = links.find(({ href }) => href.startsWith(`${route}?`));
+    assert.ok(link);
+    assert.equal(new URL(link.href, "https://example.test").searchParams.get("next"), returnTo);
+  }
+});
+
 test("the sign-in screen links to sign-up, recovery and signing in from another device", () => {
   for (const step of ["passkey", "code"] as const) {
     const links = hrefsWithText(renderToStaticMarkup(<SigninView step={step} />));
