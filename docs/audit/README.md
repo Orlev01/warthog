@@ -1,15 +1,24 @@
 # Warthog comprehensive engineering audit
 
-**Design polish deployed, 10 November:** source `7e61d3d` is live with one healthy
+**Integrated admin console deployed, 11 November:** source `fc131da` is live with
+one healthy replica and 100% traffic, retaining the agent-first and skills-library
+work. Both CI runs passed 5,154 tests. The 74 local layout cases and interaction
+checks passed, as did all 16 live public checks and the authenticated desktop/mobile
+browser smoke checks. The exact image, retained OS findings, unchanged configuration
+and independently verified runner teardown are in the
+[current release record](admin-console-release-2026-11-11.md).
+See [current state](../../state.md) for remaining acceptance boundaries.
+
+## Historical checkpoints
+
+**Design polish deployed, 10 November:** source `7e61d3d` was live with one healthy
 replica and 100% traffic. The production workflow succeeded. Five contributor
 design skills and responsive/accessibility improvements passed 5,105 CI tests,
 72 local layout cases and 18 interaction/display checks. All 16 public acceptance
 checks and three production sign-in layout checks pass. The immutable image,
 retained OS findings and deployment evidence are in the
-[current release record](design-polish-release-2026-11-10.md).
+[release record](design-polish-release-2026-11-10.md).
 See [current state](../../state.md) for remaining acceptance boundaries.
-
-## Historical checkpoints
 
 **Acceptance fixes deployed, 10 November:** source `09e1360` is live with one
 healthy replica and explicit 100% traffic. Publication CI passes 5,092 application

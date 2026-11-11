@@ -1,46 +1,44 @@
-# Delivery status — 10 November 2026
+# Delivery status — 11 November 2026
 
-## Local Skills library work
+**The integrated admin console design is live at [app.warthog.com.au](https://app.warthog.com.au).**
+[PR 7](https://github.com/Orlev01/warthog/pull/7) merged the design with the latest
+main, retaining the deployed agent-first and skills-library work. Application
+source `fc131dab5cf17cf5c6878c53d4113e935ac91b0d` is running as
+`warthog--r42931814911a1`, with one healthy replica and explicit 100% traffic.
+The [production workflow](https://github.com/Orlev01/warthog/actions/runs/42931814911)
+succeeded after the founder approved both protected environments. See the
+[release record](docs/audit/admin-console-release-2026-11-11.md) for the exact
+image, retained OS findings, verification and cleanup evidence.
 
-`codex/warthog-skills-library` isolates the Grove-inspired private library from
-the concurrent agent-first work. Import/review, skill/plugin creation, file and
-form editing, duplication/deletion, portable downloads, encrypted storage and
-named-agent access are implemented. Verification passed: 5,122 full-suite tests,
-33 final library checks, 153 related regression checks, typecheck, production
-build, 37 browser checks and real PostgreSQL 16 migration/ownership/concurrency
-checks. See [investigation and implementation](docs/adr/private-skills-library.md),
-including the four backend merge points and permission reconciliation required
-before combining with the agent-first branch. This feature has not been deployed.
+The neutral workspace shell, grouped sidebar, section tabs, nested agent
+navigation, bounded page widths and mobile drawer follow the reviewed
+[admin-console reference](docs/design/admin-console-reference.md). Contributor
+skills define the reusable design, desktop, mobile, feedback and media conventions.
+The private skills library and agent-specific resource controls remain integrated;
+see the [preceding release](docs/audit/agent-first-release-2026-11-11.md).
 
-## Existing deployed release
+Main and pinned-image CI each passed all 5,154 tests, with no failures or skips.
+Local browser validation covered 74 route/viewport combinations plus interaction
+checks. All 16 production public checks passed. Read-only authenticated browser
+checks verified Home and Skills at 1440, 390 and 320px, tab selection, mobile drawer
+Escape/focus return, no horizontal overflow and no browser warnings/errors.
 
-**The design polish is live at [app.warthog.com.au](https://app.warthog.com.au).**
-Source `7e61d3d12d3fbd661d41f750551a8bf4bd019d1a` is deployed as
-`warthog--r42809708265a1`, with one healthy replica and explicit 100% traffic.
-The [production workflow](https://github.com/Orlev01/warthog/actions/runs/42809708265)
-succeeded; independent checks confirm the exact image, unchanged configuration,
-zero old replicas and healthy HTTPS/database readiness. See the
-[release record](docs/audit/design-polish-release-2026-11-10.md).
+Independent Azure checks confirm the exact image, unchanged application settings,
+zero old replicas and healthy readiness. The allocation remains one 0.5-vCPU/1-GiB
+replica with SMS disabled. No migration, dependency or infrastructure change was
+introduced by this design release. The fresh image scan retains the reviewed
+215 OS findings with no additions/removals or non-OS findings.
 
-Five contributor skills now define design-system, mobile, desktop, feedback and
-media conventions. Layout bounds, long content, safe areas, forms, notices, copy
-feedback and dialogs are polished. Publication CI passes 5,105 application tests;
-local browser checks pass 72 viewport/route cases and 18 interaction/display cases.
-All 16 public post-release checks and three production sign-in layout checks pass,
-including simulated phone safe areas. The image retains the same reviewed OS
-findings with no Node findings. No migration or dependency change was introduced.
+The temporary runner, disk, NIC, NAT, egress IP and scoped grants are verified
+removed; the shared subnet NAT is detached and the GitHub runner deregistered.
+Ephemeral local SSH keys and registry credentials were removed. Browser overrides
+and the temporary verification tab were cleaned up. Private release evidence is
+under ignored `.delivery/admin-design-release/`.
 
-The application remains one 0.5-vCPU/1-GiB replica with SMS disabled and the
-existing credentials, hostname and usage alert. Independent inventory verifies
-the temporary runner and all associated resources and grants are deleted, with
-no shared-subnet NAT association or GitHub runner remaining. Required human
-GitHub environment approvals remain in place. Private evidence is under ignored
-`.delivery/design-polish/`.
-
-Earlier provider and receipt acceptance remains recorded below. Desktop push
-receipt, additional provider consents and isolated coordinated recovery remain
-unconfirmed; no messages, consent flows or production user-data tests were added
-by this design release. Earlier checkpoints are historical where superseded.
+No production records or account settings were changed during browser acceptance.
+Additional provider consents, desktop notification receipt and isolated coordinated
+restore remain subject to their existing acceptance boundaries. Earlier status
+entries below are historical where superseded by this release.
 
 # Historical acceptance-fixes status — 10 November 2026
 

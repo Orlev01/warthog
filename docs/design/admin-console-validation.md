@@ -6,8 +6,11 @@ checkout and the other agent's worktrees were not changed.
 
 ## Automated checks
 
-The pre-browser regression run passed 5,152 tests and TypeScript. The final run
-also covers the added server-selected-tab and retained-record-panel cases.
+The final local run passed all 5,154 tests, TypeScript and the production build,
+including the added server-selected-tab and retained-record-panel cases.
+All six [main-branch CI checks](https://github.com/Orlev01/warthog/actions/runs/42923528755)
+passed on merged source `fc131da`: 5,154 tests across four Linux/PostgreSQL 16
+shards, with no failures, cancellations or skips.
 The four changed contributor skills pass `quick_validate.py`. No application
 package or lockfile changes are required.
 
@@ -53,3 +56,9 @@ Verified interactions:
 The preview was stopped; its temporary dev-only sign-in helper was removed.
 Browser overrides and temporary tabs were cleaned up. Actual assistive-technology
 announcements, physical-device safe areas and provider connections were not tested.
+
+The [production release](../audit/admin-console-release-2026-11-11.md) subsequently
+passed all 16 public acceptance checks and read-only authenticated browser checks
+at 1440, 390 and 320px. Live tab selection, mobile drawer Escape/focus return and
+overflow checks passed, with no browser warning/error logs. No production records
+or account settings were changed by these checks.
