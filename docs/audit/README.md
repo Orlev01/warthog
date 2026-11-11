@@ -1,15 +1,25 @@
 # Warthog comprehensive engineering audit
 
-**Integrated admin console deployed, 11 November:** source `fc131da` is live with
+**Bug bash deployed, 11 November:** source `9a7de2e` is live with one healthy
+replica and 100% traffic. Three independent perspectives and cross-reviews are
+recorded in the [bug-bash report](bug-bash-2026-11-11/coordinator.md). Local Linux,
+main CI and pinned-image CI each passed 5,225 tests. The 97 local layout/theme
+cases and interaction checks passed, followed by all 16 public production checks
+and five authenticated desktop/mobile cases. The [release record](bug-bash-release-2026-11-11.md)
+contains the immutable image, OAuth reconnection impact, retained OS findings,
+configuration verification and independently verified runner cleanup.
+See [current state](../../state.md) for remaining verification boundaries.
+
+## Historical checkpoints
+
+**Integrated admin console deployed, 11 November:** source `fc131da` was live with
 one healthy replica and 100% traffic, retaining the agent-first and skills-library
 work. Both CI runs passed 5,154 tests. The 74 local layout cases and interaction
 checks passed, as did all 16 live public checks and the authenticated desktop/mobile
 browser smoke checks. The exact image, retained OS findings, unchanged configuration
 and independently verified runner teardown are in the
-[current release record](admin-console-release-2026-11-11.md).
+[release record](admin-console-release-2026-11-11.md).
 See [current state](../../state.md) for remaining acceptance boundaries.
-
-## Historical checkpoints
 
 **Design polish deployed, 10 November:** source `7e61d3d` was live with one healthy
 replica and 100% traffic. The production workflow succeeded. Five contributor

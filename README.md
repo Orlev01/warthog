@@ -25,7 +25,7 @@ Use Node 22. The committed environment file contains public development fixtures
 production requires separately approved credentials and infrastructure. For the
 clean Docker/PostgreSQL checks, see [`docs/local-release-validation.md`](docs/local-release-validation.md).
 The approved Azure foundation, scoped permissions and production credentials are
-installed. The [design-polish release](docs/audit/design-polish-release-2026-11-10.md)
+installed. The [bug-bash release](docs/audit/bug-bash-release-2026-11-11.md)
 is running with SMS disabled, one healthy replica and verified private database
 access. Delivery workflows are enabled for manual, reviewed use; future deployments
 still require approval. The release record and [current state](state.md) track
@@ -46,3 +46,12 @@ agents, including existing ones.
 See [the ownership and access model](docs/adr/agent-first-management.md) and
 [the cross-domain review](docs/audit/agent-first-review-2026-11-10.md) for enforced
 behaviour, validation and remaining integration limits.
+
+## OAuth connection compatibility
+
+The 11 November security update binds refresh tokens to their issuing OAuth
+client. Older OAuth agent connections need reauthorization when their existing
+access token expires. Reauthorization creates a new connection: review/reapply
+custom permissions, then remove the obsolete entry after the replacement works.
+Static access keys and provider connector credentials are unaffected. See the
+[migration decision](docs/adr/oauth-refresh-client-binding.md).

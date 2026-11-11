@@ -1,5 +1,49 @@
 # Delivery status — 11 November 2026
 
+**The bug-bash fixes are live at [app.warthog.com.au](https://app.warthog.com.au).**
+Application source `9a7de2e58e9ed3bede61d65bbb9716d0a2214900` runs as
+`warthog--r42954727454a1`, with one healthy replica and explicit 100% traffic.
+The [production workflow](https://github.com/Orlev01/warthog/actions/runs/42954727454)
+succeeded after the founder approved both protected environments. The
+[release record](docs/audit/bug-bash-release-2026-11-11.md) identifies the exact
+image, compatibility impact, retained OS findings, verification and cleanup.
+
+Three independent perspectives and the coordinator recorded findings and fixes
+in the [bug-bash report](docs/audit/bug-bash-2026-11-11/coordinator.md). Changes
+address authentication/reset races, OAuth client binding, push deadlines,
+reminder correctness, Calendar Undo outcomes, forms, mobile targets and focus.
+The admin-console design, agent-first model and skills library are preserved.
+
+Local Linux, main CI and pinned-image CI each passed 5,225 tests. Build,
+TypeScript, all 76 migrations and real PostgreSQL16 checks passed. Browser work
+covered 97 local route/width/theme combinations plus interaction tests. All 16
+production public checks and five authenticated desktop/mobile cases passed,
+with no document overflow or browser warnings/errors.
+
+Migration 0105 adds nullable OAuth client binding. Legacy refresh tokens need
+reauthorization; current access tokens retain their normal expiry. Reauthorization
+creates a new agent connection, so review/reapply custom permissions and remove
+the obsolete entry after the replacement works. Static access keys and provider
+credentials are unaffected. See the [migration decision](docs/adr/oauth-refresh-client-binding.md).
+
+Independent Azure verification confirmed the exact image, unchanged settings,
+zero old replicas and healthy readiness. Capacity remains 0.5 vCPU/1 GiB with
+SMS disabled. The fresh scan retains 215 reviewed OS findings (1 critical,
+34 high, 95 medium, 85 low), no added/removed pairs and no non-OS findings.
+
+The temporary runner and all associated cloud resources/grants are verified
+removed; the shared subnet NAT is detached and the GitHub runner deregistered.
+Ephemeral keys, registry credentials, preview/test resources and downloaded task
+caches are removed. Browser overrides were reset and the test tab closed. Private
+evidence remains in ignored `.delivery/bug-bash-2026-11-11/`.
+
+No production records or account settings were mutated during acceptance.
+Real provider receipt, hardware passkeys, assistive-technology speech and
+coordinated restore retain their existing verification boundaries. Earlier
+entries below are historical where superseded by this release.
+
+# Historical admin-console delivery — 11 November 2026
+
 **The integrated admin console design is live at [app.warthog.com.au](https://app.warthog.com.au).**
 [PR 7](https://github.com/Orlev01/warthog/pull/7) merged the design with the latest
 main, retaining the deployed agent-first and skills-library work. Application

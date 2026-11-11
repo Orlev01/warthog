@@ -1,10 +1,10 @@
 # Comprehensive bug bash — 11 November 2026
 
-Status: confirmed fixes implemented; final integration and release validation in progress.
+Status: fixes integrated on main, deployed and verified. See the [release record](../bug-bash-release-2026-11-11.md) for the exact image, approvals and cleanup evidence.
 
 Base: latest main `5882213b21fd7047f014596ef04ba027aa6f0ff6`, following the
-deployed admin-console and agent-first integration. Work is isolated on
-`codex/warthog-bug-bash`; the other checkouts are untouched.
+deployed admin-console and agent-first integration. Work was isolated on
+`codex/warthog-bug-bash`; the other checkouts were untouched.
 
 ## Independent perspectives
 
@@ -48,14 +48,15 @@ The current official Node22 Bookworm slim manifest still resolves to reviewed di
 Fresh npm audits reported zero vulnerabilities in both runtime-only and full
 dependency trees. This is not a zero-vulnerability claim for the container:
 the deployed image retains its separately reviewed OS advisories. The release
-candidate will receive a fresh immutable-image scan before deployment.
+candidate received a fresh immutable-image scan before deployment; results are in
+the [release record](../bug-bash-release-2026-11-11.md).
 
 29 delivery-safety tests and 5 cost-model tests passed; approved-profile calculation agrees. TypeScript checks passed after accurately typing the reusable software authenticator now used in real PostgreSQL contention tests.
 
 Current runtime review confirms non-root standalone packaging, an allowlisted
 Docker context, production configuration guards, separate ownership checks,
 nonce-based CSP, private receipt downloads and unchanged protected deployment
-gates. Investigation continues; this paragraph does not certify every code path.
+gates. This review does not certify every code path.
 
 ## Completed browser coverage
 
@@ -85,4 +86,4 @@ Completed before release: three independent reviews and cross-reviews; all confi
 
 Complete Linux validation passed: **5,225 tests, zero failures/skips**, optimized build, TypeScript and real PostgreSQL16. The database checks cover all 76 migrations and idempotence, runtime/migration/purge role separation, exclusive ownership, household budgets, OAuth client binding/replay/legacy tokens, both recovery generation lock orders, agent claims/quotas/audiences/package revisions, receipt locking and cascade purge. Runtime staging verified 106 catalogue entries. The disposable containers and internal network were removed.
 
-Pending release steps: main commit/push and CI, fresh immutable image scan, protected GitHub image/production approvals, production verification, and temporary-resource cleanup. This report is not itself evidence of a successful deployment.
+Release completed from `9a7de2e58e9ed3bede61d65bbb9716d0a2214900`. Main and pinned-image CI each passed all 5,225 tests. Both protected GitHub environments were approved by the founder. The immutable image was independently inspected and freshly scanned; the same 215 reviewed OS findings remain, with no additions or non-OS findings. Production has one healthy replica and 100% traffic. All 16 public checks and five authenticated desktop/mobile browser cases passed. Temporary cloud-runner teardown was independently verified. See the [release record](../bug-bash-release-2026-11-11.md) for evidence, compatibility impact and verification limits.
