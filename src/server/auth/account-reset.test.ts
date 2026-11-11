@@ -434,7 +434,7 @@ test("a pending reset is cancellable by the person's userId, and cancelling stop
 
     // When the 7-day timer later fires, completion must find the reset cancelled and
     // erase / revoke NOTHING — the cancel wins the race.
-    await completeAccountReset(db, { userId: person.id }, makeDeps(clock, alertOutbox, executor));
+    await completeAccountReset(db, { userId: person.id }, makeDeps(fixedClock(new Date(T0.getTime() + SEVEN_DAYS_MS)), alertOutbox, executor));
     assert.deepEqual(erased, [], "a cancelled reset must not erase vault data");
     assert.deepEqual(revoked, [], "a cancelled reset must not revoke agents or connections");
   } finally {
@@ -459,7 +459,7 @@ test("cancel is member-scoped: another person cannot cancel this person's reset"
 
     // Alice's reset is untouched, so its completion still erases and revokes — for
     // Alice, and only Alice.
-    await completeAccountReset(db, { userId: alice.id }, makeDeps(clock, alertOutbox, executor));
+    await completeAccountReset(db, { userId: alice.id }, makeDeps(fixedClock(new Date(T0.getTime() + SEVEN_DAYS_MS)), alertOutbox, executor));
     assert.deepEqual(erased, [alice.id], "Alice's reset still erases her vault data after Bob's failed cancel");
     assert.deepEqual(revoked, [alice.id], "Alice's reset still revokes her agents and connections");
   } finally {
@@ -495,7 +495,7 @@ test("completing a pending reset erases VK-wrapped vault data and revokes all ag
     const person = await freshUser(db, "complete");
     await requestResetFor(db, person, clock, alertOutbox, executor);
 
-    await completeAccountReset(db, { userId: person.id }, makeDeps(clock, alertOutbox, executor));
+    await completeAccountReset(db, { userId: person.id }, makeDeps(fixedClock(new Date(T0.getTime() + SEVEN_DAYS_MS)), alertOutbox, executor));
 
     // Both halves of the acceptance criterion fire, exactly once, for this person:
     // the VK-wrapped vault data is erased and every agent and connection is revoked.
@@ -515,7 +515,7 @@ test("a completed reset keeps everything else: the account's users row and wrapp
     const person = await freshUser(db, "keeps-rest");
     await requestResetFor(db, person, clock, alertOutbox, executor);
 
-    await completeAccountReset(db, { userId: person.id }, makeDeps(clock, alertOutbox, executor));
+    await completeAccountReset(db, { userId: person.id }, makeDeps(fixedClock(new Date(T0.getTime() + SEVEN_DAYS_MS)), alertOutbox, executor));
 
     // A reset is NOT an account deletion: the person signs back in afterwards. The
     // users row survives and the per-person DEK is untouched (only VK-wrapped vault
@@ -537,7 +537,7 @@ test("completing when no reset is pending does nothing (no erase, no revoke)", a
   try {
     const person = await freshUser(db, "complete-none");
     // No reset was ever requested — a stray completion must not wipe a vault.
-    await completeAccountReset(db, { userId: person.id }, makeDeps(clock, alertOutbox, executor));
+    await completeAccountReset(db, { userId: person.id }, makeDeps(fixedClock(new Date(T0.getTime() + SEVEN_DAYS_MS)), alertOutbox, executor));
     assert.deepEqual(erased, [], "completion with no pending reset erases nothing");
     assert.deepEqual(revoked, [], "completion with no pending reset revokes nothing");
   } finally {
@@ -653,7 +653,7 @@ test("when no channel can be reached the reset does not start", async () => {
     const pending = await db.query("SELECT 1 FROM account_resets WHERE user_id = $1 AND status = 'pending'", [person.id]);
     assert.equal(pending.rows.length, 0, "no pending reset is left behind");
     assert.equal(await scheduledCompletionDelayMs(db, T0), null, "no completion is scheduled");
-    await completeAccountReset(db, { userId: person.id }, makeDeps(clock, createOutbox(), executor));
+    await completeAccountReset(db, { userId: person.id }, makeDeps(fixedClock(new Date(T0.getTime() + SEVEN_DAYS_MS)), createOutbox(), executor));
     assert.deepEqual(erased, [], "a stray completion erases nothing");
   } finally {
     await db.close();
@@ -675,14 +675,14 @@ test("a completion whose erase fails stays pending for the retry, and the retry 
       },
     };
     await assert.rejects(
-      completeAccountReset(db, { userId: person.id }, makeDeps(clock, createOutbox(), failing)),
+      completeAccountReset(db, { userId: person.id }, makeDeps(fixedClock(new Date(T0.getTime() + SEVEN_DAYS_MS)), createOutbox(), failing)),
       /storage unavailable/,
       "the failure surfaces, so the job runner retries",
     );
     const status = await db.query("SELECT status FROM account_resets WHERE user_id = $1", [person.id]);
     assert.equal(status.rows[0]?.status, "pending", "the reset is not marked done");
 
-    assert.deepEqual(await completeAccountReset(db, { userId: person.id }, makeDeps(clock, createOutbox(), executor)), {
+    assert.deepEqual(await completeAccountReset(db, { userId: person.id }, makeDeps(fixedClock(new Date(T0.getTime() + SEVEN_DAYS_MS)), createOutbox(), executor)), {
       ok: true,
     });
     assert.deepEqual(erased, [person.id], "the retry erases");
@@ -717,7 +717,7 @@ test("the erase, the revoke and the status change commit together: a failed revo
       close: () => real.close(),
     };
     await assert.rejects(
-      completeAccountReset(db, { userId: person.id }, makeDeps(clock, createOutbox(), createResetExecutor(db))),
+      completeAccountReset(db, { userId: person.id }, makeDeps(fixedClock(new Date(T0.getTime() + SEVEN_DAYS_MS)), createOutbox(), createResetExecutor(db))),
       /lock timeout/,
     );
     assert.equal((await listCards(real, person.id)).length, 1, "the erase was rolled back with the failed revoke");

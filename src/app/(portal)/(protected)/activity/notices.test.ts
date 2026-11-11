@@ -137,7 +137,7 @@ function realActions(db: Db, dek: Uint8Array) {
     db,
     recorder,
     reversalFor: () => undefined,
-    runReversal: async () => ({ outcome: "reversed" }),
+    runReversal: async () => ({ status: "executed", outcome: "reversed" }),
   });
   return { actions: createActivityActions({ db, disputes, undo }), recorder, clock };
 }
@@ -214,4 +214,33 @@ test("a real undo refusal (an entry with no declared reversal) maps to a plain-w
   } finally {
     await db.close();
   }
+});
+
+test("pending Undo links to approval while provider failure and refusal remain distinct", async () => {
+  const db = await freshDb();
+  try {
+    const user = await createUser(db, { email: "undo-outcomes@warthog.com.au", wrappedDek: "synthetic" });
+    const dek = randomBytes(32);
+    const clock = fixedClock(new Date("2026-11-11T12:00:00Z"));
+    const recorder = createDbRecorder({ db, clock, dekFor: async () => dek });
+    await recorder.record({ userId: user.id, kind: "tool_call", source: "warthog", tool: "google-calendar__create", payload: {} });
+    const session = await sessionFor(db, user.id);
+    for (const [status, code] of [["pending_approval", "undo_pending"], ["failed", "undo_failed"], ["refused", "undo_refused"]] as const) {
+      const undo = createUndoService({ db, recorder, reversalFor: () => "google-calendar__delete",
+        runReversal: async () => ({ status, outcome: "Fixed internal explanation" }),
+      });
+      const actions = createActivityActions({ db, undo, disputes: { fileDispute: async () => {} } });
+      const result = await actions.undoEntry(session, 1);
+      const location = noticeLocation("undo_done", result);
+      assert.equal(noticeCode(location), code);
+      const notice = activityNotice(code)!;
+      assert.ok(notice.text.length > 0);
+      assert.notEqual(notice.tone, "done");
+      if (status === "pending_approval") {
+        assert.equal(notice.tone, "waiting");
+        assert.match(notice.text, /has not been undone/);
+        assert.deepEqual(notice.action, { href: "/inbox", label: "Review approval" });
+      } else assert.equal(notice.action, undefined);
+    }
+  } finally { await db.close(); }
 });

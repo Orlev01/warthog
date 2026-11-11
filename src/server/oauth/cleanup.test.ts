@@ -42,3 +42,16 @@ test("cleanup preserves refresh replay evidence and grace retries while pruning 
     assert.deepEqual(hashes, ["active-successor", "grace-retry", "retired-active"]);
   } finally { await db.close(); }
 });
+
+test("a live client's refresh token does not retain another client's abandoned replay rows", async () => {
+  const db = await freshDb();
+  try {
+    const connection = "00000000-0000-4000-8000-000000000003";
+    await db.query(`INSERT INTO oauth_tokens (token_hash,connection_id,client_id,kind,expires_at) VALUES
+      ('a-retired',$1,'client-a','refresh','2026-09-01'), ('a-live',$1,'client-a','refresh','2026-12-01'),
+      ('b-abandoned',$1,'client-b','refresh','2026-09-01'), ('legacy-abandoned',$1,NULL,'refresh','2026-09-01')`, [connection]);
+    await cleanupOAuth(db, new Date("2026-11-11T00:00:00Z"));
+    assert.deepEqual((await db.query("SELECT token_hash FROM oauth_tokens ORDER BY token_hash")).rows.map((row) => row.token_hash),
+      ["a-live", "a-retired"]);
+  } finally { await db.close(); }
+});

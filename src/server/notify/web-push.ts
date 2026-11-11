@@ -2,7 +2,7 @@
 // production implementation that sits behind the done PushSender channel: it signs
 // a VAPID push with `@pushforge/builder` and POSTs it to one device's push service.
 //
-// The payload carries ONLY the approval id — never any personal content — so a push
+// The payload carries ONLY opaque approval or record routing ids — never any personal content — so a push
 // that is cached or logged by the browser/push service reveals nothing about the
 // request (the app fetches the detail from an authenticated session when the person
 // opens the notification). The signing key and contact subject are READ FROM CONFIG
@@ -16,6 +16,7 @@
 
 import { buildPushHTTPRequest } from "@pushforge/builder";
 import { z } from "zod";
+import { recordNotificationSchema, type RecordNotification } from "../../domain/life-admin/record-notification";
 
 import type { VapidConfig } from "../config";
 import { HttpError, parseParams } from "../http/validate";
@@ -37,6 +38,7 @@ export interface PushDeviceSubscription {
 export interface PushResponse {
   readonly ok: boolean;
   readonly status: number;
+  readonly body?: { cancel(): Promise<void> } | null;
 }
 export type PushFetch = (
   input: string,
@@ -44,6 +46,7 @@ export type PushFetch = (
     method: string;
     headers: Record<string, string> | Headers;
     body: ArrayBuffer;
+    signal?: AbortSignal;
   },
 ) => Promise<PushResponse>;
 
@@ -53,11 +56,12 @@ export interface WebPushSenderDeps {
   readonly vapid: VapidConfig;
   readonly fetch: PushFetch;
   readonly buildRequest?: typeof buildPushHTTPRequest;
+  readonly timeoutMs?: number;
 }
 
 export interface WebPushSender {
   sendApprovalPush(subscription: PushDeviceSubscription, approvalId: string): Promise<void>;
-  sendNotificationPush(subscription: PushDeviceSubscription): Promise<void>;
+  sendNotificationPush(subscription: PushDeviceSubscription, target?: RecordNotification): Promise<void>;
 }
 
 export class PushDeliveryError extends Error {
@@ -91,7 +95,7 @@ const approvalIdSchema = z.string().min(1);
 // reported to the caller (rejected), never swallowed, so a fallback channel can run.
 export function createWebPushSender(deps: WebPushSenderDeps): WebPushSender {
   const build = deps.buildRequest ?? buildPushHTTPRequest;
-  async function send(subscription: PushDeviceSubscription, approvalId?: string): Promise<void> {
+  async function send(subscription: PushDeviceSubscription, approvalId?: string, target?: RecordNotification): Promise<void> {
       // Keys read from config — never a hard-coded fallback. A missing key is
       // reported, not quietly signed, so the absence surfaces to the caller.
       const { subject, privateKey } = deps.vapid;
@@ -107,9 +111,10 @@ export function createWebPushSender(deps: WebPushSenderDeps): WebPushSender {
       const validSubscription = parseParams(subscriptionSchema, subscription);
       const validApprovalId = approvalId === undefined ? undefined : parseParams(approvalIdSchema, approvalId);
 
-      // The payload carries ONLY the approval id — no personal content. Enforce the
+      // The payload carries ONLY opaque approval or record routing ids — no personal content. Enforce the
       // 4 KB cap on the plaintext before signing, so an oversized value is refused.
-      const payload: Record<string, string> = validApprovalId === undefined ? {} : { approvalId: validApprovalId };
+      const payload: Record<string, string> = validApprovalId !== undefined ? { approvalId: validApprovalId }
+        : target === undefined ? {} : parseParams(recordNotificationSchema, target);
       if (Buffer.byteLength(JSON.stringify(payload), "utf8") > MAX_PAYLOAD_BYTES) {
         throw new HttpError(413, "push payload exceeds the 4 KB limit");
       }
@@ -120,20 +125,24 @@ export function createWebPushSender(deps: WebPushSenderDeps): WebPushSender {
         subscription: validSubscription,
       });
 
-      const response = await deps.fetch(request.endpoint, {
-        method: "POST",
-        headers: request.headers,
-        body: request.body,
-      });
-
-      // A non-2xx from the push service is reported, not swallowed, so the caller can
-      // fall back to another channel.
-      if (!response.ok) {
-        throw new PushDeliveryError(response.status);
+      const controller = new AbortController();
+      const timeout = setTimeout(() => controller.abort(), deps.timeoutMs ?? 15_000);
+      let response: PushResponse | undefined;
+      try {
+        response = await deps.fetch(request.endpoint, {
+          method: "POST", headers: request.headers, body: request.body, signal: controller.signal,
+        });
+        if (!response.ok) throw new PushDeliveryError(response.status);
+      } finally {
+        // Status is the only response data needed. Cancel the unused stream and
+        // close the guarded transport even if a push service never finishes it.
+        void response?.body?.cancel().catch(() => {});
+        controller.abort();
+        clearTimeout(timeout);
       }
   }
   return {
     sendApprovalPush: (subscription, approvalId) => send(subscription, approvalId),
-    sendNotificationPush: (subscription) => send(subscription),
+    sendNotificationPush: (subscription, target) => send(subscription, undefined, target),
   };
 }

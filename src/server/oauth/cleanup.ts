@@ -14,6 +14,7 @@ export async function cleanupOAuth(db: Db, now: Date): Promise<void> {
          OR (kind = 'refresh' AND expires_at < $2::timestamptz
           AND NOT EXISTS (SELECT 1 FROM oauth_tokens AS live
             WHERE live.connection_id = expired.connection_id
+              AND live.client_id IS NOT DISTINCT FROM expired.client_id
               AND live.kind = 'refresh' AND live.expires_at > $1::timestamptz))`, [stamp, cutoff]);
     await tx.query(`DELETE FROM oauth_clients AS client
       WHERE registration = 'dcr' AND first_used_at IS NULL AND created_at < $1::timestamptz

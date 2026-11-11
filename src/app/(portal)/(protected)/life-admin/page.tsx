@@ -16,6 +16,7 @@ import type { Db } from "@/server/db/index";
 import { createLifeAdminActions, type LifeAdminActions } from "./actions";
 import { LifeAdminView } from "@/components/life-admin/life-admin-view";
 import { TasksView } from "@/components/life-admin/tasks-view";
+import { recordFields, recordDate, recordReturnPath, recordOffsets, recordStatus } from "./form-inputs";
 
 // E14-S13 — Life Admin page (the thin protected-page loader + action wiring over the
 // tested `createLifeAdminActions` seam, `./actions`). It reads the signed-in session
@@ -68,26 +69,6 @@ function str(formData: FormData, name: string): string {
   return typeof raw === "string" ? raw : "";
 }
 
-// Every decrypted field the Edit form resubmits (named by its field key), minus the
-// reserved control fields — the fields blob `updateRecord` re-encrypts.
-function fieldsOf(formData: FormData): Record<string, string> {
-  const fields: Record<string, string> = {};
-  for (const [key, value] of formData.entries()) {
-    if (key === "recordId" || key === "setting") continue;
-    if (typeof value === "string") fields[key] = value;
-  }
-  return fields;
-}
-
-// The comma-separated "days before" the reminder control submits, parsed to a number
-// list (a non-numeric entry is dropped; the boundary caps and validates the rest).
-function offsetsOf(raw: string): number[] {
-  return raw
-    .split(",")
-    .map((part) => Number(part.trim()))
-    .filter((value) => Number.isFinite(value));
-}
-
 // Run one mutation against the seam under the verified session and redirect back with a
 // notice naming the outcome. A reported refusal ({ ok: false }) or a 4xx `HttpError`
 // from the validation boundary becomes `problem` — shown in plain words, never
@@ -95,6 +76,8 @@ function offsetsOf(raw: string): number[] {
 async function run(
   success: Notice,
   mutate: (actions: LifeAdminActions, session: Session) => Promise<{ ok: boolean }>,
+  returnPath = "/life-admin",
+  invalidNotice: Notice = "invalid_input",
 ): Promise<never> {
   const db = await getServerDb();
   const session = await resolveSession(db);
@@ -111,10 +94,10 @@ async function run(
     if (!(error instanceof HttpError)) {
       throw error;
     }
-    notice = error.status === 413 ? "file_too_large" : "problem";
+    notice = error.status === 413 ? "file_too_large" : error.status === 400 || error.status === 422 ? invalidNotice : "problem";
   }
   revalidatePath("/life-admin");
-  redirect(`/life-admin?notice=${notice}`);
+  redirect(`${returnPath}${returnPath.includes("?") ? "&" : "?"}notice=${notice}`);
 }
 
 async function addRecordAction(formData: FormData): Promise<void> {
@@ -123,7 +106,10 @@ async function addRecordAction(formData: FormData): Promise<void> {
     actions.saveRecord(session, {
       kind: str(formData, "kind") as "subscription" | "receipt_warranty" | "renewal_appointment",
       fields: { name: str(formData, "title") },
+      dueDate: recordDate(formData),
+      status: recordStatus(formData),
     }),
+    recordReturnPath(formData),
   );
 }
 
@@ -133,13 +119,17 @@ async function editRecordAction(formData: FormData): Promise<void> {
     await run("reminded", (actions, session) =>
       actions.setRecordReminders(session, {
         id: str(formData, "recordId"),
-        reminderOffsets: offsetsOf(str(formData, "reminderOffsets")),
+        reminderOffsets: recordOffsets(str(formData, "reminderOffsets")),
       }),
+      recordReturnPath(formData),
+      "invalid_reminders",
     );
     return;
   }
   await run("updated", (actions, session) =>
-    actions.updateRecord(session, { id: str(formData, "recordId"), fields: fieldsOf(formData) }),
+    actions.updateRecord(session, { id: str(formData, "recordId"), fields: recordFields(formData),
+      dueDate: recordDate(formData), status: recordStatus(formData) }),
+    recordReturnPath(formData),
   );
 }
 
@@ -147,18 +137,20 @@ async function attachFileAction(formData: FormData): Promise<void> {
   "use server";
   await run("attached", (actions, session) =>
     actions.attachReceiptFile(session, { recordId: str(formData, "recordId"), file: formData.get("file") }),
+    recordReturnPath(formData),
   );
 }
 
 async function deleteRecordAction(formData: FormData): Promise<void> {
   "use server";
-  await run("deleted", (actions, session) => actions.deleteRecord(session, { id: str(formData, "recordId") }));
+  await run("deleted", (actions, session) => actions.deleteRecord(session, { id: str(formData, "recordId") }), recordReturnPath(formData));
 }
 
 async function tickOffAction(formData: FormData): Promise<void> {
   "use server";
   await run("ticked", (actions, session) =>
     actions.toggleChecklistItem(session, { id: str(formData, "itemId") }),
+    "/life-admin?view=life&tab=checklist",
   );
 }
 
@@ -166,18 +158,20 @@ async function handToAgentAction(formData: FormData): Promise<void> {
   "use server";
   await run("handed", (actions, session) =>
     actions.handChecklistItemToAgent(session, { id: str(formData, "itemId") }),
+    "/life-admin?view=life&tab=checklist",
   );
 }
 
 async function createTaskAction(formData: FormData): Promise<void> {
   "use server";
-  await run("created", (actions, session) => actions.createTask(session, { title: str(formData, "title") }));
+  await run("created", (actions, session) => actions.createTask(session, { title: str(formData, "title") }), "/life-admin?view=tasks");
 }
 
 async function assignAction(formData: FormData): Promise<void> {
   "use server";
   await run("assigned", (actions, session) =>
     actions.assignTask(session, { id: str(formData, "taskId"), assignee: str(formData, "assignee") }),
+    "/life-admin?view=tasks",
   );
 }
 
@@ -185,6 +179,7 @@ async function addNoteAction(formData: FormData): Promise<void> {
   "use server";
   await run("noted", (actions, session) =>
     actions.addTaskNote(session, { id: str(formData, "taskId"), text: str(formData, "note") }),
+    "/life-admin?view=tasks",
   );
 }
 
@@ -192,6 +187,7 @@ async function completeAction(formData: FormData): Promise<void> {
   "use server";
   await run("completed", (actions, session) =>
     actions.completeTask(session, { id: str(formData, "taskId") }),
+    "/life-admin?view=tasks",
   );
 }
 
@@ -208,6 +204,8 @@ type Notice =
   | "assigned"
   | "noted"
   | "completed"
+  | "invalid_input"
+  | "invalid_reminders"
   | "problem";
 
 const NOTICES: Record<Notice, { done: boolean; text: string }> = {
@@ -223,11 +221,13 @@ const NOTICES: Record<Notice, { done: boolean; text: string }> = {
   assigned: { done: true, text: "Task reassigned." },
   noted: { done: true, text: "Note added." },
   completed: { done: true, text: "Task marked done." },
+  invalid_input: { done: false, text: "Check the values you entered and try again." },
+  invalid_reminders: { done: false, text: "Enter whole days from 0 to 36500, separated by commas. Leave the field empty to turn off reminders." },
   problem: { done: false, text: "Something went wrong. Please try again." },
 };
 
 function toNotice(raw: string | string[] | undefined): Notice | null {
-  return typeof raw === "string" && raw in NOTICES ? (raw as Notice) : null;
+  return typeof raw === "string" && Object.hasOwn(NOTICES, raw) ? (raw as Notice) : null;
 }
 
 // The outcome of the last action, in words plus an icon (never colour alone). A problem

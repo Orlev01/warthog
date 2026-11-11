@@ -45,7 +45,7 @@ import { z } from "zod";
 import type { RegistrationResponseJSON } from "@simplewebauthn/server";
 
 import { parseBody, HttpError } from "../../../server/http/validate";
-import { verifyRecoveryCode, issueRecoveryCode } from "../../../server/auth/recovery";
+import { verifyRecoveryCodeGeneration, issueRecoveryCode } from "../../../server/auth/recovery";
 import { issueEmailCode, verifyEmailCode } from "../../../server/auth/email-code";
 import { alertAccountRecovered, deliverAlert } from "../../../server/auth/alerts";
 import { deviceCookieFor } from "../../../server/auth/device-recognition";
@@ -58,7 +58,7 @@ import { getUserByEmail } from "../../../server/db/users";
 import type { Clock } from "../../../server/seams/clock";
 import type { Random } from "../../../server/seams/random";
 import type { EmailSender } from "../../../server/notify/senders";
-import type { Db } from "../../../server/db/index";
+import { withTransaction, type Db } from "../../../server/db/index";
 import { pendingStore } from "../../../server/auth/pending-store";
 
 // The dependency bundle. Each step reads the subset it needs; the superset is
@@ -89,14 +89,15 @@ export interface RecoverHandler {
 // back either way, so an unknown email is indistinguishable from a registered one);
 // `email` is the address the one-time code went to and seeds the passkey registration
 // options. Each later step requires the flag the step before it sets: `emailVerified`
-// (the email code), `recoveryVerified` (the recovery code), `passkeyRegistered` (the new
+// (the email code), `recoveryGeneration` (the recovery code), `passkeyRegistered` (the new
 // second factor). `recoveryFailures` counts wrong recovery codes on this recovery.
 interface PendingRecovery {
   readonly userId: string | null;
   readonly email: string;
   emailVerified: boolean;
-  recoveryVerified: boolean;
+  recoveryGeneration?: string;
   passkeyRegistered: boolean;
+  registering?: boolean;
   recoveryFailures: number;
 }
 
@@ -210,7 +211,6 @@ export function createRecoverHandler(deps: RecoverHandlerDeps): RecoverHandler {
           userId: user?.id ?? null,
           email: user?.email ?? email,
           emailVerified: false,
-          recoveryVerified: false,
           passkeyRegistered: false,
           recoveryFailures: 0,
         },
@@ -279,8 +279,8 @@ export function createRecoverHandler(deps: RecoverHandlerDeps): RecoverHandler {
 
       // An address with no account still runs the (equal-cost) verifier, so the response
       // time does not reveal whether the account exists.
-      const ok = await verifyRecoveryCode(db, pending.userId, recoveryCode);
-      if (!ok || !pending.userId) {
+      const generation = await verifyRecoveryCodeGeneration(db, pending.userId, recoveryCode);
+      if (generation === null || !pending.userId) {
         pending.recoveryFailures += 1;
         if (pending.recoveryFailures >= MAX_RECOVERY_CODE_FAILURES) {
           pendingRecoveries.delete(recoveryId);
@@ -294,7 +294,7 @@ export function createRecoverHandler(deps: RecoverHandlerDeps): RecoverHandler {
         { userId: pending.userId, userName: pending.email },
         { rpId, origin: publicOrigin, clock },
       );
-      pending.recoveryVerified = true;
+      pending.recoveryGeneration = generation;
 
       return json(200, { registrationOptions });
     } catch (error) {
@@ -319,21 +319,40 @@ export function createRecoverHandler(deps: RecoverHandlerDeps): RecoverHandler {
 
       const pending = pendingRecoveries.get(recoveryId, clock.now());
       if (!pending || !pending.userId) return json(400, { error: "unknown_recovery" });
-      if (!pending.recoveryVerified) return json(400, { error: "not_verified" });
+      if (!pending.recoveryGeneration) return json(400, { error: "not_verified" });
+      if (pending.registering || pending.passkeyRegistered) return json(409, { error: "recovery_in_progress" });
 
-      const result = await finishPasskeyRegistration(
-        db,
-        { userId: pending.userId, response: registrationResponse as RegistrationResponseJSON },
-        { rpId, origin: publicOrigin, clock },
-      );
-      if (!result.ok) return json(400, { error: "bad_attestation" });
+      const userId = pending.userId;
+      const generation = pending.recoveryGeneration;
+      pending.registering = true;
+      let result: { error: "not_verified" | "bad_attestation" } | { code: string };
+      try {
+        result = await withTransaction(db, async (tx) => {
+          // Serialize with code regeneration and competing recoveries. Checking only
+          // the earlier proof flag would let a revoked code add a durable passkey.
+          const current = await tx.query("SELECT salt FROM recovery_codes WHERE user_id = $1 FOR UPDATE", [userId]);
+          if (current.rows[0]?.salt !== generation) return { error: "not_verified" } as const;
 
-      // The new passkey is the second factor: only now is a new recovery code issued,
-      // replacing the old one. The code is returned once and stored only as its hash.
-      const { code } = await issueRecoveryCode(db, pending.userId, { random });
+          const registered = await finishPasskeyRegistration(
+            tx,
+            { userId, response: registrationResponse as RegistrationResponseJSON },
+            { rpId, origin: publicOrigin, clock },
+          );
+          if (!registered.ok) return { error: "bad_attestation" } as const;
+
+          // The factor and replacement code commit together. Failure leaves neither
+          // a newly usable factor nor a replacement code the person never received.
+          const { code } = await issueRecoveryCode(tx, userId, { random });
+          return { code };
+        });
+      } finally { pending.registering = false; }
+      if ("error" in result) {
+        if (result.error === "not_verified") pendingRecoveries.delete(recoveryId);
+        return json(400, { error: result.error });
+      }
       pending.passkeyRegistered = true;
 
-      return json(200, { recoveryCode: code });
+      return json(200, { recoveryCode: result.code });
     } catch (error) {
       return handleError(error);
     }

@@ -39,7 +39,8 @@ import type { Db } from "../db/index";
 import { selectKeyWrapper, type KeyWrapper } from "../crypto/key-wrapper";
 import { createRedactingRecorder } from "./recorder";
 import { toEntry } from "../activity/writer";
-import { type UndoReversalJob } from "../activity/undo";
+import { type UndoReversalJob, type UndoReversalResult } from "../activity/undo";
+import { calendarReversalForEntry, successfulConnectorResult } from "../activity/calendar-reversal";
 import { getRateLimiter } from "./rate-limit";
 import { systemClock, type Clock } from "../seams/clock";
 import { getUserById } from "../db/users";
@@ -497,7 +498,7 @@ export function createMcpDispatch(deps: McpDispatchDeps): McpDispatch {
 // CALLER's (the session's / the owning entry's), never a form value (design §5).
 export interface AgentExecutors {
   executeApprovedHold(userId: string, approvalId: string): Promise<ApprovedHoldResult>;
-  runReversal(job: UndoReversalJob): Promise<{ outcome: string }>;
+  runReversal(job: UndoReversalJob): Promise<UndoReversalResult>;
 }
 
 // Plain-words fallbacks so an undo that could not route its reversal still reports an
@@ -507,14 +508,16 @@ const REVERSAL_NO_ROUTE =
 const REVERSAL_FAILED = "The reversal couldn't be completed.";
 
 // One pipeline outcome as the plain-words outcome the undo entry records.
-function reversalOutcome(result: AgentCallResult): string {
+function reversalOutcome(result: AgentCallResult): UndoReversalResult {
   switch (result.status) {
     case "executed":
-      return "Undone.";
+      return successfulConnectorResult(result.result)
+        ? { status: "executed", outcome: "Undone." }
+        : { status: "failed", outcome: REVERSAL_FAILED };
     case "refused":
-      return result.reason;
+      return { status: "refused", outcome: result.reason };
     case "pending_approval":
-      return "This needs your approval before it can be undone.";
+      return { status: "pending_approval", outcome: "This needs your approval before it can be undone. Open Approvals to continue." };
   }
 }
 
@@ -529,24 +532,24 @@ export function createAgentExecutors(deps: McpDispatchDeps): AgentExecutors {
   // the agent may no longer use is cleanly declined), and the outcome is reported in plain
   // words — never thrown — so the undo service can always append its reversal entry (design
   // §9; constitution 14/15).
-  async function runReversal(job: UndoReversalJob): Promise<{ outcome: string }> {
+  async function runReversal(job: UndoReversalJob): Promise<UndoReversalResult> {
     const found = await db.query(
       "SELECT * FROM activity_entries WHERE user_id = $1 AND seq = $2",
       [job.userId, job.originalSeq],
     );
     const row = found.rows[0];
     if (!row) {
-      return { outcome: REVERSAL_NO_ROUTE };
+      return { status: "refused", outcome: REVERSAL_NO_ROUTE };
     }
 
     const agentId = row.agent_id == null ? null : String(row.agent_id);
     if (!agentId) {
-      return { outcome: REVERSAL_NO_ROUTE };
+      return { status: "refused", outcome: REVERSAL_NO_ROUTE };
     }
 
     const agent = await getAgentById(db, job.userId, agentId);
     if (!agent) {
-      return { outcome: REVERSAL_NO_ROUTE };
+      return { status: "refused", outcome: REVERSAL_NO_ROUTE };
     }
 
     const connection: AgentConnection = {
@@ -565,23 +568,30 @@ export function createAgentExecutors(deps: McpDispatchDeps): AgentExecutors {
     try {
       // A reversal must use the account on the original action, never the agent's
       // newly selected account. Legacy entries without that binding fail closed.
-      let boundCall = call;
       if (call.connector) {
         const user = await getUserById(db, job.userId);
-        if (!user) return { outcome: REVERSAL_NO_ROUTE };
+        if (!user) return { status: "refused", outcome: REVERSAL_NO_ROUTE };
         const wrapper = selectKeyWrapper({ nodeEnv: deps.config.nodeEnv, localKek: deps.config.devKek });
-        const entry = await toEntry(row, await wrapper.unwrap(user.wrappedDek));
-        const accountId = (entry.payload as { connectorAccountId?: unknown } | null)?.connectorAccountId;
-        if (typeof accountId !== "string") return { outcome: "This action cannot be undone automatically because its original service account is unknown." };
-        boundCall = { ...call, connectorAccountId: accountId };
+        const dek = await wrapper.unwrap(user.wrappedDek);
+        try {
+          const entry = await toEntry(row, dek);
+          const target = calendarReversalForEntry(entry);
+          const accountId = (entry.payload as { connectorAccountId?: unknown } | null)?.connectorAccountId;
+          if (!target || target.tool !== job.reversalTool || typeof accountId !== "string") {
+            return { status: "refused", outcome: "This action cannot be undone automatically because its original event or service account is unavailable." };
+          }
+          const result = await pipeline.handleAgentCall(connection, { ...call, connectorAccountId: accountId,
+            params: { query: { eventId: target.eventId } },
+          });
+          return reversalOutcome(result);
+        } finally { dek.fill(0); }
       }
-      const result = await pipeline.handleAgentCall(connection, boundCall);
-      return { outcome: reversalOutcome(result) };
+      return { status: "refused", outcome: REVERSAL_NO_ROUTE };
     } catch {
       // The pipeline surfaces a policy decision as a result, so a throw here is an
       // infrastructure failure, not a refusal. Report it in plain words rather than letting
       // it escape, so the undo service can still record the reversal entry.
-      return { outcome: REVERSAL_FAILED };
+      return { status: "failed", outcome: REVERSAL_FAILED };
     }
   }
 

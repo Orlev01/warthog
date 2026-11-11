@@ -107,8 +107,8 @@ const KEK_BYTES = 32; // a 256-bit local AES key-encryption key (AES-256-GCM)
 // A curated reversible tool and its declared reversal (design §7: create_event ↔
 // delete_event), a read that declares no reversal, and the reversal table the loader
 // consults to decide `canUndo`. Tool names are `<connector>__<tool>`.
-const CREATE_EVENT = "google_calendar__create_event";
-const DELETE_EVENT = "google_calendar__delete_event";
+const CREATE_EVENT = "google-calendar__create";
+const DELETE_EVENT = "google-calendar__delete";
 const LIST_EVENTS = "google_calendar__list_events";
 const REVERSALS: Record<string, string> = { [CREATE_EVENT]: DELETE_EVENT };
 const reversalFor = (tool?: string): string | undefined => (tool ? REVERSALS[tool] : undefined);
@@ -228,8 +228,8 @@ async function seedWorld(db: Db, keyWrapper: KeyWrapper) {
     agentId: "agent-claude",
     connectorId: "google_calendar",
     tool: CREATE_EVENT,
-    outcome: "ok",
-    payload: { summary: `Booked ${WORD[1]} trip`, detail: "trip detail" },
+    outcome: "executed",
+    payload: { summary: `Booked ${WORD[1]} trip`, detail: "trip detail", reversal: { tool: DELETE_EVENT, eventId: "event" } },
   });
   // Alice seq 2 — a read (not reversible), agent-gpt, gmail, agent-reported, Mar.
   await record(recorder, clock, "2026-03-15T00:00:00.000Z", {
@@ -674,7 +674,7 @@ test("a person with no activity gets an empty list and the empty state renders",
 //
 //   createAgentExecutors(deps: { db: Db; config: Config }): {
 //     executeApprovedHold(userId, approvalId): Promise<ApprovedHoldResult>;
-//     runReversal(job: { userId; reversalTool; originalSeq; reason? }): Promise<{ outcome: string }>;
+//     runReversal(job: { userId; reversalTool; originalSeq; reason? }): Promise<{ status: "executed" | "refused" | "pending_approval" | "failed"; outcome: string }>;
 //   }
 //
 // `runReversal` is the undo service's reversal executor (the same seam shape undo.ts takes,
@@ -700,7 +700,7 @@ type AgentExecutors = {
     reversalTool: string;
     originalSeq: number;
     reason?: string;
-  }): Promise<{ outcome: string }>;
+  }): Promise<{ status: "executed" | "refused" | "pending_approval" | "failed"; outcome: string }>;
 };
 
 // The composition-root module as this task widens it. The factory is OPTIONAL in the view
@@ -736,7 +736,7 @@ function devConfig(): Config {
   } as NodeJS.ProcessEnv);
 }
 
-test("a reversible entry gets a live Undo that runs the reversal once and reports the outcome; a non-reversible entry shows no Undo", async () => {
+test("a legacy entry without a target shows no Undo and a refused reversal never reports success", async () => {
   const db = await freshDb();
   try {
     const config = devConfig();
@@ -811,10 +811,9 @@ test("a reversible entry gets a live Undo that runs the reversal once and report
     // The loader + rendered screen: a LIVE Undo on the reversible entry only, carrying its seq.
     const view = await actions.load(session, {});
     const markup = render(view, { disputeAction: noopAction, undoAction: noopAction });
-    assert.equal(liveCount(markup, /\bundo\b/i), 1, "a live Undo is mounted for the entry with a declared reversal");
+    assert.equal(liveCount(markup, /\bundo\b/i), 0, "legacy entries without a known event target cannot offer Undo");
     const undoForms = formsFor(markup, /\bundo\b/i);
-    assert.equal(undoForms.length, 1, "exactly one Undo form");
-    assert.match(undoForms[0]!, /value="1"/, "the live Undo carries the reversible entry's seq (1)");
+    assert.equal(undoForms.length, 0);
 
     // Undo the reversible entry → the reversal runs and reports a plain-words outcome,
     // appended as a NEW warthog activity entry. The original entry is never altered.
@@ -822,7 +821,7 @@ test("a reversible entry gets a live Undo that runs the reversal once and report
     assert.equal(before, 0, "no reversal entry exists before the undo");
 
     const undone = await actions.undoEntry(session, 1, "undo the booking");
-    assert.equal(undone.ok, true, "undoing a reversible entry succeeds — the reversal is wired and ran");
+    assert.equal(undone.ok, false, "an unavailable reversal never reports success");
 
     const afterUndo = await listActivity(db, userId, {}, dek);
     const reversalEntries = afterUndo.filter((e) => e.tool === DELETE_EVENT && e.source === "warthog");

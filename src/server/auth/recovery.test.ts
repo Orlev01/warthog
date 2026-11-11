@@ -75,7 +75,7 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
 
-import { issueRecoveryCode, verifyRecoveryCode } from "./recovery";
+import { issueRecoveryCode, verifyRecoveryCode, verifyRecoveryCodeGeneration } from "./recovery";
 import { freshDb } from "../../test/db";
 import { createUser, type User } from "../db/users";
 import { systemRandom } from "../seams/random";
@@ -96,6 +96,23 @@ const WRAPPED_DEK = "wrapped-dek-placeholder";
 async function freshUser(db: Db, label: string): Promise<User> {
   return createUser(db, { email: `${label}@warthog.com.au`, wrappedDek: WRAPPED_DEK });
 }
+
+test("a verified recovery generation retains only the public salt and changes on rotation", async () => {
+  const db = await freshDb();
+  try {
+    const user = await freshUser(db, "generation");
+    const first = await issueRecoveryCode(db, user.id, deps);
+    const generation = await verifyRecoveryCodeGeneration(db, user.id, first.code);
+    const row = (await db.query("SELECT salt, auth_hash FROM recovery_codes WHERE user_id = $1", [user.id])).rows[0]!;
+    assert.equal(generation, row.salt);
+    assert.notEqual(generation, first.code);
+    assert.notEqual(generation, row.auth_hash);
+    const second = await issueRecoveryCode(db, user.id, deps);
+    assert.equal(await verifyRecoveryCodeGeneration(db, user.id, first.code), null);
+    assert.notEqual(await verifyRecoveryCodeGeneration(db, user.id, second.code), generation);
+    assert.equal(await verifyRecoveryCodeGeneration(db, null, second.code), null);
+  } finally { await db.close(); }
+});
 
 // ---------------------------------------------------------------------------------
 // An independent RFC 4648 base32 decoder, so the test owns the entropy check without

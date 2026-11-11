@@ -128,3 +128,16 @@ test("launching the installed app starts at Home", () => {
   assert.equal(manifest.start_url, "/home");
   assert.equal(manifest.scope, "/");
 });
+
+
+test("reminder taps open the record's group and anchor, never an arbitrary URL", async () => {
+  const recordId = "d7d57ea2-50ea-4ed7-b234-66eb47957b38";
+  for (const recordTab of ["subscriptions", "receipts", "renewals"]) {
+    const worker = loadWorker([]);
+    await tap(worker, { recordId, recordTab, url: "https://evil.test" });
+    assert.deepEqual(worker.opened, [`/life-admin?view=life&tab=${recordTab}#record-${recordId}`]);
+  }
+  for (const data of [{ recordId, recordTab: "__proto__" }, { recordId: "x#secret", recordTab: "receipts" }, { url: "https://evil.test" }]) {
+    const worker = loadWorker([]); await tap(worker, data); assert.deepEqual(worker.opened, ["/home"]);
+  }
+});

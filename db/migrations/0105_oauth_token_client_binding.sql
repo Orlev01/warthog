@@ -1,0 +1,11 @@
+-- Keep the validated issuing client with every new token, including rotated
+-- refresh tokens. CIMD identities may be validated dynamically without a row in
+-- oauth_clients, so this deliberately mirrors oauth_auth_codes.client_id rather
+-- than introducing a foreign key to the DCR registry.
+--
+-- Historical token rows retain NULL. Consumed authorization codes are deleted
+-- and agents store only display metadata: neither remaining codes nor names can
+-- reliably establish the original client. The new runtime refuses unbound
+-- refresh tokens with invalid_grant and requires fresh authorization. Existing
+-- access tokens keep their original expiry and bearer-verification behavior.
+ALTER TABLE oauth_tokens ADD COLUMN client_id text CHECK (client_id <> '');

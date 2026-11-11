@@ -120,7 +120,7 @@ import { systemRandom } from "../../../server/seams/random";
 import { fixedClock, type Clock } from "../../../server/seams/clock";
 import { freshDb } from "../../../test/db";
 import { createAuthenticator, type SoftwareAuthenticator } from "../../../test/authenticator";
-import type { Db } from "../../../server/db/index";
+import { withTransaction, type Db } from "../../../server/db/index";
 
 // A frozen instant: the session is minted and verified at the same clock, so it is
 // comfortably inside its idle/absolute windows with no wall-clock dependence.
@@ -294,6 +294,88 @@ async function throughRegisterPasskey(
   assert.ok(body.recoveryCode.length > 0, "the new recovery code is non-empty");
   return { recoveryId, newRecoveryCode: body.recoveryCode };
 }
+
+test("rotating a recovery code invalidates an older verified recovery before it can add a passkey", async () => {
+  const db = await freshDb();
+  try {
+    const handler = makeHandler(db);
+    const { user, recoveryCode } = await seedAccount(db, "revoked-recovery");
+    const pending = await throughVerifyCode(handler, user.email, recoveryCode);
+    const registrationResponse = await createAuthenticator().register(pending.registrationOptions);
+    const replacement = await issueRecoveryCode(db, user.id, { random: systemRandom });
+
+    const result = await handler.registerPasskey(recoverRequest({ recoveryId: pending.recoveryId, registrationResponse }));
+    assert.equal(result.status, 400);
+    assert.equal(await countFor(db, "passkeys", user.id), 0, "a revoked proof must not create a durable sign-in factor");
+    assert.equal(await verifyRecoveryCode(db, user.id, replacement.code), true, "the owner's replacement code survives");
+    assert.equal((await handler.finish(recoverRequest({ recoveryId: pending.recoveryId }))).status, 400);
+    assert.equal(await countFor(db, "sessions", user.id), 0);
+  } finally { await db.close(); }
+});
+
+test("two pending recoveries using the same code cannot both register after one rotates it", async () => {
+  const db = await freshDb();
+  try {
+    const { user, recoveryCode } = await seedAccount(db, "competing-recoveries");
+    const first = makeHandler(db);
+    const second = makeHandler(db, fixedClock(new Date(T0.getTime() + 60_000)));
+    const a = await throughVerifyCode(first, user.email, recoveryCode);
+    const b = await throughVerifyCode(second, user.email, recoveryCode);
+    const responseA = await createAuthenticator().register(a.registrationOptions);
+    const responseB = await createAuthenticator().register(b.registrationOptions);
+
+    const results = await Promise.all([
+      first.registerPasskey(recoverRequest({ recoveryId: a.recoveryId, registrationResponse: responseA })),
+      second.registerPasskey(recoverRequest({ recoveryId: b.recoveryId, registrationResponse: responseB })),
+    ]);
+    assert.deepEqual(results.map((result) => result.status).sort(), [200, 400]);
+    assert.equal(await countFor(db, "passkeys", user.id), 1);
+    const winner = await results.find((result) => result.status === 200)!.json() as { recoveryCode: string };
+    assert.equal(await verifyRecoveryCode(db, user.id, winner.recoveryCode), true);
+    assert.equal(await verifyRecoveryCode(db, user.id, recoveryCode), false);
+  } finally { await db.close(); }
+});
+
+test("a failed recovery-code replacement rolls back the newly registered passkey", async () => {
+  const db = await freshDb();
+  try {
+    const { user, recoveryCode } = await seedAccount(db, "recovery-rollback");
+    const failing: Db = {
+      query: (text, values) => db.query(text, values),
+      transaction: (fn) => withTransaction(db, (tx) => fn({
+        ...tx,
+        query: (text, values) => text.includes("INSERT INTO recovery_codes")
+          ? Promise.reject(new Error("synthetic recovery-code failure")) : tx.query(text, values),
+      })),
+      close: async () => {},
+    };
+    const handler = makeHandler(failing);
+    const pending = await throughVerifyCode(handler, user.email, recoveryCode);
+    const registrationResponse = await createAuthenticator().register(pending.registrationOptions);
+    await assert.rejects(handler.registerPasskey(recoverRequest({ recoveryId: pending.recoveryId, registrationResponse })),
+      /synthetic recovery-code failure/);
+    assert.equal(await countFor(db, "passkeys", user.id), 0);
+    assert.equal(await verifyRecoveryCode(db, user.id, recoveryCode), true);
+    assert.equal((await handler.finish(recoverRequest({ recoveryId: pending.recoveryId }))).status, 400);
+  } finally { await db.close(); }
+});
+
+test("duplicate passkey registration on one recovery cannot invalidate its successful completion", async () => {
+  const db = await freshDb();
+  try {
+    const handler = makeHandler(db);
+    const { user, recoveryCode } = await seedAccount(db, "duplicate-recovery");
+    const pending = await throughVerifyCode(handler, user.email, recoveryCode);
+    const registrationResponse = await createAuthenticator().register(pending.registrationOptions);
+    const results = await Promise.all([
+      handler.registerPasskey(recoverRequest({ recoveryId: pending.recoveryId, registrationResponse })),
+      handler.registerPasskey(recoverRequest({ recoveryId: pending.recoveryId, registrationResponse })),
+    ]);
+    assert.equal(results.filter((result) => result.status === 200).length, 1);
+    assert.equal(await countFor(db, "passkeys", user.id), 1);
+    assert.equal((await handler.finish(recoverRequest({ recoveryId: pending.recoveryId }))).status, 303);
+  } finally { await db.close(); }
+});
 
 // =====================================================================================
 // AC1 — the happy path: identify → recovery code → new passkey → new code (shown) →

@@ -104,7 +104,7 @@ export function buildDispatchTable(seams: JobSeams): Record<string, JobHandler> 
     // A reset cancelled in its waiting week is no longer pending: completion reports
     // ok:false and there is nothing to do, so that is not a failure.
     [COMPLETE_JOB_TYPE]: async (job) => {
-      await completeAccountReset(seams.db, payloadOf(userPayload, job), { executor: seams.resetExecutor });
+      await completeAccountReset(seams.db, payloadOf(userPayload, job), { executor: seams.resetExecutor, clock: seams.clock });
     },
   };
 }

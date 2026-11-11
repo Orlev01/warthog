@@ -160,7 +160,7 @@ function MemoryCard({
       </div>
 
       <details className="flex flex-col gap-3">
-        <summary className="inline-flex w-fit cursor-pointer items-center gap-2 text-sm font-medium text-fg">
+        <summary className="inline-flex min-h-11 w-fit cursor-pointer items-center gap-2 rounded-card text-sm font-medium text-fg focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-focus">
           <Pencil aria-hidden={true} className="h-4 w-4 shrink-0" />
           Edit
         </summary>
@@ -222,7 +222,7 @@ export function MemoryView({
 
       {/* ----- Add your own memory (offered even with no memories) ----- */}
       <details className="flex flex-col gap-3 rounded-card border border-line bg-surface p-4">
-        <summary className="inline-flex w-fit cursor-pointer items-center gap-2 text-sm font-medium text-fg">
+        <summary className="inline-flex min-h-11 w-fit cursor-pointer items-center gap-2 rounded-card text-sm font-medium text-fg focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-focus">
           <Plus aria-hidden={true} className="h-4 w-4 shrink-0" />
           Add a memory
         </summary>

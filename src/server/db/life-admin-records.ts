@@ -24,6 +24,7 @@
 // they only ever touch plaintext metadata.
 
 import { randomUUID } from "node:crypto";
+import { MAX_REMINDER_OFFSET_DAYS, recordDueDateSchema, reminderOffsetsSchema } from "../../domain/life-admin/record-metadata";
 
 import { decrypt, encrypt } from "../crypto/envelope";
 import type { Clock } from "../seams/clock";
@@ -144,8 +145,8 @@ export async function createRecord(
   dek: Uint8Array,
 ): Promise<LifeAdminRecord> {
   const id = randomUUID();
-  const dueDate = input.dueDate ?? null;
-  const reminderOffsets = input.reminderOffsets ?? [...DEFAULT_REMINDER_OFFSETS];
+  const dueDate = recordDueDateSchema.nullable().parse(input.dueDate ?? null);
+  const reminderOffsets = reminderOffsetsSchema.parse(input.reminderOffsets ?? [...DEFAULT_REMINDER_OFFSETS]);
   const source = input.source;
   const sourceAgentId = source.kind === "agent" ? source.agentId : null;
   const envelope = await encrypt(dek, TABLE, FIELDS_COLUMN, id, JSON.stringify(input.fields));
@@ -184,21 +185,21 @@ export async function updateRecord(
   input: UpdateRecordInput,
   dek: Uint8Array,
 ): Promise<LifeAdminRecord> {
-  const dueDate = input.dueDate ?? null;
-  const reminderOffsets = input.reminderOffsets ?? null;
+  const dueDate = recordDueDateSchema.nullable().parse(input.dueDate ?? null);
+  const reminderOffsets = input.reminderOffsets === undefined ? null : reminderOffsetsSchema.parse(input.reminderOffsets);
   const envelope = await encrypt(dek, TABLE, FIELDS_COLUMN, input.id, JSON.stringify(input.fields));
 
   const result = await db.query(
     `UPDATE life_admin_records
      SET fields = $3,
-         due_date = $4::date,
+         due_date = CASE WHEN $7::boolean THEN $4::date ELSE due_date END,
          status = $5,
          reminder_offsets = COALESCE($6::int[], reminder_offsets),
-         sent_offsets = CASE WHEN due_date IS DISTINCT FROM $4::date
+         sent_offsets = CASE WHEN $7::boolean AND due_date IS DISTINCT FROM $4::date
                              THEN '{}'::int[] ELSE sent_offsets END
      WHERE id = $1 AND user_id = $2
      RETURNING ${SELECT_COLUMNS}`,
-    [input.id, input.userId, envelope, dueDate, input.status, reminderOffsets],
+    [input.id, input.userId, envelope, dueDate, input.status, reminderOffsets, input.dueDate !== undefined],
   );
 
   const row = result.rows[0];
@@ -256,12 +257,17 @@ async function decryptRows(rows: Row[], dek: Uint8Array): Promise<LifeAdminRecor
 export async function listDueForReminder(db: Db, clock: Clock): Promise<DueReminder[]> {
   const result = await db.query(
     `SELECT r.id AS record_id, r.user_id, r.kind, r.due_date::text AS due_date, o AS "offset"
-     FROM life_admin_records r, unnest(r.reminder_offsets) AS o
+     FROM life_admin_records r
+     CROSS JOIN LATERAL (
+       SELECT DISTINCT CASE WHEN value BETWEEN 0 AND $2::int THEN value END AS o
+       FROM unnest(r.reminder_offsets) AS value
+     ) offsets
      WHERE r.due_date IS NOT NULL
+       AND o IS NOT NULL
        AND NOT (o = ANY(r.sent_offsets))
        AND (r.due_date - o) <= $1
      ORDER BY (r.due_date - o), r.id, o`,
-    [clock.now()],
+    [clock.now(), MAX_REMINDER_OFFSET_DAYS],
   );
   return result.rows.map((row) => ({
     recordId: row.record_id as string,
@@ -274,16 +280,20 @@ export async function listDueForReminder(db: Db, clock: Clock): Promise<DueRemin
 
 // Record that the reminder for one (record, offset) has been sent — the SENT-marker
 // the job sets so `listDueForReminder` stops returning it. DEK-FREE (the job holds
-// no key); keyed on the record's unguessable id, so it is the system job's write,
-// not a member read. Appending only when absent makes a repeat call idempotent.
+// no key). Bind the owner and captured due date so an in-flight delivery cannot mark a
+// rescheduled cycle sent. A removed offset must not be reintroduced by that delivery.
+// Appending only when absent makes repeated completion writes idempotent; this does
+// not guarantee exactly-once external push delivery across crashes/overlapping sweeps.
 export async function markReminderSent(
   db: Db,
-  input: { recordId: string; offset: number },
+  input: Pick<DueReminder, "recordId" | "userId" | "dueDate" | "offset">,
 ): Promise<void> {
   await db.query(
     `UPDATE life_admin_records
      SET sent_offsets = array_append(sent_offsets, $2::int)
-     WHERE id = $1 AND NOT ($2::int = ANY(sent_offsets))`,
-    [input.recordId, input.offset],
+     WHERE id = $1 AND user_id = $3 AND due_date = $4::date
+       AND $2::int = ANY(reminder_offsets)
+       AND NOT ($2::int = ANY(sent_offsets))`,
+    [input.recordId, input.offset, input.userId, input.dueDate],
   );
 }

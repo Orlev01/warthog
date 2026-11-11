@@ -6,7 +6,7 @@
 // It MUST show a notification for EVERY push. On iOS web push, a push that does
 // not result in a user-visible notification can cost the site its push
 // permission, so even an empty or malformed payload shows one notification.
-// The push payload carries the approval id only — never personal content — so
+// The push payload carries opaque routing ids only — never personal content — so
 // the notification body is generic.
 
 self.addEventListener("install", function () {
@@ -29,7 +29,7 @@ self.addEventListener("push", function (event) {
 function showPushNotification(event) {
   var title = "Warthog";
   var options = {
-    body: "You have a new request to review.",
+    body: "You have a new notification.",
     tag: "warthog-push",
   };
 
@@ -38,8 +38,16 @@ function showPushNotification(event) {
   if (id) {
     // The approval id is not personal content; use it only to coalesce the
     // notification and to route the tap into the app.
+    options.body = "You have a new request to review.";
     options.tag = "warthog-approval-" + id;
     options.data = { approval_id: id };
+  } else {
+    var record = recordTarget(payload);
+    if (record) {
+      options.body = "You have a life admin reminder.";
+      options.tag = "warthog-record-" + record.recordId;
+      options.data = record;
+    }
   }
 
   return self.registration.showNotification(title, options);
@@ -70,7 +78,16 @@ function targetFor(data) {
   if (id) {
     return "/inbox?approval=" + encodeURIComponent(id);
   }
+  var record = recordTarget(data);
+  if (record) return "/life-admin?view=life&tab=" + record.recordTab + "#record-" + record.recordId;
   return "/home";
+}
+
+function recordTarget(data) {
+  if (!data || typeof data.recordId !== "string" ||
+      !/^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i.test(data.recordId) ||
+      ["subscriptions", "receipts", "renewals"].indexOf(data.recordTab) === -1) return null;
+  return { recordId: data.recordId, recordTab: data.recordTab };
 }
 
 function approvalId(data) {

@@ -48,6 +48,7 @@ export interface ResetFlowDeps {
 }
 
 export interface ResetFlowState {
+  readonly busy: boolean;
   readonly phase: ResetStep;
   readonly email: string;
   readonly emailCode: string;
@@ -94,6 +95,7 @@ export function createResetFlow(deps: ResetFlowDeps): ResetFlowController {
   let registrationOptions: PublicKeyCredentialCreationOptionsJSON | undefined;
 
   let state: ResetFlowState = {
+    busy: false,
     phase: setup ? "setup-identify" : "identify",
     email: "",
     emailCode: "",
@@ -103,6 +105,18 @@ export function createResetFlow(deps: ResetFlowDeps): ResetFlowController {
   function set(patch: Partial<ResetFlowState>): void {
     state = { ...state, ...patch };
     deps.onChange?.();
+  }
+
+  async function run(action: () => Promise<void>, failure: string): Promise<void> {
+    if (state.busy) return;
+    set({ busy: true, error: undefined });
+    try {
+      await action();
+    } catch {
+      set({ error: failure });
+    } finally {
+      set({ busy: false });
+    }
   }
 
   // POST a JSON body to a reset step; a thrown fetch (offline) is a failed step, not a crash.
@@ -120,7 +134,8 @@ export function createResetFlow(deps: ResetFlowDeps): ResetFlowController {
 
   async function readJson(response: Response): Promise<Record<string, unknown>> {
     try {
-      return (await response.json()) as Record<string, unknown>;
+      const body: unknown = await response.json();
+      return body !== null && typeof body === "object" ? body as Record<string, unknown> : {};
     } catch {
       return {};
     }
@@ -152,6 +167,7 @@ export function createResetFlow(deps: ResetFlowDeps): ResetFlowController {
     const body = await readJson(response);
     setupId = typeof body.setupId === "string" ? body.setupId : undefined;
     registrationOptions = body.registrationOptions as PublicKeyCredentialCreationOptionsJSON | undefined;
+    if (!setupId || !registrationOptions) { set({ error: VERIFY_FAILED_COPY }); return; }
     set({ phase: "setup-passkey", emailCode: "", error: undefined });
   }
 
@@ -218,13 +234,13 @@ export function createResetFlow(deps: ResetFlowDeps): ResetFlowController {
 
   return {
     getState: () => state,
-    setEmail: (value) => set({ email: value }),
-    setEmailCode: (value) => set({ emailCode: value }),
-    setSavedConfirmed: (value) => set({ savedConfirmed: value }),
-    submitIdentify,
-    submitEmailCode,
-    createPasskey,
-    confirm,
+    setEmail: (value) => { if (!state.busy) set({ email: value }); },
+    setEmailCode: (value) => { if (!state.busy) set({ emailCode: value }); },
+    setSavedConfirmed: (value) => { if (!state.busy) set({ savedConfirmed: value }); },
+    submitIdentify: () => run(submitIdentify, SEND_FAILED_COPY),
+    submitEmailCode: () => run(submitEmailCode, setup ? VERIFY_FAILED_COPY : REQUEST_FAILED_COPY),
+    createPasskey: () => run(createPasskey, SETUP_FAILED_COPY),
+    confirm: () => run(confirm, SETUP_FAILED_COPY),
   };
 }
 
@@ -269,6 +285,7 @@ export function ResetFlow(props: ResetFlowProps = {}): React.ReactElement {
       recoveryCode={state.newRecoveryCode}
       savedConfirmed={state.savedConfirmed}
       error={state.error}
+      busy={state.busy}
       onEmailChange={(value) => flow.setEmail(value)}
       onEmailCodeChange={(value) => flow.setEmailCode(value)}
       onSavedConfirmedChange={(value) => flow.setSavedConfirmed(value)}

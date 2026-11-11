@@ -155,7 +155,9 @@ async function undoEntryAction(formData: FormData): Promise<void> {
 function NoticeBanner({ notice }: { notice: ActivityNotice }) {
   return (
     <div className="mx-auto w-full max-w-3xl px-4 pt-8 sm:px-6">
-      <InlineNotice tone={notice.tone === "done" ? "success" : "error"}>{notice.text}</InlineNotice>
+      <InlineNotice tone={notice.tone === "done" ? "success" : notice.tone === "waiting" ? "info" : "error"}>
+        {notice.text}{notice.action && <> <a href={notice.action.href} className="font-medium underline underline-offset-4">{notice.action.label}</a></>}
+      </InlineNotice>
     </div>
   );
 }

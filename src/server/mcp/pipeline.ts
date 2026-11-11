@@ -1,4 +1,5 @@
 import { highTierRequestAllowed } from "../agents/resource-access";
+import { calendarReversalFromResult } from "../activity/calendar-reversal";
 // E07-S16 — Agent call pipeline: gatekeeping and the allow/deny decision
 // (design §6.1 pipeline, §8 policy engine; constitution principle 14 "Warthog
 // writes the record", 15 "agents reach services only through Warthog").
@@ -329,6 +330,7 @@ export function createAgentCallPipeline(deps: PipelineDeps): AgentCallPipeline {
     connection: AgentConnection,
     call: AgentCall,
     outcome: string,
+    result?: unknown,
   ): Promise<void> {
     await recorder.record({
       userId: connection.userId,
@@ -339,7 +341,9 @@ export function createAgentCallPipeline(deps: PipelineDeps): AgentCallPipeline {
       tool: call.tool,
       outcome,
       merchant: call.merchant,
-      payload: { params: call.params, reason: call.reason, connectorAccountId: call.connectorAccountId },
+      payload: { params: call.params, reason: call.reason, connectorAccountId: call.connectorAccountId,
+        ...(outcome === "executed" ? { reversal: calendarReversalFromResult(call.tool, result) } : {}),
+      },
     });
   }
 
@@ -499,7 +503,7 @@ export function createAgentCallPipeline(deps: PipelineDeps): AgentCallPipeline {
       await record(connection, call, "refused");
       return { result: refusal, errorCategory: CATEGORY_TOOL_REFUSED };
     }
-    await record(connection, call, "executed");
+    await record(connection, call, "executed", result);
     return { result: { status: "executed", result } };
   }
 
@@ -616,7 +620,7 @@ export function createAgentCallPipeline(deps: PipelineDeps): AgentCallPipeline {
         await recordOutcome(db, { userId, id: ran.id, outcome: { status: "refused", reason: HOLD_FAILED } }, dek);
         throw error;
       }
-      await record(connection, call, outcome.status);
+      await record(connection, call, outcome.status, outcome.status === "executed" ? outcome.result : undefined);
       await recordOutcome(db, { userId, id: ran.id, outcome }, dek);
       return outcome;
     },

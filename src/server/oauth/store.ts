@@ -203,6 +203,9 @@ export type TokenKind = "access" | "refresh";
 export interface Token {
   readonly tokenHash: string;
   readonly connectionId: string;
+  // NULL only for pre-binding tokens. Those access tokens remain valid, while
+  // their refresh tokens require fresh authorization instead of guessed binding.
+  readonly clientId: string | null;
   readonly kind: TokenKind;
   readonly expiresAt: Date;
 }
@@ -212,16 +215,20 @@ export interface Token {
 export interface NewToken {
   readonly tokenHash: string;
   readonly connectionId: string;
+  // Every authorization-code exchange and rotation supplies the validated client.
+  // Optional only for legacy fixtures/callers creating pre-binding token shapes.
+  readonly clientId?: string;
   readonly kind: TokenKind;
   readonly expiresAt: Date;
 }
 
-const TOKEN_RETURNING = "token_hash, connection_id, kind, expires_at";
+const TOKEN_RETURNING = "token_hash, connection_id, client_id, kind, expires_at";
 
 function toToken(row: Row): Token {
   return {
     tokenHash: row.token_hash as string,
     connectionId: row.connection_id as string,
+    clientId: row.client_id == null ? null : row.client_id as string,
     kind: row.kind as TokenKind,
     expiresAt: new Date(row.expires_at as string | number | Date),
   };
@@ -231,10 +238,10 @@ function toToken(row: Row): Token {
 // row.
 export async function createToken(db: Db, token: NewToken): Promise<Token> {
   const result = await db.query(
-    `INSERT INTO oauth_tokens (token_hash, connection_id, kind, expires_at)
-     VALUES ($1, $2, $3, $4::timestamptz)
+    `INSERT INTO oauth_tokens (token_hash, connection_id, kind, expires_at, client_id)
+     VALUES ($1, $2, $3, $4::timestamptz, $5)
      RETURNING ${TOKEN_RETURNING}`,
-    [token.tokenHash, token.connectionId, token.kind, token.expiresAt.toISOString()],
+    [token.tokenHash, token.connectionId, token.kind, token.expiresAt.toISOString(), token.clientId ?? null],
   );
   const row = result.rows[0];
   if (!row) throw new Error("createToken: INSERT returned no row");

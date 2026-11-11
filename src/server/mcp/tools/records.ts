@@ -29,6 +29,7 @@
 // routes these core tools (Warthog writes the record, principle 14).
 
 import { z } from "zod";
+import { recordDueDateSchema } from "../../../domain/life-admin/record-metadata";
 
 import { parseParams } from "../../http/validate";
 import { getConnectionPermissions, type ConnectionPermissions } from "../../db/agent-permissions";
@@ -52,7 +53,6 @@ import type { Db } from "../../db/index";
 // real record yet far below a payload meant to exhaust memory); `reason` matches the
 // registry's envelope cap (design §6.2 "every tool takes an optional reason").
 const MAX_STATUS = 200;
-const MAX_DUE_DATE = 40;
 const MAX_ID = 200;
 const MAX_FIELDS_CHARS = 100_000;
 const MAX_REASON = 2000;
@@ -83,7 +83,7 @@ export const saveRecordSchema = z.object({
   kind: z.enum(RECORD_KINDS),
   fields,
   status: z.string().max(MAX_STATUS).optional(),
-  dueDate: z.string().max(MAX_DUE_DATE).optional(),
+  dueDate: recordDueDateSchema.nullable().optional(),
   reason,
 });
 
@@ -94,7 +94,7 @@ export const updateRecordSchema = z.object({
   id: z.string().min(1).max(MAX_ID),
   fields,
   status: z.string().max(MAX_STATUS).optional(),
-  dueDate: z.string().max(MAX_DUE_DATE).optional(),
+  dueDate: recordDueDateSchema.nullable().optional(),
   reason,
 });
 
@@ -166,12 +166,6 @@ function toView(record: LifeAdminRecord): RecordView {
     status: record.status,
     source: record.source,
   };
-}
-
-// A store due date comes back as a "YYYY-MM-DD" string (or null); narrow it to the
-// store's `string | null` input so preserving it on an update stays type-safe.
-function toDueDate(value: string | Date | null): string | null {
-  return typeof value === "string" ? value : null;
 }
 
 // Resolve the person's unwrapped 256-bit DEK: read their wrapped DEK member-scoped
@@ -306,7 +300,7 @@ export function createUpdateRecordTool(deps: RecordsToolDeps): UpdateRecordTool 
           id: existing.id,
           fields: parsed.fields,
           status: parsed.status ?? existing.status,
-          dueDate: parsed.dueDate ?? toDueDate(existing.dueDate),
+          dueDate: parsed.dueDate,
         },
         dek,
       );

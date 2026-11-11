@@ -39,6 +39,7 @@ import { validTaskAssignee } from "../../../../server/db/task-handoffs";
 //     loaded screen or a stored row.
 
 import { z } from "zod";
+import { recordDueDateSchema, reminderOffsetsSchema } from "@/domain/life-admin/record-metadata";
 import { RECEIPT_MAX_BYTES } from "@/lib/receipt-upload";
 
 import { HttpError, parseParams } from "@/server/http/validate";
@@ -121,11 +122,9 @@ export type ActionResult = { readonly ok: true } | { readonly ok: false; readonl
 // tasks / moving_checklist all gen_random_uuid()), shape-guarded so a non-uuid never
 // reaches `WHERE id = $1` as a cast (OBS-049).
 const MAX_STATUS = 200;
-const MAX_DUE_DATE = 40;
 const MAX_FIELDS_CHARS = 100_000;
 const MAX_TITLE = 2000;
 const MAX_NOTE = 4000;
-const MAX_OFFSETS = 50;
 export const MAX_FILE_BYTES = RECEIPT_MAX_BYTES;
 const DEFAULT_STATUS = "active";
 
@@ -139,8 +138,8 @@ const fields = z
   .record(z.string(), z.unknown())
   .refine((value) => JSON.stringify(value).length <= MAX_FIELDS_CHARS);
 const status = z.string().max(MAX_STATUS).optional();
-const dueDate = z.string().max(MAX_DUE_DATE).optional().nullable();
-const reminderOffsets = z.array(z.number().int().min(0)).max(MAX_OFFSETS);
+const dueDate = recordDueDateSchema.optional().nullable();
+const reminderOffsets = reminderOffsetsSchema;
 
 const saveRecordSchema = z.object({
   kind: recordKind,

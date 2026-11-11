@@ -194,7 +194,7 @@ function buildUndoService(opts: {
     reversalFor: (tool) => (tool ? opts.reversals[tool] : undefined),
     runReversal: async (job) => {
       opts.runCalls.push(job);
-      return { outcome: "reversed" };
+      return { status: "executed", outcome: "reversed" };
     },
   });
 }
@@ -279,6 +279,23 @@ function recordingRecorder(): RecordingRecorder {
 // AC1 — undo on a reversible entry runs the reversal, writes a new entry, leaves the
 // original unchanged.
 // ===================================================================================
+
+test("undo never reports completion for a refused or pending reversal", async () => {
+  const db = await freshDb();
+  try {
+    const userId = await makeUser(db, "undo-refused");
+    const recorder = makeRecorder(db, { [userId]: freshDek() });
+    await seedChain(recorder, userId, [CREATE_EVENT]);
+    for (const status of ["refused", "pending_approval", "failed"] as const) {
+      const outcome = status === "refused" ? "The reversal could not be completed." : "Approval is required.";
+      const service = createUndoService({ db, recorder, reversalFor: () => DELETE_EVENT,
+        runReversal: async () => ({ status, outcome }),
+      });
+      assert.deepEqual(await service.undo({ userId, entrySeq: 1 }), { ok: false, reason: outcome, status });
+    }
+    assert.equal(await entryCount(db, userId), 4, "attempt outcomes remain recorded");
+  } finally { await db.close(); }
+});
 
 test("undo of a reversible entry runs the declared reversal tool and appends a new entry; the original is unchanged", async () => {
   const db = await freshDb();

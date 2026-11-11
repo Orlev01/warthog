@@ -1,8 +1,8 @@
-// The one-time recovery code (design §4.2, §5): a 26-character base32 code shown
-// once at sign-up that restores access / unlocks the vault if every passkey is
-// lost. The person enters it to recover, and a no-passkey device enters it each
-// time it unlocks — so the code is DURABLE (it is not consumed on use); it is
-// retired only by a regenerate, which issues a fresh code and drops the old one.
+// The account recovery code: a 26-character base32 code shown once at sign-up
+// that restores sign-in if every passkey is lost. It is distinct from the
+// device-only vault recovery phrase; it never unlocks protected vault data.
+// Verification alone does not consume it. Regeneration or a completed passkey
+// recovery replaces it and invalidates grants tied to the previous generation.
 //
 // The server authenticates a recovery sign-in WITHOUT ever holding the code. It
 // stores only a slow one-way auth hash — scrypt(HKDF(code, info
@@ -10,8 +10,7 @@
 // as a hash and appear in plain text nowhere except the single message that hands
 // a person their own code. verify recomputes that hash under the stored per-row
 // salt and compares it in constant time; the plaintext is returned by issue and
-// written to no column. (The SAME code separately derives the vault wrapping key
-// via a different HKDF info — that is the browser's concern, not this module's.)
+// written to no column.
 //
 // Entropy is drawn through the `random` seam (conventions: src/server/** never
 // calls the crypto library for randomness directly); HKDF and scrypt are
@@ -153,6 +152,18 @@ export async function verifyRecoveryCode(
   userId: string | null,
   code: string,
 ): Promise<boolean> {
+  return (await verifyRecoveryCodeGeneration(db, userId, code)) !== null;
+}
+
+// A successful multi-step recovery retains only this nonsecret generation ID,
+// never the presented code or its auth hash. The fresh random salt changes on
+// every rotation. Callers must lock and compare the current row before adding a
+// factor, so a proof verified before regeneration cannot authorize one afterward.
+export async function verifyRecoveryCodeGeneration(
+  db: Db,
+  userId: string | null,
+  code: string,
+): Promise<string | null> {
   const row =
     userId === null
       ? undefined
@@ -160,10 +171,10 @@ export async function verifyRecoveryCode(
           .rows[0];
   if (!row) {
     await authHash(code, DECOY_SALT);
-    return false;
+    return null;
   }
 
   const expected = Buffer.from(row.auth_hash as string, "hex");
   const actual = await authHash(code, Buffer.from(row.salt as string, "hex"));
-  return expected.length === actual.length && timingSafeEqual(expected, actual);
+  return expected.length === actual.length && timingSafeEqual(expected, actual) ? row.salt as string : null;
 }

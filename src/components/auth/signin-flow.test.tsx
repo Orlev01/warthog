@@ -84,6 +84,7 @@ import assert from "node:assert/strict";
 import { renderToStaticMarkup } from "react-dom/server";
 
 import { createSigninFlow } from "./signin-flow";
+import { SigninView } from "./auth-views";
 import SigninPage from "../../app/(auth)/signin/page";
 
 // ── Fixtures ──────────────────────────────────────────────────────────────────────────
@@ -741,4 +742,69 @@ test("the sign-in page passes a safe ?next= to the flow and drops an unsafe one"
   assert.ok(kept.includes("next=%2Fa%2FAbC123"), "the return path rides on the screen's links");
   const dropped = await render("https://evil.example");
   assert.ok(!dropped.includes("evil.example"), "an unsafe return path never reaches the page");
+});
+
+test("a pending passkey sign-in blocks repeated submissions, method changes and identity edits before a render", async () => {
+  const begin = Promise.withResolvers<Response>();
+  const finish = Promise.withResolvers<Response>();
+  const calls: RecordedCall[] = [];
+  const navCalls: string[] = [];
+  const flow = createSigninFlow({
+    fetch: (async (input, init) => {
+      const url = String(input);
+      const step = stepOf(url);
+      calls.push({ step, url, method: init?.method ?? "GET", body: JSON.parse(String(init?.body)) });
+      return step === "begin-passkey" ? begin.promise : finish.promise;
+    }) as typeof fetch,
+    startAuthentication: makeStart().fn,
+    navigate: (path) => { navCalls.push(path); },
+  });
+  flow.setEmail(EMAIL);
+  const signingIn = flow.signInWithPasskey();
+  void flow.signInWithPasskey();
+  void flow.signInWithCode();
+  flow.useAuthenticatorApp();
+  flow.setEmail("different@example.com");
+  flow.setCode("999999");
+  assert.equal(flow.getState().busy, true);
+  assert.equal(flow.getState().email, EMAIL);
+  assert.equal(flow.getState().code, "");
+  assert.equal(flow.getState().phase, "passkey");
+  assert.deepEqual(calls.map((call) => call.step), ["begin-passkey"]);
+  begin.resolve(jsonResponse(200, { options: AUTH_OPTIONS }));
+  await new Promise<void>((resolve) => setImmediate(resolve));
+  assert.equal(flow.getState().busy, true, "the finish request is still pending");
+  assert.deepEqual(calls[1]?.body, { email: EMAIL, authenticationResponse: ASSERTION });
+  finish.resolve(jsonResponse(200, { ok: true }));
+  await signingIn;
+  assert.equal(flow.getState().busy, false);
+  assert.deepEqual(navCalls, ["/home"]);
+});
+
+test("failed and cancelled passkey sign-ins release the pending guard for a retry", async () => {
+  const ctx = setup();
+  ctx.flow.setEmail(EMAIL);
+  ctx.responders["begin-passkey"] = () => { throw new Error("private transport detail"); };
+  await ctx.flow.signInWithPasskey();
+  assert.equal(ctx.flow.getState().busy, false);
+  assert.ok(ctx.flow.getState().error);
+  assert.ok(!ctx.flow.getState().error?.includes("private transport detail"));
+  ctx.responders["begin-passkey"] = () => jsonResponse(200, { options: AUTH_OPTIONS });
+  ctx.start.cancel();
+  await ctx.flow.signInWithPasskey();
+  assert.equal(ctx.flow.getState().busy, false);
+  ctx.start.succeed();
+  await ctx.flow.signInWithPasskey();
+  assert.deepEqual(ctx.navCalls, ["/home"]);
+});
+
+test("the pending passkey view prevents identity and method edits and keeps its initiating button focusable", () => {
+  const html = renderToStaticMarkup(<SigninView step="passkey" email={EMAIL} busy />);
+  assert.match(html, /<input[^>]*disabled=""/);
+  const buttons = [...html.matchAll(/<button([^>]*)>(.*?)<\/button>/gs)];
+  const primary = buttons.find((button) => button[1]?.includes('type="submit"'));
+  assert.match(primary?.[1] ?? "", /aria-disabled="true"/);
+  assert.doesNotMatch(primary?.[1] ?? "", /\sdisabled=""/);
+  assert.match(primary?.[2] ?? "", /Signing in/);
+  assert.match(buttons.find((button) => /authenticator/.test(button[2] ?? ""))?.[1] ?? "", /disabled=""/);
 });

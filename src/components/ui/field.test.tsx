@@ -139,6 +139,7 @@ test("Field conveys the error by text, not colour alone", () => {
   // The error is present as readable text content (a sighted or screen-reader
   // user gets the words), not signalled only by a colour class.
   assert.ok(stripTags(markup).includes(error), "the error message is rendered as text");
+  assert.equal(firstTagAttrs(markup, "p").role, "alert", "a new asynchronous error is announced while focus stays on Submit");
   // ...and the Input is flagged invalid programmatically (a non-visual signal).
   assert.equal(
     firstTagAttrs(markup, "input")["aria-invalid"],

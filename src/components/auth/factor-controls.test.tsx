@@ -772,3 +772,92 @@ test("a shared authenticator confirmation resumes only the pending security chan
   assert.equal(events.filter((event) => event === "regenerateRecovery").length, 2);
   assert.ok(!events.includes("startAuthentication"));
 });
+
+test("recovery generation serializes repeated and competing actions before a render", async () => {
+  const ctx = setup({ stepUp: true });
+  const pending = Promise.withResolvers<unknown>();
+  ctx.setRegenerateResult(() => pending.promise);
+  const generating = ctx.flow.generateRecoveryCode();
+  void ctx.flow.generateRecoveryCode();
+  void ctx.flow.addPasskey();
+  void ctx.flow.confirm();
+  assert.equal(ctx.flow.getState().busy, true);
+  assert.deepEqual(ctx.events, ["regenerateRecovery"]);
+  pending.resolve({ ok: true, code: NEW_RECOVERY_CODE });
+  await generating;
+  assert.equal(ctx.flow.getState().busy, false);
+  assert.equal(ctx.flow.getState().recoveryCode, NEW_RECOVERY_CODE);
+});
+
+test("replacing a recovery code clears the old output even when the action loses its response", async () => {
+  const ctx = setup({ stepUp: true });
+  await ctx.flow.generateRecoveryCode();
+  assert.equal(ctx.flow.getState().recoveryCode, NEW_RECOVERY_CODE);
+  const pending = Promise.withResolvers<unknown>();
+  ctx.setRegenerateResult(() => pending.promise);
+  const generating = ctx.flow.generateRecoveryCode();
+  assert.equal(ctx.flow.getState().recoveryCode, undefined);
+  pending.reject(new Error("private database detail"));
+  await assert.doesNotReject(generating);
+  assert.equal(ctx.flow.getState().recoveryCode, undefined);
+  assert.equal(ctx.flow.getState().busy, false);
+  assert.equal(ctx.flow.getState().notice?.tone, "problem");
+  assert.ok(!ctx.flow.getState().notice?.text.includes("private database detail"));
+  ctx.setRegenerateResult(() => ({ ok: true, code: "REPLACEMENT-CODE" }));
+  await ctx.flow.generateRecoveryCode();
+  assert.equal(ctx.flow.getState().recoveryCode, "REPLACEMENT-CODE");
+});
+
+test("passkey registration stays exclusive through begin and finish and can retry a lost server response", async () => {
+  const ctx = setup({ stepUp: true });
+  const begin = Promise.withResolvers<unknown>();
+  const finish = Promise.withResolvers<unknown>();
+  ctx.setBeginResult(() => begin.promise);
+  ctx.setFinishResult(() => finish.promise);
+  const adding = ctx.flow.addPasskey();
+  void ctx.flow.addPasskey();
+  assert.equal(ctx.flow.getState().busy, true);
+  assert.deepEqual(ctx.events, ["beginAddPasskey"]);
+  begin.resolve({ ok: true, options: ADD_OPTIONS });
+  await new Promise<void>((resolve) => setImmediate(resolve));
+  await ctx.flow.generateRecoveryCode();
+  assert.equal(ctx.flow.getState().busy, true);
+  assert.deepEqual(ctx.events, ["beginAddPasskey", "startRegistration", "finishAddPasskey"]);
+  finish.reject(new Error("private transport detail"));
+  await assert.doesNotReject(adding);
+  assert.equal(ctx.flow.getState().busy, false);
+  assert.equal(ctx.flow.getState().notice?.tone, "problem");
+  assert.ok(!ctx.flow.getState().notice?.text.includes("private transport detail"));
+  ctx.setFinishResult(() => ({ ok: true }));
+  await ctx.flow.addPasskey();
+  assert.equal(ctx.flow.getState().notice?.tone, "done");
+});
+
+test("a rejected passkey begin reports a safe error and releases the busy guard", async () => {
+  const ctx = setup({ stepUp: true });
+  ctx.setBeginResult(() => { throw new Error("private server detail"); });
+  await assert.doesNotReject(ctx.flow.addPasskey());
+  assert.equal(ctx.flow.getState().busy, false);
+  assert.equal(ctx.flow.getState().notice?.tone, "problem");
+  assert.ok(!ctx.flow.getState().notice?.text.includes("private server detail"));
+});
+
+test("confirmation resumes the requested change once while keeping the whole operation exclusive", async () => {
+  const ctx = setup();
+  await ctx.flow.generateRecoveryCode();
+  const pending = Promise.withResolvers<unknown>();
+  ctx.setRegenerateResult(() => pending.promise);
+  const confirming = ctx.flow.confirm();
+  void ctx.flow.confirm();
+  await new Promise<void>((resolve) => setImmediate(resolve));
+  await ctx.flow.resumeAfterConfirmation();
+  await ctx.flow.generateRecoveryCode();
+  assert.equal(ctx.flow.getState().busy, true);
+  assert.equal(ctx.events.filter((event) => event === "stepup:begin").length, 1);
+  assert.equal(ctx.events.filter((event) => event === "regenerateRecovery").length, 2);
+  pending.resolve({ ok: true, code: NEW_RECOVERY_CODE });
+  await confirming;
+  assert.equal(ctx.flow.getState().busy, false);
+  assert.equal(ctx.flow.getState().confirmRequired, false);
+  assert.equal(ctx.flow.getState().recoveryCode, NEW_RECOVERY_CODE);
+});

@@ -37,7 +37,7 @@ export interface UndoInput {
 // plain-words reason (never a silent failure).
 export type UndoResult =
   | { ok: true; entry: ActivityEntry }
-  | { ok: false; reason: string };
+  | { ok: false; reason: string; status?: "refused" | "pending_approval" | "failed" };
 
 // The job handed to the reversal executor. The declared reversal tool plus enough
 // context to route and record it; the executor effects the reversal (in production,
@@ -47,6 +47,11 @@ export interface UndoReversalJob {
   readonly reversalTool: string;
   readonly originalSeq: number;
   readonly reason?: string;
+}
+
+export interface UndoReversalResult {
+  readonly status: "executed" | "refused" | "pending_approval" | "failed";
+  readonly outcome: string;
 }
 
 export interface UndoServiceOptions {
@@ -60,7 +65,7 @@ export interface UndoServiceOptions {
   reversalFor: (tool: string | undefined) => string | undefined;
   // Effects the reversal (routes the reversal tool through the agent pipeline /
   // connector in production). Injected so tests never touch a network.
-  runReversal: (job: UndoReversalJob) => Promise<{ outcome: string }>;
+  runReversal: (job: UndoReversalJob) => Promise<UndoReversalResult>;
 }
 
 export interface UndoService {
@@ -115,7 +120,8 @@ export function createUndoService(options: UndoServiceOptions): UndoService {
         },
       });
 
-      return { ok: true, entry };
+      return reversal.status === "executed" ? { ok: true, entry }
+        : { ok: false, reason: reversal.outcome, status: reversal.status };
     },
   };
 }

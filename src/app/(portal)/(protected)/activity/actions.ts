@@ -39,6 +39,7 @@ import {
   type IntegrityResult,
 } from "@/server/activity/integrity";
 import { listActivity, listActivityFacets, type ActivityFilters } from "@/server/activity/list";
+import { calendarReversalForEntry } from "@/server/activity/calendar-reversal";
 import { getUserById } from "@/server/db/users";
 import { agentNamesForUser } from "@/server/db/agents";
 import { agentLabel, entryTitle } from "@/domain/activity/describe";
@@ -60,7 +61,7 @@ interface DisputeFiler {
 }
 interface EntryUndoer {
   undo(input: { userId: string; entrySeq: number; reason?: string }): Promise<
-    { ok: true; entry: { seq: number } } | { ok: false; reason: string }
+    { ok: true; entry: { seq: number } } | { ok: false; reason: string; status?: "refused" | "pending_approval" | "failed" }
   >;
 }
 
@@ -231,7 +232,8 @@ export function createActivityActions(deps: ActivityActionsDeps): ActivityAction
     // The service reports distinct English reasons (a non-reversible entry, or no such
     // entry — the latter carrying a position number). Neither is a stable notice code, so
     // report the one stable refusal code and let the screen say it in plain words.
-    if (!result.ok) return { ok: false, reason: UNDO_REFUSED };
+    if (!result.ok) return { ok: false, reason: result.status === "pending_approval" ? "undo_pending"
+      : result.status === "failed" ? "undo_failed" : UNDO_REFUSED };
     return { ok: true, entry: { seq: result.entry.seq } };
   }
 
@@ -248,7 +250,8 @@ export function createActivityActions(deps: ActivityActionsDeps): ActivityAction
   // The agent is shown by the name the person gave it (`agentNames`: their OWN agents,
   // read member-scoped), never its raw id, and an agent call is titled by its tool.
   function toEntryView(entry: ActivityEntry, agentNames: ReadonlyMap<string, string>, timeZone: string): ActivityEntryView {
-    const canUndo = reversalFor !== undefined && reversalFor(entry.tool) !== undefined;
+    const target = calendarReversalForEntry(entry);
+    const canUndo = target !== undefined && reversalFor?.(entry.tool) === target.tool;
     return {
       seq: entry.seq,
       kind: humanise(entry.kind),

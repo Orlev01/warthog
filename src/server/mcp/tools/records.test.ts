@@ -370,6 +370,27 @@ test("list_records returns the person's records, decrypted", async () => {
 // back under the owner's key; the record's KIND is untouched by a fields update.
 // ===========================================================================
 
+test("record tools reject impossible dates and preserve omitted dates while allowing explicit clearing", async () => {
+  const db = await freshDb();
+  const keyWrapper = keyWrapperFor();
+  try {
+    const { userId, dek } = await makePerson(db, "record-date-validation", keyWrapper);
+    const conn = connectionFor(userId);
+    await grantRecords(db, userId, conn.connectionId);
+    const save = createSaveRecordTool(recordsDeps(db, keyWrapper, fixedClock(NOW)));
+    const update = createUpdateRecordTool(recordsDeps(db, keyWrapper, fixedClock(NOW)));
+    for (const dueDate of ["0000-01-01", "2026-02-30", "tomorrow", "2026-11-10T12:00:00Z"]) {
+      await assert.rejects(save.handle({ kind: "subscription", fields: {}, dueDate }, conn));
+      await assert.rejects(update.handle({ id: "record", fields: {}, dueDate }, conn));
+    }
+    const record = await createRecord(db, { userId, kind: "subscription", fields: {}, dueDate: "2026-11-20", status: "active", source: { kind: "person" } }, dek);
+    await update.handle({ id: record.id, fields: { note: "changed" } }, conn);
+    assert.equal((await listRecordsForUser(db, userId, dek))[0]!.dueDate, "2026-11-20");
+    await update.handle({ id: record.id, fields: {}, dueDate: null }, conn);
+    assert.equal((await listRecordsForUser(db, userId, dek))[0]!.dueDate, null);
+  } finally { await db.close(); }
+});
+
 test("update_record changes the fields of the person's own record (kind untouched)", async () => {
   const db = await freshDb();
   const keyWrapper = keyWrapperFor();

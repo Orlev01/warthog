@@ -9,7 +9,7 @@ import { createApproval } from "../db/approvals";
 import { enqueue } from "../db/jobs";
 import { withTransaction, type Db } from "../db/index";
 import { createSession } from "../auth/session";
-import { completeAccountReset } from "../auth/account-reset";
+import { completeAccountReset, RESET_WAIT_MS } from "../auth/account-reset";
 import { createOutbox } from "../notify/outbox";
 import { fixedClock } from "../seams/clock";
 import { systemRandom } from "../seams/random";
@@ -135,7 +135,7 @@ for (const fails of [false, true]) {
         if (fails && text.includes("UPDATE agents SET status")) return Promise.reject(new Error("synthetic reset failure"));
         return real.query(text, values);
       }, close: () => real.close() };
-      const completion = completeAccountReset(db, { userId }, { executor: createResetExecutor(db), releases });
+      const completion = completeAccountReset(db, { userId }, { executor: createResetExecutor(db), releases, clock: fixedClock(new Date(clock.now().getTime() + RESET_WAIT_MS)) });
       if (fails) await assert.rejects(completion, /synthetic reset failure/);
       else assert.deepEqual(await completion, { ok: true });
       assert.equal(releases.collect(key), fails ? "private release" : undefined);

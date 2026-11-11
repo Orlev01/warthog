@@ -307,7 +307,7 @@ function SkillCard({
         Download skill
       </Button>
       <details className="flex flex-col gap-3">
-        <summary className="inline-flex w-fit cursor-pointer items-center gap-2 text-sm font-medium text-fg">
+        <summary className="inline-flex min-h-11 w-fit cursor-pointer items-center gap-2 rounded-card text-sm font-medium text-fg focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-focus">
           <Pencil aria-hidden={true} className="h-4 w-4 shrink-0" />
           Edit
         </summary>
@@ -367,6 +367,16 @@ export function SkillsView({
     ParsedPackage | StoredPackage | null
   >(null);
   const [opening, setOpening] = React.useState<string | null>(null);
+  const openingRef = React.useRef(false);
+  const modalOpener = React.useRef<HTMLElement | null>(null);
+  const restoreOpener = React.useRef(false);
+  const libraryHeading = React.useRef<HTMLHeadingElement | null>(null);
+  React.useLayoutEffect(() => {
+    if (draft !== null || !restoreOpener.current) return;
+    restoreOpener.current = false;
+    const target = modalOpener.current?.isConnected ? modalOpener.current : libraryHeading.current;
+    target?.focus({ preventScroll: true });
+  }, [draft]);
   const [loadError, setLoadError] = React.useState("");
   const [skipped, setSkipped] = React.useState<string[]>([]);
   const packagedIds = new Set(
@@ -413,7 +423,7 @@ export function SkillsView({
     <section className="flex min-w-0 flex-col gap-6">
       <header>
         <p className="mb-2 text-sm text-fg-muted">Your personal library</p>
-        <h1 className="text-2xl font-semibold tracking-tight">
+        <h1 ref={libraryHeading} tabIndex={-1} className="text-2xl font-semibold tracking-tight">
           Skills &amp; plugins
         </h1>
         <p className="mt-2 max-w-2xl text-sm leading-relaxed text-fg-muted">
@@ -525,8 +535,14 @@ export function SkillsView({
                       <button
                         type="button"
                         className="flex h-full min-h-44 w-full flex-col gap-3 rounded-card border border-line bg-surface p-4 text-start transition-colors hover:border-line-strong focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-focus"
-                        disabled={Boolean(opening)}
-                        onClick={async () => {
+                        aria-disabled={Boolean(opening)}
+                        aria-busy={opening === p.id}
+                        onClick={async (event) => {
+                          if (openingRef.current) return;
+                          // Capture the initiating card before the asynchronous
+                          // load can move focus or render a modal.
+                          modalOpener.current = event.currentTarget;
+                          openingRef.current = true;
                           setOpening(p.id);
                           setLoadError("");
                           try {
@@ -540,6 +556,7 @@ export function SkillsView({
                               "Could not open that package. Please try again.",
                             );
                           } finally {
+                            openingRef.current = false;
                             setOpening(null);
                           }
                         }}
@@ -635,10 +652,18 @@ export function SkillsView({
             key: "add",
             label: "Import & create",
             content: (
-              <>
+              <div className="contents" onClickCapture={(event) => {
+                if (draft) return;
+                const button = event.target instanceof Element ? event.target.closest("button") : null;
+                if (button instanceof HTMLElement) modalOpener.current = button;
+              }} onSubmitCapture={(event) => {
+                if (draft) return;
+                const submitter = (event.nativeEvent as SubmitEvent).submitter;
+                if (submitter instanceof HTMLElement) modalOpener.current = submitter;
+              }}>
                 <PackageImport onReady={ready} />
                 <CreatePackage onReady={ready} />
-              </>
+              </div>
             ),
           },
           {
@@ -688,7 +713,10 @@ export function SkillsView({
           agents={agents}
           skipped={skipped}
           onDuplicate={ready}
-          onClose={() => setDraft(null)}
+          onClose={() => {
+            restoreOpener.current = true;
+            setDraft(null);
+          }}
           onSaved={() => window.location.reload()}
         />
       )}

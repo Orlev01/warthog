@@ -123,9 +123,18 @@ function toDashboardAgent(agent: HomeAgentSpend): DashboardAgent {
 // Map one upcoming life-admin record to the view's reminder: its title (from the
 // decrypted fields) and a readable due label.
 function toDashboardReminder(record: LifeAdminRecord): DashboardReminder {
+  const categories: Record<LifeAdminRecord["kind"], string> = {
+    subscription: "Subscription",
+    receipt_warranty: "Receipt or warranty",
+    renewal_appointment: "Renewal or appointment",
+  };
+  // Portal-created records use name; older/agent-created records can use title or
+  // what. These are already decrypted by the owner-scoped Home read.
+  const title = ["title", "name", "what"]
+    .map((key) => payloadText(record.fields, key).trim()).find(Boolean);
   return {
     id: record.id,
-    title: payloadText(record.fields, "title") || record.kind,
+    title: title || categories[record.kind],
     due: record.dueDate != null ? formatDue(record.dueDate) : "",
   };
 }

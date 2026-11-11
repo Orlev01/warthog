@@ -1200,3 +1200,26 @@ test("no ambient env secret leaks into any stored row or the loaded screen; the 
     else process.env.DATABASE_URL = prevDbUrl;
   }
 });
+
+
+test("record dates and reminder offsets reject impossible scheduling before writes, preserve omitted dates, and allow clearing", async () => {
+  const db = await freshDb();
+  const wrapper = makeKeyWrapper();
+  try {
+    const { userId, dek } = await makeUserWithDek(db, wrapper, "schedule-boundary");
+    const actions = makeActions(db, wrapper), session = sessionFor(userId);
+    for (const dueDate of ["2027-02-30", "0000-01-01", "tomorrow", "2027-01-01T00:00:00Z"]) {
+      await assertRejects4xx("invalid calendar date", () => actions.saveRecord(session, { kind: "subscription", fields: {}, dueDate }));
+    }
+    for (const reminderOffsets of [[2147483647], [-1], [1.5]]) {
+      await assertRejects4xx("unsafe reminder offset", () => actions.saveRecord(session, { kind: "subscription", fields: {}, reminderOffsets }));
+    }
+    assert.equal((await listRecordsForUser(db, userId, dek)).length, 0);
+    await actions.saveRecord(session, { kind: "subscription", fields: { name: "Leap renewal" }, dueDate: "2028-02-29" });
+    const record = (await listRecordsForUser(db, userId, dek))[0];
+    await actions.updateRecord(session, { id: record.id, fields: { name: "Edited" } });
+    assert.equal((await listRecordsForUser(db, userId, dek))[0].dueDate, "2028-02-29");
+    await actions.updateRecord(session, { id: record.id, fields: { name: "Cleared" }, dueDate: null });
+    assert.equal((await listRecordsForUser(db, userId, dek))[0].dueDate, null);
+  } finally { await db.close(); }
+});

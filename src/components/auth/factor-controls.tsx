@@ -81,6 +81,7 @@ export interface FactorControlsNotice {
 }
 
 export interface FactorControlsState {
+  readonly busy: boolean;
   // the plain-words outcome of the last action
   readonly notice?: FactorControlsNotice;
   // true when a change was refused for a fresh confirmation; the component then renders
@@ -126,15 +127,31 @@ const COPY = {
 } as const;
 
 export function createFactorControls(deps: FactorControlsDeps): FactorControlsController {
-  let state: FactorControlsState = { confirmRequired: false };
+  let state: FactorControlsState = { confirmRequired: false, busy: false };
 
   // The change that was refused for a fresh confirmation, resumed once the person has
   // confirmed it's them. Cleared only when a confirm genuinely unblocks it.
-  let pendingResume: null | (() => Promise<void>) = null;
+  let pendingResume: null | { action: () => Promise<void>; failure: string } = null;
 
   function set(patch: Partial<FactorControlsState>): void {
     state = { ...state, ...patch };
     deps.onChange?.();
+  }
+
+  async function run(action: () => Promise<void>, failure: string): Promise<void> {
+    // This guard changes before the first await, including before React rerenders.
+    // All factor changes share it because they can rotate the same account state.
+    if (state.busy) return;
+    set({ busy: true, notice: undefined });
+    try {
+      await action();
+    } catch {
+      // Server actions can reject after a connection loss; never expose their raw
+      // exception or leave the screen waiting indefinitely.
+      set({ notice: { tone: "problem", text: failure } });
+    } finally {
+      set({ busy: false });
+    }
   }
 
   async function readJson(response: Response): Promise<Record<string, unknown>> {
@@ -163,7 +180,7 @@ export function createFactorControls(deps: FactorControlsDeps): FactorControlsCo
     const begin = await deps.beginAddPasskey();
     if (!begin.ok) {
       if (begin.reason === STEP_UP_REQUIRED) {
-        pendingResume = addPasskey;
+        pendingResume = { action: addPasskey, failure: COPY.addFailed };
         set({ confirmRequired: true, notice: { tone: "problem", text: COPY.addConfirmRequired } });
       } else {
         set({ notice: { tone: "problem", text: COPY.addFailed } });
@@ -190,10 +207,13 @@ export function createFactorControls(deps: FactorControlsDeps): FactorControlsCo
   }
 
   async function generateRecoveryCode(): Promise<void> {
+    // The server may rotate the code even if its response is lost. Once another
+    // generation starts, the previously displayed code is no longer trustworthy.
+    set({ recoveryCode: undefined });
     const result = await deps.regenerateRecovery();
     if (!result.ok) {
       if (result.reason === STEP_UP_REQUIRED) {
-        pendingResume = generateRecoveryCode;
+        pendingResume = { action: generateRecoveryCode, failure: COPY.generateFailed };
         set({ confirmRequired: true, notice: { tone: "problem", text: COPY.generateConfirmRequired } });
       } else {
         set({ notice: { tone: "problem", text: COPY.generateFailed } });
@@ -246,19 +266,25 @@ export function createFactorControls(deps: FactorControlsDeps): FactorControlsCo
     // change. Clear it first so duplicate callbacks cannot repeat a mutation.
     const resume = pendingResume;
     pendingResume = null;
+    set({ confirmRequired: false });
     if (resume) {
-      await resume();
-    } else {
-      set({ confirmRequired: false });
+      try {
+        await resume.action();
+      } catch {
+        set({ notice: { tone: "problem", text: resume.failure } });
+      }
     }
   }
 
   return {
     getState: () => state,
-    addPasskey,
-    generateRecoveryCode,
-    confirm,
-    resumeAfterConfirmation,
+    // Keep the requested change stable while the shared confirmation UI runs.
+    addPasskey: async () => { if (!state.confirmRequired) await run(addPasskey, COPY.addFailed); },
+    generateRecoveryCode: async () => { if (!state.confirmRequired) await run(generateRecoveryCode, COPY.generateFailed); },
+    confirm: () => run(confirm, COPY.confirmFailed),
+    resumeAfterConfirmation: async () => {
+      if (pendingResume) await run(resumeAfterConfirmation, COPY.confirmFailed);
+    },
   };
 }
 
@@ -312,6 +338,7 @@ export function FactorControls(props: FactorControlsProps): React.ReactElement {
   return (
     <div className="flex flex-col gap-4">
       {state.notice ? <NoticeBanner notice={state.notice} /> : null}
+      {state.busy ? <p role="status" className="text-sm text-fg-muted">Updating your security settings…</p> : null}
 
       {state.confirmRequired ? (
         <ConfirmItsYou fetch={props.fetch ?? defaultFetch}
@@ -325,6 +352,8 @@ export function FactorControls(props: FactorControlsProps): React.ReactElement {
           // The accent is reserved for the one primary action: while a confirmation is
           // owed, "Confirm it's you" is that action, so add drops to a neutral button.
           variant={state.confirmRequired ? "secondary" : "primary"}
+          aria-disabled={state.busy || state.confirmRequired}
+          className="aria-disabled:opacity-50"
           onClick={() => {
             void flow.addPasskey();
           }}
@@ -348,6 +377,8 @@ export function FactorControls(props: FactorControlsProps): React.ReactElement {
         <Button
           type="button"
           variant="secondary"
+          aria-disabled={state.busy || state.confirmRequired}
+          className="aria-disabled:opacity-50"
           onClick={() => {
             void flow.generateRecoveryCode();
           }}

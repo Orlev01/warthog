@@ -1146,6 +1146,71 @@ test("AC6: a SQL-injection probe in an input field is stored as bound data, leav
   }
 });
 
+test("calendar Undo uses the created event id and reports permission, account and provider failures honestly", async () => {
+  const { createAgentExecutors } = await import("./compose");
+  const { getConnectionPermissions } = await import("../db/agent-permissions");
+  const db = await freshDb();
+  try {
+    const config = devConfig();
+    const { userId, connectionId, dek } = await seedConnection(db, config, { grantedConnectors: ["google-calendar"] });
+    const account = await createConnection(db, { userId, connectorId: "google-calendar", accountLabel: "Personal",
+      credentials: { access_token: "synthetic-calendar-token" } }, dek, systemClock);
+    const stored = (await getConnectionPermissions(db, userId, connectionId))!;
+    await upsertPermissions(db, { ...stored, connectorAccounts: { "google-calendar": account.id } });
+    let responseStatus = 204;
+    let throwOnDelete = false;
+    const sent: string[] = [];
+    const fetch: typeof globalThis.fetch = async (input, init) => {
+      sent.push(String(input));
+      if (init?.method === "POST") return new Response(JSON.stringify({ id: "event_opaque-1", summary: "Private calendar content" }), { status: 201 });
+      if (throwOnDelete) throw new Error("synthetic provider failure");
+      return new Response(null, { status: responseStatus });
+    };
+    const dispatch = createMcpDispatch({ db, config, fetch });
+    const created = await readRpc(await dispatch(connectionId, mcpPost(callBody("google-calendar__create", { body: "{}" }))));
+    assert.notEqual(created.result?.isError, true);
+    const entries = await listActivity(db, userId, {}, dek);
+    const original = entries.find(entry => entry.tool === "google-calendar__create" && entry.outcome === "executed")!;
+    assert.ok(original);
+    assert.ok(!JSON.stringify(original.payload).includes("Private calendar content"), "provider content is never copied to activity");
+    const executors = createAgentExecutors({ db, config, fetch });
+    const job = { userId, originalSeq: original.seq, reversalTool: "google-calendar__delete" };
+    const undone = await executors.runReversal(job);
+    assert.equal(undone.status, "executed");
+    assert.equal(sent.at(-1), "https://www.googleapis.com/calendar/v3/calendars/primary/events/event_opaque-1");
+
+    responseStatus = 404;
+    assert.equal((await executors.runReversal(job)).status, "failed", "provider errors are not successful deletion");
+    throwOnDelete = true;
+    assert.equal((await executors.runReversal(job)).status, "failed");
+    throwOnDelete = false;
+    responseStatus = 204;
+    const sentBeforePolicy = sent.length;
+    await upsertPermissions(db, { ...stored, changeTools: "off", connectorAccounts: { "google-calendar": account.id } });
+    assert.equal((await executors.runReversal(job)).status, "refused");
+    await upsertPermissions(db, { ...stored, changeTools: "ask_first", connectorAccounts: { "google-calendar": account.id } });
+    assert.equal((await executors.runReversal(job)).status, "pending_approval");
+    assert.equal(sent.length, sentBeforePolicy, "denied and pending reversals send nothing");
+    const other = await createConnection(db, { userId, connectorId: "google-calendar", accountLabel: "Work",
+      credentials: { access_token: "synthetic-other-token" } }, dek, systemClock);
+    await upsertPermissions(db, { ...stored, connectorAccounts: { "google-calendar": other.id } });
+    assert.equal((await executors.runReversal(job)).status, "refused");
+    assert.equal(sent.length, sentBeforePolicy, "a changed account never receives the deletion");
+
+    await upsertPermissions(db, { ...stored, changeTools: "ask_first", connectorAccounts: { "google-calendar": account.id } });
+    const held = await readRpc(await dispatch(connectionId, mcpPost(callBody("google-calendar__create", { body: "{}" }))));
+    const approvalId = String(held.result?.structuredContent?.approval_id);
+    const { decide } = await import("../db/approvals");
+    await decide(db, { userId, id: approvalId, decision: { status: "approved" } }, dek, systemClock);
+    assert.equal((await executors.executeApprovedHold(userId, approvalId)).status, "executed");
+    const approvedCreate = (await listActivity(db, userId, {}, dek))
+      .find(entry => entry.tool === "google-calendar__create" && entry.outcome === "executed" && entry.seq !== original.seq)!;
+    assert.ok(approvedCreate, "approved creates also capture their bounded reversal target");
+    await upsertPermissions(db, { ...stored, connectorAccounts: { "google-calendar": account.id } });
+    assert.equal((await executors.runReversal({ ...job, originalSeq: approvedCreate.seq })).status, "executed");
+  } finally { await db.close(); }
+});
+
 test("an approved connector hold cannot switch to a different service account", async () => {
   const { createAgentExecutors } = await import("./compose");
   const { getConnectionPermissions } = await import("../db/agent-permissions");

@@ -60,6 +60,7 @@ export interface RecoverFlowDeps {
 }
 
 export interface RecoverFlowState {
+  readonly busy: boolean;
   readonly phase: RecoverPhase;
   readonly email: string;
   // The one-time code from the email identify sent.
@@ -128,6 +129,7 @@ export function createRecoverFlow(deps: RecoverFlowDeps): RecoverFlowController 
   let registrationOptions: PublicKeyCredentialCreationOptionsJSON | undefined;
 
   let state: RecoverFlowState = {
+    busy: false,
     phase: "identify",
     email: "",
     emailCode: "",
@@ -138,6 +140,18 @@ export function createRecoverFlow(deps: RecoverFlowDeps): RecoverFlowController 
   function set(patch: Partial<RecoverFlowState>): void {
     state = { ...state, ...patch };
     deps.onChange?.();
+  }
+
+  async function run(action: () => Promise<void>, failure: string): Promise<void> {
+    if (state.busy) return;
+    set({ busy: true, error: undefined });
+    try {
+      await action();
+    } catch {
+      set({ error: failure });
+    } finally {
+      set({ busy: false });
+    }
   }
 
   // POST a JSON body to a recovery step. A thrown fetch (offline) is reported as a step
@@ -156,7 +170,8 @@ export function createRecoverFlow(deps: RecoverFlowDeps): RecoverFlowController 
 
   async function readJson(response: Response): Promise<Record<string, unknown>> {
     try {
-      return (await response.json()) as Record<string, unknown>;
+      const body: unknown = await response.json();
+      return body !== null && typeof body === "object" ? body as Record<string, unknown> : {};
     } catch {
       return {};
     }
@@ -170,6 +185,7 @@ export function createRecoverFlow(deps: RecoverFlowDeps): RecoverFlowController 
     }
     const body = await readJson(response);
     recoveryId = typeof body.recoveryId === "string" ? body.recoveryId : undefined;
+    if (!recoveryId) { set({ error: stepErrorCopy("identify") }); return; }
     set({ phase: "email-code", error: undefined });
   }
 
@@ -211,6 +227,7 @@ export function createRecoverFlow(deps: RecoverFlowDeps): RecoverFlowController 
     registrationOptions = body.registrationOptions as
       | PublicKeyCredentialCreationOptionsJSON
       | undefined;
+    if (!registrationOptions) { set({ error: stepErrorCopy("verify-code") }); return; }
     set({ phase: "passkey", error: undefined });
   }
 
@@ -232,6 +249,14 @@ export function createRecoverFlow(deps: RecoverFlowDeps): RecoverFlowController 
 
     const response = await post("register-passkey", { recoveryId, registrationResponse });
     if (!response || !response.ok) {
+      const body = response ? await readJson(response) : {};
+      if (body.error === "not_verified" || body.error === "unknown_recovery") {
+        recoveryId = undefined;
+        registrationOptions = undefined;
+        set({ phase: "identify", emailCode: "", recoveryCode: "", newRecoveryCode: undefined,
+          savedConfirmed: false, error: "This recovery is no longer valid. Start again with your latest recovery code, and we'll email you a new verification code." });
+        return;
+      }
       set({ error: stepErrorCopy("register-passkey") });
       return;
     }
@@ -261,15 +286,15 @@ export function createRecoverFlow(deps: RecoverFlowDeps): RecoverFlowController 
 
   return {
     getState: () => state,
-    setEmail: (value) => set({ email: value }),
-    setEmailCode: (value) => set({ emailCode: value }),
-    setRecoveryCode: (value) => set({ recoveryCode: value }),
-    setSavedConfirmed: (value) => set({ savedConfirmed: value }),
-    submitIdentify,
-    submitEmailCode,
-    submitRecoveryCode,
-    createPasskey,
-    confirm,
+    setEmail: (value) => { if (!state.busy) set({ email: value }); },
+    setEmailCode: (value) => { if (!state.busy) set({ emailCode: value }); },
+    setRecoveryCode: (value) => { if (!state.busy) set({ recoveryCode: value }); },
+    setSavedConfirmed: (value) => { if (!state.busy) set({ savedConfirmed: value }); },
+    submitIdentify: () => run(submitIdentify, stepErrorCopy("identify")),
+    submitEmailCode: () => run(submitEmailCode, stepErrorCopy("verify-email")),
+    submitRecoveryCode: () => run(submitRecoveryCode, stepErrorCopy("verify-code")),
+    createPasskey: () => run(createPasskey, stepErrorCopy("register-passkey")),
+    confirm: () => run(confirm, stepErrorCopy("finish")),
   };
 }
 
@@ -316,6 +341,7 @@ export function RecoverFlow(props: RecoverFlowProps = {}): React.ReactElement {
       recoveryCode={state.newRecoveryCode}
       savedConfirmed={state.savedConfirmed}
       error={state.error}
+      busy={state.busy}
       onEmailChange={(value) => flow.setEmail(value)}
       onEmailCodeChange={(value) => flow.setEmailCode(value)}
       onRecoveryCodeChange={(value) => flow.setRecoveryCode(value)}

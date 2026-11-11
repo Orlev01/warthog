@@ -267,7 +267,7 @@ sentence by a pure function (`ruleSentence`).
 
 ## 10. Notifications
 - Web Push (VAPID via `@pushforge/builder`), service worker `public/sw.js`, every push shows a
-  notification (iOS requirement); payload ≤ 4 KB, contains the approval id only (no personal content).
+  notification (iOS requirement); payload ≤ 4 KB, contains only an opaque approval ID or a validated life-admin record ID and category (no personal content or arbitrary URLs). The worker reconstructs an internal destination; the authenticated page enforces ownership. Push transport has a 15-second deadline and cancels unused response bodies.
 - Fallback job at `created_at + fallback_delay`: if the approval is still unopened,
   send through the configured Twilio/Resend adapters subject to channel consent,
   persistent usage limits and provider suppression. Each link is single-use,

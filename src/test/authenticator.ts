@@ -64,7 +64,7 @@ export interface SoftwareAuthenticator {
 interface StoredCredential {
   id: string;
   privateKey: KeyObject;
-  prfSecret: Uint8Array;
+  prfSecret: Uint8Array<ArrayBuffer>;
   userHandle: string;
   signCount: number;
 }
@@ -200,7 +200,7 @@ function selectCredential(
 }
 
 // Build the COSE_Key for an EC2/P-256/ES256 public key from its raw coordinates.
-function ec2CoseKey(x: Uint8Array, y: Uint8Array): CborValue {
+function ec2CoseKey(x: Uint8Array<ArrayBuffer>, y: Uint8Array<ArrayBuffer>): CborValue {
   return new Map<string | number, CborValue>([
     [cose.COSEKEYS.kty, cose.COSEKTY.EC2],
     [cose.COSEKEYS.alg, cose.COSEALG.ES256],
@@ -211,7 +211,7 @@ function ec2CoseKey(x: Uint8Array, y: Uint8Array): CborValue {
 }
 
 // Read the 32-byte X and Y coordinates of a P-256 public key out of its JWK form.
-function exportEC2Coordinates(publicKey: KeyObject): { x: Uint8Array; y: Uint8Array } {
+function exportEC2Coordinates(publicKey: KeyObject): { x: Uint8Array<ArrayBuffer>; y: Uint8Array<ArrayBuffer> } {
   const jwk = publicKey.export({ format: "jwk" });
   if (!jwk.x || !jwk.y) throw new Error("EC public key is missing its coordinates");
   return {
@@ -229,9 +229,9 @@ function wantsPRF(extensions: AuthenticationExtensionsClientInputs | undefined):
 // deterministic in (this credential's secret, salt): HMAC-SHA256(prfSecret, H(prefix ‖
 // salt)). A different salt or a different credential yields a different 32-byte output.
 function evaluatePRF(
-  prfSecret: Uint8Array,
+  prfSecret: Uint8Array<ArrayBuffer>,
   extensions: AuthenticationExtensionsClientInputs | undefined,
-): { first: Uint8Array; second?: Uint8Array } | null {
+): { first: Uint8Array<ArrayBuffer>; second?: Uint8Array<ArrayBuffer> } | null {
   const evalInputs = extensions?.prf?.eval;
   if (!evalInputs) return null;
   const first = derivePRF(prfSecret, toBytes(evalInputs.first));
@@ -241,7 +241,7 @@ function evaluatePRF(
   return { first };
 }
 
-function derivePRF(prfSecret: Uint8Array, salt: Uint8Array): Uint8Array {
+function derivePRF(prfSecret: Uint8Array<ArrayBuffer>, salt: Uint8Array<ArrayBuffer>): Uint8Array<ArrayBuffer> {
   const hashedInput = sha256(isoUint8Array.concat([PRF_PREFIX, salt]));
   return new Uint8Array(createHmac("sha256", prfSecret).update(hashedInput).digest());
 }
@@ -251,7 +251,7 @@ function encodeClientDataJSON(type: string, challenge: string, origin: string): 
   return isoBase64URL.fromBuffer(clientDataJSONBytes(type, challenge, origin));
 }
 
-function clientDataJSONBytes(type: string, challenge: string, origin: string): Uint8Array {
+function clientDataJSONBytes(type: string, challenge: string, origin: string): Uint8Array<ArrayBuffer> {
   return utf8(
     JSON.stringify({
       type,
@@ -262,34 +262,35 @@ function clientDataJSONBytes(type: string, challenge: string, origin: string): U
   );
 }
 
-function rpIdHash(rpId: string): Uint8Array {
+function rpIdHash(rpId: string): Uint8Array<ArrayBuffer> {
   return sha256(utf8(rpId));
 }
 
-function sha256(data: Uint8Array): Uint8Array {
+function sha256(data: Uint8Array<ArrayBuffer>): Uint8Array<ArrayBuffer> {
   return new Uint8Array(createHash("sha256").update(data).digest());
 }
 
-function utf8(value: string): Uint8Array {
+function utf8(value: string): Uint8Array<ArrayBuffer> {
   return new TextEncoder().encode(value);
 }
 
-function uint16BE(value: number): Uint8Array {
+function uint16BE(value: number): Uint8Array<ArrayBuffer> {
   const bytes = new Uint8Array(2);
   new DataView(bytes.buffer).setUint16(0, value, false);
   return bytes;
 }
 
-function uint32BE(value: number): Uint8Array {
+function uint32BE(value: number): Uint8Array<ArrayBuffer> {
   const bytes = new Uint8Array(4);
   new DataView(bytes.buffer).setUint32(0, value, false);
   return bytes;
 }
 
-function toBytes(source: BufferSource): Uint8Array {
-  if (source instanceof Uint8Array) return source;
+function toBytes(source: ArrayBuffer | ArrayBufferView<ArrayBufferLike>): Uint8Array<ArrayBuffer> {
   if (source instanceof ArrayBuffer) return new Uint8Array(source);
-  return new Uint8Array(source.buffer, source.byteOffset, source.byteLength);
+  // The WebAuthn library accepts arbitrary views, including SharedArrayBuffer.
+  // Copy exactly the view's bytes into an owned ArrayBuffer for its crypto helpers.
+  return new Uint8Array(new Uint8Array(source.buffer, source.byteOffset, source.byteLength));
 }
 
 function requireRpId(rpId: string | undefined): string {

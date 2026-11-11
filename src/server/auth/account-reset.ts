@@ -94,6 +94,7 @@ export interface RequestAccountResetDeps {
 // the agents/connections of a reset that is still pending.
 export interface CompleteAccountResetDeps {
   readonly executor: ResetExecutor;
+  readonly clock: Clock;
   readonly releases?: Pick<ReleaseStore, "discardScope">;
 }
 
@@ -138,14 +139,9 @@ export async function requestAccountReset(
 
     // Supersede any earlier reset's timer before scheduling this one. The reset row
     // is replaced in place (one per person), but every request also enqueued its own
-    // completion job — so a re-request (after a cancel, OR while a reset was still
-    // pending) would otherwise leave an EARLIER job in the queue that fires first and
-    // completes this fresh reset before its own 7 days have elapsed. Completion is
-    // claimed on status alone (the pending row looks identical whichever timer fires,
-    // and the direct action takes only a userId), so the 7-day window is protected
-    // HERE, by clearing the superseded timer so only this request's job survives to
-    // fire. Scoped to this person's still-pending completion jobs; the id is a bound
-    // value, never woven into the SQL (INV-102).
+    // completion job. Remove earlier pending work; a timer already claimed by a
+    // worker cannot be removed here, so completion independently enforces the
+    // CURRENT reset's full waiting period in its atomic claim.
     await clearCompletionJobs(tx, person.id);
 
     // The 7-day timer: a background job due now + 7 days that fires completion.
@@ -173,11 +169,17 @@ export async function requestAccountReset(
     // Nobody could be told: withdraw the reset and its timer rather than let it run
     // unannounced. The send errors are not logged (they may name a recipient).
     await withTransaction(db, async (tx) => {
-      await tx.query(
-        "UPDATE account_resets SET status = 'cancelled' WHERE user_id = $1 AND status = 'pending'",
-        [person.id],
+      // Alerts run after the request commits. A newer reset can supersede this
+      // one while those sends are in flight; compensate only this generation.
+      // The row lock also keeps a replacement request from inserting its timer
+      // between a successful cancellation and the matching job cleanup.
+      const cancelled = await tx.query(
+        `UPDATE account_resets SET status = 'cancelled'
+         WHERE user_id = $1 AND status = 'pending' AND requested_at = $2::timestamptz
+         RETURNING user_id`,
+        [person.id, now.toISOString()],
       );
-      await clearCompletionJobs(tx, person.id);
+      if (cancelled.rows.length > 0) await clearCompletionJobs(tx, person.id);
     });
     return { ok: false, reason: "alert_failed" };
   }
@@ -232,8 +234,10 @@ export async function getPendingAccountReset(
 }
 
 // The action the 7-day timer fires. Claiming the completion is a guarded, atomic
-// status transition: ONLY a still-'pending' reset moves to 'done' and returns a
-// row. When it does, the erase and the revoke run once each for that person; a
+// status transition: ONLY a still-'pending' reset whose full seven-day wait has
+// elapsed moves to 'done' and returns a row. The deadline belongs to the current
+// request: a superseded timer already claimed by a worker cannot complete a newer
+// reset early. When it does, the erase and the revoke run once each for that person; a
 // cancelled reset, an already-completed one, or no reset at all transitions
 // nothing, so the executor is not called (a cancel wins the race against a firing
 // timer, and a stray fire never wipes a vault that did not request a reset).
@@ -249,9 +253,9 @@ export async function completeAccountReset(
   const outcome = await withTransaction(db, async (tx) => {
     const claimed = await tx.query(
       `UPDATE account_resets SET status = 'done'
-       WHERE user_id = $1 AND status = 'pending'
+       WHERE user_id = $1 AND status = 'pending' AND requested_at <= $2::timestamptz
        RETURNING user_id`,
-      [userId],
+      [userId, new Date(deps.clock.now().getTime() - RESET_WAIT_MS).toISOString()],
     );
     if (claimed.rows.length === 0) return { ok: false as const, reason: "no_pending_reset" };
 

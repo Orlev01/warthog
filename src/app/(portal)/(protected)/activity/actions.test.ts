@@ -189,7 +189,7 @@ function realActions(
     reversalFor: (tool) => (tool ? REVERSALS[tool] : undefined),
     runReversal: async (job) => {
       runCalls.push(job);
-      return { outcome: "reversed" };
+      return { status: "executed", outcome: "reversed" };
     },
   });
   const actions = createActivityActions({ db, disputes, undo });

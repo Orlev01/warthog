@@ -87,7 +87,7 @@
 //       (dueDate − offset days) is at or before clock.now() AND the offset has NOT been marked
 //       sent AND the record has a dueDate. METADATA ONLY — it never decrypts a field, which is
 //       exactly design §4.1's "filter without decrypting another person's data".
-//   markReminderSent(db, input: { recordId, offset }): Promise<void>
+//   markReminderSent(db, input: { recordId, userId, dueDate, offset }): Promise<void>
 //     • records that the reminder for one (record, offset) has been sent — the SENT-marker the
 //       job sets so listDueForReminder stops returning it. DEK-FREE (the job holds no key); keyed
 //       on the record's unguessable id, so it is the system job's write, not a member read.
@@ -630,7 +630,7 @@ test("markReminderSent removes a sent offset from the due set and records the se
     const before = dueForRecord((await listDueForReminder(db, fixedClock(NOW))) as DueReminderLike[], saved.id);
     assert.deepEqual(before.map((d) => d.offset), [14], "the 14-day reminder is due before it is sent");
 
-    await markReminderSent(db, { recordId: saved.id, offset: 14 });
+    await markReminderSent(db, { recordId: saved.id, userId, dueDate: saved.dueDate!, offset: 14 });
 
     const after = dueForRecord((await listDueForReminder(db, fixedClock(NOW))) as DueReminderLike[], saved.id);
     assert.equal(after.length, 0, "once marked sent, the offset is no longer returned as due");
@@ -640,12 +640,30 @@ test("markReminderSent removes a sent offset from the due set and records the se
     assert.ok(records[0]!.sentOffsets.includes(14), "the sent offset is recorded on the record");
 
     // Marking the same offset again is harmless (idempotent) and still not due.
-    await markReminderSent(db, { recordId: saved.id, offset: 14 });
+    await markReminderSent(db, { recordId: saved.id, userId, dueDate: saved.dueDate!, offset: 14 });
     const again = dueForRecord((await listDueForReminder(db, fixedClock(NOW))) as DueReminderLike[], saved.id);
     assert.equal(again.length, 0, "re-marking a sent offset keeps it out of the due set");
   } finally {
     await db.close();
   }
+});
+
+test("markReminderSent requires the captured owner and due date", async () => {
+  const db = await freshDb();
+  try {
+    const userId = await makeUser(db, "reminder-mark-owner");
+    const otherUserId = await makeUser(db, "reminder-mark-other");
+    const dek = freshDek();
+    const record = await createRecord(db, {
+      userId, kind: "subscription", fields: subscriptionFields(), dueDate: "2026-11-20",
+      status: "active", source: { kind: "person" },
+    }, dek);
+    await markReminderSent(db, { recordId: record.id, userId: otherUserId, dueDate: "2026-11-20", offset: 14 });
+    await markReminderSent(db, { recordId: record.id, userId, dueDate: "2027-11-20", offset: 14 });
+    assert.deepEqual((await listRecordsForUser(db, userId, dek))[0]!.sentOffsets, []);
+    await markReminderSent(db, { recordId: record.id, userId, dueDate: "2026-11-20", offset: 14 });
+    assert.deepEqual((await listRecordsForUser(db, userId, dek))[0]!.sentOffsets, [14]);
+  } finally { await db.close(); }
 });
 
 test("listDueForReminder is cross-user: it returns every person's due reminders with their owner", async () => {
@@ -1117,6 +1135,32 @@ test("the life_admin_records migration applies and re-running every migration ch
 // due date on a year meant that record never reminded again — silently).
 // =====================================================================================
 
+test("record metadata rejects year zero and overflowing reminder offsets before queries", async () => {
+  const db = recordingDb();
+  const input = { userId: "synthetic", kind: "subscription" as const, fields: {}, status: "active", source: { kind: "person" as const } };
+  for (const bad of [{ dueDate: "0000-01-01" }, { dueDate: "2026-02-30" }, { reminderOffsets: [2147483647] }]) {
+    await assert.rejects(createRecord(db, { ...input, ...bad }, freshDek()));
+    await assert.rejects(updateRecord(db, { ...input, id: "synthetic-record", ...bad }, freshDek()));
+  }
+  assert.equal(db.calls.length, 0);
+});
+
+test("updateRecord preserves omitted due dates and clears only explicit null", async () => {
+  const db = await freshDb();
+  try {
+    const userId = await makeUser(db, "due-date-omitted");
+    const dek = freshDek();
+    const record = await createRecord(db, { userId, kind: "subscription", fields: {}, dueDate: "2026-11-20", status: "active", source: { kind: "person" } }, dek);
+    await markReminderSent(db, { recordId: record.id, userId, dueDate: "2026-11-20", offset: 14 });
+    const kept = await updateRecord(db, { userId, id: record.id, fields: { note: "changed" }, status: "active" }, dek);
+    assert.equal(kept.dueDate, "2026-11-20");
+    assert.deepEqual(kept.sentOffsets, [14]);
+    const cleared = await updateRecord(db, { userId, id: record.id, fields: {}, dueDate: null, status: "active" }, dek);
+    assert.equal(cleared.dueDate, null);
+    assert.deepEqual(cleared.sentOffsets, []);
+  } finally { await db.close(); }
+});
+
 test("updateRecord with a new due date resets the sent-markers, so the next cycle's reminders fire", async () => {
   const db = await freshDb();
   try {
@@ -1134,8 +1178,8 @@ test("updateRecord with a new due date resets the sent-markers, so the next cycl
       dueForRecord((await listDueForReminder(db, dueDay)) as DueReminderLike[], saved.id).map((d) => d.offset).sort(),
       [1, 14],
     );
-    await markReminderSent(db, { recordId: saved.id, offset: 14 });
-    await markReminderSent(db, { recordId: saved.id, offset: 1 });
+    await markReminderSent(db, { recordId: saved.id, userId, dueDate: saved.dueDate!, offset: 14 });
+    await markReminderSent(db, { recordId: saved.id, userId, dueDate: saved.dueDate!, offset: 1 });
 
     // The renewal rolls on a year.
     const rolled = (await updateRecord(
@@ -1151,7 +1195,7 @@ test("updateRecord with a new due date resets the sent-markers, so the next cycl
       [14],
       "the new cycle's 14-day reminder is due",
     );
-    await markReminderSent(db, { recordId: saved.id, offset: 14 });
+    await markReminderSent(db, { recordId: saved.id, userId, dueDate: rolled.dueDate!, offset: 14 });
     const dayBefore = fixedClock(new Date("2027-11-30T12:00:00Z"));
     assert.deepEqual(
       dueForRecord((await listDueForReminder(db, dayBefore)) as DueReminderLike[], saved.id).map((d) => d.offset),
@@ -1173,8 +1217,8 @@ test("updateRecord that keeps the same due date keeps the sent-markers, so nothi
       { userId, kind: "subscription", fields: subscriptionFields(), dueDate: "2026-12-01", status: "active", source: { kind: "person" } },
       dek,
     )) as RecordLike;
-    await markReminderSent(db, { recordId: saved.id, offset: 14 });
-    await markReminderSent(db, { recordId: saved.id, offset: 1 });
+    await markReminderSent(db, { recordId: saved.id, userId, dueDate: saved.dueDate!, offset: 14 });
+    await markReminderSent(db, { recordId: saved.id, userId, dueDate: saved.dueDate!, offset: 1 });
 
     // A fields/status edit on the same date.
     const edited = (await updateRecord(

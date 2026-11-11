@@ -73,7 +73,7 @@ import { randomBytes, randomUUID } from "node:crypto";
 import { z } from "zod";
 
 import { runLifeAdminReminders } from "./reminders-job";
-import { createRecord, listRecordsForUser } from "../db/life-admin-records";
+import { createRecord, listRecordsForUser, updateRecord, type RecordKind } from "../db/life-admin-records";
 import { createUser } from "../db/users";
 import { freshDb } from "../../test/db";
 import { fixedClock, type Clock } from "../seams/clock";
@@ -148,6 +148,103 @@ function recordingPush(): { sender: PushSender; sent: OutgoingMessage[] } {
 function messageBlob(m: OutgoingMessage): string {
   return `${m.recipient}\n${m.body}\n${m.link ?? ""}\n${JSON.stringify(m)}`;
 }
+
+test("reminder links select the record's life-admin tab and anchor", async () => {
+  const db = await freshDb();
+  try {
+    const person = await makePerson(db, "reminder-link");
+    const tabs: Record<RecordKind, string> = {
+      subscription: "subscriptions", receipt_warranty: "receipts", renewal_appointment: "renewals",
+    };
+    const push = recordingPush();
+    for (const kind of Object.keys(tabs) as RecordKind[]) {
+      const record = await createRecord(db, {
+        userId: person.userId, kind, fields: { name: "Private reminder" },
+        dueDate: "2026-11-20", status: "active", source: { kind: "person" },
+      }, person.dek);
+      await runLifeAdminReminders({ db, clock: fixedClock(NOW), push: push.sender });
+      const url = new URL(push.sent.at(-1)!.link!, "https://warthog.test");
+      assert.equal(url.pathname, "/life-admin");
+      assert.equal(url.searchParams.get("view"), "life");
+      assert.equal(url.searchParams.get("tab"), tabs[kind]);
+      assert.equal(url.hash, `#record-${record.id}`);
+    }
+  } finally { await db.close(); }
+});
+
+test("legacy overflowing offsets cannot break other due reminders", async () => {
+  const db = await freshDb();
+  try {
+    const person = await makePerson(db, "reminder-overflow");
+    const record = await createRecord(db, {
+      userId: person.userId, kind: "subscription", fields: subscriptionFields(),
+      dueDate: "2026-11-20", status: "active", source: { kind: "person" },
+    }, person.dek);
+    await db.query("UPDATE life_admin_records SET reminder_offsets = $2::int[] WHERE id = $1", [record.id, [2147483647, 14, -1]]);
+    const push = recordingPush();
+    await runLifeAdminReminders({ db, clock: fixedClock(NOW), push: push.sender });
+    assert.equal(push.sent.length, 1, "a legacy invalid offset is skipped while valid reminders still send");
+    assert.deepEqual(await sentOffsetsOf(db, person.userId, person.dek, record.id), [14]);
+  } finally { await db.close(); }
+});
+
+test("duplicate configured reminder offsets produce one notification per offset", async () => {
+  const db = await freshDb();
+  try {
+    const person = await makePerson(db, "reminder-duplicate-offset");
+    const record = await createRecord(db, {
+      userId: person.userId, kind: "subscription", fields: subscriptionFields(),
+      dueDate: "2026-11-20", reminderOffsets: [14, 14, 1], status: "active", source: { kind: "person" },
+    }, person.dek);
+    const push = recordingPush();
+    await runLifeAdminReminders({ db, clock: fixedClock(NOW), push: push.sender });
+    assert.equal(push.sent.length, 1);
+    assert.deepEqual(await sentOffsetsOf(db, person.userId, person.dek, record.id), [14]);
+  } finally { await db.close(); }
+});
+
+test("a reminder completing after rescheduling does not mark the new due-date cycle sent", async () => {
+  const db = await freshDb();
+  try {
+    const person = await makePerson(db, "reminder-reschedule");
+    const record = await createRecord(db, {
+      userId: person.userId, kind: "subscription", fields: subscriptionFields(),
+      dueDate: "2026-11-20", status: "active", source: { kind: "person" },
+    }, person.dek);
+    await runLifeAdminReminders({ db, clock: fixedClock(NOW), push: {
+      async sendPush() {
+        await updateRecord(db, { id: record.id, userId: person.userId, fields: subscriptionFields(),
+          dueDate: "2027-11-20", status: "active" }, person.dek);
+      },
+    } });
+    assert.deepEqual(await sentOffsetsOf(db, person.userId, person.dek, record.id), []);
+    const push = recordingPush();
+    await runLifeAdminReminders({ db, clock: fixedClock(new Date("2027-11-10T12:00:00Z")), push: push.sender });
+    assert.equal(push.sent.length, 1, "the new cycle still receives its 14-day reminder");
+  } finally { await db.close(); }
+});
+
+test("a reminder completing after its offset is removed does not reintroduce a sent marker", async () => {
+  const db = await freshDb();
+  try {
+    const person = await makePerson(db, "reminder-offset-change");
+    const record = await createRecord(db, {
+      userId: person.userId, kind: "subscription", fields: subscriptionFields(),
+      dueDate: "2026-11-20", status: "active", source: { kind: "person" },
+    }, person.dek);
+    await runLifeAdminReminders({ db, clock: fixedClock(NOW), push: {
+      async sendPush() {
+        await updateRecord(db, { id: record.id, userId: person.userId, fields: subscriptionFields(),
+          dueDate: "2026-11-20", reminderOffsets: [1], status: "custom status" }, person.dek);
+      },
+    } });
+    assert.deepEqual(await sentOffsetsOf(db, person.userId, person.dek, record.id), []);
+    const push = recordingPush();
+    await runLifeAdminReminders({ db, clock: fixedClock(new Date("2026-11-19T12:00:00Z")), push: push.sender });
+    assert.equal(push.sent.length, 1, "the remaining offset still sends with an arbitrary status");
+    assert.deepEqual(await sentOffsetsOf(db, person.userId, person.dek, record.id), [1]);
+  } finally { await db.close(); }
+});
 
 // Convenience builder for a subscription record's content (free-text so it round-trips
 // exactly through JSON). The content is DEK-encrypted; the metadata (dueDate/offsets) is not.

@@ -3,6 +3,7 @@
 import * as React from "react";
 
 import { ViewPanels } from "@/components/ui/view-tabs";
+import { ActionForm, FormSubmit, PendingFormFields } from "@/components/ui/form-submit";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/field";
 import { EmptyState } from "@/components/ui/empty";
@@ -100,12 +101,10 @@ export type LifeAdminViewProps = {
 // primary action; everything else is the neutral surface.
 const BTN_BASE =
   "inline-flex min-h-11 items-center justify-center gap-2 rounded-full px-4 text-sm font-medium transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-focus focus-visible:ring-offset-2 focus-visible:ring-offset-bg";
-const BTN_PRIMARY = `${BTN_BASE} bg-accent text-accent-fg hover:bg-accent-hover`;
-const BTN_SECONDARY = `${BTN_BASE} border border-line bg-surface text-fg hover:bg-surface-muted`;
 const BTN_DISABLED = `${BTN_BASE} border border-line bg-surface text-fg-muted opacity-50`;
 
 const SUMMARY_CLASS =
-  "inline-flex w-fit cursor-pointer items-center gap-2 text-sm font-medium text-fg";
+  "inline-flex min-h-11 w-fit cursor-pointer items-center gap-2 rounded-card text-sm font-medium text-fg focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-focus";
 const FILE_INPUT_CLASS =
   "min-h-11 min-w-0 w-full max-w-full text-base text-fg file:me-3 file:rounded-card file:border file:border-line file:bg-surface file:px-3 file:py-2 file:text-sm file:text-fg sm:text-sm";
 
@@ -134,6 +133,25 @@ const ADD_LABELS: Record<RecordKind, string> = {
   renewal_appointment: "Add a renewal",
 };
 
+const RECORD_TABS: Record<RecordKind, string> = {
+  subscription: "subscriptions", receipt_warranty: "receipts", renewal_appointment: "renewals",
+};
+
+function ScheduleFields({ id, dueDate, status = "active" }: { id: string; dueDate?: string | null; status?: string }) {
+  return <>
+    <input type="hidden" name="recordFormVersion" value="2" />
+    <div className="flex flex-col gap-1.5">
+      <Label htmlFor={`${id}-date`}>Due date (optional)</Label>
+      <Input id={`${id}-date`} type="date" name="dueDate" defaultValue={dueDate ?? ""} aria-describedby={`${id}-date-help`} />
+      <p id={`${id}-date-help`} className="text-xs text-fg-muted">Reminders use this date. Leave it empty for no reminders.</p>
+    </div>
+    <div className="flex flex-col gap-1.5">
+      <Label htmlFor={`${id}-status`}>Status</Label>
+      <Input id={`${id}-status`} name="status" defaultValue={status} required maxLength={200} />
+    </div>
+  </>;
+}
+
 function AddControl({
   kind,
   addRecordAction,
@@ -154,24 +172,26 @@ function AddControl({
   return (
     <details className="flex flex-col gap-3 rounded-card border border-line bg-surface p-4">
       <summary className={SUMMARY_CLASS}>{label}</summary>
-      <form action={addRecordAction} className="mt-2 flex flex-col gap-3">
-        <input type="hidden" name="kind" value={kind} />
-        <div className="flex flex-col gap-1.5">
-          <Label htmlFor={fieldId}>What to add</Label>
-          <Input
-            id={fieldId}
-            name="title"
-            placeholder="Describe it"
-            required
-            maxLength={2000}
-          />
-        </div>
+      <ActionForm action={addRecordAction} className="mt-2 flex flex-col gap-3">
+        <PendingFormFields>
+          <input type="hidden" name="kind" value={kind} />
+          <input type="hidden" name="returnTab" value={RECORD_TABS[kind]} />
+          <div className="flex flex-col gap-1.5">
+            <Label htmlFor={fieldId}>What to add</Label>
+            <Input
+              id={fieldId}
+              name="title"
+              placeholder="Describe it"
+              required
+              maxLength={2000}
+            />
+          </div>
+          <ScheduleFields id={fieldId} />
+        </PendingFormFields>
         <div>
-          <button type="submit" className={BTN_PRIMARY}>
-            {label}
-          </button>
+          <FormSubmit variant="primary" preserveFocus pendingLabel="Adding record…">{label}</FormSubmit>
         </div>
-      </form>
+      </ActionForm>
     </details>
   );
 }
@@ -206,17 +226,21 @@ function ReminderSetting({
     );
   }
   return (
-    <form action={editRecordAction} className="flex flex-col gap-1.5">
-      <input type="hidden" name="recordId" value={record.id} />
-      <input type="hidden" name="setting" value="reminder" />
-      <Label htmlFor={fieldId}>Remind me (days before)</Label>
-      <Input id={fieldId} name="reminderOffsets" defaultValue={value} />
+    <ActionForm action={editRecordAction} className="flex flex-col gap-1.5">
+      <PendingFormFields>
+        <input type="hidden" name="recordId" value={record.id} />
+        <input type="hidden" name="returnTab" value={RECORD_TABS[record.kind]} />
+        <input type="hidden" name="setting" value="reminder" />
+        <Label htmlFor={fieldId}>Remind me (days before)</Label>
+        <Input id={fieldId} name="reminderOffsets" defaultValue={value} aria-describedby={`${fieldId}-help`} />
+        <p id={`${fieldId}-help`} className="text-xs text-fg-muted">
+          Use whole days from 0 to 36500, separated by commas (for example, 14, 1). Leave empty to turn reminders off.
+        </p>
+      </PendingFormFields>
       <div>
-        <button type="submit" className={BTN_SECONDARY}>
-          Save reminder
-        </button>
+        <FormSubmit variant="secondary" preserveFocus pendingLabel="Saving reminder…">Save reminder</FormSubmit>
       </div>
-    </form>
+    </ActionForm>
   );
 }
 
@@ -248,33 +272,34 @@ function AttachControl({
     );
   }
   return (
-    <form action={attachFileAction} className="flex flex-col gap-1.5">
-      <input type="hidden" name="recordId" value={record.id} />
-      <Label htmlFor={fieldId}>Attach a file</Label>
-      <input
-        id={fieldId}
-        type="file"
-        name="file"
-        required
-        className={FILE_INPUT_CLASS}
-        onChange={(event) => {
-          const input = event.currentTarget;
-          const file = input.files?.[0];
-          input.setCustomValidity(
-            file ? (receiptUploadError(file.size) ?? "") : "Choose a file.",
-          );
-          if (file) input.reportValidity();
-        }}
-      />
-      <p className="text-xs text-fg-muted">
-        Up to 25 MiB per file. Files are encrypted before storage.
-      </p>
+    <ActionForm action={attachFileAction} className="flex flex-col gap-1.5">
+      <PendingFormFields>
+        <input type="hidden" name="recordId" value={record.id} />
+        <input type="hidden" name="returnTab" value={RECORD_TABS[record.kind]} />
+        <Label htmlFor={fieldId}>Attach a file</Label>
+        <input
+          id={fieldId}
+          type="file"
+          name="file"
+          required
+          className={FILE_INPUT_CLASS}
+          onChange={(event) => {
+            const input = event.currentTarget;
+            const file = input.files?.[0];
+            input.setCustomValidity(
+              file ? (receiptUploadError(file.size) ?? "") : "Choose a file.",
+            );
+            if (file) input.reportValidity();
+          }}
+        />
+        <p className="text-xs text-fg-muted">
+          Up to 25 MiB per file. Files are encrypted before storage.
+        </p>
+      </PendingFormFields>
       <div>
-        <button type="submit" className={BTN_SECONDARY}>
-          Attach file
-        </button>
+        <FormSubmit variant="secondary" preserveFocus pendingLabel="Attaching file…">Attach file</FormSubmit>
       </div>
-    </form>
+    </ActionForm>
   );
 }
 
@@ -300,23 +325,25 @@ function EditControl({
   return (
     <details className="flex flex-col gap-3">
       <summary className={SUMMARY_CLASS}>Edit</summary>
-      <form action={editRecordAction} className="mt-2 flex flex-col gap-3">
-        <input type="hidden" name="recordId" value={record.id} />
-        {Object.entries(record.fields).map(([key, fieldValue], index) => {
-          const fieldId = `${baseId}-${index}`;
-          return (
-            <div key={key} className="flex flex-col gap-1.5">
-              <Label htmlFor={fieldId}>{key}</Label>
-              <Input id={fieldId} name={key} defaultValue={fieldValue} />
-            </div>
-          );
-        })}
+      <ActionForm action={editRecordAction} className="mt-2 flex flex-col gap-3">
+        <PendingFormFields>
+          <input type="hidden" name="recordId" value={record.id} />
+          <input type="hidden" name="returnTab" value={RECORD_TABS[record.kind]} />
+          {Object.entries(record.fields).map(([key, fieldValue], index) => {
+            const fieldId = `${baseId}-${index}`;
+            return (
+              <div key={key} className="flex flex-col gap-1.5">
+                <Label htmlFor={fieldId}>{key}</Label>
+                <Input id={fieldId} name={`field:${key}`} defaultValue={fieldValue} />
+              </div>
+            );
+          })}
+          <ScheduleFields id={baseId} dueDate={record.dueDate} status={record.status} />
+        </PendingFormFields>
         <div>
-          <button type="submit" className={BTN_SECONDARY}>
-            Save changes
-          </button>
+          <FormSubmit variant="secondary" preserveFocus pendingLabel="Saving changes…">Save changes</FormSubmit>
         </div>
-      </form>
+      </ActionForm>
     </details>
   );
 }
@@ -335,7 +362,7 @@ function RecordCard({
   deleteRecordAction?: LifeAdminAction;
 }) {
   return (
-    <li className="flex flex-col gap-3 rounded-card border border-line bg-surface p-4">
+    <li id={`record-${record.id}`} tabIndex={-1} className="scroll-mt-32 flex flex-col gap-3 rounded-card border border-line bg-surface p-4">
       <dl className="grid min-w-0 grid-cols-1 gap-x-3 gap-y-1 text-sm sm:grid-cols-[minmax(0,1fr)_minmax(0,2fr)]">
         {Object.entries(record.fields).map(([key, fieldValue]) => (
           <React.Fragment key={key}>
@@ -384,12 +411,11 @@ function RecordCard({
             Delete this record and all its attached files? This cannot be
             undone.
           </p>
-          <form action={deleteRecordAction}>
+          <ActionForm action={deleteRecordAction}>
             <input type="hidden" name="recordId" value={record.id} />
-            <button type="submit" className={BTN_SECONDARY}>
-              Delete record and files
-            </button>
-          </form>
+            <input type="hidden" name="returnTab" value={RECORD_TABS[record.kind]} />
+            <FormSubmit variant="secondary" preserveFocus pendingLabel="Deleting record…">Delete record and files</FormSubmit>
+          </ActionForm>
         </details>
       ) : null}
     </li>
@@ -470,21 +496,23 @@ function TickControl({
     );
   }
   return (
-    <form action={tickOffAction}>
-      <input type="hidden" name="itemId" value={item.id} />
-      <label className="inline-flex min-h-11 items-center gap-2 text-sm text-fg">
-        <input
-          type="checkbox"
-          name="done"
-          className="size-4"
-          defaultChecked={item.done}
-          onChange={(event: React.ChangeEvent<HTMLInputElement>) =>
-            event.currentTarget.form?.requestSubmit()
-          }
-        />
-        Done
-      </label>
-    </form>
+    <ActionForm action={tickOffAction}>
+      <PendingFormFields pendingLabel="Saving checklist…">
+        <input type="hidden" name="itemId" value={item.id} />
+        <label className="inline-flex min-h-11 items-center gap-2 text-sm text-fg">
+          <input
+            type="checkbox"
+            name="done"
+            className="size-4"
+            defaultChecked={item.done}
+            onChange={(event: React.ChangeEvent<HTMLInputElement>) =>
+              event.currentTarget.form?.requestSubmit()
+            }
+          />
+          Done
+        </label>
+      </PendingFormFields>
+    </ActionForm>
   );
 }
 
@@ -515,12 +543,10 @@ function HandControl({
     );
   }
   return (
-    <form action={handToAgentAction}>
+    <ActionForm action={handToAgentAction}>
       <input type="hidden" name="itemId" value={item.id} />
-      <button type="submit" className={BTN_SECONDARY}>
-        Hand to an agent
-      </button>
-    </form>
+      <FormSubmit variant="secondary" preserveFocus pendingLabel="Handing to an agent…">Hand to an agent</FormSubmit>
+    </ActionForm>
   );
 }
 

@@ -168,3 +168,15 @@ test("the push handler keeps the worker alive via waitUntil", async () => {
     "the handler passes its notification work to event.waitUntil",
   );
 });
+
+
+test("record reminder push keeps content generic and preserves only its safe destination", async () => {
+  const sw = loadServiceWorker();
+  const recordId = "d7d57ea2-50ea-4ed7-b234-66eb47957b38";
+  await firePush(sw, { json: { recordId, recordTab: "receipts", body: "PRIVATE", url: "https://evil.test" } });
+  assert.equal(sw.shown.length, 1);
+  const options = JSON.parse(JSON.stringify(sw.shown[0].options));
+  assert.deepEqual(options.data, { recordId, recordTab: "receipts" });
+  assert.match(options.body, /reminder/i);
+  assert.doesNotMatch(JSON.stringify(options), /PRIVATE|evil/);
+});

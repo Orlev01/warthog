@@ -1,7 +1,7 @@
 // E14-S09 — the life-admin reminders job (brief §"Life admin": "reminders by
 // notification before due dates (default 14 days and 1 day before, adjustable per
 // record)"; constitution principle 13 — reminders are deterministic code, no AI).
-// This is the TIMER that fires each record's due-date reminders exactly once, without
+// This is the TIMER that sends each record's due-date reminders without
 // leaking personal content.
 //
 // `runLifeAdminReminders` is what the background worker runs each sweep. At that moment
@@ -12,15 +12,17 @@
 //     to the record (its opaque id — the app resolves it after sign-in) and NO personal
 //     content; then
 //   • marks that offset sent (`markReminderSent`), so `listDueForReminder` stops returning
-//     it and that reminder never fires again for this due date (moving the due date
+//     it on later sweeps for this due date (moving the due date
 //     clears the markers, so the next cycle's reminders fire).
 //
 // The defaults (14 days and 1 day before the due date) and any per-record override live on
 // the record's own reminder offsets, so this job honours whatever the store hands it — it
-// applies no schedule of its own. Idempotent: a second run the same day over the same
-// records sends nothing more, because every fired offset is already marked sent and drops
+// applies no schedule of its own. After a successful sweep, a sequential run over the same
+// records sends nothing more, because every completed offset is already marked sent and drops
 // out of the due set. Member scope: the owner is carried on each due reminder (taken from
 // the record's own row, never a client value), so every push reaches exactly its owner.
+// A crash after delivery but before marking, or overlapping sweeps, can repeat a push:
+// the external notification and database completion are not one atomic transaction.
 //
 // A SERVER module built purely from its INJECTED seams (db, clock, push): it reads no
 // `process.env` and holds no secret (INV-103) — time comes from the injected Clock (never
@@ -30,7 +32,7 @@
 // (INV-102) — so a record carrying a SQL-injection-shaped value is swept as data and cannot
 // alter a query.
 
-import { listDueForReminder, markReminderSent } from "../db/life-admin-records";
+import { listDueForReminder, markReminderSent, type RecordKind } from "../db/life-admin-records";
 import type { PushSender } from "../notify/senders";
 import type { Clock } from "../seams/clock";
 import type { Db } from "../db/index";
@@ -55,8 +57,13 @@ const REMINDER_BODY =
 // The REFERENCE the push carries: the record's opaque id as an app path the person opens
 // after sign-in. No personal content — just an identifier the app resolves against the
 // signed-in owner's own records.
-function buildReference(recordId: string): string {
-  return `/life-admin/records/${recordId}`;
+function buildReference(recordId: string, kind: RecordKind): string {
+  const tabs: Record<RecordKind, string> = {
+    subscription: "subscriptions",
+    receipt_warranty: "receipts",
+    renewal_appointment: "renewals",
+  };
+  return `/life-admin?view=life&tab=${tabs[kind]}#record-${encodeURIComponent(recordId)}`;
 }
 
 export async function runLifeAdminReminders(deps: LifeAdminRemindersDeps): Promise<void> {
@@ -77,12 +84,12 @@ export async function runLifeAdminReminders(deps: LifeAdminRemindersDeps): Promi
       await push.sendPush({
         recipient: reminder.userId,
         body: REMINDER_BODY,
-        link: buildReference(reminder.recordId),
+        link: buildReference(reminder.recordId, reminder.kind),
       });
 
-      // Mark this offset sent so it drops out of the due set — the sweep is idempotent and
-      // the reminder never fires twice. The record id is bound as a parameter (INV-102).
-      await markReminderSent(db, { recordId: reminder.recordId, offset: reminder.offset });
+      // Mark only the captured owner/date/offset; an edit during delivery must not
+      // suppress the new reminder cycle. Every value is bound as a parameter (INV-102).
+      await markReminderSent(db, reminder);
     } catch (error) {
       failures.push(error);
     }

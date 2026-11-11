@@ -1,3 +1,4 @@
+import { recordNotificationFromLink, type RecordNotification } from "../../domain/life-admin/record-notification";
 import type { Config } from "../config";
 import { getServerDb } from "../db/server";
 import type { Db } from "../db/index";
@@ -16,7 +17,7 @@ import { outbox } from "./outbox";
 export function createUserPushSender(deps: {
   subscriptions: (userId: string) => Promise<(PushDeviceSubscription & { id: string })[]>;
   remove: (userId: string, id: string) => Promise<unknown>;
-  send: (subscription: PushDeviceSubscription) => Promise<void>;
+  send: (subscription: PushDeviceSubscription, target?: RecordNotification) => Promise<void>;
 }): PushSender {
   return {
     sendDevicePush: deps.send,
@@ -24,7 +25,7 @@ export function createUserPushSender(deps: {
       const devices = await deps.subscriptions(message.recipient);
       if (!devices.length) throw new Error("No registered push device");
       const results = await Promise.allSettled(devices.map(async (device) => {
-        try { await deps.send({ endpoint: device.endpoint, keys: device.keys }); }
+        try { await deps.send({ endpoint: device.endpoint, keys: device.keys }, recordNotificationFromLink(message.link)); }
         catch (error) {
           const status = (error as { status?: number } | null)?.status;
           if (status === 404 || status === 410) await deps.remove(message.recipient, device.id);

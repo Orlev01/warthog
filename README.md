@@ -9,6 +9,7 @@ they are, what each agent may touch and spend, and a record of everything agents
 
 - Requirements: [`brief.yaml`](brief.yaml)
 - Design of record: [`docs/design/technical-design.md`](docs/design/technical-design.md)
+- Comprehensive code, security and UX review: [11 November bug bash](docs/audit/bug-bash-2026-11-11/coordinator.md)
 - Current release audit and open launch gates: [`docs/audit/README.md`](docs/audit/README.md)
 - Azure CI/CD and approved release procedure: [`docs/azure-delivery.md`](docs/azure-delivery.md)
 

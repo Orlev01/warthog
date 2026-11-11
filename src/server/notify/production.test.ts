@@ -41,3 +41,21 @@ test("push cannot claim delivery when no devices exist or all endpoints fail", a
   const failed = createUserPushSender({ subscriptions: async () => [{ id: "a", endpoint: "https://push.test/a", keys: { p256dh: "x", auth: "y" } }], remove: async () => {}, send: async () => { throw new Error("private endpoint token"); } });
   await assert.rejects(failed.sendPush({ recipient: "owner", body: "test" }), /^Error: Push delivery failed$/);
 });
+
+
+test("record reminders carry only a validated opaque target and reject arbitrary links", async () => {
+  const payloads: unknown[] = [];
+  const sender = createUserPushSender({
+    subscriptions: async () => [{ id: "device", endpoint: "https://push.test/a", keys: { p256dh: "x", auth: "y" } }],
+    remove: async () => {}, send: async (_subscription, target) => { payloads.push(target); },
+  });
+  const recordId = "d7d57ea2-50ea-4ed7-b234-66eb47957b38";
+  for (const tab of ["subscriptions", "receipts", "renewals"]) {
+    await sender.sendPush({ recipient: "owner", body: "private insurance content", link: `/life-admin?view=life&tab=${tab}#record-${recordId}` });
+    assert.deepEqual(payloads.at(-1), { recordId, recordTab: tab });
+  }
+  for (const link of [`https://evil.test/life-admin?view=life&tab=receipts#record-${recordId}`, `/life-admin?view=life&tab=receipts&secret=private#record-${recordId}`, "/life-admin?view=life&tab=__proto__#record-bad", undefined]) {
+    await sender.sendPush({ recipient: "owner", body: "private content", link });
+    assert.equal(payloads.at(-1), undefined);
+  }
+});

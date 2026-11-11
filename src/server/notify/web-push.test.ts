@@ -403,3 +403,39 @@ test("an oversized payload is rejected and nothing is sent", async () => {
   await assert.rejects(() => sender.sendApprovalPush(subscription, oversized));
   assert.equal(calls.length, 0, "no push is POSTed when the payload exceeds the 4 KB cap");
 });
+
+
+test("notification payload strips everything except a valid record reference", async () => {
+  const build = fakeBuildRequest();
+  const sender = createWebPushSender({ vapid: { subject: SUBJECT, publicKey: "pub", privateKey: "fake" }, fetch: recordingFetch().fetch, buildRequest: build.buildRequest });
+  const target = { recordId: "d7d57ea2-50ea-4ed7-b234-66eb47957b38", recordTab: "receipts" as const, body: "secret" };
+  await sender.sendNotificationPush(await validSubscription(), target);
+  assert.deepEqual(build.calls[0].message.payload, { recordId: target.recordId, recordTab: "receipts" });
+});
+
+test("a stalled push request is aborted within its deadline", async () => {
+  let aborted = false;
+  const sender = createWebPushSender({ vapid: { subject: SUBJECT, publicKey: "pub", privateKey: "fake" }, timeoutMs: 15,
+    buildRequest: fakeBuildRequest().buildRequest,
+    fetch: async (_url, init) => new Promise((_resolve, reject) => {
+      if (!init.signal) { reject(new Error("missing deadline")); return; }
+      init.signal.addEventListener("abort", () => { aborted = true; reject(new Error("aborted")); }, { once: true });
+    }),
+  });
+  await assert.rejects(sender.sendNotificationPush(await validSubscription()), /aborted/);
+  assert.equal(aborted, true);
+});
+
+test("push responses release their body on success and failure", async () => {
+  for (const status of [201, 410]) {
+    let cancelled = 0;
+    const sender = createWebPushSender({ vapid: { subject: SUBJECT, publicKey: "pub", privateKey: "fake" },
+      buildRequest: fakeBuildRequest().buildRequest,
+      fetch: async () => ({ ok: status === 201, status, body: { cancel: async () => { cancelled++; } } }),
+    });
+    const delivery = sender.sendNotificationPush(await validSubscription());
+    if (status === 201) await delivery;
+    else await assert.rejects(delivery, (error: unknown) => (error as { status: number }).status === 410);
+    assert.equal(cancelled, 1);
+  }
+});

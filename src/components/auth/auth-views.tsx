@@ -67,7 +67,7 @@ function AuthLinks({ links, returnTo }: { links: readonly AuthLink[]; returnTo?:
           <li key={link.href}>
             <a
               href={withReturnPath(link.href, returnTo)}
-              className="rounded-card text-accent underline-offset-4 hover:underline focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-focus"
+              className="inline-flex min-h-11 items-center rounded-card text-accent underline-offset-4 hover:underline focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-focus"
             >
               {link.label}
             </a>
@@ -137,7 +137,7 @@ function SaveRecoveryCode({
           {groupRecoveryCode(code)}
         </p>
       </div>
-      <label htmlFor={checkboxId} className="flex items-start gap-2 text-sm text-fg">
+      <label htmlFor={checkboxId} className="flex min-h-11 cursor-pointer items-center gap-2 text-sm text-fg">
         <input
           id={checkboxId}
           type="checkbox"
@@ -148,7 +148,7 @@ function SaveRecoveryCode({
         />
         <span>I&apos;ve saved it</span>
       </label>
-      <Button type="button" variant="primary" disabled={!savedConfirmed || working} onClick={onContinue}>
+      <Button type="button" variant="primary" disabled={!savedConfirmed} aria-disabled={working} aria-busy={working} className="aria-disabled:opacity-50" onClick={() => { if (!working && savedConfirmed) onContinue?.(); }}>
         Continue
       </Button>
       {error ? (
@@ -214,7 +214,7 @@ export function SignupView({
 }: SignupViewProps) {
   const handleSubmit = (event: React.FormEvent<HTMLFormElement>) => {
     event.preventDefault();
-    onSubmit?.();
+    if (!working) onSubmit?.();
   };
   switch (step) {
     case "details":
@@ -240,7 +240,7 @@ export function SignupView({
               onChange={(event) => onEmailChange?.(event.target.value)}
               error={error}
             />
-            <Button type="submit" variant="primary" disabled={working}>
+            <Button type="submit" variant="primary" aria-disabled={working} aria-busy={working} className="aria-disabled:opacity-50">
               Continue
             </Button>
           </form>
@@ -265,7 +265,7 @@ export function SignupView({
               onChange={(event) => onCodeChange?.(event.target.value)}
               error={error}
             />
-            <Button type="submit" variant="primary" disabled={working}>
+            <Button type="submit" variant="primary" aria-disabled={working} aria-busy={working} className="aria-disabled:opacity-50">
               Continue
             </Button>
           </form>
@@ -277,10 +277,10 @@ export function SignupView({
           title="Set up a passkey"
           lead="A passkey lets you sign in with your fingerprint, face or device PIN — there's no password to remember."
         >
-          <Button type="button" variant="primary" onClick={onCreatePasskey} disabled={working}>
+          <Button type="button" variant="primary" onClick={() => { if (!working) onCreatePasskey?.(); }} aria-disabled={working} aria-busy={working} className="aria-disabled:opacity-50">
             Create a passkey
           </Button>
-          <Button type="button" variant="secondary" onClick={onUseAuthenticatorApp} disabled={working}>
+          <Button type="button" variant="secondary" onClick={() => { if (!working) onUseAuthenticatorApp?.(); }} aria-disabled={working} aria-busy={working} className="aria-disabled:opacity-50">
             Use an authenticator app
           </Button>
           {error ? (
@@ -299,7 +299,7 @@ export function SignupView({
             <Field label="Authenticator app code" name="totp" type="text" inputMode="numeric"
               autoComplete="one-time-code" required pattern="[0-9]{6}" maxLength={6} disabled={working}
               value={code ?? ""} onChange={(event) => onCodeChange?.(event.target.value)} error={error} />
-            <Button type="submit" variant="primary" disabled={working}>Confirm authenticator app</Button>
+            <Button type="submit" variant="primary" aria-disabled={working} aria-busy={working} className="aria-disabled:opacity-50">Confirm authenticator app</Button>
           </form>
           <a href="/signup" className="text-sm text-fg-muted underline">Start signup again</a>
         </AuthScreen>
@@ -372,7 +372,7 @@ export function SigninView({
             className="flex flex-col gap-4"
             onSubmit={(event) => {
               event.preventDefault();
-              onPasskey?.();
+              if (!busy) onPasskey?.();
             }}
           >
             <Field
@@ -382,9 +382,10 @@ export function SigninView({
               autoComplete="email"
               value={email}
               onChange={(event) => onEmailChange?.(event.target.value)}
+              disabled={busy}
             />
-            <Button type="submit" variant="primary">
-              Sign in with your passkey
+            <Button type="submit" variant="primary" aria-disabled={busy} aria-busy={busy} className="aria-disabled:opacity-50">
+              {busy ? "Signing in…" : "Sign in with your passkey"}
             </Button>
           </form>
           {error ? (
@@ -392,7 +393,7 @@ export function SigninView({
               {error}
             </p>
           ) : null}
-          <Button type="button" variant="secondary" onClick={onUseAuthenticatorApp}>
+          <Button type="button" variant="secondary" disabled={busy} onClick={onUseAuthenticatorApp}>
             Use my authenticator app instead
           </Button>
           <AuthLinks links={SIGNIN_LINKS} returnTo={returnTo} />
@@ -412,7 +413,7 @@ export function SigninView({
             className="flex flex-col gap-4"
             onSubmit={(event) => {
               event.preventDefault();
-              onSubmitCode?.();
+              if (!busy) onSubmitCode?.();
             }}
           >
             {step === "email" ? <Field
@@ -434,7 +435,7 @@ export function SigninView({
               onChange={(event) => onCodeChange?.(event.target.value)}
               disabled={busy}
             /> : null}
-            <Button type="submit" variant="primary" disabled={busy}>
+            <Button type="submit" variant="primary" aria-disabled={busy} aria-busy={busy} className="aria-disabled:opacity-50">
               {busy ? "Please wait…" : step === "email" ? "Send email code" : step === "email-code" ? "Verify email" : "Sign in"}
             </Button>
           </form>
@@ -461,6 +462,7 @@ export type RecoverStep = "identify" | "email-code" | "recovery-code" | "passkey
 // person types at the recovery-code step; `emailCode` is the one-time code from the
 // email identify sent (email-code step).
 export interface RecoverViewProps {
+  busy?: boolean;
   step: RecoverStep;
   recoveryCode?: string;
   email?: string;
@@ -484,6 +486,7 @@ export interface RecoverViewProps {
 
 export function RecoverView({
   step,
+  busy,
   recoveryCode,
   email,
   emailCode,
@@ -512,10 +515,11 @@ export function RecoverView({
             className="flex flex-col gap-4"
             onSubmit={(event) => {
               event.preventDefault();
-              onSubmitIdentify?.();
+              if (!busy) onSubmitIdentify?.();
             }}
           >
             <Field
+              disabled={busy}
               label="Email address"
               name="email"
               type="email"
@@ -524,8 +528,8 @@ export function RecoverView({
               onChange={(event) => onEmailChange?.(event.target.value)}
               error={error}
             />
-            <Button type="submit" variant="primary">
-              Send me a code
+            <Button type="submit" variant="primary" aria-disabled={busy} aria-busy={busy} className="aria-disabled:opacity-50">
+              {busy ? "Please wait…" : "Send me a code"}
             </Button>
           </form>
           <AuthLinks links={RECOVER_LINKS} returnTo={returnTo} />
@@ -541,10 +545,11 @@ export function RecoverView({
             className="flex flex-col gap-4"
             onSubmit={(event) => {
               event.preventDefault();
-              onSubmitEmailCode?.();
+              if (!busy) onSubmitEmailCode?.();
             }}
           >
             <Field
+              disabled={busy}
               label="Your code"
               name="code"
               type="text"
@@ -554,8 +559,8 @@ export function RecoverView({
               onChange={(event) => onEmailCodeChange?.(event.target.value)}
               error={error}
             />
-            <Button type="submit" variant="primary">
-              Continue
+            <Button type="submit" variant="primary" aria-disabled={busy} aria-busy={busy} className="aria-disabled:opacity-50">
+              {busy ? "Please wait…" : "Continue"}
             </Button>
           </form>
         </AuthScreen>
@@ -570,10 +575,11 @@ export function RecoverView({
             className="flex flex-col gap-4"
             onSubmit={(event) => {
               event.preventDefault();
-              onSubmitRecoveryCode?.();
+              if (!busy) onSubmitRecoveryCode?.();
             }}
           >
             <Field
+              disabled={busy}
               label="Recovery code"
               name="recoveryCode"
               type="text"
@@ -582,8 +588,8 @@ export function RecoverView({
               onChange={(event) => onRecoveryCodeChange?.(event.target.value)}
               error={error}
             />
-            <Button type="submit" variant="primary">
-              Continue
+            <Button type="submit" variant="primary" aria-disabled={busy} aria-busy={busy} className="aria-disabled:opacity-50">
+              {busy ? "Please wait…" : "Continue"}
             </Button>
           </form>
         </AuthScreen>
@@ -594,8 +600,8 @@ export function RecoverView({
           title="Set up a new passkey"
           lead="Now create a new passkey so you can sign in on this device from now on."
         >
-          <Button type="button" variant="primary" onClick={onCreatePasskey}>
-            Create a passkey
+          <Button type="button" variant="primary" aria-disabled={busy} aria-busy={busy} className="aria-disabled:opacity-50" onClick={() => { if (!busy) onCreatePasskey?.(); }}>
+            {busy ? "Please wait…" : "Create a passkey"}
           </Button>
           {error ? (
             <p role="alert" className="text-sm text-danger">
@@ -611,6 +617,7 @@ export function RecoverView({
           lead="Here's your new recovery code — your old one no longer works. Write it down and keep it safe, and we'll only show it once."
         >
           <SaveRecoveryCode
+            working={busy}
             code={recoveryCode}
             savedConfirmed={savedConfirmed}
             onSavedConfirmedChange={onSavedConfirmedChange}
@@ -633,6 +640,7 @@ export type DeviceStep = "code" | "confirm" | "waiting" | "stopped";
 // approves on a device they already use; `stopped` explains a refused or expired request
 // and offers to start again.
 export interface DeviceViewProps {
+  busy?: boolean;
   step: DeviceStep;
   email?: string;
   code?: string;
@@ -652,6 +660,7 @@ export interface DeviceViewProps {
 
 export function DeviceView({
   step,
+  busy,
   email,
   code,
   error,
@@ -674,10 +683,11 @@ export function DeviceView({
             className="flex flex-col gap-4"
             onSubmit={(event) => {
               event.preventDefault();
-              onSubmit?.();
+              if (!busy) onSubmit?.();
             }}
           >
             <Field
+              disabled={busy}
               label="Email address"
               name="email"
               type="email"
@@ -685,8 +695,8 @@ export function DeviceView({
               value={email}
               onChange={(event) => onEmailChange?.(event.target.value)}
             />
-            <Button type="button" variant="secondary" onClick={onSendCode}>
-              Email me a code
+            <Button type="button" variant="secondary" aria-disabled={busy} aria-busy={busy} className="aria-disabled:opacity-50" onClick={() => { if (!busy) onSendCode?.(); }}>
+              {busy ? "Please wait…" : "Email me a code"}
             </Button>
             {notice ? (
               <p role="status" className="text-sm text-fg-muted">
@@ -694,6 +704,7 @@ export function DeviceView({
               </p>
             ) : null}
             <Field
+              disabled={busy}
               label="Your code"
               name="code"
               type="text"
@@ -703,8 +714,8 @@ export function DeviceView({
               onChange={(event) => onCodeChange?.(event.target.value)}
               error={error}
             />
-            <Button type="submit" variant="primary">
-              Continue
+            <Button type="submit" variant="primary" aria-disabled={busy} aria-busy={busy} className="aria-disabled:opacity-50">
+              {busy ? "Please wait…" : "Continue"}
             </Button>
           </form>
           <AuthLinks links={DEVICE_LINKS} returnTo={returnTo} />
@@ -773,6 +784,7 @@ function plainDate(iso: string | undefined): string | undefined {
 // details erased. `completesAt` is when a requested reset finishes. `recoveryCode` is the
 // NEW shown-once code of the set-up's last step.
 export interface ResetViewProps {
+  busy?: boolean;
   step: ResetStep;
   email?: string;
   emailCode?: string;
@@ -792,6 +804,7 @@ export interface ResetViewProps {
 
 export function ResetView({
   step,
+  busy,
   email,
   emailCode,
   completesAt,
@@ -826,10 +839,11 @@ export function ResetView({
             className="flex flex-col gap-4"
             onSubmit={(event) => {
               event.preventDefault();
-              onSubmitIdentify?.();
+              if (!busy) onSubmitIdentify?.();
             }}
           >
             <Field
+              disabled={busy}
               label="Email address"
               name="email"
               type="email"
@@ -838,8 +852,8 @@ export function ResetView({
               onChange={(event) => onEmailChange?.(event.target.value)}
               error={error}
             />
-            <Button type="submit" variant="primary">
-              Send me a code
+            <Button type="submit" variant="primary" aria-disabled={busy} aria-busy={busy} className="aria-disabled:opacity-50">
+              {busy ? "Please wait…" : "Send me a code"}
             </Button>
           </form>
           <AuthLinks links={RESET_LINKS} returnTo={returnTo} />
@@ -855,10 +869,11 @@ export function ResetView({
             className="flex flex-col gap-4"
             onSubmit={(event) => {
               event.preventDefault();
-              onSubmitEmailCode?.();
+              if (!busy) onSubmitEmailCode?.();
             }}
           >
             <Field
+              disabled={busy}
               label="Your code"
               name="code"
               type="text"
@@ -868,8 +883,8 @@ export function ResetView({
               onChange={(event) => onEmailCodeChange?.(event.target.value)}
               error={error}
             />
-            <Button type="submit" variant="primary">
-              Start the reset
+            <Button type="submit" variant="primary" aria-disabled={busy} aria-busy={busy} className="aria-disabled:opacity-50">
+              {busy ? "Please wait…" : "Start the reset"}
             </Button>
           </form>
         </AuthScreen>
@@ -897,10 +912,11 @@ export function ResetView({
             className="flex flex-col gap-4"
             onSubmit={(event) => {
               event.preventDefault();
-              onSubmitIdentify?.();
+              if (!busy) onSubmitIdentify?.();
             }}
           >
             <Field
+              disabled={busy}
               label="Email address"
               name="email"
               type="email"
@@ -909,8 +925,8 @@ export function ResetView({
               onChange={(event) => onEmailChange?.(event.target.value)}
               error={error}
             />
-            <Button type="submit" variant="primary">
-              Send me a code
+            <Button type="submit" variant="primary" aria-disabled={busy} aria-busy={busy} className="aria-disabled:opacity-50">
+              {busy ? "Please wait…" : "Send me a code"}
             </Button>
           </form>
           <AuthLinks links={RESET_SETUP_LINKS} returnTo={returnTo} />
@@ -926,10 +942,11 @@ export function ResetView({
             className="flex flex-col gap-4"
             onSubmit={(event) => {
               event.preventDefault();
-              onSubmitEmailCode?.();
+              if (!busy) onSubmitEmailCode?.();
             }}
           >
             <Field
+              disabled={busy}
               label="Your code"
               name="code"
               type="text"
@@ -939,8 +956,8 @@ export function ResetView({
               onChange={(event) => onEmailCodeChange?.(event.target.value)}
               error={error}
             />
-            <Button type="submit" variant="primary">
-              Continue
+            <Button type="submit" variant="primary" aria-disabled={busy} aria-busy={busy} className="aria-disabled:opacity-50">
+              {busy ? "Please wait…" : "Continue"}
             </Button>
           </form>
         </AuthScreen>
@@ -951,8 +968,8 @@ export function ResetView({
           title="Create a new passkey"
           lead="Create a passkey on this device to sign in from now on. Your old passkeys will stop working, and any other devices will be signed out."
         >
-          <Button type="button" variant="primary" onClick={onCreatePasskey}>
-            Create a passkey
+          <Button type="button" variant="primary" aria-disabled={busy} aria-busy={busy} className="aria-disabled:opacity-50" onClick={() => { if (!busy) onCreatePasskey?.(); }}>
+            {busy ? "Please wait…" : "Create a passkey"}
           </Button>
           {error ? (
             <p role="alert" className="text-sm text-danger">
@@ -968,6 +985,7 @@ export function ResetView({
           lead="Here's your new recovery code. Write it down and keep it safe, and we'll only show it once."
         >
           <SaveRecoveryCode
+            working={busy}
             code={recoveryCode}
             savedConfirmed={savedConfirmed}
             onSavedConfirmedChange={onSavedConfirmedChange}

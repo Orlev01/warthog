@@ -51,7 +51,7 @@ import assert from "node:assert/strict";
 import { createHash, randomBytes, randomUUID } from "node:crypto";
 
 import { createResetExecutor } from "./reset-executor";
-import { completeAccountReset } from "../auth/account-reset";
+import { completeAccountReset, RESET_WAIT_MS } from "../auth/account-reset";
 
 import { createUser } from "../db/users";
 import { addCard, listCards } from "../db/cards";
@@ -244,7 +244,7 @@ test("completeAccountReset with the real executor erases the vault but keeps low
     assert.equal((await listIdentityFields(db, userId, DEK)).length, 1, "precondition: a low-tier field exists");
     assert.ok((await countActivity(db, userId)) >= 1, "precondition: an activity entry exists");
 
-    const outcome = await completeAccountReset(db, { userId }, { executor: createResetExecutor(db) });
+    const outcome = await completeAccountReset(db, { userId }, { executor: createResetExecutor(db), clock: fixedClock(new Date(NOW.getTime() + RESET_WAIT_MS)) });
     assert.deepEqual(outcome, { ok: true }, "a due reset completes with the real executor");
 
     // The VK-wrapped vault data is gone.
@@ -282,7 +282,7 @@ test("after the reset, a previously-issued bearer token and access key no longer
     assert.equal(before.length, 2, "precondition: both agents exist");
     assert.ok(before.every((agent) => agent.status === "connected"), "precondition: both agents are connected");
 
-    await completeAccountReset(db, { userId }, { executor: createResetExecutor(db) });
+    await completeAccountReset(db, { userId }, { executor: createResetExecutor(db), clock: fixedClock(new Date(NOW.getTime() + RESET_WAIT_MS)) });
 
     // Neither credential verifies any more.
     assert.equal(await verifies(db, a.rawToken), false, "agent A's token no longer verifies");
@@ -309,7 +309,7 @@ test("after the reset, the person's connections are removed", async () => {
 
     assert.equal((await listConnectionsForUser(db, userId)).length, 2, "precondition: two connections exist");
 
-    await completeAccountReset(db, { userId }, { executor: createResetExecutor(db) });
+    await completeAccountReset(db, { userId }, { executor: createResetExecutor(db), clock: fixedClock(new Date(NOW.getTime() + RESET_WAIT_MS)) });
 
     assert.deepEqual(await listConnectionsForUser(db, userId), [], "the person's connections are removed");
   } finally {

@@ -79,6 +79,7 @@ import { createUser } from "@/server/db/users";
 import { createSession, type Session } from "@/server/auth/session";
 import { createApproval } from "@/server/db/approvals";
 import { createAgent } from "@/server/db/agents";
+import { createRecord } from "@/server/db/life-admin-records";
 import { saveIdentityField } from "@/server/db/identity-fields";
 import { createDbRecorder } from "@/server/activity/writer";
 import { localAesKeyWrapper, type KeyWrapper } from "@/server/crypto/key-wrapper";
@@ -108,6 +109,31 @@ const SET_UP_TITLES = [
   "Connect a service",
   "Connect an agent",
 ] as const;
+
+test("reminders use the owner's saved title or name and friendly category fallbacks", async () => {
+  const db = await freshDb();
+  try {
+    const owner = await seedSignedIn(db, "reminder-owner@example.com");
+    const other = await seedSignedIn(db, "reminder-other@example.com");
+    for (const [kind, fields] of [
+      ["subscription", { name: "Mobile plan" }],
+      ["receipt_warranty", { title: "Laptop", name: "Other name" }],
+      ["renewal_appointment", { what: "Passport" }],
+      ["subscription", { name: "   " }],
+      ["receipt_warranty", {}],
+      ["renewal_appointment", {}],
+    ] as const) {
+      await createRecord(db, { userId: owner.userId, kind, fields, dueDate: "2027-02-28", status: "active", source: { kind: "person" } }, owner.dek);
+    }
+    await createRecord(db, { userId: other.userId, kind: "subscription", fields: { name: "Other person's private title" }, dueDate: "2027-02-28", status: "active", source: { kind: "person" } }, other.dek);
+    const view = await makeActions(db).load(owner.session);
+    assert.deepEqual(view.reminders.map((reminder) => reminder.title).sort(), [
+      "Laptop", "Mobile plan", "Passport", "Receipt or warranty", "Renewal or appointment", "Subscription",
+    ].sort());
+  } finally {
+    await db.close();
+  }
+});
 
 // --- the view model the loader returns -----------------------------------------
 // Derived from the function itself so the test pins the BEHAVIOURAL fields without

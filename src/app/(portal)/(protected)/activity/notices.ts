@@ -30,7 +30,7 @@ export function noticeLocation(successCode: string, outcome: ActionOutcome | unk
   return `${SCREEN}?notice=${encodeURIComponent(code)}`;
 }
 
-export type ActivityNotice = { tone: "done" | "problem"; text: string };
+export type ActivityNotice = { tone: "done" | "problem" | "waiting"; text: string; action?: { href: string; label: string } };
 
 // The plain-words copy (and tone) for every code a finished wrapper can emit: the two
 // success codes, the boundary's invalid_request, and the stable refusal codes
@@ -38,6 +38,9 @@ export type ActivityNotice = { tone: "done" | "problem"; text: string };
 const NOTICES: Record<string, ActivityNotice> = {
   dispute_filed: { tone: "done", text: "Your dispute has been recorded against that activity." },
   undo_done: { tone: "done", text: "That action has been undone." },
+  undo_pending: { tone: "waiting", text: "Undo is waiting for your approval. The action has not been undone.",
+    action: { href: "/inbox", label: "Review approval" } },
+  undo_failed: { tone: "problem", text: "The service couldn't complete the undo. Check the activity and service before trying again." },
   dispute_refused: { tone: "problem", text: "That activity entry can't be disputed." },
   undo_refused: { tone: "problem", text: "That action couldn't be undone." },
   invalid_request: { tone: "problem", text: "Nothing was changed: that request wasn't valid. Please try again." },

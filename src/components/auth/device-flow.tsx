@@ -59,6 +59,7 @@ export interface DeviceFlowDeps {
 }
 
 export interface DeviceFlowState {
+  readonly busy: boolean;
   readonly phase: DevicePhase;
   readonly email: string;
   // The emailed one-time code the person types (the request's first factor).
@@ -106,8 +107,11 @@ export function createDeviceFlow(deps: DeviceFlowDeps): DeviceFlowController {
   // The collection handle lives in this closure, never in the rendered snapshot — it is
   // machinery the person never sees.
   let requestId: string | undefined;
+  let generation = 0;
+  let pollingGeneration: number | undefined;
 
   let state: DeviceFlowState = {
+    busy: false,
     phase: "code",
     email: "",
     code: "",
@@ -116,6 +120,18 @@ export function createDeviceFlow(deps: DeviceFlowDeps): DeviceFlowController {
   function set(patch: Partial<DeviceFlowState>): void {
     state = { ...state, ...patch };
     deps.onChange?.();
+  }
+
+  async function run(action: () => Promise<void>, failure: string): Promise<void> {
+    if (state.busy || state.phase !== "code") return;
+    set({ busy: true, error: undefined, notice: undefined });
+    try {
+      await action();
+    } catch {
+      set({ error: failure });
+    } finally {
+      set({ busy: false });
+    }
   }
 
   // POST a JSON body to a device step. A thrown fetch (offline) returns null so the
@@ -134,7 +150,8 @@ export function createDeviceFlow(deps: DeviceFlowDeps): DeviceFlowController {
 
   async function readJson(response: Response): Promise<Record<string, unknown>> {
     try {
-      return (await response.json()) as Record<string, unknown>;
+      const body: unknown = await response.json();
+      return body !== null && typeof body === "object" ? body as Record<string, unknown> : {};
     } catch {
       return {};
     }
@@ -164,46 +181,59 @@ export function createDeviceFlow(deps: DeviceFlowDeps): DeviceFlowController {
     }
     const body = await readJson(response);
     requestId = typeof body.requestId === "string" ? body.requestId : undefined;
+    if (!requestId) { set({ error: REQUEST_FAILED_COPY }); return; }
     // The request is recorded and the push is on its way — start waiting for approval.
     set({ phase: "waiting", error: undefined });
   }
 
   async function poll(): Promise<void> {
     // Only the waiting step polls, and only once a handle exists.
-    if (requestId === undefined) return;
+    if (requestId === undefined || state.phase !== "waiting" || pollingGeneration === generation) return;
+    const currentGeneration = generation;
+    const currentRequest = requestId;
+    pollingGeneration = currentGeneration;
+    try {
 
-    const response = await post("collect", { requestId });
-    // A transient network blip is not a verdict — stay waiting and let the next tick retry.
-    if (!response) return;
+      const response = await post("collect", { requestId: currentRequest });
+      if (generation !== currentGeneration || requestId !== currentRequest) return;
+      // A transient network blip is not a verdict — stay waiting and let the next tick retry.
+      if (!response) return;
 
-    if (response.ok) {
-      // Approved: the session cookie rode the followed 303; go to /home.
-      set({ error: undefined });
-      deps.navigate(safeReturnPath(deps.returnTo));
-      return;
+      if (response.ok) {
+        // Approved: the session cookie rode the followed 303; go to /home.
+        requestId = undefined;
+        set({ error: undefined });
+        deps.navigate(safeReturnPath(deps.returnTo));
+        return;
+      }
+
+      const body = await readJson(response);
+      if (generation !== currentGeneration || requestId !== currentRequest) return;
+      // `not_approved` is the expected "still pending" answer — keep waiting, no error.
+      if (body.error === "not_approved") return;
+
+      // Anything else (unknown_request, …) is terminal: the handle can no longer be
+      // completed, so stop polling and offer to start again.
+      requestId = undefined;
+      set({ phase: "stopped", error: REQUEST_GONE_COPY });
+    } finally {
+      if (pollingGeneration === currentGeneration) pollingGeneration = undefined;
     }
-
-    const body = await readJson(response);
-    // `not_approved` is the expected "still pending" answer — keep waiting, no error.
-    if (body.error === "not_approved") return;
-
-    // Anything else (unknown_request, …) is terminal: the handle can no longer be
-    // completed, so stop polling and offer to start again.
-    requestId = undefined;
-    set({ phase: "stopped", error: REQUEST_GONE_COPY });
   }
 
   function startAgain(): void {
+    if (state.busy) return;
+    generation++;
     requestId = undefined;
-    set({ phase: "code", error: undefined });
+    set({ phase: "code", code: "", notice: undefined, error: undefined });
   }
 
   return {
     getState: () => state,
-    setEmail: (value) => set({ email: value }),
-    setCode: (value) => set({ code: value }),
-    sendCode,
-    requestApproval,
+    setEmail: (value) => { if (!state.busy) set({ email: value }); },
+    setCode: (value) => { if (!state.busy) set({ code: value }); },
+    sendCode: () => run(sendCode, SEND_CODE_FAILED_COPY),
+    requestApproval: () => run(requestApproval, REQUEST_FAILED_COPY),
     poll,
     startAgain,
   };
@@ -263,6 +293,7 @@ export function DeviceFlow(props: DeviceFlowProps = {}): React.ReactElement {
       code={state.code}
       error={state.error}
       notice={state.notice}
+      busy={state.busy}
       onEmailChange={(value) => flow.setEmail(value)}
       onCodeChange={(value) => flow.setCode(value)}
       onSendCode={() => {

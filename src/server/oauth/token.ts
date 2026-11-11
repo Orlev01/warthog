@@ -15,13 +15,13 @@
 //     relationship (base64url(SHA-256(verifier)) must equal the bound challenge) and
 //     that the client/redirect match the ones the code was issued to, then mint an
 //     opaque access token (1 hour) + refresh token (30 days), each stored ONLY as its
-//     SHA-256 hash bound to the code's connection.
+//     SHA-256 hash bound to the code's connection and validated issuing client.
 //
 //   refresh_token — resolve the presented refresh token (by hash). A CURRENT refresh
 //     token is rotated on EVERY use: it is retired and a fresh access+refresh pair is
-//     issued, bound to the same connection. A refresh token that resolves but is no
+//     issued, bound to the same connection and issuing client. A refresh token that resolves but is no
 //     longer current (retired by an earlier rotation, or lapsed) is a replay — the
-//     connection's tokens are revoked and the request is rejected with invalid_grant,
+//     client's tokens on that connection are revoked and the request is rejected with invalid_grant,
 //     so the then-current refresh token stops working too.
 //
 // Review fix A3 — single use is ATOMIC and a retried refresh is safe. The code is
@@ -157,7 +157,7 @@ async function exchangeAuthorizationCode(
         s256Challenge(verifier) !== authCode.codeChallenge) {
       return { ok: false, error: "invalid_grant" };
     }
-    return mintTokenPair({ ...deps, db: tx }, authCode.connectionId);
+    return mintTokenPair({ ...deps, db: tx }, authCode.connectionId, authCode.clientId);
   });
 }
 
@@ -168,31 +168,36 @@ async function exchangeRefreshToken(
   deps: TokenDeps,
 ): Promise<TokenResult> {
   const presented = params.get("refresh_token");
-  if (!presented) return { ok: false, error: "invalid_request" };
+  const clientId = params.get("client_id");
+  if (!presented || !clientId) return { ok: false, error: "invalid_request" };
   const identified = await resolveToken(deps.db, sha256Hex(presented));
   if (!identified || identified.kind !== "refresh") return { ok: false, error: "invalid_grant" };
   return withTransaction(deps.db, async (tx) => {
     await lockOAuthConnection(tx, identified.connectionId);
-    return rotateRefreshToken(presented, { ...deps, db: tx });
+    return rotateRefreshToken(presented, clientId, { ...deps, db: tx });
   });
 }
 
-async function rotateRefreshToken(presented: string, deps: TokenDeps): Promise<TokenResult> {
+async function rotateRefreshToken(presented: string, clientId: string, deps: TokenDeps): Promise<TokenResult> {
   const { db, clock, hmacKey } = deps;
   const presentedHash = sha256Hex(presented);
   const now = clock.now();
 
+  // Re-read under the revocation/rotation lock. Check the immutable client binding
+  // BEFORE retiring a current token or treating a stale token as a replay. A wrong
+  // client must neither obtain tokens nor revoke the legitimate client's family.
+  // Pre-migration rows have no trustworthy client identity and fail closed here.
+  const token = await resolveToken(db, presentedHash);
+  if (!token || token.kind !== "refresh" || token.clientId !== clientId) {
+    return { ok: false, error: "invalid_grant" };
+  }
+
   // Current: claim it — retire it in the same statement that checks it is current, so of
   // two concurrent refreshes only one rotates — and mint the pair with the derived
   // successor, bound to the same connection.
-  const claimed = await claimRefreshToken(db, presentedHash, now);
+  const claimed = await claimRefreshToken(db, presentedHash, clientId, now);
   if (claimed != null) {
-    return mintTokenPair(deps, claimed, successorOf(presented, hmacKey));
-  }
-
-  const token = await resolveToken(db, presentedHash);
-  if (token == null || token.kind !== "refresh") {
-    return { ok: false, error: "invalid_grant" };
+    return mintTokenPair(deps, claimed, clientId, successorOf(presented, hmacKey));
   }
 
   // Retired moments ago: a retry (or a request racing the one that rotated it). If the
@@ -206,17 +211,18 @@ async function rotateRefreshToken(presented: string, deps: TokenDeps): Promise<T
     if (
       next.kind === "refresh" &&
       next.connectionId === token.connectionId &&
+      next.clientId === clientId &&
       next.expiresAt.getTime() > now.getTime()
     ) {
-      return mintTokenPair(deps, token.connectionId, successor, { refreshExists: true });
+      return mintTokenPair(deps, token.connectionId, clientId, successor, { refreshExists: true });
     }
   }
 
   // A refresh token that resolves but is no longer current (retired by an earlier
   // rotation past the grace window, rotated onward already, or lapsed) is a replay:
-  // revoke every token on the connection so the then-current refresh token stops working
-  // too, and reject.
-  await revokeConnectionTokens(db, token.connectionId);
+  // revoke this client's tokens on the connection so its current refresh token stops
+  // working too. Other issuing clients are not part of the compromised family.
+  await revokeClientTokens(db, token.connectionId, clientId);
   return { ok: false, error: "invalid_grant" };
 }
 
@@ -227,6 +233,7 @@ async function rotateRefreshToken(presented: string, deps: TokenDeps): Promise<T
 async function mintTokenPair(
   deps: TokenDeps,
   connectionId: string,
+  clientId: string,
   refreshToken: string = mintBearer(deps.random),
   opts: { readonly refreshExists?: boolean } = {},
 ): Promise<TokenResult> {
@@ -238,6 +245,7 @@ async function mintTokenPair(
   await createToken(db, {
     tokenHash: sha256Hex(accessToken),
     connectionId,
+    clientId,
     kind: "access",
     expiresAt: new Date(now.getTime() + ACCESS_TTL_MS),
   });
@@ -245,6 +253,7 @@ async function mintTokenPair(
     await createToken(db, {
       tokenHash: sha256Hex(refreshToken),
       connectionId,
+      clientId,
       kind: "refresh",
       expiresAt: new Date(now.getTime() + REFRESH_TTL_MS),
     });
@@ -266,19 +275,19 @@ async function mintTokenPair(
 // replay is detectable) but no longer counts as current. Returns its connection, or null
 // when it was not a current refresh token — including when a concurrent request claimed
 // it first.
-async function claimRefreshToken(db: Db, tokenHash: string, now: Date): Promise<string | null> {
+async function claimRefreshToken(db: Db, tokenHash: string, clientId: string, now: Date): Promise<string | null> {
   const result = await db.query(
     `UPDATE oauth_tokens SET expires_at = $1::timestamptz
-     WHERE token_hash = $2 AND kind = 'refresh' AND expires_at > $1::timestamptz
+     WHERE token_hash = $2 AND client_id = $3 AND kind = 'refresh' AND expires_at > $1::timestamptz
      RETURNING connection_id`,
-    [now.toISOString(), tokenHash],
+    [now.toISOString(), tokenHash, clientId],
   );
   const row = result.rows[0];
   return row ? (row.connection_id as string) : null;
 }
 
-// Revoke every token bound to a connection (both kinds), used when a retired refresh
-// token is replayed.
-async function revokeConnectionTokens(db: Db, connectionId: string): Promise<void> {
-  await db.query("DELETE FROM oauth_tokens WHERE connection_id = $1::uuid", [connectionId]);
+// A replay revokes both kinds for the issuing client on this connection. Explicit
+// connection revocation/disconnect still removes every client's tokens and codes.
+async function revokeClientTokens(db: Db, connectionId: string, clientId: string): Promise<void> {
+  await db.query("DELETE FROM oauth_tokens WHERE connection_id = $1::uuid AND client_id = $2", [connectionId, clientId]);
 }

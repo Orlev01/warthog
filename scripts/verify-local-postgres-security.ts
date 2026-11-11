@@ -5,8 +5,15 @@ import { createHash, randomUUID } from "node:crypto";
 import { withTransaction, type Db } from "../src/server/db/index";
 import { createUser } from "../src/server/db/users";
 import { createSession, verifySession } from "../src/server/auth/session";
+import { issueRecoveryCode, verifyRecoveryCode } from "../src/server/auth/recovery";
+import { createRecoverHandler } from "../src/app/(auth)/recover/handler";
+import { createAuthenticator } from "../src/test/authenticator";
+import { createOutbox } from "../src/server/notify/outbox";
+import type { PublicKeyCredentialCreationOptionsJSON } from "@simplewebauthn/server";
 import { createAuthCode, createClient, createClientWithinCap } from "../src/server/oauth/store";
-import { exchangeToken } from "../src/server/oauth/token";
+import { exchangeToken, REFRESH_REUSE_GRACE_MS } from "../src/server/oauth/token";
+import { verifyBearer } from "../src/server/oauth/verify-bearer";
+import { loadConfig } from "../src/server/config";
 import { createRevokeHandler } from "../src/app/oauth/revoke/handler";
 import { systemRandom } from "../src/server/seams/random";
 import { createDbRecorder, readActivity } from "../src/server/activity/writer";
@@ -155,6 +162,140 @@ async function registrationCheck(runtime: Db) {
   }
 }
 
+async function oauthClientBindingChecks(runtime: Db) {
+  const clientIds = [`local-binding-a-${randomUUID()}`, `local-binding-b-${randomUUID()}`];
+  const connection = randomUUID();
+  const legacyConnection = randomUUID();
+  const issue = async (clientId: string) => {
+    const code = randomUUID();
+    await createAuthCode(runtime, { codeHash: hash(code), connectionId: connection, clientId,
+      codeChallenge: createHash("sha256").update(verifier).digest("base64url"),
+      redirectUri: "https://synthetic.example/callback", resource: "https://synthetic.example/mcp",
+      expiresAt: new Date(now.getTime() + 60_000) });
+    const result = await exchangeToken({ params: new URLSearchParams({ grant_type: "authorization_code",
+      client_id: clientId, code, code_verifier: verifier, redirect_uri: "https://synthetic.example/callback" }) }, tokenDeps(runtime));
+    assert.ok(result.ok);
+    return result.body;
+  };
+  const params = (token: string, clientId: string) => new URLSearchParams({ grant_type: "refresh_token", refresh_token: token, client_id: clientId });
+  try {
+    // The migration is applied by the parent harness using the migration role;
+    // these reads/writes exercise the app role's privileges on its added column.
+    for (const clientId of clientIds) await createClient(runtime, { clientId, registration: "dcr", redirectUris: ["https://synthetic.example/callback"] });
+    const a = await issue(clientIds[0]!);
+    const b = await issue(clientIds[1]!);
+    assert.deepEqual(new Set((await runtime.query("SELECT client_id FROM oauth_tokens WHERE connection_id = $1", [connection])).rows.map(row => row.client_id)), new Set(clientIds));
+
+    const paused = deferred<void>(), resume = deferred<void>(), secondPid = deferred<number>();
+    const rotating = exchangeToken({ params: params(a.refresh_token, clientIds[0]!) }, tokenDeps(observed(runtime, {
+      intercept: async (text, _values, run) => {
+        const result = await run();
+        if (/UPDATE oauth_tokens SET expires_at/.test(text)) { paused.resolve(); await resume.promise; }
+        return result;
+      },
+    })));
+    let wrongClient: ReturnType<typeof exchangeToken> | undefined;
+    try {
+      await beforeCompletion(paused.promise, rotating, "bound refresh claim");
+      wrongClient = exchangeToken({ params: params(a.refresh_token, clientIds[1]!) }, tokenDeps(observed(runtime, { pid: secondPid.resolve })));
+      const pid = await beforeCompletion(secondPid.promise, wrongClient, "wrong-client refresh backend");
+      await assertBlocked(runtime, pid, "client binding versus refresh rotation");
+      resume.resolve();
+      const rotated = await rotating;
+      assert.ok(rotated.ok);
+      assert.deepEqual(await wrongClient, { ok: false, error: "invalid_grant" });
+      const retry = await exchangeToken({ params: params(a.refresh_token, clientIds[0]!) }, tokenDeps(runtime));
+      assert.ok(retry.ok);
+      assert.equal(retry.body.refresh_token, rotated.body.refresh_token);
+      const later = { ...tokenDeps(runtime), clock: { now: () => new Date(now.getTime() + REFRESH_REUSE_GRACE_MS + 1) } };
+      assert.deepEqual(await exchangeToken({ params: params(a.refresh_token, clientIds[0]!) }, later), { ok: false, error: "invalid_grant" });
+      assert.equal((await runtime.query("SELECT token_hash FROM oauth_tokens WHERE connection_id = $1 AND client_id = $2", [connection, clientIds[0]])).rows.length, 0);
+      assert.ok((await exchangeToken({ params: params(b.refresh_token, clientIds[1]!) }, later)).ok);
+    } finally { resume.resolve(); await Promise.allSettled([rotating, wrongClient]); }
+
+    const legacyAccess = randomUUID(), legacyRefresh = randomUUID();
+    await runtime.query("INSERT INTO oauth_tokens (token_hash, connection_id, kind, expires_at) VALUES ($1,$3,'access',$4),($2,$3,'refresh',$4)",
+      [hash(legacyAccess), hash(legacyRefresh), legacyConnection, new Date(now.getTime() + 3_600_000).toISOString()]);
+    assert.deepEqual(await exchangeToken({ params: params(legacyRefresh, clientIds[0]!) }, tokenDeps(runtime)), { ok: false, error: "invalid_grant" });
+    const config = loadConfig({ NODE_ENV: "test", DATABASE_URL: "pglite:memory", PUBLIC_BASE_URL: "https://synthetic.example", WEBAUTHN_RP_ID: "synthetic.example",
+      WARTHOG_HMAC_KEY: "ERERERERERERERERERERERERERERERERERERERERERE=", WARTHOG_DEV_KEK: "IiIiIiIiIiIiIiIiIiIiIiIiIiIiIiIiIiIiIiIiIiI=" });
+    assert.deepEqual(await verifyBearer(new Request("https://synthetic.example/mcp", { headers: { authorization: `Bearer ${legacyAccess}` } }),
+      { db: runtime, config, clock }), { ok: true, connectionId: legacyConnection });
+  } finally {
+    await runtime.query("DELETE FROM oauth_tokens WHERE connection_id IN ($1,$2)", [connection, legacyConnection]);
+    await runtime.query("DELETE FROM oauth_auth_codes WHERE connection_id = $1", [connection]);
+    await runtime.query("DELETE FROM oauth_clients WHERE client_id IN ($1,$2)", clientIds);
+  }
+}
+
+async function recoveryGenerationChecks(runtime: Db, purge: Db) {
+  const origin = "https://synthetic.example";
+  const request = (body: unknown) => new Request(`${origin}/api/auth/recover`, {
+    method: "POST", headers: { origin, "content-type": "application/json" }, body: JSON.stringify(body),
+  });
+  for (const firstOperation of ["rotation", "registration"] as const) {
+    const user = await createUser(runtime, { email: `local-recovery-${randomUUID()}@example.test`, wrappedDek: "synthetic-only" });
+    const outbox = createOutbox();
+    const handlerFor = (db: Db) => createRecoverHandler({ db, clock, random: systemRandom, emailSender: outbox,
+      hmacKey: new Uint8Array(32).fill(17), rpId: "synthetic.example", publicOrigin: origin });
+    const paused = deferred<void>(), resume = deferred<void>(), secondPid = deferred<number>();
+    let registering: Promise<Response> | undefined;
+    let rotating: Promise<{ code: string }> | undefined;
+    try {
+      const original = await issueRecoveryCode(runtime, user.id, { random: systemRandom });
+      const handler = handlerFor(runtime);
+      const identified = await handler.identify(request({ email: user.email }));
+      assert.equal(identified.status, 200);
+      const { recoveryId } = await identified.json() as { recoveryId: string };
+      const emailCode = outbox.list().find(message => message.channel === "email")?.body.match(/\b\d{6}\b/)?.[0];
+      assert.ok(emailCode);
+      assert.equal((await handler.verifyEmail(request({ recoveryId, code: emailCode }))).status, 200);
+      const verified = await handler.verifyCode(request({ recoveryId, recoveryCode: original.code }));
+      assert.equal(verified.status, 200);
+      const { registrationOptions } = await verified.json() as { registrationOptions: PublicKeyCredentialCreationOptionsJSON };
+      const registrationResponse = await createAuthenticator({ origin }).register(registrationOptions);
+      const registrationRequest = () => request({ recoveryId, registrationResponse });
+
+      if (firstOperation === "rotation") {
+        rotating = withTransaction(runtime, async tx => {
+          const result = await issueRecoveryCode(tx, user.id, { random: systemRandom });
+          paused.resolve(); await resume.promise;
+          return result;
+        });
+        await beforeCompletion(paused.promise, rotating, "recovery rotation update");
+        registering = handlerFor(observed(runtime, { pid: secondPid.resolve })).registerPasskey(registrationRequest());
+        const pid = await beforeCompletion(secondPid.promise, registering, "recovery registration backend");
+        await assertBlocked(runtime, pid, "recovery registration versus code regeneration");
+        resume.resolve();
+        const replacement = await rotating;
+        assert.equal((await registering).status, 400);
+        assert.equal((await runtime.query("SELECT credential_id FROM passkeys WHERE user_id = $1", [user.id])).rows.length, 0);
+        assert.ok(await verifyRecoveryCode(runtime, user.id, replacement.code));
+      } else {
+        registering = handlerFor(observed(runtime, { intercept: async (text, _values, run) => {
+          const result = await run();
+          if (/SELECT salt FROM recovery_codes.*FOR UPDATE/.test(text)) { paused.resolve(); await resume.promise; }
+          return result;
+        } })).registerPasskey(registrationRequest());
+        await beforeCompletion(paused.promise, registering, "recovery registration lock");
+        rotating = withTransaction(observed(runtime, { pid: secondPid.resolve }), tx => issueRecoveryCode(tx, user.id, { random: systemRandom }));
+        const pid = await beforeCompletion(secondPid.promise, rotating, "recovery rotation backend");
+        await assertBlocked(runtime, pid, "code regeneration versus recovery registration");
+        resume.resolve();
+        const registered = await registering;
+        assert.equal(registered.status, 200);
+        const replacement = await rotating;
+        assert.equal((await runtime.query("SELECT credential_id FROM passkeys WHERE user_id = $1", [user.id])).rows.length, 1);
+        assert.ok(await verifyRecoveryCode(runtime, user.id, replacement.code), "the later owner's rotation wins after registration commits");
+        assert.equal(await verifyRecoveryCode(runtime, user.id, original.code), false);
+      }
+    } finally {
+      resume.resolve(); await Promise.allSettled([registering, rotating]);
+      await purge.query("DELETE FROM users WHERE id = $1", [user.id]);
+    }
+  }
+}
+
 async function sessionCheck(runtime: Db, purge: Db) {
   const user = await createUser(runtime, { email: `local-session-${randomUUID()}@example.test`, wrappedDek: "synthetic-only" });
   const previous = await createSession(runtime, user.id, { clock, random: systemRandom });
@@ -279,9 +420,11 @@ export async function verifyPostgresSecurityContention(runtime: Db, purge: Db): 
   if (process.platform !== "linux" || process.env.WARTHOG_LOCAL_PG_CHECK !== "1") throw new Error("Local Compose check required");
   assert.equal((await runtime.query("SHOW cluster_name")).rows[0]?.cluster_name, "warthog-local-certification");
   await oauthChecks(runtime);
+  await oauthClientBindingChecks(runtime);
+  await recoveryGenerationChecks(runtime, purge);
   await registrationCheck(runtime);
   await sessionCheck(runtime, purge);
   await activityChecks(runtime, purge);
   await receiptChecks(runtime, purge);
-  console.log("PostgreSQL security contention: OAuth rollback/revocation, DCR final-slot capacity, session/deletion activity-chain and receipt upload/deletion locks passed.");
+  console.log("PostgreSQL security contention: OAuth rollback/revocation/client binding, recovery generation ordering, DCR final-slot capacity, session/deletion activity-chain and receipt upload/deletion locks passed.");
 }

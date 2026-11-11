@@ -119,46 +119,58 @@ export function createSigninFlow(deps: SigninFlowDeps): SigninFlowController {
 
   async function readJson(response: Response): Promise<Record<string, unknown>> {
     try {
-      return (await response.json()) as Record<string, unknown>;
+      const body: unknown = await response.json();
+      return body !== null && typeof body === "object" ? body as Record<string, unknown> : {};
     } catch {
       return {};
     }
   }
 
   async function signInWithPasskey(): Promise<void> {
-    // begin-passkey names the account to challenge and hands back the options.
-    const begin = await post("begin-passkey", { email: state.email });
-    if (!begin || !begin.ok) {
-      set({ error: PASSKEY_FAILED_COPY });
-      return;
-    }
-    const body = await readJson(begin);
-    const options = body.options as PublicKeyCredentialRequestOptionsJSON | undefined;
-    if (options === undefined) {
-      set({ error: PASSKEY_FAILED_COPY });
-      return;
-    }
-
-    // The OS passkey prompt. A dismissed / timed-out prompt rejects here: stay on the
-    // step with a plain message and a retry, and post NOTHING to the server.
-    let authenticationResponse: AuthenticationResponseJSON;
+    // Update the controller synchronously: a second tap can arrive before React
+    // renders the pending state. Keep the identity fixed for the whole ceremony.
+    if (state.busy) return;
+    const email = state.email;
+    set({ busy: true, error: undefined });
     try {
-      authenticationResponse = await deps.startAuthentication({ optionsJSON: options });
-    } catch {
-      set({ error: PASSKEY_CANCELLED_COPY });
-      return;
-    }
+      // begin-passkey names the account to challenge and hands back the options.
+      const begin = await post("begin-passkey", { email });
+      if (!begin || !begin.ok) {
+        set({ error: PASSKEY_FAILED_COPY });
+        return;
+      }
+      const body = await readJson(begin);
+      const options = body.options as PublicKeyCredentialRequestOptionsJSON | undefined;
+      if (options === undefined) {
+        set({ error: PASSKEY_FAILED_COPY });
+        return;
+      }
 
-    const finish = await post("finish-passkey", {
-      email: state.email,
-      authenticationResponse,
-    });
-    if (!finish || !finish.ok) {
+      // The OS passkey prompt. A dismissed / timed-out prompt rejects here: stay on the
+      // step with a plain message and a retry, and post NOTHING to the server.
+      let authenticationResponse: AuthenticationResponseJSON;
+      try {
+        authenticationResponse = await deps.startAuthentication({ optionsJSON: options });
+      } catch {
+        set({ error: PASSKEY_CANCELLED_COPY });
+        return;
+      }
+
+      const finish = await post("finish-passkey", {
+        email,
+        authenticationResponse,
+      });
+      if (!finish || !finish.ok) {
+        set({ error: PASSKEY_FAILED_COPY });
+        return;
+      }
+      set({ error: undefined });
+      deps.navigate(safeReturnPath(deps.returnTo));
+    } catch {
       set({ error: PASSKEY_FAILED_COPY });
-      return;
+    } finally {
+      set({ busy: false });
     }
-    set({ error: undefined });
-    deps.navigate(safeReturnPath(deps.returnTo));
   }
 
   function useAuthenticatorApp(): void {
@@ -207,7 +219,7 @@ export function createSigninFlow(deps: SigninFlowDeps): SigninFlowController {
       signinId = undefined;
       set({ email: value, ...(state.phase === "passkey" ? {} : { phase: "email" as const, code: "" }) });
     },
-    setCode: (value) => set({ code: value }),
+    setCode: (value) => { if (!state.busy) set({ code: value }); },
     signInWithPasskey,
     useAuthenticatorApp,
     signInWithCode,
