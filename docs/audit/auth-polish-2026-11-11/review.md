@@ -29,18 +29,19 @@ migration, new dependency, external asset or production account-data change.
 
 ## Verification
 
-- **5,234 tests passed** in the initial full run, with no failures, skips or
-  cancellations. TypeScript and the production build/startup suite passed.
-  Regression coverage checks explicit home links across all nine signup/sign-in
-  states and destination preservation. The subsequent form-feedback correction
-  passes all **206 focused checks**, including a regression case for passkey
-  cancellation and delivery failures; final full verification is recorded with
-  the release outcome.
+- All **5,235 tests passed**, with no failures, skips or cancellations.
+  TypeScript and the production build/startup suite passed. All **206 focused
+  checks** also passed. Regression coverage checks explicit home links across all
+  nine signup/sign-in states, destination preservation and form-level feedback
+  for passkey cancellation and email-delivery failures.
 - **63 authentication layout cases** used 13 synthetic states across phone and
   desktop, with additional breakpoint, error, long-email and short-landscape
   cases. A 320px sweep used actual 24/12/20/12px safe-area padding. Light and dark
   themes were checked. No document/child overflow or undersized checked controls
   were observed.
+- Eight additional browser cases checked form-level feedback at 320, 390,
+  844 × 390 and 1440px. Each kept one associated alert, avoided marking a valid
+  email invalid and remained within the viewport.
 - **20 public-page layout cases** covered 320, 360, 390, 640, 768, 1023, 1024,
   1440 and 1920px plus 844 × 390 landscape, in both themes. All section links
   remained available and the document stayed within its viewport.
@@ -56,8 +57,8 @@ migration, new dependency, external asset or production account-data change.
 
 Screenshots below are from the local production build. The tests do not establish
 hardware-passkey acceptance, authenticator QR scanning, native device keyboard
-behavior or assistive-technology speech. Source/image CI and production outcome
-are recorded separately during release.
+behavior or assistive-technology speech. Source/image CI and the verified production outcome
+are recorded in the [release record](../auth-polish-release-2026-11-11.md).
 
 ## Visual evidence
 
