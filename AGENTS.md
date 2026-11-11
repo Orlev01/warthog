@@ -18,6 +18,10 @@ and only the focused skills relevant to the change:
 These are contributor skills, separate from the application's user-authored Skills feature.
 Use the current checkout explicitly when other agents are working in another worktree.
 
+For the signed-out landing page, also follow the
+[public front-door design](docs/design/public-front-door.md): its marketing
+hierarchy shares the console's tokens but has its own bounded composition.
+
 ## Agent-first product model
 
 Read [the agent-first decision](docs/adr/agent-first-management.md) when changing

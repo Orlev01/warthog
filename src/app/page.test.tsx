@@ -1,3 +1,5 @@
+import { withPageRequest } from "@/test/page-request";
+
 // E05-S01 — Home page entry (src/app/page.tsx).
 //
 // RED-first: today this entry is the operator placeholder front door — it renders
@@ -63,18 +65,14 @@ function hrefs(markup: string): (string | null)[] {
   return out;
 }
 
-// Render the page entry's default export (the route's screen). The thin entry
-// mounts a static view, so it renders without a live request scope. `searchParams`
-// / `params` are supplied as resolved promises (the Next 15 shape) so an entry that
-// reads them sees an empty, fresh GET; one that ignores them is unaffected. The
-// result may be sync JSX or an async server component — await either.
+// Render the real page in an anonymous request, with no cookie or database.
 async function renderPage(Page: unknown): Promise<string> {
   assert.equal(
     typeof Page,
     "function",
     "the home entry must have a default-exported page component",
   );
-  const element = await Promise.resolve(
+  const element = await withPageRequest("/", undefined, () =>
     (Page as (props: unknown) => unknown)({
       searchParams: Promise.resolve({}),
       params: Promise.resolve({}),
@@ -87,8 +85,8 @@ async function renderPage(Page: unknown): Promise<string> {
 //
 // The home route sits at the top level (not inside a protected route group), so an
 // unauthenticated visitor must get the page, not a guard redirect/throw. If the
-// builder put it behind a guard that reads a session, rendering here (no request
-// scope, no session) would throw — this catches that. A screen that renders is the
+// builder put it behind a guard that reads a session, rendering here (an anonymous
+// request) would throw — this catches that. A screen that renders is the
 // render-test proxy for "returns 200 with no authentication".
 
 test("home page renders for an unauthenticated visitor (public, not behind a guard)", async () => {

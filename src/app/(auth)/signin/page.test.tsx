@@ -1,3 +1,5 @@
+import { withPageRequest } from "@/test/page-request";
+
 // E04-S13 — Sign-in page entry (src/app/(auth)/signin/page.tsx).
 //
 // RED-first: today this entry is an operator placeholder (it renders the generic
@@ -93,18 +95,14 @@ function actionableButtons(markup: string): { name: string; attrs: string }[] {
     .map((b) => ({ name: visibleText(b.inner) || attr(b.attrs, "aria-label") || "", attrs: b.attrs }));
 }
 
-// Render the page entry's default export (the route's screen). The thin entry mounts
-// a view from props alone, so it renders without a live request scope. `searchParams`
-// / `params` are supplied as resolved promises (the Next 15 shape) so an entry that
-// reads them sees an empty, fresh-GET request; an entry that ignores them is
-// unaffected. The result may be sync JSX or an async server component — await either.
+// Render the real page in an anonymous request, with no cookie or database.
 async function renderPage(Page: unknown): Promise<string> {
   assert.equal(
     typeof Page,
     "function",
     "the sign-in entry must have a default-exported page component",
   );
-  const element = await Promise.resolve(
+  const element = await withPageRequest("/signin", undefined, () =>
     (Page as (props: unknown) => unknown)({
       searchParams: Promise.resolve({}),
       params: Promise.resolve({}),
@@ -162,10 +160,10 @@ test("sign-in page entry presents an actionable, named control to sign in (no de
 });
 
 // AC2 (outside any guard — the point of this task) — sign-in must be reachable by a
-// signed-out visitor: the thin entry renders from props alone and must NOT sit behind
+// signed-out visitor: the entry renders without a session and must NOT sit behind
 // a guard that reads a session and redirects/throws when none is present (a guard
 // wrapping its own sign-in page loops it to itself). If the builder wrapped it in a
-// protected route group, rendering here (no request scope, no session) would throw —
+// protected route group, rendering here (an anonymous request) would throw —
 // this test catches that.
 test("sign-in page entry renders for a signed-out visitor (not behind a protected guard)", async () => {
   let markup: string;

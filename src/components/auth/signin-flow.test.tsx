@@ -1,3 +1,5 @@
+import { withPageRequest } from "@/test/page-request";
+
 // E04-S25 — Client sign-in flow (src/components/auth/signin-flow.tsx).
 //
 // RED-first: src/components/auth/signin-flow.tsx does NOT exist yet, so importing
@@ -605,13 +607,10 @@ function actionableButtons(markup: string): { name: string; attrs: string }[] {
     .map((b) => ({ name: visibleText(b.inner) || attr(b.attrs, "aria-label") || "", attrs: b.attrs }));
 }
 
-// Render the page entry's default export (its only framework field). It mounts the flow
-// at its first step from props alone, so it renders without a live request scope; the
-// Next 15 resolved-promise props are supplied in case the entry reads them. A sync entry
-// or an async server component are both awaited.
+// Render the actual page in an anonymous request, preserving the public sign-in flow.
 async function renderPage(Page: unknown): Promise<string> {
   assert.equal(typeof Page, "function", "the sign-in entry must have a default-exported page component");
-  const element = await Promise.resolve(
+  const element = await withPageRequest("/signin", undefined, () =>
     (Page as (props: unknown) => unknown)({
       searchParams: Promise.resolve({}),
       params: Promise.resolve({}),
@@ -731,7 +730,7 @@ test("an unsafe return path is ignored: the flow goes to /home", async () => {
 test("the sign-in page passes a safe ?next= to the flow and drops an unsafe one", async () => {
   const render = async (next: unknown) =>
     renderToStaticMarkup(
-      (await Promise.resolve(
+      (await withPageRequest("/signin", undefined, () =>
         (SigninPage as (props: unknown) => unknown)({
           searchParams: Promise.resolve({ next }),
           params: Promise.resolve({}),

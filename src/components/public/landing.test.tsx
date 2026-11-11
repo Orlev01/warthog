@@ -96,6 +96,26 @@ function render(): string {
   return renderToStaticMarkup(<Landing />);
 }
 
+test("product preview is explicitly illustrative and compatibility is qualified", () => {
+  const markup = render();
+  const text = visibleText(markup);
+  assert.match(text, /illustrative workspace/i);
+  assert.match(text, /availability varies by platform and plan/i);
+  assert.match(text, /only.*through Warthog/i);
+  assert.ok(anchors(markup).some((link) => link.href === "/help/compatibility"));
+});
+
+test("public navigation has real destinations and FAQs use native disclosure controls", () => {
+  const markup = render();
+  for (const { href } of anchors(markup)) {
+    assert.ok(href && href !== "#", "no placeholder links");
+    if (href.startsWith("#")) assert.ok(markup.includes(`id="${href.slice(1)}"`));
+  }
+  assert.equal((markup.match(/<h1\b/g) ?? []).length, 1);
+  assert.ok((markup.match(/<summary\b/g) ?? []).length >= 3);
+  assert.ok(!/<button\b/.test(markup), "the static preview must not pretend to have live controls");
+});
+
 // The positioning line (brief overview; design_ux primary_journey) — asserted
 // without a trailing period so either "…home" or "…home." satisfies it.
 const POSITIONING_LINE = "Your agents work for you, on your terms, from your home";
