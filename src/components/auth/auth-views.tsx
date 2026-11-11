@@ -354,6 +354,8 @@ export function SigninView({
   onSubmitCode,
   returnTo,
 }: SigninViewProps) {
+  // SigninView is the page's single primary screen, like AuthScreen's heading.
+  const formErrorId = "signin-error";
   switch (step) {
     case "passkey":
       return (
@@ -363,6 +365,7 @@ export function SigninView({
         >
           <form
             className="flex flex-col gap-4"
+            aria-describedby={error ? formErrorId : undefined}
             onSubmit={(event) => {
               event.preventDefault();
               if (!busy) onPasskey?.();
@@ -376,8 +379,8 @@ export function SigninView({
               value={email}
               onChange={(event) => onEmailChange?.(event.target.value)}
               disabled={busy}
-              error={error}
             />
+            {error ? <p id={formErrorId} role="alert" className="text-sm text-danger">{error}</p> : null}
             <Button type="submit" variant="primary" aria-disabled={busy} aria-busy={busy} className="aria-disabled:opacity-50">
               <Fingerprint size={18} aria-hidden="true" /> {busy ? "Signing in…" : "Sign in with your passkey"}
             </Button>
@@ -401,6 +404,7 @@ export function SigninView({
         >
           <form
             className="flex flex-col gap-4"
+            aria-describedby={step === "email" && error ? formErrorId : undefined}
             onSubmit={(event) => {
               event.preventDefault();
               if (!busy) onSubmitCode?.();
@@ -414,8 +418,8 @@ export function SigninView({
               value={email}
               onChange={(event) => onEmailChange?.(event.target.value)}
               disabled={busy}
-              error={error}
             /> : <p className="wh-auth-identity">{email}</p>}
+            {step === "email" && error ? <p id={formErrorId} role="alert" className="text-sm text-danger">{error}</p> : null}
             {step !== "email" ? <Field
               label={step === "email-code" ? "Email code" : "Authenticator code"}
               name="code"

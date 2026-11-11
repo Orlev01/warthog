@@ -19,7 +19,8 @@ pages consistent with the rest of Warthog.
   confirmation and warnings remain visible.
 - Sign-in separates the main action from alternate/recovery routes using a native
   keyboard-accessible disclosure. Account creation stays visible. Inline errors
-  are associated with their input. Switching back to a passkey or restarting
+  describe the relevant field or form; cancellation/delivery failures do not
+  declare the email invalid. Switching back to a passkey or restarting
   signup preserves the validated destination.
 
 Authentication controllers, handlers, session lifetimes, cookies, required factors
@@ -28,9 +29,13 @@ migration, new dependency, external asset or production account-data change.
 
 ## Verification
 
-- **5,234 tests passed**, with no failures, skips or cancellations. TypeScript and
-  the production build/startup suite passed. Regression coverage checks explicit
-  home links across all nine signup/sign-in states and destination preservation.
+- **5,234 tests passed** in the initial full run, with no failures, skips or
+  cancellations. TypeScript and the production build/startup suite passed.
+  Regression coverage checks explicit home links across all nine signup/sign-in
+  states and destination preservation. The subsequent form-feedback correction
+  passes all **206 focused checks**, including a regression case for passkey
+  cancellation and delivery failures; final full verification is recorded with
+  the release outcome.
 - **63 authentication layout cases** used 13 synthetic states across phone and
   desktop, with additional breakpoint, error, long-email and short-landscape
   cases. A 320px sweep used actual 24/12/20/12px safe-area padding. Light and dark

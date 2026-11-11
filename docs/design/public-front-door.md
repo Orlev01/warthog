@@ -54,8 +54,9 @@ Signup shows four stages: details, email verification, sign-in method and saving
 the recovery code. Passkey and authenticator setup are alternatives within the
 same stage. Keep recovery warnings and confirmation visible. Group alternate
 sign-in/recovery routes under a native disclosure, while account creation remains
-visible. Errors stay inline and associated with their field; preserve the existing
-pending guards, required factors and session checks.
+visible. Code-entry errors stay associated with their field; passkey cancellation
+and delivery failures describe the form without declaring the email invalid.
+Preserve the existing pending guards, required factors and session checks.
 
 ## Verification
 

@@ -509,6 +509,17 @@ test("signup restart and alternate sign-in methods preserve the pending destinat
   }
 });
 
+test("passkey cancellation and email delivery failures describe the form without invalidating the email", () => {
+  for (const step of ["passkey", "email"] as const) {
+    const markup = renderToStaticMarkup(<SigninView step={step} email="sam@example.test" error="Please try again." />);
+    const formDescription = markup.match(/<form[^>]*aria-describedby="([^"]+)"/)?.[1];
+    assert.ok(formDescription);
+    assert.ok(markup.includes(`id="${formDescription}" role="alert"`));
+    assert.equal((markup.match(/role="alert"/g) ?? []).length, 1);
+    assert.ok(!/<input[^>]*aria-invalid="true"/.test(markup));
+  }
+});
+
 test("the sign-in screen links to sign-up, recovery and signing in from another device", () => {
   for (const step of ["passkey", "code"] as const) {
     const links = hrefsWithText(renderToStaticMarkup(<SigninView step={step} />));
