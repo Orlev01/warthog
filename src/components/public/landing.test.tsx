@@ -113,7 +113,16 @@ test("public navigation has real destinations and FAQs use native disclosure con
   }
   assert.equal((markup.match(/<h1\b/g) ?? []).length, 1);
   assert.ok((markup.match(/<summary\b/g) ?? []).length >= 3);
-  assert.ok(!/<button\b/.test(markup), "the static preview must not pretend to have live controls");
+  const preview = markup.match(/<figure\b[\s\S]*?<\/figure>/)?.[0];
+  assert.ok(preview && !/<button\b/.test(preview), "the static preview must not pretend to have live controls");
+});
+
+test("marketing artwork is decorative and server content does not depend on animation", () => {
+  const markup = render();
+  assert.match(markup, /class="wh-landing-backdrop" aria-hidden="true"/);
+  assert.match(markup, /data-motion="off"/);
+  assert.match(markup, /<button[^>]*type="button"[^>]*>[^]*Motion off<\/button>/);
+  assert.ok(!/<(?:main|section|article|h[1-3])\b[^>]*(?:hidden|aria-hidden)/.test(markup));
 });
 
 // The positioning line (brief overview; design_ux primary_journey) — asserted

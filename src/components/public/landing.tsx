@@ -20,6 +20,7 @@ import {
 
 import { Wordmark } from "../shell/wordmark";
 import { PolicyLinks } from "./policy-links";
+import { LandingBackdrop, LandingMotion, LandingMotionControl } from "./landing-motion";
 
 const STEPS = [
   {
@@ -108,7 +109,7 @@ const FAQS = [
 // account data or pretend interactive controls. No provider logos or remote media.
 function WorkspacePreview() {
   return (
-    <figure className="wh-landing-preview" aria-labelledby="workspace-caption">
+    <figure className="wh-landing-preview" aria-labelledby="workspace-caption" data-motion-reveal>
       <div className="wh-landing-preview-bar">
         <span>
           <ShieldCheck size={16} aria-hidden="true" /> Your workspace
@@ -176,7 +177,7 @@ function WorkspacePreview() {
 
 export function Landing() {
   return (
-    <div className="wh-landing">
+    <LandingMotion>
       <a className="wh-landing-skip" href="#main-content">
         Skip to content
       </a>
@@ -201,8 +202,9 @@ export function Landing() {
       </header>
 
       <main id="main-content" tabIndex={-1}>
-        <section className="wh-landing-hero" aria-labelledby="hero-title">
-          <div className="wh-landing-hero-copy">
+        <section className="wh-landing-hero" aria-labelledby="hero-title" data-motion-surface>
+          <LandingBackdrop />
+          <div className="wh-landing-hero-copy" data-motion-reveal>
             <p className="wh-landing-eyebrow">
               <span className="wh-landing-eyebrow-line" /> A home for your AI
               agents
@@ -231,6 +233,7 @@ export function Landing() {
               <Fingerprint size={16} aria-hidden="true" /> Your permissions.
               Your decisions.
             </p>
+            <LandingMotionControl />
           </div>
           <WorkspacePreview />
         </section>
@@ -260,7 +263,7 @@ export function Landing() {
           className="wh-landing-section wh-landing-controls"
           aria-labelledby="control-title"
         >
-          <div className="wh-landing-section-intro">
+          <div className="wh-landing-section-intro" data-motion-reveal>
             <p className="wh-landing-eyebrow">
               Useful agents. Clear boundaries.
             </p>
@@ -280,7 +283,7 @@ export function Landing() {
           </div>
           <div className="wh-landing-control-list">
             {CONTROLS.map(({ icon: Icon, title, body }) => (
-              <article key={title}>
+              <article key={title} data-motion-reveal>
                 <span className="wh-landing-icon">
                   <Icon size={21} aria-hidden="true" />
                 </span>
@@ -302,7 +305,7 @@ export function Landing() {
           className="wh-landing-resources wh-landing-section"
           aria-labelledby="resources-title"
         >
-          <div className="wh-landing-section-intro">
+          <div className="wh-landing-section-intro" data-motion-reveal>
             <p className="wh-landing-eyebrow">A shared home, chosen access</p>
             <h2 id="resources-title">The context is yours to keep.</h2>
             <p>
@@ -312,7 +315,7 @@ export function Landing() {
           </div>
           <div className="wh-landing-resource-grid">
             {RESOURCES.map(({ icon: Icon, title, body }) => (
-              <article key={title}>
+              <article key={title} data-motion-reveal>
                 <Icon size={25} strokeWidth={1.5} aria-hidden="true" />
                 <h3>{title}</h3>
                 <p>{body}</p>
@@ -326,7 +329,7 @@ export function Landing() {
           className="wh-landing-section"
           aria-labelledby="steps-title"
         >
-          <div className="wh-landing-section-intro">
+          <div className="wh-landing-section-intro" data-motion-reveal>
             <p className="wh-landing-eyebrow">How it works</p>
             <h2 id="steps-title">
               Start with one connection.
@@ -336,7 +339,7 @@ export function Landing() {
           </div>
           <ol className="wh-landing-steps">
             {STEPS.map(({ icon: Icon, title, body }, index) => (
-              <li key={title}>
+              <li key={title} data-motion-reveal>
                 <div className="wh-landing-step-top">
                   <span>0{index + 1}</span>
                   <Icon size={20} aria-hidden="true" />
@@ -353,7 +356,7 @@ export function Landing() {
           className="wh-landing-section wh-landing-faq"
           aria-labelledby="faq-title"
         >
-          <div className="wh-landing-section-intro">
+          <div className="wh-landing-section-intro" data-motion-reveal>
             <p className="wh-landing-eyebrow">A few useful answers</p>
             <h2 id="faq-title">Before you settle in.</h2>
             <p>Get to know your agent home.</p>
@@ -377,8 +380,9 @@ export function Landing() {
           </div>
         </section>
 
-        <section className="wh-landing-closing" aria-labelledby="closing-title">
-          <div>
+        <section className="wh-landing-closing" aria-labelledby="closing-title" data-motion-surface>
+          <LandingBackdrop />
+          <div data-motion-reveal>
             <p className="wh-landing-eyebrow">Make yourself at home</p>
             <h2 id="closing-title">
               A little more help.
@@ -406,6 +410,6 @@ export function Landing() {
         </nav>
         <PolicyLinks />
       </footer>
-    </div>
+    </LandingMotion>
   );
 }

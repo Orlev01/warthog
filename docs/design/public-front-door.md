@@ -39,8 +39,32 @@ redirects to those flows.
   fragment links scroll smoothly when reduced motion is not requested. Allow
   clearance for the header and safe area so section headings remain visible.
 - Use local assets and semantic colour variables, including both system themes.
-  Avoid remote fonts, decorative dependencies, autoplay or tracking added as
-  part of visual polish.
+  Avoid remote fonts, decorative dependencies, autoplay media or tracking added
+  as part of visual polish.
+
+## Marketing motion
+
+The founder requested a more animated public page after reviewing React Bits.
+Use its [Threads](https://reactbits.dev/backgrounds/threads),
+[Dot Grid](https://reactbits.dev/backgrounds/dot-grid) and
+[Animated Content](https://reactbits.dev/animations/animated-content) as visual
+references. Warthog's flowing SVG artwork and progressive entrance effects are
+original implementations using browser APIs; no library code or dependency is
+copied into the application.
+
+- Keep animated decoration inside the hero and closing section. Use the existing
+  neutral tokens, preserve reading contrast and keep illustrative product data
+  still. Do not imply that sample activity is live.
+- Gentle entrances may introduce sections once. All content is visible in the
+  server response, without JavaScript or when animation support is unavailable.
+  Never make access to content depend on an animation completing.
+- Provide a named pause/play control with a 44px target. Remember that choice for
+  the browser tab. Reduced-motion and forced-colour preferences take precedence;
+  pause offscreen backgrounds and hidden tabs, and clean up listeners/animations.
+- Fine pointers may gently steer decoration; touch scrolling and links remain
+  native. No custom cursor, audio, flashing, full-page parallax or scroll capture.
+- Scope motion to the signed-out landing page. Account-entry screens and the
+  signed-in workspace retain their existing presentation and behavior.
 
 ## Account entry
 
