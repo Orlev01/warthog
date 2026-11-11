@@ -39,8 +39,9 @@ The first full run found four older tests that invoked sign-in without a request
 context. Their assertions are preserved; their harness now supplies a real Next
 anonymous request. The corrected 25-case sign-in/session group passes. The final full run passes
 all **5,232 tests**, with no failures, skips or cancellations; typecheck and the
-production build/boot suite also pass. Deployment is recorded separately once
-the protected release gates and live verification are complete.
+production build/boot suite also pass. The
+[release record](../public-entry-release-2026-11-11.md) documents successful
+production deployment, live verification and completed runner cleanup.
 
 ## Visual evidence
 
