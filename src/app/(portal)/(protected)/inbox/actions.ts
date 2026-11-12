@@ -2,6 +2,9 @@ import { vaultFieldAllowed } from "../../../../server/agents/resource-access";
 import { getAgentById, listAgentsForUser, type Agent } from "../../../../server/db/agents";
 import { getConnectionPermissions } from "../../../../server/db/agent-permissions";
 import { formatAccountTime } from "@/server/display-time";
+// Time left before a pending request expires, in plain words: minutes under an hour, then
+// hours and minutes (the person's expiry runs up to 24 hours).
+import { timeLeftLabel } from "@/domain/approvals/expiry-copy";
 import { timeZoneFor } from "@/server/spending/time-zone";
 // E12-S10 — Approval decision actions (the injectable seam the thin inbox
 // `page.tsx` loader + its server-action wrappers compose).
@@ -272,13 +275,6 @@ function detailLines(detail: Record<string, unknown>): RequestDetail[] {
   const purpose = text(detail.purpose);
   if (purpose) lines.push({ label: "Purpose", value: purpose });
   return lines;
-}
-
-// Time left before a pending request expires, in plain words (floored at expiry).
-function timeLeftLabel(timeLeftMs: number): string {
-  if (timeLeftMs <= 0) return "Expired";
-  const minutes = Math.ceil(timeLeftMs / 60_000);
-  return minutes === 1 ? "1 minute left" : `${minutes} minutes left`;
 }
 
 // A decided status as plain-words outcome copy (the view adds the per-status icon). One

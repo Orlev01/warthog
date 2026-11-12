@@ -84,6 +84,8 @@ export const ACCOUNT_KINDS: readonly string[] = [
   "rule_updated",
   "rule_paused",
   "rule_deleted",
+  // The person's approval expiry, set with their rules on Rules & budgets.
+  "approval_expiry_change",
   "memory_created",
   "memory_updated",
   "memory_deleted",

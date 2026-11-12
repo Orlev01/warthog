@@ -13,6 +13,8 @@ import { verifySession, type Session } from "@/server/auth/session";
 import { systemClock } from "@/server/seams/clock";
 import type { Db } from "@/server/db/index";
 import {
+  approvalExpiryInputFromForm,
+  approvalExpiryNotice,
   createRulesActions,
   ruleInputFromForm,
   rulesCreateReturnHref,
@@ -32,11 +34,11 @@ import {
 // rules (active and paused), each as its exact plain sentence + status, and their
 // connected agents — and renders the view.
 //
-// It binds the four rule controls to inline `use server` wrappers (the sibling inbox
-// screen's pattern): each re-derives the verified session (never a client value,
-// design §5), calls the factory scoped to the SESSION user id, and redirects back
-// with a `?notice=` outcome the page shows in plain words (never a silent failure —
-// a refusal, a malformed id, or a rejected vocabulary is shown, not swallowed).
+// It binds the four rule controls and the approval-expiry save to inline `use server`
+// wrappers (the sibling inbox screen's pattern): each re-derives the verified session
+// (never a client value, design §5), calls the factory scoped to the SESSION user id, and
+// redirects back with a `?notice=` outcome the page shows in plain words (never a silent
+// failure — a refusal, a malformed id, or a rejected vocabulary is shown, not swallowed).
 //
 // Where each action lands (`rulesReturnHref`, validated keys only): adding a rule lands on
 // the rules list, where the new rule now is (a refusal returns to the New rule view, so it
@@ -150,6 +152,26 @@ async function deleteAction(formData: FormData): Promise<void> {
   redirect(rulesReturnHref(mutationNotice(outcome, "deleted"), { status: formData.get("return-status") }));
 }
 
+// Save the acting person's approval expiry (how long a held request waits for them). Same
+// discipline: the session is re-derived, the chosen minutes are validated against the
+// allowed range by the factory, and the outcome returns to the rules list as a notice.
+async function saveApprovalExpiryAction(formData: FormData): Promise<void> {
+  "use server";
+  const db = await getServerDb();
+  const session = await resolveSession(db);
+  if (!session) {
+    redirect("/signin");
+  }
+  let outcome: ActionResult | unknown;
+  try {
+    outcome = await buildActions(db).setApprovalExpiry(session, approvalExpiryInputFromForm(formData));
+  } catch (error) {
+    outcome = error;
+  }
+  revalidatePath("/rules");
+  redirect(rulesReturnHref(approvalExpiryNotice(outcome), {}));
+}
+
 // The outcome of the last change, in words plus an icon (never colour alone), as the
 // page's one notice slot under the heading band. A problem is announced immediately
 // (alert); a success politely (status). The copy is resolved by the sibling `rulesNotice`
@@ -189,6 +211,8 @@ export default async function RulesPage({
         updateAction={updateAction}
         pauseAction={pauseAction}
         deleteAction={deleteAction}
+        approvalExpiryMinutes={view.approvalExpiryMinutes}
+        approvalExpiryAction={saveApprovalExpiryAction}
       />
     </div>
   );

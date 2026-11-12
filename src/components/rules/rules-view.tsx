@@ -13,6 +13,8 @@ import { ListGroup, LIST_ROW } from "@/components/ui/list-group";
 import { ListToolbar } from "@/components/ui/list-toolbar";
 import { ViewPanels } from "@/components/ui/view-tabs";
 import { WorkspacePanel } from "@/components/shell/workspace-surfaces";
+import { DEFAULT_EXPIRY_MINUTES } from "@/domain/approvals/state-machine";
+import { APPROVAL_EXPIRY_PRESETS, expiryDurationLabel } from "@/domain/approvals/expiry-copy";
 import {
   ruleSentence,
   type RuleKind,
@@ -37,7 +39,9 @@ import {
 //   • Your rules — every rule read back as the exact plain sentence Warthog enforces,
 //     grouped by scope (all agents first, then each agent by name), filterable by status
 //     (?status=active|paused), each with its kind and status in words, a live Pause
-//     (active rules) and a Delete behind a confirmation;
+//     (active rules) and a Delete behind a confirmation; then the Approval expiry panel —
+//     how long a held request waits for the person (brief: default 15 minutes, 2 minutes
+//     to 24 hours), a labelled select of presets saved from the panel footer;
 //   • New rule — build an "Ask me first" or "Never allow" rule, previewed as a sentence
 //     before saving and scoped to all agents or a chosen agent;
 //   • Budgets — links to each agent's real card-budget control (its workspace Spending
@@ -52,7 +56,8 @@ import {
 //
 // The rules store holds only the two rule kinds. Per-purchase caps and merchant lists are
 // expressed as card-request rules with an amount or merchant condition; there is no
-// separate per-purchase, merchant-list or approval-expiry setting, so none is offered.
+// separate per-purchase or merchant-list setting, so none is offered. The approval expiry
+// is a setting of its own (not a rule template), shown next to the rules it times.
 //
 // This is the prop-driven VIEW (a Client Component): it renders the screen from its
 // props so it can be pinned without a browser or a session. Persistence lives in the
@@ -114,6 +119,10 @@ export type RulesViewProps = {
   updateAction?: RuleFormAction;
   pauseAction?: RuleFormAction;
   deleteAction?: RuleFormAction;
+  // the person's approval expiry in minutes (the page loads it; 15 when omitted) and the
+  // server action that saves a new one. Optional so the view renders without a session.
+  approvalExpiryMinutes?: number;
+  approvalExpiryAction?: RuleFormAction;
 };
 
 type RuleTemplate = RuleDraft["template"];
@@ -471,6 +480,54 @@ function RulesList({
   );
 }
 
+// The approval expiry choices: every preset plus the person's current value when it is not
+// one (so a saved value is shown as the current choice and never silently replaced by the
+// first option), in time order. The default is marked.
+function expiryChoices(current: number): { value: number; label: string }[] {
+  const values = APPROVAL_EXPIRY_PRESETS.includes(current) ? [...APPROVAL_EXPIRY_PRESETS] : [...APPROVAL_EXPIRY_PRESETS, current].sort((a, b) => a - b);
+  return values.map((value) => ({
+    value,
+    label: value === DEFAULT_EXPIRY_MINUTES ? `${expiryDurationLabel(value)} (default)` : expiryDurationLabel(value),
+  }));
+}
+
+// "Approval expiry": how long Warthog holds a request that needs the person before it is
+// denied. One panel, its save in the footer, in the Your rules tab beside the rules that ask.
+function ApprovalExpiryPanel({ minutes, action }: { minutes: number; action?: RuleFormAction }) {
+  const panel = (
+    <WorkspacePanel
+      title="Approval expiry"
+      description="How long Warthog holds any request that needs your approval, such as one caught by an Ask me first rule or a card request."
+      footer={<FormSubmit pendingLabel="Saving…">Save approval expiry</FormSubmit>}
+    >
+      <PendingFormFields>
+        <SelectField
+          label="Requests wait for"
+          name="approval-expiry-minutes"
+          defaultValue={String(minutes)}
+          width="text"
+          hint="If you don't decide in time, the request is denied and the agent is told. A change applies to new requests; ones already waiting keep their time."
+        >
+          {expiryChoices(minutes).map((choice) => (
+            <option key={choice.value} value={String(choice.value)}>
+              {choice.label}
+            </option>
+          ))}
+        </SelectField>
+      </PendingFormFields>
+    </WorkspacePanel>
+  );
+  return action ? (
+    <ActionForm action={action} className="contents">
+      {panel}
+    </ActionForm>
+  ) : (
+    <form className="contents" onSubmit={(event) => event.preventDefault()}>
+      {panel}
+    </form>
+  );
+}
+
 // "Budgets": where each spending limit really lives. Only per-agent card budgets are
 // settings; caps and merchant lists are card-request rules built in New rule.
 function BudgetsPanel({ agents }: { agents: ReadonlyArray<RulesViewAgent> }) {
@@ -587,6 +644,8 @@ export function RulesView({
   createAction,
   pauseAction,
   deleteAction,
+  approvalExpiryMinutes = DEFAULT_EXPIRY_MINUTES,
+  approvalExpiryAction,
 }: RulesViewProps) {
   const [builder, dispatch] = React.useReducer(updateRuleBuilder, initialDraft, createRuleBuilderState);
   const draft = builder.draft;
@@ -774,13 +833,16 @@ export function RulesView({
           label: `Your rules (${rules.length})`,
           content: withNotice(
             "rules",
-            <RulesList
-              rules={rules}
-              agents={agents}
-              statusFilter={statusFilter}
-              pauseAction={pauseAction}
-              deleteAction={deleteAction}
-            />,
+            <>
+              <RulesList
+                rules={rules}
+                agents={agents}
+                statusFilter={statusFilter}
+                pauseAction={pauseAction}
+                deleteAction={deleteAction}
+              />
+              <ApprovalExpiryPanel minutes={approvalExpiryMinutes} action={approvalExpiryAction} />
+            </>,
           ),
         },
         { key: "new", label: "New rule", content: withNotice("new", newRule) },

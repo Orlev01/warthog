@@ -171,7 +171,7 @@ function toToolResult(outcome: AgentCallResult): {
         status: "pending_approval",
         approval_id: outcome.approval_id,
         expires_at: outcome.expires_at.toISOString(),
-        next: "The person has been asked. Call check_approval with this approval_id to wait for their decision.",
+        next: "The person has been asked. Call check_approval with this approval_id to wait for their decision. If they have not decided by expires_at, the request expires and is refused.",
       };
       return { content: [{ type: "text", text: JSON.stringify(structured) }], structuredContent: structured };
     }

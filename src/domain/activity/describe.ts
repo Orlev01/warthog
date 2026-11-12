@@ -71,6 +71,7 @@ const KIND_LABELS: Record<string, string> = {
   rule_updated: "Rule updated",
   rule_paused: "Rule paused",
   rule_deleted: "Rule deleted",
+  approval_expiry_change: "Approval expiry change",
   memory_created: "Memory added",
   memory_updated: "Memory edited",
   memory_deleted: "Memory deleted",
