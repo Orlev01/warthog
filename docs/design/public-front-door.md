@@ -27,15 +27,18 @@ redirects to those flows.
   workspace illustration. The illustration must say it is an example and must
   not present fake buttons, customer data, live metrics or endorsements.
 - Follow with compatibility, agent controls, owned resources, setup steps,
-  native FAQ disclosures and a closing action. Prefer aligned rows and open
-  columns to a border around every paragraph.
+  native FAQ disclosures and a closing action. Every section is a bounded band,
+  panel or card on a tinted page canvas; no copy sits loose on the background
+  ([contained text](../adr/contained-text.md)). Inside a section, prefer aligned
+  rows and dividers to a border around every paragraph.
 - Compatibility varies by platform and plan; link the actual guide. Permissions,
   spending rules and activity records apply to requests through Warthog. Never
   imply control of other providers' direct tools, billing or private memory.
 - Keep headlines readable as columns collapse. Navigation, signup, signin and
   disclosures have at least 44px targets. Preserve the skip link, native keyboard
   behaviour, visible focus, semantic headings and useful text beside icons.
-- Keep public navigation sticky, including the section links on phones. Native
+- Keep the public header bar sticky on wider screens; on phones and short
+  landscape screens the section links scroll away so the bar stays compact. Native
   fragment links scroll smoothly when reduced motion is not requested. Allow
   clearance for the header and safe area so section headings remain visible.
 - Use local assets and semantic colour variables, including both system themes.
@@ -70,7 +73,10 @@ copied into the application.
 
 Sign-in and signup use `AuthScreen`: the same bounded public canvas, a focused
 form, a restrained desktop introduction and a visible **Back to home** link on
-every step. Phones show the form directly, without the desktop introduction.
+every step. The form is a bounded panel at every width; phones show it first,
+without the desktop introduction, which is its own panel on wider screens. Help,
+compatibility, privacy and terms share the `PublicPage` frame: header and footer
+bars outside `<main>` and content in panels.
 The brand and home link lead to `/`; account-method links retain the validated
 return destination. Returning to the homepage never submits a form.
 
