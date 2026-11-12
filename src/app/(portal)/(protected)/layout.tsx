@@ -59,7 +59,7 @@ export default async function ProtectedLayout({ children }: { children: React.Re
   }
   const agents = await listAgentsForUser(db, result.session.userId);
   return (
-    <PortalChrome agents={agents.map(agent => ({ id: agent.id, name: agent.displayName }))}>
+    <PortalChrome agents={agents.map(agent => ({ id: agent.id, name: agent.displayName, connected: agent.status === "connected" }))}>
       {pendingReset ? (
         <PendingResetBanner
           requestedAt={pendingReset.requestedAt.toISOString()}

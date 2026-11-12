@@ -62,3 +62,16 @@ test("a server-selected deep link is present before hydration", () => {
   );
   assert.match(html, /aria-selected="true"[^>]*>Preferences/);
 });
+
+test("in-page tabs are bounded: their own strip, or the nav row of the page heading band", () => {
+  const tabs = [
+    { key: "a", label: "Library", content: <p>A</p> },
+    { key: "b", label: "Import & create", content: <p>B</p> },
+  ];
+  const strip = renderToStaticMarkup(<ViewPanels label="Views" tabs={tabs} />);
+  assert.match(strip, /^<div class="wh-tabstrip"><div role="tablist" aria-label="Views" class="wh-tabs">/);
+  assert.match(strip, /class="wh-tab" data-label="Library"/, "the bold width is reserved, no ad-hoc weight class");
+  const banded = renderToStaticMarkup(<ViewPanels label="Views" tabs={tabs} heading={{ title: "Skills", description: "Yours." }} />);
+  assert.match(banded, /^<header class="wh-page-heading">[\s\S]*<h1>Skills<\/h1>[\s\S]*<div class="wh-page-heading-nav"><div role="tablist" aria-label="Views" class="wh-tabs">[\s\S]*<\/header><div role="tabpanel"/);
+  assert.doesNotMatch(banded, /wh-tabstrip/);
+});

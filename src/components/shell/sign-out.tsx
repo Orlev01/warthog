@@ -22,19 +22,34 @@ import { LogOut } from "lucide-react";
 
 const SIGNOUT_ACTION = "/api/auth/signout";
 
-export function SignOutControl({ className }: { className?: string }) {
+export function SignOutControl({
+  className,
+  variant = "menu",
+}: {
+  className?: string;
+  // `sidebar`: styled exactly like a sidebar link (same edge, radius, weight and 18px icon) so
+  // it sits flush under the navigation; `menu`: the stand-alone control on /more.
+  variant?: "sidebar" | "menu";
+}) {
+  const sidebar = variant === "sidebar";
   return (
     <form method="post" action={SIGNOUT_ACTION}>
       <button
         type="submit"
         className={[
-          "flex min-h-11 w-full items-center gap-3 rounded-card text-sm font-medium text-fg-muted hover:bg-surface-muted",
+          sidebar
+            ? "wh-sidebar-link w-full text-fg-muted"
+            : "flex min-h-11 w-full items-center gap-3 rounded-card text-sm font-medium text-fg-muted hover:bg-surface-muted",
           className ?? "",
         ]
           .join(" ")
           .trim()}
       >
-        <LogOut aria-hidden={true} className="h-5 w-5 shrink-0" />
+        <LogOut
+          aria-hidden={true}
+          className={sidebar ? "h-[18px] w-[18px] shrink-0" : "h-5 w-5 shrink-0"}
+          strokeWidth={sidebar ? 1.7 : 2}
+        />
         <span>Sign out</span>
       </button>
     </form>

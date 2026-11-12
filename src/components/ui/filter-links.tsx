@@ -1,5 +1,7 @@
 import * as React from "react";
 import { X } from "lucide-react";
+import { TabTrack } from "@/components/shell/tab-track";
+import { CountBadge } from "./badge";
 
 // Server-rendered organisation controls shared by list pages (Activity, Inbox, Memory,
 // Connectors …), so every page groups and filters the same way:
@@ -11,7 +13,8 @@ import { X } from "lucide-react";
 //
 // Both are plain links (no client state): Back/Forward restore them, they deep-link, and
 // they work before hydration. Callers build every href with `hrefWith` so unrelated
-// parameters survive.
+// parameters survive. Rows that scroll on phones (`tabs`, `scroll`) keep the current link in
+// view and fade their clipped edge once hydrated. On a list page, put them in a ListToolbar.
 
 export type FilterLink = {
   readonly label: string;
@@ -23,7 +26,7 @@ export type FilterLink = {
 // `tabs` is the sub-tab pill row (a view switch); `chips` is a lighter bordered row for quick
 // filters that sit under it.
 const CHIP_LINK =
-  "inline-flex min-h-11 items-center gap-2 rounded-full border border-line px-3 text-sm text-fg-muted hover:bg-surface-muted hover:text-fg aria-[current=page]:border-line-strong aria-[current=page]:bg-surface-muted aria-[current=page]:font-semibold aria-[current=page]:text-fg focus-visible:outline-hidden focus-visible:ring-2 focus-visible:ring-focus focus-visible:ring-offset-2 focus-visible:ring-offset-bg";
+  "wh-chip inline-flex min-h-11 lg:min-h-10 items-center gap-2 rounded-full border border-line px-3 text-sm text-fg-muted hover:bg-surface-muted hover:text-fg aria-[current=page]:border-line-strong aria-[current=page]:bg-surface-muted aria-[current=page]:font-semibold aria-[current=page]:text-fg focus-visible:outline-hidden focus-visible:ring-2 focus-visible:ring-focus focus-visible:ring-offset-2 focus-visible:ring-offset-bg";
 
 export function FilterLinks({
   label,
@@ -40,21 +43,19 @@ export function FilterLinks({
     variant === "tabs"
       ? "wh-subtabs"
       : variant === "scroll"
-        ? "-mx-1 flex gap-2 overflow-x-auto px-1 py-1 sm:mx-0 sm:flex-wrap sm:overflow-visible sm:px-0"
+        ? "wh-chip-track -mx-1 flex gap-2 overflow-x-auto px-1 py-1 sm:mx-0 sm:flex-wrap sm:overflow-visible sm:px-0"
         : "flex flex-wrap gap-2";
   return (
-    <nav aria-label={label} className={row}>
+    <TabTrack as="nav" aria-label={label} className={row} current={items.find((item) => item.active)?.href}>
       {items.map((item) => (
         <a key={item.href} href={item.href} aria-current={item.active ? "page" : undefined} className={variant === "tabs" ? "wh-subtab gap-2" : variant === "scroll" ? `${CHIP_LINK} shrink-0 whitespace-nowrap` : CHIP_LINK}>
           {item.label}
           {item.count !== undefined ? (
-            <span className="rounded-card bg-surface-muted px-1.5 text-xs font-medium tabular-nums text-fg-muted">
-              {item.count}
-            </span>
+            <CountBadge count={item.count} />
           ) : null}
         </a>
       ))}
-    </nav>
+    </TabTrack>
   );
 }
 
@@ -74,13 +75,13 @@ export function ActiveFilters({
 }) {
   if (filters.length === 0) return null;
   return (
-    <div className="flex flex-wrap items-center gap-2">
+    <div className="wh-applied-filters flex flex-wrap items-center gap-2">
       <ul aria-label={label} className="flex flex-wrap gap-2" role="list">
         {filters.map((filter) => (
           <li key={filter.removeHref + filter.label}>
             <a
               href={filter.removeHref}
-              className="inline-flex min-h-11 items-center gap-1.5 rounded-full border border-line-strong bg-surface px-3 text-sm text-fg [overflow-wrap:anywhere] hover:bg-surface-muted focus-visible:outline-hidden focus-visible:ring-2 focus-visible:ring-focus focus-visible:ring-offset-2 focus-visible:ring-offset-bg"
+              className="wh-chip inline-flex min-h-11 lg:min-h-10 items-center gap-1.5 rounded-full border border-line-strong bg-surface px-3 text-sm text-fg [overflow-wrap:anywhere] hover:bg-surface-muted focus-visible:outline-hidden focus-visible:ring-2 focus-visible:ring-focus focus-visible:ring-offset-2 focus-visible:ring-offset-bg"
             >
               <span className="sr-only">Remove filter </span>
               {filter.label}

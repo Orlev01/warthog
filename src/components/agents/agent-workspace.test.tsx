@@ -6,25 +6,37 @@ import { ResourceScope } from "./resource-scope";
 import { agentSection, AGENT_SECTIONS } from "@/domain/permissions/workspace";
 import { collectEdits } from "@/app/(portal)/(protected)/agents/[id]/permission-edits";
 
-test("resource screens expose account scope and an agent selector", () => {
-  for (const path of [
-    "/connectors",
-    "/vault/cards",
-    "/skills",
-    "/memory",
-    "/spending",
-    "/rules",
-  ]) {
+test("resource screens explain account scope and link to each agent's matching section", () => {
+  for (const [path, section] of [
+    ["/connectors", "connectors"],
+    ["/vault/cards", "vault"],
+    ["/skills", "skills"],
+    ["/memory", "memory"],
+    ["/spending", "spending"],
+    ["/rules", "rules"],
+  ] as const) {
     const html = renderToStaticMarkup(
       <ResourceScope
         pathname={path}
         agents={[{ id: "agent-a", name: "My agent" }]}
       />,
     );
-    assert.match(html, /Account resources/);
-    assert.match(html, /Manage for an agent/);
-    assert.match(html, /My agent/);
+    assert.match(html, /How access works/);
+    assert.match(html, /Manage for one agent/);
+    // Links, not a select that navigates on change (WCAG 3.2.2), so an arrow key never
+    // leaves the page and the picker works without JavaScript.
+    assert.doesNotMatch(html, /<select/);
+    assert.match(html, new RegExp(`href="/agents/agent-a\\?section=${section}"[^>]*>\\s*<span>My agent</span>`));
   }
+  // With no agents the picker is left out rather than replaced by a competing call to action.
+  const none = renderToStaticMarkup(<ResourceScope pathname="/memory" agents={[]} />);
+  assert.match(none, /How access works/);
+  assert.doesNotMatch(none, /Manage for one agent|Connect your first agent/);
+  // Inside the page heading band it is a labelled group, not a second landmark.
+  const heading = renderToStaticMarkup(
+    <ResourceScope variant="heading" pathname="/memory" agents={[{ id: "a", name: "A" }]} />,
+  );
+  assert.match(heading, /^<div role="group" aria-label="Agent scope"/);
   assert.equal(
     renderToStaticMarkup(<ResourceScope pathname="/agents/one" agents={[]} />),
     "",

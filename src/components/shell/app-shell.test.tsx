@@ -10,8 +10,13 @@ const render = (active = "home") =>
       <p>Page content</p>
     </AppShell>,
   );
+// The two destination lists (desktop sidebar, mobile drawer), not the breadcrumb.
 const navs = (html: string) =>
-  [...html.matchAll(/<nav\b[^>]*>([\s\S]*?)<\/nav>/g)].map((m) => m[1]!);
+  [
+    ...html.matchAll(
+      /<nav\b[^>]*aria-label="(?:Primary|Mobile navigation)"[^>]*>([\s\S]*?)<\/nav>/g,
+    ),
+  ].map((m) => m[1]!);
 
 test("desktop and mobile expose the same grouped destinations", () => {
   const navigation = navs(render());
@@ -69,4 +74,47 @@ test("both navigation surfaces retain the footer and use semantic tokens", () =>
   const html = render();
   assert.equal((html.match(/Sign out/g) ?? []).length, 2);
   assert.doesNotMatch(html, /#[0-9a-fA-F]{3,8}\b/);
+});
+test("group labels name their groups without entering the page's heading outline", () => {
+  for (const nav of navs(render())) {
+    assert.doesNotMatch(nav, /<h[1-6]\b/, "sidebar group labels are not headings");
+    const groups = [...nav.matchAll(/<div role="group" aria-labelledby="([^"]+)"/g)];
+    assert.equal(groups.length, NAV_GROUPS.length);
+    for (const [, id] of groups) assert.match(nav, new RegExp(`<p id="${id}"`));
+  }
+  // Group names are distinct, and "Resources" is never the help group's name.
+  const labels = NAV_GROUPS.map((g) => g.label);
+  assert.equal(new Set(labels).size, labels.length);
+  assert.notEqual(NAV_GROUPS.find((g) => g.items.some((i) => i.key === "help"))?.label, "Resources");
+});
+test("the top bar is a banner before <main>, and route tabs sit with it outside the content", () => {
+  const html = renderToStaticMarkup(
+    <AppShell
+      activeSection="settings"
+      page={{ label: "Security", href: "/settings/security" }}
+      measure="form"
+      sectionNavigation={<nav aria-label="Settings sections">tabs</nav>}
+    >
+      <p>Page content</p>
+    </AppShell>,
+  );
+  const header = html.indexOf('<header class="wh-workspace-header"');
+  const tabs = html.indexOf('aria-label="Settings sections"');
+  const main = html.indexOf("<main");
+  assert.ok(header > 0 && header < tabs && tabs < main, "header, then route tabs, then main");
+  assert.doesNotMatch(html.slice(main), /wh-workspace-header/);
+  assert.match(html, /class="wh-main" data-measure="form"/);
+  // The breadcrumb names the page and links back to its section.
+  assert.match(html, /<nav aria-label="Breadcrumb"/);
+  assert.match(html, /<a href="\/settings">Settings<\/a>/);
+  assert.match(html, /<span aria-current="page">Security<\/span>/);
+});
+test("a section's own landing page is the last breadcrumb, not a link", () => {
+  const html = renderToStaticMarkup(
+    <AppShell activeSection="vault" page={{ label: "About you", href: "/vault" }}>
+      <p>x</p>
+    </AppShell>,
+  );
+  assert.match(html, /<span aria-current="page">Vault<\/span>/);
+  assert.doesNotMatch(html, /About you<\/span>/);
 });

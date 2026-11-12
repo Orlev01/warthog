@@ -11,6 +11,7 @@ import * as React from "react";
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import { renderToStaticMarkup } from "react-dom/server";
+import { readFileSync } from "node:fs";
 
 import { LifeAdminView, nextTabIndex } from "./life-admin-view";
 
@@ -89,8 +90,12 @@ test("the selected tab is marked by more than colour", () => {
     markup,
   )![1]!;
   const other = /<button\b([^>]*aria-selected="false"[^>]*)>/.exec(markup)![1]!;
-  assert.match(selected, /\bfont-semibold\b/);
-  assert.ok(!/\bfont-semibold\b/.test(other));
+  // The shared .wh-tab style bolds the selected tab (and underlines it) from its
+  // aria-selected state, for route and in-page tabs alike (src/app/surfaces.css).
+  assert.match(selected, /class="wh-tab"/);
+  assert.match(other, /class="wh-tab"/);
+  const css = readFileSync(new URL("../../app/surfaces.css", import.meta.url), "utf8");
+  assert.match(css, /\.wh-tab\[aria-selected="true"\]\s*\{\s*font-weight:\s*600;/);
 });
 
 test("arrow keys, Home and End move between tabs, wrapping at the ends", () => {

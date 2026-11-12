@@ -1,33 +1,69 @@
 import * as React from "react";
-import { AlertTriangle, Compass, Home, RotateCcw } from "lucide-react";
+import { AlertTriangle, Bot, Compass, Home, LifeBuoy, RotateCcw } from "lucide-react";
 
 import { Button } from "@/components/ui/button";
+import { ButtonLink } from "@/components/ui/button-link";
 import { Skeleton } from "@/components/ui/skeleton";
+import { PolicyLinks } from "@/components/public/policy-links";
+import { Wordmark } from "./wordmark";
 
 // The app's fallback screens (review fix G7): the body of the error boundaries
-// (src/app/error.tsx, src/app/global-error.tsx), the 404 page (src/app/not-found.tsx) and
-// the route loading state (src/app/(portal)/(protected)/loading.tsx). Each is calm, plain Australian English,
-// built on the design tokens, and always offers a way back into the app. An error's raw
-// message is never shown (it can carry internal detail); only Next's opaque digest is,
-// as a reference for support.
+// (src/app/error.tsx, src/app/global-error.tsx), the 404 pages (src/app/not-found.tsx and,
+// inside the signed-in shell, src/app/(portal)/(protected)/not-found.tsx) and the route
+// loading state (src/app/(portal)/(protected)/loading.tsx). Each is calm, plain Australian
+// English, built on the design tokens, bounded in a panel and always offers a way forward.
+// An error's raw message is never shown (it can carry internal detail); only Next's opaque
+// digest is, as a reference for support.
+//
+// Two frames:
+//   • `public` — outside the workspace (signed out, or the root boundaries): the panel on the
+//     tinted public canvas under a wordmark bar, with the policy links in a footer bar. Its
+//     way back is "/", which already sends a signed-in member on to /home.
+//   • `workspace` — inside AppShell: the panel in the page container, so the sidebar, top
+//     bar and drawer stay put and every destination is one click away.
 
-const LINK_CLASS =
-  "inline-flex min-h-11 items-center justify-center gap-2 rounded-full border border-line bg-surface px-4 text-sm font-medium text-fg hover:bg-surface-muted focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-focus focus-visible:ring-offset-2 focus-visible:ring-offset-bg";
+export type StatusVariant = "public" | "workspace";
 
-function ScreenFrame({ children }: { children: React.ReactNode }) {
+function StatusPanel({
+  icon,
+  title,
+  children,
+  actions,
+}: {
+  icon: React.ReactNode;
+  title: string;
+  children: React.ReactNode;
+  actions: React.ReactNode;
+}) {
+  const id = React.useId();
   return (
-    <main className="mx-auto flex min-h-[60dvh] w-full max-w-lg flex-col items-start justify-center gap-4 px-4 py-12 sm:px-6">
-      {children}
-    </main>
+    <section aria-labelledby={id} className="wh-status-panel">
+      <span className="wh-status-icon">{icon}</span>
+      <h1 id={id} className="wh-standalone-title">
+        {title}
+      </h1>
+      <div className="wh-status-copy">{children}</div>
+      <div className="wh-status-actions">{actions}</div>
+    </section>
   );
 }
 
-function HomeLink() {
+function ScreenFrame({ variant, children }: { variant: StatusVariant; children: React.ReactNode }) {
+  if (variant === "workspace") return <div className="wh-page wh-status-page-body">{children}</div>;
   return (
-    <a href="/home" className={LINK_CLASS}>
-      <Home aria-hidden={true} className="h-4 w-4 shrink-0" />
-      Go to Home
-    </a>
+    <div className="wh-status-page">
+      <header className="wh-status-bar">
+        <div className="wh-status-bar-inner">
+          <Wordmark href="/" />
+        </div>
+      </header>
+      <main className="wh-status-main">{children}</main>
+      <footer className="wh-status-bar wh-status-footer">
+        <div className="wh-status-bar-inner">
+          <PolicyLinks />
+        </div>
+      </footer>
+    </div>
   );
 }
 
@@ -36,54 +72,106 @@ export type ErrorScreenProps = {
   digest?: string;
   // Re-render the segment (error.tsx); absent for the root global error.
   reset?: () => void;
+  variant?: StatusVariant;
 };
 
-export function ErrorScreen({ digest, reset }: ErrorScreenProps) {
+export function ErrorScreen({ digest, reset, variant = "public" }: ErrorScreenProps) {
   return (
-    <ScreenFrame>
-      <AlertTriangle aria-hidden={true} className="h-8 w-8 text-danger" />
-      <h1 className="text-2xl font-semibold tracking-tight text-fg">Something went wrong</h1>
-      <p className="text-sm text-fg-muted">
-        Warthog couldn&apos;t show this page just now. Nothing you were doing has been
-        changed. Try again, or head back Home.
-      </p>
-      {digest ? <p className="text-xs text-fg-muted">Reference: {digest}</p> : null}
-      <div className="flex flex-wrap gap-3">
-        {reset ? (
-          <Button type="button" variant="primary" onClick={reset}>
-            <RotateCcw aria-hidden={true} className="h-4 w-4 shrink-0" />
-            Try again
-          </Button>
-        ) : null}
-        <HomeLink />
-      </div>
+    <ScreenFrame variant={variant}>
+      <StatusPanel
+        icon={<AlertTriangle aria-hidden={true} className="h-6 w-6 text-danger" />}
+        title="Something went wrong"
+        actions={
+          <>
+            {reset ? (
+              <Button type="button" variant="primary" onClick={reset}>
+                <RotateCcw aria-hidden={true} className="h-4 w-4 shrink-0" />
+                Try again
+              </Button>
+            ) : null}
+            {variant === "workspace" ? (
+              <ButtonLink href="/home" variant={reset ? "secondary" : "primary"}>
+                <Home aria-hidden={true} className="h-4 w-4 shrink-0" />
+                Go to Home
+              </ButtonLink>
+            ) : (
+              <ButtonLink href="/" variant={reset ? "secondary" : "primary"}>
+                <Home aria-hidden={true} className="h-4 w-4 shrink-0" />
+                Go to Warthog
+              </ButtonLink>
+            )}
+          </>
+        }
+      >
+        <p>
+          Warthog couldn&apos;t show this page just now. Nothing you were doing has been
+          changed.{" "}
+          {variant === "workspace"
+            ? "Try again, or head back to Home."
+            : "Try again, or go back to the Warthog home page."}
+        </p>
+        {digest ? <p className="wh-status-reference">Reference for support: {digest}</p> : null}
+      </StatusPanel>
     </ScreenFrame>
   );
 }
 
-export function NotFoundScreen() {
+export function NotFoundScreen({ variant = "public" }: { variant?: StatusVariant }) {
+  const workspace = variant === "workspace";
   return (
-    <ScreenFrame>
-      <Compass aria-hidden={true} className="h-8 w-8 text-fg-muted" />
-      <h1 className="text-2xl font-semibold tracking-tight text-fg">We couldn&apos;t find that page</h1>
-      <p className="text-sm text-fg-muted">
-        The link may be old, or the page may have moved. Everything else is where you left it.
-      </p>
-      <HomeLink />
+    <ScreenFrame variant={variant}>
+      <StatusPanel
+        icon={<Compass aria-hidden={true} className="h-6 w-6 text-fg-muted" />}
+        title="We couldn't find that page"
+        actions={
+          workspace ? (
+            <>
+              <ButtonLink href="/home" variant="primary">
+                <Home aria-hidden={true} className="h-4 w-4 shrink-0" />
+                Go to Home
+              </ButtonLink>
+              <ButtonLink href="/agents">
+                <Bot aria-hidden={true} className="h-4 w-4 shrink-0" />
+                Your agents
+              </ButtonLink>
+            </>
+          ) : (
+            <>
+              <ButtonLink href="/" variant="primary">
+                <Home aria-hidden={true} className="h-4 w-4 shrink-0" />
+                Go to Warthog
+              </ButtonLink>
+              <ButtonLink href="/help">
+                <LifeBuoy aria-hidden={true} className="h-4 w-4 shrink-0" />
+                Get help
+              </ButtonLink>
+            </>
+          )
+        }
+      >
+        <p>
+          {workspace
+            ? "The link may be old, or the page may have moved. Everything in your workspace is where you left it."
+            : "The link may be old, or the page may have moved."}
+        </p>
+      </StatusPanel>
     </ScreenFrame>
   );
 }
 
+// The loading state inside the workspace: the same page container, heading band and panel
+// rhythm the page will have, so content streams in without the layout jumping.
 export function LoadingScreen() {
   return (
-    <div className="mx-auto flex w-full max-w-2xl flex-col gap-4 px-4 py-8 sm:px-6">
-      <Skeleton className="h-8 w-48">
-        <span className="sr-only">Loading…</span>
-      </Skeleton>
-      <div aria-hidden={true} className="flex flex-col gap-3">
-        <div className="h-20 animate-pulse rounded-card bg-surface-muted" />
-        <div className="h-20 animate-pulse rounded-card bg-surface-muted" />
+    <div className="wh-page wh-loading-page">
+      <div className="wh-loading-band">
+        <Skeleton className="h-7 w-48">
+          <span className="sr-only">Loading…</span>
+        </Skeleton>
+        <div aria-hidden={true} className="mt-3 h-4 w-72 max-w-full animate-pulse rounded-field bg-surface-muted" />
       </div>
+      <div aria-hidden={true} className="wh-loading-panel" />
+      <div aria-hidden={true} className="wh-loading-panel" />
     </div>
   );
 }
