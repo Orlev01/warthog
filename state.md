@@ -1,4 +1,20 @@
-# Delivery status — 12 November 2026
+# Delivery status — 12 November 2026 (activity organisation)
+
+**The activity organisation release is live at [app.warthog.com.au](https://app.warthog.com.au).**
+Application source `80a353084e1e17eb6f5e0b2811de83f5a7c213a4` runs as
+`warthog--r43164384841a1`, with one healthy replica, explicit 100% traffic and zero
+old replicas. It includes main's workspace-depth commit `2f18a38`. See the
+[release record](docs/audit/activity-organisation-release-2026-11-12.md) for the
+changes, image, verification and follow-ups.
+
+Activity now has Timeline, By agent, By type and By service views; Home, the agent
+audit log, Inbox, Life admin, Rules, Connectors, Memory, Spending, Vault, More and
+the agents list are grouped and filterable. Undo is offered again for curated
+calendar events. Main and pinned-image CI passed 5,455 tests; no migrations or
+dependency changes. The founder approved both protected environments in GitHub.
+The temporary runner is verified removed.
+
+# Earlier delivery status — 12 November 2026
 
 **The product review fixes and latest main integration are live at
 [app.warthog.com.au](https://app.warthog.com.au).** Application source
