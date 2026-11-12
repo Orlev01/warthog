@@ -99,7 +99,8 @@ export async function verifyBearer(
 
   // Otherwise it may be a per-agent access key (`wh_ak_…`), which verifies as a bearer
   // to the one connection it binds to (design §6.1). Access keys have no expiry — they
-  // are retired by disconnecting the connection.
+  // are retired by disconnecting the connection, or replaced or revoked from the agent's
+  // Settings (Access key panel).
   const key = await verifyAccessKey(db, bearer);
   if (key != null) return { ok: true, connectionId: key.connectionId };
 
