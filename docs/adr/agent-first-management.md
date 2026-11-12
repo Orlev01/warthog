@@ -27,7 +27,7 @@ connection for each agent that needs separate control.
 
 The top-level resource pages are explicitly labelled **Account resources · all
 agents**, with an agent selector. The Agents list opens a workspace with Overview,
-Connectors, Vault, Skills, Memory, Spending, Rules, Audit log and Settings. Top-level
+Connectors, Vault, Skills, Memory, Spending, Rules, Activity and Settings. Top-level
 activity and spending remain aggregate views.
 
 ## Defaults versus enforced policy

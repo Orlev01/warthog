@@ -34,6 +34,11 @@ Inspect the [UI primitives](../../../src/components/ui),
 Use tokens in both explicit and system themes. Do not restore an indigo palette,
 add a component-library dependency, or invent analytics or unavailable controls.
 
+Never leave text loose on the canvas: every title, description, helper line, empty
+state and link sits in a bounded component ([contained text](../../../docs/adr/contained-text.md)).
+Use `WorkspaceHeading`, `WorkspacePanel`, `ListGroup`, `ListToolbar`, `PageNotice` and
+`EmptyState` rather than hand-rolled wrappers.
+
 Follow [workspace depth](../../../docs/design/workspace-depth.md) for signed-in
 surfaces: a neutral canvas, raised groups and muted insets. Reuse
 `WorkspaceHeading`, `WorkspacePanel` and the shared `Card`; texture stays in the
@@ -45,7 +50,7 @@ Branch lines describe navigation, never inferred live traffic or extra access.
 - Group sidebar destinations by purpose. Keep every existing capability reachable.
 - Use `NavigationTabs` for routes and `ViewPanels` for in-page state. Route links
   use `aria-current`; in-page tabs use the complete keyboard/ARIA tab pattern.
-- Agent workspaces have Overview, Resources, Controls and Audit log, with resource
+- Agent workspaces have Overview, Resources, Controls and Activity, with resource
   or control sub-tabs. Preserve the same agent ID and existing section parameters.
 - Separate browsing, setup and preferences when a page otherwise becomes a long
   stack. Keep forms mounted across in-page tabs so drafts survive. Preserve URL

@@ -23,7 +23,8 @@ No images, animation libraries, remote assets or new runtime dependencies are us
 
 ## Organise by purpose
 
-Use `WorkspaceHeading` for the page identity and one compact action group. Home
+Use `WorkspaceHeading` (a bounded heading band) for the page identity and one compact
+action group; no text sits loose on the canvas ([contained text](../adr/contained-text.md)). Home
 separates decisions and recent activity from agent connections, setup and reminders.
 The activity rail connects events without implying that one caused another.
 Setup progress comes from the real checklist; do not invent dashboard statistics.
