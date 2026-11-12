@@ -671,3 +671,41 @@ test("the undo service reads no process.env: a decoy env secret never appears in
     else process.env.WARTHOG_DECOY_SECRET = prev;
   }
 });
+
+// Review follow-up (12 Nov) — only Warthog's own record of an agent call is reversible: an
+// approval decision or an agent's report can carry the same tool name but is not the action,
+// so it is refused and nothing is run or recorded. A recorded reversal stores a stable
+// outcome code (filterable and groupable), with the sentence kept in the payload.
+test("an approval decision carrying a reversible tool is refused and records nothing", async () => {
+  const db = await freshDb();
+  try {
+    const userId = await makeUser(db, "undo-approval");
+    const recorder = makeRecorder(db, { [userId]: freshDek() });
+    await recorder.record({ userId, kind: "approval_decision", source: "warthog", tool: CREATE_EVENT, outcome: "approved", payload: {} });
+    const runs: unknown[] = [];
+    const service = createUndoService({ db, recorder, reversalFor: () => DELETE_EVENT,
+      runReversal: async (job) => { runs.push(job); return { status: "executed", outcome: "Undone." }; },
+    });
+    const result = await service.undo({ userId, entrySeq: 1 });
+    assert.equal(result.ok, false);
+    assert.equal(runs.length, 0, "no reversal ran");
+    assert.equal(await entryCount(db, userId), 1, "nothing was recorded");
+  } finally { await db.close(); }
+});
+
+test("a recorded reversal stores an outcome code, never a sentence", async () => {
+  const db = await freshDb();
+  try {
+    const userId = await makeUser(db, "undo-codes");
+    const recorder = makeRecorder(db, { [userId]: freshDek() });
+    await seedChain(recorder, userId, [CREATE_EVENT, CREATE_EVENT]);
+    const done = createUndoService({ db, recorder, reversalFor: () => DELETE_EVENT,
+      runReversal: async () => ({ status: "executed", outcome: "Undone." }) });
+    await done.undo({ userId, entrySeq: 1 });
+    const failed = createUndoService({ db, recorder, reversalFor: () => DELETE_EVENT,
+      runReversal: async () => ({ status: "failed", outcome: "The reversal couldn't be completed." }) });
+    await failed.undo({ userId, entrySeq: 2 });
+    const rows = await db.query("SELECT outcome FROM activity_entries WHERE user_id = $1 AND seq > 2 ORDER BY seq", [userId]);
+    assert.deepEqual(rows.rows.map((row) => row.outcome), ["reversed", "failed"]);
+  } finally { await db.close(); }
+});

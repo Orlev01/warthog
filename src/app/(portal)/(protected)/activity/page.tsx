@@ -16,6 +16,7 @@ import { createUndoService } from "@/server/activity/undo";
 import { createAgentExecutors } from "@/server/mcp/compose";
 import { getProcessCatalogue } from "@/server/connectors/catalogue";
 import { systemClock } from "@/server/seams/clock";
+import { reversalToolFor } from "@/server/activity/tool-effects";
 import type { Db } from "@/server/db/index";
 import { createActivityActions } from "./actions";
 import { noticeLocation, activityNotice, type ActivityNotice } from "./notices";
@@ -49,15 +50,11 @@ export const metadata: Metadata = { title: "Activity" };
 
 const SESSION_COOKIE = "__Host-wh_session";
 
-// The declared reversals (design §7): a created calendar event is undone by deleting it.
-// ONE table backs both the loader's `canUndo` and the undo service's "is this reversible?"
-// decision, so an Undo control shows only where undoEntry can act.
-const REVERSALS: Record<string, string> = {
-  google_calendar__create_event: "google_calendar__delete_event",
-};
-function reversalFor(tool?: string): string | undefined {
-  return tool ? REVERSALS[tool] : undefined;
-}
+// The declared reversals (design §7) come from the curated connector definitions (a created
+// calendar event is undone by deleting it). ONE table backs both the loader's `canUndo` and
+// the undo service's "is this reversible?" decision, so an Undo control shows only where
+// undoEntry can act.
+const reversalFor = reversalToolFor;
 
 // Resolve the signed-in session from the cookie (or null), re-derived wherever it is
 // needed so no handler trusts a client value for identity (design §5).
