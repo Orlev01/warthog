@@ -45,3 +45,20 @@ test("messageRecipients reads Gmail MIME headers and Outlook recipient lists", (
   assert.deepEqual(messageRecipients("not json"), []);
   assert.deepEqual(messageRecipients(undefined), []);
 });
+
+test("Gmail discovery explains search/read arguments and distinguishes an unsent draft from sending", () => {
+  const gmailCatalogue = { get: () => ({ ...entry("google-gmail"), name: "Gmail" }) } as unknown as CatalogueIndex;
+  const tools = connectorToolsetFor([connection("google-gmail")], ["google-gmail"], gmailCatalogue)["google-gmail"]!;
+  const get = (name: string) => {
+    const tool = tools.find(t => typeof t !== "string" && t.name === name);
+    assert.ok(tool && typeof tool !== "string");
+    return tool;
+  };
+  assert.equal(get("search").title, "Gmail: Search messages");
+  assert.match(get("search").description!, /query\.q/);
+  assert.match(get("read").description!, /query\.id/);
+  assert.match(get("draft").description!, /does not send/i);
+  assert.match(get("draft").description!, /message\.raw/);
+  assert.match(get("send").description!, /sends an email/i);
+  assert.match(get("send").description!, /body/);
+});

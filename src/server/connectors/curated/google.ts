@@ -6,7 +6,8 @@
 // The most-used Google services get CLEAR curated tools. Each tool DECLARES whether it
 // reads or makes a change (so a change follows the agent's change-making setting), a
 // reversal link (create event is undone by delete event) the Undo flow reads, and a
-// "sends a message" flag the rules engine reads. Only Gmail send + draft send a message;
+// "sends a message" flag the rules engine reads. Gmail send + draft both use the
+// conservative message-policy gate; creating a draft does not deliver email.
 // only create-event carries a reversal (YAGNI — just the one the task asks for).
 //
 // A tool reaches Google ONLY through the person's Google OAuth connection: the stored
@@ -99,7 +100,7 @@ function byId(
 // The exact curated tool set this task adds (design §7). Read tools use GET; change tools
 // use the matching REST verb (POST to create, PATCH to update, DELETE to delete).
 const CURATED_DEFS: readonly CuratedToolDef[] = [
-  // Gmail — search / read are reads; draft / send make changes AND send a message.
+  // Gmail — search / read are reads; draft / send both receive message-policy checks.
   {
     name: "google-gmail__search",
     connectorId: "google-gmail",

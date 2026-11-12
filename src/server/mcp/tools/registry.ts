@@ -46,6 +46,7 @@ import {
 } from "./records";
 import { logActivitySchema } from "./log-activity";
 import { requestMakesChange } from "../../connectors/request-tool";
+import { coreToolMetadata, connectorToolMetadata, type ToolAnnotations } from "./metadata";
 import {
   connectorRequestSchema,
   connectorToolSchema,
@@ -62,6 +63,8 @@ import {
 // routes the call through the pipeline under the session connection's identity.
 export interface ToolDefinition {
   readonly name: string;
+  readonly title: string;
+  readonly annotations: ToolAnnotations;
   readonly description: string;
   readonly inputSchema: z.ZodType; // a z.object(...) exposing an optional `reason` in its .shape
   handle(input: unknown, connection: AgentConnection): Promise<AgentCallResult>;
@@ -73,6 +76,7 @@ export interface ToolDefinition {
 // validated body, so the rules engine's send-message and recipient rules can match. The
 // general `request` tool is classified per call by its HTTP method instead.
 export interface ConnectorToolDeclaration {
+  readonly title?: string;
   readonly schema?: z.ZodType;
   readonly requiresApproval?: boolean;
   readonly name: string;
@@ -343,6 +347,7 @@ function buildCoreTool(
 ): ToolDefinition {
   return {
     name: spec.name,
+    ...coreToolMetadata(spec.name),
     description: spec.description,
     inputSchema: spec.schema,
     async handle(
@@ -384,6 +389,10 @@ function buildConnectorTool(
     (isRequest ? connectorRequestSchema : connectorToolSchema);
   return {
     name,
+    ...connectorToolMetadata(
+      declaration.title ?? `${connectorId}: ${declaration.name.replace(/_/g, " ")}`,
+      !isRequest && !declaration.requiresApproval && declaration.makesChange === false,
+    ),
     description:
       declaration.description ??
       `Use the ${declaration.name} tool of the person's ${connectorId} service.`,
