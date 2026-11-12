@@ -3,10 +3,11 @@ import * as React from "react";
 import { cookies } from "next/headers";
 import { redirect } from "next/navigation";
 import { revalidatePath } from "next/cache";
-import { Notice as InlineNotice } from "@/components/ui/notice";
+import { PageNotice } from "@/components/ui/notice";
+import { UrlParamCleanup } from "@/components/ui/url-param-cleanup";
+import { WorkspaceHeading } from "@/components/shell/workspace-surfaces";
 
 import { DataView } from "@/components/settings/data-view";
-import { ConfirmItsYou } from "@/components/ui/confirm-its-you";
 import { loadConfig } from "@/server/config";
 import { getServerDb } from "@/server/db/server";
 import { selectKeyWrapper } from "@/server/crypto/key-wrapper";
@@ -157,11 +158,11 @@ const NOTICES: Record<string, Notice> = {
   },
   step_up_required: {
     tone: "problem",
-    text: "That's a sensitive action, so we need to check it's you first. Choose “Confirm it's you” below, then try again.",
+    text: "Nothing was deleted. For your security, confirm it's you first, then try again.",
   },
   confirmation_required: {
     tone: "problem",
-    text: "Nothing was deleted: type the exact confirmation phrase to confirm.",
+    text: "Nothing was deleted. Type the confirmation phrase exactly as shown, then try again.",
   },
   owns_household: {
     tone: "problem",
@@ -177,10 +178,15 @@ function dataNotice(code: string | undefined): Notice | null {
   return (code !== undefined && Object.hasOwn(NOTICES, code) && NOTICES[code]) || null;
 }
 
-function NoticeBanner({ notice }: { notice: Notice }) {
-  return (
-    <InlineNotice tone={notice.tone === "done" ? "success" : "error"}>{notice.text}</InlineNotice>
+// Which ways this member can confirm it's you, so the inline control offers only those
+// (enrolment metadata only: no secret is read). Scoped to the session person.
+async function confirmFactors(db: Db, userId: string): Promise<{ passkey: boolean; authenticator: boolean }> {
+  const result = await db.query(
+    `SELECT EXISTS (SELECT 1 FROM passkeys WHERE user_id = $1) AS passkey,
+            EXISTS (SELECT 1 FROM totp_secrets WHERE user_id = $1) AS authenticator`,
+    [userId],
   );
+  return { passkey: result.rows[0]?.passkey === true, authenticator: result.rows[0]?.authenticator === true };
 }
 
 export default async function DataPage({
@@ -203,27 +209,29 @@ export default async function DataPage({
   // Export and delete need a confirmation within the last five minutes; offer it inline
   // whenever the session lacks one, so a refusal is never a dead end.
   const needsConfirm = !requireStepUp(session, { clock: systemClock });
+  const factors = await confirmFactors(db, session.userId);
+  // A step-up refusal is said inside the "Confirm it's you" control (so it clears once
+  // confirmed) rather than as a second notice above it.
+  const refusalInConfirm = needsConfirm && rawNotice === "step_up_required" ? notice : null;
 
   return (
-    <div className="wh-page wh-page--form flex flex-col gap-6">
-      <div className="flex flex-col gap-1">
-        <h1 className="text-2xl font-semibold tracking-tight text-fg">Data &amp; privacy</h1>
-        <p className="text-sm text-fg-muted">
-          Export everything Warthog keeps about you, bring back a previous export, or delete
-          your account.
-        </p>
-      </div>
-      {notice ? <NoticeBanner notice={notice} /> : null}
-      {needsConfirm ? (
-        <ConfirmItsYou
-          explanation="Exporting, importing or deleting data needs a quick check that it's really you. Use a passkey or authenticator code."
-          confirmedText="Thanks — that's confirmed. You can transfer data or delete your account for the next five minutes."
-        />
+    <div className="wh-page">
+      <WorkspaceHeading
+        title="Data & privacy"
+        description="Export everything Warthog keeps about you, bring back a previous export, or delete your account."
+      />
+      {notice && !refusalInConfirm ? (
+        <PageNotice tone={notice.tone === "done" ? "success" : "error"}>{notice.text}</PageNotice>
       ) : null}
+      {refusalInConfirm ? <UrlParamCleanup names={["notice"]} /> : null}
       <DataView
         importedHistory={data.importedHistory}
         confirmationPhrase={DELETE_ACCOUNT_CONFIRMATION}
         deleteAccountAction={deleteAccountAction}
+        needsConfirm={needsConfirm}
+        confirmExplanation={refusalInConfirm?.text}
+        passkey={factors.passkey}
+        authenticator={factors.authenticator}
       />
     </div>
   );

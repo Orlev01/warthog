@@ -3,11 +3,14 @@
 import { SmsDisclosure } from "../public/sms-disclosure";
 
 import * as React from "react";
-import { Bell, Smartphone, Mail, Send, ShieldCheck, Clock, Trash2 } from "lucide-react";
+import { Bell, Smartphone, Send, ShieldCheck, Clock, Trash2, MessageSquareOff } from "lucide-react";
 
+import { WorkspacePanel } from "@/components/shell/workspace-surfaces";
+import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
-import { Card } from "@/components/ui/card";
+import { EmptyState } from "@/components/ui/empty";
 import { Field } from "@/components/ui/field";
+import { ActionForm, FormSubmit, PendingFormFields } from "@/components/ui/form-submit";
 import { endpointFingerprint, subscribeThisBrowser } from "./push-subscribe";
 import { InstallPrompt } from "@/components/pwa/install-prompt";
 
@@ -118,14 +121,15 @@ function useThisDeviceFingerprint(): string | null {
   return fingerprint;
 }
 
-function SectionHeading({ icon: Icon, children }: { icon: typeof Bell; children: React.ReactNode }) {
-  return (
-    <h2 className="inline-flex items-center gap-2 text-sm font-semibold text-fg">
-      <Icon aria-hidden={true} className="h-4 w-4 shrink-0" />
-      {children}
-    </h2>
-  );
-}
+// A divider row inside a panel: the item on the left, its one control on the right; the
+// text wraps beside the control rather than pushing it onto a line of its own.
+const ROW =
+  "flex min-w-0 items-center justify-between gap-4 border-b border-line py-3 text-sm first:pt-0 last:border-0 last:pb-0 [overflow-wrap:anywhere]";
+
+// A stacked divider row (a setting with its notes) and a checkbox with its whole label as
+// the 44px target.
+const ROW_ITEM = "flex min-w-0 flex-col gap-2 border-b border-line py-3 text-sm first:pt-0 last:border-0 last:pb-0";
+const CHECK_LABEL = "flex min-h-11 items-center gap-3";
 
 export function NotificationsView({
   devices,
@@ -145,6 +149,17 @@ export function NotificationsView({
 }: NotificationsViewProps) {
   const hasDevice = devices.length > 0;
   const thisDevice = useThisDeviceFingerprint();
+  // Text messages can only be sent to an enabled destination country (twilio.ts refuses
+  // every number otherwise), so with none enabled the number form, the SMS alert switch and
+  // their legal text would be a dead end: show one plain line instead (content-30).
+  const smsAvailable = smsEnabled && smsCountries.length > 0;
+  const smsCountryNames = smsCountries
+    .map((code) => new Intl.DisplayNames(["en"], { type: "region" }).of(code) ?? code)
+    .join(", ");
+  const noop = () => undefined;
+  // One ceremony at a time: the ref drops a second tap before React has re-rendered.
+  const [registering, setRegistering] = React.useState(false);
+  const registeringRef = React.useRef(false);
 
   // Register THIS browser as a push device. The subscription can only be created on
   // the client, so this control runs the ceremony (`subscribeThisBrowser`: permission
@@ -153,7 +168,9 @@ export function NotificationsView({
   // `registerPushDevice` server action. Every outcome is reported in plain words via a
   // `?notice=` redirect (never a silent no-op).
   async function handleRegisterDevice(): Promise<void> {
-    if (!registerPushDevice) return;
+    if (!registerPushDevice || registeringRef.current) return;
+    registeringRef.current = true;
+    setRegistering(true);
     const go = (notice: string): void => {
       window.location.assign(`${SCREEN}?notice=${notice}`);
     };
@@ -178,207 +195,216 @@ export function NotificationsView({
   }
 
   return (
-    <section className="flex flex-col gap-8">
-      {/* ----- Push devices: register one or more devices to be reached on ----- */}
-      <div className="flex flex-col gap-3">
-        <SectionHeading icon={Bell}>Push notifications</SectionHeading>
-        {/* Install guidance (iOS only delivers web push to an app added to the Home
-            Screen); its own notification part is hidden — "Register this device" below
-            already sets notifications up (review fix W4.1). */}
-        <InstallPrompt showNotifications={false} />
-        {hasDevice ? (
-          <ul className="flex flex-col gap-2">
-            {devices.map((device) => {
-              const label = device.label ?? "Registered device";
-              const isThisDevice = thisDevice !== null && device.fingerprint === thisDevice;
-              return (
-                <li
-                  key={device.id}
-                  className="flex flex-wrap items-center justify-between gap-3 rounded-card border border-line bg-surface px-4 py-3 text-sm text-fg"
-                >
-                  <span className="flex flex-col gap-0.5">
-                    <span>{label}</span>
-                    {isThisDevice ? (
-                      <span className="inline-flex items-center gap-1.5 text-xs font-medium text-fg-muted">
-                        <Smartphone aria-hidden={true} className="h-3.5 w-3.5 shrink-0" />
-                        This device
-                      </span>
-                    ) : null}
-                  </span>
-                  <form action={removePushDeviceAction}>
-                    <input type="hidden" name="id" value={device.id} />
-                    <Button type="submit" variant="secondary" aria-label={`Remove ${label}`}>
-                      <Trash2 aria-hidden={true} className="h-4 w-4 shrink-0" />
-                      Remove
-                    </Button>
-                  </form>
-                </li>
-              );
-            })}
-          </ul>
-        ) : (
-          <p className="text-sm text-fg-muted">No devices registered yet.</p>
-        )}
-        <Button
-          type="button"
-          variant="primary"
-          className="self-start"
-          onClick={() => {
-            void handleRegisterDevice();
-          }}
-        >
-          <Bell aria-hidden={true} className="h-4 w-4 shrink-0" />
-          Register this device
-        </Button>
-      </div>
-
-      {/* ----- SMS fallback: add and verify a mobile number with a 6-digit code ----- */}
-      {smsEnabled ? (
-      <div className="flex flex-col gap-3">
-        <SectionHeading icon={Smartphone}>Mobile number for SMS fallback</SectionHeading>
-        <p className="text-sm text-fg-muted">
-          Use + and your country code. SMS is optional and depends on your country and mobile network.
-          {smsCountries.length ? ` Currently enabled: ${smsCountries.map((code) => new Intl.DisplayNames(["en"], { type: "region" }).of(code) ?? code).join(", ")}.` : " No SMS destinations are currently enabled."}
-          {" "}Email, supported push notifications and in-app approvals remain available.
-          Requesting a code sends your number to Twilio for validation and one verification text.
-        </p>
-
-        {numbers.length > 0 ? (
-          <ul className="flex flex-col gap-2">
-            {numbers.map((number) => (
-              <li key={number.id}>
-                <Card className="flex flex-col gap-3">
-                  <p className="font-medium text-fg">{number.number}</p>
-                  {number.verified ? (
-                    <span className="inline-flex items-center gap-1.5 text-sm font-medium text-success">
-                      <ShieldCheck aria-hidden={true} className="h-4 w-4 shrink-0" />
-                      Verified
+    <>
+      {/* ----- Push devices: register one or more devices to be reached on, and test them ----- */}
+      <WorkspacePanel
+        title="Push notifications"
+        description="Get approval alerts on your phone or computer. Register each device you want them on."
+        footer={
+          <>
+            <Button
+              type="button"
+              variant="primary"
+              aria-disabled={registering || undefined}
+              aria-busy={registering || undefined}
+              onClick={() => {
+                void handleRegisterDevice();
+              }}
+            >
+              <Bell aria-hidden={true} className="h-4 w-4 shrink-0" />
+              {registering ? "Setting up…" : "Register this device"}
+            </Button>
+            <ActionForm action={sendTestNotificationAction ?? noop} className="contents">
+              <FormSubmit variant="secondary" disabled={!hasDevice} pendingLabel="Sending…">
+                <Send aria-hidden={true} className="h-4 w-4 shrink-0" />
+                Send a test notification
+              </FormSubmit>
+            </ActionForm>
+            {hasDevice ? null : <span>Register a device first, so the test notification has somewhere to go.</span>}
+          </>
+        }
+      >
+        <div className="flex min-w-0 flex-col gap-4 [&>[data-install-prompt]:empty]:hidden">
+          {/* Install guidance (iOS only delivers web push to an app added to the Home
+              Screen); its own notification part is hidden — "Register this device" below
+              already sets notifications up (review fix W4.1). */}
+          <InstallPrompt showNotifications={false} />
+          {hasDevice ? (
+            <ul role="list" className="flex min-w-0 flex-col">
+              {devices.map((device) => {
+                const label = device.label ?? "Registered device";
+                const isThisDevice = thisDevice !== null && device.fingerprint === thisDevice;
+                return (
+                  <li key={device.id} className={ROW}>
+                    <span className="flex min-w-0 flex-1 flex-col gap-0.5">
+                      <span className="text-fg">{label}</span>
+                      {isThisDevice ? (
+                        <span className="inline-flex items-center gap-1.5 text-xs font-medium text-fg-muted">
+                          <Smartphone aria-hidden={true} className="h-3.5 w-3.5 shrink-0" />
+                          This device
+                        </span>
+                      ) : null}
                     </span>
-                  ) : (
-                    <>
-                      <span className="inline-flex items-center gap-1.5 text-sm font-medium text-fg-muted">
-                        <Clock aria-hidden={true} className="h-4 w-4 shrink-0" />
-                        Not verified
-                      </span>
-                      <p className="text-sm text-fg-muted">
-                        If your text arrives, enter its 6-digit code, then verify.
-                      </p>
-                      <form
-                        action={verifyMobileNumberAction}
-                        className="flex flex-col gap-3 sm:flex-row sm:items-end"
-                      >
-                        <input type="hidden" name="id" value={number.id} />
-                        <Field
-                          label="Verification code"
-                          name="code"
-                          type="text"
-                          inputMode="numeric"
-                          maxLength={6}
-                          placeholder="123456"
-                          className="sm:flex-1"
-                        />
-                        <Button type="submit" variant="secondary" className="sm:self-stretch">
-                          Verify
-                        </Button>
-                      </form>
-                    </>
-                  )}
-                </Card>
-              </li>
-            ))}
-          </ul>
-        ) : null}
-
-        {/* Add a new number: type it, then request its verification code. */}
-        <form
-          action={addMobileNumberAction}
-          className="flex flex-col gap-3 sm:flex-row sm:items-end"
-        >
-          <Field
-            label="Mobile number"
-            name="number"
-            type="tel"
-            inputMode="tel"
-            placeholder="+ country code and number"
-            className="sm:flex-1"
-          />
-          <Button type="submit" variant="secondary" className="sm:self-stretch">
-            <Send aria-hidden={true} className="h-4 w-4 shrink-0" />
-            Send code
-          </Button>
-        </form>
-        <SmsDisclosure purpose="verification" />
-      </div>
-      ) : (
-        <div className="flex flex-col gap-3">
-          <SectionHeading icon={Smartphone}>SMS notifications</SectionHeading>
-          <p className="text-sm text-fg-muted">
-            SMS is currently unavailable. You can use email, push notifications and in-app approvals.
-          </p>
+                    <ActionForm action={removePushDeviceAction ?? noop} className="shrink-0">
+                      <input type="hidden" name="id" value={device.id} />
+                      <FormSubmit variant="danger" size="sm" pendingLabel="Removing…" aria-label={`Remove ${label}`}>
+                        <Trash2 aria-hidden={true} className="h-4 w-4 shrink-0" />
+                        Remove
+                      </FormSubmit>
+                    </ActionForm>
+                  </li>
+                );
+              })}
+            </ul>
+          ) : (
+            <EmptyState
+              variant="inline"
+              icon={Bell}
+              heading="No devices registered yet."
+              description="Register this device to get approval alerts on it."
+            />
+          )}
         </div>
-      )}
+      </WorkspacePanel>
 
-      {/* ----- Fallback preferences: email fallback + the delay before it fires ----- */}
-      <form action={saveNotificationPrefsAction} className="flex flex-col gap-3">
-        <SectionHeading icon={Mail}>Fallback</SectionHeading>
+      {/* ----- SMS: add and verify a mobile number with a 6-digit code ----- */}
+      {smsAvailable ? (
+        <WorkspacePanel
+          title="Mobile number for text messages"
+          description={`Get approval alerts by text if you don't open them in time. Available in ${smsCountryNames}. Text messages are optional.`}
+          footer={<SmsDisclosure purpose="verification" />}
+        >
+          <div className="flex min-w-0 flex-col gap-4">
+            {numbers.length > 0 ? (
+              <ul role="list" className="flex min-w-0 flex-col">
+                {numbers.map((number) => (
+                  <li key={number.id} className="flex min-w-0 flex-col gap-3 border-b border-line py-3 text-sm first:pt-0 last:border-0 last:pb-0">
+                    <div className="flex min-w-0 flex-wrap items-center justify-between gap-x-4 gap-y-2">
+                      <span className="font-medium text-fg [overflow-wrap:anywhere]">{number.number}</span>
+                      {number.verified ? (
+                        <Badge tone="success" icon={ShieldCheck}>Verified</Badge>
+                      ) : (
+                        <Badge tone="neutral" icon={Clock}>Not verified</Badge>
+                      )}
+                    </div>
+                    {number.verified ? null : (
+                      <div className="flex min-w-0 flex-col gap-3 rounded-field bg-surface-muted p-3">
+                        <p className="text-fg-muted">If your text arrives, enter its 6-digit code, then verify.</p>
+                        <ActionForm
+                          action={verifyMobileNumberAction ?? noop}
+                          className="flex min-w-0 flex-col gap-3 sm:flex-row sm:items-end"
+                        >
+                          <input type="hidden" name="id" value={number.id} />
+                          <Field
+                            label="Verification code"
+                            name="code"
+                            type="text"
+                            inputMode="numeric"
+                            autoComplete="one-time-code"
+                            maxLength={6}
+                            width="short"
+                          />
+                          <FormSubmit variant="secondary" pendingLabel="Verifying…">
+                            Verify
+                          </FormSubmit>
+                        </ActionForm>
+                      </div>
+                    )}
+                  </li>
+                ))}
+              </ul>
+            ) : null}
 
-        <label className="flex items-center gap-3 rounded-card border border-line bg-surface p-3">
-          <input
-            type="checkbox"
-            name="emailFallback"
-            defaultChecked={emailFallback}
-            className="h-4 w-4 accent-accent"
-          />
-          <span className="text-fg">Also send fallback alerts by email</span>
-        </label>
+            {/* Add a new number: type it, then request its verification code. */}
+            <ActionForm action={addMobileNumberAction ?? noop} className="flex min-w-0 flex-col gap-3 sm:flex-row sm:items-end">
+              <Field
+                label="Mobile number"
+                hint="Start with + and your country code. We'll text you a 6-digit code to check it."
+                name="number"
+                type="tel"
+                inputMode="tel"
+                autoComplete="tel"
+                className="sm:flex-1"
+              />
+              <FormSubmit variant="secondary" pendingLabel="Sending code…">
+                <Send aria-hidden={true} className="h-4 w-4 shrink-0" />
+                Send code
+              </FormSubmit>
+            </ActionForm>
+          </div>
+        </WorkspacePanel>
+      ) : null}
 
-        {smsEnabled ? <>
-        <label className="flex items-center gap-3 rounded-card border border-line bg-surface p-3">
-          <input type="checkbox" name="smsFallback" defaultChecked={smsFallback} className="h-4 w-4 accent-accent" />
-          <span className="text-fg">Send approval alerts by SMS to my verified number</span>
-        </label>
-        <p className="text-sm text-fg-muted">
-          SMS alerts are off until you enable them. Turn this off and save to stop future SMS alerts.
-          This setting does not prevent a verification text you explicitly request.
-        </p>
-        <SmsDisclosure purpose="alerts" />
-        </> : null}
-
-        <Field
-          label="Fallback delay (minutes)"
-          name="fallbackDelayMinutes"
-          type="number"
-          inputMode="numeric"
-          min={1}
-          max={30}
-          defaultValue={fallbackDelayMinutes}
-        />
-        <p className="text-sm text-fg-muted">
-          How long Warthog waits for an approval to be opened before sending fallback alerts (1–30 minutes).
-        </p>
-        <Button type="submit" variant="secondary" className="self-start">
-          Save preferences
-        </Button>
-      </form>
-
-      {/* ----- Send a test notification: live with a device, disabled WITH A REASON
-               when none is registered (no dead controls). ----- */}
-      <div className="flex flex-col gap-2">
-        <SectionHeading icon={Send}>Test notification</SectionHeading>
-        {hasDevice ? null : (
-          <p className="text-sm text-fg-muted">
-            Register a device above before you can send a test notification — there is
-            nowhere to send it yet.
-          </p>
-        )}
-        <form action={sendTestNotificationAction}>
-          <Button type="submit" variant="secondary" disabled={!hasDevice} className="self-start">
-            <Send aria-hidden={true} className="h-4 w-4 shrink-0" />
-            Send a test notification
-          </Button>
-        </form>
-      </div>
-    </section>
+      {/* ----- Fallback preferences: what happens when an alert isn't opened in time ----- */}
+      <ActionForm action={saveNotificationPrefsAction ?? noop} className="contents">
+        <WorkspacePanel
+          title="If you miss an alert"
+          description="When an approval isn't opened in time, Warthog follows up another way."
+          footer={
+            <FormSubmit variant="secondary" pendingLabel="Saving…">
+              Save preferences
+            </FormSubmit>
+          }
+        >
+          <PendingFormFields>
+            <ul role="list" className="flex min-w-0 flex-col">
+              <li className={ROW_ITEM}>
+                <label className={CHECK_LABEL}>
+                  <input type="checkbox" name="emailFallback" defaultChecked={emailFallback} className="h-4 w-4 shrink-0" />
+                  <span className="text-fg">Also send fallback alerts by email</span>
+                </label>
+              </li>
+              {smsAvailable ? (
+                <li className={ROW_ITEM}>
+                  <label className={CHECK_LABEL}>
+                    <input
+                      type="checkbox"
+                      name="smsFallback"
+                      defaultChecked={smsFallback}
+                      aria-describedby="notifications-sms-fallback-note"
+                      className="h-4 w-4 shrink-0"
+                    />
+                    <span className="text-fg">Send approval alerts by SMS to my verified number</span>
+                  </label>
+                  <div className="flex min-w-0 flex-col gap-2 pl-7 text-sm text-fg-muted">
+                    <p id="notifications-sms-fallback-note">
+                      Off until you turn it on. Turn it off and save to stop future alert texts. It
+                      doesn&apos;t stop a verification text you ask for.
+                    </p>
+                    <SmsDisclosure purpose="alerts" />
+                  </div>
+                </li>
+              ) : (
+                <li className={ROW_ITEM}>
+                  {/* Keep a saved SMS-alert choice as it is: hiding the switch must not
+                      quietly turn it off the next time these preferences are saved. */}
+                  {smsEnabled && smsFallback ? <input type="hidden" name="smsFallback" value="on" /> : null}
+                  <EmptyState
+                    variant="inline"
+                    icon={MessageSquareOff}
+                    heading="Text message alerts aren't available yet."
+                    description="You can get approval alerts by push notification and email, and you can always approve in the app."
+                  />
+                </li>
+              )}
+              <li className={ROW_ITEM}>
+                <Field
+                  label="Fallback delay (minutes)"
+                  hint="How long Warthog waits for an approval to be opened before following up: 1 to 30 minutes."
+                  name="fallbackDelayMinutes"
+                  type="number"
+                  inputMode="numeric"
+                  min={1}
+                  max={30}
+                  width="code"
+                  defaultValue={fallbackDelayMinutes}
+                />
+              </li>
+            </ul>
+          </PendingFormFields>
+        </WorkspacePanel>
+      </ActionForm>
+    </>
   );
 }
 

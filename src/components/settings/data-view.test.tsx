@@ -588,9 +588,35 @@ test("the Export explainer warns that opted-in protected details are readable in
 });
 
 
-test("deletion distinguishes live key-reference removal from retained backup copies", () => {
+// content-28 — the delete explainer says what happens in plain words, without database
+// terms, and still separates what happens straight away from what backups keep for a time.
+test("deletion explains, in plain words, what happens now, within 24 hours and in backups", () => {
   const text = visibleText(render(base()));
-  assert.match(text, /encryption-key reference is removed from the live database/i);
-  assert.match(text, /backups can retain older data/i);
+  assert.match(text, /straight away/i);
+  assert.match(text, /can no longer be opened/i);
+  assert.match(text, /within 24 hours/i);
+  assert.match(text, /backups/i);
+  assert.match(text, /privacy policy/i);
+  assert.doesNotMatch(text, /encryption|database|rows|queued|sensitive step|take a moment/i);
   assert.doesNotMatch(text, /encryption key is destroyed|everything.*erased for good/i);
+});
+
+// interaction-17 / F2 — one "Confirm it's you" on the page, offering only the member's
+// factors, and no unlock guidance until it applies (content-29).
+test("offers a single Confirm it's you when the session needs one, with only the member's factors", () => {
+  const markup = render(base({ needsConfirm: true, passkey: false, authenticator: true }));
+  assert.equal(markup.match(/class="wh-confirm-its-you/g)?.length, 1);
+  assert.match(markup, /Authenticator app code/);
+  assert.doesNotMatch(markup, />Confirm it&#x27;s you</);
+  assert.equal(render(base()).match(/class="wh-confirm-its-you/g), null, "none when the session is fresh");
+  assert.doesNotMatch(visibleText(render(base())), /unlock your vault|How would you like to unlock/i);
+});
+
+test("each task is its own panel, with the delete action in the delete panel's footer", () => {
+  const markup = render(base());
+  for (const title of ["Export your data", "Import a previous export", "Imported history", "Delete account"]) {
+    assert.match(markup, new RegExp(`<section[^>]*class="wh-panel"[\\s\\S]*?<h2[^>]*>${title}</h2>`), title);
+  }
+  assert.match(markup, /<footer class="wh-panel-footer">[\s\S]*?Delete my account/);
+  assert.match(render(base({ importedHistory: [] })), /wh-panel-empty[\s\S]*Nothing has been imported yet/, "the empty archive is an inline empty state");
 });

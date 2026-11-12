@@ -93,3 +93,29 @@ test("browser transfer keeps package files and agent reference settings in downl
  flow.setFile({size:downloaded.length,text:async()=>downloaded});await flow.importData();
  assert.equal((requests[0]!.document as typeof source).skillPackages[0]!.files[1]!.content,"Supporting text");
 });
+
+// interaction-17 — a refused transfer says so next to the button that started it and hands
+// the confirmation to the page's single "Confirm it's you", instead of mounting a second one.
+test("a step-up refusal names the transfer, tells the page, and mounts no second confirmation", async () => {
+  let asked = 0;
+  const flow = createDataTransfer({ vault: vault(new Uint8Array(randomBytes(32))), onStepUpRequired: () => { asked++; },
+    fetch: (async () => Response.json({ error: "step_up_required" }, { status: 403 })) as typeof fetch, download: () => assert.fail("must not download") });
+  await flow.exportData();
+  assert.equal(asked, 1);
+  assert.equal(flow.getState().activity, "export");
+  assert.match(flow.getState().error ?? "", /^Nothing was exported\. Confirm it's you/);
+  const html = renderToStaticMarkup(<DataTransferControls onStepUpRequired={() => {}} />);
+  assert.doesNotMatch(html, /wh-confirm-its-you/);
+  assert.match(html, /<h2[^>]*>Export your data<\/h2>/); assert.match(html, /<h2[^>]*>Import a previous export<\/h2>/);
+});
+
+test("the running transfer is the one that shows its pending label; a second tap sends nothing", async () => {
+  let release: () => void = () => {}; const waiting = new Promise<void>((resolve) => { release = resolve; }); let sends = 0;
+  const flow = createDataTransfer({ vault: vault(new Uint8Array(randomBytes(32))), download: () => {},
+    fetch: (async () => { sends++; await waiting; return Response.json({ document, protectedVault: { cards: [], highTierFields: [] } }); }) as typeof fetch });
+  const first = flow.exportData(); await new Promise((resolve) => setTimeout(resolve, 0));
+  assert.equal(flow.getState().working, true); assert.equal(flow.getState().activity, "export");
+  await flow.exportData(); assert.equal(sends, 1, "a double click sends one request");
+  release(); await first;
+  assert.equal(flow.getState().working, false); assert.match(flow.getState().notice ?? "", /export is ready/);
+});

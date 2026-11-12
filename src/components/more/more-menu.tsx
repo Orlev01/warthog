@@ -18,6 +18,7 @@ import { PORTAL_NAV, type NavNode } from "@/components/shell/nav";
 import { SignOutControl } from "@/components/shell/sign-out";
 import { NAV_GROUPS } from "@/components/shell/workspace-navigation";
 import { ListGroup } from "@/components/ui/list-group";
+import { WorkspaceHeading } from "@/components/shell/workspace-surfaces";
 
 // MoreMenu keeps the legacy /more route useful for bookmarks. The grouped desktop
 // sidebar and mobile drawer now expose these destinations directly.
@@ -73,10 +74,15 @@ function groupId(label: string): string {
 
 export function MoreMenu() {
   return (
-    <div className="wh-page flex flex-col gap-6">
-      <h1 className="text-2xl font-semibold tracking-tight text-fg">More</h1>
+    <div className="wh-page">
+      <WorkspaceHeading
+        title="More"
+        description="Everything else in your workspace, grouped as in the main menu."
+        scope={false}
+      />
 
-      <nav aria-label="More" className="flex flex-col gap-6">
+      {/* One panel per group; two columns once the page is wide enough. */}
+      <nav aria-label="More" className="grid min-w-0 gap-4 sm:gap-6 lg:grid-cols-2 lg:items-start">
         {MORE_GROUPS.map((group) => (
           <ListGroup key={group.label} id={groupId(group.label)} title={group.label}>
             {group.items.map((child) => {
@@ -85,9 +91,9 @@ export function MoreMenu() {
                 <li key={child.key} className="border-b border-line last:border-0">
                   <a
                     href={child.href}
-                    className="flex min-h-11 items-center gap-3 rounded-field px-2 py-3 text-sm font-medium text-fg hover:bg-surface-muted"
+                    className="-mx-2 flex min-h-11 items-center gap-3 rounded-field px-2 py-3 text-sm font-medium text-fg hover:bg-surface-muted"
                   >
-                    <Icon aria-hidden={true} className="h-5 w-5 shrink-0" />
+                    <Icon aria-hidden={true} className="h-[18px] w-[18px] shrink-0" strokeWidth={1.7} />
                     <span>{child.label}</span>
                   </a>
                 </li>
@@ -99,8 +105,15 @@ export function MoreMenu() {
 
       {/* Sign out — the mobile twin of the desktop sidebar's footer control. On
           mobile the More menu is the only way into these sections, so this is
-          where a person signs out of the device they are using. */}
-      <SignOutControl className="border border-line bg-surface px-4 py-3" />
+          where a person signs out of the device they are using. From 1024px the
+          sidebar's own Sign out is always on screen, so the panel isn't repeated. */}
+      <div className="lg:hidden">
+        <ListGroup id="more-account" title="This device">
+          <li>
+            <SignOutControl className="-mx-2 w-[calc(100%+1rem)]! px-2 py-3 [&>svg]:h-[18px] [&>svg]:w-[18px] [&>svg]:[stroke-width:1.7]" />
+          </li>
+        </ListGroup>
+      </div>
     </div>
   );
 }

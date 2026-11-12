@@ -1,6 +1,6 @@
 import * as React from "react";
 import { WorkspaceHeading } from "@/components/shell/workspace-surfaces";
-import { ArrowUpRight, Bell, Database, Lock, Settings, type LucideIcon } from "lucide-react";
+import { Bell, ChevronRight, Database, Lock, MessageSquareText, Settings, SlidersHorizontal, type LucideIcon } from "lucide-react";
 
 import { PORTAL_NAV } from "@/components/shell/nav";
 
@@ -24,6 +24,7 @@ import { PORTAL_NAV } from "@/components/shell/nav";
 // The icon for each settings destination, keyed on its IA `key`. A key the IA adds
 // without an icon here falls back to the Settings glyph rather than crashing.
 const ICONS: Record<string, LucideIcon> = {
+  "agent-defaults": SlidersHorizontal,
   security: Lock,
   notifications: Bell,
   data: Database,
@@ -32,10 +33,19 @@ const ICONS: Record<string, LucideIcon> = {
 // The one-line, plain-English description for each settings destination, keyed on
 // its IA `key` — what the screen is for, so the destinations are self-explaining.
 const DESCRIPTIONS: Record<string, string> = {
-  "agent-defaults": "Set defaults for new agents and review controls that apply to all agents.",
-  security: "Manage your passkey and second factor for signing in.",
+  "agent-defaults": "Starting permissions for agents you connect from now on.",
+  security: "Manage your passkeys, recovery code and where you're signed in.",
   notifications: "Choose how Warthog lets you know about approvals and alerts.",
-  data: "Export everything Warthog holds, or delete your account.",
+  data: "Export or import your data, or delete your account.",
+};
+
+// How agents write for you lives with your skills; it's linked here too because it's where
+// people look for it (newcomer-10). The route is the Skills page's Preferences tab.
+const PREFERENCES = {
+  key: "preferences",
+  label: "Preferences",
+  href: "/skills?view=preferences",
+  description: "How agents write for you: tone, length, language, units and time zone.",
 };
 
 // The settings children straight from the IA, in IA order.
@@ -44,28 +54,35 @@ const SETTINGS_CHILDREN =
   [];
 
 export function SettingsIndex() {
+  const links = [
+    ...SETTINGS_CHILDREN.map((child) => ({
+      key: child.key,
+      label: child.label,
+      href: child.href,
+      description: DESCRIPTIONS[child.key] ?? "",
+      Icon: ICONS[child.key] ?? Settings,
+    })),
+    { ...PREFERENCES, Icon: MessageSquareText },
+  ];
   return (
-    <div className="wh-page flex flex-col gap-6">
-      <WorkspaceHeading eyebrow="Personal workspace" title="Settings" description="Keep your account secure, choose how you hear from Warthog and manage your data." />
+    <div className="wh-page">
+      <WorkspaceHeading title="Settings" description="Keep your account secure, choose how you hear from Warthog and manage your data." />
 
       <nav aria-label="Settings" className="wh-settings-links">
-        {SETTINGS_CHILDREN.map((child) => {
-          const Icon = ICONS[child.key] ?? Settings;
-          return (
-            <a
-              key={child.key}
-              href={child.href}
-              className="wh-surface wh-settings-link text-sm text-fg"
-            >
-              <span className="wh-object-icon"><Icon aria-hidden size={18} /></span>
-              <span className="flex flex-col gap-1">
-                <span className="font-medium">{child.label}</span>
-                <span className="text-fg-muted">{DESCRIPTIONS[child.key] ?? ""}</span>
-              </span>
-              <ArrowUpRight aria-hidden size={16} />
-            </a>
-          );
-        })}
+        {links.map(({ key, label, href, description, Icon }) => (
+          <a
+            key={key}
+            href={href}
+            className={`wh-surface wh-settings-link text-sm text-fg${key === PREFERENCES.key ? " sm:col-span-2" : ""}`}
+          >
+            <span className="wh-object-icon"><Icon aria-hidden size={18} strokeWidth={1.7} /></span>
+            <span className="flex flex-col gap-1">
+              <span className="font-medium">{label}</span>
+              <span className="text-fg-muted">{description}</span>
+            </span>
+            <ChevronRight aria-hidden size={16} />
+          </a>
+        ))}
       </nav>
     </div>
   );
