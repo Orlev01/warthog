@@ -1,4 +1,5 @@
-import { recordNotificationFromLink, type RecordNotification } from "../../domain/life-admin/record-notification";
+import { recordNotificationFromLink } from "../../domain/life-admin/record-notification";
+import { SIGN_IN_REQUESTS_PATH } from "../auth/sign-in-requests-path";
 import type { Config } from "../config";
 import { getServerDb } from "../db/server";
 import type { Db } from "../db/index";
@@ -10,14 +11,14 @@ import { systemClock } from "../seams/clock";
 import { createResendEmailSender } from "./resend";
 import { createTwilioSmsSender } from "./twilio";
 import { reserveSmsSegments } from "./sms-budget";
-import { createWebPushSender, type PushDeviceSubscription } from "./web-push";
+import { createWebPushSender, SIGN_IN_REQUESTS_TARGET, type PushDeviceSubscription, type PushTarget } from "./web-push";
 import { disabledSmsSender, selectSenders, type PushSender, type Senders } from "./senders";
 import { outbox } from "./outbox";
 
 export function createUserPushSender(deps: {
   subscriptions: (userId: string) => Promise<(PushDeviceSubscription & { id: string })[]>;
   remove: (userId: string, id: string) => Promise<unknown>;
-  send: (subscription: PushDeviceSubscription, target?: RecordNotification) => Promise<void>;
+  send: (subscription: PushDeviceSubscription, target?: PushTarget) => Promise<void>;
 }): PushSender {
   return {
     sendDevicePush: deps.send,
@@ -25,7 +26,9 @@ export function createUserPushSender(deps: {
       const devices = await deps.subscriptions(message.recipient);
       if (!devices.length) throw new Error("No registered push device");
       const results = await Promise.allSettled(devices.map(async (device) => {
-        try { await deps.send({ endpoint: device.endpoint, keys: device.keys }, recordNotificationFromLink(message.link)); }
+        // Only fixed, known destinations become routing data; any other link is dropped.
+        const target = message.link === SIGN_IN_REQUESTS_PATH ? SIGN_IN_REQUESTS_TARGET : recordNotificationFromLink(message.link);
+        try { await deps.send({ endpoint: device.endpoint, keys: device.keys }, target); }
         catch (error) {
           const status = (error as { status?: number } | null)?.status;
           if (status === 404 || status === 410) await deps.remove(message.recipient, device.id);

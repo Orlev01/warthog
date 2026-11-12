@@ -486,6 +486,9 @@ test("a read-only (disconnected) agent offers no Save and says why", () => {
   const markup = render(base({ readOnly: true }));
   assert.equal(allButtons(markup).filter((b) => /save/i.test(b.name)).length, 0, "no Save control");
   assert.match(visibleText(markup), /disconnected, so its access can.t be changed/);
+  // There is no reconnecting this agent: connecting again makes a new one (brief: "a
+  // disconnected agent can be reconnected only by going through consent again").
+  assert.match(visibleText(markup), /Connecting it again adds it as a new agent/);
   assert.match(markup, /href="\/agents\/connect"/);
 });
 

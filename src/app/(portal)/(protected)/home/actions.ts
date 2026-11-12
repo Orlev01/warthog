@@ -142,7 +142,7 @@ function toDashboardAgent(
     todayCount: lastDay?.total ?? 0,
     needsAttention: lastDay ? lastDay.byOutcome.blocked + lastDay.byOutcome.failed + lastDay.disputed : 0,
     name: agent.displayName,
-    status: agent.status === "connected" ? "connected" : "needs-reconnect",
+    status: agent.status === "connected" ? "connected" : "disconnected",
     spendThisPeriod: Number(agent.spendThisPeriod),
     budget: agent.budget === null ? null : Number(agent.budget),
     budgetPeriod: agent.budgetPeriod,

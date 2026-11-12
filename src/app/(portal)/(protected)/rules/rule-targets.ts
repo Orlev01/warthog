@@ -16,6 +16,11 @@
 // What a rule matches on is unchanged: the stored value is exactly the name the engine
 // compares. Only the choice is constrained.
 //
+// The same sources name a rule's tool and service for a PERSON (UI/UX follow-up): `labels`
+// resolves a tool to its title (a choice's own label first, so the builder's preview reads
+// exactly what the saved rule reads) and a service to its catalogue name. Agent-facing
+// sentences never use them, so agents keep reading the exact ids.
+//
 // A SERVER module over injected values (db, catalogue, the person's DEK): it reads no
 // `process.env` and holds no secret, and every query is member-scoped by the given userId.
 
@@ -31,7 +36,8 @@ import { processSingleton } from "@/server/seams/process-singleton";
 import { createToolRegistry } from "@/server/mcp/tools/registry";
 import type { AgentCallPipeline } from "@/server/mcp/pipeline";
 import type { Db } from "@/server/db/index";
-import type { RuleTargetGroup } from "@/components/rules/rules-view";
+import { ruleLabelsFromChoices, type RuleTargetGroup } from "@/components/rules/rules-organise";
+import type { RuleDisplayLabels } from "@/domain/rules/rules";
 
 // The `<connector>__<tool>` namespace separator (design §6.2).
 const NAMESPACE = "__";
@@ -83,12 +89,33 @@ export interface RuleTargets {
   readonly services: RuleTargetGroup[];
   isTool(name: string): boolean;
   isService(name: string): boolean;
+  // How a person reads a rule's tool (its title) and service (its catalogue name). An id
+  // that names nothing real resolves to nothing, so the sentence shows the id.
+  readonly labels: RuleDisplayLabels;
 }
 
 function toolLabel(serviceName: string, declarationName: string, title: string | undefined): string {
   if (title) return title;
   if (declarationName === REQUEST_TOOL) return `${serviceName}: any request`;
   return `${serviceName}: ${declarationName.replace(/_/g, " ")}`;
+}
+
+// The label of a catalogue service's tool that is known without a connection (a curated
+// tool, or the general request tool), named as the builder would name it once the service
+// is connected: the toolset is the one a connected account of the service is served, which
+// the catalogue and the curated declarations alone decide. Undefined for anything else.
+function offlineToolLabel(catalogue: CatalogueIndex, tool: string): string | undefined {
+  const split = tool.indexOf(NAMESPACE);
+  if (split <= 0) return undefined;
+  const entry = catalogue.get(tool.slice(0, split));
+  if (!entry || entry.auth_kind === "provider_mcp") return undefined;
+  const verb = tool.slice(split + NAMESPACE.length);
+  const served: Connection = { id: entry.id, userId: "", connectorId: entry.id, accountLabel: "", status: "connected", connectedAt: new Date(0) };
+  const declaration = (connectorToolsetFor([served], [entry.id], catalogue)[entry.id] ?? []).find(
+    (candidate) => (typeof candidate === "string" ? candidate : candidate.name) === verb,
+  );
+  if (declaration === undefined) return undefined;
+  return toolLabel(entry.name, verb, typeof declaration === "string" ? undefined : declaration.title);
 }
 
 // The tools and services `userId` may name in a rule, and the checks the rule actions run
@@ -149,13 +176,50 @@ export async function ruleTargetsFor(
     .map((entry) => ({ value: entry.id, label: entry.name }))
     .sort(byName);
 
+  const tools: RuleTargetGroup[] = [
+    { label: "Warthog", choices: own.map((tool) => ({ value: tool.name, label: tool.title })) },
+    ...serviceGroups,
+  ];
+  const services: RuleTargetGroup[] = [
+    ...(connectedServices.length ? [{ label: "Your connected services", choices: connectedServices }] : []),
+    { label: connectedServices.length ? "Other services" : "Services", choices: otherServices },
+  ];
+
+  // A tool is named by its choice's label first (so the preview and the saved rule agree),
+  // then — for a real tool that isn't a choice — by its provider declaration (another
+  // connected account's tools) or the toolset its service is served once connected.
+  const choiceLabels = ruleLabelsFromChoices(tools, services);
+  const providerLabels = new Map<string, string>();
+  for (const connection of connections) {
+    const entry = catalogue.get(connection.connectorId)!;
+    for (const tool of providerTools[connection.id] ?? []) {
+      const name = `${connection.connectorId}${NAMESPACE}${tool.name}`;
+      if (!providerLabels.has(name)) providerLabels.set(name, toolLabel(entry.name, tool.name, tool.title));
+    }
+  }
+  const labels: RuleDisplayLabels = {
+    toolTitle: (tool) =>
+      known.has(tool) ? (choiceLabels.toolTitle?.(tool) ?? providerLabels.get(tool) ?? offlineToolLabel(catalogue, tool)) : undefined,
+    serviceName: (service) => choiceLabels.serviceName?.(service) ?? catalogue.get(service)?.name,
+  };
+
   return {
-    tools: [{ label: "Warthog", choices: own.map((tool) => ({ value: tool.name, label: tool.title })) }, ...serviceGroups],
-    services: [
-      ...(connectedServices.length ? [{ label: "Your connected services", choices: connectedServices }] : []),
-      { label: connectedServices.length ? "Other services" : "Services", choices: otherServices },
-    ],
+    tools,
+    services,
     isTool: (name) => known.has(name),
     isService: (name) => catalogue.get(name) !== undefined,
+    labels,
   };
+}
+
+// How `userId` reads the tools and services their rules name — the labels the Rules page
+// uses — for another screen that shows rule sentences (an agent's workspace). Member-scoped
+// like `ruleTargetsFor`: only the person's own connections are read.
+export async function ruleDisplayLabelsFor(
+  db: Db,
+  catalogue: CatalogueIndex,
+  userId: string,
+  dek: Uint8Array,
+): Promise<RuleDisplayLabels> {
+  return (await ruleTargetsFor(db, catalogue, userId, dek)).labels;
 }

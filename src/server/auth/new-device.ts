@@ -26,6 +26,13 @@
 // no migration, so nothing about a pending request is written to the database.
 // Every member-scoped decision takes its userId from the session (the approver's
 // own `approvingSession.userId`), never from a client-supplied value.
+//
+// Follow-up S3 (docs/adr/security-followups-2026-11.md): the signed-in app lists a member's
+// own pending requests (Settings › Security › Sign-in requests) and approves or denies them
+// there. Each request carries a second random id, the APPROVAL id, which is all the
+// approving device ever sees; the collection handle stays a bearer secret of the requesting
+// device alone, so seeing a request never lets anyone collect its session. The request's
+// push links to that screen and carries neither id.
 
 import type { AuthenticationResponseJSON } from "@simplewebauthn/server";
 
@@ -33,6 +40,7 @@ import { verifyEmailCode } from "./email-code";
 import { verifyRecoveryCode } from "./recovery";
 import { finishPasskeyAuthentication } from "./passkey";
 import { pendingStore } from "./pending-store";
+import { SIGN_IN_REQUESTS_PATH } from "./sign-in-requests-path";
 import { createSession, type Session } from "./session";
 import { alertNewDeviceSignIn, deliverAlert } from "./alerts";
 import { requireStepUp } from "./step-up";
@@ -98,9 +106,30 @@ export interface CollectDeps {
 // from the client); `approved` flips true only when the owner approves.
 interface PendingRequest {
   readonly userId: string;
-  // The label the new device gave itself, named in the approval push and the alert.
+  // The label the request is shown under (the device handler derives it from the
+  // requesting browser into a fixed vocabulary; see device-label.ts), named in the
+  // approval push, the requests screen and the alert.
   readonly deviceLabel: string;
+  // The opaque id the approving device lists, approves and denies by — never the handle.
+  readonly approvalId: string;
+  readonly requestedAt: Date;
   approved: boolean;
+}
+
+// How long a request can wait to be approved and collected.
+export const NEW_DEVICE_REQUEST_TTL_MS = 10 * 60 * 1000;
+
+// The signed-in screen where a member sees and answers their pending requests. The push for
+// a new request links here; the URL carries no request id or secret, so the screen lists
+// the requests itself from the session.
+export { SIGN_IN_REQUESTS_PATH };
+
+// A pending request as the member's own listing shows it.
+export interface DeviceSignInRequest {
+  readonly id: string;
+  readonly deviceLabel: string;
+  readonly requestedAt: Date;
+  readonly expiresAt: Date;
 }
 
 // The device label used when a sign-in method carries none of its own.
@@ -111,7 +140,7 @@ const UNNAMED_DEVICE = "a new device";
 // and expiring (pending-store): a request must be approved and collected within ten
 // minutes, so a stale approved request can never be collected days later.
 const pendingRequests = pendingStore<PendingRequest>("auth.newDeviceRequests", {
-  ttlMs: 10 * 60 * 1000,
+  ttlMs: NEW_DEVICE_REQUEST_TTL_MS,
   maxEntries: 10_000,
 });
 
@@ -195,27 +224,93 @@ export async function signInNewDeviceWithRecoveryCode(
 // device, and the random collection handle is returned to the requesting device
 // ONLY — it never rides along in the push (approvals happen inside the signed-in
 // app, and the handle is a bearer secret for the new device alone).
+//
+// The push links to the signed-in requests screen and names only the device label. It is
+// best effort (like the security alerts): a member with no push device, or a failed send,
+// still has the request waiting on that screen for the requesting device to collect.
 export async function requestNewDeviceApproval(
   db: Db,
   params: { email: string; code: string; deviceLabel: string },
   deps: RequestApprovalDeps,
-): Promise<{ ok: true; requestId: string } | { ok: false; reason: string }> {
+): Promise<{ ok: true; requestId: string; expiresAt: Date } | { ok: false; reason: string }> {
   const person = await completeFirstFactor(db, params.email, params.code, deps);
   if (!person) return { ok: false, reason: "invalid_code" };
 
   const requestId = Buffer.from(deps.random.randomBytes(32)).toString("hex");
+  const approvalId = Buffer.from(deps.random.randomBytes(16)).toString("hex");
+  const requestedAt = deps.clock.now();
   pendingRequests.set(
     requestId,
-    { userId: person.id, deviceLabel: params.deviceLabel, approved: false },
-    deps.clock.now(),
+    { userId: person.id, deviceLabel: params.deviceLabel, approvalId, requestedAt, approved: false },
+    requestedAt,
   );
 
-  await deps.pushSender.sendPush({
-    recipient: person.id,
-    body: `Approve sign-in on ${params.deviceLabel}?`,
-  });
+  await deliverAlert("new-device-request-push", () =>
+    deps.pushSender.sendPush({
+      recipient: person.id,
+      body: `Someone is asking to sign in to your Warthog account on ${params.deviceLabel}. Only approve it if that's you.`,
+      link: SIGN_IN_REQUESTS_PATH,
+    }),
+  );
 
-  return { ok: true, requestId };
+  return { ok: true, requestId, expiresAt: new Date(requestedAt.getTime() + NEW_DEVICE_REQUEST_TTL_MS) };
+}
+
+// The session's OWN pending requests that are still waiting: unexpired and not yet
+// approved, newest first. Scoped by the session's account alone; each is listed under its
+// approval id, never its collection handle.
+export function listDeviceSignInRequests(session: Session, deps: { clock: Clock }): DeviceSignInRequest[] {
+  return pendingRequests
+    .live(deps.clock.now())
+    .filter(({ value }) => value.userId === session.userId && !value.approved)
+    .map(({ value, expiresAt }) => ({
+      id: value.approvalId,
+      deviceLabel: value.deviceLabel,
+      requestedAt: value.requestedAt,
+      expiresAt,
+    }))
+    .sort((a, b) => b.requestedAt.getTime() - a.requestedAt.getTime());
+}
+
+// Find the session's own waiting request by its approval id (an id that is someone else's,
+// expired, approved or unknown finds nothing).
+function findOwnRequest(
+  approvalId: string,
+  userId: string,
+  now: Date,
+): { key: string; value: PendingRequest } | undefined {
+  return pendingRequests
+    .live(now)
+    .find(({ value }) => value.approvalId === approvalId && value.userId === userId && !value.approved);
+}
+
+// Approve one of the session's own waiting requests from the signed-in app. Needs a FRESH
+// step-up; marks the request approved so the requesting device can collect it, and returns
+// NO session — the approver gets nothing to sign in with.
+export async function approveDeviceSignInRequest(
+  params: { approvalId: string; approvingSession: Session },
+  deps: ApproveDeps,
+): Promise<{ ok: true } | { ok: false; reason: "step_up_required" | "not_found" }> {
+  if (!requireStepUp(params.approvingSession, { clock: deps.clock })) {
+    return { ok: false, reason: "step_up_required" };
+  }
+  const found = findOwnRequest(params.approvalId, params.approvingSession.userId, deps.clock.now());
+  if (!found) return { ok: false, reason: "not_found" };
+  found.value.approved = true;
+  return { ok: true };
+}
+
+// Deny one of the session's own waiting requests: it is discarded, so the requesting
+// device's next collect finds nothing. Denying only takes access away, so it needs no
+// step-up (the screen still asks first).
+export function denyDeviceSignInRequest(
+  params: { approvalId: string; session: Session },
+  deps: { clock: Clock },
+): { ok: true } | { ok: false; reason: "not_found" } {
+  const found = findOwnRequest(params.approvalId, params.session.userId, deps.clock.now());
+  if (!found) return { ok: false, reason: "not_found" };
+  pendingRequests.delete(found.key);
+  return { ok: true };
 }
 
 // Approve a pending request from an existing signed-in device. Accepted only when

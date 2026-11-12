@@ -22,6 +22,7 @@ import { createUser } from "@/server/db/users";
 import { localAesKeyWrapper, type KeyWrapper } from "@/server/crypto/key-wrapper";
 import { fixedClock } from "@/server/seams/clock";
 import { freshDb } from "@/test/db";
+import { catalogueFromDataFiles } from "../../rules/rule-targets";
 import type { Db } from "@/server/db/index";
 import type { Session } from "@/server/auth/session";
 
@@ -124,6 +125,26 @@ test("with no rules of its own the section says so and points to the Rules page"
     const markup = renderToStaticMarkup(<PermissionsView {...props!} />);
     assert.match(strip(markup), /No rules just for Claude yet/);
     assert.match(markup, /href="\/rules"/);
+  } finally {
+    await db.close();
+  }
+});
+
+test("the agent's rules read with tool titles, as the Rules page shows them, never the raw tool id", async () => {
+  const db = await freshDb();
+  const keyWrapper = localAesKeyWrapper(randomBytes(32));
+  try {
+    const alice = await makePerson(db, keyWrapper, "alice");
+    const claude = await seedAgent(db, alice.userId, "Claude");
+    await createRule(
+      db,
+      { userId: alice.userId, kind: "ask_first", scope: { type: "agent", agentId: claude.connectionId }, action: { type: "specific_tool", tool: "create_task" } },
+      alice.dek,
+    );
+    const props = await createPermissionsActions({ db, keyWrapper, catalogue: catalogueFromDataFiles() }).load(sessionFor(alice.userId), claude.agentId);
+    const text = strip(renderToStaticMarkup(<PermissionsView {...props!} />));
+    assert.match(text, /Ask me before Claude uses Create a task/);
+    assert.doesNotMatch(text, /create_task/);
   } finally {
     await db.close();
   }

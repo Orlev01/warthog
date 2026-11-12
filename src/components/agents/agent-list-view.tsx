@@ -3,7 +3,7 @@ import { AgentMark } from "@/components/ui/brand-mark";
 import { Bot, Plus } from "lucide-react";
 import { WorkspaceHeading } from "@/components/shell/workspace-surfaces";
 
-import { Status, type StatusKey } from "@/components/ui/status";
+import { Status, type DisplayStatus } from "@/components/ui/status";
 import { EmptyState } from "@/components/ui/empty";
 import { PageNotice, type NoticeTone } from "@/components/ui/notice";
 import { Button } from "@/components/ui/button";
@@ -35,13 +35,13 @@ import { platformLabel } from "./platform-label";
 // loader produced (never a raw Date — the view reaches for no clock); `lastActiveAt` is
 // null when the agent has never been active. `spendThisPeriod` / `budget` are plain
 // major-unit amounts and `budgetPeriod` names the current period. `activityHref` is the
-// ready-made URL to THIS agent's filtered activity. `status` is the shared StatusKey
-// union the UI <Status> primitive renders (one source of truth with DashboardAgent).
+// ready-made URL to THIS agent's filtered activity. `status` is a state the shared
+// <Status> primitive renders ("Connected", "Disconnected", …).
 export type AgentListItem = {
   id: string;
   name: string;
   platform: string;
-  status: StatusKey;
+  status: DisplayStatus;
   connectedAt: string;
   lastActiveAt: string | null;
   requestCount: number;
@@ -52,6 +52,8 @@ export type AgentListItem = {
   currency?: string;
   hasBudget?: boolean;
   spendIncomplete?: boolean;
+  // Whether it holds a working Warthog access key (so its key can be replaced instead).
+  accessKey?: boolean;
 };
 
 export type AgentListViewProps = {
@@ -79,17 +81,19 @@ function periodLabel(period: AgentListItem["budgetPeriod"]): string {
   }
 }
 
-// The one-line summary under the heading: how many agents, then how many need
-// attention, in words ("3 agents · 1 needs reconnecting"), or "all connected". The
-// rows keep the order the loader gives — agents needing reconnection first, then the
-// most recently active (listAgentsForUser's ORDER BY).
+// The one-line summary under the heading: how many agents, then how many are not
+// connected, in words ("3 agents · 1 disconnected"), or "all connected". The rows keep
+// the order the loader gives — disconnected agents first, then the most recently active
+// (listAgentsForUser's ORDER BY).
 export function agentSummary(agents: readonly AgentListItem[]): string {
   const total = `${agents.length} agent${agents.length === 1 ? "" : "s"}`;
-  const count = (status: StatusKey) => agents.filter((agent) => agent.status === status).length;
+  const count = (status: DisplayStatus) => agents.filter((agent) => agent.status === status).length;
+  const disconnected = count("disconnected");
   const reconnect = count("needs-reconnect");
   const errors = count("error");
   const pending = count("pending");
   const parts = [
+    disconnected ? `${disconnected} disconnected` : null,
     reconnect ? `${reconnect} ${reconnect === 1 ? "needs" : "need"} reconnecting` : null,
     errors ? `${errors} ${errors === 1 ? "has an error" : "have errors"}` : null,
     pending ? `${pending} pending` : null,
@@ -97,10 +101,11 @@ export function agentSummary(agents: readonly AgentListItem[]): string {
   return [total, ...(parts.length ? parts : ["all connected"])].join(" · ");
 }
 
-// A disconnected agent ("Reconnect needed") can't be disconnected again: it offers the way
-// back instead (interaction-08). Every other state keeps its live Disconnect.
+// A disconnected agent ("Disconnected") can't be disconnected again: it offers the way
+// back instead, connecting it from the start (interaction-08). Every other state keeps its
+// live Disconnect.
 function isDisconnected(agent: AgentListItem): boolean {
-  return agent.status === "needs-reconnect";
+  return agent.status === "disconnected";
 }
 
 // The Disconnect control for one agent. LIVE (bound to `disconnectAction`, carrying THIS

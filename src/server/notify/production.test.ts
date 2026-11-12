@@ -1,6 +1,7 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import { createUserPushSender, notificationSenders } from "./production";
+import { SIGN_IN_REQUESTS_PATH } from "../auth/sign-in-requests-path";
 import { loadConfig } from "../config";
 import { outbox } from "./outbox";
 
@@ -57,5 +58,19 @@ test("record reminders carry only a validated opaque target and reject arbitrary
   for (const link of [`https://evil.test/life-admin?view=life&tab=receipts#record-${recordId}`, `/life-admin?view=life&tab=receipts&secret=private#record-${recordId}`, "/life-admin?view=life&tab=__proto__#record-bad", undefined]) {
     await sender.sendPush({ recipient: "owner", body: "private content", link });
     assert.equal(payloads.at(-1), undefined);
+  }
+});
+
+test("a sign-in request push carries only the fixed sign-in-requests kind, never an id", async () => {
+  const payloads: unknown[] = [];
+  const sender = createUserPushSender({
+    subscriptions: async () => [{ id: "device", endpoint: "https://push.test/a", keys: { p256dh: "x", auth: "y" } }],
+    remove: async () => {}, send: async (_subscription, target) => { payloads.push(target); },
+  });
+  await sender.sendPush({ recipient: "owner", body: "A new device wants to sign in", link: SIGN_IN_REQUESTS_PATH });
+  assert.deepEqual(payloads.at(-1), { kind: "sign-in-requests" });
+  for (const link of [`${SIGN_IN_REQUESTS_PATH}?request=abc`, `https://evil.test${SIGN_IN_REQUESTS_PATH}`]) {
+    await sender.sendPush({ recipient: "owner", body: "x", link });
+    assert.equal(payloads.at(-1), undefined, "only the exact path routes; anything else is dropped");
   }
 });

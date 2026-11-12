@@ -3,7 +3,7 @@
 // rules actions and the client view all read the same keys — a value exported from a
 // client module would reach server code only as a client reference.
 
-import type { RuleKind, RuleScope } from "@/domain/rules/rules";
+import type { RuleDisplayLabels, RuleKind, RuleScope } from "@/domain/rules/rules";
 import { hrefWith } from "@/lib/href";
 
 export const RULES_PATH = "/rules";
@@ -24,6 +24,27 @@ export const RULE_STATUS_LABELS: Record<RuleStatusFilter, string> = {
 // The rules list filtered to one status, or every rule. Only the fixed path is emitted.
 export function rulesStatusHref(status: RuleStatusFilter | undefined): string {
   return hrefWith(RULES_PATH, {}, { status });
+}
+
+// One tool or service a rule may name: `value` is the exact name the engine matches (and
+// the form posts); `label` is its plain name. Grouped for the builder's <optgroup>s.
+export type RuleTargetChoice = { value: string; label: string };
+export type RuleTargetGroup = { label: string; choices: RuleTargetChoice[] };
+
+// The display labels a set of builder choices gives: each tool by its choice label (its
+// title) and each service by its catalogue name. The builder's preview and the Rules page
+// list both name tools and services through this, from the same choices, so the preview
+// reads exactly what the saved rule reads. An id outside the choices resolves to nothing
+// (the sentence then shows the id).
+export function ruleLabelsFromChoices(
+  tools: ReadonlyArray<RuleTargetGroup> | undefined,
+  services: ReadonlyArray<RuleTargetGroup> | undefined,
+): RuleDisplayLabels {
+  const index = (groups: ReadonlyArray<RuleTargetGroup> | undefined) =>
+    new Map((groups ?? []).flatMap((group) => group.choices.map((choice) => [choice.value, choice.label] as const)));
+  const toolLabels = index(tools);
+  const serviceLabels = index(services);
+  return { toolTitle: (tool) => toolLabels.get(tool), serviceName: (service) => serviceLabels.get(service) };
 }
 
 // The part of a rule the grouping reads.

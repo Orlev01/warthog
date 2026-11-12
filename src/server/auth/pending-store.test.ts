@@ -82,3 +82,15 @@ test("two stores with the same name share one map (the process-wide singleton)",
   first.set("a", 7, T0);
   assert.equal(second.get("a", T0), 7);
 });
+
+test("live entries can be listed with their expiry; expired ones are skipped and forgotten", () => {
+  const store = pendingStore<string>(uniqueName(), { ttlMs: 10 * MINUTE_MS, maxEntries: 10 });
+  store.set("old", "a", T0);
+  store.set("new", "b", at(5 * MINUTE_MS));
+  assert.deepEqual(store.live(at(6 * MINUTE_MS)), [
+    { key: "old", value: "a", expiresAt: at(10 * MINUTE_MS) },
+    { key: "new", value: "b", expiresAt: at(15 * MINUTE_MS) },
+  ]);
+  assert.deepEqual(store.live(at(10 * MINUTE_MS)).map((entry) => entry.key), ["new"]);
+  assert.equal(store.size, 1, "the expired entry was evicted by the listing");
+});

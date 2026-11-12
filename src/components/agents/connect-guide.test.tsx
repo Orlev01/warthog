@@ -441,3 +441,10 @@ test("the connect page title is the shared heading band", () => {
   const markup = render();
   assert.match(markup, /<header class="wh-page-heading">[\s\S]*?<h1>Connect an agent<\/h1>/);
 });
+
+// interaction-07 follow-up — an access key can be replaced or revoked later from the agent's
+// Settings, so the access-key route says so (and no longer implies a key is for ever).
+test("the access-key route says the key can be replaced or revoked later in the agent's Settings", () => {
+  const text = visibleText(render());
+  assert.match(text, /replace or revoke (it|the key) later[^.]*Settings/i, `text="${text}"`);
+});

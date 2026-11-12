@@ -99,6 +99,8 @@ import { createUser } from "@/server/db/users";
 import { createReleaseStore } from "@/server/crypto/release-store";
 import { HttpError } from "@/server/http/validate";
 import { fixedClock } from "@/server/seams/clock";
+import { systemRandom } from "@/server/seams/random";
+import { issueAccessKey } from "@/server/oauth/access-key";
 import { freshDb } from "@/test/db";
 import type { Db } from "@/server/db/index";
 import type { Session } from "@/server/auth/session";
@@ -515,6 +517,42 @@ test("disconnecting an agent that is already disconnected says so, instead of re
     const again = await actions.disconnect(sessionFor(userId), agent.id);
     assert.deepEqual(again, { ok: false, reason: "not_connected" });
     assert.equal((await getAgentById(db, userId, agent.id))?.status, "disconnected");
+  } finally {
+    await db.close();
+  }
+});
+
+// The list knows which agents hold a working access key, so Disconnect's confirmation can
+// point them at replacing the key instead (an OAuth agent has none).
+test("the loader marks the agents that hold a working access key", async () => {
+  const db = await freshDb();
+  try {
+    const userId = await makeUser(db, "key-marks");
+    const keyed = await seedAgent(db, userId, { displayName: "GalahHelper" });
+    const plain = await seedAgent(db, userId, { displayName: "PossumHelper" });
+    await issueAccessKey(db, { connectionId: keyed.connectionId }, { random: systemRandom });
+    const { agents } = await makeActions(db).load(sessionFor(userId));
+    assert.equal(agents.find((agent) => agent.id === keyed.id)?.accessKey, true);
+    assert.equal(agents.find((agent) => agent.id === plain.id)?.accessKey, false);
+  } finally {
+    await db.close();
+  }
+});
+
+// A disconnected agent reads "Disconnected" on the list: nothing renews it ("Connect it
+// again" makes a new connection), so it is never "Reconnect needed".
+test("the loader shows a disconnected agent as disconnected, not as needing a reconnect", async () => {
+  const db = await freshDb();
+  try {
+    const userId = await makeUser(db, "disc-status");
+    const kept = await seedAgent(db, userId, { displayName: "KoalaHelper" });
+    const ended = await seedAgent(db, userId, { displayName: "EmuHelper" });
+    const actions = makeActions(db);
+    assert.equal((await actions.disconnect(sessionFor(userId), ended.id)).ok, true);
+    const { agents } = await actions.load(sessionFor(userId));
+    assert.equal(agents.find((agent) => agent.id === ended.id)?.status, "disconnected");
+    assert.equal(agents.find((agent) => agent.id === kept.id)?.status, "connected");
+    assert.ok(agents.every((agent) => agent.status !== "needs-reconnect"));
   } finally {
     await db.close();
   }

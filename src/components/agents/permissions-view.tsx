@@ -100,7 +100,8 @@ export type PermissionsViewProps = {
   sharedMemoryRead: boolean;
   learningSharing: boolean;
   // its own rules, each rendered as its plain-English sentence (ruleSentence).
-  rules: ReadonlyArray<Rule>;
+  // `sentence` is the labelled form the server resolved (tool titles, service names).
+  rules: ReadonlyArray<Rule & { sentence?: string }>;
   // Advanced: the sliding-window request limit; defaults to 120 requests/min.
   requestLimit?: number;
   // the person's currency label (e.g. "A$").
@@ -516,7 +517,7 @@ export function PermissionsView({
 
       {section !== "rules" && readOnly ? (
         // A disconnected agent: nothing here can be saved, and the bar says why.
-        <ActionBar note="This agent is disconnected, so its access can’t be changed. Connect it again to set what it can use.">
+        <ActionBar note="This agent is disconnected, so its access can’t be changed. Connecting it again adds it as a new agent, with its own settings.">
           <ButtonLink href="/agents/connect" size="sm">Connect it again</ButtonLink>
         </ActionBar>
       ) : section !== "rules" ? (
@@ -551,12 +552,12 @@ export function PermissionsView({
 // rules just for it. Each reads back as its exact sentence with its kind as a word. The
 // agent's own group always shows, and its empty message says whether global rules still
 // apply; the inherited group shows only when there is something to inherit.
-function AgentRules({ agentName, rules }: { agentName: string; rules: ReadonlyArray<Rule> }) {
+function AgentRules({ agentName, rules }: { agentName: string; rules: ReadonlyArray<Rule & { sentence?: string }> }) {
   const inherited = rules.filter((rule) => rule.scope.type === "any_agent");
   const own = rules.filter((rule) => rule.scope.type === "agent");
-  const row = (rule: Rule, i: number) => (
+  const row = (rule: Rule & { sentence?: string }, i: number) => (
     <li key={i} className={LIST_ROW}>
-      <span className="text-sm text-fg">{ruleSentence(rule)}</span>
+      <span className="text-sm text-fg">{rule.sentence ?? ruleSentence(rule)}</span>
       <RuleKindBadge kind={rule.kind} />
     </li>
   );

@@ -80,7 +80,10 @@
 // access keys) is drawn from the REAL randomness seam so two issues never collide.
 
 import { createConnection } from "@/server/db/connections";
-import { randomBytes } from "node:crypto";
+import { randomBytes, randomUUID } from "node:crypto";
+import { auditedOwnerChange } from "@/server/activity/owner-change";
+import { disconnectAgent } from "@/server/agents/disconnect";
+import { createReleaseStore } from "@/server/crypto/release-store";
 import { test } from "node:test";
 import assert from "node:assert/strict";
 
@@ -88,7 +91,7 @@ import { createAccessKeyActions, type AccessKeyInput } from "./actions";
 
 import { verifyAccessKey } from "../../../../../server/oauth/access-key";
 import { resolveAccessKey } from "../../../../../server/oauth/store";
-import { getAgentById, listAgentsForUser } from "../../../../../server/db/agents";
+import { createAgent, getAgentById, listAgentsForUser } from "../../../../../server/db/agents";
 import { getConnectionPermissions } from "../../../../../server/db/agent-permissions";
 import { saveAgentDefaults } from "../../../../../server/db/agent-defaults";
 import { readActivity } from "../../../../../server/activity/writer";
@@ -656,5 +659,136 @@ test("a decoy secret in the environment never lands in the issued key, agent or 
     await db.close();
     if (prev === undefined) delete process.env.WARTHOG_DECOY_SECRET;
     else process.env.WARTHOG_DECOY_SECRET = prev;
+  }
+});
+
+// =====================================================================================
+// The agent's Settings panel drives revoke and replace (follow-up to interaction-07).
+// They stay exactly as audited as before — one entry each, naming the agent, with no key
+// in it — and refuse what would mislead: a second revoke of a key that is already gone,
+// any change to a disconnected agent, and minting an access key for an OAuth agent.
+// =====================================================================================
+
+const TEST_DEK = new Uint8Array(32).fill(7);
+
+// The key-change entries for one agent, as the activity record holds them.
+async function keyEntries(db: Db, userId: string, agentId: string) {
+  return (await readActivity(db, userId, TEST_DEK)).filter(
+    (entry) => entry.agentId === agentId && (entry.kind === "agent_key_revoked" || entry.kind === "agent_key_replaced"),
+  );
+}
+
+// The number of access keys bound to a connection (only their hashes are stored).
+async function keysFor(db: Db, connectionId: string): Promise<number> {
+  return (await db.query("SELECT 1 FROM oauth_access_keys WHERE connection_id = $1::uuid", [connectionId])).rows.length;
+}
+
+test("replace and revoke each write one activity entry naming the agent, with no key in it", async () => {
+  const db = await freshDb();
+  try {
+    const userId = await makeUser(db, "audit-keys");
+    const actions = makeActions(db);
+    const created = await actions.create(sessionFor(userId), input());
+    if (!created.ok) throw new Error("create failed");
+    const replaced = await actions.replace(sessionFor(userId), created.agentId);
+    if (!replaced.ok) throw new Error("replace failed");
+    assert.equal((await actions.revoke(sessionFor(userId), created.agentId)).ok, true);
+
+    const entries = await keyEntries(db, userId, created.agentId);
+    assert.deepEqual(entries.map((entry) => entry.kind), ["agent_key_replaced", "agent_key_revoked"]);
+    for (const entry of entries) {
+      assert.equal(entry.source, "warthog");
+      assert.equal(entry.outcome, "saved");
+      assert.deepEqual(entry.payload, { actor: "account_owner", changes: {} });
+      assert.doesNotMatch(JSON.stringify(entry), new RegExp(`${created.key}|${replaced.key}`), "no key reaches the record");
+    }
+  } finally {
+    await db.close();
+  }
+});
+
+test("after a revoke, a new key can be created for the same agent and only it works", async () => {
+  const db = await freshDb();
+  try {
+    const userId = await makeUser(db, "revoke-then-new");
+    const actions = makeActions(db);
+    const created = await actions.create(sessionFor(userId), input());
+    if (!created.ok) throw new Error("create failed");
+    const connectionId = await connectionIdOfAgent(db, userId, created.agentId);
+    assert.equal((await actions.revoke(sessionFor(userId), created.agentId)).ok, true);
+    assert.equal(await keysFor(db, connectionId), 0);
+
+    const fresh = await actions.replace(sessionFor(userId), created.agentId);
+    assert.equal(fresh.ok, true, "the revoked agent can be given a new key");
+    if (!fresh.ok) throw new Error("unreachable");
+    assert.equal((await verifyAccessKey(db, fresh.key))?.connectionId, connectionId, "the new key works for the same agent");
+    assert.equal(await verifyAccessKey(db, created.key), null, "the revoked key stays refused");
+    assert.equal(await keysFor(db, connectionId), 1);
+  } finally {
+    await db.close();
+  }
+});
+
+test("revoking a key that is already revoked changes nothing and says so", async () => {
+  const db = await freshDb();
+  try {
+    const userId = await makeUser(db, "revoke-twice");
+    const actions = makeActions(db);
+    const created = await actions.create(sessionFor(userId), input());
+    if (!created.ok) throw new Error("create failed");
+    assert.equal((await actions.revoke(sessionFor(userId), created.agentId)).ok, true);
+    assert.deepEqual(await actions.revoke(sessionFor(userId), created.agentId), { ok: false, reason: "no_key" });
+    assert.equal((await keyEntries(db, userId, created.agentId)).length, 1, "a stale second revoke records nothing");
+  } finally {
+    await db.close();
+  }
+});
+
+test("a disconnected agent's key can't be replaced or revoked: no key is issued and nothing is recorded", async () => {
+  const db = await freshDb();
+  try {
+    const userId = await makeUser(db, "key-disconnected");
+    const actions = makeActions(db);
+    const created = await actions.create(sessionFor(userId), input());
+    if (!created.ok) throw new Error("create failed");
+    const connectionId = await connectionIdOfAgent(db, userId, created.agentId);
+    const ended = await disconnectAgent(
+      { db, clock: fixedClock(NOW), releaseStore: createReleaseStore(fixedClock(NOW)), dekFor: async () => TEST_DEK },
+      sessionFor(userId),
+      created.agentId,
+    );
+    assert.equal(ended.ok, true);
+
+    assert.deepEqual(await actions.replace(sessionFor(userId), created.agentId), { ok: false, reason: "not_connected" });
+    assert.deepEqual(await actions.revoke(sessionFor(userId), created.agentId), { ok: false, reason: "not_connected" });
+    assert.equal(await keysFor(db, connectionId), 0, "a disconnected agent is never handed a working key");
+    assert.equal((await keyEntries(db, userId, created.agentId)).length, 0);
+  } finally {
+    await db.close();
+  }
+});
+
+test("an agent connected over OAuth is never given an access key, and has none to revoke", async () => {
+  const db = await freshDb();
+  try {
+    const userId = await makeUser(db, "key-oauth");
+    const actions = makeActions(db);
+    const connectionId = randomUUID();
+    const agent = await auditedOwnerChange(
+      { db, clock: fixedClock(NOW), keyWrapper: { wrap: async () => "w", unwrap: async () => TEST_DEK } },
+      userId,
+      async (tx, record) => {
+        const made = await createAgent(tx, { userId, connectionId, displayName: "Claude", platform: "Claude", status: "connected" }, fixedClock(NOW));
+        await record("agent_connected", { credentialKind: "oauth", clientId: "https://claude.ai/oauth", grants: {} }, made.id);
+        return made;
+      },
+    );
+
+    assert.deepEqual(await actions.replace(sessionFor(userId), agent.id), { ok: false, reason: "not_access_key" });
+    assert.deepEqual(await actions.revoke(sessionFor(userId), agent.id), { ok: false, reason: "no_key" });
+    assert.equal(await keysFor(db, connectionId), 0, "no static key is minted for an OAuth connection");
+    assert.equal((await keyEntries(db, userId, agent.id)).length, 0);
+  } finally {
+    await db.close();
   }
 });

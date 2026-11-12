@@ -180,3 +180,13 @@ test("record reminder push keeps content generic and preserves only its safe des
   assert.match(options.body, /reminder/i);
   assert.doesNotMatch(JSON.stringify(options), /PRIVATE|evil/);
 });
+
+test("a sign-in request push shows fixed wording and keeps only its routing kind", async () => {
+  const sw = loadServiceWorker();
+  await firePush(sw, { json: { kind: "sign-in-requests", body: "PRIVATE", device: "evil" } });
+  assert.equal(sw.shown.length, 1);
+  const options = JSON.parse(JSON.stringify(sw.shown[0].options));
+  assert.deepEqual(options.data, { kind: "sign-in-requests" });
+  assert.match(options.body, /sign in/i);
+  assert.doesNotMatch(JSON.stringify(options), /PRIVATE|evil/);
+});

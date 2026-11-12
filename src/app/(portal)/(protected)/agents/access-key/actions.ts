@@ -19,7 +19,12 @@ import type { KeyWrapper } from "@/server/crypto/key-wrapper";
 // chosen starting permission set to a server-minted connection, and issues the
 // agent's one-time access key through the already-built `issueAccessKey` seam.
 // `revoke` / `replace` resolve the agent by (session.userId, agentId) FIRST, so
-// another person's agent id matches nothing and the call is refused.
+// another person's agent id matches nothing and the call is refused. The agent's Settings
+// section drives them (its "Access key" panel). They refuse what would mislead, writing
+// nothing: any change to a disconnected agent (its key went with the disconnect), a
+// revoke when no key is left, and a key for an agent that connected over OAuth. Under the
+// connection's credential lock they re-check that the agent is still connected, so a
+// disconnect that lands first wins and no working key is left behind.
 //
 // Security (each a reviewer veto):
 //   • The acting person's user id is ALWAYS `session.userId` — never a value smuggled
@@ -41,7 +46,10 @@ import { z } from "zod";
 import { getAccountCurrency, isKnownCurrency } from "@/server/db/account-currency";
 
 import { issueAccessKey, replaceAccessKey, revokeAccessKey } from "../../../../../server/oauth/access-key";
+import { lockOAuthConnection } from "../../../../../server/oauth/connection-lock";
 import { createAgent, getAgentById } from "../../../../../server/db/agents";
+import { getUserById } from "../../../../../server/db/users";
+import { connectedWithAccessKey, hasAccessKey } from "../../../../../server/agents/access-key-state";
 import {
   upsertPermissions,
   type PermissionGrants,
@@ -93,11 +101,12 @@ export type CreateResult =
   | { readonly ok: true; readonly agentId: string; readonly key: string }
   | { readonly ok: false; readonly reason: string };
 
-// The outcome of a revoke: success, or a refusal (the agent is not this person's).
+// The outcome of a revoke: success, or a refusal: `not_found` (the agent is not this
+// person's), `not_connected` (it is disconnected) or `no_key` (there is no key to revoke).
 export type RevokeResult = { readonly ok: true } | { readonly ok: false; readonly reason: string };
 
-// The outcome of a replace: the fresh RAW key shown ONCE, or a refusal (the agent is
-// not this person's).
+// The outcome of a replace: the fresh RAW key shown ONCE, or a refusal: `not_found`,
+// `not_connected` or `not_access_key` (the agent connected over OAuth, so it has no key).
 export type ReplaceResult =
   | { readonly ok: true; readonly key: string }
   | { readonly ok: false; readonly reason: string };
@@ -200,31 +209,56 @@ export function createAccessKeyActions(deps: AccessKeyActionsDeps): AccessKeyAct
   // 4xx), resolve the agent by (session.userId, agentId) — so another person's id
   // matches nothing — then revoke the connection's key so it no longer verifies. An id
   // that is not this person's revokes nothing ({ ok: false }, never a silent success).
+  // A disconnected agent, or one with no key left (already revoked, or an OAuth agent that
+  // never had one), revokes nothing and records nothing.
   async function revoke(session: Session, agentId: string): Promise<RevokeResult> {
     const id = parseParams(uuidSchema, agentId);
     const agent = await getAgentById(db, session.userId, id);
     if (agent == null) return { ok: false, reason: "not_found" };
-    await auditedOwnerChange(deps, session.userId, async (tx, record) => {
+    if (agent.status !== "connected") return { ok: false, reason: "not_connected" };
+    return auditedOwnerChange(deps, session.userId, async (tx, record): Promise<RevokeResult> => {
+      await lockOAuthConnection(tx, agent.connectionId);
+      if ((await getAgentById(tx, session.userId, id))?.status !== "connected") return { ok: false, reason: "not_connected" };
+      if (!(await hasAccessKey(tx, agent.connectionId))) return { ok: false, reason: "no_key" };
       await revokeAccessKey(tx, { connectionId: agent.connectionId });
       await record("agent_key_revoked", {}, agent.id);
+      return { ok: true };
     });
-    return { ok: true };
   }
 
   // Replace: same discipline — validate the id shape, resolve the agent member-scoped,
   // then retire the old key and issue a fresh one bound to the SAME connection (so the
   // old key stops verifying and the agent keeps working under the new key). An id that
   // is not this person's issues nothing and leaves the original key working.
+  //
+  // After a revoke there is no old key: replace then issues the agent's new key, so the
+  // person can let it back in without connecting it from the start. Only an agent that
+  // connected with an access key gets one (a working key now, or the record of its
+  // access-key connection); an OAuth agent is never handed a static key. A disconnected
+  // agent gets nothing — reconnecting means going through consent again (brief).
   async function replace(session: Session, agentId: string): Promise<ReplaceResult> {
     const id = parseParams(uuidSchema, agentId);
     const agent = await getAgentById(db, session.userId, id);
     if (agent == null) return { ok: false, reason: "not_found" };
-    const { key } = await auditedOwnerChange(deps, session.userId, async (tx, record) => {
-      const issued = await replaceAccessKey(tx, { connectionId: agent.connectionId }, { random });
+    if (agent.status !== "connected") return { ok: false, reason: "not_connected" };
+    if (!(await hasAccessKey(db, agent.connectionId)) && !(await connectedWithAccessKey(db, session.userId, agent.id, await dataKey(session.userId)))) {
+      return { ok: false, reason: "not_access_key" };
+    }
+    return auditedOwnerChange(deps, session.userId, async (tx, record): Promise<ReplaceResult> => {
+      await lockOAuthConnection(tx, agent.connectionId);
+      if ((await getAgentById(tx, session.userId, id))?.status !== "connected") return { ok: false, reason: "not_connected" };
+      const { key } = await replaceAccessKey(tx, { connectionId: agent.connectionId }, { random });
       await record("agent_key_replaced", {}, agent.id);
-      return issued;
+      return { ok: true, key };
     });
-    return { ok: true, key };
+  }
+
+  // The session person's data key, to read how their agent connected (that record is
+  // encrypted). Only a replace with no working key needs it.
+  async function dataKey(userId: string): Promise<Uint8Array> {
+    const user = await getUserById(db, userId);
+    if (!user) throw new Error("Account unavailable");
+    return deps.keyWrapper.unwrap(user.wrappedDek);
   }
 
   return { create, revoke, replace };

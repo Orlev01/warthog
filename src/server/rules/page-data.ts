@@ -17,7 +17,7 @@
 // read it back.
 
 import { listAllRules } from "../db/rules";
-import { ruleSentence, type RuleKind, type RuleScope } from "../../domain/rules/rules";
+import { ruleSentence, type RuleDisplayLabels, type RuleKind, type RuleScope } from "../../domain/rules/rules";
 import type { Db } from "../db/index";
 
 // One rule as the Rules page shows it: its id, its exact English sentence, its scope
@@ -40,18 +40,23 @@ export interface RulesPageItem {
 // chosen-agent scope by the agent's CURRENT name before the sentence is rendered, so a
 // scope stored under a raw connection id or an old name reads back naming the agent
 // (review fix W2.1). A scope whose agent is not in it keeps its stored name.
+//
+// `labels` (optional) names a rule's tool by its title and its service by its catalogue
+// name, as a person reads them (the page builds them from the tool registry and the
+// catalogue, ./rule-targets); an id they don't know, or no labels at all, reads as the id.
 export async function rulesPageData(
   db: Db,
   userId: string,
   dek: Uint8Array,
   agentNames?: ReadonlyMap<string, string>,
+  labels?: RuleDisplayLabels,
 ): Promise<RulesPageItem[]> {
   const rules = await listAllRules(db, userId, dek);
   return rules.map((rule) => {
     const scope = namedScope(rule.scope, agentNames);
     return {
       id: rule.id,
-      sentence: ruleSentence({ ...rule, scope }),
+      sentence: ruleSentence({ ...rule, scope }, labels),
       scope,
       kind: rule.kind,
       status: rule.status,

@@ -6,10 +6,11 @@
 // app").
 //
 // The handshake is three steps, each its own request:
-//   • requestApproval — the NEW device: { email, code, deviceLabel }. Verifies the email
-//     one-time code (the first factor), records a pending request and sends ONE approval
-//     push naming the device, returning 200 { requestId } — the requesting device's own
-//     collection handle. No session is minted.
+//   • requestApproval — the NEW device: { email, code }. Verifies the email one-time code
+//     (the first factor), records a pending request and sends ONE approval push naming the
+//     device (a label derived from its browser), returning 200 { requestId, deviceLabel,
+//     expiresAt } — the requesting device's own collection handle, and what to look for on
+//     the approving device. No session is minted.
 //   • approve — an EXISTING signed-in device: { requestId }. The approver's identity comes
 //     ONLY from the `__Host-wh_session` cookie (member-scoped: the userId is the session's,
 //     never a client value). Accepted only when that session passes a fresh step-up AND the
@@ -49,6 +50,7 @@ import { COOKIE_NAME, verifySession } from "../../../server/auth/session";
 import { issueEmailCode } from "../../../server/auth/email-code";
 import { getUserByEmail } from "../../../server/db/users";
 import { deviceCookieFor } from "../../../server/auth/device-recognition";
+import { describeDevice } from "../../../server/auth/device-label";
 import type { Clock } from "../../../server/seams/clock";
 import type { Random } from "../../../server/seams/random";
 import type { EmailSender, PushSender } from "../../../server/notify/senders";
@@ -80,13 +82,15 @@ export interface DeviceHandler {
 // (an email, a code, a short device label, or a request handle) is far under this.
 const MAX_BODY_BYTES = 64 * 1024;
 
-// requestApproval: the new device's email, its one-time code, and the label shown in the
-// approval push. Each is a bounded string, so a non-string / oversized field is a 4xx at
-// the boundary, never a cast that reaches a query.
+// requestApproval: the new device's email and its one-time code. Each is a bounded string,
+// so a non-string / oversized field is a 4xx at the boundary, never a cast that reaches a
+// query. An older client also sends a `deviceLabel`; it is still bounded but no longer used:
+// the label the approving device sees is derived from the requesting browser on the server
+// (follow-up S3, device-label.ts), so a requester can't name itself "safe to approve".
 const requestApprovalSchema = z.object({
   email: z.string().trim().toLowerCase().min(1).max(320), // normalised (users.normaliseEmail)
   code: z.string().min(1).max(100),
-  deviceLabel: z.string().min(1).max(200),
+  deviceLabel: z.string().min(1).max(200).optional(),
 });
 
 // sendCode: the email of the account the new device is signing in to.
@@ -174,9 +178,10 @@ export function createDeviceHandler(deps: DeviceHandlerDeps): DeviceHandler {
   async function requestApproval(request: Request): Promise<Response> {
     if (!sameOrigin(request)) return json(403, { error: "forbidden" });
     try {
-      const { email, code, deviceLabel } = await parseBody(requestApprovalSchema, request, {
+      const { email, code } = await parseBody(requestApprovalSchema, request, {
         maxBytes: MAX_BODY_BYTES,
       });
+      const deviceLabel = describeDevice(request.headers.get("user-agent"));
 
       const result = await requestNewDeviceApproval(
         db,
@@ -185,7 +190,9 @@ export function createDeviceHandler(deps: DeviceHandlerDeps): DeviceHandler {
       );
       if (!result.ok) return json(400, { error: result.reason });
 
-      return json(200, { requestId: result.requestId });
+      // The handle, plus what this device should look for on the approving one: the label
+      // the request is listed under and when it expires.
+      return json(200, { requestId: result.requestId, deviceLabel, expiresAt: result.expiresAt.toISOString() });
     } catch (error) {
       return handleError(error);
     }

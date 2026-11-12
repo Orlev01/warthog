@@ -187,11 +187,16 @@ test("public-15: the recovery code renders as unbreakable groups with a copy act
   assert.doesNotMatch(markup, /<input[^>]*value="ABCD/, "the code is never a form value");
 });
 
-test("public-01: the device screens explain that approval from another device isn't available yet", () => {
+test("public-01 (follow-up S3): the device screens say where the request is approved, and keep the other ways in", () => {
   for (const step of ["code", "waiting"] as const) {
     const markup = renderToStaticMarkup(<DeviceView step={step} />);
-    assert.match(markup, /isn’t available in Warthog yet/);
+    assert.doesNotMatch(markup, /isn’t available/, "approval from another device is real now");
+    assert.match(markup, /Settings › Security › Sign-in requests/);
     assert.match(markup, /href="\/signin"/);
     assert.match(markup, /href="\/recover"/);
   }
+  const waiting = renderToStaticMarkup(<DeviceView step="waiting" deviceLabel="Chrome on Mac" expires="12:10 pm" />);
+  assert.match(waiting, /Chrome on Mac/);
+  assert.match(waiting, /12:10 pm/);
+  assert.match(waiting, /Only approve it if/);
 });

@@ -170,6 +170,61 @@ test("ruleSentence omits the condition clause when the rule has no condition", (
 });
 
 // ===========================================================================
+// ruleSentence with display labels (UI/UX follow-up): a PERSON reads a tool by its
+// title and a service by its catalogue name; the agent-facing form (no labels) keeps
+// the exact ids the engine matches on.
+// ===========================================================================
+
+const TOOL_RULE = { kind: "ask_first", scope: ANY_AGENT, action: { type: "specific_tool", tool: "create_task" } } as const;
+const SERVICE_RULE = { kind: "ask_first", scope: ANY_AGENT, action: { type: "service_tool", service: "google-gmail" } } as const;
+const TITLES: Record<string, string> = { create_task: "Create a task", "google-gmail__send": "Gmail: Send email" };
+const SERVICES: Record<string, string> = { "google-gmail": "Gmail" };
+const LABELS = { toolTitle: (tool: string) => TITLES[tool], serviceName: (service: string) => SERVICES[service] };
+
+test("without display labels a tool or service rule names the exact id (the agent-facing form is unchanged)", () => {
+  assert.equal(ruleSentence(TOOL_RULE), "Ask me before any agent uses create_task");
+  assert.equal(ruleSentence(SERVICE_RULE), "Ask me before any agent uses any google-gmail tool");
+  assert.equal(ruleSentence({ ...SERVICE_RULE, kind: "never_allow" }), "Never allow any agent to use any google-gmail tool");
+  assert.equal(ruleSentence(TOOL_RULE, {}), "Ask me before any agent uses create_task", "an empty label set is the default form");
+});
+
+test("with display labels a person reads the tool's title and the service's catalogue name", () => {
+  assert.equal(ruleSentence(TOOL_RULE, LABELS), "Ask me before any agent uses Create a task");
+  assert.equal(ruleSentence(SERVICE_RULE, LABELS), "Ask me before any agent uses any Gmail tool");
+  assert.equal(
+    ruleSentence(
+      {
+        kind: "never_allow",
+        scope: CLAUDE,
+        action: { type: "specific_tool", tool: "google-gmail__send" },
+        condition: { type: "recipient_in_domain", domain: "example.com" },
+      },
+      LABELS,
+    ),
+    "Never allow Claude to use Gmail: Send email to anyone at example.com",
+    "the never-allow template, a chosen agent and a condition all keep their wording around the label",
+  );
+});
+
+test("an id the labels don't know, or label as blank, falls back to the id", () => {
+  assert.equal(ruleSentence({ ...TOOL_RULE, action: { type: "specific_tool", tool: "retired_tool" } }, LABELS), "Ask me before any agent uses retired_tool");
+  assert.equal(ruleSentence({ ...SERVICE_RULE, action: { type: "service_tool", service: "gone-service" } }, LABELS), "Ask me before any agent uses any gone-service tool");
+  const blank = { toolTitle: () => "  ", serviceName: () => "" };
+  assert.equal(ruleSentence(TOOL_RULE, blank), "Ask me before any agent uses create_task");
+  assert.equal(ruleSentence(SERVICE_RULE, blank), "Ask me before any agent uses any google-gmail tool");
+});
+
+test("display labels change only tool and service names, never another action's wording", () => {
+  const rule = emailRule("ask_first", ANY_AGENT, { type: "recipient_is", address: MANAGER });
+  const everything = { toolTitle: () => "X", serviceName: () => "Y" };
+  assert.equal(ruleSentence(rule, everything), ruleSentence(rule));
+  for (const action of [{ type: "any_change" }, { type: "card_request" }, { type: "high_tier_request" }] as const) {
+    const other = { kind: "never_allow", scope: ANY_AGENT, action } as const;
+    assert.equal(ruleSentence(other, everything), ruleSentence(other));
+  }
+});
+
+// ===========================================================================
 // conditionMatches — AC2: recipient (exact + domain), amount-over, and merchant
 // in/not-in conditions evaluate correctly.
 // ===========================================================================

@@ -172,7 +172,7 @@ export function ConnectGuide({ connectorAddress }: { connectorAddress: string })
       <WorkspacePanel
         title="Can’t add a connector?"
         icon={KeyRound}
-        description="Some agents can’t sign in through a connector yet. Create an access key for the agent and paste that in instead."
+        description="Some agents can’t sign in through a connector yet. Create an access key for the agent and paste that in instead. You can replace or revoke it later in the agent’s Settings."
         footer={<ButtonLink href="/agents/access-key">Create an access key</ButtonLink>}
       />
     </>

@@ -11,6 +11,7 @@ import { dayOf, timeOfDay } from "@/domain/display-time";
 // The newest entries the agent's audit log lists before "Open the full log".
 export const AGENT_AUDIT_ROWS = 30;
 import { readAgentSpending } from "../spending/agent-spending";
+import { accessKeyState } from "./access-key-state";
 import { timeZoneFor } from "../spending/time-zone";
 import { formatAccountTime } from "../display-time";
 import { entryTitle } from "@/domain/activity/describe";
@@ -99,7 +100,15 @@ export async function agentWorkspaceData(
     refused: measured.filter(entry => ["refused","denied","rate_limited"].includes(entry.outcome ?? "")).length,
     p95Ms: durations.length ? Math.round(durations[Math.ceil(durations.length * 0.95) - 1]!) : null };
   const clientObservation = await readClientObservation(db, userId, agent.id, dek);
+  // The Settings section's "Access key" panel: only for a connected agent that connects with
+  // a Warthog access key. A disconnected agent's key went with the disconnect, and an agent
+  // connected over OAuth has none.
+  const accessKey =
+    section === "settings" && agent.status === "connected"
+      ? await accessKeyState(db, userId, agent, async () => dek)
+      : null;
   return {
+    accessKey,
     performance,
     agent,
     clientObservation: clientObservation ? { ...clientObservation, displayObservedAt: formatAccountTime(clientObservation.observedAt, timeZone) } : null,

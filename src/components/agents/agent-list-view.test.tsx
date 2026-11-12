@@ -54,8 +54,8 @@ import { AgentListView } from "./agent-list-view";
 // --- the prop shapes this task introduces (described here as the contract) ------
 
 // The connection state the UI <Status> primitive knows (one source of truth with
-// DashboardAgent): "connected" | "needs-reconnect" | "error" | "pending".
-type StatusKey = "connected" | "needs-reconnect" | "error" | "pending";
+// DashboardAgent): "connected" | "needs-reconnect" | "disconnected" | "error" | "pending".
+type StatusKey = "connected" | "needs-reconnect" | "disconnected" | "error" | "pending";
 
 // One agent on the list. `connectedAt` / `lastActiveAt` are PRE-FORMATTED labels the
 // loader produced (never a raw Date — the view reaches for no clock); `lastActiveAt`
@@ -115,7 +115,7 @@ const AGENT_B: AgentListItem = {
   id: "agent-beacon",
   name: "Travel planner",
   platform: "Claude",
-  status: "needs-reconnect",
+  status: "disconnected",
   connectedAt: "around Easter",
   lastActiveAt: null, // has never been active
   requestCount: 5,
@@ -367,13 +367,16 @@ test("shows current-period spend against budget", () => {
 
 test("renders each agent's status in words (not colour alone)", () => {
   // Rendered alone so the status word can only come from that agent's status. These
-  // StatusKey labels are the shared <Status> vocabulary ("Reconnect needed", "Error").
-  const reconnect = visibleText(render(base({ agents: [AGENT_B] }))); // needs-reconnect
+  // StatusKey labels are the shared <Status> vocabulary ("Disconnected", "Error").
+  const disconnected = visibleText(render(base({ agents: [AGENT_B] }))); // disconnected
   assert.match(
-    reconnect,
-    /reconnect/i,
-    `a needs-reconnect agent must show its status in words; text="${reconnect}"`,
+    disconnected,
+    /\bDisconnected\b/,
+    `a disconnected agent must show its status in words; text="${disconnected}"`,
   );
+  // There is no reconnecting a disconnected agent ("Connect it again" makes a new
+  // connection), so it is never labelled as needing a reconnect.
+  assert.doesNotMatch(disconnected, /reconnect/i, `text="${disconnected}"`);
   const error = visibleText(render(base({ agents: [AGENT_C] }))); // error
   assert.match(
     error,
@@ -389,7 +392,7 @@ test("renders each agent's status in words (not colour alone)", () => {
 test("offers a Disconnect control for every agent still connected (live when a disconnectAction is bound)", () => {
   const markup = render(base()); // disconnectAction bound
   const disconnects = buttonsMatching(markup, /disconnect/i);
-  const connected = base().agents.filter((agent) => agent.status !== "needs-reconnect");
+  const connected = base().agents.filter((agent) => agent.status !== "disconnected");
   assert.ok(
     disconnects.length >= connected.length,
     `every connected agent must offer a Disconnect control; found ${disconnects.length} for ${connected.length} agents`,
@@ -400,10 +403,10 @@ test("offers a Disconnect control for every agent still connected (live when a d
   );
 });
 
-// interaction-08 — a disconnected agent ("Reconnect needed") can't be disconnected again: it
+// interaction-08 — a disconnected agent ("Disconnected") can't be disconnected again: it
 // offers the way back, connecting it from the start, instead of a second Disconnect.
 test("a disconnected agent offers 'Connect it again' instead of another Disconnect", () => {
-  const markup = render(base({ agents: [AGENT_B] })); // needs-reconnect
+  const markup = render(base({ agents: [AGENT_B] })); // disconnected
   assert.equal(buttonsMatching(markup, /disconnect/i).length, 0, "no Disconnect for an agent that is already disconnected");
   const again = anchors(markup).find((a) => a.href === "/agents/connect" && /connect it again/i.test(a.name));
   assert.ok(again, `a disconnected agent links to /agents/connect; anchors=${JSON.stringify(anchors(markup))}`);
@@ -587,14 +590,15 @@ function headerText(markup: string): string {
 
 const AGENT_D: AgentListItem = { ...AGENT_A, id: "agent-dune", name: "Second helper", activityHref: "/activity?agent=agent-dune" };
 
-test("the header summarises how many agents there are and how many need reconnecting", () => {
+test("the header summarises how many agents there are and how many are disconnected", () => {
   const text = headerText(render(base({ agents: [AGENT_B, AGENT_A, AGENT_D] })));
-  assert.match(text, /\b3 agents · 1 needs reconnecting\b/, `text="${text}"`);
+  assert.match(text, /\b3 agents · 1 disconnected\b/, `text="${text}"`);
+  assert.doesNotMatch(text, /reconnect/i, `a disconnected agent doesn't "need reconnecting"; text="${text}"`);
 });
 
 test("the summary names every state that needs attention, with plurals in words", () => {
   const text = headerText(render(base({ agents: [AGENT_B, { ...AGENT_B, id: "agent-b2" }, AGENT_C, AGENT_A] })));
-  assert.match(text, /\b4 agents · 2 need reconnecting · 1 has an error\b/, `text="${text}"`);
+  assert.match(text, /\b4 agents · 2 disconnected · 1 has an error\b/, `text="${text}"`);
 });
 
 test("when every agent is connected the summary says so", () => {
@@ -602,7 +606,7 @@ test("when every agent is connected the summary says so", () => {
   assert.match(headerText(render(base({ agents: [AGENT_A] }))), /\b1 agent · all connected\b/);
 });
 
-test("the view keeps the order the loader gives (reconnect-needed first)", () => {
+test("the view keeps the order the loader gives", () => {
   const markup = render(base({ agents: [AGENT_B, AGENT_A] }));
   const text = visibleText(markup);
   assert.ok(text.indexOf("Travel planner") < text.indexOf("Research buddy"), `the given order is kept; text="${text}"`);

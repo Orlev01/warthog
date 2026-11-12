@@ -72,7 +72,8 @@ import type { Clock } from "@/server/seams/clock";
 import type { KeyWrapper } from "@/server/crypto/key-wrapper";
 import type { Db } from "@/server/db/index";
 import type { CatalogueIndex } from "@/server/connectors/catalogue";
-import type { RulesViewRule, RulesViewAgent, RuleTargetGroup } from "@/components/rules/rules-view";
+import type { RulesViewRule, RulesViewAgent } from "@/components/rules/rules-view";
+import type { RuleTargetGroup } from "@/components/rules/rules-organise";
 import { catalogueFromDataFiles, ruleTargetsFor } from "./rule-targets";
 import {
   RULES_PATH,
@@ -436,12 +437,16 @@ export function createRulesActions(deps: RulesActionsDeps): RulesActions {
     // the person has written, active AND paused, already rendered as its exact plain
     // sentence with its scope and lifecycle status, member-scoped by the session id.
     // Each chosen-agent scope is named by the agent's CURRENT name from the person's OWN
-    // agents (member-scoped), never a raw connection id stored with an older rule.
+    // agents (member-scoped), never a raw connection id stored with an older rule, and each
+    // tool or service by its title or catalogue name — the labels the builder's choices
+    // carry, so a new rule reads on the list exactly as its preview did.
+    const targets = await ruleTargetsFor(db, catalogue(), session.userId, dek);
     const rules: RulesViewRule[] = await rulesPageData(
       db,
       session.userId,
       dek,
       await agentNamesForUser(db, session.userId),
+      targets.labels,
     );
 
     const agents: RulesViewAgent[] = (await listAgentsForUser(db, session.userId))
@@ -456,7 +461,6 @@ export function createRulesActions(deps: RulesActionsDeps): RulesActions {
       // Name order (then id), so the scope choices and budget links never shuffle.
       .sort((a, b) => a.name.localeCompare(b.name, undefined, { sensitivity: "base" }) || (a.id < b.id ? -1 : a.id > b.id ? 1 : 0));
 
-    const targets = await ruleTargetsFor(db, catalogue(), session.userId, dek);
     return {
       rules,
       agents,

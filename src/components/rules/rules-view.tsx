@@ -18,6 +18,7 @@ import { DEFAULT_EXPIRY_MINUTES } from "@/domain/approvals/state-machine";
 import { APPROVAL_EXPIRY_PRESETS, expiryDurationLabel } from "@/domain/approvals/expiry-copy";
 import {
   ruleSentence,
+  type RuleDisplayLabels,
   type RuleKind,
   type RuleScope,
   type RuleAction,
@@ -29,8 +30,10 @@ import {
   RULE_STATUS_FILTERS,
   RULE_STATUS_LABELS,
   groupRulesByScope,
+  ruleLabelsFromChoices,
   rulesStatusHref,
   type RuleStatusFilter,
+  type RuleTargetGroup,
 } from "./rules-organise";
 
 // E12-S16 / E12-S17 — Rules view component (design §8; brief "Rules and approvals").
@@ -80,10 +83,9 @@ export type RulesViewRule = {
 // scope choice posts); `workspaceId` is the agent's own id, for links to its workspace.
 export type RulesViewAgent = { id: string; name: string; workspaceId?: string };
 
-// One tool or service a rule may name: `value` is the exact name the engine matches (and
-// the form posts); `label` is its plain name. Grouped for the builder's <optgroup>s.
-export type RuleTargetChoice = { value: string; label: string };
-export type RuleTargetGroup = { label: string; choices: RuleTargetChoice[] };
+// One tool or service a rule may name, grouped for the builder's <optgroup>s (defined with
+// the other shared Rules keys in ./rules-organise, so server code can read them too).
+export type { RuleTargetChoice, RuleTargetGroup } from "./rules-organise";
 
 // A server action a rule form submits to (the page binds the real one; the view
 // renders a live control either way). Optional — an unbound control still renders.
@@ -195,14 +197,18 @@ function conditionValueText(condition: RuleCondition | undefined): string {
 
 // The exact sentence a rule draft reads back as, previewed before saving — straight
 // through the one-source-of-truth renderer, so the condition and the all-agents /
-// chosen-agent scope all flow through.
-function previewSentence(draft: RuleDraft): string {
-  return ruleSentence({
-    kind: draft.template,
-    scope: draft.scope,
-    action: draft.action,
-    condition: draft.condition,
-  });
+// chosen-agent scope all flow through. A tool or service is named by the label of its
+// choice, as the saved rule is on the Rules list.
+function previewSentence(draft: RuleDraft, labels: RuleDisplayLabels): string {
+  return ruleSentence(
+    {
+      kind: draft.template,
+      scope: draft.scope,
+      action: draft.action,
+      condition: draft.condition,
+    },
+    labels,
+  );
 }
 
 // The builder's state: the draft and the raw text of its condition detail field.
@@ -691,6 +697,7 @@ export function RulesView({
   const [builder, dispatch] = React.useReducer(updateRuleBuilder, initialDraft, createRuleBuilderState);
   const draft = builder.draft;
   const complete = isRuleBuilderComplete(builder, { tools: toolChoices ?? [], services: serviceChoices ?? [] });
+  const labels = React.useMemo(() => ruleLabelsFromChoices(toolChoices, serviceChoices), [toolChoices, serviceChoices]);
   const incompleteId = React.useId();
 
   // Create form: build a rule from a template, previewed as a sentence before saving. One
@@ -834,7 +841,7 @@ export function RulesView({
           <div className="flex flex-col gap-1.5 rounded-card bg-surface-muted p-4">
             <p className="text-sm font-semibold text-fg">Preview</p>
             <p className="text-fg" aria-live="polite">
-              {complete ? previewSentence(draft) : "Complete the action and condition details to preview your rule."}
+              {complete ? previewSentence(draft, labels) : "Complete the action and condition details to preview your rule."}
             </p>
           </div>
         </div>

@@ -34,10 +34,11 @@ import { renderToStaticMarkup } from "react-dom/server";
 
 import { Status } from "./status";
 
-// The four connection statuses this component must cover (brief: a connected
-// service shows "connected / needs reconnecting / error"; approvals add pending).
-type StatusKey = "connected" | "needs-reconnect" | "error" | "pending";
-const STATUSES: StatusKey[] = ["connected", "needs-reconnect", "error", "pending"];
+// The connection statuses this component must cover (brief: a connected service
+// shows "connected / needs reconnecting / error"; approvals add pending; an agent the
+// person disconnected is "disconnected" — a final state, not one to reconnect from).
+type StatusKey = "connected" | "needs-reconnect" | "disconnected" | "error" | "pending";
+const STATUSES: StatusKey[] = ["connected", "needs-reconnect", "disconnected", "error", "pending"];
 
 // A word each status's label must contain. Kept to the obvious stem so a reworded
 // label stays green as long as it still names the state — the exact phrasing is
@@ -45,6 +46,7 @@ const STATUSES: StatusKey[] = ["connected", "needs-reconnect", "error", "pending
 const EXPECTED_WORD: Record<StatusKey, RegExp> = {
   connected: /connected/i,
   "needs-reconnect": /reconnect/i,
+  disconnected: /disconnected/i,
   error: /error/i,
   pending: /pending/i,
 };
@@ -82,8 +84,8 @@ test("every status renders an icon (an <svg>) and a readable text label", () => 
   }
 });
 
-// AC2 — connected, needs-reconnect, error and pending map to DISTINCT labels.
-test("the four statuses map to distinct accessible labels", () => {
+// AC2 — connected, needs-reconnect, disconnected, error and pending map to DISTINCT labels.
+test("every status maps to a distinct accessible label", () => {
   const labels = STATUSES.map((status) => labelText(render(status)));
   for (const [i, label] of labels.entries()) {
     assert.ok(label.length > 0, `the ${STATUSES[i]} status has a non-empty label`);
@@ -103,6 +105,21 @@ test("needs-reconnect uses the documented copy \"Reconnect needed\"", () => {
     /reconnect needed/i,
     "the needs-reconnect label must read \"Reconnect needed\"",
   );
+});
+
+// A disconnected agent is NOT one that needs reconnecting: "Connect it again" makes a new
+// connection, so the word is "Disconnected", with its own icon and a neutral tone — never
+// the warning colour that asks for action, nor the success/danger tones.
+test("disconnected reads \"Disconnected\" in a neutral tone with its own icon", () => {
+  const markup = render("disconnected");
+  assert.equal(labelText(markup), "Disconnected");
+  assert.doesNotMatch(labelText(markup), /reconnect/i, "a disconnected agent is not told to reconnect");
+  assert.match(markup, /text-fg-muted/, "a neutral tone");
+  assert.doesNotMatch(markup, /text-(warning|danger|success)\b/, "never an alarm, error or success colour");
+  const icon = (status: StatusKey) => /<svg[^>]*class="([^"]*)"/.exec(render(status))?.[1] ?? "";
+  for (const other of STATUSES.filter((status) => status !== "disconnected")) {
+    assert.notEqual(icon("disconnected"), icon(other), `disconnected has its own icon, not ${other}'s`);
+  }
 });
 
 // Accessibility — the icon is decorative, so the status's accessible name comes

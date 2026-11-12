@@ -4,7 +4,6 @@ import * as React from "react";
 import {
   Pencil,
   Copy,
-  Trash2,
   Plus,
   Power,
   PowerOff,
@@ -29,6 +28,7 @@ import { Notice, PageNotice, type NoticeTone } from "@/components/ui/notice";
 import { loadPackageAction } from "@/app/(portal)/(protected)/skills/library-actions";
 import { EmptyState } from "@/components/ui/empty";
 import { AgentScope, type SkillAgent } from "./agent-scope";
+import { DeleteSkillControl } from "./delete-skill";
 import { PackageImport, CreatePackage } from "./package-import";
 import { PackageModal, downloadBlob } from "./package-editor";
 import { makeSkillFile, type ParsedPackage } from "@/domain/skills/package";
@@ -210,6 +210,13 @@ function SkillFields({
   );
 }
 
+// Focus the library list (after a skill card has left the page with its deleted skill). Found
+// in the document rather than through a ref, so it also works when the refreshed page has
+// mounted a new list.
+function focusLibrary(): void {
+  document.querySelector<HTMLElement>("[data-skill-library]")?.focus({ preventScroll: true });
+}
+
 // Edit opens underneath the card's action row (see the memory rows): where the browser
 // supports it the <details> lets its summary sit in the row and its panel span the width.
 const ROW_DISCLOSURE =
@@ -328,24 +335,13 @@ function SkillCard({
           Download
           <span className="sr-only"> {skill.title}</span>
         </Button>
-        <ActionForm
+        {/* Delete asks first, in an in-page dialog naming the skill (./delete-skill). */}
+        <DeleteSkillControl
           action={deleteSkillAction ?? noAction}
-          onSubmit={(e) => {
-            if (
-              !window.confirm(
-                "Delete this skill? Your agents will lose access immediately.",
-              )
-            )
-              e.preventDefault();
-          }}
-        >
-          <input type="hidden" name="id" value={skill.id} />
-          <FormSubmit variant="danger" size="sm" pendingLabel="Deleting…">
-            <Trash2 aria-hidden={true} className="h-4 w-4 shrink-0" />
-            Delete
-            <span className="sr-only"> {skill.title}</span>
-          </FormSubmit>
-        </ActionForm>
+          skillId={skill.id}
+          title={skill.title}
+          onDeleted={focusLibrary}
+        />
       </div>
     </Card>
   );
@@ -540,7 +536,7 @@ export function SkillsView({
                     status={`Showing ${matchedCount} of ${count} ${itemsNoun}.`}
                   />
                 ) : null}
-                <div ref={libraryHeading} tabIndex={-1} className="flex min-w-0 flex-col gap-4 outline-none sm:gap-6">
+                <div ref={libraryHeading} tabIndex={-1} data-skill-library="" className="flex min-w-0 flex-col gap-4 outline-none sm:gap-6">
                   {!count ? (
                     <EmptyState
                       heading="No skills of your own yet"

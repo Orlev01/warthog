@@ -522,3 +522,39 @@ test("rulesPageData cannot decrypt a rule's condition with a different DEK (the 
     await db.close();
   }
 });
+
+// UI/UX follow-up: the Rules page names a tool by its title and a service by its catalogue
+// name. The labels are injected (the page builds them from the tool registry and the
+// catalogue); without them, and for an id they don't know, the id is shown as it is.
+test("rulesPageData names tools and services through the injected display labels, falling back to the id", async () => {
+  const db = await freshDb();
+  try {
+    const userId = await makeUser(db, "labels");
+    const dek = freshDek();
+    for (const action of [
+      { type: "specific_tool", tool: "create_task" },
+      { type: "service_tool", service: "google-gmail" },
+      { type: "specific_tool", tool: "retired_tool" },
+    ] as const) {
+      await createRule(db, { userId, kind: "ask_first", scope: { type: "any_agent" }, action }, dek);
+    }
+    const labels = {
+      toolTitle: (tool: string) => (tool === "create_task" ? "Create a task" : undefined),
+      serviceName: (service: string) => (service === "google-gmail" ? "Gmail" : undefined),
+    };
+    const labelled = (await rulesPageData(db, userId, dek, undefined, labels)).map((item) => item.sentence).sort();
+    assert.deepEqual(labelled, [
+      "Ask me before any agent uses Create a task",
+      "Ask me before any agent uses any Gmail tool",
+      "Ask me before any agent uses retired_tool",
+    ]);
+    const plain = (await rulesPageData(db, userId, dek)).map((item) => item.sentence).sort();
+    assert.deepEqual(plain, [
+      "Ask me before any agent uses any google-gmail tool",
+      "Ask me before any agent uses create_task",
+      "Ask me before any agent uses retired_tool",
+    ]);
+  } finally {
+    await db.close();
+  }
+});

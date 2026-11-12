@@ -9,19 +9,29 @@ import { ActionForm, FormSubmit } from "@/components/ui/form-submit";
 
 // The Remove control for one passkey on Settings › Security (interaction-05). Removing a
 // passkey is a sign-in factor gone, so it never happens on one click: Remove opens an
-// in-page dialog that names the passkey and says plainly what removing it means — above
-// all when it's the account's ONLY passkey (no passkey sign-in or confirmation on any
-// device; the recovery code and email are then the way back in). Only the dialog's
-// "Remove passkey" posts the form, through the guarded ActionForm, so one confirmed tap
-// sends exactly one request. The server rule is unchanged: the action still requires a
-// fresh confirmation and is scoped to the session person (settings/security/actions.ts).
+// in-page dialog that names the passkey and says plainly what removing it means. Only the
+// dialog's "Remove passkey" posts the form, through the guarded ActionForm, so one confirmed
+// tap sends exactly one request. The action still requires a fresh confirmation and is
+// scoped to the session person (settings/security/actions.ts).
+//
+// Never the last sign-in method (follow-up S2): when this is the account's ONLY passkey and
+// there's no authenticator app, the server refuses the removal, so the dialog doesn't offer
+// it. It says why and links to the two ways to add another sign-in method first. With an
+// authenticator app, removing the only passkey is allowed and the dialog warns plainly.
 //
 // The trigger is a plain button, not a submit, so nothing is removed before the page has
 // hydrated and the dialog can ask first.
 
 export type RemovePasskeyAction = (formData: FormData) => void | Promise<void>;
 
-export type RemovePasskeyCopy = { title: string; body: string[] };
+// `blocked`: removal isn't possible (the last sign-in method), so the dialog offers the
+// alternatives instead of a Remove button.
+export type RemovePasskeyCopy = { title: string; body: string[]; blocked: boolean };
+
+// Where the blocked dialog sends the person: the two ways to add another sign-in method,
+// both on this screen (security-view.tsx renders these ids).
+export const ADD_PASSKEY_ANCHOR = "add-a-passkey";
+export const SET_UP_AUTHENTICATOR_ANCHOR = "set-up-authenticator";
 
 /** What the confirmation says, by situation. Pure, so the wording is testable. */
 export function removePasskeyCopy({
@@ -44,6 +54,7 @@ export function removePasskeyCopy({
         `${name} (added ${added}) will stop working for signing in and confirming it's you. Your other passkeys keep working.`,
         vault,
       ],
+      blocked: false,
     };
   }
   if (authenticatorEnabled) {
@@ -54,16 +65,16 @@ export function removePasskeyCopy({
         vault,
         "If you're replacing this passkey, add the new one first.",
       ],
+      blocked: false,
     };
   }
   return {
-    title: "Remove your only passkey?",
+    title: "You can't remove your only passkey",
     body: [
-      "This is the only passkey on your account and you haven't set up an authenticator app, so once it's removed you can't sign in or confirm it's you on any device.",
-      "You'll stay signed in here. To get back in after you sign out, you'll need your email and your recovery code.",
-      vault,
-      "If you're replacing this passkey, add the new one first.",
+      "This passkey is the only way you can sign in, so removing it would lock you out of your account.",
+      "Add another passkey or set up an authenticator app first. Then you can remove this one.",
     ],
+    blocked: true,
   };
 }
 
@@ -130,14 +141,41 @@ export function RemovePasskeyControl({
             <p key={line}>{line}</p>
           ))}
         </div>
-        <div className="mt-6 flex flex-col-reverse gap-3 sm:flex-row sm:justify-end">
-          <Button type="button" variant="secondary" autoFocus onClick={() => dialog.current?.close()}>
-            Keep passkey
-          </Button>
-          <FormSubmit variant="danger-solid" pendingLabel="Removing…">
-            Remove passkey
-          </FormSubmit>
-        </div>
+        {copy.blocked ? (
+          <>
+            <ul role="list" className="mt-4 flex flex-col gap-2 text-sm">
+              {[
+                { href: `#${ADD_PASSKEY_ANCHOR}`, label: "Add a passkey" },
+                { href: `#${SET_UP_AUTHENTICATOR_ANCHOR}`, label: "Set up an authenticator app" },
+              ].map((link) => (
+                <li key={link.href}>
+                  {/* Close first, so the page can scroll to the section behind the dialog. */}
+                  <a
+                    href={link.href}
+                    className="inline-flex min-h-11 items-center font-medium text-fg underline underline-offset-4 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-focus"
+                    onClick={() => dialog.current?.close()}
+                  >
+                    {link.label}
+                  </a>
+                </li>
+              ))}
+            </ul>
+            <div className="mt-6 flex flex-col-reverse gap-3 sm:flex-row sm:justify-end">
+              <Button type="button" variant="secondary" autoFocus onClick={() => dialog.current?.close()}>
+                Close
+              </Button>
+            </div>
+          </>
+        ) : (
+          <div className="mt-6 flex flex-col-reverse gap-3 sm:flex-row sm:justify-end">
+            <Button type="button" variant="secondary" autoFocus onClick={() => dialog.current?.close()}>
+              Keep passkey
+            </Button>
+            <FormSubmit variant="danger-solid" pendingLabel="Removing…">
+              Remove passkey
+            </FormSubmit>
+          </div>
+        )}
         <CloseWhenSettled dialog={dialog} />
       </dialog>
     </ActionForm>

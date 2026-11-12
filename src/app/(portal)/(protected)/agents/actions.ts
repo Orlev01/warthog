@@ -35,6 +35,7 @@ import { timeZoneFor } from "@/server/spending/time-zone";
 import { getAgentById, listAgentsForUser, type Agent } from "@/server/db/agents";
 import { getConnectionPermissions, type ConnectionPermissions } from "@/server/db/agent-permissions";
 import { disconnectAgent } from "@/server/agents/disconnect";
+import { hasAccessKey } from "@/server/agents/access-key-state";
 import type { AgentListItem } from "@/components/agents/agent-list-view";
 import type { Db } from "@/server/db/index";
 import type { Clock } from "@/server/seams/clock";
@@ -73,11 +74,12 @@ export interface AgentsActions {
   disconnect(session: Session, agentId: string): Promise<DisconnectActionResult>;
 }
 
-// The agent store's status vs. the UI's StatusKey: a disconnected agent needs reconnecting
-// before it can act again, so it reads as "Reconnect needed" (CLAUDE.md vocab); a connected
-// one reads "Connected".
+// The agent store's status vs. the UI's StatusKey: a connected agent reads "Connected"; a
+// disconnected one reads "Disconnected". It is not "Reconnect needed": an agent connection
+// has no renewal (the store knows only these two states), and "Connect it again" makes a
+// new connection rather than reviving this one.
 function toStatusKey(status: Agent["status"]): AgentListItem["status"] {
-  return status === "connected" ? "connected" : "needs-reconnect";
+  return status === "connected" ? "connected" : "disconnected";
 }
 
 
@@ -119,7 +121,10 @@ export function createAgentsActions(deps: AgentsActionsDeps): AgentsActions {
     for (const agent of agents) {
       const grants = await getConnectionPermissions(db, session.userId, agent.connectionId);
       const spend = grants?.cardBudget ? await readAgentSpending(db, session.userId, agent.connectionId, grants.cardBudget, clock.now(), timeZone) : null;
-      items.push({ ...toListItem(agent, grants, timeZone, clock.now()), spendThisPeriod: spend?.total ?? 0, spendIncomplete: (spend?.unconverted.length ?? 0) > 0 });
+      // Whether it holds a working access key (only checked for presence), so Disconnect's
+      // confirmation can point to replacing the key instead.
+      const accessKey = agent.status === "connected" && (await hasAccessKey(db, agent.connectionId));
+      items.push({ ...toListItem(agent, grants, timeZone, clock.now()), spendThisPeriod: spend?.total ?? 0, spendIncomplete: (spend?.unconverted.length ?? 0) > 0, accessKey });
     }
     return { agents: items };
   }

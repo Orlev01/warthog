@@ -22,7 +22,7 @@ import type { OutcomeGroup } from "@/domain/activity/category";
 import { formatMoney } from "@/domain/approvals/request-sentence";
 import { NOTHING_WAITING } from "@/domain/approvals/inbox-copy";
 import { SetupChecklist } from "./setup-checklist";
-import { Status, type StatusKey } from "@/components/ui/status";
+import { Status, type DisplayStatus } from "@/components/ui/status";
 import { Badge, type BadgeTone } from "@/components/ui/badge";
 import { ButtonLink } from "@/components/ui/button-link";
 import { EmptyState } from "@/components/ui/empty";
@@ -77,7 +77,7 @@ export type DashboardAgent = {
   lastActive?: string; // "Today, 3:04 pm"
   todayCount?: number; // entries in the last 24 hours
   needsAttention?: number; // blocked, failed or disputed in the last 24 hours
-  status: StatusKey;
+  status: DisplayStatus;
   spendThisPeriod: number;
   budget?: number | null;
   budgetPeriod: "day" | "week" | "month";

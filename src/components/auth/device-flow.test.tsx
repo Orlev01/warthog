@@ -504,3 +504,23 @@ test("the device code step offers a 'Send me a code' control", () => {
   const markup = renderToStaticMarkup(<DeviceView step="code" />);
   assert.match(markup, /<button[^>]*type="button"[^>]*>Send me a code<\/button>/);
 });
+
+// ── Follow-up S3 — the waiting step says what to look for on the approving device ──────
+
+test("the waiting step carries the label the request is listed under and when it expires", async () => {
+  const ctx = setup();
+  ctx.responders.request = () =>
+    jsonResponse(200, { requestId: REQUEST_ID, deviceLabel: "Chrome on Mac", expiresAt: "2026-11-13T01:10:00.000Z" });
+  ctx.responders.collect = () => jsonResponse(400, { error: "not_approved" });
+  ctx.flow.setEmail(EMAIL);
+  ctx.flow.setCode(EMAIL_CODE);
+  await ctx.flow.requestApproval();
+  const state = ctx.flow.getState();
+  assert.equal(state.phase, "waiting");
+  assert.equal(state.deviceLabel, "Chrome on Mac");
+  assert.match(state.expires ?? "", /\d{1,2}:10/);
+  assert.ok(!JSON.stringify(state).includes(REQUEST_ID), "the handle never reaches the rendered state");
+  ctx.flow.startAgain();
+  assert.equal(ctx.flow.getState().deviceLabel, undefined);
+  assert.equal(ctx.flow.getState().expires, undefined);
+});

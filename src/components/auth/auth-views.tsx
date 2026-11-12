@@ -129,6 +129,8 @@ const CODE_TIMING =
   "Codes can take a minute to arrive. We send at most one a minute, so if you asked moments ago, use the code you already have.";
 
 const SIGNIN_MORE: readonly AuthLink[] = [
+  // Follow-up S3: approved from Settings › Security › Sign-in requests on a signed-in device.
+  { href: "/device", label: "Signed in somewhere else? Approve from another device" },
   { href: "/recover", label: "Lost your passkey? Recover your account" },
   { href: "/reset", label: "Lost everything? Reset your account" },
   { href: "/reset/setup", label: "Reset finished? Set up a new passkey" },
@@ -756,11 +758,11 @@ export function RecoverView({
 
 export type DeviceStep = "code" | "confirm" | "waiting" | "stopped";
 
-// Approving a new device needs a signed-in screen that lists and approves the request, and
-// the app doesn't have one yet (public-01). Sign-in no longer links here, and anyone who
-// arrives anyway is told plainly and pointed at the ways that work.
-const DEVICE_UNAVAILABLE =
-  "Approving a new device from one you already use isn’t available in Warthog yet, so this request can’t be completed. Sign in with your passkey, or recover your account, instead.";
+// Where the request is approved (follow-up S3): a signed-in device's Settings › Security ›
+// Sign-in requests screen lists it. Said on both steps, so nobody waits without knowing where
+// to look.
+const DEVICE_WHERE =
+  "You approve it on a device where you're already signed in to Warthog: open Settings › Security › Sign-in requests there.";
 
 const DEVICE_ROUTES: AuthRoute = { lead: "Have a passkey on this device?", href: "/signin", label: "Sign in" };
 const DEVICE_MORE: readonly AuthLink[] = [{ href: "/recover", label: "Lost your passkey? Recover your account" }];
@@ -787,6 +789,10 @@ export interface DeviceViewProps {
   // Where to go after signing in (a validated relative path), carried on the links
   // to the other auth screens.
   returnTo?: string;
+  // While waiting: the label the approving device lists this request under, and when the
+  // request expires.
+  deviceLabel?: string;
+  expires?: string;
 }
 
 export function DeviceView({
@@ -802,13 +808,15 @@ export function DeviceView({
   onSubmit,
   onStartAgain,
   returnTo,
+  deviceLabel,
+  expires,
 }: DeviceViewProps) {
   switch (step) {
     case "code":
       return (
         <AuthScreen
           title="Add this device"
-          lead="Enter your email and we'll send you a code. Then enter it to add this device to your account."
+          lead="Enter your email and we'll send you a code. Enter it here, then approve this device from one where you're already signed in."
           icon={MonitorSmartphone} error={error}
         >
           <form
@@ -819,7 +827,7 @@ export function DeviceView({
               if (!busy) onSubmit?.();
             }}
           >
-            <Notice tone="warning" announce={false}>{DEVICE_UNAVAILABLE}</Notice>
+            <Notice tone="info" announce={false}>{DEVICE_WHERE}</Notice>
             <Field
               {...pending(busy)}
               label="Email address"
@@ -868,10 +876,16 @@ export function DeviceView({
       return (
         <AuthScreen
           title="Waiting for approval"
-          lead="We've sent an approval request to a device you already use. The request lasts 10 minutes."
+          lead={`Your request is waiting${expires ? ` until ${expires}` : " for 10 minutes"}. This page carries on by itself once it's approved.`}
           icon={MonitorSmartphone}
         >
-          <Notice tone="warning" announce={false}>{DEVICE_UNAVAILABLE}</Notice>
+          <Notice tone="info" announce={false}>
+            <p>{DEVICE_WHERE}</p>
+            {deviceLabel ? <p className="mt-2">{`Look for the request from “${deviceLabel}”. Only approve it if it's this device.`}</p> : (
+              <p className="mt-2">Only approve it if it&apos;s this device.</p>
+            )}
+          </Notice>
+          <p role="status" className="text-sm text-fg-muted">Checking for approval…</p>
           <Button type="button" variant="secondary" onClick={onStartAgain}>
             Start again
           </Button>
