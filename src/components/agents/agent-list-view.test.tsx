@@ -547,3 +547,44 @@ test("the empty state offers a 'Connect an agent' link to /agents/connect", () =
     `the empty-state CTA must read 'Connect an agent'; name="${connect!.name}"`,
   );
 });
+
+// ================================================================================
+// Organisation pass — a one-line summary under the heading says how many agents
+// there are and how many need attention, in words. (The loader lists agents needing
+// reconnection first, then the most recently active — pinned in
+// src/server/db/agents.order.test.ts; the view keeps the order it is given.)
+// ================================================================================
+
+// The header's summary line: the visible text of the <header> after the h1.
+function headerText(markup: string): string {
+  const header = findAll(markup, "header")[0];
+  assert.ok(header, "the list has a header");
+  return visibleText(header.inner);
+}
+
+const AGENT_D: AgentListItem = { ...AGENT_A, id: "agent-dune", name: "Second helper", activityHref: "/activity?agent=agent-dune" };
+
+test("the header summarises how many agents there are and how many need reconnecting", () => {
+  const text = headerText(render(base({ agents: [AGENT_B, AGENT_A, AGENT_D] })));
+  assert.match(text, /\b3 agents · 1 needs reconnecting\b/, `text="${text}"`);
+});
+
+test("the summary names every state that needs attention, with plurals in words", () => {
+  const text = headerText(render(base({ agents: [AGENT_B, { ...AGENT_B, id: "agent-b2" }, AGENT_C, AGENT_A] })));
+  assert.match(text, /\b4 agents · 2 need reconnecting · 1 has an error\b/, `text="${text}"`);
+});
+
+test("when every agent is connected the summary says so", () => {
+  assert.match(headerText(render(base({ agents: [AGENT_A, AGENT_D] }))), /\b2 agents · all connected\b/);
+  assert.match(headerText(render(base({ agents: [AGENT_A] }))), /\b1 agent · all connected\b/);
+});
+
+test("the view keeps the order the loader gives (reconnect-needed first)", () => {
+  const markup = render(base({ agents: [AGENT_B, AGENT_A] }));
+  const text = visibleText(markup);
+  assert.ok(text.indexOf("Travel planner") < text.indexOf("Research buddy"), `the given order is kept; text="${text}"`);
+});
+
+test("an empty list shows no summary count", () => {
+  assert.doesNotMatch(headerText(render(base({ agents: [] }))), /\b0 agents\b/);
+});

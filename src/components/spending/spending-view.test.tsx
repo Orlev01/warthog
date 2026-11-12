@@ -83,7 +83,6 @@ type OwnRelease = {
   amount: number | string;
   currency: string;
   reportedAmount: number | string | null;
-  activityLink: string;
 };
 
 type OwnAgent = {
@@ -91,6 +90,8 @@ type OwnAgent = {
   displayName: string;
   budget: CardBudget | null;
   approvedTotal: number | string;
+  // This agent's approvals & releases in the Activity feed (agent + type filter).
+  activityLink?: string;
   releases: OwnRelease[];
 };
 
@@ -117,6 +118,8 @@ type SpendingViewProps = {
   household: HouseholdReport | null;
   accountCurrency: string;
   currencyOptions: readonly string[];
+  // The page's bound save-currency server action (absent in a prop-only render).
+  currencyAction?: (formData: FormData) => void | Promise<void>;
 };
 
 // --- fixtures ---------------------------------------------------------------------
@@ -136,6 +139,7 @@ const AGENT_SHOP: OwnAgent = {
   displayName: "Shopping Assistant",
   budget: { amount: 300, currency: "AUD", period: "month" },
   approvedTotal: 65.63,
+  activityLink: "/activity?agent=agent-shop&type=approval",
   releases: [
     {
       // An AUD release the agent later REPORTED a (higher) amount for.
@@ -144,7 +148,6 @@ const AGENT_SHOP: OwnAgent = {
       amount: 40.17,
       currency: "AUD",
       reportedAmount: 42.89,
-      activityLink: "/activity?release=rel-1",
     },
     {
       // A USD release with NO reported amount — proves per-release currency and that a
@@ -154,7 +157,6 @@ const AGENT_SHOP: OwnAgent = {
       amount: 25.53,
       currency: "USD",
       reportedAmount: null,
-      activityLink: "/activity?release=rel-2",
     },
   ],
 };
@@ -541,8 +543,8 @@ test("the household section shows no merchants and no release entries", () => {
     );
   }
   assert.ok(
-    !/\/activity\?release=/.test(slice),
-    `no release activity-entry link may appear in the household section; section=${slice}`,
+    !/\/activity\?/.test(slice),
+    `no agent's activity link may appear in the household section; section=${slice}`,
   );
 });
 
@@ -688,4 +690,143 @@ test("W4.5: an amount that couldn't be converted is flagged, naming its currency
 test("W4.5: a household with nothing unconverted shows no conversion warning", () => {
   const text = visibleText(sectionByHeading(render(base()), /household/i) ?? "");
   assert.doesNotMatch(text, /couldn.t convert/i);
+});
+
+// ================================================================================
+// Organisation pass — the account-currency setting is one compact form in the page
+// header (not a stray control below the whole report), each agent is a divider row
+// (no card nested in a card), its releases are grouped by merchant with a subtotal,
+// largest first, the individual releases tucked inside a disclosure, and the agent
+// links to its approvals and releases in Activity.
+// ================================================================================
+
+// Every <details> element (outer markup), in document order.
+function detailsBlocks(markup: string): string[] {
+  return [...markup.matchAll(/<details\b[^>]*>[\s\S]*?<\/details>/gi)].map((m) => m[0]);
+}
+
+const saveCurrency = async (_formData: FormData) => {};
+
+test("the account currency is one compact form in the page header, before the report", () => {
+  const markup = render(base({ currencyAction: saveCurrency }));
+  const select = markup.search(/<select\b[^>]*name="account-currency"/);
+  const agentsHeading = markup.search(/<h2\b[^>]*>[^<]*Your agents/);
+  assert.ok(select >= 0, "the account-currency selector is rendered");
+  assert.ok(agentsHeading >= 0, "the own-agent section is rendered");
+  assert.ok(select < agentsHeading, "the currency setting sits in the header, before the report");
+
+  // The selector and its save control share ONE form.
+  const forms = findAll(markup, "form").filter((f) => /name="account-currency"/.test(f.inner));
+  assert.equal(forms.length, 1, "exactly one form carries the account-currency selector");
+  const buttons = findAll(forms[0].inner, "button");
+  assert.ok(
+    buttons.some((b) => /type="submit"/.test(b.attrs) && !hasBoolAttr(b.attrs, "disabled") && /save/i.test(visibleText(b.inner))),
+    `the form carries a live Save control; buttons=${JSON.stringify(buttons.map((b) => visibleText(b.inner)))}`,
+  );
+});
+
+test("without a bound save action the currency Save is disabled and says why (no dead control)", () => {
+  const markup = render(base());
+  const save = findAll(markup, "button").filter((b) => /save/i.test(visibleText(b.inner)));
+  assert.equal(save.length, 1, "one Save control is shown");
+  assert.ok(hasBoolAttr(save[0].attrs, "disabled"), "with no action bound, Save is disabled");
+  assert.match(visibleText(markup), /isn.t available/i, "and the reason is given in words");
+});
+
+test("own agents are divider rows, never a card nested in a card", () => {
+  const markup = render(base());
+  const section = sectionByHeading(markup, /your agents/i) ?? "";
+  assert.ok(section.includes("Shopping Assistant"), "the own-agent section holds the agents");
+  // A card is a bordered rounded box; the count badge (a borderless pill) is not one.
+  const boxes = [...section.matchAll(/class="([^"]*)"/g)]
+    .map((m) => m[1].split(/\s+/))
+    .filter((cls) => cls.includes("rounded-card") && cls.includes("border"));
+  assert.equal(boxes.length, 0, `no card (or card-like box) is nested inside the agent list; boxes=${JSON.stringify(boxes)}`);
+});
+
+test("releases are grouped by merchant with a subtotal, largest first", () => {
+  const agent: OwnAgent = {
+    agentId: "agent-errands",
+    displayName: "Errand runner",
+    budget: { amount: 400, currency: "AUD", period: "week" },
+    approvedTotal: 86.0,
+    activityLink: "/activity?agent=agent-errands&type=approval",
+    releases: [
+      { id: "r-a1", merchant: "Officeworks", amount: 10.25, currency: "AUD", reportedAmount: null },
+      { id: "r-b1", merchant: "Coles", amount: 55.15, currency: "AUD", reportedAmount: null },
+      { id: "r-a2", merchant: "Officeworks", amount: 20.6, currency: "AUD", reportedAmount: null },
+    ],
+  };
+  const markup = render(base({ own: { agents: [agent] }, household: null }));
+  const text = visibleText(markup);
+
+  // Coles (55.15) outranks Officeworks (10.25 + 20.60 = 30.85).
+  assert.ok(text.indexOf("Coles") >= 0 && text.indexOf("Officeworks") >= 0, `both merchants are listed; text="${text}"`);
+  assert.ok(text.indexOf("Coles") < text.indexOf("Officeworks"), `the larger merchant subtotal comes first; text="${text}"`);
+  // Each merchant appears once, as a group.
+  assert.equal((text.match(/Officeworks/g) ?? []).length, 1, `a merchant is one group, not one row per release; text="${text}"`);
+
+  // Officeworks' subtotal (never a float artefact) with its currency and release count.
+  assert.ok(moneyRe(30.85, "AUD").test(text), `the merchant subtotal is shown with its currency; text="${text}"`);
+  assert.ok(nearInText(markup, "Officeworks", /\b2 releases\b/i, 80), `the subtotal says how many releases it covers; text="${text}"`);
+  assert.ok(nearInText(markup, "Coles", /\b1 release\b/i, 80), `a single release reads in the singular; text="${text}"`);
+});
+
+test("each merchant's individual releases sit inside a disclosure", () => {
+  const agent: OwnAgent = {
+    agentId: "agent-errands",
+    displayName: "Errand runner",
+    budget: { amount: 400, currency: "AUD", period: "week" },
+    approvedTotal: 30.85,
+    releases: [
+      { id: "r-a1", merchant: "Officeworks", amount: 10.25, currency: "AUD", reportedAmount: 11.95 },
+      { id: "r-a2", merchant: "Officeworks", amount: 20.6, currency: "AUD", reportedAmount: null },
+    ],
+  };
+  const markup = render(base({ own: { agents: [agent] }, household: null }));
+  const officeworks = detailsBlocks(markup).find((d) => d.includes("Officeworks"));
+  assert.ok(officeworks, `the merchant group is a <details> disclosure; markup=${markup}`);
+  const block = officeworks as string;
+  assert.match(block, /<summary\b/, "the disclosure has a summary naming the merchant");
+  const summary = visibleText(/<summary\b[^>]*>([\s\S]*?)<\/summary>/.exec(block)?.[1] ?? "");
+  assert.match(summary, /Officeworks/, "the summary names the merchant");
+  assert.ok(moneyRe(30.85, "AUD").test(summary), `the summary carries the subtotal; summary="${summary}"`);
+  // The individual approved amounts — and the labelled report — are inside the disclosure.
+  const body = visibleText(block.replace(/<summary\b[\s\S]*?<\/summary>/, ""));
+  assert.ok(moneyRe(10.25, "AUD").test(body) && moneyRe(20.6, "AUD").test(body), `each release is listed inside; body="${body}"`);
+  assert.match(body, /reported by\s+errand runner/i, "the reported amount stays labelled with the agent");
+  assert.ok(!hasBoolAttr(/<details\b([^>]*)>/.exec(block)?.[1] ?? "", "open"), "the releases start collapsed");
+});
+
+test("a merchant paid in two currencies keeps a subtotal per currency — never added together", () => {
+  const agent: OwnAgent = {
+    agentId: "agent-travel",
+    displayName: "Trip planner",
+    budget: { amount: 900, currency: "AUD", period: "month" },
+    approvedTotal: 0,
+    releases: [
+      { id: "r-1", merchant: "Qantas", amount: 120.4, currency: "AUD", reportedAmount: null },
+      { id: "r-2", merchant: "Qantas", amount: 80.3, currency: "USD", reportedAmount: null },
+    ],
+  };
+  const summary = visibleText(/<summary\b[^>]*>([\s\S]*?)<\/summary>/.exec(render(base({ own: { agents: [agent] }, household: null })))?.[1] ?? "");
+  assert.ok(moneyRe(120.4, "AUD").test(summary), `the AUD subtotal is shown; summary="${summary}"`);
+  assert.ok(moneyRe(80.3, "USD").test(summary), `the USD subtotal is shown separately; summary="${summary}"`);
+  assert.doesNotMatch(summary, /200\.70/, "amounts in different currencies are never summed");
+});
+
+test("an agent with releases links to its approvals and releases in Activity", () => {
+  const markup = render(base());
+  const links = [...markup.matchAll(/<a\b([^>]*)>([\s\S]*?)<\/a>/gi)].map((m) => ({
+    href: decode(attr(m[1], "href") ?? ""),
+    text: visibleText(m[2]),
+    cls: attr(m[1], "class") ?? "",
+  }));
+  const link = links.find((l) => l.href === "/activity?agent=agent-shop&type=approval");
+  assert.ok(link, `the agent's activity link is rendered; links=${JSON.stringify(links)}`);
+  assert.match(link.text, /activity/i, "it reads as an Activity link");
+  assert.match(link.cls, /min-h-11/, "it is a comfortable touch target");
+  assert.ok(nearInText(markup, "Shopping Assistant", /activity/i, 120), "it sits with its agent");
+  // No activity link is invented for an agent without releases or a link.
+  assert.ok(!links.some((l) => /agent-mail/.test(l.href)), "no link is fabricated for an agent without one");
 });
