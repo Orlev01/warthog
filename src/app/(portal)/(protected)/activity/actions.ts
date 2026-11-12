@@ -344,12 +344,18 @@ export function createActivityActions(deps: ActivityActionsDeps): ActivityAction
     // the filter still posts (and narrows by) its id.
     const agentNames = await agentNamesForUser(db, session.userId);
     const filterOptions: ActivityViewProps["filterOptions"] = {
-      agents: facets.agents
-        .map((id) => ({ value: id, label: agentLabel(agentNames, id) ?? id }))
-        .sort((a, b) => a.label.localeCompare(b.label)),
-      services: facets.services
-        .map((id) => ({ value: id, label: serviceLabel(id) }))
-        .sort((a, b) => a.label.localeCompare(b.label)),
+      agents: [
+        ...facets.agents
+          .map((id) => ({ value: id, label: agentLabel(agentNames, id) ?? id }))
+          .sort((a, b) => a.label.localeCompare(b.label)),
+        { value: NONE, label: "No agent (account and Warthog)" },
+      ],
+      services: [
+        ...facets.services
+          .map((id) => ({ value: id, label: serviceLabel(id) }))
+          .sort((a, b) => a.label.localeCompare(b.label)),
+        { value: NONE, label: "No connected service" },
+      ],
       kinds: [...facets.kinds].map((value) => ({ value, label: kindLabel(value) })).sort((a, b) => a.label.localeCompare(b.label)),
       outcomes: [...facets.outcomes].sort().map((value) => ({ value, label: humanise(value) })),
     };

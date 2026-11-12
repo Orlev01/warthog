@@ -3,6 +3,7 @@ import {
   AlertTriangle,
   Ban,
   CheckCircle,
+  ChevronDown,
   ChevronLeft,
   CircleDot,
   Clock,
@@ -12,6 +13,7 @@ import {
   PencilLine,
   Plug,
   ShieldCheck,
+  SlidersHorizontal,
   UserCog,
   type LucideIcon,
 } from "lucide-react";
@@ -362,7 +364,7 @@ function ActivityEntryItem({
           {entry.time ? <time dateTime={entry.dateTime} title={entry.at}>{entry.time}</time> : null}
         </div>
       </div>
-      <p className="ps-6 text-fg">{entry.summary}</p>
+      {entry.summary !== (entry.title ?? entry.kind) ? <p className="ps-6 text-fg">{entry.summary}</p> : null}
       {reported ? <p className="ps-6 text-sm text-fg-muted">Reported by {entry.agent}. Warthog did not observe this.</p> : null}
       <details open={open || disputed} className="group ps-6 text-sm">
         <summary className="inline-flex min-h-11 cursor-pointer items-center font-medium text-fg underline underline-offset-4">
@@ -594,12 +596,18 @@ export function ActivityView({
         </div>
       ) : null}
 
-      <form method="get" className="flex flex-col gap-4 rounded-card border border-line bg-surface p-4">
+      <form method="get" className="flex flex-col gap-3 rounded-card border border-line bg-surface p-4">
         <HiddenState state={formState} omit={["agent", "service", "kind", "outcome", "type", "from", "to", "q"]} />
+        {activeFilters.type ? <input type="hidden" name="type" value={activeFilters.type} /> : null}
         {view === "timeline" ? (
           <div className="flex flex-col gap-1.5">
             <Label htmlFor="activity-search">Search</Label>
-            <Input id="activity-search" type="search" name="q" defaultValue={query} placeholder="Search activity" />
+            <div className="flex flex-col gap-2 sm:flex-row">
+              <Input id="activity-search" type="search" name="q" defaultValue={query} placeholder="Search activity" />
+              <button type="submit" className={`${BTN_SECONDARY} shrink-0`}>
+                Search
+              </button>
+            </div>
           </div>
         ) : null}
         {!appliedFilters && summary.length > 0 ? (
@@ -612,11 +620,16 @@ export function ActivityView({
             </a>
           </p>
         ) : null}
-        <details open={query.length > 0 || appliedCount > 0}>
-          <summary className="inline-flex min-h-11 cursor-pointer items-center font-medium text-fg">
+        {/* Applied filters already show as removable chips, so with chips the panel stays
+            closed (it would push the entries down on a phone); without them it opens when
+            anything is applied, so the applied values are visible. */}
+        <details open={appliedFilters ? false : query.length > 0 || appliedCount > 0} className="group">
+          <summary className="inline-flex min-h-11 cursor-pointer list-none items-center gap-2 font-medium text-fg [&::-webkit-details-marker]:hidden">
+            <SlidersHorizontal aria-hidden={true} className="h-4 w-4 shrink-0 text-fg-muted" />
             Filters{appliedCount > 0 ? ` (${appliedCount} applied)` : ""}
+            <ChevronDown aria-hidden={true} className="h-4 w-4 shrink-0 text-fg-muted transition-transform group-open:rotate-180" />
           </summary>
-          <div className="mt-4 grid grid-cols-1 gap-4 sm:grid-cols-2">
+          <div className="mt-3 grid grid-cols-1 gap-4 sm:grid-cols-2 xl:grid-cols-3">
             {facets.map((facet) => (
               <FacetFilter key={facet.name} {...facet} />
             ))}
@@ -629,13 +642,12 @@ export function ActivityView({
               <Input id="activity-to" type="date" name="to" defaultValue={activeFilters.to?.slice(0, 10) ?? ""} />
             </div>
           </div>
-          {activeFilters.type ? <input type="hidden" name="type" value={activeFilters.type} /> : null}
+          <div className="mt-4">
+            <button type="submit" className={BTN_SECONDARY}>
+              Apply filters
+            </button>
+          </div>
         </details>
-        <div>
-          <button type="submit" className={BTN_SECONDARY}>
-            Apply filters
-          </button>
-        </div>
       </form>
 
       {breadcrumb ? (

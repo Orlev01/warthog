@@ -229,7 +229,7 @@ export function agentGroups(
     const agent = summary.key ?? NONE;
     const drill = (patch: QueryState = {}) => activityHref(state, { view: undefined, via: "agents", agent, ...patch }, ["q"]);
     const details = f
-      ? [f.platform, f.disconnected ? "Disconnected" : undefined, (nameCounts.get(f.name) ?? 0) > 1 && f.connectedOn ? `connected ${f.connectedOn}` : undefined]
+      ? [f.platform && f.platform.toLowerCase() !== f.name.toLowerCase() ? f.platform : undefined, f.disconnected ? "Disconnected" : undefined, (nameCounts.get(f.name) ?? 0) > 1 && f.connectedOn ? `connected ${f.connectedOn}` : undefined]
       : ["Your own account changes and Warthog's events, with no agent involved"];
     const attention = attentionOf(summary);
     return {
