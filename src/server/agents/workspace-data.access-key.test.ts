@@ -27,8 +27,8 @@ test("the Settings section carries the agent's access-key state; other sections 
   const db = await freshDb();
   try {
     const userId = (await createUser(db, { email: "ws-key@warthog.com.au", wrappedDek: "d3M=" })).id;
-    const session: Session = { id: "s", userId, createdAt: NOW, lastSeenAt: NOW, steppedUpAt: null };
-    const actions = createAccessKeyActions({ db, clock, random: systemRandom, keyWrapper: { wrap: async () => "w", unwrap: async () => DEK } });
+    const session: Session = { id: "s", userId, createdAt: NOW, lastSeenAt: NOW, steppedUpAt: NOW };
+    const actions = createAccessKeyActions({ db, clock, random: systemRandom, keyWrapper: { wrap: async () => "w", unwrap: async () => DEK }, alerts: { emailSender: { sendEmail: async () => {} } } });
     const created = await actions.create(session, { name: "My Grok", platform: "Grok", template: "minimal" });
     if (!created.ok) throw new Error("create failed");
 

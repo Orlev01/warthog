@@ -37,6 +37,10 @@ import type { KeyWrapper } from "@/server/crypto/key-wrapper";
 //     so a value shaped like SQL is stored as data and cannot alter a query.
 //   • This module reads no `process.env` and holds no secret: the key is minted from
 //     the injected randomness seam alone (INV-103).
+//   • A key is lasting access that outlives sign-out and recovery, so `create` and
+//     `replace` refuse (`step_up_required`, nothing written) unless the session confirmed
+//     it's you in the last five minutes, and each emails the person (security audit
+//     2026-11-13). `revoke` needs neither: shutting an agent out stays one step.
 
 import { listConnectionsForUser } from "@/server/db/connections";
 import { getAgentDefaults } from "@/server/db/agent-defaults";
@@ -60,6 +64,13 @@ import type { Clock } from "../../../../../server/seams/clock";
 import type { Random } from "../../../../../server/seams/random";
 import type { Db } from "../../../../../server/db/index";
 import type { Session } from "../../../../../server/auth/session";
+import { requireStepUp } from "../../../../../server/auth/step-up";
+import {
+  alertAccessKeyReplaced,
+  alertNewAgentConnection,
+  deliverAlert,
+  type AlertDeps,
+} from "../../../../../server/auth/alerts";
 
 // The brief's default per-agent request limit (120 requests per minute); the per-agent
 // permissions page lets the person change it later (brief "Per-agent permissions page").
@@ -96,7 +107,8 @@ export interface AccessKeyInput {
 }
 
 // The outcome of a create: the created agent's id and the RAW key shown ONCE, or a
-// refusal naming its reason. Never a silent success.
+// refusal naming its reason (`step_up_required` when the session needs a fresh
+// confirmation first). Never a silent success.
 export type CreateResult =
   | { readonly ok: true; readonly agentId: string; readonly key: string }
   | { readonly ok: false; readonly reason: string };
@@ -105,19 +117,22 @@ export type CreateResult =
 // person's), `not_connected` (it is disconnected) or `no_key` (there is no key to revoke).
 export type RevokeResult = { readonly ok: true } | { readonly ok: false; readonly reason: string };
 
-// The outcome of a replace: the fresh RAW key shown ONCE, or a refusal: `not_found`,
-// `not_connected` or `not_access_key` (the agent connected over OAuth, so it has no key).
+// The outcome of a replace: the fresh RAW key shown ONCE, or a refusal: `step_up_required`,
+// `not_found`, `not_connected` or `not_access_key` (the agent connected over OAuth, so it
+// has no key).
 export type ReplaceResult =
   | { readonly ok: true; readonly key: string }
   | { readonly ok: false; readonly reason: string };
 
-// The seams the flow composes: the db (stores), the clock (the agent's connected-at)
-// and the randomness source (the opaque access key). No config — no OAuth issuer here.
+// The seams the flow composes: the db (stores), the clock (the agent's connected-at and
+// the step-up window), the randomness source (the opaque access key) and the alert sender
+// that tells the person a key was issued. No config — no OAuth issuer here.
 export interface AccessKeyActionsDeps {
   readonly keyWrapper: KeyWrapper;
   readonly db: Db;
   readonly clock: Clock;
   readonly random: Random;
+  readonly alerts: AlertDeps;
 }
 
 // The access-key actions the access-key screen drives.
@@ -167,7 +182,7 @@ type ValidInput = z.infer<typeof inputSchema>;
 const uuidSchema = z.uuid();
 
 export function createAccessKeyActions(deps: AccessKeyActionsDeps): AccessKeyActions {
-  const { db, clock, random } = deps;
+  const { db, clock, random, alerts } = deps;
 
   // Create: validate the untrusted input FIRST (a 4xx before any write), mint the
   // connection id server-side, name the agent and upsert its chosen permissions, then
@@ -176,7 +191,8 @@ export function createAccessKeyActions(deps: AccessKeyActionsDeps): AccessKeyAct
   // its hash is stored.
   async function create(session: Session, input: AccessKeyInput): Promise<CreateResult> {
     const valid = parseParams(inputSchema, input);
-    return auditedOwnerChange(deps, session.userId, async (tx, record) => {
+    if (!requireStepUp(session, { clock })) return { ok: false, reason: "step_up_required" };
+    const result = await auditedOwnerChange(deps, session.userId, async (tx, record) => {
       const connected = new Set((await listConnectionsForUser(tx, session.userId)).map(c => c.connectorId));
       valid.tickedServices = valid.tickedServices?.filter(id => connected.has(id));
       const connectionId = randomUUID();
@@ -203,6 +219,11 @@ export function createAccessKeyActions(deps: AccessKeyActionsDeps): AccessKeyAct
       await record("agent_connected", { credentialKind: "access_key", grants }, agent.id);
       return { ok: true as const, agentId: agent.id, key };
     });
+    // The key exists now, so a send failure is logged and never undoes it.
+    await deliverAlert("access-key-created", () =>
+      alertNewAgentConnection(db, { userId: session.userId, agentName: valid.name }, alerts),
+    );
+    return result;
   }
 
   // Revoke: validate the agent id shape at the boundary first (a malformed id throws a
@@ -238,19 +259,26 @@ export function createAccessKeyActions(deps: AccessKeyActionsDeps): AccessKeyAct
   // agent gets nothing — reconnecting means going through consent again (brief).
   async function replace(session: Session, agentId: string): Promise<ReplaceResult> {
     const id = parseParams(uuidSchema, agentId);
+    if (!requireStepUp(session, { clock })) return { ok: false, reason: "step_up_required" };
     const agent = await getAgentById(db, session.userId, id);
     if (agent == null) return { ok: false, reason: "not_found" };
     if (agent.status !== "connected") return { ok: false, reason: "not_connected" };
     if (!(await hasAccessKey(db, agent.connectionId)) && !(await connectedWithAccessKey(db, session.userId, agent.id, await dataKey(session.userId)))) {
       return { ok: false, reason: "not_access_key" };
     }
-    return auditedOwnerChange(deps, session.userId, async (tx, record): Promise<ReplaceResult> => {
+    const result = await auditedOwnerChange(deps, session.userId, async (tx, record): Promise<ReplaceResult> => {
       await lockOAuthConnection(tx, agent.connectionId);
       if ((await getAgentById(tx, session.userId, id))?.status !== "connected") return { ok: false, reason: "not_connected" };
       const { key } = await replaceAccessKey(tx, { connectionId: agent.connectionId }, { random });
       await record("agent_key_replaced", {}, agent.id);
       return { ok: true, key };
     });
+    if (result.ok) {
+      await deliverAlert("access-key-replaced", () =>
+        alertAccessKeyReplaced(db, { userId: session.userId, agentName: agent.displayName }, alerts),
+      );
+    }
+    return result;
   }
 
   // The session person's data key, to read how their agent connected (that record is

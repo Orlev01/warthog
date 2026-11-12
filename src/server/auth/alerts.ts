@@ -113,6 +113,23 @@ export async function alertNewAgentConnection(
 
 // A sign-in from a new device. `deviceLabel` is untrusted free text, so the
 // scrub pass masks any card number planted in it before delivery.
+// A new access key for an existing agent (security audit 2026-11-13): whoever holds it can
+// act as that agent, so the person hears about every replacement. `agentName` is untrusted
+// free text, scrubbed like the new-agent alert's. Never carries the key.
+export async function alertAccessKeyReplaced(
+  db: Db,
+  { userId, agentName }: { userId: string; agentName: string },
+  deps: AlertDeps,
+): Promise<void> {
+  await sendAlert(
+    db,
+    userId,
+    `A new access key was made for ${agentName} on your Warthog account, and its old key ` +
+      "stopped working. If you didn't do this, sign in and revoke the key.",
+    deps,
+  );
+}
+
 export async function alertNewDeviceSignIn(
   db: Db,
   { userId, deviceLabel }: { userId: string; deviceLabel: string },

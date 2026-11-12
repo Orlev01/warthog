@@ -7,6 +7,7 @@ import { Button } from "@/components/ui/button";
 import { ButtonLink } from "@/components/ui/button-link";
 import { Field } from "@/components/ui/field";
 import { Notice } from "@/components/ui/notice";
+import { ConfirmItsYou } from "@/components/ui/confirm-its-you";
 import { IssuedKey } from "./issued-key";
 import { ConnectionPermissions, ConnectionAccessSummary } from "./connection-permissions";
 import { connectionChoices, connectionChoiceInput, type ConnectionChoices, type ConnectionService } from "@/domain/permissions/connection-choices";
@@ -88,6 +89,9 @@ export interface AccessKeyFlowState {
   key?: string; // the RAW key, present only in "created" — shown once
   agentId?: string; // the created agent's id, present only in "created"
   error?: string; // a plain-English refusal, present only in "error"
+  // The server wants a fresh "confirm it's you" before it makes a key; once confirmed,
+  // `confirmed()` makes it with the same choices.
+  confirmRequired?: boolean;
 }
 
 export interface AccessKeyFlowDeps {
@@ -107,6 +111,7 @@ export interface AccessKeyController {
   setTemplate(value: AccessKeyTemplate): void;
   setChoices(value: ConnectionChoices): void;
   submit(): Promise<void>;
+  confirmed(): Promise<void>;
 }
 
 // Plain-English failure copy — a real sentence a person can act on, with no protocol
@@ -114,6 +119,8 @@ export interface AccessKeyController {
 // refusal and a thrown transport fault both surface this.
 const CREATE_FAILED_COPY =
   "We couldn't create your access key just now. Please try again.";
+export const CONFIRM_TO_CREATE_COPY =
+  "Before we make this key, we need to check it's really you. Anyone with the key can act as this agent.";
 
 export function createAccessKeyFlow(deps: AccessKeyFlowDeps): AccessKeyController {
   let state: AccessKeyFlowState = {
@@ -136,6 +143,7 @@ export function createAccessKeyFlow(deps: AccessKeyFlowDeps): AccessKeyControlle
   // key is held for its single showing.
   async function submit(): Promise<void> {
     if (state.status === "working" || state.status === "created") return; // guard against a double confirm
+    if (state.confirmRequired) return; // the confirmation, not Create, carries on from here
     set({ status: "working", error: undefined });
 
     let result: AccessKeyCreateResult;
@@ -154,9 +162,18 @@ export function createAccessKeyFlow(deps: AccessKeyFlowDeps): AccessKeyControlle
     if (result.ok) {
       set({ status: "created", key: result.key, agentId: result.agentId, error: undefined });
       deps.onCreated?.();
+    } else if (result.reason === "step_up_required") {
+      set({ status: "idle", confirmRequired: true });
     } else {
       set({ status: "error", error: CREATE_FAILED_COPY });
     }
+  }
+
+  // The person confirmed it's them: make the key they already asked for.
+  async function confirmed(): Promise<void> {
+    if (!state.confirmRequired) return;
+    set({ confirmRequired: false });
+    await submit();
   }
 
   return {
@@ -166,6 +183,7 @@ export function createAccessKeyFlow(deps: AccessKeyFlowDeps): AccessKeyControlle
     setTemplate: (value) => set({ template: value, choices: value === "custom" ? state.choices : connectionChoices(value) }),
     setChoices: (choices) => set({ template: "custom", choices }),
     submit,
+    confirmed,
   };
 }
 
@@ -229,6 +247,9 @@ export interface AccessKeyFlowProps {
   // submit — the sibling `initialOpen` idiom of AddCardFlow / HighTierFlow).
   initialKey?: string;
   initialAgentId?: string;
+  // Seed the confirm-it's-you prompt for a render test (production reaches it through a
+  // `step_up_required` refusal).
+  initialConfirmRequired?: boolean;
   // Called once a key is issued (the page refreshes the agents list).
   onCreated?: () => void;
 }
@@ -263,7 +284,14 @@ export function AccessKeyFlow(props: AccessKeyFlowProps): React.ReactElement {
     return <IssuedPanel keyValue={issuedKey} agentId={state.agentId ?? props.initialAgentId} />;
   }
 
+  // The confirmation sits after the form, never inside it: it has its own authenticator-code
+  // form, and a nested form would submit Create instead.
+  const confirm = state.confirmRequired || props.initialConfirmRequired ? (
+    <ConfirmItsYou explanation={CONFIRM_TO_CREATE_COPY} onConfirmed={() => { void flow.confirmed(); }} />
+  ) : null;
+
   return (
+    <>
     <form method="post" className="wh-connection-flow" onSubmit={event => { event.preventDefault(); if (ready) void flow.submit(); }}>
       <header className="wh-connection-intro">
         <span className="wh-connection-mark"><KeyRound size={24} aria-hidden="true" /></span>
@@ -288,7 +316,7 @@ export function AccessKeyFlow(props: AccessKeyFlowProps): React.ReactElement {
       {state.error ? <Notice tone="error">{state.error} Your choices have been kept.</Notice> : null}
       <div className="wh-connection-actionbar">
         <div className="wh-connection-actions">
-          <Button type="submit" variant="primary" disabled={!ready} aria-disabled={state.status === "working" || undefined} aria-busy={state.status === "working"} onClick={event => { if (state.status === "working") event.preventDefault(); }}>
+          <Button type="submit" variant="primary" disabled={!ready} aria-disabled={state.status === "working" || state.confirmRequired || undefined} aria-busy={state.status === "working"} onClick={event => { if (state.status === "working" || state.confirmRequired) event.preventDefault(); }}>
             <KeyRound aria-hidden="true" size={16} />{state.status === "working" ? "Creating…" : "Create access key"}
           </Button>
           <ButtonLink href="/agents">Cancel</ButtonLink>
@@ -296,6 +324,8 @@ export function AccessKeyFlow(props: AccessKeyFlowProps): React.ReactElement {
         <p className="wh-connection-footer">The key is shown once. Copy it somewhere safe before leaving the next screen.</p>
       </div>
     </form>
+    {confirm}
+    </>
   );
 }
 

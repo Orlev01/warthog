@@ -113,8 +113,18 @@ export function createAgentConsoleActions(deps: AgentConsoleActionsDeps): AgentC
   // key verifies at `/mcp` and a tool call executes rather than being refused. The key
   // already issued for that agent is reused unless `fresh` asks for a new one.
   async function issue(session: Session | null, fresh: boolean): Promise<{ accessKey: string; endpoint: string }> {
-    const owner = session ?? (await fallbackSession());
-    const accessKeys = createAccessKeyActions({ db, clock, random, keyWrapper: selectKeyWrapper({ nodeEnv: config.nodeEnv, localKek: config.devKek }) });
+    // Minting a real person's key needs a fresh "confirm it's you" and emails them. This
+    // console exists only with dev tools on (production refuses to start with them), and it
+    // keeps its OWN dev agent's key working on every load, so it acts as confirmed and
+    // announces nothing rather than prompting or mailing on each refresh.
+    const owner = { ...(session ?? (await fallbackSession())), steppedUpAt: clock.now() };
+    const accessKeys = createAccessKeyActions({
+      db,
+      clock,
+      random,
+      keyWrapper: selectKeyWrapper({ nodeEnv: config.nodeEnv, localKek: config.devKek }),
+      alerts: { emailSender: { sendEmail: async () => {} } },
+    });
 
     // Reuse the one CONNECTED dev agent already provisioned for this person (marked by its
     // platform); a disconnected one is left as history and a new one is created.

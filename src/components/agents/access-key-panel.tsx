@@ -5,6 +5,7 @@ import { KeyRound, RefreshCw } from "lucide-react";
 
 import { Button } from "@/components/ui/button";
 import { Notice, type NoticeTone } from "@/components/ui/notice";
+import { ConfirmItsYou } from "@/components/ui/confirm-its-you";
 import { WorkspacePanel } from "@/components/shell/workspace-surfaces";
 import { IssuedKey } from "./issued-key";
 
@@ -24,8 +25,10 @@ import { IssuedKey } from "./issued-key";
 // The page's server actions do the work (`createAccessKeyActions`): they resolve the agent
 // from the SESSION's person, re-check it is connected under the connection's credential
 // lock, and write the same activity entries as before ("Access key replaced" / "Access key
-// revoked"). No step-up: the server functions ask for none, and Disconnect (the stronger
-// action) is gated by a single confirmation too, so these match it.
+// revoked"). A new key is lasting access, so making one needs a fresh "confirm it's you"
+// (security audit 2026-11-13): a `step_up_required` refusal shows the confirmation here and,
+// once confirmed, makes the key without another tap. Revoking only cuts access, so like
+// Disconnect it stays a single confirmation.
 //
 // As the sibling flows do, the logic is a framework-free controller
 // (`createAccessKeyPanel`) with a thin client component over it. The raw key lives only in
@@ -52,12 +55,15 @@ export interface AccessKeyPanelState {
   // Whether the new key replaced a working one (so "the old key has stopped working").
   replacedOldKey?: boolean;
   notice?: { tone: NoticeTone; text: string };
+  // A new key waits for a fresh "confirm it's you"; `confirmed()` then makes it.
+  confirmRequired?: boolean;
 }
 
 export interface AccessKeyPanelController {
   getState(): AccessKeyPanelState;
   replace(): Promise<void>;
   revoke(): Promise<void>;
+  confirmed(): Promise<void>;
   dismissKey(): void;
 }
 
@@ -66,6 +72,7 @@ const DISCONNECTED = "This agent is disconnected, so its key can’t be changed.
 const REPLACE_FAILED = "We couldn’t make a new key just now. Please try again.";
 const REVOKE_FAILED = "We couldn’t revoke the key just now. Please try again.";
 const ALREADY_REVOKED = "This key was already revoked, so nothing changed.";
+const CONFIRM_TO_REPLACE = "Before we make a new key, we need to check it's really you. Anyone with the key can act as this agent.";
 
 export function createAccessKeyPanel(deps: AccessKeyPanelDeps): AccessKeyPanelController {
   let state: AccessKeyPanelState = { key: deps.initial, working: null };
@@ -75,7 +82,7 @@ export function createAccessKeyPanel(deps: AccessKeyPanelDeps): AccessKeyPanelCo
   }
 
   async function replace(): Promise<void> {
-    if (state.working) return; // one confirm, one new key
+    if (state.working || state.confirmRequired) return; // one confirm, one new key
     const replacedOldKey = state.key === "active";
     set({ working: "replace", notice: undefined, issuedKey: undefined });
     let result: ReplaceKeyResult;
@@ -87,9 +94,18 @@ export function createAccessKeyPanel(deps: AccessKeyPanelDeps): AccessKeyPanelCo
     }
     if (result.ok) {
       set({ working: null, key: "active", issuedKey: result.key, replacedOldKey });
+    } else if (result.reason === "step_up_required") {
+      set({ working: null, confirmRequired: true });
     } else {
       set({ working: null, notice: { tone: "error", text: result.reason === "not_connected" ? DISCONNECTED : REPLACE_FAILED } });
     }
+  }
+
+  // The person confirmed it's them: make the new key they already asked for.
+  async function confirmed(): Promise<void> {
+    if (!state.confirmRequired) return;
+    set({ confirmRequired: false });
+    await replace();
   }
 
   async function revoke(): Promise<void> {
@@ -119,6 +135,7 @@ export function createAccessKeyPanel(deps: AccessKeyPanelDeps): AccessKeyPanelCo
     getState: () => state,
     replace,
     revoke,
+    confirmed,
     dismissKey: () => set({ issuedKey: undefined, replacedOldKey: undefined }),
   };
 }
@@ -171,6 +188,9 @@ export interface AccessKeyPanelProps {
   revoke: () => Promise<RevokeKeyResult>;
   // Seed a new key for a render test (the production panel reaches it through Replace).
   initialKey?: string;
+  // Seed the confirm-it's-you prompt for a render test (production reaches it through a
+  // `step_up_required` refusal).
+  initialConfirmRequired?: boolean;
 }
 
 export function AccessKeyPanel(props: AccessKeyPanelProps): React.ReactElement {
@@ -207,6 +227,9 @@ export function AccessKeyPanel(props: AccessKeyPanelProps): React.ReactElement {
   };
   const notice = state.notice ? (
     <Notice tone={state.notice.tone}>{state.notice.text}</Notice>
+  ) : null;
+  const confirm = state.confirmRequired || props.initialConfirmRequired ? (
+    <ConfirmItsYou explanation={CONFIRM_TO_REPLACE} onConfirmed={() => { void panel.confirmed(); }} />
   ) : null;
 
   if (issuedKey) {
@@ -255,6 +278,7 @@ export function AccessKeyPanel(props: AccessKeyPanelProps): React.ReactElement {
         <div className="flex flex-col gap-3 text-sm text-fg-muted">
           {notice}
           <p>Create a new key and paste it into {name} to let it back in. Its settings and history are kept.</p>
+          {confirm}
         </div>
       </WorkspacePanel>
     );
@@ -297,6 +321,7 @@ export function AccessKeyPanel(props: AccessKeyPanelProps): React.ReactElement {
             it: you get a new key and the old one stops working straight away. Revoke it to cut off
             access until you create a new key.
           </p>
+          {confirm}
         </div>
       </WorkspacePanel>
       <ConfirmDialog

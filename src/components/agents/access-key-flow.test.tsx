@@ -602,3 +602,69 @@ test("Custom preserves edited choices and submits independent grants before issu
   await flow.submit();
   assert.equal(create.count, 1, "a completed flow cannot issue another key on a repeated submit");
 });
+
+// ═══ a fresh "confirm it's you" before a key is made (security audit 2026-11-13) ═════
+
+// A create that refuses until the person confirms, then issues the key.
+function confirmFirstCreate() {
+  const inputs: CreateInput[] = [];
+  let confirmedYet = false;
+  const fn = async (input: CreateInput): Promise<CreateResult> => {
+    inputs.push(input);
+    return confirmedYet ? { ok: true, agentId: ISSUED_AGENT_ID, key: ISSUED_KEY } : { ok: false, reason: "step_up_required" };
+  };
+  return { fn, inputs, confirm: () => { confirmedYet = true; } };
+}
+
+test("a create that needs a fresh confirmation asks for it instead of failing, and keeps the choices", async () => {
+  const create = confirmFirstCreate();
+  const flow = createAccessKeyFlow({ create: create.fn, defaultName: "My Grok", defaultPlatform: "grok" });
+  flow.setName("Grok on the laptop");
+
+  await flow.submit();
+
+  const state = flow.getState();
+  assert.equal(state.confirmRequired, true, "the screen asks the person to confirm it's them");
+  assert.equal(state.status, "idle", "nothing failed");
+  assert.equal(state.error, undefined, "no error is shown");
+  assert.equal(state.key, undefined, "no key yet");
+  assert.equal(state.name, "Grok on the laptop", "the choices are kept");
+});
+
+test("once confirmed, the key is created with the same choices without pressing Create again", async () => {
+  const create = confirmFirstCreate();
+  const flow = createAccessKeyFlow({ create: create.fn, defaultName: "My Grok", defaultPlatform: "grok" });
+  await flow.submit();
+
+  create.confirm();
+  await flow.confirmed();
+
+  const state = flow.getState();
+  assert.equal(state.status, "created");
+  assert.equal(state.key, ISSUED_KEY);
+  assert.equal(state.confirmRequired, false);
+  assert.equal(create.inputs.length, 2, "one refused attempt, then the create");
+  assert.deepEqual(create.inputs[1], create.inputs[0], "the retried create carries the same choices");
+});
+
+test("while a confirmation is pending, Create does nothing", async () => {
+  const create = confirmFirstCreate();
+  const flow = createAccessKeyFlow({ create: create.fn, defaultName: "My Grok", defaultPlatform: "grok" });
+  await flow.submit();
+  await flow.submit();
+  assert.equal(create.inputs.length, 1, "the second press waits for the confirmation");
+});
+
+test("the create screen shows the confirm-it's-you control when a confirmation is needed", () => {
+  const markup = renderToStaticMarkup(<AccessKeyFlow create={noopCreate} defaultName="My Grok" defaultPlatform="grok" initialConfirmRequired />);
+  assert.match(markup, /check it(&#x27;|')s really you/i, "it says why");
+  assert.match(markup, /Confirm it(&#x27;|')s you/, "it offers a way to confirm");
+});
+
+test("the confirm-it's-you control is never inside the create form (its code form would submit Create)", () => {
+  const markup = renderToStaticMarkup(<AccessKeyFlow create={noopCreate} defaultName="My Grok" defaultPlatform="grok" initialConfirmRequired />);
+  const form = /<form\b[^>]*wh-connection-flow[\s\S]*?<\/form>/.exec(markup)?.[0] ?? "";
+  assert.ok(form.length > 0, "the create form renders");
+  assert.ok(!form.includes("wh-confirm-its-you"), "the confirmation is outside the create form");
+  assert.ok(markup.includes("wh-confirm-its-you"), "the confirmation renders");
+});

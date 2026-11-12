@@ -102,6 +102,7 @@ import { systemRandom } from "../../../../../server/seams/random";
 import { freshDb } from "../../../../../test/db";
 import type { Db } from "../../../../../server/db/index";
 import type { Session } from "../../../../../server/auth/session";
+import type { EmailSender, OutgoingMessage } from "../../../../../server/notify/senders";
 
 // The prefix every access key carries (design §6.1: `wh_ak_` + 32 base62 bytes), kept
 // here so the tests read it without re-typing the literal.
@@ -129,8 +130,14 @@ test("access-key audit records the persisted grants including the account reques
 
 // Build the access-key actions under test with the real seams: a frozen clock and the
 // real randomness source (so two issued keys never collide across tests).
-function makeActions(db: Db) {
-  return createAccessKeyActions({ keyWrapper: { wrap: async () => "test-wrapped", unwrap: async () => new Uint8Array(32).fill(7) }, db, clock: fixedClock(NOW), random: systemRandom });
+function makeActions(db: Db, emailSender: EmailSender = { sendEmail: async () => {} }) {
+  return createAccessKeyActions({ keyWrapper: { wrap: async () => "test-wrapped", unwrap: async () => new Uint8Array(32).fill(7) }, db, clock: fixedClock(NOW), random: systemRandom, alerts: { emailSender } });
+}
+
+// An email sender that keeps what it was asked to send, so a test can read the alerts.
+function recordingSender(): EmailSender & { sent: OutgoingMessage[] } {
+  const sent: OutgoingMessage[] = [];
+  return { sent, sendEmail: async (message) => { sent.push(message); } };
 }
 
 // A stand-in wrapped DEK for createUser (opaque base64; never read here).
@@ -145,18 +152,23 @@ async function makeUser(db: Db, who: string): Promise<string> {
   return user.id;
 }
 
-// A plain signed-in session for `userId` — the page resolves this from the
-// `__Host-wh_session` cookie; the seam only needs its user id. Stepped-up state is
-// irrelevant to the access-key flow (it is the consent screen's twin, not a sensitive
-// re-auth), so it is left null.
+// A signed-in session for `userId` that confirmed it's you a minute ago — the page resolves
+// this from the `__Host-wh_session` cookie. Minting or replacing a key is a sensitive
+// change (security audit 2026-11-13), so the ordinary session here carries a fresh step-up;
+// `unconfirmedSessionFor` is the same session without one.
 function sessionFor(userId: string): Session {
   return {
     id: `sess-${userId}`,
     userId,
     createdAt: new Date(NOW.getTime() - 60_000),
     lastSeenAt: new Date(NOW.getTime() - 60_000),
-    steppedUpAt: null,
+    steppedUpAt: new Date(NOW.getTime() - 60_000),
   };
+}
+
+// The same session with no step-up, or with one older than the five-minute window.
+function unconfirmedSessionFor(userId: string, steppedUpAt: Date | null = null): Session {
+  return { ...sessionFor(userId), steppedUpAt };
 }
 
 // A valid access-key create input, overridable per test. The extra-key escape hatch
@@ -791,4 +803,103 @@ test("an agent connected over OAuth is never given an access key, and has none t
   } finally {
     await db.close();
   }
+});
+
+// =====================================================================================
+// Security audit 2026-11-13 — a key is lasting access to the person's account, so minting
+// or replacing one needs a fresh "confirm it's you", and the person is told by email.
+// Before this, anyone holding a signed-in session (an unlocked laptop, a copied cookie)
+// could mint a key that outlived sign-out and recovery, silently.
+// =====================================================================================
+
+test("creating a key without a fresh confirmation is refused and writes nothing", async () => {
+  const db = await freshDb();
+  try {
+    const userId = await makeUser(db, "create-no-stepup");
+    const sender = recordingSender();
+    const actions = makeActions(db, sender);
+    const sixMinutesAgo = new Date(NOW.getTime() - 6 * 60_000);
+
+    for (const session of [unconfirmedSessionFor(userId), unconfirmedSessionFor(userId, sixMinutesAgo)]) {
+      const result = await actions.create(session, input());
+      assert.deepEqual(result, { ok: false, reason: "step_up_required" });
+    }
+    assert.equal((await listAgentsForUser(db, userId)).length, 0, "no agent was created");
+    assert.equal((await db.query("SELECT 1 FROM oauth_access_keys")).rows.length, 0, "no key was stored");
+    assert.equal(sender.sent.length, 0, "nothing happened, so nothing is announced");
+  } finally { await db.close(); }
+});
+
+test("replacing a key without a fresh confirmation is refused and the old key keeps working", async () => {
+  const db = await freshDb();
+  try {
+    const userId = await makeUser(db, "replace-no-stepup");
+    const actions = makeActions(db);
+    const created = await actions.create(sessionFor(userId), input());
+    if (!created.ok) throw new Error("setup: create must succeed");
+
+    const result = await actions.replace(unconfirmedSessionFor(userId), created.agentId);
+    assert.deepEqual(result, { ok: false, reason: "step_up_required" });
+    assert.ok(await verifyAccessKey(db, created.key), "the existing key still verifies");
+  } finally { await db.close(); }
+});
+
+test("revoking a key needs no confirmation: shutting an agent out stays one step", async () => {
+  const db = await freshDb();
+  try {
+    const userId = await makeUser(db, "revoke-no-stepup");
+    const actions = makeActions(db);
+    const created = await actions.create(sessionFor(userId), input());
+    if (!created.ok) throw new Error("setup: create must succeed");
+
+    assert.deepEqual(await actions.revoke(unconfirmedSessionFor(userId), created.agentId), { ok: true });
+    assert.equal(await verifyAccessKey(db, created.key), null);
+  } finally { await db.close(); }
+});
+
+test("creating a key emails the person that a new agent connected, naming it and never the key", async () => {
+  const db = await freshDb();
+  try {
+    const userId = await makeUser(db, "create-alert");
+    const sender = recordingSender();
+    const created = await makeActions(db, sender).create(sessionFor(userId), input({ name: "Grok on the laptop" }));
+    if (!created.ok) throw new Error("create must succeed");
+
+    assert.equal(sender.sent.length, 1, "one alert");
+    assert.equal(sender.sent[0].recipient, "create-alert@warthog.com.au", "sent to the account's own address");
+    assert.match(sender.sent[0].body, /new agent connected/i);
+    assert.match(sender.sent[0].body, /Grok on the laptop/);
+    assert.ok(!sender.sent[0].body.includes(created.key), "the key is never in the email");
+  } finally { await db.close(); }
+});
+
+test("replacing a key emails the person that the agent has a new key, never the key itself", async () => {
+  const db = await freshDb();
+  try {
+    const userId = await makeUser(db, "replace-alert");
+    const sender = recordingSender();
+    const actions = makeActions(db, sender);
+    const created = await actions.create(sessionFor(userId), input({ name: "Grok on the laptop" }));
+    if (!created.ok) throw new Error("setup: create must succeed");
+    sender.sent.length = 0;
+
+    const replaced = await actions.replace(sessionFor(userId), created.agentId);
+    if (!replaced.ok) throw new Error("replace must succeed");
+    assert.equal(sender.sent.length, 1, "one alert");
+    assert.match(sender.sent[0].body, /new access key/i);
+    assert.match(sender.sent[0].body, /Grok on the laptop/);
+    assert.ok(!sender.sent[0].body.includes(replaced.key), "the key is never in the email");
+  } finally { await db.close(); }
+});
+
+test("an alert that can't be sent doesn't undo the key: it is still shown and still works", async () => {
+  const db = await freshDb();
+  try {
+    const userId = await makeUser(db, "alert-fails");
+    const failing: EmailSender = { sendEmail: async () => { throw new Error("provider down"); } };
+    const created = await makeActions(db, failing).create(sessionFor(userId), input());
+    assert.ok(created.ok, "the create still succeeds");
+    if (!created.ok) throw new Error("unreachable");
+    assert.ok(await verifyAccessKey(db, created.key));
+  } finally { await db.close(); }
 });

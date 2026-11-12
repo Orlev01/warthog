@@ -26,6 +26,7 @@ import { HttpError } from "@/server/http/validate";
 import { getProcessCatalogue } from "@/server/connectors/catalogue";
 import { loadConfig } from "@/server/config";
 import { selectKeyWrapper } from "@/server/crypto/key-wrapper";
+import { notificationSenders } from "@/server/notify/production";
 import {
   createPermissionsActions,
   type PermissionsSaveInput,
@@ -114,6 +115,7 @@ function accessKeyActions(db: Db) {
     keyWrapper: selectKeyWrapper({ nodeEnv: config.nodeEnv, localKek: config.devKek }),
     clock: systemClock,
     random: systemRandom,
+    alerts: { emailSender: notificationSenders(config, db).email },
   });
 }
 
