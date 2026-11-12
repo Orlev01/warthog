@@ -128,14 +128,25 @@ def stop_before_start(platform, previous):
     platform.ownership(expected_free=True)
 
 
+def has_journal_configuration(previous):
+    if previous is None:
+        return False
+    entries = [item for item in previous["properties"]["template"]["containers"][0]["env"]
+               if item["name"] == "DELETION_JOURNAL_CONTAINER"]
+    require(not entries or (len(entries) == 1 and entries[0].get("value") == "account-deletions"
+                            and entries[0].get("secretRef") is None),
+            "Existing deletion journal configuration must be one approved literal container")
+    return bool(entries)
+
+
 def journal_activation(previous, operation):
     value = os.environ.get("ACTIVATE_DELETION_JOURNAL", "false")
     require(value in ("true", "false", ""), "Invalid journal activation selection")
+    configured = has_journal_configuration(previous)
     if value != "true":
         return False
     require(operation == "update" and previous is not None, "Journal activation requires an existing app update")
-    env = previous["properties"]["template"]["containers"][0]["env"]
-    require(not any(item["name"] == "DELETION_JOURNAL_CONTAINER" for item in env),
+    require(not configured,
             "Journal is already configured; inspect rather than replace it")
     return True
 
@@ -209,8 +220,7 @@ def release(platform, operation, image, suffix, scratch):
         parameter_file = scratch / "workload.parameters.json"
         parameter_file.write_bytes(canonical(params))
         command(["python3", "infra/workload/check_template.py", str(parameter_file)])
-    journal_configured = previous is not None and any(item["name"] == "DELETION_JOURNAL_CONTAINER"
-        for item in previous["properties"]["template"]["containers"][0]["env"])
+    journal_configured = has_journal_configuration(previous)
     verify_image(image, require_journal=activate_journal or journal_configured or operation == "create")
     stop_before_start(platform, previous)
     # Detect a concurrent operator/configuration update after the maintenance stop.

@@ -127,6 +127,42 @@ class PlanTests(unittest.TestCase):
 
 
 class SingletonTests(unittest.TestCase):
+    def test_journal_configuration_accepts_the_exact_literal_and_optional_azure_null(self):
+        self.assertFalse(deploy_app.has_journal_configuration(None))
+        old = app_fixture()
+        self.assertFalse(deploy_app.has_journal_configuration(old))
+        entry = {"name": "DELETION_JOURNAL_CONTAINER", "value": "account-deletions"}
+        old["properties"]["template"]["containers"][0]["env"].append(entry)
+        self.assertTrue(deploy_app.has_journal_configuration(old))
+        entry["secretRef"] = None
+        self.assertTrue(deploy_app.has_journal_configuration(old))
+
+    def test_invalid_existing_journal_configuration_never_stops_live_app(self):
+        variants = [
+            [{"name": "DELETION_JOURNAL_CONTAINER", "value": ""}],
+            [{"name": "DELETION_JOURNAL_CONTAINER", "value": "other-container"}],
+            [{"name": "DELETION_JOURNAL_CONTAINER", "secretRef": "journal"}],
+            [{"name": "DELETION_JOURNAL_CONTAINER", "value": "account-deletions", "secretRef": "journal"}],
+            [{"name": "DELETION_JOURNAL_CONTAINER", "value": "account-deletions"}] * 2,
+        ]
+        for entries in variants:
+            with self.subTest(entries=entries):
+                platform = self.platform()
+                old = app_fixture()
+                old["properties"]["template"]["containers"][0]["env"].extend(entries)
+                platform.current.return_value = old
+                env = {"ACR_NAME": "testregistry", "GITHUB_SHA": "a" * 40,
+                       "ACTIVATE_DELETION_JOURNAL": "false", "EXPECTED_CONFIG_SHA256": deploy_app.fingerprint(old)}
+                with patch.dict(os.environ, env), \
+                     patch.object(deploy_app, "command", return_value=json.dumps([runtime_image("v1")])), \
+                     patch.object(deploy_app, "stop_before_start") as stop, \
+                     patch.object(deploy_app, "azure") as cloud, tempfile.TemporaryDirectory() as directory:
+                    with self.assertRaisesRegex(RuntimeError, "journal"):
+                        deploy_app.release(platform, "update", "testregistry.azurecr.io/warthog@sha256:" + "c" * 64,
+                                           "new", Path(directory))
+                    stop.assert_not_called()
+                    cloud.assert_not_called()
+
     def test_unactivated_journal_image_is_rejected_before_stopping_live_app(self):
         platform = self.platform()
         old = app_fixture()
