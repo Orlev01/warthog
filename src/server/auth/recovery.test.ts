@@ -378,7 +378,8 @@ test("the recovery migration applies and re-running every migration changes noth
 // whether or not the account has a recovery code.
 // =====================================================================================
 
-import { scryptSync } from "node:crypto";
+import crypto, { scryptSync } from "node:crypto";
+import { syncBuiltinESMExports } from "node:module";
 
 // The wall time of one synchronous scrypt at the module's work factors, measured here
 // so the event-loop assertion scales with however loaded the machine is right now.
@@ -386,17 +387,6 @@ function oneSyncScryptMs(): number {
   const started = performance.now();
   scryptSync(Buffer.alloc(32, 1), Buffer.alloc(16, 2), 32, { N: 16384, r: 8, p: 1 });
   return performance.now() - started;
-}
-
-async function median(times: number, run: () => Promise<unknown>): Promise<number> {
-  const samples: number[] = [];
-  for (let i = 0; i < times; i += 1) {
-    const started = performance.now();
-    await run();
-    samples.push(performance.now() - started);
-  }
-  samples.sort((a, b) => a - b);
-  return samples[Math.floor(samples.length / 2)]!;
 }
 
 test("verifyRecoveryCode does not block the event loop while it hashes", async () => {
@@ -431,20 +421,39 @@ test("verifyRecoveryCode does not block the event loop while it hashes", async (
   }
 });
 
-test("verifying for an account with no recovery code (or none at all) costs the same hash", async () => {
+test("verifying for an account with no recovery code (or none at all) costs the same hash", async (t) => {
   const db = await freshDb();
   try {
     const withCode = await freshUser(db, "has-code");
     const { code } = await issueRecoveryCode(db, withCode.id, deps);
     const withoutCode = await freshUser(db, "no-code");
 
-    const real = await median(5, () => verifyRecoveryCode(db, withCode.id, wrongVariant(code)));
-    const missing = await median(5, () => verifyRecoveryCode(db, withoutCode.id, code));
-    const noAccount = await median(5, () => verifyRecoveryCode(db, null, code));
-
-    assert.ok(missing > real * 0.5, `no stored code answered in ${missing.toFixed(1)} ms vs ${real.toFixed(1)} ms`);
-    assert.ok(noAccount > real * 0.5, `no account answered in ${noAccount.toFixed(1)} ms vs ${real.toFixed(1)} ms`);
-    assert.equal(await verifyRecoveryCode(db, null, code), false, "no account never verifies");
+    // Observe real async scrypt calls rather than comparing elapsed times between
+    // sequential batches. Shared CI CPU/thread-pool load can change between batches
+    // even when both paths perform exactly the same work. No hash is stubbed here.
+    const hash = t.mock.method(crypto, "scrypt");
+    syncBuiltinESMExports();
+    try {
+      for (const [label, userId] of [
+        ["stored code", withCode.id],
+        ["no stored code", withoutCode.id],
+        ["no account", null],
+      ] as const) {
+        hash.mock.resetCalls();
+        assert.equal(await verifyRecoveryCode(db, userId, wrongVariant(code)), false, label);
+        assert.equal(hash.mock.callCount(), 1, `${label} must pay for exactly one async hash`);
+        const [password, salt, keyLength, options, callback] = hash.mock.calls[0]!.arguments;
+        assert.equal(Buffer.byteLength(password), 32, `${label} uses the full HKDF output`);
+        assert.equal(Buffer.byteLength(salt), 16, `${label} uses a full salt`);
+        assert.equal(keyLength, 32, `${label} derives the full digest`);
+        assert.deepEqual(options, { N: 16384, r: 8, p: 1 }, `${label} uses the same work factors`);
+        assert.equal(typeof callback, "function", `${label} uses the asynchronous API`);
+      }
+    } finally {
+      // Restore the named ESM binding too, including when an assertion fails.
+      hash.mock.restore();
+      syncBuiltinESMExports();
+    }
   } finally {
     await db.close();
   }
