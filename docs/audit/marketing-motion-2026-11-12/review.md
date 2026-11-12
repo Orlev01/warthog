@@ -61,9 +61,10 @@ now also meet the 44px minimum target width on the marketing page.
 - Browser overrides and tabs were reset/closed. The isolated preview and database
   were removed, and the original local environment file remains byte-identical.
 
-Source/image CI and production outcome are recorded during release. Screenshots
-below use the local production build and synthetic illustration content; a still
-image cannot demonstrate animation timing.
+Source/image CI, production verification and cleanup passed; see the
+[release record](../marketing-motion-release-2026-11-12.md). Screenshots below use
+the local production build and synthetic illustration content; a still image
+cannot demonstrate animation timing.
 
 ## Visual evidence
 
