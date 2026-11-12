@@ -431,7 +431,22 @@ test("verifying for an account with no recovery code (or none at all) costs the 
     // Observe real async scrypt calls rather than comparing elapsed times between
     // sequential batches. Shared CI CPU/thread-pool load can change between batches
     // even when both paths perform exactly the same work. No hash is stubbed here.
-    const hash = t.mock.method(crypto, "scrypt");
+    const scrypt = crypto.scrypt;
+    let hashCompleted: (() => void) | undefined;
+    let finishHash: (() => void) | undefined;
+    const hash = t.mock.method(crypto, "scrypt", (...args: Parameters<typeof scrypt>) => {
+      const [password, salt, keyLength, options, callback] = args;
+      scrypt(password, salt, keyLength, options, (error, key) => {
+        // Real work completes, but hold its callback until the test releases it.
+        // This proves callers await the work instead of starting it and returning.
+        if (hashCompleted) {
+          finishHash = () => callback(error, key);
+          hashCompleted();
+        } else {
+          callback(error, key);
+        }
+      });
+    });
     syncBuiltinESMExports();
     try {
       for (const [label, userId] of [
@@ -440,7 +455,16 @@ test("verifying for an account with no recovery code (or none at all) costs the 
         ["no account", null],
       ] as const) {
         hash.mock.resetCalls();
-        assert.equal(await verifyRecoveryCode(db, userId, wrongVariant(code)), false, label);
+        const completed = new Promise<void>((resolve) => { hashCompleted = resolve; });
+        const verification = verifyRecoveryCode(db, userId, wrongVariant(code));
+        assert.equal(await Promise.race([
+          completed.then(() => "hash"),
+          verification.then(() => "verification"),
+        ]), "hash", `${label} must await the hash callback before answering`);
+        finishHash!();
+        hashCompleted = undefined;
+        finishHash = undefined;
+        assert.equal(await verification, false, label);
         assert.equal(hash.mock.callCount(), 1, `${label} must pay for exactly one async hash`);
         const [password, salt, keyLength, options, callback] = hash.mock.calls[0]!.arguments;
         assert.equal(Buffer.byteLength(password), 32, `${label} uses the full HKDF output`);
@@ -450,6 +474,8 @@ test("verifying for an account with no recovery code (or none at all) costs the 
         assert.equal(typeof callback, "function", `${label} uses the asynchronous API`);
       }
     } finally {
+      hashCompleted = undefined;
+      finishHash?.();
       // Restore the named ESM binding too, including when an assertion fails.
       hash.mock.restore();
       syncBuiltinESMExports();
