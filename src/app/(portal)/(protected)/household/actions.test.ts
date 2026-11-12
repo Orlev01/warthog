@@ -87,7 +87,7 @@ import { test } from "node:test";
 import assert from "node:assert/strict";
 import { randomBytes, randomUUID } from "node:crypto";
 
-import { createHouseholdActions } from "./actions";
+import { amountInput, createHouseholdActions } from "./actions";
 
 import { createUser } from "@/server/db/users";
 import {
@@ -909,4 +909,55 @@ test("a shared address written under the owner's key before the household key ex
   } finally {
     await db.close();
   }
+});
+
+// =====================================================================================
+// UI/UX pass (interaction-13 / newcomer-09 / interaction-20) — the member list names each
+// member by their account email, never an internal id; a blank address or amount is a
+// missing value, never saved as blank or as a budget of 0.
+// =====================================================================================
+
+test("load names every member (and a pending transfer's target) by their account email", async () => {
+  const db = await freshDb();
+  try {
+    const alice = await makeUser(db, "owner");
+    const bob = await makeUser(db, "member");
+    const x = (await seedHousehold(db, { ownerId: alice.id, currency: "AUD" })).id;
+    await seedMember(db, { householdId: x, userId: bob.id });
+    const actions = makeActions(db);
+    expectOk(await actions.transferOwnership(sessionFor(alice.id), { toUserId: bob.id }), "transfer started");
+
+    const report = await actions.load(sessionFor(alice.id));
+    assert.ok(report);
+    const emails = Object.fromEntries(report.members.map((m) => [m.userId, m.email]));
+    assert.match(emails[alice.id] ?? "", /^owner-.*@people\.example$/);
+    assert.match(emails[bob.id] ?? "", /^member-.*@people\.example$/);
+    assert.equal(report.pendingTransfer?.toEmail, emails[bob.id]);
+    // Nothing else about the other member is added (no limit, no spending, no address).
+    assert.deepEqual(Object.keys(report.members.find((m) => m.userId === bob.id)!).sort(), ["email", "role", "userId"]);
+  } finally {
+    await db.close();
+  }
+});
+
+test("a shared address made only of spaces is refused at the boundary and nothing changes", async () => {
+  const db = await freshDb();
+  try {
+    const alice = await makeUser(db, "owner");
+    await seedHousehold(db, { ownerId: alice.id, currency: "AUD" });
+    const actions = makeActions(db);
+    expectOk(await actions.editSharedAddress(sessionFor(alice.id), { current: "  9 Owner St, Hobart  " }), "a real address");
+    await assertRejects4xx("blank address", () => actions.editSharedAddress(sessionFor(alice.id), { current: "    " }));
+    assert.equal((await actions.load(sessionFor(alice.id)))?.sharedAddress?.current, "9 Owner St, Hobart", "kept, trimmed");
+  } finally {
+    await db.close();
+  }
+});
+
+test("an empty budget or limit field is a missing amount, never a budget of 0", () => {
+  for (const raw of [null, "", "   "]) assert.equal(amountInput(raw), null, JSON.stringify(raw));
+  assert.equal(amountInput("500"), 500);
+  assert.equal(amountInput(" 12.50 "), 12.5);
+  assert.equal(amountInput("0"), 0, "an explicit 0 is still allowed");
+  assert.ok(Number.isNaN(amountInput("lots")!), "a non-number reaches the boundary, which refuses it");
 });

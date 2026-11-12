@@ -100,18 +100,24 @@ test("resolveAssigneeFilter accepts 'any' or one of the person's own agents, not
 
 // ─── the grouped, filterable view ────────────────────────────────────────────────────
 
-test("the Tasks view has exactly one h1, 'Life admin', above its Tasks heading", () => {
+// The status groups' headings (each group's heading id is `tasks-<status>-heading`), leaving
+// out the Create panel's and an empty state's headings.
+function groupHeadings(markup: string): string[] {
+  return [...markup.matchAll(/<h2\b[^>]*id="tasks-[a-z_]+-heading"[^>]*>([\s\S]*?)<\/h2>/g)].map((m) => text(m[1]!));
+}
+
+test("the Tasks view leaves the page title to the Life admin heading band and doesn't repeat the tab's label", () => {
+  // UI/UX pass: the h1 and the Records | Tasks tabs live in LifeAdminScreen's heading band, so
+  // the view starts with its Create panel (no h1, no h2 "Tasks").
   const markup = render();
-  const h1s = [...markup.matchAll(/<h1\b([^>]*)>([\s\S]*?)<\/h1>/g)];
-  assert.equal(h1s.length, 1);
-  assert.equal(text(h1s[0]![2]!), "Life admin");
-  assert.match(h1s[0]![1]!, /text-2xl font-semibold tracking-tight text-fg/);
-  assert.deepEqual(headings(markup, 2), ["Tasks"]);
+  assert.doesNotMatch(markup, /<h1\b/);
+  assert.ok(!headings(markup, 2).includes("Tasks"));
+  assert.equal(headings(markup, 2)[0], "Create a task");
 });
 
 test("tasks are grouped To do, In progress, Done with counts; Done starts collapsed", () => {
   const markup = render();
-  assert.deepEqual(headings(markup, 3), ["To do", "In progress", "Done"]);
+  assert.deepEqual(groupHeadings(markup), ["To do", "In progress", "Done"]);
   assert.match(text(markup), /To do 2 .*In progress 1 .*Done 1/);
   const details = [...markup.matchAll(/<details\b([^>]*)>\s*<summary\b[^>]*>([\s\S]*?)<\/summary>/g)];
   const done = details.find((m) => /^Done 1$/.test(text(m[2]!)));
@@ -164,7 +170,7 @@ test("filtering to one assignee shows only their tasks, marks the link current a
   assert.match(body, /Book the removalists/);
   assert.doesNotMatch(body, /Return the faulty kettle/);
   assert.doesNotMatch(body, /Renew the car rego/);
-  assert.deepEqual(headings(markup, 3), ["To do", "In progress"]);
+  assert.deepEqual(groupHeadings(markup), ["To do", "In progress"]);
   assert.ok(links(filterNav(markup)).some((l) => l.current && l.text === "Zephyr Assistant 2"));
   const chips = /<ul\b[^>]*aria-label="Applied filters"[^>]*>([\s\S]*?)<\/ul>/.exec(markup);
   assert.ok(chips, "the applied filter is listed");
@@ -192,7 +198,7 @@ test("a filter that matches nothing says so and links back to every task", () =>
   const markup = render({ agents: [...AGENTS, idle], assignee: idle.id });
   assert.match(text(markup), /No tasks for Idle Helper/);
   assert.ok(links(markup).some((l) => l.text === "Show all tasks" && l.href === "/life-admin?view=tasks"));
-  assert.deepEqual(headings(markup, 3), []);
+  assert.deepEqual(groupHeadings(markup), []);
 });
 
 test("an unknown assignee is ignored: every task shows and no chip appears", () => {

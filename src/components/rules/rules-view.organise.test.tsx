@@ -8,7 +8,7 @@
 //   • rules are grouped by scope: all agents first, then each agent by name, with counts;
 //   • a status filter (?status=active|paused) shows as links with counts, an applied-filter
 //     chip and an empty state with a way back;
-//   • each rule shows its kind as a word ("Ask first" / "Never allow"), and its status in
+//   • each rule shows its kind as a word ("Ask me first" / "Never allow"), and its status in
 //     words;
 //   • Delete asks for confirmation in a native disclosure, then posts to the same handler;
 //   • Budgets links each agent's real card-budget control (its workspace Spending section)
@@ -113,12 +113,16 @@ function rowFor(html: string, sentence: string): string {
 
 // --- page title and views ---------------------------------------------------------------
 
-test("the page is titled like its navigation entry, with the house h1", () => {
+test("the page is titled like its navigation entry, in the heading band with its tabs", () => {
+  // UI/UX pass: the title, its purpose and the three tabs share one WorkspaceHeading band.
   const markup = render();
   const h1s = findAll(markup, "h1");
   assert.equal(h1s.length, 1);
   assert.equal(visibleText(h1s[0]!.inner), "Rules & budgets");
-  assert.equal(attr(h1s[0]!.attrs, "class"), "text-2xl font-semibold tracking-tight text-fg");
+  const band = findAll(markup, "header").find((h) => /class="wh-page-heading"/.test(h.attrs));
+  assert.ok(band, "the heading band is rendered");
+  assert.match(band!.inner, /<h1>Rules &amp; budgets<\/h1>/);
+  assert.match(band!.inner, /role="tablist" aria-label="Rules and budgets"/);
 });
 
 test("browsing, building and budgets are separate tabs; the rules tab counts every rule", () => {
@@ -194,7 +198,7 @@ test("groupRulesByScope orders same-named agents by id and keeps every rule", ()
 test("each rule shows its kind and its status in words", () => {
   const html = rulesPanel(render());
   const ask = visibleText(rowFor(html, "Ask me before any agent sends email"));
-  assert.match(ask, /Ask first/);
+  assert.match(ask, /Ask me first/);
   assert.match(ask, /Active/);
   const never = visibleText(rowFor(html, "Never allow any agent to request a high-tier identity detail"))
     .replace("Never allow any agent to request a high-tier identity detail", "");

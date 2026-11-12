@@ -1,6 +1,6 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { recordFields, recordDate, recordReturnPath, recordOffsets, recordStatus, taskReturnPath } from "./form-inputs";
+import { recordFields, recordDate, recordReturnPath, recordOffsets, recordStatus, recordTitle, taskReturnPath } from "./form-inputs";
 
 test("record form keeps personal fields separate from metadata and action internals", () => {
   const form = new FormData();
@@ -67,4 +67,16 @@ test("a task action returns to the Tasks view, keeping a well-formed assignee fi
   for (const value of ["", "https://evil.test", "any&notice=saved", "__proto__", `${agentId}#x`, "Zephyr"]) {
     assert.equal(withFilter(value), "/life-admin?view=tasks", `ignored: ${value}`);
   }
+});
+
+test("a record name made only of spaces is refused (null), and a real one is trimmed", () => {
+  for (const raw of ["", "   ", "\t\n "]) {
+    const form = new FormData();
+    form.set("title", raw);
+    assert.equal(recordTitle(form), null, `blank: ${JSON.stringify(raw)}`);
+  }
+  assert.equal(recordTitle(new FormData()), null, "missing");
+  const form = new FormData();
+  form.set("title", "  Netflix Premium ");
+  assert.equal(recordTitle(form), "Netflix Premium");
 });

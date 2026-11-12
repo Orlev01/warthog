@@ -59,7 +59,8 @@ import {
 import { issueInvite, InviteRefusedError, type IssuedInvite } from "@/server/db/household-invites";
 import { isKnownCurrency } from "@/server/db/account-currency";
 import { ensureHouseholdKey } from "@/server/household/household-key";
-import { readHouseholdPageData, type HouseholdPageData } from "@/server/household/page-data";
+import { readHouseholdPageData, type HouseholdPageData as HouseholdReport } from "@/server/household/page-data";
+import { getUserById } from "@/server/db/users";
 import type { Session } from "@/server/auth/session";
 import type { Clock } from "@/server/seams/clock";
 import type { Random } from "@/server/seams/random";
@@ -86,6 +87,23 @@ export interface HouseholdActionsDeps {
 // A mutation's result: success, or a refusal naming its reason (never a silent success).
 // The page maps the reason to plain copy.
 export type ActionResult = { ok: true } | { ok: false; reason: string };
+
+// The household report the page renders: the shared-items-only read, with each member (and
+// a pending transfer's target) identified by their account email — the address the owner
+// invited them with — so the member list never shows an internal id. Nothing else about
+// another member is added: no name from their vault, no limit, no spending.
+export type HouseholdPageData = Omit<HouseholdReport, "members" | "pendingTransfer"> & {
+  readonly members: Array<HouseholdReport["members"][number] & { readonly email: string | null }>;
+  readonly pendingTransfer: (NonNullable<HouseholdReport["pendingTransfer"]> & { readonly toEmail: string | null }) | null;
+};
+
+// An amount typed into a budget or limit field: null when the field was left empty (or holds
+// only spaces) — a missing amount, never a budget of 0 — otherwise the number, which the
+// boundary then validates (a non-number or a negative is a 4xx).
+export function amountInput(raw: FormDataEntryValue | null): number | null {
+  if (typeof raw !== "string" || raw.trim() === "") return null;
+  return Number(raw.trim());
+}
 
 // What createHousehold optionally takes: a starting currency (defaults to the owner's
 // account currency when omitted). The owner is always the SESSION user, never a client id.
@@ -165,8 +183,10 @@ const memberLimitSchema = z.object({ memberId: uuidSchema, monthlyLimit: z.numbe
 const currencySchema = z.string().min(1).max(MAX_CURRENCY);
 const currencyInputSchema = z.object({ currency: currencySchema });
 const followSchema = z.object({ follow: z.boolean() });
+// The address is trimmed before it is checked, so one made only of spaces is refused (a 4xx)
+// rather than saved as a blank shared address.
 const editAddressSchema = z.object({
-  current: z.string().min(1).max(MAX_ADDRESS),
+  current: z.string().trim().min(1).max(MAX_ADDRESS),
   upcoming: z.string().max(MAX_ADDRESS).nullish(),
   movingOn: z.iso.date().nullish(),
 });
@@ -185,8 +205,21 @@ export function createHouseholdActions(deps: HouseholdActionsDeps): HouseholdAct
     return ensureHouseholdKey(householdId, { db, keyWrapper, random });
   }
 
-  function load(session: Session): Promise<HouseholdPageData | null> {
-    return readHouseholdPageData(session.userId, { db, keyWrapper, clock });
+  // The caller's own household report (member-scoped by the session), with every member
+  // named by their account email. A member whose row is missing reads as null (the view
+  // then says "Household member"), never as their id.
+  async function load(session: Session): Promise<HouseholdPageData | null> {
+    const report = await readHouseholdPageData(session.userId, { db, keyWrapper, clock });
+    if (!report) return null;
+    const emails = new Map<string, string | null>();
+    for (const member of report.members) emails.set(member.userId, (await getUserById(db, member.userId))?.email ?? null);
+    return {
+      ...report,
+      members: report.members.map((member) => ({ ...member, email: emails.get(member.userId) ?? null })),
+      pendingTransfer: report.pendingTransfer
+        ? { ...report.pendingTransfer, toEmail: emails.get(report.pendingTransfer.toUserId) ?? null }
+        : null,
+    };
   }
 
   async function createHousehold(session: Session, input?: CreateHouseholdInput): Promise<ActionResult> {

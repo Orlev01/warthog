@@ -74,6 +74,7 @@ import { buildMovingChecklist } from "@/server/moving/checklist";
 import { lifeAdminPageData } from "@/server/life-admin/page-data";
 import { periodKeyFor } from "@/server/db/card-spend-ledger";
 import { timeZoneFor } from "@/server/spending/time-zone";
+import { formatAccountTime } from "@/domain/display-time";
 
 import type {
   LifeAdminRecordView,
@@ -164,15 +165,17 @@ const setRemindersSchema = z.object({ id: uuid, reminderOffsets });
 const attachRecordSchema = z.object({ recordId: uuid });
 const idOnlySchema = z.object({ id: uuid });
 const handSchema = z.object({ id: uuid, agentId: uuid.optional() });
-const createTaskSchema = z.object({ title: z.string().min(1).max(MAX_TITLE), assignee: assignee.optional() });
+// A title or note is trimmed before it is checked, so one made only of spaces is refused at
+// the boundary (a 4xx) instead of being saved as a blank task or note.
+const createTaskSchema = z.object({ title: z.string().trim().min(1).max(MAX_TITLE), assignee: assignee.optional() });
 const updateTaskSchema = z.object({
   id: uuid,
-  title: z.string().min(1).max(MAX_TITLE),
+  title: z.string().trim().min(1).max(MAX_TITLE),
   assignee,
   status: taskStatus,
 });
 const assignTaskSchema = z.object({ id: uuid, assignee });
-const addNoteSchema = z.object({ id: uuid, text: z.string().min(1).max(MAX_NOTE) });
+const addNoteSchema = z.object({ id: uuid, text: z.string().trim().min(1).max(MAX_NOTE) });
 
 // ---- the method input types (so the factory's shape is precise) --------------------
 
@@ -319,14 +322,18 @@ export function createLifeAdminActions(deps: LifeAdminActionsDeps): LifeAdminAct
       : { kind: "agent", agentId: assigneeId, agentName: nameOf(agents, assigneeId) };
   }
 
-  function toTaskView(task: Task, agents: ReadonlyArray<{ id: string; displayName: string }>): TaskItemView {
+  // A claim's expiry is worded in the person's own time zone ("12 Nov 2026, 6:17 pm"), never
+  // as a raw UTC timestamp; the ISO instant is kept for the <time> element.
+  function toTaskView(task: Task, agents: ReadonlyArray<{ id: string; displayName: string }>, timeZone?: string): TaskItemView {
     return {
       id: task.id,
       title: task.title,
       notes: task.notes.map((note) => ({ author: toActorView(note.author, agents), text: note.text })),
       assignee: toAssigneeView(task.assignee, agents),
       status: task.status,
-      ...(task.claimedBy ? {claim: {agentName: nameOf(agents,task.claimedBy), expiresAt: task.claimExpiresAt!}} : {}),
+      ...(task.claimedBy
+        ? { claim: { agentName: nameOf(agents, task.claimedBy), expiresAt: task.claimExpiresAt!, until: formatAccountTime(task.claimExpiresAt!, timeZone) } }
+        : {}),
     };
   }
 
@@ -346,7 +353,8 @@ export function createLifeAdminActions(deps: LifeAdminActionsDeps): LifeAdminAct
     const filesFor = (id: string) => fileRows.rows.filter((r) => r.record_id === id).map((r) => ({ id: r.id as string, size: Number(r.size) }));
     const agents = await listAgentsForUser(db, userId);
     // "Today" is the person's own local day (the same derivation Home uses), not UTC.
-    const today = periodKeyFor("day", clock.now(), await timeZoneFor(db, userId, dek));
+    const timeZone = await timeZoneFor(db, userId, dek);
+    const today = periodKeyFor("day", clock.now(), timeZone);
 
     return {
       today,
@@ -354,7 +362,7 @@ export function createLifeAdminActions(deps: LifeAdminActionsDeps): LifeAdminAct
       receipts: page.receipts.map((r) => toRecordView(r, r.hasAttachedFile, filesFor(r.id))),
       renewals: page.renewals.map((r) => toRecordView(r, r.hasAttachedFile)),
       checklist: page.checklist.map(toChecklistView),
-      tasks: page.tasks.map((t) => toTaskView(t, agents)),
+      tasks: page.tasks.map((t) => toTaskView(t, agents, timeZone)),
       agents: agents.map((a) => ({ id: a.id, name: a.displayName })),
     };
   }

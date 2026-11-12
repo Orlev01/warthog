@@ -429,7 +429,8 @@ test("offers the brief's six action choices under a rule template", () => {
     { re: /service|connector|connection/i, label: "any tool of a chosen service" },
     { re: /change[- ]?making|any change/i, label: "any change-making tool" },
     { re: /\bcard\b/i, label: "a card request" },
-    { re: /high[- ]?tier/i, label: "a high-tier identity request" },
+    // "Protected details" is the canonical name for the high tier (content-09).
+    { re: /high[- ]?tier|protected detail/i, label: "a high-tier identity request" },
   ];
   for (const choice of ACTION_CHOICES) {
     assert.ok(

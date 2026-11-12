@@ -23,6 +23,14 @@ export function recordStatus(form: FormData): string | undefined {
   return typeof value === "string" ? value || undefined : undefined;
 }
 
+// The name typed into "What to add", trimmed; null when it is missing or only spaces, so the
+// page can refuse it with a notice that names the field instead of saving a blank record.
+export function recordTitle(form: FormData): string | null {
+  const value = form.get("title");
+  const title = typeof value === "string" ? value.trim() : "";
+  return title === "" ? null : title;
+}
+
 export function recordReturnPath(form: FormData): string {
   const value = form.get("returnTab");
   const tab = typeof value === "string" && ["subscriptions", "receipts", "renewals", "checklist"].includes(value)
