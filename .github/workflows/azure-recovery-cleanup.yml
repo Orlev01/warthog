@@ -1,0 +1,70 @@
+# Manual only; exact temporary drill resources and cleanup grant require approval.
+name: Supervise the approved isolated recovery drill
+on:
+  workflow_dispatch:
+    inputs:
+      execution_approved:
+        description: Exact drill approval is recorded against this manifest
+        required: true
+        type: boolean
+        default: false
+      manifest_sha256:
+        description: Approved private manifest SHA256 (no account data)
+        required: true
+        type: string
+      approved_workflow_sha:
+        description: Exact reviewed main commit containing this workflow
+        required: true
+        type: string
+      supervisor_sha256:
+        description: Exact reviewed supervisor script SHA256
+        required: true
+        type: string
+      started_at:
+        description: Exact RG created_at UTC tag; starts four-hour clock
+        required: true
+        type: string
+      cleanup_at:
+        description: Exact UTC tag, started_at plus three hours
+        required: true
+        type: string
+      deadline_at:
+        description: Exact expires_at UTC tag, started_at plus four hours
+        required: true
+        type: string
+permissions:
+  contents: read
+concurrency:
+  group: warthog-one-recovery-drill-e854
+  cancel-in-progress: false
+jobs:
+  supervise:
+    if: github.repository == 'Orlev01/warthog' && github.ref == 'refs/heads/main' && inputs.execution_approved == true
+    runs-on: ubuntu-24.04
+    timeout-minutes: 330
+    environment: azure-runner-cleanup
+    permissions:
+      contents: read
+      id-token: write
+    env:
+      DRILL_EXECUTION_APPROVED: ${{ inputs.execution_approved }}
+      DRILL_MANIFEST_SHA256: ${{ inputs.manifest_sha256 }}
+      DRILL_APPROVED_WORKFLOW_SHA: ${{ inputs.approved_workflow_sha }}
+      DRILL_SUPERVISOR_SHA256: ${{ inputs.supervisor_sha256 }}
+      DRILL_STARTED_AT: ${{ inputs.started_at }}
+      DRILL_CLEANUP_AT: ${{ inputs.cleanup_at }}
+      DRILL_DEADLINE_AT: ${{ inputs.deadline_at }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ github.sha }}
+          persist-credentials: false
+      - name: Verify exact personal identity and approved group tags
+        id: arm
+        run: python3 -B scripts/ci/cleanup_recovery_drill.py arm
+      - name: Supervise until exact cleanup deadline
+        id: supervisor
+        run: python3 -B scripts/ci/cleanup_recovery_drill.py supervise
+      - name: Best-effort exact-group cleanup after failure or cancellation
+        if: ${{ always() && steps.supervisor.outcome != 'success' }}
+        run: python3 -B scripts/ci/cleanup_recovery_drill.py cleanup-now
