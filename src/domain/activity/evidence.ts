@@ -15,7 +15,9 @@ export function activityEvidence(entry: EvidenceEntry): { summary: string; detai
   const safe = redact(entry.payload, () => false) as Record<string, unknown> | null;
   const payload = safe && typeof safe === "object" ? safe : {};
   const text = (key: string): string => typeof payload[key] === "string" ? payload[key] as string : "";
-  const summary = text("summary") || text("reason") || entryTitle(entry);
+  // An agent-supplied reason is the agent's claim, never Warthog's account of what happened,
+  // so a summary built from it says so.
+  const summary = text("summary") || (text("reason") ? `Stated reason: ${text("reason")}` : entryTitle(entry));
   const lines: string[] = [];
   if (text("detail")) lines.push(text("detail"));
   if (text("reason")) lines.push(`Supplied reason: ${text("reason")}`);
