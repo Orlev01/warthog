@@ -1,5 +1,20 @@
 import * as React from "react";
-import { AlertTriangle, Ban, CheckCircle, Clock, type LucideIcon } from "lucide-react";
+import {
+  Activity,
+  AlertTriangle,
+  ArrowRight,
+  Ban,
+  Bell,
+  Bot,
+  CheckCheck,
+  CheckCircle,
+  CheckCircle2,
+  Circle,
+  Clock,
+  ListChecks,
+  type LucideIcon,
+} from "lucide-react";
+import { WorkspaceHeading, WorkspacePanel } from "@/components/shell/workspace-surfaces";
 
 import type { SetupChecklistItem } from "@/domain/home/checklist";
 import type { OutcomeGroup } from "@/domain/activity/category";
@@ -104,7 +119,6 @@ const OUTCOME_ICONS: Partial<Record<OutcomeGroup, { Icon: LucideIcon; tone: stri
   failed: { Icon: AlertTriangle, tone: "text-danger" },
 };
 
-const SECTION_LINK = "inline-flex min-h-11 items-center text-sm font-medium text-fg underline underline-offset-4 hover:text-fg-muted";
 
 // Plain words for the budget period, so spend reads "A$42 of A$200 this month".
 function periodLabel(period: DashboardAgent["budgetPeriod"]): string {
@@ -129,113 +143,97 @@ export function DashboardView({
   vapidPublicKey,
   attention,
 }: DashboardViewProps) {
+  const completed = checklist.filter((item) => item.done).length;
   return (
-    <div className="wh-page flex flex-col gap-8">
-      <h1 className="text-2xl font-semibold tracking-tight text-fg">
-        Hi, {personName}
-      </h1>
-
-      <section className="flex flex-col gap-3">
-        <h2 className="text-lg font-semibold text-fg">Set up Warthog</h2>
-        <SetupChecklist items={checklist} />
-        <InstallPrompt
-          registerPushDevice={registerPushDevice}
-          vapidPublicKey={vapidPublicKey}
-        />
-      </section>
-
-      <div className="grid min-w-0 gap-8 xl:grid-cols-[minmax(0,1.7fr)_minmax(0,1fr)]">
-        <div className="flex min-w-0 flex-col gap-8">
-          <section className="flex flex-col gap-3">
-            <h2 className="text-lg font-semibold text-fg">Approvals</h2>
+    <div className="wh-page flex flex-col gap-6">
+      <WorkspaceHeading
+        eyebrow="Your workspace"
+        title={<>Hi, {personName}</>}
+        description="A place to oversee your agents, review their requests and keep track of what happens next."
+      />
+      <div className="wh-dashboard-grid">
+        <div className="wh-dashboard-column">
+          <WorkspacePanel title="Approvals" description="Requests waiting for your decision" icon={CheckCheck}>
             {pendingApprovals > 0 ? (
-              <a
-                className="inline-flex min-h-11 items-center self-start font-medium text-fg underline underline-offset-4 hover:text-fg-muted"
-                href="/inbox"
-              >
-                {pendingApprovals} pending approval
-                {pendingApprovals === 1 ? "" : "s"}
+              <a className="wh-approval-summary" href="/inbox">
+                <span>{pendingApprovals} pending approval{pendingApprovals === 1 ? "" : "s"}</span>
+                <ArrowRight aria-hidden size={20} />
               </a>
             ) : (
-              <p className="text-sm text-fg-muted">No pending approvals.</p>
+              <div className="wh-panel-empty">
+                <CheckCircle2 aria-hidden size={20} />
+                <div><p className="font-medium text-fg">No pending approvals.</p><p>Requests that need your decision will appear here.</p></div>
+              </div>
             )}
-          </section>
-
-          <section className="flex flex-col gap-3" aria-labelledby="home-activity-heading">
-            <div className="flex flex-wrap items-center justify-between gap-x-4">
-              <h2 id="home-activity-heading" className="text-lg font-semibold text-fg">Recent activity</h2>
-              {activity.length > 0 ? (
+          </WorkspacePanel>
+          <WorkspacePanel
+            title="Recent activity"
+            description="Recorded across your Warthog connections"
+            icon={Activity}
+            action={
+              activity.length > 0 ? (
                 <span className="flex flex-wrap gap-x-4">
-                  <a className={SECTION_LINK} href="/activity?view=agents">By agent</a>
-                  <a className={SECTION_LINK} href="/activity">View all activity</a>
+                  <a href="/activity?view=agents">By agent</a>
+                  <a href="/activity">View all activity <ArrowRight aria-hidden size={14} /></a>
                 </span>
-              ) : null}
-            </div>
+              ) : undefined
+            }
+          >
             {attention ? (
-              <a href={attention.href} className="inline-flex min-h-11 items-center gap-2 self-start rounded-card border border-line bg-surface px-3 text-sm font-medium text-fg underline underline-offset-4">
+              <a href={attention.href} className="mb-4 inline-flex min-h-11 items-center gap-2 rounded-card border border-line bg-surface-muted px-3 text-sm font-medium text-fg underline underline-offset-4">
                 <AlertTriangle aria-hidden={true} className="h-4 w-4 shrink-0 text-warning" />
                 {attention.count} {attention.count === 1 ? "entry needs" : "entries need"} attention from the last 24 hours
               </a>
             ) : null}
             {activity.length > 0 ? (
-              <ul role="list" className="flex flex-col">
+              <ul className="wh-timeline">
                 {activity.slice(0, HOME_ACTIVITY_ROWS).map((entry) => {
                   const icon = entry.outcomeGroup ? OUTCOME_ICONS[entry.outcomeGroup] : undefined;
                   const headline = entry.title ?? entry.summary;
                   return (
-                    <li key={entry.id} className="flex min-w-0 flex-col gap-1 border-b border-line py-3 last:border-0 [overflow-wrap:anywhere]">
-                      <span className="flex flex-wrap items-center gap-x-3 gap-y-1">
+                    <li key={entry.id}>
+                      <p className="text-sm font-medium text-fg">
                         {entry.href ? (
-                          <a href={entry.href} className="font-medium text-fg underline-offset-4 hover:underline">
+                          <a href={entry.href} className="underline-offset-4 hover:underline">
                             {headline}<span className="sr-only">, {entry.at}</span>
                           </a>
-                        ) : (
-                          <span className="font-medium text-fg">{headline}</span>
-                        )}
+                        ) : headline}
+                      </p>
+                      {entry.title && entry.summary !== entry.title ? (
+                        <p className="mt-1 text-sm leading-relaxed text-fg">{entry.summary}</p>
+                      ) : null}
+                      <div className="wh-timeline-meta">
                         {entry.outcome ? (
-                          <span className="inline-flex items-center gap-1 rounded-card bg-surface-muted px-2 py-0.5 text-xs font-medium text-fg">
+                          <span className="inline-flex items-center gap-1 rounded-full bg-surface-muted px-2 py-0.5 font-medium text-fg">
                             {icon ? <icon.Icon aria-hidden={true} className={`h-3.5 w-3.5 shrink-0 ${icon.tone}`} /> : null}
                             {entry.outcome}
                           </span>
                         ) : null}
-                      </span>
-                      {entry.title && entry.summary !== entry.title ? <span className="text-sm text-fg">{entry.summary}</span> : null}
-                      <span className="text-sm text-fg-muted">
-                        {[
-                          entry.reported ? `Reported by ${entry.agent ?? "an agent"}` : entry.agent,
-                          entry.service,
-                        ].filter(Boolean).join(" · ")}
-                        {entry.reported || entry.agent || entry.service ? " · " : ""}
-                        <time dateTime={entry.dateTime}>{entry.when ?? entry.at}</time>
-                      </span>
+                        <span>
+                          {[entry.reported ? `Reported by ${entry.agent ?? "an agent"}` : entry.agent, entry.service].filter(Boolean).join(" · ")}
+                          {entry.reported || entry.agent || entry.service ? " · " : ""}
+                          <time dateTime={entry.dateTime}>{entry.when ?? entry.at}</time>
+                        </span>
+                      </div>
                     </li>
                   );
                 })}
               </ul>
-            ) : (
-              <p className="text-sm text-fg-muted">No recent activity yet.</p>
-            )}
-          </section>
+            ) : <p className="wh-panel-empty">No recent activity yet.</p>}
+          </WorkspacePanel>
         </div>
-        <div className="flex min-w-0 flex-col gap-8 border-line xl:border-s xl:ps-8">
-          <section className="flex flex-col gap-3">
-            <h2 className="text-lg font-semibold text-fg">Your agents</h2>
+        <div className="wh-dashboard-column">
+          <WorkspacePanel title="Your agents" description="Separate connections, individual controls" icon={Bot}>
             {agents.length > 0 ? (
-              <ul role="list" className="flex flex-col">
+              <ul className="flex flex-col divide-y divide-line">
                 {agents.map((agent) => (
-                  <li
-                    key={agent.id}
-                    className="flex min-w-0 flex-col gap-1 border-b border-line py-3 last:border-0"
-                  >
-                    <div className="flex min-w-0 flex-wrap items-center justify-between gap-x-3 gap-y-1">
-                      {agent.href ? (
-                        <a href={agent.href} className="line-clamp-2 font-medium text-fg underline-offset-4 [overflow-wrap:anywhere] hover:underline">
-                          {agent.name}
-                        </a>
-                      ) : (
-                        <span className="line-clamp-2 font-medium text-fg [overflow-wrap:anywhere]">{agent.name}</span>
-                      )}
-                      <Status status={agent.status} />
+                  <li key={agent.id} className="flex min-w-0 flex-col gap-2 py-4 first:pt-0 last:pb-0">
+                    <div className="flex min-w-0 items-start gap-3">
+                      <span className="wh-object-icon"><Bot aria-hidden size={18} /></span>
+                      <div className="flex min-w-0 flex-1 flex-col items-start gap-1">
+                        <a href={agent.href ?? `/agents/${encodeURIComponent(agent.id)}`} className="inline-flex min-h-11 items-center font-medium text-fg underline decoration-line-strong underline-offset-4 [overflow-wrap:anywhere]">{agent.name}</a>
+                        <Status status={agent.status} />
+                      </div>
                     </div>
                     {agent.activityHref ? (
                       <span className="text-sm text-fg-muted">
@@ -246,7 +244,7 @@ export function DashboardView({
                         {agent.lastActive ? <> · last active {agent.lastActive}</> : null}
                       </span>
                     ) : null}
-                    <span className="min-w-0 text-sm text-fg-muted">
+                    <span className="min-w-0 text-xs leading-relaxed text-fg-muted">
                       {agent.spendUnavailable
                         ? "Total unavailable: a reference rate is missing for earlier spending."
                         : `${agent.currency && agent.currency !== "AUD" ? agent.currency + " " : "A$"}${agent.spendThisPeriod} of ${agent.currency && agent.currency !== "AUD" ? agent.currency + " " : "A$"}${agent.budget} ${periodLabel(agent.budgetPeriod)}`}
@@ -254,38 +252,36 @@ export function DashboardView({
                   </li>
                 ))}
               </ul>
-            ) : (
-              <p className="text-sm text-fg-muted">No agents connected yet.</p>
-            )}
-          </section>
-
-          <section className="flex flex-col gap-3">
-            <h2 className="text-lg font-semibold text-fg">Reminders</h2>
+            ) : <p className="wh-panel-empty">No agents connected yet.</p>}
+          </WorkspacePanel>
+          <WorkspacePanel title="Set up Warthog" description={`${completed} of ${checklist.length} steps complete`} icon={ListChecks}>
+            <SetupChecklist items={checklist} />
+            <InstallPrompt registerPushDevice={registerPushDevice} vapidPublicKey={vapidPublicKey} />
+          </WorkspacePanel>
+          <WorkspacePanel
+            title="Reminders"
+            description="Coming up in your life admin"
+            icon={Bell}
+            action={reminders.length > 0 ? (
+              <a href="/life-admin">
+                {reminders.length > HOME_REMINDER_ROWS ? `View all ${reminders.length} in Life admin` : "Open Life admin"}
+              </a>
+            ) : undefined}
+          >
             {reminders.length > 0 ? (
-              <ul role="list" className="flex flex-col">
+              <ul className="flex flex-col divide-y divide-line">
                 {reminders.slice(0, HOME_REMINDER_ROWS).map((reminder) => (
-                  <li
-                    key={reminder.id}
-                    className="flex flex-col gap-1 border-b border-line py-4 last:border-0"
-                  >
-                    <span className="text-fg [overflow-wrap:anywhere]">
-                      {reminder.title}
-                    </span>
-                    <span className="text-sm text-fg-muted">
-                      Due {reminder.due}
-                    </span>
+                  <li key={reminder.id} className="flex items-start gap-3 py-3 first:pt-0 last:pb-0">
+                    <Circle aria-hidden size={15} className="mt-1 shrink-0 text-fg-muted" />
+                    <div className="min-w-0">
+                      <p className="text-sm text-fg [overflow-wrap:anywhere]">{reminder.title}</p>
+                      <p className="mt-1 text-xs text-fg-muted">Due {reminder.due}</p>
+                    </div>
                   </li>
                 ))}
               </ul>
-            ) : (
-              <p className="text-sm text-fg-muted">No reminders yet.</p>
-            )}
-            {reminders.length > 0 ? (
-              <a className={SECTION_LINK} href="/life-admin">
-                {reminders.length > HOME_REMINDER_ROWS ? `View all ${reminders.length} in Life admin` : "Open Life admin"}
-              </a>
-            ) : null}
-          </section>
+            ) : <p className="wh-panel-empty">No reminders yet.</p>}
+          </WorkspacePanel>
         </div>
       </div>
     </div>

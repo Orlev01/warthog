@@ -175,7 +175,7 @@ export function PermissionsView({
   const show = (part: PermissionsSection) =>
     section === "all" || section === part;
   return (
-    <section className="flex flex-col gap-6">
+    <section className="wh-permissions flex flex-col gap-6">
       {!embedded ? (
         <header className="flex flex-col gap-1">
           <h1 className="text-xl font-semibold text-fg">
@@ -191,7 +191,7 @@ export function PermissionsView({
       {show("connectors") ? (
         <>
           {/* Connected services and their tools — reads and changes listed separately. */}
-          <div className="flex flex-col gap-3">
+          <div className="wh-permission-group flex flex-col gap-3">
             <SectionHeading>Connected services</SectionHeading>
             <p className="text-sm text-fg-muted">
               Service accounts belong to you. Choose which services this agent
@@ -354,7 +354,7 @@ export function PermissionsView({
       {show("vault") ? (
         <>
           {/* Identity: low-tier read vs. the high-tier REQUEST toggle. */}
-          <div className="flex flex-col gap-3">
+          <div className="wh-permission-group flex flex-col gap-3">
             <SectionHeading>Your identity</SectionHeading>
             <label className="flex flex-col gap-1 text-sm">
               Vault fields
@@ -412,7 +412,7 @@ export function PermissionsView({
         <>
           {/* Card access and its spending budget. The budget field shows only alongside
           card access; enabling card access without a budget blocks save. */}
-          <div className="flex flex-col gap-3">
+          <div className="wh-permission-group flex flex-col gap-3">
             <SectionHeading>Card access</SectionHeading>
             <Toggle
               name="card"
@@ -464,7 +464,7 @@ export function PermissionsView({
       {show("skills") ? (
         <>
           {/* Skills it receives. */}
-          <div className="flex flex-col gap-3">
+          <div className="wh-permission-group flex flex-col gap-3">
             <SectionHeading>Skills</SectionHeading>
             <p className="text-sm text-fg-muted">
               Choose skills for this agent. Your choices override each skill’s
@@ -494,7 +494,7 @@ export function PermissionsView({
       {show("settings") ? (
         <>
           {/* The person's tasks and life-admin records — their own grants. */}
-          <div className="flex flex-col gap-3">
+          <div className="wh-permission-group flex flex-col gap-3">
             <SectionHeading>Tasks and records</SectionHeading>
             <Toggle name="tasksWrite" on={resourceControls?.tasksWrite !== false} label="Allow task changes" description="Requires task access below. Turn off for read-only access." />
             <Toggle name="recordsWrite" on={resourceControls?.recordsWrite !== false} label="Allow record changes" description="Requires record access below. Turn off for read-only access." />
@@ -524,7 +524,7 @@ export function PermissionsView({
       {show("memory") ? (
         <>
           {/* Shared memory and sharing what it learns. */}
-          <div className="flex flex-col gap-3">
+          <div className="wh-permission-group flex flex-col gap-3">
             <SectionHeading>Memory and sharing</SectionHeading>
             <p className="text-sm text-fg-muted">
               Shared and source-agent memory are the defaults. Choose individual
@@ -564,7 +564,9 @@ export function PermissionsView({
       ) : null}
 
       {show("rules") ? (
-        <AgentRules agentName={agentName} rules={rules} />
+        <div className="wh-permission-group">
+          <AgentRules agentName={agentName} rules={rules} />
+        </div>
       ) : null}
 
       {show("settings") ? (

@@ -23,13 +23,13 @@ export type SetupChecklistProps = {
 
 export function SetupChecklist({ items }: SetupChecklistProps) {
   return (
-    <ul className="grid gap-2 sm:grid-cols-2 xl:grid-cols-3">
+    <ul className="wh-setup-list">
       {items.map((item) => (
         <li
           key={item.href}
-          className="flex items-center justify-between gap-3 rounded-card border border-line bg-surface px-3 py-1.5"
+          className="min-w-0"
         >
-          <a className="inline-flex min-h-11 items-center font-medium text-accent hover:text-accent-hover" href={item.href}>
+          <a className="inline-flex min-h-11 items-center text-sm font-medium text-accent hover:text-accent-hover" href={item.href}>
             {item.label}
           </a>
           <ChecklistState done={item.done} />

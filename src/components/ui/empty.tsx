@@ -14,7 +14,7 @@ export type EmptyStateProps = {
 
 export function EmptyState({ heading, description, action }: EmptyStateProps) {
   return (
-    <div className="flex flex-col items-center gap-3 rounded-card border border-line bg-surface p-8 text-center">
+    <div className="wh-card wh-empty flex flex-col items-center gap-3 rounded-card border border-line bg-surface p-8 text-center">
       <h2 className="text-lg font-semibold text-fg">{heading}</h2>
       <p className="text-sm text-fg-muted">{description}</p>
       {action ? <div className="mt-2">{action}</div> : null}

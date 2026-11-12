@@ -1,4 +1,5 @@
 import * as React from "react";
+import { WorkspaceHeading } from "@/components/shell/workspace-surfaces";
 
 import { ViewPanels } from "@/components/ui/view-tabs";
 import { Status, type StatusKey } from "@/components/ui/status";
@@ -237,7 +238,7 @@ function CatalogueEntry({
   requestAction?: (formData: FormData) => void | Promise<void>;
 }) {
   return (
-    <li className="flex min-w-0 flex-col items-start gap-3 rounded-card border border-line bg-surface p-4">
+    <li className="flex min-w-0 flex-col items-start gap-3 wh-card rounded-card border border-line bg-surface p-4">
       <div className="min-w-0 w-full">
         <div className="flex flex-wrap items-center justify-between gap-x-2 gap-y-1">
           <span className="font-medium text-fg">{item.name}</span>
@@ -294,7 +295,7 @@ function RequestSection({
   requestAction?: (formData: FormData) => void | Promise<void>;
 }) {
   return (
-    <div className="flex min-w-0 flex-col gap-3 rounded-card border border-line bg-surface p-4 [overflow-wrap:anywhere]">
+    <div className="flex min-w-0 flex-col gap-3 wh-card rounded-card border border-line bg-surface p-4 [overflow-wrap:anywhere]">
       <div className="flex flex-col gap-1">
         <h3 className="text-base font-semibold text-fg">
           Can&apos;t find what you need?
@@ -377,7 +378,7 @@ function ConnectionCard({
   reconnectAction?: (formData: FormData) => void | Promise<void>;
 }) {
   return (
-    <li className="flex min-w-0 flex-col gap-3 rounded-card border border-line bg-surface p-4 [overflow-wrap:anywhere]">
+    <li className="flex min-w-0 flex-col gap-3 wh-card rounded-card border border-line bg-surface p-4 [overflow-wrap:anywhere]">
       <div className="flex flex-wrap items-start justify-between gap-2">
         <div className="flex flex-col gap-0.5">
           <span className="font-medium text-fg">{connection.name}</span>
@@ -502,15 +503,7 @@ export function ConnectorsView({
   const filtered = Boolean(query) || category !== null;
   return (
     <div className="wh-page flex flex-col gap-8">
-      <header className="flex flex-col gap-2">
-        <h1 className="text-2xl font-semibold tracking-tight text-fg">
-          Connectors
-        </h1>
-        <p className="max-w-2xl text-sm text-fg-muted">
-          Manage your connected accounts, or browse services to bring into your
-          workspace.
-        </p>
-      </header>
+      <WorkspaceHeading eyebrow="Account resources" title="Connectors" description="Manage your connected accounts, or browse services to bring into your workspace." />
       <ViewPanels
         label="Connector views"
         defaultTab={filtered ? "catalogue" : "connected"}

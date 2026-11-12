@@ -1,4 +1,6 @@
 import * as React from "react";
+import { Bot, Plus } from "lucide-react";
+import { WorkspaceHeading } from "@/components/shell/workspace-surfaces";
 
 import { Status, type StatusKey } from "@/components/ui/status";
 import { EmptyState } from "@/components/ui/empty";
@@ -144,9 +146,10 @@ function AgentCard({
   disconnectAction?: (formData: FormData) => void | Promise<void>;
 }) {
   return (
-    <li className="grid min-w-0 gap-4 py-5 md:grid-cols-[minmax(0,1fr)_auto] md:items-start">
+    <li className="wh-surface wh-agent-row">
       <div className="flex min-w-0 flex-col gap-3">
-        <div className="flex items-start justify-between gap-3">
+        <div className="wh-agent-row-heading">
+          <span className="wh-object-icon"><Bot aria-hidden size={19} /></span>
           <div className="flex min-w-0 flex-1 flex-col gap-0.5 [overflow-wrap:anywhere]">
             <a
               href={`/agents/${agent.id}`}
@@ -176,7 +179,7 @@ function AgentCard({
             : null}
         </p>
       </div>
-      <div className="flex flex-wrap items-center gap-2 md:max-w-80 md:justify-end">
+      <div className="wh-agent-row-actions">
         <a href={`/agents/${agent.id}`} className={BTN_SECONDARY}>
           Manage agent
         </a>
@@ -198,26 +201,10 @@ export function AgentListView({
 }: AgentListViewProps) {
   return (
     <div className="wh-page flex flex-col gap-6">
-      <header className="flex flex-col gap-3">
-        <h1 className="text-2xl font-semibold tracking-tight text-fg">
-          Your agents
-        </h1>
-        <p className="text-sm text-fg-muted">
-          Choose an agent to manage its connectors, vault access, skills,
-          memory, spending and audit log.
-        </p>
-        {agents.length > 0 ? (
-          <p className="text-sm font-medium text-fg">{agentSummary(agents)}</p>
-        ) : null}
-        <div className="flex flex-wrap gap-2">
-          <a href="/agents/connect" className={BTN_PRIMARY}>
-            Connect an agent
-          </a>
-          <a href="/settings/agents" className={BTN_SECONDARY}>
-            Global agent settings
-          </a>
-        </div>
-      </header>
+      <WorkspaceHeading eyebrow="Connections" title="Your agents" description="Choose an agent to manage its connectors, vault access, skills, memory, spending and audit log." meta={agents.length > 0 ? agentSummary(agents) : undefined}>
+        <a href="/agents/connect" className={BTN_PRIMARY}><Plus aria-hidden size={16} />Connect an agent</a>
+        <a href="/settings/agents" className={BTN_SECONDARY}>Global agent settings</a>
+      </WorkspaceHeading>
 
       {agents.length === 0 ? (
         <EmptyState
@@ -230,7 +217,7 @@ export function AgentListView({
           }
         />
       ) : (
-        <ul className="divide-y divide-line border-t border-line">
+        <ul className="wh-agent-list">
           {agents.map((agent) => (
             <AgentCard
               key={agent.id}

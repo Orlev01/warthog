@@ -17,6 +17,7 @@ import {
   UserCog,
   type LucideIcon,
 } from "lucide-react";
+import { WorkspaceHeading } from "@/components/shell/workspace-surfaces";
 
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/field";
@@ -569,14 +570,11 @@ export function ActivityView({
 
   return (
     <div className="wh-page flex flex-col gap-6">
-      <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
-        <div className="flex flex-col gap-1">
-          <h1 className="text-2xl font-semibold tracking-tight text-fg">Activity</h1>
-          <p className="text-sm text-fg-muted">
-            What your agents did through Warthog, and changes to your account.
-            {timeZoneLabel ? <> Times in {timeZoneLabel}.</> : null}
-          </p>
-        </div>
+      <WorkspaceHeading
+        eyebrow="Insights"
+        title="Activity"
+        description={`What your agents did through Warthog, and changes to your account.${timeZoneLabel ? ` Times in ${timeZoneLabel}.` : ""}`}
+      >
         <form method="get">
           <HiddenState state={formState} omit={["verify"]} />
           <input type="hidden" name="verify" value="1" />
@@ -585,7 +583,7 @@ export function ActivityView({
             Check integrity
           </button>
         </form>
-      </div>
+      </WorkspaceHeading>
 
       {integrity ? <IntegrityPanel result={integrity} /> : null}
 
@@ -596,7 +594,7 @@ export function ActivityView({
         </div>
       ) : null}
 
-      <form method="get" className="flex flex-col gap-3 rounded-card border border-line bg-surface p-4">
+      <form method="get" className="wh-card flex flex-col gap-3 rounded-card border border-line bg-surface p-4">
         <HiddenState state={formState} omit={["agent", "service", "kind", "outcome", "type", "from", "to", "q"]} />
         {activeFilters.type ? <input type="hidden" name="type" value={activeFilters.type} /> : null}
         {view === "timeline" ? (

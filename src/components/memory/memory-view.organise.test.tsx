@@ -72,8 +72,8 @@ function hrefsOf(markup: string): string[] {
   return [...markup.matchAll(/href="([^"]*)"/g)].map((m) => m[1]!.replace(/&amp;/g, "&"));
 }
 
-test("the page heading uses the house page-title style", () => {
-  assert.match(render(), /<h1 class="text-2xl font-semibold tracking-tight text-fg">Memory<\/h1>/);
+test("the page heading uses the shared workspace page heading", () => {
+  assert.match(render(), /<header class="wh-page-heading">.*<h1>Memory<\/h1>/s);
 });
 
 test("memories sit under Today / This week / Earlier headings, each with its count, in that order", () => {
