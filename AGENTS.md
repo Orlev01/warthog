@@ -23,6 +23,10 @@ For consent and access-key setup, follow the
 standalone consent, expired requests and the access-key alternative in UI reviews;
 these flows do not all inherit the workspace shell.
 
+For signed-in composition, follow [workspace depth](docs/design/workspace-depth.md):
+use layered surfaces for meaningful groups, keep texture restrained and represent
+agent resource/control relationships without implying unverified connectivity.
+
 For the signed-out landing page, also follow the
 [public front-door design](docs/design/public-front-door.md): its marketing
 hierarchy shares the console's tokens but has its own bounded composition.

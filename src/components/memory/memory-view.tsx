@@ -1,6 +1,7 @@
 "use client";
 
 import * as React from "react";
+import { WorkspaceHeading } from "@/components/shell/workspace-surfaces";
 import { Bot, Lock, Pencil, Plus, Save, Share, Trash2 } from "lucide-react";
 
 import { Button } from "@/components/ui/button";
@@ -192,13 +193,7 @@ export function MemoryView({
   const scopeId = React.useId();
   return (
     <section className="flex flex-col gap-8">
-      <div className="flex flex-col gap-1">
-        <h1 className="text-xl font-semibold text-fg">Memory</h1>
-        <p className="text-sm text-fg-muted">
-          What your agents remember about you, and who each memory is shared
-          with.
-        </p>
-      </div>
+      <WorkspaceHeading eyebrow="Account resources" title="Memory" description="What your agents remember about you, and who each memory is shared with." />
 
       {/* ----- Search over the memories (a GET the loader reads) ----- */}
       <form
@@ -221,7 +216,7 @@ export function MemoryView({
       </form>
 
       {/* ----- Add your own memory (offered even with no memories) ----- */}
-      <details className="flex flex-col gap-3 rounded-card border border-line bg-surface p-4">
+      <details className="flex flex-col gap-3 wh-card rounded-card border border-line bg-surface p-4">
         <summary className="inline-flex min-h-11 w-fit cursor-pointer items-center gap-2 rounded-card text-sm font-medium text-fg focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-focus">
           <Plus aria-hidden={true} className="h-4 w-4 shrink-0" />
           Add a memory
