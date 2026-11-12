@@ -68,7 +68,8 @@ import {
 } from "../../../../../server/db/agent-permissions";
 import { parseParams } from "../../../../../server/http/validate";
 import { budgetAllowsCard } from "../../../../../domain/budget/budget";
-import type { Rule } from "../../../../../domain/rules/rules";
+import { ruleSentence, type Rule } from "../../../../../domain/rules/rules";
+import { ruleDisplayLabelsFor } from "../../rules/rule-targets";
 import type { KeyWrapper } from "../../../../../server/crypto/key-wrapper";
 import type { PermissionsViewProps } from "../../../../../components/agents/permissions-view";
 import type { Db } from "../../../../../server/db/index";
@@ -373,11 +374,14 @@ export function createPermissionsActions(
     userId: string,
     connectionId: string,
     agentName: string,
-  ): Promise<Rule[]> {
+  ): Promise<(Rule & { sentence?: string })[]> {
     if (!keyWrapper) return [];
     const user = await getUserById(db, userId);
     if (!user) return [];
     const dek = await keyWrapper.unwrap(user.wrappedDek);
+    // The same tool titles and service names the Rules page shows (never ids), when the
+    // catalogue is available; without it the sentence keeps the id form.
+    const labels = deps.catalogue ? await ruleDisplayLabelsFor(db, deps.catalogue, userId, dek) : undefined;
     return (await listAllRules(db, userId, dek))
       .filter(
         (rule) =>
@@ -386,15 +390,18 @@ export function createPermissionsActions(
             (rule.scope.type === "agent" &&
               rule.scope.agentId === connectionId)),
       )
-      .map((rule) => ({
-        kind: rule.kind,
-        scope:
-          rule.scope.type === "any_agent"
-            ? rule.scope
-            : { type: "agent", agentId: connectionId, name: agentName },
-        action: rule.action,
-        condition: rule.condition,
-      }));
+      .map((rule) => {
+        const shown: Rule = {
+          kind: rule.kind,
+          scope:
+            rule.scope.type === "any_agent"
+              ? rule.scope
+              : { type: "agent", agentId: connectionId, name: agentName },
+          action: rule.action,
+          condition: rule.condition,
+        };
+        return labels ? { ...shown, sentence: ruleSentence(shown, labels) } : shown;
+      });
   }
 
   // The person's OWN connected services (member-scoped by the session's user id), one per
