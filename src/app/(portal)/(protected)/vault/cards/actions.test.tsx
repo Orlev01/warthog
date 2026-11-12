@@ -381,7 +381,7 @@ test("the loader returns the session user's cards + billing addresses and mounts
     const markup = renderToStaticMarkup(
       <CardsView cards={data.cards} billingAddresses={data.billingAddresses} />,
     );
-    assert.ok(strip(markup).includes("Your cards"), "mounting CardsView renders the cards screen");
+    assert.ok(strip(markup).includes("Saved cards"), "mounting CardsView renders the cards screen");
     assert.ok(markup.includes("Visa"), "the owner's card brand renders");
     assert.ok(markup.includes("4242"), "the owner's card last four renders");
     assert.ok(strip(markup).includes("Everyday spending"), "the owner's card nickname renders");
