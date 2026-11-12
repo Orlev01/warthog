@@ -1,4 +1,6 @@
 import * as React from "react";
+import { ServiceMark } from "@/components/ui/brand-mark";
+import { toolLabel } from "@/domain/activity/describe";
 import { WorkspaceHeading } from "@/components/shell/workspace-surfaces";
 
 import { ViewPanels } from "@/components/ui/view-tabs";
@@ -73,6 +75,8 @@ export type ToolItem = {
 // label, the status, the marked tools, and the names of the agents that may use it.
 export type ConnectionItem = {
   id: string;
+  // The catalogue entry this connection is an account of (identifies its brand mark).
+  connectorId?: string;
   name: string;
   accountLabel: string;
   unavailableReason?: string;
@@ -241,7 +245,10 @@ function CatalogueEntry({
     <li className="flex min-w-0 flex-col items-start gap-3 wh-card rounded-card border border-line bg-surface p-4">
       <div className="min-w-0 w-full">
         <div className="flex flex-wrap items-center justify-between gap-x-2 gap-y-1">
-          <span className="font-medium text-fg">{item.name}</span>
+          <span className="flex min-w-0 items-center gap-3">
+            <ServiceMark id={item.id} name={item.name} size="md" />
+            <span className="font-medium text-fg">{item.name}</span>
+          </span>
           {item.connected ? <Status status="connected" /> : null}
         </div>
         <p className="text-xs text-fg-muted">{item.verification ?? "Configured integration · live verification not recorded"}</p>
@@ -380,11 +387,14 @@ function ConnectionCard({
   return (
     <li className="flex min-w-0 flex-col gap-3 wh-card rounded-card border border-line bg-surface p-4 [overflow-wrap:anywhere]">
       <div className="flex flex-wrap items-start justify-between gap-2">
-        <div className="flex flex-col gap-0.5">
-          <span className="font-medium text-fg">{connection.name}</span>
-          <span className="text-sm text-fg-muted">
-            {connection.accountLabel}
-          </span>
+        <div className="flex min-w-0 items-center gap-3">
+          <ServiceMark id={connection.connectorId} name={connection.name} size="lg" />
+          <div className="flex min-w-0 flex-col gap-0.5">
+            <span className="font-medium text-fg">{connection.name}</span>
+            <span className="text-sm text-fg-muted">
+              {connection.accountLabel}
+            </span>
+          </div>
         </div>
         <Status status={connection.status} />
       </div>
@@ -410,8 +420,9 @@ function ConnectionCard({
                     key={tool.name}
                     className="flex flex-wrap items-center gap-2 text-sm text-fg"
                   >
-                    <span>{tool.name}</span>
-                    <span className={MARK_BADGE}>
+                    <span>{toolLabel(tool.name)}</span>
+                    <code className="text-xs text-fg-muted">{tool.name}</code>
+                    <span className={`wh-tone-badge ${tool.makesChange ? "wh-tone-warning" : "wh-tone-info"}`}>
                       {tool.makesChange ? "Makes changes" : "Reads"}
                     </span>
                   </li>

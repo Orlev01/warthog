@@ -1,4 +1,5 @@
 import * as React from "react";
+import { AgentMark } from "@/components/ui/brand-mark";
 import { Bot, Plus } from "lucide-react";
 import { WorkspaceHeading } from "@/components/shell/workspace-surfaces";
 
@@ -149,7 +150,7 @@ function AgentCard({
     <li className="wh-surface wh-agent-row">
       <div className="flex min-w-0 flex-col gap-3">
         <div className="wh-agent-row-heading">
-          <span className="wh-object-icon"><Bot aria-hidden size={19} /></span>
+          <AgentMark platform={agent.platform} name={agent.name} size="md" />
           <div className="flex min-w-0 flex-1 flex-col gap-0.5 [overflow-wrap:anywhere]">
             <a
               href={`/agents/${agent.id}`}

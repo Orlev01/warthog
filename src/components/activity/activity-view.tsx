@@ -26,6 +26,7 @@ import { EmptyState } from "@/components/ui/empty";
 import { Notice } from "@/components/ui/notice";
 import { ActiveFilters, FilterLinks, type AppliedFilter, type FilterLink } from "@/components/ui/filter-links";
 import { LIST_ROW } from "@/components/ui/list-group";
+import { AgentMark, ServiceMark } from "@/components/ui/brand-mark";
 import type { IntegrityResult } from "@/server/activity/integrity";
 import type { ActivityCategory, OutcomeGroup } from "@/domain/activity/category";
 
@@ -67,6 +68,7 @@ export type ActivityEntryView = {
   agentHref?: string; // the timeline filtered to this agent
   agentRole?: "actor" | "subject"; // the agent acted, or an owner's change was about it
   service?: string;
+  serviceId?: string; // the connected service's catalogue id, for its mark
   outcome: string; // display-ready, e.g. "Done"
   outcomeGroup?: OutcomeGroup;
   category?: ActivityCategory;
@@ -90,6 +92,8 @@ export type ActivityViewKey = "timeline" | "agents" | "types" | "services";
 export type ActivityGroupView = {
   readonly id: string;
   readonly label: string;
+  // What identifies the group visually: an agent's platform, a service's id or a type.
+  readonly mark?: { readonly kind: "agent"; readonly platform?: string } | { readonly kind: "service"; readonly id: string } | { readonly kind: "type"; readonly type: ActivityCategory };
   readonly detail?: string; // platform, connection status/date, or the type's description
   readonly disconnected?: boolean;
   readonly total: number;
@@ -179,10 +183,23 @@ const CATEGORY_ICONS: Record<ActivityCategory, LucideIcon> = {
 };
 
 const OUTCOME_ICONS: Partial<Record<OutcomeGroup, { Icon: LucideIcon; tone: string }>> = {
-  done: { Icon: CheckCircle, tone: "text-success" },
-  waiting: { Icon: Clock, tone: "text-fg-muted" },
-  blocked: { Icon: Ban, tone: "text-danger" },
-  failed: { Icon: AlertTriangle, tone: "text-danger" },
+  done: { Icon: CheckCircle, tone: "wh-tone-success" },
+  waiting: { Icon: Clock, tone: "wh-tone-warning" },
+  blocked: { Icon: Ban, tone: "wh-tone-danger" },
+  failed: { Icon: AlertTriangle, tone: "wh-tone-danger" },
+};
+
+// Each activity type's tone: reads blue, changes amber, approvals in the accent, rejected
+// requests red; the rest stay neutral (docs/adr/brand-marks-and-accent.md).
+const CATEGORY_TONES: Record<ActivityCategory, string> = {
+  read: "wh-tone-info",
+  change: "wh-tone-warning",
+  approval: "wh-tone-tint",
+  report: "wh-tone-neutral",
+  rejected: "wh-tone-danger",
+  access: "wh-tone-tint",
+  account: "wh-tone-neutral",
+  other: "wh-tone-neutral",
 };
 
 // The outcome in words, with a tone icon (the icon carries colour, the word carries meaning).
@@ -190,8 +207,8 @@ function OutcomeBadge({ outcome, group }: { outcome: string; group?: OutcomeGrou
   if (!outcome) return null;
   const icon = group ? OUTCOME_ICONS[group] : undefined;
   return (
-    <span className={BADGE}>
-      {icon ? <icon.Icon aria-hidden={true} className={`h-3.5 w-3.5 shrink-0 ${icon.tone}`} /> : null}
+    <span className={`wh-tone-badge ${icon ? icon.tone : "wh-tone-neutral"}`}>
+      {icon ? <icon.Icon aria-hidden={true} className="h-3.5 w-3.5 shrink-0" /> : null}
       {outcome}
     </span>
   );
@@ -335,12 +352,20 @@ function ActivityEntryItem({
   const agentText = entry.agent ? (entry.agentHref ? <a href={entry.agentHref} className="underline underline-offset-2">{entry.agent}</a> : entry.agent) : null;
   // Who: an agent acted, a person's change was about an agent, or the agent reported it.
   const who = reported ? null : agentText ? (entry.agentRole === "subject" ? <>About {agentText}</> : agentText) : null;
-  const meta = [who, entry.service, entry.time ? null : entry.at].filter(Boolean);
+  const service = entry.service ? (
+    <span className="inline-flex items-center gap-1 align-middle">
+      {entry.serviceId ? <ServiceMark id={entry.serviceId} name={entry.service} size="xs" /> : null}
+      {entry.service}
+    </span>
+  ) : null;
+  const meta = [who, service, entry.time ? null : entry.at].filter(Boolean);
   return (
     <li id={`entry-${entry.seq}`} className={LIST_ROW}>
       <div className="flex min-w-0 flex-wrap items-start justify-between gap-x-4 gap-y-1">
         <div className="flex min-w-0 items-start gap-2">
-          <Icon aria-hidden={true} className="mt-1 h-4 w-4 shrink-0 text-fg-muted" />
+          <span className={`mt-0.5 inline-grid h-6 w-6 shrink-0 place-items-center rounded-md ${entry.category ? CATEGORY_TONES[entry.category] : "wh-tone-neutral"}`} style={{ background: "var(--wh-tone-soft)" }}>
+            <Icon aria-hidden={true} className="h-3.5 w-3.5 wh-tone-icon" />
+          </span>
           <div className="min-w-0">
             <h3 className="font-medium text-fg">{entry.title ?? entry.kind}</h3>
             <p className="text-sm text-fg-muted">
@@ -365,9 +390,9 @@ function ActivityEntryItem({
           {entry.time ? <time dateTime={entry.dateTime} title={entry.at}>{entry.time}</time> : null}
         </div>
       </div>
-      {entry.summary !== (entry.title ?? entry.kind) ? <p className="ps-6 text-fg">{entry.summary}</p> : null}
-      {reported ? <p className="ps-6 text-sm text-fg-muted">Reported by {entry.agent}. Warthog did not observe this.</p> : null}
-      <details open={open || disputed} className="group ps-6 text-sm">
+      {entry.summary !== (entry.title ?? entry.kind) ? <p className="ps-8 text-fg">{entry.summary}</p> : null}
+      {reported ? <p className="ps-8 text-sm text-fg-muted">Reported by {entry.agent}. Warthog did not observe this.</p> : null}
+      <details open={open || disputed} className="group ps-8 text-sm">
         <summary className="inline-flex min-h-11 cursor-pointer items-center font-medium text-fg underline underline-offset-4">
           View details<span className="sr-only"> for {entry.title ?? entry.kind}, {entry.at}</span>
         </summary>
@@ -460,6 +485,19 @@ function plural(count: number, one: string, many: string): string {
   return `${count} ${count === 1 ? one : many}`;
 }
 
+function GroupMark({ group }: { group: ActivityGroupView }) {
+  const mark = group.mark;
+  if (!mark) return null;
+  if (mark.kind === "agent") return <AgentMark platform={mark.platform} name={group.label} size="md" />;
+  if (mark.kind === "service") return <ServiceMark id={mark.id} name={group.label} size="md" />;
+  const Icon = CATEGORY_ICONS[mark.type];
+  return (
+    <span aria-hidden={true} className={`inline-grid h-9 w-9 shrink-0 place-items-center rounded-[10px] ${CATEGORY_TONES[mark.type]}`} style={{ background: "var(--wh-tone-soft)" }}>
+      <Icon className="h-[18px] w-[18px] wh-tone-icon" />
+    </span>
+  );
+}
+
 function GroupRow({ group }: { group: ActivityGroupView }) {
   const attention = [
     group.blocked ? `${group.blocked} blocked` : "",
@@ -469,11 +507,14 @@ function GroupRow({ group }: { group: ActivityGroupView }) {
   return (
     <li id={group.id} className={`${LIST_ROW} gap-2`}>
       <div className="flex min-w-0 flex-wrap items-start justify-between gap-x-4 gap-y-1">
-        <div className="min-w-0">
+        <div className="flex min-w-0 items-start gap-3">
+          <GroupMark group={group} />
+          <div className="min-w-0">
           <h3 className="text-base font-semibold text-fg">
             {group.href && group.total > 0 ? <a href={group.href} className="underline underline-offset-4 hover:text-fg-muted">{group.label}</a> : group.label}
           </h3>
           {group.detail ? <p className="text-sm text-fg-muted">{group.detail}</p> : null}
+          </div>
         </div>
         <p className="shrink-0 text-sm text-fg-muted">
           <span className="font-semibold tabular-nums text-fg">{group.total}</span> {group.total === 1 ? "entry" : "entries"}

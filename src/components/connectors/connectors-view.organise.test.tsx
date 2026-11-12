@@ -151,7 +151,7 @@ test("each tool inside Show tools is still marked as reading or making changes",
   const card = entry(render(base({ groups: [] })), "robin mailbox");
   const disclosure = card.match(/<details\b[^>]*>[\s\S]*?<\/details>/g)?.find((d) => d.includes("Show tools"))!;
   const rows = [...disclosure.matchAll(/<li\b[^>]*>([\s\S]*?)<\/li>/g)].map((m) => text(m[1]!));
-  assert.deepEqual(rows, ["search_mail Reads", "read_message Reads", "send_mail Makes changes"]);
+  assert.deepEqual(rows, ["Search mail search_mail Reads", "Read message read_message Reads", "Send mail send_mail Makes changes"], "plain name, identifier, then its effect");
 });
 
 test("Disconnect acts in one click: a bound form on the card, not behind a disclosure", () => {

@@ -299,6 +299,7 @@ export function createActivityActions(deps: ActivityActionsDeps): ActivityAction
       agentHref: entry.agentId === undefined ? undefined : activityHref(state, { agent: entry.agentId, via: undefined }),
       agentRole: agentRole(entry.kind),
       service: entry.connectorId === undefined ? undefined : serviceLabel(entry.connectorId),
+      serviceId: entry.connectorId,
       outcome: entry.outcome === undefined ? "" : humanise(entry.outcome),
       outcomeGroup: outcomeGroup(entry.outcome),
       category,

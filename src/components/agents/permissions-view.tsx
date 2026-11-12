@@ -15,6 +15,7 @@ import {
 import { ruleSentence, type Rule } from "@/domain/rules/rules";
 import { ListGroup, LIST_ROW } from "@/components/ui/list-group";
 import { RuleKindBadge } from "@/components/rules/rule-badges";
+import { ConnectorModule } from "./connector-module";
 
 // E10-S07 — Per-agent permissions view (design §7; brief "Per-agent permissions
 // page"). Each agent's reach is shaped on ONE screen. For a given agent the person
@@ -190,26 +191,35 @@ export function PermissionsView({
 
       {show("connectors") ? (
         <>
-          {/* Connected services and their tools — reads and changes listed separately. */}
-          <div className="wh-permission-group flex flex-col gap-3">
-            <SectionHeading>Connected services</SectionHeading>
-            <p className="text-sm text-fg-muted">
-              Service accounts belong to you. Choose which services this agent
-              may use. Connecting a service does not grant agent access.
-            </p>
-            <Toggle
-              name="readTools"
-              on={readTools}
-              label="Allow reading from granted services"
-            />
-            <label className="flex flex-col gap-2 text-sm font-medium">
-              Changes to granted services
-              <Select name="changeTools" defaultValue={changeTools}>
-                <option value="off">Off</option>
-                <option value="ask_first">Ask me first</option>
-                <option value="allow">Allow, subject to rules</option>
-              </Select>
-            </label>
+          {/* Connected services: the agent-wide defaults, then one collapsible module per
+              service (reads and changes listed separately inside each). */}
+          <div className="wh-permission-group flex flex-col gap-4">
+            <div className="flex flex-col gap-1">
+              <SectionHeading>Connected services</SectionHeading>
+              <p className="text-sm text-fg-muted">
+                Service accounts belong to you. Choose which services {agentName} may
+                use and how. Connecting a service does not grant agent access.
+              </p>
+            </div>
+            <div className="flex flex-col gap-3 rounded-card border border-line bg-surface-muted p-3">
+              <p className="text-sm font-medium text-fg">Defaults for every service</p>
+              <div className="grid gap-3 sm:grid-cols-2">
+                <Toggle
+                  name="readTools"
+                  on={readTools}
+                  label="Allow reading from granted services"
+                />
+                <label className="flex flex-col gap-1.5 text-sm font-medium">
+                  Changes to granted services
+                  <Select name="changeTools" defaultValue={changeTools}>
+                    <option value="off">Off</option>
+                    <option value="ask_first">Ask me first</option>
+                    <option value="allow">Allow, subject to rules</option>
+                  </Select>
+                </label>
+              </div>
+              <p className="text-xs text-fg-muted">A service set to “Use agent default” follows these.</p>
+            </div>
             {connectors.length === 0 ? (
               <p className="text-sm text-fg-muted">
                 No services connected yet.{" "}
@@ -221,132 +231,26 @@ export function PermissionsView({
                 </a>{" "}
                 to let {agentName} use it.
               </p>
-            ) : null}
-            {connectors.map((connector) => (
-              <Card key={connector.id} className="flex flex-col gap-3">
-                {connector.granted === undefined ? (
-                  <h3 className="font-medium text-fg">{connector.name}</h3>
-                ) : (
-                  <Toggle
-                    name={`connector:${connector.id}`}
-                    on={connector.granted}
-                    label={`Let it use ${connector.name}`}
-                    description="Access follows this service’s settings and your global and agent rules."
-                  />
-                )}
-
-                {connector.accounts?.length ? (
-                  <label className="flex flex-col gap-2 text-sm font-medium">
-                    {connector.name} account for this agent
-                    <Select
-                      name={`connectorAccount:${connector.id}`}
-                      defaultValue={connector.accountId ?? ""}
-                    >
-                      <option value="">Choose an account</option>
-                      {connector.accounts.map((account) => (
-                        <option key={account.id} value={account.id}>
-                          {account.label}
-                        </option>
-                      ))}
-                    </Select>
-                    <span className="text-xs font-normal text-fg-muted">
-                      When more than one account is connected, this agent must
-                      have an account selected before it can use the service.
-                    </span>
-                  </label>
-                ) : null}
-                <div className="grid gap-3 sm:grid-cols-2">
-                  <label className="flex flex-col gap-1 text-sm">
-                    Read tools
-                    <Select
-                      name={`connectorPolicyRead:${connector.id}`}
-                      defaultValue={
-                        connector.policy?.readTools === undefined
-                          ? "default"
-                          : connector.policy.readTools
-                            ? "on"
-                            : "off"
-                      }
-                    >
-                      <option value="default">Use agent default</option>
-                      <option value="on">Allow reads</option>
-                      <option value="off">Off</option>
-                    </Select>
-                  </label>
-                  <label className="flex flex-col gap-1 text-sm">
-                    Change tools
-                    <Select
-                      name={`connectorPolicyChange:${connector.id}`}
-                      defaultValue={connector.policy?.changeTools ?? "default"}
-                    >
-                      <option value="default">Use agent default</option>
-                      <option value="off">Off</option>
-                      <option value="ask_first">Ask me first</option>
-                      <option value="allow">Allow, subject to rules</option>
-                    </Select>
-                  </label>
-                </div>
+            ) : (
+              <div className="flex flex-col gap-3">
                 <p className="text-sm text-fg-muted">
-                  Provider-hosted tools always require approval.
+                  {connectors.length} {connectors.length === 1 ? "service" : "services"} ·{" "}
+                  {connectors.filter((connector) => connector.granted !== false).length} allowed for {agentName}. Open a service to change its access.
                 </p>
-                <label className="flex flex-col gap-1 text-sm">
-                  Tool access
-                  <Select name={`connectorToolScope:${connector.id}`} defaultValue={connector.policy?.allowedTools == null ? "all" : "chosen"}>
-                    <option value="all">All tools, including future tools</option>
-                    <option value="chosen">Only checked tools</option>
-                  </Select>
-                  <span className="text-xs text-fg-muted">In checked-tools mode, newly discovered tools are blocked. Read/change settings and global rules still apply.</span>
-                </label>
-                {!connector.readTools.length && !connector.changeTools.length ? <p className="text-sm text-fg-muted">No tool inventory is available for the selected account. Reconnect or select its account to refresh discovery.</p> : null}
-                {connector.readTools.length > 0 ? (
-                  <div className="flex flex-col gap-1.5">
-                    <h4 className="text-sm font-medium text-fg-muted">Reads</h4>
-                    <ul className="flex flex-col gap-1">
-                      {connector.readTools.map((tool) => (
-                        <li
-                          key={tool}
-                          className="rounded-card border border-line bg-surface-muted p-2 text-sm text-fg"
-                        >
-                          <label className="flex min-h-11 items-center gap-2 [overflow-wrap:anywhere]">
-                            <input type="checkbox" name={`connectorTool:${connector.id}`} value={tool} defaultChecked={connector.policy?.allowedTools == null || connector.policy.allowedTools.includes(tool)} />{tool}
-                          </label>
-                        </li>
-                      ))}
-                    </ul>
-                  </div>
-                ) : null}
-
-                {connector.changeTools.length > 0 ? (
-                  <div className="flex flex-col gap-1.5">
-                    <h4 className="text-sm font-medium text-fg-muted">
-                      Makes changes
-                    </h4>
-                    <ul className="flex flex-col gap-1">
-                      {connector.changeTools.map((tool) => (
-                        <li
-                          key={tool}
-                          className="flex flex-wrap items-center justify-between gap-2 rounded-card border border-line bg-surface-muted p-2 text-sm text-fg"
-                        >
-                          <label className="flex min-h-11 items-center gap-2 [overflow-wrap:anywhere]">
-                            <input type="checkbox" name={`connectorTool:${connector.id}`} value={tool} defaultChecked={connector.policy?.allowedTools == null || connector.policy.allowedTools.includes(tool)} />{tool}
-                          </label>
-                          <span className="font-medium text-fg-muted">
-                            {connector.granted === false ||
-                            (connector.policy?.changeTools ?? changeTools) ===
-                              "off"
-                              ? "Off"
-                              : (connector.policy?.changeTools ??
-                                    changeTools) === "allow"
-                                ? "Allowed, subject to rules"
-                                : "Ask me first"}
-                          </span>
-                        </li>
-                      ))}
-                    </ul>
-                  </div>
-                ) : null}
-              </Card>
-            ))}
+                {[...connectors]
+                  .sort((a, b) => Number(b.granted !== false) - Number(a.granted !== false) || a.name.localeCompare(b.name))
+                  .map((connector) => (
+                  <ConnectorModule
+                    key={connector.id}
+                    agentName={agentName}
+                    connector={connector}
+                    defaultReads={readTools}
+                    defaultChanges={changeTools}
+                    defaultOpen={connectors.length === 1}
+                  />
+                ))}
+              </div>
+            )}
           </div>
         </>
       ) : null}

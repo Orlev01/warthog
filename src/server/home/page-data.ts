@@ -62,6 +62,7 @@ export interface HomeMetricsDeps {
 export interface HomeAgentSpend {
   readonly agentId: string;
   readonly displayName: string;
+  readonly platform?: string;
   readonly status: AgentStatus;
   readonly lastActiveAt: Date | string | null;
   readonly spendThisPeriod: number | string;
@@ -164,6 +165,7 @@ export async function loadHomeMetrics(
     agents.push({
       agentId: agent.id,
       displayName: agent.displayName,
+      platform: agent.platform,
       status: agent.status,
       lastActiveAt: agent.lastActiveAt,
       spendThisPeriod: spending.total,

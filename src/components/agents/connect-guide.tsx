@@ -1,6 +1,7 @@
 "use client";
 
 import { AGENT_PLATFORMS as PLATFORMS } from "@/domain/agents/compatibility";
+import { AgentMark } from "@/components/ui/brand-mark";
 import * as React from "react";
 import { ChevronDown, ExternalLink } from "lucide-react";
 
@@ -69,7 +70,10 @@ export function ConnectGuide({ connectorAddress }: { connectorAddress: string })
             <li key={platform.name} className="border-b border-line">
               <details className="group">
                 <summary className="flex min-h-11 cursor-pointer list-none items-center justify-between gap-3 rounded-field py-2 text-sm font-medium text-fg focus-visible:outline-hidden focus-visible:ring-2 focus-visible:ring-focus [&::-webkit-details-marker]:hidden">
-                  <span className="min-w-0 [overflow-wrap:anywhere]">{platform.name}</span>
+                  <span className="flex min-w-0 items-center gap-3 [overflow-wrap:anywhere]">
+                    <AgentMark platform={platform.name} name={platform.name} size="sm" />
+                    {platform.name}
+                  </span>
                   <ChevronDown aria-hidden={true} className="h-4 w-4 shrink-0 text-fg-muted transition-transform group-open:rotate-180" />
                 </summary>
                 <div className="flex flex-col gap-2 pb-4">

@@ -257,6 +257,7 @@ export function createConnectorsActions(deps: ConnectorsActionsDeps): Connectors
       ...(unavailable ? { unavailableReason: "This saved service account is unavailable until provider connection support is complete." } : {}),
       reconnectable: deps.providerMcpAvailable === true && catalogue.get(connection.connectorId)?.auth_kind === "provider_mcp",
       id: connection.id,
+      connectorId: connection.connectorId,
       name: catalogue.get(connection.connectorId)?.name ?? connection.connectorId,
       accountLabel: connection.accountLabel,
       status: unavailable ? "error" : toStatusKey(connection.status),

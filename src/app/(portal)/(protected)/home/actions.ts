@@ -111,6 +111,7 @@ function toDashboardActivity(
     agent: agentLabel(agentNames, entry.agentId),
     reported: entry.source === "agent_reported",
     service: entry.connectorId === undefined ? undefined : serviceName(entry.connectorId),
+    serviceId: entry.connectorId,
     at: formatAccountTime(entry.occurredAt, timeZone),
     when: `${day.label}, ${timeOfDay(entry.occurredAt, timeZone)}`,
     dateTime: entry.occurredAt,
@@ -132,6 +133,7 @@ function toDashboardAgent(
   const lastActive = agent.lastActiveAt == null ? undefined : new Date(agent.lastActiveAt).toISOString();
   return {
     id: agent.agentId,
+    platform: agent.platform,
     href: `/agents/${encodeURIComponent(agent.agentId)}`,
     activityHref: `/activity?agent=${encodeURIComponent(agent.agentId)}&via=agents`,
     lastActive: lastActive ? `${dayOf(lastActive, timeZone, now).label}, ${timeOfDay(lastActive, timeZone)}` : undefined,

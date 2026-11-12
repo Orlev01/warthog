@@ -1,4 +1,5 @@
 import * as React from "react";
+import { AgentMark } from "@/components/ui/brand-mark";
 import { Activity, ArrowRight, Bot, Brain, Gauge, Lock, Network, Plug, Settings, ShieldCheck, SlidersHorizontal, Sparkles, Wallet, type LucideIcon } from "lucide-react";
 import { WorkspacePanel } from "@/components/shell/workspace-surfaces";
 import { type AgentSection } from "@/domain/permissions/workspace";
@@ -23,7 +24,7 @@ export function AgentWorkspaceHeader({
         All agents
       </a>
       <div>
-        <span className="wh-object-icon"><Bot aria-hidden size={24} strokeWidth={1.5} /></span>
+        <AgentMark platform={data.agent.platform} name={data.agent.displayName} size="lg" />
         <div className="min-w-0 [overflow-wrap:anywhere]">
           <h1 className="text-2xl font-semibold tracking-tight">
             {data.agent.displayName}
