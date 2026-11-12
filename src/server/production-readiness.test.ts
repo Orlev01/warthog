@@ -9,6 +9,7 @@ const point = ec.getPublicKey();
 const jwk = { kty: "EC", crv: "P-256", x: point.subarray(1, 33).toString("base64url"), y: point.subarray(33).toString("base64url"), d: ec.getPrivateKey().toString("base64url") };
 const url = (user: string) => `postgresql://${user}:synthetic-secret@db.example.test/warthog?sslmode=verify-full`;
 const base = {
+  DELETION_JOURNAL_CONTAINER: "account-deletions",
   NODE_ENV: "production", PUBLIC_BASE_URL: "https://app.example.test", WEBAUTHN_RP_ID: "example.test",
   DATABASE_URL: url("runtime"), MIGRATION_DATABASE_URL: url("migrate"), PURGE_DATABASE_URL: url("purge"),
   WARTHOG_HMAC_KEY: Buffer.alloc(32, 99).toString("base64"), KEY_VAULT_URL: "https://test.vault.azure.net", KEY_VAULT_KEY_NAME: "test-key",
@@ -23,6 +24,12 @@ const base = {
   SMS_MONTHLY_SEGMENT_LIMIT: "200", SMS_DAILY_SEGMENT_LIMIT: "20", SMS_RECIPIENT_HOURLY_SEGMENT_LIMIT: "3",
   SMS_RECIPIENT_DAILY_MESSAGE_LIMIT: "3", SMS_MAX_SEGMENTS_PER_MESSAGE: "2",
 };
+
+test("production refuses a missing journal or one that shares the receipt container", () => {
+  for (const value of ["", "receipts", "INVALID!"]) {
+    assert.throws(() => assertProductionReleaseConfiguration(loadConfig({ ...base, DELETION_JOURNAL_CONTAINER: value })), /DELETION_JOURNAL_CONTAINER/);
+  }
+});
 
 test("first-release startup requires the entire configured feature set and matching VAPID keys", () => {
   assert.doesNotThrow(() => assertProductionReleaseConfiguration(loadConfig(base)));

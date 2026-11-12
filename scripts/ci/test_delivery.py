@@ -53,6 +53,40 @@ class DeliveryGateTests(unittest.TestCase):
                 common.account()
 
 
+def runtime_image(journal=None):
+    labels = {"org.opencontainers.image.revision": "a" * 40,
+              "io.warthog.verified": "linux-pg16",
+              "org.opencontainers.image.base.name": "node:22-bookworm-slim@sha256:" + "b" * 64}
+    if journal is not None:
+        labels["io.warthog.deletion-journal"] = journal
+    return {"Os": "linux", "Architecture": "amd64", "Config": {"User": "node", "Labels": labels}}
+
+
+class ImageJournalTests(unittest.TestCase):
+    def verify(self, label, configured):
+        with patch.dict(os.environ, ACR_NAME="testregistry", GITHUB_SHA="a" * 40), \
+             patch.object(deploy_app, "command", return_value=json.dumps([runtime_image(label)])):
+            deploy_app.verify_image("testregistry.azurecr.io/warthog@sha256:" + "c" * 64,
+                                    require_journal=configured)
+
+    def test_journal_image_requires_existing_configuration_or_explicit_activation(self):
+        with self.assertRaises(RuntimeError):
+            self.verify("v1", False)
+
+    def test_journal_configuration_rejects_legacy_image(self):
+        with self.assertRaises(RuntimeError):
+            self.verify(None, True)
+
+    def test_matching_legacy_and_journal_contracts_are_allowed(self):
+        self.verify(None, False)
+        self.verify("v1", True)
+
+    def test_unknown_journal_contract_cannot_bypass_activation(self):
+        for configured in (False, True):
+            with self.subTest(configured=configured), self.assertRaises(RuntimeError):
+                self.verify("v2", configured)
+
+
 class PlanTests(unittest.TestCase):
     def test_saved_backend_does_not_bind_apply_to_plan_identity(self):
         coordinates = dict(resource_group_name="reviewed", storage_account_name="reviewed",
@@ -93,6 +127,71 @@ class PlanTests(unittest.TestCase):
 
 
 class SingletonTests(unittest.TestCase):
+    def test_journal_configuration_accepts_the_exact_literal_and_optional_azure_null(self):
+        self.assertFalse(deploy_app.has_journal_configuration(None))
+        old = app_fixture()
+        self.assertFalse(deploy_app.has_journal_configuration(old))
+        entry = {"name": "DELETION_JOURNAL_CONTAINER", "value": "account-deletions"}
+        old["properties"]["template"]["containers"][0]["env"].append(entry)
+        self.assertTrue(deploy_app.has_journal_configuration(old))
+        entry["secretRef"] = None
+        self.assertTrue(deploy_app.has_journal_configuration(old))
+
+    def test_invalid_existing_journal_configuration_never_stops_live_app(self):
+        variants = [
+            [{"name": "DELETION_JOURNAL_CONTAINER", "value": ""}],
+            [{"name": "DELETION_JOURNAL_CONTAINER", "value": "other-container"}],
+            [{"name": "DELETION_JOURNAL_CONTAINER", "secretRef": "journal"}],
+            [{"name": "DELETION_JOURNAL_CONTAINER", "value": "account-deletions", "secretRef": "journal"}],
+            [{"name": "DELETION_JOURNAL_CONTAINER", "value": "account-deletions"}] * 2,
+        ]
+        for entries in variants:
+            with self.subTest(entries=entries):
+                platform = self.platform()
+                old = app_fixture()
+                old["properties"]["template"]["containers"][0]["env"].extend(entries)
+                platform.current.return_value = old
+                env = {"ACR_NAME": "testregistry", "GITHUB_SHA": "a" * 40,
+                       "ACTIVATE_DELETION_JOURNAL": "false", "EXPECTED_CONFIG_SHA256": deploy_app.fingerprint(old)}
+                with patch.dict(os.environ, env), \
+                     patch.object(deploy_app, "command", return_value=json.dumps([runtime_image("v1")])), \
+                     patch.object(deploy_app, "stop_before_start") as stop, \
+                     patch.object(deploy_app, "azure") as cloud, tempfile.TemporaryDirectory() as directory:
+                    with self.assertRaisesRegex(RuntimeError, "journal"):
+                        deploy_app.release(platform, "update", "testregistry.azurecr.io/warthog@sha256:" + "c" * 64,
+                                           "new", Path(directory))
+                    stop.assert_not_called()
+                    cloud.assert_not_called()
+
+    def test_unactivated_journal_image_is_rejected_before_stopping_live_app(self):
+        platform = self.platform()
+        old = app_fixture()
+        platform.current.return_value = old
+        env = {"ACR_NAME": "testregistry", "GITHUB_SHA": "a" * 40,
+               "ACTIVATE_DELETION_JOURNAL": "false", "EXPECTED_CONFIG_SHA256": deploy_app.fingerprint(old)}
+        with patch.dict(os.environ, env), \
+             patch.object(deploy_app, "command", return_value=json.dumps([runtime_image("v1")])), \
+             patch.object(deploy_app, "stop_before_start") as stop, \
+             patch.object(deploy_app, "azure") as cloud, tempfile.TemporaryDirectory() as directory:
+            with self.assertRaisesRegex(RuntimeError, "journal"):
+                deploy_app.release(platform, "update", "testregistry.azurecr.io/warthog@sha256:" + "c" * 64,
+                                   "new", Path(directory))
+            stop.assert_not_called()
+            cloud.assert_not_called()
+
+    def test_journal_activation_is_explicit_one_time_update_without_existing_env(self):
+        old = app_fixture()
+        self.assertFalse(deploy_app.journal_activation(old, "update"))
+        with patch.dict(os.environ, ACTIVATE_DELETION_JOURNAL="true"):
+            self.assertTrue(deploy_app.journal_activation(old, "update"))
+            for operation in ["inspect", "create"]:
+                with self.assertRaises(RuntimeError):
+                    deploy_app.journal_activation(old, operation)
+            old["properties"]["template"]["containers"][0]["env"].append(
+                {"name": "DELETION_JOURNAL_CONTAINER", "value": "unexpected"})
+            with self.assertRaises(RuntimeError):
+                deploy_app.journal_activation(old, "update")
+
     def platform(self):
         platform = Mock(spec=deploy_app.Platform)
         platform.app, platform.group = "warthog", "test-group"
@@ -251,6 +350,32 @@ class SingletonTests(unittest.TestCase):
                 deploy_app.release(platform, "create", "new-digest", "new", Path(directory))
             cloud.assert_not_called()
         platform.ownership.assert_not_called()
+
+    def test_journal_activation_changes_only_exact_env_after_stop_and_keeps_domains(self):
+        platform = self.platform()
+        old = app_fixture()
+        live = copy.deepcopy(old)
+        live["properties"]["template"]["revisionSuffix"] = "new"
+        live["properties"]["template"]["containers"][0].update(image="new-digest")
+        live["properties"]["template"]["containers"][0]["env"].append(
+            {"name": "DELETION_JOURNAL_CONTAINER", "value": "account-deletions"})
+        live["properties"]["configuration"]["ingress"]["traffic"] = [{"revisionName": "warthog--new", "weight": 100}]
+        platform.current.side_effect = [old, old, live]
+        with patch.dict(os.environ, ACTIVATE_DELETION_JOURNAL="true", EXPECTED_CONFIG_SHA256=deploy_app.fingerprint(old)), \
+             patch.object(deploy_app, "verify_image") as verify, patch.object(deploy_app, "azure") as cloud, \
+             patch.object(deploy_app, "wait_ready"), patch.object(deploy_app, "summary"), \
+             patch.object(deploy_app.urllib.request, "urlopen") as health:
+            health.return_value.__enter__.return_value = Mock(status=200)
+            def azure_after_stop(*args):
+                platform.wait_stopped.assert_called_once()
+                self.assertEqual(platform.ownership.call_args_list[0].kwargs, {"expected_free": True})
+            cloud.side_effect = azure_after_stop
+            self.run_update(platform)
+            verify.assert_called_once_with("new-digest", require_journal=True)
+            args = cloud.call_args_list[0].args
+            self.assertEqual(args[-2:], ("--set-env-vars", "DELETION_JOURNAL_CONTAINER=account-deletions"))
+            self.assertNotIn("--replace-env-vars", args)
+        self.assertEqual(len(old["properties"]["template"]["containers"][0]["env"]), 2)
 
     def test_failed_start_stops_candidate_without_reactivating_old_revision(self):
         platform = self.platform()

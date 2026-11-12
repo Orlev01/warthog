@@ -119,8 +119,11 @@ it does not approve an unquoted paid plan or change Warthog's own authentication
 - Plaintext metadata (needed for filtering, never personal content): ids, timestamps, kinds, agent id,
   connector id, tool name, outcome, amounts + currency + merchant name for card releases (needed for
   budgets), card brand + last four.
-- **Account deletion = crypto-shredding:** deleting the wrapped DEK makes everything unreadable before
-  the confirmation is shown; a job deletes the rows within 24 hours.
+- **Account deletion:** clear the live wrapped DEK and revoke access before confirmation;
+  a job purges live rows within 24 hours. Retained backups can contain the older
+  wrapped DEK and are not cryptographically erased by that update. The independent
+  [deletion journal and recovery procedure](../adr/deletion-recovery-journal.md)
+  reconcile later deletions before a restored database can be considered for use.
 - Search over encrypted fields (memory, activity text) decrypts in the app within the already
   filtered set (max 5,000 rows per query) — acceptable at v1 scale.
 

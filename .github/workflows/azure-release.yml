@@ -18,6 +18,10 @@ on:
       expected_config_sha256:
         description: Update only - reviewed current configuration hash from inspect
         type: string
+      activate_deletion_journal:
+        description: Separately approved first activation after immutable storage and writer grant are verified
+        type: boolean
+        default: false
 
 permissions:
   contents: read
@@ -55,6 +59,7 @@ jobs:
       OPERATION: ${{ inputs.operation }}
       IMAGE_DIGEST: ${{ inputs.image_digest }}
       EXPECTED_CONFIG_SHA256: ${{ inputs.expected_config_sha256 }}
+      ACTIVATE_DELETION_JOURNAL: ${{ inputs.activate_deletion_journal }}
       ACR_NAME: ${{ vars.ACR_NAME }}
       RESOURCE_GROUP: ${{ vars.RESOURCE_GROUP }}
       APP_NAME: ${{ vars.APP_NAME }}

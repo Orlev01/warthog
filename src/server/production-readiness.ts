@@ -28,6 +28,8 @@ export function assertProductionReleaseConfiguration(config: Config): void {
   https("EXCHANGE_RATE_BASE_URL", config.exchangeRateBaseUrl);
   valid("STORAGE_ACCOUNT", /^[a-z0-9]{3,24}$/.test(config.blob.account ?? ""));
   valid("STORAGE_CONTAINER", /^(?!.*--)[a-z0-9][a-z0-9-]{1,61}[a-z0-9]$/.test(config.blob.container ?? ""));
+  valid("DELETION_JOURNAL_CONTAINER", /^(?!.*--)[a-z0-9][a-z0-9-]{1,61}[a-z0-9]$/.test(config.blob.deletionJournalContainer ?? "")
+    && config.blob.deletionJournalContainer !== config.blob.container);
   for (const [prefix, client] of [["GOOGLE", config.connectorClients?.google], ["MICROSOFT", config.connectorClients?.microsoft]] as const) {
     valid(`${prefix}_CLIENT_ID`, client?.clientId?.trim());
     valid(`${prefix}_CLIENT_SECRET`, client?.clientSecret?.trim());

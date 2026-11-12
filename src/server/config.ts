@@ -45,6 +45,7 @@ export interface VapidConfig {
 export interface BlobConfig {
   readonly account: string | undefined;
   readonly container: string | undefined;
+  readonly deletionJournalContainer?: string;
 }
 
 export interface Config {
@@ -252,6 +253,7 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): Config {
     blob: {
       account: env.STORAGE_ACCOUNT,
       container: env.STORAGE_CONTAINER,
+      deletionJournalContainer: env.DELETION_JOURNAL_CONTAINER,
     },
     hmacKey: parseHmacKey(env, nodeEnv),
     devKek: parseDevKek(env, nodeEnv),

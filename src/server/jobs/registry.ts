@@ -20,6 +20,7 @@ import { runApprovalExpiry } from "../approvals/expiry-job";
 import { runLifeAdminReminders } from "../life-admin/reminders-job";
 import { runRatesJob } from "../currency/rates-job";
 import { runAccountPurge } from "../account/purge-job";
+import type { DeletionJournal } from "../account/deletion-journal";
 import { runMetricsSnapshot } from "../metrics/snapshot-job";
 import { runDailyIntegrityCheck } from "../activity/integrity-job";
 import { cleanupOAuth } from "../oauth/cleanup";
@@ -64,6 +65,7 @@ export interface JobSeams {
   readonly resetExecutor: ResetExecutor;
   readonly rateSource: RateSource;
   readonly blobStore: BlobStore; // receipt ciphertext, deleted by the account purge
+  readonly deletionJournal?: DeletionJournal;
   readonly publicBaseUrl: string;
 }
 
@@ -152,7 +154,8 @@ export function buildPeriodicSweeps(seams: JobSeams): readonly PeriodicSweep[] {
       name: "account-purge",
       intervalMs: HOUR_MS,
       run: async () => {
-        await runAccountPurge(seams.getPurgeDb ? await seams.getPurgeDb() : seams.db, { blobStore: seams.blobStore });
+        await runAccountPurge(seams.getPurgeDb ? await seams.getPurgeDb() : seams.db,
+          { blobStore: seams.blobStore, journal: seams.deletionJournal });
       },
     },
     { name: "metrics-snapshot", intervalMs: HOUR_MS, run: () => runMetricsSnapshot(seams.db, seams.clock) },

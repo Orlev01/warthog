@@ -21,6 +21,48 @@ import { enqueueAccountPurge } from "../db/account-purge";
 
 const clock = fixedClock(new Date("2026-11-09T00:00:00Z"));
 
+test("deletion journal failure precedes every durable revocation", async () => {
+  const db = await freshDb();
+  try {
+    const { userId } = await fixture(db);
+    const before = await snapshot(db, userId);
+    const outbox = createOutbox();
+    await assert.rejects(deleteAccount({ db, revoker: createResetExecutor(db),
+      senders: { email: outbox, sms: outbox, push: outbox },
+      journal: { async requested() { throw new Error("journal unavailable"); }, async completed() { assert.fail(); } },
+    }, { userId }), /journal unavailable/);
+    assert.deepEqual(await snapshot(db, userId), before);
+    assert.equal(outbox.list().length, 0);
+  } finally { await db.close(); }
+});
+
+test("completion follows commit and a failed completion is retried before purge", async () => {
+  const db = await freshDb();
+  try {
+    const { userId } = await fixture(db);
+    const outbox = createOutbox();
+    const events: string[] = [];
+    let available = false;
+    const journal = {
+      async requested(id: string) { assert.equal(id, userId); events.push("requested"); },
+      async completed(id: string) {
+        assert.equal(id, userId);
+        assert.equal((await snapshot(db, id)).wrappedDek, "");
+        events.push("completed");
+        if (!available) throw new Error("journal unavailable");
+      },
+    };
+    assert.deepEqual(await deleteAccount({ db, revoker: createResetExecutor(db),
+      senders: { email: outbox, sms: outbox, push: outbox }, journal }, { userId }), { ok: true });
+    assert.deepEqual(events, ["requested", "completed"]);
+    const blobStore = { async put() {}, async get() { return null; }, async delete() { assert.fail("no receipts in fixture"); } };
+    await assert.rejects(runAccountPurge(db, { blobStore, journal }), /could not be purged/);
+    assert.equal((await db.query("SELECT id FROM users WHERE id = $1", [userId])).rows.length, 1);
+    available = true;
+    assert.deepEqual(await runAccountPurge(db, { blobStore, journal }), { purged: [userId] });
+  } finally { await db.close(); }
+});
+
 async function fixture(db: Db) {
   const user = await createUser(db, { email: `${randomUUID()}@example.test`, wrappedDek: "wrapped-key" });
   const connectionId = randomUUID();

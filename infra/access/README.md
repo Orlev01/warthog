@@ -7,7 +7,7 @@ It grants no subscription Owner role and does not modify DNS or create an app.
 
 The plan identity reads the production group. Apply gets explicit resource writes
 there, no deletes or user-assigned-identity/federation writes. A separate condition
-allows it to grant only four reviewed application data roles, and only to the
+allows it to grant only the explicitly listed application data roles, and only to the
 fixed application identity. Budget permissions apply only to the existing named
 budget. Both identities get subscription/provider/role-definition metadata reads.
 State-container grants remain in `infra/bootstrap`; the personal operator has
@@ -41,3 +41,10 @@ Azure's [delegation conditions](https://learn.microsoft.com/en-us/azure/role-bas
 constrain both allowed role definitions and recipient identity. Current access
 has been checked through Terraform and independent ARM reads; GitHub environment
 OIDC exercises remain separate from static trust/permission validation.
+
+The recovery candidate adds a fifth, custom deletion-journal role containing only
+`blobs/add/action`, assigned at the journal container. It adds foundation actions
+for initial immutable-policy write/lock and receipt lifecycle policy management.
+These changes require exact approval before applying; existing setup approval does
+not silently approve locked retention or the new grant. No journal read/delete
+permission is granted to the app or release identity.

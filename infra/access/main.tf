@@ -47,6 +47,7 @@ locals {
     "ba92f5b4-2d11-453d-a403-e96b0029c9fe", # Storage Blob Data Contributor
     "4633458b-17de-408a-b874-0445c86b69e6", # Key Vault Secrets User
     "e147488a-f6f5-4113-8e2d-b22465e65bf6", # Key Vault Crypto Service Encryption User
+    "bd073ecf-ecb9-5398-ad82-39d1947b034c", # Warthog deletion journal writer
   ]
 }
 
@@ -101,6 +102,9 @@ resource "azurerm_role_definition" "foundation" {
       "Microsoft.Storage/storageAccounts/write",
       "Microsoft.Storage/storageAccounts/blobServices/write",
       "Microsoft.Storage/storageAccounts/blobServices/containers/write",
+      "Microsoft.Storage/storageAccounts/blobServices/containers/immutabilityPolicies/write",
+      "Microsoft.Storage/storageAccounts/blobServices/containers/immutabilityPolicies/lock/action",
+      "Microsoft.Storage/storageAccounts/managementPolicies/write",
       "Microsoft.OperationalInsights/workspaces/write",
       "Microsoft.App/managedEnvironments/write",
       "Microsoft.Insights/diagnosticSettings/write",
@@ -114,6 +118,16 @@ resource "azurerm_role_assignment" "foundation" {
   role_definition_id = azurerm_role_definition.foundation.role_definition_resource_id
   principal_id       = data.azurerm_user_assigned_identity.delivery["apply"].principal_id
   principal_type     = "ServicePrincipal"
+}
+
+resource "azurerm_role_definition" "deletion_journal_writer" {
+  name               = "Warthog deletion journal writer"
+  role_definition_id = "bd073ecf-ecb9-5398-ad82-39d1947b034c"
+  scope              = azurerm_resource_group.production.id
+  permissions {
+    data_actions = ["Microsoft.Storage/storageAccounts/blobServices/containers/blobs/add/action"]
+  }
+  assignable_scopes = [azurerm_resource_group.production.id]
 }
 
 resource "azurerm_role_definition" "app_grants" {

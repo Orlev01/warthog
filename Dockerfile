@@ -16,6 +16,7 @@ FROM build AS verification
 CMD ["node", "scripts/check-local-linux.mjs"]
 
 FROM ${NODE_BASE_IMAGE} AS runtime
+LABEL io.warthog.deletion-journal="v1"
 # The standalone server uses node directly; the build-only npm CLI carries its
 # own dependency tree and is unnecessary in the shipped runtime.
 RUN rm -rf /usr/local/lib/node_modules/npm /usr/local/bin/npm /usr/local/bin/npx

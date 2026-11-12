@@ -43,6 +43,7 @@ import { deleteAccountJobs, listPendingPurges } from "../db/account-purge";
 import { withTransaction, type Db } from "../db/index";
 import type { BlobStore } from "../storage/blob";
 import { lockUserOAuthConnections } from "../oauth/connection-lock";
+import type { DeletionJournal } from "./deletion-journal";
 
 // The account ids purged on this run (empty when the queue was empty / already clear).
 export interface PurgeRunResult {
@@ -52,6 +53,7 @@ export interface PurgeRunResult {
 // The blob store receipt ciphertext lives in (the same store the life-admin page writes).
 export interface PurgeDeps {
   readonly blobStore: BlobStore;
+  readonly journal?: DeletionJournal;
 }
 
 // Purge one account: its receipt blobs, then (in one transaction) its agents' credentials
@@ -59,6 +61,15 @@ export interface PurgeDeps {
 // append-only activity entries and disputes) and its own queue entry. Idempotent: an
 // account whose rows are already partly or wholly gone simply deletes what remains.
 async function purgeAccount(db: Db, userId: string, deps: PurgeDeps): Promise<void> {
+  if (deps?.journal) {
+    const person = await db.query("SELECT wrapped_dek FROM users WHERE id = $1", [userId]);
+    if (!person.rows[0] || person.rows[0].wrapped_dek !== "") {
+      throw new Error("Refusing to certify an account without a committed deletion");
+    }
+    // Repair a post-commit journal outage before destroying the database evidence.
+    await deps.journal.requested(userId);
+    await deps.journal.completed(userId);
+  }
   const receipts = await db.query("SELECT blob_key FROM receipt_files WHERE user_id = $1", [userId]);
   for (const row of receipts.rows) {
     await deps.blobStore.delete(String(row.blob_key));

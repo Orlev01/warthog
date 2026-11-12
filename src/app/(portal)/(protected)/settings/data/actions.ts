@@ -58,6 +58,7 @@ import type { Clock } from "@/server/seams/clock";
 import type { KeyWrapper } from "@/server/crypto/key-wrapper";
 import type { Senders } from "@/server/notify/senders";
 import type { Db } from "@/server/db/index";
+import type { DeletionJournal } from "@/server/account/deletion-journal";
 import type { DataViewImportedEntry } from "@/components/settings/data-view";
 
 // The injected seams — no process.env (INV-103). `keyWrapper` resolves the session
@@ -72,6 +73,7 @@ export interface DataActionsDeps {
   readonly revoker: DeletionExecutor;
   readonly senders: Senders;
   readonly maxUploadBytes?: number;
+  readonly journal?: DeletionJournal;
 }
 
 // A single action's result: success, or a refusal naming its reason in plain words
@@ -288,7 +290,7 @@ export function createDataActions(deps: DataActionsDeps): DataActions {
     if (confirmation !== DELETE_ACCOUNT_CONFIRMATION) {
       return { ok: false, reason: CONFIRMATION_REQUIRED };
     }
-    const deleted = await deleteAccountService({ db, revoker, senders }, { userId: session.userId });
+    const deleted = await deleteAccountService({ db, revoker, senders, journal: deps.journal }, { userId: session.userId });
     return deleted.ok ? { ok: true } : { ok: false, reason: OWNS_HOUSEHOLD };
   }
 

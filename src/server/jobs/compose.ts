@@ -21,6 +21,7 @@ import { keyWrapperFor } from "../auth/compose";
 import { createFrankfurterRateSource } from "../currency/rate-source";
 import { createResetExecutor } from "../account/reset-executor";
 import { selectBlobStore } from "../storage/blob";
+import { selectDeletionJournal } from "../storage/deletion-journal";
 import { buildDispatchTable, buildPeriodicSweeps, type JobSeams } from "./registry";
 import { createScheduler, type Scheduler } from "./scheduler";
 import type { Db } from "../db/index";
@@ -44,6 +45,8 @@ export async function composeJobSeams(
     push: senders.push,
     refresh: (target) => createConnectorRuntime({ config, db }).refresh(target),
     resetExecutor: createResetExecutor(db),
+    deletionJournal: selectDeletionJournal({ nodeEnv: config.nodeEnv, account: config.blob.account,
+      container: config.blob.deletionJournalContainer }),
     rateSource: createFrankfurterRateSource({ baseUrl: config.exchangeRateBaseUrl ?? FRANKFURTER_BASE_URL, fetchImpl: fetch }),
     // The same receipt store the life-admin page writes (built lazily: it opens the
     // container on the first delete, so a purge with no receipts never touches Azure).
