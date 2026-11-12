@@ -22,12 +22,19 @@ type ActionOutcome = { ok: true } | { ok: false; reason: string };
 // code on `{ ok: true }`, the refusal's reason code on `{ ok: false, reason }`, or
 // `invalid_request` for a 4xx boundary `HttpError`. Anything else is a genuine server
 // fault and is RE-THROWN, never dressed up as a notice.
-export function noticeLocation(successCode: string, outcome: ActionOutcome | unknown): string {
-  if (outcome instanceof HttpError) return `${SCREEN}?notice=invalid_request`;
+//
+// With an `entrySeq` (a positive integer the server action already holds — never a
+// form-supplied URL), the person lands back on that one entry (`?entry=N…#entry-N`) to see
+// the result in place.
+export function noticeLocation(successCode: string, outcome: ActionOutcome | unknown, entrySeq?: number): string {
+  const entry = entrySeq !== undefined && Number.isSafeInteger(entrySeq) && entrySeq > 0 ? entrySeq : undefined;
+  const at = entry === undefined ? "" : `entry=${entry}&`;
+  const anchor = entry === undefined ? "" : `#entry-${entry}`;
+  if (outcome instanceof HttpError) return `${SCREEN}?${at}notice=invalid_request${anchor}`;
   if (outcome instanceof Error) throw outcome;
   const result = outcome as ActionOutcome;
   const code = result.ok ? successCode : result.reason;
-  return `${SCREEN}?notice=${encodeURIComponent(code)}`;
+  return `${SCREEN}?${at}notice=${encodeURIComponent(code)}${anchor}`;
 }
 
 export type ActivityNotice = { tone: "done" | "problem" | "waiting"; text: string; action?: { href: string; label: string } };

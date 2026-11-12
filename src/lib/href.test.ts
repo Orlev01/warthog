@@ -14,6 +14,10 @@ test("an empty or undefined patch value removes that parameter, and drop removes
   assert.equal(hrefWith("/memory", { scope: "kept" }, { scope: "" }), "/memory");
 });
 
+test("drop strips carried-over state but never a value the patch sets", () => {
+  assert.equal(hrefWith("/activity", { before: "9", q: "x" }, { before: "4" }, ["before"]), "/activity?before=4&q=x");
+});
+
 test("values are encoded and the path is always the caller's own", () => {
   assert.equal(hrefWith("/activity", { q: "a&b=c" }), "/activity?q=a%26b%3Dc");
   assert.equal(hrefWith("/activity", { next: "https://evil.example" }).startsWith("/activity?"), true);

@@ -47,6 +47,34 @@ export function toolLabel(tool: string): string {
   return humanise(at >= 0 ? tool.slice(at + NAMESPACE.length) : tool);
 }
 
+// What each recorded kind is, in words, for the Kind filter and its chip. A kind not listed
+// reads as its tidied code.
+const KIND_LABELS: Record<string, string> = {
+  tool_call: "Agent request",
+  tool_attempt: "Change starting (intent record)",
+  tool_rejected: "Rejected tool request",
+  protocol_rejected: "Rejected malformed request",
+  agent_report: "Agent report",
+  client_observed: "Client details reported",
+  approval_decision: "Approval decision",
+  card_release: "Card release",
+  identity_release: "Identity detail release",
+  agent_connected: "Agent connected",
+  agent_key_revoked: "Access key revoked",
+  agent_key_replaced: "Access key replaced",
+  connection_change: "Connection change",
+  permission_change: "Permission change",
+  agent_defaults_change: "Agent defaults change",
+  skill_access_change: "Skill access change",
+  memory_scope_change: "Memory sharing change",
+  account_imported: "Account import",
+};
+
+/** A recorded kind in words: "tool_call" → "Agent request". */
+export function kindLabel(kind: string): string {
+  return KIND_LABELS[kind] ?? humanise(kind);
+}
+
 /**
  * The headline an entry reads as: an agent call is titled by the tool it used ("Save a
  * memory"); every other entry (a connection change, a release, an approval decision) by
@@ -54,6 +82,8 @@ export function toolLabel(tool: string): string {
  */
 export function entryTitle(entry: { readonly kind: string; readonly tool?: string }): string {
   if (entry.kind === "tool_call" && entry.tool) return toolLabel(entry.tool);
+  // The intent record written just before a change runs; its result follows as its own entry.
+  if (entry.kind === "tool_attempt" && entry.tool) return `Starting: ${toolLabel(entry.tool)}`;
   return humanise(entry.kind);
 }
 

@@ -93,7 +93,7 @@ function buildActions(db: Db, config: Config) {
   // index the connectors screen reads.
   const serviceName = (connectorId: string): string | undefined => getProcessCatalogue().get(connectorId)?.name;
 
-  return createActivityActions({ db, disputes, undo, keyWrapper, reversalFor, serviceName });
+  return createActivityActions({ db, disputes, undo, keyWrapper, reversalFor, serviceName, clock: systemClock });
 }
 
 // Dispute one of the acting person's OWN entries. A thin server-action wrapper over the
@@ -119,7 +119,7 @@ async function disputeEntryAction(formData: FormData): Promise<void> {
     outcome = error;
   }
   revalidatePath("/activity");
-  redirect(noticeLocation("dispute_filed", outcome));
+  redirect(noticeLocation("dispute_filed", outcome, seq));
 }
 
 // Undo one of the acting person's OWN reversible entries. Same discipline as dispute: it
@@ -144,14 +144,18 @@ async function undoEntryAction(formData: FormData): Promise<void> {
     outcome = error;
   }
   revalidatePath("/activity");
-  redirect(noticeLocation("undo_done", outcome));
+  // Back to the new reversal entry on success, else to the entry the person tried to undo.
+  const landing = outcome && typeof outcome === "object" && "ok" in outcome && outcome.ok && "entry" in outcome
+    ? (outcome as { entry: { seq: number } }).entry.seq
+    : seq;
+  redirect(noticeLocation("undo_done", outcome, landing));
 }
 
 // The outcome of the last change, in words plus an icon (never colour alone). A problem is
 // announced immediately (alert); a success politely (status).
 function NoticeBanner({ notice }: { notice: ActivityNotice }) {
   return (
-    <div className="mx-auto w-full max-w-3xl px-4 pt-8 sm:px-6">
+    <div className="wh-page pb-0">
       <InlineNotice tone={notice.tone === "done" ? "success" : notice.tone === "waiting" ? "info" : "error"}>
         {notice.text}{notice.action && <> <a href={notice.action.href} className="font-medium underline underline-offset-4">{notice.action.label}</a></>}
       </InlineNotice>

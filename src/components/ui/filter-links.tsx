@@ -20,11 +20,24 @@ export type FilterLink = {
   readonly count?: number;
 };
 
-export function FilterLinks({ label, items }: { label: string; items: readonly FilterLink[] }) {
+// `tabs` is the sub-tab pill row (a view switch); `chips` is a lighter bordered row for quick
+// filters that sit under it.
+const CHIP_LINK =
+  "inline-flex min-h-11 items-center gap-2 rounded-full border border-line px-3 text-sm text-fg-muted hover:bg-surface-muted hover:text-fg aria-[current=page]:border-line-strong aria-[current=page]:bg-surface-muted aria-[current=page]:font-semibold aria-[current=page]:text-fg focus-visible:outline-hidden focus-visible:ring-2 focus-visible:ring-focus focus-visible:ring-offset-2 focus-visible:ring-offset-bg";
+
+export function FilterLinks({
+  label,
+  items,
+  variant = "tabs",
+}: {
+  label: string;
+  items: readonly FilterLink[];
+  variant?: "tabs" | "chips";
+}) {
   return (
-    <nav aria-label={label} className="wh-subtabs">
+    <nav aria-label={label} className={variant === "tabs" ? "wh-subtabs" : "flex flex-wrap gap-2"}>
       {items.map((item) => (
-        <a key={item.href} href={item.href} aria-current={item.active ? "page" : undefined} className="wh-subtab gap-2">
+        <a key={item.href} href={item.href} aria-current={item.active ? "page" : undefined} className={variant === "tabs" ? "wh-subtab gap-2" : CHIP_LINK}>
           {item.label}
           {item.count !== undefined ? (
             <span className="rounded-card bg-surface-muted px-1.5 text-xs font-medium tabular-nums text-fg-muted">

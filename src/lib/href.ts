@@ -9,8 +9,9 @@ export type QueryState = Readonly<Record<string, string | undefined>>;
 
 /**
  * `path` with `state` overlaid by `patch`. A patch value of `undefined` or "" removes that
- * parameter; `drop` names further parameters to remove (a page cursor, a one-off notice).
- * Parameters keep a stable order so the same state always yields the same link.
+ * parameter; `drop` names further parameters NOT to carry over from `state` (a page cursor,
+ * a one-off notice) — a value the patch sets explicitly is always kept. Parameters keep a
+ * stable order so the same state always yields the same link.
  */
 export function hrefWith(
   path: string,
@@ -19,8 +20,12 @@ export function hrefWith(
   drop: readonly string[] = [],
 ): string {
   const merged: Record<string, string> = {};
-  for (const [key, value] of Object.entries({ ...state, ...patch })) {
+  for (const [key, value] of Object.entries(state)) {
     if (value !== undefined && value !== "" && !drop.includes(key)) merged[key] = value;
+  }
+  for (const [key, value] of Object.entries(patch)) {
+    if (value !== undefined && value !== "") merged[key] = value;
+    else delete merged[key];
   }
   const query = new URLSearchParams(Object.entries(merged).sort(([a], [b]) => a.localeCompare(b))).toString();
   return query ? `${path}?${query}` : path;
