@@ -1,0 +1,91 @@
+{
+  "audit_display": {
+    "storedReason": true,
+    "storedParams": true,
+    "displayedSummary": "",
+    "displayedDetail": ""
+  },
+  "reason_search": {
+    "matches": 0,
+    "storedMatchingReason": true
+  },
+  "http_failure": {
+    "upstreamStatus": 500,
+    "pipelineOutcome": "executed"
+  },
+  "provider_failure": {
+    "upstreamIsError": true,
+    "pipelineOutcome": "executed"
+  },
+  "thrown_failure": {
+    "activityEntriesAdded": 0,
+    "metricEmitted": true
+  },
+  "audit_write_failure": {
+    "simulatedSideEffectOccurred": true,
+    "callReturnedError": true
+  },
+  "agent_context": {
+    "fields": [
+      "profile",
+      "next",
+      "preferences",
+      "skills",
+      "rules",
+      "memory",
+      "tasks",
+      "permissions",
+      "card"
+    ],
+    "houseSkillFields": [
+      "title",
+      "useThisWhen"
+    ],
+    "services": [
+      "google-gmail"
+    ]
+  },
+  "agent_report": {
+    "labelledAsReported": true,
+    "displayedSummary": "",
+    "displayedDetail": ""
+  },
+  "history_paging": {
+    "pageSize": 2,
+    "totalEntries": 4,
+    "continuationProvided": false,
+    "attemptedContinuationReturnsSameEntries": true
+  },
+  "dispute_display": {
+    "saved": true,
+    "activityViewUnchanged": true
+  },
+  "metric_dimensions": [
+    "outcome",
+    "errorCategory"
+  ],
+  "generic_message_rule": {
+    "genericChangeWithUnknownMessageSemantics": true,
+    "configuredNeverAllowEmail": true,
+    "changePolicy": "allow",
+    "decision": "allow"
+  },
+  "owner_changes": {
+    "ruleSaved": true,
+    "memorySaved": true,
+    "activityEntriesAdded": 0
+  },
+  "tail_deletion": {
+    "requiresPrivilegedDatabaseAccess": true,
+    "before": {
+      "intact": true,
+      "checked": 5,
+      "brokenSeq": null
+    },
+    "after": {
+      "intact": true,
+      "checked": 4,
+      "brokenSeq": null
+    }
+  }
+}

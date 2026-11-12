@@ -1,5 +1,12 @@
 # Warthog comprehensive engineering audit
 
+**Functional product review, 12 November:** the live Claude/Gmail flow works, but
+the [product review](product-review-2026-11-12/review.md) identifies gaps in audit
+presentation/completeness, outcome classification, policy coverage, agent metadata
+and product promises. All 596 targeted regression tests passed; 14 synthetic
+diagnostic groups reproduce the reviewed behavior. This is a review with
+prioritized acceptance criteria, not a claim that those follow-ups are fixed.
+
 **Bug bash deployed, 11 November:** source `9a7de2e` is live with one healthy
 replica and 100% traffic. Three independent perspectives and cross-reviews are
 recorded in the [bug-bash report](bug-bash-2026-11-11/coordinator.md). Local Linux,
