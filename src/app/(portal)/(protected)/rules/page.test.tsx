@@ -370,3 +370,51 @@ test("each loaded rule mounts a live Pause (active) and Delete bound to the serv
     await db.close();
   }
 });
+
+// =====================================================================================
+// Rules tidy-up — the loader hands the view each rule's KIND (shown as a word badge) and
+// each agent's own workspace id (agents.id, distinct from the connection id a rule scope
+// matches on), so Budgets can link that agent's real card-budget control. Agents come back
+// in name order, so the scope choices and budget links never shuffle.
+// =====================================================================================
+
+test("the loader passes each rule's kind and each agent's workspace id, agents in name order", async () => {
+  const db = await freshDb();
+  const keyWrapper = keyWrapperFor();
+  try {
+    const alice = await makePerson(db, keyWrapper, "alice");
+    const session = await sessionFor(db, alice.userId);
+    const actions = makeActions(db, keyWrapper);
+    const zed = await createAgent(
+      db,
+      { userId: alice.userId, connectionId: randomUUID(), displayName: "Zed", platform: "openai" },
+      fixedClock(NOW),
+    );
+    const claude = await createAgent(
+      db,
+      { userId: alice.userId, connectionId: randomUUID(), displayName: "Claude", platform: "anthropic" },
+      fixedClock(NOW),
+    );
+    assert.equal((await actions.createRule(session, ASK_FIRST_EMAIL)).ok, true);
+    assert.equal((await actions.createRule(session, NEVER_ALLOW_CHANGE)).ok, true);
+
+    const view = await actions.load(session);
+    const kinds = new Map(view.rules.map((r) => [r.sentence, r.kind]));
+    assert.equal(kinds.get(ASK_FIRST_EMAIL_SENTENCE), "ask_first");
+    assert.equal(kinds.get(NEVER_ALLOW_CHANGE_SENTENCE), "never_allow");
+
+    assert.deepEqual(
+      view.agents.map((a) => ({ id: a.id, name: a.name, workspaceId: a.workspaceId })),
+      [
+        { id: claude.connectionId, name: "Claude", workspaceId: claude.id },
+        { id: zed.connectionId, name: "Zed", workspaceId: zed.id },
+      ],
+    );
+
+    const markup = renderRules(view, { deleteAction: noopAction, pauseAction: noopAction, createAction: noopAction });
+    assert.ok(markup.includes(`href="/agents/${claude.id}?section=spending"`), "Budgets links Claude's spending section");
+    assert.ok(markup.includes(`href="/agents/${zed.id}?section=spending"`), "Budgets links Zed's spending section");
+  } finally {
+    await db.close();
+  }
+});
