@@ -58,6 +58,7 @@ import { agentNamesForUser, listAgentsForUser } from "@/server/db/agents";
 import { getUserById } from "@/server/db/users";
 import { getAccountCurrency } from "@/server/db/account-currency";
 import { getApprovalExpiryMinutes, setApprovalExpiryMinutes } from "@/server/db/approval-settings";
+import { getNotificationPrefs } from "@/server/db/notification-prefs";
 import { MAX_EXPIRY_MINUTES, MIN_EXPIRY_MINUTES } from "@/domain/approvals/state-machine";
 import {
   type RuleKind,
@@ -237,6 +238,10 @@ export interface RulesLoadData {
   readonly serviceChoices: RuleTargetGroup[];
   // How long a held request waits for the person's decision, in minutes (15 when unset).
   readonly approvalExpiryMinutes: number;
+  // The person's text/email reminder for an unopened approval (Settings › Notifications):
+  // whether either channel is switched on, and how long it waits before it is sent. The
+  // panel warns when the expiry leaves the reminder no time to go out.
+  readonly approvalReminder: { readonly on: boolean; readonly delayMinutes: number };
 }
 
 export interface RulesActions {
@@ -459,7 +464,15 @@ export function createRulesActions(deps: RulesActionsDeps): RulesActions {
       toolChoices: targets.tools,
       serviceChoices: targets.services,
       approvalExpiryMinutes: await getApprovalExpiryMinutes(db, session.userId),
+      approvalReminder: await reminderFor(session.userId),
     };
+  }
+
+  // The session person's own reminder setting (member-scoped by session.userId). A reminder
+  // is "on" when either the email or the text-message fallback is switched on.
+  async function reminderFor(userId: string): Promise<RulesLoadData["approvalReminder"]> {
+    const prefs = await getNotificationPrefs(db, userId);
+    return { on: prefs.emailFallback || prefs.smsFallback === true, delayMinutes: prefs.fallbackDelayMinutes };
   }
 
   // A specific-tool or service rule must name a real tool or service, or it would match

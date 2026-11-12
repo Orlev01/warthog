@@ -7,6 +7,7 @@ import { buttonClasses } from "@/components/ui/button";
 import { ButtonLink } from "@/components/ui/button-link";
 import { Field, SelectField } from "@/components/ui/field";
 import { EmptyState } from "@/components/ui/empty";
+import { Notice } from "@/components/ui/notice";
 import { ActionForm, FormSubmit, PendingFormFields } from "@/components/ui/form-submit";
 import { ActiveFilters, FilterLinks } from "@/components/ui/filter-links";
 import { ListGroup, LIST_ROW } from "@/components/ui/list-group";
@@ -123,7 +124,16 @@ export type RulesViewProps = {
   // server action that saves a new one. Optional so the view renders without a session.
   approvalExpiryMinutes?: number;
   approvalExpiryAction?: RuleFormAction;
+  // the person's text/email reminder (Settings › Notifications): whether it is on and how
+  // long it waits. When the expiry is at or below that delay, the panel warns that the
+  // reminder can't go out in time. Omitted, no warning is shown.
+  approvalReminder?: ApprovalReminder;
 };
+
+export type ApprovalReminder = { readonly on: boolean; readonly delayMinutes: number };
+
+// Where the reminder delay is set.
+const NOTIFICATION_SETTINGS_HREF = "/settings/notifications";
 
 type RuleTemplate = RuleDraft["template"];
 
@@ -491,9 +501,27 @@ function expiryChoices(current: number): { value: number; label: string }[] {
   }));
 }
 
+// Whether the text/email reminder can never go out: it fires after its delay only while the
+// request is still waiting, so an expiry at or below the delay leaves it no time.
+function reminderTooLate(minutes: number, reminder: ApprovalReminder | undefined): reminder is ApprovalReminder {
+  return reminder !== undefined && reminder.on && minutes <= reminder.delayMinutes;
+}
+
 // "Approval expiry": how long Warthog holds a request that needs the person before it is
 // denied. One panel, its save in the footer, in the Your rules tab beside the rules that ask.
-function ApprovalExpiryPanel({ minutes, action }: { minutes: number; action?: RuleFormAction }) {
+// When the saved expiry leaves the reminder no time, a warning inside the panel says so and
+// links to where the delay is set.
+function ApprovalExpiryPanel({
+  minutes,
+  action,
+  reminder,
+}: {
+  minutes: number;
+  action?: RuleFormAction;
+  reminder?: ApprovalReminder;
+}) {
+  const warningId = React.useId();
+  const tooLate = reminderTooLate(minutes, reminder);
   const panel = (
     <WorkspacePanel
       title="Approval expiry"
@@ -506,7 +534,8 @@ function ApprovalExpiryPanel({ minutes, action }: { minutes: number; action?: Ru
           name="approval-expiry-minutes"
           defaultValue={String(minutes)}
           width="text"
-          hint="If you don't decide in time, the request is denied and the agent is told. A change applies to new requests; ones already waiting keep their time."
+          aria-describedby={tooLate ? warningId : undefined}
+          hint="If you don't decide in time, the request is denied and the agent is told. A change applies to new requests; ones already waiting keep their time. Text and email reminders go out after the delay set in Settings."
         >
           {expiryChoices(minutes).map((choice) => (
             <option key={choice.value} value={String(choice.value)}>
@@ -514,6 +543,17 @@ function ApprovalExpiryPanel({ minutes, action }: { minutes: number; action?: Ru
             </option>
           ))}
         </SelectField>
+        {tooLate ? (
+          <Notice tone="warning" announce={false} className="mt-4">
+            <p id={warningId}>
+              {`Your text or email reminder waits ${expiryDurationLabel(reminder.delayMinutes)}, so it won't be sent before requests expire. Choose a longer time, or shorten the reminder delay in Settings.`}
+            </p>
+            <a href={NOTIFICATION_SETTINGS_HREF} className={LINK_CLASS}>
+              Change the reminder delay
+              <ArrowRight aria-hidden={true} className="h-4 w-4 shrink-0" />
+            </a>
+          </Notice>
+        ) : null}
       </PendingFormFields>
     </WorkspacePanel>
   );
@@ -646,6 +686,7 @@ export function RulesView({
   deleteAction,
   approvalExpiryMinutes = DEFAULT_EXPIRY_MINUTES,
   approvalExpiryAction,
+  approvalReminder,
 }: RulesViewProps) {
   const [builder, dispatch] = React.useReducer(updateRuleBuilder, initialDraft, createRuleBuilderState);
   const draft = builder.draft;
@@ -841,7 +882,7 @@ export function RulesView({
                 pauseAction={pauseAction}
                 deleteAction={deleteAction}
               />
-              <ApprovalExpiryPanel minutes={approvalExpiryMinutes} action={approvalExpiryAction} />
+              <ApprovalExpiryPanel minutes={approvalExpiryMinutes} action={approvalExpiryAction} reminder={approvalReminder} />
             </>,
           ),
         },

@@ -212,6 +212,7 @@ export default async function RulesPage({
         pauseAction={pauseAction}
         deleteAction={deleteAction}
         approvalExpiryMinutes={view.approvalExpiryMinutes}
+        approvalReminder={view.approvalReminder}
         approvalExpiryAction={saveApprovalExpiryAction}
       />
     </div>

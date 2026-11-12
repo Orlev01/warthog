@@ -27,6 +27,8 @@ import {
 import { RulesView } from "@/components/rules/rules-view";
 import { createUser } from "@/server/db/users";
 import { getApprovalExpiryMinutes, setApprovalExpiryMinutes } from "@/server/db/approval-settings";
+import { saveNotificationPrefs } from "@/server/db/notification-prefs";
+import { PORTAL_NAV, type NavNode } from "@/components/shell/nav";
 import { createSession, type Session } from "@/server/auth/session";
 import { localAesKeyWrapper, type KeyWrapper } from "@/server/crypto/key-wrapper";
 import { fixedClock } from "@/server/seams/clock";
@@ -272,4 +274,158 @@ test("the save redirects back to the rules list with a plain-words notice", () =
   assert.equal(invalid?.tone, "problem");
   assert.match(invalid!.text, /2 minutes/);
   assert.match(invalid!.text, /24 hours/);
+});
+
+// --- the reminder warning ----------------------------------------------------------------
+//
+// The text/email fallback (Settings › Notifications) fires after the person's fallback delay,
+// and only while the approval has not expired. When the saved expiry is at or below that
+// delay the reminder can never go out, so the panel says so — inside the panel — and links to
+// where the delay is set. Notification timing itself is unchanged.
+
+const NOTIFICATIONS_ROUTE = "/settings/notifications";
+
+async function renderedFor(
+  db: Db,
+  keyWrapper: KeyWrapper,
+  setup: { expiry?: number; delay?: number; emailFallback?: boolean; smsFallback?: boolean },
+  who: string,
+): Promise<string> {
+  const person = await makePerson(db, keyWrapper, who);
+  if (setup.expiry !== undefined) await setApprovalExpiryMinutes(db, { userId: person.userId, minutes: setup.expiry, now: NOW });
+  if (setup.delay !== undefined || setup.emailFallback !== undefined || setup.smsFallback !== undefined) {
+    const saved = await saveNotificationPrefs(db, {
+      userId: person.userId,
+      emailFallback: setup.emailFallback ?? true,
+      smsFallback: setup.smsFallback ?? false,
+      fallbackDelayMinutes: setup.delay ?? 2,
+    });
+    assert.equal(saved.ok, true);
+  }
+  const view = await actionsFor(db, keyWrapper).load(person.session);
+  return renderToStaticMarkup(
+    <RulesView
+      rules={view.rules}
+      agents={view.agents}
+      approvalExpiryMinutes={view.approvalExpiryMinutes}
+      approvalReminder={view.approvalReminder}
+      approvalExpiryAction={noop}
+    />,
+  );
+}
+
+function expiryPanel(markup: string): string {
+  const panel = rulesTabPanel(markup)
+    .match(/<section\b[^>]*class="wh-panel[^"]*"[^>]*>([\s\S]*?)<\/section>/g)
+    ?.find((s) => /approval-expiry-minutes/.test(s));
+  assert.ok(panel, "the Approval expiry panel is rendered");
+  return panel!;
+}
+
+function reminderWarning(panel: string): string | undefined {
+  return [...panel.matchAll(/<div\b[^>]*data-tone="warning"[^>]*>([\s\S]*?)<\/div><\/div>/g)].map((m) => m[0])[0];
+}
+
+function navHrefs(nodes: readonly NavNode[]): string[] {
+  return nodes.flatMap((node) => [...(node.href ? [node.href] : []), ...navHrefs(node.children ?? [])]);
+}
+
+test("the loader reads the session person's own reminder setting", async () => {
+  const db = await freshDb();
+  const keyWrapper = localAesKeyWrapper(randomBytes(32));
+  try {
+    const alice = await makePerson(db, keyWrapper, "reminder-owner");
+    const bob = await makePerson(db, keyWrapper, "reminder-other");
+    await saveNotificationPrefs(db, { userId: bob.userId, emailFallback: false, smsFallback: false, fallbackDelayMinutes: 30 });
+    assert.deepEqual((await actionsFor(db, keyWrapper).load(alice.session)).approvalReminder, { on: true, delayMinutes: 2 }, "the defaults: email on, 2 minutes");
+
+    await saveNotificationPrefs(db, { userId: alice.userId, emailFallback: false, smsFallback: true, fallbackDelayMinutes: 10 });
+    assert.deepEqual((await actionsFor(db, keyWrapper).load(alice.session)).approvalReminder, { on: true, delayMinutes: 10 }, "a text reminder alone counts as on");
+    assert.deepEqual((await actionsFor(db, keyWrapper).load(bob.session)).approvalReminder, { on: false, delayMinutes: 30 });
+  } finally {
+    await db.close();
+  }
+});
+
+test("the warning shows inside the panel at an expiry of 2 minutes with a 2-minute reminder delay", async () => {
+  const db = await freshDb();
+  const keyWrapper = localAesKeyWrapper(randomBytes(32));
+  try {
+    const markup = await renderedFor(db, keyWrapper, { expiry: 2, delay: 2 }, "warn-equal");
+    const warning = reminderWarning(expiryPanel(markup));
+    assert.ok(warning, "a warning notice sits inside the Approval expiry panel");
+    const text = visibleText(warning!);
+    assert.match(text, /reminder waits 2 minutes/i, "it names the reminder delay");
+    assert.match(text, /won't be sent before requests expire/i, "and says the reminder can't go out in time");
+    assert.match(text, /Choose a longer time, or shorten the reminder delay/i, "and what to do about it");
+
+    // The select is described by the warning, so it is read with the control.
+    const select = expirySelect(markup);
+    const warningId = attr(warning!.match(/<p\b([^>]*)>/)![1]!, "id");
+    assert.ok(warningId && (attr(select.attrs, "aria-describedby") ?? "").split(/\s+/).includes(warningId), "the select is described by the warning");
+  } finally {
+    await db.close();
+  }
+});
+
+test("the warning also shows when the expiry is shorter than the reminder delay, by text alone", async () => {
+  const db = await freshDb();
+  const keyWrapper = localAesKeyWrapper(randomBytes(32));
+  try {
+    const markup = await renderedFor(db, keyWrapper, { expiry: 5, delay: 10, emailFallback: false, smsFallback: true }, "warn-shorter");
+    assert.match(visibleText(reminderWarning(expiryPanel(markup)) ?? ""), /reminder waits 10 minutes/i);
+  } finally {
+    await db.close();
+  }
+});
+
+test("the warning is hidden at an expiry of 15 minutes with a 2-minute reminder delay", async () => {
+  const db = await freshDb();
+  const keyWrapper = localAesKeyWrapper(randomBytes(32));
+  try {
+    const markup = await renderedFor(db, keyWrapper, { expiry: 15, delay: 2 }, "no-warn-longer");
+    assert.equal(reminderWarning(expiryPanel(markup)), undefined, "no warning when the reminder goes out in time");
+    assert.doesNotMatch(markup, /won't be sent before requests expire/i);
+    const defaults = await renderedFor(db, keyWrapper, {}, "no-warn-defaults");
+    assert.equal(reminderWarning(expiryPanel(defaults)), undefined, "nor with the defaults (15 minutes, 2-minute delay)");
+  } finally {
+    await db.close();
+  }
+});
+
+test("the warning is hidden when text and email reminders are both off", async () => {
+  const db = await freshDb();
+  const keyWrapper = localAesKeyWrapper(randomBytes(32));
+  try {
+    const markup = await renderedFor(db, keyWrapper, { expiry: 2, delay: 2, emailFallback: false, smsFallback: false }, "no-warn-off");
+    assert.equal(reminderWarning(expiryPanel(markup)), undefined, "no reminder is due, so nothing to warn about");
+  } finally {
+    await db.close();
+  }
+});
+
+test("the warning links to the real Notifications settings route with a full-size target", async () => {
+  const db = await freshDb();
+  const keyWrapper = localAesKeyWrapper(randomBytes(32));
+  try {
+    const warning = reminderWarning(expiryPanel(await renderedFor(db, keyWrapper, { expiry: 2, delay: 2 }, "warn-link")));
+    const links = [...warning!.matchAll(/<a\b([^>]*)>([\s\S]*?)<\/a>/g)];
+    assert.equal(links.length, 1, "one link in the warning");
+    assert.equal(attr(links[0]![1]!, "href"), NOTIFICATIONS_ROUTE, "it opens Settings › Notifications");
+    assert.ok(navHrefs(PORTAL_NAV).includes(NOTIFICATIONS_ROUTE), "that is the route the navigation uses for Notifications");
+    assert.match(attr(links[0]![1]!, "class") ?? "", /\bmin-h-11\b/, "a 44px touch target");
+    assert.ok(visibleText(links[0]![2]!).length > 0, "the link says where it goes");
+  } finally {
+    await db.close();
+  }
+});
+
+test("the select hint says reminders go out after the delay set in Settings", () => {
+  const markup = renderToStaticMarkup(<RulesView rules={[]} agents={[]} approvalExpiryMinutes={15} />);
+  const select = expirySelect(markup);
+  const hintId = (attr(select.attrs, "aria-describedby") ?? "").split(/\s+/).find((id) => id.endsWith("-hint"));
+  assert.ok(hintId, "the select has a hint");
+  const hint = markup.match(new RegExp(`<p[^>]*id="${hintId!.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")}"[^>]*>([\\s\\S]*?)</p>`));
+  assert.ok(hint, "the hint is rendered");
+  assert.match(visibleText(hint![1]!), /reminders go out after the delay set in Settings/i);
 });
