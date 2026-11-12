@@ -23,7 +23,7 @@
     "@pushforge/builder": "2.0.5",
     "@simplewebauthn/browser": "14.0.0",
     "@simplewebauthn/server": "14.1.0",
-    "lucide-react": "1.68.0",
+    "lucide-react": "1.70.0",
     "next": "16.4.5",
     "oauth4webapi": "3.8.8",
     "pg": "8.23.1",
