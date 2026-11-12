@@ -111,3 +111,33 @@ shown-once values, member scoping, the activity hash chain and deletion semantic
   - hiding services that can't be connected yet;
   - the newly shown record fingerprint;
   - "Removed agent" for agents no longer in the account.
+
+## Follow-ups, 13 November
+
+Implemented on branch `claude/uiux-followups` after the pass went live (decisions recorded in
+[security follow-ups](../../adr/security-followups-2026-11.md)):
+
+- **Authenticator app:** it can be set up from Settings › Security after a fresh step-up, with
+  the same bounded, single-flight, encrypted enrolment rules as at sign-up.
+- **Last sign-in method:** the server refuses to remove the only passkey when there is no
+  authenticator app.
+- **Device sign-in approval:** a member approves or denies a sign-in from another device on
+  Settings › Security › Sign-in requests (approval needs a fresh step-up). The push opens that
+  screen and carries no id, and sign-in offers the option again.
+- **Access keys:** an access-key agent's Settings can replace its key (shown once, old key
+  stops working) or revoke it.
+- **Status:** disconnected agents read "Disconnected" instead of "Reconnect needed".
+- **Rule sentences:** members see tool titles and service names; agents keep the id form.
+- **Skills:** skill deletion asks in the page instead of through the browser's `confirm()`.
+
+Still open for the founder:
+- reactivating a disconnected agent;
+- device and passkey names;
+- catalogue summaries;
+- a Home tasks summary;
+- an earlier existing-account notice at sign-up;
+- household email visibility;
+- the operator name and support mailbox;
+- number matching on device approval;
+- removing or replacing an authenticator;
+- step-up before revealing a replaced access key.
