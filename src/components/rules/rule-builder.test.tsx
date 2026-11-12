@@ -4,6 +4,7 @@ import * as React from "react";
 import { renderToStaticMarkup } from "react-dom/server";
 import { RulesView, createRuleBuilderState, updateRuleBuilder, isRuleBuilderComplete } from "./rules-view";
 import { ruleInputFromForm } from "@/app/(portal)/(protected)/rules/actions";
+import { ruleLabelsFromChoices } from "./rules-organise";
 
 test("changing a rule action and condition exposes matching required fields and updates the preview", () => {
   let state = createRuleBuilderState();
@@ -70,4 +71,39 @@ test("a tool or service that isn't one of the real choices can't complete the dr
   assert.match(markup, /<optgroup label="Warthog"><option value="create_task">Create a task<\/option><\/optgroup>/);
   assert.doesNotMatch(markup, /totally_made_up_tool/);
   assert.match(markup, /<button[^>]*type="submit"[^>]*disabled=""[^>]*>[\s\S]*?Add rule<\/button>/, "Add rule is unavailable until a real tool is chosen");
+});
+
+// UI/UX follow-up: the preview names a tool by its title and a service by its catalogue
+// name, the same labels the choices show (and the saved rule's sentence uses), never the id.
+test("the preview names the chosen tool by its title and the chosen service by its name", () => {
+  const tools = [
+    { label: "Warthog", choices: [{ value: "create_task", label: "Create a task" }] },
+    { label: "Gmail", choices: [{ value: "google-gmail__send", label: "Gmail: Send email" }] },
+  ];
+  const services = [{ label: "Your connected services", choices: [{ value: "google-gmail", label: "Gmail" }] }];
+  const preview = (draft: React.ComponentProps<typeof RulesView>["draft"]) => {
+    const markup = renderToStaticMarkup(<RulesView rules={[]} agents={[]} draft={draft} toolChoices={tools} serviceChoices={services} />);
+    return /<p class="text-fg" aria-live="polite">([\s\S]*?)<\/p>/.exec(markup)?.[1] ?? "";
+  };
+  const any = { type: "any_agent" } as const;
+  assert.equal(preview({ template: "ask_first", scope: any, action: { type: "specific_tool", tool: "create_task" } }), "Ask me before any agent uses Create a task");
+  assert.equal(preview({ template: "ask_first", scope: any, action: { type: "service_tool", service: "google-gmail" } }), "Ask me before any agent uses any Gmail tool");
+  assert.equal(
+    preview({ template: "never_allow", scope: { type: "agent", agentId: "c1", name: "Helper" }, action: { type: "specific_tool", tool: "google-gmail__send" } }),
+    "Never allow Helper to use Gmail: Send email",
+  );
+});
+
+test("the preview's labels come from the choices; an id they don't hold is shown as it is", () => {
+  const labels = ruleLabelsFromChoices(
+    [{ label: "Warthog", choices: [{ value: "create_task", label: "Create a task" }] }],
+    [{ label: "Services", choices: [{ value: "google-gmail", label: "Gmail" }] }],
+  );
+  assert.equal(labels.toolTitle?.("create_task"), "Create a task");
+  assert.equal(labels.serviceName?.("google-gmail"), "Gmail");
+  assert.equal(labels.toolTitle?.("google-gmail"), undefined, "a service id is not a tool");
+  assert.equal(labels.toolTitle?.("retired_tool"), undefined);
+  assert.equal(labels.serviceName?.("gone-service"), undefined);
+  const none = ruleLabelsFromChoices(undefined, undefined);
+  assert.equal(none.toolTitle?.("create_task"), undefined);
 });

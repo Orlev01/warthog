@@ -71,18 +71,37 @@ export interface MatchContext {
   merchant?: string;
 }
 
+/**
+ * How a PERSON reads the tools and services a rule names (the Rules page, the rule
+ * builder's preview, an agent's workspace): each resolver returns the display label for
+ * an id — a tool's title, a service's catalogue name — or undefined when it does not
+ * know the id, which is then shown as it is. Agent-facing sentences (the MCP pipeline,
+ * `get_context`) pass none, so they keep the exact ids the engine matches on. Pure: the
+ * resolvers are injected, so this module still reads no registry or catalogue.
+ */
+export interface RuleDisplayLabels {
+  readonly toolTitle?: (tool: string) => string | undefined;
+  readonly serviceName?: (service: string) => string | undefined;
+}
+
 function assertNever(value: never): never {
   throw new Error(`Unhandled variant: ${JSON.stringify(value)}`);
 }
 
 // --- ruleSentence ----------------------------------------------------------
 
+/** An id's display label from `resolve`, or the id itself when none is known (or it is blank). */
+function displayed(id: string, resolve: ((id: string) => string | undefined) | undefined): string {
+  const label = resolve?.(id)?.trim();
+  return label ? label : id;
+}
+
 /**
  * The infinitive form of an action's verb phrase ("send email", "use <tool>",
  * "request a card"). The finite form ("sends email") is derived from it, so the
- * two never drift apart.
+ * two never drift apart. A tool or service is named through `labels` when given.
  */
-function actionInfinitive(action: RuleAction): string {
+function actionInfinitive(action: RuleAction, labels: RuleDisplayLabels | undefined): string {
   switch (action.type) {
     case "send_message": {
       const noun =
@@ -94,9 +113,9 @@ function actionInfinitive(action: RuleAction): string {
       return `send ${noun}`;
     }
     case "specific_tool":
-      return `use ${action.tool}`;
+      return `use ${displayed(action.tool, labels?.toolTitle)}`;
     case "service_tool":
-      return `use any ${action.service} tool`;
+      return `use any ${displayed(action.service, labels?.serviceName)} tool`;
     case "any_change":
       return "make any change";
     case "card_request":
@@ -140,11 +159,16 @@ function conditionClause(condition: RuleCondition): string {
 /**
  * Render a rule to the exact English sentence it reads back as, for example
  * "Ask me before any agent sends email to manager@example.com". Pure: the same
- * rule always renders the same string.
+ * rule (and labels) always renders the same string.
+ *
+ * Without `labels` a tool or service is named by its exact id ("Ask me before any agent
+ * uses create_task") — the form agents read. With them a person reads its title or
+ * catalogue name ("Ask me before any agent uses Create a task", "… uses any Gmail tool");
+ * an id the labels don't know falls back to the id.
  */
-export function ruleSentence(rule: Rule): string {
+export function ruleSentence(rule: Rule, labels?: RuleDisplayLabels): string {
   const subject = rule.scope.type === "any_agent" ? "any agent" : rule.scope.name;
-  const infinitive = actionInfinitive(rule.action);
+  const infinitive = actionInfinitive(rule.action, labels);
   const clause = rule.condition ? conditionClause(rule.condition) : "";
   if (rule.kind === "never_allow") {
     return `Never allow ${subject} to ${infinitive}${clause}`;
