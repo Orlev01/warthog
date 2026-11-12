@@ -14,6 +14,15 @@ calendar events. Main and pinned-image CI passed 5,455 tests; no migrations or
 dependency changes. The founder approved both protected environments in GitHub.
 The temporary runner is verified removed.
 
+**Recovery protection follow-up:** the approved storage/access changes are
+applied and independently verified, including receipt versioning/14-day soft
+deletion and a locked 42-day journal. The one synthetic probe found an add-only
+retry compatibility issue; its remaining denial checks have not run. The narrow
+adapter fix passes 66 targeted tests and TypeScript. Image publication, journal
+activation and the isolated cloud recovery drill are still separate gates;
+production continues on the image above. See the
+[storage and test record](docs/audit/recovery-storage-2026-11-12.md).
+
 # Earlier delivery status — 12 November 2026
 
 **The product review fixes and latest main integration are live at

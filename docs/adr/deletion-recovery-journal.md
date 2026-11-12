@@ -38,8 +38,15 @@ and Terraform destroy protection. Locking cannot be undone and retention cannot 
 shortened. The app receives only `blobs/add/action` at this container, with no read,
 list or delete permission. Small markers use one conditional Put Blob; the exact
 first-write/retry/overwrite-denial behavior must pass on Azure before activation.
-Only HTTP 412 `ConditionNotMet` acknowledges an existing marker. Other errors fail
-closed. [Put Blob permissions](https://learn.microsoft.com/en-us/rest/api/storageservices/put-blob#permissions).
+HTTP 412 `ConditionNotMet` or exactly HTTP 403 `UnauthorizedBlobOverwrite` from
+that conditional upload acknowledges an existing marker. The latter was observed
+with the app's add-only role: Azure denied overwrite before evaluating the
+precondition. Neither response verifies the stored body; the journal deliberately
+keeps the first coverage/event timestamp, rather than claiming a retry's newer
+timestamp was written. Generic authorization failures, other 403/409/412 responses
+and client setup errors still fail closed. No read or overwrite grant is added.
+[Put Blob permissions](https://learn.microsoft.com/en-us/rest/api/storageservices/put-blob#permissions),
+[overwrite-specific error](https://learn.microsoft.com/en-us/rest/api/storageservices/blob-service-error-codes).
 
 Journal records **do not automatically expire**. Azure's lifecycle Delete action
 is unsupported on immutable containers. Retain evidence until a separately
