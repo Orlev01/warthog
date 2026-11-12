@@ -260,18 +260,48 @@ export async function memoriesForAgent(
   return memories;
 }
 
-/** Newest-first bounded page; visibility is enforced in SQL before decryption. */
+// Who saved a memory, as a Memory page filter: the PERSON (no source agent) or one agent.
+// The caller validates an agent id against the person's own agents before passing it; it
+// is only ever bound as a parameter.
+export type MemorySourceFilter =
+  | { readonly kind: "person" }
+  | { readonly kind: "agent"; readonly agentId: string };
+
+// The Memory page's list filters, applied in SQL so paging stays correct.
+export interface MemoryListFilters {
+  readonly scope?: MemoryScope;
+  readonly source?: MemorySourceFilter;
+}
+
+// The bound values for the filter fragments below: scope, source kind, source agent id.
+function filterValues(filters: MemoryListFilters): [string | null, string | null, string | null] {
+  const source = filters.source;
+  return [
+    filters.scope ?? null,
+    source?.kind ?? null,
+    source?.kind === "agent" ? source.agentId : null,
+  ];
+}
+
+// `scope` / `source` predicates over the numbered parameters a caller supplies. The text
+// is fixed; every value is a bound parameter.
+const scopePredicate = (p: number) => `($${p}::text IS NULL OR scope = $${p}::text)`;
+const sourcePredicate = (kind: number, agent: number) =>
+  `($${kind}::text IS NULL OR ($${kind}::text = 'person' AND source_agent_id IS NULL) OR ($${kind}::text = 'agent' AND source_agent_id = $${agent}::text))`;
+
+/** Newest-first bounded page; visibility and the page filters are enforced in SQL before decryption. */
 export async function pageMemories(
   db: Db,
   userId: string,
   dek: Uint8Array,
-  input: { cursor?: string; limit?: number; agentId?: string } = {},
+  input: { cursor?: string; limit?: number; agentId?: string } & MemoryListFilters = {},
 ) {
   const { limit, cursor } = pageOptions(input);
   const result = await db.query(
     `SELECT ${SELECT_COLUMNS}, ${cursorTimestamp("created_at")} FROM memories
  WHERE user_id = $1 AND ($2::text IS NULL OR COALESCE((SELECT allowed FROM agent_memory_access a WHERE a.user_id = memories.user_id AND a.memory_id = memories.id AND a.agent_id::text = $2),scope = 'shared' OR source_agent_id = $2))
  AND ($3::timestamptz IS NULL OR (created_at,id) < ($3::timestamptz,$4::uuid))
+ AND ${scopePredicate(6)} AND ${sourcePredicate(7, 8)}
  ORDER BY created_at DESC,id DESC LIMIT $5`,
     [
       userId,
@@ -279,6 +309,7 @@ export async function pageMemories(
       cursor?.at ?? null,
       cursor?.id ?? null,
       limit + 1,
+      ...filterValues(input),
     ],
   );
   const items = await Promise.all(
@@ -292,4 +323,45 @@ export async function pageMemories(
         ? pageCursor({ id: String(last.id), createdAt: String(last.cursor_at) })
         : null,
   };
+}
+
+// How many of the person's memories each Memory page filter option would show. Each facet
+// honours the OTHER facet's filter but not its own (so choosing "Kept" still shows how many
+// are shared): scope counts within the chosen source, source counts within the chosen
+// scope. Metadata only (no content is read or decrypted); member-scoped by `userId`.
+export interface MemoryFacetCounts {
+  readonly scope: Readonly<Record<MemoryScope, number>>;
+  readonly source: {
+    readonly person: number;
+    readonly agents: ReadonlyMap<string, number>;
+  };
+}
+
+export async function countMemoryFacets(
+  db: Db,
+  userId: string,
+  filters: MemoryListFilters,
+): Promise<MemoryFacetCounts> {
+  const [scope, sourceKind, sourceAgent] = filterValues(filters);
+  const byScope = await db.query(
+    `SELECT scope, count(*)::int AS n FROM memories
+ WHERE user_id = $1 AND ${sourcePredicate(2, 3)}
+ GROUP BY scope`,
+    [userId, sourceKind, sourceAgent],
+  );
+  const bySource = await db.query(
+    `SELECT source_agent_id, count(*)::int AS n FROM memories
+ WHERE user_id = $1 AND ${scopePredicate(2)}
+ GROUP BY source_agent_id`,
+    [userId, scope],
+  );
+  const scopeCounts: Record<MemoryScope, number> = { kept: 0, shared: 0 };
+  for (const row of byScope.rows) scopeCounts[row.scope as MemoryScope] = Number(row.n);
+  let person = 0;
+  const agents = new Map<string, number>();
+  for (const row of bySource.rows) {
+    if (row.source_agent_id == null) person = Number(row.n);
+    else agents.set(String(row.source_agent_id), Number(row.n));
+  }
+  return { scope: scopeCounts, source: { person, agents } };
 }
