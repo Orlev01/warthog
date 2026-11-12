@@ -18,7 +18,7 @@ import { hrefWith, type QueryState } from "@/lib/href";
 //     "Request a connector" affordance on a miss (nothing matched the search); and
 //   • the CONNECTED-SERVICES list — each connection showing its status, the account
 //     connected, the connected date, the tools it offers (each marked "reads" or "makes
-//     changes"), which agents may use it, and a Disconnect that acts after a single confirm.
+//     changes"), which agents may use it, and a one-click Disconnect.
 //
 // This is the PURE, prop-driven VIEW — exactly like AgentListView / DashboardView /
 // ActivityView: it renders the screen from already-formatted props so it can be pinned
@@ -35,7 +35,8 @@ import { hrefWith, type QueryState } from "@/lib/href";
 // each with its count of matches for the current search) that keep the search text; an
 // entry the person already connected carries a "Connected" badge in words and an icon.
 // Connected cards summarise their tools ("n tools · n make changes") with the full list
-// behind a "Show tools" disclosure, and Disconnect asks for confirmation before it acts.
+// (each tool still marked "Reads" or "Makes changes") behind a "Show tools" disclosure.
+// Disconnect stays one click (brief: "disconnect in one click").
 
 // One catalogue entry as the view renders it. `connectable` is the index's own
 // connectability truth (E09-S15). `gate` is the per-person decision (E09-S13): "connect"
@@ -127,8 +128,6 @@ const BTN_DISABLED = `${BTN_BASE} border border-line bg-surface text-fg-muted op
 // never by colour alone (brief design_ux.feel). Styled through tokens, no raw colour.
 const MARK_BADGE =
   "rounded-card bg-surface-muted px-2 py-0.5 text-xs font-medium text-fg-muted";
-// A disclosure summary that looks like the neutral button it opens.
-const SUMMARY_BUTTON = `${BTN_SECONDARY} w-fit cursor-pointer list-none [&::-webkit-details-marker]:hidden`;
 const SUMMARY_LINK =
   "inline-flex min-h-11 w-fit cursor-pointer list-none items-center gap-2 rounded-field text-sm font-medium text-fg focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-focus [&::-webkit-details-marker]:hidden";
 
@@ -337,14 +336,13 @@ function RequestSection({
 }
 
 // The Disconnect control for one connection. LIVE (bound to `disconnectAction`, carrying
-// THIS connection's id) when an action is supplied — behind a confirmation disclosure
-// that says what disconnecting does, so it never acts on one click; otherwise DISABLED
-// with a one-line reason — the same pattern as AgentListView.
+// THIS connection's id) when an action is supplied — one click, as the brief requires;
+// otherwise DISABLED with a one-line reason — the same pattern as AgentListView.
 function DisconnectControl({
-  connection,
+  connectionId,
   disconnectAction,
 }: {
-  connection: ConnectionItem;
+  connectionId: string;
   disconnectAction?: (formData: FormData) => void | Promise<void>;
 }) {
   if (!disconnectAction) {
@@ -360,23 +358,12 @@ function DisconnectControl({
     );
   }
   return (
-    <details className="min-w-0">
-      <summary className={SUMMARY_BUTTON}>Disconnect</summary>
-      <div className="mt-3 flex flex-col gap-3 rounded-field bg-surface-muted p-3">
-        <p className="text-sm text-fg">
-          Disconnect {connection.name} ({connection.accountLabel})? Every agent
-          loses access to this account straight away, and Warthog deletes its
-          stored credentials. Where the provider supports it, Warthog also
-          revokes its access there.
-        </p>
-        <form action={disconnectAction}>
-          <input type="hidden" name="connectionId" value={connection.id} />
-          <button type="submit" className={BTN_SECONDARY}>
-            Disconnect {connection.name}
-          </button>
-        </form>
-      </div>
-    </details>
+    <form action={disconnectAction}>
+      <input type="hidden" name="connectionId" value={connectionId} />
+      <button type="submit" className={BTN_SECONDARY}>
+        Disconnect
+      </button>
+    </form>
   );
 }
 
@@ -440,7 +427,7 @@ function ConnectionCard({
           : `Used by ${connection.agents.join(", ")}`}
       </p>
 
-      <div className="flex flex-wrap items-start gap-2">
+      <div className="flex flex-wrap items-center gap-2">
         {connection.reconnectable && reconnectAction && (
           <form action={reconnectAction}>
             <input type="hidden" name="connectionId" value={connection.id} />
@@ -450,7 +437,7 @@ function ConnectionCard({
           </form>
         )}
         <DisconnectControl
-          connection={connection}
+          connectionId={connection.id}
           disconnectAction={disconnectAction}
         />
       </div>

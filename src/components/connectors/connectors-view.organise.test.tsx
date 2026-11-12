@@ -1,8 +1,9 @@
 // Connectors screen organisation (`./connectors-view`): category filter links over the
 // catalogue (All first, with counts, keeping the search), a "Connected" word badge on
 // services the person already has, a counted Connected tab, a tool summary with a
-// "Show tools" disclosure on each connected card, and a confirmation step before
-// Disconnect. Rendered with react-dom/server and read from the markup, like the sibling
+// "Show tools" disclosure on each connected card (each tool still marked "Reads" or
+// "Makes changes"), and Disconnect still acting in one click (brief: "disconnect in one
+// click"). Rendered with react-dom/server and read from the markup, like the sibling
 // view tests.
 
 import * as React from "react";
@@ -146,12 +147,20 @@ test("a read-only service says so in its tool summary", () => {
   assert.ok(text(card).includes("1 tool · read-only"), text(card));
 });
 
-test("Disconnect asks for confirmation first, then submits the same action for this connection", () => {
+test("each tool inside Show tools is still marked as reading or making changes", () => {
   const card = entry(render(base({ groups: [] })), "robin mailbox");
-  const confirm = card.match(/<details\b[^>]*>([\s\S]*?)<\/details>/g)?.find((d) => /<summary[^>]*>[^<]*Disconnect/.test(d));
-  assert.ok(confirm, "a Disconnect disclosure exists");
-  assert.match(text(confirm!), /every agent/i, "the confirmation says agents lose access");
-  assert.match(confirm!, /<form action="javascript:[\s\S]*name="connectionId" value="conn-1"[\s\S]*Disconnect Fastmail[\s\S]*<\/form>/);
+  const disclosure = card.match(/<details\b[^>]*>[\s\S]*?<\/details>/g)?.find((d) => d.includes("Show tools"))!;
+  const rows = [...disclosure.matchAll(/<li\b[^>]*>([\s\S]*?)<\/li>/g)].map((m) => text(m[1]!));
+  assert.deepEqual(rows, ["search_mail Reads", "read_message Reads", "send_mail Makes changes"]);
+});
+
+test("Disconnect acts in one click: a bound form on the card, not behind a disclosure", () => {
+  const card = entry(render(base({ groups: [] })), "robin mailbox");
+  const disclosures = card.match(/<details\b[\s\S]*?<\/details>/g) ?? [];
+  assert.ok(!disclosures.some((d) => /disconnect/i.test(d)), "no confirmation disclosure around Disconnect");
   const outside = card.replace(/<details\b[\s\S]*?<\/details>/g, "");
-  assert.ok(!/<form/.test(outside), "no one-click Disconnect form outside the confirmation");
+  assert.match(
+    outside,
+    /<form action="javascript:[\s\S]*?name="connectionId" value="conn-1"[\s\S]*?<button type="submit"[^>]*>Disconnect<\/button><\/form>/,
+  );
 });
