@@ -162,6 +162,7 @@ export async function importExportDocument(
   dek: Uint8Array,
   clock: Clock,
   protectedVault?: SealedVault,
+  transferContext?: { importedAddresses: Map<string, string> },
 ): Promise<ImportSummary> {
   // Validate BEFORE any write: a malformed / wrong-version document is rejected here, so
   // nothing is ever persisted for it (AC4). The envelope's `version: literal(1)` and the
@@ -188,14 +189,14 @@ export async function importExportDocument(
   const rules = doc.rules as RuleDoc[];
   const tasks = doc.tasks as TaskDoc[];
   const lifeAdmin = doc.lifeAdmin as LifeAdminDoc[];
-  const activity = doc.activity as ActivityDoc[];
+  const activity = [...doc.activity, ...(doc.importedActivity ?? [])] as ActivityDoc[];
 
   // One transaction: every restore commits together, or a mid-way failure rolls the whole
   // import back (never a half-restored account).
-  return withTransaction(db, async (tx): Promise<ImportSummary> => {
+  const restore = async (tx: Db): Promise<ImportSummary> => {
     // Profile — the full low-tier identity field list (the authoritative profile data),
     // each a fresh row owned by `userId`.
-    const importedAddresses = new Map<string, string>();
+    const importedAddresses = transferContext?.importedAddresses ?? new Map<string, string>();
     for (const field of profileFields) {
       const saved = await saveIdentityField(
         tx,
@@ -328,5 +329,6 @@ export async function importExportDocument(
       lifeAdmin: lifeAdmin.length,
       archivedActivity: activity.length,
     };
-  });
+  };
+  return db.inTransaction ? restore(db) : withTransaction(db, restore);
 }

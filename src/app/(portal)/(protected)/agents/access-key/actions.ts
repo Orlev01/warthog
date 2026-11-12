@@ -1,3 +1,5 @@
+import { auditedOwnerChange } from "@/server/activity/owner-change";
+import type { KeyWrapper } from "@/server/crypto/key-wrapper";
 // E10-S06 — Per-agent access key creation (design §6.1; brief "Connect an agent" —
 // "For a platform that cannot use the standard connector sign-in, 'Create an access
 // key' lets the person name the agent and set its permissions on the same screen as
@@ -32,7 +34,6 @@
 //     the injected randomness seam alone (INV-103).
 
 import { listConnectionsForUser } from "@/server/db/connections";
-import { withTransaction } from "@/server/db/index";
 import { getAgentDefaults } from "@/server/db/agent-defaults";
 import { randomUUID } from "node:crypto";
 
@@ -104,6 +105,7 @@ export type ReplaceResult =
 // The seams the flow composes: the db (stores), the clock (the agent's connected-at)
 // and the randomness source (the opaque access key). No config — no OAuth issuer here.
 export interface AccessKeyActionsDeps {
+  readonly keyWrapper: KeyWrapper;
   readonly db: Db;
   readonly clock: Clock;
   readonly random: Random;
@@ -165,7 +167,7 @@ export function createAccessKeyActions(deps: AccessKeyActionsDeps): AccessKeyAct
   // its hash is stored.
   async function create(session: Session, input: AccessKeyInput): Promise<CreateResult> {
     const valid = parseParams(inputSchema, input);
-    return withTransaction(db, async tx => {
+    return auditedOwnerChange(deps, session.userId, async (tx, record) => {
       const connected = new Set((await listConnectionsForUser(tx, session.userId)).map(c => c.connectorId));
       valid.tickedServices = valid.tickedServices?.filter(id => connected.has(id));
       const connectionId = randomUUID();
@@ -182,11 +184,15 @@ export function createAccessKeyActions(deps: AccessKeyActionsDeps): AccessKeyAct
         clock,
       );
 
-      await upsertPermissions(tx, { ...initialGrants(session.userId, connectionId, valid), rateLimit: (await getAgentDefaults(tx, session.userId)).rateLimit });
+      const grants = await upsertPermissions(tx, {
+        ...initialGrants(session.userId, connectionId, valid),
+        rateLimit: (await getAgentDefaults(tx, session.userId)).rateLimit,
+      });
 
       const { key } = await issueAccessKey(tx, { connectionId }, { random });
 
-      return { ok: true, agentId: agent.id, key };
+      await record("agent_connected", { credentialKind: "access_key", grants }, agent.id);
+      return { ok: true as const, agentId: agent.id, key };
     });
   }
 
@@ -198,7 +204,10 @@ export function createAccessKeyActions(deps: AccessKeyActionsDeps): AccessKeyAct
     const id = parseParams(uuidSchema, agentId);
     const agent = await getAgentById(db, session.userId, id);
     if (agent == null) return { ok: false, reason: "not_found" };
-    await revokeAccessKey(db, { connectionId: agent.connectionId });
+    await auditedOwnerChange(deps, session.userId, async (tx, record) => {
+      await revokeAccessKey(tx, { connectionId: agent.connectionId });
+      await record("agent_key_revoked", {}, agent.id);
+    });
     return { ok: true };
   }
 
@@ -210,7 +219,11 @@ export function createAccessKeyActions(deps: AccessKeyActionsDeps): AccessKeyAct
     const id = parseParams(uuidSchema, agentId);
     const agent = await getAgentById(db, session.userId, id);
     if (agent == null) return { ok: false, reason: "not_found" };
-    const { key } = await replaceAccessKey(db, { connectionId: agent.connectionId }, { random });
+    const { key } = await auditedOwnerChange(deps, session.userId, async (tx, record) => {
+      const issued = await replaceAccessKey(tx, { connectionId: agent.connectionId }, { random });
+      await record("agent_key_replaced", {}, agent.id);
+      return issued;
+    });
     return { ok: true, key };
   }
 

@@ -93,3 +93,7 @@ per-field vault grants and per-service read/change overrides. [Collection bounds
 describes pagination and storage limits. Provider-runtime lifecycle control remains
 outside Warthog's connection: Dots and Instinct have no verified direct integration
 contract, so the product does not invent setup steps for them.
+
+[Agent evidence and controls](agent-evidence-and-controls.md) adds explicit tool
+allowlists, task/record write controls, selected-record access, client observations,
+durable attempt/outcome evidence, investigation and chunked account transfers.

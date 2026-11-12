@@ -1,5 +1,11 @@
 # Warthog comprehensive engineering audit
 
+**Product review implementation, 12 November:** the thirteen findings below have
+changes and acceptance evidence in the isolated review branch. See the
+[implementation record](product-review-2026-11-12/implementation.md) for granular
+controls, audit evidence, metadata, large transfers and the per-service verification
+matrix. This local implementation is separate from the deployed release below.
+
 **Functional product review, 12 November:** the live Claude/Gmail flow works, but
 the [product review](product-review-2026-11-12/review.md) identifies gaps in audit
 presentation/completeness, outcome classification, policy coverage, agent metadata

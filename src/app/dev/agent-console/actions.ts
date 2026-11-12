@@ -95,7 +95,7 @@ export function createAgentConsoleActions(deps: AgentConsoleActionsDeps): AgentC
   // key verifies at `/mcp` and a tool call executes rather than being refused.
   async function load(session: Session | null): Promise<{ accessKey: string; endpoint: string }> {
     const owner = session ?? (await fallbackSession());
-    const accessKeys = createAccessKeyActions({ db, clock, random });
+    const accessKeys = createAccessKeyActions({ db, clock, random, keyWrapper: selectKeyWrapper({ nodeEnv: config.nodeEnv, localKek: config.devKek }) });
 
     // Reuse the one dev agent already provisioned for this person (marked by its platform),
     // re-issuing its key; otherwise create it with sensible default permissions.

@@ -189,10 +189,10 @@ async function dataKeyFor(db: Db, keyWrapper: KeyWrapper, userId: string): Promi
 async function tasksPermission(
   db: Db,
   connection: AgentConnection,
-  _kind: "read" | "change",
+  kind: "read" | "change",
 ): Promise<ConnectionPermissions | null> {
   const permissions = await getConnectionPermissions(db, connection.userId, connection.connectionId);
-  if (!permissions || !permissions.tasksAccess) return null;
+  if (!permissions || !permissions.tasksAccess || (kind === "change" && permissions.resourceControls?.tasksWrite === false)) return null;
   return permissions;
 }
 

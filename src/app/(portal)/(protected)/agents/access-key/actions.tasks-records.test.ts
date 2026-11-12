@@ -21,7 +21,7 @@ test("custom access-key permissions persist explicit denials and independent mem
   const db = await freshDb();
   try {
     const user = await createUser(db, { email: "ak-custom-edits@example.com", wrappedDek: "d3JhcHBlZA==" });
-    const actions = createAccessKeyActions({ db, clock: fixedClock(NOW), random: systemRandom });
+    const actions = createAccessKeyActions({ keyWrapper: { wrap: async () => "test-wrapped", unwrap: async () => new Uint8Array(32).fill(7) }, db, clock: fixedClock(NOW), random: systemRandom });
     assert.ok((await actions.create(sessionFor(user.id), {
       name: "Research", platform: "Other", template: "custom",
       identity: false, memoryRead: true, memoryWrite: false, tasks: false, records: false,
@@ -49,7 +49,7 @@ for (const [template, expected] of [
     const db = await freshDb();
     try {
       const user = await createUser(db, { email: `ak-${template}@warthog.com.au`, wrappedDek: "d3JhcHBlZA==" });
-      const actions = createAccessKeyActions({ db, clock: fixedClock(NOW), random: systemRandom });
+      const actions = createAccessKeyActions({ keyWrapper: { wrap: async () => "test-wrapped", unwrap: async () => new Uint8Array(32).fill(7) }, db, clock: fixedClock(NOW), random: systemRandom });
       const input: AccessKeyInput = { name: "My Grok", platform: "grok", template } as AccessKeyInput;
       const result = await actions.create(sessionFor(user.id), input);
       assert.ok(result.ok);

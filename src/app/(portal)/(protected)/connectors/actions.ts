@@ -1,3 +1,4 @@
+import { connectorVerification } from "@/domain/catalogue/verification";
 import { formatAccountTime } from "@/server/display-time";
 import { timeZoneFor } from "@/server/spending/time-zone";
 // E09-S17 — Connectors page loader + connect/disconnect/request actions (the
@@ -265,6 +266,7 @@ export function createConnectorsActions(deps: ConnectorsActionsDeps): Connectors
         (entry): CatalogueItem => ({
           id: entry.id,
           name: entry.name,
+          verification: connectorVerification(entry.id).label,
           connectable: entry.connectable && !(deps.providerMcpAvailable === false && catalogue.get(entry.id)?.auth_kind === "provider_mcp"),
           ...(deps.providerMcpAvailable === false && catalogue.get(entry.id)?.auth_kind === "provider_mcp" ? { unavailableReason: "Provider-hosted MCP sign-in and tool routing are not available yet." } : {}),
           gate: gateFor(entry.id, email),

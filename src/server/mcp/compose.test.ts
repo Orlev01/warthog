@@ -973,7 +973,7 @@ test("D7: get_context returns the profile, skills, rules, memory and open tasks 
     const { text, json } = await getContextOf(dispatch, connectionId);
     assert.ok(!text.includes(userId), "the person's internal id is not returned");
     assert.ok(!text.includes(connectionId), "the connection's internal id is not returned");
-    assert.ok(!text.includes(agentId), "the agent's internal id is not returned");
+    assert.equal((json.connection as { agentId: string }).agentId, agentId, "the authorised connection identifies itself");
 
     assert.match(text, /Ada Lovelace/, "the low-tier profile is included when identity access is on");
     const skills = json.skills as Array<{ title: string }>;
@@ -1022,7 +1022,7 @@ test("an internal tool failure is logged without its message and reported plainl
       await dispatch(connectionId, mcpPost(callBody("amadeus__request", { method: "GET", path: "/v1/x" }))),
     );
     assert.equal(rpc.result?.isError, true);
-    assert.equal(contentText(rpc.result), "The tool call could not be completed.");
+    assert.equal(contentText(rpc.result), "The tool call could not be completed. A change may have occurred; inspect Activity and the service before retrying.");
 
     const lines = logged.mock.calls.map((call) => call.arguments.map(String).join(" "));
     const line = lines.find((text) => text.includes("tool_call_failed"));
@@ -1277,5 +1277,26 @@ test("large provider inventories support discovery, pagination and policy-gated 
   assert.equal(JSON.parse(contentText(called.result)).status,"pending_approval");
   const unknown=await readRpc(await dispatch(connectionId,mcpPost(callBody("call_tool",{name:"gmail__send",arguments:{}}))));
   assert.equal(unknown.result?.isError,true);
+ } finally {await db.close();}
+});
+
+test("client observations and SDK input refusals are recorded without retaining invalid arguments", async () => {
+ const db=await freshDb();
+ try {
+  const config=devConfig(),{userId,connectionId,agentId,dek}=await seedConnection(db,config);
+  const dispatch=createMcpDispatch({db,config});
+  await readRpc(await dispatch(connectionId,mcpPost({jsonrpc:"2.0",id:1,method:"initialize",params:{protocolVersion:"2025-11-25",clientInfo:{name:"Example client",version:"3"},capabilities:{roots:{}}}})));
+  const {readClientObservation}=await import("./client-observation");
+  const observed=await readClientObservation(db,userId,agentId,dek);
+  assert.equal(observed?.name,"Example client");
+  assert.equal(observed?.source,"client_reported");
+  await readRpc(await dispatch(connectionId,mcpPost(callBody("remember",{content:22,reason:"INVALID-PRIVATE-ARGUMENT"}))));
+  const entries=await listActivity(db,userId,{},dek);
+  assert.ok(entries.some(e=>e.kind==="tool_rejected"&&e.outcome==="refused"));
+  assert.doesNotMatch(JSON.stringify(entries),/INVALID-PRIVATE-ARGUMENT/);
+  await readRpc(await dispatch(connectionId,mcpPost(callBody("missing_tool",{}))));
+  assert.equal((await readClientObservation(db,userId,agentId,dek))?.name,"Example client","ordinary calls preserve initialize metadata");
+  const rejected=await listActivity(db,userId,{kind:"tool_rejected"},dek);
+  assert.equal(rejected.length,2);
  } finally {await db.close();}
 });

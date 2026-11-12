@@ -508,7 +508,7 @@ test("through the pipeline: an allowed remember saves the memory and records ONE
     assert.equal(stored.length, 1, "the memory write persisted through the pipeline");
 
     // Warthog recorded the memory write itself — ONE entry, labelled source "warthog".
-    const entries = rec.inputs.filter((e) => e.tool === "remember");
+    const entries = rec.inputs.filter((e) => e.tool === "remember" && e.kind === "tool_call");
     assert.equal(entries.length, 1, "the memory write is recorded as exactly ONE activity entry");
     assert.equal(entries[0].source, "warthog", "Warthog writes the record itself (not the agent)");
   } finally {

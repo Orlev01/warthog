@@ -1,3 +1,6 @@
+import { requestObservation } from "./client-observation";
+import { randomUUID, createHash } from "node:crypto";
+import { observeResult } from "./result-evidence";
 import { highTierRequestAllowed } from "../agents/resource-access";
 import { calendarReversalFromResult } from "../activity/calendar-reversal";
 // E07-S16 — Agent call pipeline: gatekeeping and the allow/deny decision
@@ -67,6 +70,9 @@ import { withTransaction, type Db } from "../db/index";
 // engine's `PolicyCall`, plus the tool `params` (executed + recorded, redacted)
 // and an optional agent `reason`.
 export interface AgentCall {
+  /** Server-owned request trace. Never populated from agent arguments. */
+  readonly audit?: { requestId: string; attemptId?: string; policyFingerprint?: string; connectorAccountId?: string; connectorAccountLabel?: string; startedAt: number; attempted?: boolean; terminal?: boolean; decision?: unknown; approvalId?: string };
+  readonly unknownSemantics?: boolean;
   readonly requiresApproval?: boolean;
   readonly connector: string | null;
   readonly connectorAccountId?: string;
@@ -129,6 +135,7 @@ export interface PipelineDeps {
 export type AgentCallResult =
   | { status: "executed"; result: unknown }
   | { status: "refused"; reason: string }
+  | { status: "failed" | "unknown"; reason: string }
   | { status: "pending_approval"; approval_id: string; expires_at: Date };
 
 // The two request metrics the pipeline records for EVERY handled agent call (task E17-S03):
@@ -168,6 +175,7 @@ interface DecidedCall {
 export type ApprovedHoldResult =
   | { status: "executed"; result: unknown }
   | { status: "refused"; reason: string }
+  | { status: "failed" | "unknown"; reason: string }
   | { status: "in_progress" };
 
 // The plain reasons executeApprovedHold refuses with.
@@ -182,7 +190,8 @@ const HOLD_FAILED = "The approved request could not be completed.";
 function asToolRefusal(result: unknown): { status: "refused"; reason: string } | null {
   if (typeof result !== "object" || result === null) return null;
   const { status, reason } = result as { status?: unknown; reason?: unknown };
-  return status === "refused" && typeof reason === "string" ? { status: "refused", reason } : null;
+  return ["refused", "not_available", "gone"].includes(String(status))
+    ? { status: "refused", reason: typeof reason === "string" ? reason : "The requested resource is unavailable." } : null;
 }
 
 export interface AgentCallPipeline {
@@ -190,16 +199,15 @@ export interface AgentCallPipeline {
   executeApprovedHold(userId: string, approvalId: string): Promise<ApprovedHoldResult>;
 }
 
-// The permission the policy engine checks (design §8 step 2). The stored grants
-// grant whole CONNECTORS plus read/change tool CLASSES — there is no per-tool
-// allowlist column — so a tool is permitted when its connector is granted AND its
-// class (read / change) is allowed. `grantedTools` therefore names exactly the
-// called tool, leaving the connector grant + class to gate it.
+// Permission checks combine the service grant, read/change class and optional
+// exact tool allowlist. An absent allowlist preserves all current and future tools;
+// an explicit empty list grants none. Discovery uses the same stored policy.
+
 function toPermission(call: AgentCall, context: AgentContext): Permission {
   const { permissions } = context;
   return {
     connectorGranted: call.connector !== null && permissions.grantedConnectors.includes(call.connector),
-    grantedTools: [call.tool],
+    grantedTools: (call.connector ? permissions.connectorPolicies?.[call.connector]?.allowedTools : undefined) ?? [call.tool],
     readsAllowed: (call.connector ? permissions.connectorPolicies?.[call.connector]?.readTools : undefined) ?? permissions.readTools,
     changes: (call.connector ? permissions.connectorPolicies?.[call.connector]?.changeTools : undefined) ?? permissions.changeTools,
     highTierAllowed: permissions.highTierAccess,
@@ -224,7 +232,7 @@ function toPolicyContext(
     permission: toPermission(call, context),
     // Unknown provider semantics cannot bypass a never-send or conditional
     // prohibition by omitting trustworthy channel/recipient/amount metadata.
-    rules: context.rules.map(rule => call.requiresApproval && rule.kind === "never_allow"
+    rules: context.rules.map(rule => (call.requiresApproval || (call.unknownSemantics && call.makesChange)) && (rule.kind === "never_allow" || rule.kind === "ask_first")
       ? {...rule, condition:undefined, ...(rule.action.type === "send_message" ? {action:{type:"any_change" as const}} : {})}
       : rule) as readonly IdentifiedRule[],
     accountCurrency: context.accountCurrency,
@@ -331,20 +339,27 @@ export function createAgentCallPipeline(deps: PipelineDeps): AgentCallPipeline {
     call: AgentCall,
     outcome: string,
     result?: unknown,
+    targetRecorder: ActivityRecorder = recorder,
+    markTerminal = true,
   ): Promise<void> {
-    await recorder.record({
+    await targetRecorder.record({
       userId: connection.userId,
-      kind: "tool_call",
+      kind: outcome === "attempted" ? "tool_attempt" : "tool_call",
       source: "warthog",
       agentId: connection.agentId,
       connectorId: call.connector ?? undefined,
       tool: call.tool,
       outcome,
       merchant: call.merchant,
-      payload: { params: call.params, reason: call.reason, connectorAccountId: call.connectorAccountId,
+      payload: { params: call.params, reason: call.reason, connectorAccountId: call.connectorAccountId ?? call.audit?.connectorAccountId,
+        connectorAccountLabel: call.connectorAccountLabel ?? call.audit?.connectorAccountLabel,
+        requestId: call.audit?.requestId, attemptId: call.audit?.attemptId, policyFingerprint: call.audit?.policyFingerprint, reportedRunId: requestObservation.getStore()?.reportedRunId, parentRequestId: requestObservation.getStore()?.requestId, client: requestObservation.getStore()?.client, decision: call.audit?.decision, approvalId: call.audit?.approvalId,
+        durationMs: call.audit ? Math.max(0, clock.now().getTime() - call.audit.startedAt) : undefined,
+        resultEvidence: result === undefined ? { outcome } : observeResult(result).evidence,
         ...(outcome === "executed" ? { reversal: calendarReversalFromResult(call.tool, result) } : {}),
       },
     });
+    if (markTerminal && call.audit && outcome !== "attempted") call.audit.terminal = true;
   }
 
   // Resolve the person's unwrapped DEK (to encrypt the held call's args and the
@@ -369,6 +384,7 @@ export function createAgentCallPipeline(deps: PipelineDeps): AgentCallPipeline {
     startedAt: number,
     outcome: string,
     errorCategory: string | undefined,
+    call?: AgentCall, connection?: AgentConnection,
   ): Promise<void> {
     if (!deps.recordMetric) return;
     // Elapsed wall-clock milliseconds read through the clock seam (never Date.now()). A
@@ -376,6 +392,8 @@ export function createAgentCallPipeline(deps: PipelineDeps): AgentCallPipeline {
     const elapsed = clock.now().getTime() - startedAt;
     const latency = elapsed >= 0 ? elapsed : 0;
     const dimensions: Record<string, unknown> = { outcome };
+    if (call?.connector && /^[A-Za-z0-9][A-Za-z0-9_.-]{0,63}$/.test(call.connector)) dimensions.connectorId = call.connector;
+    if (connection?.platform && /^[A-Za-z0-9][A-Za-z0-9_.-]{0,63}$/.test(connection.platform)) dimensions.platform = connection.platform;
     if (errorCategory !== undefined) dimensions.errorCategory = errorCategory;
     await deps.recordMetric({ name: REQUEST_COUNT_METRIC, value: 1, dimensions });
     await deps.recordMetric({ name: REQUEST_LATENCY_METRIC, value: latency, dimensions });
@@ -427,6 +445,11 @@ export function createAgentCallPipeline(deps: PipelineDeps): AgentCallPipeline {
       toPolicyContext(connection, context, call, clock.now(), rate),
     );
 
+    if (call.audit) {
+      call.audit.decision = decision;
+      call.audit.policyFingerprint = createHash("sha256").update(JSON.stringify({ grants: context.permissions, rules: context.rules })).digest("hex");
+    }
+
     // DENY — refuse and record, never execute.
     if (decision.decision === "deny") {
       await record(connection, call, "denied");
@@ -440,6 +463,7 @@ export function createAgentCallPipeline(deps: PipelineDeps): AgentCallPipeline {
         return { result: { status: "refused", reason: "The service account is unavailable or changed. Select an account in this agent’s Connectors settings and submit a new request." }, errorCategory: CATEGORY_DENIED };
       }
       call = prepared;
+      if (call.audit) { call.audit.connectorAccountId = call.connectorAccountId; call.audit.connectorAccountLabel = call.connectorAccountLabel; }
     }
 
     // ASK — the person is needed. Warthog HOLDS the call: it parks the exact
@@ -464,6 +488,7 @@ export function createAgentCallPipeline(deps: PipelineDeps): AgentCallPipeline {
           dek,
           clock,
         );
+        if (call.audit) call.audit.approvalId = created.id;
         await createHeldRequest(
           tx,
           {
@@ -475,9 +500,10 @@ export function createAgentCallPipeline(deps: PipelineDeps): AgentCallPipeline {
           dek,
           clock,
         );
+        await record(connection, call, "pending_approval", undefined, recorder.forTransaction?.(tx, async () => dek) ?? recorder, false);
         return created;
       });
-      await record(connection, call, "pending_approval");
+      if (call.audit) call.audit.terminal = true;
       // Trigger the approval notifier on creation (E12-S07): a push to every
       // registered device within seconds, plus a scheduled fallback anchored to the
       // approval's own createdAt. A push failure does not derail this — the notifier
@@ -497,13 +523,19 @@ export function createAgentCallPipeline(deps: PipelineDeps): AgentCallPipeline {
     // is returned to the agent. A tool body that refuses (e.g. the connection lacks
     // the permission it checks) did nothing: it is recorded and returned as refused,
     // with the body's own plain reason — never as executed.
+    if (call.makesChange) await record(connection, call, "attempted");
+    if (call.audit) call.audit.attempted = true;
     const result = await executeTool(call, connection);
     const refusal = asToolRefusal(result);
     if (refusal) {
       await record(connection, call, "refused");
       return { result: refusal, errorCategory: CATEGORY_TOOL_REFUSED };
     }
-    await record(connection, call, "executed", result);
+    const observed = observeResult(result);
+    await record(connection, call, observed.outcome, result);
+    if (observed.outcome === "failed" || observed.outcome === "unknown") {
+      return { result: { status: observed.outcome, reason: "The service did not confirm success. Check the activity record before retrying a change." }, errorCategory: CATEGORY_TOOL_ERROR };
+    }
     return { result: { status: "executed", result } };
   }
 
@@ -513,6 +545,7 @@ export function createAgentCallPipeline(deps: PipelineDeps): AgentCallPipeline {
       // timing, so it measures the request-count and request-latency metrics here (task
       // E17-S03). Start the timer before the gates run.
       const startedAt = clock.now().getTime();
+      call = { ...call, audit: { requestId: requestObservation.getStore()?.requestId ?? randomUUID(), attemptId: randomUUID(), startedAt } };
       let decided: DecidedCall;
       try {
         decided = await decide(connection, call);
@@ -520,10 +553,13 @@ export function createAgentCallPipeline(deps: PipelineDeps): AgentCallPipeline {
         // The tool executor (or a downstream step) threw: measure the operational failure
         // first so error rates capture it, then let the error propagate — the pipeline
         // never swallows a tool failure.
-        await emitRequestMetrics(startedAt, EXECUTOR_FAILURE_OUTCOME, CATEGORY_TOOL_ERROR);
+        if (!call.audit?.terminal) {
+          await record(connection, call, call.audit?.attempted && call.makesChange ? "unknown" : "failed");
+        }
+        await emitRequestMetrics(startedAt, EXECUTOR_FAILURE_OUTCOME, CATEGORY_TOOL_ERROR, call, connection);
         throw err;
       }
-      await emitRequestMetrics(startedAt, decided.result.status, decided.errorCategory);
+      await emitRequestMetrics(startedAt, decided.result.status, decided.errorCategory, call, connection);
       return decided.result;
     },
 
@@ -560,7 +596,11 @@ export function createAgentCallPipeline(deps: PipelineDeps): AgentCallPipeline {
 
       // Already run: hand back what it came to (or "still running" mid-run).
       if (held.status === "executed") {
-        return held.outcome ?? { status: "in_progress" };
+        if (held.outcome) return held.outcome;
+        if (held.executedAt && clock.now().getTime() - held.executedAt.getTime() > 5 * 60_000) {
+          return { status: "unknown", reason: "No completion was recorded for this attempt. Check Activity and the service before submitting a new request; this hold will not be replayed." };
+        }
+        return { status: "in_progress" };
       }
 
       // A release is handed over by the person's device and collected by the agent;
@@ -601,27 +641,45 @@ export function createAgentCallPipeline(deps: PipelineDeps): AgentCallPipeline {
         agentId: agent.id,
         active: true,
       };
+      const approvedCall: AgentCall = { ...call, audit: { requestId: call.audit?.requestId ?? randomUUID(), attemptId: randomUUID(), startedAt: clock.now().getTime(), approvalId } };
+      async function finish(outcome: HeldOutcome, result?: unknown) {
+        await withTransaction(db, async tx => {
+          await record(connection, approvedCall, outcome.status, result, recorder.forTransaction?.(tx, async () => dek) ?? recorder, false);
+          await recordOutcome(tx, { userId, id: ran.id, outcome }, dek);
+        });
+        approvedCall.audit!.terminal = true;
+      }
+      let observedResult: unknown;
       let outcome: HeldOutcome;
       try {
         const current = await loadAgentContext(connection, { db, keyWrapper, clock }, cardRequestOf(call));
         const policy = evaluate(toPolicyCall(call), toPolicyContext(connection, current, call, clock.now(), rate));
+        approvedCall.audit!.decision = policy;
+        approvedCall.audit!.policyFingerprint = createHash("sha256").update(JSON.stringify({ grants: current.permissions, rules: current.rules })).digest("hex");
         if (policy.decision === "deny") {
           outcome = { status: "refused", reason: policy.reason };
         } else {
           // Approval satisfies an ask, never a current denial. The tool also checks
           // its current resource grant and the originally approved service account.
-          const result = await executeTool(call, connection);
+          approvedCall.audit!.decision = policy;
+          await record(connection, approvedCall, "attempted");
+          approvedCall.audit!.attempted = true;
+          const result = await executeTool(approvedCall, connection);
+          observedResult = result;
           const refusal = asToolRefusal(result);
-          outcome = refusal ?? { status: "executed", result };
+          const observed = observeResult(result);
+          outcome = refusal ?? (observed.outcome === "failed" || observed.outcome === "unknown"
+            ? { status: observed.outcome, reason: HOLD_FAILED }
+            : { status: "executed", result });
         }
       } catch (error) {
         // Keep the failure so a later ask is told the request could not be completed
         // (never "already run"), then let the error propagate — never swallowed.
-        await recordOutcome(db, { userId, id: ran.id, outcome: { status: "refused", reason: HOLD_FAILED } }, dek);
+        const status = approvedCall.audit?.attempted ? "unknown" : "failed";
+        await finish({ status, reason: HOLD_FAILED });
         throw error;
       }
-      await record(connection, call, outcome.status, outcome.status === "executed" ? outcome.result : undefined);
-      await recordOutcome(db, { userId, id: ran.id, outcome }, dek);
+      await finish(outcome, observedResult);
       return outcome;
     },
   };

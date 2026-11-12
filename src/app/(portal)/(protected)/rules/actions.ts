@@ -1,3 +1,4 @@
+import { auditedOwnerChange } from "@/server/activity/owner-change";
 // E12-S17 — Rules page actions (the injectable seam the thin rules `page.tsx`
 // loader + its server-action wrappers compose).
 //
@@ -37,6 +38,7 @@ import { z } from "zod";
 
 import { parseParams } from "@/server/http/validate";
 import {
+  listAllRules,
   createRule as storeCreateRule,
   updateRule as storeUpdateRule,
   pauseRule as storePauseRule,
@@ -327,7 +329,10 @@ export function createRulesActions(deps: RulesActionsDeps): RulesActions {
     const content = parseParams(ruleContentSchema, input);
     const scope = await resolveScopeName(session.userId, content.scope);
     const dek = await dataKeyFor(session.userId);
-    await storeCreateRule(db, { userId: session.userId, ...content, scope }, dek);
+    await auditedOwnerChange(deps, session.userId, async (tx, record) => {
+      const rule = await storeCreateRule(tx, { userId: session.userId, ...content, scope }, dek);
+      await record("rule_created", { ruleId: rule.id, after: { ...content, scope } });
+    });
     return { ok: true };
   }
 
@@ -337,7 +342,11 @@ export function createRulesActions(deps: RulesActionsDeps): RulesActions {
     const scope = await resolveScopeName(session.userId, content.scope);
     const dek = await dataKeyFor(session.userId);
     try {
-      await storeUpdateRule(db, session.userId, ruleId, { ...content, scope }, dek);
+      await auditedOwnerChange(deps, session.userId, async (tx, record) => {
+        const before = (await listAllRules(tx, session.userId, dek)).find(rule => rule.id === ruleId);
+        await storeUpdateRule(tx, session.userId, ruleId, { ...content, scope }, dek);
+        await record("rule_updated", { ruleId, before, after: { ...content, scope } });
+      });
       return { ok: true };
     } catch {
       return { ok: false, reason: NOT_FOUND };
@@ -347,7 +356,10 @@ export function createRulesActions(deps: RulesActionsDeps): RulesActions {
   async function pauseRule(session: Session, id: string): Promise<ActionResult> {
     const ruleId = parseParams(uuidSchema, id);
     try {
-      await storePauseRule(db, session.userId, ruleId);
+      await auditedOwnerChange(deps, session.userId, async (tx, record) => {
+        await storePauseRule(tx, session.userId, ruleId);
+        await record("rule_paused", { ruleId });
+      });
       return { ok: true };
     } catch {
       return { ok: false, reason: NOT_FOUND };
@@ -356,7 +368,13 @@ export function createRulesActions(deps: RulesActionsDeps): RulesActions {
 
   async function deleteRule(session: Session, id: string): Promise<ActionResult> {
     const ruleId = parseParams(uuidSchema, id);
-    const removed = await storeDeleteRule(db, session.userId, ruleId);
+    const dek = await dataKeyFor(session.userId);
+    const removed = await auditedOwnerChange(deps, session.userId, async (tx, record) => {
+      const before = (await listAllRules(tx, session.userId, dek)).find(rule => rule.id === ruleId);
+      const deleted = await storeDeleteRule(tx, session.userId, ruleId);
+      if (deleted) await record("rule_deleted", { ruleId, before });
+      return deleted;
+    });
     return removed ? { ok: true } : { ok: false, reason: NOT_FOUND };
   }
 

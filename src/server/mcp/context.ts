@@ -49,6 +49,7 @@ const DEFAULT_PERIOD: PeriodKind = "month";
 // The resolved connection the loader reads for. `userId` is the OWNING person
 // (member scope) — from the session/connection, NEVER a client value.
 export interface AgentConnection {
+  readonly platform?: string;
   readonly userId: string;
   readonly connectionId: string;
   readonly agentId: string;

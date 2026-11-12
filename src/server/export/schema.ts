@@ -115,6 +115,7 @@ export const exportDocumentSchema = z.looseObject({
   version: z.literal(1),
   // When the export was produced (ISO 8601 string).
   exportedAt: z.string(),
+  agentSettings: z.record(z.string(), z.unknown()).optional(),
   profile: profileSchema,
   preferences: preferencesSchema,
   skills: z.array(skillSchema),
@@ -129,6 +130,7 @@ export const exportDocumentSchema = z.looseObject({
   lifeAdmin: z.array(lifeAdminSchema),
   connections: z.array(connectionSchema),
   activity: z.array(activitySchema),
+  importedActivity: z.array(activitySchema).optional(),
   // Present only after a step-up device decrypt; a server-only export omits it.
   deviceProtected: deviceProtectedSchema.optional(),
 });

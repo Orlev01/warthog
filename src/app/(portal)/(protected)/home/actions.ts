@@ -1,3 +1,4 @@
+import { activityEvidence } from "@/domain/activity/evidence";
 // E18-S08 — Home page loader (the injectable seam the thin `page.tsx` loader
 // composes). Extends the earlier minimal loader (E18-S13 greeting + all-not-done
 // checklist + empty states) to feed the dashboard view from the two already-built
@@ -95,7 +96,7 @@ function toDashboardActivity(
   const agent = entry.agentId !== undefined ? agentNames.get(entry.agentId) : undefined;
   return {
     id: entry.entryHash,
-    summary: payloadText(entry.payload, "summary") || entryTitle(entry),
+    summary: activityEvidence(entry).summary,
     outcome: entry.outcome !== undefined ? humanise(entry.outcome) : undefined,
     agent,
     at: formatAccountTime(entry.occurredAt, timeZone),

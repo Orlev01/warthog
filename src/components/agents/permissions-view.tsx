@@ -43,7 +43,7 @@ const DEFAULT_REQUEST_LIMIT = 120;
 export type ConnectorAccess = {
   accounts?: readonly { id: string; label: string }[];
   accountId?: string;
-  policy?: { readTools?: boolean; changeTools?: "off" | "allow" | "ask_first" };
+  policy?: { allowedTools?: string[] | null; readTools?: boolean; changeTools?: "off" | "allow" | "ask_first" };
   id: string;
   name: string;
   // whether the agent may use this connected service (review fix W2.3): when present, the
@@ -83,6 +83,8 @@ export type PermissionsViewProps = {
   // which skills it receives, each grantable.
   skills: ReadonlyArray<SkillGrant>;
   // the person's tasks and life-admin records (their own grants, migration 0068).
+  resourceControls?: { tasksWrite?: boolean; recordsWrite?: boolean; recordIds?: string[] | null };
+  recordChoices?: readonly SkillGrant[];
   tasksAccess: boolean;
   recordsAccess: boolean;
   // read the person's shared memory; share what it learns with other agents.
@@ -149,6 +151,7 @@ export function PermissionsView({
   cardAccess,
   budget,
   skills,
+  resourceControls, recordChoices,
   tasksAccess,
   recordsAccess,
   sharedMemoryRead,
@@ -284,6 +287,15 @@ export function PermissionsView({
                 <p className="text-sm text-fg-muted">
                   Provider-hosted tools always require approval.
                 </p>
+                <label className="flex flex-col gap-1 text-sm">
+                  Tool access
+                  <Select name={`connectorToolScope:${connector.id}`} defaultValue={connector.policy?.allowedTools == null ? "all" : "chosen"}>
+                    <option value="all">All tools, including future tools</option>
+                    <option value="chosen">Only checked tools</option>
+                  </Select>
+                  <span className="text-xs text-fg-muted">In checked-tools mode, newly discovered tools are blocked. Read/change settings and global rules still apply.</span>
+                </label>
+                {!connector.readTools.length && !connector.changeTools.length ? <p className="text-sm text-fg-muted">No tool inventory is available for the selected account. Reconnect or select its account to refresh discovery.</p> : null}
                 {connector.readTools.length > 0 ? (
                   <div className="flex flex-col gap-1.5">
                     <h4 className="text-sm font-medium text-fg-muted">Reads</h4>
@@ -293,7 +305,9 @@ export function PermissionsView({
                           key={tool}
                           className="rounded-card border border-line bg-surface-muted p-2 text-sm text-fg"
                         >
-                          {tool}
+                          <label className="flex min-h-11 items-center gap-2 [overflow-wrap:anywhere]">
+                            <input type="checkbox" name={`connectorTool:${connector.id}`} value={tool} defaultChecked={connector.policy?.allowedTools == null || connector.policy.allowedTools.includes(tool)} />{tool}
+                          </label>
                         </li>
                       ))}
                     </ul>
@@ -311,7 +325,9 @@ export function PermissionsView({
                           key={tool}
                           className="flex flex-wrap items-center justify-between gap-2 rounded-card border border-line bg-surface-muted p-2 text-sm text-fg"
                         >
-                          <span>{tool}</span>
+                          <label className="flex min-h-11 items-center gap-2 [overflow-wrap:anywhere]">
+                            <input type="checkbox" name={`connectorTool:${connector.id}`} value={tool} defaultChecked={connector.policy?.allowedTools == null || connector.policy.allowedTools.includes(tool)} />{tool}
+                          </label>
                           <span className="font-medium text-fg-muted">
                             {connector.granted === false ||
                             (connector.policy?.changeTools ?? changeTools) ===
@@ -478,17 +494,26 @@ export function PermissionsView({
           {/* The person's tasks and life-admin records — their own grants. */}
           <div className="flex flex-col gap-3">
             <SectionHeading>Tasks and records</SectionHeading>
+            <Toggle name="tasksWrite" on={resourceControls?.tasksWrite !== false} label="Allow task changes" description="Requires task access below. Turn off for read-only access." />
+            <Toggle name="recordsWrite" on={resourceControls?.recordsWrite !== false} label="Allow record changes" description="Requires record access below. Turn off for read-only access." />
+            <label className="flex flex-col gap-1 text-sm">Record audience
+              <Select name="recordScope" defaultValue={resourceControls?.recordIds == null ? "all" : "chosen"}>
+                <option value="all">All your records, including future records</option>
+                <option value="chosen">Checked records and records this agent creates</option>
+              </Select>
+            </label>
+            {recordChoices?.map(record => <Toggle key={record.id} name={`record:${record.id}`} on={record.granted} label={record.name} />)}
             <Toggle
               name="tasks"
               on={tasksAccess}
               label="Your tasks"
-              description={CONNECTION_CAPABILITIES.tasks.description}
+              description="Read tasks assigned to this agent or available to any agent. The change setting above controls whether it can create, update and complete tasks."
             />
             <Toggle
               name="records"
               on={recordsAccess}
               label="Your life-admin records"
-              description={CONNECTION_CAPABILITIES.records.description}
+              description="Read records in the selected audience. The change setting above controls whether it can save and update records."
             />
           </div>
         </>

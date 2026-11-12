@@ -1,3 +1,4 @@
+import { selectKeyWrapper } from "@/server/crypto/key-wrapper";
 import { getAgentDefaults } from "@/server/db/agent-defaults";
 import * as React from "react";
 import { cookies } from "next/headers";
@@ -80,6 +81,7 @@ export default async function AccessKeyPage({
     try {
       const result = await createAccessKeyActions({
         db: requestDb,
+        keyWrapper: selectKeyWrapper({ nodeEnv: loadConfig().nodeEnv, localKek: loadConfig().devKek }),
         clock: systemClock,
         random: systemRandom,
       }).create(requestSession, input);

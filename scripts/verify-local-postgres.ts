@@ -10,6 +10,7 @@ import { checkHouseholdRelease } from "../src/server/spending/release-household"
 import { randomUUID } from "node:crypto";
 import { verifyPostgresAgentControls } from "./verify-local-postgres-agents";
 import { verifyPostgresSecurityContention } from "./verify-local-postgres-security";
+import { verifyPostgresEvidence } from "./verify-local-postgres-evidence";
 
 if (process.platform !== "linux" || process.env.WARTHOG_LOCAL_PG_CHECK !== "1") throw new Error("Local Compose check required");
 const url = (role: string) => `postgresql://${role}@warthog-postgres-check:5432/warthog?sslmode=disable`;
@@ -98,6 +99,7 @@ try {
   await verifyConcurrentHouseholdReleases();
   await verifyPostgresSecurityContention(runtime, purge);
   await verifyPostgresAgentControls(runtime, purge);
+  await verifyPostgresEvidence(runtime, purge);
   console.log(`PostgreSQL 16: ${migrations.length} migrations, idempotence, role separation, cascade purge, exclusive ownership and concurrent household-budget checks passed.`);
 } finally {
   await owner?.close();

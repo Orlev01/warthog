@@ -16,6 +16,7 @@ import { createTransferImportHandler as createImportHandler } from "@/server/imp
 import { encryptValue, decryptValue } from "@/client/vault/values";
 import { buildDeviceProtected } from "@/client/vault/export";
 import { reprotectDeviceProtected } from "@/client/vault/import";
+import { emptyTransferDocument, TRANSFER_REQUEST_BYTES } from "@/domain/transfer-parts";
 
 const origin = "https://warthog.test";
 const clock = fixedClock(new Date("2026-11-09T00:00:00Z"));
@@ -32,6 +33,25 @@ async function setup() {
   }
   return { db, person, deps: { db, keyWrapper, clock, publicOrigin: origin } };
 }
+
+test("legacy imports retain their size allowance while multipart payloads stay bounded", async () => {
+  const f = await setup();
+  try {
+    const target = await f.person("legacy-large");
+    const handle = createImportHandler(f.deps);
+    const document = emptyTransferDocument(clock.now().toISOString());
+    document.skills = Array.from({ length: 80 }, (_, i) => ({ title: `Skill ${i}`, fullText: "x".repeat(190_000) }));
+    assert.ok(Buffer.byteLength(JSON.stringify({ document })) > TRANSFER_REQUEST_BYTES);
+    const started = await handle(request("/api/data/import", target.cookie, { operation: "begin", partCount: 1 }));
+    const { id } = await started.json();
+    assert.equal((await handle(request("/api/data/import", target.cookie, { operation: "part", id, seq: 0, part: { document } }))).status, 413);
+    assert.equal((await handle(request("/api/data/import", target.cookie, { document }))).status, 200);
+    assert.equal(Number((await f.db.query("SELECT count(*) AS n FROM skills WHERE user_id = $1", [target.userId])).rows[0]!.n), 80);
+    const oversized = request("/api/data/import", target.cookie, { document: emptyTransferDocument(clock.now().toISOString()) });
+    oversized.headers.set("content-length", String(26 * 1024 * 1024 + 1));
+    assert.equal((await handle(oversized)).status, 413);
+  } finally { await f.db.close(); }
+});
 
 test("device export/import restores protected records only as locally resealed ciphertext and maps owned card addresses", async () => {
   const f = await setup();

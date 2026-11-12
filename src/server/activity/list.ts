@@ -38,6 +38,7 @@ import { parseParams } from "../http/validate";
 // bounds on occurred_at; `agentId`/`connectorId` map to the entry's agent/service;
 // `source` keeps only Warthog-written or only agent-reported entries.
 export interface ActivityFilters {
+  seq?: number;
   agentId?: string;
   connectorId?: string;
   kind?: string;
@@ -63,6 +64,7 @@ export interface ActivityCursor {
 export interface ActivityPage {
   limit?: number;
   before?: ActivityCursor;
+  beforeSeq?: number;
 }
 
 // The cursor that continues after a page (the last, i.e. oldest, entry it returned), or
@@ -108,6 +110,7 @@ export async function listActivity(
     conditions.push(`${column} ${op} $${values.length}`);
   };
 
+  if (filters.seq !== undefined) bind("seq", "=", String(filters.seq));
   if (filters.agentId !== undefined) bind("agent_id", "=", filters.agentId);
   if (filters.connectorId !== undefined) bind("connector_id", "=", filters.connectorId);
   if (filters.kind !== undefined) bind("kind", "=", filters.kind);
@@ -119,6 +122,10 @@ export async function listActivity(
     // Strictly after the cursor in feed order (occurred_at DESC, seq DESC).
     values.push(page.before.occurredAt, page.before.seq);
     conditions.push(`(occurred_at, seq) < ($${values.length - 1}::timestamptz, $${values.length})`);
+  }
+  if (page.beforeSeq !== undefined) {
+    values.push(page.beforeSeq);
+    conditions.push(`(occurred_at, seq) < (SELECT occurred_at, seq FROM activity_entries WHERE user_id = $1 AND seq = $${values.length})`);
   }
   values.push(clampLimit(page.limit));
 

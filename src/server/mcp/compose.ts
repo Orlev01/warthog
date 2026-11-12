@@ -1,3 +1,6 @@
+import { randomUUID } from "node:crypto";
+import { requestObservation, clientObservation, rememberClient } from "./client-observation";
+import { parseBody } from "../http/validate";
 import { z } from "zod";
 import { findToolsSchema } from "./tools/registry";
 import { mayCollectReleasedField } from "../agents/resource-access";
@@ -111,7 +114,7 @@ const MCP_SERVER_VERSION = "0.1.0";
 
 // A thrown tool call maps to a plain-English reason the agent sees; an internal failure is
 // never surfaced verbatim (only the input-boundary's own fixed 4xx messages are safe).
-const TOOL_FAILED_REASON = "The tool call could not be completed.";
+const TOOL_FAILED_REASON = "The tool call could not be completed. A change may have occurred; inspect Activity and the service before retrying.";
 
 // Register `tool` on `server`, routing the call through `tool.handle` under the already
 // resolved `connection` (from the verified bearer). The advertised input schema is the
@@ -135,7 +138,7 @@ function registerTool(
       }
       try {
         const outcome = await tool.handle(args, connection);
-        return toToolResult(outcome);
+        return { ...toToolResult(outcome), _meta: { "app.warthog/requestId": requestObservation.getStore()?.requestId } };
       } catch (err) {
         // A boundary 4xx (malformed / oversized input, INV-102) carries its own fixed,
         // safe message. Any other failure is logged for operators (never its message) and
@@ -172,6 +175,9 @@ function toToolResult(outcome: AgentCallResult): {
       };
       return { content: [{ type: "text", text: JSON.stringify(structured) }], structuredContent: structured };
     }
+    case "failed":
+    case "unknown":
+      return errorResult(outcome.reason);
     case "refused":
       // A denied / refused call is an MCP error carrying the plain reason.
       return errorResult(outcome.reason);
@@ -414,6 +420,13 @@ export function createMcpDispatch(deps: McpDispatchDeps): McpDispatch {
   const pipeline = buildAgentPipeline(deps);
   const registry = createToolRegistry({ pipeline });
   const wrapper=selectKeyWrapper({nodeEnv:config.nodeEnv,localKek:config.devKek});
+  const clock = systemClock;
+  const dataKeyFor = async (userId: string) => {
+    const user = await getUserById(db, userId);
+    if (!user) throw new Error("No user data key");
+    return wrapper.unwrap(user.wrappedDek);
+  };
+  const recorder = createRedactingRecorder({ db, clock, dekFor: dataKeyFor });
   const provider=createProviderRuntime({db,catalogue,clock:systemClock,publicBaseUrl:config.publicBaseUrl,fetch:deps.fetch,dekFor:async userId=>{
     const user=await getUserById(db,userId);
     if(!user) throw new Error("No user data key");
@@ -433,6 +446,7 @@ export function createMcpDispatch(deps: McpDispatchDeps): McpDispatch {
       connectionId: agent.connectionId,
       agentId: agent.id,
       active: agent.status === "connected",
+      platform: agent.platform,
     };
   }
 
@@ -470,6 +484,18 @@ export function createMcpDispatch(deps: McpDispatchDeps): McpDispatch {
       tools = registry.coreTools;
     }
 
+    const envelope = requestObservation.getStore()?.body as { method?: string; params?: { name?: unknown; arguments?: unknown } } | undefined;
+    if (connection && envelope?.method === "tools/call") {
+      const requested = tools.find(tool => tool.name === envelope.params?.name);
+      if (!requested || !requested.inputSchema.safeParse(envelope.params?.arguments ?? {}).success) {
+        const observation = requestObservation.getStore();
+        if (observation) observation.boundaryRecorded = true;
+        await recorder.record({ userId: connection.userId, agentId: connection.agentId, kind: "tool_rejected", source: "warthog", outcome: "refused",
+          tool: requested?.name, payload: { requestId: requestObservation.getStore()?.requestId,
+            summary: requested ? "Tool input rejected before execution" : "Unavailable tool rejected before execution",
+            reason: requested ? "invalid_input" : "tool_unavailable" } });
+      }
+    }
     for (const tool of tools) {
       registerTool(server, tool, connection);
     }
@@ -482,8 +508,26 @@ export function createMcpDispatch(deps: McpDispatchDeps): McpDispatch {
     // Hand the VERIFIED connection to the SDK as pass-through authInfo (clientId = the
     // connection id); the per-request factory reads it to scope the tools. The SDK never
     // reads identity from the body.
-    return handler.fetch(request, {
-      authInfo: { token: connectionId, clientId: connectionId, scopes: [MCP_SCOPE] },
+    const connection = await resolveConnection(connectionId);
+    let body: unknown;
+    try { if (request.method === "POST") body = await parseBody(z.unknown(), request.clone(), { maxBytes: 1024 * 1024 }); }
+    catch {
+      if (connection) await recorder.record({ userId: connection.userId, agentId: connection.agentId, kind: "protocol_rejected", source: "warthog", outcome: "refused", payload: { reason: "Malformed or oversized request", requestId: randomUUID() } });
+      return Response.json({ jsonrpc: "2.0", id: null, error: { code: -32700, message: "Invalid request body" } }, { status: 400 });
+    }
+    const client = clientObservation(body, request.headers);
+    if (connection && client) await rememberClient(db, connection, client, clock.now().toISOString(), await dataKeyFor(connection.userId), recorder);
+    const meta = body && typeof body === "object" ? (body as { _meta?: Record<string, unknown> })._meta : undefined;
+    const run = meta?.["app.warthog/runId"];
+    const reportedRunId = typeof run === "string" && /^[A-Za-z0-9_.:-]{1,120}$/.test(run) ? run : undefined;
+    return requestObservation.run({ requestId: randomUUID(), body, client, reportedRunId }, async () => {
+      const response = await handler.fetch(request, {
+        authInfo: { token: connectionId, clientId: connectionId, scopes: [MCP_SCOPE] },
+      });
+      if (connection && response.status >= 400 && !requestObservation.getStore()?.boundaryRecorded) {
+        await recorder.record({ userId: connection.userId, agentId: connection.agentId, kind: "protocol_rejected", source: "warthog", outcome: "refused", payload: { requestId: requestObservation.getStore()?.requestId, summary: "Request rejected by the protocol boundary", status: response.status } });
+      }
+      return response;
     });
   };
 }
@@ -510,6 +554,9 @@ const REVERSAL_FAILED = "The reversal couldn't be completed.";
 // One pipeline outcome as the plain-words outcome the undo entry records.
 function reversalOutcome(result: AgentCallResult): UndoReversalResult {
   switch (result.status) {
+    case "failed":
+    case "unknown":
+      return { status: "failed", outcome: result.reason };
     case "executed":
       return successfulConnectorResult(result.result)
         ? { status: "executed", outcome: "Undone." }

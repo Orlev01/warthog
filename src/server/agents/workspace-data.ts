@@ -1,3 +1,5 @@
+import { readClientObservation } from "../mcp/client-observation";
+import { activityEvidence } from "@/domain/activity/evidence";
 import { getAgentById } from "../db/agents";
 import { getConnectionPermissions } from "../db/agent-permissions";
 import { pageMemories } from "../db/memories";
@@ -55,13 +57,28 @@ export async function agentWorkspaceData(
         ).map((entry) => ({
           seq: entry.seq,
           title: entryTitle(entry),
+          ...activityEvidence(entry),
           outcome: entry.outcome ? humanise(entry.outcome) : "",
           reported: entry.source === "agent_reported",
           at: formatAccountTime(entry.occurredAt, timeZone),
         }))
       : [];
+  const recent = section === "overview" ? await listActivity(db, userId, { agentId: agent.id, kind: "tool_call" }, dek, { limit: 100 }) : [];
+  const measured = recent.filter(entry => {
+    const payload = entry.payload as { durationMs?: unknown; resultEvidence?: unknown };
+    return entry.outcome !== "pending_approval" && typeof payload?.durationMs === "number" && payload.resultEvidence != null;
+  });
+  const durations = measured.map(entry => (entry.payload as {durationMs:number}).durationMs).sort((a,b)=>a-b);
+  const performance = { examined: recent.length, measured: measured.length,
+    failed: measured.filter(entry => entry.outcome === "failed").length,
+    unknown: measured.filter(entry => entry.outcome === "unknown").length,
+    refused: measured.filter(entry => ["refused","denied","rate_limited"].includes(entry.outcome ?? "")).length,
+    p95Ms: durations.length ? Math.round(durations[Math.ceil(durations.length * 0.95) - 1]!) : null };
+  const clientObservation = await readClientObservation(db, userId, agent.id, dek);
   return {
+    performance,
     agent,
+    clientObservation: clientObservation ? { ...clientObservation, displayObservedAt: formatAccountTime(clientObservation.observedAt, timeZone) } : null,
     spending,
     memory,
     activity,

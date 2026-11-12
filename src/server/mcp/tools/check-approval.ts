@@ -78,6 +78,7 @@ const approvalIdShape = z.uuid();
 export type ApprovedHoldResult =
   | { status: "executed"; result: unknown }
   | { status: "refused"; reason: string }
+  | { status: "failed" | "unknown"; reason: string }
   | { status: "in_progress" };
 
 // What check_approval returns to the waiting agent. `released` / `approved` + `next`
@@ -88,6 +89,7 @@ export type CheckApprovalResult =
   | { status: "executed"; result: unknown }
   | { status: "approved" | "released"; approval_id: string; next: "collect_release" }
   | { status: "refused"; reason: string }
+  | { status: "failed" | "unknown"; reason: string }
   | { status: "more_detail"; approval_id: string; question: string };
 
 export interface CheckApprovalTool {

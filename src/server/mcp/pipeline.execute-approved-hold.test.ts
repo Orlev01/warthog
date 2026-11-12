@@ -317,7 +317,7 @@ async function arrangeHeldCall(
 // outcome as an activity entry (execute BEFORE record), returning the tool's result.
 // ===========================================================================
 
-test("an approved hold runs the held tool exactly once, records ONE Warthog outcome entry, and returns the result", async () => {
+test("an approved hold runs the held tool exactly once, records intent and a Warthog outcome entry, and returns the result", async () => {
   const db = await freshDb();
   const keyWrapper = keyWrapperFor();
   try {
@@ -351,8 +351,8 @@ test("an approved hold runs the held tool exactly once, records ONE Warthog outc
 
     // Warthog writes exactly ONE outcome entry for the run (it writes the record
     // itself), AFTER the tool ran.
-    assert.equal(rec.entries.length, beforeExec + 1, "the run records exactly one new activity entry");
-    assert.deepEqual(order, ["execute", "record"], "the tool runs, then the outcome is recorded");
+    assert.equal(rec.entries.length, beforeExec + 2, "the run records intent and one outcome entry");
+    assert.deepEqual(order, ["record", "execute", "record"], "intent is persisted before the tool and its outcome afterwards");
     const entry = rec.entries[rec.entries.length - 1]!;
     assert.equal(entry.source, "warthog", "Warthog writes the record itself (not the agent)");
     assert.equal(entry.tool, "send_email", "the outcome entry names the held tool");
@@ -532,7 +532,7 @@ test("the recorded outcome entry runs the held call's parameters through redacti
     const beforeExec = rec.entries.length;
     expectExecuted(await holds(pipeline).executeApprovedHold(userId, approvalId));
 
-    assert.equal(rec.entries.length, beforeExec + 1, "the run records exactly one new outcome entry");
+    assert.equal(rec.entries.length, beforeExec + 2, "the run records intent and one outcome entry");
     const entry = rec.entries[rec.entries.length - 1]!;
     const recorded = JSON.stringify(entry);
     assert.ok(!recorded.includes(SECRET), "a secret-named field value must not appear raw in the recorded outcome entry");
@@ -688,7 +688,9 @@ test("a held call whose tool threw keeps the failure, so a later ask is told it 
     });
 
     await assert.rejects(holds(throwing).executeApprovedHold(userId, approvalId), /provider exploded/, "the failure is never swallowed");
-    const later = expectRefused(await holds(throwing).executeApprovedHold(userId, approvalId));
+    const later = await holds(throwing).executeApprovedHold(userId, approvalId);
+    assert.equal(later.status, "unknown");
+    assert.ok("reason" in later);
     assert.match(later.reason, /could not be completed/i, "a later ask is told the request could not be completed");
     assert.equal(attempts, 1, "the held call is never retried behind the person's back");
   } finally {

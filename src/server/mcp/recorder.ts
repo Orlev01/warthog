@@ -35,6 +35,7 @@ export function createRedactingRecorder(deps: RedactingRecorderDeps): ActivityRe
   const { db, clock, dekFor } = deps;
 
   return {
+    forTransaction: (tx, transactionKey) => createRedactingRecorder({ ...deps, db: tx, dekFor: transactionKey }),
     async record(input: ActivityEntryInput): Promise<ActivityEntry> {
       const dek = await dekFor(input.userId);
       const matches = releasedValueMatcher(dek, await lookupForUser(db, input.userId, clock));

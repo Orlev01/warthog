@@ -411,6 +411,7 @@ function buildConnectorTool(
           ? requestMakesChange(String(parsed.method))
           : (declaration.makesChange ?? true),
         requiresApproval: declaration.requiresApproval,
+        unknownSemantics: isRequest || declaration.requiresApproval,
         messageChannel: declaration.messageChannel,
         recipients: declaration.recipients?.(parsed.body),
         reason: parsed.reason as string | undefined,
@@ -483,6 +484,7 @@ export function createToolRegistry(deps: ToolRegistryDeps): ToolRegistry {
           changes = policy?.changeTools ?? permissions.changeTools;
         for (const tool of tools) {
           const declaration = typeof tool === "string" ? { name: tool } : tool;
+          if (policy?.allowedTools && !policy.allowedTools.includes(`${connectorId}${NAMESPACE}${declaration.name}`)) continue;
           if (
             declaration.name === REQUEST_TOOL
               ? !reads && changes === "off"

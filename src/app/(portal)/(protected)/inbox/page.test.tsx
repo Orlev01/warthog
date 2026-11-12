@@ -931,7 +931,7 @@ test("approving a held non-release call runs it once through the composed pipeli
     assert.equal(ranHold?.status, "executed", "the held request is consumed — the approved call ran once");
 
     const recorded = (await listActivity(db, user.id, {}, dek)).filter(
-      (entry) => entry.tool === "remember" && entry.source === "warthog",
+      (entry) => entry.tool === "remember" && entry.source === "warthog" && entry.kind === "tool_call",
     );
     assert.equal(recorded.length, 1, "the approved held call's outcome is recorded in Activity exactly once");
     assert.equal(recorded[0]!.outcome, "executed", "it is recorded as executed — the tool really ran");
@@ -952,7 +952,7 @@ test("approving a held non-release call runs it once through the composed pipeli
     const afterSecond = (await listActivity(db, user.id, {}, dek)).filter(
       (entry) => entry.tool === "remember" && entry.source === "warthog",
     );
-    assert.equal(afterSecond.length, 1, "approving again runs nothing more (the held call ran only once)");
+    assert.equal(afterSecond.length, 2, "approving again adds neither another intent nor another outcome");
     assert.equal(
       (await getByApproval(db, user.id, approval.id, dek))?.status,
       "executed",

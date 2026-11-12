@@ -63,10 +63,12 @@ export const getSkillSchema = z.object({
 // deliberately omits (the index carries only `HOUSE_SKILL.title` + `useThisWhen`).
 // The TITLE is the ONE the index advertises (`HOUSE_SKILL.title`, one source of
 // truth); only this body lives here.
-const HOUSE_SKILL_BODY = [
-  "You are connected to this person through Warthog, their personal agent home. Everything you do for them passes through Warthog, and Warthog keeps the record.",
+export const HOUSE_SKILL_BODY = [
+  "You are connected to this person through Warthog, their personal agent home. Warthog enforces permissions and records requests routed through this connection. It cannot observe your separate tools or private conversations.",
   "",
   "Before you act:",
+  "- Use serviceAccounts in get_context to identify the selected account. The profile belongs to the consenting Warthog account and is not proof of the chat user’s identity.",
+  "- An unknown outcome means a change may have happened. Check Activity and the service before retrying; never blindly replay a change.",
   "- You may only use the connected services, identity details, cards and skills the person has granted to you. If a tool call is refused, that is the person's settings speaking — do not try to work around it.",
   "- When Warthog tells you a request is pending approval, stop and wait: the person decides it from their own signed-in app. Never ask them to approve by replying to a message, SMS or email.",
   "- Fetch a skill's full text with get_skill only when you have decided it is relevant. Warthog never guesses relevance for you.",

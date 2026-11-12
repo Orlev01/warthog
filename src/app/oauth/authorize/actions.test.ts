@@ -103,6 +103,8 @@ import type { EmailSender, OutgoingMessage } from "../../../server/notify/sender
 import { getAuthCode } from "../../../server/oauth/store";
 import { listAgentsForUser } from "../../../server/db/agents";
 import { getConnectionPermissions } from "../../../server/db/agent-permissions";
+import { saveAgentDefaults } from "../../../server/db/agent-defaults";
+import { readActivity } from "../../../server/activity/writer";
 import { createUser } from "../../../server/db/users";
 import { HttpError } from "../../../server/http/validate";
 import { loadConfig, type Config } from "../../../server/config";
@@ -168,7 +170,7 @@ const recordingEmail: EmailSender = {
 };
 
 function makeActions(db: Db, base: string = BASE_URL, emailSender: EmailSender = recordingEmail) {
-  return createAuthorizeActions({
+  return createAuthorizeActions({ keyWrapper: { wrap: async () => "test-wrapped", unwrap: async () => new Uint8Array(32).fill(7) },
     db,
     config: configWithBaseUrl(base),
     clock: fixedClock(NOW),
@@ -177,6 +179,21 @@ function makeActions(db: Db, base: string = BASE_URL, emailSender: EmailSender =
     alerts: { emailSender },
   });
 }
+
+test("consent audit records the persisted grants including the account request limit", async () => {
+  const db = await freshDb();
+  try {
+    const userId = await makeUser(db, "audit-grants");
+    await saveAgentDefaults(db, userId, { template: "standard", rateLimit: 37 });
+    const result = await makeActions(db).approve(sessionFor(userId), await seedPending(db, userId), approval());
+    assert.ok(result.ok);
+    const connectionId = await connectionOfIssuedCode(db, result.redirectTo);
+    const grants = await getConnectionPermissions(db, userId, connectionId);
+    assert.equal(grants?.rateLimit, 37);
+    const event = (await readActivity(db, userId, new Uint8Array(32).fill(7))).find(entry => entry.kind === "agent_connected");
+    assert.deepEqual((event?.payload as { changes: { grants: unknown } }).changes.grants, grants);
+  } finally { await db.close(); }
+});
 
 // A stand-in wrapped DEK for createUser (opaque base64; never read here).
 function wrappedDekFor(who: string): string {

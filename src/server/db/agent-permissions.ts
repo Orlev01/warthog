@@ -38,7 +38,8 @@ export interface CardBudget {
 // per-minute request limit.
 export interface PermissionGrants {
   readonly identityFields?: string[] | null;
-  readonly connectorPolicies?: Record<string, {readTools?:boolean; changeTools?:ChangeTools}>;
+  readonly resourceControls?: { tasksWrite?: boolean; recordsWrite?: boolean; recordIds?: string[] | null };
+  readonly connectorPolicies?: Record<string, {readTools?:boolean; changeTools?:ChangeTools; allowedTools?: string[] | null}>;
   readonly userId: string;
   readonly connectionId: string;
   readonly grantedConnectors: string[];
@@ -78,7 +79,7 @@ export type ConnectionPermissions = PermissionGrants & {
 const COLUMNS =
   "user_id, connection_id, granted_connectors, read_tools, change_tools, " +
   "identity_access, high_tier_access, card_access, card_budget, skills_scope, " +
-  "memory_read, sharing, rules_scope, rate_limit, tasks_access, records_access, memory_write, connector_accounts, identity_fields, connector_policies";
+  "memory_read, sharing, rules_scope, rate_limit, tasks_access, records_access, memory_write, connector_accounts, identity_fields, connector_policies, resource_controls";
 
 // Map a raw row to the grants shape, translating the snake_case columns to the
 // module's camelCase fields. jsonb comes back already parsed (so the connector /
@@ -91,6 +92,7 @@ function toPermissions(row: Row): ConnectionPermissions {
     grantedConnectors: row.granted_connectors as string[],
     connectorAccounts: (row.connector_accounts ?? {}) as Record<string, string>,
     identityFields: (row.identity_fields ?? null) as string[] | null,
+    resourceControls: (row.resource_controls ?? {}) as NonNullable<PermissionGrants["resourceControls"]>,
     connectorPolicies: (row.connector_policies ?? {}) as NonNullable<PermissionGrants["connectorPolicies"]>,
     readTools: row.read_tools as boolean,
     changeTools: row.change_tools as ChangeTools,
@@ -153,7 +155,7 @@ export async function upsertPermissions(
        user_id, connection_id, granted_connectors, read_tools, change_tools,
        identity_access, high_tier_access, card_access, card_budget,
        skills_scope, memory_read, sharing, rules_scope, rate_limit,
-       tasks_access, records_access, memory_write, connector_accounts, identity_fields, connector_policies
+       tasks_access, records_access, memory_write, connector_accounts, identity_fields, connector_policies, resource_controls
      ) VALUES (
        $1, $2, $3::jsonb, $4, $5,
        $6, $7, $8, $9::jsonb,
@@ -161,7 +163,7 @@ export async function upsertPermissions(
        COALESCE($15::boolean, $4 OR $5 <> 'off'),
        COALESCE($16::boolean, $4 OR $5 <> 'off'),
        COALESCE($17::boolean, $11),
-       COALESCE($18::jsonb, '{}'::jsonb), $19::jsonb, COALESCE($20::jsonb, '{}'::jsonb)
+       COALESCE($18::jsonb, '{}'::jsonb), $19::jsonb, COALESCE($20::jsonb, '{}'::jsonb), COALESCE($21::jsonb, '{}'::jsonb)
      )
      ON CONFLICT (user_id, connection_id) DO UPDATE SET
        granted_connectors = EXCLUDED.granted_connectors,
@@ -181,8 +183,9 @@ export async function upsertPermissions(
        memory_write       = COALESCE($17::boolean, agent_permissions.memory_write),
        connector_accounts = COALESCE($18::jsonb, agent_permissions.connector_accounts),
        identity_fields = COALESCE($19::jsonb, agent_permissions.identity_fields),
+       resource_controls = COALESCE($21::jsonb, agent_permissions.resource_controls),
        connector_policies = COALESCE($20::jsonb, agent_permissions.connector_policies)
-     RETURNING tasks_access, records_access, memory_write, connector_accounts, identity_fields, connector_policies`,
+     RETURNING tasks_access, records_access, memory_write, connector_accounts, identity_fields, connector_policies, resource_controls`,
     [
       grants.userId,
       grants.connectionId,
@@ -204,6 +207,7 @@ export async function upsertPermissions(
       grants.connectorAccounts === undefined ? null : JSON.stringify(grants.connectorAccounts),
       grants.identityFields === undefined ? null : JSON.stringify(grants.identityFields),
       grants.connectorPolicies === undefined ? null : JSON.stringify(grants.connectorPolicies),
+      grants.resourceControls === undefined ? null : JSON.stringify(grants.resourceControls),
     ],
   );
   const stored = result.rows[0];
@@ -214,6 +218,7 @@ export async function upsertPermissions(
     grantedConnectors: grants.grantedConnectors,
     connectorAccounts: stored?.connector_accounts as Record<string, string>,
     identityFields: (stored?.identity_fields ?? null) as string[] | null,
+    resourceControls: (stored?.resource_controls ?? {}) as NonNullable<PermissionGrants["resourceControls"]>,
     connectorPolicies: (stored?.connector_policies ?? {}) as NonNullable<PermissionGrants["connectorPolicies"]>,
     readTools: grants.readTools,
     changeTools: grants.changeTools,

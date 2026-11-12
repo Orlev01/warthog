@@ -34,6 +34,7 @@ import { EmptyState } from "@/components/ui/empty";
 // offers a Connect control; "ask_to_join" is a gated Google entry — the view shows the
 // "Early access — ask to join" funnel instead of Connect.
 export type CatalogueItem = {
+  verification?: string;
   id: string;
   name: string;
   connectable: boolean;
@@ -192,8 +193,12 @@ function CatalogueEntry({
   requestAction?: (formData: FormData) => void | Promise<void>;
 }) {
   return (
-    <li className="flex flex-wrap items-center justify-between gap-2 rounded-card border border-line bg-surface p-4">
-      <span className="font-medium text-fg">{item.name}</span>
+    <li className="flex min-w-0 flex-col items-start gap-3 rounded-card border border-line bg-surface p-4">
+      <div className="min-w-0 w-full">
+        <span className="font-medium text-fg">{item.name}</span>
+        <p className="text-xs text-fg-muted">{item.verification ?? "Configured integration · live verification not recorded"}</p>
+        <a className="text-xs text-accent underline" href="/help/compatibility#connector-verification">What has been verified</a>
+      </div>
       {item.gate === "ask_to_join" ? (
         <AskToJoinControl item={item} requestAction={requestAction} />
       ) : (

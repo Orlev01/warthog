@@ -46,7 +46,7 @@ const config = loadConfig({
 } as NodeJS.ProcessEnv);
 
 function deps(db: Db) {
-  return {
+  return { keyWrapper: { wrap: async () => "test-wrapped", unwrap: async () => new Uint8Array(32).fill(7) },
     db,
     config,
     clock: fixedClock(NOW),

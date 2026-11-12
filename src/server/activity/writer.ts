@@ -237,6 +237,7 @@ export function createDbRecorder(options: DbRecorderOptions): ActivityRecorder {
   const { db, clock, dekFor, matchesReleased } = options;
 
   return {
+    forTransaction: (tx, transactionKey) => createDbRecorder({ ...options, db: tx, dekFor: transactionKey }),
     async record(input: ActivityEntryInput): Promise<ActivityEntry> {
       const { userId } = input;
       const dek = await dekFor(userId);

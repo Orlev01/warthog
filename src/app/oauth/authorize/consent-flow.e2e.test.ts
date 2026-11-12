@@ -91,6 +91,7 @@ function devConfig(): Config {
 // real flow needs); no CIMD fetch is ever made in tests.
 function deps(db: Db, config: Config) {
   return {
+    keyWrapper: localAesKeyWrapper(config.devKek!),
     db,
     config,
     clock: fixedClock(NOW),

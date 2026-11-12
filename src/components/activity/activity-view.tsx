@@ -49,6 +49,7 @@ export type ActivityEntryView = {
   summary: string; // one-line, already-redacted
   detail: string; // full detail, already-redacted (the per-entry "open for detail")
   canUndo: boolean;
+  disputes?: readonly { note: string; at: string }[];
 };
 
 // One filter choice: a plain value shown as itself, or a value posted by the filter with
@@ -80,6 +81,9 @@ export type ActivityActiveFilters = {
 
 export type ActivityViewProps = {
   entries: readonly ActivityEntryView[];
+  nextHref?: string;
+  newestHref?: string;
+  scannedCount?: number;
   filterOptions: ActivityFilterOptions;
   query: string; // the current search text (pre-fills the search box)
   // The facet/date filters currently applied (review fix G11): each pre-selects its
@@ -163,7 +167,8 @@ function IntegrityPanel({ result }: { result: IntegrityResult }) {
         <>
           <ShieldCheck aria-hidden={true} className="mt-0.5 h-5 w-5 shrink-0 text-success" />
           <p>
-            Record intact — all {result.checked} entries checked and verified.
+            Retained record intact — all {result.checked} entries checked and verified.
+            This checks the consistency of retained entries. It cannot prove every action was logged or detect a privileged deletion of the end of the record.
           </p>
         </>
       ) : (
@@ -272,7 +277,7 @@ function ActivityEntryItem({
   const meta = metaParts.filter(Boolean).join(" · ");
 
   return (
-    <li className="flex flex-col gap-2 rounded-card border border-line bg-surface p-4">
+    <li id={`entry-${entry.seq}`} className="flex min-w-0 flex-col gap-2 rounded-card border border-line bg-surface p-4 [overflow-wrap:anywhere]">
       <div className="flex flex-wrap items-center gap-x-3 gap-y-1">
         <span className="font-medium text-fg">{entry.title ?? entry.kind}</span>
         <span className="rounded-card bg-surface-muted px-2 py-0.5 text-xs font-medium text-fg-muted">
@@ -286,8 +291,12 @@ function ActivityEntryItem({
       ) : null}
       <details className="text-sm">
         <summary className="cursor-pointer font-medium text-accent">View details</summary>
-        <p className="mt-2 text-fg-muted">{entry.detail}</p>
+        <p className="mt-2 whitespace-pre-wrap text-fg-muted">{entry.detail}</p>
       </details>
+      {entry.disputes?.length ? <section aria-label="Dispute history" className="border-l-2 border-warning pl-3">
+        <h3 className="font-medium">Disputed</h3>
+        {entry.disputes.map((note, index) => <p key={index} className="whitespace-pre-wrap text-sm">{note.note}<span className="block text-fg-muted">{note.at}</span></p>)}
+      </section> : null}
       <div className="flex flex-wrap items-start gap-2">
         {entry.canUndo ? <UndoControl seq={entry.seq} undoAction={undoAction} /> : null}
         <DisputeControl seq={entry.seq} disputeAction={disputeAction} />
@@ -302,6 +311,7 @@ export function ActivityView({
   query,
   integrity,
   activeFilters = {},
+  nextHref, newestHref, scannedCount,
   disputeAction,
   undoAction,
 }: ActivityViewProps) {
@@ -377,10 +387,11 @@ export function ActivityView({
         </div>
       </form>
 
+      {scannedCount !== undefined ? <p className="text-sm text-fg-muted">{scannedCount} entries examined on this page. Search applies to this page; continue to older entries to search earlier history.</p> : null}
       {entries.length === 0 ? (
         <EmptyState
-          heading="No activity yet"
-          description="Everything your agents do through Warthog will show up here."
+          heading={!query && !applied.length && !newestHref ? "No activity yet" : "No matching activity on this page"}
+          description="Try other filters or continue to older entries. Recorded requests and changes through Warthog appear here."
         />
       ) : (
         <ul className="flex flex-col gap-3">
@@ -394,6 +405,10 @@ export function ActivityView({
           ))}
         </ul>
       )}
+      <nav aria-label="Activity pages" className="flex flex-wrap gap-3">
+        {nextHref ? <a className={BTN_SECONDARY} href={nextHref}>Older entries</a> : null}
+        {newestHref ? <a className={BTN_SECONDARY} href={newestHref}>Newest entries</a> : null}
+      </nav>
     </div>
   );
 }

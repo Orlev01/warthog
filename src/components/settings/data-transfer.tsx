@@ -1,6 +1,7 @@
 "use client";
 
 import * as React from "react";
+import { splitPreparedTransfer, TRANSFER_PART_BYTES } from "@/domain/transfer-parts";
 import { createDeviceVault, StepUpRequiredError, type DeviceVault } from "@/client/vault/device-vault";
 import { createVaultKey } from "@/client/vault/key";
 import { startVaultAuthentication } from "@/client/vault/prf-ceremony";
@@ -43,7 +44,7 @@ export function createDataTransfer(deps: TransferDeps) {
   }
   function ordinaryDocument(doc: ExportDocument): ExportDocument {
     // Do not spread the file: unknown top-level fields and device plaintext never upload.
-    return { version: doc.version, exportedAt: doc.exportedAt, profile: doc.profile, preferences: doc.preferences, skills: doc.skills, memory: doc.memory, rules: doc.rules, tasks: doc.tasks, lifeAdmin: doc.lifeAdmin, connections: doc.connections, activity: doc.activity };
+    return { version: doc.version, exportedAt: doc.exportedAt, profile: doc.profile, agentSettings: doc.agentSettings, preferences: doc.preferences, skills: doc.skills, skillPackages: doc.skillPackages, memory: doc.memory, rules: doc.rules, tasks: doc.tasks, lifeAdmin: doc.lifeAdmin, connections: doc.connections, activity: doc.activity, importedActivity: doc.importedActivity };
   }
   async function submitImport(doc: ExportDocument, key?: Uint8Array<ArrayBuffer>) {
     let protectedVault;
@@ -59,7 +60,20 @@ export function createDataTransfer(deps: TransferDeps) {
     }
     file = null; set({ hasFile: false });
     try {
-      await request("/api/data/import", { document: ordinaryDocument(doc), ...(protectedVault ? { protectedVault } : {}) });
+      const ordinary = ordinaryDocument(doc);
+      const payload = { document: ordinary, ...(protectedVault ? { protectedVault } : {}) };
+      if (new TextEncoder().encode(JSON.stringify(payload)).length <= TRANSFER_PART_BYTES) {
+        await request("/api/data/import", payload);
+      } else {
+        const parts = [...splitPreparedTransfer(ordinary, protectedVault)];
+        const started = await request("/api/data/import", { operation: "begin", partCount: parts.length });
+        for (let seq = 0; seq < parts.length; seq++) {
+          set({ notice: `Uploading part ${seq + 1} of ${parts.length}. Nothing is restored until all parts are verified.` });
+          await request("/api/data/import", { operation: "part", id: started.id, seq, part: parts[seq] });
+        }
+        set({ notice: "Verifying and restoring your data…" });
+        await request("/api/data/import", { operation: "commit", id: started.id });
+      }
     } catch (error) {
       if (error instanceof StepUpRequiredError || error instanceof TransferError) throw error;
       throw new TransferError("The import response was interrupted. Check this account before choosing the file again, to avoid duplicates.");
@@ -100,9 +114,7 @@ export function createDataTransfer(deps: TransferDeps) {
       if (pending) return;
       await run(async () => {
         if (!file) throw new TransferError("Choose a Warthog export file first.");
-        if (file.size > 16 * 1024 * 1024) throw new TransferError("Choose an export file smaller than 16 MiB.");
         const raw = await file.text();
-        if (new TextEncoder().encode(raw).byteLength > 16 * 1024 * 1024) throw new TransferError("Choose an export file smaller than 16 MiB.");
         const doc = exportDocumentSchema.parse(JSON.parse(raw));
         const protectedData = doc.deviceProtected ? plaintextVaultSchema.safeParse(doc.deviceProtected) : null;
         if (protectedData && !protectedData.success) throw new TransferError("This file's protected details are incomplete or invalid. Create a new export from the original account; nothing was uploaded.");

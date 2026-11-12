@@ -156,7 +156,10 @@ export function buildPeriodicSweeps(seams: JobSeams): readonly PeriodicSweep[] {
       },
     },
     { name: "metrics-snapshot", intervalMs: HOUR_MS, run: () => runMetricsSnapshot(seams.db, seams.clock) },
-    { name: "oauth-cleanup", intervalMs: HOUR_MS, run: () => cleanupOAuth(seams.db, seams.clock.now()) },
+    { name: "oauth-cleanup", intervalMs: HOUR_MS, run: async () => {
+      await cleanupOAuth(seams.db, seams.clock.now());
+      await seams.db.query("DELETE FROM data_imports WHERE created_at < $1", [new Date(seams.clock.now().getTime() - DAY_MS).toISOString()]);
+    } },
     {
       name: "daily-integrity-check",
       intervalMs: DAY_MS,

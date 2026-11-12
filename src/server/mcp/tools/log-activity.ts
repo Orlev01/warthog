@@ -26,6 +26,7 @@ import { z } from "zod";
 import { parseParams } from "../../http/validate";
 import type { ActivityEntry, ActivityRecorder } from "../../activity/recorder";
 import type { AgentConnection } from "../context";
+import { requestObservation } from "../client-observation";
 
 // The activity `kind` for an agent's self-reported summary: distinct from the
 // `tool_call` entries Warthog writes itself for a handled call.
@@ -71,6 +72,11 @@ function payloadOf(parsed: LogActivityInput): Record<string, unknown> {
   if (parsed.amount !== undefined) payload.amount = parsed.amount;
   if (parsed.currency !== undefined) payload.currency = parsed.currency;
   if (parsed.cardRelease !== undefined) payload.cardRelease = parsed.cardRelease;
+  const observation = requestObservation.getStore();
+  if (observation) {
+    payload.requestId = observation.requestId;
+    if (observation.reportedRunId) payload.reportedRunId = observation.reportedRunId;
+  }
   return payload;
 }
 

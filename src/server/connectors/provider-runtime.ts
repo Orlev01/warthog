@@ -236,27 +236,7 @@ export function createProviderRuntime(deps: {
       userId: string,
       connections: readonly Pick<Connection, "id" | "connectorId" | "status">[],
     ): Promise<Record<string, readonly ConnectorToolDeclaration[]>> {
-      const result: Record<string, readonly ConnectorToolDeclaration[]> = {};
-      const dek = await deps.dekFor(userId);
-      for (const connection of connections) {
-        if (
-          connection.status !== "connected" ||
-          deps.catalogue.get(connection.connectorId)?.auth_kind !==
-            "provider_mcp"
-        )
-          continue;
-        const state = (
-          await getConnectionCredentials(db, userId, connection.id, dek)
-        )?.providerMcp as ProviderState | undefined;
-        result[connection.id] = (state?.tools ?? []).map((tool) => ({
-          name: tool.name,
-          description: `${tool.description ?? tool.name}\nPass the provider's fields in arguments. Provider schema: ${JSON.stringify(tool.inputSchema)}`,
-          makesChange: true,
-          requiresApproval: true,
-          schema: providerArgumentsSchema,
-        }));
-      }
-      return result;
+      return readProviderToolsets(db, deps.catalogue, userId, connections, await deps.dekFor(userId));
     },
     async execute(
       userId: string,
@@ -318,4 +298,30 @@ export function createProviderRuntime(deps: {
       return outcome.value;
     },
   };
+}
+
+/** Cached discovery only: rendering permissions does not call a provider. */
+export async function readProviderToolsets(db: Db, catalogue: CatalogueIndex, userId: string,
+  connections: readonly Pick<Connection, "id" | "connectorId" | "status">[], dek: Uint8Array,
+): Promise<Record<string, readonly ConnectorToolDeclaration[]>> {
+      const result: Record<string, readonly ConnectorToolDeclaration[]> = {};
+      for (const connection of connections) {
+        if (
+          connection.status !== "connected" ||
+          catalogue.get(connection.connectorId)?.auth_kind !==
+            "provider_mcp"
+        )
+          continue;
+        const state = (
+          await getConnectionCredentials(db, userId, connection.id, dek)
+        )?.providerMcp as ProviderState | undefined;
+        result[connection.id] = (state?.tools ?? []).map((tool) => ({
+          name: tool.name,
+          description: `${tool.description ?? tool.name}\nPass the provider's fields in arguments. Provider schema: ${JSON.stringify(tool.inputSchema)}`,
+          makesChange: true,
+          requiresApproval: true,
+          schema: providerArgumentsSchema,
+        }));
+      }
+      return result;
 }

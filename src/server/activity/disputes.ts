@@ -172,3 +172,14 @@ export function createDisputeRepo(options: DisputeRepoOptions): DisputeRepo {
     },
   };
 }
+
+/** One bounded, member-scoped read for a displayed page (no per-entry query loop). */
+export async function readDisputesForEntries(db: Db, userId: string, entries: readonly number[], dek: Uint8Array): Promise<FiledDispute[]> {
+  if (!entries.length) return [];
+  const result = await db.query(
+    `SELECT user_id, entry_seq, dispute_seq, note_ct, created_at FROM activity_disputes
+     WHERE user_id = $1 AND entry_seq = ANY($2::bigint[]) ORDER BY entry_seq, dispute_seq`,
+    [userId, entries],
+  );
+  return Promise.all(result.rows.map(row => toDispute(row, dek)));
+}

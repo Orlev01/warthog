@@ -1,3 +1,4 @@
+import { selectKeyWrapper } from "@/server/crypto/key-wrapper";
 import { getProcessCatalogue } from "../../../server/connectors/catalogue";
 import { notificationSenders } from "../../../server/notify/production";
 import * as React from "react";
@@ -67,6 +68,7 @@ async function resolveSession(db: Db): Promise<Session | null> {
 function buildActions(db: Db) {
   const config = loadConfig();
   return createAuthorizeActions({
+    keyWrapper: selectKeyWrapper({ nodeEnv: config.nodeEnv, localKek: config.devKek }),
     db,
     config,
     clock: systemClock,

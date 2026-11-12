@@ -1,3 +1,5 @@
+import { activityEvidence } from "@/domain/activity/evidence";
+import { readDisputesForEntries } from "@/server/activity/disputes";
 import { formatAccountTime } from "@/server/display-time";
 import { timeZoneFor } from "@/server/spending/time-zone";
 // E08-S07 — Activity page server actions (dispute, undo, check integrity).
@@ -261,8 +263,7 @@ export function createActivityActions(deps: ActivityActionsDeps): ActivityAction
       service: entry.connectorId === undefined ? undefined : serviceLabel(entry.connectorId),
       outcome: entry.outcome === undefined ? "" : humanise(entry.outcome),
       at: formatAccountTime(entry.occurredAt, timeZone),
-      summary: payloadText(entry.payload, "summary"),
-      detail: payloadText(entry.payload, "detail"),
+      ...activityEvidence(entry),
       canUndo,
     };
   }
@@ -326,26 +327,37 @@ export function createActivityActions(deps: ActivityActionsDeps): ActivityAction
 
     // The shared filtered read (`listActivity`, E08-S05) narrows by facet/date in SQL,
     // newest-first, and decrypts only the bounded page it returns.
-    const narrowed = await listActivity(db, session.userId, filters, dek, {
-      limit: deps.pageLimit ?? ACTIVITY_PAGE_LIMIT,
-    });
-
-    // The free-text search narrows further, in-app over the decrypted summary (an
-    // encrypted column can't be matched in SQL), case-insensitively over the same text
-    // the view shows.
-    const views = narrowed.map((entry) => toEntryView(entry, agentNames, timeZone));
-    const query = firstValue(searchParams.q) ?? "";
+    const positive = (raw: string | string[] | undefined): number | undefined => {
+      const value = firstValue(raw);
+      if (!value || !/^[1-9][0-9]*$/.test(value)) return undefined;
+      const number = Number(value);
+      return Number.isSafeInteger(number) ? number : undefined;
+    };
+    const beforeSeq = positive(searchParams.before);
+    const entrySeq = positive(searchParams.entry);
+    if (entrySeq) filters.seq = entrySeq;
+    const limit = Math.max(1, Math.min(4999, deps.pageLimit ?? ACTIVITY_PAGE_LIMIT));
+    const narrowed = await listActivity(db, session.userId, filters, dek, { limit: limit + 1, beforeSeq });
+    const page = narrowed.slice(0, limit);
+    const notes = await readDisputesForEntries(db, session.userId, page.map(e => e.seq), dek);
+    const views = page.map((entry) => ({ ...toEntryView(entry, agentNames, timeZone),
+      disputes: notes.filter(note => note.entrySeq === entry.seq).map(note => ({ note: note.note, at: formatAccountTime(note.createdAt, timeZone) })),
+    }));
+    const query = (firstValue(searchParams.q) ?? "").slice(0, 2000);
     const needle = query.toLowerCase();
-    const entries =
-      needle.length === 0
-        ? views
-        : views.filter((view) => view.summary.toLowerCase().includes(needle));
+    const entries = needle.length === 0 ? views : views.filter(view =>
+      [view.summary, view.detail, view.title, view.service, view.agent, ...view.disputes.map(n => n.note)]
+        .some(value => value?.toLowerCase().includes(needle)));
+    const params = new URLSearchParams({ ...activeFilters, ...(query ? { q: query } : {}) });
+    const newestHref = beforeSeq || entrySeq ? `/activity?${params}` : undefined;
+    params.set("before", String(page.at(-1)?.seq ?? ""));
+    const nextHref = narrowed.length > limit ? `/activity?${params}` : undefined;
 
     // The Check-integrity control posts verify=1; only then run the record-wide check.
     const integrity =
       firstValue(searchParams.verify) === "1" ? await checkIntegrity(session) : null;
 
-    return { entries, filterOptions, query, integrity, activeFilters };
+    return { entries, filterOptions, query, integrity, activeFilters, nextHref, newestHref, scannedCount: page.length };
   }
 
   return { disputeEntry, undoEntry, checkIntegrity, load };

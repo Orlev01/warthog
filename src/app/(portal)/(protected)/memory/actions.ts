@@ -1,3 +1,4 @@
+import { auditedOwnerChange } from "@/server/activity/owner-change";
 import { pageMemories } from "../../../../server/db/memories";
 import { withTransaction } from "../../../../server/db/index";
 import { createRedactingRecorder } from "../../../../server/mcp/recorder";
@@ -272,8 +273,9 @@ export function createMemoryActions(deps: MemoryActionsDeps): MemoryActions {
   ): Promise<ActionResult> {
     const valid = parseParams(addMemorySchema, input);
     const dek = await dataKeyFor(session.userId);
-    await createMemoryRow(
-      db,
+    await auditedOwnerChange(deps, session.userId, async (tx, record) => {
+    const memory = await createMemoryRow(
+      tx,
       {
         userId: session.userId,
         content: valid.content,
@@ -283,6 +285,8 @@ export function createMemoryActions(deps: MemoryActionsDeps): MemoryActions {
       dek,
       clock,
     );
+    await record("memory_created", { memoryId: memory.id, scope: valid.scope });
+    });
     return { ok: true };
   }
 
@@ -298,7 +302,10 @@ export function createMemoryActions(deps: MemoryActionsDeps): MemoryActions {
       return { ok: false, reason: "not_found" };
     }
     const dek = await dataKeyFor(session.userId);
-    await editMemoryRow(db, session.userId, valid.id, valid.content, dek);
+    await auditedOwnerChange(deps, session.userId, async (tx, record) => {
+      await editMemoryRow(tx, session.userId, valid.id, valid.content, dek);
+      await record("memory_updated", { memoryId: valid.id, contentChanged: true });
+    });
     return { ok: true };
   }
 
@@ -343,7 +350,11 @@ export function createMemoryActions(deps: MemoryActionsDeps): MemoryActions {
     input: DeleteMemoryInput,
   ): Promise<ActionResult> {
     const valid = parseParams(deleteMemorySchema, input);
-    const removed = await deleteMemoryRow(db, session.userId, valid.id);
+    const removed = await auditedOwnerChange(deps, session.userId, async (tx, record) => {
+      const deleted = await deleteMemoryRow(tx, session.userId, valid.id);
+      if (deleted) await record("memory_deleted", { memoryId: valid.id });
+      return deleted;
+    });
     return removed ? { ok: true } : { ok: false, reason: "not_found" };
   }
 

@@ -630,7 +630,7 @@ test("through the pipeline: an allowed save_record creates the record and record
     assert.equal(stored.length, 1, "the record write persisted through the pipeline");
 
     // Warthog recorded the call itself — ONE entry, labelled source "warthog".
-    const entries = rec.inputs.filter((e) => e.tool === "save_record");
+    const entries = rec.inputs.filter((e) => e.tool === "save_record" && e.kind === "tool_call");
     assert.equal(entries.length, 1, "the call is recorded as exactly ONE activity entry");
     assert.equal(entries[0].source, "warthog", "Warthog writes the record itself (not the agent)");
     assert.equal(entries[0].userId, userId, "the entry is scoped to the connection's person");

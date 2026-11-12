@@ -62,6 +62,14 @@ export function Help({ connectorAddress }: { connectorAddress: string }) {
           Some agents don&#39;t yet support remote connections. An access key works only when a client supports remote connections using an access key; it cannot add missing connection support. Connecting a service such as Slack or Notion as a tool does not register that service’s own agents.
         </p>
       </section>
-    </main>
+    <section id="connector-verification" className="mt-8 flex flex-col gap-3 border-t border-line pt-6">
+        <h2 className="text-xl font-semibold">Connector verification</h2>
+        <p>Catalogue availability means setup is supported by the configured integration. It does not certify that every provider operation has passed a live test.</p>
+        <p>Configured means an integration definition exists. Protocol tested locally means its request and response handling has automated tests using simulated services. Live verified names the specific operations tested against a connected account and their date.</p>
+        <p>Claude through Warthog to Gmail has verified live context, search and message reads as of 12 November 2026. Sending, renewal and revocation require their own acceptance evidence. Other catalogue entries have no published live verification record yet.</p>
+        <p>Warthog governs requests made through its connection. It does not receive your agent’s private conversations, model reasoning, model usage charges or activity in separate tools. Connected means access is authorised, not that a worker is running.</p>
+        <p>General-purpose tools may not identify their message type or recipient. Applicable restrictions are enforced conservatively; a provider’s tool description cannot override your rules.</p>
+      </section>
+      </main>
   );
 }

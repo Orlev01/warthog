@@ -20,6 +20,7 @@
 import { createHash } from "node:crypto";
 
 import type { Clock } from "../seams/clock";
+import type { Db } from "../db/index";
 import { redact } from "../../domain/redaction/redact";
 
 // The input handed to `record()`: the required core plus optional metadata and the
@@ -57,6 +58,8 @@ export interface ActivityEntry {
 // The one contract the pipeline and every write-through depend on.
 export interface ActivityRecorder {
   record(input: ActivityEntryInput): Promise<ActivityEntry>;
+  /** Join a caller-owned transaction; key resolution must not query the outer pool. */
+  forTransaction?(db: Db, dekFor: (userId: string) => Promise<Uint8Array>): ActivityRecorder;
 }
 
 export interface InMemoryRecorderOptions {

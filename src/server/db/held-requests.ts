@@ -44,7 +44,8 @@ export type HeldStatus = "held" | "executed";
 // refused with a plain reason.
 export type HeldOutcome =
   | { readonly status: "executed"; readonly result: unknown }
-  | { readonly status: "refused"; readonly reason: string };
+  | { readonly status: "refused"; readonly reason: string }
+  | { readonly status: "failed" | "unknown"; readonly reason: string };
 
 // Thrown when a held request has already been claimed to run — the single-shot
 // compare-and-swap refused a second claim. A typed refusal, so callers can tell

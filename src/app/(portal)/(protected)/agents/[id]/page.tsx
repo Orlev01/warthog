@@ -80,6 +80,7 @@ async function savePermissions(
     return await createPermissionsActions({
       db,
       nameOf: serviceName,
+    catalogue: getProcessCatalogue(loadConfig()),
       keyWrapper,
     }).save(session, agentId, input);
   } catch (error) {
@@ -128,6 +129,7 @@ export default async function AgentPermissionsPage({
   const props = await createPermissionsActions({
     db,
     nameOf: serviceName,
+    catalogue: getProcessCatalogue(loadConfig()),
     keyWrapper,
   }).load(session, id, {
     memoryCursor:

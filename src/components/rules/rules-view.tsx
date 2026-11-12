@@ -393,6 +393,7 @@ export function RulesView({
             {/* The brief's six action choices. */}
             <fieldset className="flex min-w-0 flex-col gap-2">
               <legend className="pb-2 text-sm font-medium text-fg">What the agent is doing</legend>
+              <p className="text-sm text-fg-muted">Rules govern requests through Warthog. If a tool cannot identify its message type, recipient or amount, an applicable restriction also applies to that uncertain change. This can block or hold more actions than a tool with verified details.</p>
               <div className="flex flex-col gap-2">
                 {ACTIONS.map((a) => (
                   <Choice

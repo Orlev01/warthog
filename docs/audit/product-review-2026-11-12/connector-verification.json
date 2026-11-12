@@ -1,0 +1,2131 @@
+{
+  "asOf": "2026-11-12",
+  "scope": "Configured, simulated protocol acceptance and observed live operation sets are distinct. Unverified is not failed or passed. No live calls were made by this report.",
+  "entries": [
+    {
+      "id": "airtable",
+      "name": "Airtable",
+      "connectionKind": "provider_mcp",
+      "configurationSource": "catalogue/connectors/airtable.json",
+      "localEvidence": "configured",
+      "localAcceptanceSource": null,
+      "liveEvidence": {
+        "testedAt": null,
+        "operations": [],
+        "connect": "unverified",
+        "identity": "unverified",
+        "read": "unverified",
+        "writeApproval": "unverified",
+        "error": "unverified",
+        "refresh": "unverified",
+        "reconnect": "unverified",
+        "revoke": "unverified"
+      }
+    },
+    {
+      "id": "alpaca",
+      "name": "Alpaca",
+      "connectionKind": "api_key",
+      "configurationSource": "catalogue/connectors/alpaca.json",
+      "localEvidence": "configured",
+      "localAcceptanceSource": null,
+      "liveEvidence": {
+        "testedAt": null,
+        "operations": [],
+        "connect": "unverified",
+        "identity": "unverified",
+        "read": "unverified",
+        "writeApproval": "unverified",
+        "error": "unverified",
+        "refresh": "unverified",
+        "reconnect": "unverified",
+        "revoke": "unverified"
+      }
+    },
+    {
+      "id": "amadeus",
+      "name": "Amadeus",
+      "connectionKind": "api_key",
+      "configurationSource": "catalogue/connectors/amadeus.json",
+      "localEvidence": "configured",
+      "localAcceptanceSource": null,
+      "liveEvidence": {
+        "testedAt": null,
+        "operations": [],
+        "connect": "unverified",
+        "identity": "unverified",
+        "read": "unverified",
+        "writeApproval": "unverified",
+        "error": "unverified",
+        "refresh": "unverified",
+        "reconnect": "unverified",
+        "revoke": "unverified"
+      }
+    },
+    {
+      "id": "asana",
+      "name": "Asana",
+      "connectionKind": "provider_mcp",
+      "configurationSource": "catalogue/connectors/asana.json",
+      "localEvidence": "configured",
+      "localAcceptanceSource": null,
+      "liveEvidence": {
+        "testedAt": null,
+        "operations": [],
+        "connect": "unverified",
+        "identity": "unverified",
+        "read": "unverified",
+        "writeApproval": "unverified",
+        "error": "unverified",
+        "refresh": "unverified",
+        "reconnect": "unverified",
+        "revoke": "unverified"
+      }
+    },
+    {
+      "id": "atlassian-confluence",
+      "name": "Confluence",
+      "connectionKind": "provider_mcp",
+      "configurationSource": "catalogue/connectors/atlassian-confluence.json",
+      "localEvidence": "configured",
+      "localAcceptanceSource": null,
+      "liveEvidence": {
+        "testedAt": null,
+        "operations": [],
+        "connect": "unverified",
+        "identity": "unverified",
+        "read": "unverified",
+        "writeApproval": "unverified",
+        "error": "unverified",
+        "refresh": "unverified",
+        "reconnect": "unverified",
+        "revoke": "unverified"
+      }
+    },
+    {
+      "id": "atlassian-jira",
+      "name": "Jira",
+      "connectionKind": "provider_mcp",
+      "configurationSource": "catalogue/connectors/atlassian-jira.json",
+      "localEvidence": "configured",
+      "localAcceptanceSource": null,
+      "liveEvidence": {
+        "testedAt": null,
+        "operations": [],
+        "connect": "unverified",
+        "identity": "unverified",
+        "read": "unverified",
+        "writeApproval": "unverified",
+        "error": "unverified",
+        "refresh": "unverified",
+        "reconnect": "unverified",
+        "revoke": "unverified"
+      }
+    },
+    {
+      "id": "aviationstack",
+      "name": "Aviationstack",
+      "connectionKind": "api_key",
+      "configurationSource": "catalogue/connectors/aviationstack.json",
+      "localEvidence": "configured",
+      "localAcceptanceSource": null,
+      "liveEvidence": {
+        "testedAt": null,
+        "operations": [],
+        "connect": "unverified",
+        "identity": "unverified",
+        "read": "unverified",
+        "writeApproval": "unverified",
+        "error": "unverified",
+        "refresh": "unverified",
+        "reconnect": "unverified",
+        "revoke": "unverified"
+      }
+    },
+    {
+      "id": "backblaze-b2",
+      "name": "Backblaze B2",
+      "connectionKind": "api_key",
+      "configurationSource": "catalogue/connectors/backblaze-b2.json",
+      "localEvidence": "configured",
+      "localAcceptanceSource": null,
+      "liveEvidence": {
+        "testedAt": null,
+        "operations": [],
+        "connect": "unverified",
+        "identity": "unverified",
+        "read": "unverified",
+        "writeApproval": "unverified",
+        "error": "unverified",
+        "refresh": "unverified",
+        "reconnect": "unverified",
+        "revoke": "unverified"
+      }
+    },
+    {
+      "id": "bigcommerce",
+      "name": "BigCommerce",
+      "connectionKind": "api_key",
+      "configurationSource": "catalogue/connectors/bigcommerce.json",
+      "localEvidence": "configured",
+      "localAcceptanceSource": null,
+      "liveEvidence": {
+        "testedAt": null,
+        "operations": [],
+        "connect": "unverified",
+        "identity": "unverified",
+        "read": "unverified",
+        "writeApproval": "unverified",
+        "error": "unverified",
+        "refresh": "unverified",
+        "reconnect": "unverified",
+        "revoke": "unverified"
+      }
+    },
+    {
+      "id": "bitbucket",
+      "name": "Bitbucket",
+      "connectionKind": "basic",
+      "configurationSource": "catalogue/connectors/bitbucket.json",
+      "localEvidence": "configured",
+      "localAcceptanceSource": null,
+      "liveEvidence": {
+        "testedAt": null,
+        "operations": [],
+        "connect": "unverified",
+        "identity": "unverified",
+        "read": "unverified",
+        "writeApproval": "unverified",
+        "error": "unverified",
+        "refresh": "unverified",
+        "reconnect": "unverified",
+        "revoke": "unverified"
+      }
+    },
+    {
+      "id": "box",
+      "name": "Box",
+      "connectionKind": "provider_mcp",
+      "configurationSource": "catalogue/connectors/box.json",
+      "localEvidence": "configured",
+      "localAcceptanceSource": null,
+      "liveEvidence": {
+        "testedAt": null,
+        "operations": [],
+        "connect": "unverified",
+        "identity": "unverified",
+        "read": "unverified",
+        "writeApproval": "unverified",
+        "error": "unverified",
+        "refresh": "unverified",
+        "reconnect": "unverified",
+        "revoke": "unverified"
+      }
+    },
+    {
+      "id": "brevo",
+      "name": "Brevo",
+      "connectionKind": "api_key",
+      "configurationSource": "catalogue/connectors/brevo.json",
+      "localEvidence": "configured",
+      "localAcceptanceSource": null,
+      "liveEvidence": {
+        "testedAt": null,
+        "operations": [],
+        "connect": "unverified",
+        "identity": "unverified",
+        "read": "unverified",
+        "writeApproval": "unverified",
+        "error": "unverified",
+        "refresh": "unverified",
+        "reconnect": "unverified",
+        "revoke": "unverified"
+      }
+    },
+    {
+      "id": "bunny-storage",
+      "name": "Bunny Storage",
+      "connectionKind": "api_key",
+      "configurationSource": "catalogue/connectors/bunny-storage.json",
+      "localEvidence": "configured",
+      "localAcceptanceSource": null,
+      "liveEvidence": {
+        "testedAt": null,
+        "operations": [],
+        "connect": "unverified",
+        "identity": "unverified",
+        "read": "unverified",
+        "writeApproval": "unverified",
+        "error": "unverified",
+        "refresh": "unverified",
+        "reconnect": "unverified",
+        "revoke": "unverified"
+      }
+    },
+    {
+      "id": "calendly",
+      "name": "Calendly",
+      "connectionKind": "api_key",
+      "configurationSource": "catalogue/connectors/calendly.json",
+      "localEvidence": "configured",
+      "localAcceptanceSource": null,
+      "liveEvidence": {
+        "testedAt": null,
+        "operations": [],
+        "connect": "unverified",
+        "identity": "unverified",
+        "read": "unverified",
+        "writeApproval": "unverified",
+        "error": "unverified",
+        "refresh": "unverified",
+        "reconnect": "unverified",
+        "revoke": "unverified"
+      }
+    },
+    {
+      "id": "canva",
+      "name": "Canva",
+      "connectionKind": "provider_mcp",
+      "configurationSource": "catalogue/connectors/canva.json",
+      "localEvidence": "configured",
+      "localAcceptanceSource": null,
+      "liveEvidence": {
+        "testedAt": null,
+        "operations": [],
+        "connect": "unverified",
+        "identity": "unverified",
+        "read": "unverified",
+        "writeApproval": "unverified",
+        "error": "unverified",
+        "refresh": "unverified",
+        "reconnect": "unverified",
+        "revoke": "unverified"
+      }
+    },
+    {
+      "id": "circleci",
+      "name": "CircleCI",
+      "connectionKind": "api_key",
+      "configurationSource": "catalogue/connectors/circleci.json",
+      "localEvidence": "configured",
+      "localAcceptanceSource": null,
+      "liveEvidence": {
+        "testedAt": null,
+        "operations": [],
+        "connect": "unverified",
+        "identity": "unverified",
+        "read": "unverified",
+        "writeApproval": "unverified",
+        "error": "unverified",
+        "refresh": "unverified",
+        "reconnect": "unverified",
+        "revoke": "unverified"
+      }
+    },
+    {
+      "id": "clickup",
+      "name": "ClickUp",
+      "connectionKind": "provider_mcp",
+      "configurationSource": "catalogue/connectors/clickup.json",
+      "localEvidence": "configured",
+      "localAcceptanceSource": null,
+      "liveEvidence": {
+        "testedAt": null,
+        "operations": [],
+        "connect": "unverified",
+        "identity": "unverified",
+        "read": "unverified",
+        "writeApproval": "unverified",
+        "error": "unverified",
+        "refresh": "unverified",
+        "reconnect": "unverified",
+        "revoke": "unverified"
+      }
+    },
+    {
+      "id": "cloudflare",
+      "name": "Cloudflare",
+      "connectionKind": "provider_mcp",
+      "configurationSource": "catalogue/connectors/cloudflare.json",
+      "localEvidence": "configured",
+      "localAcceptanceSource": null,
+      "liveEvidence": {
+        "testedAt": null,
+        "operations": [],
+        "connect": "unverified",
+        "identity": "unverified",
+        "read": "unverified",
+        "writeApproval": "unverified",
+        "error": "unverified",
+        "refresh": "unverified",
+        "reconnect": "unverified",
+        "revoke": "unverified"
+      }
+    },
+    {
+      "id": "coinbase",
+      "name": "Coinbase",
+      "connectionKind": "api_key",
+      "configurationSource": "catalogue/connectors/coinbase.json",
+      "localEvidence": "configured",
+      "localAcceptanceSource": null,
+      "liveEvidence": {
+        "testedAt": null,
+        "operations": [],
+        "connect": "unverified",
+        "identity": "unverified",
+        "read": "unverified",
+        "writeApproval": "unverified",
+        "error": "unverified",
+        "refresh": "unverified",
+        "reconnect": "unverified",
+        "revoke": "unverified"
+      }
+    },
+    {
+      "id": "cronofy",
+      "name": "Cronofy",
+      "connectionKind": "api_key",
+      "configurationSource": "catalogue/connectors/cronofy.json",
+      "localEvidence": "configured",
+      "localAcceptanceSource": null,
+      "liveEvidence": {
+        "testedAt": null,
+        "operations": [],
+        "connect": "unverified",
+        "identity": "unverified",
+        "read": "unverified",
+        "writeApproval": "unverified",
+        "error": "unverified",
+        "refresh": "unverified",
+        "reconnect": "unverified",
+        "revoke": "unverified"
+      }
+    },
+    {
+      "id": "databricks",
+      "name": "Databricks",
+      "connectionKind": "provider_mcp",
+      "configurationSource": "catalogue/connectors/databricks.json",
+      "localEvidence": "configured",
+      "localAcceptanceSource": null,
+      "liveEvidence": {
+        "testedAt": null,
+        "operations": [],
+        "connect": "unverified",
+        "identity": "unverified",
+        "read": "unverified",
+        "writeApproval": "unverified",
+        "error": "unverified",
+        "refresh": "unverified",
+        "reconnect": "unverified",
+        "revoke": "unverified"
+      }
+    },
+    {
+      "id": "datadog",
+      "name": "Datadog",
+      "connectionKind": "provider_mcp",
+      "configurationSource": "catalogue/connectors/datadog.json",
+      "localEvidence": "configured",
+      "localAcceptanceSource": null,
+      "liveEvidence": {
+        "testedAt": null,
+        "operations": [],
+        "connect": "unverified",
+        "identity": "unverified",
+        "read": "unverified",
+        "writeApproval": "unverified",
+        "error": "unverified",
+        "refresh": "unverified",
+        "reconnect": "unverified",
+        "revoke": "unverified"
+      }
+    },
+    {
+      "id": "digitalocean",
+      "name": "DigitalOcean",
+      "connectionKind": "api_key",
+      "configurationSource": "catalogue/connectors/digitalocean.json",
+      "localEvidence": "configured",
+      "localAcceptanceSource": null,
+      "liveEvidence": {
+        "testedAt": null,
+        "operations": [],
+        "connect": "unverified",
+        "identity": "unverified",
+        "read": "unverified",
+        "writeApproval": "unverified",
+        "error": "unverified",
+        "refresh": "unverified",
+        "reconnect": "unverified",
+        "revoke": "unverified"
+      }
+    },
+    {
+      "id": "discord",
+      "name": "Discord",
+      "connectionKind": "api_key",
+      "configurationSource": "catalogue/connectors/discord.json",
+      "localEvidence": "configured",
+      "localAcceptanceSource": null,
+      "liveEvidence": {
+        "testedAt": null,
+        "operations": [],
+        "connect": "unverified",
+        "identity": "unverified",
+        "read": "unverified",
+        "writeApproval": "unverified",
+        "error": "unverified",
+        "refresh": "unverified",
+        "reconnect": "unverified",
+        "revoke": "unverified"
+      }
+    },
+    {
+      "id": "dropbox",
+      "name": "Dropbox",
+      "connectionKind": "provider_mcp",
+      "configurationSource": "catalogue/connectors/dropbox.json",
+      "localEvidence": "configured",
+      "localAcceptanceSource": null,
+      "liveEvidence": {
+        "testedAt": null,
+        "operations": [],
+        "connect": "unverified",
+        "identity": "unverified",
+        "read": "unverified",
+        "writeApproval": "unverified",
+        "error": "unverified",
+        "refresh": "unverified",
+        "reconnect": "unverified",
+        "revoke": "unverified"
+      }
+    },
+    {
+      "id": "duffel",
+      "name": "Duffel",
+      "connectionKind": "api_key",
+      "configurationSource": "catalogue/connectors/duffel.json",
+      "localEvidence": "configured",
+      "localAcceptanceSource": null,
+      "liveEvidence": {
+        "testedAt": null,
+        "operations": [],
+        "connect": "unverified",
+        "identity": "unverified",
+        "read": "unverified",
+        "writeApproval": "unverified",
+        "error": "unverified",
+        "refresh": "unverified",
+        "reconnect": "unverified",
+        "revoke": "unverified"
+      }
+    },
+    {
+      "id": "ebay",
+      "name": "eBay",
+      "connectionKind": "api_key",
+      "configurationSource": "catalogue/connectors/ebay.json",
+      "localEvidence": "configured",
+      "localAcceptanceSource": null,
+      "liveEvidence": {
+        "testedAt": null,
+        "operations": [],
+        "connect": "unverified",
+        "identity": "unverified",
+        "read": "unverified",
+        "writeApproval": "unverified",
+        "error": "unverified",
+        "refresh": "unverified",
+        "reconnect": "unverified",
+        "revoke": "unverified"
+      }
+    },
+    {
+      "id": "etsy",
+      "name": "Etsy",
+      "connectionKind": "api_key",
+      "configurationSource": "catalogue/connectors/etsy.json",
+      "localEvidence": "configured",
+      "localAcceptanceSource": null,
+      "liveEvidence": {
+        "testedAt": null,
+        "operations": [],
+        "connect": "unverified",
+        "identity": "unverified",
+        "read": "unverified",
+        "writeApproval": "unverified",
+        "error": "unverified",
+        "refresh": "unverified",
+        "reconnect": "unverified",
+        "revoke": "unverified"
+      }
+    },
+    {
+      "id": "filestack",
+      "name": "Filestack",
+      "connectionKind": "api_key",
+      "configurationSource": "catalogue/connectors/filestack.json",
+      "localEvidence": "configured",
+      "localAcceptanceSource": null,
+      "liveEvidence": {
+        "testedAt": null,
+        "operations": [],
+        "connect": "unverified",
+        "identity": "unverified",
+        "read": "unverified",
+        "writeApproval": "unverified",
+        "error": "unverified",
+        "refresh": "unverified",
+        "reconnect": "unverified",
+        "revoke": "unverified"
+      }
+    },
+    {
+      "id": "finnhub",
+      "name": "Finnhub",
+      "connectionKind": "api_key",
+      "configurationSource": "catalogue/connectors/finnhub.json",
+      "localEvidence": "configured",
+      "localAcceptanceSource": null,
+      "liveEvidence": {
+        "testedAt": null,
+        "operations": [],
+        "connect": "unverified",
+        "identity": "unverified",
+        "read": "unverified",
+        "writeApproval": "unverified",
+        "error": "unverified",
+        "refresh": "unverified",
+        "reconnect": "unverified",
+        "revoke": "unverified"
+      }
+    },
+    {
+      "id": "fly-io",
+      "name": "Fly.io",
+      "connectionKind": "api_key",
+      "configurationSource": "catalogue/connectors/fly-io.json",
+      "localEvidence": "configured",
+      "localAcceptanceSource": null,
+      "liveEvidence": {
+        "testedAt": null,
+        "operations": [],
+        "connect": "unverified",
+        "identity": "unverified",
+        "read": "unverified",
+        "writeApproval": "unverified",
+        "error": "unverified",
+        "refresh": "unverified",
+        "reconnect": "unverified",
+        "revoke": "unverified"
+      }
+    },
+    {
+      "id": "github",
+      "name": "GitHub",
+      "connectionKind": "provider_mcp",
+      "configurationSource": "catalogue/connectors/github.json",
+      "localEvidence": "configured",
+      "localAcceptanceSource": null,
+      "liveEvidence": {
+        "testedAt": null,
+        "operations": [],
+        "connect": "unverified",
+        "identity": "unverified",
+        "read": "unverified",
+        "writeApproval": "unverified",
+        "error": "unverified",
+        "refresh": "unverified",
+        "reconnect": "unverified",
+        "revoke": "unverified"
+      }
+    },
+    {
+      "id": "gitlab",
+      "name": "GitLab",
+      "connectionKind": "api_key",
+      "configurationSource": "catalogue/connectors/gitlab.json",
+      "localEvidence": "configured",
+      "localAcceptanceSource": null,
+      "liveEvidence": {
+        "testedAt": null,
+        "operations": [],
+        "connect": "unverified",
+        "identity": "unverified",
+        "read": "unverified",
+        "writeApproval": "unverified",
+        "error": "unverified",
+        "refresh": "unverified",
+        "reconnect": "unverified",
+        "revoke": "unverified"
+      }
+    },
+    {
+      "id": "gocardless",
+      "name": "GoCardless",
+      "connectionKind": "api_key",
+      "configurationSource": "catalogue/connectors/gocardless.json",
+      "localEvidence": "configured",
+      "localAcceptanceSource": null,
+      "liveEvidence": {
+        "testedAt": null,
+        "operations": [],
+        "connect": "unverified",
+        "identity": "unverified",
+        "read": "unverified",
+        "writeApproval": "unverified",
+        "error": "unverified",
+        "refresh": "unverified",
+        "reconnect": "unverified",
+        "revoke": "unverified"
+      }
+    },
+    {
+      "id": "google-calendar",
+      "name": "Google Calendar",
+      "connectionKind": "oauth2",
+      "configurationSource": "catalogue/connectors/google-calendar.json",
+      "localEvidence": "protocol_tested",
+      "localAcceptanceSource": "src/server/connectors/curated/google.test.ts",
+      "liveEvidence": {
+        "testedAt": null,
+        "operations": [],
+        "connect": "unverified",
+        "identity": "unverified",
+        "read": "unverified",
+        "writeApproval": "unverified",
+        "error": "unverified",
+        "refresh": "unverified",
+        "reconnect": "unverified",
+        "revoke": "unverified"
+      }
+    },
+    {
+      "id": "google-drive",
+      "name": "Google Drive",
+      "connectionKind": "oauth2",
+      "configurationSource": "catalogue/connectors/google-drive.json",
+      "localEvidence": "protocol_tested",
+      "localAcceptanceSource": "src/server/connectors/curated/google.test.ts",
+      "liveEvidence": {
+        "testedAt": null,
+        "operations": [],
+        "connect": "unverified",
+        "identity": "unverified",
+        "read": "unverified",
+        "writeApproval": "unverified",
+        "error": "unverified",
+        "refresh": "unverified",
+        "reconnect": "unverified",
+        "revoke": "unverified"
+      }
+    },
+    {
+      "id": "google-gmail",
+      "name": "Gmail",
+      "connectionKind": "oauth2",
+      "configurationSource": "catalogue/connectors/google-gmail.json",
+      "localEvidence": "protocol_tested",
+      "localAcceptanceSource": "src/server/connectors/curated/google.test.ts",
+      "liveEvidence": {
+        "testedAt": "2026-11-12",
+        "client": "Claude",
+        "operations": [
+          "context",
+          "search",
+          "read"
+        ],
+        "connect": "observed",
+        "identity": "unverified",
+        "read": "observed",
+        "writeApproval": "unverified",
+        "error": "unverified",
+        "refresh": "unverified",
+        "reconnect": "unverified",
+        "revoke": "unverified"
+      }
+    },
+    {
+      "id": "govee",
+      "name": "Govee",
+      "connectionKind": "api_key",
+      "configurationSource": "catalogue/connectors/govee.json",
+      "localEvidence": "configured",
+      "localAcceptanceSource": null,
+      "liveEvidence": {
+        "testedAt": null,
+        "operations": [],
+        "connect": "unverified",
+        "identity": "unverified",
+        "read": "unverified",
+        "writeApproval": "unverified",
+        "error": "unverified",
+        "refresh": "unverified",
+        "reconnect": "unverified",
+        "revoke": "unverified"
+      }
+    },
+    {
+      "id": "gumroad",
+      "name": "Gumroad",
+      "connectionKind": "api_key",
+      "configurationSource": "catalogue/connectors/gumroad.json",
+      "localEvidence": "configured",
+      "localAcceptanceSource": null,
+      "liveEvidence": {
+        "testedAt": null,
+        "operations": [],
+        "connect": "unverified",
+        "identity": "unverified",
+        "read": "unverified",
+        "writeApproval": "unverified",
+        "error": "unverified",
+        "refresh": "unverified",
+        "reconnect": "unverified",
+        "revoke": "unverified"
+      }
+    },
+    {
+      "id": "heroku",
+      "name": "Heroku",
+      "connectionKind": "api_key",
+      "configurationSource": "catalogue/connectors/heroku.json",
+      "localEvidence": "configured",
+      "localAcceptanceSource": null,
+      "liveEvidence": {
+        "testedAt": null,
+        "operations": [],
+        "connect": "unverified",
+        "identity": "unverified",
+        "read": "unverified",
+        "writeApproval": "unverified",
+        "error": "unverified",
+        "refresh": "unverified",
+        "reconnect": "unverified",
+        "revoke": "unverified"
+      }
+    },
+    {
+      "id": "hex",
+      "name": "Hex",
+      "connectionKind": "provider_mcp",
+      "configurationSource": "catalogue/connectors/hex.json",
+      "localEvidence": "configured",
+      "localAcceptanceSource": null,
+      "liveEvidence": {
+        "testedAt": null,
+        "operations": [],
+        "connect": "unverified",
+        "identity": "unverified",
+        "read": "unverified",
+        "writeApproval": "unverified",
+        "error": "unverified",
+        "refresh": "unverified",
+        "reconnect": "unverified",
+        "revoke": "unverified"
+      }
+    },
+    {
+      "id": "honeybadger",
+      "name": "Honeybadger",
+      "connectionKind": "api_key",
+      "configurationSource": "catalogue/connectors/honeybadger.json",
+      "localEvidence": "configured",
+      "localAcceptanceSource": null,
+      "liveEvidence": {
+        "testedAt": null,
+        "operations": [],
+        "connect": "unverified",
+        "identity": "unverified",
+        "read": "unverified",
+        "writeApproval": "unverified",
+        "error": "unverified",
+        "refresh": "unverified",
+        "reconnect": "unverified",
+        "revoke": "unverified"
+      }
+    },
+    {
+      "id": "hubspot",
+      "name": "HubSpot",
+      "connectionKind": "provider_mcp",
+      "configurationSource": "catalogue/connectors/hubspot.json",
+      "localEvidence": "configured",
+      "localAcceptanceSource": null,
+      "liveEvidence": {
+        "testedAt": null,
+        "operations": [],
+        "connect": "unverified",
+        "identity": "unverified",
+        "read": "unverified",
+        "writeApproval": "unverified",
+        "error": "unverified",
+        "refresh": "unverified",
+        "reconnect": "unverified",
+        "revoke": "unverified"
+      }
+    },
+    {
+      "id": "ifttt",
+      "name": "IFTTT",
+      "connectionKind": "api_key",
+      "configurationSource": "catalogue/connectors/ifttt.json",
+      "localEvidence": "configured",
+      "localAcceptanceSource": null,
+      "liveEvidence": {
+        "testedAt": null,
+        "operations": [],
+        "connect": "unverified",
+        "identity": "unverified",
+        "read": "unverified",
+        "writeApproval": "unverified",
+        "error": "unverified",
+        "refresh": "unverified",
+        "reconnect": "unverified",
+        "revoke": "unverified"
+      }
+    },
+    {
+      "id": "intercom",
+      "name": "Intercom",
+      "connectionKind": "provider_mcp",
+      "configurationSource": "catalogue/connectors/intercom.json",
+      "localEvidence": "configured",
+      "localAcceptanceSource": null,
+      "liveEvidence": {
+        "testedAt": null,
+        "operations": [],
+        "connect": "unverified",
+        "identity": "unverified",
+        "read": "unverified",
+        "writeApproval": "unverified",
+        "error": "unverified",
+        "refresh": "unverified",
+        "reconnect": "unverified",
+        "revoke": "unverified"
+      }
+    },
+    {
+      "id": "linear",
+      "name": "Linear",
+      "connectionKind": "provider_mcp",
+      "configurationSource": "catalogue/connectors/linear.json",
+      "localEvidence": "configured",
+      "localAcceptanceSource": null,
+      "liveEvidence": {
+        "testedAt": null,
+        "operations": [],
+        "connect": "unverified",
+        "identity": "unverified",
+        "read": "unverified",
+        "writeApproval": "unverified",
+        "error": "unverified",
+        "refresh": "unverified",
+        "reconnect": "unverified",
+        "revoke": "unverified"
+      }
+    },
+    {
+      "id": "linode",
+      "name": "Linode",
+      "connectionKind": "api_key",
+      "configurationSource": "catalogue/connectors/linode.json",
+      "localEvidence": "configured",
+      "localAcceptanceSource": null,
+      "liveEvidence": {
+        "testedAt": null,
+        "operations": [],
+        "connect": "unverified",
+        "identity": "unverified",
+        "read": "unverified",
+        "writeApproval": "unverified",
+        "error": "unverified",
+        "refresh": "unverified",
+        "reconnect": "unverified",
+        "revoke": "unverified"
+      }
+    },
+    {
+      "id": "mailchimp",
+      "name": "Mailchimp",
+      "connectionKind": "provider_mcp",
+      "configurationSource": "catalogue/connectors/mailchimp.json",
+      "localEvidence": "configured",
+      "localAcceptanceSource": null,
+      "liveEvidence": {
+        "testedAt": null,
+        "operations": [],
+        "connect": "unverified",
+        "identity": "unverified",
+        "read": "unverified",
+        "writeApproval": "unverified",
+        "error": "unverified",
+        "refresh": "unverified",
+        "reconnect": "unverified",
+        "revoke": "unverified"
+      }
+    },
+    {
+      "id": "mailgun",
+      "name": "Mailgun",
+      "connectionKind": "basic",
+      "configurationSource": "catalogue/connectors/mailgun.json",
+      "localEvidence": "configured",
+      "localAcceptanceSource": null,
+      "liveEvidence": {
+        "testedAt": null,
+        "operations": [],
+        "connect": "unverified",
+        "identity": "unverified",
+        "read": "unverified",
+        "writeApproval": "unverified",
+        "error": "unverified",
+        "refresh": "unverified",
+        "reconnect": "unverified",
+        "revoke": "unverified"
+      }
+    },
+    {
+      "id": "mailjet",
+      "name": "Mailjet",
+      "connectionKind": "basic",
+      "configurationSource": "catalogue/connectors/mailjet.json",
+      "localEvidence": "configured",
+      "localAcceptanceSource": null,
+      "liveEvidence": {
+        "testedAt": null,
+        "operations": [],
+        "connect": "unverified",
+        "identity": "unverified",
+        "read": "unverified",
+        "writeApproval": "unverified",
+        "error": "unverified",
+        "refresh": "unverified",
+        "reconnect": "unverified",
+        "revoke": "unverified"
+      }
+    },
+    {
+      "id": "mercury",
+      "name": "Mercury",
+      "connectionKind": "api_key",
+      "configurationSource": "catalogue/connectors/mercury.json",
+      "localEvidence": "configured",
+      "localAcceptanceSource": null,
+      "liveEvidence": {
+        "testedAt": null,
+        "operations": [],
+        "connect": "unverified",
+        "identity": "unverified",
+        "read": "unverified",
+        "writeApproval": "unverified",
+        "error": "unverified",
+        "refresh": "unverified",
+        "reconnect": "unverified",
+        "revoke": "unverified"
+      }
+    },
+    {
+      "id": "messagebird",
+      "name": "Bird (MessageBird)",
+      "connectionKind": "api_key",
+      "configurationSource": "catalogue/connectors/messagebird.json",
+      "localEvidence": "configured",
+      "localAcceptanceSource": null,
+      "liveEvidence": {
+        "testedAt": null,
+        "operations": [],
+        "connect": "unverified",
+        "identity": "unverified",
+        "read": "unverified",
+        "writeApproval": "unverified",
+        "error": "unverified",
+        "refresh": "unverified",
+        "reconnect": "unverified",
+        "revoke": "unverified"
+      }
+    },
+    {
+      "id": "microsoft-onedrive",
+      "name": "OneDrive",
+      "connectionKind": "oauth2",
+      "configurationSource": "catalogue/connectors/microsoft-onedrive.json",
+      "localEvidence": "protocol_tested",
+      "localAcceptanceSource": "src/server/connectors/curated/microsoft.test.ts",
+      "liveEvidence": {
+        "testedAt": null,
+        "operations": [],
+        "connect": "unverified",
+        "identity": "unverified",
+        "read": "unverified",
+        "writeApproval": "unverified",
+        "error": "unverified",
+        "refresh": "unverified",
+        "reconnect": "unverified",
+        "revoke": "unverified"
+      }
+    },
+    {
+      "id": "microsoft-outlook-calendar",
+      "name": "Outlook Calendar",
+      "connectionKind": "oauth2",
+      "configurationSource": "catalogue/connectors/microsoft-outlook-calendar.json",
+      "localEvidence": "protocol_tested",
+      "localAcceptanceSource": "src/server/connectors/curated/microsoft.test.ts",
+      "liveEvidence": {
+        "testedAt": null,
+        "operations": [],
+        "connect": "unverified",
+        "identity": "unverified",
+        "read": "unverified",
+        "writeApproval": "unverified",
+        "error": "unverified",
+        "refresh": "unverified",
+        "reconnect": "unverified",
+        "revoke": "unverified"
+      }
+    },
+    {
+      "id": "microsoft-outlook-mail",
+      "name": "Outlook Mail",
+      "connectionKind": "oauth2",
+      "configurationSource": "catalogue/connectors/microsoft-outlook-mail.json",
+      "localEvidence": "protocol_tested",
+      "localAcceptanceSource": "src/server/connectors/curated/microsoft.test.ts",
+      "liveEvidence": {
+        "testedAt": null,
+        "operations": [],
+        "connect": "unverified",
+        "identity": "unverified",
+        "read": "unverified",
+        "writeApproval": "unverified",
+        "error": "unverified",
+        "refresh": "unverified",
+        "reconnect": "unverified",
+        "revoke": "unverified"
+      }
+    },
+    {
+      "id": "monday",
+      "name": "monday.com",
+      "connectionKind": "provider_mcp",
+      "configurationSource": "catalogue/connectors/monday.json",
+      "localEvidence": "configured",
+      "localAcceptanceSource": null,
+      "liveEvidence": {
+        "testedAt": null,
+        "operations": [],
+        "connect": "unverified",
+        "identity": "unverified",
+        "read": "unverified",
+        "writeApproval": "unverified",
+        "error": "unverified",
+        "refresh": "unverified",
+        "reconnect": "unverified",
+        "revoke": "unverified"
+      }
+    },
+    {
+      "id": "netlify",
+      "name": "Netlify",
+      "connectionKind": "api_key",
+      "configurationSource": "catalogue/connectors/netlify.json",
+      "localEvidence": "configured",
+      "localAcceptanceSource": null,
+      "liveEvidence": {
+        "testedAt": null,
+        "operations": [],
+        "connect": "unverified",
+        "identity": "unverified",
+        "read": "unverified",
+        "writeApproval": "unverified",
+        "error": "unverified",
+        "refresh": "unverified",
+        "reconnect": "unverified",
+        "revoke": "unverified"
+      }
+    },
+    {
+      "id": "newrelic",
+      "name": "New Relic",
+      "connectionKind": "api_key",
+      "configurationSource": "catalogue/connectors/newrelic.json",
+      "localEvidence": "configured",
+      "localAcceptanceSource": null,
+      "liveEvidence": {
+        "testedAt": null,
+        "operations": [],
+        "connect": "unverified",
+        "identity": "unverified",
+        "read": "unverified",
+        "writeApproval": "unverified",
+        "error": "unverified",
+        "refresh": "unverified",
+        "reconnect": "unverified",
+        "revoke": "unverified"
+      }
+    },
+    {
+      "id": "notion",
+      "name": "Notion",
+      "connectionKind": "provider_mcp",
+      "configurationSource": "catalogue/connectors/notion.json",
+      "localEvidence": "configured",
+      "localAcceptanceSource": null,
+      "liveEvidence": {
+        "testedAt": null,
+        "operations": [],
+        "connect": "unverified",
+        "identity": "unverified",
+        "read": "unverified",
+        "writeApproval": "unverified",
+        "error": "unverified",
+        "refresh": "unverified",
+        "reconnect": "unverified",
+        "revoke": "unverified"
+      }
+    },
+    {
+      "id": "nozbe",
+      "name": "Nozbe",
+      "connectionKind": "api_key",
+      "configurationSource": "catalogue/connectors/nozbe.json",
+      "localEvidence": "configured",
+      "localAcceptanceSource": null,
+      "liveEvidence": {
+        "testedAt": null,
+        "operations": [],
+        "connect": "unverified",
+        "identity": "unverified",
+        "read": "unverified",
+        "writeApproval": "unverified",
+        "error": "unverified",
+        "refresh": "unverified",
+        "reconnect": "unverified",
+        "revoke": "unverified"
+      }
+    },
+    {
+      "id": "ntfy",
+      "name": "ntfy",
+      "connectionKind": "api_key",
+      "configurationSource": "catalogue/connectors/ntfy.json",
+      "localEvidence": "configured",
+      "localAcceptanceSource": null,
+      "liveEvidence": {
+        "testedAt": null,
+        "operations": [],
+        "connect": "unverified",
+        "identity": "unverified",
+        "read": "unverified",
+        "writeApproval": "unverified",
+        "error": "unverified",
+        "refresh": "unverified",
+        "reconnect": "unverified",
+        "revoke": "unverified"
+      }
+    },
+    {
+      "id": "nylas",
+      "name": "Nylas",
+      "connectionKind": "api_key",
+      "configurationSource": "catalogue/connectors/nylas.json",
+      "localEvidence": "configured",
+      "localAcceptanceSource": null,
+      "liveEvidence": {
+        "testedAt": null,
+        "operations": [],
+        "connect": "unverified",
+        "identity": "unverified",
+        "read": "unverified",
+        "writeApproval": "unverified",
+        "error": "unverified",
+        "refresh": "unverified",
+        "reconnect": "unverified",
+        "revoke": "unverified"
+      }
+    },
+    {
+      "id": "opsgenie",
+      "name": "Opsgenie",
+      "connectionKind": "api_key",
+      "configurationSource": "catalogue/connectors/opsgenie.json",
+      "localEvidence": "configured",
+      "localAcceptanceSource": null,
+      "liveEvidence": {
+        "testedAt": null,
+        "operations": [],
+        "connect": "unverified",
+        "identity": "unverified",
+        "read": "unverified",
+        "writeApproval": "unverified",
+        "error": "unverified",
+        "refresh": "unverified",
+        "reconnect": "unverified",
+        "revoke": "unverified"
+      }
+    },
+    {
+      "id": "pagerduty",
+      "name": "PagerDuty",
+      "connectionKind": "provider_mcp",
+      "configurationSource": "catalogue/connectors/pagerduty.json",
+      "localEvidence": "configured",
+      "localAcceptanceSource": null,
+      "liveEvidence": {
+        "testedAt": null,
+        "operations": [],
+        "connect": "unverified",
+        "identity": "unverified",
+        "read": "unverified",
+        "writeApproval": "unverified",
+        "error": "unverified",
+        "refresh": "unverified",
+        "reconnect": "unverified",
+        "revoke": "unverified"
+      }
+    },
+    {
+      "id": "particle",
+      "name": "Particle",
+      "connectionKind": "api_key",
+      "configurationSource": "catalogue/connectors/particle.json",
+      "localEvidence": "configured",
+      "localAcceptanceSource": null,
+      "liveEvidence": {
+        "testedAt": null,
+        "operations": [],
+        "connect": "unverified",
+        "identity": "unverified",
+        "read": "unverified",
+        "writeApproval": "unverified",
+        "error": "unverified",
+        "refresh": "unverified",
+        "reconnect": "unverified",
+        "revoke": "unverified"
+      }
+    },
+    {
+      "id": "paypal",
+      "name": "PayPal",
+      "connectionKind": "provider_mcp",
+      "configurationSource": "catalogue/connectors/paypal.json",
+      "localEvidence": "configured",
+      "localAcceptanceSource": null,
+      "liveEvidence": {
+        "testedAt": null,
+        "operations": [],
+        "connect": "unverified",
+        "identity": "unverified",
+        "read": "unverified",
+        "writeApproval": "unverified",
+        "error": "unverified",
+        "refresh": "unverified",
+        "reconnect": "unverified",
+        "revoke": "unverified"
+      }
+    },
+    {
+      "id": "pinata",
+      "name": "Pinata",
+      "connectionKind": "api_key",
+      "configurationSource": "catalogue/connectors/pinata.json",
+      "localEvidence": "configured",
+      "localAcceptanceSource": null,
+      "liveEvidence": {
+        "testedAt": null,
+        "operations": [],
+        "connect": "unverified",
+        "identity": "unverified",
+        "read": "unverified",
+        "writeApproval": "unverified",
+        "error": "unverified",
+        "refresh": "unverified",
+        "reconnect": "unverified",
+        "revoke": "unverified"
+      }
+    },
+    {
+      "id": "plaid",
+      "name": "Plaid",
+      "connectionKind": "provider_mcp",
+      "configurationSource": "catalogue/connectors/plaid.json",
+      "localEvidence": "configured",
+      "localAcceptanceSource": null,
+      "liveEvidence": {
+        "testedAt": null,
+        "operations": [],
+        "connect": "unverified",
+        "identity": "unverified",
+        "read": "unverified",
+        "writeApproval": "unverified",
+        "error": "unverified",
+        "refresh": "unverified",
+        "reconnect": "unverified",
+        "revoke": "unverified"
+      }
+    },
+    {
+      "id": "plivo",
+      "name": "Plivo",
+      "connectionKind": "basic",
+      "configurationSource": "catalogue/connectors/plivo.json",
+      "localEvidence": "configured",
+      "localAcceptanceSource": null,
+      "liveEvidence": {
+        "testedAt": null,
+        "operations": [],
+        "connect": "unverified",
+        "identity": "unverified",
+        "read": "unverified",
+        "writeApproval": "unverified",
+        "error": "unverified",
+        "refresh": "unverified",
+        "reconnect": "unverified",
+        "revoke": "unverified"
+      }
+    },
+    {
+      "id": "postmark",
+      "name": "Postmark",
+      "connectionKind": "api_key",
+      "configurationSource": "catalogue/connectors/postmark.json",
+      "localEvidence": "configured",
+      "localAcceptanceSource": null,
+      "liveEvidence": {
+        "testedAt": null,
+        "operations": [],
+        "connect": "unverified",
+        "identity": "unverified",
+        "read": "unverified",
+        "writeApproval": "unverified",
+        "error": "unverified",
+        "refresh": "unverified",
+        "reconnect": "unverified",
+        "revoke": "unverified"
+      }
+    },
+    {
+      "id": "printful",
+      "name": "Printful",
+      "connectionKind": "api_key",
+      "configurationSource": "catalogue/connectors/printful.json",
+      "localEvidence": "configured",
+      "localAcceptanceSource": null,
+      "liveEvidence": {
+        "testedAt": null,
+        "operations": [],
+        "connect": "unverified",
+        "identity": "unverified",
+        "read": "unverified",
+        "writeApproval": "unverified",
+        "error": "unverified",
+        "refresh": "unverified",
+        "reconnect": "unverified",
+        "revoke": "unverified"
+      }
+    },
+    {
+      "id": "pushover",
+      "name": "Pushover",
+      "connectionKind": "api_key",
+      "configurationSource": "catalogue/connectors/pushover.json",
+      "localEvidence": "configured",
+      "localAcceptanceSource": null,
+      "liveEvidence": {
+        "testedAt": null,
+        "operations": [],
+        "connect": "unverified",
+        "identity": "unverified",
+        "read": "unverified",
+        "writeApproval": "unverified",
+        "error": "unverified",
+        "refresh": "unverified",
+        "reconnect": "unverified",
+        "revoke": "unverified"
+      }
+    },
+    {
+      "id": "railway",
+      "name": "Railway",
+      "connectionKind": "api_key",
+      "configurationSource": "catalogue/connectors/railway.json",
+      "localEvidence": "configured",
+      "localAcceptanceSource": null,
+      "liveEvidence": {
+        "testedAt": null,
+        "operations": [],
+        "connect": "unverified",
+        "identity": "unverified",
+        "read": "unverified",
+        "writeApproval": "unverified",
+        "error": "unverified",
+        "refresh": "unverified",
+        "reconnect": "unverified",
+        "revoke": "unverified"
+      }
+    },
+    {
+      "id": "ramp",
+      "name": "Ramp",
+      "connectionKind": "api_key",
+      "configurationSource": "catalogue/connectors/ramp.json",
+      "localEvidence": "configured",
+      "localAcceptanceSource": null,
+      "liveEvidence": {
+        "testedAt": null,
+        "operations": [],
+        "connect": "unverified",
+        "identity": "unverified",
+        "read": "unverified",
+        "writeApproval": "unverified",
+        "error": "unverified",
+        "refresh": "unverified",
+        "reconnect": "unverified",
+        "revoke": "unverified"
+      }
+    },
+    {
+      "id": "render",
+      "name": "Render",
+      "connectionKind": "api_key",
+      "configurationSource": "catalogue/connectors/render.json",
+      "localEvidence": "configured",
+      "localAcceptanceSource": null,
+      "liveEvidence": {
+        "testedAt": null,
+        "operations": [],
+        "connect": "unverified",
+        "identity": "unverified",
+        "read": "unverified",
+        "writeApproval": "unverified",
+        "error": "unverified",
+        "refresh": "unverified",
+        "reconnect": "unverified",
+        "revoke": "unverified"
+      }
+    },
+    {
+      "id": "resend",
+      "name": "Resend",
+      "connectionKind": "api_key",
+      "configurationSource": "catalogue/connectors/resend.json",
+      "localEvidence": "configured",
+      "localAcceptanceSource": null,
+      "liveEvidence": {
+        "testedAt": null,
+        "operations": [],
+        "connect": "unverified",
+        "identity": "unverified",
+        "read": "unverified",
+        "writeApproval": "unverified",
+        "error": "unverified",
+        "refresh": "unverified",
+        "reconnect": "unverified",
+        "revoke": "unverified"
+      }
+    },
+    {
+      "id": "rollbar",
+      "name": "Rollbar",
+      "connectionKind": "api_key",
+      "configurationSource": "catalogue/connectors/rollbar.json",
+      "localEvidence": "configured",
+      "localAcceptanceSource": null,
+      "liveEvidence": {
+        "testedAt": null,
+        "operations": [],
+        "connect": "unverified",
+        "identity": "unverified",
+        "read": "unverified",
+        "writeApproval": "unverified",
+        "error": "unverified",
+        "refresh": "unverified",
+        "reconnect": "unverified",
+        "revoke": "unverified"
+      }
+    },
+    {
+      "id": "savvycal",
+      "name": "SavvyCal",
+      "connectionKind": "api_key",
+      "configurationSource": "catalogue/connectors/savvycal.json",
+      "localEvidence": "configured",
+      "localAcceptanceSource": null,
+      "liveEvidence": {
+        "testedAt": null,
+        "operations": [],
+        "connect": "unverified",
+        "identity": "unverified",
+        "read": "unverified",
+        "writeApproval": "unverified",
+        "error": "unverified",
+        "refresh": "unverified",
+        "reconnect": "unverified",
+        "revoke": "unverified"
+      }
+    },
+    {
+      "id": "scaleway",
+      "name": "Scaleway",
+      "connectionKind": "api_key",
+      "configurationSource": "catalogue/connectors/scaleway.json",
+      "localEvidence": "configured",
+      "localAcceptanceSource": null,
+      "liveEvidence": {
+        "testedAt": null,
+        "operations": [],
+        "connect": "unverified",
+        "identity": "unverified",
+        "read": "unverified",
+        "writeApproval": "unverified",
+        "error": "unverified",
+        "refresh": "unverified",
+        "reconnect": "unverified",
+        "revoke": "unverified"
+      }
+    },
+    {
+      "id": "sendgrid",
+      "name": "SendGrid",
+      "connectionKind": "provider_mcp",
+      "configurationSource": "catalogue/connectors/sendgrid.json",
+      "localEvidence": "configured",
+      "localAcceptanceSource": null,
+      "liveEvidence": {
+        "testedAt": null,
+        "operations": [],
+        "connect": "unverified",
+        "identity": "unverified",
+        "read": "unverified",
+        "writeApproval": "unverified",
+        "error": "unverified",
+        "refresh": "unverified",
+        "reconnect": "unverified",
+        "revoke": "unverified"
+      }
+    },
+    {
+      "id": "sentry",
+      "name": "Sentry",
+      "connectionKind": "provider_mcp",
+      "configurationSource": "catalogue/connectors/sentry.json",
+      "localEvidence": "configured",
+      "localAcceptanceSource": null,
+      "liveEvidence": {
+        "testedAt": null,
+        "operations": [],
+        "connect": "unverified",
+        "identity": "unverified",
+        "read": "unverified",
+        "writeApproval": "unverified",
+        "error": "unverified",
+        "refresh": "unverified",
+        "reconnect": "unverified",
+        "revoke": "unverified"
+      }
+    },
+    {
+      "id": "shippo",
+      "name": "Shippo",
+      "connectionKind": "api_key",
+      "configurationSource": "catalogue/connectors/shippo.json",
+      "localEvidence": "configured",
+      "localAcceptanceSource": null,
+      "liveEvidence": {
+        "testedAt": null,
+        "operations": [],
+        "connect": "unverified",
+        "identity": "unverified",
+        "read": "unverified",
+        "writeApproval": "unverified",
+        "error": "unverified",
+        "refresh": "unverified",
+        "reconnect": "unverified",
+        "revoke": "unverified"
+      }
+    },
+    {
+      "id": "shopify",
+      "name": "Shopify",
+      "connectionKind": "provider_mcp",
+      "configurationSource": "catalogue/connectors/shopify.json",
+      "localEvidence": "configured",
+      "localAcceptanceSource": null,
+      "liveEvidence": {
+        "testedAt": null,
+        "operations": [],
+        "connect": "unverified",
+        "identity": "unverified",
+        "read": "unverified",
+        "writeApproval": "unverified",
+        "error": "unverified",
+        "refresh": "unverified",
+        "reconnect": "unverified",
+        "revoke": "unverified"
+      }
+    },
+    {
+      "id": "shortcut",
+      "name": "Shortcut",
+      "connectionKind": "api_key",
+      "configurationSource": "catalogue/connectors/shortcut.json",
+      "localEvidence": "configured",
+      "localAcceptanceSource": null,
+      "liveEvidence": {
+        "testedAt": null,
+        "operations": [],
+        "connect": "unverified",
+        "identity": "unverified",
+        "read": "unverified",
+        "writeApproval": "unverified",
+        "error": "unverified",
+        "refresh": "unverified",
+        "reconnect": "unverified",
+        "revoke": "unverified"
+      }
+    },
+    {
+      "id": "skyscanner",
+      "name": "Skyscanner",
+      "connectionKind": "api_key",
+      "configurationSource": "catalogue/connectors/skyscanner.json",
+      "localEvidence": "configured",
+      "localAcceptanceSource": null,
+      "liveEvidence": {
+        "testedAt": null,
+        "operations": [],
+        "connect": "unverified",
+        "identity": "unverified",
+        "read": "unverified",
+        "writeApproval": "unverified",
+        "error": "unverified",
+        "refresh": "unverified",
+        "reconnect": "unverified",
+        "revoke": "unverified"
+      }
+    },
+    {
+      "id": "smartthings",
+      "name": "SmartThings",
+      "connectionKind": "api_key",
+      "configurationSource": "catalogue/connectors/smartthings.json",
+      "localEvidence": "configured",
+      "localAcceptanceSource": null,
+      "liveEvidence": {
+        "testedAt": null,
+        "operations": [],
+        "connect": "unverified",
+        "identity": "unverified",
+        "read": "unverified",
+        "writeApproval": "unverified",
+        "error": "unverified",
+        "refresh": "unverified",
+        "reconnect": "unverified",
+        "revoke": "unverified"
+      }
+    },
+    {
+      "id": "snowflake",
+      "name": "Snowflake",
+      "connectionKind": "provider_mcp",
+      "configurationSource": "catalogue/connectors/snowflake.json",
+      "localEvidence": "configured",
+      "localAcceptanceSource": null,
+      "liveEvidence": {
+        "testedAt": null,
+        "operations": [],
+        "connect": "unverified",
+        "identity": "unverified",
+        "read": "unverified",
+        "writeApproval": "unverified",
+        "error": "unverified",
+        "refresh": "unverified",
+        "reconnect": "unverified",
+        "revoke": "unverified"
+      }
+    },
+    {
+      "id": "sparkpost",
+      "name": "SparkPost",
+      "connectionKind": "api_key",
+      "configurationSource": "catalogue/connectors/sparkpost.json",
+      "localEvidence": "configured",
+      "localAcceptanceSource": null,
+      "liveEvidence": {
+        "testedAt": null,
+        "operations": [],
+        "connect": "unverified",
+        "identity": "unverified",
+        "read": "unverified",
+        "writeApproval": "unverified",
+        "error": "unverified",
+        "refresh": "unverified",
+        "reconnect": "unverified",
+        "revoke": "unverified"
+      }
+    },
+    {
+      "id": "square",
+      "name": "Square",
+      "connectionKind": "provider_mcp",
+      "configurationSource": "catalogue/connectors/square.json",
+      "localEvidence": "configured",
+      "localAcceptanceSource": null,
+      "liveEvidence": {
+        "testedAt": null,
+        "operations": [],
+        "connect": "unverified",
+        "identity": "unverified",
+        "read": "unverified",
+        "writeApproval": "unverified",
+        "error": "unverified",
+        "refresh": "unverified",
+        "reconnect": "unverified",
+        "revoke": "unverified"
+      }
+    },
+    {
+      "id": "stripe",
+      "name": "Stripe",
+      "connectionKind": "provider_mcp",
+      "configurationSource": "catalogue/connectors/stripe.json",
+      "localEvidence": "configured",
+      "localAcceptanceSource": null,
+      "liveEvidence": {
+        "testedAt": null,
+        "operations": [],
+        "connect": "unverified",
+        "identity": "unverified",
+        "read": "unverified",
+        "writeApproval": "unverified",
+        "error": "unverified",
+        "refresh": "unverified",
+        "reconnect": "unverified",
+        "revoke": "unverified"
+      }
+    },
+    {
+      "id": "telnyx",
+      "name": "Telnyx",
+      "connectionKind": "api_key",
+      "configurationSource": "catalogue/connectors/telnyx.json",
+      "localEvidence": "configured",
+      "localAcceptanceSource": null,
+      "liveEvidence": {
+        "testedAt": null,
+        "operations": [],
+        "connect": "unverified",
+        "identity": "unverified",
+        "read": "unverified",
+        "writeApproval": "unverified",
+        "error": "unverified",
+        "refresh": "unverified",
+        "reconnect": "unverified",
+        "revoke": "unverified"
+      }
+    },
+    {
+      "id": "ticktick",
+      "name": "TickTick",
+      "connectionKind": "api_key",
+      "configurationSource": "catalogue/connectors/ticktick.json",
+      "localEvidence": "configured",
+      "localAcceptanceSource": null,
+      "liveEvidence": {
+        "testedAt": null,
+        "operations": [],
+        "connect": "unverified",
+        "identity": "unverified",
+        "read": "unverified",
+        "writeApproval": "unverified",
+        "error": "unverified",
+        "refresh": "unverified",
+        "reconnect": "unverified",
+        "revoke": "unverified"
+      }
+    },
+    {
+      "id": "todoist",
+      "name": "Todoist",
+      "connectionKind": "api_key",
+      "configurationSource": "catalogue/connectors/todoist.json",
+      "localEvidence": "configured",
+      "localAcceptanceSource": null,
+      "liveEvidence": {
+        "testedAt": null,
+        "operations": [],
+        "connect": "unverified",
+        "identity": "unverified",
+        "read": "unverified",
+        "writeApproval": "unverified",
+        "error": "unverified",
+        "refresh": "unverified",
+        "reconnect": "unverified",
+        "revoke": "unverified"
+      }
+    },
+    {
+      "id": "travis-ci",
+      "name": "Travis CI",
+      "connectionKind": "api_key",
+      "configurationSource": "catalogue/connectors/travis-ci.json",
+      "localEvidence": "configured",
+      "localAcceptanceSource": null,
+      "liveEvidence": {
+        "testedAt": null,
+        "operations": [],
+        "connect": "unverified",
+        "identity": "unverified",
+        "read": "unverified",
+        "writeApproval": "unverified",
+        "error": "unverified",
+        "refresh": "unverified",
+        "reconnect": "unverified",
+        "revoke": "unverified"
+      }
+    },
+    {
+      "id": "tripadvisor",
+      "name": "Tripadvisor",
+      "connectionKind": "api_key",
+      "configurationSource": "catalogue/connectors/tripadvisor.json",
+      "localEvidence": "configured",
+      "localAcceptanceSource": null,
+      "liveEvidence": {
+        "testedAt": null,
+        "operations": [],
+        "connect": "unverified",
+        "identity": "unverified",
+        "read": "unverified",
+        "writeApproval": "unverified",
+        "error": "unverified",
+        "refresh": "unverified",
+        "reconnect": "unverified",
+        "revoke": "unverified"
+      }
+    },
+    {
+      "id": "tuya",
+      "name": "Tuya",
+      "connectionKind": "api_key",
+      "configurationSource": "catalogue/connectors/tuya.json",
+      "localEvidence": "configured",
+      "localAcceptanceSource": null,
+      "liveEvidence": {
+        "testedAt": null,
+        "operations": [],
+        "connect": "unverified",
+        "identity": "unverified",
+        "read": "unverified",
+        "writeApproval": "unverified",
+        "error": "unverified",
+        "refresh": "unverified",
+        "reconnect": "unverified",
+        "revoke": "unverified"
+      }
+    },
+    {
+      "id": "twilio",
+      "name": "Twilio",
+      "connectionKind": "provider_mcp",
+      "configurationSource": "catalogue/connectors/twilio.json",
+      "localEvidence": "configured",
+      "localAcceptanceSource": null,
+      "liveEvidence": {
+        "testedAt": null,
+        "operations": [],
+        "connect": "unverified",
+        "identity": "unverified",
+        "read": "unverified",
+        "writeApproval": "unverified",
+        "error": "unverified",
+        "refresh": "unverified",
+        "reconnect": "unverified",
+        "revoke": "unverified"
+      }
+    },
+    {
+      "id": "uploadcare",
+      "name": "Uploadcare",
+      "connectionKind": "api_key",
+      "configurationSource": "catalogue/connectors/uploadcare.json",
+      "localEvidence": "configured",
+      "localAcceptanceSource": null,
+      "liveEvidence": {
+        "testedAt": null,
+        "operations": [],
+        "connect": "unverified",
+        "identity": "unverified",
+        "read": "unverified",
+        "writeApproval": "unverified",
+        "error": "unverified",
+        "refresh": "unverified",
+        "reconnect": "unverified",
+        "revoke": "unverified"
+      }
+    },
+    {
+      "id": "vercel",
+      "name": "Vercel",
+      "connectionKind": "provider_mcp",
+      "configurationSource": "catalogue/connectors/vercel.json",
+      "localEvidence": "configured",
+      "localAcceptanceSource": null,
+      "liveEvidence": {
+        "testedAt": null,
+        "operations": [],
+        "connect": "unverified",
+        "identity": "unverified",
+        "read": "unverified",
+        "writeApproval": "unverified",
+        "error": "unverified",
+        "refresh": "unverified",
+        "reconnect": "unverified",
+        "revoke": "unverified"
+      }
+    },
+    {
+      "id": "vonage",
+      "name": "Vonage",
+      "connectionKind": "api_key",
+      "configurationSource": "catalogue/connectors/vonage.json",
+      "localEvidence": "configured",
+      "localAcceptanceSource": null,
+      "liveEvidence": {
+        "testedAt": null,
+        "operations": [],
+        "connect": "unverified",
+        "identity": "unverified",
+        "read": "unverified",
+        "writeApproval": "unverified",
+        "error": "unverified",
+        "refresh": "unverified",
+        "reconnect": "unverified",
+        "revoke": "unverified"
+      }
+    },
+    {
+      "id": "wave",
+      "name": "Wave",
+      "connectionKind": "api_key",
+      "configurationSource": "catalogue/connectors/wave.json",
+      "localEvidence": "configured",
+      "localAcceptanceSource": null,
+      "liveEvidence": {
+        "testedAt": null,
+        "operations": [],
+        "connect": "unverified",
+        "identity": "unverified",
+        "read": "unverified",
+        "writeApproval": "unverified",
+        "error": "unverified",
+        "refresh": "unverified",
+        "reconnect": "unverified",
+        "revoke": "unverified"
+      }
+    },
+    {
+      "id": "webflow",
+      "name": "Webflow",
+      "connectionKind": "provider_mcp",
+      "configurationSource": "catalogue/connectors/webflow.json",
+      "localEvidence": "configured",
+      "localAcceptanceSource": null,
+      "liveEvidence": {
+        "testedAt": null,
+        "operations": [],
+        "connect": "unverified",
+        "identity": "unverified",
+        "read": "unverified",
+        "writeApproval": "unverified",
+        "error": "unverified",
+        "refresh": "unverified",
+        "reconnect": "unverified",
+        "revoke": "unverified"
+      }
+    },
+    {
+      "id": "wise",
+      "name": "Wise",
+      "connectionKind": "api_key",
+      "configurationSource": "catalogue/connectors/wise.json",
+      "localEvidence": "configured",
+      "localAcceptanceSource": null,
+      "liveEvidence": {
+        "testedAt": null,
+        "operations": [],
+        "connect": "unverified",
+        "identity": "unverified",
+        "read": "unverified",
+        "writeApproval": "unverified",
+        "error": "unverified",
+        "refresh": "unverified",
+        "reconnect": "unverified",
+        "revoke": "unverified"
+      }
+    },
+    {
+      "id": "wix",
+      "name": "Wix",
+      "connectionKind": "provider_mcp",
+      "configurationSource": "catalogue/connectors/wix.json",
+      "localEvidence": "configured",
+      "localAcceptanceSource": null,
+      "liveEvidence": {
+        "testedAt": null,
+        "operations": [],
+        "connect": "unverified",
+        "identity": "unverified",
+        "read": "unverified",
+        "writeApproval": "unverified",
+        "error": "unverified",
+        "refresh": "unverified",
+        "reconnect": "unverified",
+        "revoke": "unverified"
+      }
+    },
+    {
+      "id": "zapier",
+      "name": "Zapier",
+      "connectionKind": "provider_mcp",
+      "configurationSource": "catalogue/connectors/zapier.json",
+      "localEvidence": "configured",
+      "localAcceptanceSource": null,
+      "liveEvidence": {
+        "testedAt": null,
+        "operations": [],
+        "connect": "unverified",
+        "identity": "unverified",
+        "read": "unverified",
+        "writeApproval": "unverified",
+        "error": "unverified",
+        "refresh": "unverified",
+        "reconnect": "unverified",
+        "revoke": "unverified"
+      }
+    },
+    {
+      "id": "zendesk",
+      "name": "Zendesk",
+      "connectionKind": "provider_mcp",
+      "configurationSource": "catalogue/connectors/zendesk.json",
+      "localEvidence": "configured",
+      "localAcceptanceSource": null,
+      "liveEvidence": {
+        "testedAt": null,
+        "operations": [],
+        "connect": "unverified",
+        "identity": "unverified",
+        "read": "unverified",
+        "writeApproval": "unverified",
+        "error": "unverified",
+        "refresh": "unverified",
+        "reconnect": "unverified",
+        "revoke": "unverified"
+      }
+    }
+  ]
+}

@@ -63,13 +63,23 @@ export function collectEdits(
   if (missing.length) return { ok: false, reason: "form_incomplete", missing };
   const input: PermissionsSaveInput = {};
   for (const name of names) Object.assign(input, { [name]: find("checkbox", name)!.checked });
+  if (includes("settings")) {
+    const tasksWrite = find("checkbox", "tasksWrite"), recordsWrite = find("checkbox", "recordsWrite");
+    const recordScope = controls.find(c => c.name === "recordScope")?.value;
+    if (tasksWrite || recordsWrite || recordScope) input.resourceControls = {
+      ...(tasksWrite ? {tasksWrite: tasksWrite.checked}:{}), ...(recordsWrite ? {recordsWrite: recordsWrite.checked}:{}),
+      ...(recordScope ? {recordIds: recordScope === "chosen" ? controls.filter(c => c.name.startsWith("record:") && c.checked).map(c => c.name.slice(7)) : null}:{}),
+    };
+  }
   if (includes("connectors")) {
     input.connectors = connectorIds.filter(id => find("checkbox", connectorControlName(id))!.checked);
     input.connectorAccounts = Object.fromEntries(controls.filter(c => c.name.startsWith("connectorAccount:") && c.value).map(c => [c.name.slice("connectorAccount:".length), c.value]));
     if (controls.some(c=>c.name.startsWith("connectorPolicy"))) input.connectorPolicies = Object.fromEntries(connectorIds.map(id=>{
       const read=controls.find(c=>c.name===`connectorPolicyRead:${id}`)?.value;
       const change=controls.find(c=>c.name===`connectorPolicyChange:${id}`)?.value;
-      return [id,{...(read&&read!=="default"?{readTools:read==="on"}:{}),...(change&&change!=="default"?{changeTools:change as "off"|"allow"|"ask_first"}:{})}];
+      const scope=controls.find(c=>c.name===`connectorToolScope:${id}`)?.value;
+      const allowedTools=scope === "chosen" ? controls.filter(c=>c.name===`connectorTool:${id}` && c.checked).map(c=>c.value) : null;
+      return [id,{...(scope ? {allowedTools}:{}),...(read&&read!=="default"?{readTools:read==="on"}:{}),...(change&&change!=="default"?{changeTools:change as "off"|"allow"|"ask_first"}:{})}];
     }));
     if (changes) input.changeTools = changes.value as PermissionsSaveInput["changeTools"];
   }

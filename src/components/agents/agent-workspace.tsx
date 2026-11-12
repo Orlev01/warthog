@@ -109,11 +109,27 @@ export function AgentOverview({
   return (
     <section className="flex flex-col gap-4">
       <h2 className="text-lg font-semibold">This agent’s access</h2>
+      <section aria-label="Connection evidence" className="border-b border-line pb-4 text-sm [overflow-wrap:anywhere]">
+        <h3 className="font-medium">Connection evidence</h3>
+        <p>Connected means access is authorised. It is not a live heartbeat.</p>
+        {data.clientObservation ? <>
+          <p>Client reported: {data.clientObservation.name ?? "Name unavailable"} · {data.clientObservation.version ?? "Version unavailable"}</p>
+          <p>Protocol: {data.clientObservation.protocol ?? "Unavailable"} · Capabilities: {data.clientObservation.capabilities?.join(", ") || "Not reported"}</p>
+          <p>Last observed: <time dateTime={data.clientObservation.observedAt}>{data.clientObservation.displayObservedAt}</time></p>
+        </> : <p>No client metadata has been recorded yet. Existing history cannot supply it.</p>}
+        <p className="text-fg-muted">Client metadata is self-reported. Warthog verifies this connection’s credential, not the client’s human, model or conversation identity.</p>
+      </section>
       <p className="text-sm text-fg-muted">
         Your account owns the resources. This workspace controls what{" "}
         {data.agent.displayName} can use through Warthog. Global rules still
         apply.
       </p>
+      <section aria-label="Recent request performance" className="border-b border-line pb-4 text-sm">
+        <h3 className="font-medium">Recent request performance</h3>
+        <p>{data.performance?.measured ?? 0} measured outcomes among the latest {data.performance?.examined ?? 0} call records (up to 100). Pending approvals and older entries without result evidence are excluded. A held request can have separate approval and completion records.</p>
+        <p>Failed: {data.performance?.failed ?? 0} · Unknown: {data.performance?.unknown ?? 0} · Refused: {data.performance?.refused ?? 0}</p>
+        <p>95th percentile response time: {data.performance?.p95Ms == null ? "Not available yet" : `${data.performance.p95Ms} ms`}</p>
+      </section>
       <div className="grid gap-3 sm:grid-cols-2">
         {cards.map(([key, title, detail]) => (
           <a
@@ -221,13 +237,15 @@ export function AgentResources({
                 className="rounded-card border border-line bg-surface p-4"
               >
                 <a
-                  href={`/activity?agent=${data.agent.id}#entry-${entry.seq}`}
+                  href={`/activity?agent=${data.agent.id}&entry=${entry.seq}#entry-${entry.seq}`}
                   className="font-medium text-accent underline"
                 >
                   {entry.title}
                 </a>
                 <p className="text-sm text-fg-muted">
                   {entry.outcome} · {entry.at}
+                </p>
+                <p className="text-sm [overflow-wrap:anywhere]">{entry.summary}
                 </p>
                 {entry.reported ? (
                   <p className="text-sm text-fg-muted">

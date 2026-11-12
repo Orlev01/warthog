@@ -1,3 +1,5 @@
+import { auditedOwnerChange } from "@/server/activity/owner-change";
+import type { KeyWrapper } from "@/server/crypto/key-wrapper";
 // E10-S03 — Agent consent decision action, wired into the authorize flow (design
 // §6.1; brief "Agent consent screen"; constitution 15/16 — each connected agent gets
 // its own revocable credential through the connector standard's consent flow).
@@ -31,7 +33,6 @@
 //   • This module reads no `process.env` and holds no secret: config (the issuer)
 //     flows in through injected `deps.config` alone (INV-103).
 
-import { withTransaction } from "@/server/db/index";
 import { getAgentDefaults } from "@/server/db/agent-defaults";
 import { randomUUID } from "node:crypto";
 
@@ -107,6 +108,7 @@ export type DecisionResult =
 // ever redirects to an unvalidated URI) and the alert senders (review fix A6: the
 // "new agent connection" security email).
 export interface AuthorizeActionsDeps {
+  readonly keyWrapper: KeyWrapper;
   readonly db: Db;
   readonly config: Config;
   readonly clock: Clock;
@@ -201,14 +203,14 @@ export function createAuthorizeActions(deps: AuthorizeActionsDeps): AuthorizeAct
     // or fetch client metadata. Reuse that snapshot for the validated request only.
     const clientId = pending.params.get("client_id");
     const client = clientId ? await resolveClient(clientId) : null;
-    const issued = await withTransaction(db, async tx => {
+    const issued = await auditedOwnerChange(deps, session.userId, async (tx, record) => {
       const result = await authorize(
         { params: pending.params, session, connectionId },
         { db: tx, config, clock, random, resolveClient: async id => id === clientId ? client : null },
       );
       if (!result.ok) return result;
 
-      await createAgent(
+      const agent = await createAgent(
         tx,
         {
           userId: session.userId,
@@ -225,8 +227,12 @@ export function createAuthorizeActions(deps: AuthorizeActionsDeps): AuthorizeAct
       const connected = new Set(
         (await listConnectionsForUser(tx, session.userId)).map((c) => c.connectorId),
       );
-      await upsertPermissions(tx, { ...initialGrants(session.userId, connectionId, valid, [...new Set(valid.tickedServices ?? [])].filter(id => connected.has(id))), rateLimit: (await getAgentDefaults(tx, session.userId)).rateLimit });
+      const grants = await upsertPermissions(tx, {
+        ...initialGrants(session.userId, connectionId, valid, [...new Set(valid.tickedServices ?? [])].filter(id => connected.has(id))),
+        rateLimit: (await getAgentDefaults(tx, session.userId)).rateLimit,
+      });
 
+      await record("agent_connected", { credentialKind: "oauth", clientId, grants }, agent.id);
       return result;
     });
     if (!issued.ok) return { ok: false, error: issued.error };

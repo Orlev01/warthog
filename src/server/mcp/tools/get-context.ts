@@ -1,3 +1,7 @@
+import { getAgentById } from "../../db/agents";
+import { listConnectionsForUser } from "../../db/connections";
+import { selectConnectorAccount } from "../../connectors/tool-routing";
+import { HOUSE_SKILL_BODY } from "./get-skill";
 import { z } from "zod";
 import { parseParams } from "../../http/validate";
 import { pageMemories } from "../../db/memories";
@@ -57,6 +61,9 @@ export interface ProfileField {
 
 // Granted context with bounded skill/memory pages and opaque continuation cursors.
 export interface AgentContextView {
+  readonly connection: { agentId: string; name: string; platform: string; identitySource: string };
+  readonly instructions: string;
+  readonly serviceAccounts: readonly { service: string; accountId: string | null; label: string | null; status: string }[];
   readonly profile: readonly ProfileField[] | null;
   readonly next?: { memory: string | null; skills: string | null };
   readonly preferences: Record<string, string> | null;
@@ -74,6 +81,7 @@ export interface AgentContextView {
     assignedTo: "you" | "any agent";
   }>;
   readonly permissions: {
+    readonly resources?: { tasks: { read: boolean; write: boolean }; records: { read: boolean; write: boolean; scope: string } };
     readonly services: readonly string[];
     readonly servicePolicies?: Record<
       string,
@@ -169,6 +177,7 @@ export function createGetContextTool(deps: GetContextDeps): {
 
       const memory = permissions.memoryRead
         ? memoryPage.items.map((m) => ({
+            id: m.id,
             content: m.content,
             shared: m.scope === "shared",
             savedAt: iso(m.createdAt),
@@ -191,7 +200,15 @@ export function createGetContextTool(deps: GetContextDeps): {
             }))
         : [];
 
+      const agent = await getAgentById(db, connection.userId, connection.agentId);
+      const accounts = await listConnectionsForUser(db, connection.userId);
       return {
+        connection: { agentId: connection.agentId, name: agent?.displayName ?? "This connection", platform: agent?.platform ?? "other", identitySource: "Warthog credential; display name and platform are owner supplied, not verification of the chat user or model." },
+        instructions: HOUSE_SKILL_BODY,
+        serviceAccounts: permissions.grantedConnectors.map(service => {
+          const selected = selectConnectorAccount(accounts, service, permissions.connectorAccounts?.[service]);
+          return { service, accountId: selected?.id ?? null, label: selected?.accountLabel ?? null, status: selected?.status ?? "selection_required" };
+        }),
         profile,
         next: { memory: memoryPage.nextCursor, skills: skillPage.nextCursor },
         preferences,
@@ -201,6 +218,7 @@ export function createGetContextTool(deps: GetContextDeps): {
         tasks,
         permissions: {
           services: permissions.grantedConnectors,
+          resources: { tasks: { read: permissions.tasksAccess, write: permissions.tasksAccess && permissions.resourceControls?.tasksWrite !== false }, records: { read: permissions.recordsAccess, write: permissions.recordsAccess && permissions.resourceControls?.recordsWrite !== false, scope: permissions.resourceControls?.recordIds == null ? "all" : "chosen_and_created_by_this_agent" } },
           servicePolicies: permissions.connectorPolicies ?? {},
           vaultScope: permissions.identityFields == null ? "all" : "chosen",
           readTools: permissions.readTools,

@@ -188,10 +188,10 @@ async function dataKeyFor(db: Db, keyWrapper: KeyWrapper, userId: string): Promi
 async function recordsPermission(
   db: Db,
   connection: AgentConnection,
-  _kind: "read" | "change",
+  kind: "read" | "change",
 ): Promise<ConnectionPermissions | null> {
   const permissions = await getConnectionPermissions(db, connection.userId, connection.connectionId);
-  if (!permissions || !permissions.recordsAccess) return null;
+  if (!permissions || !permissions.recordsAccess || (kind === "change" && permissions.resourceControls?.recordsWrite === false)) return null;
   return permissions;
 }
 
@@ -216,7 +216,7 @@ export function createListRecordsTool(deps: RecordsToolDeps): ListRecordsTool {
       // Read ONLY the CONNECTION's person's records (member-scoped by the session's
       // userId, never the input), each fields blob decrypted under the owner's DEK.
       const dek = await dataKeyFor(db, keyWrapper, connection.userId);
-      const records = await listRecordsForUser(db, connection.userId, dek);
+      const records = (await listRecordsForUser(db, connection.userId, dek)).filter(record => permissions.resourceControls?.recordIds == null || permissions.resourceControls.recordIds.includes(record.id) || (record.source.kind === "agent" && record.source.agentId === connection.agentId));
 
       return { status: "ok", records: records.map(toView) };
     },
@@ -284,7 +284,7 @@ export function createUpdateRecordTool(deps: RecordsToolDeps): UpdateRecordTool 
       // so one person can never change another's record. A missing one refuses (not
       // throws).
       const dek = await dataKeyFor(db, keyWrapper, connection.userId);
-      const owned = await listRecordsForUser(db, connection.userId, dek);
+      const owned = (await listRecordsForUser(db, connection.userId, dek)).filter(record => permissions.resourceControls?.recordIds == null || permissions.resourceControls.recordIds.includes(record.id) || (record.source.kind === "agent" && record.source.agentId === connection.agentId));
       const existing = owned.find((r) => r.id === parsed.id);
       if (!existing) {
         return { status: "refused", reason: NO_SUCH_RECORD_REASON };

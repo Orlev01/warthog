@@ -1,3 +1,5 @@
+import { readDisputesForEntries } from "../activity/disputes";
+import { listImportedEntriesForUser } from "../db/imported-history";
 // E16-S02 — Export document builder (server).
 //
 // Assembles a person's complete export document to the E16-S01 schema (`./schema`),
@@ -122,6 +124,14 @@ export async function buildExportDocument(
   const lifeAdmin = await listRecordsForUser(db, userId, dek);
   const connections = await listConnectionsForUser(db, userId);
   const activity = await readFullActivity(db, userId, dek);
+  const importedActivity = await listImportedEntriesForUser(db, userId, dek);
+  const disputes = new Map<number, { note: string; createdAt: string }[]>();
+  for (let start = 0; start < activity.length; start += 500) {
+    for (const note of await readDisputesForEntries(db, userId, activity.slice(start, start + 500).map(entry => entry.seq), dek)) {
+      const list = disputes.get(note.entrySeq) ?? [];
+      list.push({ note: note.note, createdAt: note.createdAt }); disputes.set(note.entrySeq, list);
+    }
+  }
   const agents = await listAgentsForUser(db, userId);
   const agentSettings = {
     defaults: await getAgentDefaults(db, userId),
@@ -146,6 +156,7 @@ export async function buildExportDocument(
         }
       : {},
     agentSettings,
+    ...(importedActivity.length ? { importedActivity: importedActivity.map(entry => entry.content) } : {}),
     ...(packages.length ? { skillPackages: packages.map((p) => ({ id: p.id, name: p.name, files: p.files })) } : {}),
     skills: skills.map((skill) => ({
       scope: skill.scope, enabled: skill.enabled, scopedAgentIds: skill.scopedAgentIds,
@@ -206,6 +217,7 @@ export async function buildExportDocument(
       payload: entry.payload,
       prevHash: entry.prevHash,
       entryHash: entry.entryHash,
+      disputes: disputes.get(entry.seq) ?? [],
     })),
   };
 }

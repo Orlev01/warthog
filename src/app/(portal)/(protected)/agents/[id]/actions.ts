@@ -1,3 +1,7 @@
+import { listRecordsForUser } from "@/server/db/life-admin-records";
+import { connectorToolsetFor } from "@/server/connectors/tool-routing";
+import { readProviderToolsets } from "@/server/connectors/provider-runtime";
+import type { CatalogueIndex } from "@/server/connectors/catalogue";
 import { pageSkillChoices } from "../../../../../server/db/skills";
 import { agentMemoryChoicesPage } from "../../../../../server/agents/resource-access";
 import {
@@ -130,10 +134,12 @@ const inputSchema = z.object({
     .array(z.object({ id: z.uuid(), granted: z.boolean() }))
     .max(1000)
     .optional(),
+  resourceControls: z.object({ tasksWrite: z.boolean().optional(), recordsWrite: z.boolean().optional(), recordIds: z.array(z.uuid()).max(5000).nullable().optional() }).optional(),
   connectorPolicies: z
     .record(
       z.string().max(MAX_SERVICE_LENGTH),
       z.object({
+        allowedTools: z.array(z.string().min(1).max(300)).max(1000).nullable().optional(),
         readTools: z.boolean().optional(),
         changeTools: z.enum(["off", "allow", "ask_first"]).optional(),
       }),
@@ -175,6 +181,7 @@ export type SaveResult =
 // config, no clock — editing permissions needs neither.
 export interface PermissionsActionsDeps {
   readonly db: Db;
+  readonly catalogue?: CatalogueIndex;
   readonly nameOf?: (connectorId: string) => string | undefined;
   readonly keyWrapper?: KeyWrapper;
   readonly clock?: Clock;
@@ -231,6 +238,7 @@ function toViewProps(
       readTools: [],
       changeTools: [],
     })),
+    resourceControls: grants.resourceControls,
     tasksAccess: grants.tasksAccess,
     recordsAccess: grants.recordsAccess,
     lowTierRead: grants.identityAccess,
@@ -307,6 +315,7 @@ function mergeGrants(
     connectionId,
     connectorAccounts: input.connectorAccounts ?? stored.connectorAccounts,
     connectorPolicies: input.connectorPolicies ?? stored.connectorPolicies,
+    resourceControls: input.resourceControls ? { ...stored.resourceControls, ...input.resourceControls } : stored.resourceControls,
     identityFields:
       input.identityFields !== undefined
         ? input.identityFields
@@ -418,6 +427,21 @@ export function createPermissionsActions(
     const user = await getUserById(db, session.userId);
     if (!user) return null;
     const dek = await keyWrapper.unwrap(user.wrappedDek);
+    props.recordChoices = (await listRecordsForUser(db, session.userId, dek)).map(record => ({ id: record.id, name: String(record.fields.title ?? record.kind), granted: grants.resourceControls?.recordIds == null || grants.resourceControls.recordIds.includes(record.id) }));
+
+    if (deps.catalogue) {
+      const connections = await listConnectionsForUser(db, session.userId);
+      const providerTools = await readProviderToolsets(db, deps.catalogue, session.userId, connections, dek);
+      const inventory = connectorToolsetFor(connections, connections.map(c => c.connectorId), deps.catalogue, grants.connectorAccounts, providerTools);
+      props.connectors = props.connectors.map(service => {
+        const declarations = inventory[service.id] ?? [];
+        return { ...service,
+          readTools: declarations.filter(t => typeof t !== "string" && t.makesChange === false).map(t => `${service.id}__${typeof t === "string" ? t : t.name}`),
+          changeTools: declarations.filter(t => typeof t === "string" || t.makesChange !== false).map(t => `${service.id}__${typeof t === "string" ? t : t.name}`),
+        };
+      });
+    }
+
     const skills = await pageSkillChoices(db, session.userId, agent.id, dek, {
       cursor: options.skillCursor,
     });
@@ -498,6 +522,11 @@ export function createPermissionsActions(
         !(await ownsVaultFields(tx, session.userId, valid.identityFields))
       )
         return { ok: false, reason: "invalid_request" };
+      if (valid.resourceControls?.recordIds) {
+        const owned = await tx.query("SELECT id FROM life_admin_records WHERE user_id = $1 AND id = ANY($2::uuid[])", [session.userId, valid.resourceControls.recordIds]);
+        if (owned.rows.length !== new Set(valid.resourceControls.recordIds).size) return { ok: false, reason: "invalid_request" };
+      }
+      if (valid.connectorPolicies && Object.entries(valid.connectorPolicies).some(([service, policy]) => policy.allowedTools?.some(tool => !tool.startsWith(`${service}__`)))) return { ok: false, reason: "invalid_request" };
       if (valid.memories) {
         const owned = await tx.query(
           "SELECT id FROM memories WHERE user_id = $1 AND id = ANY($2::uuid[]) ORDER BY id FOR UPDATE",

@@ -90,6 +90,8 @@ import { verifyAccessKey } from "../../../../../server/oauth/access-key";
 import { resolveAccessKey } from "../../../../../server/oauth/store";
 import { getAgentById, listAgentsForUser } from "../../../../../server/db/agents";
 import { getConnectionPermissions } from "../../../../../server/db/agent-permissions";
+import { saveAgentDefaults } from "../../../../../server/db/agent-defaults";
+import { readActivity } from "../../../../../server/activity/writer";
 import { createUser } from "../../../../../server/db/users";
 import { HttpError } from "../../../../../server/http/validate";
 import { fixedClock } from "../../../../../server/seams/clock";
@@ -106,10 +108,26 @@ const PREFIX = "wh_ak_";
 // injected clock, never SQL now()).
 const NOW = new Date("2026-06-01T00:00:00.000Z");
 
+test("access-key audit records the persisted grants including the account request limit", async () => {
+  const db = await freshDb();
+  try {
+    const userId = await makeUser(db, "audit-grants");
+    await saveAgentDefaults(db, userId, { template: "standard", rateLimit: 37 });
+    const result = await makeActions(db).create(sessionFor(userId), input());
+    assert.ok(result.ok);
+    const connectionId = await connectionIdOfAgent(db, userId, result.agentId);
+    const grants = await getConnectionPermissions(db, userId, connectionId);
+    assert.equal(grants?.rateLimit, 37);
+    const event = (await readActivity(db, userId, new Uint8Array(32).fill(7))).find(entry => entry.kind === "agent_connected");
+    assert.deepEqual((event?.payload as { changes: { grants: unknown } }).changes.grants, grants);
+    assert.doesNotMatch(JSON.stringify(event), new RegExp(result.key));
+  } finally { await db.close(); }
+});
+
 // Build the access-key actions under test with the real seams: a frozen clock and the
 // real randomness source (so two issued keys never collide across tests).
 function makeActions(db: Db) {
-  return createAccessKeyActions({ db, clock: fixedClock(NOW), random: systemRandom });
+  return createAccessKeyActions({ keyWrapper: { wrap: async () => "test-wrapped", unwrap: async () => new Uint8Array(32).fill(7) }, db, clock: fixedClock(NOW), random: systemRandom });
 }
 
 // A stand-in wrapped DEK for createUser (opaque base64; never read here).
