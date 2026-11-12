@@ -40,7 +40,7 @@ import { test } from "node:test";
 import assert from "node:assert/strict";
 import { randomUUID, webcrypto } from "node:crypto";
 
-import { createWebPushSender } from "./web-push";
+import { createWebPushSender, SIGN_IN_REQUESTS_TARGET } from "./web-push";
 
 // ---------------------------------------------------------------------------
 // Test helpers — all local, no network, no Azure, no DB.
@@ -438,4 +438,11 @@ test("push responses release their body on success and failure", async () => {
     else await assert.rejects(delivery, (error: unknown) => (error as { status: number }).status === 410);
     assert.equal(cancelled, 1);
   }
+});
+
+test("a sign-in request notification signs only the fixed routing kind", async () => {
+  const build = fakeBuildRequest();
+  const sender = createWebPushSender({ vapid: { subject: SUBJECT, publicKey: "pub", privateKey: "fake" }, fetch: recordingFetch().fetch, buildRequest: build.buildRequest });
+  await sender.sendNotificationPush(await validSubscription(), SIGN_IN_REQUESTS_TARGET);
+  assert.deepEqual(build.calls[0].message.payload, { kind: "sign-in-requests" });
 });

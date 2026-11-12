@@ -141,3 +141,12 @@ test("reminder taps open the record's group and anchor, never an arbitrary URL",
     const worker = loadWorker([]); await tap(worker, data); assert.deepEqual(worker.opened, ["/home"]);
   }
 });
+
+test("a sign-in request tap opens the sign-in requests screen and nothing else", async () => {
+  const worker = loadWorker([]);
+  await tap(worker, { kind: "sign-in-requests", url: "https://evil.test" });
+  assert.deepEqual(worker.opened, ["/settings/security/sign-in-requests"]);
+  const other = loadWorker([]);
+  await tap(other, { kind: "something-else" });
+  assert.deepEqual(other.opened, ["/home"]);
+});

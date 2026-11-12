@@ -21,6 +21,12 @@ import { recordNotificationSchema, type RecordNotification } from "../../domain/
 import type { VapidConfig } from "../config";
 import { HttpError, parseParams } from "../http/validate";
 
+// A pending "approve from another device" sign-in request: a fixed
+// routing kind only. It carries no request id or secret; the signed-in screen lists the
+// member's own requests itself.
+export const SIGN_IN_REQUESTS_TARGET = { kind: "sign-in-requests" } as const;
+export type PushTarget = RecordNotification | typeof SIGN_IN_REQUESTS_TARGET;
+
 // The Web Push payload cap (RFC 8291): a push body must be at most 4 KB. We cap the
 // PLAINTEXT payload we hand the signer, so an oversized value is refused before it is
 // ever signed or sent.
@@ -61,7 +67,7 @@ export interface WebPushSenderDeps {
 
 export interface WebPushSender {
   sendApprovalPush(subscription: PushDeviceSubscription, approvalId: string): Promise<void>;
-  sendNotificationPush(subscription: PushDeviceSubscription, target?: RecordNotification): Promise<void>;
+  sendNotificationPush(subscription: PushDeviceSubscription, target?: PushTarget): Promise<void>;
 }
 
 export class PushDeliveryError extends Error {
@@ -95,7 +101,7 @@ const approvalIdSchema = z.string().min(1);
 // reported to the caller (rejected), never swallowed, so a fallback channel can run.
 export function createWebPushSender(deps: WebPushSenderDeps): WebPushSender {
   const build = deps.buildRequest ?? buildPushHTTPRequest;
-  async function send(subscription: PushDeviceSubscription, approvalId?: string, target?: RecordNotification): Promise<void> {
+  async function send(subscription: PushDeviceSubscription, approvalId?: string, target?: PushTarget): Promise<void> {
       // Keys read from config — never a hard-coded fallback. A missing key is
       // reported, not quietly signed, so the absence surfaces to the caller.
       const { subject, privateKey } = deps.vapid;
@@ -114,7 +120,9 @@ export function createWebPushSender(deps: WebPushSenderDeps): WebPushSender {
       // The payload carries ONLY opaque approval or record routing ids — no personal content. Enforce the
       // 4 KB cap on the plaintext before signing, so an oversized value is refused.
       const payload: Record<string, string> = validApprovalId !== undefined ? { approvalId: validApprovalId }
-        : target === undefined ? {} : parseParams(recordNotificationSchema, target);
+        : target === undefined ? {}
+        : "kind" in target ? { kind: SIGN_IN_REQUESTS_TARGET.kind }
+        : parseParams(recordNotificationSchema, target);
       if (Buffer.byteLength(JSON.stringify(payload), "utf8") > MAX_PAYLOAD_BYTES) {
         throw new HttpError(413, "push payload exceeds the 4 KB limit");
       }

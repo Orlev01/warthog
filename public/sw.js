@@ -41,6 +41,11 @@ function showPushNotification(event) {
     options.body = "You have a new request to review.";
     options.tag = "warthog-approval-" + id;
     options.data = { approval_id: id };
+  } else if (signInRequest(payload)) {
+    // A new device is asking to sign in (no id rides along; the screen lists requests).
+    options.body = "A new device is asking to sign in to your account. Only approve it if it's you.";
+    options.tag = "warthog-sign-in-request";
+    options.data = { kind: "sign-in-requests" };
   } else {
     var record = recordTarget(payload);
     if (record) {
@@ -78,9 +83,14 @@ function targetFor(data) {
   if (id) {
     return "/inbox?approval=" + encodeURIComponent(id);
   }
+  if (signInRequest(data)) return "/settings/security/sign-in-requests";
   var record = recordTarget(data);
   if (record) return "/life-admin?view=life&tab=" + record.recordTab + "#record-" + record.recordId;
   return "/home";
+}
+
+function signInRequest(data) {
+  return Boolean(data && data.kind === "sign-in-requests");
 }
 
 function recordTarget(data) {
