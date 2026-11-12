@@ -94,6 +94,7 @@ type LifeAdminTab = "subscriptions" | "receipts" | "renewals" | "checklist";
 type LifeAdminAction = (formData: FormData) => void | Promise<void>;
 
 type LifeAdminViewProps = {
+  today: string; // the person's local date, from the loader (the view never reads the clock)
   subscriptions: ReadonlyArray<LifeAdminRecordView>;
   receipts: ReadonlyArray<LifeAdminRecordView>;
   renewals: ReadonlyArray<LifeAdminRecordView>;
@@ -227,6 +228,7 @@ const noop: LifeAdminAction = () => {};
 // collection / action to isolate the behaviour under test.
 function base(overrides: Partial<LifeAdminViewProps> = {}): LifeAdminViewProps {
   return {
+    today: "2026-11-12",
     subscriptions: SUBSCRIPTIONS,
     receipts: RECEIPTS,
     renewals: RENEWALS,

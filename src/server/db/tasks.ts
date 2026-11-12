@@ -155,9 +155,11 @@ export async function createTask(db: Db, input: NewTask, dek: Uint8Array): Promi
 // List ALL of `userId`'s tasks (member-scoped: user_id is bound), each title/notes
 // blob DECRYPTED under the owner's `dek`. Never another person's tasks; an empty
 // array when the person has none. A wrong DEK fails the GCM tag and rejects.
+// Oldest first, then by id for tasks created at the same instant, so the list (and
+// the Tasks view's status groups built from it) keeps one stable order.
 export async function listTasksForUser(db: Db, userId: string, dek: Uint8Array): Promise<Task[]> {
   const result = await db.query(
-    `SELECT ${SELECT_COLUMNS} FROM tasks WHERE user_id = $1`,
+    `SELECT ${SELECT_COLUMNS} FROM tasks WHERE user_id = $1 ORDER BY created_at ASC, id ASC`,
     [userId],
   );
   return decryptRows(result.rows, dek);
