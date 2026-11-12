@@ -12,7 +12,8 @@
 //                     (identity resolved from the `__Host-wh_session` cookie).
 //   finish(request) — verifies the posted assertion ({ authenticationResponse }) against
 //                     that person's OWN passkeys and, on success, records a step-up on
-//                     their CURRENT session.
+//                     their CURRENT session and rotates its token (the response sets the
+//                     new cookie; a copy of the old one no longer verifies).
 //
 // Two seams live here because a Next App-Router `route.ts` may export ONLY the known
 // route keys (the HTTP verbs) or `next build` rejects it (OBS-025):
@@ -40,20 +41,23 @@ import type { AuthenticationResponseJSON } from "@simplewebauthn/server";
 
 import { parseBody, HttpError } from "../http/validate";
 import { getStepUpDeps } from "./compose";
-import { COOKIE_NAME, verifySession, recordStepUp } from "./session";
+import { COOKIE_NAME, verifySession, stepUpAndRotate } from "./session";
 import { beginPasskeyAuthentication, finishPasskeyAuthentication } from "./passkey";
 import type { Clock } from "../seams/clock";
+import type { Random } from "../seams/random";
 import type { Db } from "../db/index";
 import type { TotpSecretStore } from "./totp-store";
 import { checkTotpSignIn } from "./totp-attempts";
 
 // The dependency bundle the composition root builds: the shared db, the clock that
-// judges session freshness and stamps the recorded step-up, the configured WebAuthn RP
+// judges session freshness and stamps the recorded step-up, the random source that
+// mints the rotated session token, the configured WebAuthn RP
 // ID (never hard-coded) and the origin every request's Origin header is checked against
 // (also the origin the assertion is verified at).
 export interface StepUpHandlerDeps {
   readonly db: Db;
   readonly clock: Clock;
+  readonly random: Random;
   readonly rpId: string;
   readonly publicOrigin: string;
   readonly totpSecrets?: Pick<TotpSecretStore, "get">;
@@ -120,7 +124,7 @@ function readCookie(request: Request, name: string): string | null {
 // (never the body), check Origin first, and parameter-bind every query through the real
 // session/passkey seams.
 export function createStepUpHandler(deps: StepUpHandlerDeps): StepUpHandler {
-  const { db, clock, rpId, publicOrigin } = deps;
+  const { db, clock, random, rpId, publicOrigin } = deps;
 
   // The request is same-origin only when it carries exactly the configured Origin. A
   // missing header (`null`) or a foreign one cannot be proven same-origin → refused.
@@ -141,7 +145,19 @@ export function createStepUpHandler(deps: StepUpHandlerDeps): StepUpHandler {
   async function currentSession(request: Request) {
     const token = readCookie(request, COOKIE_NAME);
     if (token == null) return null;
-    return verifySession(db, token, { clock });
+    const session = await verifySession(db, token, { clock });
+    return session ? { ...session, token } : null;
+  }
+
+  // A confirmed step-up: stamp it and rotate the session token in one write, so a copy of
+  // the cookie this request presented cannot use the fresh step-up, and hand the
+  // confirming browser its new cookie. A session that vanished meanwhile is a 401.
+  async function confirmed(presentedToken: string): Promise<Response> {
+    const rotated = await stepUpAndRotate(db, presentedToken, { clock, random });
+    if (!rotated) return json(401, { error: "unauthenticated" });
+    const response = json(200, { ok: true });
+    response.headers.set("set-cookie", rotated.cookie);
+    return response;
   }
 
   // Step 1 — issue a WebAuthn authentication challenge (carrying the configured RP ID)
@@ -188,8 +204,7 @@ export function createStepUpHandler(deps: StepUpHandlerDeps): StepUpHandler {
       );
       if (!result.ok) return json(401, { error: "invalid_assertion" });
 
-      await recordStepUp(db, session.id, { clock });
-      return json(200, { ok: true });
+      return await confirmed(session.token);
     } catch (error) {
       return handleError(error);
     }
@@ -214,8 +229,7 @@ export function createStepUpHandler(deps: StepUpHandlerDeps): StepUpHandler {
         }
         return json(401, { error: "invalid_code" });
       }
-      await recordStepUp(db, session.id, { clock });
-      return json(200, { ok: true });
+      return await confirmed(session.token);
     } catch (error) { return handleError(error); }
   }
 

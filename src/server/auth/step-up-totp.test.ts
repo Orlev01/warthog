@@ -25,7 +25,7 @@ async function fixture() {
   const a = await createSession(db, user.id, { clock, random: systemRandom });
   const b = await createSession(db, user.id, { clock, random: systemRandom });
   const dispatch = createStepUpStepHandler({ getDeps: async () => ({
-    db, clock, rpId: "app.example.test", publicOrigin: ORIGIN, totpSecrets,
+    db, clock, random: systemRandom, rpId: "app.example.test", publicOrigin: ORIGIN, totpSecrets,
   }) });
   const send = (body: unknown = { totp: CODE }, token: string | null = a.token, origin: string | null = ORIGIN) => {
     const headers: Record<string, string> = { "content-type": "application/json" };
@@ -38,11 +38,22 @@ async function fixture() {
   return { db, user, a, b, send };
 }
 
+// The rotated token a successful step-up sets in its `__Host-wh_session` cookie.
+function rotatedToken(response: Response): string {
+  const match = new RegExp(`${COOKIE_NAME}=([^;]+)`).exec(response.headers.get("set-cookie") ?? "");
+  assert.ok(match, "a successful step-up sets a new session cookie");
+  return match[1];
+}
+
 test("authenticator confirmation stamps only the current verified session and consumes its code", async () => {
   const f = await fixture();
   try {
-    assert.equal((await f.send()).status, 200);
-    assert.equal((await verifySession(f.db, f.a.token, { clock }))?.steppedUpAt?.getTime(), clock.now().getTime());
+    const confirmed = await f.send();
+    assert.equal(confirmed.status, 200);
+    const fresh = rotatedToken(confirmed);
+    assert.equal((await verifySession(f.db, fresh, { clock }))?.steppedUpAt?.getTime(), clock.now().getTime());
+    assert.equal((await verifySession(f.db, fresh, { clock }))?.id, f.a.session.id, "the same session carries on");
+    assert.equal(await verifySession(f.db, f.a.token, { clock }), null, "a copy of the old token is signed out");
     assert.equal((await verifySession(f.db, f.b.token, { clock }))?.steppedUpAt, null);
     assert.equal((await f.send({ totp: CODE }, f.b.token)).status, 401);
     assert.equal((await verifySession(f.db, f.b.token, { clock }))?.steppedUpAt, null);
