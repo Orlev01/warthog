@@ -18,6 +18,9 @@ on:
       plan_sha256:
         description: Apply only - SHA-256 of the exact reviewed saved plan
         type: string
+      reviewed_changes_sha256:
+        description: Apply only - SHA-256 independently calculated from the privately reviewed managed resource delta
+        type: string
 
 permissions:
   contents: read
@@ -52,6 +55,7 @@ jobs:
       OPERATION: ${{ inputs.operation }}
       PLAN_ID: ${{ inputs.plan_id }}
       PLAN_SHA256: ${{ inputs.plan_sha256 }}
+      REVIEWED_CHANGES_SHA256: ${{ inputs.reviewed_changes_sha256 }}
       ARM_CLIENT_ID: ${{ vars.AZURE_CLIENT_ID }}
       FOUNDATION_TFVARS_JSON: ${{ secrets.FOUNDATION_TFVARS_JSON }}
       FOUNDATION_BACKEND_JSON: ${{ secrets.FOUNDATION_BACKEND_JSON }}
