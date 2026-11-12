@@ -5,7 +5,6 @@ import {
   Bell,
   Clock,
   CheckCircle,
-  Info,
   XCircle,
   HelpCircle,
   type LucideIcon,
@@ -13,6 +12,11 @@ import {
 
 import { Label } from "@/components/ui/field";
 import { EmptyState } from "@/components/ui/empty";
+import { Notice } from "@/components/ui/notice";
+import { ViewPanels } from "@/components/ui/view-tabs";
+import { ActiveFilters, FilterLinks, type AppliedFilter } from "@/components/ui/filter-links";
+import { LIST_ROW, ListGroup } from "@/components/ui/list-group";
+import { hrefWith } from "@/lib/href";
 import type { UnlockRequest } from "@/client/vault/unlock";
 import { ReleaseRejectedError } from "@/client/vault/release";
 import { ReleaseApprove } from "./release-approve";
@@ -32,6 +36,10 @@ import { ReleaseApprove } from "./release-approve";
 //      actions the page passes (createInboxActions, E12-S10), exactly as ActivityView
 //      binds Dispute/Undo; a control whose action is not supplied renders DISABLED with a
 //      one-line reason rather than a dead button (constitution: no dead controls).
+//      It is organised as two tabs, "Waiting on you (n)" and "History (n)", whose panels
+//      both stay mounted so a half-written question survives a switch; pending requests
+//      from two or more agents are grouped by agent, and the history carries outcome and
+//      agent filter links (the loader validates the filters and supplies the counts).
 //
 //   2. createReleaseFlow(deps) — the framework-free controller behind the card/high-tier
 //      Approve path. On this device it unlocks the vault, decrypts the stored ciphertext
@@ -64,6 +72,9 @@ export type HighTierFieldView = {
 // field first) so their device can decrypt the one they choose.
 export type PendingRequestView = {
   id: string;
+  // The requesting agent's id (the loader supplies it) — pending requests from two or
+  // more agents are grouped by it. Absent, the display name groups them instead.
+  agentId?: string;
   agent: string;
   sentence: string;
   details: readonly RequestDetail[];
@@ -127,7 +138,38 @@ export type InboxViewProps = {
   // decided or is gone gets a plain notice. Compared against the loaded ids only — it is
   // never written into the page.
   focusApproval?: string;
+  // The tab the address bar asked for (`?view=`, validated by the page). Absent, the tab
+  // follows the opened approval: a decided one opens History, otherwise Waiting on you.
+  initialView?: InboxViewKey;
+  // The history filters in force (validated by the loader) and the counts behind the
+  // History tab and its filter links. Absent, the history shows unfiltered with no links.
+  historyFilter?: HistoryFilter;
+  historySummary?: HistorySummary;
+  // The opened approval when it is decided but not on the loaded history page (older
+  // than the page, or hidden by a filter), so the notification still lands on it.
+  openedEntry?: DecidedRequestView;
+  // The outcome of the last decision, in plain words (the page maps its `?notice=`).
+  notice?: InboxNotice;
 };
+
+// The inbox's two tabs, keyed by the `?view=` parameter.
+export type InboxViewKey = "pending" | "history";
+
+// The history filters: one outcome and/or one of the person's own agents (by id).
+export type HistoryFilter = { outcome?: DecidedStatus; agent?: string };
+
+// Counts for the History tab and its filter links. Outcome counts are within the agent
+// filter and agent counts within the outcome filter, so each link says what it would show.
+export type HistorySummary = {
+  total: number; // every decision the person has
+  matching: number; // decisions matching both filters
+  outcomes: readonly { status: DecidedStatus; count: number }[];
+  allOutcomesCount: number;
+  agents: readonly { id: string; name: string; count: number }[];
+  allAgentsCount: number;
+};
+
+export type InboxNotice = { tone: "success" | "error"; text: string };
 
 // ─── styling (design tokens; no raw hex) ─────────────────────────────────────────────
 //
@@ -146,13 +188,30 @@ const TEXTAREA_CLASS =
 
 // ─── decision controls ───────────────────────────────────────────────────────────────
 
+// Every pending request repeats the same control words (Approve, Deny, Ask for more
+// detail), so each control also names its request for screen readers: "Deny: Claude wants
+// to send a note…". The visible label still leads the accessible name (voice control).
+export function RequestContext({ request }: { request: Pick<PendingRequestView, "agent" | "sentence"> }) {
+  const context = [request.agent, request.sentence].filter(Boolean).join(" ");
+  return context ? <span className="sr-only">: {context}</span> : null;
+}
+
 // A present-but-not-actionable control: the native `disabled` attribute does the
 // disabling, and a one-line reason says why (constitution: no dead controls).
-function DisabledControl({ label, reason }: { label: string; reason: string }) {
+function DisabledControl({
+  label,
+  reason,
+  request,
+}: {
+  label: string;
+  reason: string;
+  request: PendingRequestView;
+}) {
   return (
     <div className="flex flex-col gap-1">
       <button type="button" disabled className={BTN_DISABLED}>
         {label}
+        <RequestContext request={request} />
       </button>
       <p className="text-xs text-fg-muted">{reason}</p>
     </div>
@@ -169,13 +228,14 @@ function ApproveControl({
   approveAction?: InboxAction;
 }) {
   if (!approveAction) {
-    return <DisabledControl label="Approve" reason="Approving isn't available just now." />;
+    return <DisabledControl label="Approve" reason="Approving isn't available just now." request={request} />;
   }
   return (
     <form action={approveAction}>
       <input type="hidden" name="id" value={request.id} />
       <button type="submit" className={BTN_PRIMARY}>
         Approve
+        <RequestContext request={request} />
       </button>
     </form>
   );
@@ -189,13 +249,14 @@ function DenyControl({
   denyAction?: InboxAction;
 }) {
   if (!denyAction) {
-    return <DisabledControl label="Deny" reason="Denying isn't available just now." />;
+    return <DisabledControl label="Deny" reason="Denying isn't available just now." request={request} />;
   }
   return (
     <form action={denyAction}>
       <input type="hidden" name="id" value={request.id} />
       <button type="submit" className={BTN_SECONDARY}>
         Deny
+        <RequestContext request={request} />
       </button>
     </form>
   );
@@ -215,13 +276,17 @@ function AskControl({
       <DisabledControl
         label="Ask for more detail"
         reason="Asking for more detail isn't available just now."
+        request={request}
       />
     );
   }
   const questionId = `inbox-ask-${request.id}`;
   return (
     <details className="text-sm">
-      <summary className="cursor-pointer font-medium text-accent">Ask for more detail</summary>
+      <summary className="min-h-11 cursor-pointer py-3 font-medium text-accent">
+        Ask for more detail
+        <RequestContext request={request} />
+      </summary>
       <form action={moreDetailAction} className="mt-2 flex flex-col gap-2">
         <input type="hidden" name="id" value={request.id} />
         <Label htmlFor={questionId}>What would you like to ask?</Label>
@@ -229,6 +294,7 @@ function AskControl({
         <div>
           <button type="submit" className={BTN_SECONDARY}>
             Ask for more detail
+            <RequestContext request={request} />
           </button>
         </div>
       </form>
@@ -284,27 +350,24 @@ function openedStateOf(
   id: string,
   pending: readonly PendingRequestView[],
   history: readonly DecidedRequestView[],
+  openedEntry?: DecidedRequestView,
 ): OpenedState {
   if (pending.some((request) => request.id === id)) return "pending";
-  const decided = history.find((entry) => entry.id === id);
+  const decided = history.find((entry) => entry.id === id) ?? (openedEntry?.id === id ? openedEntry : undefined);
   if (!decided) return "gone";
   return decided.status === "expired" ? "expired" : "decided";
 }
 
-// Plain words for an opened approval that can no longer be decided.
+// Plain words for an opened approval that can no longer be decided. A decided one opens
+// the History tab, where it is marked.
 const OPENED_NOTICE: Record<Exclude<OpenedState, "pending">, string> = {
-  decided: "That request has already been decided. You'll find it under History below.",
-  expired: "That request expired before it was decided. You'll find it under History below.",
+  decided: "That request has already been decided. You'll find it marked in History.",
+  expired: "That request expired before it was decided. You'll find it marked in History.",
   gone: "We couldn't find that request. It may have expired or been removed.",
 };
 
 function OpenedNotice({ state }: { state: Exclude<OpenedState, "pending"> }) {
-  return (
-    <div role="status" className="flex items-start gap-3 rounded-card border border-line bg-surface p-4 text-sm text-fg">
-      <Info aria-hidden={true} className="mt-0.5 h-5 w-5 shrink-0" />
-      <p>{OPENED_NOTICE[state]}</p>
-    </div>
-  );
+  return <Notice tone="info">{OPENED_NOTICE[state]}</Notice>;
 }
 
 // ─── the pending list ────────────────────────────────────────────────────────────────
@@ -334,7 +397,7 @@ function PendingItem({
     <li
       id={approvalElementId(request.id)}
       tabIndex={focused ? -1 : undefined}
-      className={`flex flex-col gap-3 rounded-card border bg-surface p-4 ${focused ? FOCUSED_ITEM : "border-line"}`}
+      className={`mt-3 flex flex-col gap-3 rounded-card border bg-surface p-4 first:mt-0 ${focused ? FOCUSED_ITEM : "border-line"}`}
     >
       {focused ? <OpenedTag /> : null}
       <p className={`text-fg ${WRAP_ANYWHERE}`}>
@@ -372,7 +435,67 @@ function PendingItem({
   );
 }
 
-// ─── the history section ─────────────────────────────────────────────────────────────
+// ─── the pending panel ───────────────────────────────────────────────────────────────
+
+type PendingControls = {
+  approveAction?: InboxAction;
+  denyAction?: InboxAction;
+  moreDetailAction?: InboxAction;
+  savedCards?: readonly SavedCardView[];
+  focusApproval?: string;
+};
+
+type AgentGroup = { key: string; name: string; requests: PendingRequestView[] };
+
+// Group pending requests by their agent, keeping the loader's newest-first order: the
+// group with the newest request leads, and requests stay newest-first within a group.
+function groupByAgent(pending: readonly PendingRequestView[]): AgentGroup[] {
+  const groups = new Map<string, AgentGroup>();
+  for (const request of pending) {
+    const key = request.agentId ?? `name:${request.agent}`;
+    const group = groups.get(key) ?? { key, name: request.agent || "Unknown agent", requests: [] };
+    group.requests.push(request);
+    groups.set(key, group);
+  }
+  return [...groups.values()];
+}
+
+function PendingPanel({ pending, ...controls }: PendingControls & { pending: readonly PendingRequestView[] }) {
+  if (pending.length === 0) {
+    return <p className="text-sm text-fg-muted">No requests are waiting right now.</p>;
+  }
+  const item = (request: PendingRequestView) => (
+    <PendingItem
+      key={request.id}
+      request={request}
+      approveAction={controls.approveAction}
+      denyAction={controls.denyAction}
+      moreDetailAction={controls.moreDetailAction}
+      savedCards={controls.savedCards}
+      focused={request.id === controls.focusApproval}
+    />
+  );
+  const groups = groupByAgent(pending);
+  // One agent asking: a single list. Two or more: one titled group per agent.
+  if (groups.length < 2) {
+    return (
+      <ul role="list" className="flex flex-col">
+        {pending.map(item)}
+      </ul>
+    );
+  }
+  return (
+    <div className="flex flex-col gap-6">
+      {groups.map((group, index) => (
+        <ListGroup key={group.key} id={`inbox-agent-${index}`} title={group.name} count={group.requests.length}>
+          {group.requests.map(item)}
+        </ListGroup>
+      ))}
+    </div>
+  );
+}
+
+// ─── the history panel ───────────────────────────────────────────────────────────────
 
 // Each decided status reads as WORDS (the loader's display-ready `outcome`) plus an icon,
 // never colour alone; the icon is decorative and inherits the tone token via currentColor.
@@ -383,25 +506,161 @@ const HISTORY_META: Record<DecidedStatus, { Icon: LucideIcon; tone: string }> = 
   more_detail: { Icon: HelpCircle, tone: "text-fg-muted" },
 };
 
+// The words each outcome filter reads as.
+const OUTCOME_FILTER_LABEL: Record<DecidedStatus, string> = {
+  approved: "Approved",
+  denied: "Turned down",
+  expired: "Expired",
+  more_detail: "Asked for more detail",
+};
+
+// One decision as a divider row; the opened one is ringed and marked in words.
+const FOCUSED_ROW = "-mx-3 rounded-field px-3 ring-2 ring-accent focus:outline-none";
+
 function HistoryItem({ entry, focused }: { entry: DecidedRequestView; focused: boolean }) {
   const { Icon, tone } = HISTORY_META[entry.status];
   return (
     <li
       id={approvalElementId(entry.id)}
       tabIndex={focused ? -1 : undefined}
-      className={`flex flex-col gap-1 rounded-card border bg-surface p-4 ${focused ? FOCUSED_ITEM : "border-line"}`}
+      className={focused ? `${LIST_ROW} ${FOCUSED_ROW}` : LIST_ROW}
     >
       {focused ? <OpenedTag /> : null}
       <p className={`text-fg ${WRAP_ANYWHERE}`}>
         <span className="font-medium">{entry.agent}</span> {entry.sentence}
       </p>
-      <span className={["inline-flex items-center gap-1.5 text-sm font-medium", tone].join(" ")}>
-        <Icon aria-hidden={true} className="h-4 w-4 shrink-0" />
-        {entry.outcome}
-      </span>
+      <div className="flex flex-wrap items-center gap-x-3 gap-y-1">
+        <span className={["inline-flex items-center gap-1.5 text-sm font-medium", tone].join(" ")}>
+          <Icon aria-hidden={true} className="h-4 w-4 shrink-0" />
+          {entry.outcome}
+        </span>
+        {entry.decidedAt ? <span className="text-xs text-fg-muted">{entry.decidedAt}</span> : null}
+      </div>
       {entry.question ? <p className={`text-sm text-fg-muted ${WRAP_ANYWHERE}`}>{entry.question}</p> : null}
-      <p className="text-xs text-fg-muted">{entry.decidedAt}</p>
     </li>
+  );
+}
+
+const INBOX_PATH = "/inbox";
+
+// Every history link keeps the History tab and the other filter, and drops one-off state
+// (a notice, the notification's approval id) — only this fixed path is ever emitted.
+function historyHref(filter: HistoryFilter, patch: HistoryFilter): string {
+  return hrefWith(INBOX_PATH, { view: "history", outcome: filter.outcome, agent: filter.agent }, patch);
+}
+
+function HistoryFilters({ filter, summary }: { filter: HistoryFilter; summary: HistorySummary }) {
+  const agentName = (id: string) => summary.agents.find((agent) => agent.id === id)?.name ?? "Unknown agent";
+  const applied: AppliedFilter[] = [];
+  if (filter.outcome) {
+    applied.push({ label: `Outcome: ${OUTCOME_FILTER_LABEL[filter.outcome]}`, removeHref: historyHref(filter, { outcome: undefined }) });
+  }
+  if (filter.agent) {
+    applied.push({ label: `Agent: ${agentName(filter.agent)}`, removeHref: historyHref(filter, { agent: undefined }) });
+  }
+  return (
+    <div className="flex flex-col">
+      <FilterLinks
+        label="Filter decisions by outcome"
+        items={[
+          {
+            label: "All",
+            href: historyHref(filter, { outcome: undefined }),
+            active: filter.outcome === undefined,
+            count: summary.allOutcomesCount,
+          },
+          ...summary.outcomes.map((option) => ({
+            label: OUTCOME_FILTER_LABEL[option.status],
+            href: historyHref(filter, { outcome: option.status }),
+            active: filter.outcome === option.status,
+            count: option.count,
+          })),
+        ]}
+      />
+      {summary.agents.length >= 2 || filter.agent ? (
+        <FilterLinks
+          label="Filter decisions by agent"
+          items={[
+            {
+              label: "All agents",
+              href: historyHref(filter, { agent: undefined }),
+              active: filter.agent === undefined,
+              count: summary.allAgentsCount,
+            },
+            ...summary.agents.map((agent) => ({
+              label: agent.name,
+              href: historyHref(filter, { agent: agent.id }),
+              active: filter.agent === agent.id,
+              count: agent.count,
+            })),
+          ]}
+        />
+      ) : null}
+      <ActiveFilters filters={applied} clearHref={historyHref(filter, { outcome: undefined, agent: undefined })} />
+    </div>
+  );
+}
+
+function HistoryPanel({
+  history,
+  filter,
+  summary,
+  openedEntry,
+  focusApproval,
+}: {
+  history: readonly DecidedRequestView[];
+  filter: HistoryFilter;
+  summary?: HistorySummary;
+  openedEntry?: DecidedRequestView;
+  focusApproval?: string;
+}) {
+  const total = summary?.total ?? history.length;
+  const matching = summary?.matching ?? history.length;
+  const filtered = filter.outcome !== undefined || filter.agent !== undefined;
+  const extra = openedEntry && !history.some((entry) => entry.id === openedEntry.id) ? openedEntry : undefined;
+  const clearHref = historyHref(filter, { outcome: undefined, agent: undefined });
+  return (
+    <>
+      {extra ? (
+        <ul role="list" className="flex flex-col">
+          <HistoryItem entry={extra} focused={extra.id === focusApproval} />
+        </ul>
+      ) : null}
+      {summary && total > 0 ? <HistoryFilters filter={filter} summary={summary} /> : null}
+      {history.length === 0 ? (
+        filtered ? (
+          <EmptyState
+            heading="No decisions match"
+            description="Try another outcome or agent, or clear the filters to see every decision."
+            action={
+              <a href={clearHref} className={BTN_SECONDARY}>
+                Clear filters
+              </a>
+            }
+          />
+        ) : extra ? null : (
+          <p className="text-sm text-fg-muted">Nothing decided yet.</p>
+        )
+      ) : (
+        <ListGroup
+          id="inbox-history"
+          title="Recent decisions"
+          count={matching}
+          summary={
+            matching > history.length ? (
+              <>
+                Showing the {history.length} most recent of {matching}. Choose an outcome or agent to narrow
+                the list; every decision is also kept in <a href="/activity" className="underline underline-offset-4">Activity</a>.
+              </>
+            ) : undefined
+          }
+        >
+          {history.map((entry) => (
+            <HistoryItem key={entry.id} entry={entry} focused={entry.id === focusApproval} />
+          ))}
+        </ListGroup>
+      )}
+    </>
   );
 }
 
@@ -415,16 +674,26 @@ export function InboxView({
   moreDetailAction,
   savedCards,
   focusApproval,
+  initialView,
+  historyFilter = {},
+  historySummary,
+  openedEntry,
+  notice,
 }: InboxViewProps) {
-  const isEmpty = pending.length === 0 && history.length === 0;
-  const opened = focusApproval ? openedStateOf(focusApproval, pending, history) : null;
+  const historyTotal = historySummary?.total ?? history.length;
+  const isEmpty = pending.length === 0 && historyTotal === 0 && !openedEntry;
+  const opened = focusApproval ? openedStateOf(focusApproval, pending, history, openedEntry) : null;
   // Once mounted, bring the opened request into view and give it focus.
   React.useEffect(() => {
     if (focusApproval && opened !== "gone") focusApprovalElement(document, focusApproval);
   }, [focusApproval, opened]);
+  // A decided approval from a notification opens History; anything else opens Waiting on
+  // you. An explicit `?view=` wins. Both panels stay mounted, so drafts survive a switch.
+  const openedView: InboxViewKey = opened === "decided" || opened === "expired" ? "history" : "pending";
   return (
     <div className="wh-page flex flex-col gap-6">
       <h1 className="text-2xl font-semibold tracking-tight text-fg">Inbox</h1>
+      {notice ? <Notice tone={notice.tone}>{notice.text}</Notice> : null}
       {opened !== null && opened !== "pending" ? <OpenedNotice state={opened} /> : null}
       {isEmpty ? (
         <EmptyState
@@ -432,40 +701,40 @@ export function InboxView({
           description="When an agent needs your say-so, the request will wait for you here."
         />
       ) : (
-        <>
-          <section className="flex flex-col gap-3">
-            <h2 className="text-lg font-semibold text-fg">Waiting on you</h2>
-            {pending.length === 0 ? (
-              <p className="text-sm text-fg-muted">No requests are waiting right now.</p>
-            ) : (
-              <ul className="flex flex-col gap-3">
-                {pending.map((request) => (
-                  <PendingItem
-                    key={request.id}
-                    request={request}
-                    approveAction={approveAction}
-                    denyAction={denyAction}
-                    moreDetailAction={moreDetailAction}
-                    savedCards={savedCards}
-                    focused={request.id === focusApproval}
-                  />
-                ))}
-              </ul>
-            )}
-          </section>
-          <section className="flex flex-col gap-3">
-            <h2 className="text-lg font-semibold text-fg">History</h2>
-            {history.length === 0 ? (
-              <p className="text-sm text-fg-muted">Nothing decided yet.</p>
-            ) : (
-              <ul className="flex flex-col gap-3">
-                {history.map((entry) => (
-                  <HistoryItem key={entry.id} entry={entry} focused={entry.id === focusApproval} />
-                ))}
-              </ul>
-            )}
-          </section>
-        </>
+        <ViewPanels
+          label="Inbox"
+          defaultTab={openedView}
+          initialTab={initialView ?? openedView}
+          tabs={[
+            {
+              key: "pending",
+              label: `Waiting on you (${pending.length})`,
+              content: (
+                <PendingPanel
+                  pending={pending}
+                  approveAction={approveAction}
+                  denyAction={denyAction}
+                  moreDetailAction={moreDetailAction}
+                  savedCards={savedCards}
+                  focusApproval={focusApproval}
+                />
+              ),
+            },
+            {
+              key: "history",
+              label: `History (${historyTotal})`,
+              content: (
+                <HistoryPanel
+                  history={history}
+                  filter={historyFilter}
+                  summary={historySummary}
+                  openedEntry={openedEntry}
+                  focusApproval={focusApproval}
+                />
+              ),
+            },
+          ]}
+        />
       )}
     </div>
   );
