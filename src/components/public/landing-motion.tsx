@@ -124,14 +124,21 @@ export function LandingMotion({ children }: { children: React.ReactNode }) {
   );
 }
 
+// When the system asks for reduced motion (or forced colours), there is nothing to play, so
+// a short note replaces the control instead of a disabled play button (public-26, a18).
+// Before hydration the slot is empty; the server markup never shows a dead control.
 export function LandingMotionControl() {
   const { running, ready, allowed, toggle } = React.useContext(MotionContext);
   return (
     <div className="wh-landing-motion-slot">
-      <button type="button" className="wh-landing-motion-control" hidden={!ready} disabled={!allowed} onClick={toggle}>
-        {running ? <Pause size={14} aria-hidden="true" /> : <Play size={14} aria-hidden="true" />}
-        {!allowed ? "Motion off" : running ? "Pause animations" : "Play animations"}
-      </button>
+      {ready && !allowed ? (
+        <p className="wh-landing-motion-note">Animations are off to match your system settings.</p>
+      ) : (
+        <button type="button" className="wh-landing-motion-control" hidden={!ready} onClick={toggle}>
+          {running ? <Pause size={14} aria-hidden="true" /> : <Play size={14} aria-hidden="true" />}
+          {running ? "Pause animations" : "Play animations"}
+        </button>
+      )}
     </div>
   );
 }

@@ -1,4 +1,237 @@
 /* Public, account-entry and standalone screens (UI/UX pass, 12 Nov 2026): landing, help, legal,
  * sign-in/up/recover/reset/device, consent and status pages. Every text block sits in a bounded
  * band, panel or bar (docs/design/public-front-door.md). Loaded last; unlayered.
+ *
+ * One public frame: a tinted canvas (the workspace canvas), full-width top and footer bars
+ * whose content lines up with the page measure, and content in surface panels. The rules
+ * below override the original .wh-landing / .wh-auth / .wh-connection rules in globals.css
+ * at equal or higher specificity; they never change the signed-in workspace.
  */
+
+/* --- Canvas, surfaces and gutters ------------------------------------------------------ */
+/* One backdrop for every standalone frame: the workspace canvas. --wh-page-canvas is the hook
+ * the status screens (surfaces.css) already read; the public frames use the same value. */
+:root { --wh-page-canvas: light-dark(#f5f6f7, #191a1c); --wh-public-canvas: var(--wh-page-canvas); }
+html:has(:is(.wh-landing, .wh-auth-page, .wh-public, .wh-connection-page)),
+html:has(:is(.wh-landing, .wh-auth-page, .wh-public, .wh-connection-page)) body { background: var(--wh-public-canvas); }
+
+:is(.wh-landing, .wh-auth-page, .wh-public, .wh-connection-page) {
+  /* The same surface values as the workspace (workspace.css), so a panel reads as a panel. */
+  --wh-surface: light-dark(#ffffff, #252628);
+  --wh-surface-muted: light-dark(#f1f3f4, #2d2f31);
+  --wh-elevation: light-dark(rgb(26 35 45 / 5%), rgb(0 0 0 / 20%));
+  --wh-highlight: light-dark(rgb(255 255 255 / 90%), rgb(255 255 255 / 4%));
+  --wh-panel-shadow: 0 1px 2px var(--wh-elevation), 0 8px 24px -16px var(--wh-elevation);
+  --wh-gutter: 16px;
+  /* The width every bar and frame lines its content up with. */
+  --wh-measure: 1216px;
+}
+@media (min-width: 640px) {
+  :is(.wh-landing, .wh-auth-page, .wh-public, .wh-connection-page) { --wh-gutter: 32px; }
+}
+
+/* --- Bars: full-bleed top and footer bars, content on the page measure ------------------ */
+.wh-public-bar { position: relative; width: 100%; background: var(--wh-surface); }
+header.wh-public-bar { border-bottom: 1px solid var(--wh-line); }
+footer.wh-public-bar { border-top: 1px solid var(--wh-line); }
+.wh-public-bar-inner { display: flex; flex-wrap: wrap; align-items: center; justify-content: space-between; gap: 8px 16px; width: 100%; max-width: calc(var(--wh-measure) + 2 * var(--wh-gutter)); min-height: 64px; margin-inline: auto; padding: 8px var(--wh-gutter); }
+.wh-public-bar-inner > a:first-child { min-height: 44px; }
+.wh-public-bar-nav { display: flex; flex-wrap: wrap; align-items: center; justify-content: flex-end; gap: 4px 20px; font-size: 14px; }
+.wh-public-bar-nav a, .wh-public-back { display: inline-flex; align-items: center; gap: 8px; min-height: 44px; color: var(--wh-fg-muted); border-radius: 8px; }
+.wh-public-bar-nav a:hover, .wh-public-back:hover { color: var(--wh-fg); text-decoration: underline; text-underline-offset: 4px; }
+.wh-public-bar-nav a[aria-current="page"] { color: var(--wh-fg); text-decoration: underline; text-underline-offset: 4px; }
+.wh-public-bar-nav .wh-public-signup { display: none; padding: 0 18px; border-radius: 999px; background: var(--wh-accent); color: var(--wh-accent-fg); font-weight: 500; }
+.wh-public-bar-nav .wh-public-signup:hover { background: var(--wh-accent-hover); color: var(--wh-accent-fg); text-decoration: none; }
+.wh-public-back { font-size: 13px; }
+.wh-public-back svg { flex-shrink: 0; }
+.wh-public-footer-inner { justify-content: center; gap: 0 24px; font-size: 13px; }
+.wh-public-footer-inner nav { padding-block: 0; }
+.wh-public-footer-inner .wh-public-bar-nav { justify-content: center; }
+.wh-public-skip { position: fixed; left: 16px; top: 12px; z-index: 100; padding: 12px 20px; border: 1px solid var(--wh-line-input); border-radius: 8px; background: var(--wh-surface); transform: translateY(-180%); }
+.wh-public-skip:focus { transform: translateY(0); }
+@media (min-width: 640px) {
+  .wh-public-bar-nav .wh-public-signup { display: inline-flex; }
+}
+@media (forced-colors: active) {
+  .wh-public-bar-nav .wh-public-signup { border: 1px solid ButtonText; }
+}
+
+/* --- One title style for every standalone screen (24px phone / 28px from 640px) --------- */
+:is(.wh-auth-intro, .wh-connection-intro, .wh-connection-expired, .wh-public-title) h1, .wh-standalone-title { font-size: 24px; line-height: 1.25; font-weight: 600; letter-spacing: -.035em; text-wrap: balance; overflow-wrap: break-word; }
+@media (min-width: 640px) {
+  :is(.wh-auth-intro, .wh-connection-intro, .wh-connection-expired, .wh-public-title) h1, .wh-standalone-title { font-size: 28px; line-height: 1.2; }
+}
+/* Step headings take focus when a flow moves on (a11y-01); they are not interactive. */
+:is(.wh-auth-intro, .wh-connection-intro) h1:focus { outline: none; }
+/* One eyebrow style, matching the workspace heading eyebrow. */
+.wh-connection-eyebrow,
+.wh-connection-expired > p.wh-connection-eyebrow,
+.wh-public-eyebrow { font-size: 11px; line-height: 1.5; font-weight: 600; letter-spacing: .09em; text-transform: uppercase; color: var(--wh-fg-muted); }
+
+/* --- Landing ---------------------------------------------------------------------------- */
+/* The root spans the viewport so the top bar can; main and the footer keep the 1216px measure. */
+.wh-landing { max-width: none; padding-inline: 0; --wh-landing-bar: 64px; }
+html:has(.wh-landing) { scroll-padding-top: calc(var(--wh-landing-bar, 64px) + 16px + env(safe-area-inset-top)); }
+.wh-landing-header { display: flex; align-items: center; justify-content: space-between; gap: 12px 16px; min-height: var(--wh-landing-bar); padding-block: 8px; padding-inline: max(var(--wh-gutter), calc((100% - var(--wh-measure)) / 2)); border-bottom: 1px solid var(--wh-line); background: var(--wh-surface); }
+/* Paints behind the safe area only; the bar itself carries the single rule (desktop-18). */
+.wh-landing-header::before { inset: calc(-1 * env(safe-area-inset-top)) 0 0; border-bottom: 0; background: var(--wh-surface); }
+.wh-landing-header > a { min-height: 44px; }
+/* Section links: a strip under the bar on phones that scrolls away, so only the brand and
+ * account links stay pinned (mobile-14); inside the sticky bar from 768px. */
+.wh-landing-nav { display: flex; justify-content: center; gap: 4px 24px; min-height: 44px; padding-inline: var(--wh-gutter); border-bottom: 1px solid var(--wh-line); background: var(--wh-surface); font-size: 14px; color: var(--wh-fg-muted); }
+.wh-landing-nav a { display: inline-flex; align-items: center; min-height: 44px; }
+.wh-landing-nav a:hover { color: var(--wh-fg); }
+@media (max-width: 379px) {
+  .wh-landing-nav { justify-content: space-between; gap: 4px 12px; }
+}
+@media (min-width: 768px) {
+  .wh-landing-header { display: flex; min-height: var(--wh-landing-bar); }
+  .wh-landing-nav { position: sticky; top: env(safe-area-inset-top); z-index: 31; width: fit-content; height: calc(var(--wh-landing-bar) - 1px); margin: calc(-1 * var(--wh-landing-bar)) auto 1px; padding-inline: 0; border-bottom: 0; align-items: center; }
+}
+/* Short landscape screens keep the bar but don't pin it. */
+@media (max-height: 480px) and (orientation: landscape) {
+  .wh-landing-header, .wh-landing-nav { position: relative; top: auto; }
+}
+
+.wh-landing > main { display: flex; flex-direction: column; gap: 16px; width: 100%; max-width: calc(var(--wh-measure) + 2 * var(--wh-gutter)); margin-inline: auto; padding: 16px var(--wh-gutter) 0; }
+/* Every section is one bounded band; rows, columns and dividers stay inside it. */
+.wh-landing :is(.wh-landing-hero, .wh-landing-compatibility, .wh-landing-section, .wh-landing-closing) { padding: clamp(20px, 5vw, 56px); border: 1px solid var(--wh-line); border-radius: 16px; background: var(--wh-surface); box-shadow: var(--wh-panel-shadow); }
+.wh-landing-hero-copy::before { background: radial-gradient(ellipse at 35% 45%, var(--wh-surface) 30%, color-mix(in srgb, var(--wh-surface) 85%, transparent) 58%, transparent 75%); }
+.wh-landing-compatibility { gap: 16px 40px; }
+.wh-landing-compatibility p { font-size: 13px; line-height: 1.6; }
+.wh-landing-scope { padding: 12px 16px; border-top: 0; border-radius: 12px; background: var(--wh-surface-muted); font-size: 13px; line-height: 1.6; }
+/* The preview is the hero's one inset; the request inside it is a muted block, not a card. */
+.wh-landing-request { border-color: transparent; background: var(--wh-surface-muted); }
+/* Nothing under 12px, and the warning status keeps 4.5:1 on its fill (a11y-07). */
+.wh-landing-preview-bar .wh-landing-eyebrow,
+.wh-landing-preview-label, .wh-landing-badge, .wh-landing-request-rule,
+.wh-landing-preview-note, .wh-landing-preview figcaption, .wh-landing-request-status { font-size: 12px; }
+.wh-landing-request-status { color: color-mix(in srgb, var(--wh-warning) 82%, var(--wh-fg)); }
+/* Balanced headings and no single-word last lines (public-31). */
+.wh-landing :is(h1, h2, h3, .wh-landing-lead) { text-wrap: balance; }
+.wh-landing p { text-wrap: pretty; }
+.wh-landing-footer { margin: 16px max(var(--wh-gutter), calc((100% - var(--wh-measure)) / 2)); padding: 24px clamp(20px, 5vw, 56px); border: 1px solid var(--wh-line); border-radius: 16px; background: var(--wh-surface); box-shadow: var(--wh-panel-shadow); }
+.wh-landing-footer nav[aria-label="Support"] { gap: 4px 20px; }
+.wh-landing-motion-note { display: flex; align-items: center; min-height: 44px; margin-top: 8px; font-size: 12px; color: var(--wh-fg-muted); }
+
+/* --- Shared public document frame (help, compatibility, privacy, terms) ----------------- */
+.wh-public { display: flex; flex-direction: column; min-height: calc(100dvh - env(safe-area-inset-top) - env(safe-area-inset-bottom)); }
+.wh-public-main { flex: 1; display: flex; flex-direction: column; gap: 16px; width: 100%; max-width: calc(800px + 2 * var(--wh-gutter)); margin-inline: auto; padding: 16px var(--wh-gutter) 48px; outline: none; }
+.wh-public-title, .wh-public-panel { min-width: 0; padding: 24px 20px; border: 1px solid var(--wh-line); border-radius: 16px; background: var(--wh-surface); box-shadow: var(--wh-panel-shadow); }
+.wh-public-title > * + * { margin-top: 12px; }
+.wh-public-title > p { max-width: 68ch; font-size: 15px; line-height: 1.65; color: var(--wh-fg-muted); text-wrap: pretty; }
+.wh-public-title > p.wh-public-meta { font-size: 13px; }
+.wh-public-section { min-width: 0; }
+.wh-public-section + .wh-public-section { margin-top: 28px; padding-top: 28px; border-top: 1px solid var(--wh-line); }
+.wh-public-section h2 { font-size: 18px; line-height: 1.4; font-weight: 600; letter-spacing: -.01em; text-wrap: balance; }
+.wh-public-section h3 { font-size: 15px; line-height: 1.5; font-weight: 600; }
+.wh-public-section > * + * { margin-top: 12px; }
+.wh-public-section :is(p, li, dd) { max-width: 68ch; font-size: 15px; line-height: 1.7; color: var(--wh-fg-muted); text-wrap: pretty; overflow-wrap: break-word; }
+.wh-public-section ul { padding-left: 20px; list-style: disc; }
+.wh-public-section li + li { margin-top: 6px; }
+.wh-public :is(.wh-public-section, .wh-public-title) a:not([class]) { color: var(--wh-fg); text-decoration: underline; text-underline-offset: 3px; }
+.wh-public :is(.wh-public-section, .wh-public-title) a:not([class]):hover { color: var(--wh-fg-muted); }
+.wh-public-actions { display: flex; flex-wrap: wrap; gap: 12px; }
+.wh-public-action { display: inline-flex; align-items: center; justify-content: center; gap: 8px; min-height: 44px; padding: 0 18px; border: 1px solid var(--wh-line-strong); border-radius: 999px; background: var(--wh-surface); color: var(--wh-fg); font-size: 14px; font-weight: 500; }
+.wh-public-action:hover { background: var(--wh-surface-muted); }
+.wh-public-action svg { flex-shrink: 0; }
+/* Rows divided inside one panel (compatibility platforms). */
+.wh-public-rows > div { padding-block: 16px; border-top: 1px solid var(--wh-line); }
+.wh-public-rows > div:last-child { padding-bottom: 0; }
+.wh-public-rows dt { display: flex; flex-wrap: wrap; align-items: center; gap: 4px 12px; font-size: 15px; font-weight: 600; color: var(--wh-fg); }
+.wh-public-rows dd { margin-top: 6px; }
+.wh-public-rows dd a { display: inline-flex; align-items: center; gap: 6px; min-height: 44px; }
+.wh-public-status { display: inline-flex; align-items: center; padding: 2px 10px; border-radius: 999px; background: var(--wh-surface-muted); font-size: 12px; font-weight: 500; color: var(--wh-fg); }
+/* An address people paste: an inset with its copy action beside it. */
+.wh-public-address { display: flex; flex-direction: column; gap: 12px; padding: 12px; border-radius: 12px; background: var(--wh-surface-muted); }
+.wh-public-address code { display: block; min-width: 0; overflow-x: auto; padding: 8px 4px; font-size: 14px; color: var(--wh-fg); overflow-wrap: anywhere; user-select: all; }
+@media (min-width: 640px) {
+  .wh-public-title, .wh-public-panel { padding: 32px 40px; }
+  .wh-public-address { flex-direction: row; align-items: center; justify-content: space-between; }
+}
+
+/* --- Account entry ---------------------------------------------------------------------- */
+.wh-auth-page { min-height: calc(100dvh - env(safe-area-inset-top) - env(safe-area-inset-bottom)); }
+.wh-auth-header { display: block; min-height: 0; }
+.wh-auth-footer { width: 100%; max-width: none; margin: 0; }
+.wh-auth-footer nav { font-size: 13px; }
+/* Content starts at a fixed offset: showing an error never re-centres the frame (public-13). */
+.wh-auth-layout { align-content: start; align-items: start; gap: 16px; padding-block: clamp(16px, 5vh, 56px); }
+/* The form is a bounded panel at every width (containment-09, public-07). */
+.wh-auth-panel { max-width: 480px; padding: 24px 20px; border: 1px solid var(--wh-line); border-radius: 16px; background: var(--wh-surface); box-shadow: var(--wh-panel-shadow); }
+.wh-auth-intro { margin-bottom: 24px; }
+.wh-auth-mark { background: var(--wh-surface-muted); }
+.wh-auth-identity { display: flex; flex-wrap: wrap; align-items: center; justify-content: space-between; gap: 4px 12px; padding: 8px 8px 8px 16px; border-radius: 10px; background: var(--wh-surface-muted); color: var(--wh-fg); overflow-wrap: anywhere; }
+.wh-auth-identity > span { min-width: 0; }
+.wh-auth-identity > span > span { display: block; font-size: 12px; color: var(--wh-fg-muted); }
+/* Links look like links (WCAG 1.4.1, public-11). */
+.wh-auth-links a, .wh-auth-alternatives > p a, .wh-auth-text-link, .wh-auth-inline-link { color: var(--wh-fg); text-decoration: underline; text-underline-offset: 4px; }
+.wh-auth-links a:hover, .wh-auth-alternatives > p a:hover, .wh-auth-text-link:hover, .wh-auth-inline-link:hover { color: var(--wh-fg-muted); }
+.wh-auth-text-button { display: inline-flex; align-items: center; min-height: 44px; padding-inline: 8px; border-radius: 8px; color: var(--wh-fg); font-size: 13px; font-weight: 500; text-decoration: underline; text-underline-offset: 4px; cursor: pointer; }
+.wh-auth-text-button:hover { color: var(--wh-fg-muted); }
+.wh-auth-text-button[aria-disabled="true"] { opacity: .5; cursor: default; }
+/* One block of alternative routes on every screen (public-12): a divider, the most relevant
+ * route as a sentence, the rest under one disclosure. */
+.wh-auth-alternatives { margin-top: 4px; }
+.wh-auth-alternatives > p { justify-content: flex-start; }
+.wh-auth-help summary:hover { color: var(--wh-fg); }
+.wh-auth-help .wh-auth-links ul { gap: 0; }
+/* Form-level outcomes sit in one slot above the primary action. */
+.wh-auth-notice { display: flex; flex-direction: column; gap: 12px; }
+.wh-auth-recovery { display: flex; flex-direction: column; gap: 12px; padding: 16px; border-radius: 12px; background: var(--wh-surface-muted); }
+/* A stable grid of four groups per row (4 + 3 for a 26-character code), so a short last
+ * group never sits alone like a separate code (public-15). */
+.wh-auth-recovery-code { display: grid; grid-template-columns: repeat(4, max-content); gap: 6px 12px; font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; font-size: 16px; letter-spacing: .06em; color: var(--wh-fg); }
+@media (min-width: 400px) { .wh-auth-recovery-code { gap: 6px 16px; font-size: 18px; } }
+.wh-auth-recovery-code > span { white-space: nowrap; }
+.wh-auth-steps { display: flex; flex-direction: column; gap: 6px; padding-left: 20px; list-style: disc; }
+@media (min-width: 640px) {
+  .wh-auth-panel { padding: 36px; }
+}
+@media (min-width: 1024px) {
+  .wh-auth-layout { column-gap: 32px; }
+  /* The introduction is a quieter bounded panel beside the form, not equal height. */
+  .wh-auth-story { max-width: none; padding: 40px; border: 1px solid var(--wh-line); border-radius: 16px; background: color-mix(in srgb, var(--wh-surface) 55%, var(--wh-public-canvas)); }
+  .wh-auth-story h2 { font-size: clamp(32px, 3vw, 40px); line-height: 1.12; letter-spacing: -.045em; text-wrap: balance; }
+  .wh-auth-story-lead { font-size: 15px; }
+}
+
+/* --- Connection flows (consent, expired request, access key) ---------------------------- */
+.wh-connection-page { display: flex; flex-direction: column; max-width: none; min-height: calc(100dvh - env(safe-area-inset-top) - env(safe-area-inset-bottom)); margin: 0; padding: 0; --wh-measure: 880px; }
+.wh-connection-page--narrow { --wh-measure: 640px; }
+.wh-connection-header { display: block; padding-bottom: 0; }
+.wh-connection-main { flex: 1; display: flex; flex-direction: column; gap: 16px; width: 100%; max-width: calc(var(--wh-measure) + 2 * var(--wh-gutter)); margin-inline: auto; padding: 16px var(--wh-gutter) 48px; }
+.wh-connection-flow { gap: 16px; }
+/* The intro is a heading band, each numbered step a panel, the actions a bar (public-08). */
+.wh-connection-intro, .wh-connection-section, .wh-connection-expired { max-width: none; padding: 24px; border: 1px solid var(--wh-line); border-radius: 14px; background: var(--wh-surface); box-shadow: var(--wh-panel-shadow, none); }
+.wh-connection-section { padding-top: 24px; }
+.wh-connection-intro > p:last-child, .wh-connection-expired > p:not(.wh-connection-eyebrow) { font-size: 15px; line-height: 1.65; color: var(--wh-fg-muted); }
+.wh-connection-help, .wh-connection-name-help { font-size: 14px; line-height: 1.6; color: var(--wh-fg-muted); }
+.wh-connection-actions, .wh-connection-actionbar { padding: 16px 24px; border: 1px solid var(--wh-line); border-radius: 14px; background: var(--wh-surface); box-shadow: var(--wh-panel-shadow, none); }
+.wh-connection-actions { align-items: flex-start; flex-wrap: wrap; }
+.wh-connection-actionbar { display: flex; flex-direction: column; gap: 12px; }
+.wh-connection-actionbar > .wh-connection-actions, .wh-connection-expired .wh-connection-actions { padding: 0; border: 0; border-radius: 0; background: none; box-shadow: none; }
+/* Fine print attached to the action bar when it follows it as a sibling (access key). */
+.wh-connection-actions:has(+ .wh-connection-footer) { border-bottom: 0; border-radius: 14px 14px 0 0; padding-bottom: 8px; }
+.wh-connection-actions + .wh-connection-footer { margin-top: -16px; padding: 0 24px 16px; border: 1px solid var(--wh-line); border-top: 0; border-radius: 0 0 14px 14px; background: var(--wh-surface); }
+/* Inside the consent action bar the fine print is plain text in the same bar. */
+.wh-connection-actionbar > .wh-connection-actions:has(+ .wh-connection-footer), .wh-connection-actionbar > .wh-connection-actions { padding: 0; border: 0; border-radius: 0; }
+.wh-connection-actionbar > .wh-connection-actions + .wh-connection-footer, .wh-connection-actionbar > .wh-connection-footer { margin-top: 0; padding: 0; border: 0; border-radius: 0; background: none; }
+.wh-connection-footer { font-size: 13px; line-height: 1.6; }
+/* A bare form-level error in a connection flow is still bounded. */
+.wh-connection-flow > p[role="alert"] { padding: 16px; border: 1px solid var(--wh-line); border-radius: 14px; background: var(--wh-surface); }
+.wh-connection-actions > a:not([class]), .wh-connection-link { color: var(--wh-fg); text-decoration: underline; text-underline-offset: 4px; }
+.wh-connection-actions > a:not([class]):hover, .wh-connection-link:hover { color: var(--wh-fg-muted); }
+.wh-connection-link { display: inline-flex; align-items: center; min-height: 44px; font-size: 14px; }
+.wh-connection-link-primary { display: inline-flex; min-height: 44px; align-items: center; justify-content: center; gap: 8px; padding: 0 20px; font-size: 14px; font-weight: 500; }
+.wh-connection-link-primary:hover { background: var(--wh-accent-hover); }
+.wh-connection-expired { gap: 12px; }
+.wh-connection-expired ol { margin-top: 4px; color: var(--wh-fg-muted); }
+@media (max-width: 639px) {
+  .wh-connection-intro, .wh-connection-section, .wh-connection-expired { padding: 20px 16px; }
+  .wh-connection-actions, .wh-connection-actionbar { padding: 16px; }
+  .wh-connection-actions + .wh-connection-footer { padding: 0 16px 16px; }
+}
+@media (min-width: 640px) {
+  .wh-connection-actions { align-items: center; }
+}

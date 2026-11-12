@@ -53,6 +53,7 @@ import { loadConfig, type Config } from "../../../../server/config";
 import { getServerDb } from "../../../../server/db/server";
 import { systemClock, type Clock } from "../../../../server/seams/clock";
 import type { Db } from "../../../../server/db/index";
+import { actionHtml, escapeHtml, standaloneResponse } from "../../../../components/public/standalone-html";
 
 // The injection seams, each defaulting to the real composition root. All three are optional
 // so the route entry can build the handler with `createHouseholdJoinHandler()` and leave
@@ -123,72 +124,43 @@ function toSignin(baseUrl: string, token: string): Response {
   return new Response(null, { status: 303, headers: { location: target.toString() } });
 }
 
-// Escape a value for an HTML attribute or text node. The only dynamic value on the page is
-// the token, already restricted to [A-Za-z0-9_-] by the schema; escaping anyway keeps the
-// page safe if that ever loosens.
-function escapeHtml(value: string): string {
-  return value
-    .replace(/&/g, "&amp;")
-    .replace(/</g, "&lt;")
-    .replace(/>/g, "&gt;")
-    .replace(/"/g, "&quot;")
-    .replace(/'/g, "&#39;");
-}
-
 // The confirmation page: what joining shares (the brief's household rules, in plain words)
-// and one button that POSTs back to this link. Self-contained (no script); never cached,
-// and never framed.
+// and one button that POSTs back to this link. It uses the shared standalone page —
+// Warthog's own tokens in both colour schemes, the brand bar and one panel (public-29,
+// visual-03) — with no script; never cached, and never framed. The only dynamic value is the
+// token, already restricted to [A-Za-z0-9_-] by the schema and escaped regardless.
 function confirmationPage(token: string): Response {
   const action = escapeHtml(joinPath(token));
-  const html = `<!doctype html>
-<html lang="en">
-<head>
-<meta charset="utf-8">
-<meta name="viewport" content="width=device-width, initial-scale=1">
-<title>Join a household · Warthog</title>
-<style>
-  :root { color-scheme: light dark; --fg: #18181b; --muted: #52525b; --bg: #fafafa; --card: #ffffff; --line: #d4d4d8; --accent: #4338ca; --on-accent: #ffffff; }
-  @media (prefers-color-scheme: dark) { :root { --fg: #fafafa; --muted: #a1a1aa; --bg: #09090b; --card: #18181b; --line: #3f3f46; --accent: #a5b4fc; --on-accent: #09090b; } }
-  body { margin: 0; background: var(--bg); color: var(--fg); font: 16px/1.5 system-ui, -apple-system, "Segoe UI", sans-serif; }
-  main { max-width: 32rem; margin: 0 auto; padding: 48px 16px; }
-  .card { background: var(--card); border: 1px solid var(--line); border-radius: 12px; padding: 24px; }
-  h1 { font-size: 1.375rem; margin: 0 0 8px; }
-  p, li { color: var(--muted); }
-  ul { padding-left: 1.25rem; }
-  .actions { display: flex; flex-wrap: wrap; gap: 12px; align-items: center; margin-top: 24px; }
-  button { font: inherit; font-weight: 600; background: var(--accent); color: var(--on-accent); border: 0; border-radius: 8px; padding: 10px 20px; min-height: 44px; cursor: pointer; }
-  a { color: var(--accent); }
-</style>
-</head>
-<body>
-<main>
-  <div class="card">
-    <h1>Join this household?</h1>
-    <p>You've been invited to join a household on Warthog. If you join:</p>
-    <ul>
-      <li>members see the shared address, the member list and the household budget totals;</li>
-      <li>the household owner sets your monthly spending limit, and your agents' card requests count against it and the household budget;</li>
-      <li>nobody sees your vault, cards, memory, agents or activity.</li>
-    </ul>
-    <form method="post" action="${action}">
-      <div class="actions">
-        <button type="submit">Join household</button>
-        <a href="/home">Not now</a>
-      </div>
-    </form>
-  </div>
-</main>
-</body>
-</html>`;
-  return new Response(html, {
-    status: 200,
-    headers: {
-      "content-type": "text/html; charset=utf-8",
-      "cache-control": "no-store",
-      "x-frame-options": "DENY",
-      "referrer-policy": "no-referrer",
-    },
-  });
+  return standaloneResponse({
+    title: "Join a household",
+    eyebrow: "Household",
+    heading: "Join this household?",
+    paragraphs: ["You've been invited to join a household on Warthog. If you join:"],
+    bodyHtml:
+      "<ul>" +
+      "<li>members see the shared address, the member list and the household budget totals;</li>" +
+      "<li>the household owner sets your monthly spending limit, and your agents' card requests count against it and the household budget;</li>" +
+      "<li>nobody sees your vault, cards, memory, agents or activity.</li>" +
+      "</ul>" +
+      `<form method="post" action="${action}"><div class="actions">` +
+      '<button class="button" type="submit">Join household</button>' +
+      actionHtml({ href: "/home", label: "Not now" }) +
+      "</div></form>",
+  }, 200, { "x-frame-options": "DENY", "referrer-policy": "no-referrer" });
+}
+
+// A link whose token is malformed: the same 4xx, now with a page and a way forward.
+function invalidLinkPage(status: number): Response {
+  return standaloneResponse({
+    title: "Invite link not valid",
+    eyebrow: "Household",
+    heading: "This invite link isn't valid",
+    paragraphs: ["The link may be incomplete or mistyped, so nothing has changed. Ask the person who invited you to send a new invite."],
+    actions: [
+      { href: "/household", label: "Go to Household", primary: true },
+      { href: "/", label: "Go to Warthog" },
+    ],
+  }, status, { "referrer-policy": "no-referrer" });
 }
 
 // Whether a POST came from Warthog's own pages: its Origin header must be exactly the
@@ -210,7 +182,7 @@ export function createHouseholdJoinHandler(
       return parseParams(tokenSchema, params.token);
     } catch (error) {
       if (error instanceof HttpError) {
-        return new Response(null, { status: error.status });
+        return invalidLinkPage(error.status);
       }
       throw error;
     }

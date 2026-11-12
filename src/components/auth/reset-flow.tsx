@@ -68,6 +68,8 @@ export interface ResetFlowController {
   submitEmailCode(): Promise<void>;
   createPasskey(): Promise<void>;
   confirm(): Promise<void>;
+  // Back to the email step to change the address. Client-side only: it sends nothing.
+  changeEmail(): void;
 }
 
 const API_BASE = "/api/auth/reset";
@@ -237,6 +239,12 @@ export function createResetFlow(deps: ResetFlowDeps): ResetFlowController {
     setEmail: (value) => { if (!state.busy) set({ email: value }); },
     setEmailCode: (value) => { if (!state.busy) set({ emailCode: value }); },
     setSavedConfirmed: (value) => { if (!state.busy) set({ savedConfirmed: value }); },
+    changeEmail: () => {
+      if (state.busy || (state.phase !== "email-code" && state.phase !== "setup-email-code")) return;
+      setupId = undefined;
+      registrationOptions = undefined;
+      set({ phase: setup ? "setup-identify" : "identify", emailCode: "", error: undefined });
+    },
     submitIdentify: () => run(submitIdentify, SEND_FAILED_COPY),
     submitEmailCode: () => run(submitEmailCode, setup ? VERIFY_FAILED_COPY : REQUEST_FAILED_COPY),
     createPasskey: () => run(createPasskey, SETUP_FAILED_COPY),
@@ -301,6 +309,7 @@ export function ResetFlow(props: ResetFlowProps = {}): React.ReactElement {
       onConfirm={() => {
         void flow.confirm();
       }}
+      onChangeEmail={() => flow.changeEmail()}
     />
   );
 }

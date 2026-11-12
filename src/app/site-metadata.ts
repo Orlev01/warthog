@@ -33,8 +33,10 @@ export const SITE_VIEWPORT: Viewport = {
   width: "device-width",
   initialScale: 1,
   viewportFit: "cover",
+  // The browser chrome matches the top bars every screen now has: the surface colour of the
+  // workspace and public bars (workspace.css / public.css), not the retired palette (mobile-15).
   themeColor: [
-    { media: "(prefers-color-scheme: light)", color: "#fafafa" },
-    { media: "(prefers-color-scheme: dark)", color: "#09090b" },
+    { media: "(prefers-color-scheme: light)", color: "#ffffff" },
+    { media: "(prefers-color-scheme: dark)", color: "#252628" },
   ],
 };

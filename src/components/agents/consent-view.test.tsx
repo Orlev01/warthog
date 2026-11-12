@@ -442,16 +442,26 @@ test("shows every requested scope in plain words", () => {
   }
 });
 
-test("renders an Approve and a Refuse control, both live", () => {
+// The refusal reads "Deny", the product's one word for saying no (canonical terms, content-12).
+test("renders an Approve and a Deny control, both live", () => {
   const buttons = actionableButtons(render(base()));
   assert.ok(
     buttons.some((b) => /approve/i.test(b)),
     `a live Approve control must be present; buttons=${JSON.stringify(buttons)}`,
   );
   assert.ok(
-    buttons.some((b) => /refuse/i.test(b)),
-    `a live Refuse control must be present; buttons=${JSON.stringify(buttons)}`,
+    buttons.some((b) => /^deny$/i.test(b.trim())),
+    `a live Deny control must be present; buttons=${JSON.stringify(buttons)}`,
   );
+});
+
+// public-20: an unrecognised callback is named by its host only in the destination inset.
+test("an unrecognised platform is called 'an agent', never titled after its callback host", () => {
+  const markup = render(base({ platform: "relay.example-platform.com", redirect: { host: "relay.example-platform.com:8443", verified: false } }));
+  assert.match(markup, /<h1>Connect an agent<\/h1>/);
+  assert.match(markup, /What this agent is asking for/);
+  assert.match(markup, /rename your account on that platform/);
+  assert.match(markup, /relay\.example-platform\.com:8443/, "the host still shows in the destination inset");
 });
 
 // === AC2 — Verified-platform badge vs. a prominent other host ===================

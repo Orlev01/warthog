@@ -86,7 +86,7 @@ test("a few titles read as the person would name the screen", async () => {
 test("the public Help, Compatibility and Privacy pages are titled too", async () => {
   for (const [route, expected] of [
     ["help", "Help"],
-    ["help/compatibility", "Compatibility"],
+    ["help/compatibility", "Connect your agents · Warthog"],
     ["privacy", "Privacy"],
   ] as const) {
     const layout = await import(join(process.cwd(), "src", "app", route, "layout.tsx"));

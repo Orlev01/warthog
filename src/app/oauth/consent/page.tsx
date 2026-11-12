@@ -4,9 +4,8 @@ import { notificationSenders } from "../../../server/notify/production";
 import * as React from "react";
 import { cookies } from "next/headers";
 import { redirect } from "next/navigation";
-import { AlertTriangle } from "lucide-react";
-
 import { ConsentView, type ConsentDecisionResult } from "@/components/agents/consent-view";
+import { Notice } from "@/components/ui/notice";
 import { ConnectionFrame, ExpiredConnection } from "@/components/agents/connection-frame";
 
 import { loadConfig } from "../../../server/config";
@@ -137,7 +136,7 @@ async function refuseConsentAction(_formData: FormData): Promise<void> {
 
 // The outcome of the last attempt, in plain Australian English.
 const NOTICES: Record<string, string> = {
-  invalid: "We couldn't use those details. Check the agent's name and card budget, then try again.",
+  invalid: "We couldn’t use those details. Check the agent name and card budget, then try again.",
   expired: "This connection request has expired. Start connecting again from your agent.",
 };
 
@@ -169,15 +168,8 @@ export default async function ConsentPage({
 
   return (
     <ConnectionFrame>
-      {noticeText ? (
-        <div
-          role="alert"
-          className="flex items-start gap-3 rounded-card border border-line bg-surface p-4 text-sm text-fg"
-        >
-          <AlertTriangle aria-hidden={true} className="mt-0.5 h-5 w-5 shrink-0" />
-          <p>{noticeText}</p>
-        </div>
-      ) : null}
+      {/* The frame spaces its children, so the notice never sits flush on the form (public-21). */}
+      {noticeText ? <Notice tone="error">{noticeText}</Notice> : null}
       <ConsentView
         {...view}
         approveAction={approveConsentAction}

@@ -41,6 +41,7 @@ import { loadConfig, type Config } from "../../../server/config";
 import { getServerDb } from "../../../server/db/server";
 import { systemClock, type Clock } from "../../../server/seams/clock";
 import type { Db } from "../../../server/db/index";
+import { standaloneResponse } from "../../../components/public/standalone-html";
 
 // The injection seams, each defaulting to the real composition root. All three are optional
 // so the route entry can build the handler with `createApprovalLinkHandler()` and leave
@@ -109,7 +110,17 @@ export function createApprovalLinkHandler(
       token = parseParams(tokenSchema, params.token);
     } catch (error) {
       if (error instanceof HttpError) {
-        return new Response(null, { status: error.status });
+        // The same 4xx, now with Warthog's page and a way forward instead of a blank one.
+        return standaloneResponse({
+          title: "Link not valid",
+          eyebrow: "Approvals",
+          heading: "This approval link isn't valid",
+          paragraphs: ["The link may be incomplete or mistyped, so nothing was opened. Open the request from your Warthog inbox instead."],
+          actions: [
+            { href: "/inbox", label: "Open your inbox", primary: true },
+            { href: "/", label: "Go to Warthog" },
+          ],
+        }, error.status, { "referrer-policy": "no-referrer" });
       }
       throw error;
     }

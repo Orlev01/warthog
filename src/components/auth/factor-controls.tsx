@@ -13,6 +13,7 @@ import { AlertTriangle, CheckCircle2 } from "lucide-react";
 
 import { Button } from "@/components/ui/button";
 import { ConfirmItsYou } from "@/components/ui/confirm-its-you";
+import { RecoveryCodeDisplay } from "./recovery-code";
 
 // E04-S37 — Security screen factor controls.
 //
@@ -353,7 +354,7 @@ export function FactorControls(props: FactorControlsProps): React.ReactElement {
           // owed, "Confirm it's you" is that action, so add drops to a neutral button.
           variant={state.confirmRequired ? "secondary" : "primary"}
           aria-disabled={state.busy || state.confirmRequired}
-          className="aria-disabled:opacity-50"
+          className="aria-disabled:opacity-50 sm:self-start"
           onClick={() => {
             void flow.addPasskey();
           }}
@@ -366,19 +367,13 @@ export function FactorControls(props: FactorControlsProps): React.ReactElement {
       </div>
 
       <div className="flex flex-col gap-2">
-        {state.recoveryCode ? (
-          <div className="flex flex-col gap-1.5">
-            <span className="text-sm font-medium text-fg">Your new recovery code</span>
-            <p className="rounded-card border border-line bg-surface-muted px-3 py-3 text-center font-mono text-lg tracking-widest text-fg">
-              {state.recoveryCode}
-            </p>
-          </div>
-        ) : null}
+        {/* Shown once, in unbreakable groups with a Copy action (public-15). */}
+        {state.recoveryCode ? <RecoveryCodeDisplay code={state.recoveryCode} label="Your new recovery code" /> : null}
         <Button
           type="button"
           variant="secondary"
           aria-disabled={state.busy || state.confirmRequired}
-          className="aria-disabled:opacity-50"
+          className="aria-disabled:opacity-50 sm:self-start"
           onClick={() => {
             void flow.generateRecoveryCode();
           }}
@@ -386,7 +381,7 @@ export function FactorControls(props: FactorControlsProps): React.ReactElement {
           Generate a new recovery code
         </Button>
         <p className="text-sm text-fg-muted">
-          A one-time way back in if you lose access to your passkeys or Authenticator app. Generating a new one replaces the old.
+          A one-time way back in if you lose access to your passkeys or authenticator app. Generating a new one replaces the old.
         </p>
       </div>
     </div>

@@ -26,6 +26,7 @@ import type { Config } from "../../../server/config";
 import type { Db } from "../../../server/db/index";
 import type { Clock } from "../../../server/seams/clock";
 import type { Random } from "../../../server/seams/random";
+import { standaloneResponse } from "../../../components/public/standalone-html";
 
 // Mirrors the host-locked cookie name set by the session module.
 const SESSION_COOKIE = "__Host-wh_session";
@@ -72,20 +73,23 @@ function signInLocation(url: URL): string {
 // Warthog's own page for a request it will not carry forward. Fixed copy in plain words
 // (no protocol jargon on a primary screen); nothing from the request is echoed, so a
 // hostile redirect or client id never reaches the page.
+// It uses the shared standalone page (Warthog's tokens, both colour schemes, a brand bar and
+// one panel), and its way forward works signed in or out: "/" opens Home for a member and the
+// front door for anyone else (public-09, visual-03).
 function invalidRequestPage(): Response {
-  const html =
-    '<!doctype html><html lang="en-AU"><head><meta charset="utf-8">' +
-    '<meta name="viewport" content="width=device-width, initial-scale=1">' +
-    "<title>Connection request not valid · Warthog</title></head>" +
-    '<body style="font-family:system-ui,sans-serif;max-width:28rem;margin:3rem auto;padding:0 1rem">' +
-    "<h1>We can't connect this agent</h1>" +
-    "<p>This connection request isn't valid, so nothing was connected and you haven't been sent anywhere. " +
-    "Start connecting again from your agent. If it keeps happening, the agent may not be set up for Warthog.</p>" +
-    '<p><a href="/home">Go to Home</a></p></body></html>';
-  return new Response(html, {
-    status: 400,
-    headers: { "content-type": "text/html; charset=utf-8", "cache-control": "no-store" },
-  });
+  return standaloneResponse({
+    title: "Connection request not valid",
+    eyebrow: "Connect an agent",
+    heading: "We can't connect this agent",
+    paragraphs: [
+      "This connection request isn't valid, so nothing was connected and you haven't been sent anywhere.",
+      "Start connecting again from your agent. If it keeps happening, the agent may not be set up for Warthog.",
+    ],
+    actions: [
+      { href: "/", label: "Go to Warthog", primary: true },
+      { href: "/help/compatibility", label: "How to connect an agent" },
+    ],
+  }, 400);
 }
 
 export function createAuthorizeHandler(

@@ -146,7 +146,7 @@ function WorkspacePreview() {
               <strong>Personal organiser</strong>
               <span>Calendar</span>
             </div>
-            <span className="wh-landing-badge">Ask first</span>
+            <span className="wh-landing-badge">Ask me first</span>
           </li>
         </ul>
         <div className="wh-landing-request">
@@ -181,13 +181,11 @@ export function Landing() {
       <a className="wh-landing-skip" href="#main-content">
         Skip to content
       </a>
+      {/* The brand and account links form the pinned top bar. The section links follow it:
+          a strip that scrolls away on phones, drawn inside the sticky bar from 768px
+          (public.css), so the bar stays about 64px tall everywhere (mobile-14). */}
       <header className="wh-landing-header">
         <Wordmark href="/" />
-        <nav aria-label="Explore Warthog" className="wh-landing-nav">
-          <a href="#your-control">Your control</a>
-          <a href="#how-it-works">How it works</a>
-          <a href="#questions">FAQs</a>
-        </nav>
         <div className="wh-landing-account">
           <a href="/signin" className="wh-landing-link">
             Sign in
@@ -200,6 +198,11 @@ export function Landing() {
           </a>
         </div>
       </header>
+      <nav aria-label="Explore Warthog" className="wh-landing-nav">
+        <a href="#your-control">Control</a>
+        <a href="#how-it-works">How it works</a>
+        <a href="#questions">Questions</a>
+      </nav>
 
       <main id="main-content" tabIndex={-1}>
         <section className="wh-landing-hero" aria-labelledby="hero-title" data-motion-surface>
@@ -244,7 +247,11 @@ export function Landing() {
         >
           <div>
             <h2 id="compatibility-title">Bring the agents you already use.</h2>
-            <p>Connection availability varies by platform and plan.</p>
+            <p>
+              Connection availability varies by platform and plan. Claude and ChatGPT
+              support custom connectors; for Gemini, Grok and Llama-based clients it
+              depends on the app you use.
+            </p>
           </div>
           <ul aria-label="Agent platforms">
             <li>Claude</li>

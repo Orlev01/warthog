@@ -62,6 +62,11 @@ export interface SignupFlowState {
   readonly working: boolean;
   readonly authenticatorSecret?: string;
   readonly authenticatorQr?: string;
+  // The details-step error is a throttled send (a code went out moments ago), so the
+  // screen shows it for the form, not the email field, with a way to enter that code.
+  readonly codeThrottled?: boolean;
+  // A plain, non-error status line on the code step (e.g. a new code was sent).
+  readonly notice?: string;
 }
 
 export interface SignupFlowController {
@@ -72,6 +77,12 @@ export interface SignupFlowController {
   setSavedConfirmed(value: boolean): void;
   submitEmail(): Promise<void>;
   submitCode(): Promise<void>;
+  // Back to the details step to change the address. Client-side only: it sends nothing.
+  changeEmail(): void;
+  // Ask send-code for a new code to the same address (the same rate limits apply).
+  resendCode(): Promise<void>;
+  // After a throttled send, go to the code step to enter the code already sent.
+  useExistingCode(): void;
   createPasskey(): Promise<void>;
   useAuthenticatorApp(): Promise<void>;
   submitAuthenticatorCode(): Promise<void>;
@@ -102,13 +113,22 @@ function stepErrorCopy(step: StepPath): string {
   }
 }
 
-// A send-code refused because this address was sent a code moments ago (429).
+// A send-code refused because this address was sent a code moments ago (429). Nothing was
+// sent this time, so the copy never says it was (public-04).
 const CODE_THROTTLED_COPY =
-  "We sent a code to this address a moment ago. Check your email, or wait a minute and try again.";
+  "We sent a code to this address a moment ago, so we didn't send another. Enter the code you already have, or wait a minute and try again.";
 
-// Confirm found the address already has an account (409).
+// Asking for a new code on the code step.
+const CODE_RESENT_NOTICE = "We've sent a new code. Use the newest one; earlier codes stop working.";
+const CODE_RESEND_THROTTLED_NOTICE =
+  "We sent a code less than a minute ago, so we didn't send another. Use that one, or ask again in a minute.";
+const CODE_RESEND_FAILED_NOTICE = "We couldn't send a new code just now. Try again in a minute.";
+
+// Confirm found the address already has an account (409). Nothing from this sign-up was
+// stored (the server rolls the whole account back), so the recovery code it showed never
+// works and any passkey it made belongs to no account (public-02).
 const ACCOUNT_EXISTS_COPY =
-  "There's already an account for this email address. Sign in instead, or recover your account if you've lost your passkey.";
+  "This email address already has a Warthog account, so nothing from this sign-up was saved: the recovery code shown won't work, and if you created a passkey it isn't linked to any account, so you can delete it from your device's saved passkeys. Sign in with your existing passkey, or recover your account if you've lost it.";
 
 const PASSKEY_CANCELLED_COPY =
   "Setting up your passkey was cancelled. You can try again when you're ready.";
@@ -159,10 +179,20 @@ export function createSignupFlow(deps: SignupFlowDeps): SignupFlowController {
   async function submitEmail(): Promise<void> {
     const response = await post("send-code", { email: state.email, name: state.name });
     if (!response || !response.ok) {
-      set({ error: response?.status === 429 ? CODE_THROTTLED_COPY : stepErrorCopy("send-code") });
+      const throttled = response?.status === 429;
+      set({ error: throttled ? CODE_THROTTLED_COPY : stepErrorCopy("send-code"), codeThrottled: throttled });
       return;
     }
-    set({ phase: "code", error: undefined });
+    set({ phase: "code", error: undefined, codeThrottled: false, notice: undefined });
+  }
+
+  async function resendCode(): Promise<void> {
+    if (state.phase !== "code") return;
+    const response = await post("send-code", { email: state.email, name: state.name });
+    set({
+      error: undefined,
+      notice: response?.ok ? CODE_RESENT_NOTICE : response?.status === 429 ? CODE_RESEND_THROTTLED_NOTICE : CODE_RESEND_FAILED_NOTICE,
+    });
   }
 
   async function submitCode(): Promise<void> {
@@ -174,7 +204,7 @@ export function createSignupFlow(deps: SignupFlowDeps): SignupFlowController {
     const body = await readJson(response);
     signupId = typeof body.signupId === "string" ? body.signupId : undefined;
     registrationOptions = body.registrationOptions as PublicKeyCredentialCreationOptionsJSON | undefined;
-    set({ phase: "passkey", error: undefined });
+    set({ phase: "passkey", error: undefined, notice: undefined });
   }
 
   async function createPasskey(): Promise<void> {
@@ -213,8 +243,15 @@ export function createSignupFlow(deps: SignupFlowDeps): SignupFlowController {
     }
 
     const response = await post("confirm", { signupId, savedConfirmed: true });
+    if (response?.status === 409) {
+      // The account was never created: drop the now-meaningless code from memory and show
+      // the titled "you already have an account" state with its two ways in.
+      signupId = undefined;
+      set({ phase: "exists", error: ACCOUNT_EXISTS_COPY, recoveryCode: undefined, savedConfirmed: false });
+      return;
+    }
     if (!response || !response.ok) {
-      set({ error: response?.status === 409 ? ACCOUNT_EXISTS_COPY : stepErrorCopy("confirm") });
+      set({ error: stepErrorCopy("confirm") });
       return;
     }
     set({ error: undefined });
@@ -237,7 +274,7 @@ export function createSignupFlow(deps: SignupFlowDeps): SignupFlowController {
     const response = await post("verify-totp", { signupId, totp: state.code });
     if (!response?.ok) {
       set({ error: response?.status === 429
-        ? "Too many incorrect codes. Start signup again to set up your authenticator safely."
+        ? "Too many incorrect codes. Start sign-up again to set up your authenticator safely."
         : stepErrorCopy("verify-totp") }); return;
     }
     const result = await readJson(response);
@@ -260,6 +297,9 @@ export function createSignupFlow(deps: SignupFlowDeps): SignupFlowController {
     setSavedConfirmed: (value) => edit({ savedConfirmed: value }),
     submitEmail: () => transition(submitEmail),
     submitCode: () => transition(submitCode),
+    changeEmail: () => { if (!state.working && state.phase === "code") set({ phase: "details", code: "", error: undefined, notice: undefined, codeThrottled: false }); },
+    resendCode: () => transition(resendCode),
+    useExistingCode: () => { if (!state.working && state.phase === "details") set({ phase: "code", code: "", error: undefined, notice: undefined, codeThrottled: false }); },
     createPasskey: () => transition(createPasskey),
     useAuthenticatorApp: () => transition(useAuthenticatorApp),
     submitAuthenticatorCode: () => transition(submitAuthenticatorCode),
@@ -310,6 +350,8 @@ export function SignupFlow(props: SignupFlowProps = {}): React.ReactElement {
       recoveryCode={state.recoveryCode}
       savedConfirmed={state.savedConfirmed}
       error={state.error}
+      codeThrottled={state.codeThrottled}
+      notice={state.notice}
       working={state.working}
       authenticatorSecret={state.authenticatorSecret}
       authenticatorQr={state.authenticatorQr}
@@ -328,6 +370,9 @@ export function SignupFlow(props: SignupFlowProps = {}): React.ReactElement {
       onConfirm={() => {
         void flow.confirm();
       }}
+      onChangeEmail={() => flow.changeEmail()}
+      onResendCode={() => { void flow.resendCode(); }}
+      onUseExistingCode={() => flow.useExistingCode()}
     />
   );
 }

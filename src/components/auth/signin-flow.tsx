@@ -61,6 +61,8 @@ export interface SigninFlowState {
   readonly email: string;
   readonly code: string;
   readonly error?: string;
+  // A plain, non-error status line on the email-code step (e.g. a new code was sent).
+  readonly notice?: string;
   readonly busy?: boolean;
 }
 
@@ -71,6 +73,8 @@ export interface SigninFlowController {
   signInWithPasskey(): Promise<void>;
   useAuthenticatorApp(): void;
   signInWithCode(): Promise<void>;
+  // Ask send-email-code for a new code to the same address (the same rate limits apply).
+  resendEmailCode(): Promise<void>;
 }
 
 const API_BASE = "/api/auth/signin";
@@ -89,6 +93,12 @@ const CODE_FAILED_COPY =
   "We couldn't sign you in with that code. Check the code from your authenticator app and try again.";
 const PASSKEY_CANCELLED_COPY =
   "Signing in with your passkey was cancelled. You can try again when you're ready.";
+// Asking for a new email code: the server answers 429 when one went out under a minute ago,
+// so the copy never claims a send that didn't happen (public-04).
+const CODE_RESENT_NOTICE = "We've sent a new code. Use the newest one; earlier codes stop working.";
+const CODE_RESEND_THROTTLED_NOTICE =
+  "We sent a code less than a minute ago, so we didn't send another. Use that one, or ask again in a minute.";
+const CODE_RESEND_FAILED_NOTICE = "We couldn't send a new code just now. Try again in a minute.";
 
 export function createSigninFlow(deps: SigninFlowDeps): SigninFlowController {
   let signinId: string | undefined;
@@ -178,12 +188,23 @@ export function createSigninFlow(deps: SigninFlowDeps): SigninFlowController {
     // error left on the passkey step (no stale message).
     if (state.busy) return;
     signinId = undefined;
-    set({ phase: "email", code: "", error: undefined });
+    set({ phase: "email", code: "", error: undefined, notice: undefined });
+  }
+
+  async function resendEmailCode(): Promise<void> {
+    if (state.busy || state.phase !== "email-code") return;
+    set({ busy: true, error: undefined, notice: undefined });
+    try {
+      const response = await post("send-email-code", { email: state.email });
+      set({ notice: response?.ok ? CODE_RESENT_NOTICE : response?.status === 429 ? CODE_RESEND_THROTTLED_NOTICE : CODE_RESEND_FAILED_NOTICE });
+    } finally {
+      set({ busy: false });
+    }
   }
 
   async function signInWithCode(): Promise<void> {
     if (state.busy) return;
-    set({ busy: true, error: undefined });
+    set({ busy: true, error: undefined, notice: undefined });
     try {
       if (state.phase === "email") {
         const response = await post("send-email-code", { email: state.email });
@@ -223,6 +244,7 @@ export function createSigninFlow(deps: SigninFlowDeps): SigninFlowController {
     signInWithPasskey,
     useAuthenticatorApp,
     signInWithCode,
+    resendEmailCode,
   };
 }
 
@@ -266,6 +288,7 @@ export function SigninFlow(props: SigninFlowProps = {}): React.ReactElement {
       email={state.email}
       code={state.code}
       error={state.error}
+      notice={state.notice}
       busy={state.busy}
       onEmailChange={(value) => flow.setEmail(value)}
       onCodeChange={(value) => flow.setCode(value)}
@@ -276,6 +299,7 @@ export function SigninFlow(props: SigninFlowProps = {}): React.ReactElement {
       onSubmitCode={() => {
         void flow.signInWithCode();
       }}
+      onResendCode={() => { void flow.resendEmailCode(); }}
     />
   );
 }
