@@ -245,6 +245,7 @@ test("each pending approval carries the agent, the plain-sentence, the exact det
     // The agent — resolved for display.
     assert.equal(entry.agent.id, agentId, "the requesting agent id is carried");
     assert.equal(entry.agent.displayName, "Asterisk", "the agent's display name is resolved");
+    assert.equal(entry.agent.platform, "Claude Desktop", "the agent's platform is carried for its mark");
 
     // The plain-sentence request, the exact details, the reason and the triggering rule
     // — the decrypted detail round-trips so the inbox can show every one.

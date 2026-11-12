@@ -24,6 +24,7 @@ import { ActiveFilters, FilterLinks, type AppliedFilter } from "@/components/ui/
 import { LIST_ROW, ListGroup } from "@/components/ui/list-group";
 import { ListToolbar } from "@/components/ui/list-toolbar";
 import { WorkspaceHeading } from "@/components/shell/workspace-surfaces";
+import { AgentMark } from "@/components/ui/brand-mark";
 import { NOTHING_WAITING } from "@/domain/approvals/inbox-copy";
 import { hrefWith } from "@/lib/href";
 import type { UnlockRequest } from "@/client/vault/unlock";
@@ -88,6 +89,7 @@ export type PendingRequestView = {
   // more agents are grouped by it. Absent, the display name groups them instead.
   agentId?: string;
   agent: string;
+  agentPlatform?: string;
   sentence: string;
   details: readonly RequestDetail[];
   reason: string;
@@ -103,6 +105,7 @@ export type DecidedStatus = "approved" | "denied" | "expired" | "more_detail";
 export type DecidedRequestView = {
   id: string;
   agent: string;
+  agentPlatform?: string;
   sentence: string;
   status: DecidedStatus;
   outcome: string;
@@ -416,6 +419,7 @@ function PendingItem({
     >
       {focused ? <OpenedTag /> : null}
       <p className={`text-base text-fg ${WRAP_ANYWHERE}`}>
+        <InlineAgentMark platform={request.agentPlatform} name={request.agent} />
         <span className="font-semibold">{request.agent}</span> {request.sentence}
       </p>
       <dl className="grid grid-cols-[auto_minmax(0,1fr)] gap-x-4 gap-y-1.5 text-sm">
@@ -474,6 +478,16 @@ type PendingControls = {
   savedCards?: readonly SavedCardView[];
   focusApproval?: string;
 };
+
+// The requesting agent's mark, set into the request sentence just before its name.
+function InlineAgentMark({ platform, name }: { platform?: string; name: string }) {
+  if (!name) return null;
+  return (
+    <span className="me-1.5 inline-flex align-[-0.2em]">
+      <AgentMark platform={platform} name={name} size="xs" />
+    </span>
+  );
+}
 
 type AgentGroup = { key: string; name: string; requests: PendingRequestView[] };
 
@@ -561,6 +575,7 @@ function HistoryItem({ entry, focused }: { entry: DecidedRequestView; focused: b
     >
       {focused ? <OpenedTag /> : null}
       <p className={`text-fg ${WRAP_ANYWHERE}`}>
+        <InlineAgentMark platform={entry.agentPlatform} name={entry.agent} />
         <span className="font-medium">{entry.agent}</span> {entry.sentence}
       </p>
       <div className="flex flex-wrap items-center gap-x-3 gap-y-1">

@@ -1542,3 +1542,17 @@ test("a decision notice sits straight under the heading band, in the tab that op
   assert.ok(bandEnd < noticeAt && noticeAt < firstRequest, "after the band, before the requests");
   assert.equal(markup.split("That approval link has expired").length - 1, 1, "shown once, not once per tab");
 });
+
+test("each request and past decision shows the requesting agent's mark beside its name", () => {
+  // A known agent shows its own brand mark (resolved from its platform, else its name);
+  // an agent without a known brand shows a neutral initial tile. Decorative: the name
+  // beside it stays the accessible text.
+  const markup = render(base({
+    pending: [{ ...PENDING_CARD, agent: "Research helper", agentPlatform: "Claude Desktop" }],
+    history: [{ id: "d-1", agent: "Helper", sentence: "asked to send a note", status: "approved", outcome: "Approved", decidedAt: "Today" }],
+  }));
+  assert.match(markup, /<span aria-hidden="true" data-size="xs" class="wh-brand-tile" data-brand="[^"]*"><img src="\/brands\/agent-claude\.svg" alt=""/, "a Claude agent shows Claude's mark from its platform");
+  assert.match(markup, /<span aria-hidden="true" data-size="xs" class="wh-brand-tile wh-brand-initial">H<\/span>/, "an unbranded agent shows its initial");
+  const text = visibleText(markup);
+  assert.ok(text.includes("Research helper"), "the agent's name is still the visible text");
+});

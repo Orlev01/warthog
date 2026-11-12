@@ -317,6 +317,7 @@ function toPendingView(request: PendingApproval, serviceName: ServiceNamer): Pen
     id: request.id,
     agentId: request.agent.id,
     agent: request.agent.displayName,
+    agentPlatform: request.agent.platform,
     sentence: sentenceFor(request.detail, serviceName),
     details: detailLines(request.detail),
     reason: text(request.detail.reason),
@@ -331,6 +332,7 @@ function toDecidedView(entry: DecidedApproval, timeZone: string, serviceName: Se
   const view: DecidedRequestView = {
     id: entry.id,
     agent: entry.agent.displayName,
+    agentPlatform: entry.agent.platform,
     sentence: sentenceFor(entry.detail, serviceName),
     status: entry.status,
     outcome: OUTCOME[entry.status],

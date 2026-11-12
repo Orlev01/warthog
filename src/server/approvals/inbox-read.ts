@@ -27,6 +27,8 @@ import type { Clock } from "../seams/clock";
 export interface ApprovalAgentRef {
   readonly id: string;
   readonly displayName: string;
+  // The client platform, so the inbox can show the agent's brand mark.
+  readonly platform?: string;
 }
 
 // A pending request awaiting the OWNER's decision.
@@ -76,11 +78,13 @@ export async function readInbox(
   ]);
 
   // Resolve each approval's OWN requesting agent's display name from the person's own
-  // agents (member-scoped); a value is carried for the id even if the agent row is gone.
-  const nameById = new Map(agents.map((agent) => [agent.id, agent.displayName]));
+  // agents (member-scoped), with its platform for the mark; a value is carried for the id
+  // even if the agent row is gone.
+  const byId = new Map(agents.map((agent) => [agent.id, agent]));
   const agentRef = (agentId: string): ApprovalAgentRef => ({
     id: agentId,
-    displayName: nameById.get(agentId) ?? "",
+    displayName: byId.get(agentId)?.displayName ?? "",
+    platform: byId.get(agentId)?.platform,
   });
 
   const now = clock.now().getTime();
