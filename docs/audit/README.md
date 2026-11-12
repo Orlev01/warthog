@@ -1,5 +1,12 @@
 # Warthog comprehensive engineering audit
 
+**Recovery storage applied, 12 November:** receipt versioning/soft deletion and
+the locked 42-day journal are verified, with a zero-change follow-up plan. The
+synthetic access test found an Azure add-only retry response requiring a narrow
+adapter correction; remaining permission checks and app activation are still
+gated. See the [storage record](recovery-storage-2026-11-12.md) and
+[current state](../../state.md). The live application remains unchanged.
+
 **Product review deployed, 12 November:** the thirteen findings below have
 changes and acceptance evidence, deployed from integrated main `9f2ef12`. See the
 [implementation record](product-review-2026-11-12/implementation.md) for granular
