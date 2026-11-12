@@ -13,7 +13,8 @@
 //   • resolving, against a placeholder origin, to that same origin (so no scheme or host
 //     can sneak in through any parser quirk);
 //   • not one of the auth screens themselves (no sign-in loops).
-// The kept value is re-serialised from the parsed URL (path, query, fragment).
+// The kept value is re-serialised from the parsed URL (path, query, fragment), and that
+// serialised value must still start with exactly one "/".
 //
 // Pure and dependency-free, so the server pages and the client flows share it.
 
@@ -40,10 +41,16 @@ export function safeReturnPath(raw: unknown): string {
   }
   if (url.origin !== PLACEHOLDER_ORIGIN) return DEFAULT_RETURN_PATH;
 
+  // Parsing collapses dot segments (`/.//x`, `/%2e//x`, `/a/..//x` → `//x`), so the
+  // re-serialised value gets the leading-slash checks again: a browser would read a
+  // `//host` pathname as another site.
+  const kept = `${url.pathname}${url.search}${url.hash}`;
+  if (kept.startsWith("//") || kept.startsWith("/\\")) return DEFAULT_RETURN_PATH;
+
   const path = url.pathname.replace(/\/+$/, "") || "/";
   if (AUTH_SCREENS.has(path)) return DEFAULT_RETURN_PATH;
 
-  return `${url.pathname}${url.search}${url.hash}`;
+  return kept;
 }
 
 // An auth-screen link that carries the return path along (so moving from sign-in to
