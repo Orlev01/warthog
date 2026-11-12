@@ -79,7 +79,9 @@ import {
   alertNewAgentConnection,
   alertNewDeviceSignIn,
   alertAccountReenrolled,
+  alertAccountRecovered,
 } from "./alerts";
+import { SUPPORT_EMAIL } from "../../components/public/operator";
 import { freshDb } from "../../test/db";
 import { createUser, type User } from "../db/users";
 import { createOutbox, type Outbox } from "../notify/outbox";
@@ -319,6 +321,21 @@ test("setting up a new passkey after a reset sends one plain email to the person
     assert.match(mail[0].body, /new passkey/i, "it says a new passkey was set up");
     assert.match(mail[0].body, /recovery code/i, "it says a new recovery code was issued");
     assert.doesNotMatch(mail[0].body, /using your recovery code/i, "it does not claim the old code was used");
+    assertNoCodeOrToken(mail[0].body);
+  } finally {
+    await db.close();
+  }
+});
+
+test("the account-recovered alert says how to reach support, not just 'contact support'", async () => {
+  const db = await freshDb();
+  try {
+    const person = await freshUser(db, "recovered");
+    const outbox = createOutbox();
+    await alertAccountRecovered(db, { userId: person.id }, { emailSender: outbox });
+    const mail = emailsTo(outbox, person.email);
+    assert.equal(mail.length, 1);
+    assert.ok(mail[0].body.includes(SUPPORT_EMAIL), "the alert carries the support address");
     assertNoCodeOrToken(mail[0].body);
   } finally {
     await db.close();
