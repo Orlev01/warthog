@@ -79,6 +79,11 @@ Back/Forward. In-page panels retain drafts when switching views.
 
 ## Composition and responsive behaviour
 
+The [12 November workspace-depth refinement](workspace-depth.md) adds a scoped
+canvas/panel/inset hierarchy, shallow elevation and grouped agent navigation to
+the signed-in application. It supersedes minimal-depth treatment there while
+retaining this reference's neutral identity, widths and interaction contracts.
+
 - The frame owns the 260px sidebar and page header. A section's optional route
   tabs span the content area. `ResourceScope` is a compact account/agent toolbar.
 - `wh-page` caps broad lists and dashboards at 1216px including gutters.

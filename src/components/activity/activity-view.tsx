@@ -1,4 +1,5 @@
 import * as React from "react";
+import { WorkspaceHeading } from "@/components/shell/workspace-surfaces";
 import { ShieldAlert, ShieldCheck } from "lucide-react";
 
 import { Input } from "@/components/ui/input";
@@ -277,7 +278,7 @@ function ActivityEntryItem({
   const meta = metaParts.filter(Boolean).join(" · ");
 
   return (
-    <li id={`entry-${entry.seq}`} className="flex min-w-0 flex-col gap-2 rounded-card border border-line bg-surface p-4 [overflow-wrap:anywhere]">
+    <li id={`entry-${entry.seq}`} className="flex min-w-0 flex-col gap-2 wh-card rounded-card border border-line bg-surface p-4 [overflow-wrap:anywhere]">
       <div className="flex flex-wrap items-center gap-x-3 gap-y-1">
         <span className="font-medium text-fg">{entry.title ?? entry.kind}</span>
         <span className="rounded-card bg-surface-muted px-2 py-0.5 text-xs font-medium text-fg-muted">
@@ -325,8 +326,7 @@ export function ActivityView({
 
   return (
     <div className="wh-page flex flex-col gap-6">
-      <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
-        <h1 className="text-2xl font-semibold tracking-tight text-fg">Activity</h1>
+      <WorkspaceHeading eyebrow="Insights" title="Activity" description="Follow requests through Warthog, review outcomes and inspect the evidence behind them.">
         <form method="get">
           <input type="hidden" name="verify" value="1" />
           <button type="submit" className={BTN_PRIMARY}>
@@ -334,11 +334,11 @@ export function ActivityView({
             Check integrity
           </button>
         </form>
-      </div>
+      </WorkspaceHeading>
 
       {integrity ? <IntegrityPanel result={integrity} /> : null}
 
-      <form method="get" className="flex flex-col gap-4 rounded-card border border-line bg-surface p-4">
+      <form method="get" className="flex flex-col gap-4 wh-card rounded-card border border-line bg-surface p-4">
         <div className="flex flex-col gap-1.5">
           <Label htmlFor="activity-search">Search</Label>
           <Input

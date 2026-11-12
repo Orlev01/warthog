@@ -1,4 +1,6 @@
 import * as React from "react";
+import { Activity, ArrowRight, Bell, Bot, CheckCheck, CheckCircle2, Circle, ListChecks } from "lucide-react";
+import { WorkspaceHeading, WorkspacePanel } from "@/components/shell/workspace-surfaces";
 
 import type { SetupChecklistItem } from "@/domain/home/checklist";
 import { SetupChecklist } from "./setup-checklist";
@@ -99,83 +101,59 @@ export function DashboardView({
   registerPushDevice,
   vapidPublicKey,
 }: DashboardViewProps) {
+  const completed = checklist.filter((item) => item.done).length;
   return (
-    <div className="wh-page flex flex-col gap-8">
-      <h1 className="text-2xl font-semibold tracking-tight text-fg">
-        Hi, {personName}
-      </h1>
-
-      <section className="flex flex-col gap-3">
-        <h2 className="text-lg font-semibold text-fg">Set up Warthog</h2>
-        <SetupChecklist items={checklist} />
-        <InstallPrompt
-          registerPushDevice={registerPushDevice}
-          vapidPublicKey={vapidPublicKey}
-        />
-      </section>
-
-      <div className="grid min-w-0 gap-8 xl:grid-cols-[minmax(0,1.7fr)_minmax(0,1fr)]">
-        <div className="flex min-w-0 flex-col gap-8">
-          <section className="flex flex-col gap-3">
-            <h2 className="text-lg font-semibold text-fg">Approvals</h2>
+    <div className="wh-page flex flex-col gap-6">
+      <WorkspaceHeading
+        eyebrow="Your workspace"
+        title={<>Hi, {personName}</>}
+        description="A place to oversee your agents, review their requests and keep track of what happens next."
+      />
+      <div className="wh-dashboard-grid">
+        <div className="wh-dashboard-column">
+          <WorkspacePanel title="Approvals" description="Requests waiting for your decision" icon={CheckCheck}>
             {pendingApprovals > 0 ? (
-              <a
-                className="font-medium text-accent hover:text-accent-hover"
-                href="/inbox"
-              >
-                {pendingApprovals} pending approval
-                {pendingApprovals === 1 ? "" : "s"}
+              <a className="wh-approval-summary" href="/inbox">
+                <span>{pendingApprovals} pending approval{pendingApprovals === 1 ? "" : "s"}</span>
+                <ArrowRight aria-hidden size={20} />
               </a>
             ) : (
-              <p className="text-sm text-fg-muted">No pending approvals.</p>
+              <div className="wh-panel-empty">
+                <CheckCircle2 aria-hidden size={20} />
+                <div><p className="font-medium text-fg">No pending approvals.</p><p>Requests that need your decision will appear here.</p></div>
+              </div>
             )}
-          </section>
-
-          <section className="flex flex-col gap-3">
-            <h2 className="text-lg font-semibold text-fg">Recent activity</h2>
+          </WorkspacePanel>
+          <WorkspacePanel title="Recent activity" description="Recorded across your Warthog connections" icon={Activity} action={<a href="/activity">View activity <ArrowRight aria-hidden size={14} /></a>}>
             {activity.length > 0 ? (
-              <ul className="flex flex-col gap-2">
+              <ul className="wh-timeline">
                 {activity.map((entry) => (
-                  <li
-                    key={entry.id}
-                    className="flex flex-col gap-1 border-b border-line py-4 last:border-0"
-                  >
-                    <span className="flex flex-wrap items-center gap-x-3 gap-y-1">
-                      <span className="text-fg">{entry.summary}</span>
-                      {entry.outcome ? (
-                        <span className="rounded-card bg-surface-muted px-2 py-0.5 text-xs font-medium text-fg-muted">
-                          {entry.outcome}
-                        </span>
-                      ) : null}
-                    </span>
-                    <span className="text-sm text-fg-muted">
-                      {entry.agent ? `${entry.agent} · ${entry.at}` : entry.at}
-                    </span>
+                  <li key={entry.id}>
+                    <p className="text-sm leading-relaxed text-fg">{entry.summary}</p>
+                    <div className="wh-timeline-meta">
+                      {entry.outcome && <span className="rounded-full bg-surface-muted px-2 py-0.5 font-medium">{entry.outcome}</span>}
+                      <span>{entry.agent ? `${entry.agent} · ${entry.at}` : entry.at}</span>
+                    </div>
                   </li>
                 ))}
               </ul>
-            ) : (
-              <p className="text-sm text-fg-muted">No recent activity yet.</p>
-            )}
-          </section>
+            ) : <p className="wh-panel-empty">No recent activity yet.</p>}
+          </WorkspacePanel>
         </div>
-        <div className="flex min-w-0 flex-col gap-8 border-line xl:border-s xl:ps-8">
-          <section className="flex flex-col gap-3">
-            <h2 className="text-lg font-semibold text-fg">Your agents</h2>
+        <div className="wh-dashboard-column">
+          <WorkspacePanel title="Your agents" description="Separate connections, individual controls" icon={Bot}>
             {agents.length > 0 ? (
-              <ul className="flex flex-col gap-2">
+              <ul className="flex flex-col divide-y divide-line">
                 {agents.map((agent) => (
-                  <li
-                    key={agent.id}
-                    className="flex min-w-0 flex-col gap-2 border-b border-line py-3 last:border-0"
-                  >
-                    <div className="flex min-w-0 flex-col gap-1">
-                      <span className="line-clamp-2 font-medium text-fg [overflow-wrap:anywhere]">
-                        {agent.name}
-                      </span>
-                      <Status status={agent.status} />
+                  <li key={agent.id} className="flex min-w-0 flex-col gap-2 py-4 first:pt-0 last:pb-0">
+                    <div className="flex min-w-0 items-start gap-3">
+                      <span className="wh-object-icon"><Bot aria-hidden size={18} /></span>
+                      <div className="flex min-w-0 flex-1 flex-col items-start gap-1">
+                        <a href={`/agents/${encodeURIComponent(agent.id)}`} className="inline-flex min-h-11 items-center font-medium text-fg underline decoration-line-strong underline-offset-4 [overflow-wrap:anywhere]">{agent.name}</a>
+                        <Status status={agent.status} />
+                      </div>
                     </div>
-                    <span className="min-w-0 text-sm text-fg-muted">
+                    <span className="min-w-0 text-xs leading-relaxed text-fg-muted">
                       {agent.spendUnavailable
                         ? "Total unavailable: a reference rate is missing for earlier spending."
                         : `${agent.currency && agent.currency !== "AUD" ? agent.currency + " " : "A$"}${agent.spendThisPeriod} of ${agent.currency && agent.currency !== "AUD" ? agent.currency + " " : "A$"}${agent.budget} ${periodLabel(agent.budgetPeriod)}`}
@@ -183,33 +161,27 @@ export function DashboardView({
                   </li>
                 ))}
               </ul>
-            ) : (
-              <p className="text-sm text-fg-muted">No agents connected yet.</p>
-            )}
-          </section>
-
-          <section className="flex flex-col gap-3">
-            <h2 className="text-lg font-semibold text-fg">Reminders</h2>
+            ) : <p className="wh-panel-empty">No agents connected yet.</p>}
+          </WorkspacePanel>
+          <WorkspacePanel title="Set up Warthog" description={`${completed} of ${checklist.length} steps complete`} icon={ListChecks}>
+            <SetupChecklist items={checklist} />
+            <InstallPrompt registerPushDevice={registerPushDevice} vapidPublicKey={vapidPublicKey} />
+          </WorkspacePanel>
+          <WorkspacePanel title="Reminders" description="Coming up in your life admin" icon={Bell}>
             {reminders.length > 0 ? (
-              <ul className="flex flex-col gap-2">
+              <ul className="flex flex-col divide-y divide-line">
                 {reminders.map((reminder) => (
-                  <li
-                    key={reminder.id}
-                    className="flex flex-col gap-1 border-b border-line py-4 last:border-0"
-                  >
-                    <span className="text-fg [overflow-wrap:anywhere]">
-                      {reminder.title}
-                    </span>
-                    <span className="text-sm text-fg-muted">
-                      Due {reminder.due}
-                    </span>
+                  <li key={reminder.id} className="flex items-start gap-3 py-3 first:pt-0 last:pb-0">
+                    <Circle aria-hidden size={15} className="mt-1 shrink-0 text-fg-muted" />
+                    <div className="min-w-0">
+                      <p className="text-sm text-fg [overflow-wrap:anywhere]">{reminder.title}</p>
+                      <p className="mt-1 text-xs text-fg-muted">Due {reminder.due}</p>
+                    </div>
                   </li>
                 ))}
               </ul>
-            ) : (
-              <p className="text-sm text-fg-muted">No reminders yet.</p>
-            )}
-          </section>
+            ) : <p className="wh-panel-empty">No reminders yet.</p>}
+          </WorkspacePanel>
         </div>
       </div>
     </div>

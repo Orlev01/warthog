@@ -8,7 +8,7 @@ export type CardProps = React.HTMLAttributes<HTMLDivElement>;
 export function Card({ className, children, ...props }: CardProps) {
   return (
     <div
-      className={["rounded-card border border-line bg-surface p-4", className].filter(Boolean).join(" ")}
+      className={["wh-card rounded-card border border-line bg-surface p-4", className].filter(Boolean).join(" ")}
       {...props}
     >
       {children}

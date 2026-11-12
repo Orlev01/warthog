@@ -29,10 +29,16 @@ Inspect the [UI primitives](../../../src/components/ui),
 | Form boundaries | `border-line-input`; decorative dividers are insufficient |
 | Primary action | Neutral `accent`, `accent-hover`, `accent-fg`; pill shape |
 | Meaningful state | `success`, `warning`, `danger`, with words and an icon |
-| Focus / card / field | `focus`, `rounded-card` (12px), `rounded-field` (8px) |
+| Focus / card / field | `focus`, `rounded-card` (12px; raised workspace groups 14px), `rounded-field` (8px) |
 
 Use tokens in both explicit and system themes. Do not restore an indigo palette,
 add a component-library dependency, or invent analytics or unavailable controls.
+
+Follow [workspace depth](../../../docs/design/workspace-depth.md) for signed-in
+surfaces: a neutral canvas, raised groups and muted insets. Reuse
+`WorkspaceHeading`, `WorkspacePanel` and the shared `Card`; texture stays in the
+access-map introduction. Group resources separately from controls and evidence.
+Branch lines describe navigation, never inferred live traffic or extra access.
 
 ## Hierarchy and organisation
 
@@ -44,7 +50,7 @@ add a component-library dependency, or invent analytics or unavailable controls.
 - Separate browsing, setup and preferences when a page otherwise becomes a long
   stack. Keep forms mounted across in-page tabs so drafts survive. Preserve URL
   filters and Back/Forward selection; validate view keys.
-- Use a compact header, 24px section titles, 14px interface text and 8px spacing
+- Use a compact header, 24px phone / 28px desktop page titles, 14px interface text and 8px spacing
   rhythm. Keep body copy readable and phone inputs at 16px.
 - Lists and settings use aligned rows and dividers. Cards group meaningful content;
   avoid nested cards, artificial equal heights and decorative dashboard metrics.

@@ -1,0 +1,52 @@
+[
+  {
+    "mode": "home",
+    "check": "short-landscape-safe-area",
+    "mainRight": 800,
+    "padding": "20px 44px",
+    "scroll": 844,
+    "width": 844,
+    "pass": true
+  },
+  {
+    "mode": "agents",
+    "check": "short-landscape-safe-area",
+    "mainRight": 800,
+    "padding": "20px 44px",
+    "scroll": 844,
+    "width": 844,
+    "pass": true
+  },
+  {
+    "mode": "agent",
+    "check": "short-landscape-safe-area",
+    "mainRight": 800,
+    "padding": "20px 44px",
+    "scroll": 844,
+    "width": 844,
+    "pass": true
+  },
+  {
+    "mode": "permissions",
+    "check": "short-landscape-safe-area",
+    "mainRight": 800,
+    "padding": "20px 44px",
+    "scroll": 844,
+    "width": 844,
+    "pass": true
+  },
+  {
+    "check": "access-map-keyboard-focus",
+    "outline": "solid",
+    "outlineWidth": "2px",
+    "text": "VaultCan read everyday identity details",
+    "pass": true
+  },
+  {
+    "check": "forced-colors-reduced-motion",
+    "border": "solid",
+    "texture": "none",
+    "transition": "1e-05s",
+    "pass": true
+  }
+]

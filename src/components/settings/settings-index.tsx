@@ -1,5 +1,6 @@
 import * as React from "react";
-import { Bell, Database, Lock, Settings, type LucideIcon } from "lucide-react";
+import { WorkspaceHeading } from "@/components/shell/workspace-surfaces";
+import { ArrowUpRight, Bell, Database, Lock, Settings, type LucideIcon } from "lucide-react";
 
 import { PORTAL_NAV } from "@/components/shell/nav";
 
@@ -45,22 +46,23 @@ const SETTINGS_CHILDREN =
 export function SettingsIndex() {
   return (
     <div className="wh-page flex flex-col gap-6">
-      <h1 className="text-2xl font-semibold tracking-tight text-fg">Settings</h1>
+      <WorkspaceHeading eyebrow="Personal workspace" title="Settings" description="Keep your account secure, choose how you hear from Warthog and manage your data." />
 
-      <nav aria-label="Settings" className="flex flex-col gap-2">
+      <nav aria-label="Settings" className="wh-settings-links">
         {SETTINGS_CHILDREN.map((child) => {
           const Icon = ICONS[child.key] ?? Settings;
           return (
             <a
               key={child.key}
               href={child.href}
-              className="flex min-h-11 items-start gap-3 rounded-card border border-line bg-surface px-4 py-3 text-sm text-fg hover:bg-surface-muted"
+              className="wh-surface wh-settings-link text-sm text-fg"
             >
-              <Icon aria-hidden={true} className="mt-0.5 h-5 w-5 shrink-0" />
+              <span className="wh-object-icon"><Icon aria-hidden size={18} /></span>
               <span className="flex flex-col gap-1">
                 <span className="font-medium">{child.label}</span>
                 <span className="text-fg-muted">{DESCRIPTIONS[child.key] ?? ""}</span>
               </span>
+              <ArrowUpRight aria-hidden size={16} />
             </a>
           );
         })}

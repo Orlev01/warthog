@@ -1,4 +1,6 @@
 import * as React from "react";
+import { Activity, ArrowRight, Bot, Brain, Gauge, Lock, Network, Plug, Settings, ShieldCheck, SlidersHorizontal, Sparkles, Wallet, type LucideIcon } from "lucide-react";
+import { WorkspacePanel } from "@/components/shell/workspace-surfaces";
 import { type AgentSection } from "@/domain/permissions/workspace";
 import type { AgentWorkspaceData } from "@/server/agents/workspace-data";
 import type { PermissionsViewProps } from "./permissions-view";
@@ -14,11 +16,12 @@ export function AgentWorkspaceHeader({
   section: AgentSection;
 }) {
   return (
-    <header className="flex flex-col gap-4">
-      <a href="/agents" className="text-sm text-accent underline">
+    <header className="wh-surface wh-agent-heading flex flex-col gap-3">
+      <a href="/agents" className="inline-flex min-h-11 items-center self-start text-xs text-fg-muted underline underline-offset-4">
         All agents
       </a>
-      <div className="flex flex-wrap items-start justify-between gap-3">
+      <div>
+        <span className="wh-object-icon"><Bot aria-hidden size={24} strokeWidth={1.5} /></span>
         <div className="min-w-0 [overflow-wrap:anywhere]">
           <h1 className="text-2xl font-semibold tracking-tight">
             {data.agent.displayName}
@@ -105,60 +108,79 @@ export function AgentOverview({
       "Settings",
       `${permissions.requestLimit} requests per minute · tasks and records`,
     ],
+  ] as const;
+  const icons = {
+    connectors: Plug,
+    vault: Lock,
+    skills: Sparkles,
+    memory: Brain,
+    spending: Wallet,
+    rules: SlidersHorizontal,
+    activity: Activity,
+    settings: Settings,
+  } satisfies Record<(typeof cards)[number][0], LucideIcon>;
+  const branches = [
+    { title: "Resources", items: cards.slice(0, 4) },
+    { title: "Controls & history", items: [cards[4], cards[5], cards[7], cards[6]] },
   ];
   return (
-    <section className="flex flex-col gap-4">
-      <h2 className="text-lg font-semibold">This agent’s access</h2>
-      <section aria-label="Connection evidence" className="border-b border-line pb-4 text-sm [overflow-wrap:anywhere]">
-        <h3 className="font-medium">Connection evidence</h3>
-        <p>Connected means access is authorised. It is not a live heartbeat.</p>
-        {data.clientObservation ? <>
-          <p>Client reported: {data.clientObservation.name ?? "Name unavailable"} · {data.clientObservation.version ?? "Version unavailable"}</p>
-          <p>Protocol: {data.clientObservation.protocol ?? "Unavailable"} · Capabilities: {data.clientObservation.capabilities?.join(", ") || "Not reported"}</p>
-          <p>Last observed: <time dateTime={data.clientObservation.observedAt}>{data.clientObservation.displayObservedAt}</time></p>
-        </> : <p>No client metadata has been recorded yet. Existing history cannot supply it.</p>}
-        <p className="text-fg-muted">Client metadata is self-reported. Warthog verifies this connection’s credential, not the client’s human, model or conversation identity.</p>
+    <div className="flex min-w-0 flex-col gap-6">
+      <section className="wh-surface wh-access-map" aria-label="This agent’s access">
+        <div className="wh-access-map-intro">
+          <span className="wh-object-icon"><Network aria-hidden size={20} /></span>
+          <div>
+            <h2>This agent’s access</h2>
+            <p>Your account owns the resources. This workspace controls what {data.agent.displayName} can use through Warthog. Global rules still apply.</p>
+          </div>
+        </div>
+        <div className="wh-access-branches">
+          {branches.map((branch) => (
+            <section className="wh-access-branch" key={branch.title} aria-label={branch.title}>
+              <h3>{branch.title}</h3>
+              {branch.items.map(([key, title, detail]) => {
+                const Icon = icons[key];
+                return (
+                  <a key={key} href={`/agents/${data.agent.id}?section=${key}`} className="wh-access-node">
+                    <Icon aria-hidden size={18} strokeWidth={1.7} />
+                    <span><strong>{title}</strong><small>{detail}</small></span>
+                    <ArrowRight aria-hidden size={14} />
+                  </a>
+                );
+              })}
+            </section>
+          ))}
+        </div>
       </section>
-      <p className="text-sm text-fg-muted">
-        Your account owns the resources. This workspace controls what{" "}
-        {data.agent.displayName} can use through Warthog. Global rules still
-        apply.
-      </p>
-      <section aria-label="Recent request performance" className="border-b border-line pb-4 text-sm">
-        <h3 className="font-medium">Recent request performance</h3>
-        <p>{data.performance?.measured ?? 0} measured outcomes among the latest {data.performance?.examined ?? 0} call records (up to 100). Pending approvals and older entries without result evidence are excluded. A held request can have separate approval and completion records.</p>
-        <p>Failed: {data.performance?.failed ?? 0} · Unknown: {data.performance?.unknown ?? 0} · Refused: {data.performance?.refused ?? 0}</p>
-        <p>95th percentile response time: {data.performance?.p95Ms == null ? "Not available yet" : `${data.performance.p95Ms} ms`}</p>
-      </section>
-      <div className="grid gap-3 sm:grid-cols-2">
-        {cards.map(([key, title, detail]) => (
-          <a
-            key={key}
-            href={`/agents/${data.agent.id}?section=${key}`}
-            className="flex min-w-0 flex-col gap-2 rounded-card border border-line bg-surface p-4 hover:bg-surface-muted focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-focus"
-          >
-            <h3 className="font-medium">{title}</h3>
-            <p className="text-sm text-fg-muted">{detail}</p>
-          </a>
-        ))}
+      <div className="wh-evidence-grid">
+        <WorkspacePanel title="Connection evidence" icon={ShieldCheck} description="What Warthog can verify">
+          <p>Connected means access is authorised. It is not a live heartbeat.</p>
+          {data.clientObservation ? <>
+            <p>Client reported: {data.clientObservation.name ?? "Name unavailable"} · {data.clientObservation.version ?? "Version unavailable"}</p>
+            <p>Protocol: {data.clientObservation.protocol ?? "Unavailable"} · Capabilities: {data.clientObservation.capabilities?.join(", ") || "Not reported"}</p>
+            <p>Last observed: <time dateTime={data.clientObservation.observedAt}>{data.clientObservation.displayObservedAt}</time></p>
+          </> : <p className="text-fg-muted">No client metadata has been recorded yet. Existing history cannot supply it.</p>}
+          <p className="text-fg-muted">Client metadata is self-reported. Warthog verifies this connection’s credential, not the client’s human, model or conversation identity.</p>
+        </WorkspacePanel>
+        <WorkspacePanel title="Recent request performance" icon={Gauge} description="Evidence from this connection">
+          <p>{data.performance?.measured ?? 0} measured outcomes among the latest {data.performance?.examined ?? 0} call records (up to 100).</p>
+          <dl className="wh-evidence-facts">
+            <div><dt>Failed</dt><dd>{data.performance?.failed ?? 0}</dd></div>
+            <div><dt>Unknown</dt><dd>{data.performance?.unknown ?? 0}</dd></div>
+            <div><dt>Refused</dt><dd>{data.performance?.refused ?? 0}</dd></div>
+          </dl>
+          <p>95th percentile response time: <strong className="font-medium">{data.performance?.p95Ms == null ? "Not available yet" : `${data.performance.p95Ms} ms`}</strong></p>
+          <p className="text-fg-muted">Pending approvals and older entries without result evidence are excluded. A held request can have separate approval and completion records.</p>
+        </WorkspacePanel>
       </div>
       <p className="text-sm text-fg-muted">
-        Manage{" "}
-        <a className="text-accent underline" href="/settings/agents">
-          defaults for new agents
-        </a>{" "}
-        or{" "}
-        <a className="text-accent underline" href="/rules">
-          global rules
-        </a>{" "}
-        for the whole account.
+        Manage <a className="text-accent underline" href="/settings/agents">defaults for new agents</a> or <a className="text-accent underline" href="/rules">global rules</a> for the whole account.
       </p>
       <Notice tone="info" announce={false}>
         Warthog governs actions routed through its connection. It cannot control
         tools an agent uses directly elsewhere. An external platform must
         support a compatible connection to use Warthog.
       </Notice>
-    </section>
+    </div>
   );
 }
 
@@ -184,7 +206,7 @@ export function AgentResources({
             {data.memory.map((item) => (
               <li
                 key={item.id}
-                className="rounded-card border border-line bg-surface p-4"
+                className="wh-card rounded-card border border-line bg-surface p-4"
               >
                 <p className="whitespace-pre-wrap [overflow-wrap:anywhere]">
                   {item.content}
@@ -234,7 +256,7 @@ export function AgentResources({
             {data.activity.map((entry) => (
               <li
                 key={entry.seq}
-                className="rounded-card border border-line bg-surface p-4"
+                className="wh-card rounded-card border border-line bg-surface p-4"
               >
                 <a
                   href={`/activity?agent=${data.agent.id}&entry=${entry.seq}#entry-${entry.seq}`}
