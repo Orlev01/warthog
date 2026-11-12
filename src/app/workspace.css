@@ -120,10 +120,6 @@
 .wh-timeline > li::before { content: ""; position: absolute; inset-inline-start: -4px; top: 8px; height: 7px; width: 7px; background: var(--wh-surface); border: 1px solid var(--wh-fg-muted); border-radius: 50%; }
 .wh-timeline p { overflow-wrap: anywhere; }
 .wh-timeline-meta { display: flex; flex-wrap: wrap; gap: 4px 8px; margin-top: 8px; font-size: 12px; line-height: 1.6; color: var(--wh-fg-muted); }
-.wh-setup-list { display: grid; gap: 0; }
-.wh-setup-list > li { display: flex; align-items: center; justify-content: space-between; gap: 12px; min-width: 0; border-bottom: 1px solid var(--wh-line); padding: 4px 0; }
-.wh-setup-list > li:last-child { border-bottom: 0; }
-.wh-setup-list a { overflow-wrap: anywhere; }
 .wh-agent-list { display: flex; flex-direction: column; gap: 16px; }
 .wh-agent-row { padding: 20px; display: grid; min-width: 0; gap: 20px; }
 .wh-agent-row-heading { display: flex; min-width: 0; flex-wrap: wrap; align-items: flex-start; gap: 12px; }
