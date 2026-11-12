@@ -20,6 +20,9 @@
 // caller pages on with a keyset cursor over the feed order (`before`, from `cursorAfter`),
 // which the (user_id, occurred_at DESC, seq DESC) index serves without a sort. The filter
 // dropdowns come from `listActivityFacets` — DISTINCT plaintext columns, no decryption.
+// Each listed entry also says where an undo of it stands (`undoClaim`: done, or waiting for
+// the person's approval), read in the same query from the plaintext `activity_undo_claims`
+// guard and its approval's status — no decryption (`./undo-claims`).
 //
 // This module reads no `process.env` and holds no key (INV-103): the db and the
 // per-person DEK are INJECTED. Decryption reuses the writer's OWN row→entry mapper
@@ -33,6 +36,7 @@ import type { ActivityEntry } from "./recorder";
 import type { Db } from "../db/index";
 import { parseParams } from "../http/validate";
 import { categoryCaseSql, outcomeGroupCaseSql, DISPUTED_SQL } from "./category-sql";
+import { UNDO_CLAIM_JOIN_SQL } from "./undo-claims";
 import {
   ACTIVITY_CATEGORIES,
   ATTENTION_OUTCOMES,
@@ -67,6 +71,13 @@ export interface ActivityFilters {
 // The most entries one read returns (design §4.1: at most 5,000 rows per query), and the
 // default when a caller names no limit.
 export const MAX_LIST_LIMIT = 5000;
+
+// A listed entry: the stored entry, plus `undoClaim` when an undo of it stands — "done" (it
+// ran, is running, or its approval was approved) or "waiting" on the named approval. The key
+// is absent when there is no claim, or only a stale one (its approval was denied, expired or
+// is gone), so the Activity page never offers Undo twice yet offers it again once freed.
+export type UndoClaimView = { readonly state: "done" } | { readonly state: "waiting"; readonly approvalId: string };
+export type ListedActivityEntry = ActivityEntry & { undoClaim?: UndoClaimView };
 
 // A position in the newest-first feed: the (occurred_at, seq) of the last entry a page
 // returned. The next page starts strictly after it.
@@ -114,7 +125,7 @@ export async function listActivity(
   filters: ActivityFilters,
   dek: Uint8Array,
   page: ActivityPage = {},
-): Promise<ActivityEntry[]> {
+): Promise<ListedActivityEntry[]> {
   parseParams(dateBoundsSchema, { from: filters.from, to: filters.to });
 
   const values: unknown[] = [];
@@ -132,8 +143,10 @@ export async function listActivity(
 
   const result = await db.query(
     `SELECT user_id, seq, occurred_at, kind, source, agent_id, connector_id, tool,
-            outcome, merchant, payload_ct, prev_hash, entry_hash
+            outcome, merchant, payload_ct, prev_hash, entry_hash,
+            undo_claim.undo_state, undo_claim.undo_approval_id
        FROM activity_entries
+       ${UNDO_CLAIM_JOIN_SQL}
       WHERE ${conditions.join(" AND ")}
       ORDER BY occurred_at DESC, seq DESC
       LIMIT $${values.length}`,
@@ -141,7 +154,12 @@ export async function listActivity(
   );
 
   // Decrypt ONLY the returned page — the WHERE and LIMIT already narrowed the set.
-  return Promise.all(result.rows.map((row) => toEntry(row, dek)));
+  return Promise.all(result.rows.map(async (row): Promise<ListedActivityEntry> => {
+    const entry = await toEntry(row, dek);
+    if (row.undo_state === "done") return { ...entry, undoClaim: { state: "done" } };
+    if (row.undo_state === "waiting") return { ...entry, undoClaim: { state: "waiting", approvalId: String(row.undo_approval_id) } };
+    return entry;
+  }));
 }
 
 // The WHERE conditions for `filters`, appending each bound value to `values`. The member

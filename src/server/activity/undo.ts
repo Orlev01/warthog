@@ -16,6 +16,23 @@
 // the seq, so an entry the caller does not own simply matches no row and is refused —
 // the other person's entry is never reached.
 //
+// An entry is undone at most once (13 Nov). After the eligibility checks and BEFORE the
+// reversal runs, the service claims the entry in `activity_undo_claims` with one atomic
+// INSERT … ON CONFLICT DO NOTHING (member-scoped by the same user id + seq). Only the
+// caller that wins the claim runs the reversal; a double-click, a concurrent request or a
+// later second Undo finds the claim and is refused with "already_undone", running and
+// recording NOTHING. The claim is kept once the reversal has executed (even if recording
+// it then fails — the change itself was undone) or is held for approval (a second request
+// would raise a duplicate approval). It is released when the reversal is refused, fails
+// or throws, so the person can try again.
+//
+// A held undo records the approval it waits on, on its claim. If that approval is later
+// denied, expires or no longer exists, the claim is stale — it undid nothing — so a later
+// undo clears exactly that claim (matched on its approval id) and claims once more. Two
+// requests racing on a stale claim still run the reversal at most once: only one of them
+// can win the fresh claim. The claim statements live in `./undo-claims`, shared with the
+// Activity list so the two always agree.
+//
 // Every statement is parameterized through the `Db` seam (INV-102): the user id and
 // seq travel as BOUND values, never concatenated into the SQL text, so a value shaped
 // like SQL is read as inert data and cannot alter the query. This module reads no
@@ -23,7 +40,9 @@
 // reversal executor are all INJECTED.
 
 import type { Db } from "../db/index";
+import { systemClock, type Clock } from "../seams/clock";
 import type { ActivityEntry, ActivityRecorder } from "./recorder";
+import { claimUndo, clearStaleUndo, holdUndoForApproval, releaseUndo } from "./undo-claims";
 
 // What the caller asks to undo: the person (the SESSION user id, the member scope),
 // the entry's seq within THAT person's chain, and an optional plain reason.
@@ -33,11 +52,19 @@ export interface UndoInput {
   readonly reason?: string;
 }
 
+// Why an undo that reached the reversal stage did not complete: the reversal's own
+// status, or "already_undone" when the entry was already claimed by an earlier (or
+// concurrent) undo and nothing was run.
+export type UndoRefusalStatus = "refused" | "pending_approval" | "failed" | "already_undone";
+
 // The result of an undo: the NEW reversal entry that was recorded, or a refusal with a
 // plain-words reason (never a silent failure).
 export type UndoResult =
   | { ok: true; entry: ActivityEntry }
-  | { ok: false; reason: string; status?: "refused" | "pending_approval" | "failed" };
+  | { ok: false; reason: string; status?: UndoRefusalStatus };
+
+// The refusal for an entry someone has already claimed.
+const ALREADY_UNDONE = "This action has already been undone, or an undo is in progress.";
 
 // The job handed to the reversal executor. The declared reversal tool plus enough
 // context to route and record it; the executor effects the reversal (in production,
@@ -52,6 +79,8 @@ export interface UndoReversalJob {
 export interface UndoReversalResult {
   readonly status: "executed" | "refused" | "pending_approval" | "failed";
   readonly outcome: string;
+  // The approval a pending_approval reversal waits on, so the undo's claim can follow it.
+  readonly approvalId?: string;
 }
 
 export interface UndoServiceOptions {
@@ -66,19 +95,23 @@ export interface UndoServiceOptions {
   // Effects the reversal (routes the reversal tool through the agent pipeline /
   // connector in production). Injected so tests never touch a network.
   runReversal: (job: UndoReversalJob) => Promise<UndoReversalResult>;
+  // Stamps the claim's `claimed_at` (a clock, never SQL now()). Defaults to the system clock.
+  clock?: Clock;
 }
 
 export interface UndoService {
   // Undo the CALLER'S OWN entry at `entrySeq`. If the entry's tool declares a
   // reversal, run it and record a NEW entry whose `tool` is the reversal tool; return
   // { ok: true, entry }. If the entry does not exist for this caller, or its tool
-  // declares no reversal, refuse with a plain reason and run/record NOTHING. The
+  // declares no reversal, or it was already claimed by an earlier or concurrent undo
+  // (status "already_undone"), refuse with a plain reason and run/record NOTHING. The
   // original entry is never altered.
   undo(input: UndoInput): Promise<UndoResult>;
 }
 
 export function createUndoService(options: UndoServiceOptions): UndoService {
   const { db, recorder, reversalFor, runReversal } = options;
+  const clock = options.clock ?? systemClock;
 
   return {
     async undo(input: UndoInput): Promise<UndoResult> {
@@ -104,9 +137,36 @@ export function createUndoService(options: UndoServiceOptions): UndoService {
         return { ok: false, reason: "This action can't be undone — it has no reversal." };
       }
 
+      // Claim the entry before anything runs. The insert is atomic, so of two concurrent
+      // undos exactly one wins; the other (and any later undo) is refused here, with
+      // nothing run and nothing recorded — unless the claim in the way is stale (its
+      // approval was denied, expired or is gone), which is cleared before one more try.
+      let claimed = await claimUndo(db, userId, entrySeq, clock.now());
+      if (!claimed && (await clearStaleUndo(db, userId, entrySeq))) {
+        claimed = await claimUndo(db, userId, entrySeq, clock.now());
+      }
+      if (!claimed) {
+        return { ok: false, reason: ALREADY_UNDONE, status: "already_undone" };
+      }
+      const release = (): Promise<void> => releaseUndo(db, userId, entrySeq);
+
       // Run the declared reversal, then WRITE a NEW entry for it. The original entry
-      // is never touched; the record is append-only (design §9).
-      const reversal = await runReversal({ userId, reversalTool, originalSeq: entrySeq, reason });
+      // is never touched; the record is append-only (design §9). A reversal that throws
+      // undid nothing, so the claim is released before the error is surfaced.
+      let reversal: UndoReversalResult;
+      try {
+        reversal = await runReversal({ userId, reversalTool, originalSeq: entrySeq, reason });
+      } catch (error) {
+        await release().catch(() => undefined); // the reversal's own error is the one reported
+        throw error;
+      }
+      // A refused or failed reversal did not undo the action: release the claim so the
+      // person can try again. An executed or approval-held one keeps it, and a held one
+      // records the approval it waits on, so the claim frees itself if that is declined.
+      if (reversal.status === "refused" || reversal.status === "failed") await release();
+      if (reversal.status === "pending_approval" && reversal.approvalId !== undefined) {
+        await holdUndoForApproval(db, userId, entrySeq, reversal.approvalId);
+      }
 
       // The stored outcome is a stable code (filterable and groupable, like every other
       // entry's); the plain-words sentence stays in the encrypted payload.

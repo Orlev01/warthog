@@ -564,7 +564,10 @@ function reversalOutcome(result: AgentCallResult): UndoReversalResult {
     case "refused":
       return { status: "refused", outcome: result.reason };
     case "pending_approval":
-      return { status: "pending_approval", outcome: "This needs your approval before it can be undone. Open your Inbox to continue." };
+      // The approval it waits on travels with it, so the undo's claim can follow that
+      // request: declined or expired frees the entry again; approved reads as undone.
+      return { status: "pending_approval", outcome: "This needs your approval before it can be undone. Open your Inbox to continue.",
+        approvalId: result.approval_id };
   }
 }
 
