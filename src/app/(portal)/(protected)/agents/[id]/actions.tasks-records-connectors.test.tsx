@@ -118,8 +118,8 @@ test("the loader reflects the tasks and records grants and offers each of the pe
 
     const markup = renderToStaticMarkup(<PermissionsView {...props!} />);
     const text = strip(markup);
-    assert.ok(/Let it use Google Calendar/.test(text), text);
-    assert.ok(/Let it use Notion/.test(text));
+    assert.ok(/Let Claude use Google Calendar/.test(text), text);
+    assert.ok(/Let Claude use Notion/.test(text));
     assert.ok(/Your tasks/.test(text) && /Your life-admin records/.test(text));
     assert.match(markup, /<input[^>]*name="connector:google-calendar"[^>]*checked=""/);
     assert.match(markup, /<input[^>]*name="tasks"[^>]*checked=""/);

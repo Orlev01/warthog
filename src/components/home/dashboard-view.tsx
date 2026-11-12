@@ -1,4 +1,5 @@
 import * as React from "react";
+import { AgentMark, ServiceMark } from "@/components/ui/brand-mark";
 import {
   Activity,
   AlertTriangle,
@@ -54,6 +55,7 @@ import {
 // `budget` are plain amounts in the major unit.
 export type DashboardAgent = {
   id: string;
+  platform?: string; // identifies the agent's brand mark
   name: string;
   href?: string; // the agent's workspace
   activityHref?: string; // its activity
@@ -80,6 +82,7 @@ export type DashboardActivity = {
   agent?: string;
   reported?: boolean; // an agent's own report, never shown as fact
   service?: string;
+  serviceId?: string; // the service's catalogue id, for its mark
   at: string;
   when?: string; // "Today, 3:04 pm"
   dateTime?: string;
@@ -113,10 +116,10 @@ const HOME_ACTIVITY_ROWS = 8;
 const HOME_REMINDER_ROWS = 5;
 
 const OUTCOME_ICONS: Partial<Record<OutcomeGroup, { Icon: LucideIcon; tone: string }>> = {
-  done: { Icon: CheckCircle, tone: "text-success" },
-  waiting: { Icon: Clock, tone: "text-fg-muted" },
-  blocked: { Icon: Ban, tone: "text-danger" },
-  failed: { Icon: AlertTriangle, tone: "text-danger" },
+  done: { Icon: CheckCircle, tone: "wh-tone-success" },
+  waiting: { Icon: Clock, tone: "wh-tone-warning" },
+  blocked: { Icon: Ban, tone: "wh-tone-danger" },
+  failed: { Icon: AlertTriangle, tone: "wh-tone-danger" },
 };
 
 
@@ -192,7 +195,8 @@ export function DashboardView({
                   const headline = entry.title ?? entry.summary;
                   return (
                     <li key={entry.id}>
-                      <p className="text-sm font-medium text-fg">
+                      <p className="flex items-center gap-2 text-sm font-medium text-fg">
+                        {entry.serviceId ? <ServiceMark id={entry.serviceId} name={entry.service ?? entry.serviceId} size="xs" /> : null}
                         {entry.href ? (
                           <a href={entry.href} className="underline-offset-4 hover:underline">
                             {headline}<span className="sr-only">, {entry.at}</span>
@@ -204,8 +208,8 @@ export function DashboardView({
                       ) : null}
                       <div className="wh-timeline-meta">
                         {entry.outcome ? (
-                          <span className="inline-flex items-center gap-1 rounded-full bg-surface-muted px-2 py-0.5 font-medium text-fg">
-                            {icon ? <icon.Icon aria-hidden={true} className={`h-3.5 w-3.5 shrink-0 ${icon.tone}`} /> : null}
+                          <span className={`wh-tone-badge ${icon ? icon.tone : "wh-tone-neutral"}`}>
+                            {icon ? <icon.Icon aria-hidden={true} className="h-3.5 w-3.5 shrink-0" /> : null}
                             {entry.outcome}
                           </span>
                         ) : null}
@@ -229,7 +233,7 @@ export function DashboardView({
                 {agents.map((agent) => (
                   <li key={agent.id} className="flex min-w-0 flex-col gap-2 py-4 first:pt-0 last:pb-0">
                     <div className="flex min-w-0 items-start gap-3">
-                      <span className="wh-object-icon"><Bot aria-hidden size={18} /></span>
+                      <AgentMark platform={agent.platform} name={agent.name} size="md" />
                       <div className="flex min-w-0 flex-1 flex-col items-start gap-1">
                         <a href={agent.href ?? `/agents/${encodeURIComponent(agent.id)}`} className="inline-flex min-h-11 items-center font-medium text-fg underline decoration-line-strong underline-offset-4 [overflow-wrap:anywhere]">{agent.name}</a>
                         <Status status={agent.status} />

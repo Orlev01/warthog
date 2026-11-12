@@ -235,6 +235,7 @@ export function agentGroups(
     return {
       id: `agent-${agent}`,
       label: f ? f.name : "Account and Warthog",
+      mark: f ? { kind: "agent", platform: f.platform } : undefined,
       detail: details.filter(Boolean).join(" · ") || undefined,
       disconnected: f?.disconnected,
       total: summary.total,
@@ -268,12 +269,13 @@ export function typeGroups(
       .map((group) => `${agentName(group.key)} ${group.byCategory[type]}`)
       .join(" · ");
     if (!summary) {
-      return { id: `type-${type}`, label: CATEGORY_LABELS[type], detail: CATEGORY_DESCRIPTIONS[type], total: 0, split: [], blocked: 0, failed: 0, disputed: 0 };
+      return { id: `type-${type}`, label: CATEGORY_LABELS[type], mark: { kind: "type", type }, detail: CATEGORY_DESCRIPTIONS[type], total: 0, split: [], blocked: 0, failed: 0, disputed: 0 };
     }
     const attention = attentionOf(summary);
     return {
       id: `type-${type}`,
       label: CATEGORY_LABELS[type],
+      mark: { kind: "type", type },
       detail: CATEGORY_DESCRIPTIONS[type],
       total: summary.total,
       lastAt: when(summary.lastAt),
@@ -300,6 +302,7 @@ export function serviceGroups(
     return {
       id: `service-${service}`,
       label: summary.key === null ? "No connected service" : serviceName(summary.key),
+      mark: summary.key === null ? undefined : { kind: "service", id: summary.key },
       detail: summary.key === null ? "Warthog's own tools, approvals and account changes" : undefined,
       total: summary.total,
       lastAt: when(summary.lastAt),
