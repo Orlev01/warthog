@@ -21,10 +21,39 @@ def validate_inputs(values, backend):
             "Invalid backend coordinates")
 
 
-def validate_plan(manifest, plan, *, commit, inputs_hash, expected_hash, now):
+def changes_digest(data):
+    """Bind the entire reviewed managed delta without exposing plan values.
+
+    Data reads and unchanged resources can contain unrelated refreshed state or
+    ephemeral inputs. They do not authorize writes. Include every field of each
+    changed managed resource, including before/after, unknowns and sensitivity.
+    """
+    require(data.get("complete", True) is True and not data.get("errored")
+            and not data.get("deferred_changes"), "Foundation plan is incomplete")
+    changes = []
+    addresses = set()
+    for item in data.get("resource_changes", []):
+        address, mode, change = item["address"], item["mode"], item["change"]
+        require(address not in addresses, "Plan contains duplicate resource addresses")
+        addresses.add(address)
+        require(mode in ("managed", "data"), "Unknown resource mode in plan")
+        require(not item.get("previous_address") and not change.get("importing"),
+                "Resource moves/imports require a separate migration review")
+        actions = change["actions"]
+        allowed = (["no-op"], ["read"]) if mode == "data" else (["no-op"], ["create"], ["update"])
+        require(actions in allowed,
+                "Deletion/replacement or unknown action requires a separate migration review")
+        if mode == "managed" and actions != ["no-op"]:
+            changes.append(item)
+    return digest(canonical({"version": 1, "resource_changes": sorted(changes, key=lambda item: item["address"])}))
+
+
+def validate_plan(manifest, plan, *, commit, inputs_hash, expected_hash, reviewed_changes_hash, now):
     require(manifest.get("commit") == commit, "Plan belongs to a different source commit")
     require(manifest.get("inputs_sha256") == inputs_hash, "Plan inputs/backend changed; make a new plan")
     require(manifest.get("sha256") == expected_hash == digest(plan), "Plan SHA-256 does not match the approved digest")
+    require(manifest.get("changes_sha256") == reviewed_changes_hash,
+            "Plan changes do not match the reviewed resource delta")
     require(manifest.get("subscription") == SUBSCRIPTION, "Plan scope differs")
     require(0 <= now - manifest.get("created_at", 0) <= 86400, "Plan expired; make a new plan")
 
@@ -48,6 +77,8 @@ def run():
     gate()
     account()
     operation = setting("OPERATION", r"plan|apply")
+    reviewed_changes_hash = (setting("REVIEWED_CHANGES_SHA256", r"[a-f0-9]{64}")
+                             if operation == "apply" else None)
     values = json.loads(setting("FOUNDATION_TFVARS_JSON"))
     backend = json.loads(setting("FOUNDATION_BACKEND_JSON"))
     validate_inputs(values, backend)
@@ -80,12 +111,12 @@ def run():
             command([*tf, "plan", "-input=false", "-lock-timeout=5m", "-detailed-exitcode",
                      f"-var-file={variables}", f"-out={plan}"], accepted=(0, 2))
             data = json.loads(command([*tf, "show", "-json", str(plan)]))
-            changes = [item["change"]["actions"] for item in data.get("resource_changes", [])]
-            require(not any("delete" in actions for actions in changes),
-                    "Deletion/replacement is outside this pipeline; review a separate migration")
+            changes_hash = changes_digest(data)
+            change_count = sum(item["mode"] == "managed" and item["change"]["actions"] != ["no-op"]
+                               for item in data.get("resource_changes", []))
             plan_hash = digest(plan.read_bytes())
             manifest = {"commit": setting("GITHUB_SHA"), "sha256": plan_hash,
-                        "inputs_sha256": inputs_hash, "subscription": SUBSCRIPTION,
+                        "inputs_sha256": inputs_hash, "changes_sha256": changes_hash, "subscription": SUBSCRIPTION,
                         "created_at": int(time.time()), "approval_reference": setting("APPROVAL_REFERENCE")}
             manifest_path.write_bytes(canonical(manifest))
             review = scratch / "review.txt"
@@ -93,8 +124,8 @@ def run():
             for name, path in [("plan.tfplan", plan), ("review.txt", review), ("manifest.json", manifest_path)]:
                 blob("upload", plan_id, name, path)
             summary(f"Private plan `{plan_id}`: SHA-256 `{plan_hash}`; "
-                    f"{sum(actions != ['no-op'] for actions in changes)} resource changes. "
-                    "Review the private review.txt and funding approval before a separate apply dispatch. Expires in 24 hours.")
+                    f"{change_count} managed resource changes; changes SHA-256 `{changes_hash}`. "
+                    "Independently review the private resource delta and funding approval before a separate apply dispatch. Expires in 24 hours.")
         else:
             plan_id = setting("PLAN_ID", r"[0-9]+-[0-9]+")
             expected_hash = setting("PLAN_SHA256", r"[a-f0-9]{64}")
@@ -102,7 +133,10 @@ def run():
             blob("download", plan_id, "manifest.json", manifest_path)
             validate_plan(json.loads(manifest_path.read_text()), plan.read_bytes(),
                           commit=setting("GITHUB_SHA"), inputs_hash=inputs_hash,
-                          expected_hash=expected_hash, now=time.time())
+                          expected_hash=expected_hash, reviewed_changes_hash=reviewed_changes_hash, now=time.time())
+            data = json.loads(command([*tf, "show", "-json", str(plan)]))
+            require(changes_digest(data) == reviewed_changes_hash,
+                    "Saved plan resource changes differ from the reviewed resource delta")
             command([*tf, "apply", "-input=false", "-lock-timeout=5m", str(plan)], timeout=2700)
             output = scratch / "foundation.json"
             output.write_text(command([*tf, "output", "-json", "foundation"]))

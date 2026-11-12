@@ -88,6 +88,89 @@ class ImageJournalTests(unittest.TestCase):
 
 
 class PlanTests(unittest.TestCase):
+    def planned_change(self, address="test_resource.fixture", mode="managed", actions=None):
+        return {"address": address, "mode": mode, "type": "test_resource",
+                "name": "fixture", "provider_name": "test/provider", "change": {
+                    "actions": actions or ["create"], "before": None,
+                    "after": {"permission": "add-only", "secret": "PRIVATE_FIXTURE"},
+                    "after_unknown": {"id": True}, "before_sensitive": False,
+                    "after_sensitive": {"secret": True}}}
+
+    def test_managed_change_digest_is_order_independent_and_excludes_reads_and_noops(self):
+        first, second = self.planned_change(), self.planned_change("test_resource.other")
+        data = {"resource_changes": [first, second]}
+        expected = foundation.changes_digest(data)
+        self.assertEqual(expected, foundation.changes_digest({"resource_changes": [second, first,
+            self.planned_change("test_resource.noop", actions=["no-op"]),
+            self.planned_change("data.test_resource.read", mode="data", actions=["read"])]}))
+        self.assertRegex(expected, r"^[a-f0-9]{64}$")
+
+    def test_digest_binds_all_change_values_unknowns_permissions_and_actions(self):
+        original = self.planned_change()
+        expected = foundation.changes_digest({"resource_changes": [original]})
+        for field, value in [("after", {"permission": "read-and-write"}),
+                             ("before", {"existing": True}), ("after_unknown", {"id": False}),
+                             ("after_sensitive", {}), ("actions", ["update"])]:
+            changed = copy.deepcopy(original)
+            changed["change"][field] = value
+            with self.subTest(field=field):
+                self.assertNotEqual(expected, foundation.changes_digest({"resource_changes": [changed]}))
+        changed = dict(original, address="test_resource.unreviewed")
+        self.assertNotEqual(expected, foundation.changes_digest({"resource_changes": [changed]}))
+
+    def test_digest_refuses_partial_plans_imports_moves_deletes_and_duplicate_addresses(self):
+        original = self.planned_change()
+        cases = [dict(original, previous_address="test_resource.old"),
+                 dict(original, change=dict(original["change"], importing={"id": "existing"})),
+                 dict(original, change=dict(original["change"], actions=["delete", "create"]))]
+        for change in cases:
+            with self.subTest(change=change), self.assertRaises(RuntimeError):
+                foundation.changes_digest({"resource_changes": [change]})
+        for data in [{"complete": False}, {"errored": True}, {"deferred_changes": [original]},
+                     {"resource_changes": [original, original]}]:
+            with self.subTest(data=data), self.assertRaises(RuntimeError):
+                foundation.changes_digest(data)
+
+    def test_apply_rechecks_saved_delta_before_any_terraform_apply(self):
+        reviewed = {"resource_changes": [self.planned_change()]}
+        reviewed_hash = foundation.changes_digest(reviewed)
+        values = {"subscription_id": common.SUBSCRIPTION, "tenant_id": common.TENANT, "provisioning_approved": True}
+        backend = dict(resource_group_name="reviewed", storage_account_name="reviewed", container_name="state", key="prod.tfstate")
+        binary = b"saved fixture plan"
+        manifest = {"commit": "a" * 40, "sha256": common.digest(binary), "changes_sha256": reviewed_hash,
+                    "inputs_sha256": common.digest(common.canonical({"values": values, "backend": backend,
+                        "lock": common.digest((common.ROOT / "infra/.terraform.lock.hcl").read_bytes())})),
+                    "subscription": common.SUBSCRIPTION, "created_at": 100}
+        env = {"OPERATION": "apply", "REVIEWED_CHANGES_SHA256": reviewed_hash,
+               "PLAN_ID": "123-1", "PLAN_SHA256": common.digest(binary), "GITHUB_SHA": "a" * 40,
+               "FOUNDATION_TFVARS_JSON": json.dumps(values), "FOUNDATION_BACKEND_JSON": json.dumps(backend),
+               "TF_VAR_postgres_admin_password": "PRIVATE_FIXTURE", "ARM_CLIENT_ID": "apply-fixture"}
+
+        def download(operation, plan_id, filename, path):
+            if operation == "download":
+                path.write_bytes(binary if filename == "plan.tfplan" else common.canonical(manifest))
+
+        for changed in (False, True):
+            actual = copy.deepcopy(reviewed)
+            if changed:
+                actual["resource_changes"][0]["change"]["after"]["permission"] = "read-and-write"
+
+            def execute(args, **kwargs):
+                return json.dumps(actual) if "show" in args else "{}"
+
+            with self.subTest(changed=changed), patch.dict(os.environ, env, clear=True), \
+                 patch.object(foundation, "gate"), patch.object(foundation, "account"), \
+                 patch.object(foundation, "blob", side_effect=download), \
+                 patch.object(foundation.time, "time", return_value=200), \
+                 patch.object(foundation, "summary"), patch.object(foundation, "command", side_effect=execute) as command:
+                if changed:
+                    with self.assertRaisesRegex(RuntimeError, "reviewed resource delta"):
+                        foundation.run()
+                else:
+                    foundation.run()
+                applies = [call for call in command.call_args_list if "apply" in call.args[0]]
+                self.assertEqual(len(applies), 0 if changed else 1)
+
     def test_saved_backend_does_not_bind_apply_to_plan_identity(self):
         coordinates = dict(resource_group_name="reviewed", storage_account_name="reviewed",
                            container_name="state", key="prod.tfstate")
@@ -103,17 +186,20 @@ class PlanTests(unittest.TestCase):
     def test_apply_rejects_tamper_wrong_commit_inputs_expiry_and_scope(self):
         data = b"saved plan fixture"
         manifest = {"commit": "a" * 40, "sha256": common.digest(data), "inputs_sha256": "inputs",
-                    "subscription": common.SUBSCRIPTION, "created_at": 100}
-        arguments = dict(commit="a" * 40, inputs_hash="inputs", expected_hash=common.digest(data), now=200)
+                    "subscription": common.SUBSCRIPTION, "created_at": 100, "changes_sha256": "c" * 64}
+        arguments = dict(commit="a" * 40, inputs_hash="inputs", expected_hash=common.digest(data),
+                         reviewed_changes_hash="c" * 64, now=200)
         foundation.validate_plan(manifest, data, **arguments)
         for key, value in [("commit", "b" * 40), ("inputs_hash", "changed"), ("now", 90000),
-                           ("now", 99), ("expected_hash", "0" * 64)]:
+                           ("now", 99), ("expected_hash", "0" * 64), ("reviewed_changes_hash", "d" * 64)]:
             with self.subTest(key=key), self.assertRaises(RuntimeError):
                 foundation.validate_plan(manifest, data, **dict(arguments, **{key: value}))
         with self.assertRaises(RuntimeError):
             foundation.validate_plan(manifest, data + b"tampered", **arguments)
         with self.assertRaises(RuntimeError):
             foundation.validate_plan(dict(manifest, subscription="other"), data, **arguments)
+        with self.assertRaises(RuntimeError):
+            foundation.validate_plan({k: v for k, v in manifest.items() if k != "changes_sha256"}, data, **arguments)
 
     def test_foundation_refuses_embedded_password_and_unapproved_inputs(self):
         values = {"subscription_id": common.SUBSCRIPTION, "tenant_id": common.TENANT, "provisioning_approved": True}

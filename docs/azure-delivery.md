@@ -206,12 +206,30 @@ the workflow's temporary files and Docker config are additionally cleaned normal
    switches permit their separately reviewed manual jobs. Enable the application
    `AZURE_DELIVERY_ENABLED` switch only after its inputs and release approvals are ready.
 3. Dispatch foundation `plan` with the approval reference and approve the plan
-   environment. It records only a plan ID, SHA-256 and change count in public logs.
+   environment. It records only a plan ID, saved-plan SHA-256, managed-change
+   SHA-256 and change count in public logs.
    Privately review `foundation/<run-id>-<attempt>/review.txt`, `manifest.json`, and
    `plan.tfplan` in the approved container. No plan/state is uploaded to GitHub
-   artifacts. Deletions/replacements are rejected and need a separate migration.
+   artifacts. Deletions/replacements, resource moves/imports and incomplete plans
+   are rejected and need a separate migration.
+   Calculate `foundation.changes_digest` from the privately reviewed Terraform
+   plan JSON. It hashes the entire changed managed-resource entries, including
+   before/after values and unknowns; unchanged resources and data reads are excluded.
+   A reviewer without plan-container read access can instead compare a local
+   review plan's digest with the hosted digest, provided the source, providers and
+   approved inputs are the same and any placeholder secret has no managed delta.
+   A mismatch requires inspecting a fresh private review; never approve by copying
+   an unreviewed digest from the log. No additional access grant is needed for an
+   exact match. For example, with the private JSON on stdin:
+
+   ```sh
+   PYTHONPATH=scripts/ci python3 -c 'import json,sys; from foundation import changes_digest; print(changes_digest(json.load(sys.stdin)))' < /private/review-plan.json
+   ```
+
 4. Dispatch foundation `apply` from the **same main commit**, supplying that plan ID
-   and SHA-256, then approve the separate apply environment. Inputs/backend/lockfile
+   and SHA-256 plus the independently reviewed `reviewed_changes_sha256`, then
+   approve the separate apply environment. Both the manifest and downloaded plan
+   must match the reviewed delta. Inputs/backend/lockfile
    must be unchanged and the plan no older than 24 hours. Terraform applies the
    saved plan with state locking; it does not silently re-plan. Review resulting
    `foundation.json` privately. A later failed run is not permission to force-unlock
