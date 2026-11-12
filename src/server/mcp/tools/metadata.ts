@@ -59,3 +59,10 @@ export function connectorToolMetadata(title: string, readOnly: boolean) {
     } satisfies ToolAnnotations,
   };
 }
+
+// The core tools a person's audit log may count as reads: exactly those this table marks
+// read-only. The activity classification takes its read-only set from here so the audit log
+// and the published MCP hints can never disagree.
+export const CORE_READ_ONLY_TOOLS: readonly string[] = Object.entries(CORE)
+  .filter(([, annotations]) => annotations.readOnlyHint)
+  .map(([name]) => name);
