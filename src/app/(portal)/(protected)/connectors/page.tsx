@@ -26,6 +26,7 @@ import { createGuardedProviderFetch } from "@/server/connectors/provider-mcp";
 import type { Db } from "@/server/db/index";
 import type { OAuthClientConfig } from "@/server/connectors/oauth-client";
 import { createConnectorsActions, type ConnectorsActions } from "./actions";
+import { firstParam } from "@/lib/href";
 import { ConnectorsView } from "@/components/connectors/connectors-view";
 
 // E09-S17 — Connectors page (the thin protected-page loader over the tested
@@ -222,7 +223,9 @@ export default async function ConnectorsPage({
   // Read the request first: touching per-request data marks the page dynamic, so
   // `next build` never prerenders it (and never opens the database at build time).
   const params = await searchParams;
-  const query = typeof params.q === "string" ? params.q : undefined;
+  const query = firstParam(params.q);
+  // Untrusted: the loader keeps it only when it is one of the catalogue's own categories.
+  const category = firstParam(params.category);
   const notice = connectorNotice(params.notice);
   const config = loadConfig();
   const db = await getServerDb();
@@ -231,15 +234,15 @@ export default async function ConnectorsPage({
     redirect("/signin");
   }
 
-  const data = await buildActions(db, config).load(
-    session,
-    query !== undefined ? { query } : undefined,
-  );
+  const data = await buildActions(db, config).load(session, {
+    ...(query !== undefined ? { query } : {}),
+    ...(category !== undefined ? { category } : {}),
+  });
   return (
     <>
       {notice ? <div className="mx-auto w-full max-w-3xl px-4 pt-8 sm:px-6"><Notice tone={notice.tone}>{notice.text}</Notice></div> : null}
       <ConnectorsView
-        initialView={typeof params.view === "string" ? params.view : undefined}
+        initialView={firstParam(params.view)}
         {...data}
         connectAction={connectAction}
         disconnectAction={disconnectAction}

@@ -153,9 +153,13 @@ export async function createConnection(
 
 // Every connection OWNED BY `userId` (member-scoped: WHERE user_id bound), REGARDLESS
 // OF STATUS — management must see them in any state — never another person's and never
-// with credentials. Returns an empty array when the person has none.
+// with credentials. Returns an empty array when the person has none. Oldest first, ties
+// by id, so every page, chooser and export lists them in the same order on every read.
 export async function listConnectionsForUser(db: Db, userId: string): Promise<Connection[]> {
-  const result = await db.query(`SELECT ${COLUMNS} FROM connections WHERE user_id = $1`, [userId]);
+  const result = await db.query(
+    `SELECT ${COLUMNS} FROM connections WHERE user_id = $1 ORDER BY connected_at, id`,
+    [userId],
+  );
   return result.rows.map(toConnection);
 }
 

@@ -11,6 +11,7 @@ import { systemClock } from "@/server/seams/clock";
 import { HttpError } from "@/server/http/validate";
 import type { Db } from "@/server/db/index";
 import { createMemoryActions, type MemoryActions } from "./actions";
+import { firstParam } from "@/lib/href";
 import { MemoryView } from "@/components/memory/memory-view";
 import { PageContainer } from "@/components/shell/page-container";
 import { Notice as InlineNotice } from "@/components/ui/notice";
@@ -22,7 +23,8 @@ import { Notice as InlineNotice } from "@/components/ui/notice";
 // name, each saved time pre-formatted — and mounts the already-render-tested
 // <MemoryView/> with each control BOUND to a `use server` wrapper over the SAME seam:
 // Add (addMemory), Edit (editMemory), Change scope (rescopeMemory), Delete (deleteMemory).
-// Search is a plain GET the loader reads (`?q=`). Every wrapper re-derives the verified
+// Search is a plain GET the loader reads (`?q=`), as are the scope and saved-by filters
+// (`?scope=`, `?source=`), which the loader validates before they reach the store. Every wrapper re-derives the verified
 // session (never trusting a client value for identity), takes its input from the
 // submitted form, persists member-scoped through the seam, and redirects back with a
 // `?notice=` the page renders in plain words — a refusal (another person's id) or a 4xx
@@ -184,17 +186,19 @@ export default async function MemoryPage({
   const params = await searchParams;
   const notice = toNotice(params.notice);
   const query = queryOf(params.q);
+  const cursor = firstParam(params.cursor);
+  const scope = firstParam(params.scope);
+  const source = firstParam(params.source);
   const db = await getServerDb();
   const session = await resolveSession(db);
   if (!session) {
     redirect("/signin");
   }
 
-  const data = await buildActions(db).load(
-    session,
-    query,
-    typeof params.cursor === "string" ? params.cursor : undefined,
-  );
+  const data = await buildActions(db).load(session, query, cursor, {
+    ...(scope !== undefined ? { scope } : {}),
+    ...(source !== undefined ? { source } : {}),
+  });
 
   return (
     <PageContainer className="flex flex-col gap-6">
@@ -202,8 +206,9 @@ export default async function MemoryPage({
       <MemoryView
         memories={data.memories}
         query={data.query}
+        filters={data.filters}
         nextCursor={data.nextCursor}
-        hasPreviousPage={typeof params.cursor === "string"}
+        hasPreviousPage={cursor !== undefined}
         addAction={addMemoryAction}
         editAction={editMemoryAction}
         rescopeAction={rescopeMemoryAction}
