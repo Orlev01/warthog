@@ -55,7 +55,13 @@ import { test } from "node:test";
 import assert from "node:assert/strict";
 import { renderToStaticMarkup } from "react-dom/server";
 
-import { InboxView, createReleaseFlow, focusApprovalElement } from "./inbox-view";
+import {
+  InboxView,
+  createReleaseFlow,
+  focusApprovalElement,
+  type HistorySummary,
+  type InboxViewProps as LiveInboxViewProps,
+} from "./inbox-view";
 import { ReleaseRejectedError } from "@/client/vault/release";
 
 // ─── the prop shapes this task introduces (described here as the contract) ───────────
@@ -414,11 +420,13 @@ const SECURITY_CODE_RE = /security code|security number|\bcvc\b|\bcvv\b|card cod
 // ═══ AC1 — the pending list, newest-first, each a one-sentence request with details, ══
 //          reason, triggering rule and time left, offering Approve / Deny / Ask.
 
-test("renders pending approvals in the order given — newest at the top", () => {
+test("renders pending approvals in the order given — newest at the top — when one agent is asking", () => {
   // The loader hands pending newest-first; the view must preserve that order (never
-  // reverse it). Markers: ferry (newest) → mailing → passport (oldest). History is
-  // emptied so only the pending markers can appear.
-  const text = visibleText(render(base({ history: [] })));
+  // reverse it). Markers: ferry (newest) → mailing → passport (oldest). One agent asks
+  // for all three, so they stay one list. History is emptied so only the pending markers
+  // can appear.
+  const sameAgent = [PENDING_CARD, { ...PENDING_HELD, agent: "Claude" }, PENDING_HIGH];
+  const text = visibleText(render(base({ pending: sameAgent, history: [] })));
   const iFerry = text.indexOf("ferry");
   const iMailing = text.indexOf("mailing");
   const iPassport = text.indexOf("passport");
@@ -1225,4 +1233,235 @@ test("W6 — a high-tier release still posts the bare value, with no card detail
   const ctx = setupFlow();
   await ctx.flow.release({ approvalId: APPROVAL_ID, unlockRequest: UNLOCK_REQUEST, ciphertext: HIGH_CIPHERTEXT });
   assert.equal(ctx.postCalls[0]!.value, HIGH_PLAINTEXT, "the high-tier value is posted as is");
+});
+
+// ═══ Inbox organisation — tabs, grouping and history filters ════════════════════════════
+//
+// The inbox used to be one long thread: every pending request, then every past decision.
+// It is now two tabs — "Waiting on you (n)" and "History (n)" — whose panels both stay
+// mounted (an unsent question or a half-entered release survives a tab switch). Pending
+// requests from two or more agents are grouped under one heading per agent; the history
+// can be narrowed by outcome and agent with plain links that keep the other filter.
+
+const AGENT_CLAUDE = "a1a1a1a1-a1a1-4a1a-8a1a-a1a1a1a1a1a1";
+const AGENT_CHATGPT = "b2b2b2b2-b2b2-4b2b-8b2b-b2b2b2b2b2b2";
+
+function renderLive(props: LiveInboxViewProps): string {
+  return renderToStaticMarkup(<InboxView {...props} />);
+}
+
+function liveBase(overrides: Partial<LiveInboxViewProps> = {}): LiveInboxViewProps {
+  return { ...(base() as LiveInboxViewProps), ...overrides };
+}
+
+// The tab buttons, by their visible label.
+function tabs(markup: string): { label: string; selected: boolean; controls: string | null }[] {
+  return findAll(markup, "button")
+    .filter((b) => attr(b.attrs, "role") === "tab")
+    .map((b) => ({
+      label: visibleText(b.inner),
+      selected: attr(b.attrs, "aria-selected") === "true",
+      controls: attr(b.attrs, "aria-controls"),
+    }));
+}
+
+// Whether the tab panel with this id is hidden, and where it opens in the markup.
+function panel(markup: string, id: string | null): { hidden: boolean; at: number } {
+  for (const m of markup.matchAll(/<div\b([^>]*)>/gi)) {
+    if (id !== null && attr(m[1]!, "id") === id) return { hidden: /\bhidden=""/.test(m[1]!), at: m.index! };
+  }
+  throw new Error(`no panel ${id}`);
+}
+
+// The links inside the <nav> named `label`.
+function navLinks(markup: string, label: string): { text: string; href: string; current: boolean }[] {
+  const nav = findAll(markup, "nav").find((n) => attr(n.attrs, "aria-label") === label);
+  assert.ok(nav, `a "${label}" navigation exists`);
+  return findAll(nav.inner, "a").map((a) => ({
+    text: visibleText(a.inner),
+    href: decode(attr(a.attrs, "href") ?? ""),
+    current: attr(a.attrs, "aria-current") === "page",
+  }));
+}
+
+const SUMMARY: HistorySummary = {
+  total: 4,
+  matching: 4,
+  outcomes: [
+    { status: "approved", count: 1 },
+    { status: "denied", count: 1 },
+    { status: "expired", count: 1 },
+    { status: "more_detail", count: 1 },
+  ],
+  allOutcomesCount: 4,
+  agents: [
+    { id: AGENT_CHATGPT, name: "ChatGPT", count: 1 },
+    { id: AGENT_CLAUDE, name: "Claude", count: 3 },
+  ],
+  allAgentsCount: 4,
+};
+
+test("Waiting on you and History are tabs that name their counts; Waiting on you opens first", () => {
+  const markup = renderLive(liveBase({ historySummary: { ...SUMMARY, total: 12 } }));
+  const found = tabs(markup);
+  assert.deepEqual(
+    found.map((tab) => [tab.label, tab.selected]),
+    [
+      ["Waiting on you (3)", true],
+      ["History (12)", false],
+    ],
+    "two tabs: the pending count, then every decision the person has",
+  );
+  const pendingPanel = panel(markup, found[0]!.controls);
+  const historyPanel = panel(markup, found[1]!.controls);
+  assert.equal(pendingPanel.hidden, false, "the pending panel shows");
+  assert.equal(historyPanel.hidden, true, "the history panel waits behind its tab");
+  const iFerry = markup.indexOf("ferry fare");
+  const iHistory = markup.indexOf(HIST_DENIED.sentence);
+  assert.ok(pendingPanel.at < iFerry && iFerry < historyPanel.at, "pending requests sit in the pending panel");
+  assert.ok(historyPanel.at < iHistory, "decisions stay mounted in the history panel, so no draft is lost");
+});
+
+test("an explicit view opens that tab", () => {
+  const found = tabs(renderLive(liveBase({ initialView: "history" })));
+  assert.deepEqual(found.map((tab) => tab.selected), [false, true]);
+});
+
+test("a notification for a request that is already decided opens History and says where it is", () => {
+  const markup = renderLive(liveBase({ focusApproval: HIST_DENIED.id }));
+  assert.deepEqual(tabs(markup).map((tab) => tab.selected), [false, true], "the History tab opens");
+  const text = visibleText(markup);
+  assert.match(text, /already been decided/i);
+  assert.doesNotMatch(text, /below/i, "the notice no longer points down a single long page");
+});
+
+test("a decided request opened from a notification is shown and marked even when it is not on the loaded page", () => {
+  const older: DecidedRequestView = { ...HIST_APPROVED, id: "45454545-4545-4545-8545-454545454545", sentence: "booked the old ferry" };
+  const markup = renderLive(liveBase({ focusApproval: older.id, openedEntry: older }));
+  const item = itemFor(markup, older.id);
+  assert.ok(item, "the opened decision is rendered");
+  assert.match(visibleText(item.inner), /from your notification/i, "and marked in words");
+  assert.equal(attr(item.attrs, "tabindex"), "-1", "and it can take focus");
+  assert.deepEqual(tabs(markup).map((tab) => tab.selected), [false, true], "in the History tab");
+  assert.match(visibleText(markup), /already been decided/i);
+});
+
+test("with two or more agents waiting, pending requests are grouped by agent, each group headed with its count", () => {
+  const pending = [
+    { ...PENDING_CARD, agentId: AGENT_CLAUDE },
+    { ...PENDING_HELD, agentId: AGENT_CHATGPT },
+    { ...PENDING_HIGH, agentId: AGENT_CLAUDE },
+  ];
+  const markup = renderLive(liveBase({ pending, history: [] }));
+  assert.match(markup, /<h2[^>]*>Claude<\/h2>\s*<span[^>]*>2<\/span>/, "Claude's group names its two requests");
+  assert.match(markup, /<h2[^>]*>ChatGPT<\/h2>\s*<span[^>]*>1<\/span>/, "ChatGPT's group names its one request");
+  const text = visibleText(markup);
+  const order = ["Claude 2", "ferry fare", "passport", "ChatGPT 1", "mailing"].map((marker) => text.indexOf(marker));
+  assert.ok(order.every((index) => index >= 0), `every marker renders: ${text}`);
+  assert.deepEqual([...order].sort((a, b) => a - b), order, "the group with the newest request leads; newest first within a group");
+});
+
+test("one agent's pending requests stay a single list with no agent headings", () => {
+  const pending = [PENDING_CARD, PENDING_HIGH].map((request) => ({ ...request, agentId: AGENT_CLAUDE }));
+  const markup = renderLive(liveBase({ pending, history: [] }));
+  assert.doesNotMatch(markup, /<h2[^>]*>Claude<\/h2>/, "no group heading for a single agent");
+});
+
+test("repeated decision controls name the request they decide for screen readers", () => {
+  const markup = render(base({ history: [] }));
+  // Deny buttons, the Ask disclosures and the Ask submit buttons each repeat per request.
+  for (const [tag, re] of [
+    ["button", /^Deny\b/],
+    ["summary", /^Ask for more detail\b/],
+    ["button", /^Ask for more detail\b/],
+  ] as const) {
+    const faces = findAll(markup, tag).map(controlFace).filter((face) => re.test(face));
+    assert.equal(faces.length, 3, `one ${tag} ${re} per request, got ${JSON.stringify(faces)}`);
+    assert.equal(new Set(faces).size, 3, `each ${tag} ${re} has its own accessible name: ${JSON.stringify(faces)}`);
+  }
+  const approve = buttonsMatching(markup, /^Approve\b/).map(controlFace);
+  assert.ok(approve.some((face) => face.includes("mailing list")), `Approve names its request: ${JSON.stringify(approve)}`);
+  assert.match(markup, /<span class="sr-only">/, "the context is read out, not shown");
+});
+
+test("history filters offer each outcome and agent as links with counts, marking the current one and keeping the other filter", () => {
+  const summary: HistorySummary = {
+    ...SUMMARY,
+    matching: 3,
+    outcomes: [
+      { status: "approved", count: 1 },
+      { status: "denied", count: 0 },
+      { status: "expired", count: 1 },
+      { status: "more_detail", count: 1 },
+    ],
+    allOutcomesCount: 3,
+  };
+  const markup = renderLive(
+    liveBase({ historyFilter: { agent: AGENT_CLAUDE }, historySummary: summary, focusApproval: HIST_APPROVED.id }),
+  );
+  assert.deepEqual(navLinks(markup, "Filter decisions by outcome"), [
+    { text: "All 3", href: `/inbox?agent=${AGENT_CLAUDE}&view=history`, current: true },
+    { text: "Approved 1", href: `/inbox?agent=${AGENT_CLAUDE}&outcome=approved&view=history`, current: false },
+    { text: "Turned down 0", href: `/inbox?agent=${AGENT_CLAUDE}&outcome=denied&view=history`, current: false },
+    { text: "Expired 1", href: `/inbox?agent=${AGENT_CLAUDE}&outcome=expired&view=history`, current: false },
+    { text: "Asked for more detail 1", href: `/inbox?agent=${AGENT_CLAUDE}&outcome=more_detail&view=history`, current: false },
+  ]);
+  assert.deepEqual(navLinks(markup, "Filter decisions by agent"), [
+    { text: "All agents 4", href: "/inbox?view=history", current: false },
+    { text: "ChatGPT 1", href: `/inbox?agent=${AGENT_CHATGPT}&view=history`, current: false },
+    { text: "Claude 3", href: `/inbox?agent=${AGENT_CLAUDE}&view=history`, current: true },
+  ]);
+  assert.ok(!/[?&](approval|notice)=/.test(decode(markup)), "a filter link never carries the notification id or an old notice");
+  assert.ok(!/#[0-9a-fA-F]{3,8}\b/.test(markup), "filters use design tokens");
+});
+
+test("a single agent's history offers no agent filter", () => {
+  const markup = renderLive(liveBase({ historySummary: { ...SUMMARY, agents: [SUMMARY.agents[1]!] } }));
+  assert.ok(!findAll(markup, "nav").some((n) => attr(n.attrs, "aria-label") === "Filter decisions by agent"));
+});
+
+test("applied history filters are removable chips with a way to clear them all", () => {
+  const markup = renderLive(
+    liveBase({ historyFilter: { outcome: "denied", agent: AGENT_CLAUDE }, historySummary: { ...SUMMARY, matching: 1 }, history: [HIST_DENIED] }),
+  );
+  const chips = findAll(markup, "a").map((a) => ({ text: visibleText(a.inner), href: decode(attr(a.attrs, "href") ?? "") }));
+  assert.ok(chips.some((c) => c.text === "Remove filter Outcome: Turned down" && c.href === `/inbox?agent=${AGENT_CLAUDE}&view=history`));
+  assert.ok(chips.some((c) => c.text === "Remove filter Agent: Claude" && c.href === "/inbox?outcome=denied&view=history"));
+  assert.ok(chips.some((c) => c.text === "Clear all filters" && c.href === "/inbox?view=history"));
+});
+
+test("a history filter that matches nothing says so and offers a way back", () => {
+  const markup = renderLive(
+    liveBase({ history: [], historyFilter: { outcome: "expired" }, historySummary: { ...SUMMARY, matching: 0 } }),
+  );
+  const text = visibleText(markup);
+  assert.match(text, /No decisions match/);
+  assert.doesNotMatch(text, /Nothing waiting|Nothing decided yet/, "the person does have decisions; just none that match");
+  const clear = findAll(markup, "a").find((a) => visibleText(a.inner) === "Clear filters");
+  assert.ok(clear, "a Clear filters link");
+  assert.equal(decode(attr(clear.attrs, "href") ?? ""), "/inbox?view=history");
+  assert.match(attr(clear.attrs, "class") ?? "", /min-h-11/, "a full-size touch target");
+});
+
+test("a history page cut short says how many recent decisions it shows", () => {
+  const text = visibleText(renderLive(liveBase({ historySummary: { ...SUMMARY, total: 80, matching: 80 } })));
+  assert.match(text, /Showing the 4 most recent of 80/);
+});
+
+test("history rows show each outcome in words with an icon, as divider rows", () => {
+  const markup = render(base({ pending: [] }));
+  const row = itemFor(markup, HIST_DENIED.id);
+  assert.ok(row, "the decision renders as a list item");
+  assert.match(row.inner, /<svg[^>]*aria-hidden="true"/, "an icon accompanies the words");
+  assert.match(visibleText(row.inner), /Turned down/, "the outcome reads as words");
+  assert.match(attr(row.attrs, "class") ?? "", /border-b/, "a divider row, not a card per decision");
+});
+
+test("a decision's outcome notice renders inside the page width", () => {
+  const markup = renderLive(liveBase({ notice: { tone: "success", text: "Approved — the agent can go ahead." } }));
+  assert.match(markup, /^<div class="wh-page[^"]*">/, "the page container is the outermost element");
+  assert.match(markup, /role="status"[^>]*>[\s\S]*Approved — the agent can go ahead\./, "the notice is announced");
+  assert.doesNotMatch(markup, /max-w-3xl/, "no narrower wrapper outside the page");
+  const error = renderLive(liveBase({ notice: { tone: "error", text: "We couldn't complete that just now." } }));
+  assert.match(error, /role="alert"/, "a problem is announced immediately");
 });

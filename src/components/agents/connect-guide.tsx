@@ -2,6 +2,7 @@
 
 import { AGENT_PLATFORMS as PLATFORMS } from "@/domain/agents/compatibility";
 import * as React from "react";
+import { ChevronDown, ExternalLink } from "lucide-react";
 
 import { CopyButton } from "@/components/ui/copy-button";
 
@@ -24,6 +25,11 @@ import { CopyButton } from "@/components/ui/copy-button";
 // address it is given (so swapping the config value swaps what the screen shows and what
 // Copy copies) and bakes no address in.
 //
+// The platform guides are native disclosures, one divider row each, collapsed until a
+// person opens the one for their agent — rather than nine fully expanded guides to
+// scroll past. The steps stay in the markup, so find-in-page and assistive technology
+// still reach them.
+//
 // This whole module is a client component because the Copy control writes to the
 // clipboard on click — a live affordance, never a dead button (conventions: "no dead
 // controls"). Everything is said in plain Australian English — no protocol or security
@@ -34,7 +40,7 @@ export function ConnectGuide({ connectorAddress }: { connectorAddress: string })
   return (
     <section className="flex flex-col gap-8">
       <header className="flex flex-col gap-2">
-        <h1 className="text-xl font-semibold text-fg">Connect an agent</h1>
+        <h1 className="text-2xl font-semibold tracking-tight text-fg">Connect an agent</h1>
         <p className="text-sm text-fg-muted">
           Connect compatible agents using the address below. Each connection gets its own permissions, memory controls, budget and audit log.
         </p>
@@ -53,22 +59,43 @@ export function ConnectGuide({ connectorAddress }: { connectorAddress: string })
         </div>
       </div>
 
-      <div className="flex flex-col gap-3">
-        {PLATFORMS.map((platform) => (
-          <article
-            key={platform.name}
-            className="flex flex-col gap-2 rounded-card border border-line bg-surface p-4"
-          >
-            <h2 className="text-base font-medium text-fg">{platform.name}</h2>
-            <ol className="flex list-decimal flex-col gap-1 ps-5 text-sm text-fg-muted">
-              {platform.steps.map((step, i) => (
-                <li key={i}>{step}</li>
-              ))}
-            </ol>
-            {"docs" in platform ? <a href={platform.docs} className="text-sm text-accent underline" target="_blank" rel="noreferrer">Provider setup guide</a> : null}
-          </article>
-        ))}
-      </div>
+      <section aria-labelledby="connect-platforms-heading" className="flex flex-col gap-1">
+        <h2 id="connect-platforms-heading" className="text-base font-medium text-fg">
+          Steps for your agent
+        </h2>
+        <p className="text-sm text-fg-muted">Open the platform your agent runs on.</p>
+        <ul role="list" className="mt-2 flex flex-col border-t border-line">
+          {PLATFORMS.map((platform) => (
+            <li key={platform.name} className="border-b border-line">
+              <details className="group">
+                <summary className="flex min-h-11 cursor-pointer list-none items-center justify-between gap-3 rounded-field py-2 text-sm font-medium text-fg focus-visible:outline-hidden focus-visible:ring-2 focus-visible:ring-focus [&::-webkit-details-marker]:hidden">
+                  <span className="min-w-0 [overflow-wrap:anywhere]">{platform.name}</span>
+                  <ChevronDown aria-hidden={true} className="h-4 w-4 shrink-0 text-fg-muted transition-transform group-open:rotate-180" />
+                </summary>
+                <div className="flex flex-col gap-2 pb-4">
+                  <ol className="flex list-decimal flex-col gap-1 ps-5 text-sm text-fg-muted">
+                    {platform.steps.map((step, i) => (
+                      <li key={i}>{step}</li>
+                    ))}
+                  </ol>
+                  {"docs" in platform ? (
+                    <a
+                      href={platform.docs}
+                      className="inline-flex min-h-11 w-fit items-center gap-1.5 text-sm font-medium text-fg underline underline-offset-4"
+                      target="_blank"
+                      rel="noreferrer"
+                    >
+                      {platform.name} setup guide
+                      <ExternalLink aria-hidden={true} className="h-4 w-4 shrink-0" />
+                      <span className="sr-only"> (opens in a new tab)</span>
+                    </a>
+                  ) : null}
+                </div>
+              </details>
+            </li>
+          ))}
+        </ul>
+      </section>
     </section>
   );
 }

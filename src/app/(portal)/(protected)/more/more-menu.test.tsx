@@ -26,7 +26,8 @@
 //       `PORTAL_NAV` → the "more" node's children). This task hard-codes no
 //       parallel list of destinations.
 //     • Renders EVERY "More" child as a full-width navigable link (an <a href>)
-//       pointing at that child's IA route, in IA order.
+//       pointing at that child's IA route, grouped under the sidebar's group
+//       headings (NAV_GROUPS) in the sidebar's order (organisation pass).
 //     • Each link shows BOTH an icon (a decorative <svg>) and the child's word
 //       label, and is a comfortable touch target (≥ 44px tall).
 //     • Built on the design tokens (globals.css), never a raw hex colour.
@@ -35,10 +36,11 @@
 //   AC1  a signed-in GET /more returns 200 LISTING every More child from the
 //        navigation IA (Vault, Connectors, Rules & budgets, Spending, Skills,
 //        Memory, Life admin, Household, Settings, Help), each a link to its IA
-//        route. The 200 body is exactly the <MoreMenu> the page mounts; the guard
+//        route, grouped as the sidebar groups them. The 200 body is exactly the
+//        <MoreMenu> the page mounts; the guard
 //        the route sits behind admits a valid session (the 200 path).
 //   AC2  each link is ≥ 44px tall, shows its icon and its word label, and the links
-//        follow the IA order in both visual (DOM) and keyboard (no positive
+//        follow the grouped order in both visual (DOM) and keyboard (no positive
 //        tabindex) tab order.
 //   AC3  an unauthenticated GET /more redirects to /signin — /more is inside the
 //        `(protected)` group whose layout delegates to `requireSession`; these
@@ -51,7 +53,8 @@ import { renderToStaticMarkup } from "react-dom/server";
 
 import { MoreMenu } from "@/components/more/more-menu";
 
-import { PORTAL_NAV } from "@/components/shell/nav";
+import { PORTAL_NAV, type NavNode } from "@/components/shell/nav";
+import { NAV_GROUPS } from "@/components/shell/workspace-navigation";
 import { requireSession } from "@/server/auth/guard";
 import { createSession } from "@/server/auth/session";
 import { createUser } from "@/server/db/users";
@@ -203,13 +206,22 @@ test("the navigation IA still carries every 'More' child the page must list", ()
 // ===========================================================================
 
 // The 200 body: the <MoreMenu> the page mounts renders exactly the IA's "More"
-// children — the same children, each pointing at its own IA route, in IA order and
-// with no extras. Pinned by comparing the rendered anchors to the canonical IA by
-// index, so a dropped, added or reordered destination fails, and Settings stays a
-// single link to /settings (never expanded into its sub-pages).
-test("lists every 'More' child from the IA as a link to its IA route, in IA order", () => {
+// children — the same children, each pointing at its own IA route, with no extras —
+// grouped as the sidebar groups them (NAV_GROUPS), in the sidebar's order. Pinned by
+// comparing the rendered anchors to that order by index, so a dropped, added or
+// reordered destination fails, and Settings stays a single link to /settings (never
+// expanded into its sub-pages).
+const MORE_KEYS = new Set(MORE_CHILDREN.map((c) => c.key));
+const GROUPED: ReadonlyArray<{ label: string; items: readonly NavNode[] }> = [
+  ...NAV_GROUPS.map((g) => ({ label: g.label, items: g.items.filter((i) => MORE_KEYS.has(i.key)) })),
+  { label: "Other", items: MORE_CHILDREN.filter((c) => !NAV_GROUPS.some((g) => g.items.some((i) => i.key === c.key))) },
+].filter((g) => g.items.length > 0);
+const IN_GROUP_ORDER = GROUPED.flatMap((g) => g.items);
+
+test("lists every 'More' child from the IA as a link to its IA route, in the sidebar's group order", () => {
   const { links } = renderMenu();
 
+  assert.equal(IN_GROUP_ORDER.length, MORE_CHILDREN.length, "every 'More' child lands in exactly one group");
   assert.equal(
     links.length,
     MORE_CHILDREN.length,
@@ -217,7 +229,7 @@ test("lists every 'More' child from the IA as a link to its IA route, in IA orde
       JSON.stringify(links.map((l) => l.href)),
   );
 
-  MORE_CHILDREN.forEach((child, i) => {
+  IN_GROUP_ORDER.forEach((child, i) => {
     const link = links[i]!;
     assert.equal(
       link.href,
@@ -231,6 +243,26 @@ test("lists every 'More' child from the IA as a link to its IA route, in IA orde
   });
 });
 
+// The destinations are grouped the way the sidebar groups them: one titled group per
+// sidebar group that holds a "More" destination, in the sidebar's order, each holding
+// only its own destinations — never one long flat list.
+test("groups the destinations under the sidebar's group headings", () => {
+  const { markup } = renderMenu();
+  const sections = [...markup.matchAll(/<section\b[^>]*>([\s\S]*?)<\/section>/gi)].map((m) => ({
+    heading: strip(/<h2\b[^>]*>([\s\S]*?)<\/h2>/i.exec(m[1])?.[1] ?? ""),
+    hrefs: parseAnchors(m[1]).map((a) => a.href),
+  }));
+  assert.deepEqual(
+    sections.map((s) => s.heading),
+    GROUPED.map((g) => g.label),
+    "one titled group per sidebar group, in the sidebar's order",
+  );
+  sections.forEach((section, i) => {
+    assert.deepEqual(section.hrefs, GROUPED[i]!.items.map((item) => item.href), `the "${section.heading}" group holds its own destinations`);
+  });
+  assert.ok(GROUPED.length > 1, "the destinations span more than one group");
+});
+
 // ===========================================================================
 // AC2 — each link shows its icon AND its label, ≥44px, in visual + keyboard order
 // ===========================================================================
@@ -239,7 +271,7 @@ test("lists every 'More' child from the IA as a link to its IA route, in IA orde
 // a label with no icon.
 test("each 'More' link renders an icon (an <svg>) alongside its word label", () => {
   const { links } = renderMenu();
-  MORE_CHILDREN.forEach((child, i) => {
+  IN_GROUP_ORDER.forEach((child, i) => {
     const link = links[i]!;
     assert.ok(
       link.hasIcon,
@@ -256,7 +288,7 @@ test("each 'More' link renders an icon (an <svg>) alongside its word label", () 
 // "Touch targets ≥ 44px"; the app shell already encodes this as min-h-11).
 test("each 'More' link is at least 44px tall (a comfortable touch target)", () => {
   const { links } = renderMenu();
-  MORE_CHILDREN.forEach((child, i) => {
+  IN_GROUP_ORDER.forEach((child, i) => {
     const link = links[i]!;
     assert.ok(
       minHeightPx(link.cls) >= 44,
@@ -265,7 +297,7 @@ test("each 'More' link is at least 44px tall (a comfortable touch target)", () =
   });
 });
 
-// Keyboard tab order follows visual order. The links sit in DOM order = IA order
+// Keyboard tab order follows visual order. The links sit in DOM order = grouped order
 // (pinned by the ordered AC1 check above); here we pin the other half: no positive
 // tabindex anywhere reorders that natural (DOM = visual = keyboard) sequence.
 test("no positive tabindex is used, so keyboard tab order follows visual (IA) order", () => {

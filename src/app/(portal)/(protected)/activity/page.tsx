@@ -16,6 +16,7 @@ import { createUndoService } from "@/server/activity/undo";
 import { createAgentExecutors } from "@/server/mcp/compose";
 import { getProcessCatalogue } from "@/server/connectors/catalogue";
 import { systemClock } from "@/server/seams/clock";
+import { reversalToolFor } from "@/server/activity/tool-effects";
 import type { Db } from "@/server/db/index";
 import { createActivityActions } from "./actions";
 import { noticeLocation, activityNotice, type ActivityNotice } from "./notices";
@@ -49,15 +50,11 @@ export const metadata: Metadata = { title: "Activity" };
 
 const SESSION_COOKIE = "__Host-wh_session";
 
-// The declared reversals (design §7): a created calendar event is undone by deleting it.
-// ONE table backs both the loader's `canUndo` and the undo service's "is this reversible?"
-// decision, so an Undo control shows only where undoEntry can act.
-const REVERSALS: Record<string, string> = {
-  google_calendar__create_event: "google_calendar__delete_event",
-};
-function reversalFor(tool?: string): string | undefined {
-  return tool ? REVERSALS[tool] : undefined;
-}
+// The declared reversals (design §7) come from the curated connector definitions (a created
+// calendar event is undone by deleting it). ONE table backs both the loader's `canUndo` and
+// the undo service's "is this reversible?" decision, so an Undo control shows only where
+// undoEntry can act.
+const reversalFor = reversalToolFor;
 
 // Resolve the signed-in session from the cookie (or null), re-derived wherever it is
 // needed so no handler trusts a client value for identity (design §5).
@@ -96,7 +93,7 @@ function buildActions(db: Db, config: Config) {
   // index the connectors screen reads.
   const serviceName = (connectorId: string): string | undefined => getProcessCatalogue().get(connectorId)?.name;
 
-  return createActivityActions({ db, disputes, undo, keyWrapper, reversalFor, serviceName });
+  return createActivityActions({ db, disputes, undo, keyWrapper, reversalFor, serviceName, clock: systemClock });
 }
 
 // Dispute one of the acting person's OWN entries. A thin server-action wrapper over the
@@ -122,7 +119,7 @@ async function disputeEntryAction(formData: FormData): Promise<void> {
     outcome = error;
   }
   revalidatePath("/activity");
-  redirect(noticeLocation("dispute_filed", outcome));
+  redirect(noticeLocation("dispute_filed", outcome, seq));
 }
 
 // Undo one of the acting person's OWN reversible entries. Same discipline as dispute: it
@@ -147,14 +144,18 @@ async function undoEntryAction(formData: FormData): Promise<void> {
     outcome = error;
   }
   revalidatePath("/activity");
-  redirect(noticeLocation("undo_done", outcome));
+  // Back to the new reversal entry on success, else to the entry the person tried to undo.
+  const landing = outcome && typeof outcome === "object" && "ok" in outcome && outcome.ok && "entry" in outcome
+    ? (outcome as { entry: { seq: number } }).entry.seq
+    : seq;
+  redirect(noticeLocation("undo_done", outcome, landing));
 }
 
 // The outcome of the last change, in words plus an icon (never colour alone). A problem is
 // announced immediately (alert); a success politely (status).
 function NoticeBanner({ notice }: { notice: ActivityNotice }) {
   return (
-    <div className="mx-auto w-full max-w-3xl px-4 pt-8 sm:px-6">
+    <div className="wh-page pb-0">
       <InlineNotice tone={notice.tone === "done" ? "success" : notice.tone === "waiting" ? "info" : "error"}>
         {notice.text}{notice.action && <> <a href={notice.action.href} className="font-medium underline underline-offset-4">{notice.action.label}</a></>}
       </InlineNotice>

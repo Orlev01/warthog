@@ -111,6 +111,9 @@ import {
   createApproval,
   getApproval,
   listPendingForUser,
+  listDecidedForUser,
+  countDecidedForUser,
+  HISTORY_PAGE_SIZE,
   decide,
   markReleased,
   ApprovalAlreadyDecidedError,
@@ -1041,6 +1044,150 @@ test("markReleased marks an approved approval released exactly once, member-scop
     ]);
     assert.deepEqual(results.sort(), [false, true], "of two concurrent releases exactly one wins");
     assert.equal(await markReleased(db, { userId, id: created.id }, at), false, "and it can never be released again");
+  } finally {
+    await db.close();
+  }
+});
+
+// ===========================================================================
+// Inbox organisation — the decision HISTORY is a bounded, newest-first page that can be
+// narrowed by outcome and agent (docs/adr/collection-bounds.md: ordinary portal pages
+// show 50 records), and its per-outcome / per-agent counts come from one grouped count
+// with no decryption. Both stay member-scoped by the bound user id.
+// ===========================================================================
+
+// Create an approval at `at` and decide it at `decidedAt`, returning its id.
+async function seedDecision(
+  db: Db,
+  input: {
+    userId: string;
+    dek: Uint8Array;
+    agentId?: string;
+    token: string;
+    at: Date;
+    decidedAt: Date;
+    decision: Parameters<typeof decide>[1]["decision"];
+  },
+): Promise<string> {
+  const created = await createApproval(
+    db,
+    { userId: input.userId, agentId: input.agentId ?? AGENT_A, detail: detailWith(input.token) },
+    input.dek,
+    fixedClock(input.at),
+  );
+  await decide(db, { userId: input.userId, id: created.id, decision: input.decision }, input.dek, fixedClock(input.decidedAt));
+  return created.id;
+}
+
+const at = (minutes: number): Date => new Date(T0.getTime() + minutes * MINUTE);
+
+test("listDecidedForUser lists decisions newest-first by decision time, falling back to when it was asked", async () => {
+  const db = await freshDb();
+  try {
+    const userId = await makeUser(db, "history-order");
+    const dek = freshDek();
+    // Asked first but decided last: the decision time leads.
+    const late = await seedDecision(db, { userId, dek, token: "H1", at: at(0), decidedAt: at(10), decision: { status: "approved" } });
+    const early = await seedDecision(db, { userId, dek, token: "H2", at: at(5), decidedAt: at(6), decision: { status: "denied" } });
+    // A more-detail decision stamps no decision time, so it sorts by when it was asked.
+    const asked = await seedDecision(db, {
+      userId,
+      dek,
+      token: "H3",
+      at: at(8),
+      decidedAt: at(9),
+      decision: { status: "more_detail", question: "Which one?" },
+    });
+    await createApproval(db, { userId, agentId: AGENT_A, detail: detailWith("H4") }, dek, fixedClock(at(11)));
+
+    const history = await listDecidedForUser(db, userId, dek);
+    assert.deepEqual(history.map((entry) => entry.id), [late, asked, early], "newest decision first; pending never listed");
+  } finally {
+    await db.close();
+  }
+});
+
+test("listDecidedForUser bounds the history to a 50-record page", async () => {
+  const db = await freshDb();
+  try {
+    const userId = await makeUser(db, "history-bound");
+    const dek = freshDek();
+    assert.equal(HISTORY_PAGE_SIZE, 50, "ordinary portal pages show 50 records");
+    const ids: string[] = [];
+    for (let index = 0; index < HISTORY_PAGE_SIZE + 2; index += 1) {
+      ids.push(
+        await seedDecision(db, { userId, dek, token: `B${index}`, at: at(index), decidedAt: at(index), decision: { status: "denied" } }),
+      );
+    }
+    const history = await listDecidedForUser(db, userId, dek);
+    assert.equal(history.length, HISTORY_PAGE_SIZE, "the default page holds 50 decisions");
+    assert.equal(history[0]!.id, ids.at(-1), "the newest decision leads the page");
+    assert.ok(!history.some((entry) => entry.id === ids[0] || entry.id === ids[1]), "the two oldest fall off the page");
+    assert.equal((await listDecidedForUser(db, userId, dek, { limit: 3 })).length, 3, "a smaller page can be asked for");
+  } finally {
+    await db.close();
+  }
+});
+
+test("listDecidedForUser narrows the history by outcome and by agent, never reaching another person's", async () => {
+  const db = await freshDb();
+  try {
+    const alice = await makeUser(db, "history-filter-alice");
+    const bob = await makeUser(db, "history-filter-bob");
+    const dek = freshDek();
+    const approvedA = await seedDecision(db, { userId: alice, dek, agentId: AGENT_A, token: "F1", at: at(0), decidedAt: at(1), decision: { status: "approved" } });
+    const deniedA = await seedDecision(db, { userId: alice, dek, agentId: AGENT_A, token: "F2", at: at(0), decidedAt: at(2), decision: { status: "denied" } });
+    const deniedB = await seedDecision(db, { userId: alice, dek, agentId: AGENT_B, token: "F3", at: at(0), decidedAt: at(3), decision: { status: "denied" } });
+    await seedDecision(db, { userId: bob, dek, agentId: AGENT_A, token: "F4", at: at(0), decidedAt: at(4), decision: { status: "denied" } });
+
+    const ids = async (options: Parameters<typeof listDecidedForUser>[3]) =>
+      (await listDecidedForUser(db, alice, dek, options)).map((entry) => entry.id);
+    assert.deepEqual(await ids({ status: "denied" }), [deniedB, deniedA], "only Alice's turned-down decisions");
+    assert.deepEqual(await ids({ agentId: AGENT_A }), [deniedA, approvedA], "only decisions from the chosen agent");
+    assert.deepEqual(await ids({ status: "denied", agentId: AGENT_B }), [deniedB], "both filters together");
+    assert.deepEqual(await ids({ status: "expired" }), [], "an outcome with no decisions lists nothing");
+    assert.deepEqual(await ids({ agentId: "not-a-uuid" }), [], "a malformed agent id matches nothing rather than failing");
+  } finally {
+    await db.close();
+  }
+});
+
+test("listDecidedForUser binds the user id, filters and page size as parameters, never splicing SQL", async () => {
+  const db = recordingDb();
+  const probe = "h'; DROP TABLE approvals; --";
+  const agentId = "33333333-3333-3333-3333-333333333333";
+
+  const result = await listDecidedForUser(db, probe, freshDek(), { status: "approved", agentId, limit: 7 });
+  assert.deepEqual(result, [], "the recording db returns no rows");
+  assert.equal(db.calls.length, 1, "one query");
+  const call = db.calls[0]!;
+  for (const value of [probe, "approved", agentId, 7]) {
+    assert.ok(call.values.includes(value), `${String(value)} travels as a bound value`);
+  }
+  assert.ok(!call.text.includes(probe) && !call.text.includes(agentId), "nothing is concatenated into the SQL");
+  assert.match(call.text, /ORDER BY[\s\S]*LIMIT \$\d+/i, "the page is ordered and bounded");
+});
+
+test("countDecidedForUser counts the person's decisions by outcome and agent, member-scoped", async () => {
+  const db = await freshDb();
+  try {
+    const alice = await makeUser(db, "history-count-alice");
+    const bob = await makeUser(db, "history-count-bob");
+    const dek = freshDek();
+    await seedDecision(db, { userId: alice, dek, agentId: AGENT_A, token: "C1", at: at(0), decidedAt: at(1), decision: { status: "denied" } });
+    await seedDecision(db, { userId: alice, dek, agentId: AGENT_A, token: "C2", at: at(0), decidedAt: at(2), decision: { status: "denied" } });
+    await seedDecision(db, { userId: alice, dek, agentId: AGENT_B, token: "C3", at: at(0), decidedAt: at(3), decision: { status: "approved" } });
+    await seedDecision(db, { userId: bob, dek, agentId: AGENT_A, token: "C4", at: at(0), decidedAt: at(4), decision: { status: "approved" } });
+    await createApproval(db, { userId: alice, agentId: AGENT_A, detail: detailWith("C5") }, dek, fixedClock(at(5)));
+
+    const counts = (await countDecidedForUser(db, alice))
+      .map((row) => `${row.status}:${row.agentId}:${row.count}`)
+      .sort();
+    assert.deepEqual(counts, [`approved:${AGENT_B}:1`, `denied:${AGENT_A}:2`], "Alice's decisions only; pending is not counted");
+
+    const recording = recordingDb();
+    await countDecidedForUser(recording, "x'; DROP TABLE approvals; --");
+    assert.ok(recording.calls.every((c) => !c.text.includes("DROP TABLE")), "the user id is bound, never spliced");
   } finally {
     await db.close();
   }

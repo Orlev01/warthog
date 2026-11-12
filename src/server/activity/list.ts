@@ -32,6 +32,14 @@ import { toEntry } from "./writer";
 import type { ActivityEntry } from "./recorder";
 import type { Db } from "../db/index";
 import { parseParams } from "../http/validate";
+import { categoryCaseSql, outcomeGroupCaseSql, DISPUTED_SQL } from "./category-sql";
+import {
+  ACTIVITY_CATEGORIES,
+  ATTENTION_OUTCOMES,
+  OUTCOME_GROUPS,
+  type ActivityCategory,
+  type OutcomeGroup,
+} from "@/domain/activity/category";
 
 // The filters a list read narrows by. Every field is optional; an omitted filter does
 // not constrain, and filters COMBINE with AND. `from`/`to` are inclusive ISO-8601
@@ -46,6 +54,14 @@ export interface ActivityFilters {
   source?: "warthog" | "agent_reported";
   from?: string;
   to?: string;
+  // The activity type (`domain/activity/category`), evaluated in SQL over plaintext columns.
+  category?: ActivityCategory;
+  // Only entries that need a look: a blocked/failed outcome, or at least one dispute.
+  attention?: boolean;
+  // Only entries with NO agent (the person's own account changes, Warthog's own events).
+  noAgent?: boolean;
+  // Only entries with NO connected service (core tools, account changes).
+  noService?: boolean;
 }
 
 // The most entries one read returns (design §4.1: at most 5,000 rows per query), and the
@@ -101,23 +117,8 @@ export async function listActivity(
 ): Promise<ActivityEntry[]> {
   parseParams(dateBoundsSchema, { from: filters.from, to: filters.to });
 
-  // The member scope is always the first bound value; each present filter appends its
-  // own bound value and a condition over a FIXED column name (never from input).
-  const conditions: string[] = ["user_id = $1"];
-  const values: unknown[] = [userId];
-  const bind = (column: string, op: string, value: string): void => {
-    values.push(value);
-    conditions.push(`${column} ${op} $${values.length}`);
-  };
-
-  if (filters.seq !== undefined) bind("seq", "=", String(filters.seq));
-  if (filters.agentId !== undefined) bind("agent_id", "=", filters.agentId);
-  if (filters.connectorId !== undefined) bind("connector_id", "=", filters.connectorId);
-  if (filters.kind !== undefined) bind("kind", "=", filters.kind);
-  if (filters.outcome !== undefined) bind("outcome", "=", filters.outcome);
-  if (filters.source !== undefined) bind("source", "=", filters.source);
-  if (filters.from !== undefined) bind("occurred_at", ">=", filters.from);
-  if (filters.to !== undefined) bind("occurred_at", "<=", filters.to);
+  const values: unknown[] = [];
+  const conditions = activityConditions(userId, filters, values);
   if (page.before !== undefined) {
     // Strictly after the cursor in feed order (occurred_at DESC, seq DESC).
     values.push(page.before.occurredAt, page.before.seq);
@@ -141,6 +142,37 @@ export async function listActivity(
 
   // Decrypt ONLY the returned page — the WHERE and LIMIT already narrowed the set.
   return Promise.all(result.rows.map((row) => toEntry(row, dek)));
+}
+
+// The WHERE conditions for `filters`, appending each bound value to `values`. The member
+// scope is always the first bound value; each present filter adds a condition over a FIXED
+// column name or expression (never from input) with its value bound. Shared by the list and
+// the summaries so a grouped count and the list it drills into always apply the same filters.
+export function activityConditions(userId: string, filters: ActivityFilters, values: unknown[]): string[] {
+  if (values.length !== 0) throw new Error("activityConditions binds the user id as $1");
+  values.push(userId);
+  const conditions: string[] = ["user_id = $1"];
+  const param = (value: unknown): string => {
+    values.push(value);
+    return `$${values.length}`;
+  };
+  const bind = (column: string, op: string, value: string): void => {
+    conditions.push(`${column} ${op} ${param(value)}`);
+  };
+
+  if (filters.seq !== undefined) bind("seq", "=", String(filters.seq));
+  if (filters.noAgent) conditions.push("agent_id IS NULL");
+  else if (filters.agentId !== undefined) bind("agent_id", "=", filters.agentId);
+  if (filters.noService) conditions.push("connector_id IS NULL");
+  else if (filters.connectorId !== undefined) bind("connector_id", "=", filters.connectorId);
+  if (filters.kind !== undefined) bind("kind", "=", filters.kind);
+  if (filters.outcome !== undefined) bind("outcome", "=", filters.outcome);
+  if (filters.source !== undefined) bind("source", "=", filters.source);
+  if (filters.from !== undefined) bind("occurred_at", ">=", filters.from);
+  if (filters.to !== undefined) bind("occurred_at", "<=", filters.to);
+  if (filters.category !== undefined) conditions.push(`(${categoryCaseSql(param)}) = ${param(filters.category)}`);
+  if (filters.attention) conditions.push(`(outcome = ANY(${param(ATTENTION_OUTCOMES)}::text[]) OR ${DISPUTED_SQL})`);
+  return conditions;
 }
 
 // The distinct filterable values in the person's own entries — the agents, connected
@@ -181,4 +213,98 @@ export async function listActivityFacets(db: Db, userId: string): Promise<Activi
     if (value !== "") into[String(row.facet)]?.push(value);
   }
   return facets;
+}
+
+// ===================================================================================
+// Grouped summaries — the "By agent", "By type" and "By service" views and the per-agent
+// counts on Home and the agent workspace.
+// ===================================================================================
+
+export type ActivityGroupBy = "agent" | "service" | "category";
+
+// One group's counts. `key` is the agent id, connector id or category (null ⇒ entries with
+// no agent / no service). Every count is EXACT over the person's whole record within the
+// filters: it is computed from plaintext metadata in SQL, so nothing is decrypted and no
+// page bound applies.
+export interface ActivityGroupSummary {
+  key: string | null;
+  total: number;
+  lastAt: string;
+  byCategory: Record<ActivityCategory, number>;
+  byOutcome: Record<OutcomeGroup, number>;
+  disputed: number;
+}
+
+// The most groups one summary returns (a person has a handful of agents and services).
+const MAX_GROUPS = 500;
+
+function emptyCounts<K extends string>(keys: readonly K[]): Record<K, number> {
+  return Object.fromEntries(keys.map((key) => [key, 0])) as Record<K, number>;
+}
+
+/**
+ * Count `userId`'s entries matching `filters`, grouped by agent, service or activity type,
+ * most recently active group first. Each group carries its type and outcome-group split,
+ * its dispute count and its latest instant. Member-scoped (the user id is bound as $1, and
+ * a dispute counts only when it is the same person's), parameterized, and decryption-free.
+ *
+ * `tool_attempt` rows — the intent record written before a change runs, always followed by
+ * its own result row — are not counted (unless the filters ask for that kind), so one change
+ * is never counted twice.
+ */
+export async function summariseActivity(
+  db: Db,
+  userId: string,
+  filters: ActivityFilters,
+  groupBy: ActivityGroupBy,
+): Promise<ActivityGroupSummary[]> {
+  parseParams(dateBoundsSchema, { from: filters.from, to: filters.to });
+  const values: unknown[] = [];
+  const conditions = activityConditions(userId, filters, values);
+  if (filters.kind === undefined) conditions.push("kind <> 'tool_attempt'");
+  const param = (value: unknown): string => {
+    values.push(value);
+    return `$${values.length}`;
+  };
+  const groupColumn = groupBy === "agent" ? "agent_id" : groupBy === "service" ? "connector_id" : "category";
+
+  const result = await db.query(
+    `SELECT ${groupColumn} AS key, category, outcome_group, count(*)::int AS n,
+            max(occurred_at) AS last_at, count(*) FILTER (WHERE disputed)::int AS disputed
+       FROM (SELECT agent_id, connector_id, occurred_at,
+                    ${categoryCaseSql(param)} AS category,
+                    ${outcomeGroupCaseSql(param)} AS outcome_group,
+                    ${DISPUTED_SQL} AS disputed
+               FROM activity_entries
+              WHERE ${conditions.join(" AND ")}) AS matched
+      GROUP BY ${groupColumn}, category, outcome_group`,
+    values,
+  );
+
+  const groups = new Map<string | null, ActivityGroupSummary>();
+  for (const row of result.rows) {
+    const key = row.key == null ? null : String(row.key);
+    const at = new Date(row.last_at as string).toISOString();
+    let group = groups.get(key);
+    if (!group) {
+      group = {
+        key,
+        total: 0,
+        lastAt: at,
+        byCategory: emptyCounts(ACTIVITY_CATEGORIES),
+        byOutcome: emptyCounts(OUTCOME_GROUPS),
+        disputed: 0,
+      };
+      groups.set(key, group);
+    }
+    const n = Number(row.n);
+    group.total += n;
+    group.disputed += Number(row.disputed);
+    if (at > group.lastAt) group.lastAt = at;
+    const category = String(row.category) as ActivityCategory;
+    const outcome = String(row.outcome_group) as OutcomeGroup;
+    if (category in group.byCategory) group.byCategory[category] += n;
+    if (outcome in group.byOutcome) group.byOutcome[outcome] += n;
+  }
+  return [...groups.values()].sort((a, b) => b.lastAt.localeCompare(a.lastAt)).slice(0, MAX_GROUPS);
 }

@@ -62,6 +62,7 @@ import assert from "node:assert/strict";
 import { renderToStaticMarkup } from "react-dom/server";
 
 import { ConnectGuide } from "./connect-guide";
+import { AGENT_PLATFORMS } from "@/domain/agents/compatibility";
 
 // ── tiny markup helpers (no DOM), mirrored from the sibling component tests ────────────
 
@@ -390,5 +391,35 @@ test("the guide shows no protocol or security jargon in its prose", () => {
       !re.test(prose),
       `the guide must say what happens in plain words — found jargon "${label}" in: "${prose}"`,
     );
+  }
+});
+
+// ════════════════════════════════════════════════════════════════════════════════════════
+// Organisation pass — the platform guides are disclosures (a person opens the one for
+// their agent instead of scrolling past nine fully expanded guides), and the page title
+// uses the house heading style.
+// ════════════════════════════════════════════════════════════════════════════════════════
+
+test("each platform guide is a collapsed disclosure named for its platform, its steps inside", () => {
+  const markup = render();
+  const disclosures = [...markup.matchAll(/<details\b([^>]*)>([\s\S]*?)<\/details>/gi)];
+  assert.equal(disclosures.length, AGENT_PLATFORMS.length, "one disclosure per platform guide");
+  disclosures.forEach((d, i) => {
+    const platform = AGENT_PLATFORMS[i]!;
+    const summary = visibleText(/<summary\b[^>]*>([\s\S]*?)<\/summary>/i.exec(d[2]!)?.[1] ?? "");
+    assert.match(summary, new RegExp(platform.name.replace(/[()]/g, "\\$&")), `disclosure #${i + 1} is named for ${platform.name}`);
+    assert.ok(!hasBoolAttr(d[1]!, "open"), `the ${platform.name} guide starts collapsed`);
+    const steps = orderedLists(d[2]!)[0];
+    assert.ok(steps, `the ${platform.name} steps sit inside its disclosure`);
+    assert.equal(steps.items.length, platform.steps.length, `every ${platform.name} step is listed`);
+  });
+});
+
+test("the connect page title uses the house heading style", () => {
+  const h1 = /<h1\b([^>]*)>([\s\S]*?)<\/h1>/.exec(render());
+  assert.ok(h1, "the guide has a page heading");
+  const cls = (attr(h1[1]!, "class") ?? "").split(/\s+/);
+  for (const token of ["text-2xl", "font-semibold", "tracking-tight", "text-fg"]) {
+    assert.ok(cls.includes(token), `the h1 carries ${token}; class="${cls.join(" ")}"`);
   }
 });

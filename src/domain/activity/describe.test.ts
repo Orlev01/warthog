@@ -7,7 +7,7 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
 
-import { agentLabel, entryTitle, toolLabel } from "./describe";
+import { agentLabel, entryTitle, kindLabel, toolLabel } from "./describe";
 
 test("Warthog's own tools read in plain words", () => {
   assert.equal(toolLabel("remember"), "Save a memory");
@@ -45,4 +45,11 @@ test("an agent is shown by the name the person gave it, never its raw id", () =>
   const unknown = agentLabel(names, "28e3dfa1-7fc1-47da-8d0c-583cf7794c38");
   assert.ok(unknown?.startsWith("Unknown agent"), `an id with no agent behind it reads as unknown, got ${unknown}`);
   assert.ok(!unknown?.includes("28e3dfa1-7fc1-47da-8d0c-583cf7794c38"), "the full raw id is never shown");
+});
+
+test("recorded kinds read in words for filters, and an intent record names the change it starts", () => {
+  assert.equal(kindLabel("tool_call"), "Agent request");
+  assert.equal(kindLabel("card_release"), "Card release");
+  assert.equal(kindLabel("brand_new_kind"), "Brand new kind");
+  assert.equal(entryTitle({ kind: "tool_attempt", tool: "remember" }), "Starting: Save a memory");
 });

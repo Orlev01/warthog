@@ -16,6 +16,7 @@ import { generateRecoveryPhrase } from "@/client/vault/recovery-phrase";
 import { RecoveryPhraseReveal } from "@/components/vault/vault-key-step";
 import {
   createReleaseFlow,
+  RequestContext,
   type ReleaseFlow,
   type PendingRequestView,
   type SavedCardView,
@@ -701,6 +702,7 @@ export function ReleaseApprove(props: ReleaseApproveProps): React.ReactElement {
         <div className="flex flex-col gap-1">
           <button type="button" disabled className={BTN_PRIMARY_DISABLED}>
             Approve and release
+            <RequestContext request={request} />
           </button>
           <p className="text-xs text-fg-muted">{unavailableReason}</p>
         </div>
@@ -715,6 +717,7 @@ export function ReleaseApprove(props: ReleaseApproveProps): React.ReactElement {
             }}
           >
             Approve and release
+            <RequestContext request={request} />
           </button>
         </div>
       )}

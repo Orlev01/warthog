@@ -87,6 +87,24 @@ function periodLabel(period: AgentListItem["budgetPeriod"]): string {
   }
 }
 
+// The one-line summary under the heading: how many agents, then how many need
+// attention, in words ("3 agents · 1 needs reconnecting"), or "all connected". The
+// rows keep the order the loader gives — agents needing reconnection first, then the
+// most recently active (listAgentsForUser's ORDER BY).
+export function agentSummary(agents: readonly AgentListItem[]): string {
+  const total = `${agents.length} agent${agents.length === 1 ? "" : "s"}`;
+  const count = (status: StatusKey) => agents.filter((agent) => agent.status === status).length;
+  const reconnect = count("needs-reconnect");
+  const errors = count("error");
+  const pending = count("pending");
+  const parts = [
+    reconnect ? `${reconnect} ${reconnect === 1 ? "needs" : "need"} reconnecting` : null,
+    errors ? `${errors} ${errors === 1 ? "has an error" : "have errors"}` : null,
+    pending ? `${pending} pending` : null,
+  ].filter((part): part is string => part !== null);
+  return [total, ...(parts.length ? parts : ["all connected"])].join(" · ");
+}
+
 // The Disconnect control for one agent. LIVE (bound to `disconnectAction`, carrying THIS
 // agent's id so the action disconnects the right one) when an action is supplied;
 // otherwise DISABLED with a one-line reason — never a live button over a missing action
@@ -183,7 +201,7 @@ export function AgentListView({
 }: AgentListViewProps) {
   return (
     <div className="wh-page flex flex-col gap-6">
-      <WorkspaceHeading eyebrow="Connections" title="Your agents" description="Choose an agent to manage its connectors, vault access, skills, memory, spending and audit log.">
+      <WorkspaceHeading eyebrow="Connections" title="Your agents" description="Choose an agent to manage its connectors, vault access, skills, memory, spending and audit log." meta={agents.length > 0 ? agentSummary(agents) : undefined}>
         <a href="/agents/connect" className={BTN_PRIMARY}><Plus aria-hidden size={16} />Connect an agent</a>
         <a href="/settings/agents" className={BTN_SECONDARY}>Global agent settings</a>
       </WorkspaceHeading>

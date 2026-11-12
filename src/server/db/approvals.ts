@@ -207,19 +207,60 @@ export async function listPendingForUser(
   return approvals;
 }
 
-// This user's DECIDED approvals (approved / denied / expired / more_detail) — every
-// non-pending one — details decrypted; never a still-pending approval and never
-// another user's (the user id is bound as a parameter; member-scoped). The inbox
-// reads these as the person's decision HISTORY; the order is left to the caller.
+// The statuses a decided approval can be in (every status but `pending`).
+export type DecidedApprovalStatus = Exclude<ApprovalStatus, "pending">;
+export const DECIDED_STATUSES: readonly DecidedApprovalStatus[] = ["approved", "denied", "expired", "more_detail"];
+
+// The decision history is a bounded page (docs/adr/collection-bounds.md: ordinary portal
+// pages show 50 records); a caller may ask for a smaller or larger page up to the cap.
+export const HISTORY_PAGE_SIZE = 50;
+const MAX_HISTORY_PAGE_SIZE = 100;
+
+// Optional narrowing of the history: one outcome and/or one requesting agent. Each is a
+// BOUND value; the caller validates them (the agent against the person's own agents).
+export interface DecidedListOptions {
+  readonly status?: DecidedApprovalStatus;
+  readonly agentId?: string;
+  readonly limit?: number;
+}
+
+const UUID_SHAPE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+
+function historyPageSize(limit: number | undefined): number {
+  if (limit === undefined || !Number.isFinite(limit)) return HISTORY_PAGE_SIZE;
+  return Math.min(MAX_HISTORY_PAGE_SIZE, Math.max(1, Math.trunc(limit)));
+}
+
+// This user's DECIDED approvals (approved / denied / expired / more_detail) — never a
+// still-pending approval and never another user's (the user id is bound as a parameter;
+// member-scoped) — details decrypted. The inbox reads these as the person's decision
+// HISTORY: newest decision first (a more_detail decision stamps no decision time, so it
+// sorts by when it was asked), at most one page (50 by default), optionally narrowed to
+// one outcome and/or one agent. An agent id that is not uuid-shaped matches nothing.
 export async function listDecidedForUser(
   db: Db,
   userId: string,
   dek: Uint8Array,
+  options: DecidedListOptions = {},
 ): Promise<StoredApproval[]> {
+  if (options.agentId !== undefined && !UUID_SHAPE.test(options.agentId)) return [];
+  const values: unknown[] = [userId];
+  const where = ["user_id = $1", "status <> 'pending'"];
+  if (options.status !== undefined) {
+    values.push(options.status);
+    where.push(`status = $${values.length}`);
+  }
+  if (options.agentId !== undefined) {
+    values.push(options.agentId);
+    where.push(`agent_id = $${values.length}`);
+  }
+  values.push(historyPageSize(options.limit));
   const result = await db.query(
     `SELECT ${COLUMNS} FROM approvals
-      WHERE user_id = $1 AND status <> 'pending'`,
-    [userId],
+      WHERE ${where.join(" AND ")}
+      ORDER BY COALESCE(decided_at, created_at) DESC, id DESC
+      LIMIT $${values.length}`,
+    values,
   );
   const approvals: StoredApproval[] = [];
   for (const row of result.rows) {
@@ -227,6 +268,29 @@ export async function listDecidedForUser(
     approvals.push(toStored(row, detail));
   }
   return approvals;
+}
+
+// How many decisions this user has, per outcome and requesting agent — the counts the
+// inbox's history tab and filters show. Reads no detail (nothing is decrypted) and is
+// member-scoped by the bound user id.
+export interface DecidedCount {
+  readonly status: DecidedApprovalStatus;
+  readonly agentId: string;
+  readonly count: number;
+}
+
+export async function countDecidedForUser(db: Db, userId: string): Promise<DecidedCount[]> {
+  const result = await db.query(
+    `SELECT status, agent_id, COUNT(*)::int AS count FROM approvals
+      WHERE user_id = $1 AND status <> 'pending'
+      GROUP BY status, agent_id`,
+    [userId],
+  );
+  return result.rows.map((row) => ({
+    status: row.status as DecidedApprovalStatus,
+    agentId: row.agent_id as string,
+    count: Number(row.count),
+  }));
 }
 
 // Thrown when a decision cannot land because the approval is no longer pending: it

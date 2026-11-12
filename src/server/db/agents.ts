@@ -124,8 +124,20 @@ export async function createAgent(db: Db, input: NewAgent, clock: Clock): Promis
 
 // Every agent OWNED BY `userId` (member-scoped: WHERE user_id bound), never another
 // person's. Returns an empty array when the person has none.
+//
+// One deterministic order, so every screen that lists agents reads the same way each
+// time: agents that need reconnecting (a disconnected connection) first, then the most
+// recently active, then those never active by newest connection, and the agent id as
+// the final tie-break. The ORDER BY is fixed statement text — no caller value shapes it.
 export async function listAgentsForUser(db: Db, userId: string): Promise<Agent[]> {
-  const result = await db.query(`SELECT ${COLUMNS} FROM agents WHERE user_id = $1`, [userId]);
+  const result = await db.query(
+    `SELECT ${COLUMNS} FROM agents WHERE user_id = $1
+      ORDER BY CASE WHEN status = 'connected' THEN 1 ELSE 0 END,
+               last_active_at DESC NULLS LAST,
+               connected_at DESC,
+               id`,
+    [userId],
+  );
   return result.rows.map(toAgent);
 }
 

@@ -1,6 +1,6 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { recordFields, recordDate, recordReturnPath, recordOffsets, recordStatus } from "./form-inputs";
+import { recordFields, recordDate, recordReturnPath, recordOffsets, recordStatus, taskReturnPath } from "./form-inputs";
 
 test("record form keeps personal fields separate from metadata and action internals", () => {
   const form = new FormData();
@@ -51,4 +51,20 @@ test("forms open before deployment retain legacy personal fields without changin
   assert.deepEqual(recordFields(form), { name: "Legacy title", dueDate: "Personal date notes", status: "Personal status notes" });
   assert.equal(recordDate(form), undefined);
   assert.equal(recordStatus(form), undefined);
+});
+
+test("a task action returns to the Tasks view, keeping a well-formed assignee filter only", () => {
+  const agentId = "0b4c6c7e-1c1a-4b55-9a49-5e2f0d6d1a01";
+  const withFilter = (value?: string) => {
+    const form = new FormData();
+    form.set("taskId", "task");
+    if (value !== undefined) form.set("returnAssignee", value);
+    return taskReturnPath(form);
+  };
+  assert.equal(withFilter(), "/life-admin?view=tasks");
+  assert.equal(withFilter("any"), "/life-admin?view=tasks&assignee=any");
+  assert.equal(withFilter(agentId), `/life-admin?view=tasks&assignee=${agentId}`);
+  for (const value of ["", "https://evil.test", "any&notice=saved", "__proto__", `${agentId}#x`, "Zephyr"]) {
+    assert.equal(withFilter(value), "/life-admin?view=tasks", `ignored: ${value}`);
+  }
 });

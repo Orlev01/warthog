@@ -76,6 +76,7 @@ import type {
   ConnectorsViewProps,
   CatalogueGroup,
   CatalogueItem,
+  CategoryCount,
   ConnectionItem,
   ToolItem,
 } from "@/components/connectors/connectors-view";
@@ -186,6 +187,22 @@ function toStatusKey(status: ConnectionStatus): StatusKey {
   return status === "needs_reconnect" ? "needs-reconnect" : status;
 }
 
+// Connected services that need the person's attention come first (reconnect, then error),
+// then the rest; within a status, by service name and then account.
+const STATUS_ORDER: Record<StatusKey, number> = {
+  "needs-reconnect": 0,
+  error: 1,
+  pending: 2,
+  connected: 3,
+};
+function byAttentionThenName(a: ConnectionItem, b: ConnectionItem): number {
+  return (
+    STATUS_ORDER[a.status] - STATUS_ORDER[b.status] ||
+    a.name.localeCompare(b.name) ||
+    a.accountLabel.localeCompare(b.accountLabel)
+  );
+}
+
 
 export function createConnectorsActions(deps: ConnectorsActionsDeps): ConnectorsActions {
   const {
@@ -255,31 +272,50 @@ export function createConnectorsActions(deps: ConnectorsActionsDeps): Connectors
   ): Promise<ConnectorsViewData> {
     const userId = session.userId;
 
-    // Browse the catalogue (pure, in-memory — no query), then decide each entry's per-person
-    // gate from the session user's own email.
-    const browse = browseCatalogue(catalogue, { category: input?.category, query: input?.query });
-    const user = await getUserById(db, userId);
-    const email = user?.email ?? "";
-    const groups: CatalogueGroup[] = browse.groups.map((group) => ({
-      category: group.category,
-      items: group.entries.map(
-        (entry): CatalogueItem => ({
-          id: entry.id,
-          name: entry.name,
-          verification: connectorVerification(entry.id).label,
-          connectable: entry.connectable && !(deps.providerMcpAvailable === false && catalogue.get(entry.id)?.auth_kind === "provider_mcp"),
-          ...(deps.providerMcpAvailable === false && catalogue.get(entry.id)?.auth_kind === "provider_mcp" ? { unavailableReason: "Provider-hosted MCP sign-in and tool routing are not available yet." } : {}),
-          gate: gateFor(entry.id, email),
-        }),
-      ),
-    }));
-
-    // The session user's OWN connections (member-scoped, never credentials) and OWN agents
-    // (to name which agents use each service).
+    // The session user's OWN connections (member-scoped, never credentials) — read first so
+    // the catalogue can mark the services this person already has.
     const timeZone = await timeZoneFor(db, userId, await dekFor(userId));
     let connections = await listConnectionsForPage(db, userId, catalogue);
     const providerTools = await deps.providerToolsets?.(userId,connections);
     if (providerTools) connections = connections.map(connection => catalogue.get(connection.connectorId)?.auth_kind === "provider_mcp" ? {...connection,tools:(providerTools[connection.id]??[]).map(tool=>({name:tool.name,makesChange:true}))} : connection);
+    const connectedConnectors = new Set(connections.map((connection) => connection.connectorId));
+
+    // Browse the catalogue (pure, in-memory — no query) across EVERY category, so each
+    // category can be offered with its count of matches and a miss means the term matched
+    // nothing anywhere. A `category` is kept only when it is one of the catalogue's own
+    // categories (anything else is ignored), then narrows the groups shown. Each entry's
+    // per-person gate is decided from the session user's own email.
+    const category =
+      input?.category !== undefined && catalogue.categories().includes(input.category)
+        ? input.category
+        : null;
+    const browse = browseCatalogue(catalogue, { query: input?.query });
+    const browseGroups = [...browse.groups].sort((a, b) => a.category.localeCompare(b.category));
+    const matchesByCategory = new Map(browseGroups.map((group) => [group.category, group.entries.length]));
+    const categories: CategoryCount[] = [...catalogue.categories()]
+      .sort((a, b) => a.localeCompare(b))
+      .map((key) => ({ key, count: matchesByCategory.get(key) ?? 0 }))
+      .filter((c) => c.count > 0 || c.key === category);
+    const user = await getUserById(db, userId);
+    const email = user?.email ?? "";
+    const groups: CatalogueGroup[] = browseGroups
+      .filter((group) => category === null || group.category === category)
+      .map((group) => ({
+        category: group.category,
+        items: group.entries.map(
+          (entry): CatalogueItem => ({
+            id: entry.id,
+            name: entry.name,
+            verification: connectorVerification(entry.id).label,
+            connectable: entry.connectable && !(deps.providerMcpAvailable === false && catalogue.get(entry.id)?.auth_kind === "provider_mcp"),
+            ...(deps.providerMcpAvailable === false && catalogue.get(entry.id)?.auth_kind === "provider_mcp" ? { unavailableReason: "Provider-hosted MCP sign-in and tool routing are not available yet." } : {}),
+            gate: gateFor(entry.id, email),
+            ...(connectedConnectors.has(entry.id) ? { connected: true } : {}),
+          }),
+        ),
+      }));
+
+    // The session user's OWN agents (to name which agents use each service).
     const agents = await listAgentsForUser(db, userId);
     const agentsByConnector = new Map<string, string[]>();
     for (const agent of agents) {
@@ -297,7 +333,11 @@ export function createConnectorsActions(deps: ConnectorsActionsDeps): Connectors
 
     return {
       groups,
-      connections: connections.map((connection) => toConnectionItem(connection, agentsByConnector, timeZone)),
+      categories,
+      category,
+      connections: connections
+        .map((connection) => toConnectionItem(connection, agentsByConnector, timeZone))
+        .sort(byAttentionThenName),
       query: browse.query,
       canRequest: browse.canRequest,
     };

@@ -19,7 +19,7 @@ import { SpendingView } from "@/components/spending/spending-view";
 // the host-locked `__Host-wh_session` cookie, turns it (via the seam's `load`) into the
 // person's OWN-agent spending detail + their household totals + their account currency +
 // the selectable options, and mounts the already-render-tested <SpendingView/>. The
-// account-currency selector is BOUND to a `use server` wrapper over the SAME seam: it
+// view's account-currency form is BOUND to a `use server` wrapper over the SAME seam: it
 // re-derives the verified session (never trusting a client value for identity), takes the
 // chosen code from the submitted form, persists it member-scoped, and redirects back with
 // a `?notice=` the page renders in plain words — a refusal or a 4xx from the boundary is
@@ -93,14 +93,11 @@ async function setCurrencyAction(formData: FormData): Promise<void> {
 }
 
 // The outcome of the last set, in words plus an icon (never colour alone). A problem is
-// announced immediately (alert); a success politely (status).
+// announced immediately (alert); a success politely (status). The view shows it under
+// its header, next to the currency setting it reports on.
 function NoticeBanner({ notice }: { notice: Notice }) {
   const { done, text } = NOTICES[notice];
-  return (
-    <div className="mx-auto w-full max-w-3xl px-4 pt-8 sm:px-6">
-      <InlineNotice tone={done ? "success" : "error"}>{text}</InlineNotice>
-    </div>
-  );
+  return <InlineNotice tone={done ? "success" : "error"}>{text}</InlineNotice>;
 }
 
 export default async function SpendingPage({
@@ -120,28 +117,16 @@ export default async function SpendingPage({
 
   const data = await buildActions(db).load(session);
 
+  // The view renders the account-currency setting as one compact form in its header,
+  // its Save bound to `setCurrencyAction` — never a dead control.
   return (
-    <>
-      {notice ? <NoticeBanner notice={notice} /> : null}
-      {/* The view renders the account-currency <select name="account-currency">; this
-          form submits the chosen code to the seam, with an explicit save control so the
-          selector is never a dead control. */}
-      <form action={setCurrencyAction}>
-        <SpendingView
-          own={data.own}
-          household={data.household}
-          accountCurrency={data.accountCurrency}
-          currencyOptions={data.currencyOptions}
-        />
-        <div className="mx-auto flex max-w-3xl justify-end px-4 pb-8 sm:px-6">
-          <button
-            type="submit"
-            className="inline-flex min-h-11 items-center justify-center rounded-card bg-accent px-4 text-sm font-medium text-accent-fg focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-focus focus-visible:ring-offset-2 focus-visible:ring-offset-bg"
-          >
-            Save account currency
-          </button>
-        </div>
-      </form>
-    </>
+    <SpendingView
+      own={data.own}
+      household={data.household}
+      accountCurrency={data.accountCurrency}
+      currencyOptions={data.currencyOptions}
+      currencyAction={setCurrencyAction}
+      notice={notice ? <NoticeBanner notice={notice} /> : null}
+    />
   );
 }

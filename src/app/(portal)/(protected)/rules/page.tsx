@@ -15,6 +15,8 @@ import {
   createRulesActions,
   ruleInputFromForm,
   rulesNotice,
+  rulesPageState,
+  rulesReturnHref,
   type ActionResult,
   type RulesNotice,
 } from "./actions";
@@ -32,6 +34,11 @@ import {
 // design §5), calls the factory scoped to the SESSION user id, and redirects back
 // with a `?notice=` outcome the page shows in plain words (never a silent failure —
 // a refusal, a malformed id, or a rejected vocabulary is shown, not swallowed).
+//
+// Where each action lands (`rulesReturnHref`, validated keys only): adding a rule returns
+// to the New rule view (its draft is still mounted, so a refusal can be corrected); pause
+// and delete return to the status filter the row's form carried; the rules list is the
+// default view.
 //
 // Thin by design (the server-composition-roots addendum): per-request data (the
 // cookie, the search params) is read BEFORE `getServerDb()` so touching it marks the
@@ -94,7 +101,7 @@ async function createAction(formData: FormData): Promise<void> {
     outcome = error;
   }
   revalidatePath("/rules");
-  redirect(`/rules?notice=${mutationNotice(outcome, "created")}`);
+  redirect(rulesReturnHref(mutationNotice(outcome, "created"), { view: "new" }));
 }
 
 // Replace the content of one of the acting person's OWN rules. Same discipline.
@@ -116,7 +123,7 @@ async function updateAction(formData: FormData): Promise<void> {
     outcome = error;
   }
   revalidatePath("/rules");
-  redirect(`/rules?notice=${mutationNotice(outcome, "updated")}`);
+  redirect(rulesReturnHref(mutationNotice(outcome, "updated"), {}));
 }
 
 // Pause one of the acting person's OWN rules. Same discipline.
@@ -134,7 +141,7 @@ async function pauseAction(formData: FormData): Promise<void> {
     outcome = error;
   }
   revalidatePath("/rules");
-  redirect(`/rules?notice=${mutationNotice(outcome, "paused")}`);
+  redirect(rulesReturnHref(mutationNotice(outcome, "paused"), { status: formData.get("return-status") }));
 }
 
 // Delete one of the acting person's OWN rules. Same discipline.
@@ -152,7 +159,7 @@ async function deleteAction(formData: FormData): Promise<void> {
     outcome = error;
   }
   revalidatePath("/rules");
-  redirect(`/rules?notice=${mutationNotice(outcome, "deleted")}`);
+  redirect(rulesReturnHref(mutationNotice(outcome, "deleted"), { status: formData.get("return-status") }));
 }
 
 // The outcome of the last change, in words plus an icon (never colour alone). A
@@ -172,8 +179,8 @@ export default async function RulesPage({
 }) {
   // Read the request first: touching per-request data marks the page dynamic, so
   // `next build` never prerenders it (and never opens the database at build time).
-  const rawNotice = (await searchParams).notice;
-  const notice = rulesNotice(typeof rawNotice === "string" ? rawNotice : null);
+  const state = rulesPageState(await searchParams);
+  const notice = rulesNotice(state.notice);
   const db = await getServerDb();
   const session = await resolveSession(db);
   if (!session) {
@@ -188,6 +195,8 @@ export default async function RulesPage({
         rules={view.rules}
         agents={view.agents}
         currency={view.currency}
+        initialView={state.view}
+        statusFilter={state.status}
         createAction={createAction}
         updateAction={updateAction}
         pauseAction={pauseAction}

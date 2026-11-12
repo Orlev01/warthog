@@ -6,6 +6,8 @@ import { Status, type StatusKey } from "@/components/ui/status";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/field";
 import { EmptyState } from "@/components/ui/empty";
+import { FilterLinks } from "@/components/ui/filter-links";
+import { hrefWith, type QueryState } from "@/lib/href";
 
 // E09-S16 — Connectors view component (src/components/connectors/connectors-view.tsx).
 //
@@ -29,6 +31,13 @@ import { EmptyState } from "@/components/ui/empty";
 // AgentListView binds Disconnect). The view reaches for no clock, locale, DB or config.
 //
 // Colour comes from the design tokens (globals.css), never a raw hex.
+//
+// Organisation: the catalogue is filtered by category with same-page links (All first,
+// each with its count of matches for the current search) that keep the search text; an
+// entry the person already connected carries a "Connected" badge in words and an icon.
+// Connected cards summarise their tools ("n tools · n make changes") with the full list
+// (each tool still marked "Reads" or "Makes changes") behind a "Show tools" disclosure.
+// Disconnect stays one click (brief: "disconnect in one click").
 
 // One catalogue entry as the view renders it. `connectable` is the index's own
 // connectability truth (E09-S15). `gate` is the per-person decision (E09-S13): "connect"
@@ -41,6 +50,8 @@ export type CatalogueItem = {
   connectable: boolean;
   unavailableReason?: string;
   gate: "connect" | "ask_to_join";
+  // The person already has at least one account of this service connected.
+  connected?: boolean;
 };
 
 // The catalogue entries of one category, grouped so the view renders a section per
@@ -72,9 +83,19 @@ export type ConnectionItem = {
   agents: readonly string[];
 };
 
+// One catalogue category the filter links offer, with how many entries it holds that
+// match the current search.
+export type CategoryCount = {
+  key: string;
+  count: number;
+};
+
 export type ConnectorsViewProps = {
   initialView?: string;
   groups: readonly CatalogueGroup[];
+  // Every category to filter by (validated by the loader), and the one chosen (null = all).
+  categories?: readonly CategoryCount[];
+  category?: string | null;
   connections: readonly ConnectionItem[];
   query: string | null; // the search term echoed back (prefill); null = no search
   canRequest: boolean; // a MISS → surface "Request a connector"
@@ -108,6 +129,29 @@ const BTN_DISABLED = `${BTN_BASE} border border-line bg-surface text-fg-muted op
 // never by colour alone (brief design_ux.feel). Styled through tokens, no raw colour.
 const MARK_BADGE =
   "rounded-card bg-surface-muted px-2 py-0.5 text-xs font-medium text-fg-muted";
+const SUMMARY_LINK =
+  "inline-flex min-h-11 w-fit cursor-pointer list-none items-center gap-2 rounded-field text-sm font-medium text-fg focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-focus [&::-webkit-details-marker]:hidden";
+
+const PATH = "/connectors";
+
+// A category slug as a person reads it: "smart-home" → "Smart home", with the few
+// initialisms kept upper case.
+const CATEGORY_LABELS: Readonly<Record<string, string>> = { crm: "CRM", iot: "IoT" };
+export function categoryLabel(key: string): string {
+  const known = CATEGORY_LABELS[key];
+  if (known) return known;
+  const words = key.replaceAll("-", " ");
+  return words.charAt(0).toUpperCase() + words.slice(1);
+}
+
+// "3 tools · 1 makes changes", or "· read-only" when none of them change anything.
+function toolSummary(tools: readonly ToolItem[]): string {
+  const changes = tools.filter((tool) => tool.makesChange).length;
+  const count = `${tools.length} ${tools.length === 1 ? "tool" : "tools"}`;
+  return changes === 0
+    ? `${count} · read-only`
+    : `${count} · ${changes} ${changes === 1 ? "makes" : "make"} changes`;
+}
 
 // The Connect control for one catalogue entry. LIVE (bound to `connectAction`, carrying
 // THIS entry's connector id) when an action is supplied; otherwise DISABLED with a
@@ -146,7 +190,7 @@ function ConnectControl({
     <form action={connectAction}>
       <input type="hidden" name="connectorId" value={item.id} />
       <button type="submit" className={BTN_SECONDARY}>
-        Connect
+        {item.connected ? "Connect another account" : "Connect"}
       </button>
     </form>
   );
@@ -196,7 +240,10 @@ function CatalogueEntry({
   return (
     <li className="flex min-w-0 flex-col items-start gap-3 wh-card rounded-card border border-line bg-surface p-4">
       <div className="min-w-0 w-full">
-        <span className="font-medium text-fg">{item.name}</span>
+        <div className="flex flex-wrap items-center justify-between gap-x-2 gap-y-1">
+          <span className="font-medium text-fg">{item.name}</span>
+          {item.connected ? <Status status="connected" /> : null}
+        </div>
         <p className="text-xs text-fg-muted">{item.verification ?? "Configured integration · live verification not recorded"}</p>
         <a className="text-xs text-accent underline" href="/help/compatibility#connector-verification">What has been verified</a>
       </div>
@@ -220,8 +267,8 @@ function CategorySection({
 }) {
   return (
     <section className="flex flex-col gap-2">
-      <h3 className="text-sm font-medium capitalize text-fg-muted">
-        {group.category.replaceAll("-", " ")}
+      <h3 className="text-sm font-medium text-fg-muted">
+        {categoryLabel(group.category)}
       </h3>
       <ul className="grid gap-3 sm:grid-cols-2 xl:grid-cols-3">
         {group.items.map((item) => (
@@ -290,15 +337,14 @@ function RequestSection({
 }
 
 // The Disconnect control for one connection. LIVE (bound to `disconnectAction`, carrying
-// THIS connection's id) when an action is supplied; otherwise DISABLED with a one-line
-// reason — the same pattern as AgentListView.
+// THIS connection's id) when an action is supplied — one click, as the brief requires;
+// otherwise DISABLED with a one-line reason — the same pattern as AgentListView.
 function DisconnectControl({
   connectionId,
   disconnectAction,
 }: {
   connectionId: string;
   disconnectAction?: (formData: FormData) => void | Promise<void>;
-  reconnectAction?: (formData: FormData) => void | Promise<void>;
 }) {
   if (!disconnectAction) {
     return (
@@ -350,24 +396,29 @@ function ConnectionCard({
         <p className="text-sm text-warning">{connection.unavailableReason}</p>
       ) : null}
 
-      <div className="flex flex-col gap-1.5">
-        <span className="text-sm font-medium text-fg">Tools</span>
+      <div className="flex flex-col gap-1">
         {connection.tools.length === 0 ? (
           <p className="text-sm text-fg-muted">No tools yet.</p>
         ) : (
-          <ul className="flex flex-col gap-1.5">
-            {connection.tools.map((tool) => (
-              <li
-                key={tool.name}
-                className="flex flex-wrap items-center gap-2 text-sm text-fg"
-              >
-                <span>{tool.name}</span>
-                <span className={MARK_BADGE}>
-                  {tool.makesChange ? "Makes changes" : "Reads"}
-                </span>
-              </li>
-            ))}
-          </ul>
+          <>
+            <p className="text-sm text-fg">{toolSummary(connection.tools)}</p>
+            <details>
+              <summary className={SUMMARY_LINK}>Show tools</summary>
+              <ul className="flex flex-col gap-1.5 pb-1">
+                {connection.tools.map((tool) => (
+                  <li
+                    key={tool.name}
+                    className="flex flex-wrap items-center gap-2 text-sm text-fg"
+                  >
+                    <span>{tool.name}</span>
+                    <span className={MARK_BADGE}>
+                      {tool.makesChange ? "Makes changes" : "Reads"}
+                    </span>
+                  </li>
+                ))}
+              </ul>
+            </details>
+          </>
         )}
       </div>
 
@@ -381,10 +432,7 @@ function ConnectionCard({
         {connection.reconnectable && reconnectAction && (
           <form action={reconnectAction}>
             <input type="hidden" name="connectionId" value={connection.id} />
-            <button
-              type="submit"
-              className="rounded-control border border-line px-3 py-2 text-sm font-medium text-fg"
-            >
+            <button type="submit" className={BTN_SECONDARY}>
               Reconnect and refresh tools
             </button>
           </form>
@@ -398,9 +446,46 @@ function ConnectionCard({
   );
 }
 
+// The category filter row: All first (the total), then every category with its count.
+// Each link keeps the search text and the catalogue tab.
+function CategoryLinks({
+  categories,
+  category,
+  state,
+}: {
+  categories: readonly CategoryCount[];
+  category: string | null;
+  state: QueryState;
+}) {
+  const total = categories.reduce((sum, c) => sum + c.count, 0);
+  return (
+    <FilterLinks
+      variant="scroll"
+      label="Catalogue categories"
+      items={[
+        { label: "All", href: hrefWith(PATH, state, { category: undefined }), active: category === null, count: total },
+        ...categories.map((c) => ({
+          label: categoryLabel(c.key),
+          href: hrefWith(PATH, state, { category: c.key }),
+          active: c.key === category,
+          count: c.count,
+        })),
+      ]}
+    />
+  );
+}
+
+// What clearing an empty, filtered catalogue removes, in words.
+function clearLabel(query: string | null, category: string | null): string {
+  if (query && category) return "Clear search and category";
+  return query ? "Clear search" : "Show all categories";
+}
+
 export function ConnectorsView({
   initialView,
   groups,
+  categories,
+  category = null,
   connections,
   query,
   canRequest,
@@ -409,17 +494,24 @@ export function ConnectorsView({
   disconnectAction,
   requestAction,
 }: ConnectorsViewProps) {
+  // The catalogue state every category link keeps (the tab, the search, the category).
+  const catalogueState: QueryState = {
+    view: "catalogue",
+    q: query ?? undefined,
+    category: category ?? undefined,
+  };
+  const filtered = Boolean(query) || category !== null;
   return (
     <div className="wh-page flex flex-col gap-8">
       <WorkspaceHeading eyebrow="Account resources" title="Connectors" description="Manage your connected accounts, or browse services to bring into your workspace." />
       <ViewPanels
         label="Connector views"
-        defaultTab={query ? "catalogue" : "connected"}
+        defaultTab={filtered ? "catalogue" : "connected"}
         initialTab={initialView}
         tabs={[
           {
             key: "connected",
-            label: "Connected services",
+            label: `Connected services (${connections.length})`,
             content: (
               <section className="flex flex-col gap-4">
                 <h2 className="text-lg font-semibold text-fg">
@@ -460,6 +552,9 @@ export function ConnectorsView({
                   className="flex flex-col gap-2 sm:flex-row sm:items-end"
                 >
                   <input type="hidden" name="view" value="catalogue" />
+                  {category ? (
+                    <input type="hidden" name="category" value={category} />
+                  ) : null}
                   <div className="flex flex-1 flex-col gap-1.5">
                     <Label htmlFor="connector-search">Search</Label>
                     <Input
@@ -475,12 +570,37 @@ export function ConnectorsView({
                   </button>
                 </form>
 
+                {categories && categories.length > 0 ? (
+                  <CategoryLinks
+                    categories={categories}
+                    category={category}
+                    state={catalogueState}
+                  />
+                ) : null}
+
                 {groups.length === 0 ? (
-                  <p className="text-sm text-fg-muted">
-                    {canRequest
-                      ? "No connectors matched your search."
-                      : "No connectors to show just now."}
-                  </p>
+                  filtered ? (
+                    <EmptyState
+                      heading="No connectors match"
+                      description={
+                        category && !canRequest
+                          ? `Nothing in ${categoryLabel(category)} matches your search. Try all categories.`
+                          : "Nothing in the catalogue matches your search."
+                      }
+                      action={
+                        <a
+                          href={hrefWith(PATH, { view: "catalogue" })}
+                          className="inline-flex min-h-11 items-center text-sm font-medium text-fg underline underline-offset-4"
+                        >
+                          {clearLabel(query, category)}
+                        </a>
+                      }
+                    />
+                  ) : (
+                    <p className="text-sm text-fg-muted">
+                      No connectors to show just now.
+                    </p>
+                  )
                 ) : (
                   <div className="flex flex-col gap-6">
                     {groups.map((group) => (

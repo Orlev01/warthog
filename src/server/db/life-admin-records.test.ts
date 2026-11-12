@@ -432,6 +432,40 @@ test("listRecordsForUser returns an empty array for a person with no records", a
   }
 });
 
+// The Life admin page groups records by how soon they fall due, so the owner reads come
+// back soonest-due first with undated records last; records sharing a due date (or both
+// undated) are in creation order, then id — a deterministic order, not the heap's.
+test("listRecordsForUser and listRecordsByKind return records soonest due first, undated last, in a stable order", async () => {
+  const db = await freshDb();
+  try {
+    const userId = await makeUser(db, "order");
+    const dek = freshDek();
+    const plan = [
+      { name: "Later", dueDate: "2027-01-10", createdAt: "2026-10-01T00:00:00Z" },
+      { name: "Undated new", dueDate: null, createdAt: "2026-10-05T00:00:00Z" },
+      { name: "Soon new", dueDate: "2026-12-01", createdAt: "2026-10-04T00:00:00Z" },
+      { name: "Undated old", dueDate: null, createdAt: "2026-10-02T00:00:00Z" },
+      { name: "Soon old", dueDate: "2026-12-01", createdAt: "2026-10-03T00:00:00Z" },
+      { name: "Overdue", dueDate: "2026-09-30", createdAt: "2026-10-06T00:00:00Z" },
+    ];
+    for (const row of plan) {
+      const record = await createRecord(
+        db,
+        { userId, kind: "subscription", fields: { name: row.name }, dueDate: row.dueDate, status: "active", source: { kind: "person" } },
+        dek,
+      );
+      await db.query("UPDATE life_admin_records SET created_at = $1 WHERE id = $2", [row.createdAt, record.id]);
+    }
+    const expected = ["Overdue", "Soon old", "Soon new", "Later", "Undated old", "Undated new"];
+    const names = (await listRecordsForUser(db, userId, dek)).map((r) => r.fields.name);
+    assert.deepEqual(names, expected);
+    const byKind = (await listRecordsByKind(db, userId, "subscription", dek)).map((r) => r.fields.name);
+    assert.deepEqual(byKind, expected, "the by-kind read uses the same order");
+  } finally {
+    await db.close();
+  }
+});
+
 test("listRecordsByKind returns only the owner's records of that kind, decrypted", async () => {
   const db = await freshDb();
   try {

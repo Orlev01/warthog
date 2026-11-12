@@ -16,7 +16,9 @@ import type { Db } from "@/server/db/index";
 import { createLifeAdminActions, type LifeAdminActions } from "./actions";
 import { LifeAdminView } from "@/components/life-admin/life-admin-view";
 import { TasksView } from "@/components/life-admin/tasks-view";
-import { recordFields, recordDate, recordReturnPath, recordOffsets, recordStatus } from "./form-inputs";
+import { resolveAssigneeFilter } from "@/components/life-admin/task-groups";
+import { firstParam } from "@/lib/href";
+import { recordFields, recordDate, recordReturnPath, recordOffsets, recordStatus, taskReturnPath } from "./form-inputs";
 
 // E14-S13 — Life Admin page (the thin protected-page loader + action wiring over the
 // tested `createLifeAdminActions` seam, `./actions`). It reads the signed-in session
@@ -29,7 +31,9 @@ import { recordFields, recordDate, recordReturnPath, recordOffsets, recordStatus
 // client value for identity), takes its input from the submitted form, persists
 // member-scoped through the seam, and redirects back with a `?notice=` the page renders
 // in plain words — a refusal (another person's id, a foreign agent) or a 4xx from the
-// boundary is reported as a plain problem, never swallowed (no dead controls).
+// boundary is reported as a plain problem, never swallowed (no dead controls). The Tasks
+// view's `?assignee=` filter is validated against the person's own agents here (anything
+// else shows every task), and task actions return to the filter they were submitted under.
 //
 // Thin by design (the server-composition-roots addendum): per-request data (the search
 // params) is read BEFORE `getServerDb()` so `next build` marks the page dynamic and
@@ -171,7 +175,7 @@ async function assignAction(formData: FormData): Promise<void> {
   "use server";
   await run("assigned", (actions, session) =>
     actions.assignTask(session, { id: str(formData, "taskId"), assignee: str(formData, "assignee") }),
-    "/life-admin?view=tasks",
+    taskReturnPath(formData),
   );
 }
 
@@ -179,7 +183,7 @@ async function addNoteAction(formData: FormData): Promise<void> {
   "use server";
   await run("noted", (actions, session) =>
     actions.addTaskNote(session, { id: str(formData, "taskId"), text: str(formData, "note") }),
-    "/life-admin?view=tasks",
+    taskReturnPath(formData),
   );
 }
 
@@ -187,7 +191,7 @@ async function completeAction(formData: FormData): Promise<void> {
   "use server";
   await run("completed", (actions, session) =>
     actions.completeTask(session, { id: str(formData, "taskId") }),
-    "/life-admin?view=tasks",
+    taskReturnPath(formData),
   );
 }
 
@@ -287,6 +291,7 @@ export default async function LifeAdminPage({
           <TasksView
             tasks={data.tasks}
             agents={data.agents}
+            assignee={resolveAssigneeFilter(firstParam(params.assignee), data.agents)}
             createTaskAction={createTaskAction}
             assignAction={assignAction}
             addNoteAction={addNoteAction}
@@ -295,6 +300,7 @@ export default async function LifeAdminPage({
         </div>
       ) : (
         <LifeAdminView
+          today={data.today}
           initialTab={params.tab === "receipts" || params.tab === "renewals" || params.tab === "checklist" ? params.tab : "subscriptions"}
           subscriptions={data.subscriptions}
           receipts={data.receipts}

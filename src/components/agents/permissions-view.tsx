@@ -13,6 +13,8 @@ import {
   type Budget,
 } from "@/domain/budget/budget";
 import { ruleSentence, type Rule } from "@/domain/rules/rules";
+import { ListGroup, LIST_ROW } from "@/components/ui/list-group";
+import { RuleKindBadge } from "@/components/rules/rule-badges";
 
 // E10-S07 — Per-agent permissions view (design §7; brief "Per-agent permissions
 // page"). Each agent's reach is shaped on ONE screen. For a given agent the person
@@ -562,41 +564,9 @@ export function PermissionsView({
       ) : null}
 
       {show("rules") ? (
-        <>
-          {/* The agent's own rules, each read back as its exact plain-English sentence. */}
-          <div className="wh-permission-group flex flex-col gap-3">
-            <SectionHeading>Rules for {agentName}</SectionHeading>
-            <p className="text-sm text-fg-muted">
-              Global rules apply to every agent. Individual settings cannot
-              override a global denial.{" "}
-              <a href="/rules" className="text-accent underline">
-                Manage global and agent rules
-              </a>
-            </p>
-            {rules.length === 0 ? (
-              <p className="text-sm text-fg-muted">
-                No rules just for {agentName} yet.{" "}
-                <a
-                  href="/rules"
-                  className="font-medium text-accent underline underline-offset-2"
-                >
-                  Add one in Rules
-                </a>
-                .
-              </p>
-            ) : null}
-            <ul className="flex flex-col gap-2">
-              {rules.map((rule, i) => (
-                <li
-                  key={i}
-                  className="rounded-card border border-line bg-surface p-3 text-sm text-fg"
-                >
-                  {ruleSentence(rule)}
-                </li>
-              ))}
-            </ul>
-          </div>
-        </>
+        <div className="wh-permission-group">
+          <AgentRules agentName={agentName} rules={rules} />
+        </div>
       ) : null}
 
       {show("settings") ? (
@@ -647,6 +617,75 @@ export function PermissionsView({
         </>
       ) : null}
     </section>
+  );
+}
+
+// The rules that apply to this agent, in two groups: the global rules it inherits (they
+// apply to every agent and an individual setting cannot override a global denial) and the
+// rules just for it. Each reads back as its exact sentence with its kind as a word. The
+// agent's own group always shows, and its empty message says whether global rules still
+// apply; the inherited group shows only when there is something to inherit.
+function AgentRules({ agentName, rules }: { agentName: string; rules: ReadonlyArray<Rule> }) {
+  const inherited = rules.filter((rule) => rule.scope.type === "any_agent");
+  const own = rules.filter((rule) => rule.scope.type === "agent");
+  const row = (rule: Rule, i: number) => (
+    <li key={i} className={LIST_ROW}>
+      <span className="text-sm text-fg">{ruleSentence(rule)}</span>
+      <RuleKindBadge kind={rule.kind} />
+    </li>
+  );
+  const stillApplies =
+    inherited.length === 0
+      ? "No global rules apply either."
+      : inherited.length === 1
+        ? "The global rule above still applies."
+        : `The ${inherited.length} global rules above still apply.`;
+  return (
+    <div className="flex flex-col gap-4">
+      <div className="flex flex-col gap-1">
+        <SectionHeading>Rules for {agentName}</SectionHeading>
+        <p className="text-sm text-fg-muted">
+          Global rules apply to every agent. Individual settings cannot
+          override a global denial.{" "}
+          <a href="/rules" className="text-accent underline">
+            Manage global and agent rules
+          </a>
+        </p>
+      </div>
+      {inherited.length > 0 ? (
+        <ListGroup
+          id="agent-rules-inherited"
+          level={3}
+          title="Inherited global rules"
+          count={inherited.length}
+          summary="Set for all agents on the Rules page."
+        >
+          {inherited.map(row)}
+        </ListGroup>
+      ) : null}
+      <ListGroup
+        id="agent-rules-own"
+        level={3}
+        title={`Just for ${agentName}`}
+        count={own.length}
+        summary={
+          own.length === 0 ? (
+            <>
+              No rules just for {agentName} yet. {stillApplies}{" "}
+              <a
+                href="/rules?view=new"
+                className="font-medium text-accent underline underline-offset-2"
+              >
+                Add one in Rules
+              </a>
+              .
+            </>
+          ) : undefined
+        }
+      >
+        {own.map(row)}
+      </ListGroup>
+    </div>
   );
 }
 

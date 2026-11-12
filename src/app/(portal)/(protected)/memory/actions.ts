@@ -1,5 +1,5 @@
 import { auditedOwnerChange } from "@/server/activity/owner-change";
-import { pageMemories } from "../../../../server/db/memories";
+import { countMemoryFacets, pageMemories, type MemoryListFilters } from "../../../../server/db/memories";
 import { withTransaction } from "../../../../server/db/index";
 import { createRedactingRecorder } from "../../../../server/mcp/recorder";
 import { formatAccountTime } from "@/server/display-time";
@@ -51,6 +51,11 @@ import { type MemoryPageItem } from "@/server/memory/page-data";
 import type { KeyWrapper } from "@/server/crypto/key-wrapper";
 import type { Clock } from "@/server/seams/clock";
 import type { Session } from "@/server/auth/session";
+import type {
+  MemoryDateGroup,
+  MemoryFilterOption,
+  MemoryFilterState,
+} from "@/components/memory/memory-view";
 
 // The injected seams — no process.env, no secret (INV-103). `db` is the
 // parameterizing database seam; `keyWrapper` unwraps the session person's own DEK
@@ -63,23 +68,34 @@ export interface MemoryActionsDeps {
 }
 
 // One memory shaped for the view: its id, its decrypted content, a PRE-FORMATTED
-// saved-at label, the saving agent's DISPLAY NAME (null when the PERSON added it) and
-// its scope. This IS the shape <MemoryView/> is mounted over — the loader output is
-// the view's input.
+// saved-at label, the saving agent's DISPLAY NAME (null when the PERSON added it), its
+// scope and the date heading it sits under (computed in the account time zone). This IS
+// the shape <MemoryView/> is mounted over — the loader output is the view's input.
 export interface MemoryViewItem {
   readonly id: string;
   readonly content: string;
   readonly savedAt: string;
   readonly sourceAgentName: string | null;
   readonly scope: MemoryScope;
+  readonly dateGroup: MemoryDateGroup;
 }
 
-// What `load` returns — the owner's memories shaped for the view, plus the search term
-// echoed back so the search box stays prefilled (null when no active search).
+// What `load` returns — the owner's memories shaped for the view, the search term echoed
+// back so the search box stays prefilled (null when no active search), and the validated
+// filters with the options (and counts) the filter links offer.
 export interface MemoryPageData {
   readonly memories: MemoryViewItem[];
   readonly query: string | null;
   readonly nextCursor?: string | null;
+  readonly filters: MemoryFilterState;
+}
+
+// The raw `?scope=` / `?source=` values from the URL. Untrusted: `load` keeps a scope only
+// when it is a known scope, and a source only when it is "you" or one of the session
+// person's OWN agents; anything else is ignored.
+export interface MemoryFilterInput {
+  readonly scope?: string;
+  readonly source?: string;
 }
 
 // Every mutation reports its outcome — success, or a refusal naming its reason (the
@@ -117,6 +133,7 @@ export interface MemoryActions {
     session: Session,
     query?: string,
     cursor?: string,
+    filters?: MemoryFilterInput,
   ): Promise<MemoryPageData>;
   addMemory(session: Session, input: AddMemoryInput): Promise<ActionResult>;
   editMemory(session: Session, input: EditMemoryInput): Promise<ActionResult>;
@@ -158,6 +175,30 @@ const rescopeMemorySchema = z.object({
 });
 const deleteMemorySchema = z.object({ id: memoryIdSchema });
 
+// The date heading a memory sits under: its calendar day in the account time zone
+// compared with today's there — "today", the six days before ("week", shown as "This
+// week") or "earlier". A saved time ahead of now (clock skew) counts as today.
+export function memoryDateGroup(savedAt: Date, now: Date, timeZone: string): MemoryDateGroup {
+  const days = localDayNumber(now, timeZone) - localDayNumber(savedAt, timeZone);
+  if (days <= 0) return "today";
+  if (days < 7) return "week";
+  return "earlier";
+}
+
+// Whole days since the epoch for the calendar date `instant` falls on in `timeZone`.
+function localDayNumber(instant: Date, timeZone: string): number {
+  const parts = new Intl.DateTimeFormat("en-CA", {
+    timeZone,
+    year: "numeric",
+    month: "2-digit",
+    day: "2-digit",
+  }).formatToParts(instant);
+  const part = (type: string) => Number(parts.find((p) => p.type === type)?.value);
+  return Date.UTC(part("year"), part("month") - 1, part("day")) / 86_400_000;
+}
+
+const SCOPE_LABELS: Record<MemoryScope, string> = { shared: "Shared", kept: "Kept" };
+
 export function createMemoryActions(deps: MemoryActionsDeps): MemoryActions {
   const { db, keyWrapper, clock } = deps;
 
@@ -190,6 +231,7 @@ export function createMemoryActions(deps: MemoryActionsDeps): MemoryActions {
     m: MemoryPageItem,
     agentNameById: ReadonlyMap<string, string>,
     timeZone: string,
+    now: Date,
   ): MemoryViewItem {
     return {
       id: m.id,
@@ -200,6 +242,7 @@ export function createMemoryActions(deps: MemoryActionsDeps): MemoryActions {
           ? (agentNameById.get(m.sourceAgentId) ?? null)
           : null,
       scope: m.scope,
+      dateGroup: memoryDateGroup(m.createdAt, now, timeZone),
     };
   }
 
@@ -213,24 +256,42 @@ export function createMemoryActions(deps: MemoryActionsDeps): MemoryActions {
     session: Session,
     query?: string,
     cursor?: string,
+    filterInput?: MemoryFilterInput,
   ): Promise<MemoryPageData> {
     const dek = await dataKeyFor(session.userId);
     const timeZone = await timeZoneFor(db, session.userId, dek);
     const hasQuery = typeof query === "string" && query.trim().length > 0;
+
+    // Resolve source agent ids to display names from the person's OWN agents only
+    // (member-scoped), in one read rather than per memory. The same list validates the
+    // saved-by filter: an id that is not one of this person's agents is ignored.
+    const agents = await listAgentsForUser(db, session.userId);
+    const agentNameById = new Map(agents.map((a) => [a.id, a.displayName]));
+    const scope: MemoryScope | null =
+      filterInput?.scope === "kept" || filterInput?.scope === "shared" ? filterInput.scope : null;
+    const source: string | null =
+      filterInput?.source === "you" || (filterInput?.source !== undefined && agentNameById.has(filterInput.source))
+        ? filterInput.source
+        : null;
+    const filters: MemoryListFilters = {
+      ...(scope ? { scope } : {}),
+      ...(source === "you"
+        ? { source: { kind: "person" as const } }
+        : source
+          ? { source: { kind: "agent" as const, agentId: source } }
+          : {}),
+    };
+
     const page = await pageMemories(db, session.userId, dek, {
       cursor,
       limit: hasQuery ? 200 : 50,
+      ...filters,
     });
     const items = hasQuery
       ? page.items.filter((m) =>
           m.content.toLowerCase().includes(query!.toLowerCase()),
         )
       : page.items;
-
-    // Resolve source agent ids to display names from the person's OWN agents only
-    // (member-scoped), in one read rather than per memory.
-    const agents = await listAgentsForUser(db, session.userId);
-    const agentNameById = new Map(agents.map((a) => [a.id, a.displayName]));
 
     const active = (
       await db.query(
@@ -244,9 +305,10 @@ export function createMemoryActions(deps: MemoryActionsDeps): MemoryActions {
         [session.userId, items.map((m) => m.id)],
       )
     ).rows;
+    const now = clock.now();
     return {
       memories: items.map((m) => ({
-        ...toViewItem(m, agentNameById, timeZone),
+        ...toViewItem(m, agentNameById, timeZone, now),
         audience: active
           .filter((a) => {
             const override = overrides.find(
@@ -260,7 +322,44 @@ export function createMemoryActions(deps: MemoryActionsDeps): MemoryActions {
       })),
       query: hasQuery ? query : null,
       nextCursor: page.nextCursor,
+      filters: await filterState(session.userId, scope, source, filters, agents, hasQuery),
     };
+  }
+
+  // The filter links' options: every scope, then "You" and each of the person's OWN
+  // agents that saved something under the chosen scope (or is the chosen source). Counts
+  // come from metadata only and are left off while a search narrows the list, since the
+  // search runs over decrypted content and the counts could not match it.
+  async function filterState(
+    userId: string,
+    scope: MemoryScope | null,
+    source: string | null,
+    filters: MemoryListFilters,
+    agents: ReadonlyArray<{ id: string; displayName: string }>,
+    hasQuery: boolean,
+  ): Promise<MemoryFilterState> {
+    const facets = await countMemoryFacets(db, userId, filters);
+    const counted = (count: number) => (hasQuery ? {} : { count });
+    const scopeTotal = facets.scope.kept + facets.scope.shared;
+    const sourceTotal =
+      facets.source.person + [...facets.source.agents.values()].reduce((sum, n) => sum + n, 0);
+    const scopeOptions: MemoryFilterOption[] = [
+      { value: null, label: "All scopes", ...counted(scopeTotal) },
+      ...(["shared", "kept"] as const).map((key) => ({
+        value: key,
+        label: SCOPE_LABELS[key],
+        ...counted(facets.scope[key]),
+      })),
+    ];
+    const sourceOptions: MemoryFilterOption[] = [
+      { value: null, label: "Anyone", ...counted(sourceTotal) },
+      { value: "you", label: "You", ...counted(facets.source.person) },
+      ...[...agents]
+        .filter((a) => (facets.source.agents.get(a.id) ?? 0) > 0 || a.id === source)
+        .sort((a, b) => a.displayName.localeCompare(b.displayName))
+        .map((a) => ({ value: a.id, label: a.displayName, ...counted(facets.source.agents.get(a.id) ?? 0) })),
+    ];
+    return { scope, source, scopeOptions, sourceOptions };
   }
 
   // Add the session person's OWN memory (no source agent). Validate at the boundary

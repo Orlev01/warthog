@@ -59,13 +59,12 @@
 // Behaviours asserted below:
 //   - every existing rule renders as its plain sentence, each with a live Pause
 //     (active rules) and a live Delete; a paused rule shows its status in words.
-//   - the create form offers the Ask-me-first and Never-allow templates, the four
-//     spending-rule templates and the approval-expiry setting, plus the brief's
-//     six action choices.
+//   - the create form offers the Ask-me-first and Never-allow templates plus the
+//     brief's six action choices (the spending and expiry "templates" are superseded:
+//     see the template test below and rules-view.organise.test.tsx's Budgets tab).
 //   - the chosen draft is PREVIEWED as a sentence before saving: an ask-first /
 //     never-allow draft previews EXACTLY `ruleSentence(...)` (so the condition and
-//     the all-agents / chosen-agent scope all flow through); a spending-rule /
-//     expiry draft previews its salient figures and merchants.
+//     the all-agents / chosen-agent scope all flow through).
 //   - a scope choice for all agents and for each connected agent is offered.
 //   - a live control to add the rule is present; no raw hex colour anywhere.
 
@@ -82,7 +81,6 @@ import {
   type RuleAction,
   type RuleCondition,
 } from "@/domain/rules/rules";
-import { type PeriodKind } from "@/domain/budget/budget";
 
 // --- the prop shape this task introduces (described here as the contract) -------
 
@@ -91,21 +89,18 @@ type RulesViewRule = {
   sentence: string;
   scope: RuleScope;
   status: "active" | "paused";
+  kind: "ask_first" | "never_allow";
 };
 
 type RulesViewAgent = { id: string; name: string };
 
 // The initially-active create-form template, its values and its scope. The two rule
-// templates (ask_first / never_allow) carry the brief's action + optional condition;
-// the spending templates and the expiry setting carry their own figures/merchants.
+// templates (ask_first / never_allow) carry the brief's action + optional condition.
+// SUPERSEDED (rules tidy-up): the spending and approval-expiry "templates" were disabled
+// radios pointing at settings that do not exist; they are gone from the form (see below).
 type RuleDraft =
   | { template: "ask_first"; scope: RuleScope; action: RuleAction; condition?: RuleCondition }
-  | { template: "never_allow"; scope: RuleScope; action: RuleAction; condition?: RuleCondition }
-  | { template: "per_purchase_limit"; scope: RuleScope; amount: number }
-  | { template: "agent_budget"; scope: RuleScope; amount: number; period: PeriodKind }
-  | { template: "allowed_merchants"; scope: RuleScope; merchants: readonly string[] }
-  | { template: "blocked_merchants"; scope: RuleScope; merchants: readonly string[] }
-  | { template: "approval_expiry"; scope: RuleScope; minutes: number };
+  | { template: "never_allow"; scope: RuleScope; action: RuleAction; condition?: RuleCondition };
 
 type RulesViewProps = {
   rules: ReadonlyArray<RulesViewRule>;
@@ -131,18 +126,21 @@ const EXISTING: RulesViewRule[] = [
     sentence: "Ask me before any agent requests a high-tier identity detail",
     scope: ANY_AGENT,
     status: "active",
+    kind: "ask_first",
   },
   {
     id: "r2",
     sentence: "Never allow Grok to make any change",
     scope: { type: "agent", agentId: "a-grok", name: "Grok" },
     status: "active",
+    kind: "never_allow",
   },
   {
     id: "r3",
     sentence: "Ask me before any agent requests a card when the amount is over 500",
     scope: ANY_AGENT,
     status: "paused",
+    kind: "ask_first",
   },
 ];
 
@@ -264,9 +262,8 @@ function countSelectable(markup: string, re: RegExp): number {
 }
 
 // Names of every DISABLED control (the counterpart of selectableNames): a disabled
-// <button>, a disabled checkbox/radio input, or a disabled wrapping-label input. A
-// template the rules store does not hold renders DISABLED with a reason, so it appears
-// here (never in selectableNames). Reads RENDERED state, not source text.
+// <button>, a disabled checkbox/radio input, or a disabled wrapping-label input (an
+// incomplete draft's Add button, say). Reads RENDERED state, not source text.
 function disabledNames(markup: string): string[] {
   const labels = labelTextById(markup);
   const out: string[] = [];
@@ -288,10 +285,6 @@ function disabledNames(markup: string): string[] {
   return out.filter((n) => n.length > 0);
 }
 
-function hasDisabled(markup: string, re: RegExp): boolean {
-  return disabledNames(markup).some((n) => re.test(n));
-}
-
 // Whether `markup` carries a form control (input / select / textarea) posting under
 // `name` — the behaviour a FormData-reading server action depends on. Pins the NAME the
 // control posts under, not its element kind or label copy (a refactor may swap a select
@@ -299,11 +292,6 @@ function hasDisabled(markup: string, re: RegExp): boolean {
 function hasNamedControl(markup: string, name: string): boolean {
   return new RegExp(`<(?:input|select|textarea)\\b[^>]*\\bname="${name}"`, "i").test(markup);
 }
-
-// A disabled non-rule template must show a one-line reason pointing to WHERE that
-// setting actually lives (per agent / Spending / Settings) — generous over the plausible
-// destinations, since the exact copy is the builder's.
-const WHERE_SET_RE = /\b(spending|spend|budget|budgets|setting|settings|agent|agents|connection|connector|permission|permissions)\b/i;
 
 function render(props: RulesViewProps): string {
   return renderToStaticMarkup(<RulesView {...props} />);
@@ -377,6 +365,7 @@ test("renders a chosen-agent rule by the agent's name, never its raw connection 
     sentence: "Ask me before Claude requests a card",
     scope: { type: "agent", agentId: CONNECTION_ID, name: "Claude" },
     status: "active",
+    kind: "ask_first",
   };
   const markup = render(base({ rules: [chosen] }));
   const text = visibleText(markup);
@@ -406,77 +395,25 @@ test("offers the Ask-me-first and Never-allow rule templates as live choices", (
   );
 });
 
-test("shows the four spending-rule templates and the approval-expiry setting as DISABLED choices (set elsewhere)", () => {
-  // SUPERSEDED (E12-S17): the rules store holds only the ask-first / never-allow rules.
-  // The four spending rules and the approval-expiry setting are configured ELSEWHERE
-  // (per agent / Spending / Settings), so on THIS screen they appear but DISABLED —
-  // never offered as a live create choice that would post into a guaranteed error.
+test("offers only the two rule templates: no disabled spending or approval-expiry choices", () => {
+  // SUPERSEDES (rules tidy-up) the E12-S17 "shown DISABLED, set elsewhere" contract. Those
+  // five radios were never selectable and pointed at settings that do not exist (no
+  // per-purchase limit, merchant list or approval-expiry setting exists anywhere in the
+  // app; only a per-agent card budget does, which the Budgets tab now links to). The form
+  // offers exactly the two templates the rules store holds, and no disabled template.
   const markup = render(base());
-  const nonRuleTemplates: Array<{ re: RegExp; label: string }> = [
-    { re: /per[- ]?purchase|each purchase|purchase limit/i, label: "per-purchase limit" },
-    { re: /budget/i, label: "budget per agent" },
-    { re: /allow(ed)?.*merchant|only.*merchant/i, label: "allowed-merchants only" },
-    { re: /block(ed)?.*merchant|merchant.*block/i, label: "blocked merchants" },
-    { re: /expir/i, label: "approval expiry" },
-  ];
-  for (const t of nonRuleTemplates) {
-    assert.ok(
-      hasDisabled(markup, t.re),
-      `the "${t.label}" template must appear DISABLED (set elsewhere); disabled=${JSON.stringify(disabledNames(markup))}`,
-    );
-    assert.ok(
-      !hasSelectable(markup, t.re),
-      `the "${t.label}" template must NOT be a live create choice; controls=${JSON.stringify(selectableNames(markup))}`,
-    );
-  }
-  // By contrast, the two RULE templates the store DOES hold remain live choices.
-  assert.ok(
-    hasSelectable(markup, /ask me (first|before)|ask[- ]first/i),
-    "Ask-me-first stays a live create choice",
+  const templateRadios = [...markup.matchAll(/<input\b([^>]*\bname="rule-template"[^>]*?)\/?>/gi)].map((m) => m[1]!);
+  assert.deepEqual(
+    templateRadios.map((attrs) => attr(attrs, "value")),
+    ["ask_first", "never_allow"],
+    "the template picker holds exactly the two rule templates",
   );
-  assert.ok(hasSelectable(markup, /never allow/i), "Never-allow stays a live create choice");
-});
-
-// Operator fix (E12-S17 review veto 2): the where-it-is-set reason must show in the state a
-// person actually sees — the default render — not only under a forced draft that the disabled
-// radios make unreachable.
-test("in the default render each disabled template says where it is set", () => {
-  const text = render(base()).replace(/<[^>]+>/g, " ").replace(/\s+/g, " ");
-  for (const reason of [
-    "Set a per-purchase spending limit for each agent in Spending.",
-    "Set an agent's budget per day, week or month in Spending.",
-    "Choose the merchants an agent may pay in Spending.",
-    "Choose the merchants an agent may never pay in Spending.",
-    "Choose how long approvals stay open in Settings.",
-  ]) {
-    const html = reason.replace(/'/g, "&#x27;");
-    assert.ok(text.includes(reason) || text.includes(html), `default render shows: ${reason}`);
+  assert.ok(templateRadios.every((attrs) => !hasBoolAttr(attrs, "disabled")), "neither template is disabled");
+  const text = visibleText(markup);
+  for (const gone of [/per[- ]purchase limit/i, /allowed merchants only/i, /blocked merchants/i, /approval expiry/i, /approvals stay open/i]) {
+    assert.doesNotMatch(text, gone, `no copy names a setting that does not exist (${gone})`);
   }
-});
-
-test("a disabled non-rule template can never be submitted into a guaranteed error, and names where it is set", () => {
-  // SUPERSEDED (E12-S17): forcing a non-rule template active (the draft seam) must NOT
-  // produce a live Add/Create/Save control (it can never be submitted into a guaranteed
-  // error), and a reason must point to where that setting actually lives.
-  const drafts: RuleDraft[] = [
-    { template: "per_purchase_limit", scope: ANY_AGENT, amount: 175 },
-    { template: "agent_budget", scope: ANY_AGENT, amount: 333, period: "week" },
-    { template: "allowed_merchants", scope: ANY_AGENT, merchants: ["BoxCo"] },
-    { template: "blocked_merchants", scope: ANY_AGENT, merchants: ["Sketchy Store"] },
-    { template: "approval_expiry", scope: ANY_AGENT, minutes: 45 },
-  ];
-  for (const draft of drafts) {
-    const markup = render(base({ draft }));
-    assert.ok(
-      !hasSelectable(markup, /\b(add|create|save)\b/i),
-      `the ${draft.template} template must offer NO live submit (never submitted into a guaranteed ` +
-        `error); controls=${JSON.stringify(selectableNames(markup))}`,
-    );
-    assert.ok(
-      WHERE_SET_RE.test(visibleText(markup)),
-      `the ${draft.template} template must show a reason pointing to where it is set; text="${visibleText(markup)}"`,
-    );
-  }
+  assert.equal(disabledNames(markup).filter((n) => /template|merchant|expir|purchase/i.test(n)).length, 0);
 });
 
 test("offers the brief's six action choices under a rule template", () => {
@@ -721,11 +658,6 @@ test("uses design tokens, never a raw hex colour", () => {
   const drafts: RuleDraft[] = [
     { template: "ask_first", scope: ANY_AGENT, action: { type: "send_message", channel: "email" } },
     { template: "never_allow", scope: CLAUDE_SCOPE, action: { type: "card_request" }, condition: { type: "amount_over", amount: 750 } },
-    { template: "per_purchase_limit", scope: ANY_AGENT, amount: 175 },
-    { template: "agent_budget", scope: CLAUDE_SCOPE, amount: 333, period: "month" },
-    { template: "allowed_merchants", scope: ANY_AGENT, merchants: ["BoxCo"] },
-    { template: "blocked_merchants", scope: ANY_AGENT, merchants: ["Sketchy Store"] },
-    { template: "approval_expiry", scope: ANY_AGENT, minutes: 45 },
   ];
   for (const draft of drafts) {
     const markup = render(base({ draft }));

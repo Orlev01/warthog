@@ -19,6 +19,7 @@ function render(
 ): string {
   return renderToStaticMarkup(
     <LifeAdminView
+      today="2026-11-12"
       subscriptions={[]}
       receipts={[]}
       renewals={[]}
@@ -50,17 +51,17 @@ test("the section buttons are tabs in a labelled tablist, exactly one selected, 
   assert.deepEqual(
     tabs.map((t) => t.text),
     [
-      "Subscriptions",
-      "Receipts & warranties",
-      "Renewals & appointments",
-      "Moving checklist",
+      "Subscriptions (0)",
+      "Receipts & warranties (0)",
+      "Renewals & appointments (0)",
+      "Moving checklist (0)",
     ],
   );
   const selected = tabs.filter(
     (t) => attr(t.attrs, "aria-selected") === "true",
   );
   assert.equal(selected.length, 1);
-  assert.equal(selected[0]!.text, "Receipts & warranties");
+  assert.equal(selected[0]!.text, "Receipts & warranties (0)");
   assert.equal(
     tabs.filter((t) => attr(t.attrs, "aria-selected") === "false").length,
     3,

@@ -165,7 +165,10 @@ test("the agent filter offers agents by name and still filters by id", async () 
 
     const loader = loaderFor(db, keyWrapper);
     const all = await loader.load(alice.session, {});
-    const options = [...all.filterOptions.agents].map((o) => (typeof o === "string" ? { value: o, label: o } : o));
+    const offered = [...all.filterOptions.agents].map((o) => (typeof o === "string" ? { value: o, label: o } : o));
+    // The last choice narrows to entries with no agent (the person's own account changes).
+    assert.deepEqual(offered.at(-1), { value: "none", label: "No agent (account and Warthog)" });
+    const options = offered.slice(0, -1);
     assert.deepEqual(
       options.sort((a, b) => a.label.localeCompare(b.label)),
       [
@@ -215,7 +218,10 @@ test("a connected service is shown and offered by its catalogue name, and still 
     assert.equal(view.entries.length, 1, "the service filter still narrows by the connector id");
     assert.equal(view.entries[0]!.service, "Google Calendar");
     assert.equal(view.entries[0]!.title, "List events");
-    assert.deepEqual(view.filterOptions.services, [{ value: "google-calendar", label: "Google Calendar" }]);
+    assert.deepEqual(view.filterOptions.services, [
+      { value: "google-calendar", label: "Google Calendar" },
+      { value: "none", label: "No connected service" },
+    ]);
     const shown = text(renderToStaticMarkup(<ActivityView {...view} />));
     assert.ok(shown.includes("Service: Google Calendar"), shown);
   } finally {

@@ -78,6 +78,7 @@ type MemoryViewItem = {
   savedAt: string; // pre-formatted "saved at" label the loader produced
   sourceAgentName: string | null; // the saving agent's display name; null when the PERSON added it
   scope: MemoryScope;
+  dateGroup: "today" | "week" | "earlier"; // the date heading the loader placed it under
 };
 
 type MemoryViewProps = {
@@ -100,6 +101,7 @@ const MEM_CLAUDE_SHARED: MemoryViewItem = {
   savedAt: "2 Dec 2026, 9:14 am",
   sourceAgentName: "Claude",
   scope: "shared",
+  dateGroup: "today",
 };
 
 // An agent-sourced memory, KEPT to the agent that saved it.
@@ -109,6 +111,7 @@ const MEM_CHATGPT_KEPT: MemoryViewItem = {
   savedAt: "14 Nov 2026, 7:02 am",
   sourceAgentName: "ChatGPT",
   scope: "kept",
+  dateGroup: "week",
 };
 
 // A memory the PERSON added themselves — no source agent.
@@ -118,6 +121,7 @@ const MEM_OWN: MemoryViewItem = {
   savedAt: "1 Nov 2026, 4:30 pm",
   sourceAgentName: null,
   scope: "shared",
+  dateGroup: "earlier",
 };
 
 const MEMORIES: MemoryViewItem[] = [MEM_CLAUDE_SHARED, MEM_CHATGPT_KEPT, MEM_OWN];
