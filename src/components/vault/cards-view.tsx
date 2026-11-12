@@ -3,8 +3,9 @@
 import * as React from "react";
 import { CreditCard, Trash2 } from "lucide-react";
 
+import { WorkspaceHeading, WorkspacePanel } from "@/components/shell/workspace-surfaces";
 import { Button } from "@/components/ui/button";
-import { Card } from "@/components/ui/card";
+import { EmptyState } from "@/components/ui/empty";
 import { encryptValue } from "@/client/vault/values";
 import { AddCardFlow } from "./add-card-flow";
 
@@ -214,14 +215,16 @@ function SavedCardRow({ card, removeCard }: { card: SavedCard; removeCard: Remov
 
   if (stage === "removed") {
     return (
-      <p role="status" className="text-sm text-fg-muted [overflow-wrap:anywhere]">
-        {card.nickname} was removed from your vault.
-      </p>
+      <li className="flex min-w-0 flex-col gap-1 border-b border-line py-4 last:border-0">
+        <p role="status" className="text-sm text-fg-muted [overflow-wrap:anywhere]">
+          {card.nickname} was removed from your vault.
+        </p>
+      </li>
     );
   }
 
   return (
-    <Card className="flex flex-col gap-3">
+    <li className="flex min-w-0 flex-col gap-3 border-b border-line py-4 last:border-0">
       <div className="flex flex-col items-start justify-between gap-3 sm:flex-row">
         <div className="flex min-w-0 items-start gap-3">
           <CreditCard aria-hidden={true} className="mt-0.5 h-5 w-5 shrink-0 text-fg-muted" />
@@ -237,7 +240,8 @@ function SavedCardRow({ card, removeCard }: { card: SavedCard; removeCard: Remov
         </div>
         {stage === "idle" || stage === "error" ? (
           <Button
-            variant="secondary"
+            variant="danger"
+            size="sm"
             type="button"
             className="shrink-0"
             aria-label={`Remove ${card.nickname}`}
@@ -249,23 +253,32 @@ function SavedCardRow({ card, removeCard }: { card: SavedCard; removeCard: Remov
         ) : null}
       </div>
       {stage === "confirming" || stage === "working" ? (
-        <div className="flex flex-col gap-2 rounded-card border border-line bg-surface-muted p-3">
+        <div className="flex flex-col gap-3 rounded-card bg-surface-muted p-4">
           <p className="text-sm text-fg">
             Remove {card.nickname} ({card.brand} •••• {card.lastFour})? It is deleted from your
             vault, and agents can no longer ask to use it.
           </p>
           <div className="flex flex-wrap gap-2">
             <Button
-              variant="secondary"
+              variant="danger-solid"
               type="button"
-              disabled={stage === "working"}
+              aria-disabled={stage === "working" || undefined}
+              aria-busy={stage === "working" || undefined}
               onClick={() => {
+                // The flow ignores a second press while it's removing.
                 void flow.confirm();
               }}
             >
               {stage === "working" ? "Removing…" : "Yes, remove it"}
             </Button>
-            <Button variant="secondary" type="button" disabled={stage === "working"} onClick={() => flow.cancel()}>
+            <Button
+              variant="ghost"
+              type="button"
+              aria-disabled={stage === "working" || undefined}
+              onClick={() => {
+                if (stage !== "working") flow.cancel();
+              }}
+            >
               Keep it
             </Button>
           </div>
@@ -276,7 +289,7 @@ function SavedCardRow({ card, removeCard }: { card: SavedCard; removeCard: Remov
           {error}
         </p>
       ) : null}
-    </Card>
+    </li>
   );
 }
 
@@ -288,30 +301,48 @@ export function CardsView({
   addCard,
   removeCard,
 }: CardsViewProps) {
+  // The page heading band, then one panel: the saved cards as divider rows (or an inline
+  // empty state) with the add flow closing the panel. The shell's section tabs (About you /
+  // Cards) are the Vault's one tab row.
   return (
-    <section className="flex flex-col gap-8">
-      {/* The shell's section tabs (Identity / Cards) are the Vault's one tab row. */}
-      <h1 className="text-2xl font-semibold tracking-tight text-fg">Your cards</h1>
+    <>
+      <WorkspaceHeading
+        title="Cards"
+        description="Cards your agents can ask to use. You approve every purchase, and only each card's last four digits are shown."
+      />
+      <WorkspacePanel
+        title="Saved cards"
+        description="Each card number is encrypted on this device before it's saved."
+      >
+        <div className="flex flex-col gap-4">
+          {cards.length === 0 ? (
+            <EmptyState
+              variant="inline"
+              icon={CreditCard}
+              heading="No cards saved yet."
+              description="Add a card so an agent can ask to use it. It can only use the card for a purchase you approve."
+            />
+          ) : (
+            <ul role="list" className="flex min-w-0 flex-col">
+              {cards.map((card) => (
+                <SavedCardRow key={card.id} card={card} removeCard={removeCard ?? noopRemoveCard} />
+              ))}
+            </ul>
+          )}
 
-      <div className="flex flex-col gap-3">
-        {cards.length === 0 ? (
-          <p className="text-sm text-fg-muted">No cards saved yet.</p>
-        ) : (
-          cards.map((card) => (
-            <SavedCardRow key={card.id} card={card} removeCard={removeCard ?? noopRemoveCard} />
-          ))
-        )}
-
-        {/* The live on-device add flow: closed it is the "Add a card" control, open it
-            seals the number under the vault key and submits only ciphertext + metadata. */}
-        <AddCardFlow
-          billingAddresses={billingAddresses}
-          defaultCardholderName={defaultCardholderName}
-          addCard={addCard ?? noopAddCard}
-          initialOpen={addingCard}
-        />
-      </div>
-    </section>
+          {/* The live on-device add flow: closed it is the "Add a card" control, open it
+              seals the number under the vault key and submits only ciphertext + metadata. */}
+          <div className="border-t border-line pt-4">
+            <AddCardFlow
+              billingAddresses={billingAddresses}
+              defaultCardholderName={defaultCardholderName}
+              addCard={addCard ?? noopAddCard}
+              initialOpen={addingCard}
+            />
+          </div>
+        </div>
+      </WorkspacePanel>
+    </>
   );
 }
 

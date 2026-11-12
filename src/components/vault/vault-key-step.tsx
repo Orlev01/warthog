@@ -193,7 +193,7 @@ export function VaultUnlockChoice(props: VaultUnlockChoiceProps): React.ReactEle
   const options: { value: UnlockChoice; label: string }[] = [
     { value: "passkey", label: "Use your passkey" },
     { value: "passphrase", label: "Use your vault passphrase" },
-    { value: "recovery", label: "Use your recovery phrase" },
+    { value: "recovery", label: "Use your vault recovery phrase" },
   ];
   return (
     <div className="flex flex-col gap-3">
@@ -224,7 +224,7 @@ export function VaultUnlockChoice(props: VaultUnlockChoiceProps): React.ReactEle
       ) : null}
       {state.method === "recovery" ? (
         <Field
-          label="Recovery phrase"
+          label="Vault recovery phrase"
           id={phraseId}
           autoComplete="off"
           autoCapitalize="characters"
@@ -249,8 +249,10 @@ export interface RecoveryPhraseRevealProps {
   continueLabel?: string;
 }
 
+// The vault recovery phrase unlocks the vault; it is not the account recovery code, which
+// gets the person back into their account (content-10: one name per secret, with its job).
 const REVEAL_EXPLAINER =
-  "If you ever lose every passkey, this phrase is the only way back into your vault. Write it down or save it somewhere private. Warthog can't see it, and you'll only see it once.";
+  "If you ever lose every passkey, this phrase is the only way back into your vault: your cards and protected details. It's not your account recovery code. Write it down or save it somewhere private. Warthog can't see it, and you'll only see it once.";
 
 // Hand the phrase to the browser's download, as a small text file.
 function downloadPhrase(phrase: string): void {
@@ -318,7 +320,7 @@ export function RecoveryPhraseReveal(props: RecoveryPhraseRevealProps): React.Re
           checked={props.saved}
           onChange={(event) => props.onSavedChange(event.target.checked)}
         />
-        I&apos;ve saved my recovery phrase somewhere safe
+        I&apos;ve saved my vault recovery phrase somewhere safe
       </label>
       {props.error ? (
         <p role="alert" className="text-sm text-danger">
@@ -326,7 +328,15 @@ export function RecoveryPhraseReveal(props: RecoveryPhraseRevealProps): React.Re
         </p>
       ) : null}
       <div className="flex">
-        <Button type="button" variant="primary" disabled={props.working === true} onClick={props.onContinue}>
+        <Button
+          type="button"
+          variant="primary"
+          aria-disabled={props.working === true || undefined}
+          aria-busy={props.working === true || undefined}
+          onClick={() => {
+            if (props.working !== true) props.onContinue();
+          }}
+        >
           {props.continueLabel ?? "Continue"}
         </Button>
       </div>

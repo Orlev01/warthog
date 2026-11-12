@@ -64,7 +64,7 @@ function SkillAccess({ skill, agents, onSaved, busy, perform }: {
     });
   }}>
     <h3 className="font-medium [overflow-wrap:anywhere]">{skill.title}</h3>
-    <label className="flex min-h-11 items-center gap-3 text-sm"><input type="checkbox" name="enabled" defaultChecked={skill.enabled} className="h-4 w-4 accent-accent" />Available to agents</label>
+    <label className="flex min-h-11 items-center gap-3 text-sm"><input type="checkbox" name="enabled" defaultChecked={skill.enabled} className="h-4 w-4" />Available to agents</label>
     <AgentScope agents={agents} scope={skill.scope} selected={skill.scopedAgentIds} />
     <Button variant="secondary" type="submit" disabled={busy}>{busy ? "Saving…" : "Save access"}</Button>
     {message && <p role="status" className="text-sm">{message}</p>}
@@ -103,8 +103,10 @@ export function PackageEditor({ draft, agents, skills, onClose, onSaved, onDupli
     dialog?.addEventListener("cancel", handle);
     return () => dialog?.removeEventListener("cancel", handle);
   });
+  // On a phone (keyboard up, landscape) the dialog scrolls; its header (title + close) and
+  // footer (the primary action) stay pinned to its edges so neither scrolls out of reach.
   return <div id={uid} className="flex min-w-0 flex-col gap-5">
-    <header className="flex items-start justify-between gap-4">
+    <header className="sticky -top-4 z-10 -mx-4 -mt-4 sm:-top-6 flex items-start justify-between gap-4 border-b border-line bg-surface px-4 pt-4 pb-3 sm:-mx-6 sm:-mt-6 sm:px-6 sm:pt-6 sm:pb-4">
       <div className="min-w-0"><p className="mb-1 text-sm text-fg-muted">{stored ? "Your library" : "Review before adding"} · {draft.kind === "plugin" ? "Plugin" : "Skill"}</p>
         <h2 id="package-dialog-title" className="text-xl font-semibold [overflow-wrap:anywhere]">{preview?.name ?? draft.name}</h2>
         <p className="mt-2 text-sm text-fg-muted [overflow-wrap:anywhere]">{preview?.description ?? draft.description}</p>
@@ -113,14 +115,14 @@ export function PackageEditor({ draft, agents, skills, onClose, onSaved, onDupli
     {confirm && <Notice tone="warning">
       <p>{confirm === "delete" ? "Delete this package and all its skills? Agents will lose access immediately. This cannot be undone." : "Discard your unsaved file changes?"}</p>
       <div className="mt-3 flex flex-wrap gap-2"><Button variant="secondary" autoFocus onClick={() => setConfirm(null)}>Keep editing</Button>
-        <Button variant="secondary" disabled={busy} onClick={() => {
+        <Button variant={confirm === "delete" ? "danger-solid" : "secondary"} disabled={busy} onClick={() => {
           if (confirm === "close") close();
           else if (stored) void perform(async () => { const result = await deletePackageAction({ id: stored.id, revision: stored.revision }); if (result.ok) onSaved(); else { setError(result.error); setConfirm(null); } });
         }}>{confirm === "delete" ? "Delete package permanently" : "Discard changes"}</Button></div>
     </Notice>}
     {error && <Notice tone="error">{error}</Notice>}
     {skipped.length > 0 && <Notice tone="warning" announce={false}><p>{skipped.length} system or binary file(s) were excluded. The saved package will contain only the files below.</p><details><summary className="min-h-11 cursor-pointer py-3">Show excluded files</summary><ul>{skipped.map((p) => <li key={p} className="[overflow-wrap:anywhere]">{p}</li>)}</ul></details></Notice>}
-    {draft.kind === "plugin" && <Notice announce={false}>Warthog makes this plugin’s skills available to your agents. Warthog does not run its hooks, commands, scripts or connector configuration. Those files stay here for editing and download.</Notice>}
+    {draft.kind === "plugin" && <Notice announce={false}>Warthog shares this package’s skills with your agents. It doesn’t run any scripts or commands inside it; those files stay here for editing and download.</Notice>}
     {!stored && <p className="text-sm text-fg-muted">New skills start switched off. After saving, choose which agents can use them.</p>}
     {busy && <p role="status" className="text-sm text-fg-muted">Please wait while your package is updated. Editing will be available when this finishes.</p>}
     <fieldset disabled={busy} className="contents">
@@ -129,12 +131,12 @@ export function PackageEditor({ draft, agents, skills, onClose, onSaved, onDupli
       </div>
       {mode === "access" && stored ? <div className="grid gap-4 sm:grid-cols-2">
         {stored.members.map((m) => currentSkills.find((s) => s.id === m.skillId)).filter((s): s is SkillsViewSkill => Boolean(s)).map((s) => <SkillAccess key={s.id} skill={s} agents={agents} busy={busy} perform={perform} onSaved={(next) => { setCurrentSkills((all) => all.map((s) => s.id === next.id ? next : s)); setAccessChanged(true); }} />)}
-        {!stored.members.length && <p className="text-sm text-fg-muted">This plugin has no SKILL.md instructions to share with agents.</p>}
+        {!stored.members.length && <p className="text-sm text-fg-muted">This package has no skills Warthog can share.</p>}
       </div> : <div className="grid min-w-0 gap-4 sm:grid-cols-[minmax(0,1fr)_minmax(0,3fr)]">
         <aside className="min-w-0 space-y-3">
           <h3 className="text-sm font-medium">Files · {files.length}</h3>
           <div className="max-h-56 overflow-y-auto rounded-card border border-line p-1 sm:max-h-96">
-            {files.map((f) => <button key={f.path} type="button" aria-pressed={selected === f.path} className={`flex min-h-11 w-full items-center gap-2 rounded-card px-3 py-2 text-start text-sm [overflow-wrap:anywhere] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-focus ${selected === f.path ? "bg-accent-soft text-fg font-medium" : "hover:bg-surface-muted text-fg-muted"}`} onClick={() => setSelected(f.path)}><FileText aria-hidden className="h-4 w-4 shrink-0" /><span className="min-w-0">{f.path}</span></button>)}
+            {files.map((f) => <button key={f.path} type="button" aria-pressed={selected === f.path} className={`flex min-h-11 w-full items-center gap-2 rounded-field px-3 py-2 text-start text-sm [overflow-wrap:anywhere] ${selected === f.path ? "bg-accent-soft text-fg font-medium" : "hover:bg-surface-muted text-fg-muted"}`} onClick={() => setSelected(f.path)}><FileText aria-hidden className="h-4 w-4 shrink-0" /><span className="min-w-0">{f.path}</span></button>)}
           </div>
           {mode === "edit" && <form className="space-y-2" onSubmit={(e) => { e.preventDefault(); try { const updated = validateFiles([...files, { path: newPath, content: "" }]); setFiles(updated); setSelected(newPath); setNewPath(""); setDirty(true); setError(""); } catch (e) { setError(e instanceof Error ? e.message : "Check the file path."); } }}>
             <Field label="New file path" value={newPath} onChange={(e) => setNewPath(e.target.value)} placeholder="references/guide.md" required maxLength={300} />
@@ -151,11 +153,11 @@ export function PackageEditor({ draft, agents, skills, onClose, onSaved, onDupli
       </div>}
     </fieldset>
     {validation && <Notice tone="warning">{validation}</Notice>}
-    <footer className="flex flex-wrap items-center justify-between gap-3 border-t border-line pt-4">
+    <footer className="sticky -bottom-4 z-10 -mx-4 -mb-4 sm:-bottom-6 flex flex-wrap items-center justify-between gap-3 border-t border-line bg-surface px-4 pt-4 pb-[max(1rem,env(safe-area-inset-bottom))] sm:-mx-6 sm:-mb-6 sm:px-6 sm:pb-6">
       <div className="flex flex-wrap gap-2">{stored && <>
         {onDuplicate && <Button variant="secondary" disabled={busy || dirty} onClick={() => { try { onDuplicate(duplicatePackage(draft)); } catch (e) { setError(e instanceof Error ? e.message : "Could not duplicate this package."); } }}><Copy aria-hidden className="h-4 w-4" />Duplicate</Button>}
         <Button variant="secondary" disabled={busy} onClick={() => void perform(async () => { const result = await downloadPackageAction(stored.id); if (!result.ok) return setError(result.error); const bytes = Uint8Array.from(atob(result.value.base64), (c) => c.charCodeAt(0)); downloadBlob(new Blob([bytes], { type: "application/zip" }), result.value.name); })}><Download aria-hidden className="h-4 w-4" />Download saved files</Button>
-        <Button variant="secondary" disabled={busy} onClick={() => setConfirm("delete")}><Trash2 aria-hidden className="h-4 w-4" />Delete package</Button>
+        <Button variant="danger" disabled={busy} onClick={() => setConfirm("delete")}><Trash2 aria-hidden className="h-4 w-4" />Delete package</Button>
       </>}</div>
       <Button disabled={Boolean(validation)} aria-disabled={busy} className="aria-disabled:opacity-50" onClick={() => void perform(async () => { const result = await savePackageAction({ files, name, ...(stored ? { id: stored.id, revision: stored.revision } : {}) }); if (result.ok) onSaved(); else setError(result.error); })}><Save aria-hidden className="h-4 w-4" />{busy ? "Working…" : stored ? "Save changes" : "Add to my library"}</Button>
     </footer>
@@ -177,7 +179,9 @@ export function PackageModal(props: React.ComponentProps<typeof PackageEditor>) 
     if (ref.current?.open) ref.current.close();
     props.onClose();
   };
-  return <dialog ref={ref} aria-labelledby="package-dialog-title" className="m-auto max-h-[90dvh] w-[calc(100%_-_2rem)] max-w-5xl overflow-y-auto rounded-card border border-line bg-surface p-4 text-fg shadow-xl sm:p-6">
+  // Inside the safe area on notched phones (as the passkey dialog is), never taller than the
+  // visible viewport.
+  return <dialog ref={ref} aria-labelledby="package-dialog-title" className="top-[env(safe-area-inset-top)] right-[env(safe-area-inset-right)] bottom-[env(safe-area-inset-bottom)] left-[env(safe-area-inset-left)] m-auto max-h-[calc(100dvh-2rem-env(safe-area-inset-top)-env(safe-area-inset-bottom))] w-[calc(100%-2rem-env(safe-area-inset-left)-env(safe-area-inset-right))] max-w-5xl overflow-y-auto rounded-panel border border-line bg-surface p-4 text-fg shadow-xl sm:p-6">
     {/* Saving keeps its existing reload/navigation path; only dismissal returns focus. */}
     <PackageEditor {...props} onClose={dismiss} />
   </dialog>;

@@ -117,7 +117,7 @@ type ConnectorsViewProps = {
 // copy — do not drift; the "—" is an em dash, U+2014).
 const EARLY_ACCESS_LABEL = "Early access — ask to join";
 // The exact miss affordance copy (brief "Request a connector").
-const REQUEST_LABEL = "Request a connector";
+const REQUEST_LABEL = "Request a service";
 
 // --- fixtures -------------------------------------------------------------------
 //
@@ -377,21 +377,20 @@ function searchInputs(markup: string): string[] {
 // AC1 — the catalogue, searchable and browsable BY CATEGORY.
 // ================================================================================
 
-test("renders the catalogue entries grouped under their category", () => {
-  // One group alone, so the category label and its entries can only be this group's and
-  // cannot bleed into another category's section.
+test("renders the catalogue entries, each tile naming its category", () => {
+  // One group alone, so the category label and its entries can only be this group's. The
+  // catalogue is ONE grid (not a short grid per category), so each tile names its group.
   const markup = render(base({ groups: [GROUP_EMAIL], connections: [] }));
   const text = visibleText(markup);
-  assert.ok(text.includes("Email"), `the category "Email" must head its section; text="${text}"`);
-  assert.ok(text.includes("Gmail"), `the "Gmail" entry must render under its category; text="${text}"`);
-  assert.ok(
-    text.includes("Fastmail"),
-    `the "Fastmail" entry must render under its category; text="${text}"`,
-  );
-  assert.ok(
-    nearInText(markup, "Email", /Gmail|Fastmail/, 220),
-    `the Email entries must render under the Email category heading; text="${text}"`,
-  );
+  assert.ok(text.includes("Gmail"), `the "Gmail" entry must render; text="${text}"`);
+  assert.ok(text.includes("Fastmail"), `the "Fastmail" entry must render; text="${text}"`);
+  for (const name of ["Gmail", "Fastmail"]) {
+    const tile = findAll(markup, "li").find((li) => visibleText(li.inner).includes(name));
+    assert.ok(tile, `a tile for "${name}" must render`);
+    assert.match(visibleText(tile!.inner), /\bEmail\b/, `the "${name}" tile must name its category; tile="${visibleText(tile!.inner)}"`);
+  }
+  const grids = markup.match(/<ul role="list" class="grid[^"]*"/g) ?? [];
+  assert.equal(grids.length, 1, "the whole catalogue is one grid, not a grid per category");
 });
 
 test("renders every category's section and entries", () => {

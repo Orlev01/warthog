@@ -189,5 +189,5 @@ test("the unlock choice offers passkey, vault passphrase and recovery phrase, ea
   assert.match(html, /passkey/i);
   assert.match(html, /vault passphrase/i);
   assert.match(html, /recovery phrase/i);
-  assert.match(html, /<label[^>]*for="[^"]+"[^>]*>Recovery phrase<\/label>/, "the phrase field is labelled");
+  assert.match(html, /<label[^>]*for="[^"]+"[^>]*>Vault recovery phrase<\/label>/, "the phrase field is labelled with the secret's full name");
 });

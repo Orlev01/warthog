@@ -111,13 +111,14 @@ test("an unticked Continue saves nothing", async () => {
 test("the panel says whether a recovery phrase exists and offers a real control", () => {
   const withPhrase = renderToStaticMarkup(<RecoveryPhraseSettings hasRecoveryPhrase hasVault />);
   assert.match(withPhrase, /recovery phrase is set up/i);
-  assert.match(withPhrase, /<button[^>]*>[^<]*Replace your recovery phrase/);
+  assert.match(withPhrase, /<button[^>]*>[^<]*Replace your vault recovery phrase/);
 
   const without = renderToStaticMarkup(<RecoveryPhraseSettings hasRecoveryPhrase={false} hasVault />);
   assert.match(without, /no recovery phrase/i);
-  assert.match(without, /<button[^>]*>[^<]*Create a recovery phrase/);
+  assert.match(without, /<button[^>]*>[^<]*Create a vault recovery phrase/);
 
   const noVault = renderToStaticMarkup(<RecoveryPhraseSettings hasRecoveryPhrase={false} hasVault={false} />);
   assert.doesNotMatch(noVault, /<button/, "no dead button before a vault exists");
-  assert.match(noVault, /first card or high-tier detail/i);
+  assert.match(noVault, /first card or protected detail/i);
+  assert.match(noVault, /separate from your account recovery code/i, "the phrase is told apart from the account recovery code");
 });

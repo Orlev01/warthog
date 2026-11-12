@@ -1,8 +1,11 @@
 "use client";
 
 import * as React from "react";
-import { Lock } from "lucide-react";
+import { Lock, ShieldCheck, UserRound } from "lucide-react";
 
+import { WorkspaceHeading, WorkspacePanel } from "@/components/shell/workspace-surfaces";
+import { Badge } from "@/components/ui/badge";
+import { EmptyState } from "@/components/ui/empty";
 import { ListGroup, LIST_ROW } from "@/components/ui/list-group";
 import { encryptValue } from "@/client/vault/values";
 import {
@@ -33,11 +36,15 @@ import {
 //     explainer of HOW the detail is protected (sealed on the device) and WHO can
 //     ever read it (only when the person approves).
 //
-// Organisation: within each tier the details are grouped by purpose (names, contact,
+// Organisation: the page heading band, then one panel per tier — "Everyday details" and
+// "Protected details" (the two tier names used everywhere; "low/high tier" is only the
+// code's word). Within each, the details are grouped by purpose (names, contact,
 // preferences; identity, vehicle, other) under titled groups with their counts, each
-// detail a divider row rather than its own card — so an opened raise panel is never a
-// card inside a card. A purpose with no details is not shown. The shell's section tabs
-// (Identity / Cards) are the Vault's one tab row; the view adds no second one.
+// detail a divider row rather than its own card — so an opened panel is never a card
+// inside a card. A purpose with no details is not shown. Each everyday detail's Save and
+// "Make protected" share one action row; the tier's add control closes its panel. The
+// shell's section tabs (About you / Cards) are the Vault's one tab row; the view adds no
+// second one.
 //
 // This is the render-testable, prop-driven VIEW (a Client Component in the app). The
 // "Add a high-tier detail" panel AND each low-tier field's "Raise to high tier" control
@@ -209,36 +216,35 @@ function LowTierRow({
 }) {
   const label = LOW_TIER_LABELS[field.kind];
   return (
-    <li className="flex min-w-0 flex-col gap-3 border-b border-line py-4 last:border-0 [overflow-wrap:anywhere]">
+    <li className={`${LIST_ROW} py-4`}>
       <LowTierDetailFlow
         mode="edit"
         field={field}
         label={label}
         updateLowTierField={updateLowTierField}
-      />
-      <HighTierFlow
-        mode="raise"
-        field={{ id: field.id, value: field.value, label }}
-        raiseFieldToHighTier={raiseFieldToHighTier}
+        actions={
+          <HighTierFlow
+            mode="raise"
+            field={{ id: field.id, value: field.value, label }}
+            raiseFieldToHighTier={raiseFieldToHighTier}
+          />
+        }
       />
     </li>
   );
 }
 
-// A high-tier field: LOCKED — its label and tier shown in words, never its value
+// A protected field: LOCKED — its label and tier shown in words, never its value
 // (the view is only ever handed metadata).
 function HighTierRow({ field }: { field: HighTierField }) {
   return (
     <li className={LIST_ROW}>
       <div className="flex flex-wrap items-center gap-2">
         <span className="font-medium text-fg">{field.label}</span>
-        <span className="inline-flex items-center gap-1.5 rounded-card border border-line bg-surface-muted px-2 py-0.5 text-xs font-medium text-fg-muted">
-          <Lock aria-hidden={true} className="h-3.5 w-3.5 shrink-0" />
-          High tier
-        </span>
+        <Badge icon={Lock}>Protected</Badge>
       </div>
       <p className="text-sm text-fg-muted">
-        Locked on your device — released only when you approve it.
+        Stored encrypted. An agent has to ask, and you approve each release.
       </p>
     </li>
   );
@@ -253,49 +259,79 @@ export function IdentityView({
   saveLowTierField,
   updateLowTierField,
 }: IdentityViewProps) {
+  const lowGroups = groupLowTier(lowTierFields);
+  const highGroups = groupHighTier(highTierFields);
   return (
-    <section className="flex flex-col gap-8">
-      <h1 className="text-2xl font-semibold tracking-tight text-fg">About you</h1>
+    <>
+      <WorkspaceHeading
+        title="About you"
+        description="Everyday details your agents can use, and protected details they have to ask you for each time."
+      />
 
-      {/* ----- Low-tier: your everyday details, editable in place, by purpose ----- */}
-      <div className="flex flex-col gap-4">
-        <h2 className="text-lg font-semibold text-fg">Your details</h2>
-        {lowTierFields.length === 0 ? (
-          <p className="text-sm text-fg-muted">
-            Add your name, email, phone or postal address so your agents can use them.
-          </p>
-        ) : null}
-        {groupLowTier(lowTierFields).map((group) => (
-          <ListGroup key={group.id} id={`vault-${group.id}`} title={group.title} count={group.fields.length} level={3}>
-            {group.fields.map((field) => (
-              <LowTierRow
-                key={field.id}
-                field={field}
-                raiseFieldToHighTier={raiseFieldToHighTier}
-                updateLowTierField={updateLowTierField}
-              />
-            ))}
-          </ListGroup>
-        ))}
-        <LowTierDetailFlow mode="add" saveLowTierField={saveLowTierField} />
-      </div>
+      {/* ----- Everyday details: editable in place, by purpose ----- */}
+      <WorkspacePanel
+        title="Everyday details"
+        description="Your name, contact details and preferences. Agents you allow can read these without asking."
+      >
+        <div className="flex flex-col gap-4">
+          {lowGroups.length === 0 ? (
+            <EmptyState
+              variant="inline"
+              icon={UserRound}
+              heading="No everyday details yet."
+              description="Add your name, email, phone or postal address so your agents can use them."
+            />
+          ) : (
+            lowGroups.map((group) => (
+              <ListGroup key={group.id} id={`vault-${group.id}`} title={group.title} count={group.fields.length} level={3}>
+                {group.fields.map((field) => (
+                  <LowTierRow
+                    key={field.id}
+                    field={field}
+                    raiseFieldToHighTier={raiseFieldToHighTier}
+                    updateLowTierField={updateLowTierField}
+                  />
+                ))}
+              </ListGroup>
+            ))
+          )}
+          <div className="border-t border-line pt-4">
+            <LowTierDetailFlow mode="add" saveLowTierField={saveLowTierField} />
+          </div>
+        </div>
+      </WorkspacePanel>
 
-      {/* ----- High-tier: protected details, locked on the device, by kind ----- */}
-      <div className="flex flex-col gap-4">
-        <h2 className="text-lg font-semibold text-fg">Protected details</h2>
-        {groupHighTier(highTierFields).map((group) => (
-          <ListGroup key={group.id} id={`vault-protected-${group.id}`} title={group.title} count={group.fields.length} level={3}>
-            {group.fields.map((field) => (
-              <HighTierRow key={field.id} field={field} />
-            ))}
-          </ListGroup>
-        ))}
-        {/* The live on-device add flow: closed it is the "Add a high-tier detail"
-            control, open it seals the value under the vault key and submits only
-            ciphertext + metadata. */}
-        <HighTierFlow mode="add" saveHighTierField={saveHighTierField} initialOpen={addingHighTier} />
-      </div>
-    </section>
+      {/* ----- Protected details: encrypted on the device, by kind ----- */}
+      <WorkspacePanel
+        title="Protected details"
+        description="Things like your passport, licence or date of birth. They're encrypted on this device before they're saved, and an agent has to ask you each time."
+      >
+        <div className="flex flex-col gap-4">
+          {highGroups.length === 0 ? (
+            <EmptyState
+              variant="inline"
+              icon={ShieldCheck}
+              heading="No protected details yet."
+              description="Add one when an agent will need it for you, like a passport number for a booking."
+            />
+          ) : (
+            highGroups.map((group) => (
+              <ListGroup key={group.id} id={`vault-protected-${group.id}`} title={group.title} count={group.fields.length} level={3}>
+                {group.fields.map((field) => (
+                  <HighTierRow key={field.id} field={field} />
+                ))}
+              </ListGroup>
+            ))
+          )}
+          {/* The live on-device add flow: closed it is the "Add a protected detail"
+              control, open it seals the value under the vault key and submits only
+              ciphertext + metadata. */}
+          <div className="border-t border-line pt-4">
+            <HighTierFlow mode="add" saveHighTierField={saveHighTierField} initialOpen={addingHighTier} />
+          </div>
+        </div>
+      </WorkspacePanel>
+    </>
   );
 }
 

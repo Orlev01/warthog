@@ -5,8 +5,7 @@ import { Plus, Save } from "lucide-react";
 
 import { Button } from "@/components/ui/button";
 import { Card } from "@/components/ui/card";
-import { Field, Label } from "@/components/ui/field";
-import { SELECT_CLASS } from "@/components/ui/select";
+import { Field, SelectField } from "@/components/ui/field";
 import type { LowTierFieldKind } from "./identity-view";
 
 // Review fix G1 — add and edit an everyday ("low-tier") detail on the Vault "About you"
@@ -88,6 +87,26 @@ export const LOW_TIER_KIND_LABELS: ReadonlyArray<readonly [LowTierFieldKind, str
   ["time_zone", "Time zone"],
   ["preference", "Preference"],
 ];
+
+// How each everyday kind's value field introduces itself (WCAG 1.3.5 Identify Input
+// Purpose): a label naming the detail, the autofill token for the member's own details,
+// and the phone keyboard to show. The type stays plain text, so no stored value is newly
+// refused by the browser's own format checks.
+type ValueFieldPurpose = {
+  label: string;
+  autoComplete?: string;
+  inputMode?: React.HTMLAttributes<HTMLInputElement>["inputMode"];
+};
+export const LOW_TIER_VALUE_FIELDS: Readonly<Record<LowTierFieldKind, ValueFieldPurpose>> = {
+  name: { label: "Your name", autoComplete: "name" },
+  preferred_name: { label: "Preferred name", autoComplete: "nickname" },
+  email: { label: "Email address", autoComplete: "email", inputMode: "email" },
+  phone: { label: "Phone number", autoComplete: "tel", inputMode: "tel" },
+  postal_address: { label: "Postal address", autoComplete: "street-address" },
+  language: { label: "Language", autoComplete: "language" },
+  time_zone: { label: "Time zone" },
+  preference: { label: "Preference" },
+};
 
 // Mirrors the server's bound (vault/actions.ts VALUE_MAX), so an oversized value is
 // explained here rather than refused as a bare invalid request.
@@ -191,6 +210,10 @@ export interface LowTierDetailFlowProps {
   updateLowTierField?: UpdateLowTierFieldAction;
   // ADD mode: whether the add form starts open (defaults to closed).
   initialOpen?: boolean;
+  // EDIT mode: further controls for this detail, in the same action row as Save (the
+  // detail's "Make protected" flow). They sit outside the form, so a field inside them
+  // never submits this detail's Save.
+  actions?: React.ReactNode;
 }
 
 export function LowTierDetailFlow(props: LowTierDetailFlowProps): React.ReactElement {
@@ -208,7 +231,7 @@ export function LowTierDetailFlow(props: LowTierDetailFlowProps): React.ReactEle
   }
   const flow = flowRef.current;
   const state = flow.getState();
-  const kindId = React.useId();
+  const formId = React.useId();
   const isAdd = props.mode === "add";
   const isAddress = state.kind === "postal_address";
   const working = state.status === "working";
@@ -216,7 +239,7 @@ export function LowTierDetailFlow(props: LowTierDetailFlowProps): React.ReactEle
   if (!open) {
     return (
       <div className="flex">
-        <Button variant="secondary" type="button" onClick={() => setOpen(true)}>
+        <Button variant="primary" type="button" onClick={() => setOpen(true)}>
           <Plus aria-hidden={true} className="h-4 w-4 shrink-0" />
           Add a detail
         </Button>
@@ -224,8 +247,25 @@ export function LowTierDetailFlow(props: LowTierDetailFlowProps): React.ReactEle
     );
   }
 
+  const purpose = LOW_TIER_VALUE_FIELDS[state.kind];
+  const save = (
+    <Button
+      type="submit"
+      form={formId}
+      variant={isAdd ? "primary" : "secondary"}
+      size={isAdd ? "md" : "sm"}
+      aria-disabled={working || undefined}
+      aria-busy={working || undefined}
+    >
+      <Save aria-hidden={true} className="h-4 w-4 shrink-0" />
+      {working ? "Saving…" : "Save"}
+      {isAdd ? null : <span className="sr-only"> {props.label ?? "detail"}</span>}
+    </Button>
+  );
+
   const form = (
     <form
+      id={formId}
       className="flex flex-col gap-3"
       aria-label={isAdd ? "Add a detail" : `Edit ${props.label ?? "detail"}`}
       onSubmit={(event) => {
@@ -235,38 +275,40 @@ export function LowTierDetailFlow(props: LowTierDetailFlowProps): React.ReactEle
     >
       {isAdd ? (
         <>
-          <h3 className="text-sm font-semibold text-fg">Add a detail</h3>
-          <div className="flex flex-col gap-1.5">
-            <Label htmlFor={kindId}>What kind of detail?</Label>
-            <select
-              id={kindId}
-              name="kind"
-              className={SELECT_CLASS}
-              value={state.kind}
-              onChange={(event) => flow.setKind(event.target.value as LowTierFieldKind)}
-            >
-              {LOW_TIER_KIND_LABELS.map(([kind, kindLabel]) => (
-                <option key={kind} value={kind}>
-                  {kindLabel}
-                </option>
-              ))}
-            </select>
-          </div>
+          <h3 className="wh-group-title">Add a detail</h3>
+          <SelectField
+            label="What kind of detail?"
+            name="kind"
+            width="text"
+            value={state.kind}
+            onChange={(event) => flow.setKind(event.target.value as LowTierFieldKind)}
+          >
+            {LOW_TIER_KIND_LABELS.map(([kind, kindLabel]) => (
+              <option key={kind} value={kind}>
+                {kindLabel}
+              </option>
+            ))}
+          </SelectField>
         </>
       ) : null}
       <Field
-        label={isAdd ? "The detail" : (props.label ?? "Detail")}
+        label={isAdd ? purpose.label : (props.label ?? "Detail")}
         name="value"
         value={state.value}
         maxLength={VALUE_MAX}
+        width="text"
+        autoComplete={purpose.autoComplete}
+        inputMode={purpose.inputMode}
         error={state.status === "error" ? state.error : undefined}
         onChange={(event) => flow.setValue(event.target.value)}
       />
       {isAddress ? (
         <Field
-          label="Moving on"
+          label="Moving date (optional)"
+          hint="Only for an address you're moving to. From this date, it becomes your current address."
           name="movingOn"
           type="date"
+          width="short"
           value={state.movingOn}
           onChange={(event) => flow.setMovingOn(event.target.value)}
         />
@@ -276,21 +318,30 @@ export function LowTierDetailFlow(props: LowTierDetailFlowProps): React.ReactEle
           Saved.
         </p>
       ) : null}
-      <div className="flex flex-wrap gap-2">
-        <Button type="submit" variant="secondary" disabled={working}>
-          <Save aria-hidden={true} className="h-4 w-4 shrink-0" />
-          {working ? "Saving…" : "Save"}
-        </Button>
-        {isAdd ? (
-          <Button type="button" variant="secondary" onClick={() => setOpen(false)}>
-            Cancel
-          </Button>
-        ) : null}
-      </div>
     </form>
   );
 
-  return isAdd ? <Card className="flex flex-col gap-3">{form}</Card> : form;
+  // The form's Save sits in an action row after the fields: with Cancel when adding, or with
+  // the detail's other controls (Make protected) when editing.
+  return isAdd ? (
+    <Card className="flex flex-col gap-4">
+      {form}
+      <div className="flex flex-wrap gap-2">
+        {save}
+        <Button type="button" variant="ghost" onClick={() => setOpen(false)}>
+          Cancel
+        </Button>
+      </div>
+    </Card>
+  ) : (
+    <div className="flex min-w-0 flex-col gap-3">
+      {form}
+      <div className="flex min-w-0 flex-wrap items-center gap-2">
+        {save}
+        {props.actions}
+      </div>
+    </div>
+  );
 }
 
 export default LowTierDetailFlow;

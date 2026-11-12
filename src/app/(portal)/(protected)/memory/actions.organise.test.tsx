@@ -113,9 +113,9 @@ test("the loader filters by scope and by who saved it, with counts on each optio
     assert.deepEqual(
       kept.filters.scopeOptions.map((o) => [o.value, o.label, o.count]),
       [
-        [null, "All scopes", 3],
+        [null, "All", 3],
         ["shared", "Shared", 1],
-        ["kept", "Kept", 2],
+        ["kept", "Private", 2],
       ],
     );
     assert.deepEqual(

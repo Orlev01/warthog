@@ -400,6 +400,41 @@ test("constructing the flow touches no device seam and submits nothing", () => {
   assert.equal(save.count, 0, "nothing is submitted on construction");
 });
 
+// ═══ a new detail needs a name and a value (spaces alone don't count) ═════════════════
+
+test("an add with no name or no value says which, and never unlocks the vault or sends anything", async () => {
+  for (const [label, value, expected] of [
+    ["", SECRET_VALUE, /what this detail is/i],
+    ["   ", SECRET_VALUE, /what this detail is/i],
+    ["Passport", "", /type the detail/i],
+    ["Passport", "  ", /type the detail/i],
+  ] as const) {
+    const server = makeServer();
+    const passkey = makePasskey();
+    const createKey = makeCreateKey();
+    const save = makeSave();
+    const ctx = makeFlow({ mode: "add", server, passkey, createKey, save });
+    fillAdd(ctx.flow, { value, label });
+    await ctx.flow.submit();
+    assert.equal(ctx.flow.getState().status, "error");
+    assert.match(String(ctx.flow.getState().error), expected);
+    assert.equal(passkey.calls.length, 0, "no passkey prompt for an incomplete detail");
+    assert.equal(createKey.count, 0, "no vault key is created");
+    assert.deepEqual(server.gets, [], "no unlock material is read");
+    assert.equal(save.count, 0, "nothing is submitted");
+  }
+});
+
+test("the open panel offers a way back out, and the confirm says what it saves", () => {
+  const markup = renderToStaticMarkup(<HighTierFlow mode="add" saveHighTierField={noopSave} initialOpen={true} />);
+  assert.ok(liveButtons(markup).includes("Cancel"), `a Cancel is offered; live=${JSON.stringify(liveButtons(markup))}`);
+  assert.ok(liveButtons(markup).includes("Save protected detail"), `the confirm names what it saves; live=${JSON.stringify(liveButtons(markup))}`);
+  // The explainer states the release as it happens (content-31): no absolute "never".
+  const text = visibleText(markup);
+  assert.doesNotMatch(text, /can never read|no one else|not even Warthog/i);
+  assert.match(text, /passed through Warthog once/i);
+});
+
 // ═══ AC1 — a FIRST add sets up the vault key, saves it wrapped, submits ciphertext ═════
 
 test("AC1 — a first add creates the vault key, saves its passkey-wrapped envelope, and submits only ciphertext + metadata (type/label)", async () => {
@@ -866,13 +901,13 @@ test("the open add panel shows the protection explainer, a value field and a liv
   );
 });
 
-test("the closed raise panel offers a live Raise-to-high-tier control", () => {
+test("the closed raise panel offers a live Make-protected control", () => {
   const markup = renderToStaticMarkup(
     <HighTierFlow mode="raise" field={RAISE_FIELD} raiseFieldToHighTier={noopRaise} />,
   );
   assert.ok(
-    liveButtons(markup).some((n) => /raise/i.test(n)),
-    `the closed raise panel must offer a live "Raise to high tier" control; live controls=${JSON.stringify(liveButtons(markup))}`,
+    liveButtons(markup).some((n) => /make protected/i.test(n)),
+    `the closed raise panel must offer a live "Make protected" control; live controls=${JSON.stringify(liveButtons(markup))}`,
   );
 });
 

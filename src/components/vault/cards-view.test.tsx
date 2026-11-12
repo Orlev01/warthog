@@ -698,11 +698,26 @@ test("the cards view adds no second Vault tab row of its own", () => {
   assert.doesNotMatch(render(base()), /<nav\b/i, "the cards view renders no navigation of its own");
 });
 
-test("the cards page title uses the house heading style", () => {
-  const h1 = /<h1\b([^>]*)>([\s\S]*?)<\/h1>/.exec(render(base()));
-  assert.ok(h1, "the view has a page heading");
-  const cls = (attr(h1[1], "class") ?? "").split(/\s+/);
-  for (const token of ["text-2xl", "font-semibold", "tracking-tight", "text-fg"]) {
-    assert.ok(cls.includes(token), `the h1 carries ${token}; class="${cls.join(" ")}"`);
-  }
+test("the cards page title matches its tab and sits in the shared heading band", () => {
+  const markup = render(base());
+  const band = /<header class="wh-page-heading">([\s\S]*?)<\/header>/.exec(markup);
+  assert.ok(band, "the view opens with the shared heading band");
+  assert.match(band[1], /<h1>Cards<\/h1>/);
+  assert.match(band[1], /approve every purchase/i, "the band says what the page is for");
+});
+
+test("saved cards are divider rows in one panel, with a destructive Remove and an inline empty state", () => {
+  const withCards = render(base({ cards: [CARD_A, CARD_B] }));
+  assert.match(withCards, /<h2[^>]*>Saved cards<\/h2>/);
+  assert.match(withCards, /<button[^>]*class="[^"]*text-danger[^"]*"[^>]*aria-label="Remove [^"]+"/, "Remove is styled as destructive");
+  const empty = render(base({ cards: [] }));
+  assert.match(empty, /class="wh-panel-empty"/, "an empty list is an inline state inside the panel, not a bare line");
+});
+
+test("the add-card explainer states the release as it happens, with no absolute claims (content-31)", () => {
+  const text = visibleText(render(base({ addingCard: true })));
+  assert.doesNotMatch(text, /can never read|not anywhere|no one else/i, `no absolute security claim; text="${text}"`);
+  assert.match(text, /encrypted on this device/i);
+  assert.match(text, /passed through Warthog once/i);
+  assert.match(text, /type it each time you approve a purchase/i, "the security code note says what happens instead");
 });

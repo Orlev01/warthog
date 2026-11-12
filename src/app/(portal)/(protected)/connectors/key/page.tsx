@@ -15,11 +15,20 @@ import { createGuardedProviderFetch } from "@/server/connectors/provider-mcp";
 import { createRedactingRecorder } from "@/server/mcp/recorder";
 import { systemClock } from "@/server/seams/clock";
 import { PageContainer } from "@/components/shell/page-container";
+import { WorkspaceHeading, WorkspacePanel } from "@/components/shell/workspace-surfaces";
 import { Field } from "@/components/ui/field";
-import { FormSubmit } from "@/components/ui/form-submit";
-import { Notice } from "@/components/ui/notice";
+import { ButtonLink } from "@/components/ui/button-link";
+import { ActionForm, FormSubmit } from "@/components/ui/form-submit";
+import { PageNotice } from "@/components/ui/notice";
+import type { Metadata } from "next";
 
-export const metadata = { title: "Connect a service account" };
+// Its own title in the "Page · Warthog" pattern: what the page is for, distinct from the
+// Connectors page above it. `absolute`, because the Connectors layout's own string title
+// would otherwise drop the site's suffix on this nested page (content-24).
+export const metadata: Metadata = { title: { absolute: "Connect a service · Warthog" } };
+
+// A key or name made only of spaces is refused like an empty one (trimmed first).
+const NOT_BLANK = ".*\\S.*";
 const inputSchema = z.object({
   connectorId: z.string().min(1).max(200),
   accountLabel: z.string().trim().min(1).max(200),
@@ -45,7 +54,16 @@ async function save(form: FormData) {
       ]),
     ),
   );
-  if (!parsed.success) redirect("/connectors?notice=problem");
+  // A missing account name or key goes back to this form with the reason, not to the
+  // Connectors page (the person's place and the service they chose are kept).
+  if (!parsed.success) {
+    const connectorId = form.get("connectorId");
+    redirect(
+      typeof connectorId === "string" && connectorId.length > 0 && connectorId.length <= 200
+        ? `/connectors/key?connector=${encodeURIComponent(connectorId)}&notice=missing`
+        : "/connectors?view=catalogue&notice=connect-problem",
+    );
+  }
   const input = parsed.data;
   const entry = getProcessCatalogue().get(input.connectorId);
   if (!entry || !["api_key", "basic"].includes(entry.auth_kind)) notFound();
@@ -92,54 +110,65 @@ export default async function ConnectKeyPage({
       ? getProcessCatalogue().get(params.connector)
       : undefined;
   if (!entry || !["api_key", "basic"].includes(entry.auth_kind)) notFound();
+  const missing = params.notice === "missing";
+  const keyLabel = entry.auth_kind === "basic" ? "API key or password" : "API key";
   return (
-    <PageContainer className="flex flex-col gap-6">
-      <a href="/connectors" className="text-sm text-accent underline">
-        All service accounts
-      </a>
-      <h1 className="text-2xl font-semibold tracking-tight">
-        Connect {entry.name}
-      </h1>
-      <Notice tone="info" announce={false}>
-        This saves a service account. Choose which agents may use it from their
-        Connectors settings after saving.
-      </Notice>
-      {entry.instructions ? (
-        <p className="whitespace-pre-wrap text-sm text-fg-muted">
-          {entry.instructions}
-        </p>
+    <PageContainer>
+      <WorkspaceHeading
+        title={`Connect ${entry.name}`}
+        description={`Paste a ${keyLabel === "API key" ? "key" : "key or password"} from your ${entry.name} account. Afterwards, you choose which agents can use it on each agent's page.`}
+      />
+      {missing ? (
+        <PageNotice tone="error">Enter a name for this account and your {keyLabel}, then save.</PageNotice>
       ) : null}
-      <form action={save} className="flex flex-col gap-4">
+      <ActionForm action={save}>
         <input type="hidden" name="connectorId" value={entry.id} />
-        <Field
-          name="accountLabel"
-          label="Account name"
-          placeholder="For example, personal or work"
-          maxLength={200}
-          required
-        />
-        <Field
-          name="apiKey"
-          label={
-            entry.auth_kind === "basic"
-              ? "Service credential"
-              : "Service access key"
+        <WorkspacePanel
+          title={`Your ${entry.name} account`}
+          description="We encrypt your key and never show it to your agents. Use a key with only the permissions this service needs."
+          footer={
+            <>
+              <FormSubmit pendingLabel="Saving…">Save and connect</FormSubmit>
+              <ButtonLink href="/connectors?view=catalogue" variant="ghost">
+                Cancel
+              </ButtonLink>
+            </>
           }
-          type="password"
-          autoComplete="off"
-          maxLength={16384}
-          required
-        />
-        <p className="text-sm text-fg-muted">
-          The credential is encrypted and is never shown to your agents. Use a
-          key with only the permissions this service needs.
-        </p>
-        <div>
-          <FormSubmit pendingLabel="Saving account…">
-            Save service account
-          </FormSubmit>
-        </div>
-      </form>
+        >
+          <div className="flex flex-col gap-4">
+            {entry.instructions ? (
+              <div className="rounded-card bg-surface-muted p-4">
+                <p className="text-sm font-medium text-fg">Where to find it</p>
+                <p className="mt-1 whitespace-pre-wrap text-sm text-fg-muted [overflow-wrap:anywhere]">
+                  {entry.instructions}
+                </p>
+              </div>
+            ) : null}
+            <Field
+              name="accountLabel"
+              label="Account name"
+              hint="So you can tell your accounts apart."
+              placeholder="For example, personal or work"
+              maxLength={200}
+              pattern={NOT_BLANK}
+              title="Enter a name for this account."
+              width="text"
+              required
+            />
+            <Field
+              name="apiKey"
+              label={keyLabel}
+              type="password"
+              autoComplete="off"
+              maxLength={16384}
+              pattern={NOT_BLANK}
+              title={`Enter your ${keyLabel}.`}
+              width="text"
+              required
+            />
+          </div>
+        </WorkspacePanel>
+      </ActionForm>
     </PageContainer>
   );
 }

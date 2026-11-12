@@ -156,10 +156,12 @@ const SCOPED_AGENTS_MAX = 100;
 const skillIdSchema = z.uuid();
 const scopeSchema = z.enum(["all", "chosen"]);
 
+// Text fields are trimmed before they're checked, so a value of only spaces is refused like
+// an empty one (interaction-02).
 const skillContentShape = {
-  title: z.string().min(1).max(TITLE_MAX),
-  useThisWhen: z.string().min(1).max(USE_THIS_WHEN_MAX),
-  fullText: z.string().min(1).max(FULL_TEXT_MAX),
+  title: z.string().trim().min(1).max(TITLE_MAX),
+  useThisWhen: z.string().trim().min(1).max(USE_THIS_WHEN_MAX),
+  fullText: z.string().trim().min(1).max(FULL_TEXT_MAX),
   scope: scopeSchema,
   scopedAgentIds: z.array(z.uuid()).max(SCOPED_AGENTS_MAX).optional(),
 };
@@ -169,7 +171,7 @@ const editSkillSchema = z.object({ id: skillIdSchema, ...skillContentShape });
 const skillIdInputSchema = z.object({ id: skillIdSchema });
 const toggleSkillSchema = z.object({ id: skillIdSchema, enabled: z.boolean() });
 
-const prefField = z.string().min(1).max(PREF_FIELD_MAX);
+const prefField = z.string().trim().min(1).max(PREF_FIELD_MAX);
 const savePreferencesSchema = z.object({
   tone: prefField,
   length: prefField,

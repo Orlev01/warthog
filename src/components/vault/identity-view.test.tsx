@@ -404,14 +404,15 @@ test("lists each high-tier field with its label and tier, shown locked (never ed
   assert.ok(text.includes(PASSPORT.label), `the high-tier Passport label must be listed; text="${text}"`);
   assert.ok(text.includes(DOB.label), `the high-tier Date of birth label must be listed; text="${text}"`);
 
-  // ...and its tier, shown near the label (words + the tier, not colour alone).
+  // ...and its tier, shown near the label (words + the tier, not colour alone). The tier's
+  // name is "Protected" everywhere (content-09).
   assert.ok(
-    nearInText(markup, PASSPORT.label, /high[\s-]?tier|\bhigh\b/i),
-    `the high-tier Passport must show its tier near its label; text="${text}"`,
+    nearInText(markup, PASSPORT.label, /\bprotected\b/i),
+    `the protected Passport must show its tier near its label; text="${text}"`,
   );
   assert.ok(
-    nearInText(markup, DOB.label, /high[\s-]?tier|\bhigh\b/i),
-    `the high-tier Date of birth must show its tier near its label; text="${text}"`,
+    nearInText(markup, DOB.label, /\bprotected\b/i),
+    `the protected Date of birth must show its tier near its label; text="${text}"`,
   );
 
   // Values are shown LOCKED: a high-tier field is never a genuinely-editable value
@@ -450,15 +451,15 @@ test("never exposes a high-tier value or a ciphertext envelope", () => {
 // field that is already high tier).
 // ================================================================================
 
-test("offers a live Raise-to-high-tier control for each low-tier field", () => {
+test("offers a live Make-protected control for each everyday field", () => {
   const markup = render(base({ lowTierFields: [EMAIL, PHONE], highTierFields: [PASSPORT] }));
-  const raiseControls = liveButtons(markup).filter((n) => /raise/i.test(n));
+  const raiseControls = liveButtons(markup).filter((n) => /make protected/i.test(n));
 
   // One raise control per low-tier field — and the already-high Passport adds none.
   assert.equal(
     raiseControls.length,
     2,
-    `there must be a live "Raise to high tier" control for each of the 2 low-tier fields (and none for the high-tier field); raise controls=${JSON.stringify(raiseControls)}, all live=${JSON.stringify(liveButtons(markup))}`,
+    `there must be a live "Make protected" control for each of the 2 everyday fields (and none for the protected field); raise controls=${JSON.stringify(raiseControls)}, all live=${JSON.stringify(liveButtons(markup))}`,
   );
 });
 
@@ -649,7 +650,7 @@ test("each low-tier field is a named control inside a form with a live Save, and
   }
   assert.match(markup, /<input\b[^>]*name="movingOn"/, "the moving-on date is a named control");
   assert.ok(
-    liveButtons(markup).filter((n) => /^save$/i.test(n)).length >= 2,
+    liveButtons(markup).filter((n) => /^save\b/i.test(n)).length >= 2,
     `every field has a live Save; live=${JSON.stringify(liveButtons(markup))}`,
   );
   assert.ok(
@@ -680,14 +681,20 @@ test("the Vault reaches Cards through the shell's section tabs, with no duplicat
   );
 });
 
-test("the page title uses the house heading style", () => {
-  const h1 = /<h1\b([^>]*)>([\s\S]*?)<\/h1>/.exec(render(base()));
-  assert.ok(h1, "the view has a page heading");
-  assert.equal(visibleText(h1[2]), "About you");
-  const cls = (attr(h1[1], "class") ?? "").split(/\s+/);
-  for (const token of ["text-2xl", "font-semibold", "tracking-tight", "text-fg"]) {
-    assert.ok(cls.includes(token), `the h1 carries ${token}; class="${cls.join(" ")}"`);
-  }
+test("the page title sits in the shared heading band, with what the page is for", () => {
+  const markup = render(base());
+  const band = /<header class="wh-page-heading">([\s\S]*?)<\/header>/.exec(markup);
+  assert.ok(band, "the view opens with the shared heading band");
+  const h1 = /<h1\b[^>]*>([\s\S]*?)<\/h1>/.exec(band[1]);
+  assert.equal(visibleText(h1![1]), "About you");
+  assert.match(visibleText(band[1]), /everyday details/i, "the band says what the page holds");
+});
+
+test("each tier is one panel: Everyday details and Protected details", () => {
+  const markup = render(base({ lowTierFields: [EMAIL], highTierFields: [PASSPORT] }));
+  const panels = [...markup.matchAll(/<section aria-labelledby="[^"]+" class="wh-panel"><header class="wh-panel-header">[\s\S]*?<h2[^>]*>([^<]*)<\/h2>/g)].map((m) => m[1]);
+  assert.deepEqual(panels, ["Everyday details", "Protected details"]);
+  assert.doesNotMatch(visibleText(markup), /high[\s-]?tier|low[\s-]?tier/i, "no tier jargon on screen");
 });
 
 // ================================================================================
@@ -695,10 +702,11 @@ test("the page title uses the house heading style", () => {
 // rows (no card per field, so an opened panel is never a card inside a card).
 // ================================================================================
 
-// The h3 group headings in document order, with the visible text of each group's rows.
+// The h3 group headings in document order, with the visible text of each group's rows
+// (the purpose groups are list groups inside each tier's panel).
 function groups(markup: string): Array<{ title: string; text: string }> {
   const out: Array<{ title: string; text: string }> = [];
-  for (const m of markup.matchAll(/<section\b[^>]*aria-labelledby="([^"]+)"[^>]*>([\s\S]*?)<\/section>/gi)) {
+  for (const m of markup.matchAll(/<section\b[^>]*aria-labelledby="([^"]+)"[^>]*class="wh-list-group"[^>]*>([\s\S]*?)<\/section>/gi)) {
     const heading = /<h3\b[^>]*>([\s\S]*?)<\/h3>/i.exec(m[2]);
     if (heading) out.push({ title: visibleText(heading[1]), text: visibleText(m[2]) });
   }
@@ -748,12 +756,12 @@ test("protected details are grouped by kind — identity documents, then vehicle
   assert.ok(found[1].text.includes("Ute rego"), "vehicle holds the registration");
   assert.ok(found[2].text.includes("Medicare number"), "other holds the custom detail");
   // Still locked: the tier is stated in words on every protected row.
-  assert.equal((visibleText(markup).match(/High tier/g) ?? []).length, 4, "every protected detail is shown locked, in words");
+  assert.equal((markup.match(/<span class="wh-badge[^"]*"[^>]*>[\s\S]*?Protected<\/span>/g) ?? []).length, 4, "every protected detail is shown locked, in words");
 });
 
 test("details are divider rows, never a card per field", () => {
   const markup = render(base({ lowTierFields: [NAME, EMAIL, PHONE], highTierFields: [PASSPORT, DOB] }));
-  const sections = [...markup.matchAll(/<section\b[^>]*aria-labelledby="[^"]+"[^>]*>([\s\S]*?)<\/section>/gi)];
+  const sections = [...markup.matchAll(/<section\b[^>]*aria-labelledby="[^"]+"[^>]*class="wh-list-group"[^>]*>([\s\S]*?)<\/section>/gi)];
   assert.ok(sections.length >= 3, `the details render in titled groups; groups=${sections.length}`);
   for (const group of sections) {
     const boxes = [...group[1].matchAll(/class="([^"]*)"/g)]

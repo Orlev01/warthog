@@ -5,7 +5,7 @@ import { Plus } from "lucide-react";
 
 import { Button } from "@/components/ui/button";
 import { Card } from "@/components/ui/card";
-import { Field, Label } from "@/components/ui/field";
+import { Field, SelectField } from "@/components/ui/field";
 import { Input } from "@/components/ui/input";
 import { SensitiveNotice } from "@/components/ui/sensitive-notice";
 import { ConfirmItsYou } from "@/components/ui/confirm-its-you";
@@ -358,20 +358,19 @@ const defaultStartAuthentication = async (opts: {
   optionsJSON: unknown;
 }): Promise<PasskeyAssertion> => startVaultAuthentication(opts.optionsJSON);
 
-// ─── styling (design tokens; no raw hex) ──────────────────────────────────────────────
+// ─── copy (plain Australian English; no protocol jargon) ───────────────────────────────
 
-const SELECT_CLASS =
-  "min-h-11 w-full rounded-card border border-line bg-surface px-3 text-sm text-fg focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-focus focus-visible:ring-offset-2 focus-visible:ring-offset-bg";
-
-// The sensitive-moment explainer: adding a card slows down and says HOW the number is
-// protected (sealed on the device, never readable by Warthog) — plain words.
+// The sensitive-moment explainer: HOW the number is protected (encrypted on this device, so
+// Warthog stores only a copy it can't read) and when it's used (passed through once, for a
+// purchase the person approves). It states the release mechanism as it is, not an absolute
+// "never" (content-31; matches the privacy page).
 const SEAL_EXPLAINER =
-  "Adding a card is a sensitive step, so take a moment. Your card number is sealed on your device with your vault key before it is saved — only the locked version ever leaves, and Warthog can never read it.";
+  "Your card number is encrypted on this device before it's saved, so Warthog stores only a locked copy it can't read. It's passed through Warthog once, to the agent, only when you approve a purchase.";
 
 // The explicit note that the card security code is never stored (§17). It lives in a
 // paragraph, not a field label — no security code is ever collected here.
 const SECURITY_CODE_NOTE =
-  "Your card's security code (sometimes called the CVV) is never stored — not by Warthog, and not anywhere.";
+  "Warthog never stores your card's security code (CVV). You type it each time you approve a purchase.";
 
 // ─── the client component (a thin binding over the controller) ─────────────────────────
 
@@ -434,15 +433,20 @@ export function AddCardFlow(props: AddCardFlowProps): React.ReactElement {
     );
   }
 
+  // Cancel closes the panel and starts afresh next time, so a typed card number never
+  // lingers. Not offered mid-unlock or while a new vault recovery phrase is on screen.
+  const canCancel = state.status !== "working" && state.status !== "phrase" && unlock.newPhrase === null;
+
   return (
     <Card className="flex flex-col gap-4">
-      <h3 className="text-sm font-semibold text-fg">Add a card</h3>
+      <h3 className="wh-group-title">Add a card</h3>
 
       <Field
         label="Card number"
         id={numberId}
         inputMode="numeric"
         autoComplete="off"
+        width="text"
         placeholder="Your card number"
         value={state.number}
         onChange={(event) => flow.setNumber(event.target.value)}
@@ -450,7 +454,8 @@ export function AddCardFlow(props: AddCardFlowProps): React.ReactElement {
       <Field
         label="A name for this card"
         id={nicknameId}
-        placeholder="e.g. Everyday spending"
+        width="text"
+        placeholder="For example, Everyday spending"
         value={state.nickname}
         onChange={(event) => flow.setNickname(event.target.value)}
       />
@@ -459,14 +464,16 @@ export function AddCardFlow(props: AddCardFlowProps): React.ReactElement {
         id={cardholderNameId}
         autoComplete="off"
         placeholder="As printed on the card"
+        width="text"
         required={true}
         maxLength={CARDHOLDER_NAME_MAX}
         value={state.cardholderName}
         onChange={(event) => flow.setCardholderName(event.target.value)}
       />
-      <div className="grid grid-cols-2 gap-3">
+      <div className="grid grid-cols-2 gap-3 sm:flex sm:flex-wrap">
         <Field
           label="Expiry month"
+          width="short"
           id={monthId}
           type="number"
           inputMode="numeric"
@@ -476,6 +483,7 @@ export function AddCardFlow(props: AddCardFlowProps): React.ReactElement {
         />
         <Field
           label="Expiry year"
+          width="short"
           id={yearId}
           type="number"
           inputMode="numeric"
@@ -485,26 +493,24 @@ export function AddCardFlow(props: AddCardFlowProps): React.ReactElement {
         />
       </div>
 
-      <div className="flex flex-col gap-1.5">
-        <Label htmlFor={billingId}>Billing address</Label>
-        <select
-          id={billingId}
-          value={state.billingAddressId}
-          onChange={(event) => flow.setBillingAddressId(event.target.value)}
-          className={SELECT_CLASS}
-        >
-          {props.billingAddresses.map((address) => (
-            <option key={address.id} value={address.id}>
-              {address.value}
-            </option>
-          ))}
-        </select>
-      </div>
+      <SelectField
+        label="Billing address"
+        id={billingId}
+        width="text"
+        value={state.billingAddressId}
+        onChange={(event) => flow.setBillingAddressId(event.target.value)}
+      >
+        {props.billingAddresses.map((address) => (
+          <option key={address.id} value={address.id}>
+            {address.value}
+          </option>
+        ))}
+      </SelectField>
 
       <p className="text-sm text-fg-muted">{SECURITY_CODE_NOTE}</p>
 
       <div className="flex flex-col gap-1.5">
-        <label htmlFor={passphraseToggleId} className="flex items-center gap-2 text-sm text-fg">
+        <label htmlFor={passphraseToggleId} className="flex min-h-11 items-center gap-2 text-sm text-fg">
           <input
             id={passphraseToggleId}
             type="checkbox"
@@ -518,6 +524,7 @@ export function AddCardFlow(props: AddCardFlowProps): React.ReactElement {
             id={passphraseId}
             type="password"
             autoComplete="off"
+            width="text"
             aria-label="Vault passphrase"
             value={state.passphrase}
             minLength={MIN_PASSPHRASE_LENGTH}
@@ -584,11 +591,29 @@ export function AddCardFlow(props: AddCardFlowProps): React.ReactElement {
       ) : (
         <SensitiveNotice
           explanation={SEAL_EXPLAINER}
+          confirmLabel="Save card"
+          pending={state.status === "working"}
+          pendingLabel="Saving…"
           onConfirm={() => {
             void flow.submit();
           }}
         />
       )}
+
+      {canCancel ? (
+        <div className="flex">
+          <Button
+            type="button"
+            variant="ghost"
+            onClick={() => {
+              flowRef.current = null;
+              setOpen(false);
+            }}
+          >
+            {state.status === "added" ? "Close" : "Cancel"}
+          </Button>
+        </div>
+      ) : null}
     </Card>
   );
 }

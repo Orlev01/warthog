@@ -183,6 +183,6 @@ test("EDIT: the value (and an address's moving-on date) render as named controls
   assert.match(markup, /<input[^>]*name="value"[^>]*value="1 Old Rd, Hobart"|<input[^>]*value="1 Old Rd, Hobart"[^>]*name="value"/);
   assert.match(markup, /<input[^>]*type="date"[^>]*name="movingOn"|<input[^>]*name="movingOn"[^>]*type="date"/);
   assert.ok(markup.includes("2027-09-15"));
-  assert.match(visibleText(markup), /Moving on/);
+  assert.match(visibleText(markup), /Moving date \(optional\)/);
   assert.match(markup, /<button[^>]*type="submit"[^>]*>[\s\S]*?Save/);
 });

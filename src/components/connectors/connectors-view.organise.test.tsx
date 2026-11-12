@@ -83,7 +83,7 @@ function entry(markup: string, needle: string): string {
 
 test("category links put All first with the total, then each category with its count", () => {
   const markup = render(base());
-  const nav = markup.slice(markup.indexOf('<nav aria-label="Catalogue categories"'), markup.indexOf("</nav>", markup.indexOf('aria-label="Catalogue categories"')));
+  const nav = markup.slice(markup.indexOf('<nav aria-label="Service categories"'), markup.indexOf("</nav>", markup.indexOf('aria-label="Service categories"')));
   assert.ok(nav.length > 0, "a category filter row is rendered");
   const labels = [...nav.matchAll(/<a [^>]*>([^<]*)<span[^>]*>(\d+)<\/span><\/a>/g)].map((m) => [m[1], m[2]]);
   assert.deepEqual(labels, [
@@ -113,7 +113,7 @@ test("the catalogue opens on its tab when a category is chosen", () => {
 test("nothing in the chosen category and search says so and offers a way to clear them", () => {
   const markup = render(base({ groups: [], category: "email", query: "zz" }));
   const t = text(markup);
-  assert.ok(t.includes("No connectors match"));
+  assert.ok(t.includes("No services match"));
   assert.match(markup, /href="\/connectors\?view=catalogue"[^>]*>Clear search and category/);
 });
 
@@ -128,9 +128,9 @@ test("an entry the person already connected carries a Connected badge in words",
   assert.ok(/>\s*Connect\s*</.test(other));
 });
 
-test("the Connected tab label carries its count", () => {
+test("the Your services tab label carries its count", () => {
   const markup = render(base({ connections: [CONNECTION, { ...CONNECTION, id: "conn-2", accountLabel: "work" }] }));
-  assert.match(markup, /role="tab"[^>]*>Connected services \(2\)</);
+  assert.match(markup, /role="tab"[^>]*>Your services \(2\)</);
 });
 
 test("a connected card summarises its tools and lists them behind Show tools", () => {
