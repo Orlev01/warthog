@@ -1,4 +1,4 @@
-"""Approved singleton releases. Existing apps get image-only revision copies."""
+"""Approved singleton releases, with a separately reviewed journal activation."""
 import copy
 import json
 import os
@@ -128,7 +128,19 @@ def stop_before_start(platform, previous):
     platform.ownership(expected_free=True)
 
 
-def verify_image(image):
+def journal_activation(previous, operation):
+    value = os.environ.get("ACTIVATE_DELETION_JOURNAL", "false")
+    require(value in ("true", "false", ""), "Invalid journal activation selection")
+    if value != "true":
+        return False
+    require(operation == "update" and previous is not None, "Journal activation requires an existing app update")
+    env = previous["properties"]["template"]["containers"][0]["env"]
+    require(not any(item["name"] == "DELETION_JOURNAL_CONTAINER" for item in env),
+            "Journal is already configured; inspect rather than replace it")
+    return True
+
+
+def verify_image(image, *, require_journal=False):
     registry = setting("ACR_NAME", r"[a-z0-9]{5,50}")
     require(re.fullmatch(re.escape(registry) + r"\.azurecr\.io/warthog@sha256:[a-f0-9]{64}", image),
             "Require an approved immutable image from this Warthog registry")
@@ -143,6 +155,8 @@ def verify_image(image):
     require(labels.get("io.warthog.verified") == "linux-pg16"
             and re.fullmatch(r"node:22-bookworm-slim@sha256:[a-f0-9]{64}", labels.get("org.opencontainers.image.base.name", "")),
             "Image lacks the checked, pinned-base publication contract")
+    require(not require_journal or labels.get("io.warthog.deletion-journal") == "v1",
+            "A journal-enabled app cannot run an image without deletion journal support")
 
 
 def wait_ready(platform, revision, image, timeout=720):
@@ -163,6 +177,7 @@ def wait_ready(platform, revision, image, timeout=720):
 
 def release(platform, operation, image, suffix, scratch):
     previous = platform.current()
+    activate_journal = journal_activation(previous, operation)
     if operation == "inspect":
         require(previous is not None, "No app exists; use the separately approved create operation")
         validate_live(previous)
@@ -188,7 +203,9 @@ def release(platform, operation, image, suffix, scratch):
         parameter_file = scratch / "workload.parameters.json"
         parameter_file.write_bytes(canonical(params))
         command(["python3", "infra/workload/check_template.py", str(parameter_file)])
-    verify_image(image)
+    journal_configured = previous is not None and any(item["name"] == "DELETION_JOURNAL_CONTAINER"
+        for item in previous["properties"]["template"]["containers"][0]["env"])
+    verify_image(image, require_journal=activate_journal or journal_configured or operation == "create")
     stop_before_start(platform, previous)
     # Detect a concurrent operator/configuration update after the maintenance stop.
     fresh = platform.current()
@@ -199,9 +216,10 @@ def release(platform, operation, image, suffix, scratch):
     try:
         started = True  # Azure requests can partially succeed before a CLI timeout.
         if previous:
+            journal_arguments = ["--set-env-vars", "DELETION_JOURNAL_CONTAINER=account-deletions"] if activate_journal else []
             azure("containerapp", "revision", "copy", *platform.scope,
                   "--from-revision", previous["properties"]["latestRevisionName"],
-                  "--image", image, "--revision-suffix", suffix, "--container-name", "warthog")
+                  "--image", image, "--revision-suffix", suffix, "--container-name", "warthog", *journal_arguments)
         else:
             azure("deployment", "group", "create", "--resource-group", platform.group,
                   "--name", "warthog-" + suffix, "--mode", "Incremental",
@@ -218,8 +236,11 @@ def release(platform, operation, image, suffix, scratch):
             expected = copy.deepcopy(previous)
             expected["properties"]["template"]["revisionSuffix"] = suffix
             expected["properties"]["template"]["containers"][0]["image"] = image
+            if activate_journal:
+                expected["properties"]["template"]["containers"][0]["env"].append(
+                    {"name": "DELETION_JOURNAL_CONTAINER", "value": "account-deletions"})
             expected["properties"]["configuration"]["ingress"]["traffic"] = traffic
-            require(fingerprint(live) == fingerprint(expected), "Image-only release changed other configuration")
+            require(fingerprint(live) == fingerprint(expected), "Release changed unapproved configuration")
         host = live["properties"]["configuration"]["ingress"]["fqdn"]
         require(re.fullmatch(r"[a-z0-9.-]+\.azurecontainerapps\.io", host), "Unexpected health hostname")
         with urllib.request.urlopen("https://" + host + "/api/health", timeout=30) as response:

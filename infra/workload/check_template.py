@@ -71,6 +71,7 @@ if len(sys.argv) > 1:
     assert len(params["traffic"]) == 1 and set(params["traffic"][0]) == {"revisionName", "weight"}, "Use one explicit traffic target"
     assert params["traffic"][0]["weight"] == 100 and params["traffic"][0]["revisionName"] == params["appName"] + "--" + params["revisionSuffix"], "Require the explicit new revision target"
     public = params["productionEnvironment"]
+    assert public["DELETION_JOURNAL_CONTAINER"] == "account-deletions" and public["STORAGE_CONTAINER"] != public["DELETION_JOURNAL_CONTAINER"], "Require the separate approved deletion journal"
     assert public["PUBLIC_BASE_URL"] == "https://app.warthog.com.au" and public["WEBAUTHN_RP_ID"] == "app.warthog.com.au", "Preserve approved authentication host/RP"
     assert public["RESEND_SENDING_DOMAIN"] == "mail.warthog.com.au", "Preserve reviewed email settings"
     if params["smsEnabled"]:

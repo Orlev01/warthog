@@ -169,6 +169,14 @@ export function Privacy() {
           messages or delete data in your Google or Microsoft account. Application
           database backups may retain older data until their retention period ends.
         </p>
+        <p className="max-w-prose text-sm text-fg-muted">
+          We keep a separate deletion record containing only an account identifier,
+          deletion status and timestamps, so recovery from an older backup does not
+          restore access to a deleted account. These records are protected from
+          deletion for at least 42 days and retained until a reviewed cleanup removes
+          expired records. They contain no email address, account content or encryption
+          key. Encrypted receipt history can also remain during backup retention.
+        </p>
       </section>
     </main>
   );

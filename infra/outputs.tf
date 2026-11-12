@@ -11,6 +11,7 @@ output "foundation" {
     key_vault_url               = azurerm_key_vault.warthog.vault_uri
     storage_account             = var.names.storage_account
     storage_container           = var.names.receipt_container
+    deletion_journal_container  = azapi_resource.deletion_journal.name
     logs_workspace_id           = azapi_resource.logs.id
   }
 }

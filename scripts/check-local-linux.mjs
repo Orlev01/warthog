@@ -26,6 +26,7 @@ try {
     await run("npm", ["test"]);
   }
   await run("node", ["--import", "tsx", "scripts/verify-local-postgres.ts"]);
+  await run("node", ["--import", "tsx", "scripts/verify-local-postgres-recovery.ts"]);
   // The boot smoke test rebuilds Next. Re-stage that final output and validate the
   // migrations/catalogue/static assets rather than retaining the earlier build.
   await run("node", ["scripts/prepare-runtime.mjs"]);

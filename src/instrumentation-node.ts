@@ -8,6 +8,7 @@ import { assertProductionReleaseConfiguration } from "./server/production-readin
 import { createRegister } from "./server/jobs/start";
 import { getScheduler } from "./server/jobs/scheduler";
 import { startProductionOwnership } from "./server/db/ownership";
+import { selectDeletionJournal } from "./server/storage/deletion-journal";
 
 // The loop fires on this interval; each periodic sweep gates itself on its own longer interval,
 // so a one-minute tick serves every sweep and drains the queue promptly.
@@ -28,6 +29,8 @@ export async function registerNode(): Promise<void> {
     const config = loadConfig();
     assertProductionReleaseConfiguration(config);
     await startProductionOwnership(config);
+    await selectDeletionJournal({ nodeEnv: config.nodeEnv, account: config.blob.account,
+      container: config.blob.deletionJournalContainer }).initialize();
     startScheduler();
   } catch (error) {
     // Next can catch a rejected instrumentation hook and leave its listener alive.

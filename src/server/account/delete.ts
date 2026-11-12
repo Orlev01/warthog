@@ -34,6 +34,7 @@ import { deleteAccountJobs, enqueueAccountPurge } from "../db/account-purge";
 import { withTransaction, type Db } from "../db/index";
 import { releaseStore, type ReleaseStore } from "../crypto/release-store";
 import type { Senders } from "../notify/senders";
+import type { DeletionJournal } from "./deletion-journal";
 
 // The cross-aggregate revocation a deletion performs, injected because the agent /
 // connection / credential stores live in other aggregates. The account module owns
@@ -52,6 +53,7 @@ export interface DeleteAccountDeps {
   readonly revoker: DeletionExecutor;
   readonly senders: Senders;
   readonly releases?: Pick<ReleaseStore, "discardScope">;
+  readonly journal?: DeletionJournal;
 }
 
 // The plain reason shown to a person who still owns a household — they must transfer
@@ -88,6 +90,10 @@ export async function deleteAccount(
     const owned = await tx.query("SELECT 1 FROM households WHERE owner_id = $1", [userId]);
     if (owned.rows.length > 0) return { ok: false as const, reason: OWNS_HOUSEHOLD_REASON };
 
+    // Durable recovery intent MUST precede commit. If commit becomes ambiguous,
+    // this marker blocks restore until independently resolved. A failed write
+    // leaves the database unchanged. The production composition always supplies it.
+    await deps.journal?.requested(userId);
     await revoker.revokeAgentsAndConnections(userId, tx);
     await tx.query("DELETE FROM sessions WHERE user_id = $1", [userId]);
     await deleteAccountJobs(tx, userId);
@@ -103,6 +109,14 @@ export async function deleteAccount(
   // approval IDs. In-memory effects follow commit so rollback never loses a live
   // release. DEKs are resolved per request; there is no persistent DEK cache.
   (deps.releases ?? releaseStore).discardScope(`${userId}:`);
+
+  try {
+    await deps.journal?.completed(userId);
+  } catch {
+    // The deletion is committed. Keep the purge queue until its sweep can persist
+    // the completion; the request marker already makes recovery fail closed.
+    console.error("[warthog account] deletion journal completion requires retry");
+  }
 
   // Confirm by email. The deletion above is already complete and irreversible, so a
   // channel failure here must not turn it into an error the person would retry: it is

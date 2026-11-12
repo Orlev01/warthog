@@ -93,6 +93,19 @@ class PlanTests(unittest.TestCase):
 
 
 class SingletonTests(unittest.TestCase):
+    def test_journal_activation_is_explicit_one_time_update_without_existing_env(self):
+        old = app_fixture()
+        self.assertFalse(deploy_app.journal_activation(old, "update"))
+        with patch.dict(os.environ, ACTIVATE_DELETION_JOURNAL="true"):
+            self.assertTrue(deploy_app.journal_activation(old, "update"))
+            for operation in ["inspect", "create"]:
+                with self.assertRaises(RuntimeError):
+                    deploy_app.journal_activation(old, operation)
+            old["properties"]["template"]["containers"][0]["env"].append(
+                {"name": "DELETION_JOURNAL_CONTAINER", "value": "unexpected"})
+            with self.assertRaises(RuntimeError):
+                deploy_app.journal_activation(old, "update")
+
     def platform(self):
         platform = Mock(spec=deploy_app.Platform)
         platform.app, platform.group = "warthog", "test-group"
@@ -251,6 +264,32 @@ class SingletonTests(unittest.TestCase):
                 deploy_app.release(platform, "create", "new-digest", "new", Path(directory))
             cloud.assert_not_called()
         platform.ownership.assert_not_called()
+
+    def test_journal_activation_changes_only_exact_env_after_stop_and_keeps_domains(self):
+        platform = self.platform()
+        old = app_fixture()
+        live = copy.deepcopy(old)
+        live["properties"]["template"]["revisionSuffix"] = "new"
+        live["properties"]["template"]["containers"][0].update(image="new-digest")
+        live["properties"]["template"]["containers"][0]["env"].append(
+            {"name": "DELETION_JOURNAL_CONTAINER", "value": "account-deletions"})
+        live["properties"]["configuration"]["ingress"]["traffic"] = [{"revisionName": "warthog--new", "weight": 100}]
+        platform.current.side_effect = [old, old, live]
+        with patch.dict(os.environ, ACTIVATE_DELETION_JOURNAL="true", EXPECTED_CONFIG_SHA256=deploy_app.fingerprint(old)), \
+             patch.object(deploy_app, "verify_image") as verify, patch.object(deploy_app, "azure") as cloud, \
+             patch.object(deploy_app, "wait_ready"), patch.object(deploy_app, "summary"), \
+             patch.object(deploy_app.urllib.request, "urlopen") as health:
+            health.return_value.__enter__.return_value = Mock(status=200)
+            def azure_after_stop(*args):
+                platform.wait_stopped.assert_called_once()
+                self.assertEqual(platform.ownership.call_args_list[0].kwargs, {"expected_free": True})
+            cloud.side_effect = azure_after_stop
+            self.run_update(platform)
+            verify.assert_called_once_with("new-digest", require_journal=True)
+            args = cloud.call_args_list[0].args
+            self.assertEqual(args[-2:], ("--set-env-vars", "DELETION_JOURNAL_CONTAINER=account-deletions"))
+            self.assertNotIn("--replace-env-vars", args)
+        self.assertEqual(len(old["properties"]["template"]["containers"][0]["env"]), 2)
 
     def test_failed_start_stops_candidate_without_reactivating_old_revision(self):
         platform = self.platform()

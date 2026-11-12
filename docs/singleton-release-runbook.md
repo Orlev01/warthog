@@ -122,9 +122,12 @@ made after the restore point using approved evidence independent of that snapsho
 Revoke restored credentials and sessions and reapply those deletions first. Earlier
 backups can contain wrapped data keys still decryptable through the shared wrapping
 key; current-row key removal is not backup erasure. The purge queue is not a durable
-deletion journal once its user has been purged. A retained reconciliation process is
-still unimplemented/unverified here; without it, do not claim a safe production
-restore or reopen access to restored accounts. No new retention store is provisioned.
+deletion journal once its user has been purged. The candidate
+[independent journal and recovery procedure](adr/deletion-recovery-journal.md)
+implements fail-closed reconciliation and a synthetic PostgreSQL clone drill.
+Its Azure protections, actual cloud restore and credential reenrollment must be
+verified separately before any production recovery. Local passing tests do not
+authorize reopening restored accounts or provision a retention store.
 
 ## Evidence still required
 
