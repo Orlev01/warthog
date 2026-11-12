@@ -7,6 +7,8 @@ import { Button } from "@/components/ui/button";
 import { Card } from "@/components/ui/card";
 import { Field } from "@/components/ui/field";
 import { CopyButton } from "@/components/ui/copy-button";
+import { ConnectionPermissions, ConnectionAccessSummary } from "./connection-permissions";
+import { connectionChoices, connectionChoiceInput, type ConnectionChoices, type ConnectionService } from "@/domain/permissions/connection-choices";
 
 // E10-S13 — Access-key flow (brief "Connect an agent" — "For a platform that cannot use
 // the standard connector sign-in, 'Create an access key' lets the person name the agent
@@ -51,6 +53,11 @@ export interface AccessKeyCreateInput {
   platform: string;
   template: AccessKeyTemplate;
   tickedServices?: readonly string[];
+  identity?: boolean;
+  memoryRead?: boolean;
+  memoryWrite?: boolean;
+  tasks?: boolean;
+  records?: boolean;
   highTier?: boolean;
   card?: boolean;
   cardBudget?: { amount: number; currency: string; period: string } | null;
@@ -74,12 +81,14 @@ export interface AccessKeyFlowState {
   platform: string;
   template: AccessKeyTemplate;
   status: AccessKeyFlowStatus;
+  choices: ConnectionChoices;
   key?: string; // the RAW key, present only in "created" — shown once
   agentId?: string; // the created agent's id, present only in "created"
   error?: string; // a plain-English refusal, present only in "error"
 }
 
 export interface AccessKeyFlowDeps {
+  services?: readonly ConnectionService[];
   create: AccessKeyCreate;
   defaultTemplate?: "minimal" | "standard";
   defaultName?: string; // the proposed agent name (page-supplied)
@@ -93,6 +102,7 @@ export interface AccessKeyController {
   setName(value: string): void;
   setPlatform(value: string): void;
   setTemplate(value: AccessKeyTemplate): void;
+  setChoices(value: ConnectionChoices): void;
   submit(): Promise<void>;
 }
 
@@ -108,6 +118,7 @@ export function createAccessKeyFlow(deps: AccessKeyFlowDeps): AccessKeyControlle
     platform: deps.defaultPlatform ?? "",
     template: deps.defaultTemplate ?? "standard",
     status: "idle",
+    choices: connectionChoices(deps.defaultTemplate ?? "standard"),
   };
 
   function set(patch: Partial<AccessKeyFlowState>): void {
@@ -121,7 +132,7 @@ export function createAccessKeyFlow(deps: AccessKeyFlowDeps): AccessKeyControlle
   // 4xx / transport error) is caught here, never let escape. On success the ONE returned
   // key is held for its single showing.
   async function submit(): Promise<void> {
-    if (state.status === "working") return; // guard against a double confirm
+    if (state.status === "working" || state.status === "created") return; // guard against a double confirm
     set({ status: "working", error: undefined });
 
     let result: AccessKeyCreateResult;
@@ -130,6 +141,7 @@ export function createAccessKeyFlow(deps: AccessKeyFlowDeps): AccessKeyControlle
         name: state.name,
         platform: state.platform,
         template: state.template,
+        ...connectionChoiceInput(state.choices),
       });
     } catch {
       set({ status: "error", error: CREATE_FAILED_COPY });
@@ -148,28 +160,17 @@ export function createAccessKeyFlow(deps: AccessKeyFlowDeps): AccessKeyControlle
     getState: () => state,
     setName: (value) => set({ name: value }),
     setPlatform: (value) => set({ platform: value }),
-    setTemplate: (value) => set({ template: value }),
+    setTemplate: (value) => set({ template: value, choices: value === "custom" ? state.choices : connectionChoices(value) }),
+    setChoices: (choices) => set({ template: "custom", choices }),
     submit,
   };
 }
 
 // ─── copy (plain Australian English; no protocol jargon) ───────────────────────────────
 
-// The three starting sets the create surface offers, in plain words (the consent screen's
-// twin set).
-const STARTING_SETS: ReadonlyArray<{
-  value: AccessKeyTemplate;
-  label: string;
-  description: string;
-}> = [
-  { value: "minimal", label: "Minimal", description: "Just the low-tier basics." },
-  { value: "standard", label: "Standard", description: "The recommended balance." },
-  { value: "custom", label: "Custom", description: "Start from Standard, then change anything later." },
-];
-
 // ─── the key-shown surface (the key once, a Copy control, instructions, a warning) ─────
 
-function IssuedPanel({ keyValue }: { keyValue: string }) {
+function IssuedPanel({ keyValue, agentId }: { keyValue: string; agentId?: string }) {
   return (
     <section className="flex flex-col gap-6">
       <header className="flex flex-col gap-1">
@@ -196,6 +197,7 @@ function IssuedPanel({ keyValue }: { keyValue: string }) {
         Add it in your agent&rsquo;s connector or access-key settings. You can revoke or
         replace it any time from your agents list.
       </p>
+      <a className="inline-flex min-h-11 w-fit items-center text-sm font-medium underline underline-offset-4" href={agentId ? `/agents/${encodeURIComponent(agentId)}` : "/agents"}>Review this agent’s permissions</a>
     </section>
   );
 }
@@ -203,6 +205,7 @@ function IssuedPanel({ keyValue }: { keyValue: string }) {
 // ─── the client component (a thin binding over the controller) ─────────────────────────
 
 export interface AccessKeyFlowProps {
+  services?: readonly ConnectionService[];
   // The page's "use server" wrapper over createAccessKeyActions.create.
   create: AccessKeyCreate;
   defaultTemplate?: "minimal" | "standard";
@@ -222,6 +225,7 @@ export function AccessKeyFlow(props: AccessKeyFlowProps): React.ReactElement {
   if (flowRef.current === null) {
     flowRef.current = createAccessKeyFlow({
       create: props.create,
+      services: props.services,
       defaultTemplate: props.defaultTemplate,
       defaultName: props.defaultName,
       defaultPlatform: props.defaultPlatform,
@@ -231,78 +235,49 @@ export function AccessKeyFlow(props: AccessKeyFlowProps): React.ReactElement {
   }
   const flow = flowRef.current;
   const state = flow.getState();
+  const [ready, setReady] = React.useState(false);
+  React.useEffect(() => setReady(true), []);
 
   // Call every hook unconditionally (rules of hooks), even on the issued path.
   const nameId = React.useId();
-  const setGroupName = React.useId();
+
 
   // The issued key: from a completed create, or the preview/test seed.
   const issuedKey = state.status === "created" ? state.key : props.initialKey;
 
   if (issuedKey) {
-    return <IssuedPanel keyValue={issuedKey} />;
+    return <IssuedPanel keyValue={issuedKey} agentId={state.agentId ?? props.initialAgentId} />;
   }
 
   return (
-    <section className="flex flex-col gap-6">
-      <header className="flex flex-col gap-1">
-        <h1 className="text-xl font-semibold text-fg">Create an access key</h1>
-        <p className="text-sm text-fg-muted">
-          Name this agent and choose what it can do, then create its key.
-        </p>
+    <form method="post" className="wh-connection-flow" onSubmit={event => { event.preventDefault(); if (ready) void flow.submit(); }}>
+      <header className="wh-connection-intro">
+        <span className="wh-connection-mark"><KeyRound size={24} aria-hidden="true" /></span>
+        <p className="wh-connection-eyebrow">Agent connection · access key</p>
+        <h1>Create an access key</h1>
+        <p>Choose what this agent can access before creating its key. Anyone with the key can use these permissions, so only share it with the agent you intend to connect.</p>
       </header>
-
-      <Field
-        label="Name"
-        id={nameId}
-        value={state.name}
-        placeholder={props.defaultName}
-        onChange={(event) => flow.setName(event.target.value)}
-      />
-
-      <fieldset className="flex flex-col gap-2">
-        <legend className="pb-2 text-sm font-medium text-fg">Starting set</legend>
-        <div className="flex flex-col gap-2">
-          {STARTING_SETS.map((set) => (
-            <div key={set.value} className="rounded-card border border-line bg-surface p-3">
-              <label className="flex min-h-11 items-center gap-3">
-                <input
-                  type="radio"
-                  name={setGroupName}
-                  value={set.value}
-                  checked={state.template === set.value}
-                  onChange={() => flow.setTemplate(set.value)}
-                  className="h-4 w-4 accent-accent"
-                />
-                <span className="font-medium text-fg">{set.label}</span>
-              </label>
-              <p className="mt-1 text-sm text-fg-muted">{set.description}</p>
-            </div>
-          ))}
-        </div>
+      <fieldset disabled={!ready || state.status === "working"} className="contents">
+        <section className="wh-connection-section">
+          <div className="wh-connection-section-heading"><span>01</span><div><h2>Name this agent</h2><p>Use a name you’ll recognise in approvals and activity.</p></div></div>
+          <Field label="Agent name" name="name" id={nameId} value={state.name} placeholder={props.defaultName} required maxLength={200} onChange={event => flow.setName(event.target.value)} />
+        </section>
+        <ConnectionPermissions template={state.template} state={state.choices} services={props.services} onTemplate={flow.setTemplate} onChange={flow.setChoices} />
+        <section className="wh-connection-section">
+          <div className="wh-connection-section-heading"><span>03</span><div><h2>Review before creating the key</h2><p>The key will be limited to the choices shown here.</p></div></div>
+          <ConnectionAccessSummary state={state.choices} services={props.services} />
+          <p className="wh-connection-boundary">Global rules still apply. You can change access or disconnect this agent later. These controls only cover requests made through Warthog; information already received cannot be recalled.</p>
+        </section>
       </fieldset>
-
-      {state.error ? (
-        <p role="alert" className="inline-flex items-center gap-2 text-sm text-danger">
-          <AlertTriangle aria-hidden={true} className="h-4 w-4 shrink-0" />
-          {state.error}
-        </p>
-      ) : null}
-
-      <div className="flex">
-        <Button
-          type="button"
-          variant="primary"
-          disabled={state.status === "working"}
-          onClick={() => {
-            void flow.submit();
-          }}
-        >
-          <KeyRound aria-hidden={true} className="h-4 w-4 shrink-0" />
-          {state.status === "working" ? "Creating…" : "Create access key"}
+      {state.error ? <p role="alert" className="flex items-start gap-2 text-sm text-danger"><AlertTriangle size={18} aria-hidden="true" />{state.error} Your choices have been kept.</p> : null}
+      <div className="wh-connection-actions">
+        <Button type="submit" variant="primary" disabled={!ready} aria-disabled={state.status === "working" || undefined} aria-busy={state.status === "working"} onClick={event => { if (state.status === "working") event.preventDefault(); }}>
+          <KeyRound aria-hidden="true" size={16} />{state.status === "working" ? "Creating…" : "Create access key"}
         </Button>
+        <a href="/agents">Cancel</a>
       </div>
-    </section>
+      <p className="wh-connection-footer">The key is shown once. Copy it somewhere safe before leaving the next screen.</p>
+    </form>
   );
 }
 

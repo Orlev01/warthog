@@ -1,4 +1,5 @@
 import type { PermissionsSection } from "@/domain/permissions/workspace";
+import { CONNECTION_CAPABILITIES } from "@/domain/permissions/connection-choices";
 import { Select } from "@/components/ui/select";
 import * as React from "react";
 import { CreditCard, TriangleAlert } from "lucide-react";
@@ -377,13 +378,13 @@ export function PermissionsView({
               name="identity"
               on={lowTierRead}
               label="Read your low-tier identity details"
-              description="Low tier only — the everyday basics, never the sensitive ones."
+              description={CONNECTION_CAPABILITIES.identity.description}
             />
             <Toggle
               name="highTier"
               on={highTierRequest}
               label="Let it ask for high-tier identity details"
-              description="You approve each request before anything is released."
+              description={CONNECTION_CAPABILITIES.highTier.description}
             />
           </div>
         </>
@@ -481,13 +482,13 @@ export function PermissionsView({
               name="tasks"
               on={tasksAccess}
               label="Your tasks"
-              description="See, add and update your tasks."
+              description={CONNECTION_CAPABILITIES.tasks.description}
             />
             <Toggle
               name="records"
               on={recordsAccess}
               label="Your life-admin records"
-              description="Subscriptions, receipts and warranties, renewals and appointments."
+              description={CONNECTION_CAPABILITIES.records.description}
             />
           </div>
         </>
@@ -507,6 +508,7 @@ export function PermissionsView({
               name="memoryRead"
               on={sharedMemoryRead}
               label="Read shared memory and its own memories"
+              description={CONNECTION_CAPABILITIES.memoryRead.description}
             />
             <div className="flex flex-col gap-2">
               {memories.map((memory) => (
@@ -522,12 +524,13 @@ export function PermissionsView({
               name="memoryWrite"
               on={memoryWrite}
               label="Save memories"
-              description="Allow this agent to add memories independently of reading them."
+              description={CONNECTION_CAPABILITIES.memoryWrite.description}
             />
             <Toggle
               name="learningSharing"
               on={learningSharing}
               label="Share what it learns with your other agents"
+              description={CONNECTION_CAPABILITIES.learningSharing.description}
             />
           </div>
         </>

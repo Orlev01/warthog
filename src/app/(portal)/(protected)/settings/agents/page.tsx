@@ -1,4 +1,5 @@
 import * as React from "react";
+import { CONNECTION_PRESETS } from "@/domain/permissions/connection-choices";
 import { cookies } from "next/headers";
 import { redirect } from "next/navigation";
 import { revalidatePath } from "next/cache";
@@ -99,12 +100,10 @@ export default async function GlobalAgentSettings({
             <option value="standard">Standard</option>
           </Select>
         </label>
-        <p className="text-sm text-fg-muted">
-          Minimal includes everyday profile, preferences and assigned skills.
-          Standard also includes memory, tasks and records. Services are always
-          individually selected. Sensitive identity and card requests stay off
-          unless you enable them.
-        </p>
+        <dl className="grid gap-4 rounded-card bg-surface-muted p-4 text-sm sm:grid-cols-2">
+          {CONNECTION_PRESETS.filter(preset => preset.value !== "custom").map(preset => <div key={preset.value}><dt className="font-medium">{preset.label}</dt><dd className="mt-1 leading-relaxed text-fg-muted">{preset.description}</dd></div>)}
+        </dl>
+        <p className="text-sm text-fg-muted">Custom choices are made for each connection, not as a global preset. Protected identity, card requests and sharing stay off until you explicitly enable them. Activity through Warthog is always recorded.</p>
         <Field
           name="rateLimit"
           label="Default requests per minute"

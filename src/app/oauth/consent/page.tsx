@@ -1,12 +1,12 @@
 import { getProcessCatalogue } from "../../../server/connectors/catalogue";
 import { notificationSenders } from "../../../server/notify/production";
 import * as React from "react";
-import { join } from "node:path";
 import { cookies } from "next/headers";
 import { redirect } from "next/navigation";
 import { AlertTriangle } from "lucide-react";
 
-import { ConsentView } from "@/components/agents/consent-view";
+import { ConsentView, type ConsentDecisionResult } from "@/components/agents/consent-view";
+import { ConnectionFrame, ExpiredConnection } from "@/components/agents/connection-frame";
 
 import { loadConfig } from "../../../server/config";
 import { getServerDb } from "../../../server/db/server";
@@ -15,9 +15,7 @@ import { systemClock } from "../../../server/seams/clock";
 import { systemRandom } from "../../../server/seams/random";
 import { HttpError } from "../../../server/http/validate";
 import { systemClientResolver } from "../../../server/oauth/clients";
-import { loadCatalogue, type CatalogueIndex } from "../../../server/connectors/catalogue";
-import { processSingleton } from "../../../server/seams/process-singleton";
-import { selectSenders, type OutgoingMessage, type Senders } from "../../../server/notify/senders";
+import { type CatalogueIndex } from "../../../server/connectors/catalogue";
 import { createAuthorizeActions } from "../authorize/actions";
 import { approvalFromForm, loadConsentView } from "./actions";
 import type { Db } from "../../../server/db/index";
@@ -88,7 +86,7 @@ function getCatalogue(): CatalogueIndex { return getProcessCatalogue(loadConfig(
 // the pending handle is cleared and the person is redirected back to the client; a
 // malformed submission comes back as a notice with the pending request still usable; an
 // expired/unknown handle comes back as an expired notice.
-async function approveConsentAction(formData: FormData): Promise<void> {
+async function approveConsentAction(formData: FormData): Promise<ConsentDecisionResult> {
   "use server";
   const db = await getServerDb();
   const store = await cookies();
@@ -101,7 +99,7 @@ async function approveConsentAction(formData: FormData): Promise<void> {
 
   let clientRedirect: string | null = null;
   let consumed = false;
-  let notice = "expired";
+  const notice = "expired";
   try {
     const result = await buildActions(db).approve(session, handle, approvalFromForm(formData, platform));
     consumed = true;
@@ -110,7 +108,7 @@ async function approveConsentAction(formData: FormData): Promise<void> {
     if (!(error instanceof HttpError)) throw error;
     // Malformed input: the decision rejects at the boundary BEFORE consuming the pending
     // request, so the handle is still usable — keep the cookie and let the person retry.
-    notice = "invalid";
+    return { error: "We couldn’t use those details. Check the agent name and card budget, then try again. Your choices have been kept." };
   }
 
   if (consumed) store.set(CONSENT_COOKIE, "", CLEAR_CONSENT_COOKIE);
@@ -143,20 +141,6 @@ const NOTICES: Record<string, string> = {
 
 // Shown when the pending request can't be found (an expired or already-used handle), so
 // the screen explains it rather than crashing.
-function ExpiredNotice() {
-  return (
-    <main className="mx-auto flex w-full max-w-md flex-col gap-4 px-4 py-10 sm:px-6">
-      <div className="flex items-start gap-3 rounded-card border border-line bg-surface p-4 text-sm text-fg">
-        <AlertTriangle aria-hidden={true} className="mt-0.5 h-5 w-5 shrink-0" />
-        <p>
-          This connection request has expired or has already been used. Start connecting
-          again from your agent.
-        </p>
-      </div>
-    </main>
-  );
-}
-
 export default async function ConsentPage({
   searchParams,
 }: {
@@ -179,10 +163,10 @@ export default async function ConsentPage({
     db,
     nameOf: (connectorId) => getCatalogue().get(connectorId)?.name,
   });
-  if (!view) return <ExpiredNotice />;
+  if (!view) return <ExpiredConnection />;
 
   return (
-    <main className="mx-auto flex w-full max-w-md flex-col gap-4 px-4 py-10 sm:px-6">
+    <ConnectionFrame>
       {noticeText ? (
         <div
           role="alert"
@@ -197,6 +181,6 @@ export default async function ConsentPage({
         approveAction={approveConsentAction}
         refuseAction={refuseConsentAction}
       />
-    </main>
+    </ConnectionFrame>
   );
 }
