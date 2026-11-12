@@ -114,6 +114,7 @@ async function makeUser(db: Db, who: string): Promise<string> {
 const SEEDED_TABLES = [
   "activity_entries",
   "activity_disputes",
+  "activity_undo_claims",
   "sessions",
   "memories",
   "cards",
@@ -134,6 +135,11 @@ async function seedPersonalRows(db: Db, userId: string, tag: string): Promise<vo
   await db.query(
     `INSERT INTO activity_disputes (user_id, entry_seq, dispute_seq, note_ct, created_at)
      VALUES ($1, 1, 1, 'v1:dispute', now())`,
+    [userId],
+  );
+  // The single-shot undo guard (13 Nov): plaintext metadata naming an undone entry.
+  await db.query(
+    `INSERT INTO activity_undo_claims (user_id, entry_seq, claimed_at) VALUES ($1, 1, now())`,
     [userId],
   );
   await db.query(

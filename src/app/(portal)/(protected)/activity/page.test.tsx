@@ -438,6 +438,48 @@ test("the loader's props mount a live Dispute control on every entry and an Undo
   }
 });
 
+// 13 Nov — an entry that has been undone (or has an undo in progress) holds an undo claim.
+// The loader marks it not undoable and the screen shows "Undone" in place of the Undo
+// button, so Undo is never offered twice. The claim is matched on the person AND the
+// position: another person's claim at the same position never marks this person's entry.
+test("an entry with an undo claim is not undoable and shows Undone instead of an Undo button", async () => {
+  const db = await freshDb();
+  try {
+    const keyWrapper = localAesKeyWrapper(randomBytes(KEK_BYTES));
+    const { aliceId, bobId, aliceSession } = await seedWorld(db, keyWrapper);
+    const loader = makeLoader(db, keyWrapper);
+    const claim = (userId: string, seq: number) => db.query(
+      "INSERT INTO activity_undo_claims (user_id, entry_seq, claimed_at) VALUES ($1, $2, $3)",
+      [userId, seq, "2026-05-01T00:00:00.000Z"],
+    );
+
+    // Bob's claim on HIS entry 1 leaves Alice's entry 1 undoable.
+    await claim(bobId, 1);
+    const before = await loader.load(aliceSession, {});
+    assert.deepEqual(before.entries.filter((entry) => entry.canUndo).map((entry) => entry.seq), [1],
+      "another person's claim never marks the session person's entry");
+    assert.ok(before.entries.every((entry) => !entry.undone), "nothing reads as undone yet");
+    assert.doesNotMatch(strip(render(before, { disputeAction: noopAction, undoAction: noopAction })), /\bundone\b/);
+
+    await claim(aliceId, 1);
+    const view = await loader.load(aliceSession, {});
+    const entry = view.entries.find((candidate) => candidate.seq === 1);
+    assert.ok(entry, "the claimed entry is still listed");
+    assert.equal(entry.canUndo, false, "a claimed entry is not undoable");
+    assert.equal(entry.undone, true, "and is marked undone");
+    assert.deepEqual(view.entries.filter((candidate) => candidate.undone).map((candidate) => candidate.seq), [1],
+      "only the claimed entry reads as undone");
+
+    const markup = render(view, { disputeAction: noopAction, undoAction: noopAction });
+    assert.equal(liveCount(markup, /\bundo\b/i), 0, "no Undo control is offered for it");
+    assert.equal(formsFor(markup, /\bundo\b/i).length, 0, "and no Undo form");
+    assert.match(strip(markup), /\bundone\b/, "the entry says it has been undone");
+    assert.equal(liveCount(markup, /dispute/i), 3, "Dispute stays on every entry");
+  } finally {
+    await db.close();
+  }
+});
+
 // =====================================================================================
 // AC3 — filters and search narrow the rendered list
 // =====================================================================================

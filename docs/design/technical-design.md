@@ -267,6 +267,12 @@ sentence by a pure function (`ruleSentence`).
   `activity_disputes` (UPDATE/DELETE revoked); a separate `warthog_purge` role is used only by the
   account-deletion job.
 - Disputes are a separate append-only table referencing the entry. Undo writes a new entry.
+- Undo is single-shot: before the reversal runs, the service claims `(user_id, entry_seq)` in
+  `activity_undo_claims` (plaintext metadata; runtime role SELECT/INSERT/DELETE) with one atomic
+  `INSERT … ON CONFLICT DO NOTHING`. A request that does not win the claim runs and records
+  nothing. The claim is kept once the reversal executed or is held for approval, and released when
+  it was refused, failed or threw. The Activity page shows "Undone" instead of Undo for a claimed
+  entry. Account deletion cascades to the claims.
 
 ## 10. Notifications
 - Web Push (VAPID via `@pushforge/builder`), service worker `public/sw.js`, every push shows a

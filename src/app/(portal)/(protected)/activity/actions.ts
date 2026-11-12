@@ -41,7 +41,7 @@ import {
   checkIntegrity as runIntegrityCheck,
   type IntegrityResult,
 } from "@/server/activity/integrity";
-import { listActivity, listActivityFacets, summariseActivity, type ActivityFilters } from "@/server/activity/list";
+import { listActivity, listActivityFacets, summariseActivity, type ActivityFilters, type ListedActivityEntry } from "@/server/activity/list";
 import { isReadOnlyTool } from "@/server/activity/tool-effects";
 import { activityCategory, agentRole, CATEGORY_LABELS, outcomeGroup, outcomeLabel } from "@/domain/activity/category";
 import type { Clock } from "@/server/seams/clock";
@@ -72,7 +72,7 @@ import { agentNamesForUser, listAgentsForUser } from "@/server/db/agents";
 import { agentLabel, entryTitle, kindLabel } from "@/domain/activity/describe";
 import { platformLabel } from "@/components/agents/platform-label";
 import type { KeyWrapper } from "@/server/crypto/key-wrapper";
-import type { ActivityEntry } from "@/server/activity/recorder";
+import type { UndoRefusalStatus } from "@/server/activity/undo";
 import type {
   ActivityEntryView,
   ActivityViewProps,
@@ -89,7 +89,7 @@ interface DisputeFiler {
 }
 interface EntryUndoer {
   undo(input: { userId: string; entrySeq: number; reason?: string }): Promise<
-    { ok: true; entry: { seq: number } } | { ok: false; reason: string; status?: "refused" | "pending_approval" | "failed" }
+    { ok: true; entry: { seq: number } } | { ok: false; reason: string; status?: UndoRefusalStatus }
   >;
 }
 
@@ -228,6 +228,12 @@ const undoInputSchema = z.object({
 // never a passed-through sentence, and no internal detail or ambient value in the result.
 const DISPUTE_REFUSED = "dispute_refused";
 const UNDO_REFUSED = "undo_refused";
+// Each distinct undo outcome the screen words differently; anything else is UNDO_REFUSED.
+const UNDO_CODES: Partial<Record<UndoRefusalStatus, string>> = {
+  pending_approval: "undo_pending",
+  failed: "undo_failed",
+  already_undone: "undo_already",
+};
 
 export function createActivityActions(deps: ActivityActionsDeps): ActivityActions {
   const { db, disputes, undo, keyWrapper, reversalFor, serviceName } = deps;
@@ -277,9 +283,10 @@ export function createActivityActions(deps: ActivityActionsDeps): ActivityAction
     });
     // The service reports distinct English reasons (a non-reversible entry, or no such
     // entry — the latter carrying a position number). Neither is a stable notice code, so
-    // report the one stable refusal code and let the screen say it in plain words.
-    if (!result.ok) return { ok: false, reason: result.status === "pending_approval" ? "undo_pending"
-      : result.status === "failed" ? "undo_failed" : UNDO_REFUSED };
+    // report a stable refusal code and let the screen say it in plain words: one each for a
+    // reversal held for approval, one that failed, and an entry already undone (or with an
+    // undo in progress), else the one general refusal.
+    if (!result.ok) return { ok: false, reason: (result.status && UNDO_CODES[result.status]) || UNDO_REFUSED };
     return { ok: true, entry: { seq: result.entry.seq } };
   }
 
@@ -293,17 +300,21 @@ export function createActivityActions(deps: ActivityActionsDeps): ActivityAction
   // Map a decrypted entry to the view's row. `canUndo` is `reversalFor(tool)` — true
   // only where the entry's tool declares a reversal — so the view mounts an Undo
   // control exactly where undoEntry can act and nowhere else (never a dead control).
+  // An entry that has already been undone (or has an undo in progress — it holds an undo
+  // claim) is never undoable again: `canUndo` is false and `undone` tells the view to say
+  // "Undone" where the button was.
   // The agent is shown by the name the person gave it (`agentNames`: their OWN agents,
   // read member-scoped), never its raw id, and an agent call is titled by its tool.
   function toEntryView(
-    entry: ActivityEntry,
+    entry: ListedActivityEntry,
     agentNames: ReadonlyMap<string, string>,
     timeZone: string,
     state: ActivityState,
     now: Date | undefined,
   ): ActivityEntryView & { attemptId?: string; intent?: true } {
     const target = calendarReversalForEntry(entry);
-    const canUndo = target !== undefined && reversalFor?.(entry.tool) === target.tool;
+    const undone = entry.undoClaimed === true;
+    const canUndo = !undone && target !== undefined && reversalFor?.(entry.tool) === target.tool;
     const category = activityCategory(entry, isReadOnlyTool);
     const day = dayOf(entry.occurredAt, timeZone, now);
     return {
@@ -328,6 +339,7 @@ export function createActivityActions(deps: ActivityActionsDeps): ActivityAction
       permalink: `${ACTIVITY_PATH}?entry=${entry.seq}#entry-${entry.seq}`,
       ...activityEvidence(entry),
       canUndo,
+      ...(undone ? { undone: true } : {}),
     };
   }
 

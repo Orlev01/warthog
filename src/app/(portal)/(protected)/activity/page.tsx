@@ -86,6 +86,8 @@ function buildActions(db: Db, config: Config) {
     // the outcome in plain words rather than throwing, so the undo service can always record
     // the reversal entry (E07-S20). The page binds a live undoAction over it below.
     runReversal: createAgentExecutors({ db, config }).runReversal,
+    // Stamps the single-shot undo claim, so a double-click or a second Undo runs nothing.
+    clock: systemClock,
   });
 
   // Connected services are named through the process-wide connector catalogue, the same

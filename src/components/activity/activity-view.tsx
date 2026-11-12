@@ -16,6 +16,7 @@ import {
   Search,
   ShieldCheck,
   SlidersHorizontal,
+  Undo2,
   UserCog,
   type LucideIcon,
 } from "lucide-react";
@@ -66,7 +67,8 @@ import type { EvidenceLine } from "@/domain/activity/evidence";
 // Trust rules carried into every view: agent-submitted summaries are labelled "Reported by
 // <agent>" and never presented as fact; blocked/failed outcomes and disputes are visible on
 // the collapsed row and on group rows; Dispute stays available on EVERY entry; Undo only
-// where the entry's tool declares a reversal (`canUndo`); the integrity check is
+// where the entry's tool declares a reversal (`canUndo`), and an entry already undone says
+// "Undone" in its place (`undone`) so Undo is never offered twice; the integrity check is
 // record-wide and never shown per group. Controls are live forms or links, never dead
 // buttons. Colour comes from the design tokens; meaning is always words plus an icon.
 
@@ -74,7 +76,9 @@ import type { EvidenceLine } from "@/domain/activity/evidence";
 // fact Warthog recorded itself; "agent_reported" is a summary an agent submitted, shown
 // labelled "Reported by <agent>" and never treated as the source of truth. `agent` is
 // the connected AI client, `service` the connected service it touched (either may be
-// absent). `canUndo` is true ⇔ the entry's tool declares a reversal. `title` is the
+// absent). `canUndo` is true ⇔ the entry's tool declares a reversal and it has not already
+// been undone; `undone` marks an entry that has been undone (or has an undo in progress),
+// shown as a plain "Undone" status where the Undo button would be. `title` is the
 // row's headline in plain words — an agent call is titled by its tool ("Save a memory")
 // — and `agent` is the agent's display name, never its raw id.
 export type ActivityEntryView = {
@@ -103,6 +107,7 @@ export type ActivityEntryView = {
   facts?: readonly EvidenceLine[]; // labelled plain-English lines ("Warthog's decision: Allowed")
   technical?: readonly EvidenceLine[]; // identifiers and measurements, shown collapsed
   canUndo: boolean;
+  undone?: boolean;
   disputes?: readonly { note: string; at: string }[];
 };
 
@@ -497,7 +502,9 @@ function ActivityEntryItem({
                 </details>
               ) : null}
               <div className="flex flex-col gap-3 border-t border-line pt-3 sm:flex-row sm:flex-wrap sm:items-start">
-                {entry.canUndo ? <UndoControl entry={entry} undoAction={undoAction} /> : null}
+                {entry.canUndo ? <UndoControl entry={entry} undoAction={undoAction} /> : entry.undone ? (
+                  <Badge tone="neutral" icon={Undo2} className="self-start">Undone</Badge>
+                ) : null}
                 <DisputeControl entry={entry} disputeAction={disputeAction} />
               </div>
               {entry.permalink ? (

@@ -57,8 +57,9 @@
 //
 // The builder MAY pass more fields to `runReversal` (connector id, agent id, the reason);
 // these tests only COUNT its calls and read the recorded entry, so they never pin the
-// job's exact shape. Undo needs NO new table — it appends through the existing
-// `activity_entries` chain via the recorder (design §9 "Undo writes a new entry").
+// job's exact shape. Undo appends through the existing `activity_entries` chain via the
+// recorder (design §9 "Undo writes a new entry"); its only table is the plaintext
+// `activity_undo_claims` guard (13 Nov) that makes an undo single-shot.
 //
 // Acceptance criteria → tests:
 //   AC1 "Undo on a reversible entry runs the declared reversal tool and writes a new
@@ -286,7 +287,9 @@ test("undo never reports completion for a refused or pending reversal", async ()
     const userId = await makeUser(db, "undo-refused");
     const recorder = makeRecorder(db, { [userId]: freshDek() });
     await seedChain(recorder, userId, [CREATE_EVENT]);
-    for (const status of ["refused", "pending_approval", "failed"] as const) {
+    // A refused or failed reversal releases the entry's undo claim, so the next attempt on
+    // the same entry runs; an approval-held one keeps it, so it is tried last.
+    for (const status of ["refused", "failed", "pending_approval"] as const) {
       const outcome = status === "refused" ? "The reversal could not be completed." : "Approval is required.";
       const service = createUndoService({ db, recorder, reversalFor: () => DELETE_EVENT,
         runReversal: async () => ({ status, outcome }),
@@ -708,4 +711,274 @@ test("a recorded reversal stores an outcome code, never a sentence", async () =>
     const rows = await db.query("SELECT outcome FROM activity_entries WHERE user_id = $1 AND seq > 2 ORDER BY seq", [userId]);
     assert.deepEqual(rows.rows.map((row) => row.outcome), ["reversed", "failed"]);
   } finally { await db.close(); }
+});
+
+// ===================================================================================
+// Single-shot undo (13 Nov) — an entry is undone at most once. Before the reversal runs,
+// the service CLAIMS the (user, seq) pair with one atomic insert; a second undo of the same
+// entry, whether a double-click or a later click, finds the claim and is refused without
+// running or recording anything. A refused or failed reversal (or one that throws) releases
+// the claim so the person can try again; an executed or approval-held reversal keeps it.
+// ===================================================================================
+
+const ALREADY_UNDONE = /already been undone/i;
+
+// How many undo claims this person holds for an entry (0 or 1).
+async function claimCount(db: Db, userId: string, seq: number): Promise<number> {
+  const result = await db.query(
+    "SELECT count(*)::int AS c FROM activity_undo_claims WHERE user_id = $1 AND entry_seq = $2",
+    [userId, seq],
+  );
+  return Number(result.rows[0]?.c ?? 0);
+}
+
+// An undo service whose reversal reports the given statuses in turn (the last one repeats),
+// logging every run.
+function scriptedUndo(
+  db: Db,
+  recorder: ActivityRecorder,
+  statuses: readonly ("executed" | "refused" | "pending_approval" | "failed")[],
+  runCalls: unknown[],
+) {
+  return createUndoService({
+    db,
+    recorder,
+    reversalFor: (tool) => (tool ? REVERSALS[tool] : undefined),
+    runReversal: async (job) => {
+      const status = statuses[Math.min(runCalls.length, statuses.length - 1)]!;
+      runCalls.push(job);
+      return { status, outcome: status === "executed" ? "Undone." : "Not undone." };
+    },
+  });
+}
+
+test("a second undo of the same entry is refused as already undone, and the reversal runs once", async () => {
+  const db = await freshDb();
+  try {
+    const alice = await makeUser(db, "single-shot");
+    const recorder = makeRecorder(db, { [alice]: freshDek() });
+    await seedChain(recorder, alice, [CREATE_EVENT]);
+    const runCalls: unknown[] = [];
+    const service = buildUndoService({ db, recorder, reversals: REVERSALS, runCalls });
+
+    const first = await service.undo({ userId: alice, entrySeq: 1 });
+    assert.ok(first.ok, "the first undo runs the reversal");
+    const second = await service.undo({ userId: alice, entrySeq: 1 });
+
+    assert.equal(second.ok, false, "the second undo is refused");
+    assert.ok(!second.ok && second.status === "already_undone", "with a distinguishable status");
+    assert.match(!second.ok ? second.reason : "", ALREADY_UNDONE, "and a plain reason");
+    assert.equal(runCalls.length, 1, "the reversal ran exactly once");
+    assert.equal(await entryCount(db, alice), 2, "only the first undo was recorded");
+    assert.equal(await claimCount(db, alice, 1), 1, "the executed undo keeps its claim");
+  } finally {
+    await db.close();
+  }
+});
+
+test("two concurrent undos of the same entry run the reversal exactly once", async () => {
+  const db = await freshDb();
+  try {
+    const alice = await makeUser(db, "concurrent");
+    const recorder = makeRecorder(db, { [alice]: freshDek() });
+    await seedChain(recorder, alice, [CREATE_EVENT]);
+    const runCalls: unknown[] = [];
+    // A slow reversal, so the second undo arrives while the first is still running.
+    const service = createUndoService({
+      db,
+      recorder,
+      reversalFor: (tool) => (tool ? REVERSALS[tool] : undefined),
+      runReversal: async (job) => {
+        runCalls.push(job);
+        await new Promise((resolve) => setTimeout(resolve, 20));
+        return { status: "executed", outcome: "Undone." };
+      },
+    });
+
+    const results = await Promise.all([
+      service.undo({ userId: alice, entrySeq: 1 }),
+      service.undo({ userId: alice, entrySeq: 1 }),
+    ]);
+
+    assert.equal(runCalls.length, 1, "the reversal ran exactly once");
+    assert.equal(results.filter((r) => r.ok).length, 1, "exactly one undo succeeded");
+    const refused = results.find((r) => !r.ok);
+    assert.ok(refused && !refused.ok && refused.status === "already_undone", "the other was refused as already undone");
+    assert.equal(await entryCount(db, alice), 2, "exactly one reversal entry was recorded");
+  } finally {
+    await db.close();
+  }
+});
+
+test("a failed or refused reversal releases the claim, so a retry runs", async () => {
+  for (const status of ["failed", "refused"] as const) {
+    const db = await freshDb();
+    try {
+      const alice = await makeUser(db, `release-${status}`);
+      const recorder = makeRecorder(db, { [alice]: freshDek() });
+      await seedChain(recorder, alice, [CREATE_EVENT]);
+      const runCalls: unknown[] = [];
+      const service = scriptedUndo(db, recorder, [status, "executed"], runCalls);
+
+      const first = await service.undo({ userId: alice, entrySeq: 1 });
+      assert.ok(!first.ok && first.status === status, `the first attempt reports ${status}`);
+      assert.equal(await claimCount(db, alice, 1), 0, `a ${status} reversal releases the claim`);
+
+      const retry = await service.undo({ userId: alice, entrySeq: 1 });
+      assert.ok(retry.ok, `a retry after a ${status} reversal runs`);
+      assert.equal(runCalls.length, 2, "the reversal ran for the retry");
+      assert.equal(await claimCount(db, alice, 1), 1, "the executed retry keeps its claim");
+    } finally {
+      await db.close();
+    }
+  }
+});
+
+test("a reversal that throws releases the claim and surfaces the error, so a retry runs", async () => {
+  const db = await freshDb();
+  try {
+    const alice = await makeUser(db, "release-throw");
+    const recorder = makeRecorder(db, { [alice]: freshDek() });
+    await seedChain(recorder, alice, [CREATE_EVENT]);
+    let calls = 0;
+    const service = createUndoService({
+      db,
+      recorder,
+      reversalFor: (tool) => (tool ? REVERSALS[tool] : undefined),
+      runReversal: async () => {
+        calls += 1;
+        if (calls === 1) throw new Error("executor unavailable");
+        return { status: "executed", outcome: "Undone." };
+      },
+    });
+
+    await assert.rejects(service.undo({ userId: alice, entrySeq: 1 }), /executor unavailable/);
+    assert.equal(await claimCount(db, alice, 1), 0, "a throwing reversal releases the claim");
+    assert.equal(await entryCount(db, alice), 1, "nothing was recorded for the throw");
+
+    const retry = await service.undo({ userId: alice, entrySeq: 1 });
+    assert.ok(retry.ok, "the retry runs");
+    assert.equal(calls, 2);
+  } finally {
+    await db.close();
+  }
+});
+
+test("a reversal held for approval keeps the claim, so the entry can't be undone twice", async () => {
+  const db = await freshDb();
+  try {
+    const alice = await makeUser(db, "pending-keeps");
+    const recorder = makeRecorder(db, { [alice]: freshDek() });
+    await seedChain(recorder, alice, [CREATE_EVENT]);
+    const runCalls: unknown[] = [];
+    const service = scriptedUndo(db, recorder, ["pending_approval", "executed"], runCalls);
+
+    const first = await service.undo({ userId: alice, entrySeq: 1 });
+    assert.ok(!first.ok && first.status === "pending_approval");
+    assert.equal(await claimCount(db, alice, 1), 1, "the approval-held undo keeps its claim");
+
+    const second = await service.undo({ userId: alice, entrySeq: 1 });
+    assert.ok(!second.ok && second.status === "already_undone", "a second undo would ask for a duplicate approval");
+    assert.equal(runCalls.length, 1, "so it is refused and nothing more runs");
+    assert.equal(await entryCount(db, alice), 2, "only the held attempt was recorded");
+  } finally {
+    await db.close();
+  }
+});
+
+test("an executed reversal keeps its claim even when recording it then fails", async () => {
+  const db = await freshDb();
+  try {
+    const alice = await makeUser(db, "record-throws");
+    const recorder = makeRecorder(db, { [alice]: freshDek() });
+    await seedChain(recorder, alice, [CREATE_EVENT]);
+    const runCalls: unknown[] = [];
+    const failing: ActivityRecorder = { record: async () => { throw new Error("record unavailable"); } };
+    const service = buildUndoService({ db, recorder: failing, reversals: REVERSALS, runCalls });
+
+    await assert.rejects(service.undo({ userId: alice, entrySeq: 1 }), /record unavailable/);
+    assert.equal(await claimCount(db, alice, 1), 1, "the change was undone, so the claim stays");
+
+    const again = await service.undo({ userId: alice, entrySeq: 1 });
+    assert.ok(!again.ok && again.status === "already_undone", "the reversal is never repeated");
+    assert.equal(runCalls.length, 1);
+  } finally {
+    await db.close();
+  }
+});
+
+test("undo claims are per person: the same position in another person's record is undone independently", async () => {
+  const db = await freshDb();
+  try {
+    const alice = await makeUser(db, "claims-alice");
+    const bob = await makeUser(db, "claims-bob");
+    const recorder = makeRecorder(db, { [alice]: freshDek(), [bob]: freshDek() });
+    await seedChain(recorder, alice, [CREATE_EVENT]);
+    await seedChain(recorder, bob, [CREATE_EVENT]);
+    const runCalls: unknown[] = [];
+    const service = buildUndoService({ db, recorder, reversals: REVERSALS, runCalls });
+
+    assert.ok((await service.undo({ userId: alice, entrySeq: 1 })).ok, "Alice undoes her entry 1");
+    assert.equal(await claimCount(db, bob, 1), 0, "Alice's claim never marks Bob's entry 1");
+    assert.ok((await service.undo({ userId: bob, entrySeq: 1 })).ok, "Bob still undoes his own entry 1");
+    assert.equal(runCalls.length, 2);
+    assert.equal(await claimCount(db, alice, 1), 1);
+    assert.equal(await claimCount(db, bob, 1), 1);
+  } finally {
+    await db.close();
+  }
+});
+
+test("a refused undo of an entry with no reversal, or of a missing entry, leaves no claim", async () => {
+  const db = await freshDb();
+  try {
+    const alice = await makeUser(db, "no-claim");
+    const recorder = makeRecorder(db, { [alice]: freshDek() });
+    await seedChain(recorder, alice, [LIST_EVENTS]);
+    const runCalls: unknown[] = [];
+    const service = buildUndoService({ db, recorder, reversals: REVERSALS, runCalls });
+
+    assert.equal((await service.undo({ userId: alice, entrySeq: 1 })).ok, false);
+    assert.equal((await service.undo({ userId: alice, entrySeq: 9 })).ok, false);
+    const claims = await db.query("SELECT count(*)::int AS c FROM activity_undo_claims WHERE user_id = $1", [alice]);
+    assert.equal(Number(claims.rows[0]?.c), 0, "an ineligible undo claims nothing");
+  } finally {
+    await db.close();
+  }
+});
+
+test("the claim and its release bind the person and position as parameters, member-scoped", async () => {
+  const probe = "u'); DROP TABLE activity_undo_claims; --";
+  const calls: { text: string; values: unknown[] }[] = [];
+  const db: Db = {
+    query(text: string, values: unknown[] = []) {
+      calls.push({ text, values });
+      if (/FROM activity_entries/.test(text)) {
+        return Promise.resolve({ rows: [{ seq: 7, tool: CREATE_EVENT, kind: "tool_call", source: "warthog", connector_id: null }] });
+      }
+      if (/INSERT INTO activity_undo_claims/.test(text)) return Promise.resolve({ rows: [{ entry_seq: 7 }] });
+      return Promise.resolve({ rows: [] as Record<string, unknown>[] });
+    },
+    close: () => Promise.resolve(),
+  };
+  const service = createUndoService({
+    db,
+    recorder: recordingRecorder(),
+    reversalFor: (tool) => (tool ? REVERSALS[tool] : undefined),
+    runReversal: async () => ({ status: "failed", outcome: "Not undone." }),
+  });
+
+  await service.undo({ userId: probe, entrySeq: 7 });
+
+  const claim = calls.find((c) => /INSERT INTO activity_undo_claims/.test(c.text));
+  const release = calls.find((c) => /DELETE FROM activity_undo_claims/.test(c.text));
+  assert.ok(claim, "the undo claims the entry before running the reversal");
+  assert.ok(release, "a failed reversal releases the claim");
+  for (const call of [claim, release]) {
+    assert.ok(call.values.includes(probe) && call.values.includes(7), "the person and position travel as bound values");
+    assert.match(call.text, /user_id/, "the statement is scoped to the person");
+  }
+  for (const call of calls) {
+    assert.ok(!call.text.includes(probe), "the id is never woven into the SQL");
+  }
 });

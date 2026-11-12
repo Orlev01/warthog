@@ -65,6 +65,7 @@ type ActivityEntryView = {
   summary: string; // one-line, already-redacted
   detail: string; // full detail, already-redacted (the per-entry "open for detail")
   canUndo: boolean;
+  undone?: boolean; // the entry has been undone (or an undo is in progress) — 13 Nov
 };
 
 // The values each filter dropdown offers (resolved display names / labels).
@@ -523,6 +524,28 @@ test("shows NO Undo control on an entry whose tool declares no reversal (with or
     0,
     "a list with no reversible entries offers no Undo control at all",
   );
+});
+
+// 13 Nov — an entry is undone at most once. Once undone (or while its undo is in progress)
+// the loader hands it in with `canUndo: false, undone: true`: the view shows a small plain
+// "Undone" status where the Undo button was, offers no Undo control (live or disabled), and
+// keeps Dispute.
+test("an undone entry shows an Undone status and no Undo control", () => {
+  const undone: ActivityEntryView = { ...ENTRY_TOOL_CALL, canUndo: false, undone: true };
+  for (const undoAction of [noopUndoAction, undefined]) {
+    const markup = render(base({ entries: [undone], undoAction }));
+    assert.equal(buttonsMatching(markup, /\bundo\b/i).length, 0, "no Undo control, not even a disabled one");
+    assert.equal(formsForControl(markup, /\bundo\b/i).length, 0, "and no Undo form");
+    assert.match(visibleText(markup), /\bUndone\b/, "the entry says it has been undone");
+    assert.ok(buttonsMatching(markup, /dispute/i).length >= 1, "Dispute is still offered");
+  }
+  // The status is a badge (the shared small-label primitive), so its words sit inside a
+  // bounded component rather than loose on the panel.
+  const markup = render(base({ entries: [undone] }));
+  const badges = findAll(markup, "span").filter((span) => /\bwh-badge\b/.test(attr(span.attrs, "class") ?? ""));
+  assert.ok(badges.some((badge) => /^Undone$/.test(visibleText(badge.inner))), "Undone is shown as a status badge");
+  // A reversible entry that has NOT been undone never says Undone.
+  assert.doesNotMatch(visibleText(render(base({ entries: [ENTRY_TOOL_CALL] }))), /\bUndone\b/);
 });
 
 // === The rest of the component's surface (brief "Activity feed") ===================
