@@ -1,4 +1,20 @@
-# Delivery status — 13 November 2026 (combined release, deletion journal active)
+# Delivery status — 13 November 2026 (undo guard, approval expiry, Inbox marks)
+
+**Live at [app.warthog.com.au](https://app.warthog.com.au).** Application source
+`81a98621567c3638248bbcf0de4b6da6e320f6e7` runs as `warthog--r43325136204a1`, with one
+healthy replica, explicit 100% traffic and zero old replicas.
+- Undo now runs once per entry and shows whether it is done or waiting for approval
+  (migration 0108).
+- The approval expiry is a per-person setting on Rules & budgets, from 2 minutes to
+  24 hours, default 15 (migration 0109).
+- The Inbox shows each agent's mark.
+
+Main and pinned-image CI passed 5,739 tests. Releases no longer wait for GitHub
+environment approvals: at the founder's request, required reviewers were removed and
+each environment keeps only its `main` branch policy. See the
+[release record](docs/audit/undo-expiry-release-2026-11-13.md).
+
+# Earlier delivery status — 13 November 2026 (combined release, deletion journal active)
 
 **The combined release is live at [app.warthog.com.au](https://app.warthog.com.au).**
 Application source `df88bbcc193465130873781294774d9028e36404` runs as
