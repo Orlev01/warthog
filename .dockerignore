@@ -23,6 +23,7 @@
 !scripts/check-local-linux.mjs
 !scripts/verify-local-postgres.ts
 !scripts/verify-local-postgres-security.ts
+!scripts/verify-local-postgres-recovery.ts
 **/.env*
 # Public development fixture required by config and bundle-leak checks.
 # Runtime staging rejects all .env files; real environment files stay excluded.
