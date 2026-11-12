@@ -1,5 +1,5 @@
 import { vaultFieldAllowed } from "../../../../server/agents/resource-access";
-import { getAgentById } from "../../../../server/db/agents";
+import { getAgentById, listAgentsForUser, type Agent } from "../../../../server/db/agents";
 import { getConnectionPermissions } from "../../../../server/db/agent-permissions";
 import { formatAccountTime } from "@/server/display-time";
 import { timeZoneFor } from "@/server/spending/time-zone";
@@ -50,11 +50,16 @@ import { parseParams } from "../../../../server/http/validate";
 import { requireStepUp } from "../../../../server/auth/step-up";
 import {
   ApprovalAlreadyDecidedError,
+  DECIDED_STATUSES,
+  countDecidedForUser,
   decide,
   getApproval,
+  listDecidedForUser,
+  type DecidedCount,
   type Decision,
   type StoredApproval,
 } from "../../../../server/db/approvals";
+import { firstParam } from "@/lib/href";
 import { markOpened } from "../../../../server/approvals/opened";
 import {
   readInbox,
@@ -78,6 +83,9 @@ import type {
   DecidedRequestView,
   DecidedStatus,
   HighTierFieldView,
+  HistoryFilter,
+  HistorySummary,
+  InboxViewKey,
   InboxViewProps,
   PendingRequestView,
   ReleaseKind,
@@ -117,7 +125,39 @@ export type ActionResult = { ok: true } | { ok: false; reason: string };
 // approvals (newest-first) + their decision history, and — for a card release — their
 // saved cards. The page adds the bound decision actions (approve / deny / ask) and the
 // device-release trigger when it renders. The view (E12-S12) owns this shape.
-export type InboxLoadData = Pick<InboxViewProps, "pending" | "history" | "savedCards">;
+// It also carries the history organisation: the validated filters in force, the counts
+// behind the History tab and its filter links, and — when a notification opened a decided
+// approval that is not on the loaded page — that one decision.
+export type InboxLoadData = Pick<
+  InboxViewProps,
+  "pending" | "history" | "savedCards" | "historyFilter" | "historySummary" | "openedEntry"
+>;
+
+// What the inbox address bar may ask for, as raw strings. `load` validates every value:
+// an outcome must be a known one, an agent must be one of the SESSION person's own agents
+// and an opened approval must be theirs — anything else is ignored, never trusted.
+export interface InboxLoadOptions {
+  readonly outcome?: string;
+  readonly agent?: string;
+  readonly focusApproval?: string;
+}
+
+// The inbox query: the validated tab plus the raw filters and opened approval `load`
+// checks. A notice and any unknown parameter are left to the page.
+export type InboxQuery = InboxLoadOptions & { readonly initialView?: InboxViewKey };
+
+export function inboxQueryFrom(params: Record<string, string | string[] | undefined>): InboxQuery {
+  const view = firstParam(params.view);
+  const outcome = firstParam(params.outcome);
+  const agent = firstParam(params.agent);
+  const focusApproval = firstParam(params.approval);
+  return {
+    ...(view === "pending" || view === "history" ? { initialView: view } : {}),
+    ...(outcome !== undefined ? { outcome } : {}),
+    ...(agent !== undefined ? { agent } : {}),
+    ...(focusApproval !== undefined ? { focusApproval } : {}),
+  };
+}
 
 // The inbox decision actions the loader + its server-action wrappers drive.
 export interface InboxActions {
@@ -129,7 +169,8 @@ export interface InboxActions {
   // release kind mapped from its decrypted detail, and a card release's saved-card
   // picker. Marks every pending approval it shows OPENED (member-scoped), suppressing
   // its SMS/email fallback once the person has viewed their inbox. READ-ONLY.
-  load(session: Session): Promise<InboxLoadData>;
+  // The optional address-bar options narrow the history and resolve an opened approval.
+  load(session: Session, options?: InboxLoadOptions): Promise<InboxLoadData>;
 }
 
 // The refusal reason codes (mapped to copy by the page). Short, stable strings —
@@ -249,6 +290,7 @@ const OUTCOME: Record<DecidedStatus, string> = {
 function toPendingView(request: PendingApproval): PendingRequestView {
   return {
     id: request.id,
+    agentId: request.agent.id,
     agent: request.agent.displayName,
     sentence: text(request.detail.sentence),
     details: detailLines(request.detail),
@@ -271,6 +313,63 @@ function toDecidedView(entry: DecidedApproval, timeZone: string): DecidedRequest
   };
   if (entry.question) view.question = entry.question;
   return view;
+}
+
+// A stored decided approval (read directly when the history is filtered, or for an opened
+// approval) in the inbox read's shape, named from the person's own agents.
+function asDecided(row: StoredApproval, nameById: ReadonlyMap<string, string>): DecidedApproval {
+  return {
+    id: row.id,
+    agent: { id: row.agentId, displayName: nameById.get(row.agentId) ?? "" },
+    detail: row.detail,
+    createdAt: row.createdAt,
+    expiresAt: row.expiresAt,
+    decidedAt: row.decidedAt,
+    question: row.question,
+    status: row.status as DecidedApproval["status"],
+  };
+}
+
+// The history filters the address bar asked for, kept only when valid: a known decided
+// outcome, and an agent that is one of the person's OWN agents (by id).
+function historyFilterFrom(options: InboxLoadOptions, agents: readonly Agent[]): HistoryFilter {
+  const filter: HistoryFilter = {};
+  const outcome = DECIDED_STATUSES.find((status) => status === options.outcome);
+  if (outcome) filter.outcome = outcome;
+  const agent = agents.find((candidate) => candidate.id === options.agent);
+  if (agent) filter.agent = agent.id;
+  return filter;
+}
+
+// The counts behind the History tab and its filters, from the grouped decision counts:
+// each outcome counted within the agent filter, each agent within the outcome filter. Only
+// outcomes and the person's own agents that have decisions are offered (plus an applied
+// filter, so it can be seen and removed).
+function historySummaryFrom(
+  counts: readonly DecidedCount[],
+  agents: readonly Agent[],
+  filter: HistoryFilter,
+): HistorySummary {
+  const sum = (rows: readonly DecidedCount[]) => rows.reduce((total, row) => total + row.count, 0);
+  const inAgent = (row: DecidedCount) => filter.agent === undefined || row.agentId === filter.agent;
+  const inOutcome = (row: DecidedCount) => filter.outcome === undefined || row.status === filter.outcome;
+  return {
+    total: sum(counts),
+    matching: sum(counts.filter((row) => inAgent(row) && inOutcome(row))),
+    outcomes: DECIDED_STATUSES.filter(
+      (status) => status === filter.outcome || counts.some((row) => row.status === status),
+    ).map((status) => ({ status, count: sum(counts.filter((row) => row.status === status && inAgent(row))) })),
+    allOutcomesCount: sum(counts.filter(inAgent)),
+    agents: agents
+      .filter((agent) => agent.id === filter.agent || counts.some((row) => row.agentId === agent.id))
+      .map((agent) => ({
+        id: agent.id,
+        name: agent.displayName || "Unknown agent",
+        count: sum(counts.filter((row) => row.agentId === agent.id && inOutcome(row))),
+      }))
+      .sort((a, b) => a.name.localeCompare(b.name)),
+    allAgentsCount: sum(counts.filter(inOutcome)),
+  };
 }
 
 export function createInboxActions(deps: InboxActionsDeps): InboxActions {
@@ -499,10 +598,14 @@ export function createInboxActions(deps: InboxActionsDeps): InboxActions {
   // approval it shows OPENED (member-scoped markOpened), so its SMS/email fallback is
   // suppressed once the person has viewed it. READ-ONLY: it never runs a held call
   // (executeApprovedHold is untouched). A card release additionally needs the saved cards.
-  async function load(session: Session): Promise<InboxLoadData> {
+  async function load(session: Session, options: InboxLoadOptions = {}): Promise<InboxLoadData> {
     const dek = await dataKeyFor(session.userId);
     const timeZone = await timeZoneFor(db, session.userId, dek);
-    const inbox = await readInbox(db, session.userId, dek, clock);
+    const [inbox, agents, counts] = await Promise.all([
+      readInbox(db, session.userId, dek, clock),
+      listAgentsForUser(db, session.userId),
+      countDecidedForUser(db, session.userId),
+    ]);
 
     for (const request of inbox.pending) {
       await markOpened(db, { id: request.id, userId: session.userId }, clock);
@@ -520,8 +623,42 @@ export function createInboxActions(deps: InboxActionsDeps): InboxActions {
         return offerFor(request,original.detail,grants?.highTierAccess ? fields.filter(f=>vaultFieldAllowed(grants,f.view.id)) : []);
       }));
     }
-    const history = inbox.history.map((entry) => toDecidedView(entry, timeZone));
-    const data: InboxLoadData = { pending, history };
+
+    // The history: the inbox read's newest page, or — with a valid filter — that page of
+    // matching decisions (still member-scoped by the session user id, bound in SQL).
+    const nameById = new Map(agents.map((agent) => [agent.id, agent.displayName]));
+    const historyFilter = historyFilterFrom(options, agents);
+    const decided =
+      historyFilter.outcome !== undefined || historyFilter.agent !== undefined
+        ? (
+            await listDecidedForUser(db, session.userId, dek, {
+              status: historyFilter.outcome,
+              agentId: historyFilter.agent,
+            })
+          ).map((row) => asDecided(row, nameById))
+        : inbox.history;
+    const history = decided.map((entry) => toDecidedView(entry, timeZone));
+    const data: InboxLoadData = {
+      pending,
+      history,
+      historyFilter,
+      historySummary: historySummaryFrom(counts, agents, historyFilter),
+    };
+
+    // A notification can open a decided approval that is not on this page (older, or
+    // hidden by a filter): load that one decision — only if it is the person's own.
+    const focus = options.focusApproval;
+    if (
+      focus !== undefined &&
+      uuidSchema.safeParse(focus).success &&
+      !pending.some((request) => request.id === focus) &&
+      !history.some((entry) => entry.id === focus)
+    ) {
+      const opened = await getApproval(db, session.userId, focus, dek);
+      if (opened && opened.status !== "pending") {
+        data.openedEntry = toDecidedView(asDecided(opened, nameById), timeZone);
+      }
+    }
 
     if (pending.some((request) => request.release === "card")) {
       data.savedCards = await loadSavedCards(session.userId, dek);

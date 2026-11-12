@@ -688,3 +688,21 @@ test("each saved card's Remove names the card for assistive technology", () => {
   const markup = render(base({ cards: [CARD_A], removeCard: async () => ({ ok: true }) }));
   assert.match(markup, /<button\b[^>]*aria-label="Remove Everyday spending"/);
 });
+
+// ================================================================================
+// Organisation pass — the shell's section tabs (Identity / Cards) are the Vault's one
+// tab row, so the view adds no duplicate; the title uses the house heading style.
+// ================================================================================
+
+test("the cards view adds no second Vault tab row of its own", () => {
+  assert.doesNotMatch(render(base()), /<nav\b/i, "the cards view renders no navigation of its own");
+});
+
+test("the cards page title uses the house heading style", () => {
+  const h1 = /<h1\b([^>]*)>([\s\S]*?)<\/h1>/.exec(render(base()));
+  assert.ok(h1, "the view has a page heading");
+  const cls = (attr(h1[1], "class") ?? "").split(/\s+/);
+  for (const token of ["text-2xl", "font-semibold", "tracking-tight", "text-fg"]) {
+    assert.ok(cls.includes(token), `the h1 carries ${token}; class="${cls.join(" ")}"`);
+  }
+});

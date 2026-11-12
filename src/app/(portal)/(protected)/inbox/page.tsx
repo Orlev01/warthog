@@ -2,9 +2,7 @@ import * as React from "react";
 import { cookies } from "next/headers";
 import { redirect } from "next/navigation";
 import { revalidatePath } from "next/cache";
-import { Notice as InlineNotice } from "@/components/ui/notice";
-
-import { InboxView } from "@/components/inbox/inbox-view";
+import { InboxView, type InboxNotice } from "@/components/inbox/inbox-view";
 import { loadConfig } from "@/server/config";
 import { getServerDb } from "@/server/db/server";
 import { selectKeyWrapper } from "@/server/crypto/key-wrapper";
@@ -13,7 +11,7 @@ import { systemClock } from "@/server/seams/clock";
 import { recordMetricEvent } from "@/server/metrics/record";
 import type { Db } from "@/server/db/index";
 import { createAgentExecutors } from "@/server/mcp/compose";
-import { createInboxActions, type ActionResult } from "./actions";
+import { createInboxActions, inboxQueryFrom, type ActionResult } from "./actions";
 
 // E12-S13 — Inbox page (the thin protected-page loader + decision wiring).
 //
@@ -24,6 +22,8 @@ import { createInboxActions, type ActionResult } from "./actions";
 // card release's saved-card picker — and renders the view. Viewing marks every pending
 // approval OPENED, suppressing its SMS/email fallback. A notification tap lands here with
 // `?approval=<id>`, which the view uses to bring that request into view (review fix W4.2).
+// The inbox is two tabs — Waiting on you and History (`?view=pending|history`) — and the
+// history can be narrowed with `?outcome=` and `?agent=`; the loader validates both.
 //
 // It binds the three decision controls to inline `use server` wrappers (the sibling
 // activity screen's pattern): each re-derives the verified session (never a client
@@ -149,39 +149,31 @@ async function moreDetailAction(formData: FormData): Promise<void> {
 }
 
 // The outcome of the last decision, in words plus an icon (never colour alone). A problem
-// is announced immediately (alert); a success politely (status).
-type Notice = { tone: "done" | "problem"; text: string };
-const NOTICES: Record<string, Notice> = {
-  approved: { tone: "done", text: "Approved — the agent can go ahead." },
-  denied: { tone: "done", text: "Turned down — the agent won't go ahead." },
-  asked: { tone: "done", text: "We've asked the agent for more detail." },
+// is announced immediately (alert); a success politely (status). The view renders it
+// inside the page width, under the heading.
+const NOTICES: Record<string, InboxNotice> = {
+  approved: { tone: "success", text: "Approved — the agent can go ahead." },
+  denied: { tone: "success", text: "Turned down — the agent won't go ahead." },
+  asked: { tone: "success", text: "We've asked the agent for more detail." },
   not_found: {
-    tone: "problem",
+    tone: "error",
     text: "We couldn't find that request. It may have already been decided.",
   },
   already_decided: {
-    tone: "problem",
+    tone: "error",
     text: "That request was already decided, so nothing more was done.",
   },
   approved_not_run: {
-    tone: "problem",
+    tone: "error",
     text: "Approved, but Warthog couldn't carry out the request, so nothing was done. The agent has been told.",
   },
   expired: {
-    tone: "problem",
+    tone: "error",
     text: "That request expired before you decided, so the agent won't go ahead.",
   },
-  step_up: { tone: "problem", text: "Please confirm it's you first, then try again." },
-  error: { tone: "problem", text: "We couldn't complete that just now. Please try again." },
+  step_up: { tone: "error", text: "Please confirm it's you first, then try again." },
+  error: { tone: "error", text: "We couldn't complete that just now. Please try again." },
 };
-
-function NoticeBanner({ notice }: { notice: Notice }) {
-  return (
-    <div className="mx-auto w-full max-w-3xl px-4 pt-8 sm:px-6">
-      <InlineNotice tone={notice.tone === "done" ? "success" : "error"}>{notice.text}</InlineNotice>
-    </div>
-  );
-}
 
 export default async function InboxPage({
   searchParams,
@@ -192,28 +184,30 @@ export default async function InboxPage({
   // `next build` never prerenders it (and never opens the database at build time).
   const params = await searchParams;
   const rawNotice = params.notice;
-  const notice = typeof rawNotice === "string" ? (NOTICES[rawNotice] ?? null) : null;
-  // A notification tap opens /inbox?approval=<id> (review fix W4.2): the view marks that
+  // Only a known code becomes a notice (an own key, so "constructor" is never one).
+  const notice = typeof rawNotice === "string" && Object.hasOwn(NOTICES, rawNotice) ? NOTICES[rawNotice] : undefined;
+  // The tab (`?view=`), the history filters (`?outcome=`, `?agent=`) and the approval a
+  // notification tap opened (`?approval=<id>`, review fix W4.2): the view marks that
   // request, scrolls to it and focuses it, or says plainly that it was decided or is gone.
-  // The id is only compared against the person's own loaded approvals, never rendered.
-  const focusApproval = typeof params.approval === "string" ? params.approval : undefined;
+  // The loader validates the filters against known outcomes and the person's own agents,
+  // and the opened id is only compared against their own approvals, never rendered.
+  const query = inboxQueryFrom(params);
   const db = await getServerDb();
   const session = await resolveSession(db);
   if (!session) {
     redirect("/signin");
   }
 
-  const view = await buildActions(db).load(session);
+  const view = await buildActions(db).load(session, query);
   return (
-    <>
-      {notice ? <NoticeBanner notice={notice} /> : null}
-      <InboxView
-        {...view}
-        focusApproval={focusApproval}
-        approveAction={approveAction}
-        denyAction={denyAction}
-        moreDetailAction={moreDetailAction}
-      />
-    </>
+    <InboxView
+      {...view}
+      initialView={query.initialView}
+      focusApproval={query.focusApproval}
+      notice={notice}
+      approveAction={approveAction}
+      denyAction={denyAction}
+      moreDetailAction={moreDetailAction}
+    />
   );
 }

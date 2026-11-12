@@ -146,6 +146,7 @@ import {
   listForUser as listChecklist,
 } from "@/server/db/moving-checklist";
 import { saveIdentityField } from "@/server/db/identity-fields";
+import { savePreferences } from "@/server/db/preferences";
 import { createConnection } from "@/server/db/connections";
 import { getReceiptFile } from "@/server/storage/receipt-files";
 import { createInMemoryBlobStore, type BlobStore } from "@/server/storage/blob";
@@ -397,6 +398,7 @@ test("the loader returns the session user's records, checklist and tasks and mou
     const subsText = strip(
       renderToStaticMarkup(
         <LifeAdminView
+          today={data.today}
           subscriptions={data.subscriptions}
           receipts={data.receipts}
           renewals={data.renewals}
@@ -410,6 +412,7 @@ test("the loader returns the session user's records, checklist and tasks and mou
     const checklistText = strip(
       renderToStaticMarkup(
         <LifeAdminView
+          today={data.today}
           subscriptions={data.subscriptions}
           receipts={data.receipts}
           renewals={data.renewals}
@@ -451,6 +454,7 @@ test("the loader returns empty collections for a person who has saved nothing; t
     const lifeText = strip(
       renderToStaticMarkup(
         <LifeAdminView
+          today={data.today}
           subscriptions={data.subscriptions}
           receipts={data.receipts}
           renewals={data.renewals}
@@ -461,6 +465,33 @@ test("the loader returns empty collections for a person who has saved nothing; t
     assert.ok(lifeText.length > 0, "the empty Life Admin screen still renders");
     const tasksText = strip(renderToStaticMarkup(<TasksView tasks={data.tasks} agents={data.agents} />));
     assert.ok(tasksText.length > 0, "the empty Tasks screen still renders");
+  } finally {
+    await db.close();
+  }
+});
+
+// The record tabs group by due date (overdue / next 30 days / later), so the loader hands
+// the view the person's local date — "today" in their account time zone, from the injected
+// clock — and the view never reads the clock itself.
+test("the loader passes today's date in the person's own time zone for grouping records by due date", async () => {
+  const db = await freshDb();
+  const keyWrapper = makeKeyWrapper();
+  try {
+    // 15:00 UTC on 7 November is already 8 November in Sydney (the account default) but
+    // still 7 November in Los Angeles.
+    const instant = fixedClock(new Date("2026-11-07T15:00:00.000Z"));
+    const sydney = await makeUserWithDek(db, keyWrapper, "today-default");
+    const data = await makeActions(db, keyWrapper, { clock: instant }).load(sessionFor(sydney.userId));
+    assert.equal(data.today, "2026-11-08", "no saved zone: the account default (Sydney)");
+
+    const la = await makeUserWithDek(db, keyWrapper, "today-la");
+    await savePreferences(
+      db,
+      { userId: la.userId, tone: "", length: "", language: "", units: "", timeZone: "America/Los_Angeles", briefing: "" },
+      la.dek,
+    );
+    const laData = await makeActions(db, keyWrapper, { clock: instant }).load(sessionFor(la.userId));
+    assert.equal(laData.today, "2026-11-07", "the person's saved zone decides their day");
   } finally {
     await db.close();
   }

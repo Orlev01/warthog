@@ -7,6 +7,8 @@ import type { PermissionsViewProps } from "./permissions-view";
 import { agentNavigation } from "@/components/shell/workspace-navigation";
 import { NavigationTabs } from "@/components/shell/section-navigation";
 import { Notice } from "@/components/ui/notice";
+import { AlertTriangle } from "lucide-react";
+import { ACTIVITY_CATEGORIES, CATEGORY_LABELS } from "@/domain/activity/category";
 
 export function AgentWorkspaceHeader({
   data,
@@ -101,7 +103,9 @@ export function AgentOverview({
     [
       "activity",
       "Audit log",
-      "Actions observed by Warthog and labelled agent reports",
+      data.auditSummary
+        ? `${data.auditSummary.total} entries · ${data.auditSummary.byOutcome.blocked + data.auditSummary.byOutcome.failed + data.auditSummary.disputed} need attention`
+        : "Actions observed by Warthog and labelled agent reports",
     ],
     [
       "settings",
@@ -233,57 +237,99 @@ export function AgentResources({
         )}
       </section>
     );
-  if (section === "activity")
+  if (section === "activity") {
+    const id = encodeURIComponent(data.agent.id);
+    const log = `/activity?agent=${id}&via=agents`;
+    const summary = data.auditSummary;
+    const attention = summary ? summary.byOutcome.blocked + summary.byOutcome.failed + summary.disputed : 0;
+    const days: { key: string; label: string; entries: typeof data.activity }[] = [];
+    for (const entry of data.activity) {
+      const last = days.at(-1);
+      if (last && last.key === entry.dayKey) last.entries.push(entry);
+      else days.push({ key: entry.dayKey, label: entry.dayLabel, entries: [entry] });
+    }
     return (
-      <section className="flex flex-col gap-3">
-        <h2 className="text-lg font-semibold">This agent’s audit log</h2>
-        <p className="text-sm text-fg-muted">
-          The latest 50 entries for this agent.{" "}
-          <a
-            href={`/activity?agent=${data.agent.id}`}
-            className="text-accent underline"
-          >
-            Open the full filtered log
-          </a>{" "}
-          or{" "}
-          <a href="/activity" className="text-accent underline">
-            view all agents
-          </a>
-          .
-        </p>
-        {data.activity.length ? (
-          <ol className="flex flex-col gap-3">
-            {data.activity.map((entry) => (
-              <li
-                key={entry.seq}
-                className="wh-card rounded-card border border-line bg-surface p-4"
-              >
-                <a
-                  href={`/activity?agent=${data.agent.id}&entry=${entry.seq}#entry-${entry.seq}`}
-                  className="font-medium text-accent underline"
-                >
-                  {entry.title}
-                </a>
-                <p className="text-sm text-fg-muted">
-                  {entry.outcome} · {entry.at}
-                </p>
-                <p className="text-sm [overflow-wrap:anywhere]">{entry.summary}
-                </p>
-                {entry.reported ? (
-                  <p className="text-sm text-fg-muted">
-                    Reported by {data.agent.displayName}
-                  </p>
-                ) : null}
-              </li>
-            ))}
-          </ol>
-        ) : (
+      <section className="flex flex-col gap-4" aria-labelledby="agent-audit-heading">
+        <div className="flex flex-col gap-1">
+          <h2 id="agent-audit-heading" className="text-lg font-semibold">This agent’s audit log</h2>
           <p className="text-sm text-fg-muted">
-            No activity recorded for this agent yet.
+            What {data.agent.displayName} did through Warthog, and your changes to its access. Warthog
+            does not see what an agent does outside its own connection.
           </p>
+        </div>
+        {summary ? (
+          <div className="flex flex-col gap-2 border-b border-line pb-4">
+            <p className="text-sm">
+              <span className="font-semibold tabular-nums">{summary.total}</span> {summary.total === 1 ? "entry" : "entries"} in total
+            </p>
+            <ul role="list" aria-label="Entries by type" className="flex flex-wrap gap-2">
+              {ACTIVITY_CATEGORIES.filter((type) => summary.byCategory[type] > 0).map((type) => (
+                <li key={type}>
+                  <a href={`${log}&type=${type}`} className="inline-flex min-h-11 items-center gap-2 rounded-full border border-line px-3 text-sm text-fg hover:bg-surface-muted">
+                    {CATEGORY_LABELS[type]}
+                    <span className="rounded-card bg-surface-muted px-1.5 text-xs font-medium tabular-nums text-fg-muted">{summary.byCategory[type]}</span>
+                  </a>
+                </li>
+              ))}
+            </ul>
+            {attention > 0 ? (
+              <a href={`${log}&attention=1`} className="inline-flex min-h-11 items-center gap-2 self-start text-sm font-medium underline underline-offset-4">
+                <AlertTriangle aria-hidden={true} className="h-4 w-4 shrink-0 text-warning" />
+                {[summary.byOutcome.blocked ? `${summary.byOutcome.blocked} blocked` : "", summary.byOutcome.failed ? `${summary.byOutcome.failed} failed` : "", summary.disputed ? `${summary.disputed} disputed` : ""].filter(Boolean).join(" · ")} — review
+              </a>
+            ) : null}
+          </div>
+        ) : null}
+        {days.length ? (
+          <div className="flex flex-col gap-4">
+            {days.map((day) => (
+              <section key={day.key} aria-labelledby={`agent-day-${day.key}`} className="flex flex-col">
+                <h3 id={`agent-day-${day.key}`} className="border-b border-line-strong pb-1 text-base font-semibold">
+                  <time dateTime={day.key}>{day.label}</time>
+                </h3>
+                <ol role="list" className="flex flex-col">
+                  {day.entries.map((entry) => (
+                    <li key={entry.seq} className="flex min-w-0 flex-col gap-0.5 border-b border-line py-3 last:border-0 [overflow-wrap:anywhere]">
+                      <div className="flex flex-wrap items-center justify-between gap-x-3">
+                        <a
+                          href={`/activity?agent=${id}&entry=${entry.seq}#entry-${entry.seq}`}
+                          className="font-medium text-fg underline underline-offset-4"
+                        >
+                          {entry.title}<span className="sr-only">, {entry.at}</span>
+                        </a>
+                        <span className="text-sm text-fg-muted">
+                          {entry.outcome ? <>{entry.outcome} · </> : null}
+                          <time dateTime={entry.dateTime}>{entry.time}</time>
+                        </span>
+                      </div>
+                      <p className="text-sm text-fg-muted">
+                        {entry.categoryLabel}
+                        {entry.subject ? " · your change about this agent" : ""}
+                      </p>
+                      <p className="text-sm">{entry.summary}</p>
+                      {entry.reported ? (
+                        <p className="text-sm text-fg-muted">Reported by {data.agent.displayName}. Warthog did not observe this.</p>
+                      ) : null}
+                    </li>
+                  ))}
+                </ol>
+              </section>
+            ))}
+          </div>
+        ) : (
+          <p className="text-sm text-fg-muted">No activity recorded for this agent yet.</p>
         )}
+        <p className="flex flex-wrap gap-x-4 text-sm">
+          <a href={log} className="inline-flex min-h-11 items-center font-medium underline underline-offset-4">
+            Open the full audit log for {data.agent.displayName}
+          </a>
+          <a href="/activity?view=agents" className="inline-flex min-h-11 items-center text-fg-muted underline underline-offset-4">
+            Compare all agents
+          </a>
+        </p>
       </section>
     );
+  }
   if (section === "spending")
     return (
       <section className="flex flex-col gap-3">
@@ -313,7 +359,7 @@ export function AgentResources({
         <p className="text-sm text-fg-muted">
           Approved releases are amounts authorised, not confirmed charges.{" "}
           <a
-            href={`/activity?agent=${data.agent.id}&kind=card_release`}
+            href={`/activity?agent=${encodeURIComponent(data.agent.id)}&type=approval&via=agents`}
             className="text-accent underline"
           >
             View this agent’s card release history

@@ -209,22 +209,30 @@ export async function updateRecord(
   return toRecord(row, input.fields);
 }
 
+// The owner reads' order: soonest due first, undated records last, then creation
+// order and id so records sharing a due date (or both undated) always come back the
+// same way. The columns are table-qualified because the output list re-labels
+// `due_date::text AS due_date`; ordering by the real `date` column, not its text.
+const OWNER_ORDER =
+  "ORDER BY life_admin_records.due_date ASC NULLS LAST, life_admin_records.created_at ASC, life_admin_records.id ASC";
+
 // List ALL of `userId`'s records (member-scoped: user_id is bound), each fields
-// blob DECRYPTED under the owner's `dek`. Never another person's records; an empty
-// array when the person has none. A wrong DEK fails the GCM tag and rejects.
+// blob DECRYPTED under the owner's `dek`, in OWNER_ORDER. Never another person's
+// records; an empty array when the person has none. A wrong DEK fails the GCM tag
+// and rejects.
 export async function listRecordsForUser(
   db: Db,
   userId: string,
   dek: Uint8Array,
 ): Promise<LifeAdminRecord[]> {
   const result = await db.query(
-    `SELECT ${SELECT_COLUMNS} FROM life_admin_records WHERE user_id = $1`,
+    `SELECT ${SELECT_COLUMNS} FROM life_admin_records WHERE user_id = $1 ${OWNER_ORDER}`,
     [userId],
   );
   return decryptRows(result.rows, dek);
 }
 
-// The same, filtered to one `kind` (the "filterable by kind" read).
+// The same, filtered to one `kind` (the "filterable by kind" read), in the same order.
 export async function listRecordsByKind(
   db: Db,
   userId: string,
@@ -232,7 +240,7 @@ export async function listRecordsByKind(
   dek: Uint8Array,
 ): Promise<LifeAdminRecord[]> {
   const result = await db.query(
-    `SELECT ${SELECT_COLUMNS} FROM life_admin_records WHERE user_id = $1 AND kind = $2`,
+    `SELECT ${SELECT_COLUMNS} FROM life_admin_records WHERE user_id = $1 AND kind = $2 ${OWNER_ORDER}`,
     [userId, kind],
   );
   return decryptRows(result.rows, dek);

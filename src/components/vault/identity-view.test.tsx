@@ -91,6 +91,7 @@ import { webcrypto } from "node:crypto";
 import { renderToStaticMarkup } from "react-dom/server";
 
 import { IdentityView, sealHighTierDetail } from "./identity-view";
+import { sectionNavigation } from "@/components/shell/workspace-navigation";
 import { decryptValue } from "@/client/vault/values";
 
 // --- the prop shapes this task renders (described here as the contract; declared
@@ -663,7 +664,101 @@ test("a person with no details yet is told what to add and offered the add contr
   assert.ok(liveButtons(markup).some((n) => /^add a detail$/i.test(n)));
 });
 
-test("the Vault page links to Cards", () => {
+// The shell's section tabs (Identity / Cards) are the Vault's one tab row — reaching
+// Cards from here (review fix G1) — so the view adds no second, duplicate Vault nav.
+test("the Vault reaches Cards through the shell's section tabs, with no duplicate tab row in the view", () => {
   const markup = render(base({ lowTierFields: [], highTierFields: [] }));
-  assert.match(markup, /<a\b[^>]*href="\/vault\/cards"[^>]*>[\s\S]*?Cards/);
+  assert.doesNotMatch(markup, /<nav\b/i, "the identity view renders no navigation of its own");
+  const tabs = sectionNavigation("/vault");
+  assert.deepEqual(
+    tabs.items.map((item) => [item.href, item.active]),
+    [
+      ["/vault", true],
+      ["/vault/cards", false],
+    ],
+    "the shell's Vault tabs mark Identity current and link to Cards",
+  );
+});
+
+test("the page title uses the house heading style", () => {
+  const h1 = /<h1\b([^>]*)>([\s\S]*?)<\/h1>/.exec(render(base()));
+  assert.ok(h1, "the view has a page heading");
+  assert.equal(visibleText(h1[2]), "About you");
+  const cls = (attr(h1[1], "class") ?? "").split(/\s+/);
+  for (const token of ["text-2xl", "font-semibold", "tracking-tight", "text-fg"]) {
+    assert.ok(cls.includes(token), `the h1 carries ${token}; class="${cls.join(" ")}"`);
+  }
+});
+
+// ================================================================================
+// Organisation pass — the details are grouped by purpose under their tier, as divider
+// rows (no card per field, so an opened panel is never a card inside a card).
+// ================================================================================
+
+// The h3 group headings in document order, with the visible text of each group's rows.
+function groups(markup: string): Array<{ title: string; text: string }> {
+  const out: Array<{ title: string; text: string }> = [];
+  for (const m of markup.matchAll(/<section\b[^>]*aria-labelledby="([^"]+)"[^>]*>([\s\S]*?)<\/section>/gi)) {
+    const heading = /<h3\b[^>]*>([\s\S]*?)<\/h3>/i.exec(m[2]);
+    if (heading) out.push({ title: visibleText(heading[1]), text: visibleText(m[2]) });
+  }
+  return out;
+}
+
+const LANGUAGE: LowTierField = { id: "lf-lang", userId: OWNER, kind: "language", value: "Auslan and English", movingOn: null };
+const PREFERRED: LowTierField = { id: "lf-pref", userId: OWNER, kind: "preferred_name", value: "Addie", movingOn: null };
+const REGO: HighTierField = { id: "hf-rego", userId: OWNER, type: "car_registration", label: "Ute rego", tier: "high" };
+const CUSTOM: HighTierField = { id: "hf-custom", userId: OWNER, type: "custom", label: "Medicare number", tier: "high" };
+
+test("everyday details are grouped by purpose — names, contact, preferences — in that order", () => {
+  const markup = render(
+    base({ lowTierFields: [LANGUAGE, EMAIL, NAME, ADDRESS_MOVING, PREFERRED, PHONE], highTierFields: [] }),
+  );
+  const found = groups(markup);
+  assert.deepEqual(
+    found.map((g) => g.title),
+    ["Names", "Contact", "Preferences"],
+    `the everyday details are grouped by purpose; groups=${JSON.stringify(found.map((g) => g.title))}`,
+  );
+  const [names, contact, prefs] = found;
+  assert.ok(names.text.includes("Name") && names.text.includes("Preferred name"), `names hold the name fields; text="${names.text}"`);
+  assert.ok(!names.text.includes("Email"), "a contact field never lands under names");
+  for (const label of ["Email", "Phone", "Postal address"]) {
+    assert.ok(contact.text.includes(label), `contact holds ${label}; text="${contact.text}"`);
+  }
+  assert.ok(prefs.text.includes("Language") && !prefs.text.includes("Email"), `preferences hold the language; text="${prefs.text}"`);
+  // Each group shows how many details it holds.
+  assert.match(contact.text, /\b3\b/, "the contact group shows its count");
+});
+
+test("a purpose with no details is not shown as an empty group", () => {
+  const found = groups(render(base({ lowTierFields: [EMAIL], highTierFields: [] })));
+  assert.deepEqual(found.map((g) => g.title), ["Contact"]);
+});
+
+test("protected details are grouped by kind — identity documents, then vehicle, then other", () => {
+  const markup = render(base({ lowTierFields: [], highTierFields: [CUSTOM, REGO, PASSPORT, DOB] }));
+  const found = groups(markup);
+  assert.deepEqual(
+    found.map((g) => g.title),
+    ["Identity", "Vehicle", "Other"],
+    `protected details are grouped by kind; groups=${JSON.stringify(found.map((g) => g.title))}`,
+  );
+  assert.ok(found[0].text.includes("Passport") && found[0].text.includes("Date of birth"), `identity holds passport + birth date; text="${found[0].text}"`);
+  assert.ok(found[1].text.includes("Ute rego"), "vehicle holds the registration");
+  assert.ok(found[2].text.includes("Medicare number"), "other holds the custom detail");
+  // Still locked: the tier is stated in words on every protected row.
+  assert.equal((visibleText(markup).match(/High tier/g) ?? []).length, 4, "every protected detail is shown locked, in words");
+});
+
+test("details are divider rows, never a card per field", () => {
+  const markup = render(base({ lowTierFields: [NAME, EMAIL, PHONE], highTierFields: [PASSPORT, DOB] }));
+  const sections = [...markup.matchAll(/<section\b[^>]*aria-labelledby="[^"]+"[^>]*>([\s\S]*?)<\/section>/gi)];
+  assert.ok(sections.length >= 3, `the details render in titled groups; groups=${sections.length}`);
+  for (const group of sections) {
+    const boxes = [...group[1].matchAll(/class="([^"]*)"/g)]
+      .map((m) => m[1].split(/\s+/))
+      .filter((cls) => cls.includes("rounded-card") && cls.includes("border") && cls.includes("p-4"));
+    assert.equal(boxes.length, 0, `a grouped detail is a divider row, not a card; boxes=${JSON.stringify(boxes)}`);
+  }
 });

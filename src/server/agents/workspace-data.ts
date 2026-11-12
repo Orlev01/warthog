@@ -3,7 +3,13 @@ import { activityEvidence } from "@/domain/activity/evidence";
 import { getAgentById } from "../db/agents";
 import { getConnectionPermissions } from "../db/agent-permissions";
 import { pageMemories } from "../db/memories";
-import { listActivity } from "../activity/list";
+import { listActivity, summariseActivity } from "../activity/list";
+import { isReadOnlyTool } from "../activity/tool-effects";
+import { activityCategory, agentRole, CATEGORY_LABELS, outcomeGroup } from "@/domain/activity/category";
+import { dayOf, timeOfDay } from "@/domain/display-time";
+
+// The newest entries the agent's audit log lists before "Open the full log".
+export const AGENT_AUDIT_ROWS = 30;
 import { readAgentSpending } from "../spending/agent-spending";
 import { timeZoneFor } from "../spending/time-zone";
 import { formatAccountTime } from "../display-time";
@@ -48,21 +54,39 @@ export async function agentWorkspaceData(
           savedAt: formatAccountTime(item.createdAt, timeZone),
         }))
       : [];
+  const now = clock.now();
   const activity =
     section === "activity"
       ? (
           await listActivity(db, userId, { agentId: agent.id }, dek, {
-            limit: 50,
+            limit: AGENT_AUDIT_ROWS,
           })
-        ).map((entry) => ({
-          seq: entry.seq,
-          title: entryTitle(entry),
-          ...activityEvidence(entry),
-          outcome: entry.outcome ? humanise(entry.outcome) : "",
-          reported: entry.source === "agent_reported",
-          at: formatAccountTime(entry.occurredAt, timeZone),
-        }))
+        ).map((entry) => {
+          const category = activityCategory(entry, isReadOnlyTool);
+          const day = dayOf(entry.occurredAt, timeZone, now);
+          return {
+            seq: entry.seq,
+            title: entryTitle(entry),
+            ...activityEvidence(entry),
+            outcome: entry.outcome ? humanise(entry.outcome) : "",
+            outcomeGroup: outcomeGroup(entry.outcome),
+            categoryLabel: CATEGORY_LABELS[category],
+            reported: entry.source === "agent_reported",
+            subject: agentRole(entry.kind) === "subject",
+            at: formatAccountTime(entry.occurredAt, timeZone),
+            dateTime: entry.occurredAt,
+            time: timeOfDay(entry.occurredAt, timeZone),
+            dayKey: day.key,
+            dayLabel: day.label,
+          };
+        })
       : [];
+  // Exact counts over this agent's whole record (plaintext metadata, nothing decrypted):
+  // the type split and what needs attention, for the audit log and the overview card.
+  const auditSummary =
+    section === "activity" || section === "overview"
+      ? (await summariseActivity(db, userId, { agentId: agent.id }, "agent"))[0] ?? null
+      : null;
   const recent = section === "overview" ? await listActivity(db, userId, { agentId: agent.id, kind: "tool_call" }, dek, { limit: 100 }) : [];
   const measured = recent.filter(entry => {
     const payload = entry.payload as { durationMs?: unknown; resultEvidence?: unknown };
@@ -82,6 +106,7 @@ export async function agentWorkspaceData(
     spending,
     memory,
     activity,
+    auditSummary,
     memoryRead: grants.memoryRead,
     budget: grants.cardBudget,
   };

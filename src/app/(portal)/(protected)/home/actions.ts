@@ -26,7 +26,11 @@ import { activityEvidence } from "@/domain/activity/evidence";
 // first-run empty states exactly as the minimal loader did.
 
 import { computeSetupChecklist } from "@/domain/home/checklist";
-import { entryTitle, humanise } from "@/domain/activity/describe";
+import { agentLabel, entryTitle, humanise } from "@/domain/activity/describe";
+import { outcomeGroup } from "@/domain/activity/category";
+import { dayOf, timeOfDay } from "@/domain/display-time";
+import { agentNamesForUser } from "@/server/db/agents";
+import type { ActivityGroupSummary } from "@/server/activity/list";
 import type {
   DashboardActivity,
   DashboardAgent,
@@ -54,6 +58,8 @@ export interface HomeActionsDeps {
   readonly db: Db;
   readonly keyWrapper?: KeyWrapper;
   readonly clock?: Clock;
+  // Names a connected service through the connector catalogue (absent ⇒ its id).
+  readonly serviceName?: (connectorId: string) => string | undefined;
 }
 
 // The home actions the thin loader drives: turn the verified session into the
@@ -90,16 +96,25 @@ function formatDue(value: Date | string): string {
 // words ("Add a task"), with its outcome alongside so a refused call never reads as done.
 function toDashboardActivity(
   entry: ActivityEntry,
-  agentNames: Map<string, string>,
+  agentNames: ReadonlyMap<string, string>,
   timeZone: string | undefined,
+  serviceName: (id: string) => string,
+  now: Date | undefined,
 ): DashboardActivity {
-  const agent = entry.agentId !== undefined ? agentNames.get(entry.agentId) : undefined;
+  const day = dayOf(entry.occurredAt, timeZone, now);
   return {
     id: entry.entryHash,
+    title: entryTitle(entry),
     summary: activityEvidence(entry).summary,
     outcome: entry.outcome !== undefined ? humanise(entry.outcome) : undefined,
-    agent,
+    outcomeGroup: outcomeGroup(entry.outcome),
+    agent: agentLabel(agentNames, entry.agentId),
+    reported: entry.source === "agent_reported",
+    service: entry.connectorId === undefined ? undefined : serviceName(entry.connectorId),
     at: formatAccountTime(entry.occurredAt, timeZone),
+    when: `${day.label}, ${timeOfDay(entry.occurredAt, timeZone)}`,
+    dateTime: entry.occurredAt,
+    href: `/activity?entry=${entry.seq}#entry-${entry.seq}`,
   };
 }
 
@@ -108,9 +123,20 @@ function toDashboardActivity(
 // needs reconnecting before it can act again (CLAUDE.md "Reconnect needed"). Amounts
 // may come back as numeric strings from the ledger sums, so coerce to the major-unit
 // number the view renders.
-function toDashboardAgent(agent: HomeAgentSpend): DashboardAgent {
+function toDashboardAgent(
+  agent: HomeAgentSpend,
+  lastDay: ActivityGroupSummary | undefined,
+  timeZone: string | undefined,
+  now: Date | undefined,
+): DashboardAgent {
+  const lastActive = agent.lastActiveAt == null ? undefined : new Date(agent.lastActiveAt).toISOString();
   return {
     id: agent.agentId,
+    href: `/agents/${encodeURIComponent(agent.agentId)}`,
+    activityHref: `/activity?agent=${encodeURIComponent(agent.agentId)}&via=agents`,
+    lastActive: lastActive ? `${dayOf(lastActive, timeZone, now).label}, ${timeOfDay(lastActive, timeZone)}` : undefined,
+    todayCount: lastDay?.total ?? 0,
+    needsAttention: lastDay ? lastDay.byOutcome.blocked + lastDay.byOutcome.failed + lastDay.disputed : 0,
     name: agent.displayName,
     status: agent.status === "connected" ? "connected" : "needs-reconnect",
     spendThisPeriod: Number(agent.spendThisPeriod),
@@ -186,15 +212,23 @@ export function createHomeActions(deps: HomeActionsDeps): HomeActions {
     const checklist = await loadSetupChecklist(reads, session.userId);
     const metrics = await loadHomeMetrics(reads, session.userId);
 
-    const agentNames = new Map(metrics.agents.map((agent) => [agent.agentId, agent.displayName]));
+    // The person's OWN agents' names, keyed by agent id and connection id, with the
+    // "Unknown agent" fallback — the same resolution the Activity page uses.
+    const agentNames = await agentNamesForUser(db, session.userId);
+    const serviceName = (id: string) => deps.serviceName?.(id) ?? id;
+    const now = clock.now();
+    const lastDay = metrics.lastDayByAgent ?? [];
+    const attention = lastDay.reduce((sum, group) => sum + group.byOutcome.blocked + group.byOutcome.failed + group.disputed, 0);
 
     return {
       personName,
       checklist,
       pendingApprovals: metrics.pendingApprovals,
-      activity: metrics.activity.map((entry) => toDashboardActivity(entry, agentNames, timeZone)),
-      agents: metrics.agents.map(toDashboardAgent),
+      activity: metrics.activity.map((entry) => toDashboardActivity(entry, agentNames, timeZone, serviceName, now)),
+      agents: metrics.agents.map((agent) =>
+        toDashboardAgent(agent, lastDay.find((group) => group.key === agent.agentId), timeZone, now)),
       reminders: metrics.reminders.map(toDashboardReminder),
+      attention: attention > 0 ? { count: attention, href: "/activity?attention=1" } : undefined,
     };
   }
 

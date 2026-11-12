@@ -18,6 +18,7 @@ import {
   type RegisterPushDeviceInput,
 } from "../settings/notifications/actions";
 import { createHomeActions } from "./actions";
+import { getProcessCatalogue } from "@/server/connectors/catalogue";
 
 // E18-S08 — Home page (the thin protected-page loader).
 //
@@ -86,7 +87,8 @@ export default async function HomePage() {
   // loader unwrap the person's DEK so the greeting and the two owner-scoped reads
   // can decrypt their own data; the clock is "now" for the set-up and metrics reads.
   const keyWrapper = selectKeyWrapper({ nodeEnv: config.nodeEnv, localKek: config.devKek });
-  const view = await createHomeActions({ db, keyWrapper, clock: systemClock }).load(session);
+  const serviceName = (connectorId: string): string | undefined => getProcessCatalogue().get(connectorId)?.name;
+  const view = await createHomeActions({ db, keyWrapper, clock: systemClock, serviceName }).load(session);
   // The install prompt's "Turn on notifications" sets this device up for push: the
   // register action above and the PUBLIC VAPID key (never a secret; undefined when push
   // isn't configured, which the prompt reports as "not available").

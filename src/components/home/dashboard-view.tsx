@@ -1,8 +1,23 @@
 import * as React from "react";
-import { Activity, ArrowRight, Bell, Bot, CheckCheck, CheckCircle2, Circle, ListChecks } from "lucide-react";
+import {
+  Activity,
+  AlertTriangle,
+  ArrowRight,
+  Ban,
+  Bell,
+  Bot,
+  CheckCheck,
+  CheckCircle,
+  CheckCircle2,
+  Circle,
+  Clock,
+  ListChecks,
+  type LucideIcon,
+} from "lucide-react";
 import { WorkspaceHeading, WorkspacePanel } from "@/components/shell/workspace-surfaces";
 
 import type { SetupChecklistItem } from "@/domain/home/checklist";
+import type { OutcomeGroup } from "@/domain/activity/category";
 import { SetupChecklist } from "./setup-checklist";
 import { Status, type StatusKey } from "@/components/ui/status";
 import {
@@ -40,6 +55,11 @@ import {
 export type DashboardAgent = {
   id: string;
   name: string;
+  href?: string; // the agent's workspace
+  activityHref?: string; // its activity
+  lastActive?: string; // "Today, 3:04 pm"
+  todayCount?: number; // entries in the last 24 hours
+  needsAttention?: number; // blocked, failed or disputed in the last 24 hours
   status: StatusKey;
   spendThisPeriod: number;
   budget: number;
@@ -53,10 +73,17 @@ export type DashboardAgent = {
 // Warthog-sourced entry), and a pre-formatted time label.
 export type DashboardActivity = {
   id: string;
+  title?: string; // what happened, e.g. "Save a memory"
   summary: string;
   outcome?: string;
+  outcomeGroup?: OutcomeGroup;
   agent?: string;
+  reported?: boolean; // an agent's own report, never shown as fact
+  service?: string;
   at: string;
+  when?: string; // "Today, 3:04 pm"
+  dateTime?: string;
+  href?: string; // the entry on the Activity page
 };
 
 // One upcoming life-admin reminder: a title and a pre-formatted due label.
@@ -77,7 +104,21 @@ export type DashboardViewProps = {
   // the running app): the register-this-device server action and the PUBLIC VAPID key.
   registerPushDevice?: RegisterPushDeviceAction;
   vapidPublicKey?: string;
+  // Blocked, failed or disputed activity in the last 24 hours, linking to it.
+  attention?: { count: number; href: string };
 };
+
+// How many of each list Home shows before "View all".
+const HOME_ACTIVITY_ROWS = 8;
+const HOME_REMINDER_ROWS = 5;
+
+const OUTCOME_ICONS: Partial<Record<OutcomeGroup, { Icon: LucideIcon; tone: string }>> = {
+  done: { Icon: CheckCircle, tone: "text-success" },
+  waiting: { Icon: Clock, tone: "text-fg-muted" },
+  blocked: { Icon: Ban, tone: "text-danger" },
+  failed: { Icon: AlertTriangle, tone: "text-danger" },
+};
+
 
 // Plain words for the budget period, so spend reads "A$42 of A$200 this month".
 function periodLabel(period: DashboardAgent["budgetPeriod"]): string {
@@ -100,6 +141,7 @@ export function DashboardView({
   reminders,
   registerPushDevice,
   vapidPublicKey,
+  attention,
 }: DashboardViewProps) {
   const completed = checklist.filter((item) => item.done).length;
   return (
@@ -124,18 +166,58 @@ export function DashboardView({
               </div>
             )}
           </WorkspacePanel>
-          <WorkspacePanel title="Recent activity" description="Recorded across your Warthog connections" icon={Activity} action={<a href="/activity">View activity <ArrowRight aria-hidden size={14} /></a>}>
+          <WorkspacePanel
+            title="Recent activity"
+            description="Recorded across your Warthog connections"
+            icon={Activity}
+            action={
+              activity.length > 0 ? (
+                <span className="flex flex-wrap gap-x-4">
+                  <a href="/activity?view=agents">By agent</a>
+                  <a href="/activity">View all activity <ArrowRight aria-hidden size={14} /></a>
+                </span>
+              ) : undefined
+            }
+          >
+            {attention ? (
+              <a href={attention.href} className="mb-4 inline-flex min-h-11 items-center gap-2 rounded-card border border-line bg-surface-muted px-3 text-sm font-medium text-fg underline underline-offset-4">
+                <AlertTriangle aria-hidden={true} className="h-4 w-4 shrink-0 text-warning" />
+                {attention.count} {attention.count === 1 ? "entry needs" : "entries need"} attention from the last 24 hours
+              </a>
+            ) : null}
             {activity.length > 0 ? (
               <ul className="wh-timeline">
-                {activity.map((entry) => (
-                  <li key={entry.id}>
-                    <p className="text-sm leading-relaxed text-fg">{entry.summary}</p>
-                    <div className="wh-timeline-meta">
-                      {entry.outcome && <span className="rounded-full bg-surface-muted px-2 py-0.5 font-medium">{entry.outcome}</span>}
-                      <span>{entry.agent ? `${entry.agent} · ${entry.at}` : entry.at}</span>
-                    </div>
-                  </li>
-                ))}
+                {activity.slice(0, HOME_ACTIVITY_ROWS).map((entry) => {
+                  const icon = entry.outcomeGroup ? OUTCOME_ICONS[entry.outcomeGroup] : undefined;
+                  const headline = entry.title ?? entry.summary;
+                  return (
+                    <li key={entry.id}>
+                      <p className="text-sm font-medium text-fg">
+                        {entry.href ? (
+                          <a href={entry.href} className="underline-offset-4 hover:underline">
+                            {headline}<span className="sr-only">, {entry.at}</span>
+                          </a>
+                        ) : headline}
+                      </p>
+                      {entry.title && entry.summary !== entry.title ? (
+                        <p className="mt-1 text-sm leading-relaxed text-fg">{entry.summary}</p>
+                      ) : null}
+                      <div className="wh-timeline-meta">
+                        {entry.outcome ? (
+                          <span className="inline-flex items-center gap-1 rounded-full bg-surface-muted px-2 py-0.5 font-medium text-fg">
+                            {icon ? <icon.Icon aria-hidden={true} className={`h-3.5 w-3.5 shrink-0 ${icon.tone}`} /> : null}
+                            {entry.outcome}
+                          </span>
+                        ) : null}
+                        <span>
+                          {[entry.reported ? `Reported by ${entry.agent ?? "an agent"}` : entry.agent, entry.service].filter(Boolean).join(" · ")}
+                          {entry.reported || entry.agent || entry.service ? " · " : ""}
+                          <time dateTime={entry.dateTime}>{entry.when ?? entry.at}</time>
+                        </span>
+                      </div>
+                    </li>
+                  );
+                })}
               </ul>
             ) : <p className="wh-panel-empty">No recent activity yet.</p>}
           </WorkspacePanel>
@@ -149,10 +231,19 @@ export function DashboardView({
                     <div className="flex min-w-0 items-start gap-3">
                       <span className="wh-object-icon"><Bot aria-hidden size={18} /></span>
                       <div className="flex min-w-0 flex-1 flex-col items-start gap-1">
-                        <a href={`/agents/${encodeURIComponent(agent.id)}`} className="inline-flex min-h-11 items-center font-medium text-fg underline decoration-line-strong underline-offset-4 [overflow-wrap:anywhere]">{agent.name}</a>
+                        <a href={agent.href ?? `/agents/${encodeURIComponent(agent.id)}`} className="inline-flex min-h-11 items-center font-medium text-fg underline decoration-line-strong underline-offset-4 [overflow-wrap:anywhere]">{agent.name}</a>
                         <Status status={agent.status} />
                       </div>
                     </div>
+                    {agent.activityHref ? (
+                      <span className="text-sm text-fg-muted">
+                        <a href={agent.activityHref} className="underline underline-offset-2 hover:text-fg">
+                          {agent.todayCount ?? 0} {(agent.todayCount ?? 0) === 1 ? "entry" : "entries"} in the last 24 hours<span className="sr-only"> for {agent.name}</span>
+                        </a>
+                        {agent.needsAttention ? <> · <AlertTriangle aria-hidden={true} className="inline h-3.5 w-3.5 text-warning" /> {agent.needsAttention} need{agent.needsAttention === 1 ? "s" : ""} attention</> : null}
+                        {agent.lastActive ? <> · last active {agent.lastActive}</> : null}
+                      </span>
+                    ) : null}
                     <span className="min-w-0 text-xs leading-relaxed text-fg-muted">
                       {agent.spendUnavailable
                         ? "Total unavailable: a reference rate is missing for earlier spending."
@@ -167,10 +258,19 @@ export function DashboardView({
             <SetupChecklist items={checklist} />
             <InstallPrompt registerPushDevice={registerPushDevice} vapidPublicKey={vapidPublicKey} />
           </WorkspacePanel>
-          <WorkspacePanel title="Reminders" description="Coming up in your life admin" icon={Bell}>
+          <WorkspacePanel
+            title="Reminders"
+            description="Coming up in your life admin"
+            icon={Bell}
+            action={reminders.length > 0 ? (
+              <a href="/life-admin">
+                {reminders.length > HOME_REMINDER_ROWS ? `View all ${reminders.length} in Life admin` : "Open Life admin"}
+              </a>
+            ) : undefined}
+          >
             {reminders.length > 0 ? (
               <ul className="flex flex-col divide-y divide-line">
-                {reminders.map((reminder) => (
+                {reminders.slice(0, HOME_REMINDER_ROWS).map((reminder) => (
                   <li key={reminder.id} className="flex items-start gap-3 py-3 first:pt-0 last:pb-0">
                     <Circle aria-hidden size={15} className="mt-1 shrink-0 text-fg-muted" />
                     <div className="min-w-0">

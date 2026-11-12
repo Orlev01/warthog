@@ -6,11 +6,14 @@ export function WorkspaceHeading({
   eyebrow,
   title,
   description,
+  meta,
   children,
 }: {
   eyebrow: string;
   title: React.ReactNode;
   description?: string;
+  // A short live summary under the description, e.g. "3 agents · 1 needs reconnecting".
+  meta?: React.ReactNode;
   children?: React.ReactNode;
 }) {
   return (
@@ -19,6 +22,7 @@ export function WorkspaceHeading({
         <p className="wh-eyebrow">{eyebrow}</p>
         <h1>{title}</h1>
         {description && <p className="wh-page-description">{description}</p>}
+        {meta ? <p className="mt-2 text-sm font-medium text-fg">{meta}</p> : null}
       </div>
       {children && <div className="wh-heading-actions">{children}</div>}
     </header>

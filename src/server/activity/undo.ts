@@ -88,7 +88,7 @@ export function createUndoService(options: UndoServiceOptions): UndoService {
       // client-concatenated value). An entry the caller does not own has no such row,
       // so one person can never reach another's entry.
       const found = await db.query(
-        "SELECT seq, tool FROM activity_entries WHERE user_id = $1 AND seq = $2",
+        "SELECT seq, tool, kind, source, connector_id FROM activity_entries WHERE user_id = $1 AND seq = $2",
         [userId, entrySeq],
       );
       const row = found.rows[0];
@@ -96,8 +96,10 @@ export function createUndoService(options: UndoServiceOptions): UndoService {
         return { ok: false, reason: `There's no activity entry at position ${entrySeq} to undo.` };
       }
 
+      // Only an agent call Warthog itself recorded can be undone. An approval decision or an
+      // agent's own report can carry the same tool name, but is not the action itself.
       const tool = row.tool == null ? undefined : String(row.tool);
-      const reversalTool = reversalFor(tool);
+      const reversalTool = row.kind === "tool_call" && row.source === "warthog" ? reversalFor(tool) : undefined;
       if (!reversalTool) {
         return { ok: false, reason: "This action can't be undone — it has no reversal." };
       }
@@ -106,12 +108,15 @@ export function createUndoService(options: UndoServiceOptions): UndoService {
       // is never touched; the record is append-only (design §9).
       const reversal = await runReversal({ userId, reversalTool, originalSeq: entrySeq, reason });
 
+      // The stored outcome is a stable code (filterable and groupable, like every other
+      // entry's); the plain-words sentence stays in the encrypted payload.
       const entry = await recorder.record({
         userId,
         kind: "tool_call",
         source: "warthog",
+        connectorId: row.connector_id == null ? undefined : String(row.connector_id),
         tool: reversalTool,
-        outcome: reversal.outcome,
+        outcome: reversal.status === "executed" ? "reversed" : reversal.status,
         payload: {
           undoneSeq: entrySeq,
           reversalTool,

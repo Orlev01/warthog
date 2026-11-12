@@ -889,3 +889,13 @@ test("W6 — a high-tier release carries no card details", async () => {
   assert.equal(ctx.releaseCalls.length, 1);
   assert.equal(ctx.releaseCalls[0]!.card, undefined, "no card details on a high-tier release");
 });
+
+// Inbox organisation — every pending release repeats "Approve and release", so the control
+// also names its request for screen readers (the visible label still leads the name).
+test("the Approve and release control names the request it decides for screen readers", () => {
+  const markup = renderToStaticMarkup(<ReleaseApprove request={PENDING_CARD} savedCards={SAVED_CARDS} />);
+  const control = findAll(markup, "button").find((button) => /^Approve and release/.test(controlFace(button)));
+  assert.ok(control, "an Approve and release control renders");
+  assert.match(controlFace(control), /^Approve and release\s*:\s*Claude wants to use a card to pay the ferry fare$/);
+  assert.match(control.inner, /<span class="sr-only">/, "the context is read out, not shown");
+});

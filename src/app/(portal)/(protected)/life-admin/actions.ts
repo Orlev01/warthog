@@ -72,6 +72,8 @@ import {
 import { saveReceiptFile, deleteRecordWithFiles } from "@/server/storage/receipt-files";
 import { buildMovingChecklist } from "@/server/moving/checklist";
 import { lifeAdminPageData } from "@/server/life-admin/page-data";
+import { periodKeyFor } from "@/server/db/card-spend-ledger";
+import { timeZoneFor } from "@/server/spending/time-zone";
 
 import type {
   LifeAdminRecordView,
@@ -100,8 +102,11 @@ export interface LifeAdminActionsDeps {
 // decrypted and stringified for display), moving checklist and tasks (titles/notes
 // decrypted, assignee + note authors resolved to agent display names), plus the
 // person's agents — shaped into the props <LifeAdminView/> + <TasksView/> are mounted
-// over.
+// over. `today` is the person's local date (YYYY-MM-DD in their account time zone, from
+// the injected clock): the record tabs group by due date against it, so the view never
+// reads the clock.
 export interface LifeAdminPageData {
+  readonly today: string;
   readonly subscriptions: LifeAdminRecordView[];
   readonly receipts: LifeAdminRecordView[];
   readonly renewals: LifeAdminRecordView[];
@@ -340,8 +345,11 @@ export function createLifeAdminActions(deps: LifeAdminActionsDeps): LifeAdminAct
     const fileRows = await db.query("SELECT id, record_id, size FROM receipt_files WHERE user_id=$1 ORDER BY id", [userId]);
     const filesFor = (id: string) => fileRows.rows.filter((r) => r.record_id === id).map((r) => ({ id: r.id as string, size: Number(r.size) }));
     const agents = await listAgentsForUser(db, userId);
+    // "Today" is the person's own local day (the same derivation Home uses), not UTC.
+    const today = periodKeyFor("day", clock.now(), await timeZoneFor(db, userId, dek));
 
     return {
+      today,
       subscriptions: page.subscriptions.map((r) => toRecordView(r, r.hasAttachedFile)),
       receipts: page.receipts.map((r) => toRecordView(r, r.hasAttachedFile, filesFor(r.id))),
       renewals: page.renewals.map((r) => toRecordView(r, r.hasAttachedFile)),

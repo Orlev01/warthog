@@ -1,13 +1,16 @@
 "use client";
 
 import * as React from "react";
+import { AlertTriangle, Bell, BellOff, Calendar, CalendarClock, CalendarOff, ChevronDown, Settings2, type LucideIcon } from "lucide-react";
 
 import { ViewPanels } from "@/components/ui/view-tabs";
+import { ListGroup, LIST_ROW } from "@/components/ui/list-group";
 import { ActionForm, FormSubmit, PendingFormFields } from "@/components/ui/form-submit";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/field";
 import { EmptyState } from "@/components/ui/empty";
 import { receiptUploadError } from "@/lib/receipt-upload";
+import { groupRecordsByDue, recordTitle, reminderSummary, type DueGroupKey } from "./record-groups";
 
 // E14-S11 — Life-admin records and checklist view component
 // (src/components/life-admin/life-admin-view.tsx).
@@ -20,6 +23,14 @@ import { receiptUploadError } from "@/lib/receipt-upload";
 // setting; a receipt also carries an attach-file control with its return-by and
 // warranty-end dates; each checklist item carries a tick-off and a "hand to an agent"
 // control.
+//
+// Organisation (the "tidy and organise" pass): each record tab groups its records by how
+// soon they fall due — Overdue, Next 30 days, Later, No due date — soonest first, with
+// counts on the groups and on the tabs. A row leads with the record's name, due date,
+// other fields and a one-line reminder summary; its controls (reminders, attach, edit,
+// delete) sit behind ONE "Manage" disclosure. The `#record-<id>` anchor stays on the row
+// (reminder notifications and other pages link to it). The loader passes the person's
+// local date as `today`, so grouping never reads the clock.
 //
 // This is the pure, prop-driven VIEW (a Client Component in the app): it renders the
 // screen FROM the props the Life Admin page loader (E14-S10 `lifeAdminPageData`) hands
@@ -75,6 +86,10 @@ export type LifeAdminTab =
 type LifeAdminAction = (formData: FormData) => void | Promise<void>;
 
 export type LifeAdminViewProps = {
+  // The person's local date (YYYY-MM-DD, in their account time zone), from the loader.
+  // Records are grouped as overdue / due soon / later against it; the view never reads
+  // the clock.
+  today: string;
   subscriptions: ReadonlyArray<LifeAdminRecordView>;
   receipts: ReadonlyArray<LifeAdminRecordView>;
   renewals: ReadonlyArray<LifeAdminRecordView>;
@@ -348,9 +363,65 @@ function EditControl({
   );
 }
 
-// One record as a card: its decrypted fields, its status and due date, its reminder-offset
-// setting, an attach-file control (receipts only) and its Edit control.
-function RecordCard({
+// The kind's own word, for a record with no filled-in field to lead with.
+const KIND_NOUNS: Record<RecordKind, string> = {
+  subscription: "Subscription",
+  receipt_warranty: "Receipt",
+  renewal_appointment: "Renewal",
+};
+
+// ONE disclosure holding every per-record control — the reminder form, the attach form
+// (receipts), Edit and Delete (with its own confirmation step) — so a long list reads as
+// names and dates, not a stack of forms. Its summary is named for the record so each
+// "Manage" is distinguishable to a screen reader.
+function ManageControls({
+  record,
+  name,
+  editRecordAction,
+  attachFileAction,
+  deleteRecordAction,
+}: {
+  record: LifeAdminRecordView;
+  name: string;
+  editRecordAction?: LifeAdminAction;
+  attachFileAction?: LifeAdminAction;
+  deleteRecordAction?: LifeAdminAction;
+}) {
+  return (
+    <details className="group/manage">
+      <summary className={`${SUMMARY_CLASS} list-none [&::-webkit-details-marker]:hidden`}>
+        <Settings2 aria-hidden={true} className="h-4 w-4 shrink-0 text-fg-muted" />
+        Manage<span className="sr-only"> {name}</span>
+        <ChevronDown aria-hidden={true} className="h-4 w-4 shrink-0 text-fg-muted transition-transform group-open/manage:rotate-180" />
+      </summary>
+      <div className="mt-2 flex min-w-0 flex-col gap-5 border-s-2 border-line ps-4">
+        <ReminderSetting record={record} editRecordAction={editRecordAction} />
+        {record.kind === "receipt_warranty" ? <AttachControl record={record} attachFileAction={attachFileAction} /> : null}
+        <EditControl record={record} editRecordAction={editRecordAction} />
+        {deleteRecordAction ? (
+          <details>
+            <summary className={SUMMARY_CLASS}>Delete record</summary>
+            <p className="my-3 text-sm text-fg-muted">
+              Delete this record and all its attached files? This cannot be
+              undone.
+            </p>
+            <ActionForm action={deleteRecordAction}>
+              <input type="hidden" name="recordId" value={record.id} />
+              <input type="hidden" name="returnTab" value={RECORD_TABS[record.kind]} />
+              <FormSubmit variant="secondary" preserveFocus pendingLabel="Deleting record…">Delete record and files</FormSubmit>
+            </ActionForm>
+          </details>
+        ) : null}
+      </div>
+    </details>
+  );
+}
+
+// One record as a divider row: its name, due date and status, its other decrypted fields,
+// its reminder setting in words, its downloads (receipts) and the Manage disclosure. The
+// row keeps the `record-<id>` anchor (focusable, clear of the sticky header) that
+// reminder notifications and other pages link to.
+function RecordRow({
   record,
   editRecordAction,
   attachFileAction,
@@ -361,72 +432,96 @@ function RecordCard({
   attachFileAction?: LifeAdminAction;
   deleteRecordAction?: LifeAdminAction;
 }) {
+  const { title, key: titleKey } = recordTitle(record.fields);
+  const name = title || KIND_NOUNS[record.kind];
+  const otherFields = Object.entries(record.fields).filter(([key]) => key !== titleKey);
+  const reminders = reminderSummary(record.dueDate, record.reminderOffsets);
+  const ReminderIcon = reminders.on ? Bell : BellOff;
   return (
-    <li id={`record-${record.id}`} tabIndex={-1} className="scroll-mt-32 flex flex-col gap-3 rounded-card border border-line bg-surface p-4">
-      <dl className="grid min-w-0 grid-cols-1 gap-x-3 gap-y-1 text-sm sm:grid-cols-[minmax(0,1fr)_minmax(0,2fr)]">
-        {Object.entries(record.fields).map(([key, fieldValue]) => (
-          <React.Fragment key={key}>
-            <dt className="min-w-0 text-fg-muted [overflow-wrap:anywhere]">
-              {key}
-            </dt>
-            <dd className="mb-2 min-w-0 text-fg [overflow-wrap:anywhere] sm:mb-0">
-              {fieldValue}
-            </dd>
-          </React.Fragment>
-        ))}
-      </dl>
-
-      <p className="text-sm text-fg-muted">
-        {record.dueDate
-          ? `Due ${record.dueDate} · ${record.status}`
-          : record.status}
-      </p>
-
-      <ReminderSetting record={record} editRecordAction={editRecordAction} />
-
-      {record.kind === "receipt_warranty" ? (
-        <AttachControl record={record} attachFileAction={attachFileAction} />
-      ) : null}
-
-      {record.files?.length ? (
-        <ul className="flex flex-col gap-2">
-          {record.files.map((file, index) => (
-            <li key={file.id}>
-              <a
-                href={`/api/receipts/${file.id}`}
-                className="inline-flex min-h-11 items-center text-sm underline underline-offset-4 focus-visible:outline focus-visible:outline-2 focus-visible:outline-focus"
-              >
-                Download attachment {index + 1} (
-                {(file.size / 1024 / 1024).toFixed(2)} MiB)
-              </a>
-            </li>
-          ))}
-        </ul>
-      ) : null}
-      <EditControl record={record} editRecordAction={editRecordAction} />
-      {deleteRecordAction ? (
-        <details className="mt-2">
-          <summary className={SUMMARY_CLASS}>Delete record</summary>
-          <p className="my-3 text-sm text-fg-muted">
-            Delete this record and all its attached files? This cannot be
-            undone.
+    <li id={`record-${record.id}`} tabIndex={-1} className={`${LIST_ROW} scroll-mt-32`}>
+      <div className="flex min-w-0 flex-col gap-2">
+        <div className="flex min-w-0 flex-col gap-0.5">
+          <p className="text-sm font-medium text-fg">{name}</p>
+          <p className="text-sm text-fg-muted">
+            {record.dueDate
+              ? `Due ${record.dueDate} · ${record.status}`
+              : record.status}
           </p>
-          <ActionForm action={deleteRecordAction}>
-            <input type="hidden" name="recordId" value={record.id} />
-            <input type="hidden" name="returnTab" value={RECORD_TABS[record.kind]} />
-            <FormSubmit variant="secondary" preserveFocus pendingLabel="Deleting record…">Delete record and files</FormSubmit>
-          </ActionForm>
-        </details>
-      ) : null}
+        </div>
+
+        {otherFields.length ? (
+          <dl className="grid min-w-0 grid-cols-1 gap-x-3 gap-y-1 text-sm sm:grid-cols-[minmax(0,1fr)_minmax(0,2fr)]">
+            {otherFields.map(([key, fieldValue]) => (
+              <React.Fragment key={key}>
+                <dt className="min-w-0 text-fg-muted [overflow-wrap:anywhere]">
+                  {key}
+                </dt>
+                <dd className="mb-2 min-w-0 text-fg [overflow-wrap:anywhere] sm:mb-0">
+                  {fieldValue}
+                </dd>
+              </React.Fragment>
+            ))}
+          </dl>
+        ) : null}
+
+        <p className="inline-flex items-center gap-1.5 text-sm text-fg-muted">
+          <ReminderIcon aria-hidden={true} className="h-4 w-4 shrink-0" />
+          {reminders.text}
+        </p>
+
+        {record.files?.length ? (
+          <ul className="flex flex-col">
+            {record.files.map((file, index) => (
+              <li key={file.id}>
+                <a
+                  href={`/api/receipts/${file.id}`}
+                  className="inline-flex min-h-11 items-center text-sm underline underline-offset-4 focus-visible:outline focus-visible:outline-2 focus-visible:outline-focus"
+                >
+                  Download attachment {index + 1} (
+                  {(file.size / 1024 / 1024).toFixed(2)} MiB)
+                </a>
+              </li>
+            ))}
+          </ul>
+        ) : null}
+
+        <ManageControls
+          record={record}
+          name={name}
+          editRecordAction={editRecordAction}
+          attachFileAction={attachFileAction}
+          deleteRecordAction={deleteRecordAction}
+        />
+      </div>
     </li>
   );
 }
 
-// A record tab's panel: its Add control (offered even with no records) and the records.
+// Each due group's heading icon (decorative: the heading's words carry the meaning).
+const DUE_GROUP_ICONS: Record<DueGroupKey, { Icon: LucideIcon; tone: string }> = {
+  overdue: { Icon: AlertTriangle, tone: "text-warning" },
+  soon: { Icon: CalendarClock, tone: "text-fg-muted" },
+  later: { Icon: Calendar, tone: "text-fg-muted" },
+  undated: { Icon: CalendarOff, tone: "text-fg-muted" },
+};
+
+function DueGroupTitle({ group, title }: { group: DueGroupKey; title: string }) {
+  const { Icon, tone } = DUE_GROUP_ICONS[group];
+  return (
+    <span className="inline-flex items-center gap-1.5">
+      <Icon aria-hidden={true} className={`h-4 w-4 shrink-0 ${tone}`} />
+      {title}
+    </span>
+  );
+}
+
+// A record tab's panel: its Add control (offered even with no records) and the records,
+// grouped by due date (only the groups that have records), soonest first.
 function RecordPanel({
   kind,
   heading,
   records,
+  today,
   addRecordAction,
   editRecordAction,
   attachFileAction,
@@ -435,6 +530,7 @@ function RecordPanel({
   kind: RecordKind;
   heading: string;
   records: ReadonlyArray<LifeAdminRecordView>;
+  today: string;
   addRecordAction?: LifeAdminAction;
   editRecordAction?: LifeAdminAction;
   attachFileAction?: LifeAdminAction;
@@ -450,17 +546,27 @@ function RecordPanel({
           description="When you add one it'll show here with its details and reminders."
         />
       ) : (
-        <ul className="flex flex-col gap-3">
-          {records.map((record) => (
-            <RecordCard
-              key={record.id}
-              record={record}
-              editRecordAction={editRecordAction}
-              attachFileAction={attachFileAction}
-              deleteRecordAction={deleteRecordAction}
-            />
+        <div className="flex flex-col gap-6">
+          {groupRecordsByDue(records, today).map((group) => (
+            <ListGroup
+              key={group.key}
+              id={`records-${kind}-${group.key}`}
+              level={3}
+              title={<DueGroupTitle group={group.key} title={group.title} />}
+              count={group.records.length}
+            >
+              {group.records.map((record) => (
+                <RecordRow
+                  key={record.id}
+                  record={record}
+                  editRecordAction={editRecordAction}
+                  attachFileAction={attachFileAction}
+                  deleteRecordAction={deleteRecordAction}
+                />
+              ))}
+            </ListGroup>
           ))}
-        </ul>
+        </div>
       )}
     </section>
   );
@@ -607,7 +713,13 @@ function ChecklistPanel({
 
 export { nextTabIndex } from "@/components/ui/view-tabs";
 
+// A tab label with its count, e.g. "Subscriptions (3)".
+function counted(label: string, count: number): string {
+  return `${label} (${count})`;
+}
+
 export function LifeAdminView({
+  today,
   subscriptions,
   receipts,
   renewals,
@@ -621,6 +733,7 @@ export function LifeAdminView({
   handToAgentAction,
 }: LifeAdminViewProps) {
   const recordActions = {
+    today,
     addRecordAction,
     editRecordAction,
     attachFileAction,
@@ -638,7 +751,7 @@ export function LifeAdminView({
         tabs={[
           {
             key: "subscriptions",
-            label: "Subscriptions",
+            label: counted("Subscriptions", subscriptions.length),
             content: (
               <RecordPanel
                 kind="subscription"
@@ -650,7 +763,7 @@ export function LifeAdminView({
           },
           {
             key: "receipts",
-            label: "Receipts & warranties",
+            label: counted("Receipts & warranties", receipts.length),
             content: (
               <RecordPanel
                 kind="receipt_warranty"
@@ -662,7 +775,7 @@ export function LifeAdminView({
           },
           {
             key: "renewals",
-            label: "Renewals & appointments",
+            label: counted("Renewals & appointments", renewals.length),
             content: (
               <RecordPanel
                 kind="renewal_appointment"
@@ -674,7 +787,7 @@ export function LifeAdminView({
           },
           {
             key: "checklist",
-            label: "Moving checklist",
+            label: counted("Moving checklist", checklist.length),
             content: (
               <ChecklistPanel
                 checklist={checklist}

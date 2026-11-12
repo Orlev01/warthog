@@ -60,6 +60,14 @@ import type { Clock } from "@/server/seams/clock";
 import type { KeyWrapper } from "@/server/crypto/key-wrapper";
 import type { Db } from "@/server/db/index";
 import type { RulesViewRule, RulesViewAgent } from "@/components/rules/rules-view";
+import {
+  RULES_PATH,
+  RULES_VIEWS,
+  RULE_STATUS_FILTERS,
+  type RuleStatusFilter,
+  type RulesViewKey,
+} from "@/components/rules/rules-organise";
+import { firstParam, hrefWith, resolveKey } from "@/lib/href";
 
 // The injected seams — no process.env (INV-103). `clock` is taken for parity with
 // the sibling actions factories and future time-stamped rule writes.
@@ -105,6 +113,38 @@ export function rulesNotice(code: string | null | undefined): RulesNotice | null
   return RULES_NOTICES[code] ?? null;
 }
 
+// ─── URL state: which view is open, the status filter, and the last outcome ──────────
+
+// The Rules page's query, validated: `view` against the known in-page views (the rules
+// list when absent or unknown), `status` against the two filter values (every rule when
+// absent or unknown) and the raw `notice` code (`rulesNotice` resolves it to copy, so an
+// unknown code renders nothing). A repeated key takes its first value.
+export function rulesPageState(search: Readonly<Record<string, string | string[] | undefined>>): {
+  view: RulesViewKey;
+  status: RuleStatusFilter | undefined;
+  notice: string | undefined;
+} {
+  const status = firstParam(search.status);
+  return {
+    view: resolveKey(firstParam(search.view), RULES_VIEWS, "rules"),
+    status: status !== undefined && (RULE_STATUS_FILTERS as readonly string[]).includes(status) ? (status as RuleStatusFilter) : undefined,
+    notice: firstParam(search.notice),
+  };
+}
+
+// Where a rule action redirects: the fixed Rules path with the outcome code, the view to
+// return to ("new" after adding; the rules list is the default and stays implicit) and the
+// status filter a row's form carried. Values arrive from FormData, so anything that is
+// not a known key — or not a string at all — is dropped, never echoed into the URL.
+export function rulesReturnHref(notice: string, back: { view?: unknown; status?: unknown }): string {
+  const view = typeof back.view === "string" ? resolveKey(back.view, RULES_VIEWS, "rules") : "rules";
+  const status =
+    typeof back.status === "string" && (RULE_STATUS_FILTERS as readonly string[]).includes(back.status)
+      ? back.status
+      : undefined;
+  return hrefWith(RULES_PATH, {}, { notice, status, view: view === "rules" ? undefined : view });
+}
+
 // The content of a rule, as the create form's FormData maps to it and the store
 // writes it (the member scope — the userId — is bound separately from the session).
 export interface RuleInput {
@@ -115,9 +155,9 @@ export interface RuleInput {
 }
 
 // The data slice of <RulesView>'s props the loader returns: the person's OWN rules
-// (active AND paused), each read back as its exact plain sentence + lifecycle
-// status, plus the person's own agents (offered as the "chosen agents" scope). The
-// page adds the bound server actions when it renders.
+// (active AND paused), each read back as its exact plain sentence + kind + lifecycle
+// status, plus the person's own agents (offered as the "chosen agents" scope, and
+// linked to their workspace for budgets). The page adds the bound server actions.
 export interface RulesLoadData {
   readonly currency: string;
   readonly rules: RulesViewRule[];
@@ -304,12 +344,17 @@ export function createRulesActions(deps: RulesActionsDeps): RulesActions {
       await agentNamesForUser(db, session.userId),
     );
 
-    const agents: RulesViewAgent[] = (await listAgentsForUser(db, session.userId)).map((agent) => ({
-      // The connection id is what the policy engine matches a rule's chosen-agent
-      // scope on (src/server/mcp/context.ts), so it is the id a scope choice posts.
-      id: agent.connectionId,
-      name: agent.displayName,
-    }));
+    const agents: RulesViewAgent[] = (await listAgentsForUser(db, session.userId))
+      .map((agent) => ({
+        // The connection id is what the policy engine matches a rule's chosen-agent
+        // scope on (src/server/mcp/context.ts), so it is the id a scope choice posts.
+        id: agent.connectionId,
+        name: agent.displayName,
+        // The agent's own id keys its workspace (/agents/<id>), where its card budget is set.
+        workspaceId: agent.id,
+      }))
+      // Name order (then id), so the scope choices and budget links never shuffle.
+      .sort((a, b) => a.name.localeCompare(b.name, undefined, { sensitivity: "base" }) || (a.id < b.id ? -1 : a.id > b.id ? 1 : 0));
 
     return { rules, agents, currency: await getAccountCurrency(db, session.userId) };
   }

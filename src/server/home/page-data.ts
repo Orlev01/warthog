@@ -30,7 +30,7 @@
 // (INV-102). The current period bucket and the "upcoming" cut-off are derived from
 // the INJECTED clock, never SQL now().
 
-import { listActivity } from "../activity/list";
+import { listActivity, summariseActivity, type ActivityGroupSummary } from "../activity/list";
 import type { ActivityEntry } from "../activity/recorder";
 import { getAccountCurrency } from "../db/account-currency";
 import { getConnectionPermissions } from "../db/agent-permissions";
@@ -74,11 +74,23 @@ export interface HomeAgentSpend {
 // How many of the latest activity entries the Home feed shows.
 export const HOME_ACTIVITY_LIMIT = 20;
 
+const DAY_MS = 86_400_000;
+
+// A record's due date as a sortable YYYY-MM-DD (records without one sort last).
+function dueKey(record: LifeAdminRecord): string {
+  if (record.dueDate == null) return "9999-12-31";
+  const iso = record.dueDate instanceof Date ? record.dueDate.toISOString() : String(record.dueDate);
+  return iso.slice(0, 10);
+}
+
 export interface HomeMetrics {
   readonly pendingApprovals: number; // the count of PENDING approvals (decided excluded)
   readonly activity: ActivityEntry[]; // the latest HOME_ACTIVITY_LIMIT entries across ALL the person's agents, newest first
   readonly agents: HomeAgentSpend[]; // the person's agents, each with spend-this-period
-  readonly reminders: LifeAdminRecord[]; // the life-admin records whose reminder date is upcoming
+  readonly reminders: LifeAdminRecord[]; // the life-admin records whose reminder date is upcoming, soonest first
+  // Exact counts of the last 24 hours' activity per agent (null key ⇒ no agent), from
+  // plaintext metadata — so Home can say "14 entries today · 2 need attention" per agent.
+  readonly lastDayByAgent?: ActivityGroupSummary[];
 }
 
 // Resolve the person's unwrapped 256-bit DEK: read their wrapped DEK (bound by
@@ -133,6 +145,7 @@ export async function loadHomeMetrics(
   // bounded page, so Home never decrypts the person's whole history (the Activity page
   // holds the full record).
   const activity = await listActivity(db, userId, {}, dek, { limit: HOME_ACTIVITY_LIMIT });
+  const lastDayByAgent = await summariseActivity(db, userId, { from: new Date(now.getTime() - DAY_MS).toISOString() }, "agent");
 
   // Each agent with its status / last-active and its spend this budget period
   // against the budget held in its agent-permission grant.
@@ -165,12 +178,15 @@ export async function loadHomeMetrics(
   // decrypted; a record with no due date, or a past one, is excluded.
   const today = periodKeyFor("day", now, timeZone);
   const records = await listRecordsForUser(db, userId, dek);
-  const reminders = records.filter((record) => isUpcoming(record, today));
+  const reminders = records
+    .filter((record) => isUpcoming(record, today))
+    .sort((a, b) => dueKey(a).localeCompare(dueKey(b)));
 
   return {
     pendingApprovals: pending.length,
     activity,
     agents,
     reminders,
+    lastDayByAgent,
   };
 }

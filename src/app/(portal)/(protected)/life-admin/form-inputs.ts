@@ -30,6 +30,16 @@ export function recordReturnPath(form: FormData): string {
   return `/life-admin?view=life&tab=${tab}`;
 }
 
+// Where a task action lands afterwards: the Tasks view, keeping the `?assignee=` filter
+// the form was submitted under when it is well formed ("any" or a uuid). The page then
+// validates it against the person's own agents, exactly as for a typed-in link.
+const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+export function taskReturnPath(form: FormData): string {
+  const value = form.get("returnAssignee");
+  const assignee = typeof value === "string" && (value === "any" || UUID_RE.test(value)) ? value : null;
+  return assignee ? `/life-admin?view=tasks&assignee=${assignee}` : "/life-admin?view=tasks";
+}
+
 // Empty input disables reminders. Invalid nonempty entries survive as NaN so
 // boundary validation refuses the whole change instead of silently losing it.
 export function recordOffsets(raw: string): number[] {

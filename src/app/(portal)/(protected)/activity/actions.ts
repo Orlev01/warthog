@@ -40,11 +40,34 @@ import {
   checkIntegrity as runIntegrityCheck,
   type IntegrityResult,
 } from "@/server/activity/integrity";
-import { listActivity, listActivityFacets, type ActivityFilters } from "@/server/activity/list";
+import { listActivity, listActivityFacets, summariseActivity, type ActivityFilters } from "@/server/activity/list";
+import { isReadOnlyTool } from "@/server/activity/tool-effects";
+import { activityCategory, agentRole, CATEGORY_LABELS, outcomeGroup } from "@/domain/activity/category";
+import { accountTimeZone } from "@/domain/time-zone";
+import type { Clock } from "@/server/seams/clock";
+import {
+  ACTIVITY_PATH,
+  NONE,
+  activityHref,
+  agentGroups,
+  appliedFilters,
+  breadcrumb,
+  countsCaption,
+  dayOf,
+  filtersFor,
+  quickLinks,
+  readActivityState,
+  serviceGroups,
+  stateQuery,
+  timeOfDay,
+  typeGroups,
+  viewLinks,
+  type ActivityState,
+} from "./organise";
 import { calendarReversalForEntry } from "@/server/activity/calendar-reversal";
 import { getUserById } from "@/server/db/users";
-import { agentNamesForUser } from "@/server/db/agents";
-import { agentLabel, entryTitle } from "@/domain/activity/describe";
+import { agentNamesForUser, listAgentsForUser } from "@/server/db/agents";
+import { agentLabel, entryTitle, kindLabel } from "@/domain/activity/describe";
 import type { KeyWrapper } from "@/server/crypto/key-wrapper";
 import type { ActivityEntry } from "@/server/activity/recorder";
 import type {
@@ -84,16 +107,21 @@ export interface ActivityActionsDeps {
   // declared.
   readonly reversalFor?: (tool?: string) => string | undefined;
   // How many of the newest entries one view reads and decrypts (default
-  // ACTIVITY_PAGE_LIMIT), so a long history is never decrypted whole.
+  // ACTIVITY_PAGE_LIMIT, or ACTIVITY_SEARCH_LIMIT for a search), so a long history is never
+  // decrypted whole.
   readonly pageLimit?: number;
+  // "Now", for the timeline's "Today"/"Yesterday" headings. Absent ⇒ dated headings only.
+  readonly clock?: Clock;
   // Names a connected service through the connector catalogue (the page passes the
   // process-wide index), so entries and the service filter show "Google Calendar" rather
   // than its id; absent, or a service the catalogue doesn't know, ⇒ the id is shown.
   readonly serviceName?: (connectorId: string) => string | undefined;
 }
 
-// The newest entries the Activity screen shows (and searches) at once.
-export const ACTIVITY_PAGE_LIMIT = 500;
+// The newest entries the Activity timeline shows at once, and how many a free-text search
+// scans (search can only match decrypted text, so it reads a larger bounded page).
+export const ACTIVITY_PAGE_LIMIT = 100;
+export const ACTIVITY_SEARCH_LIMIT = 500;
 
 // A dispute / undo outcome: success, or a refusal naming its reason in plain words
 // (never a silent success, never a silent failure).
@@ -251,18 +279,36 @@ export function createActivityActions(deps: ActivityActionsDeps): ActivityAction
   // control exactly where undoEntry can act and nowhere else (never a dead control).
   // The agent is shown by the name the person gave it (`agentNames`: their OWN agents,
   // read member-scoped), never its raw id, and an agent call is titled by its tool.
-  function toEntryView(entry: ActivityEntry, agentNames: ReadonlyMap<string, string>, timeZone: string): ActivityEntryView {
+  function toEntryView(
+    entry: ActivityEntry,
+    agentNames: ReadonlyMap<string, string>,
+    timeZone: string,
+    state: ActivityState,
+    now: Date | undefined,
+  ): ActivityEntryView {
     const target = calendarReversalForEntry(entry);
     const canUndo = target !== undefined && reversalFor?.(entry.tool) === target.tool;
+    const category = activityCategory(entry, isReadOnlyTool);
+    const day = dayOf(entry.occurredAt, timeZone, now);
     return {
       seq: entry.seq,
       kind: humanise(entry.kind),
       title: entryTitle(entry),
       source: entry.source,
       agent: agentLabel(agentNames, entry.agentId),
+      agentHref: entry.agentId === undefined ? undefined : activityHref(state, { agent: entry.agentId, via: undefined }),
+      agentRole: agentRole(entry.kind),
       service: entry.connectorId === undefined ? undefined : serviceLabel(entry.connectorId),
       outcome: entry.outcome === undefined ? "" : humanise(entry.outcome),
+      outcomeGroup: outcomeGroup(entry.outcome),
+      category,
+      categoryLabel: CATEGORY_LABELS[category],
       at: formatAccountTime(entry.occurredAt, timeZone),
+      dateTime: entry.occurredAt,
+      time: timeOfDay(entry.occurredAt, timeZone),
+      dayKey: day.key,
+      dayLabel: day.label,
+      permalink: `${ACTIVITY_PATH}?entry=${entry.seq}#entry-${entry.seq}`,
       ...activityEvidence(entry),
       canUndo,
     };
@@ -286,6 +332,7 @@ export function createActivityActions(deps: ActivityActionsDeps): ActivityAction
     }
     const dek = await keyWrapper.unwrap(user.wrappedDek);
     const timeZone = await timeZoneFor(db, session.userId, dek);
+    const now = deps.clock?.now();
 
     // The person's whole set of facet values backs the filter dropdowns, read from the
     // plaintext metadata columns (nothing decrypted), so neither a narrowing filter nor
@@ -297,36 +344,98 @@ export function createActivityActions(deps: ActivityActionsDeps): ActivityAction
     // the filter still posts (and narrows by) its id.
     const agentNames = await agentNamesForUser(db, session.userId);
     const filterOptions: ActivityViewProps["filterOptions"] = {
-      ...facets,
-      agents: facets.agents.map((id) => ({ value: id, label: agentLabel(agentNames, id) ?? id })),
-      services: facets.services.map((id) => ({ value: id, label: serviceLabel(id) })),
+      agents: [
+        ...facets.agents
+          .map((id) => ({ value: id, label: agentLabel(agentNames, id) ?? id }))
+          .sort((a, b) => a.label.localeCompare(b.label)),
+        { value: NONE, label: "No agent (account and Warthog)" },
+      ],
+      services: [
+        ...facets.services
+          .map((id) => ({ value: id, label: serviceLabel(id) }))
+          .sort((a, b) => a.label.localeCompare(b.label)),
+        { value: NONE, label: "No connected service" },
+      ],
+      kinds: [...facets.kinds].map((value) => ({ value, label: kindLabel(value) })).sort((a, b) => a.label.localeCompare(b.label)),
+      outcomes: [...facets.outcomes].sort().map((value) => ({ value, label: humanise(value) })),
     };
 
-    // The facet/date filters the view posts back: `agent`→agentId, `service`→
-    // connectorId, kind/outcome verbatim, and from/to only when they are real calendar
-    // dates. An empty "All …" option (or an absent / invalid param) does not constrain.
+    // The validated screen state: the view, the drill-down it came from, and every filter.
+    // Values of the wrong shape are dropped, so nothing unvalidated is echoed or linked.
     // The applied values go back to the view (`activeFilters`) so its controls show them
     // and a second Apply keeps them (review fix G11).
-    const filters: ActivityFilters = {};
-    const activeFilters: NonNullable<ActivityViewProps["activeFilters"]> = {};
-    const agentId = firstValue(searchParams.agent);
-    if (agentId !== undefined) filters.agentId = activeFilters.agent = agentId;
-    const connectorId = firstValue(searchParams.service);
-    if (connectorId !== undefined) filters.connectorId = activeFilters.service = connectorId;
-    const kind = firstValue(searchParams.kind);
-    if (kind !== undefined) filters.kind = activeFilters.kind = kind;
-    const outcome = firstValue(searchParams.outcome);
-    if (outcome !== undefined) filters.outcome = activeFilters.outcome = outcome;
-    const from = validDate(firstValue(searchParams.from));
-    if (from !== undefined) filters.from = activeFilters.from = from;
-    const to = validDate(firstValue(searchParams.to));
-    if (to !== undefined) {
-      activeFilters.to = to;
-      filters.to = widenToEndOfDay(to);
+    const state = readActivityState(searchParams, validDate);
+    const filters: ActivityFilters = filtersFor(state, widenToEndOfDay);
+    const activeFilters: NonNullable<ActivityViewProps["activeFilters"]> = {
+      ...(state.agent !== undefined ? { agent: state.agent } : {}),
+      ...(state.service !== undefined ? { service: state.service } : {}),
+      ...(state.kind !== undefined ? { kind: state.kind } : {}),
+      ...(state.outcome !== undefined ? { outcome: state.outcome } : {}),
+      ...(state.from !== undefined ? { from: state.from } : {}),
+      ...(state.to !== undefined ? { to: state.to } : {}),
+      ...(state.type !== undefined ? { type: state.type } : {}),
+    };
+    const names = {
+      agent: state.agent !== undefined && state.agent !== NONE ? agentLabel(agentNames, state.agent) : undefined,
+      service: state.service !== undefined && state.service !== NONE ? serviceLabel(state.service) : undefined,
+    };
+    const applied = appliedFilters(state, names);
+    const common = {
+      view: state.view,
+      viewLinks: viewLinks(state),
+      quickLinks: quickLinks(state),
+      appliedFilters: applied.filters,
+      clearHref: applied.clearHref,
+      breadcrumb: breadcrumb(state),
+      formState: stateQuery(state),
+      timeZoneLabel: accountTimeZone(timeZone),
+      filterOptions,
+      query: state.q ?? "",
+      activeFilters,
+    };
+
+    // The Check-integrity control posts verify=1; only then run the record-wide check.
+    const integrity =
+      firstValue(searchParams.verify) === "1" ? await checkIntegrity(session) : null;
+
+    // The grouped views count the WHOLE filtered record in SQL (no decryption, no page
+    // bound); free-text search applies only to the timeline's decrypted page.
+    if (state.view !== "timeline") {
+      const when = (iso: string) => {
+        const day = dayOf(iso, timeZone, now);
+        return `${day.label}, ${timeOfDay(iso, timeZone)}`;
+      };
+      const byAgent = await summariseActivity(db, session.userId, filters, "agent");
+      let groups;
+      if (state.view === "agents") {
+        const agents = new Map((await listAgentsForUser(db, session.userId)).map((agent) => [agent.id, agent]));
+        groups = agentGroups(byAgent, (id) => {
+          const agent = agents.get(id);
+          return {
+            name: agentLabel(agentNames, id) ?? id,
+            platform: agent?.platform,
+            disconnected: agent ? agent.status !== "connected" : undefined,
+            connectedOn: agent ? formatAccountTime(agent.connectedAt, timeZone, { dateOnly: true }).replace(/ \(.*\)$/, "") : undefined,
+            exists: agent !== undefined,
+          };
+        }, state, when);
+      } else if (state.view === "types") {
+        groups = typeGroups(
+          await summariseActivity(db, session.userId, filters, "category"),
+          byAgent,
+          (id) => (id === null ? "Account and Warthog" : agentLabel(agentNames, id) ?? id),
+          state,
+          when,
+        );
+      } else {
+        groups = serviceGroups(await summariseActivity(db, session.userId, filters, "service"), serviceLabel, state, when);
+      }
+      return { ...common, entries: [], groups, countsCaption: countsCaption(state), integrity };
     }
 
-    // The shared filtered read (`listActivity`, E08-S05) narrows by facet/date in SQL,
-    // newest-first, and decrypts only the bounded page it returns.
+    // The shared filtered read (`listActivity`, E08-S05) narrows by facet/type/date in SQL,
+    // newest-first, and decrypts only the bounded page it returns. A search scans a larger
+    // page, since it can only match decrypted text.
     const positive = (raw: string | string[] | undefined): number | undefined => {
       const value = firstValue(raw);
       if (!value || !/^[1-9][0-9]*$/.test(value)) return undefined;
@@ -336,28 +445,31 @@ export function createActivityActions(deps: ActivityActionsDeps): ActivityAction
     const beforeSeq = positive(searchParams.before);
     const entrySeq = positive(searchParams.entry);
     if (entrySeq) filters.seq = entrySeq;
-    const limit = Math.max(1, Math.min(4999, deps.pageLimit ?? ACTIVITY_PAGE_LIMIT));
+    const pageLimit = deps.pageLimit ?? (state.q ? ACTIVITY_SEARCH_LIMIT : ACTIVITY_PAGE_LIMIT);
+    const limit = Math.max(1, Math.min(4999, pageLimit));
     const narrowed = await listActivity(db, session.userId, filters, dek, { limit: limit + 1, beforeSeq });
     const page = narrowed.slice(0, limit);
     const notes = await readDisputesForEntries(db, session.userId, page.map(e => e.seq), dek);
-    const views = page.map((entry) => ({ ...toEntryView(entry, agentNames, timeZone),
+    const views = page.map((entry) => ({ ...toEntryView(entry, agentNames, timeZone, state, now),
       disputes: notes.filter(note => note.entrySeq === entry.seq).map(note => ({ note: note.note, at: formatAccountTime(note.createdAt, timeZone) })),
     }));
-    const query = (firstValue(searchParams.q) ?? "").slice(0, 2000);
-    const needle = query.toLowerCase();
+    const needle = (state.q ?? "").toLowerCase();
     const entries = needle.length === 0 ? views : views.filter(view =>
       [view.summary, view.detail, view.title, view.service, view.agent, ...view.disputes.map(n => n.note)]
         .some(value => value?.toLowerCase().includes(needle)));
-    const params = new URLSearchParams({ ...activeFilters, ...(query ? { q: query } : {}) });
-    const newestHref = beforeSeq || entrySeq ? `/activity?${params}` : undefined;
-    params.set("before", String(page.at(-1)?.seq ?? ""));
-    const nextHref = narrowed.length > limit ? `/activity?${params}` : undefined;
+    const newestHref = beforeSeq || entrySeq ? activityHref(state) : undefined;
+    const lastSeq = page.at(-1)?.seq;
+    const nextHref = narrowed.length > limit && lastSeq !== undefined ? activityHref(state, { before: String(lastSeq) }) : undefined;
 
-    // The Check-integrity control posts verify=1; only then run the record-wide check.
-    const integrity =
-      firstValue(searchParams.verify) === "1" ? await checkIntegrity(session) : null;
-
-    return { entries, filterOptions, query, integrity, activeFilters, nextHref, newestHref, scannedCount: page.length };
+    return {
+      ...common,
+      entries,
+      integrity,
+      nextHref,
+      newestHref,
+      singleEntry: entrySeq !== undefined,
+      scannedCount: state.q ? page.length : undefined,
+    };
   }
 
   return { disputeEntry, undoEntry, checkIntegrity, load };

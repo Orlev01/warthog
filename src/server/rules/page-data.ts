@@ -17,16 +17,17 @@
 // read it back.
 
 import { listAllRules } from "../db/rules";
-import { ruleSentence, type RuleScope } from "../../domain/rules/rules";
+import { ruleSentence, type RuleKind, type RuleScope } from "../../domain/rules/rules";
 import type { Db } from "../db/index";
 
 // One rule as the Rules page shows it: its id, its exact English sentence, its scope
-// (all agents or the chosen agent's id + name) and its lifecycle status (so paused
-// rules are distinguishable in the UI).
+// (all agents or the chosen agent's id + name), its kind (shown as a word badge) and its
+// lifecycle status (so paused rules are distinguishable in the UI).
 export interface RulesPageItem {
   readonly id: string;
   readonly sentence: string;
   readonly scope: RuleScope;
+  readonly kind: RuleKind;
   readonly status: "active" | "paused";
 }
 
@@ -52,6 +53,7 @@ export async function rulesPageData(
       id: rule.id,
       sentence: ruleSentence({ ...rule, scope }),
       scope,
+      kind: rule.kind,
       status: rule.status,
     };
   });
