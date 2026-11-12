@@ -209,12 +209,10 @@ export default async function VaultPage() {
         saveLowTierField={saveLowTierField}
         updateLowTierField={updateLowTierField}
       />
-      <div className="mt-6">
-        <RecoveryPhraseSettings
-          hasRecoveryPhrase={unlockMethods.includes("recovery")}
-          hasVault={unlockMethods.length > 0}
-        />
-      </div>
+      <RecoveryPhraseSettings
+        hasRecoveryPhrase={unlockMethods.includes("recovery")}
+        hasVault={unlockMethods.length > 0}
+      />
     </PageContainer>
   );
 }

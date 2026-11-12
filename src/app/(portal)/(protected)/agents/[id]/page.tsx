@@ -1,6 +1,13 @@
-import { agentSection } from "@/domain/permissions/workspace";
+import { agentSection, AGENT_SECTIONS } from "@/domain/permissions/workspace";
 import { getUserById } from "@/server/db/users";
+import { getAgentById } from "@/server/db/agents";
 import { agentWorkspaceData } from "@/server/agents/workspace-data";
+import { timeZoneFor } from "@/server/spending/time-zone";
+import { relativeDayTime } from "@/domain/display-time";
+import { PageContainer } from "@/components/shell/page-container";
+import { ButtonLink } from "@/components/ui/button-link";
+import type { Metadata } from "next";
+import { z } from "zod";
 import {
   AgentWorkspaceHeader,
   AgentOverview,
@@ -90,6 +97,36 @@ async function savePermissions(
   }
 }
 
+// The tab names the agent, and the section after the Overview: "Dev console · Warthog",
+// "Dev console · Activity · Warthog" (a11y-11 / content-25), so two agents or two sections
+// open in tabs can be told apart. The parent Agents layout sets a plain title, which stops
+// the root "%s · Warthog" template reaching here, so the suffix is written out. An agent
+// that isn't this person's (or an unknown section) is the not-found page's title.
+export async function generateMetadata({
+  params,
+  searchParams,
+}: {
+  params: Promise<{ id: string }>;
+  searchParams: Promise<Record<string, string | string[] | undefined>>;
+}): Promise<Metadata> {
+  const { id } = await params;
+  const section = agentSection((await searchParams).section);
+  const notFoundTitle: Metadata = { title: { absolute: "Page not found · Warthog" } };
+  if (!section || !z.uuid().safeParse(id).success) return notFoundTitle;
+  const db = await getServerDb();
+  const session = await resolveSession(db);
+  const agent = session ? await getAgentById(db, session.userId, id) : null;
+  if (!agent) return notFoundTitle;
+  const label = AGENT_SECTIONS.find(([key]) => key === section)?.[1];
+  return {
+    title: {
+      absolute: section === "overview" || !label
+        ? `${agent.displayName} · Warthog`
+        : `${agent.displayName} · ${label} · Warthog`,
+    },
+  };
+}
+
 // Name a connected service through the process-wide connector catalogue (the same index
 // the connectors screen and the consent screen use), or undefined when it doesn't know it.
 function serviceName(connectorId: string): string | undefined {
@@ -143,59 +180,64 @@ export default async function AgentPermissionsPage({
 
   const user = await getUserById(db, session.userId);
   if (!user) notFound();
+  const dek = await keyWrapper.unwrap(user.wrappedDek);
   const data = await agentWorkspaceData(
     db,
     session.userId,
     id,
-    await keyWrapper.unwrap(user.wrappedDek),
+    dek,
     systemClock,
     section,
   );
   if (!data) notFound();
+  const connected = data.agent.status === "connected";
+  // "Today, 6:17 pm" for the Overview's "Last request", in the member's own time zone.
+  const lastActiveAt = data.agent.lastActiveAt != null ? new Date(data.agent.lastActiveAt) : null;
+  const lastActive =
+    section === "overview" && lastActiveAt && Number.isFinite(lastActiveAt.getTime())
+      ? relativeDayTime(lastActiveAt.toISOString(), await timeZoneFor(db, session.userId, dek), systemClock.now())
+      : null;
+  // Memory and skill choices are paged; moving page drops unsaved edits, so the links say so.
+  const firstPage =
+    (section === "memory" && search.memoryCursor) || (section === "skills" && search.skillCursor)
+      ? `?section=${section}`
+      : null;
+  const nextPage =
+    section === "memory" && props.nextMemoryCursor
+      ? `?section=memory&memoryCursor=${encodeURIComponent(props.nextMemoryCursor)}`
+      : section === "skills" && props.nextSkillCursor
+        ? `?section=skills&skillCursor=${encodeURIComponent(props.nextSkillCursor)}`
+        : null;
   return (
-    <div className="wh-page wh-page--reading flex flex-col gap-6 [overflow-wrap:anywhere]">
+    <PageContainer className="[overflow-wrap:anywhere]">
       <AgentWorkspaceHeader data={data} section={section} />
       {section === "overview" ? (
-        <AgentOverview data={data} permissions={props} />
+        <AgentOverview data={data} permissions={props} lastActive={lastActive} />
       ) : (
         <>
           <AgentResources data={data} section={section} />
           {section !== "activity" ? (
-            <fieldset
-              disabled={data.agent.status !== "connected"}
-              className="min-w-0"
-            >
+            // A disconnected agent's settings stay visible but can't be changed: the
+            // controls are disabled and the Save bar explains why (interaction-08).
+            <fieldset disabled={!connected} className="min-w-0">
               <PermissionsForm
                 key={`${section}:${String(search.memoryCursor ?? search.skillCursor ?? "")}`}
-                initial={{ ...props, section, embedded: true }}
+                initial={{ ...props, section, embedded: true, readOnly: !connected }}
                 save={savePermissions.bind(null, id)}
               />
             </fieldset>
           ) : null}
-          {((section === "memory" && search.memoryCursor) ||
-            (section === "skills" && search.skillCursor)) && (
-            <a className="text-accent underline" href={`?section=${section}`}>
-              First page — save changes first
-            </a>
-          )}
-          {section === "memory" && props.nextMemoryCursor && (
-            <a
-              className="text-accent underline"
-              href={`?section=memory&memoryCursor=${encodeURIComponent(props.nextMemoryCursor)}`}
-            >
-              Next memory page — save changes first
-            </a>
-          )}
-          {section === "skills" && props.nextSkillCursor && (
-            <a
-              className="text-accent underline"
-              href={`?section=skills&skillCursor=${encodeURIComponent(props.nextSkillCursor)}`}
-            >
-              Next skill page — save changes first
-            </a>
-          )}
+          {firstPage || nextPage ? (
+            <nav aria-label={section === "memory" ? "Memory pages" : "Skill pages"} className="wh-form-actions">
+              <div className="wh-form-actions-buttons">
+                {firstPage ? <ButtonLink href={firstPage} size="sm">First page</ButtonLink> : null}
+                {nextPage ? <ButtonLink href={nextPage} size="sm">Next page</ButtonLink> : null}
+              </div>
+              <p>Save your changes before moving to another page.</p>
+            </nav>
+          ) : null}
         </>
       )}
-    </div>
+    </PageContainer>
   );
 }

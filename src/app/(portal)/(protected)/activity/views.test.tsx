@@ -161,3 +161,105 @@ test("the filter and integrity forms carry the current view and filters", async 
     await db.close();
   }
 });
+
+// UI/UX pass (content-04): every finished change appeared twice — "Starting: Save a record ·
+// Attempted" under "Save a record · Executed". The intent record is now left out when its
+// result is on the page, and an unmatched one stays and reads "Not confirmed".
+test("each finished change appears once; an unfinished intent stays and says it isn't confirmed", async () => {
+  const db = await freshDb();
+  try {
+    const keyWrapper = localAesKeyWrapper(randomBytes(32));
+    const alice = await makePerson(db, keyWrapper, "alice");
+    const claude = await createAgent(db, { userId: alice.userId, connectionId: randomUUID(), displayName: "Claude", platform: "Claude" }, fixedClock(NOW));
+    const at = (iso: string) => createDbRecorder({ db, clock: fixedClock(new Date(iso)), dekFor: async () => alice.dek });
+    const base = { userId: alice.userId, agentId: claude.id, source: "warthog" as const, tool: "save_record" };
+    const intent = await at("2026-11-12T01:00:00Z").record({ ...base, kind: "tool_attempt", outcome: "attempted", payload: { attemptId: "attempt-one", resultEvidence: { outcome: "attempted" } } });
+    await at("2026-11-12T01:00:01Z").record({ ...base, kind: "tool_call", outcome: "executed", payload: { attemptId: "attempt-one", resultEvidence: { outcome: "executed" } } });
+    const orphan = await at("2026-11-12T02:00:00Z").record({ ...base, kind: "tool_attempt", outcome: "attempted", payload: { attemptId: "attempt-two", resultEvidence: { outcome: "attempted" } } });
+
+    const timeline = await loaderFor(db, keyWrapper).load(alice.session, {});
+    assert.deepEqual(timeline.entries.map((e) => [e.title, e.outcome]), [["Started: Save a record", "Not confirmed"], ["Save a record", "Done"]]);
+    assert.equal(timeline.entries[0]!.seq, orphan.seq, "the unmatched intent is the one kept");
+
+    const intents = await loaderFor(db, keyWrapper).load(alice.session, { kind: "tool_attempt" });
+    assert.deepEqual(intents.entries.map((e) => e.seq), [orphan.seq, intent.seq], "asking for intent records shows them all");
+    const permalink = await loaderFor(db, keyWrapper).load(alice.session, { entry: String(intent.seq) });
+    assert.deepEqual(permalink.entries.map((e) => e.seq), [intent.seq], "a permalink always shows its entry");
+  } finally {
+    await db.close();
+  }
+});
+
+// interaction-21: an old or wrong permalink was described as a filter problem.
+test("a permalink to an entry that isn't there says so, with a way back", async () => {
+  const db = await freshDb();
+  try {
+    const keyWrapper = localAesKeyWrapper(randomBytes(32));
+    const { alice } = await seed(db, keyWrapper);
+    for (const entry of ["999999", "abc"]) {
+      const view = await loaderFor(db, keyWrapper).load(alice.session, { entry });
+      assert.deepEqual(view.entries, [], `entry=${entry} lists nothing`);
+      assert.equal(view.singleEntry, true, `entry=${entry} is still a permalink`);
+      const shown = text(renderToStaticMarkup(<ActivityView {...view} />));
+      assert.match(shown, /We couldn(?:'|&#x27;)t find that activity entry/, `entry=${entry}: ${shown}`);
+      assert.ok(!shown.includes("No activity matches these filters"), "it is not described as a filter problem");
+      assert.match(renderToStaticMarkup(<ActivityView {...view} />), /<a [^>]*href="\/activity"[^>]*>Back to the timeline<\/a>/);
+    }
+  } finally {
+    await db.close();
+  }
+});
+
+// newcomer-02/05: a brand-new record shows only its empty state, with the next step.
+test("a first-run record shows only the empty state, offering to connect an agent when there is none", async () => {
+  const db = await freshDb();
+  try {
+    const keyWrapper = localAesKeyWrapper(randomBytes(32));
+    const lone = await makePerson(db, keyWrapper, "lone");
+    const view = await loaderFor(db, keyWrapper).load(lone.session, {});
+    assert.equal(view.hasAgents, false);
+    const html = renderToStaticMarkup(<ActivityView {...view} />);
+    assert.match(html, /href="\/agents\/connect"[^>]*>Connect your first agent/);
+    assert.ok(!html.includes('aria-label="Find activity"'), "no filter toolbar over an empty record");
+    assert.ok(html.includes("Check integrity"), "the record-wide check stays available");
+  } finally {
+    await db.close();
+  }
+});
+
+// The page is contained: the toolbar, every day and the page links are bounded surfaces.
+test("the timeline is one toolbar, a list-group panel per day and a closing page bar", async () => {
+  const db = await freshDb();
+  try {
+    const keyWrapper = localAesKeyWrapper(randomBytes(32));
+    const { alice } = await seed(db, keyWrapper);
+    const view = await loaderFor(db, keyWrapper).load(alice.session, {});
+    const html = renderToStaticMarkup(<ActivityView {...view} nextHref="/activity?before=1" />);
+    assert.equal((html.match(/class="wh-toolbar"/g) ?? []).length, 1, "one toolbar holds the views, quick filters, search and filters");
+    const toolbar = html.slice(html.indexOf('class="wh-toolbar"'), html.indexOf('class="wh-list-group"'));
+    for (const part of ['aria-label="Activity views"', 'aria-label="Quick filters"', 'name="q"', ">Filters"]) {
+      assert.ok(toolbar.includes(part), `the toolbar holds ${part}`);
+    }
+    assert.equal((html.match(/class="wh-list-group"/g) ?? []).length, 3, "one list-group panel per day (Today, Yesterday, Tue 10 Nov)");
+    assert.match(html, /<nav aria-label="Activity pages"><div class="wh-form-actions">/, "the page links sit in a bounded bar");
+    assert.ok(!html.includes("wh-card flex flex-col gap-3 rounded-card border"), "the search form is no longer its own card");
+  } finally {
+    await db.close();
+  }
+});
+
+test("an empty grouped view with nothing applied is a first run, not a filter problem", async () => {
+  const db = await freshDb();
+  try {
+    const keyWrapper = localAesKeyWrapper(randomBytes(32));
+    const lone = await makePerson(db, keyWrapper, "lone");
+    const view = await loaderFor(db, keyWrapper).load(lone.session, { view: "agents" });
+    assert.deepEqual(view.groups, []);
+    const shown = text(renderToStaticMarkup(<ActivityView {...view} />));
+    assert.ok(shown.includes("No activity yet"), shown);
+    assert.ok(shown.includes("Connect your first agent"));
+    assert.ok(!shown.includes("No activity matches these filters"));
+  } finally {
+    await db.close();
+  }
+});

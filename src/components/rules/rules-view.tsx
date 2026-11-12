@@ -1,16 +1,18 @@
 "use client";
 
 import * as React from "react";
-import { useFormStatus } from "react-dom";
-import { ArrowRight, Pause, Plus, Trash2 } from "lucide-react";
+import { ArrowRight, Bot, ListChecks, Pause, Plus, Trash2 } from "lucide-react";
 
-import { Button } from "@/components/ui/button";
-import { Field, Label } from "@/components/ui/field";
+import { buttonClasses } from "@/components/ui/button";
+import { ButtonLink } from "@/components/ui/button-link";
+import { Field, SelectField } from "@/components/ui/field";
 import { EmptyState } from "@/components/ui/empty";
-import { FormSubmit } from "@/components/ui/form-submit";
+import { ActionForm, FormSubmit, PendingFormFields } from "@/components/ui/form-submit";
 import { ActiveFilters, FilterLinks } from "@/components/ui/filter-links";
 import { ListGroup, LIST_ROW } from "@/components/ui/list-group";
+import { ListToolbar } from "@/components/ui/list-toolbar";
 import { ViewPanels } from "@/components/ui/view-tabs";
+import { WorkspacePanel } from "@/components/shell/workspace-surfaces";
 import {
   ruleSentence,
   type RuleKind,
@@ -41,6 +43,13 @@ import {
 //   • Budgets — links to each agent's real card-budget control (its workspace Spending
 //     section) and to the other places spending is limited or reviewed.
 //
+// Layout (the UI/UX pass): the page title, its purpose and the three tabs share one heading
+// band; the outcome notice follows it. The builder is one panel whose steps are divided by
+// rules, with the preview as an inset and "Add rule" in its footer. The status filter is a
+// bounded toolbar above the rule groups, and Budgets is panels too — no text on the canvas.
+// A specific tool or a service is CHOSEN from the real ones (the page passes them; the
+// server refuses any other name), never typed from memory.
+//
 // The rules store holds only the two rule kinds. Per-purchase caps and merchant lists are
 // expressed as card-request rules with an amount or merchant condition; there is no
 // separate per-purchase, merchant-list or approval-expiry setting, so none is offered.
@@ -65,6 +74,11 @@ export type RulesViewRule = {
 // scope choice posts); `workspaceId` is the agent's own id, for links to its workspace.
 export type RulesViewAgent = { id: string; name: string; workspaceId?: string };
 
+// One tool or service a rule may name: `value` is the exact name the engine matches (and
+// the form posts); `label` is its plain name. Grouped for the builder's <optgroup>s.
+export type RuleTargetChoice = { value: string; label: string };
+export type RuleTargetGroup = { label: string; choices: RuleTargetChoice[] };
+
 // A server action a rule form submits to (the page binds the real one; the view
 // renders a live control either way). Optional — an unbound control still renders.
 export type RuleFormAction = (formData: FormData) => void | Promise<void>;
@@ -84,10 +98,16 @@ export type RulesViewProps = {
   draft?: RuleDraft;
   // the person's currency label (e.g. "AUD").
   currency?: string;
+  // the real tools and services a new rule may name (the page loads them). Omitted in a
+  // prop-only render, where the choice lists are empty.
+  toolChoices?: ReadonlyArray<RuleTargetGroup>;
+  serviceChoices?: ReadonlyArray<RuleTargetGroup>;
   // the view to open (?view=); validated against the known keys, else the rules list.
   initialView?: string;
   // the status filter in force (?status=); omitted shows every rule.
   statusFilter?: RuleStatusFilter;
+  // the outcome of the last change (a PageNotice), shown under the heading band.
+  notice?: React.ReactNode;
   // the four rule server actions the page binds (create the new rule; update, pause
   // or delete an existing one). Optional so the view renders without a session.
   createAction?: RuleFormAction;
@@ -108,7 +128,7 @@ const DEFAULT_DRAFT: RuleDraft = {
 // The two templates the create form offers, in the brief's own plain words.
 const TEMPLATES: ReadonlyArray<{ value: RuleTemplate; label: string; description: string }> = [
   { value: "ask_first", label: "Ask me first", description: "Warthog checks with you before the agent goes ahead." },
-  { value: "never_allow", label: "Never allow", description: "Warthog stops it outright — no approval offered." },
+  { value: "never_allow", label: "Never allow", description: "Warthog stops it outright, with no approval offered." },
 ];
 
 // The brief's six action choices under a rule template.
@@ -118,7 +138,7 @@ const ACTIONS: ReadonlyArray<{ value: RuleAction["type"]; label: string }> = [
   { value: "service_tool", label: "Use any tool of a service" },
   { value: "any_change", label: "Make any change" },
   { value: "card_request", label: "Request a card" },
-  { value: "high_tier_request", label: "Request a high-tier identity detail" },
+  { value: "high_tier_request", label: "Ask for a protected detail" },
 ];
 
 // The message channels a send-message action can cover.
@@ -137,11 +157,6 @@ const CONDITIONS: ReadonlyArray<{ value: RuleCondition["type"] | "none"; label: 
   { value: "merchant_in", label: "When the merchant is in a list" },
   { value: "merchant_not_in", label: "When the merchant is not in a list" },
 ];
-
-// A native <select> on the design tokens, shared by the channel and condition
-// pickers (one source of visual truth — never a parallel style).
-const SELECT_CLASS =
-  "min-h-11 w-full rounded-card border border-line bg-surface px-3 text-sm text-fg focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-focus focus-visible:ring-offset-2 focus-visible:ring-offset-bg";
 
 // The current draft's starting value for the condition's detail field.
 function conditionValueText(condition: RuleCondition | undefined): string {
@@ -214,27 +229,29 @@ export function updateRuleBuilder(state: RuleBuilderState, event: RuleBuilderEve
     case "detail": return draft.condition ? { detail: event.value, draft: { ...draft, condition: conditionFromDetail(draft.condition.type, event.value) } } : state;
   }
 }
-export function isRuleBuilderComplete(state: RuleBuilderState): boolean {
+
+// The real names a rule may use, when the caller knows them: a tool or service outside
+// these lists can never complete the draft (the server refuses it too).
+export type RuleBuilderTargets = { tools?: ReadonlyArray<RuleTargetGroup>; services?: ReadonlyArray<RuleTargetGroup> };
+
+function offers(groups: ReadonlyArray<RuleTargetGroup> | undefined, value: string): boolean {
+  return groups === undefined || groups.some((group) => group.choices.some((choice) => choice.value === value));
+}
+
+export function isRuleBuilderComplete(state: RuleBuilderState, targets: RuleBuilderTargets = {}): boolean {
   const draft = state.draft;
-  if (draft.action.type === "specific_tool" && !draft.action.tool.trim()) return false;
-  if (draft.action.type === "service_tool" && !draft.action.service.trim()) return false;
+  if (draft.action.type === "specific_tool" && (!draft.action.tool.trim() || !offers(targets.tools, draft.action.tool))) return false;
+  if (draft.action.type === "service_tool" && (!draft.action.service.trim() || !offers(targets.services, draft.action.service))) return false;
   if (!draft.condition) return true;
   if (!state.detail.trim()) return false;
   if (draft.condition.type === "amount_over") return Number.isFinite(Number(state.detail)) && Number(state.detail) >= 0;
   if (draft.condition.type === "merchant_in" || draft.condition.type === "merchant_not_in") return draft.condition.merchants.length > 0;
   return true;
 }
-function PendingRuleFields({ children }: { children: React.ReactNode }) {
-  const { pending } = useFormStatus();
-  return <fieldset disabled={pending} className="contents">{children}</fieldset>;
-}
-function AddRuleButton({ complete }: { complete: boolean }) {
-  const { pending } = useFormStatus();
-  return <Button type="submit" variant="primary" disabled={!complete || pending}><Plus aria-hidden={true} className="h-4 w-4 shrink-0" />{pending ? "Adding rule…" : "Add rule"}</Button>;
-}
 
 // One choice in a radio group: a native, user-adjustable radio whose checked state
-// reflects the draft.
+// reflects the draft. Inside the builder panel it is the inset level: a bordered option
+// whose chosen state shows with a strong border and a muted fill, not colour alone.
 function Choice({
   name,
   value,
@@ -251,35 +268,50 @@ function Choice({
   onChange?: () => void;
 }) {
   return (
-    <label className="flex items-start gap-3 rounded-card border border-line bg-surface p-3">
+    <label className="flex min-h-11 cursor-pointer items-start gap-3 rounded-card border border-line bg-surface p-3 hover:bg-surface-muted has-[:checked]:border-line-strong has-[:checked]:bg-surface-muted">
       <input
         type="radio"
         name={name}
         value={value}
         checked={checked}
         onChange={onChange ?? (() => {})}
-        className="mt-1 h-4 w-4 shrink-0 accent-accent"
+        className="mt-0.5 h-4 w-4 shrink-0"
       />
       <span className="flex min-w-0 flex-col gap-0.5 [overflow-wrap:anywhere]">
-        <span className="font-medium text-fg">{label}</span>
+        <span className="text-sm font-medium text-fg">{label}</span>
         {description ? <span className="text-sm text-fg-muted">{description}</span> : null}
       </span>
     </label>
   );
 }
 
-function SectionHeading({ children }: { children: React.ReactNode }) {
-  return <h2 className="text-sm font-semibold text-fg">{children}</h2>;
+// One numbered step of the builder: a fieldset whose legend is the step's title, ruled off
+// from the step above.
+function Step({ legend, hint, children }: { legend: string; hint?: React.ReactNode; children: React.ReactNode }) {
+  return (
+    <fieldset className="flex min-w-0 flex-col gap-3 border-t border-line pt-5 first:border-t-0 first:pt-0">
+      <legend className="wh-group-title float-left w-full">{legend}</legend>
+      {hint ? <p className="clear-left max-w-prose text-sm text-fg-muted">{hint}</p> : null}
+      <div className="clear-left flex min-w-0 flex-col gap-3">{children}</div>
+    </fieldset>
+  );
 }
 
 // A text link with a full-height touch target.
 const LINK_CLASS =
-  "inline-flex min-h-11 w-fit items-center gap-1.5 text-sm font-medium text-fg underline underline-offset-4 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-focus focus-visible:ring-offset-2 focus-visible:ring-offset-bg";
+  "inline-flex min-h-11 w-fit items-center gap-1.5 text-sm font-medium text-fg underline underline-offset-4";
 
-// A <summary> that reads as a secondary button (the native disclosure stays keyboard
-// operable; the marker is hidden because the label says what opens).
-const SUMMARY_BUTTON_CLASS =
-  "inline-flex min-h-11 w-fit cursor-pointer list-none items-center gap-2 rounded-full border border-line bg-surface px-4 text-sm font-medium text-fg hover:bg-surface-muted focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-focus focus-visible:ring-offset-2 focus-visible:ring-offset-bg [&::-webkit-details-marker]:hidden";
+// A <summary> that reads as a button (the native disclosure stays keyboard operable; the
+// marker is hidden because the label says what opens).
+function summaryClass(variant: "secondary" | "danger"): string {
+  return buttonClasses({ variant, size: "sm", className: "w-fit list-none [&::-webkit-details-marker]:hidden" });
+}
+
+// A row form bound to its action when the page passes one (one guarded submission at a
+// time); a plain form in a prop-only render.
+function RowForm({ action, children }: { action?: RuleFormAction; children: React.ReactNode }) {
+  return action ? <ActionForm action={action}>{children}</ActionForm> : <form>{children}</form>;
+}
 
 // The status filter a row's Pause/Delete form returns to, so acting on a filtered list
 // lands back on it (the page validates the value again before redirecting).
@@ -298,41 +330,42 @@ function RuleRow({
   pauseAction?: RuleFormAction;
   deleteAction?: RuleFormAction;
 }) {
+  const sentenceId = React.useId();
   return (
     <li className={LIST_ROW}>
       <div className="flex min-w-0 flex-col gap-2">
-        <p className="text-fg">{rule.sentence}</p>
+        <p id={sentenceId} className="text-fg">{rule.sentence}</p>
         <div className="flex flex-wrap items-center gap-x-3 gap-y-1">
           <RuleKindBadge kind={rule.kind} />
           <RuleStatusLabel status={rule.status} />
         </div>
         <div className="flex flex-wrap items-start gap-2">
           {rule.status === "active" ? (
-            <form action={pauseAction}>
+            <RowForm action={pauseAction}>
               <input type="hidden" name="rule-id" value={rule.id} />
               <ReturnStatus status={statusFilter} />
-              <Button variant="secondary" type="submit">
+              <FormSubmit variant="secondary" size="sm" pendingLabel="Pausing…" aria-describedby={sentenceId}>
                 <Pause aria-hidden={true} className="h-4 w-4 shrink-0" />
                 Pause
-              </Button>
-            </form>
+              </FormSubmit>
+            </RowForm>
           ) : null}
           {/* Delete cannot be undone, so it asks first (the same native disclosure the
           life-admin records use) and then posts to the same delete handler. */}
           <details className="min-w-0 open:basis-full">
-            <summary className={SUMMARY_BUTTON_CLASS}>
+            <summary className={summaryClass("danger")} aria-describedby={sentenceId}>
               <Trash2 aria-hidden={true} className="h-4 w-4 shrink-0" />
               Delete
             </summary>
-            <div className="mt-2 flex flex-col gap-3 rounded-card border border-line bg-surface-muted p-3">
+            <div className="mt-2 flex flex-col gap-3 rounded-card bg-surface-muted p-4">
               <p className="text-sm text-fg">Delete this rule? Warthog stops applying it, and this cannot be undone.</p>
-              <form action={deleteAction}>
+              <RowForm action={deleteAction}>
                 <input type="hidden" name="rule-id" value={rule.id} />
                 <ReturnStatus status={statusFilter} />
-                <FormSubmit variant="secondary" preserveFocus pendingLabel="Deleting rule…">
+                <FormSubmit variant="danger-solid" size="sm" pendingLabel="Deleting rule…">
                   Delete rule
                 </FormSubmit>
-              </form>
+              </RowForm>
             </div>
           </details>
         </div>
@@ -341,7 +374,7 @@ function RuleRow({
   );
 }
 
-// "Your rules": the status filter, then the rules grouped by scope.
+// "Your rules": the status filter in one toolbar, then the rules grouped by scope.
 function RulesList({
   rules,
   agents,
@@ -358,8 +391,10 @@ function RulesList({
   if (rules.length === 0) {
     return (
       <EmptyState
+        icon={ListChecks}
         heading="No rules yet"
-        description="Rules tell Warthog when to ask you first and what to stop outright. Build your first one in the New rule tab."
+        description="Rules tell Warthog when to ask you first and what to stop outright. Build your first one in New rule."
+        action={<ButtonLink href="/rules?view=new" variant="primary">Create your first rule</ButtonLink>}
       />
     );
   }
@@ -368,34 +403,36 @@ function RulesList({
   const workspaceOf = new Map(agents.map((agent) => [agent.id, agent.workspaceId]));
   const allHref = rulesStatusHref(undefined);
   return (
-    <div className="flex flex-col gap-6">
-      <div className="flex flex-col gap-3">
-        <FilterLinks
-          label="Filter rules by status"
-          items={[
-            { label: "All", href: allHref, active: statusFilter === undefined, count: rules.length },
-            ...RULE_STATUS_FILTERS.map((status) => ({
-              label: RULE_STATUS_LABELS[status],
-              href: rulesStatusHref(status),
-              active: statusFilter === status,
-              count: rules.filter((rule) => rule.status === status).length,
-            })),
-          ]}
-        />
-        <ActiveFilters
-          clearHref={allHref}
-          filters={statusFilter ? [{ label: `Status: ${RULE_STATUS_LABELS[statusFilter]}`, removeHref: allHref }] : []}
-        />
-      </div>
+    <>
+      <ListToolbar
+        label="Find rules"
+        filters={
+          <FilterLinks
+            label="Filter rules by status"
+            variant="chips"
+            items={[
+              { label: "All", href: allHref, active: statusFilter === undefined, count: rules.length },
+              ...RULE_STATUS_FILTERS.map((status) => ({
+                label: RULE_STATUS_LABELS[status],
+                href: rulesStatusHref(status),
+                active: statusFilter === status,
+                count: rules.filter((rule) => rule.status === status).length,
+              })),
+            ]}
+          />
+        }
+        applied={
+          <ActiveFilters
+            clearHref={allHref}
+            filters={statusFilter ? [{ label: `Status: ${RULE_STATUS_LABELS[statusFilter]}`, removeHref: allHref }] : []}
+          />
+        }
+      />
       {groups.length === 0 && statusFilter ? (
         <EmptyState
           heading={`No ${RULE_STATUS_LABELS[statusFilter].toLowerCase()} rules`}
           description="None of your rules match this filter."
-          action={
-            <a href={allHref} className={LINK_CLASS}>
-              Show all rules
-            </a>
-          }
+          action={<ButtonLink href={allHref}>Show all rules</ButtonLink>}
         />
       ) : (
         groups.map((group, index) => {
@@ -430,7 +467,7 @@ function RulesList({
           );
         })
       )}
-    </div>
+    </>
   );
 }
 
@@ -438,7 +475,7 @@ function RulesList({
 // settings; caps and merchant lists are card-request rules built in New rule.
 function BudgetsPanel({ agents }: { agents: ReadonlyArray<RulesViewAgent> }) {
   return (
-    <div className="flex flex-col gap-6">
+    <>
       {agents.length > 0 ? (
         <ListGroup
           id="rules-budgets"
@@ -460,16 +497,15 @@ function BudgetsPanel({ agents }: { agents: ReadonlyArray<RulesViewAgent> }) {
           ))}
         </ListGroup>
       ) : (
-        <section aria-labelledby="rules-budgets-heading" className="flex flex-col gap-1">
-          <h2 id="rules-budgets-heading" className="text-lg font-semibold text-fg">Card budgets</h2>
-          <p className="text-sm text-fg-muted">
-            Each agent gets its own card budget. No agents are connected yet.{" "}
-            <a href="/agents/connect" className="font-medium text-fg underline underline-offset-4">
-              Connect an agent
-            </a>
-            .
-          </p>
-        </section>
+        <WorkspacePanel title="Card budgets" description="Each agent gets its own card budget per day, week or month.">
+          <EmptyState
+            variant="inline"
+            icon={Bot}
+            heading="No agents connected yet."
+            description="Connect an agent, then set its card budget in its Spending section."
+            action={<ButtonLink href="/agents/connect" variant="primary" size="sm">Connect your first agent</ButtonLink>}
+          />
+        </WorkspacePanel>
       )}
       <ListGroup id="rules-other-limits" title="Other limits">
         <li className={LIST_ROW}>
@@ -493,7 +529,48 @@ function BudgetsPanel({ agents }: { agents: ReadonlyArray<RulesViewAgent> }) {
           </a>
         </li>
       </ListGroup>
-    </div>
+    </>
+  );
+}
+
+// The tool or service a rule names, chosen from the real ones (grouped), never typed.
+function TargetField({
+  kind,
+  value,
+  groups,
+  onChange,
+}: {
+  kind: "specific_tool" | "service_tool";
+  value: string;
+  groups: ReadonlyArray<RuleTargetGroup>;
+  onChange: (value: string) => void;
+}) {
+  const known = groups.some((group) => group.choices.some((choice) => choice.value === value));
+  return (
+    <SelectField
+      label={kind === "specific_tool" ? "Tool" : "Service"}
+      name="rule-target"
+      value={known ? value : ""}
+      required
+      width="text"
+      hint={
+        kind === "specific_tool"
+          ? "Warthog's own tools, and the tools of services you've connected."
+          : "Covers every tool the service has, including any it adds later."
+      }
+      onChange={(event) => onChange(event.target.value)}
+    >
+      <option value="">{kind === "specific_tool" ? "Choose a tool" : "Choose a service"}</option>
+      {groups.map((group) => (
+        <optgroup key={group.label} label={group.label}>
+          {group.choices.map((choice) => (
+            <option key={choice.value} value={choice.value}>
+              {choice.label}
+            </option>
+          ))}
+        </optgroup>
+      ))}
+    </SelectField>
   );
 }
 
@@ -502,184 +579,214 @@ export function RulesView({
   agents,
   draft: initialDraft = DEFAULT_DRAFT,
   currency = "AUD",
+  toolChoices,
+  serviceChoices,
   initialView,
   statusFilter,
+  notice,
   createAction,
   pauseAction,
   deleteAction,
 }: RulesViewProps) {
   const [builder, dispatch] = React.useReducer(updateRuleBuilder, initialDraft, createRuleBuilderState);
   const draft = builder.draft;
-  const complete = isRuleBuilderComplete(builder);
+  const complete = isRuleBuilderComplete(builder, { tools: toolChoices ?? [], services: serviceChoices ?? [] });
+  const incompleteId = React.useId();
 
-  // Create form: build a rule from a template, previewed as a sentence before saving.
-  const newRule = (
-    <form action={createAction} className="flex flex-col gap-6">
-      <PendingRuleFields>
-        <p className="text-sm text-fg-muted">Amount conditions use your account currency ({currency}).</p>
+  // Create form: build a rule from a template, previewed as a sentence before saving. One
+  // panel; each step is ruled off from the last, and "Add rule" closes it in the footer.
+  const panel = (
+    <WorkspacePanel
+      title="New rule"
+      description={`Build a rule from a template and check the sentence before you add it. Amount conditions use your account currency (${currency}).`}
+      footer={
+        <>
+          <FormSubmit pendingLabel="Adding rule…" disabled={!complete} aria-describedby={complete ? undefined : incompleteId}>
+            <Plus aria-hidden={true} className="h-4 w-4 shrink-0" />
+            Add rule
+          </FormSubmit>
+          {complete ? null : <span id={incompleteId}>Finish the steps above to add this rule.</span>}
+        </>
+      }
+    >
+      <PendingFormFields>
+        <div className="flex min-w-0 flex-col gap-5">
+          <Step legend="Choose a template">
+            <div className="grid min-w-0 gap-2 sm:grid-cols-2">
+              {TEMPLATES.map((t) => (
+                <Choice
+                  key={t.value}
+                  name="rule-template"
+                  value={t.value}
+                  checked={draft.template === t.value}
+                  onChange={() => dispatch({ type: "template", template: t.value })}
+                  label={t.label}
+                  description={t.description}
+                />
+              ))}
+            </div>
+          </Step>
 
-        <fieldset className="flex min-w-0 flex-col gap-2">
-          <legend className="pb-2 text-sm font-medium text-fg">Choose a template</legend>
-          <div className="flex flex-col gap-2">
-            {TEMPLATES.map((t) => (
-              <Choice
-                key={t.value}
-                name="rule-template"
-                value={t.value}
-                checked={draft.template === t.value}
-                onChange={() => dispatch({ type: "template", template: t.value })}
-                label={t.label}
-                description={t.description}
+          {/* The brief's six action choices, then the channel or the tool/service it names. */}
+          <Step
+            legend="What the agent is doing"
+            hint="Some tools don't say who they message or how much they spend. When Warthog can't tell, your rule applies anyway, so a few more requests may be held or blocked."
+          >
+            <div className="grid min-w-0 gap-2 sm:grid-cols-2">
+              {ACTIONS.map((a) => (
+                <Choice
+                  key={a.value}
+                  name="rule-action"
+                  value={a.value}
+                  checked={draft.action.type === a.value}
+                  onChange={() => dispatch({ type: "action", action: a.value })}
+                  label={a.label}
+                />
+              ))}
+            </div>
+            {draft.action.type === "send_message" ? (
+              <SelectField
+                label="Message channel"
+                id="rule-channel-field"
+                name="rule-channel"
+                value={draft.action.channel}
+                width="short"
+                onChange={(event) => dispatch({ type: "channel", channel: event.target.value as MessageChannel })}
+              >
+                {CHANNELS.map((c) => (
+                  <option key={c.value} value={c.value}>
+                    {c.label}
+                  </option>
+                ))}
+              </SelectField>
+            ) : null}
+            {draft.action.type === "specific_tool" || draft.action.type === "service_tool" ? (
+              <TargetField
+                kind={draft.action.type}
+                value={draft.action.type === "specific_tool" ? draft.action.tool : draft.action.service}
+                groups={(draft.action.type === "specific_tool" ? toolChoices : serviceChoices) ?? []}
+                onChange={(value) => dispatch({ type: "target", value })}
               />
-            ))}
-          </div>
-        </fieldset>
+            ) : null}
+          </Step>
 
-        {/* The brief's six action choices. */}
-        <fieldset className="flex min-w-0 flex-col gap-2">
-          <legend className="pb-2 text-sm font-medium text-fg">What the agent is doing</legend>
-          <p className="text-sm text-fg-muted">Rules govern requests through Warthog. If a tool cannot identify its message type, recipient or amount, an applicable restriction also applies to that uncertain change. This can block or hold more actions than a tool with verified details.</p>
-          <div className="flex flex-col gap-2">
-            {ACTIONS.map((a) => (
-              <Choice
-                key={a.value}
-                name="rule-action"
-                value={a.value}
-                checked={draft.action.type === a.value}
-                onChange={() => dispatch({ type: "action", action: a.value })}
-                label={a.label}
-              />
-            ))}
-          </div>
-        </fieldset>
-
-        {/* A message channel, or the tool/service name the action names. */}
-        {draft.action.type === "send_message" ? (
-          <div className="flex flex-col gap-1.5">
-            <Label htmlFor="rule-channel-field">Message channel</Label>
-            <select
-              id="rule-channel-field"
-              name="rule-channel"
-              value={draft.action.channel}
-              onChange={(event) => dispatch({ type: "channel", channel: event.target.value as MessageChannel })}
-              className={SELECT_CLASS}
+          {/* When the rule applies. */}
+          <Step legend="When it applies">
+            <SelectField
+              label="Condition"
+              name="rule-condition"
+              value={draft.condition?.type ?? "none"}
+              width="text"
+              onChange={(event) => dispatch({ type: "condition", condition: event.target.value as RuleCondition["type"] | "none" })}
             >
-              {CHANNELS.map((c) => (
+              {CONDITIONS.map((c) => (
                 <option key={c.value} value={c.value}>
                   {c.label}
                 </option>
               ))}
-            </select>
-          </div>
-        ) : null}
-
-        {draft.action.type === "specific_tool" || draft.action.type === "service_tool" ? (
-          <Field
-            label={draft.action.type === "specific_tool" ? "Tool name" : "Service name"}
-            name="rule-target"
-            value={draft.action.type === "specific_tool" ? draft.action.tool : draft.action.service}
-            required
-            onChange={(event) => dispatch({ type: "target", value: event.target.value })}
-          />
-        ) : null}
-
-        {/* When the rule applies. */}
-        <fieldset className="flex min-w-0 flex-col gap-2">
-          <legend className="pb-2 text-sm font-medium text-fg">When it applies</legend>
-          <select
-            name="rule-condition"
-            aria-label="When it applies"
-            value={draft.condition?.type ?? "none"}
-            onChange={(event) => dispatch({ type: "condition", condition: event.target.value as RuleCondition["type"] | "none" })}
-            className={SELECT_CLASS}
-          >
-            {CONDITIONS.map((c) => (
-              <option key={c.value} value={c.value}>
-                {c.label}
-              </option>
-            ))}
-          </select>
-          {draft.condition ? (
-            <Field
-              label={draft.condition.type === "amount_over" ? `Amount (${currency})` : "Condition detail"}
-              name="rule-condition-detail"
-              value={builder.detail}
-              type={draft.condition.type === "amount_over" ? "number" : "text"}
-              min={draft.condition.type === "amount_over" ? 0 : undefined}
-              step={draft.condition.type === "amount_over" ? "any" : undefined}
-              required
-              onChange={(event) => dispatch({ type: "detail", value: event.target.value })}
-            />
-          ) : null}
-        </fieldset>
-
-        {/* Scope — all agents or a chosen agent. */}
-        <fieldset className="flex min-w-0 flex-col gap-2">
-          <legend className="pb-2 text-sm font-medium text-fg">Which agents</legend>
-          <div className="flex flex-col gap-2">
-            <Choice
-              name="rule-scope"
-              value="any_agent"
-              checked={draft.scope.type === "any_agent"}
-              onChange={() => dispatch({ type: "scope", scope: { type: "any_agent" } })}
-              label="All agents"
-            />
-            {agents.map((agent) => (
-              <Choice
-                key={agent.id}
-                name="rule-scope"
-                value={agent.id}
-                checked={draft.scope.type === "agent" && draft.scope.agentId === agent.id}
-                onChange={() => dispatch({ type: "scope", scope: { type: "agent", agentId: agent.id, name: agent.name } })}
-                label={agent.name}
+            </SelectField>
+            {draft.condition ? (
+              <Field
+                label={draft.condition.type === "amount_over" ? `Amount (${currency})` : "Condition detail"}
+                name="rule-condition-detail"
+                value={builder.detail}
+                type={draft.condition.type === "amount_over" ? "number" : "text"}
+                inputMode={draft.condition.type === "amount_over" ? "decimal" : undefined}
+                min={draft.condition.type === "amount_over" ? 0 : undefined}
+                step={draft.condition.type === "amount_over" ? "any" : undefined}
+                hint={
+                  draft.condition.type === "merchant_in" || draft.condition.type === "merchant_not_in"
+                    ? "Separate merchants with commas."
+                    : undefined
+                }
+                required
+                width={draft.condition.type === "amount_over" ? "short" : "text"}
+                onChange={(event) => dispatch({ type: "detail", value: event.target.value })}
               />
-            ))}
+            ) : null}
+          </Step>
+
+          {/* Scope — all agents or a chosen agent. */}
+          <Step legend="Which agents">
+            <div className="grid min-w-0 gap-2 sm:grid-cols-2">
+              <Choice
+                name="rule-scope"
+                value="any_agent"
+                checked={draft.scope.type === "any_agent"}
+                onChange={() => dispatch({ type: "scope", scope: { type: "any_agent" } })}
+                label="All agents"
+                description="Including any you connect later."
+              />
+              {agents.map((agent) => (
+                <Choice
+                  key={agent.id}
+                  name="rule-scope"
+                  value={agent.id}
+                  checked={draft.scope.type === "agent" && draft.scope.agentId === agent.id}
+                  onChange={() => dispatch({ type: "scope", scope: { type: "agent", agentId: agent.id, name: agent.name } })}
+                  label={agent.name}
+                />
+              ))}
+            </div>
+          </Step>
+
+          {/* The preview — the exact sentence this rule reads back as, before saving. */}
+          <div className="flex flex-col gap-1.5 rounded-card bg-surface-muted p-4">
+            <p className="text-sm font-semibold text-fg">Preview</p>
+            <p className="text-fg" aria-live="polite">
+              {complete ? previewSentence(draft) : "Complete the action and condition details to preview your rule."}
+            </p>
           </div>
-        </fieldset>
-
-        {/* The preview — the exact sentence this rule reads back as, before saving. */}
-        <div className="flex flex-col gap-1.5 rounded-card border border-line bg-surface-muted p-3">
-          <SectionHeading>Preview</SectionHeading>
-          <p className="text-fg" aria-live="polite">{complete ? previewSentence(draft) : "Complete the action and condition details to preview your rule."}</p>
         </div>
-
-        {/* The one accent action: add the new rule. */}
-        <AddRuleButton complete={complete} />
-      </PendingRuleFields>
-    </form>
+      </PendingFormFields>
+    </WorkspacePanel>
+  );
+  const newRule = createAction ? (
+    <ActionForm action={createAction}>{panel}</ActionForm>
+  ) : (
+    <form onSubmit={(event) => event.preventDefault()}>{panel}</form>
   );
 
+  // The outcome of the last change sits first in the view the change returned to.
+  const opening = initialView === "new" || initialView === "budgets" ? initialView : "rules";
+  const withNotice = (key: string, content: React.ReactNode) =>
+    notice && key === opening ? (
+      <>
+        {notice}
+        {content}
+      </>
+    ) : (
+      content
+    );
+
   return (
-    <section className="flex flex-col gap-6">
-      <header className="flex flex-col gap-1">
-        <h1 className="text-2xl font-semibold tracking-tight text-fg">Rules &amp; budgets</h1>
-        <p className="text-sm text-fg-muted">
-          Rules decide when Warthog asks you first and what it never allows. Rules for all agents apply to every agent; an agent&rsquo;s own rules add to them.
-        </p>
-      </header>
-      <ViewPanels
-        label="Rules and budgets"
-        initialTab={initialView}
-        defaultTab="rules"
-        tabs={[
-          {
-            key: "rules",
-            label: `Your rules (${rules.length})`,
-            content: (
-              <RulesList
-                rules={rules}
-                agents={agents}
-                statusFilter={statusFilter}
-                pauseAction={pauseAction}
-                deleteAction={deleteAction}
-              />
-            ),
-          },
-          { key: "new", label: "New rule", content: newRule },
-          { key: "budgets", label: "Budgets", content: <BudgetsPanel agents={agents} /> },
-        ]}
-      />
-    </section>
+    <ViewPanels
+      label="Rules and budgets"
+      initialTab={initialView}
+      defaultTab="rules"
+      heading={{
+        title: "Rules & budgets",
+        description: "Rules decide when Warthog asks you first and what it never allows. Rules for all agents apply to every agent; an agent's own rules add to them.",
+      }}
+      tabs={[
+        {
+          key: "rules",
+          label: `Your rules (${rules.length})`,
+          content: withNotice(
+            "rules",
+            <RulesList
+              rules={rules}
+              agents={agents}
+              statusFilter={statusFilter}
+              pauseAction={pauseAction}
+              deleteAction={deleteAction}
+            />,
+          ),
+        },
+        { key: "new", label: "New rule", content: withNotice("new", newRule) },
+        { key: "budgets", label: "Budgets", content: withNotice("budgets", <BudgetsPanel agents={agents} />) },
+      ]}
+    />
   );
 }
 

@@ -336,6 +336,32 @@ test("malformed arguments JSON is reported as an error (never fail silently)", a
 // The controller starts clean and makes no request on construction.
 // ═══════════════════════════════════════════════════════════════════════════════════════
 
+test("a second Send while a call is in flight sends nothing more, and the old response is cleared meanwhile", async () => {
+  const ctx = setup();
+  ctx.console.setTool(TOOL);
+  await ctx.console.callTool();
+  assert.ok(ctx.console.getState().response, "the first call's response is shown");
+  let release!: () => void;
+  ctx.respondWith(() => jsonResponse(200, { jsonrpc: "2.0", id: 2, result: { content: [] } }));
+  const gate = new Promise<void>((resolve) => { release = resolve; });
+  const slowFetch = ctx.fetchImpl;
+  const slow = createAgentConsole({
+    fetch: (async (input: RequestInfo | URL, init?: RequestInit) => { await gate; return slowFetch(input, init); }) as typeof fetch,
+    accessKey: ACCESS_KEY,
+    endpoint: ENDPOINT,
+  });
+  slow.setTool(TOOL);
+  const before = ctx.calls.length;
+  const first = slow.callTool();
+  assert.equal(slow.getState().working, true, "the console says a call is in flight");
+  assert.equal(slow.getState().response, undefined, "no stale response is shown while it runs");
+  const second = slow.callTool();
+  release();
+  await Promise.all([first, second]);
+  assert.equal(ctx.calls.length - before, 1, "a double Send posts exactly once");
+  assert.equal(slow.getState().working, false);
+});
+
 test("a fresh console makes no request and shows no response or error", () => {
   const ctx = setup();
   const s = ctx.console.getState();

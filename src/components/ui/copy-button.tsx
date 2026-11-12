@@ -4,7 +4,7 @@ import * as React from "react";
 import { AlertTriangle, Check, Copy } from "lucide-react";
 
 import { Button } from "./button";
-import { Toast } from "./toast";
+import { Toast, type ToastDismissReason } from "./toast";
 
 type CopyState = "idle" | "copying" | "copied" | "failed";
 
@@ -36,12 +36,28 @@ export function createCopyController({ writeText, onChange }: CopyDeps) {
   };
 }
 
+export const DEFAULT_COPY_MESSAGE = "Copied to clipboard.";
+// A routine "Copied" confirmation clears itself; the button keeps saying "Copied".
+export const COPY_TOAST_DURATION = 4000;
+
+/** How long the copy toast stays: a routine confirmation expires; a custom message (which
+ * may carry an instruction, such as clearing the clipboard) stays until dismissed. */
+export function copyToastDuration(successMessage: string | undefined, dismissAfter: number | null | undefined): number | null {
+  if (dismissAfter !== undefined) return dismissAfter;
+  return successMessage === undefined || successMessage === DEFAULT_COPY_MESSAGE ? COPY_TOAST_DURATION : null;
+}
+
 export type CopyButtonProps = {
   value: string;
   successMessage?: string;
+  // What is being copied, for the accessible name ("Warthog address" → "Copy Warthog
+  // address"). The visible label stays "Copy". Never the value itself.
+  label?: string;
+  // Override the toast's lifetime in ms (null keeps it until dismissed).
+  dismissAfter?: number | null;
 };
 
-export function CopyButton({ value, successMessage = "Copied to clipboard." }: CopyButtonProps) {
+export function CopyButton({ value, successMessage, label, dismissAfter }: CopyButtonProps) {
   const [, redraw] = React.useReducer((n: number) => n + 1, 0);
   const button = React.useRef<HTMLButtonElement>(null);
   const errorId = React.useId();
@@ -54,22 +70,32 @@ export function CopyButton({ value, successMessage = "Copied to clipboard." }: C
   }));
   React.useEffect(() => { copy.dismiss(); }, [copy, value]);
   const state = copy.getState();
+  const message = successMessage ?? DEFAULT_COPY_MESSAGE;
+  // An expired toast hides while the button keeps saying "Copied"; the next copy shows it again.
+  const [toastExpired, setToastExpired] = React.useState(false);
   return <div className="flex min-w-0 shrink-0 flex-col gap-2 sm:max-w-56">
     <Button ref={button} variant="secondary" aria-disabled={state === "copying" || undefined}
-      className="aria-disabled:cursor-wait aria-disabled:opacity-50"
       aria-busy={state === "copying" || undefined}
       aria-describedby={state === "failed" ? errorId : undefined}
-      onClick={() => { void copy.copy(value); }}>
+      onClick={() => { setToastExpired(false); void copy.copy(value); }}>
       {state === "copied" ? <Check aria-hidden={true} className="h-4 w-4 shrink-0" /> : <Copy aria-hidden={true} className="h-4 w-4 shrink-0" />}
       {state === "copying" ? "Copying…" : state === "copied" ? "Copied" : "Copy"}
+      {label ? <span className="sr-only"> {label}</span> : null}
     </Button>
     {state === "failed" ? <p id={errorId} role="alert" className="flex items-start gap-2 text-sm text-danger">
       <AlertTriangle aria-hidden={true} className="mt-0.5 h-4 w-4 shrink-0" />
       <span className="min-w-0 break-words">Couldn’t copy. Select the value and copy it manually.</span>
     </p> : null}
-    <Toast message={state === "copied" ? successMessage : null} onDismiss={() => {
-      copy.dismiss();
-      button.current?.focus();
-    }} />
+    <Toast
+      message={state === "copied" && !toastExpired ? message : null}
+      dismissAfter={copyToastDuration(successMessage, dismissAfter)}
+      onDismiss={(reason: ToastDismissReason) => {
+        // The "Copied" state stays on the button after the toast clears itself; an explicit
+        // dismissal resets it, and returns focus to Copy only when the × had it.
+        if (reason === "timeout") { setToastExpired(true); return; }
+        copy.dismiss();
+        if (reason === "button") button.current?.focus();
+      }}
+    />
   </div>;
 }

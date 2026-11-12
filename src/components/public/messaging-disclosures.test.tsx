@@ -7,7 +7,8 @@ import { Privacy } from "./privacy";
 import { NotificationsView } from "../settings/notifications-view";
 
 test("both SMS choices show program disclosures and separate public policy links; alerts start off", () => {
-  const html = renderToStaticMarkup(<NotificationsView devices={[]} numbers={[]} />);
+  // With an SMS destination enabled (with none, the SMS choices aren't offered at all).
+  const html = renderToStaticMarkup(<NotificationsView devices={[]} numbers={[]} smsCountries={["AU"]} />);
   assert.equal((html.match(/href="\/terms"/g) ?? []).length, 2);
   assert.equal((html.match(/href="\/privacy"/g) ?? []).length, 2);
   assert.match(html, /HELP/);
@@ -22,7 +23,7 @@ test("both SMS choices show program disclosures and separate public policy links
 test("public Terms and privacy identify the operator and support route without claiming global SMS coverage", () => {
   for (const component of [<Terms key="terms" />, <Privacy key="privacy" />]) {
     const html = renderToStaticMarkup(component);
-    assert.match(html, /RPR technologies pty ltd/);
+    assert.match(html, /RPR Technologies Pty Ltd/);
     assert.match(html, /mailto:oren@nava-co.com/);
     assert.match(html, /href="\/(privacy|terms)"/);
   }

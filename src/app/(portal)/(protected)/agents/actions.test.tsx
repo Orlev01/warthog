@@ -505,6 +505,21 @@ test("disconnect disconnects the session user's own agent (wired through to the 
   }
 });
 
+test("disconnecting an agent that is already disconnected says so, instead of reporting a fresh success", async () => {
+  const db = await freshDb();
+  try {
+    const userId = await makeUser(db, "twice-disc");
+    const agent = await seedAgent(db, userId, { displayName: "WombatPlanner" });
+    const actions = makeActions(db);
+    assert.equal((await actions.disconnect(sessionFor(userId), agent.id)).ok, true);
+    const again = await actions.disconnect(sessionFor(userId), agent.id);
+    assert.deepEqual(again, { ok: false, reason: "not_connected" });
+    assert.equal((await getAgentById(db, userId, agent.id))?.status, "disconnected");
+  } finally {
+    await db.close();
+  }
+});
+
 // =====================================================================================
 // AC3 — a person cannot disconnect another person's agent by id (member-scoped); the
 // other person's agent is left wholly connected.

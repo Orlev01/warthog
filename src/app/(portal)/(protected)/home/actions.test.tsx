@@ -47,8 +47,8 @@
 //
 // ─── Acceptance criteria → tests ────────────────────────────────────────────────────
 //   AC2  a signed-in GET /home returns 200 showing the person's name and the five
-//        set-up checklist item titles (Get notified, About you, Add a card, Connect a
-//        service, Connect an agent) — the loader's props, and the <DashboardView> the
+//        set-up checklist item titles (Connect an agent, Connect a service, Add your
+//        details, Get notified, Add a card) — the loader's props, and the <DashboardView> the
 //        page mounts over them, carry exactly that.
 //   AC1 / AC3 [obligation:admin-auth-required]  an unauthenticated GET /home redirects
 //        to /signin, and more generally an unauthenticated request to any admin route
@@ -90,11 +90,11 @@ const clock: Clock = fixedClock(T0);
 
 // The five set-up checklist titles the acceptance criterion names, verbatim.
 const SET_UP_TITLES = [
-  "Get notified",
-  "About you",
-  "Add a card",
-  "Connect a service",
   "Connect an agent",
+  "Connect a service",
+  "Add your details",
+  "Get notified",
+  "Add a card",
 ] as const;
 
 // --- the view model the loader returns -----------------------------------------

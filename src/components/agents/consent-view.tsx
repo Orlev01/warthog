@@ -33,7 +33,7 @@ function ConsentButtons({ live, canRefuse, pending, ready, decision }: { live: b
       {pending && decision === "approve" ? "Connecting…" : "Approve connection"}<ArrowRight size={16} aria-hidden="true" />
     </Button>
     <Button type={canRefuse ? "submit" : "button"} data-decision="refuse" formNoValidate={canRefuse} disabled={live && !ready} variant="secondary" aria-disabled={pending || undefined} aria-busy={pending && decision === "refuse"} onClick={e => { if (pending) e.preventDefault(); }}>
-      {pending && decision === "refuse" ? "Refusing…" : "Refuse"}
+      {pending && decision === "refuse" ? "Denying…" : "Deny"}
     </Button>
   </div>;
 }
@@ -72,11 +72,14 @@ export function ConsentView({ platform, defaultName, requestedScopes, services =
     });
   }
 
+  // An unrecognised callback is named by its host only in the destination inset; the title
+  // and labels speak of "this agent" rather than echoing a hostname (public-20).
+  const named = redirect.verified;
   const content = <div className="wh-connection-flow">
     <header className="wh-connection-intro">
       <span className="wh-connection-mark"><Bot size={24} strokeWidth={1.5} aria-hidden="true" /></span>
       <p className="wh-connection-eyebrow">Agent connection</p>
-      <h1>Connect {platform}</h1>
+      <h1>{named ? `Connect ${platform}` : "Connect an agent"}</h1>
       <p>You’re giving this agent a way to use information and services in Warthog. Choose its access before you connect.</p>
     </header>
     <fieldset className="contents" disabled={pending || (!!approveAction && !ready)}>
@@ -86,22 +89,24 @@ export function ConsentView({ platform, defaultName, requestedScopes, services =
           <div><span>Connecting back to</span><strong>{redirect.host}</strong></div>
           <span className={redirect.verified ? "text-success" : "text-warning"}>{redirect.verified ? <ShieldCheck size={16} aria-hidden="true" /> : <AlertTriangle size={16} aria-hidden="true" />}{redirect.verified ? "Verified platform" : "Unrecognised platform"}</span>
         </div>
-        <p className="text-sm text-fg-muted">{redirect.verified ? "The return address matches a platform Warthog recognises. This badge does not verify the agent’s behaviour or the safety of a request." : "We do not recognise this platform. Check the full address and only continue if you started this connection and trust its destination."}</p>
+        <p className="wh-connection-help">{redirect.verified ? "The return address matches a platform Warthog recognises. This badge does not verify the agent’s behaviour or the safety of a request." : "We do not recognise this platform. Check the full address and only continue if you started this connection and trust its destination."}</p>
         <div className="wh-connection-name"><Field label="Agent name" name="name" defaultValue={defaultName ?? platform} placeholder="For example, Claude · research" required maxLength={200} aria-describedby={`${id}-name-help`} /></div>
-        <p id={`${id}-name-help`} className="text-sm text-fg-muted">This name appears in your agent list, approval requests and activity. It does not rename your account on {platform}.</p>
-        <PermissionHelp label={`What ${platform} is asking for`}><ul className="list-disc pl-5">{requestedScopes.map((scope, i) => <li key={i}>{scope}</li>)}</ul><p className="mt-2">The choices below apply to this connection. They do not connect other agents or give it access to everything in your account.</p></PermissionHelp>
+        <p id={`${id}-name-help`} className="wh-connection-name-help">This name appears in your agent list, approval requests and activity. It does not rename your account on {named ? platform : "that platform"}.</p>
+        <PermissionHelp label={named ? `What ${platform} is asking for` : "What this agent is asking for"}><ul className="list-disc pl-5">{requestedScopes.map((scope, i) => <li key={i}>{scope}</li>)}</ul><p className="mt-2">The choices below apply to this connection. They do not connect other agents or give it access to everything in your account.</p></PermissionHelp>
       </section>
       <ConnectionPermissions template={startingSet} state={state} services={services} onTemplate={choose} onChange={edit} currency={currency} />
       <section className="wh-connection-section wh-connection-review" aria-labelledby={`${id}-review`}>
         <div className="wh-connection-section-heading"><span>03</span><div><h2 id={`${id}-review`}>Review before you connect</h2><p>Your current choices — {startingSet === "custom" ? "Custom" : startingSet === "minimal" ? "Minimal" : "Standard"}.</p></div></div>
         <ConnectionAccessSummary state={state} services={services} currency={currency} />
-        <p className="wh-connection-boundary">Your global rules still apply. These permissions cover requests through Warthog, not the platform’s separate tools or activity.</p>
-        <PermissionHelp label="What happens after I approve?">Warthog creates a separate agent connection and returns you to {redirect.host} to finish setup. You can change its permissions or disconnect it in Agents. Disconnecting stops future Warthog access; it cannot recall information already received. Refusing creates no connection.</PermissionHelp>
+        <p className="wh-connection-boundary">Your rules for all agents still apply. Warthog controls only what an agent does through Warthog, not its own tools or chats.</p>
+        <PermissionHelp label="What happens after I approve?">Warthog creates a separate agent connection and returns you to {redirect.host} to finish setup. You can change its permissions or disconnect it in Agents. Disconnecting stops future Warthog access; it cannot recall information already received. Denying creates no connection.</PermissionHelp>
       </section>
     </fieldset>
     {error ? <Notice tone="error">{error}</Notice> : null}
-    <ConsentButtons live={!!approveAction} canRefuse={!!refuseAction} pending={pending} ready={ready} decision={decision} />
-    <p className="wh-connection-footer">Only approve a connection you started and recognise.</p>
+    <div className="wh-connection-actionbar">
+      <ConsentButtons live={!!approveAction} canRefuse={!!refuseAction} pending={pending} ready={ready} decision={decision} />
+      <p className="wh-connection-footer">Only approve a connection you started and recognise.</p>
+    </div>
   </div>;
   // Event-driven submission avoids React's successful-action form reset on a
   // handled validation error. Capture FormData before freezing fields; keep the

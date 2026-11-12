@@ -533,7 +533,8 @@ test("the Renewals & appointments tab renders each renewal's fields", () => {
 test("the Receipts & warranties tab renders a receipt's fields including its return-by and warranty-end dates", () => {
   // Rendered alone so each value can only come from REC_A.
   const text = visibleText(renderReceipts([REC_A]));
-  for (const value of ["Dyson cordless vacuum", "Good Guys", "2026-12-20", "2029-11-30"]) {
+  // Dates read as "20 Dec 2026" (record-format.ts), never as the stored ISO value.
+  for (const value of ["Dyson cordless vacuum", "Good Guys", "20 Dec 2026", "30 Nov 2029"]) {
     assert.ok(text.includes(value), `a receipt field "${value}" must render; text="${text}"`);
   }
   // The two dates are identifiable as return-by and warranty-end (not two bare dates).

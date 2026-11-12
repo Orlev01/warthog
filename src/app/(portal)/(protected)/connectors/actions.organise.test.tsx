@@ -1,7 +1,10 @@
-// Connectors loader organisation (`./actions` load): a `category` is validated against
-// the catalogue's own categories before it narrows the browse; every category is offered
-// with its count of matches for the current search; catalogue entries the person already
-// connected are marked; and connected services that need attention come first.
+// Connectors loader organisation (`./actions` load): the catalogue's data categories are
+// offered as plain display groups (everyday first); a `category` is validated against those
+// groups (or a data category inside one) before it narrows the browse; every group is
+// offered with its count of matches for the current search; only services a person can
+// connect or ask to join are offered; the popular services lead the full catalogue;
+// catalogue entries the person already connected are marked; and connected services that
+// need attention come first.
 //
 // Drives the real factory over a real catalogue index (the project's loader on fixture
 // files) and an isolated PGlite with the real migrations, as `actions.test.tsx` does.
@@ -41,10 +44,10 @@ const ENTRIES = [
   apiKey("home-hub", "Home Hub", "smart-home", ["acme-home"]),
 ];
 
-function catalogue(): CatalogueIndex {
+function catalogue(entries: ReadonlyArray<{ id: string }> = ENTRIES): CatalogueIndex {
   const dir = mkdtempSync(join(tmpdir(), "warthog-connectors-organise-"));
   try {
-    for (const entry of ENTRIES) writeFileSync(join(dir, `${entry.id}.json`), JSON.stringify(entry));
+    for (const entry of entries) writeFileSync(join(dir, `${entry.id}.json`), JSON.stringify(entry));
     return loadCatalogue({ dir, isOAuthClientConfigured: () => false });
   } finally {
     rmSync(dir, { recursive: true, force: true });
@@ -54,11 +57,11 @@ function catalogue(): CatalogueIndex {
 const deks = new Map<string, Uint8Array>();
 const dekFor = async (userId: string) => deks.get(userId)!;
 
-function actionsFor(db: Db) {
+function actionsFor(db: Db, entries: ReadonlyArray<{ id: string }> = ENTRIES) {
   return createConnectorsActions({
     db,
     clock: fixedClock(NOW),
-    catalogue: catalogue(),
+    catalogue: catalogue(entries),
     dekFor,
     fetch: (async () => {
       throw new Error("no fetch in these tests");
@@ -103,21 +106,88 @@ function sessionFor(userId: string): Session {
   return { id: `sess-${userId}`, userId, createdAt: NOW, lastSeenAt: NOW, steppedUpAt: null };
 }
 
-test("every category is offered with its count, alphabetically, and the catalogue groups follow that order", async () => {
+test("every display group is offered with its count, everyday groups first, and the catalogue groups follow that order", async () => {
   const db = await freshDb();
   try {
     const userId = await makeUser(db, "categories");
     const data = await actionsFor(db).load(sessionFor(userId));
+    // "database" folds into "Data and analytics", which sorts after the everyday groups.
     assert.deepEqual(data.categories, [
-      { key: "database", count: 1 },
       { key: "email", count: 2 },
       { key: "smart-home", count: 1 },
+      { key: "data", count: 1 },
     ]);
     assert.deepEqual(
       data.groups.map((g) => g.category),
-      ["database", "email", "smart-home"],
+      ["email", "smart-home", "data"],
     );
+    assert.deepEqual(data.groups[0]!.items.map((i) => i.category), ["email", "email"], "each entry names its display group");
     assert.equal(data.category, null);
+  } finally {
+    await db.close();
+  }
+});
+
+test("near-duplicate data categories share one group, and an old category link still lands on it", async () => {
+  const db = await freshDb();
+  try {
+    const userId = await makeUser(db, "merge");
+    const entries = [
+      apiKey("box-ish", "Boxish", "storage"),
+      apiKey("bucket", "Bucket", "file-storage"),
+      apiKey("fly-me", "Fly Me", "flight"),
+      apiKey("trip", "Trip", "travel"),
+    ];
+    const data = await actionsFor(db, entries).load(sessionFor(userId));
+    assert.deepEqual(data.categories, [
+      { key: "files", count: 2 },
+      { key: "travel", count: 2 },
+    ]);
+    const old = await actionsFor(db, entries).load(sessionFor(userId), { category: "file-storage" });
+    assert.equal(old.category, "files", "a data category resolves to the group that holds it");
+    assert.deepEqual(old.groups.flatMap((g) => g.items.map((i) => i.name)), ["Boxish", "Bucket"]);
+  } finally {
+    await db.close();
+  }
+});
+
+test("a service that can't be connected yet is left out; a Google early-access entry stays with its ask-to-join", async () => {
+  const db = await freshDb();
+  try {
+    const userId = await makeUser(db, "offered");
+    const oauth = (id: string, name: string, category: string, extra: Record<string, unknown> = {}) => ({
+      id,
+      name,
+      aliases: [],
+      category,
+      auth_kind: "oauth2",
+      base_url: `https://api.${id}.example`,
+      auth: { authorize_url: `https://${id}.example/a`, token_url: `https://${id}.example/t`, scopes: ["s"] },
+      ...extra,
+    });
+    const entries = [
+      apiKey("acme-mail", "Acme Mail", "email"),
+      // No provider sign-in client is configured in this catalogue, so neither oauth2 entry
+      // is connectable; only the early-access one is offered (as ask-to-join).
+      oauth("outlookish", "Outlookish", "email"),
+      oauth("google-calendar", "Google Calendar", "calendar", { google_early_access: true }),
+    ];
+    const data = await actionsFor(db, entries).load(sessionFor(userId));
+    const items = data.groups.flatMap((g) => g.items);
+    assert.deepEqual(items.map((i) => i.name).sort(), ["Acme Mail", "Google Calendar"]);
+    assert.equal(items.find((i) => i.id === "google-calendar")!.gate, "ask_to_join");
+    assert.deepEqual(data.categories, [
+      { key: "email", count: 1 },
+      { key: "calendar", count: 1 },
+    ], "the hidden service isn't counted");
+    assert.deepEqual(data.featured!.map((i) => i.id), ["google-calendar"], "a popular service leads the full catalogue");
+
+    const searched = await actionsFor(db, entries).load(sessionFor(userId), { query: "outlookish" });
+    assert.equal(searched.groups.length, 0);
+    assert.equal(searched.canRequest, true, "a term that only matched a service that can't be connected is a request for it");
+    assert.deepEqual(searched.featured, [], "no popular row while a search narrows the catalogue");
+    const narrowed = await actionsFor(db, entries).load(sessionFor(userId), { category: "calendar" });
+    assert.deepEqual(narrowed.featured, [], "no popular row inside a category");
   } finally {
     await db.close();
   }
@@ -164,11 +234,11 @@ test("with a search, the counts are the matches in each category, and a match el
     const inDatabase = await actionsFor(db).load(sessionFor(userId), { query: "acme", category: "database" });
     assert.equal(inDatabase.groups.length, 0);
     assert.equal(inDatabase.canRequest, false);
-    assert.equal(inDatabase.category, "database", "the chosen category is kept so the person can see where they are");
-    assert.ok(inDatabase.categories!.some((c) => c.key === "database" && c.count === 0), "the chosen category stays listed");
+    assert.equal(inDatabase.category, "data", "the chosen category is kept (as its group) so the person can see where they are");
+    assert.ok(inDatabase.categories!.some((c) => c.key === "data" && c.count === 0), "the chosen category stays listed");
 
     const miss = await actionsFor(db).load(sessionFor(userId), { query: "zzqq" });
-    assert.equal(miss.canRequest, true, "a term found nowhere still offers Request a connector");
+    assert.equal(miss.canRequest, true, "a term found nowhere still offers Request a service");
   } finally {
     await db.close();
   }

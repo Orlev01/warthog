@@ -41,6 +41,7 @@ import { loadConfig, type Config } from "../../../server/config";
 import { getServerDb } from "../../../server/db/server";
 import { systemClock, type Clock } from "../../../server/seams/clock";
 import type { Db } from "../../../server/db/index";
+import { standaloneResponse } from "../../../components/public/standalone-html";
 
 // The injection seams, each defaulting to the real composition root. All three are optional
 // so the route entry can build the handler with `createApprovalLinkHandler()` and leave
@@ -82,6 +83,9 @@ function readCookie(request: Request, name: string): string | null {
   return null;
 }
 
+// Where a link that can't open anything lands: the inbox, with a notice that says why.
+const LINK_EXPIRED_INBOX = "/inbox?notice=link_expired";
+
 // A same-origin, in-app redirect to `path` (optionally carrying `approval`), built from the
 // CONFIGURED public base URL — never the request host — so the link always lands on Warthog.
 function redirectTo(baseUrl: string, path: string, approvalId?: string): Response {
@@ -109,7 +113,17 @@ export function createApprovalLinkHandler(
       token = parseParams(tokenSchema, params.token);
     } catch (error) {
       if (error instanceof HttpError) {
-        return new Response(null, { status: error.status });
+        // The same 4xx, now with Warthog's page and a way forward instead of a blank one.
+        return standaloneResponse({
+          title: "Link not valid",
+          eyebrow: "Inbox",
+          heading: "This approval link isn't valid",
+          paragraphs: ["The link may be incomplete or mistyped, so nothing was opened. Open the request from your Warthog inbox instead."],
+          actions: [
+            { href: "/inbox", label: "Open your inbox", primary: true },
+            { href: "/", label: "Go to Warthog" },
+          ],
+        }, error.status, { "referrer-policy": "no-referrer" });
       }
       throw error;
     }
@@ -125,10 +139,12 @@ export function createApprovalLinkHandler(
       return redirectTo(baseUrl, withReturnPath("/signin", `/a/${token}`));
     }
 
-    // 3. Redeem the single-use token. A reused, expired or unknown token opens nothing.
+    // 3. Redeem the single-use token. A reused, expired or unknown token opens nothing; the
+    //    inbox says so (`?notice=link_expired`) instead of landing the person there without
+    //    a word (UI/UX pass interaction-22 / public-28).
     const redeemed = await redeemApprovalLink(db, { token }, { clock });
     if (!redeemed.ok) {
-      return redirectTo(baseUrl, "/inbox");
+      return redirectTo(baseUrl, LINK_EXPIRED_INBOX);
     }
 
     // 4. Member-scope the resolved approval to the SESSION's user id (never the path). Marks
@@ -136,7 +152,8 @@ export function createApprovalLinkHandler(
     //    opens nothing. Marking opened changes no decision status.
     const owned = await markOpened(db, { id: redeemed.approvalId, userId: session.userId }, clock);
     if (!owned) {
-      return redirectTo(baseUrl, "/inbox");
+      // The same words as a used link: whose approval it was is never revealed.
+      return redirectTo(baseUrl, LINK_EXPIRED_INBOX);
     }
 
     // 5. Open the approval in-app.

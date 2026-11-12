@@ -315,7 +315,8 @@ function controls(markup: string): { label: string; disabled: boolean }[] {
   const out: { label: string; disabled: boolean }[] = [];
   for (const m of markup.matchAll(/<button\b([^>]*)>([\s\S]*?)<\/button>/gi)) {
     const label = m[2]!.replace(/<[^>]*>/g, " ").replace(/\s+/g, " ").trim();
-    out.push({ label, disabled: /\bdisabled\b/i.test(m[1]!) });
+    // The real `disabled` attribute, never the shared Button's `disabled:` utility classes.
+    out.push({ label, disabled: /(?:^|\s)disabled(?:=""|\s|$)/i.test(m[1]!) });
   }
   return out;
 }
@@ -511,6 +512,9 @@ test("the date-range filter narrows to entries inside the inclusive window", asy
 // =====================================================================================
 
 test("a date-only 'to' filter includes entries from the whole of that day (end-of-day inclusive)", async () => {
+  // UI/UX pass (content-47): the page shows every time in the account's zone (Sydney here,
+  // the default), so a calendar-day filter is that day in Sydney, not in UTC — a Sydney
+  // member's "To 20 Apr" used to drop everything after 10 am local time.
   const db = await freshDb();
   try {
     const keyWrapper = localAesKeyWrapper(randomBytes(KEK_BYTES));
@@ -519,43 +523,45 @@ test("a date-only 'to' filter includes entries from the whole of that day (end-o
     const aliceId = await makePerson(db, keyWrapper, "dayfilter@people.example", dek);
     const recorder = makeRecorder(db, clock, { [aliceId]: dek });
 
-    // Two entries ON 2026-04-20 — one just after midnight, one mid-afternoon …
-    await record(recorder, clock, "2026-04-20T00:05:00.000Z", {
+    // Two entries ON 20 April in Sydney (UTC+10) — one just after local midnight, one late
+    // in the evening …
+    await record(recorder, clock, "2026-04-19T14:05:00.000Z", {
       userId: aliceId,
       kind: "tool_call",
       source: "warthog",
       payload: { summary: "morningword entry", detail: "d" },
-    }); // seq 1
-    await record(recorder, clock, "2026-04-20T15:30:00.000Z", {
+    }); // seq 1: 00:05 on 20 Apr in Sydney
+    await record(recorder, clock, "2026-04-20T13:30:00.000Z", {
       userId: aliceId,
       kind: "tool_call",
       source: "warthog",
-      payload: { summary: "afternoonword entry", detail: "d" },
-    }); // seq 2
-    // … and one the NEXT day, which a 'to' of 2026-04-20 must NOT include.
-    await record(recorder, clock, "2026-04-21T09:00:00.000Z", {
+      payload: { summary: "eveningword entry", detail: "d" },
+    }); // seq 2: 23:30 on 20 Apr in Sydney
+    // … and one the NEXT local day, which a 'to' of 2026-04-20 must NOT include.
+    await record(recorder, clock, "2026-04-20T14:30:00.000Z", {
       userId: aliceId,
       kind: "tool_call",
       source: "warthog",
       payload: { summary: "nextdayword entry", detail: "d" },
-    }); // seq 3
+    }); // seq 3: 00:30 on 21 Apr in Sydney
     const session = await sessionFor(db, aliceId, clock);
 
-    // A date-ONLY 'to' (no time of day, exactly what the view's `<input type="date">`
-    // posts) must widen to the END of that day. Without widening, `occurred_at <=
-    // 2026-04-20T00:00:00Z` would drop BOTH of that day's entries (00:05 and 15:30 are
-    // both after midnight); widened, both are inside the window and the next day is out.
+    // A date-ONLY 'to' (exactly what the view's `<input type="date">` posts) is widened to
+    // the END of that day in the account's zone; a date-only 'from' starts at its midnight.
     const view = await makeLoader(db, keyWrapper).load(session, { to: "2026-04-20" });
     assert.deepEqual(
       seqsOf(view),
       [2, 1],
-      "both of 2026-04-20's entries are inside the inclusive day window, newest-first",
+      "both of 20 April's entries (Sydney time) are inside the inclusive day window, newest-first",
     );
+    const fromNextDay = await makeLoader(db, keyWrapper).load(session, { from: "2026-04-21" });
+    assert.deepEqual(seqsOf(fromNextDay), [3], "a 'from' day starts at that day's midnight in Sydney");
 
     const text = strip(render(view));
-    assert.ok(text.includes("afternoonword"), "the mid-afternoon entry is included (end-of-day inclusive)");
+    assert.ok(text.includes("eveningword"), "the late-evening entry is included (end-of-day inclusive)");
     assert.ok(text.includes("morningword"), "the just-after-midnight entry is included");
-    assert.ok(!text.includes("nextdayword"), "an entry from the next day is outside the 'to' day");
+    assert.ok(!text.includes("nextdayword"), "an entry from the next local day is outside the 'to' day");
+    assert.ok(!text.includes("(utc)"), "the applied date is a day in the page's own time zone");
   } finally {
     await db.close();
   }

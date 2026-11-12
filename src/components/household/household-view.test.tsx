@@ -563,31 +563,32 @@ const OWNER_ONLY: Array<{ label: string; live: (m: string) => boolean }> = [
 // AC1 — the member list: an entry for every member, marking the owner.
 // ================================================================================
 
-test("renders an entry for every member and marks the owner", () => {
-  // Rendered to a NON-owner (the caller is PARTNER): a non-owner has no member-targeting owner
-  // controls, so a member id appearing in the markup can only come from the roster display — not
-  // from a hidden form field. The one member who is neither the owner nor the caller (KID) can be
-  // identified ONLY by its id, so its id must render; the owner is marked "Owner" (or carries an
-  // owner badge voiced by aria-label); the caller may read by id or "you".
-  const markup = renderMember();
+test("renders an entry for every member by their email, marks the owner, and never shows a member's id", () => {
+  // UI/UX pass (interaction-13 / newcomer-09): the roster names each member by the account email
+  // they joined with (the loader adds it), the caller as "You", and marks the owner. An internal
+  // user id never reaches the screen. Rendered to a NON-owner (the caller is PARTNER), who has no
+  // member-targeting forms, so no id may appear anywhere in the markup.
+  const EMAILS: Record<string, string> = {
+    [OWNER_ID]: "alex@example.com",
+    [PARTNER_ID]: "sam@example.com",
+    [KID_ID]: "jo@example.com",
+  };
+  const members = MEMBERS.map((member) => ({ ...member, email: EMAILS[member.userId] }));
+  const markup = renderMember({ members });
+  const text = visibleText(markup);
 
-  assert.ok(
-    markup.includes(KID_ID),
-    `every member must appear in the roster — the non-owner, non-caller member (${KID_ID}) is ` +
-      `identifiable only by its id; markup=${markup}`,
-  );
-  assert.ok(
-    markup.includes(OWNER_ID) || /\bowner\b/i.test(reasonSurface(markup)),
-    `the owner must be shown in the roster (by id or an "Owner" marker); surface="${reasonSurface(markup)}"`,
-  );
-  assert.ok(
-    markup.includes(PARTNER_ID) || /\byou\b/i.test(visibleText(markup)),
-    `the caller must be identified in the roster (by id or "you"); text="${visibleText(markup)}"`,
-  );
-  assert.ok(
-    /\bowner\b/i.test(reasonSurface(markup)),
-    `the owner must be MARKED as the owner; surface="${reasonSurface(markup)}"`,
-  );
+  assert.ok(text.includes("alex@example.com"), `the owner is named by email; text="${text}"`);
+  assert.ok(text.includes("jo@example.com"), `the other member is named by email; text="${text}"`);
+  assert.match(text, /\bYou\b/, "the caller reads as You");
+  assert.ok(/\bowner\b/i.test(reasonSurface(markup)), `the owner must be MARKED as the owner; surface="${reasonSurface(markup)}"`);
+  for (const id of [OWNER_ID, PARTNER_ID, KID_ID]) {
+    assert.ok(!markup.includes(id), `a member's internal id (${id}) never reaches the screen; markup=${markup}`);
+  }
+
+  // A member whose email isn't known reads as a neutral label, still never as an id.
+  const unknown = visibleText(renderMember({ members: MEMBERS }));
+  assert.match(unknown, /Household member 3/);
+  assert.ok(!unknown.includes(KID_ID));
 });
 
 test("renders from the members given, not a fixed roster", () => {
@@ -890,4 +891,63 @@ test("with no actions bound, no live form is rendered: every control is disabled
 test("a bound action still renders its live form", () => {
   const markup = render({ household: baseData(), currentUserId: OWNER_ID, currencyOptions: CURRENCY_OPTIONS, inviteAction: NOOP });
   assert.equal((markup.match(/<form\b/g) ?? []).length, 1, "exactly the one bound action renders a form");
+});
+
+// ================================================================================
+// UI/UX pass (interaction-06) — closing the household, removing a member and leaving each ask
+// first: the destructive control opens a closed danger disclosure that says what will happen,
+// and only the danger button inside it submits.
+// ================================================================================
+
+function disclosureFor(markup: string, summary: RegExp): El | undefined {
+  return findAll(markup, "details").find((d) => {
+    const head = findAll(d.inner, "summary")[0];
+    return head !== undefined && summary.test(visibleText(head.inner));
+  });
+}
+
+test("Close household asks first and says it is for everyone", () => {
+  const markup = renderOwner();
+  const step = disclosureFor(markup, /^Close household$/);
+  assert.ok(step, "Close household is a disclosure, not a one-click submit");
+  assert.doesNotMatch(step!.attrs, /(?:^|\s)open(?:=""|="open")?(?=\s|$)/, "closed until the owner asks");
+  assert.match(visibleText(step!.inner), /Close the household for everyone\?/);
+  assert.match(visibleText(step!.inner), /removed for everyone in the household \( ?3 members\)/);
+  const form = findAll(step!.inner, "form")[0];
+  assert.ok(form && isBoundToAction(form), "the confirmation is the bound close form");
+  const confirm = findAll(form!.inner, "button")[0]!;
+  assert.match(controlFace(confirm), /Close household for everyone/);
+  assert.match(confirm.attrs, /bg-danger/, "the final step is the danger button");
+  // Outside the disclosure, nothing submits the close.
+  const outside = markup.replace(/<details\b[\s\S]*?<\/details>/g, "");
+  assert.ok(!findAll(outside, "button").some((b) => /close/i.test(controlFace(b))), "no one-click close remains");
+});
+
+test("removing a member and leaving the household also ask first", () => {
+  const owner = renderOwner();
+  const remove = disclosureFor(owner, /^Remove\b/);
+  assert.ok(remove, "Remove is a disclosure");
+  assert.match(visibleText(remove!.inner), /keep their own Warthog account/);
+  assert.ok(findAll(remove!.inner, "form").some((f) => isBoundToAction(f) && formTargetsValue(f, PARTNER_ID)));
+
+  const leave = disclosureFor(renderMember(), /^Leave household$/);
+  assert.ok(leave, "Leave household is a disclosure");
+  assert.match(visibleText(leave!.inner), /owner has to invite you again/);
+});
+
+test("each field's Save sits in the same panel as the field", () => {
+  const markup = renderOwner();
+  const panels = [...markup.matchAll(/<section aria-labelledby="[^"]+" class="wh-panel">([\s\S]*?)<\/section>/g)].map((m) => m[1]!);
+  for (const [field, save] of [
+    ["shared-address", /Save address/],
+    ["follow-household-address", /Save choice/],
+    ["invite-email", /Send invite/],
+    ["household-budget", /Save budget/],
+    ["member-limit", /Save limit/],
+    ["household-currency", /Save currency/],
+  ] as const) {
+    const panel = panels.find((html) => html.includes(`name="${field}"`));
+    assert.ok(panel, `a panel holds ${field}`);
+    assert.match(visibleText(panel!), save, `${field}'s Save is in its panel`);
+  }
 });

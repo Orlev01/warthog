@@ -96,8 +96,10 @@ const SEND_CODE_FAILED_COPY =
   "We couldn't send a code just now. Check your email address and try again.";
 // The server answers the same whether or not the address has an account, so the notice
 // makes no account claim either.
+// The server can't say whether a send was throttled without revealing the account, so the
+// notice never claims a send it can't vouch for (public-04).
 const CODE_SENT_NOTICE =
-  "If there's an account for that address, we've emailed it a code. Enter it below.";
+  "If there's an account for that address, we'll email it a code. We send at most one a minute, so if you asked moments ago, use the code you already have.";
 const REQUEST_GONE_COPY =
   "That approval request has expired or was turned down. You can start again when you're ready.";
 

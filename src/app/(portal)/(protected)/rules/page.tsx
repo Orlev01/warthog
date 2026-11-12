@@ -2,10 +2,11 @@ import * as React from "react";
 import { cookies } from "next/headers";
 import { redirect } from "next/navigation";
 import { revalidatePath } from "next/cache";
-import { Notice as InlineNotice } from "@/components/ui/notice";
+import { PageNotice } from "@/components/ui/notice";
 
 import { RulesView } from "@/components/rules/rules-view";
 import { loadConfig } from "@/server/config";
+import { getProcessCatalogue } from "@/server/connectors/catalogue";
 import { getServerDb } from "@/server/db/server";
 import { selectKeyWrapper } from "@/server/crypto/key-wrapper";
 import { verifySession, type Session } from "@/server/auth/session";
@@ -14,6 +15,8 @@ import type { Db } from "@/server/db/index";
 import {
   createRulesActions,
   ruleInputFromForm,
+  rulesCreateReturnHref,
+  rulesMutationNotice as mutationNotice,
   rulesNotice,
   rulesPageState,
   rulesReturnHref,
@@ -35,10 +38,10 @@ import {
 // with a `?notice=` outcome the page shows in plain words (never a silent failure —
 // a refusal, a malformed id, or a rejected vocabulary is shown, not swallowed).
 //
-// Where each action lands (`rulesReturnHref`, validated keys only): adding a rule returns
-// to the New rule view (its draft is still mounted, so a refusal can be corrected); pause
-// and delete return to the status filter the row's form carried; the rules list is the
-// default view.
+// Where each action lands (`rulesReturnHref`, validated keys only): adding a rule lands on
+// the rules list, where the new rule now is (a refusal returns to the New rule view, so it
+// can be corrected); pause and delete return to the status filter the row's form carried;
+// the rules list is the default view.
 //
 // Thin by design (the server-composition-roots addendum): per-request data (the
 // cookie, the search params) is read BEFORE `getServerDb()` so touching it marks the
@@ -59,28 +62,12 @@ async function resolveSession(db: Db): Promise<Session | null> {
 
 // Build the rules actions with the real seams. The KeyWrapper (local AES outside
 // production, Key Vault in production) lets `load`/`createRule` resolve the session
-// person's DEK to decrypt/encrypt a rule's condition.
+// person's DEK to decrypt/encrypt a rule's condition; the connector catalogue is what a
+// rule's tool and service names are checked against.
 function buildActions(db: Db) {
   const config = loadConfig();
   const keyWrapper = selectKeyWrapper({ nodeEnv: config.nodeEnv, localKek: config.devKek });
-  return createRulesActions({ db, clock: systemClock, keyWrapper });
-}
-
-// Map a mutation outcome (or a thrown error) to a stable notice code the page turns
-// into plain words. A refusal names its reason; a 4xx from the validation boundary
-// is shown as "invalid"; anything else is a generic problem.
-function mutationNotice(outcome: ActionResult | unknown, doneCode: string): string {
-  if (outcome && typeof outcome === "object" && "ok" in outcome) {
-    const result = outcome as ActionResult;
-    if (result.ok) return doneCode;
-    if (result.reason === "not_found") return "not_found";
-    return "error";
-  }
-  if (outcome && typeof outcome === "object" && "status" in outcome) {
-    const status = (outcome as { status: unknown }).status;
-    if (typeof status === "number" && status >= 400 && status < 500) return "invalid";
-  }
-  return "error";
+  return createRulesActions({ db, clock: systemClock, keyWrapper, catalogue: getProcessCatalogue(config) });
 }
 
 // Create a new rule from the submitted form. A thin server-action wrapper: re-derive
@@ -101,7 +88,8 @@ async function createAction(formData: FormData): Promise<void> {
     outcome = error;
   }
   revalidatePath("/rules");
-  redirect(rulesReturnHref(mutationNotice(outcome, "created"), { view: "new" }));
+  // Added: show the list the new rule is in. Refused: back to the builder to correct it.
+  redirect(rulesCreateReturnHref(mutationNotice(outcome, "created")));
 }
 
 // Replace the content of one of the acting person's OWN rules. Same discipline.
@@ -162,14 +150,12 @@ async function deleteAction(formData: FormData): Promise<void> {
   redirect(rulesReturnHref(mutationNotice(outcome, "deleted"), { status: formData.get("return-status") }));
 }
 
-// The outcome of the last change, in words plus an icon (never colour alone). A
-// problem is announced immediately (alert); a success politely (status). The copy is
-// resolved by the sibling `rulesNotice` seam (one source of truth) — this page holds
-// no copy of its own.
-function NoticeBanner({ notice }: { notice: RulesNotice }) {
-  return (
-    <InlineNotice tone={notice.tone === "done" ? "success" : "error"}>{notice.text}</InlineNotice>
-  );
+// The outcome of the last change, in words plus an icon (never colour alone), as the
+// page's one notice slot under the heading band. A problem is announced immediately
+// (alert); a success politely (status). The copy is resolved by the sibling `rulesNotice`
+// seam (one source of truth) — this page holds no copy of its own.
+function OutcomeNotice({ notice }: { notice: RulesNotice }) {
+  return <PageNotice tone={notice.tone === "done" ? "success" : "error"}>{notice.text}</PageNotice>;
 }
 
 export default async function RulesPage({
@@ -189,12 +175,14 @@ export default async function RulesPage({
 
   const view = await buildActions(db).load(session);
   return (
-    <div className="wh-page wh-page--reading flex flex-col gap-6">
-      {notice ? <NoticeBanner notice={notice} /> : null}
+    <div className="wh-page">
       <RulesView
+        notice={notice ? <OutcomeNotice notice={notice} /> : null}
         rules={view.rules}
         agents={view.agents}
         currency={view.currency}
+        toolChoices={view.toolChoices}
+        serviceChoices={view.serviceChoices}
         initialView={state.view}
         statusFilter={state.status}
         createAction={createAction}

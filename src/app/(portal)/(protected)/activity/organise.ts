@@ -21,7 +21,8 @@ import {
   isActivityCategory,
   type ActivityCategory,
 } from "@/domain/activity/category";
-import { humanise, kindLabel } from "@/domain/activity/describe";
+import { outcomeLabel } from "@/domain/activity/category";
+import { kindLabel } from "@/domain/activity/describe";
 import type { ActivityFilters, ActivityGroupSummary } from "@/server/activity/list";
 import type { FilterLink, AppliedFilter } from "@/components/ui/filter-links";
 import type { ActivityGroupView, ActivityViewKey } from "@/components/activity/activity-view";
@@ -112,8 +113,15 @@ export function stateQuery(state: ActivityState): QueryState {
   };
 }
 
-/** The SQL filters the state selects. A date-only `to` covers the whole of that day. */
-export function filtersFor(state: ActivityState, widenTo: (to: string) => string): ActivityFilters {
+/**
+ * The SQL filters the state selects. A date-only `to` covers the whole of that day; the
+ * caller's `widenTo` / `widenFrom` place a calendar date in the account's time zone.
+ */
+export function filtersFor(
+  state: ActivityState,
+  widenTo: (to: string) => string,
+  widenFrom: (from: string) => string = (from) => from,
+): ActivityFilters {
   const filters: ActivityFilters = {};
   if (state.agent === NONE) filters.noAgent = true;
   else if (state.agent !== undefined) filters.agentId = state.agent;
@@ -121,7 +129,7 @@ export function filtersFor(state: ActivityState, widenTo: (to: string) => string
   else if (state.service !== undefined) filters.connectorId = state.service;
   if (state.kind !== undefined) filters.kind = state.kind;
   if (state.outcome !== undefined) filters.outcome = state.outcome;
-  if (state.from !== undefined) filters.from = state.from;
+  if (state.from !== undefined) filters.from = widenFrom(state.from);
   if (state.to !== undefined) filters.to = widenTo(state.to);
   if (state.type !== undefined) filters.category = state.type;
   if (state.attention) filters.attention = true;
@@ -158,6 +166,53 @@ export function quickLinks(state: ActivityState): FilterLink[] {
   return links;
 }
 
+// ---------------------------------------------------------------------------------
+// Calendar-day filters in the account's time zone. The date inputs post a calendar day
+// ("2026-11-12"); the page states its times in the account's zone, so "To 12 Nov" means the
+// end of 12 November there, not in UTC (content-47: a Sydney member's "To 12 Nov" dropped
+// everything after 11 am local time).
+// ---------------------------------------------------------------------------------
+
+const DAY = /^\d{4}-\d{2}-\d{2}$/;
+const DAY_MS = 86_400_000;
+
+// How far `zone` is ahead of UTC at `instant`, in milliseconds.
+function zoneOffset(instant: number, zone: string): number {
+  const parts = Object.fromEntries(
+    new Intl.DateTimeFormat("en-US", { timeZone: zone, hourCycle: "h23", year: "numeric", month: "2-digit", day: "2-digit", hour: "2-digit", minute: "2-digit", second: "2-digit" })
+      .formatToParts(new Date(instant))
+      .map((part) => [part.type, part.value]),
+  );
+  const asUtc = Date.UTC(Number(parts.year), Number(parts.month) - 1, Number(parts.day), Number(parts.hour), Number(parts.minute), Number(parts.second));
+  return asUtc - Math.floor(instant / 1000) * 1000;
+}
+
+/** The first instant of a calendar day in `zone`, as an ISO instant. A non-day value is returned as given. */
+export function dayStartIn(day: string, zone: string): string {
+  if (!DAY.test(day)) return day;
+  const midnight = Date.parse(`${day}T00:00:00Z`);
+  if (!Number.isFinite(midnight)) return day;
+  // Twice, so a day that starts on a daylight-saving change still lands on its local midnight.
+  const first = midnight - zoneOffset(midnight, zone);
+  return new Date(midnight - zoneOffset(first, zone)).toISOString();
+}
+
+/** The last instant of a calendar day in `zone` (inclusive), as an ISO instant. */
+export function dayEndIn(day: string, zone: string): string {
+  if (!DAY.test(day)) return day;
+  const next = new Date(Date.parse(`${day}T00:00:00Z`) + DAY_MS).toISOString().slice(0, 10);
+  return new Date(Date.parse(dayStartIn(next, zone)) - 1).toISOString();
+}
+
+/** A filter date as people write it: "2026-03-01" → "1 Mar 2026" (an ISO date-time keeps its date). */
+export function filterDate(value: string): string {
+  const day = value.slice(0, 10);
+  if (!/^\d{4}-\d{2}-\d{2}$/.test(day)) return day;
+  const date = new Date(`${day}T00:00:00Z`);
+  if (!Number.isFinite(date.getTime())) return day;
+  return new Intl.DateTimeFormat("en-AU", { timeZone: "UTC", day: "numeric", month: "short", year: "numeric" }).format(date);
+}
+
 /** The applied filters as removable chips, each linking to the screen without that filter. */
 export function appliedFilters(
   state: ActivityState,
@@ -171,10 +226,11 @@ export function appliedFilters(
   if (state.service !== undefined) chip(`Service: ${state.service === NONE ? "No service" : names.service ?? state.service}`, "service", state.via === "services" ? ["via"] : []);
   if (state.type !== undefined) chip(`Type: ${CATEGORY_LABELS[state.type]}`, "type", state.via === "types" ? ["via"] : []);
   if (state.attention) chip("Needs attention", "attention");
-  if (state.kind !== undefined) chip(`Kind: ${kindLabel(state.kind)}`, "kind");
-  if (state.outcome !== undefined) chip(`Outcome: ${humanise(state.outcome)}`, "outcome");
-  if (state.from !== undefined) chip(`From ${state.from.slice(0, 10)} (UTC)`, "from");
-  if (state.to !== undefined) chip(`To ${state.to.slice(0, 10)} (UTC)`, "to");
+  if (state.kind !== undefined) chip(`Event: ${kindLabel(state.kind)}`, "kind");
+  if (state.outcome !== undefined) chip(`Outcome: ${outcomeLabel(state.outcome)}`, "outcome");
+  // Dates are calendar days in the account's time zone, which the page states once.
+  if (state.from !== undefined) chip(`From ${filterDate(state.from)}`, "from");
+  if (state.to !== undefined) chip(`To ${filterDate(state.to)}`, "to");
   if (state.q !== undefined) chip(`Search: “${state.q}”`, "q");
   // "Clear all" keeps the current view.
   return { filters, clearHref: hrefWith(ACTIVITY_PATH, { view: stateQuery(state).view }) };
@@ -198,7 +254,8 @@ export { dayOf, timeOfDay } from "@/domain/display-time";
 
 export interface AgentFacts {
   readonly name: string;
-  readonly platform?: string;
+  readonly platform?: string; // as stored, for the agent's mark
+  readonly platformName?: string | null; // in words; null when there is nothing worth showing
   readonly disconnected?: boolean;
   readonly connectedOn?: string; // "10 Nov 2026"
   readonly exists: boolean;
@@ -216,6 +273,12 @@ function attentionOf(summary: ActivityGroupSummary) {
   return { blocked: summary.byOutcome.blocked, failed: summary.byOutcome.failed, disputed: summary.disputed };
 }
 
+// The platform line under an agent's name: in words, and only when it adds to the name.
+function shownPlatform(f: AgentFacts): string | undefined {
+  const platform = f.platformName === undefined ? f.platform : f.platformName ?? undefined;
+  return platform && platform.toLowerCase() !== f.name.toLowerCase() ? platform : undefined;
+}
+
 export function agentGroups(
   summaries: readonly ActivityGroupSummary[],
   facts: (id: string) => AgentFacts,
@@ -229,7 +292,7 @@ export function agentGroups(
     const agent = summary.key ?? NONE;
     const drill = (patch: QueryState = {}) => activityHref(state, { view: undefined, via: "agents", agent, ...patch }, ["q"]);
     const details = f
-      ? [f.platform && f.platform.toLowerCase() !== f.name.toLowerCase() ? f.platform : undefined, f.disconnected ? "Disconnected" : undefined, (nameCounts.get(f.name) ?? 0) > 1 && f.connectedOn ? `connected ${f.connectedOn}` : undefined]
+      ? [shownPlatform(f), f.disconnected ? "Disconnected" : undefined, (nameCounts.get(f.name) ?? 0) > 1 && f.connectedOn ? `connected ${f.connectedOn}` : undefined]
       : ["Your own account changes and Warthog's events, with no agent involved"];
     const attention = attentionOf(summary);
     return {
@@ -301,9 +364,9 @@ export function serviceGroups(
     const attention = attentionOf(summary);
     return {
       id: `service-${service}`,
-      label: summary.key === null ? "No connected service" : serviceName(summary.key),
+      label: summary.key === null ? "No service: Warthog itself" : serviceName(summary.key),
       mark: summary.key === null ? undefined : { kind: "service", id: summary.key },
-      detail: summary.key === null ? "Warthog's own tools, approvals and account changes" : undefined,
+      detail: summary.key === null ? "Memory, tasks, records, approvals and account changes" : undefined,
       total: summary.total,
       lastAt: when(summary.lastAt),
       lastAtIso: summary.lastAt,
@@ -319,7 +382,7 @@ export function serviceGroups(
 /** What the grouped counts cover, in words. */
 export function countsCaption(state: ActivityState): string {
   const range = state.from || state.to
-    ? `Counts for ${state.from ? `from ${state.from.slice(0, 10)}` : "the start of your record"} to ${state.to ? state.to.slice(0, 10) : "now"} (UTC)`
+    ? `Counts cover ${state.from ? filterDate(state.from) : "the start of your record"} to ${state.to ? filterDate(state.to) : "now"}`
     : "Counts cover your whole record";
-  return `${range}, within the filters shown. They count entries Warthog recorded through its own connections, not everything an agent did elsewhere, and leave out the intent record written just before a change runs.`;
+  return `${range}, within the filters shown. They include everything your agents did through Warthog, counting each change once. Warthog can't see what an agent does elsewhere.`;
 }

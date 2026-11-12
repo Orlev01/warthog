@@ -182,8 +182,10 @@ function inputValues(markup: string): string[] {
   return out;
 }
 
+// The page also passes the enabled SMS destinations from config; with none, the number
+// controls are replaced by a one-line "not available yet" (content-30), so mount it with one.
 function render(data: NotificationsData): string {
-  return renderToStaticMarkup(<NotificationsView {...data} />);
+  return renderToStaticMarkup(<NotificationsView {...data} smsCountries={["AU"]} />);
 }
 
 // =====================================================================================

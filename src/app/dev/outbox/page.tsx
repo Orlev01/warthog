@@ -1,9 +1,14 @@
 import * as React from "react";
+import type { Metadata } from "next";
 
 import { loadConfig } from "@/server/config";
 import { requireDevTools } from "@/server/dev/guard";
 import { outbox } from "@/server/notify/outbox";
 import { OutboxView } from "@/components/dev/outbox-view";
+import { DevFrame } from "@/components/dev/dev-frame";
+
+// "Dev outbox · Warthog" in the tab (the dev pages used to be titled just "Warthog").
+export const metadata: Metadata = { title: "Dev outbox" };
 
 // E17-S08 — Dev outbox viewer (loader). The `/dev/outbox` page lists the push /
 // email / SMS the process-wide dev outbox captured, so the primary journey's
@@ -31,14 +36,12 @@ export default async function DevOutboxPage({
   requireDevTools(loadConfig());
   const messages = outbox.list();
   return (
-    <main className="mx-auto flex w-full max-w-2xl flex-col gap-6 px-4 py-8 sm:px-6">
-      <header className="flex flex-col gap-1">
-        <h1 className="text-2xl font-semibold tracking-tight text-fg">Dev outbox</h1>
-        <p className="text-sm text-fg-muted">
-          Every push, email and SMS the dev outbox captured, with their single-use links.
-        </p>
-      </header>
+    <DevFrame
+      current="/dev/outbox"
+      title="Dev outbox"
+      description="Every push, email and SMS the dev outbox captured, with their single-use links."
+    >
       <OutboxView messages={messages} />
-    </main>
+    </DevFrame>
   );
 }

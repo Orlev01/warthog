@@ -1,4 +1,3 @@
-import { connectorVerification } from "@/domain/catalogue/verification";
 import { formatAccountTime } from "@/server/display-time";
 import { timeZoneFor } from "@/server/spending/time-zone";
 // E09-S17 — Connectors page loader + connect/disconnect/request actions (the
@@ -57,7 +56,7 @@ import {
   listConnectionsForPage,
   type ConnectionForPage,
 } from "@/server/connectors/page-data";
-import { gateGoogleConnector } from "@/server/connectors/google-early-access";
+import { askToJoinEarlyAccess, gateGoogleConnector } from "@/server/connectors/google-early-access";
 import { saveApiKeyConnection as saveApiKeyConnectionService } from "@/server/connectors/api-key";
 import { requestConnector as requestConnectorService } from "@/server/connectors/requests";
 import {
@@ -80,6 +79,12 @@ import type {
   ConnectionItem,
   ToolItem,
 } from "@/components/connectors/connectors-view";
+import {
+  POPULAR_SERVICES,
+  catalogueGroupOf,
+  compareCatalogueGroups,
+  resolveCatalogueGroup,
+} from "@/components/connectors/catalogue-groups";
 
 // What the provider-revocation seam is told: the acting person, the connection whose
 // stored provider access to revoke, its connector slug (for the provider adapter) and the
@@ -151,6 +156,7 @@ export interface ConnectorsActions {
   ): Promise<unknown>;
   disconnectService(session: Session, connectionId: string): Promise<DisconnectServiceResult>;
   requestConnector(session: Session, input: { name: string }): Promise<unknown>;
+  askToJoin(session: Session, input: { connectorId: string }): Promise<unknown>;
 }
 
 // ---- boundary validation shapes (INV-102) -----------------------------------------
@@ -175,8 +181,9 @@ const connectProviderMcpSchema = z.object({
   connectorId: connectorIdSchema,
   accountLabel: z.string().min(1).max(LABEL_MAX),
 });
+// Trimmed first, so a name of only spaces is refused like an empty one (interaction-02).
 const requestConnectorSchema = z.object({
-  name: z.string().min(1).max(NAME_MAX),
+  name: z.string().trim().min(1).max(NAME_MAX),
 });
 
 // ---- presentation helpers ---------------------------------------------------------
@@ -283,38 +290,54 @@ export function createConnectorsActions(deps: ConnectorsActionsDeps): Connectors
 
     // Browse the catalogue (pure, in-memory — no query) across EVERY category, so each
     // category can be offered with its count of matches and a miss means the term matched
-    // nothing anywhere. A `category` is kept only when it is one of the catalogue's own
-    // categories (anything else is ignored), then narrows the groups shown. Each entry's
-    // per-person gate is decided from the session user's own email.
-    const category =
-      input?.category !== undefined && catalogue.categories().includes(input.category)
-        ? input.category
-        : null;
+    // nothing anywhere. Each entry's per-person gate is decided from the session user's own
+    // email. Only services a person can act on are offered (brief: apart from the Google
+    // early-access entries, which carry the ask-to-join funnel, the catalogue shows only
+    // connectors a person can connect right now), so a provider whose sign-in isn't set up
+    // is left out rather than shown as a dead "Unavailable" card.
+    //
+    // The catalogue's fine-grained data categories are shown as about fifteen plain groups
+    // (catalogue-groups.ts). A `category` is kept only when it names one of those groups,
+    // or a data category inside one (anything else is ignored), then narrows what's shown.
     const browse = browseCatalogue(catalogue, { query: input?.query });
-    const browseGroups = [...browse.groups].sort((a, b) => a.category.localeCompare(b.category));
-    const matchesByCategory = new Map(browseGroups.map((group) => [group.category, group.entries.length]));
-    const categories: CategoryCount[] = [...catalogue.categories()]
-      .sort((a, b) => a.localeCompare(b))
-      .map((key) => ({ key, count: matchesByCategory.get(key) ?? 0 }))
-      .filter((c) => c.count > 0 || c.key === category);
     const user = await getUserById(db, userId);
     const email = user?.email ?? "";
-    const groups: CatalogueGroup[] = browseGroups
-      .filter((group) => category === null || group.category === category)
-      .map((group) => ({
-        category: group.category,
-        items: group.entries.map(
-          (entry): CatalogueItem => ({
-            id: entry.id,
-            name: entry.name,
-            verification: connectorVerification(entry.id).label,
-            connectable: entry.connectable && !(deps.providerMcpAvailable === false && catalogue.get(entry.id)?.auth_kind === "provider_mcp"),
-            ...(deps.providerMcpAvailable === false && catalogue.get(entry.id)?.auth_kind === "provider_mcp" ? { unavailableReason: "Provider-hosted MCP sign-in and tool routing are not available yet." } : {}),
-            gate: gateFor(entry.id, email),
-            ...(connectedConnectors.has(entry.id) ? { connected: true } : {}),
-          }),
-        ),
-      }));
+    const offered = browse.groups
+      .flatMap((group) => group.entries)
+      .map((entry): CatalogueItem => {
+        const mcpUnavailable = deps.providerMcpAvailable === false && catalogue.get(entry.id)?.auth_kind === "provider_mcp";
+        return {
+          id: entry.id,
+          name: entry.name,
+          category: catalogueGroupOf(entry.category),
+          connectable: entry.connectable && !mcpUnavailable,
+          gate: gateFor(entry.id, email),
+          ...(connectedConnectors.has(entry.id) ? { connected: true } : {}),
+        };
+      })
+      .filter((item) => item.connectable || item.gate === "ask_to_join");
+    const available = new Set(catalogue.categories().map(catalogueGroupOf));
+    const category = resolveCatalogueGroup(input?.category, available);
+    const byGroup = new Map<string, CatalogueItem[]>();
+    for (const item of offered) {
+      const bucket = byGroup.get(item.category!);
+      if (bucket) bucket.push(item);
+      else byGroup.set(item.category!, [item]);
+    }
+    const categories: CategoryCount[] = [...available]
+      .sort(compareCatalogueGroups)
+      .map((key) => ({ key, count: byGroup.get(key)?.length ?? 0 }))
+      .filter((c) => c.count > 0 || c.key === category);
+    const groups: CatalogueGroup[] = [...byGroup.entries()]
+      .filter(([key]) => category === null || key === category)
+      .sort(([a], [b]) => compareCatalogueGroups(a, b))
+      .map(([key, items]) => ({ category: key, items: [...items].sort((a, b) => a.name.localeCompare(b.name)) }));
+    // The services most people start with, at the top of the whole catalogue (not while a
+    // search or category narrows it).
+    const featured =
+      browse.query === null && category === null
+        ? POPULAR_SERVICES.flatMap((id) => offered.filter((item) => item.id === id))
+        : [];
 
     // The session user's OWN agents (to name which agents use each service).
     const agents = await listAgentsForUser(db, userId);
@@ -334,13 +357,16 @@ export function createConnectorsActions(deps: ConnectorsActionsDeps): Connectors
 
     return {
       groups,
+      featured,
       categories,
       category,
       connections: connections
         .map((connection) => toConnectionItem(connection, agentsByConnector, timeZone))
         .sort(byAttentionThenName),
       query: browse.query,
-      canRequest: browse.canRequest,
+      // A miss is judged on what can be offered: a term that only matched a service that
+      // can't be connected yet is a request for it, not "nothing to show".
+      canRequest: offered.length === 0,
     };
   }
 
@@ -485,6 +511,23 @@ export function createConnectorsActions(deps: ConnectorsActionsDeps): Connectors
     );
   }
 
+  // "Early access — ask to join" on a gated Google entry (E09-S13): record the request for
+  // the session user and email the operator, naming the catalogue's own service name (never
+  // caller text). Only an entry that is gated FOR THIS PERSON can be asked for; an unknown
+  // id, or one they can already connect, is a 4xx before any write.
+  async function askToJoin(session: Session, input: { connectorId: string }): Promise<unknown> {
+    const connectorId = parseParams(connectorIdSchema, input.connectorId);
+    const entry = requireEntry(connectorId);
+    const user = await getUserById(db, session.userId);
+    if (gateFor(entry.id, user?.email ?? "") !== "ask_to_join") {
+      throw new HttpError(400, "This service isn't in early access for this person");
+    }
+    return askToJoinEarlyAccess(
+      { userId: session.userId, connector: { id: entry.id, name: entry.name } },
+      { db, email, operatorEmail, clock },
+    );
+  }
+
   return {
     load,
     connectProviderSignin,
@@ -492,5 +535,6 @@ export function createConnectorsActions(deps: ConnectorsActionsDeps): Connectors
     connectProviderMcp,
     disconnectService,
     requestConnector,
+    askToJoin,
   };
 }

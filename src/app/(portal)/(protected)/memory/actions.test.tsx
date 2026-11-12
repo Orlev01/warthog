@@ -647,6 +647,33 @@ test("malformed input is rejected with a 4xx and nothing is persisted", async ()
   }
 });
 
+test("content of only spaces is refused like empty content, on add and on edit (interaction-02)", async () => {
+  const db = await freshDb();
+  const keyWrapper = makeKeyWrapper();
+  try {
+    const { userId, dek } = await makeUserWithDek(db, keyWrapper, "blank");
+    const actions = makeActions(db, keyWrapper);
+    const session = sessionFor(userId);
+
+    for (const content of ["", "    ", "\n\t  \n"]) {
+      await assertRejects4xx(`addMemory(${JSON.stringify(content)})`, () =>
+        actions.addMemory(session, addInput({ content, scope: "shared" })),
+      );
+    }
+    assert.deepEqual(await listMemoriesForUser(db, userId, dek), [], "no blank memory was stored");
+
+    await actions.addMemory(session, addInput({ content: "  Prefers aisle seats  ", scope: "shared" }));
+    const [saved] = await listMemoriesForUser(db, userId, dek);
+    assert.equal(saved!.content, "Prefers aisle seats", "the stored memory is trimmed");
+    await assertRejects4xx("editMemory(spaces only)", () =>
+      actions.editMemory(session, editInput({ id: saved!.id, content: "   " })),
+    );
+    assert.equal((await listMemoriesForUser(db, userId, dek))[0]!.content, "Prefers aisle seats", "a blank edit changes nothing");
+  } finally {
+    await db.close();
+  }
+});
+
 test("oversized input is rejected with a 4xx and nothing is persisted", async () => {
   const db = await freshDb();
   const keyWrapper = makeKeyWrapper();

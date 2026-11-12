@@ -1,13 +1,17 @@
 "use client";
 
 import * as React from "react";
-import { CheckCircle, ChevronDown, Circle, Clock, Settings2, type LucideIcon } from "lucide-react";
+import { CheckCircle, CheckCircle2, ChevronDown, Circle, Clock, ClipboardList, Settings2, type LucideIcon } from "lucide-react";
 
-import { Input } from "@/components/ui/input";
-import { Label } from "@/components/ui/field";
+import { Button, buttonClasses } from "@/components/ui/button";
+import { ButtonLink } from "@/components/ui/button-link";
+import { Field, SelectField, TextareaField } from "@/components/ui/field";
 import { EmptyState } from "@/components/ui/empty";
 import { ListGroup, LIST_ROW } from "@/components/ui/list-group";
+import { ListToolbar } from "@/components/ui/list-toolbar";
+import { ActionForm, FormSubmit, PendingFormFields } from "@/components/ui/form-submit";
 import { ActiveFilters, FilterLinks } from "@/components/ui/filter-links";
+import { WorkspacePanel } from "@/components/shell/workspace-surfaces";
 import { hrefWith } from "@/lib/href";
 import { ANY_ASSIGNEE, assigneeKey, groupTasksByStatus, resolveAssigneeFilter } from "./task-groups";
 
@@ -26,7 +30,14 @@ import { ANY_ASSIGNEE, assigneeKey, groupTasksByStatus, resolveAssigneeFilter } 
 // the props a later Life Admin page loader hands it — titles and notes already
 // DECRYPTED, the assignee already resolved to a display name, the server actions passed
 // in — exactly the precedent the sibling life-admin / memory / inbox / connectors views
-// set (no clock / DB / session / crypto in the view).
+// set (no clock / DB / session / crypto in the view). The page heading (and the Records |
+// Tasks views) belong to LifeAdminScreen, so this view starts at its first panel.
+//
+// Layout (the UI/UX pass): a "Create a task" panel that is always open (one field and one
+// button, so a half-typed task survives switching views), the assignee filter in one
+// bounded toolbar, then the status groups as panels with divider rows. Every form is a
+// guarded ActionForm (one submission per click), and a title made only of spaces is refused
+// before it is sent.
 //
 // Organisation (the "tidy and organise" pass): the list is grouped by the real statuses —
 // To do (open), In progress, Done (collapsed) — each keeping the loader's oldest-first
@@ -37,8 +48,8 @@ import { ANY_ASSIGNEE, assigneeKey, groupTasksByStatus, resolveAssigneeFilter } 
 // filter back (`returnAssignee`) so the person lands on the same list.
 //
 // No control may ever be dead (constitution: "No dead controls"): a control whose server
-// action is not supplied renders DISABLED with a one-line reason. Colour comes from the
-// design tokens (globals.css) and shared components, never a raw hex.
+// action is not supplied renders DISABLED with a one-line reason tied to it. Colour comes
+// from the design tokens (globals.css) and shared components, never a raw hex.
 
 // ─── the prop contract this task introduces ─────────────────────────────────────────
 
@@ -61,13 +72,17 @@ export type TaskAssigneeView =
   | { kind: "any" }
   | { kind: "agent"; agentId: string; agentName: string };
 
+// A live claim: which agent is working on the task and until when. `until` is the
+// loader's wording of the expiry in the person's own time zone ("12 Nov 2026, 6:17 pm").
+export type TaskClaimView = { agentName: string; expiresAt: string; until?: string };
+
 export type TaskItemView = {
   id: string;
   title: string;
   notes: ReadonlyArray<TaskNoteView>;
   assignee: TaskAssigneeView;
   status: TaskStatus;
-  claim?: {agentName:string; expiresAt:string};
+  claim?: TaskClaimView;
 };
 
 // A connected agent a task may be assigned to.
@@ -90,27 +105,21 @@ export type TasksViewProps = {
   completeAction?: TasksAction;
 };
 
-// ─── styling (design tokens; no raw hex) ─────────────────────────────────────────────
-//
-// Native control classes on the tokens, mirroring the sibling life-admin view. They omit
-// the shared Button's `disabled:` variants so a LIVE control's class never reads as
-// "disabled"; the one DISABLED control carries the native `disabled` attribute instead.
-// The accent fill is the one primary action (Create / submit); everything else is the
-// neutral surface.
-const BTN_BASE =
-  "inline-flex min-h-11 items-center justify-center gap-2 rounded-full px-4 text-sm font-medium transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-focus focus-visible:ring-offset-2 focus-visible:ring-offset-bg";
-const BTN_PRIMARY = `${BTN_BASE} bg-accent text-accent-fg hover:bg-accent-hover`;
-const BTN_SECONDARY = `${BTN_BASE} border border-line bg-surface text-fg hover:bg-surface-muted`;
-const BTN_DISABLED = `${BTN_BASE} border border-line bg-surface text-fg-muted opacity-50`;
+// ─── styling (shared primitives and design tokens; no raw hex) ───────────────────────
 
-const SUMMARY_CLASS =
-  "inline-flex w-fit cursor-pointer items-center gap-2 text-sm font-medium text-fg";
-const CONTROL_CLASS =
-  "min-h-11 w-full rounded-card border border-line bg-surface px-3 text-sm text-fg focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-focus focus-visible:ring-offset-2 focus-visible:ring-offset-bg";
-const MANAGE_SUMMARY_CLASS =
-  "inline-flex min-h-11 w-fit cursor-pointer list-none items-center gap-2 rounded-card text-sm font-medium text-fg focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-focus [&::-webkit-details-marker]:hidden";
-const TEXT_LINK_CLASS =
-  "inline-flex min-h-11 items-center px-2 text-sm font-medium text-fg underline underline-offset-4 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-focus";
+// A <summary> that looks like a small Button, with the disclosure marker hidden because
+// the label and its chevron say what opens.
+const MANAGE_SUMMARY_CLASS = buttonClasses({
+  variant: "ghost",
+  size: "sm",
+  className: "w-fit list-none [&::-webkit-details-marker]:hidden",
+});
+
+const HINT_CLASS = "text-sm text-fg-muted";
+
+// A title must contain something other than spaces (the server refuses one that doesn't,
+// too); checked before sending so the draft stays as typed.
+const NOT_BLANK = ".*\\S.*";
 
 // The page the Tasks view lives on, and the query state its filter links keep.
 const TASKS_PATH = "/life-admin";
@@ -124,14 +133,18 @@ function ReturnFilter({ value }: { value?: string }) {
 
 // ─── a present-but-not-actionable control (no dead controls) ─────────────────────────
 //
-// The native `disabled` attribute does the disabling, and a one-line reason says why.
+// The native `disabled` attribute does the disabling, and a one-line reason says why; the
+// reason is tied to the button so a screen reader announces it with the control.
 function DisabledControl({ label, reason }: { label: string; reason: string }) {
+  const reasonId = React.useId();
   return (
     <div className="flex flex-col gap-1">
-      <button type="button" disabled className={BTN_DISABLED}>
+      <Button variant="secondary" disabled aria-describedby={reasonId} className="w-fit">
         {label}
-      </button>
-      <p className="text-xs text-fg-muted">{reason}</p>
+      </Button>
+      <p id={reasonId} className={HINT_CLASS}>
+        {reason}
+      </p>
     </div>
   );
 }
@@ -149,8 +162,8 @@ const STATUS_META: Record<TaskStatus, StatusMeta> = {
 function TaskStatusBadge({ status }: { status: TaskStatus }) {
   const { label, Icon, tone } = STATUS_META[status];
   return (
-    <span className={["inline-flex items-center gap-1.5 text-sm font-medium", tone].join(" ")}>
-      <Icon aria-hidden={true} className="h-4 w-4 shrink-0" />
+    <span className="inline-flex items-center gap-1.5 text-sm font-medium text-fg">
+      <Icon aria-hidden={true} className={`h-4 w-4 shrink-0 ${tone}`} />
       {label}
     </span>
   );
@@ -171,10 +184,10 @@ function noteAttribution(author: TaskActorView): string {
 function TaskNotes({ notes }: { notes: ReadonlyArray<TaskNoteView> }) {
   if (notes.length === 0) return null;
   return (
-    <ul className="flex flex-col gap-2">
+    <ul className="flex max-w-prose flex-col gap-2">
       {notes.map((note, index) => (
-        <li key={index} className="flex flex-col gap-0.5 rounded-card bg-surface-muted p-3">
-          <p className="text-sm text-fg">{note.text}</p>
+        <li key={index} className="flex flex-col gap-0.5 rounded-field bg-surface-muted px-3 py-2">
+          <p className="text-sm text-fg [overflow-wrap:anywhere]">{note.text}</p>
           <p className="text-xs text-fg-muted">{noteAttribution(note.author)}</p>
         </li>
       ))}
@@ -211,29 +224,34 @@ function AssignControl({
   );
   if (!assignAction) {
     return (
-      <div className="flex flex-col gap-1.5">
-        <Label htmlFor={fieldId}>Assign to</Label>
-        <select id={fieldId} name="assignee" defaultValue={current} disabled className={CONTROL_CLASS}>
-          {options}
-        </select>
-        <p className="text-xs text-fg-muted">Assigning isn't available just now.</p>
-      </div>
+      <SelectField
+        label="Assign to"
+        id={fieldId}
+        name="assignee"
+        defaultValue={current}
+        disabled
+        hint="Assigning isn't available just now."
+        width="text"
+      >
+        {options}
+      </SelectField>
     );
   }
   return (
-    <form action={assignAction} className="flex flex-col gap-1.5">
+    <ActionForm action={assignAction} className="flex flex-col gap-3">
       <input type="hidden" name="taskId" value={task.id} />
       <ReturnFilter value={returnAssignee} />
-      <Label htmlFor={fieldId}>Assign to</Label>
-      <select id={fieldId} name="assignee" defaultValue={current} className={CONTROL_CLASS}>
-        {options}
-      </select>
+      <PendingFormFields>
+        <SelectField label="Assign to" id={fieldId} name="assignee" defaultValue={current} width="text">
+          {options}
+        </SelectField>
+      </PendingFormFields>
       <div>
-        <button type="submit" className={BTN_SECONDARY}>
+        <FormSubmit variant="secondary" size="sm" pendingLabel="Assigning…">
           Assign
-        </button>
+        </FormSubmit>
       </div>
-    </form>
+    </ActionForm>
   );
 }
 
@@ -251,38 +269,38 @@ function AddNoteControl({
   const fieldId = React.useId();
   if (!addNoteAction) {
     return (
-      <div className="flex flex-col gap-1.5">
-        <Label htmlFor={fieldId}>Add a note</Label>
-        <textarea
-          id={fieldId}
-          name="note"
-          rows={2}
-          disabled
-          className={CONTROL_CLASS}
-          placeholder="Leave a note for whoever picks this up"
-        />
-        <p className="text-xs text-fg-muted">Adding a note isn't available just now.</p>
-      </div>
-    );
-  }
-  return (
-    <form action={addNoteAction} className="flex flex-col gap-1.5">
-      <input type="hidden" name="taskId" value={task.id} />
-      <ReturnFilter value={returnAssignee} />
-      <Label htmlFor={fieldId}>Add a note</Label>
-      <textarea
+      <TextareaField
+        label="Add a note"
         id={fieldId}
         name="note"
         rows={2}
-        className={CONTROL_CLASS}
+        disabled
         placeholder="Leave a note for whoever picks this up"
+        hint="Adding a note isn't available just now."
       />
+    );
+  }
+  return (
+    <ActionForm action={addNoteAction} className="flex flex-col gap-3">
+      <input type="hidden" name="taskId" value={task.id} />
+      <ReturnFilter value={returnAssignee} />
+      <PendingFormFields>
+        <TextareaField
+          label="Add a note"
+          id={fieldId}
+          name="note"
+          rows={2}
+          required
+          maxLength={4000}
+          placeholder="Leave a note for whoever picks this up"
+        />
+      </PendingFormFields>
       <div>
-        <button type="submit" className={BTN_SECONDARY}>
+        <FormSubmit variant="secondary" size="sm" pendingLabel="Adding note…">
           Add a note
-        </button>
+        </FormSubmit>
       </div>
-    </form>
+    </ActionForm>
   );
 }
 
@@ -301,19 +319,21 @@ function CompleteControl({
     return <DisabledControl label="Mark done" reason="Completing isn't available just now." />;
   }
   return (
-    <form action={completeAction}>
+    <ActionForm action={completeAction}>
       <input type="hidden" name="taskId" value={task.id} />
       <ReturnFilter value={returnAssignee} />
-      <button type="submit" className={BTN_SECONDARY}>
-        Mark done
-      </button>
-    </form>
+      <FormSubmit variant="secondary" size="sm" pendingLabel="Marking done…">
+        <CheckCircle2 aria-hidden={true} className="h-4 w-4 shrink-0" />
+        Mark done<span className="sr-only">: {task.title}</span>
+      </FormSubmit>
+    </ActionForm>
   );
 }
 
 // One task as a divider row: its title and status, its current assignee (and claim), its
-// notes, "Mark done" (not offered once the task is done) and a Manage disclosure holding
-// the assign / add-note controls, named for the task so each one is distinguishable.
+// notes, then one row of actions — "Mark done" (not offered once the task is done) beside a
+// Manage disclosure holding the assign / add-note controls, named for the task so each one
+// is distinguishable. An open Manage takes the full row width below the buttons.
 function TaskRow({
   task,
   agents,
@@ -332,31 +352,42 @@ function TaskRow({
   return (
     <li className={LIST_ROW}>
       <div className="flex min-w-0 flex-col gap-2">
-        <div className="flex flex-wrap items-start justify-between gap-2">
-          <h4 className="min-w-0 text-sm font-medium text-fg">{task.title}</h4>
+        <div className="flex flex-wrap items-start justify-between gap-x-3 gap-y-1">
+          <p className="min-w-0 font-medium text-fg [overflow-wrap:anywhere]">{task.title}</p>
           <TaskStatusBadge status={task.status} />
         </div>
 
-        <p className="text-sm text-fg-muted">{assigneeText(task.assignee)}</p>
-        {task.claim && <p className="text-sm text-fg-muted">Claimed by {task.claim.agentName} until <time dateTime={task.claim.expiresAt}>{task.claim.expiresAt.replace("T", " ").replace(".000Z", " UTC")}</time>. Reassigning releases the claim.</p>}
+        <p className={HINT_CLASS}>{assigneeText(task.assignee)}</p>
+        {task.claim ? (
+          <p className={HINT_CLASS}>
+            Claimed by {task.claim.agentName}
+            {task.claim.until ? (
+              <>
+                {" "}until <time dateTime={task.claim.expiresAt}>{task.claim.until}</time>
+              </>
+            ) : null}
+            . Reassigning it lets another agent pick it up.
+          </p>
+        ) : null}
 
         <TaskNotes notes={task.notes} />
 
-        {task.status === "done" ? null : (
-          <CompleteControl task={task} completeAction={completeAction} returnAssignee={returnAssignee} />
-        )}
-
-        <details className="group/manage">
-          <summary className={MANAGE_SUMMARY_CLASS}>
-            <Settings2 aria-hidden={true} className="h-4 w-4 shrink-0 text-fg-muted" />
-            Manage<span className="sr-only"> {task.title}</span>
-            <ChevronDown aria-hidden={true} className="h-4 w-4 shrink-0 text-fg-muted transition-transform group-open/manage:rotate-180" />
-          </summary>
-          <div className="mt-2 flex min-w-0 flex-col gap-4 border-s-2 border-line ps-4">
-            <AssignControl task={task} agents={agents} assignAction={assignAction} returnAssignee={returnAssignee} />
-            <AddNoteControl task={task} addNoteAction={addNoteAction} returnAssignee={returnAssignee} />
-          </div>
-        </details>
+        <div className="flex min-w-0 flex-wrap items-start gap-2">
+          {task.status === "done" ? null : (
+            <CompleteControl task={task} completeAction={completeAction} returnAssignee={returnAssignee} />
+          )}
+          <details className="group/manage min-w-0 open:basis-full">
+            <summary className={MANAGE_SUMMARY_CLASS}>
+              <Settings2 aria-hidden={true} className="h-4 w-4 shrink-0 text-fg-muted" />
+              Manage<span className="sr-only"> {task.title}</span>
+              <ChevronDown aria-hidden={true} className="h-4 w-4 shrink-0 text-fg-muted transition-transform group-open/manage:rotate-180" />
+            </summary>
+            <div className="mt-2 flex min-w-0 flex-col gap-4 border-s-2 border-line ps-4">
+              <AssignControl task={task} agents={agents} assignAction={assignAction} returnAssignee={returnAssignee} />
+              <AddNoteControl task={task} addNoteAction={addNoteAction} returnAssignee={returnAssignee} />
+            </div>
+          </details>
+        </div>
       </div>
     </li>
   );
@@ -364,28 +395,55 @@ function TaskRow({
 
 // ─── the tab-level CREATE control ────────────────────────────────────────────────────
 
-// Revealed from a disclosure so an empty tab still offers it. LIVE (a form bound to
-// createTaskAction) when supplied; otherwise DISABLED with a reason.
-function CreateControl({ createTaskAction }: { createTaskAction?: TasksAction }) {
+// Always open, so an empty tab offers it and a half-typed title survives switching views.
+// LIVE (a form bound to createTaskAction) when supplied; otherwise DISABLED with a reason.
+function CreateControl({
+  createTaskAction,
+  hasAgents,
+  returnAssignee,
+}: {
+  createTaskAction?: TasksAction;
+  hasAgents: boolean;
+  returnAssignee?: string;
+}) {
   const fieldId = React.useId();
+  const description = hasAgents
+    ? "Assign it to an agent from its Manage menu, or leave it for any of your agents to pick up."
+    : "It waits here until an agent picks it up.";
   if (!createTaskAction) {
-    return <DisabledControl label="Create a task" reason="Creating a task isn't available just now." />;
+    return (
+      <WorkspacePanel title="Create a task" description={description}>
+        <DisabledControl label="Create a task" reason="Creating a task isn't available just now." />
+      </WorkspacePanel>
+    );
   }
   return (
-    <details className="flex flex-col gap-3 rounded-card border border-line bg-surface p-4">
-      <summary className={SUMMARY_CLASS}>Create a task</summary>
-      <form action={createTaskAction} className="mt-2 flex flex-col gap-3">
-        <div className="flex flex-col gap-1.5">
-          <Label htmlFor={fieldId}>What needs doing</Label>
-          <Input id={fieldId} name="title" placeholder="Describe the task" />
+    <ActionForm action={createTaskAction}>
+      <ReturnFilter value={returnAssignee} />
+      <WorkspacePanel title="Create a task" description={description}>
+        <div className="flex min-w-0 flex-col gap-3 sm:flex-row sm:items-end">
+          <PendingFormFields>
+            <Field
+              label="What needs doing"
+              id={fieldId}
+              name="title"
+              placeholder="Describe the task"
+              required
+              maxLength={2000}
+              pattern={NOT_BLANK}
+              title="Describe the task in a few words."
+              className="sm:flex-1"
+              width="full"
+            />
+          </PendingFormFields>
+          <div className="shrink-0">
+            <FormSubmit variant="primary" pendingLabel="Creating…">
+              Create a task
+            </FormSubmit>
+          </div>
         </div>
-        <div>
-          <button type="submit" className={BTN_PRIMARY}>
-            Create a task
-          </button>
-        </div>
-      </form>
-    </details>
+      </WorkspacePanel>
+    </ActionForm>
   );
 }
 
@@ -433,17 +491,16 @@ export function TasksView({
   const allDone = groups.length > 0 && groups.every((group) => group.status === "done");
 
   return (
-    <div className="flex flex-col gap-6">
-      <h1 className="text-2xl font-semibold tracking-tight text-fg">Life admin</h1>
-      <section className="flex flex-col gap-4">
-        <h2 className="text-lg font-semibold text-fg">Tasks</h2>
+    <>
+      <CreateControl createTaskAction={createTaskAction} hasAgents={agents.length > 0} returnAssignee={active} />
 
-        <CreateControl createTaskAction={createTaskAction} />
-
-        {showFilter ? (
-          <div className="flex flex-col gap-2">
+      {showFilter ? (
+        <ListToolbar
+          label="Find tasks"
+          filters={
             <FilterLinks
               label="Filter tasks by assignee"
+              variant="chips"
               items={[
                 { label: "All", href: allHref, active: active === undefined, count: tasks.length },
                 ...options.map((option) => ({
@@ -454,57 +511,66 @@ export function TasksView({
                 })),
               ]}
             />
+          }
+          applied={
             <ActiveFilters
               clearHref={allHref}
               filters={activeLabel !== undefined ? [{ label: `Assigned to: ${activeLabel}`, removeHref: allHref }] : []}
             />
-          </div>
-        ) : null}
+          }
+        />
+      ) : null}
 
-        {tasks.length === 0 ? (
-          <EmptyState
-            heading="No tasks yet"
-            description="Create one and assign it to an agent or leave it open for any of them to pick up."
-          />
-        ) : shown.length === 0 ? (
-          <EmptyState
-            heading={`No tasks for ${activeLabel ?? "this filter"}`}
-            description={`Nothing here is assigned to ${activeLabel ?? "them"}.`}
-            action={
-              <a href={allHref} className={TEXT_LINK_CLASS}>
-                Show all tasks
-              </a>
-            }
-          />
-        ) : (
-          <div className="flex flex-col gap-6">
-            {allDone ? <p className="text-sm text-fg-muted">Everything here is done.</p> : null}
-            {groups.map((group) => (
-              <ListGroup
-                key={group.status}
-                id={`tasks-${group.status}`}
-                level={3}
-                title={<StatusGroupTitle status={group.status} title={group.title} />}
-                count={group.tasks.length}
-                collapsible={group.collapsible}
-              >
-                {group.tasks.map((task) => (
-                  <TaskRow
-                    key={task.id}
-                    task={task}
-                    agents={agents}
-                    assignAction={assignAction}
-                    addNoteAction={addNoteAction}
-                    completeAction={completeAction}
-                    returnAssignee={active}
-                  />
-                ))}
-              </ListGroup>
-            ))}
-          </div>
-        )}
-      </section>
-    </div>
+      {tasks.length === 0 ? (
+        <EmptyState
+          icon={ClipboardList}
+          heading="No tasks yet"
+          description={
+            agents.length > 0
+              ? "Create one above, then assign it to an agent or leave it open for any of them to pick up."
+              : "Tasks you create wait here for an agent to pick them up. Connect an agent so one can."
+          }
+          action={agents.length > 0 ? undefined : <ButtonLink href="/agents/connect" variant="primary">Connect your first agent</ButtonLink>}
+        />
+      ) : shown.length === 0 ? (
+        <EmptyState
+          heading={`No tasks for ${activeLabel ?? "this filter"}`}
+          description={`Nothing here is assigned to ${activeLabel ?? "them"}.`}
+          action={<ButtonLink href={allHref}>Show all tasks</ButtonLink>}
+        />
+      ) : (
+        <>
+          {allDone ? (
+            <ListGroup id="tasks-open" title={<StatusGroupTitle status="open" title="To do" />} count={0}>
+              <li className={LIST_ROW}>
+                <EmptyState variant="inline" icon={CheckCircle} heading="Everything here is done." description="Create a task above when something new comes up." />
+              </li>
+            </ListGroup>
+          ) : null}
+          {groups.map((group) => (
+            <ListGroup
+              key={group.status}
+              id={`tasks-${group.status}`}
+              title={<StatusGroupTitle status={group.status} title={group.title} />}
+              count={group.tasks.length}
+              collapsible={group.collapsible}
+            >
+              {group.tasks.map((task) => (
+                <TaskRow
+                  key={task.id}
+                  task={task}
+                  agents={agents}
+                  assignAction={assignAction}
+                  addNoteAction={addNoteAction}
+                  completeAction={completeAction}
+                  returnAssignee={active}
+                />
+              ))}
+            </ListGroup>
+          ))}
+        </>
+      )}
+    </>
   );
 }
 

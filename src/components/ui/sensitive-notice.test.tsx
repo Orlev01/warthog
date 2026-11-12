@@ -199,3 +199,15 @@ test("the panel uses design tokens, never a raw hex colour", () => {
     `no raw hex colour may appear in the sensitive-notice markup, got: ${markup}`,
   );
 });
+
+// ─── UI/UX pass: a pending confirm keeps focus and ignores repeat taps ────────────────
+
+test("while the confirmed step runs the control says so, stays focusable and ignores taps", () => {
+  let calls = 0;
+  const markup = renderToStaticMarkup(<SensitiveNotice pending pendingLabel="Saving card…" onConfirm={() => { calls++; }} />);
+  assert.match(markup, /aria-busy="true"/);
+  assert.match(markup, /aria-disabled="true"/);
+  assert.match(markup, />Saving card…<\/button>/);
+  assert.doesNotMatch(markup, /\sdisabled=""/);
+  assert.equal(calls, 0);
+});

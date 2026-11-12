@@ -142,23 +142,38 @@ export function createConfirmItsYou(deps: ConfirmItsYouDeps): ConfirmItsYouContr
 const defaultFetch: typeof fetch = (...args) => globalThis.fetch(...args);
 
 export interface ConfirmItsYouProps {
-  // Why a fresh confirmation is needed here, in plain words.
+  // Why a fresh confirmation is needed here, in plain words. Hidden once confirmed, so a
+  // screen can pass its "nothing was changed, confirm first" refusal here and it clears
+  // itself on success.
   explanation?: string;
   // Shown once confirmed (e.g. "Done — you can export now.").
   confirmedText?: string;
   onConfirmed?: () => void;
+  // Which factors the member has, when the screen knows (the security loader reads both).
+  // `false` hides that option; omitted keeps it, because an enrolled factor must be usable
+  // wherever a confirmation is accepted (docs/adr/authenticator-step-up.md).
+  passkey?: boolean;
+  authenticator?: boolean;
   // Browser seams, overridable for tests.
   fetch?: typeof fetch;
   startAuthentication?: ConfirmItsYouDeps["startAuthentication"];
 }
 
-const DEFAULT_EXPLANATION =
-  "This is a sensitive step, so we need to check it's really you. Use your passkey or your enrolled authenticator app.";
 const DEFAULT_CONFIRMED = "Thanks — that's confirmed. You can carry on for the next five minutes.";
+
+/** The default explanation, naming only the ways this member can confirm. */
+export function confirmItsYouExplanation(options: { passkey: boolean; authenticator: boolean }): string {
+  const lead = "We need to check it's really you before this goes ahead.";
+  if (options.passkey && options.authenticator) return `${lead} Use your passkey or a code from your authenticator app.`;
+  if (options.authenticator) return `${lead} Enter a code from your authenticator app.`;
+  return `${lead} Use your passkey.`;
+}
 
 export function ConfirmItsYou(props: ConfirmItsYouProps): React.ReactElement {
   const [totpCode, setTotpCode] = React.useState("");
   const [, forceUpdate] = React.useReducer((n: number) => n + 1, 0);
+  const rootRef = React.useRef<HTMLDivElement>(null);
+  const confirmedRef = React.useRef<HTMLDivElement>(null);
   const flowRef = React.useRef<ConfirmItsYouController | null>(null);
   if (flowRef.current === null) {
     flowRef.current = createConfirmItsYou({
@@ -170,53 +185,79 @@ export function ConfirmItsYou(props: ConfirmItsYouProps): React.ReactElement {
   }
   const flow = flowRef.current;
   const state = flow.getState();
+  const working = state.status === "working";
+  // A member with neither flag set false keeps both options; never hide both.
+  const offerPasskey = props.passkey !== false || props.authenticator === false;
+  const offerAuthenticator = props.authenticator !== false || props.passkey === false;
 
-  const confirmation = state.status === "confirmed" ? (
-      <div
-        role="status"
-        className="flex items-start gap-3 rounded-card border border-line bg-surface p-4 text-sm text-fg"
-      >
-        <CheckCircle2 aria-hidden={true} className="mt-0.5 h-5 w-5 shrink-0 text-success" />
-        <p>{props.confirmedText ?? DEFAULT_CONFIRMED}</p>
+  // The controls disappear on success, so move focus (if it was here) to the outcome
+  // instead of letting it fall back to the top of the page.
+  const confirmed = state.status === "confirmed";
+  React.useEffect(() => {
+    if (!confirmed) return;
+    const active = document.activeElement;
+    if (active === document.body || (active && rootRef.current?.contains(active))) confirmedRef.current?.focus();
+  }, [confirmed]);
+
+  if (confirmed) {
+    return (
+      <div ref={rootRef} className="wh-confirm-its-you rounded-card border border-line bg-surface p-4">
+        <div ref={confirmedRef} tabIndex={-1} role="status" className="flex items-start gap-3 text-sm text-fg">
+          <CheckCircle2 aria-hidden={true} className="mt-0.5 h-5 w-5 shrink-0 text-success" />
+          <p className="min-w-0">{props.confirmedText ?? DEFAULT_CONFIRMED}</p>
+        </div>
       </div>
-    ) : null;
+    );
+  }
 
   return (
-    <div className="flex flex-col gap-3 rounded-card border border-line bg-surface p-4">
-      {confirmation}
-      <p className="text-sm text-fg">{props.explanation ?? DEFAULT_EXPLANATION}</p>
+    <div ref={rootRef} className="wh-confirm-its-you flex flex-col gap-4 rounded-card border border-line bg-surface p-4">
+      <div className="flex items-start gap-3">
+        <ShieldCheck aria-hidden={true} className="mt-0.5 h-5 w-5 shrink-0 text-fg-muted" />
+        <p className="min-w-0 text-sm text-fg">
+          {props.explanation ?? confirmItsYouExplanation({ passkey: offerPasskey, authenticator: offerAuthenticator })}
+        </p>
+      </div>
       {state.status === "error" && state.error ? (
         <p role="alert" className="text-sm text-danger">
           {state.error}
         </p>
       ) : null}
-      <div className="flex">
-        <Button
-          type="button"
-          variant="primary"
-          disabled={state.status === "working"}
-          onClick={() => {
-            void flow.confirm();
-          }}
-        >
-          <ShieldCheck aria-hidden={true} className="h-4 w-4 shrink-0" />
-          {state.status === "working" ? "Checking…" : "Confirm it's you"}
-        </Button>
-      </div>
-      <form className="flex flex-col gap-3" onSubmit={(event) => {
-        event.preventDefault();
-        const code = totpCode;
-        setTotpCode("");
-        void flow.confirmWithTotp(code);
-      }}>
-        <Field label="Authenticator app code" name="totp" type="text" inputMode="numeric"
-          autoComplete="one-time-code" required pattern="[0-9]{6}" maxLength={6}
-          value={totpCode} onChange={(event) => setTotpCode(event.target.value)}
-          disabled={state.status === "working"} />
-        <Button type="submit" variant="secondary" disabled={state.status === "working"}>
-          Confirm with authenticator app
-        </Button>
-      </form>
+      {offerPasskey ? (
+        <div className="flex">
+          {/* aria-disabled, not disabled, while checking: focus stays on the control. The
+              controller already ignores a second tap. */}
+          <Button
+            type="button"
+            variant="primary"
+            aria-disabled={working || undefined}
+            aria-busy={working || undefined}
+            onClick={() => {
+              void flow.confirm();
+            }}
+          >
+            <ShieldCheck aria-hidden={true} className="h-4 w-4 shrink-0" />
+            {working ? "Checking…" : "Confirm it's you"}
+          </Button>
+        </div>
+      ) : null}
+      {offerAuthenticator ? (
+        <form className="flex min-w-0 flex-col gap-3 sm:flex-row sm:items-end" onSubmit={(event) => {
+          event.preventDefault();
+          if (working) return;
+          const code = totpCode;
+          setTotpCode("");
+          void flow.confirmWithTotp(code);
+        }}>
+          <Field label="Authenticator app code" name="totp" type="text" inputMode="numeric"
+            autoComplete="one-time-code" required pattern="[0-9]{6}" maxLength={6} width="short"
+            value={totpCode} onChange={(event) => setTotpCode(event.target.value)}
+            readOnly={working} />
+          <Button type="submit" variant={offerPasskey ? "secondary" : "primary"} aria-disabled={working || undefined}>
+            Confirm with authenticator app
+          </Button>
+        </form>
+      ) : null}
     </div>
   );
 }

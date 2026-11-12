@@ -1,92 +1,99 @@
 import * as React from "react";
+import { ArrowRight } from "lucide-react";
 
-import { Wordmark } from "@/components/shell/wordmark";
+import { PublicPage, PublicPanel, PublicSection } from "@/components/public/public-page";
 
 // E18-S16 — Help page entry (`/help`). A PUBLIC page, reachable by anyone with NO
 // authentication: it sits at the top level, under no guard layout, because a person
 // locked out of their account still needs help. It explains, in plain Australian
-// English, what Warthog is, how to connect an agent (linking /help/compatibility),
-// how approvals and "Ask me first" work, how to recover an account (linking /recover)
-// and the privacy summary (linking /privacy).
+// English, what Warthog does, how to connect an agent (linking /help/compatibility),
+// how approvals and "Ask me first" work, the two ways back into an account (linking
+// /recover and /reset) and the privacy summary (linking /privacy).
 //
 // The screen is static — it needs no session and no config — so the entry mounts it
-// directly. No protocol or security jargon reaches this primary screen (brief
-// design_ux.copy): no "OAuth", "MCP", "DCR" or "token" in the copy. Colour, spacing
-// and radius come from the design tokens (globals.css) — never a raw hex value.
+// directly, inside the shared public document frame. No protocol or security jargon
+// reaches this primary screen (brief design_ux.copy): no "OAuth", "MCP", "DCR" or
+// "token" in the copy. The copy matches the landing's scope statement: Warthog's
+// controls apply to requests made through Warthog.
 
-// A neutral, button-sized navigation link (≥44px target, visible focus ring) built on
-// the same design tokens as the landing's secondary call to action.
-const NAV_LINK =
-  "inline-flex min-h-11 w-fit items-center justify-center rounded-card border border-line bg-surface px-4 text-sm font-medium text-fg transition-colors hover:bg-surface-muted focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-focus focus-visible:ring-offset-2 focus-visible:ring-offset-bg";
+function Action({ href, children }: { href: string; children: React.ReactNode }) {
+  return (
+    <a href={href} className="wh-public-action">
+      {children} <ArrowRight size={16} aria-hidden="true" />
+    </a>
+  );
+}
 
 export default function HelpPage() {
   return (
-    <main className="mx-auto flex w-full max-w-3xl flex-col gap-12 px-4 py-10 sm:px-6">
-      <header className="flex flex-col gap-6">
-        <Wordmark href="/" />
-        <h1 className="text-3xl font-semibold tracking-tight text-fg sm:text-4xl">
-          Help
-        </h1>
-        <p className="max-w-prose text-base text-fg-muted">
-          Warthog is the one place you own that every AI agent connects through. It
-          holds who you are, what each agent may touch and spend, and a plain record
-          of everything your agents do. This page covers the basics; you can read it
-          even when you&#39;re locked out of your account.
-        </p>
-      </header>
+    <PublicPage
+      title="Help"
+      current="help"
+      lead="The basics of Warthog in plain words. You can read this page even when you’re locked out of your account."
+    >
+      <PublicPanel>
+        <PublicSection id="what-warthog-does" title="What Warthog does">
+          <p>
+            Warthog is where you manage what each compatible agent can do through its Warthog
+            connection: which of your services and information it can use, what needs your
+            approval first, and a record of the requests it makes through Warthog. It doesn’t
+            control an agent’s own tools, chats or spending outside Warthog.
+          </p>
+        </PublicSection>
 
-      <section className="flex flex-col gap-4">
-        <h2 className="text-lg font-semibold text-fg">Connecting an agent</h2>
-        <p className="max-w-prose text-sm text-fg-muted">
-          Each AI agent connects to Warthog with its own sign-in that you can switch
-          off on its own, at any time, without touching your other agents. Agents
-          reach your connected services only through Warthog — never with your own
-          logins.
-        </p>
-        <a href="/help/compatibility" className={NAV_LINK}>
-          See how to connect your agent
-        </a>
-      </section>
+        <PublicSection id="connecting" title="Connecting an agent">
+          <p>
+            Each agent connects to Warthog with its own connection, so you can change or remove
+            its access without touching your other agents. When it uses a service you’ve
+            connected, it goes through Warthog and the permissions you chose. Warthog doesn’t
+            give it your passwords.
+          </p>
+          <div className="wh-public-actions">
+            <Action href="/help/compatibility">See how to connect your agent</Action>
+          </div>
+        </PublicSection>
 
-      <section className="flex flex-col gap-4">
-        <h2 className="text-lg font-semibold text-fg">
-          Approvals and &#39;Ask me first&#39;
-        </h2>
-        <p className="max-w-prose text-sm text-fg-muted">
-          Before anything sensitive happens — sharing your details, spending money or
-          making a change you&#39;d want to know about — Warthog pauses and asks you
-          first. You approve or decline each request yourself, signed in to Warthog.
-        </p>
-        <p className="max-w-prose text-sm text-fg-muted">
-          Turn on &#39;Ask me first&#39; for anything you always want to check, and
-          Warthog holds the request until you say yes.
-        </p>
-      </section>
+        <PublicSection id="approvals" title="Approvals and “Ask me first”">
+          <p>
+            When an agent asks for something that needs your say, such as a protected detail,
+            your card for a purchase or a change you’ve asked to check, Warthog holds the request
+            in your Inbox until you approve or deny it.
+          </p>
+          <p>
+            Set a rule to “Ask me first” for anything you always want to check. Warthog holds the
+            request until you decide.
+          </p>
+        </PublicSection>
 
-      <section className="flex flex-col gap-4">
-        <h2 className="text-lg font-semibold text-fg">Recovering your account</h2>
-        <p className="max-w-prose text-sm text-fg-muted">
-          Locked out? You can get back into your account using the recovery codes you
-          saved when you signed up. If you&#39;ve lost those too, Warthog can walk you
-          through how to recover your account step by step.
-        </p>
-        <a href="/recover" className={NAV_LINK}>
-          Recover your account
-        </a>
-      </section>
+        <PublicSection id="recovering" title="Getting back into your account">
+          <p>
+            Lost your passkey? Sign in with your email and the recovery code you saved when you
+            signed up.
+          </p>
+          <div className="wh-public-actions">
+            <Action href="/recover">Recover your account</Action>
+          </div>
+          <p>
+            Lost your recovery code too? You can reset your account by email. A reset takes 7
+            days, erases your saved cards and protected details, and disconnects your agents and
+            services. Everything else is kept.
+          </p>
+          <div className="wh-public-actions">
+            <Action href="/reset">Reset your account</Action>
+          </div>
+        </PublicSection>
 
-      <section className="flex flex-col gap-4">
-        <h2 className="text-lg font-semibold text-fg">Your privacy</h2>
-        <p className="max-w-prose text-sm text-fg-muted">
-          Your details, your cards and the record of what your agents do are yours.
-          You can export everything or delete your account yourself at any time. Our
-          privacy policy explains what is stored, where it is kept, and who can read
-          it.
-        </p>
-        <a href="/privacy" className={NAV_LINK}>
-          Read the privacy policy
-        </a>
-      </section>
-    </main>
+        <PublicSection id="privacy" title="Your privacy">
+          <p>
+            Your details, your cards and the record of what your agents do are yours. You can
+            export everything or delete your account yourself in Settings. The privacy policy
+            explains what we store, where it’s kept and who can read it.
+          </p>
+          <div className="wh-public-actions">
+            <Action href="/privacy">Read the privacy policy</Action>
+          </div>
+        </PublicSection>
+      </PublicPanel>
+    </PublicPage>
   );
 }

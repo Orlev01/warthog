@@ -11,6 +11,7 @@ import { systemClock } from "@/server/seams/clock";
 import { recordMetricEvent } from "@/server/metrics/record";
 import type { Db } from "@/server/db/index";
 import { createAgentExecutors } from "@/server/mcp/compose";
+import { getProcessCatalogue } from "@/server/connectors/catalogue";
 import { createInboxActions, inboxQueryFrom, type ActionResult } from "./actions";
 
 // E12-S13 — Inbox page (the thin protected-page loader + decision wiring).
@@ -68,6 +69,8 @@ function buildActions(db: Db) {
     executeApprovedHold,
     // Decision counts and response times reach the metrics store (review fix D2).
     recordMetric: (input) => recordMetricEvent(db, systemClock, input),
+    // Requests name a connected service as the catalogue does ("Gmail"), never by its id.
+    serviceName: (connectorId) => getProcessCatalogue().get(connectorId)?.name,
   });
 }
 
@@ -134,6 +137,12 @@ async function moreDetailAction(formData: FormData): Promise<void> {
   if (!session) {
     redirect("/signin");
   }
+  // A blank question (spaces only) is refused before anything is decided, with words that
+  // say what to do, rather than the generic "couldn't complete that" (UI/UX pass
+  // interaction-02). The action itself still rejects it at its boundary.
+  if (String(formData.get("question") ?? "").trim() === "") {
+    redirect("/inbox?notice=question_required");
+  }
   let outcome: ActionResult | unknown;
   try {
     outcome = await buildActions(db).askForMoreDetail(
@@ -150,11 +159,21 @@ async function moreDetailAction(formData: FormData): Promise<void> {
 
 // The outcome of the last decision, in words plus an icon (never colour alone). A problem
 // is announced immediately (alert); a success politely (status). The view renders it
-// inside the page width, under the heading.
+// inside the page width, under the heading. `link_expired` comes from an approval link
+// (/a/<token>) that was already used, has expired or isn't this person's: it says so
+// rather than dropping them here without a word (UI/UX pass interaction-22, public-28).
 const NOTICES: Record<string, InboxNotice> = {
-  approved: { tone: "success", text: "Approved — the agent can go ahead." },
-  denied: { tone: "success", text: "Turned down — the agent won't go ahead." },
+  approved: { tone: "success", text: "Approved. The agent can go ahead." },
+  denied: { tone: "success", text: "Denied. The agent won't go ahead." },
   asked: { tone: "success", text: "We've asked the agent for more detail." },
+  question_required: {
+    tone: "error",
+    text: "Type a question for the agent first. Nothing was sent, and the request is still waiting.",
+  },
+  link_expired: {
+    tone: "info",
+    text: "That approval link has expired or was already used, so it didn't open anything. Requests still waiting for you are here, and decisions you've made are under History.",
+  },
   not_found: {
     tone: "error",
     text: "We couldn't find that request. It may have already been decided.",

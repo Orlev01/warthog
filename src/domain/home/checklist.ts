@@ -10,7 +10,7 @@
 // names are the cross-task contract E18-S04 populates and E18-S06 renders.
 export type SetupSignals = {
   readonly notificationsEnabled?: boolean; // "Get notified" done
-  readonly identityAdded?: boolean; // "About you" done
+  readonly identityAdded?: boolean; // "Add your details" done
   readonly cardAdded?: boolean; // "Add a card" done
   readonly serviceConnected?: boolean; // "Connect a service" done
   readonly agentConnected?: boolean; // "Connect an agent" done
@@ -25,17 +25,20 @@ export type SetupChecklistItem = {
 };
 
 // The five first-run items, in documented order: label, link, and the signal
-// that marks it done. This table fixes the items for every consumer.
+// that marks it done. This table fixes the items for every consumer. The order is
+// the order a newcomer should do them in (UI/UX pass, newcomer-01): connecting an
+// agent is what makes Warthog work, so it comes first and goes straight to the
+// connect guide; a card is optional and sensitive, so it comes last.
 const ITEMS: ReadonlyArray<{
   readonly label: string;
   readonly href: string;
   readonly signal: keyof SetupSignals;
 }> = [
-  { label: "Get notified", href: "/settings/notifications", signal: "notificationsEnabled" },
-  { label: "About you", href: "/vault", signal: "identityAdded" },
-  { label: "Add a card", href: "/vault/cards", signal: "cardAdded" },
+  { label: "Connect an agent", href: "/agents/connect", signal: "agentConnected" },
   { label: "Connect a service", href: "/connectors", signal: "serviceConnected" },
-  { label: "Connect an agent", href: "/agents", signal: "agentConnected" },
+  { label: "Add your details", href: "/vault", signal: "identityAdded" },
+  { label: "Get notified", href: "/settings/notifications", signal: "notificationsEnabled" },
+  { label: "Add a card", href: "/vault/cards", signal: "cardAdded" },
 ];
 
 // Build the five first-run checklist items for the given account state. Labels

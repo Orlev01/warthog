@@ -690,6 +690,15 @@ test("malformed input is rejected with a 4xx and nothing is persisted", async ()
       actions.saveLowTierField(session, lowInput({ kind: "name", value: 42 })),
     );
 
+    // Only spaces count as empty (interaction-02): an everyday value or a protected
+    // detail's name of just spaces is refused.
+    await assertRejects4xx("saveLowTierField(spaces only)", () =>
+      actions.saveLowTierField(session, lowInput({ kind: "name", value: "   " })),
+    );
+    await assertRejects4xx("saveHighTierField(label of spaces)", () =>
+      actions.saveHighTierField(session, highInput({ type: "custom", label: "  ", ciphertext: "v1:x" })),
+    );
+
     // High tier: an unknown type, and a missing ciphertext.
     await assertRejects4xx("saveHighTierField(unknown type)", () =>
       actions.saveHighTierField(session, highInput({ type: "biometric", label: "x", ciphertext: "v1:x" })),
@@ -934,6 +943,9 @@ test("updateLowTierField rejects a malformed id, an empty or oversized value and
     );
     await assertRejects4xx("empty value", () =>
       actions.updateLowTierField(session, updateInput({ fieldId: seeded.id, value: "" })),
+    );
+    await assertRejects4xx("a value of only spaces", () =>
+      actions.updateLowTierField(session, updateInput({ fieldId: seeded.id, value: "   " })),
     );
     await assertRejects4xx("oversized value", () =>
       actions.updateLowTierField(session, updateInput({ fieldId: seeded.id, value: "x".repeat(5000) })),

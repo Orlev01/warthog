@@ -47,13 +47,13 @@ export function toolLabel(tool: string): string {
   return humanise(at >= 0 ? tool.slice(at + NAMESPACE.length) : tool);
 }
 
-// What each recorded kind is, in words, for the Kind filter and its chip. A kind not listed
-// reads as its tidied code.
+// What each recorded kind is, in words, for entry titles, the Event filter and its chip. A
+// kind not listed reads as its tidied code.
 const KIND_LABELS: Record<string, string> = {
   tool_call: "Agent request",
-  tool_attempt: "Change starting (intent record)",
-  tool_rejected: "Rejected tool request",
-  protocol_rejected: "Rejected malformed request",
+  tool_attempt: "Change started",
+  tool_rejected: "Request blocked",
+  protocol_rejected: "Request couldn't be read",
   agent_report: "Agent report",
   client_observed: "Client details reported",
   approval_decision: "Approval decision",
@@ -67,6 +67,13 @@ const KIND_LABELS: Record<string, string> = {
   agent_defaults_change: "Agent defaults change",
   skill_access_change: "Skill access change",
   memory_scope_change: "Memory sharing change",
+  rule_created: "Rule created",
+  rule_updated: "Rule updated",
+  rule_paused: "Rule paused",
+  rule_deleted: "Rule deleted",
+  memory_created: "Memory added",
+  memory_updated: "Memory edited",
+  memory_deleted: "Memory deleted",
   account_imported: "Account import",
 };
 
@@ -75,28 +82,44 @@ export function kindLabel(kind: string): string {
   return KIND_LABELS[kind] ?? humanise(kind);
 }
 
+// A connection change says what happened to it ("Service connected"); an agent's own
+// disconnection names the agent instead of a service.
+const CONNECTION_TITLES: Record<string, string> = {
+  connected: "Service connected",
+  reconnected: "Service reconnected",
+  disconnected: "Service disconnected",
+};
+
 /**
  * The headline an entry reads as: an agent call is titled by the tool it used ("Save a
- * memory"); every other entry (a connection change, a release, an approval decision) by
- * its kind, which already says what happened.
+ * memory"); every other entry (a connection change, a release, an approval decision) by its
+ * kind's label ("Access key replaced"), which already says what happened. The intent record
+ * written just before a change runs reads "Started: <tool>"; its result is its own entry.
  */
-export function entryTitle(entry: { readonly kind: string; readonly tool?: string }): string {
+export function entryTitle(entry: {
+  readonly kind: string;
+  readonly tool?: string;
+  readonly outcome?: string;
+  readonly agentId?: string;
+  readonly connectorId?: string;
+}): string {
   if (entry.kind === "tool_call" && entry.tool) return toolLabel(entry.tool);
-  // The intent record written just before a change runs; its result follows as its own entry.
-  if (entry.kind === "tool_attempt" && entry.tool) return `Starting: ${toolLabel(entry.tool)}`;
-  return humanise(entry.kind);
+  if (entry.kind === "tool_attempt" && entry.tool) return `Started: ${toolLabel(entry.tool)}`;
+  if (entry.kind === "connection_change" && entry.outcome) {
+    if (entry.outcome === "disconnected" && entry.agentId && !entry.connectorId) return "Agent disconnected";
+    const title = CONNECTION_TITLES[entry.outcome];
+    if (title) return title;
+  }
+  return kindLabel(entry.kind);
 }
-
-// How much of an unknown id is shown, so two unknown agents can still be told apart
-// without a raw uuid on the screen.
-const SHORT_ID = 8;
 
 /**
  * The agent an entry names, by the name the person gave it (`names` holds the person's
  * own agents, keyed by agent id and connection id). An entry with no agent names none; an
- * id with no agent of theirs behind it reads as "Unknown agent", never as the raw id.
+ * id with no agent of theirs behind it reads as "Removed agent", never as the raw id or a
+ * fragment of it (content-53).
  */
 export function agentLabel(names: ReadonlyMap<string, string>, id: string | undefined): string | undefined {
   if (id === undefined || id === "") return undefined;
-  return names.get(id) ?? `Unknown agent (${id.slice(0, SHORT_ID)})`;
+  return names.get(id) ?? "Removed agent";
 }

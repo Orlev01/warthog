@@ -5,7 +5,7 @@ import { getConnectionPermissions } from "../db/agent-permissions";
 import { pageMemories } from "../db/memories";
 import { listActivity, summariseActivity } from "../activity/list";
 import { isReadOnlyTool } from "../activity/tool-effects";
-import { activityCategory, agentRole, CATEGORY_LABELS, outcomeGroup } from "@/domain/activity/category";
+import { activityCategory, agentRole, CATEGORY_LABELS, outcomeGroup, outcomeLabel } from "@/domain/activity/category";
 import { dayOf, timeOfDay } from "@/domain/display-time";
 
 // The newest entries the agent's audit log lists before "Open the full log".
@@ -13,7 +13,7 @@ export const AGENT_AUDIT_ROWS = 30;
 import { readAgentSpending } from "../spending/agent-spending";
 import { timeZoneFor } from "../spending/time-zone";
 import { formatAccountTime } from "../display-time";
-import { entryTitle, humanise } from "@/domain/activity/describe";
+import { entryTitle } from "@/domain/activity/describe";
 import type { AgentSection } from "@/domain/permissions/workspace";
 import type { Db } from "../db/index";
 import type { Clock } from "../seams/clock";
@@ -68,7 +68,7 @@ export async function agentWorkspaceData(
             seq: entry.seq,
             title: entryTitle(entry),
             ...activityEvidence(entry),
-            outcome: entry.outcome ? humanise(entry.outcome) : "",
+            outcome: outcomeLabel(entry.outcome),
             outcomeGroup: outcomeGroup(entry.outcome),
             categoryLabel: CATEGORY_LABELS[category],
             reported: entry.source === "agent_reported",

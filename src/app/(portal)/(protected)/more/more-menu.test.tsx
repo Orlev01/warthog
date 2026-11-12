@@ -248,7 +248,10 @@ test("lists every 'More' child from the IA as a link to its IA route, in the sid
 // only its own destinations — never one long flat list.
 test("groups the destinations under the sidebar's group headings", () => {
   const { markup } = renderMenu();
-  const sections = [...markup.matchAll(/<section\b[^>]*>([\s\S]*?)<\/section>/gi)].map((m) => ({
+  // The destination groups are the panels inside the "More" navigation (the sign-out panel
+  // after it is an action, not a destination group).
+  const nav = /<nav\b[^>]*>([\s\S]*?)<\/nav>/i.exec(markup)?.[1] ?? "";
+  const sections = [...nav.matchAll(/<section\b[^>]*>([\s\S]*?)<\/section>/gi)].map((m) => ({
     heading: strip(/<h2\b[^>]*>([\s\S]*?)<\/h2>/i.exec(m[1])?.[1] ?? ""),
     hrefs: parseAnchors(m[1]).map((a) => a.href),
   }));

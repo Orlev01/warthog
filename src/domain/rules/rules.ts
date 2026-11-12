@@ -27,7 +27,7 @@ export type MessageChannel = "email" | "chat" | "post";
 /**
  * The action a rule governs — exactly the brief's action vocabulary: a tool that
  * sends a message, a specific tool, any tool of a chosen service, any
- * change-making tool, a card request, or a high-tier identity request. Only the
+ * change-making tool, a card request, or a protected-detail request. Only the
  * `send_message` wording is pinned by this task's acceptance criteria.
  */
 export type RuleAction =
@@ -102,7 +102,7 @@ function actionInfinitive(action: RuleAction): string {
     case "card_request":
       return "request a card";
     case "high_tier_request":
-      return "request a high-tier identity detail";
+      return "request a protected detail";
     default:
       return assertNever(action);
   }

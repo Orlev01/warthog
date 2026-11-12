@@ -1,5 +1,13 @@
 # Warthog comprehensive engineering audit
 
+**Whole-app UI/UX pass, 12 November (not deployed):** nine audit lenses found
+270 issues; fixes on branch `claude/uiux-pass` contain every piece of text in a
+component ([contained text](../adr/contained-text.md)) and take free text on the
+canvas from 17,166 to 0, sub-44px touch targets from 741 to 0 and sub-16px fields
+from 497 to 0 across 594 captures (66 screens, 320–1920px, landscape, dark).
+5,685 tests pass. See the [UI/UX pass record](uiux-pass-2026-11-12/review.md) for
+the method, results and open founder decisions. The live application is unchanged.
+
 **Recovery storage applied, 12 November:** receipt versioning/soft deletion and
 the locked 42-day journal are verified, with a zero-change follow-up plan. The
 synthetic access test found an Azure add-only retry response requiring a narrow

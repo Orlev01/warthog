@@ -2,7 +2,6 @@ import * as React from "react";
 import { cookies } from "next/headers";
 import { redirect } from "next/navigation";
 import { revalidatePath } from "next/cache";
-import { Notice as InlineNotice } from "@/components/ui/notice";
 
 import { ActivityView } from "@/components/activity/activity-view";
 import { loadConfig, type Config } from "@/server/config";
@@ -19,7 +18,7 @@ import { systemClock } from "@/server/seams/clock";
 import { reversalToolFor } from "@/server/activity/tool-effects";
 import type { Db } from "@/server/db/index";
 import { createActivityActions } from "./actions";
-import { noticeLocation, activityNotice, type ActivityNotice } from "./notices";
+import { noticeLocation, activityNotice } from "./notices";
 import type { Metadata } from "next";
 
 // The page title (review fix G8, WCAG 2.4.2): "%s · Warthog" via the root template.
@@ -112,6 +111,11 @@ async function disputeEntryAction(formData: FormData): Promise<void> {
   const config = loadConfig();
   const seq = Number(formData.get("seq"));
   const note = String(formData.get("note") ?? "");
+  // A note of only spaces says nothing: nothing is filed, and the screen says what to do
+  // (the action refuses it at the boundary too, interaction-02).
+  if (note.trim().length === 0) {
+    redirect(noticeLocation("dispute_filed", { ok: false, reason: "dispute_note_missing" }, seq));
+  }
   let outcome: unknown;
   try {
     outcome = await buildActions(db, config).disputeEntry(session, seq, note);
@@ -151,18 +155,6 @@ async function undoEntryAction(formData: FormData): Promise<void> {
   redirect(noticeLocation("undo_done", outcome, landing));
 }
 
-// The outcome of the last change, in words plus an icon (never colour alone). A problem is
-// announced immediately (alert); a success politely (status).
-function NoticeBanner({ notice }: { notice: ActivityNotice }) {
-  return (
-    <div className="wh-page pb-0">
-      <InlineNotice tone={notice.tone === "done" ? "success" : notice.tone === "waiting" ? "info" : "error"}>
-        {notice.text}{notice.action && <> <a href={notice.action.href} className="font-medium underline underline-offset-4">{notice.action.label}</a></>}
-      </InlineNotice>
-    </div>
-  );
-}
-
 export default async function ActivityPage({
   searchParams,
 }: {
@@ -182,10 +174,7 @@ export default async function ActivityPage({
   }
 
   const view = await buildActions(db, config).load(session, params);
-  return (
-    <>
-      {notice ? <NoticeBanner notice={notice} /> : null}
-      <ActivityView {...view} disputeAction={disputeEntryAction} undoAction={undoEntryAction} />
-    </>
-  );
+  // The outcome of the last Dispute or Undo shows in the page's notice slot, under the
+  // heading, in words plus an icon (never colour alone); a problem is announced at once.
+  return <ActivityView {...view} notice={notice} disputeAction={disputeEntryAction} undoAction={undoEntryAction} />;
 }

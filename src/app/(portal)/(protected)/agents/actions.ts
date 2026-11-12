@@ -1,5 +1,7 @@
+import { z } from "zod";
 import { readAgentSpending } from "@/server/spending/agent-spending";
 import { formatAccountTime } from "@/server/display-time";
+import { relativeDayTime } from "@/domain/display-time";
 import { timeZoneFor } from "@/server/spending/time-zone";
 // E10-S11 — Agents list page loader + disconnect wiring (the injectable, unit-testable
 // seam the thin `page.tsx` loader + its `use server` disconnect wrapper compose, the
@@ -30,7 +32,7 @@ import { timeZoneFor } from "@/server/spending/time-zone";
 //     release store and per-user DEK lookup are all INJECTED, so no ambient env value can
 //     leak into the loaded list or the recorded disconnection.
 
-import { listAgentsForUser, type Agent } from "@/server/db/agents";
+import { getAgentById, listAgentsForUser, type Agent } from "@/server/db/agents";
 import { getConnectionPermissions, type ConnectionPermissions } from "@/server/db/agent-permissions";
 import { disconnectAgent } from "@/server/agents/disconnect";
 import type { AgentListItem } from "@/components/agents/agent-list-view";
@@ -82,14 +84,16 @@ function toStatusKey(status: Agent["status"]): AgentListItem["status"] {
 // Build the view's props for one agent from its plaintext metadata and its stored grants
 // (for the budget). An agent with no grants row is NOT dropped — its budget simply reads
 // as none yet.
-function toListItem(agent: Agent, grants: ConnectionPermissions | null, timeZone: string): AgentListItem {
+function toListItem(agent: Agent, grants: ConnectionPermissions | null, timeZone: string, now: Date): AgentListItem {
+  const lastActive = agent.lastActiveAt != null ? new Date(agent.lastActiveAt) : null;
   return {
     id: agent.id,
     name: agent.displayName,
     platform: agent.platform,
     status: toStatusKey(agent.status),
     connectedAt: formatAccountTime(agent.connectedAt, timeZone, { dateOnly: true }),
-    lastActiveAt: agent.lastActiveAt != null ? formatAccountTime(agent.lastActiveAt, timeZone, { dateOnly: true }) : null,
+    // "Today, 6:17 pm", the same wording Home uses for "last active" (content-05).
+    lastActiveAt: lastActive != null && Number.isFinite(lastActive.getTime()) ? relativeDayTime(lastActive.toISOString(), timeZone, now) : null,
     requestCount: agent.requestCount,
     spendThisPeriod: 0,
     budget: grants?.cardBudget?.amount ?? 0,
@@ -115,7 +119,7 @@ export function createAgentsActions(deps: AgentsActionsDeps): AgentsActions {
     for (const agent of agents) {
       const grants = await getConnectionPermissions(db, session.userId, agent.connectionId);
       const spend = grants?.cardBudget ? await readAgentSpending(db, session.userId, agent.connectionId, grants.cardBudget, clock.now(), timeZone) : null;
-      items.push({ ...toListItem(agent, grants, timeZone), spendThisPeriod: spend?.total ?? 0, spendIncomplete: (spend?.unconverted.length ?? 0) > 0 });
+      items.push({ ...toListItem(agent, grants, timeZone, clock.now()), spendThisPeriod: spend?.total ?? 0, spendIncomplete: (spend?.unconverted.length ?? 0) > 0 });
     }
     return { agents: items };
   }
@@ -125,6 +129,13 @@ export function createAgentsActions(deps: AgentsActionsDeps): AgentsActions {
   // person's id is refused), and on success disconnects it in one transaction. Drop the
   // echoed agent id from its confirmation — the screen only needs ok / the reason.
   async function disconnect(session: Session, agentId: string): Promise<DisconnectActionResult> {
+    // An agent that is already disconnected is reported as such, never as a fresh success
+    // (interaction-08: a stale page's second Disconnect said "Agent disconnected." again).
+    // A malformed id skips this read and is refused by disconnectAgent's own boundary.
+    if (z.uuid().safeParse(agentId).success) {
+      const existing = await getAgentById(db, session.userId, agentId);
+      if (existing && existing.status !== "connected") return { ok: false, reason: "not_connected" };
+    }
     const result = await disconnectAgent({ db, clock, releaseStore, dekFor }, session, agentId);
     return result.ok ? { ok: true } : { ok: false, reason: result.reason };
   }

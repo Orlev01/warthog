@@ -3,19 +3,28 @@
 import * as React from "react";
 import {
   Bell,
+  ChevronDown,
   Clock,
   CheckCircle,
+  CheckCircle2,
+  History,
   XCircle,
   HelpCircle,
   type LucideIcon,
 } from "lucide-react";
 
-import { Label } from "@/components/ui/field";
+import { Button, buttonClasses } from "@/components/ui/button";
+import { ButtonLink } from "@/components/ui/button-link";
+import { TextareaField } from "@/components/ui/field";
+import { ActionForm, FormSubmit } from "@/components/ui/form-submit";
 import { EmptyState } from "@/components/ui/empty";
-import { Notice } from "@/components/ui/notice";
+import { PageNotice, type NoticeTone } from "@/components/ui/notice";
 import { ViewPanels } from "@/components/ui/view-tabs";
 import { ActiveFilters, FilterLinks, type AppliedFilter } from "@/components/ui/filter-links";
 import { LIST_ROW, ListGroup } from "@/components/ui/list-group";
+import { ListToolbar } from "@/components/ui/list-toolbar";
+import { WorkspaceHeading } from "@/components/shell/workspace-surfaces";
+import { NOTHING_WAITING } from "@/domain/approvals/inbox-copy";
 import { hrefWith } from "@/lib/href";
 import type { UnlockRequest } from "@/client/vault/unlock";
 import { ReleaseRejectedError } from "@/client/vault/release";
@@ -36,10 +45,13 @@ import { ReleaseApprove } from "./release-approve";
 //      actions the page passes (createInboxActions, E12-S10), exactly as ActivityView
 //      binds Dispute/Undo; a control whose action is not supplied renders DISABLED with a
 //      one-line reason rather than a dead button (constitution: no dead controls).
-//      It is organised as two tabs, "Waiting on you (n)" and "History (n)", whose panels
-//      both stay mounted so a half-written question survives a switch; pending requests
-//      from two or more agents are grouped by agent, and the history carries outcome and
-//      agent filter links (the loader validates the filters and supplies the counts).
+//      It is organised as two tabs, "Waiting on you (n)" and "History (n)", in the page's
+//      heading band, whose panels both stay mounted so a half-written question survives a
+//      switch; pending requests are one list group (one per agent when two or more agents
+//      are asking), each request a divider row, and the history carries outcome and agent
+//      filter links in one toolbar (the loader validates the filters and supplies the
+//      counts). Every piece of text sits in the band, a list group, a toolbar, a notice
+//      or an empty state, never on the canvas (UI/UX pass, rule 1).
 //
 //   2. createReleaseFlow(deps) — the framework-free controller behind the card/high-tier
 //      Approve path. On this device it unlocks the vault, decrypts the stored ciphertext
@@ -150,6 +162,9 @@ export type InboxViewProps = {
   openedEntry?: DecidedRequestView;
   // The outcome of the last decision, in plain words (the page maps its `?notice=`).
   notice?: InboxNotice;
+  // Whether the person has connected an agent (the loader knows): an empty inbox then
+  // points at connecting the first one rather than at rules. Absent, assumed connected.
+  hasAgents?: boolean;
 };
 
 // The inbox's two tabs, keyed by the `?view=` parameter.
@@ -169,24 +184,15 @@ export type HistorySummary = {
   allAgentsCount: number;
 };
 
-export type InboxNotice = { tone: "success" | "error"; text: string };
-
-// ─── styling (design tokens; no raw hex) ─────────────────────────────────────────────
-//
-// Native control classes on the tokens. They deliberately omit the shared Button's
-// `disabled:` utility variants so a LIVE control's class never reads as "disabled"; the
-// one DISABLED control carries the native `disabled` attribute instead (same approach as
-// ActivityView). The accent fill is the per-request primary action (Approve / release);
-// everything else is the neutral surface.
-const BTN_BASE =
-  "inline-flex min-h-11 items-center justify-center gap-2 rounded-full px-4 text-sm font-medium transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-focus focus-visible:ring-offset-2 focus-visible:ring-offset-bg";
-const BTN_PRIMARY = `${BTN_BASE} bg-accent text-accent-fg hover:bg-accent-hover`;
-const BTN_SECONDARY = `${BTN_BASE} border border-line bg-surface text-fg hover:bg-surface-muted`;
-const BTN_DISABLED = `${BTN_BASE} border border-line bg-surface text-fg-muted opacity-50`;
-const TEXTAREA_CLASS =
-  "min-h-11 w-full rounded-card border border-line bg-surface px-3 py-2 text-sm text-fg focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-focus focus-visible:ring-offset-2 focus-visible:ring-offset-bg";
+export type InboxNotice = { tone: NoticeTone; text: string };
 
 // ─── decision controls ───────────────────────────────────────────────────────────────
+//
+// Every control comes from the shared primitives (Button, FormSubmit, TextareaField): one
+// primary per request (Approve), 44px targets, the global focus outline. Each decision form
+// is an ActionForm, so a double click or a repeated Enter sends exactly one decision and the
+// pressed button says what it is doing ("Approving…") while focus stays put (UI/UX pass
+// interaction-01).
 
 // Every pending request repeats the same control words (Approve, Deny, Ask for more
 // detail), so each control also names its request for screen readers: "Deny: Claude wants
@@ -196,8 +202,9 @@ export function RequestContext({ request }: { request: Pick<PendingRequestView, 
   return context ? <span className="sr-only">: {context}</span> : null;
 }
 
-// A present-but-not-actionable control: the native `disabled` attribute does the
-// disabling, and a one-line reason says why (constitution: no dead controls).
+// A present-but-not-actionable control: marked unavailable (aria-disabled, so it stays in
+// the Tab order and is announced), with a one-line reason tied to it by aria-describedby
+// (constitution: no dead controls; UI/UX pass a11y-18). It has no action to run.
 function DisabledControl({
   label,
   reason,
@@ -207,13 +214,14 @@ function DisabledControl({
   reason: string;
   request: PendingRequestView;
 }) {
+  const reasonId = React.useId();
   return (
     <div className="flex flex-col gap-1">
-      <button type="button" disabled className={BTN_DISABLED}>
+      <Button type="button" variant="secondary" aria-disabled={true} aria-describedby={reasonId}>
         {label}
         <RequestContext request={request} />
-      </button>
-      <p className="text-xs text-fg-muted">{reason}</p>
+      </Button>
+      <p id={reasonId} className="text-xs text-fg-muted">{reason}</p>
     </div>
   );
 }
@@ -231,13 +239,13 @@ function ApproveControl({
     return <DisabledControl label="Approve" reason="Approving isn't available just now." request={request} />;
   }
   return (
-    <form action={approveAction}>
+    <ActionForm action={approveAction}>
       <input type="hidden" name="id" value={request.id} />
-      <button type="submit" className={BTN_PRIMARY}>
+      <FormSubmit variant="primary" pendingLabel="Approving…">
         Approve
         <RequestContext request={request} />
-      </button>
-    </form>
+      </FormSubmit>
+    </ActionForm>
   );
 }
 
@@ -252,18 +260,19 @@ function DenyControl({
     return <DisabledControl label="Deny" reason="Denying isn't available just now." request={request} />;
   }
   return (
-    <form action={denyAction}>
+    <ActionForm action={denyAction}>
       <input type="hidden" name="id" value={request.id} />
-      <button type="submit" className={BTN_SECONDARY}>
+      <FormSubmit variant="secondary" pendingLabel="Denying…">
         Deny
         <RequestContext request={request} />
-      </button>
-    </form>
+      </FormSubmit>
+    </ActionForm>
   );
 }
 
 // Ask for more detail: a disclosure whose form (bound to moreDetailAction) carries the
-// request id and a free-text question field. Disabled with a reason when unbound.
+// request id and a free-text question field. Opened, it takes the row's full width so the
+// question has room. Disabled with a reason when unbound.
 function AskControl({
   request,
   moreDetailAction,
@@ -280,24 +289,29 @@ function AskControl({
       />
     );
   }
-  const questionId = `inbox-ask-${request.id}`;
   return (
-    <details className="text-sm">
-      <summary className="min-h-11 cursor-pointer py-3 font-medium text-accent">
+    <details className="group min-w-0 open:basis-full">
+      <summary className={buttonClasses({ variant: "ghost", size: "sm" })}>
         Ask for more detail
         <RequestContext request={request} />
+        <ChevronDown aria-hidden={true} className="h-4 w-4 shrink-0 transition-transform group-open:rotate-180" />
       </summary>
-      <form action={moreDetailAction} className="mt-2 flex flex-col gap-2">
+      <ActionForm action={moreDetailAction} className="mt-2 flex max-w-xl flex-col items-start gap-3 rounded-[var(--wh-radius-inset)] bg-surface-muted p-3">
         <input type="hidden" name="id" value={request.id} />
-        <Label htmlFor={questionId}>What would you like to ask?</Label>
-        <textarea id={questionId} name="question" required={true} rows={2} className={TEXTAREA_CLASS} />
-        <div>
-          <button type="submit" className={BTN_SECONDARY}>
-            Ask for more detail
-            <RequestContext request={request} />
-          </button>
-        </div>
-      </form>
+        <TextareaField
+          label="What would you like to ask?"
+          hint="The agent sees your question and can send the request again with more detail."
+          name="question"
+          required={true}
+          rows={2}
+          maxLength={2000}
+          className="w-full"
+        />
+        <FormSubmit variant="secondary" pendingLabel="Sending…">
+          Ask the agent
+          <RequestContext request={request} />
+        </FormSubmit>
+      </ActionForm>
     </details>
   );
 }
@@ -314,8 +328,9 @@ function approvalElementId(id: string): string {
   return `approval-${id}`;
 }
 
-// The opened request's highlight: an accent border and ring on top of the words below.
-const FOCUSED_ITEM = "border-accent ring-2 ring-accent focus:outline-none";
+// The opened row's highlight: an inset accent ring on top of the words below (never colour
+// alone), drawn inside the row so it never spills past the list group's edge.
+const FOCUSED_ROW = "rounded-field ring-2 ring-inset ring-accent focus:outline-none";
 
 function OpenedTag() {
   return (
@@ -366,16 +381,16 @@ const OPENED_NOTICE: Record<Exclude<OpenedState, "pending">, string> = {
   gone: "We couldn't find that request. It may have expired or been removed.",
 };
 
-function OpenedNotice({ state }: { state: Exclude<OpenedState, "pending"> }) {
-  return <Notice tone="info">{OPENED_NOTICE[state]}</Notice>;
-}
-
 // ─── the pending list ────────────────────────────────────────────────────────────────
 
 // A detail value (and any free-text line) may be one long unbroken string — an email
-// address, a merchant name. It must wrap rather than widen the card past a 360px phone
+// address, a merchant name. It must wrap rather than widen the row past a 320px phone
 // (brief: usable from 360px with no horizontal scrolling).
 const WRAP_ANYWHERE = "min-w-0 [overflow-wrap:anywhere]";
+
+// One pending request as a divider row of its list group: the request in one sentence,
+// its exact details, the agent's reason, the rule and the time left, then the decision.
+const PENDING_ROW = "flex min-w-0 flex-col gap-3 border-b border-line py-4 last:border-0";
 
 function PendingItem({
   request,
@@ -397,23 +412,29 @@ function PendingItem({
     <li
       id={approvalElementId(request.id)}
       tabIndex={focused ? -1 : undefined}
-      className={`mt-3 flex flex-col gap-3 rounded-card border bg-surface p-4 first:mt-0 ${focused ? FOCUSED_ITEM : "border-line"}`}
+      className={focused ? `${PENDING_ROW} ${FOCUSED_ROW}` : PENDING_ROW}
     >
       {focused ? <OpenedTag /> : null}
-      <p className={`text-fg ${WRAP_ANYWHERE}`}>
-        <span className="font-medium">{request.agent}</span> {request.sentence}
+      <p className={`text-base text-fg ${WRAP_ANYWHERE}`}>
+        <span className="font-semibold">{request.agent}</span> {request.sentence}
       </p>
-      <dl className="grid grid-cols-[auto_minmax(0,1fr)] gap-x-3 gap-y-1 text-sm">
+      <dl className="grid grid-cols-[auto_minmax(0,1fr)] gap-x-4 gap-y-1.5 text-sm">
         {request.details.map((detail, index) => (
           <React.Fragment key={`${request.id}-detail-${index}`}>
             <dt className="text-fg-muted">{detail.label}</dt>
             <dd className={`text-fg ${WRAP_ANYWHERE}`}>{detail.value}</dd>
           </React.Fragment>
         ))}
-        <dt className="text-fg-muted">Why</dt>
-        <dd className={`text-fg ${WRAP_ANYWHERE}`}>{request.reason}</dd>
-        <dt className="text-fg-muted">Rule</dt>
-        <dd className={`text-fg ${WRAP_ANYWHERE}`}>{request.rule}</dd>
+        <dt className="text-fg-muted">Agent&apos;s reason</dt>
+        <dd className={request.reason ? `text-fg ${WRAP_ANYWHERE}` : "text-fg-muted"}>
+          {request.reason || "No reason given"}
+        </dd>
+        {request.rule ? (
+          <>
+            <dt className="text-fg-muted">Rule</dt>
+            <dd className={`text-fg ${WRAP_ANYWHERE}`}>{request.rule}</dd>
+          </>
+        ) : null}
         <dt className="text-fg-muted">Time left</dt>
         <dd className={`text-fg ${WRAP_ANYWHERE}`}>
           <span className="inline-flex items-center gap-1.5">
@@ -423,14 +444,23 @@ function PendingItem({
         </dd>
       </dl>
       {isRelease ? (
-        <ReleaseApprove request={request} savedCards={savedCards} />
+        <ReleaseApprove
+          request={request}
+          savedCards={savedCards}
+          secondaryActions={
+            <>
+              <DenyControl request={request} denyAction={denyAction} />
+              <AskControl request={request} moreDetailAction={moreDetailAction} />
+            </>
+          }
+        />
       ) : (
-        <ApproveControl request={request} approveAction={approveAction} />
+        <div className="flex min-w-0 flex-wrap items-center gap-2">
+          <ApproveControl request={request} approveAction={approveAction} />
+          <DenyControl request={request} denyAction={denyAction} />
+          <AskControl request={request} moreDetailAction={moreDetailAction} />
+        </div>
       )}
-      <div className="flex flex-wrap items-start gap-2">
-        <DenyControl request={request} denyAction={denyAction} />
-        <AskControl request={request} moreDetailAction={moreDetailAction} />
-      </div>
     </li>
   );
 }
@@ -462,7 +492,14 @@ function groupByAgent(pending: readonly PendingRequestView[]): AgentGroup[] {
 
 function PendingPanel({ pending, ...controls }: PendingControls & { pending: readonly PendingRequestView[] }) {
   if (pending.length === 0) {
-    return <p className="text-sm text-fg-muted">No requests are waiting right now.</p>;
+    return (
+      <EmptyState
+        icon={CheckCircle2}
+        heading={NOTHING_WAITING.heading}
+        description={NOTHING_WAITING.description}
+        action={<ButtonLink href={hrefWith(INBOX_PATH, { view: "history" }, {})}>See past decisions</ButtonLink>}
+      />
+    );
   }
   const item = (request: PendingRequestView) => (
     <PendingItem
@@ -476,22 +513,22 @@ function PendingPanel({ pending, ...controls }: PendingControls & { pending: rea
     />
   );
   const groups = groupByAgent(pending);
-  // One agent asking: a single list. Two or more: one titled group per agent.
+  // One agent asking: one list group. Two or more: one titled group per agent.
   if (groups.length < 2) {
     return (
-      <ul role="list" className="flex flex-col">
+      <ListGroup id="inbox-pending" title="Requests to decide" count={pending.length} summary="Newest first. Each request waits until you decide or it runs out of time.">
         {pending.map(item)}
-      </ul>
+      </ListGroup>
     );
   }
   return (
-    <div className="flex flex-col gap-6">
+    <>
       {groups.map((group, index) => (
         <ListGroup key={group.key} id={`inbox-agent-${index}`} title={group.name} count={group.requests.length}>
           {group.requests.map(item)}
         </ListGroup>
       ))}
-    </div>
+    </>
   );
 }
 
@@ -506,16 +543,13 @@ const HISTORY_META: Record<DecidedStatus, { Icon: LucideIcon; tone: string }> = 
   more_detail: { Icon: HelpCircle, tone: "text-fg-muted" },
 };
 
-// The words each outcome filter reads as.
+// The words each outcome filter reads as (one verb pair: Approved / Denied).
 const OUTCOME_FILTER_LABEL: Record<DecidedStatus, string> = {
   approved: "Approved",
-  denied: "Turned down",
+  denied: "Denied",
   expired: "Expired",
   more_detail: "Asked for more detail",
 };
-
-// One decision as a divider row; the opened one is ringed and marked in words.
-const FOCUSED_ROW = "-mx-3 rounded-field px-3 ring-2 ring-accent focus:outline-none";
 
 function HistoryItem({ entry, focused }: { entry: DecidedRequestView; focused: boolean }) {
   const { Icon, tone } = HISTORY_META[entry.status];
@@ -536,7 +570,7 @@ function HistoryItem({ entry, focused }: { entry: DecidedRequestView; focused: b
         </span>
         {entry.decidedAt ? <span className="text-xs text-fg-muted">{entry.decidedAt}</span> : null}
       </div>
-      {entry.question ? <p className={`text-sm text-fg-muted ${WRAP_ANYWHERE}`}>{entry.question}</p> : null}
+      {entry.question ? <p className={`text-sm text-fg-muted ${WRAP_ANYWHERE}`}>Your question: {entry.question}</p> : null}
     </li>
   );
 }
@@ -549,6 +583,8 @@ function historyHref(filter: HistoryFilter, patch: HistoryFilter): string {
   return hrefWith(INBOX_PATH, { view: "history", outcome: filter.outcome, agent: filter.agent }, patch);
 }
 
+// Everything that narrows the history, in one bounded toolbar: the outcome chips, the agent
+// chips (only when there is a choice) and the applied filters with "Clear all".
 function HistoryFilters({ filter, summary }: { filter: HistoryFilter; summary: HistorySummary }) {
   const agentName = (id: string) => summary.agents.find((agent) => agent.id === id)?.name ?? "Unknown agent";
   const applied: AppliedFilter[] = [];
@@ -559,45 +595,52 @@ function HistoryFilters({ filter, summary }: { filter: HistoryFilter; summary: H
     applied.push({ label: `Agent: ${agentName(filter.agent)}`, removeHref: historyHref(filter, { agent: undefined }) });
   }
   return (
-    <div className="flex flex-col">
-      <FilterLinks
-        label="Filter decisions by outcome"
-        items={[
-          {
-            label: "All",
-            href: historyHref(filter, { outcome: undefined }),
-            active: filter.outcome === undefined,
-            count: summary.allOutcomesCount,
-          },
-          ...summary.outcomes.map((option) => ({
-            label: OUTCOME_FILTER_LABEL[option.status],
-            href: historyHref(filter, { outcome: option.status }),
-            active: filter.outcome === option.status,
-            count: option.count,
-          })),
-        ]}
-      />
-      {summary.agents.length >= 2 || filter.agent ? (
-        <FilterLinks
-          label="Filter decisions by agent"
-          items={[
-            {
-              label: "All agents",
-              href: historyHref(filter, { agent: undefined }),
-              active: filter.agent === undefined,
-              count: summary.allAgentsCount,
-            },
-            ...summary.agents.map((agent) => ({
-              label: agent.name,
-              href: historyHref(filter, { agent: agent.id }),
-              active: filter.agent === agent.id,
-              count: agent.count,
-            })),
-          ]}
-        />
-      ) : null}
-      <ActiveFilters filters={applied} clearHref={historyHref(filter, { outcome: undefined, agent: undefined })} />
-    </div>
+    <ListToolbar
+      label="Filter decisions"
+      filters={
+        <div className="flex min-w-0 flex-col gap-3">
+          <FilterLinks
+            label="Filter decisions by outcome"
+            variant="scroll"
+            items={[
+              {
+                label: "All",
+                href: historyHref(filter, { outcome: undefined }),
+                active: filter.outcome === undefined,
+                count: summary.allOutcomesCount,
+              },
+              ...summary.outcomes.map((option) => ({
+                label: OUTCOME_FILTER_LABEL[option.status],
+                href: historyHref(filter, { outcome: option.status }),
+                active: filter.outcome === option.status,
+                count: option.count,
+              })),
+            ]}
+          />
+          {summary.agents.length >= 2 || filter.agent ? (
+            <FilterLinks
+              label="Filter decisions by agent"
+              variant="scroll"
+              items={[
+                {
+                  label: "All agents",
+                  href: historyHref(filter, { agent: undefined }),
+                  active: filter.agent === undefined,
+                  count: summary.allAgentsCount,
+                },
+                ...summary.agents.map((agent) => ({
+                  label: agent.name,
+                  href: historyHref(filter, { agent: agent.id }),
+                  active: filter.agent === agent.id,
+                  count: agent.count,
+                })),
+              ]}
+            />
+          ) : null}
+        </div>
+      }
+      applied={<ActiveFilters filters={applied} clearHref={historyHref(filter, { outcome: undefined, agent: undefined })} />}
+    />
   );
 }
 
@@ -622,9 +665,9 @@ function HistoryPanel({
   return (
     <>
       {extra ? (
-        <ul role="list" className="flex flex-col">
+        <ListGroup id="inbox-opened" title="The request you opened">
           <HistoryItem entry={extra} focused={extra.id === focusApproval} />
-        </ul>
+        </ListGroup>
       ) : null}
       {summary && total > 0 ? <HistoryFilters filter={filter} summary={summary} /> : null}
       {history.length === 0 ? (
@@ -632,14 +675,15 @@ function HistoryPanel({
           <EmptyState
             heading="No decisions match"
             description="Try another outcome or agent, or clear the filters to see every decision."
-            action={
-              <a href={clearHref} className={BTN_SECONDARY}>
-                Clear filters
-              </a>
-            }
+            action={<ButtonLink href={clearHref}>Clear filters</ButtonLink>}
           />
         ) : extra ? null : (
-          <p className="text-sm text-fg-muted">Nothing decided yet.</p>
+          <EmptyState
+            icon={History}
+            heading="No decisions yet"
+            description="Requests you approve, deny or ask about are listed here, and every decision is also kept in Activity."
+            action={<ButtonLink href={INBOX_PATH}>See what&apos;s waiting</ButtonLink>}
+          />
         )
       ) : (
         <ListGroup
@@ -666,6 +710,11 @@ function HistoryPanel({
 
 // ─── the view ────────────────────────────────────────────────────────────────────────
 
+const INBOX_HEADING = {
+  title: "Inbox",
+  description: "Requests from your agents that need your decision. Nothing goes ahead until you approve it.",
+};
+
 export function InboxView({
   pending,
   history,
@@ -679,6 +728,7 @@ export function InboxView({
   historySummary,
   openedEntry,
   notice,
+  hasAgents = true,
 }: InboxViewProps) {
   const historyTotal = historySummary?.total ?? history.length;
   const isEmpty = pending.length === 0 && historyTotal === 0 && !openedEntry;
@@ -690,26 +740,58 @@ export function InboxView({
   // A decided approval from a notification opens History; anything else opens Waiting on
   // you. An explicit `?view=` wins. Both panels stay mounted, so drafts survive a switch.
   const openedView: InboxViewKey = opened === "decided" || opened === "expired" ? "history" : "pending";
-  return (
-    <div className="wh-page flex flex-col gap-6">
-      <h1 className="text-2xl font-semibold tracking-tight text-fg">Inbox</h1>
-      {notice ? <Notice tone={notice.tone}>{notice.text}</Notice> : null}
-      {opened !== null && opened !== "pending" ? <OpenedNotice state={opened} /> : null}
-      {isEmpty ? (
+  const firstView = initialView ?? openedView;
+  // The outcome of the last action (and where an opened approval went) is the page's one
+  // notice slot: straight under the heading band — on a tabbed page, first in the tab that
+  // opens. A decision notice leaves the address bar once shown; the opened approval stays
+  // so a refresh still lands on it.
+  const notices =
+    notice || (opened !== null && opened !== "pending") ? (
+      <>
+        {notice ? <PageNotice tone={notice.tone}>{notice.text}</PageNotice> : null}
+        {opened !== null && opened !== "pending" ? (
+          <PageNotice tone="info" clearParams={[]}>{OPENED_NOTICE[opened]}</PageNotice>
+        ) : null}
+      </>
+    ) : null;
+  if (isEmpty) {
+    return (
+      <div className="wh-page">
+        <WorkspaceHeading title={INBOX_HEADING.title} description={INBOX_HEADING.description} />
+        {notices}
         <EmptyState
-          heading="Nothing waiting"
-          description="When an agent needs your say-so, the request will wait for you here."
+          icon={CheckCircle2}
+          heading={NOTHING_WAITING.heading}
+          description={
+            hasAgents
+              ? NOTHING_WAITING.description
+              : "Once you connect an agent, anything it asks you to approve waits here until you decide."
+          }
+          action={
+            hasAgents ? (
+              <ButtonLink href="/rules">Choose what needs your approval</ButtonLink>
+            ) : (
+              <ButtonLink href="/agents/connect" variant="primary">Connect your first agent</ButtonLink>
+            )
+          }
         />
-      ) : (
-        <ViewPanels
-          label="Inbox"
-          defaultTab={openedView}
-          initialTab={initialView ?? openedView}
-          tabs={[
-            {
-              key: "pending",
-              label: `Waiting on you (${pending.length})`,
-              content: (
+      </div>
+    );
+  }
+  return (
+    <div className="wh-page">
+      <ViewPanels
+        label="Inbox"
+        heading={INBOX_HEADING}
+        defaultTab={openedView}
+        initialTab={firstView}
+        tabs={[
+          {
+            key: "pending",
+            label: `Waiting on you (${pending.length})`,
+            content: (
+              <>
+                {firstView === "pending" ? notices : null}
                 <PendingPanel
                   pending={pending}
                   approveAction={approveAction}
@@ -718,12 +800,15 @@ export function InboxView({
                   savedCards={savedCards}
                   focusApproval={focusApproval}
                 />
-              ),
-            },
-            {
-              key: "history",
-              label: `History (${historyTotal})`,
-              content: (
+              </>
+            ),
+          },
+          {
+            key: "history",
+            label: `History (${historyTotal})`,
+            content: (
+              <>
+                {firstView === "history" ? notices : null}
                 <HistoryPanel
                   history={history}
                   filter={historyFilter}
@@ -731,11 +816,11 @@ export function InboxView({
                   openedEntry={openedEntry}
                   focusApproval={focusApproval}
                 />
-              ),
-            },
-          ]}
-        />
-      )}
+              </>
+            ),
+          },
+        ]}
+      />
     </div>
   );
 }

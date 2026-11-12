@@ -23,6 +23,9 @@ For consent and access-key setup, follow the
 standalone consent, expired requests and the access-key alternative in UI reviews;
 these flows do not all inherit the workspace shell.
 
+Never leave text loose on the page background; see
+[contained text](docs/adr/contained-text.md).
+
 For signed-in composition, follow [workspace depth](docs/design/workspace-depth.md):
 use layered surfaces for meaningful groups, keep texture restrained and represent
 agent resource/control relationships without implying unverified connectivity.

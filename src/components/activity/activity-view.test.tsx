@@ -222,8 +222,10 @@ function controlFace(el: El): string {
   return parts.join(" ").replace(/\s+/g, " ").trim();
 }
 
+// The real `disabled` attribute (React renders it as `disabled=""`), never a `disabled:`
+// utility class on the shared Button primitive.
 function isDisabled(el: El): boolean {
-  return /\bdisabled\b/i.test(el.attrs);
+  return /(?:^|\s)disabled(?:=""|\s|$)/i.test(el.attrs);
 }
 
 // Every <button> whose accessible name matches `re` (disabled ones included — a
@@ -579,16 +581,21 @@ test("shows an intact integrity result naming the number of entries checked", ()
   assert.match(text, /entr/i, `the intact result must mention entries, got: "${text}"`);
 });
 
-test("shows a failed integrity result with the advice to export and contact the operator", () => {
+test("shows a failed integrity result with the advice to export and email Warthog support", () => {
+  // UI/UX pass (content-39/content-50): "contact the operator" named no one a member could
+  // reach; the advice now gives the support address, and links the entry that failed.
   const broken: IntegrityResult = { intact: false, checked: 9, brokenSeq: 4 };
-  const text = visibleText(render(base({ entries: [], integrity: broken })));
+  const markup = render(base({ entries: [], integrity: broken }));
+  const text = visibleText(markup);
   assert.match(
     text,
     /fail|broken|tamper|mismatch|doesn.?t match|couldn.?t verify|not intact|problem/i,
     `a failed result must read as a failure, got: "${text}"`,
   );
   assert.match(text, /export/i, `a failed result must advise exporting the record, got: "${text}"`);
-  assert.match(text, /operator/i, `a failed result must advise contacting the operator, got: "${text}"`);
+  assert.match(markup, /href="mailto:[^"]+@[^"]+"/, `a failed result must give a support address to email, got: "${text}"`);
+  assert.match(markup, /href="\/activity\?entry=4#entry-4"/, "the entry that failed the check is one link away");
+  assert.ok(!/operator/i.test(text), "no unreachable 'operator'");
 });
 
 test("an empty timeline renders a message and keeps the Check-integrity control (no dead screen, no entry controls)", () => {

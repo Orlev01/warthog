@@ -25,6 +25,10 @@ import { auditedOwnerChange } from "@/server/activity/owner-change";
 //     (ask_first/never_allow over the six actions, an optional condition) before a
 //     row is written: an unknown action or a malformed/oversized condition is
 //     rejected at the boundary with a 4xx HttpError (parseParams), nothing stored.
+//     A specific-tool or service rule must also name a REAL tool or service (the MCP
+//     tool registry + the connector catalogue, ./rule-targets): a name that matches
+//     nothing is refused ({ ok: false, reason: "unknown_tool" | "unknown_service" })
+//     before anything is stored, so a typo can never become a rule that protects nothing.
 //   • A mis-shaped rule id (not a well-formed uuid — the rules table keys on a
 //     uuid, so this is the OBS-049 defence the AC's "positive integer" wording
 //     stands in for) is rejected at the boundary with a 4xx for update/pause/
@@ -59,7 +63,9 @@ import type { Session } from "@/server/auth/session";
 import type { Clock } from "@/server/seams/clock";
 import type { KeyWrapper } from "@/server/crypto/key-wrapper";
 import type { Db } from "@/server/db/index";
-import type { RulesViewRule, RulesViewAgent } from "@/components/rules/rules-view";
+import type { CatalogueIndex } from "@/server/connectors/catalogue";
+import type { RulesViewRule, RulesViewAgent, RuleTargetGroup } from "@/components/rules/rules-view";
+import { catalogueFromDataFiles, ruleTargetsFor } from "./rule-targets";
 import {
   RULES_PATH,
   RULES_VIEWS,
@@ -70,11 +76,14 @@ import {
 import { firstParam, hrefWith, resolveKey } from "@/lib/href";
 
 // The injected seams — no process.env (INV-103). `clock` is taken for parity with
-// the sibling actions factories and future time-stamped rule writes.
+// the sibling actions factories and future time-stamped rule writes. `catalogue` is the
+// connector catalogue the tool and service names are checked against (the page passes the
+// process catalogue; without one, the catalogue data files are read).
 export interface RulesActionsDeps {
   readonly db: Db;
   readonly clock: Clock;
   readonly keyWrapper: KeyWrapper;
+  readonly catalogue?: CatalogueIndex;
 }
 
 // A mutation's result: success, or a refusal naming its reason (a rule that is not
@@ -91,7 +100,7 @@ export type RulesNotice = { tone: "done" | "problem"; text: string };
 
 // Every `?notice=` outcome code the rule actions redirect with, mapped to its copy.
 const RULES_NOTICES: Record<string, RulesNotice> = {
-  created: { tone: "done", text: "Rule added — Warthog will enforce it from now on." },
+  created: { tone: "done", text: "Rule added. Warthog applies it from now on; it's in the list below." },
   updated: { tone: "done", text: "Rule updated." },
   // E18-S20 honest-pause copy: the Rules screen offers no Resume control (the rules
   // store has no resume primitive to back one), so the notice must NOT promise
@@ -103,6 +112,14 @@ const RULES_NOTICES: Record<string, RulesNotice> = {
     text: "We couldn't find that rule. It may have already been changed.",
   },
   invalid: { tone: "problem", text: "That rule didn't look right. Please check it and try again." },
+  unknown_tool: {
+    tone: "problem",
+    text: "No rule was added: Warthog has no tool with that name. Choose the tool from the list and try again.",
+  },
+  unknown_service: {
+    tone: "problem",
+    text: "No rule was added: Warthog has no service with that name. Choose the service from the list and try again.",
+  },
   error: { tone: "problem", text: "We couldn't complete that just now. Please try again." },
 };
 
@@ -145,6 +162,30 @@ export function rulesReturnHref(notice: string, back: { view?: unknown; status?:
   return hrefWith(RULES_PATH, {}, { notice, status, view: view === "rules" ? undefined : view });
 }
 
+// Where adding a rule lands (interaction-23): once added, the rules list the new rule is in;
+// refused, the New rule view, so the person can correct it.
+export function rulesCreateReturnHref(notice: string): string {
+  return rulesReturnHref(notice, { view: notice === "created" ? "rules" : "new" });
+}
+
+// Map a mutation outcome (or a thrown error) to a stable notice code the page turns into
+// plain words. A refusal names its reason (a rule that isn't the person's; a tool or service
+// that doesn't exist); a 4xx from the validation boundary is shown as "invalid"; anything
+// else is a generic problem.
+const REFUSAL_NOTICES = new Set(["not_found", "unknown_tool", "unknown_service"]);
+export function rulesMutationNotice(outcome: ActionResult | unknown, doneCode: string): string {
+  if (outcome && typeof outcome === "object" && "ok" in outcome) {
+    const result = outcome as ActionResult;
+    if (result.ok) return doneCode;
+    return REFUSAL_NOTICES.has(result.reason) ? result.reason : "error";
+  }
+  if (outcome && typeof outcome === "object" && "status" in outcome) {
+    const status = (outcome as { status: unknown }).status;
+    if (typeof status === "number" && status >= 400 && status < 500) return "invalid";
+  }
+  return "error";
+}
+
 // The content of a rule, as the create form's FormData maps to it and the store
 // writes it (the member scope — the userId — is bound separately from the session).
 export interface RuleInput {
@@ -162,6 +203,9 @@ export interface RulesLoadData {
   readonly currency: string;
   readonly rules: RulesViewRule[];
   readonly agents: RulesViewAgent[];
+  // The real tools and services a new rule may name, grouped for the builder's choices.
+  readonly toolChoices: RuleTargetGroup[];
+  readonly serviceChoices: RuleTargetGroup[];
 }
 
 export interface RulesActions {
@@ -186,6 +230,9 @@ export interface RulesActions {
 // The refusal reason code (mapped to copy by the page) when a rule id is not this
 // person's — the same vocabulary the sibling inbox/security actions use.
 const NOT_FOUND = "not_found";
+// The refusal reasons when a rule names a tool or service that does not exist.
+const UNKNOWN_TOOL = "unknown_tool";
+const UNKNOWN_SERVICE = "unknown_service";
 
 // A well-formed uuid: the only shape a rule id may take. A malformed value is
 // rejected at the validation boundary (parseParams throws a 4xx HttpError) before it
@@ -315,6 +362,7 @@ export function ruleInputFromForm(formData: FormData): RuleInput {
 
 export function createRulesActions(deps: RulesActionsDeps): RulesActions {
   const { db, keyWrapper } = deps;
+  const catalogue = (): CatalogueIndex => deps.catalogue ?? catalogueFromDataFiles();
 
   // Resolve the acting person's unwrapped DEK (to encrypt/decrypt a rule's
   // condition). Read the wrapped DEK member-scoped by `userId` (the session's,
@@ -356,7 +404,23 @@ export function createRulesActions(deps: RulesActionsDeps): RulesActions {
       // Name order (then id), so the scope choices and budget links never shuffle.
       .sort((a, b) => a.name.localeCompare(b.name, undefined, { sensitivity: "base" }) || (a.id < b.id ? -1 : a.id > b.id ? 1 : 0));
 
-    return { rules, agents, currency: await getAccountCurrency(db, session.userId) };
+    const targets = await ruleTargetsFor(db, catalogue(), session.userId, dek);
+    return {
+      rules,
+      agents,
+      currency: await getAccountCurrency(db, session.userId),
+      toolChoices: targets.tools,
+      serviceChoices: targets.services,
+    };
+  }
+
+  // A specific-tool or service rule must name a real tool or service, or it would match
+  // nothing and silently protect nothing. Null when the content's names are all real.
+  async function unknownTarget(userId: string, dek: Uint8Array, action: RuleAction): Promise<string | null> {
+    if (action.type !== "specific_tool" && action.type !== "service_tool") return null;
+    const targets = await ruleTargetsFor(db, catalogue(), userId, dek);
+    if (action.type === "specific_tool") return targets.isTool(action.tool) ? null : UNKNOWN_TOOL;
+    return targets.isService(action.service) ? null : UNKNOWN_SERVICE;
   }
 
   // Resolve a chosen-agent scope's display NAME from the person's OWN agent record
@@ -374,6 +438,8 @@ export function createRulesActions(deps: RulesActionsDeps): RulesActions {
     const content = parseParams(ruleContentSchema, input);
     const scope = await resolveScopeName(session.userId, content.scope);
     const dek = await dataKeyFor(session.userId);
+    const unknown = await unknownTarget(session.userId, dek, content.action);
+    if (unknown) return { ok: false, reason: unknown };
     await auditedOwnerChange(deps, session.userId, async (tx, record) => {
       const rule = await storeCreateRule(tx, { userId: session.userId, ...content, scope }, dek);
       await record("rule_created", { ruleId: rule.id, after: { ...content, scope } });
@@ -386,6 +452,8 @@ export function createRulesActions(deps: RulesActionsDeps): RulesActions {
     const content = parseParams(ruleContentSchema, input);
     const scope = await resolveScopeName(session.userId, content.scope);
     const dek = await dataKeyFor(session.userId);
+    const unknown = await unknownTarget(session.userId, dek, content.action);
+    if (unknown) return { ok: false, reason: unknown };
     try {
       await auditedOwnerChange(deps, session.userId, async (tx, record) => {
         const before = (await listAllRules(tx, session.userId, dek)).find(rule => rule.id === ruleId);

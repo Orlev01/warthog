@@ -14,7 +14,7 @@ import { createMemoryActions, type MemoryActions } from "./actions";
 import { firstParam } from "@/lib/href";
 import { MemoryView } from "@/components/memory/memory-view";
 import { PageContainer } from "@/components/shell/page-container";
-import { Notice as InlineNotice } from "@/components/ui/notice";
+import { memoryNotice, memoryReturnUrl, type MemoryNotice } from "./notices";
 
 // E13-S11 — Memory page (the thin protected-page loader + action wiring over the tested
 // `createMemoryActions` seam, `./actions`). It reads the signed-in session from the
@@ -72,12 +72,13 @@ function scopeOf(formData: FormData): "kept" | "shared" {
   return str(formData, "scope") === "kept" ? "kept" : "shared";
 }
 
-// Run one mutation against the seam under the verified session and redirect back with a
-// notice naming the outcome. A reported refusal ({ ok: false }) or a 4xx `HttpError` from
-// the validation boundary becomes `problem` — shown in plain words, never swallowed; a
-// genuine fault rethrows.
+// Run one mutation against the seam under the verified session and redirect back — to the
+// same search, filters and page — with a notice naming the outcome. A reported refusal
+// ({ ok: false }) or a 4xx `HttpError` from the validation boundary becomes `problem` —
+// shown in plain words, never swallowed; a genuine fault rethrows.
 async function run(
-  success: Notice,
+  formData: FormData,
+  success: MemoryNotice,
   mutate: (
     actions: MemoryActions,
     session: Session,
@@ -88,7 +89,7 @@ async function run(
   if (!session) {
     redirect("/signin");
   }
-  let notice: Notice = success;
+  let notice: MemoryNotice = success;
   try {
     const result = await mutate(buildActions(db), session);
     if (!result.ok) {
@@ -101,12 +102,19 @@ async function run(
     notice = error.status === 409 ? "storage_full" : "problem";
   }
   revalidatePath("/memory");
-  redirect(`/memory?notice=${notice}`);
+  redirect(memoryReturnUrl(formData, notice));
+}
+
+// Content of only spaces (or nothing) is refused with its own reason, before any write;
+// the seam refuses it too (its schema trims before it validates).
+function blank(formData: FormData): boolean {
+  return str(formData, "content").trim() === "";
 }
 
 async function addMemoryAction(formData: FormData): Promise<void> {
   "use server";
-  await run("added", (actions, session) =>
+  if (blank(formData)) redirect(memoryReturnUrl(formData, "blank"));
+  await run(formData, "added", (actions, session) =>
     actions.addMemory(session, {
       content: str(formData, "content"),
       scope: scopeOf(formData),
@@ -116,7 +124,8 @@ async function addMemoryAction(formData: FormData): Promise<void> {
 
 async function editMemoryAction(formData: FormData): Promise<void> {
   "use server";
-  await run("updated", (actions, session) =>
+  if (blank(formData)) redirect(memoryReturnUrl(formData, "blank"));
+  await run(formData, "updated", (actions, session) =>
     actions.editMemory(session, {
       id: str(formData, "id"),
       content: str(formData, "content"),
@@ -126,7 +135,7 @@ async function editMemoryAction(formData: FormData): Promise<void> {
 
 async function rescopeMemoryAction(formData: FormData): Promise<void> {
   "use server";
-  await run("rescoped", (actions, session) =>
+  await run(formData, "rescoped", (actions, session) =>
     actions.rescopeMemory(session, {
       id: str(formData, "id"),
       scope: scopeOf(formData),
@@ -136,40 +145,9 @@ async function rescopeMemoryAction(formData: FormData): Promise<void> {
 
 async function deleteMemoryAction(formData: FormData): Promise<void> {
   "use server";
-  await run("deleted", (actions, session) =>
+  await run(formData, "deleted", (actions, session) =>
     actions.deleteMemory(session, { id: str(formData, "id") }),
   );
-}
-
-type Notice =
-  | "added"
-  | "updated"
-  | "rescoped"
-  | "deleted"
-  | "problem"
-  | "storage_full";
-
-const NOTICES: Record<Notice, { done: boolean; text: string }> = {
-  added: { done: true, text: "Memory added." },
-  updated: { done: true, text: "Memory updated." },
-  rescoped: { done: true, text: "Memory updated." },
-  deleted: { done: true, text: "Memory deleted." },
-  problem: { done: false, text: "Something went wrong. Please try again." },
-  storage_full: {
-    done: false,
-    text: "Storage limit reached. Remove unused items or reduce their size before saving.",
-  },
-};
-
-function toNotice(raw: string | string[] | undefined): Notice | null {
-  return typeof raw === "string" && raw in NOTICES ? (raw as Notice) : null;
-}
-
-// The outcome of the last action, in words plus an icon (never colour alone). A problem
-// is announced immediately (alert); a success politely (status).
-function NoticeBanner({ notice }: { notice: Notice }) {
-  const { done, text } = NOTICES[notice];
-  return <InlineNotice tone={done ? "success" : "error"}>{text}</InlineNotice>;
 }
 
 function queryOf(raw: string | string[] | undefined): string | undefined {
@@ -184,7 +162,7 @@ export default async function MemoryPage({
   // Read the request first: touching per-request data marks the page dynamic, so
   // `next build` never prerenders it (and never opens the database at build time).
   const params = await searchParams;
-  const notice = toNotice(params.notice);
+  const notice = memoryNotice(params.notice);
   const query = queryOf(params.q);
   const cursor = firstParam(params.cursor);
   const scope = firstParam(params.scope);
@@ -201,14 +179,15 @@ export default async function MemoryPage({
   });
 
   return (
-    <PageContainer className="flex flex-col gap-6">
-      {notice ? <NoticeBanner notice={notice} /> : null}
+    <PageContainer>
       <MemoryView
+        notice={notice}
         memories={data.memories}
         query={data.query}
         filters={data.filters}
         nextCursor={data.nextCursor}
         hasPreviousPage={cursor !== undefined}
+        cursor={cursor}
         addAction={addMemoryAction}
         editAction={editMemoryAction}
         rescopeAction={rescopeMemoryAction}

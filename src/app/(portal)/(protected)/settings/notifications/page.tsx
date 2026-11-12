@@ -4,7 +4,8 @@ import * as React from "react";
 import { cookies } from "next/headers";
 import { redirect } from "next/navigation";
 import { revalidatePath } from "next/cache";
-import { Notice as InlineNotice } from "@/components/ui/notice";
+import { PageNotice } from "@/components/ui/notice";
+import { WorkspaceHeading } from "@/components/shell/workspace-surfaces";
 
 import { NotificationsView } from "@/components/settings/notifications-view";
 import { loadConfig } from "@/server/config";
@@ -240,8 +241,8 @@ const NOTICES: Record<string, Notice> = {
   device_registered: { tone: "done", text: "This device is set up for push notifications." },
   device_removed: { tone: "done", text: "That device won't get Warthog notifications any more." },
   code_sent: { tone: "done", text: "Your code was submitted for delivery. When it arrives, enter it below to verify your number." },
-  sms_unavailable: { tone: "problem", text: "We could not send that text. Check that your country is listed below and your number includes its country code. Email and in-app approvals remain available." },
-  sms_disabled: { tone: "problem", text: "SMS is currently unavailable. You can use email, push notifications and in-app approvals." },
+  sms_unavailable: { tone: "problem", text: "We couldn't send that text. Check that your number starts with + and its country code, and that your country is one listed below. You can still get approval alerts by email and approve in the app." },
+  sms_disabled: { tone: "problem", text: "Text messages aren't available. You can get approval alerts by push notification and email, and approve in the app." },
   number_verified: { tone: "done", text: "Your mobile number is verified." },
   prefs_saved: { tone: "done", text: "Your notification settings are saved." },
   test_sent: { tone: "done", text: "Test notification sent — check your device." },
@@ -279,12 +280,6 @@ function notificationsNotice(code: string | undefined): Notice | null {
   return (code !== undefined && Object.hasOwn(NOTICES, code) && NOTICES[code]) || null;
 }
 
-function NoticeBanner({ notice }: { notice: Notice }) {
-  return (
-    <InlineNotice tone={notice.tone === "done" ? "success" : "error"}>{notice.text}</InlineNotice>
-  );
-}
-
 export default async function NotificationsPage({
   searchParams,
 }: {
@@ -308,14 +303,14 @@ export default async function NotificationsPage({
   const vapidPublicKey = loadConfig().vapid.publicKey;
 
   return (
-    <div className="wh-page wh-page--form flex flex-col gap-6">
-      <div className="flex flex-col gap-1">
-        <h1 className="text-2xl font-semibold tracking-tight text-fg">Notifications</h1>
-        <p className="text-sm text-fg-muted">
-          Choose how Warthog lets you know about approvals and alerts.
-        </p>
-      </div>
-      {notice ? <NoticeBanner notice={notice} /> : null}
+    <div className="wh-page">
+      <WorkspaceHeading
+        title="Notifications"
+        description="Choose how Warthog lets you know about approvals and alerts."
+      />
+      {notice ? (
+        <PageNotice tone={notice.tone === "done" ? "success" : "error"}>{notice.text}</PageNotice>
+      ) : null}
       <NotificationsView
         {...data}
         vapidPublicKey={vapidPublicKey}

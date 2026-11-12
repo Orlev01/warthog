@@ -15,8 +15,10 @@ import {
   CATEGORY_LABELS,
   activityCategory,
   agentRole,
+  categoryCount,
   isActivityCategory,
   outcomeGroup,
+  outcomeLabel,
 } from "./category";
 
 const reads = new Set(["search_memory", "get_context", "google-gmail__search"]);
@@ -101,4 +103,36 @@ test("an agent acts in its calls and reports, but is the subject of an owner's c
   assert.equal(agentRole("permission_change"), "subject");
   assert.equal(agentRole("approval_decision"), "subject");
   assert.equal(agentRole("connection_change"), "subject");
+});
+
+// UI/UX pass (content-04): outcomes read in the words people use, never the engine's codes.
+test("outcomes read as Done, Waiting for you, Blocked, Failed and Undone, never as engine codes", () => {
+  assert.equal(outcomeLabel("executed"), "Done");
+  assert.equal(outcomeLabel("saved"), "Done", "an owner's saved change reads as done, not 'Saved'");
+  assert.equal(outcomeLabel("reported"), "Done");
+  assert.equal(outcomeLabel("pending_approval"), "Waiting for you");
+  assert.equal(outcomeLabel("attempted"), "Not confirmed", "an intent record never claims the change finished");
+  assert.equal(outcomeLabel("refused"), "Blocked");
+  assert.equal(outcomeLabel("denied"), "Denied");
+  assert.equal(outcomeLabel("rate_limited"), "Too many requests");
+  assert.equal(outcomeLabel("needs_reconnect"), "Reconnect needed");
+  assert.equal(outcomeLabel("reversed"), "Undone");
+  assert.equal(outcomeLabel("connected"), "Connected");
+});
+
+test("an outcome label accepts the tidied form older loaders pass, and is idempotent", () => {
+  assert.equal(outcomeLabel("Pending approval"), "Waiting for you");
+  assert.equal(outcomeLabel("Executed"), "Done");
+  assert.equal(outcomeLabel("Needs reconnect"), "Reconnect needed");
+  assert.equal(outcomeLabel(outcomeLabel("pending_approval")), "Waiting for you");
+  assert.equal(outcomeLabel("The reversal couldn't be completed."), "The reversal couldn't be completed.");
+  assert.equal(outcomeLabel(undefined), "");
+});
+
+test("counts read correctly in a sentence: one read, two rejected requests", () => {
+  assert.equal(categoryCount("read", 1), "1 read");
+  assert.equal(categoryCount("read", 2), "2 reads");
+  assert.equal(categoryCount("approval", 1), "1 approval or release");
+  assert.equal(categoryCount("rejected", 1), "1 rejected request");
+  assert.equal(categoryCount("access", 12), "12 connection and access changes");
 });

@@ -500,7 +500,7 @@ test("a failed send-code shows plain copy and no notice", async () => {
   assert.equal(s.notice, undefined);
 });
 
-test("the device code step offers an 'Email me a code' control", () => {
+test("the device code step offers a 'Send me a code' control", () => {
   const markup = renderToStaticMarkup(<DeviceView step="code" />);
-  assert.match(markup, /<button[^>]*type="button"[^>]*>Email me a code<\/button>/);
+  assert.match(markup, /<button[^>]*type="button"[^>]*>Send me a code<\/button>/);
 });

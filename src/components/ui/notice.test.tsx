@@ -2,7 +2,7 @@ import * as React from "react";
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import { renderToStaticMarkup } from "react-dom/server";
-import { Notice } from "./notice";
+import { Notice, PageNotice } from "./notice";
 
 test("routine notices announce politely and keep their explanation and action visible", () => {
   const html = renderToStaticMarkup(<Notice tone="info">Finish setting up your service. <a href="/connectors">Continue</a></Notice>);
@@ -25,4 +25,10 @@ test("static explanatory notices do not announce as a new outcome", () => {
   const html = renderToStaticMarkup(<Notice announce={false}>Only you can download this file.</Notice>);
   assert.match(html, /Only you can download this file/);
   assert.doesNotMatch(html, /role="(?:status|alert)"|aria-live|aria-atomic/);
+});
+
+test("the page notice is the one outcome slot: announced, at page width, and it tidies ?notice= from the URL", () => {
+  const html = renderToStaticMarkup(<PageNotice tone="success">Saved.</PageNotice>);
+  assert.match(html, /^<div role="status" aria-atomic="true" data-tone="success" class="wh-notice [^"]*wh-page-notice"/);
+  assert.match(renderToStaticMarkup(<PageNotice tone="error">Couldn’t save.</PageNotice>), /role="alert"/);
 });

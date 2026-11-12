@@ -6,6 +6,8 @@ import {
   NAV_GROUPS,
   sectionNavigation,
   agentNavigation,
+  navGroupFor,
+  pageMeasureFor,
 } from "./workspace-navigation";
 import { SectionNavigation } from "./section-navigation";
 
@@ -74,4 +76,26 @@ test("cross-page tabs are real links with a current-page marker", () => {
   assert.match(html, /aria-label="Settings sections"/);
   assert.match(html, /href="\/settings\/security" aria-current="page"/);
   assert.doesNotMatch(html, /role="tab"/);
+});
+test("sibling route tabs share one page width per section family", () => {
+  const measure = (paths: string[]) => new Set(paths.map((p) => pageMeasureFor(p)));
+  for (const family of [
+    ["/settings", "/settings/agents", "/settings/security", "/settings/notifications", "/settings/data"],
+    ["/memory", "/skills"],
+    ["/vault", "/vault/cards"],
+    ["/activity", "/spending"],
+    ["/agents", "/agents/connect", "/agents/access-key", "/agents/some-id"],
+  ])
+    assert.equal(measure(family).size, 1, family.join(" "));
+  assert.equal(pageMeasureFor("/settings/security"), "form");
+  assert.equal(pageMeasureFor("/home"), "wide");
+  assert.equal(pageMeasureFor("/connectors/key"), "reading");
+  assert.equal(pageMeasureFor("/nowhere"), undefined);
+});
+test("navigation uses the canonical names", () => {
+  assert.equal(navGroupFor("help")?.label, "Help");
+  assert.equal(navGroupFor("memory")?.label, "Account resources");
+  assert.deepEqual(agentNavigation("a", "activity").primary.map((i) => i.label), ["Overview", "Resources", "Controls", "Activity"]);
+  assert.deepEqual(sectionNavigation("/vault").items.map((i) => i.label), ["About you", "Cards"]);
+  assert.equal(sectionNavigation("/settings/agents").items.find((i) => i.active)?.label, "Agent defaults");
 });

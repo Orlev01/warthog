@@ -28,6 +28,7 @@ import { systemClock } from "../../../server/seams/clock";
 import type { Connection } from "../../../server/db/connections";
 import { pendingConnects } from "../../../server/connectors/pending";
 import { createConnectorRuntime } from "../../../server/connectors/runtime";
+import { standaloneResponse } from "../../../components/public/standalone-html";
 
 // The connect-start secrets stashed for a pending provider sign-in — NOT the user id (the
 // lookup is already scoped by the session user, so the flow needn't carry it).
@@ -114,11 +115,19 @@ function redirect(location: string): Response {
   return new Response(null, { status: 303, headers: { location, "cache-control": "no-store", "referrer-policy": "no-referrer" } });
 }
 
+// A refused callback is still a page a person sees: Warthog's standalone page with the fixed
+// reason and a way back to Connectors (public-09). The status and headers are unchanged.
 function badRequest(message: string): Response {
-  return new Response(message, {
-    status: 400,
-    headers: { "content-type": "text/plain; charset=utf-8", "cache-control": "no-store", "referrer-policy": "no-referrer" },
-  });
+  return standaloneResponse({
+    title: "Service not connected",
+    eyebrow: "Connectors",
+    heading: "We couldn't finish connecting this service",
+    paragraphs: [message, "Nothing was connected. Start again from Connectors."],
+    actions: [
+      { href: "/connectors", label: "Back to Connectors", primary: true },
+      { href: "/", label: "Go to Warthog" },
+    ],
+  }, 400, { "referrer-policy": "no-referrer" });
 }
 
 // --- the handler --------------------------------------------------------------------

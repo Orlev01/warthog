@@ -31,11 +31,32 @@ test("an unknown tool name is tidied into words rather than shown as a code", ()
   assert.equal(toolLabel("some-tool"), "Some tool");
 });
 
-test("an agent call is titled by its tool; any other entry by its kind", () => {
+test("an agent call is titled by its tool; any other entry by its kind's plain label", () => {
   assert.equal(entryTitle({ kind: "tool_call", tool: "remember" }), "Save a memory");
-  assert.equal(entryTitle({ kind: "tool_call" }), "Tool call", "a tool call with no tool keeps its kind");
+  assert.equal(entryTitle({ kind: "tool_call" }), "Agent request", "a tool call with no tool keeps its kind's label");
   assert.equal(entryTitle({ kind: "connection_change" }), "Connection change");
   assert.equal(entryTitle({ kind: "card_release", tool: "request_card" }), "Card release");
+});
+
+// UI/UX pass (content-03): the title used humanise(kind), so members saw "Agent key replaced"
+// and "Tool rejected" while the Event filter offered the proper labels for the same entries.
+test("titles use the same plain labels as the Event filter", () => {
+  assert.equal(entryTitle({ kind: "agent_key_replaced" }), "Access key replaced");
+  assert.equal(entryTitle({ kind: "agent_key_revoked" }), "Access key revoked");
+  assert.equal(entryTitle({ kind: "tool_rejected", tool: "remember" }), "Request blocked");
+  assert.equal(entryTitle({ kind: "protocol_rejected" }), "Request couldn't be read");
+  assert.equal(entryTitle({ kind: "client_observed" }), "Client details reported");
+  assert.equal(entryTitle({ kind: "identity_release" }), "Identity detail release");
+  for (const kind of ["agent_key_replaced", "tool_rejected", "client_observed", "memory_scope_change"]) {
+    assert.equal(entryTitle({ kind }), kindLabel(kind), `${kind}: title and filter label agree`);
+  }
+});
+
+test("a connection change says what happened to the connection", () => {
+  assert.equal(entryTitle({ kind: "connection_change", outcome: "connected", connectorId: "google-gmail" }), "Service connected");
+  assert.equal(entryTitle({ kind: "connection_change", outcome: "disconnected", connectorId: "google-gmail" }), "Service disconnected");
+  assert.equal(entryTitle({ kind: "connection_change", outcome: "disconnected", agentId: "a1" }), "Agent disconnected");
+  assert.equal(entryTitle({ kind: "connection_change", outcome: "something_new" }), "Connection change");
 });
 
 test("an agent is shown by the name the person gave it, never its raw id", () => {
@@ -43,13 +64,14 @@ test("an agent is shown by the name the person gave it, never its raw id", () =>
   assert.equal(agentLabel(names, "0f6e3c1a-1111-4222-8333-944455556666"), "Claude on my laptop");
   assert.equal(agentLabel(names, undefined), undefined, "an entry with no agent names none");
   const unknown = agentLabel(names, "28e3dfa1-7fc1-47da-8d0c-583cf7794c38");
-  assert.ok(unknown?.startsWith("Unknown agent"), `an id with no agent behind it reads as unknown, got ${unknown}`);
-  assert.ok(!unknown?.includes("28e3dfa1-7fc1-47da-8d0c-583cf7794c38"), "the full raw id is never shown");
+  assert.equal(unknown, "Removed agent", "an id with no agent of theirs behind it reads as a removed agent");
+  assert.ok(!unknown?.includes("28e3dfa1"), "no part of the raw id is shown");
 });
 
 test("recorded kinds read in words for filters, and an intent record names the change it starts", () => {
   assert.equal(kindLabel("tool_call"), "Agent request");
+  assert.equal(kindLabel("tool_attempt"), "Change started");
   assert.equal(kindLabel("card_release"), "Card release");
   assert.equal(kindLabel("brand_new_kind"), "Brand new kind");
-  assert.equal(entryTitle({ kind: "tool_attempt", tool: "remember" }), "Starting: Save a memory");
+  assert.equal(entryTitle({ kind: "tool_attempt", tool: "remember" }), "Started: Save a memory");
 });

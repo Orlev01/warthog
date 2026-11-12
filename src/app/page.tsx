@@ -5,7 +5,8 @@ import { Landing } from "@/components/public/landing";
 import { redirectSignedInVisitor } from "@/server/auth/public-entry";
 
 export const metadata: Metadata = {
-  title: "Your agents. Your rules.",
+  // The front door names the product in the tab and history (public-19).
+  title: { absolute: "Warthog — Your agents. Your rules." },
   description: "A home for your AI agents. Bring your services and information together, choose each agent’s access, and review requests on your terms.",
   openGraph: {
     title: "Warthog — Your agents. Your rules.",

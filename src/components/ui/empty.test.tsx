@@ -115,3 +115,19 @@ test("EmptyState uses design tokens, never a raw hex colour", () => {
     `no raw hex colour may appear in the EmptyState markup, got: ${markup}`,
   );
 });
+
+test("the inline variant is a quiet row for an empty group inside a panel, with its next step", () => {
+  const markup = renderToStaticMarkup(
+    <EmptyState variant="inline" heading="No devices registered yet." description="Register this one to get alerts." action={<a href="#r">Register this device</a>} />,
+  );
+  assert.match(markup, /^<div class="wh-panel-empty"><svg/);
+  assert.doesNotMatch(markup, /wh-card|<h[23]\b/, "no card-in-card and no extra heading");
+  assert.match(markup, /<p class="wh-panel-empty-title">No devices registered yet\.<\/p>/);
+  assert.match(markup, /<div class="wh-panel-empty-action"><a href="#r">Register this device<\/a><\/div>/);
+});
+
+test("the page variant can take an icon and a lower heading level", () => {
+  const markup = renderToStaticMarkup(<EmptyState heading="Nothing waiting" headingLevel={3} />);
+  assert.match(markup, /<h3 class="[^"]*">Nothing waiting<\/h3>/);
+  assert.doesNotMatch(markup, /<p class="text-sm/, "no empty description paragraph");
+});

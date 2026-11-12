@@ -1,0 +1,497 @@
+/* Containment and layout surfaces (UI/UX pass, 12 Nov 2026).
+ * Rule: no free text on the canvas — every text node sits inside a bounded component
+ * (heading band, panel, list group, toolbar, notice, empty state, tab strip, bar).
+ * Loaded after globals.css/workspace.css, unlayered like them, so equal-specificity rules win.
+ * Depth model stays canvas → panel → inset (docs/design/workspace-depth.md); no card-in-card.
+ * Primitive APIs and when to use each: WorkspaceHeading, WorkspacePanel, ActionBar
+ * (workspace-surfaces.tsx), ListGroup, ListToolbar, EmptyState, PageNotice, ViewPanels,
+ * FilterLinks, PageContainer and the status screens.
+ *
+ * Rhythm: 8px grid. Panels pad 20px (16px below 640px) and sit 24px apart (16px on phones).
+ * Type: page titles 24px phone / 28px from 640px; panel and group titles 16/24; UI text 14px.
+ */
+
+/* ---------- Base: balanced headings, pointer on disclosures (utilities still win) ---------- */
+@layer base {
+  :where(h1, h2, h3, h4, summary, legend) { text-wrap: balance; }
+  :where(p, li, dd, figcaption) { text-wrap: pretty; }
+  summary { cursor: pointer; }
+}
+
+/* ---------- Tokens ---------- */
+:root {
+  /* Container edges: about 1.3:1 against the light canvas so panels stay visibly bounded in
+     both themes (the decorative --wh-line divider is ~1.14:1 there). */
+  --wh-edge: light-dark(#d5d8dc, #3c3c3c);
+}
+html:has(.wh-workspace),
+body:has(.wh-workspace) { background: var(--wh-workspace-canvas); }
+
+/* ---------- Page measure: one width owner per section family ----------
+ * AppShell publishes the family (workspace-navigation.ts pageMeasureFor) as data-measure on
+ * .wh-main. Every .wh-page and the chrome above it (top bar, route tabs, scope strip) read
+ * --wh-measure, so they share one left and right edge at every width. */
+.wh-main {
+  --wh-measure-base: 1216px;
+  --wh-measure: var(--wh-measure-base);
+  --wh-gutter: 16px;
+  display: flex;
+  flex-direction: column;
+}
+.wh-main[data-measure="reading"] { --wh-measure-base: 896px; }
+.wh-main[data-measure="form"] { --wh-measure-base: 768px; }
+.wh-content { display: block; flex: 1; min-width: 0; outline: none; }
+/* "Skip to content" shows where it landed. */
+.wh-content:focus-visible { box-shadow: inset 0 2px 0 var(--wh-focus); }
+
+.wh-page {
+  display: flex;
+  flex-direction: column;
+  gap: 16px;
+  padding: 16px var(--wh-gutter, 16px) 40px;
+}
+.wh-page > a { align-self: flex-start; }
+.wh-main[data-measure] .wh-page { max-width: var(--wh-measure); }
+.wh-page-main,
+.wh-page-aside { display: flex; min-width: 0; flex-direction: column; gap: inherit; }
+.wh-tabpanel:not([hidden]) { gap: 16px; }
+@media (min-width: 640px) {
+  .wh-main { --wh-gutter: 32px; }
+  .wh-page { gap: 24px; padding: 24px var(--wh-gutter, 32px) 48px; }
+  .wh-tabpanel:not([hidden]) { gap: 24px; }
+}
+/* An opt-in supporting column (PageContainer `aside`) once there is room for it. */
+@media (min-width: 1600px) {
+  .wh-main:has(.wh-page--with-aside) { --wh-measure: calc(var(--wh-measure-base) + 352px); }
+  .wh-page--with-aside { display: grid; grid-template-columns: minmax(0, 1fr) 320px; align-items: start; column-gap: 32px; }
+}
+
+/* ---------- Top bar, breadcrumb, route tabs: aligned to the page measure ---------- */
+html:has(.wh-workspace) { scroll-padding-top: calc(68px + env(safe-area-inset-top)); }
+.wh-workspace-header {
+  position: sticky;
+  top: env(safe-area-inset-top);
+  z-index: 30;
+  padding-inline: var(--wh-gutter);
+}
+/* Covers the notch inset above the sticky bar so content never shows through it. */
+.wh-workspace-header::before {
+  content: "";
+  position: absolute;
+  inset-inline: 0;
+  bottom: 100%;
+  height: env(safe-area-inset-top);
+  background: var(--wh-surface);
+}
+.wh-workspace-header-inner {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  width: 100%;
+  min-width: 0;
+  min-height: 52px;
+  max-width: calc(var(--wh-measure) - 2 * var(--wh-gutter));
+  margin-inline: auto;
+}
+/* Icon buttons keep 44px targets while their glyphs line up with the content edge. */
+.wh-menu-trigger { margin-inline-start: -12px; }
+.wh-help-link { margin-inline: auto -13px; }
+.wh-breadcrumb { min-width: 0; }
+.wh-breadcrumb ol { display: flex; min-width: 0; align-items: center; gap: 8px; color: var(--wh-fg-muted); font-size: 14px; line-height: 20px; }
+.wh-breadcrumb li { display: flex; min-width: 0; align-items: center; gap: 8px; white-space: nowrap; }
+.wh-breadcrumb li > * { min-width: 0; }
+.wh-crumb-group { flex-shrink: 0; }
+.wh-crumb-separator { width: 12px; height: 12px; flex-shrink: 0; }
+.wh-breadcrumb [aria-current="page"] { overflow: hidden; text-overflow: ellipsis; color: var(--wh-fg); font-size: 18px; line-height: 24px; }
+.wh-breadcrumb a { display: inline-flex; min-height: 44px; align-items: center; border-radius: 6px; text-underline-offset: 4px; }
+.wh-breadcrumb a:hover { color: var(--wh-fg); text-decoration: underline; }
+@media (max-width: 639px) {
+  /* Phones show the section once; the page's own h1 carries the rest. */
+  .wh-breadcrumb .wh-crumb-group,
+  .wh-breadcrumb .wh-crumb-page,
+  .wh-breadcrumb .wh-crumb-section > .wh-crumb-separator { display: none; }
+  .wh-breadcrumb .wh-crumb-section a { overflow: hidden; text-overflow: ellipsis; color: var(--wh-fg); font-size: 18px; line-height: 24px; }
+}
+.wh-section-navigation { padding-inline: var(--wh-gutter); }
+.wh-section-navigation > .wh-tabs { max-width: calc(var(--wh-measure) - 2 * var(--wh-gutter)); margin-inline: auto; }
+
+/* ---------- Sidebar and drawer ---------- */
+.wh-nav-group + .wh-nav-group { margin-top: 16px; }
+.wh-nav-group[data-label-hidden]::before { content: ""; display: block; height: 1px; margin: 0 10px 8px; background: var(--wh-line); }
+.wh-sidebar-footer { padding: 6px; }
+.wh-sidebar-footer .wh-sidebar-link { color: var(--wh-fg-muted); }
+.wh-sidebar-footer .wh-sidebar-link:hover { color: var(--wh-fg); }
+/* A scroll cue while destinations are hidden above or below (data-overflow-* from useScrollEdges). */
+.wh-sidebar-nav { padding-bottom: 8px; }
+.wh-sidebar-nav { --wh-fade-start: 0px; --wh-fade-end: 0px; overscroll-behavior: contain; }
+.wh-sidebar-nav:is([data-overflow-start], [data-overflow-end]) {
+  -webkit-mask-image: linear-gradient(to bottom, transparent, #000 var(--wh-fade-start), #000 calc(100% - var(--wh-fade-end)), transparent);
+  mask-image: linear-gradient(to bottom, transparent, #000 var(--wh-fade-start), #000 calc(100% - var(--wh-fade-end)), transparent);
+}
+.wh-sidebar-nav[data-overflow-start] { --wh-fade-start: 24px; }
+.wh-sidebar-nav[data-overflow-end] { --wh-fade-end: 40px; }
+/* Short laptop screens (1366×768, 1280×720): tighter rows so every destination fits or the
+   fade shows there is more; the decorative workspace card goes first. */
+@media (min-width: 1024px) and (max-height: 860px) {
+  .wh-workspace .wh-workspace-label { margin: 4px 12px 8px; padding: 8px; }
+  .wh-workspace .wh-workspace-avatar { width: 28px; height: 28px; }
+  .wh-nav-group + .wh-nav-group { margin-top: 12px; }
+  .wh-nav-label { padding-block: 4px 2px; }
+  .wh-sidebar-link { min-height: 32px; padding-block: 6px; }
+}
+@media (min-width: 1024px) and (max-height: 720px) {
+  .wh-workspace .wh-workspace-label { display: none; }
+}
+/* The page behind the open drawer stays still. */
+html:has(.wh-nav-dialog[open]) { overflow: hidden; }
+.wh-nav-dialog { overscroll-behavior: contain; }
+
+/* ---------- Tabs, sub-tabs and pill rows ---------- */
+.wh-tabs,
+.wh-subtabs,
+.wh-chip-track { --wh-fade-start: 0px; --wh-fade-end: 0px; }
+/* The mask exists only while a track overflows, so nothing (a focus ring included) is ever
+   clipped by it on a row that fits. */
+:is(.wh-tabs, .wh-subtabs, .wh-chip-track):is([data-overflow-start], [data-overflow-end]) {
+  -webkit-mask-image: linear-gradient(to right, transparent, #000 var(--wh-fade-start), #000 calc(100% - var(--wh-fade-end)), transparent);
+  mask-image: linear-gradient(to right, transparent, #000 var(--wh-fade-start), #000 calc(100% - var(--wh-fade-end)), transparent);
+}
+:is(.wh-tabs, .wh-subtabs, .wh-chip-track)[data-overflow-start] { --wh-fade-start: 32px; }
+:is(.wh-tabs, .wh-subtabs, .wh-chip-track)[data-overflow-end] { --wh-fade-end: 40px; }
+/* Keyboard focus and the reveal-on-load land clear of the fade. */
+:is(.wh-tabs, .wh-subtabs, .wh-chip-track) { scroll-padding-inline: 40px; }
+.wh-tab { flex-direction: column; justify-content: center; cursor: pointer; }
+/* The selected tab is bold; every tab reserves its bold width so selection never shifts the row. */
+.wh-tab[aria-current="page"],
+.wh-tab[aria-selected="true"] { font-weight: 600; }
+.wh-tab[data-label]::after {
+  content: attr(data-label);
+  content: attr(data-label) / "";
+  height: 0;
+  overflow: hidden;
+  visibility: hidden;
+  font-weight: 600;
+  pointer-events: none;
+  user-select: none;
+}
+.wh-subtab { padding-inline: 16px; cursor: pointer; }
+.wh-subtab:hover { color: var(--wh-fg); }
+@media (max-width: 639px) {
+  /* One scrolling line instead of a stranded last pill on a second row. */
+  .wh-subtabs { flex-wrap: nowrap; overflow-x: auto; scrollbar-width: none; }
+  .wh-subtab { flex-shrink: 0; padding-inline: 12px; white-space: nowrap; }
+}
+@media (min-width: 1024px) {
+  .wh-subtab { min-height: 40px; padding-block: 8px; }
+}
+/* In-page tabs (ViewPanels) on the page: a bounded strip. Inside another surface: a ruled row. */
+.wh-tabstrip {
+  min-width: 0;
+  padding-inline: 20px;
+  border: 1px solid var(--wh-edge);
+  border-radius: var(--wh-radius-panel);
+  background: var(--wh-surface);
+  box-shadow: var(--wh-panel-shadow, none), 0 1px 0 var(--wh-highlight, transparent) inset;
+}
+.wh-tabstrip > .wh-tabs { border-bottom: 0; }
+:is(.wh-panel, .wh-surface, .wh-card, .wh-list-group, .wh-toolbar, .wh-permission-group) .wh-tabstrip {
+  padding-inline: 0;
+  border-width: 0 0 1px;
+  border-color: var(--wh-line);
+  border-radius: 0;
+  background: none;
+  box-shadow: none;
+}
+@media (max-width: 639px) {
+  .wh-tabstrip { padding-inline: 16px; }
+}
+
+/* ---------- Page heading band (WorkspaceHeading) ---------- */
+.wh-page-heading {
+  display: flex;
+  min-width: 0;
+  flex-direction: column;
+  gap: 16px;
+  padding: 24px;
+  border: 1px solid var(--wh-edge);
+  border-radius: var(--wh-radius-panel);
+  background: var(--wh-surface);
+  box-shadow: var(--wh-panel-shadow, none), 0 1px 0 var(--wh-highlight, transparent) inset;
+}
+.wh-page-heading-main { display: flex; min-width: 0; flex-wrap: wrap; align-items: flex-start; justify-content: space-between; gap: 16px 32px; }
+.wh-page-heading-text { min-width: 0; flex: 1 1 20rem; }
+.wh-eyebrow { margin-bottom: 8px; color: var(--wh-fg-muted); font-size: 12px; font-weight: 600; line-height: 16px; letter-spacing: .08em; text-transform: uppercase; }
+.wh-page-heading h1 { overflow-wrap: anywhere; }
+.wh-page-description { max-width: 72ch; margin-top: 8px; color: var(--wh-fg-muted); font-size: 14px; line-height: 1.6; }
+.wh-page-description > * + * { margin-top: 8px; }
+.wh-page-meta { margin-top: 8px; color: var(--wh-fg); font-size: 14px; font-weight: 500; line-height: 20px; }
+.wh-heading-actions { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; }
+.wh-page-heading-nav { min-width: 0; margin: 0 -24px -24px; padding-inline: 24px; border-top: 1px solid var(--wh-line); }
+.wh-page-heading-nav .wh-tabs { border-bottom: 0; }
+@media (max-width: 639px) {
+  .wh-page-heading { gap: 12px; padding: 16px; }
+  .wh-page-heading-nav { margin: 0 -16px -16px; padding-inline: 16px; }
+}
+/* One title size for every workspace page, hand-rolled h1s included: 24px phone, 28px desktop. */
+.wh-workspace main h1 { font-size: 24px; font-weight: 600; line-height: 1.25; letter-spacing: -.03em; }
+@media (min-width: 640px) {
+  .wh-workspace main h1 { font-size: 28px; line-height: 1.2; letter-spacing: -.035em; }
+}
+
+/* ---------- Agent-scope row (ResourceScope) ---------- */
+.wh-scope { display: flex; min-width: 0; flex-wrap: wrap; align-items: flex-start; gap: 0 24px; }
+.wh-heading-scope { padding-top: 4px; border-top: 1px solid var(--wh-line); }
+.wh-workspace .wh-resource-scope { padding: 0 var(--wh-gutter); background: var(--wh-surface); }
+.wh-resource-scope-inner { max-width: calc(var(--wh-measure) - 2 * var(--wh-gutter)); justify-content: flex-start; gap: 0 24px; }
+/* The fallback strip is for pages without a heading band; once the band carries the row, hide it. */
+.wh-main:has(.wh-heading-scope) .wh-resource-scope,
+.wh-main:has(.wh-status-panel) .wh-resource-scope { display: none; }
+.wh-scope-disclosure { min-width: 0; color: var(--wh-fg-muted); font-size: 14px; line-height: 20px; }
+.wh-scope-disclosure[open] { flex-basis: 100%; }
+.wh-scope-disclosure > summary {
+  display: inline-flex;
+  min-height: 44px;
+  align-items: center;
+  gap: 4px;
+  border-radius: 6px;
+  list-style: none;
+  text-decoration: underline;
+  text-decoration-color: var(--wh-line-strong);
+  text-underline-offset: 4px;
+}
+.wh-scope-disclosure > summary::-webkit-details-marker { display: none; }
+.wh-scope-disclosure > summary:hover { color: var(--wh-fg); text-decoration-color: currentColor; }
+.wh-scope-chevron { flex-shrink: 0; }
+.wh-scope-disclosure[open] .wh-scope-chevron { transform: rotate(180deg); }
+.wh-scope-disclosure > p { max-width: 72ch; padding-bottom: 12px; line-height: 1.6; }
+.wh-scope-agents { display: flex; max-width: 32rem; flex-direction: column; gap: 4px; padding-bottom: 12px; }
+.wh-scope-agents a { display: flex; min-height: 44px; align-items: center; justify-content: space-between; gap: 12px; padding: 8px 12px; border-radius: var(--wh-radius-field); background: var(--wh-surface-muted); color: var(--wh-fg); overflow-wrap: anywhere; }
+.wh-scope-agents a:hover { background: color-mix(in srgb, var(--wh-fg) 7%, var(--wh-surface-muted)); }
+.wh-scope-agents a > span:first-child { flex: 1; min-width: 0; }
+.wh-scope-agents svg { flex-shrink: 0; color: var(--wh-fg-muted); }
+
+/* ---------- Panels (WorkspacePanel), cards and the light-mode edge ---------- */
+.wh-workspace :is(.wh-panel, .wh-surface, .wh-card, .wh-connector-module),
+.wh-workspace .wh-permissions > .wh-permission-group { border-color: var(--wh-edge); }
+.wh-workspace :is(.wh-panel, .wh-surface, .wh-card) { border-radius: var(--wh-radius-panel); }
+.wh-panel-header { gap: 12px; padding: 16px 20px; }
+.wh-panel-title { min-width: 0; flex: 1 1 10rem; }
+.wh-panel-header :is(h2, h3) { font-size: 16px; line-height: 24px; letter-spacing: -.01em; }
+.wh-panel-header .wh-panel-description { max-width: 72ch; margin-top: 4px; color: var(--wh-fg-muted); font-size: 14px; line-height: 20px; }
+.wh-panel-action { font-size: 14px; }
+.wh-panel-action a { gap: 8px; }
+.wh-panel-action a:hover { color: var(--wh-fg); }
+.wh-panel-body > p { max-width: 72ch; }
+.wh-panel-footer {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px 12px;
+  padding: 16px 20px;
+  border-top: 1px solid var(--wh-line);
+  border-radius: 0 0 calc(var(--wh-radius-panel) - 1px) calc(var(--wh-radius-panel) - 1px);
+  background: color-mix(in srgb, var(--wh-surface-muted) 55%, var(--wh-surface));
+  color: var(--wh-fg-muted);
+  font-size: 14px;
+  line-height: 20px;
+}
+@media (max-width: 639px) {
+  .wh-panel-header { gap: 12px; padding: 16px; }
+  /* The action drops under the title, aligned with the title text, instead of squeezing it. */
+  .wh-panel-action { flex: 1 0 100%; margin-inline-start: 0; }
+  .wh-panel-icon ~ .wh-panel-action { flex-basis: calc(100% - 48px); margin-inline-start: 48px; }
+  .wh-panel-footer { padding: 12px 16px; }
+}
+.wh-workspace .wh-settings-link:hover,
+.wh-workspace .wh-access-node:hover { border-color: var(--wh-line-strong); background: var(--wh-surface-muted); }
+.wh-evidence-grid { align-items: start; }
+/* Two panel columns from tablet width; the 1.6fr/1fr split returns at 1200px (workspace.css). */
+@media (min-width: 768px) and (max-width: 1199px) {
+  .wh-dashboard-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+}
+@media (min-width: 1200px) {
+  .wh-agent-row-actions { max-width: none; flex-wrap: nowrap; }
+}
+/* Titles inside a page, for sections that aren't a WorkspacePanel or ListGroup yet:
+   a section title (18/28) above several panels, a group title (16/24) inside one. */
+.wh-section-title { color: var(--wh-fg); font-size: 18px; font-weight: 600; line-height: 28px; letter-spacing: -.015em; }
+.wh-group-title { color: var(--wh-fg); font-size: 16px; font-weight: 600; line-height: 24px; }
+/* Nested surfaces become insets: canvas → panel → inset, never deeper. Notices and empty
+   states stay readable as what they are. */
+.wh-workspace :is(.wh-panel, .wh-surface, .wh-card, .wh-list-group, .wh-toolbar, .wh-permission-group, .wh-page-heading) :is(.wh-card, .wh-surface):not(.wh-empty) {
+  border-color: transparent;
+  border-radius: var(--wh-radius-inset);
+  background: var(--wh-surface-muted);
+  box-shadow: none;
+}
+.wh-workspace :is(.wh-panel, .wh-surface, .wh-card, .wh-list-group, .wh-toolbar, .wh-permission-group) .wh-empty {
+  border-color: transparent;
+  border-radius: var(--wh-radius-inset);
+  background: var(--wh-surface-muted);
+}
+
+/* ---------- Action bar (ActionBar, or .wh-form-actions on an existing wrapper) ---------- */
+.wh-form-actions {
+  display: flex;
+  min-width: 0;
+  flex-direction: column;
+  gap: 8px;
+  padding: 16px 20px;
+  border: 1px solid var(--wh-edge);
+  border-radius: var(--wh-radius-panel);
+  background: var(--wh-surface);
+  box-shadow: var(--wh-panel-shadow, none);
+}
+.wh-form-actions-buttons { display: flex; flex-wrap: wrap; align-items: center; gap: 8px 12px; }
+.wh-form-actions-note,
+.wh-form-actions > p { max-width: 72ch; color: var(--wh-fg-muted); font-size: 14px; line-height: 20px; }
+@media (max-width: 639px) {
+  .wh-form-actions { padding: 12px 16px; }
+}
+
+/* ---------- List groups (ListGroup) ---------- */
+.wh-list-group {
+  display: flex;
+  min-width: 0;
+  flex-direction: column;
+  border: 1px solid var(--wh-edge);
+  border-radius: var(--wh-radius-panel);
+  background: var(--wh-surface);
+  box-shadow: var(--wh-panel-shadow, none), 0 1px 0 var(--wh-highlight, transparent) inset;
+}
+.wh-list-group-header { display: flex; min-width: 0; flex-direction: column; gap: 4px; padding: 16px 20px; border-bottom: 1px solid var(--wh-line); }
+.wh-list-group-title { display: flex; min-width: 0; flex-wrap: wrap; align-items: center; gap: 8px; }
+.wh-list-group-title :is(h2, h3, h4) { color: var(--wh-fg); font-size: 16px; font-weight: 600; line-height: 24px; overflow-wrap: anywhere; }
+.wh-list-group-action { margin-inline-start: auto; font-size: 14px; }
+.wh-list-group-summary { max-width: 72ch; color: var(--wh-fg-muted); font-size: 14px; line-height: 20px; }
+.wh-list-group-rows { display: flex; min-width: 0; flex-direction: column; }
+.wh-list-group-rows > li { padding-inline: 20px; }
+/* A row that is still styled as a card becomes a divider row inside the group. */
+.wh-list-group-rows > li.rounded-card { margin: 0; border-width: 0 0 1px; border-color: var(--wh-line); border-radius: 0; background: transparent; box-shadow: none; }
+.wh-list-group-rows > li.rounded-card:last-child { border-bottom-width: 0; }
+.wh-list-group[data-collapsible] summary.wh-list-group-header { min-height: 44px; flex-direction: row; border-bottom: 0; border-radius: inherit; list-style: none; }
+.wh-list-group[data-collapsible] summary::-webkit-details-marker { display: none; }
+.wh-list-group[data-collapsible] details[open] > summary { border-bottom: 1px solid var(--wh-line); border-radius: var(--wh-radius-panel) var(--wh-radius-panel) 0 0; }
+.wh-list-group[data-collapsible] details > .wh-list-group-summary { padding: 12px 20px 0; }
+.wh-list-group-chevron { margin-inline-start: auto; }
+@media (max-width: 639px) {
+  .wh-list-group-header { padding: 12px 16px; }
+  .wh-list-group-rows > li { padding-inline: 16px; }
+  .wh-list-group[data-collapsible] details > .wh-list-group-summary { padding-inline: 16px; }
+}
+/* Inside another bounded surface a group is a plain sub-section of it: no card-in-card. */
+:is(.wh-panel, .wh-surface, .wh-card, .wh-permission-group, .wh-list-group, .wh-toolbar) .wh-list-group { border: 0; border-radius: 0; background: none; box-shadow: none; }
+:is(.wh-panel, .wh-surface, .wh-card, .wh-permission-group, .wh-list-group, .wh-toolbar) .wh-list-group .wh-list-group-header { padding: 0 0 8px; }
+:is(.wh-panel, .wh-surface, .wh-card, .wh-permission-group, .wh-list-group, .wh-toolbar) .wh-list-group .wh-list-group-rows > li { padding-inline: 0; }
+:is(.wh-panel, .wh-surface, .wh-card, .wh-permission-group, .wh-list-group, .wh-toolbar) .wh-list-group[data-collapsible] details > .wh-list-group-summary { padding-inline: 0; }
+:is(.wh-panel, .wh-surface, .wh-card, .wh-permission-group, .wh-list-group, .wh-toolbar) .wh-list-group + .wh-list-group { margin-top: 16px; }
+/* Counts beside group titles and filters use CountBadge (.wh-count, controls.css). */
+
+/* ---------- List toolbar (ListToolbar) ---------- */
+.wh-toolbar {
+  display: flex;
+  min-width: 0;
+  flex-direction: column;
+  gap: 12px;
+  padding: 16px 20px;
+  border: 1px solid var(--wh-edge);
+  border-radius: var(--wh-radius-panel);
+  background: var(--wh-surface);
+  box-shadow: var(--wh-panel-shadow, none), 0 1px 0 var(--wh-highlight, transparent) inset;
+}
+.wh-toolbar-row { min-width: 0; }
+.wh-toolbar .wh-subtabs { padding-block: 0; }
+.wh-toolbar-search { display: flex; flex-wrap: wrap; align-items: flex-end; gap: 12px; }
+.wh-toolbar-search-field { min-width: 0; flex: 1 1 18rem; }
+.wh-toolbar-more { min-width: 0; flex: 0 1 auto; }
+.wh-toolbar-status { padding-top: 12px; border-top: 1px solid var(--wh-line); color: var(--wh-fg-muted); font-size: 14px; line-height: 20px; }
+@media (max-width: 639px) {
+  .wh-toolbar { padding: 12px 16px; }
+}
+
+/* ---------- Empty states (EmptyState) ---------- */
+.wh-workspace .wh-empty { border-style: dashed; border-color: var(--wh-line-strong); border-radius: var(--wh-radius-panel); background: var(--wh-surface); box-shadow: none; }
+.wh-empty p { max-width: 60ch; }
+.wh-empty-icon { display: grid; width: 40px; height: 40px; place-items: center; border-radius: var(--wh-radius-inset); background: var(--wh-surface-muted); color: var(--wh-fg-muted); }
+.wh-panel-empty { line-height: 1.6; }
+.wh-panel-empty-copy { display: flex; min-width: 0; flex-direction: column; gap: 4px; }
+.wh-panel-empty-title { color: var(--wh-fg); font-weight: 500; }
+.wh-panel-empty-action { display: flex; flex-wrap: wrap; gap: 8px; margin-top: 8px; }
+
+/* ---------- Notices (Notice, PageNotice) ---------- */
+.wh-workspace .wh-notice { border-color: var(--wh-edge); }
+.wh-page-notice { border-radius: var(--wh-radius-panel); box-shadow: var(--wh-panel-shadow, none); }
+.wh-workspace .wh-page-notice[data-tone="success"] { border-color: color-mix(in srgb, var(--wh-success) 40%, var(--wh-edge)); }
+.wh-workspace .wh-page-notice[data-tone="warning"] { border-color: color-mix(in srgb, var(--wh-warning) 45%, var(--wh-edge)); }
+.wh-workspace .wh-page-notice[data-tone="error"] { border-color: color-mix(in srgb, var(--wh-danger) 45%, var(--wh-edge)); }
+.wh-workspace .wh-page-notice[data-tone="info"] { border-color: color-mix(in srgb, var(--wh-info) 40%, var(--wh-edge)); }
+
+/* ---------- Status screens (404, error, loading) ---------- */
+html:has(.wh-status-page),
+body:has(.wh-status-page) { background: var(--wh-page-canvas, var(--wh-sidebar)); }
+.wh-status-page {
+  display: flex;
+  min-height: calc(100dvh - env(safe-area-inset-top) - env(safe-area-inset-bottom));
+  flex-direction: column;
+  background: var(--wh-page-canvas, var(--wh-sidebar));
+}
+.wh-status-bar { padding-inline: 16px; border-bottom: 1px solid var(--wh-line); background: var(--wh-surface); }
+.wh-status-footer { border-top: 1px solid var(--wh-line); border-bottom: 0; }
+.wh-status-bar-inner { display: flex; min-height: 64px; max-width: 1216px; align-items: center; justify-content: space-between; margin-inline: auto; }
+.wh-status-footer .wh-status-bar-inner { min-height: 0; justify-content: center; }
+.wh-status-footer nav { padding-block: 4px; }
+.wh-status-main { display: grid; flex: 1; place-items: center; padding: 32px 16px 48px; }
+.wh-status-panel {
+  display: flex;
+  width: 100%;
+  min-width: 0;
+  max-width: 32rem;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 12px;
+  padding: 24px;
+  border: 1px solid var(--wh-edge);
+  border-radius: var(--wh-radius-panel);
+  background: var(--wh-surface);
+  box-shadow: var(--wh-panel-shadow, 0 1px 2px rgb(0 0 0 / 4%));
+}
+.wh-status-page-body > .wh-status-panel { max-width: none; }
+.wh-status-icon { display: grid; width: 48px; height: 48px; place-items: center; margin-bottom: 4px; border: 1px solid var(--wh-line); border-radius: var(--wh-radius); background: var(--wh-surface-muted); }
+.wh-status-panel h1 { color: var(--wh-fg); font-size: 24px; font-weight: 600; line-height: 1.25; letter-spacing: -.03em; }
+.wh-status-copy { display: flex; max-width: 60ch; flex-direction: column; gap: 8px; color: var(--wh-fg-muted); font-size: 14px; line-height: 1.6; }
+.wh-status-reference { font-size: 12px; font-variant-numeric: tabular-nums; overflow-wrap: anywhere; }
+.wh-status-actions { display: flex; flex-wrap: wrap; gap: 8px; margin-top: 8px; }
+@media (min-width: 640px) {
+  .wh-status-bar { padding-inline: 32px; }
+  .wh-status-panel { padding: 32px; }
+  .wh-status-panel h1 { font-size: 28px; line-height: 1.2; letter-spacing: -.035em; }
+}
+.wh-loading-band,
+.wh-loading-panel { border: 1px solid var(--wh-edge); border-radius: var(--wh-radius-panel); background: var(--wh-surface); }
+.wh-loading-band { padding: 24px; }
+.wh-loading-panel { height: 160px; }
+@media (max-width: 639px) {
+  .wh-loading-band { padding: 16px; }
+}
+
+/* ---------- Agent workspace heading on phones and short landscape ---------- */
+@media (max-width: 639px), (max-height: 480px) {
+  .wh-agent-heading { gap: 8px; }
+  .wh-agent-heading > div:first-of-type { align-items: flex-start; gap: 12px; padding-block: 4px; }
+  .wh-agent-heading .wh-brand-tile[data-size="lg"] { width: 36px; height: 36px; border-radius: var(--wh-radius-inset); }
+}
+
+/* ---------- Forced colours ---------- */
+@media (forced-colors: active) {
+  /* Only the current tab keeps an underline; resting tabs' reserved border is painted as Canvas. */
+  .wh-tab,
+  .wh-workspace .wh-tab { border-bottom-color: Canvas; }
+  .wh-tab[aria-current="page"],
+  .wh-tab[aria-selected="true"],
+  .wh-workspace .wh-tab[aria-current="page"],
+  .wh-workspace .wh-tab[aria-selected="true"] { border-bottom-color: Highlight; }
+  .wh-subtab:not([aria-current="page"]) { border-color: Canvas; }
+  .wh-chip[aria-current="page"] { outline: 2px solid Highlight; outline-offset: 2px; }
+  :is(.wh-tabs, .wh-subtabs, .wh-chip-track, .wh-sidebar-nav):is([data-overflow-start], [data-overflow-end]) { -webkit-mask-image: none; mask-image: none; }
+  :is(.wh-page-heading, .wh-list-group, .wh-toolbar, .wh-tabstrip, .wh-form-actions, .wh-status-panel, .wh-empty) { border-color: CanvasText; box-shadow: none; }
+}

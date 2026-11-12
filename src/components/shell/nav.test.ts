@@ -240,7 +240,7 @@ test("the Settings section groups agent defaults, security, notifications and da
   );
 
   // Labels in documented order (matched by distinctive stem).
-  assert.equal(subs![0]!.label, "Global agent settings");
+  assert.equal(subs![0]!.label, "Agent defaults");
   const security = subs![1]!;
   const notifications = subs![2]!;
   const data = subs![3]!;

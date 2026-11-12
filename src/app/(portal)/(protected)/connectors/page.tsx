@@ -8,8 +8,7 @@ import { join } from "node:path";
 import { cookies } from "next/headers";
 import { redirect } from "next/navigation";
 import { revalidatePath } from "next/cache";
-import { Notice } from "@/components/ui/notice";
-import { connectorNotice } from "./notices";
+import { connectorNotice, connectorsReturnUrl as backTo } from "./notices";
 
 import { loadConfig, type Config } from "@/server/config";
 import { getServerDb } from "@/server/db/server";
@@ -109,6 +108,7 @@ function formValue(formData: FormData, name: string): string {
   return typeof raw === "string" ? raw : "";
 }
 
+
 // Connect: start the right connect flow for the chosen connector. A provider sign-in is
 // started by redirecting to the provider's authorize URL; a provider-hosted MCP service is
 // connected directly; an api-key / basic service needs the person's own key, collected on a
@@ -125,7 +125,8 @@ async function connectAction(formData: FormData): Promise<void> {
   const config = loadConfig();
   const actions = buildActions(db, config);
   const entry = getCatalogue().get(connectorId);
-  let target = "/connectors?notice=problem";
+  const problem = backTo(formData, "connect-problem");
+  let target = problem;
   try {
     if (entry?.auth_kind === "oauth2") {
       const authorize = (await actions.connectProviderSignin(session, { connectorId })) as {
@@ -142,7 +143,7 @@ async function connectAction(formData: FormData): Promise<void> {
     if (!(error instanceof HttpError)) {
       throw error;
     }
-    target = "/connectors?notice=problem";
+    target = problem;
   }
   revalidatePath("/connectors");
   redirect(target);
@@ -155,8 +156,8 @@ async function reconnectAction(formData:FormData):Promise<void> {
   const id=formValue(formData,"connectionId");
   const {getConnectionById}=await import("@/server/db/connections");
   const connection=await getConnectionById(db,session.userId,id);
-  if(!connection) redirect("/connectors?notice=problem");
-  let target="/connectors?notice=problem";
+  if(!connection) redirect(backTo(formData,"connect-problem"));
+  let target=backTo(formData,"connect-problem");
   try {target=(await createConnectorRuntime({config:loadConfig(),db}).begin(session,connection.connectorId,id)).url;} catch {}
   redirect(target);
 }
@@ -177,7 +178,7 @@ async function disconnectAction(formData: FormData): Promise<void> {
   try {
     const result = await buildActions(db, config).disconnectService(session, connectionId);
     if (!result.ok) {
-      notice = "problem";
+      notice = "disconnect-problem";
     } else if (result.providerRevoked === false) {
       notice = "provider-revoke-needed";
     }
@@ -185,10 +186,10 @@ async function disconnectAction(formData: FormData): Promise<void> {
     if (!(error instanceof HttpError)) {
       throw error;
     }
-    notice = "problem";
+    notice = "disconnect-problem";
   }
   revalidatePath("/connectors");
-  redirect(`/connectors?notice=${notice}`);
+  redirect(backTo(formData, notice));
 }
 
 // Request a connector not in the catalogue yet (recorded for the person, emailed to the
@@ -200,19 +201,25 @@ async function requestAction(formData: FormData): Promise<void> {
   if (!session) {
     redirect("/signin");
   }
+  // The ask-to-join control on a gated Google entry carries its connector id (and no name);
+  // the "Request a service" form carries the typed name. Each goes to its own action — the
+  // ask-to-join used to be posted as a nameless request and always failed.
+  const connectorId = formValue(formData, "connectorId");
   const name = formValue(formData, "name");
   const config = loadConfig();
-  let notice = "requested";
+  let notice = connectorId ? "early-access-requested" : "requested";
   try {
-    await buildActions(db, config).requestConnector(session, { name });
+    const actions = buildActions(db, config);
+    if (connectorId) await actions.askToJoin(session, { connectorId });
+    else await actions.requestConnector(session, { name });
   } catch (error) {
     if (!(error instanceof HttpError)) {
       throw error;
     }
-    notice = "problem";
+    notice = !connectorId && name.trim() === "" ? "request-name-missing" : "request-problem";
   }
   revalidatePath("/connectors");
-  redirect(`/connectors?notice=${notice}`);
+  redirect(backTo(formData, notice));
 }
 
 export default async function ConnectorsPage({
@@ -239,16 +246,14 @@ export default async function ConnectorsPage({
     ...(category !== undefined ? { category } : {}),
   });
   return (
-    <>
-      {notice ? <div className="mx-auto w-full max-w-3xl px-4 pt-8 sm:px-6"><Notice tone={notice.tone}>{notice.text}</Notice></div> : null}
-      <ConnectorsView
-        initialView={firstParam(params.view)}
-        {...data}
-        connectAction={connectAction}
-        disconnectAction={disconnectAction}
-        reconnectAction={reconnectAction}
-        requestAction={requestAction}
-      />
-    </>
+    <ConnectorsView
+      initialView={firstParam(params.view)}
+      {...data}
+      notice={notice}
+      connectAction={connectAction}
+      disconnectAction={disconnectAction}
+      reconnectAction={reconnectAction}
+      requestAction={requestAction}
+    />
   );
 }

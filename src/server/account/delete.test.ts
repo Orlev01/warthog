@@ -291,9 +291,9 @@ test("a successful deletion enqueues the account for purge and sends a confirmat
 
     const confirmations = emailsTo(outbox, person.email);
     assert.equal(confirmations.length, 1, "exactly one confirmation email is sent to the person");
-    assert.match(confirmations[0]!.body, /removed from the live database/);
-    assert.match(confirmations[0]!.body, /backups follow their separate retention/);
-    assert.doesNotMatch(confirmations[0]!.body, /Your data is now unreadable|all.*backups.*destroyed/i);
+    assert.match(confirmations[0]!.body, /removed the link to the key that protects your data from our live systems/);
+    assert.match(confirmations[0]!.body, /Backups, messages we've already sent and records kept by the services we use follow their own timelines/);
+    assert.doesNotMatch(confirmations[0]!.body, /Your data is now unreadable|can no longer be opened|all.*backups.*destroyed/i);
   } finally {
     await db.close();
   }

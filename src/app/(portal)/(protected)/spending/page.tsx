@@ -2,7 +2,7 @@ import * as React from "react";
 import { cookies } from "next/headers";
 import { redirect } from "next/navigation";
 import { revalidatePath } from "next/cache";
-import { Notice as InlineNotice } from "@/components/ui/notice";
+import { PageNotice } from "@/components/ui/notice";
 
 import { loadConfig } from "@/server/config";
 import { getServerDb } from "@/server/db/server";
@@ -56,7 +56,7 @@ type Notice = "saved" | "problem";
 
 const NOTICES: Record<Notice, { done: boolean; text: string }> = {
   saved: { done: true, text: "Account currency saved." },
-  problem: { done: false, text: "That currency could not be saved. Please choose another." },
+  problem: { done: false, text: "The account currency wasn't changed. Choose one from the list and try again." },
 };
 
 function toNotice(raw: string | string[] | undefined): Notice | null {
@@ -93,11 +93,11 @@ async function setCurrencyAction(formData: FormData): Promise<void> {
 }
 
 // The outcome of the last set, in words plus an icon (never colour alone). A problem is
-// announced immediately (alert); a success politely (status). The view shows it under
-// its header, next to the currency setting it reports on.
-function NoticeBanner({ notice }: { notice: Notice }) {
+// announced immediately (alert); a success politely (status). The view shows it as the
+// page's one notice slot, straight under the heading band that holds the currency setting.
+function OutcomeNotice({ notice }: { notice: Notice }) {
   const { done, text } = NOTICES[notice];
-  return <InlineNotice tone={done ? "success" : "error"}>{text}</InlineNotice>;
+  return <PageNotice tone={done ? "success" : "error"}>{text}</PageNotice>;
 }
 
 export default async function SpendingPage({
@@ -126,7 +126,7 @@ export default async function SpendingPage({
       accountCurrency={data.accountCurrency}
       currencyOptions={data.currencyOptions}
       currencyAction={setCurrencyAction}
-      notice={notice ? <NoticeBanner notice={notice} /> : null}
+      notice={notice ? <OutcomeNotice notice={notice} /> : null}
     />
   );
 }

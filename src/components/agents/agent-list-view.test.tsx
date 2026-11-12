@@ -208,8 +208,10 @@ function controlFace(el: El): string {
   return parts.join(" ").replace(/\s+/g, " ").trim();
 }
 
+// The native `disabled` ATTRIBUTE (never a Tailwind `disabled:` / `aria-disabled:` class
+// variant on the shared Button, which every button carries).
 function isDisabled(el: El): boolean {
-  return /\bdisabled\b/i.test(el.attrs);
+  return /(?:^|\s)disabled(?:=""|(?=\s|$))/i.test(el.attrs);
 }
 
 // Every <button> whose accessible name matches `re` (disabled ones included).
@@ -384,17 +386,28 @@ test("renders each agent's status in words (not colour alone)", () => {
 // AC2 — each agent offers a Disconnect control and a link to its filtered activity.
 // ================================================================================
 
-test("offers a Disconnect control for every agent (live when a disconnectAction is bound)", () => {
+test("offers a Disconnect control for every agent still connected (live when a disconnectAction is bound)", () => {
   const markup = render(base()); // disconnectAction bound
   const disconnects = buttonsMatching(markup, /disconnect/i);
+  const connected = base().agents.filter((agent) => agent.status !== "needs-reconnect");
   assert.ok(
-    disconnects.length >= base().agents.length,
-    `every agent must offer a Disconnect control; found ${disconnects.length} for ${base().agents.length} agents`,
+    disconnects.length >= connected.length,
+    `every connected agent must offer a Disconnect control; found ${disconnects.length} for ${connected.length} agents`,
   );
   assert.ok(
     disconnects.every((b) => !isDisabled(b)),
     "with a bound disconnectAction every Disconnect control is LIVE, not a dead/disabled button",
   );
+});
+
+// interaction-08 — a disconnected agent ("Reconnect needed") can't be disconnected again: it
+// offers the way back, connecting it from the start, instead of a second Disconnect.
+test("a disconnected agent offers 'Connect it again' instead of another Disconnect", () => {
+  const markup = render(base({ agents: [AGENT_B] })); // needs-reconnect
+  assert.equal(buttonsMatching(markup, /disconnect/i).length, 0, "no Disconnect for an agent that is already disconnected");
+  const again = anchors(markup).find((a) => a.href === "/agents/connect" && /connect it again/i.test(a.name));
+  assert.ok(again, `a disconnected agent links to /agents/connect; anchors=${JSON.stringify(anchors(markup))}`);
+  assert.ok(again!.name.includes(AGENT_B.name), "the link names the agent for assistive technology");
 });
 
 test("binds Disconnect to the disconnectAction server action, carrying THIS agent's id", () => {
@@ -543,9 +556,19 @@ test("the empty state offers a 'Connect an agent' link to /agents/connect", () =
   );
   assert.match(
     connect!.name,
-    /connect an agent/i,
-    `the empty-state CTA must read 'Connect an agent'; name="${connect!.name}"`,
+    /connect (an|your first) agent/i,
+    `the empty-state CTA must read 'Connect your first agent'; name="${connect!.name}"`,
   );
+});
+
+// newcomer-19 — with no agents there is one call to action, not three: the heading carries
+// no 'Connect an agent' / defaults buttons, and the empty state says what an agent is.
+test("an empty list has exactly one call to action and explains what an agent is", () => {
+  const markup = render(base({ agents: [] }));
+  const connects = anchors(markup).filter((a) => a.href === "/agents/connect");
+  assert.equal(connects.length, 1, `one link to connect an agent; anchors=${JSON.stringify(anchors(markup))}`);
+  assert.ok(!anchors(markup).some((a) => a.href === "/settings/agents"), "no defaults link before there is an agent");
+  assert.match(visibleText(markup), /AI assistants like Claude or ChatGPT/);
 });
 
 // ================================================================================

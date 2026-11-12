@@ -10,7 +10,9 @@ test("record forms expose scheduling metadata and preserve personal field names"
     initialTab="renewals" addRecordAction={async()=>{}} editRecordAction={async()=>{}} />);
   assert.match(html,/type="date"[^>]*name="dueDate"/);
   assert.match(html,/name="dueDate"[^>]*value="2027-02-28"/);
-  assert.match(html,/name="status"[^>]*value="upcoming"/);
+  // The status is a choice now; an agent's own value ("upcoming") is kept as the selected option.
+  assert.match(html,/<select[^>]*name="status"/);
+  assert.match(html,/<option value="upcoming" selected="">Upcoming<\/option>/);
   assert.match(html,/name="field:dueDate"[^>]*value="Personal text"/);
   assert.match(html,/id="record-00000000-0000-4000-8000-000000000001"/);
   assert.match(html,/name="returnTab"[^>]*value="renewals"/);

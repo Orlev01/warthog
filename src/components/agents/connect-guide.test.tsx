@@ -61,7 +61,7 @@ import { test } from "node:test";
 import assert from "node:assert/strict";
 import { renderToStaticMarkup } from "react-dom/server";
 
-import { ConnectGuide } from "./connect-guide";
+import { ConnectGuide, CONNECT_GROUPS } from "./connect-guide";
 import { AGENT_PLATFORMS } from "@/domain/agents/compatibility";
 
 // ── tiny markup helpers (no DOM), mirrored from the sibling component tests ────────────
@@ -400,26 +400,44 @@ test("the guide shows no protocol or security jargon in its prose", () => {
 // uses the house heading style.
 // ════════════════════════════════════════════════════════════════════════════════════════
 
-test("each platform guide is a collapsed disclosure named for its platform, its steps inside", () => {
+test("each platform guide is a disclosure named for its platform, its steps inside; only the first is open", () => {
   const markup = render();
   const disclosures = [...markup.matchAll(/<details\b([^>]*)>([\s\S]*?)<\/details>/gi)];
+  const shown = CONNECT_GROUPS.flatMap((group) => group.platforms);
   assert.equal(disclosures.length, AGENT_PLATFORMS.length, "one disclosure per platform guide");
+  assert.equal(shown.length, AGENT_PLATFORMS.length, "every platform is listed in one of the groups");
   disclosures.forEach((d, i) => {
-    const platform = AGENT_PLATFORMS[i]!;
+    const platform = shown[i]!;
     const summary = visibleText(/<summary\b[^>]*>([\s\S]*?)<\/summary>/i.exec(d[2]!)?.[1] ?? "");
     assert.match(summary, new RegExp(platform.name.replace(/[()]/g, "\\$&")), `disclosure #${i + 1} is named for ${platform.name}`);
-    assert.ok(!hasBoolAttr(d[1]!, "open"), `the ${platform.name} guide starts collapsed`);
+    assert.equal(hasBoolAttr(d[1]!, "open"), i === 0, `only the first guide (${shown[0]!.name}) starts open`);
     const steps = orderedLists(d[2]!)[0];
     assert.ok(steps, `the ${platform.name} steps sit inside its disclosure`);
     assert.equal(steps.items.length, platform.steps.length, `every ${platform.name} step is listed`);
   });
 });
 
-test("the connect page title uses the house heading style", () => {
-  const h1 = /<h1\b([^>]*)>([\s\S]*?)<\/h1>/.exec(render());
-  assert.ok(h1, "the guide has a page heading");
-  const cls = (attr(h1[1]!, "class") ?? "").split(/\s+/);
-  for (const token of ["text-2xl", "font-semibold", "tracking-tight", "text-fg"]) {
-    assert.ok(cls.includes(token), `the h1 carries ${token}; class="${cls.join(" ")}"`);
-  }
+// newcomer-07 — the common platforms come first, and the ones Warthog has no documented way
+// to connect yet sit apart, marked as such, rather than among the ones that work.
+test("Claude and ChatGPT come first, and unverified platforms are listed apart and marked", () => {
+  const [common, other, unverified] = CONNECT_GROUPS;
+  assert.deepEqual(common!.platforms.map((p) => p.name), ["Claude", "ChatGPT"]);
+  assert.ok(other!.platforms.every((p) => p.status !== "unverified"));
+  assert.deepEqual(unverified!.platforms.map((p) => p.name), ["Dots (OpenAI)", "Instinct"]);
+  const text = visibleText(render());
+  assert.match(text, /Not verified yet/);
+});
+
+// newcomer-07 — the page says what happens next: copy, add it in the agent, approve its
+// access, after which it appears in Your agents.
+test("the guide says what happens after the address is pasted", () => {
+  const text = visibleText(render());
+  assert.match(text, /Copy your Warthog address/);
+  assert.match(text, /appears in Your agents/);
+  assert.match(render(), /href="\/agents\/access-key"/, "the access-key route is offered near the top too");
+});
+
+test("the connect page title is the shared heading band", () => {
+  const markup = render();
+  assert.match(markup, /<header class="wh-page-heading">[\s\S]*?<h1>Connect an agent<\/h1>/);
 });

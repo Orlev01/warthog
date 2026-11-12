@@ -336,7 +336,7 @@ test("labels an agent-sourced shared memory as saved by that agent, and shared",
   assert.match(text, /\bshared\b/i, `a shared memory must show its scope as shared; text="${text}"`);
 });
 
-test("labels an agent-sourced kept memory as saved by that agent, and kept", () => {
+test("labels an agent-sourced kept memory as saved by that agent, and private to it", () => {
   const card = cardMarkupFor(render(base({ memories: [MEM_CHATGPT_KEPT] })), MEM_CHATGPT_KEPT.content);
   const text = visibleText(card);
   assert.match(text, /saved by/i, `an agent memory must read "Saved by <agent>"; text="${text}"`);
@@ -344,7 +344,7 @@ test("labels an agent-sourced kept memory as saved by that agent, and kept", () 
     text.includes(MEM_CHATGPT_KEPT.sourceAgentName!),
     `the label must name the saving agent "${MEM_CHATGPT_KEPT.sourceAgentName}"; text="${text}"`,
   );
-  assert.match(text, /\bkept\b/i, `a kept memory must show its scope as kept; text="${text}"`);
+  assert.match(text, /\bprivate to chatgpt\b/i, `a kept memory must read as private to the agent that saved it; text="${text}"`);
 });
 
 test("labels a person-added memory as saved by the person, not an agent", () => {

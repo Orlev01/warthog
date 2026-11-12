@@ -16,13 +16,18 @@ import { systemClock } from "@/server/seams/clock";
 import { loadConfig } from "@/server/config";
 import { selectKeyWrapper } from "@/server/crypto/key-wrapper";
 import { createRedactingRecorder } from "@/server/mcp/recorder";
-import { PageContainer } from "@/components/shell/page-container";
-import { Field } from "@/components/ui/field";
-import { Select } from "@/components/ui/select";
-import { FormSubmit } from "@/components/ui/form-submit";
-import { Notice } from "@/components/ui/notice";
+import { ArrowRight, ChevronDown } from "lucide-react";
+import { WorkspaceHeading, WorkspacePanel } from "@/components/shell/workspace-surfaces";
+import { Field, SelectField } from "@/components/ui/field";
+import { ActionForm, FormSubmit, PendingFormFields } from "@/components/ui/form-submit";
+import { PageNotice } from "@/components/ui/notice";
 
-export const metadata = { title: "Global agent settings" };
+// Settings › Agent defaults: the starting permissions for agents connected from now on, and
+// the way to the controls that apply to every agent. The same composition as the other
+// Settings tabs (containment-34): the heading band, the outcome notice, then one panel per
+// task with its action in the panel footer. Every text block sits in a bounded surface
+// (founder rule 1); the request limit is an advanced setting, out of the way.
+export const metadata = { title: "Agent defaults" };
 async function signedIn() {
   const token = (await cookies()).get("__Host-wh_session")?.value;
   const db = await getServerDb();
@@ -65,7 +70,14 @@ async function save(form: FormData) {
   revalidatePath("/settings/agents");
   redirect("/settings/agents?notice=saved");
 }
-export default async function GlobalAgentSettings({
+// The controls that apply to every agent, each a full-width row with a 44px target.
+const ALL_AGENT_LINKS = [
+  { href: "/rules", label: "Manage rules", detail: "Rules for all agents apply on every request." },
+  { href: "/agents", label: "Manage individual agents", detail: "Change what one agent can use." },
+  { href: "/activity", label: "All activity", detail: "What every agent did through Warthog." },
+] as const;
+
+export default async function AgentDefaultsPage({
   searchParams,
 }: {
   searchParams: Promise<Record<string, string | string[] | undefined>>;
@@ -73,69 +85,77 @@ export default async function GlobalAgentSettings({
   const params = await searchParams;
   const { db, session } = await signedIn();
   const defaults = await getAgentDefaults(db, session.userId);
+  const invalid = params.notice === "invalid";
   return (
-    <PageContainer className="flex flex-col gap-6">
-      <h1 className="text-2xl font-semibold tracking-tight">
-        Global agent settings
-      </h1>
-      <p className="text-sm text-fg-muted">
-        Choose starting settings for new agents. Each connection keeps its own
-        permissions, and you review access when connecting it. Existing agents
-        keep their settings.
-      </p>
+    <div className="wh-page">
+      <WorkspaceHeading
+        title="Agent defaults"
+        description="Starting permissions for agents you connect from now on. Agents you've already connected keep their own settings."
+      />
       {params.notice === "saved" ? (
-        <Notice tone="success">
-          Defaults saved. Existing agents are unchanged.
-        </Notice>
-      ) : params.notice === "invalid" ? (
-        <Notice tone="error">
-          Choose a starting set and a request limit between 1 and 10,000.
-        </Notice>
+        <PageNotice tone="success">Defaults saved. Agents you've already connected are unchanged.</PageNotice>
+      ) : invalid ? (
+        <PageNotice tone="error">Nothing was saved. Choose a starting set and a request limit from 1 to 10,000.</PageNotice>
       ) : null}
-      <form action={save} className="flex flex-col gap-4">
-        <label className="flex flex-col gap-2 text-sm font-medium">
-          Starting permission set
-          <Select name="template" defaultValue={defaults.template}>
-            <option value="minimal">Minimal</option>
-            <option value="standard">Standard</option>
-          </Select>
-        </label>
-        <dl className="grid gap-4 rounded-card bg-surface-muted p-4 text-sm sm:grid-cols-2">
-          {CONNECTION_PRESETS.filter(preset => preset.value !== "custom").map(preset => <div key={preset.value}><dt className="font-medium">{preset.label}</dt><dd className="mt-1 leading-relaxed text-fg-muted">{preset.description}</dd></div>)}
-        </dl>
-        <p className="text-sm text-fg-muted">Custom choices are made for each connection, not as a global preset. Protected identity, card requests and sharing stay off until you explicitly enable them. Activity through Warthog is always recorded.</p>
-        <Field
-          name="rateLimit"
-          label="Default requests per minute"
-          type="number"
-          min={1}
-          max={10000}
-          required
-          defaultValue={defaults.rateLimit}
-        />
-        <div>
-          <FormSubmit pendingLabel="Saving defaults…">Save defaults</FormSubmit>
-        </div>
-      </form>
-      <section className="flex flex-col gap-3">
-        <h2 className="text-lg font-semibold">Controls for all agents</h2>
-        <p className="text-sm text-fg-muted">
-          Global rules are enforced on every request, including for agents
-          already connected. A global denial takes precedence over an agent’s
-          settings.
-        </p>
-        <div className="flex flex-wrap gap-4">
-          <a className="text-sm text-accent underline" href="/rules">
-            Manage global rules
-          </a>
-          <a className="text-sm text-accent underline" href="/agents">
-            Manage individual agents
-          </a>
-          <a className="text-sm text-accent underline" href="/activity">
-            All-agent audit log
-          </a>
-        </div>
-      </section>
-    </PageContainer>
+      <ActionForm action={save} className="contents">
+        <WorkspacePanel
+          title="Defaults for new agents"
+          description="You can customise each agent when you connect it. Protected details, cards and sharing always start off."
+          footer={<FormSubmit pendingLabel="Saving defaults…">Save defaults</FormSubmit>}
+        >
+          <PendingFormFields>
+            <div className="flex flex-col gap-4">
+              <SelectField label="Starting permission set" name="template" defaultValue={defaults.template} width="text">
+                <option value="minimal">Minimal</option>
+                <option value="standard">Standard</option>
+              </SelectField>
+              <dl className="grid gap-4 rounded-field bg-surface-muted p-4 text-sm sm:grid-cols-2">
+                {CONNECTION_PRESETS.filter(preset => preset.value !== "custom").map(preset => <div key={preset.value}><dt className="font-medium">{preset.label}</dt><dd className="mt-1 leading-relaxed text-fg-muted">{preset.description}</dd></div>)}
+              </dl>
+              <p className="text-sm text-fg-muted">Warthog always records what an agent does through it.</p>
+              <details className="group border-t border-line pt-2" open={invalid}>
+                <summary className="flex min-h-11 cursor-pointer list-none items-center justify-between gap-3 text-sm font-medium text-fg [&::-webkit-details-marker]:hidden">
+                  Advanced
+                  <ChevronDown aria-hidden className="h-4 w-4 shrink-0 text-fg-muted transition-transform group-open:rotate-180" />
+                </summary>
+                <div className="pb-2">
+                  <Field
+                    name="rateLimit"
+                    label="Maximum requests per minute"
+                    hint="How often each new agent may call Warthog. The default is 120."
+                    type="number"
+                    inputMode="numeric"
+                    min={1}
+                    max={10000}
+                    required
+                    width="code"
+                    error={invalid ? "Enter a whole number from 1 to 10,000." : undefined}
+                    defaultValue={defaults.rateLimit}
+                  />
+                </div>
+              </details>
+            </div>
+          </PendingFormFields>
+        </WorkspacePanel>
+      </ActionForm>
+      <WorkspacePanel
+        title="Controls for all agents"
+        description="Rules for all agents apply on every request, including agents already connected, and an agent's own settings can't override them."
+      >
+        <ul role="list" className="-my-3 flex flex-col">
+          {ALL_AGENT_LINKS.map((link) => (
+            <li key={link.href} className="border-b border-line last:border-0">
+              <a href={link.href} className="group flex min-h-11 items-center justify-between gap-3 py-3 text-sm">
+                <span className="flex min-w-0 flex-col gap-0.5">
+                  <span className="font-medium text-fg underline-offset-4 group-hover:underline">{link.label}</span>
+                  <span className="text-fg-muted">{link.detail}</span>
+                </span>
+                <ArrowRight aria-hidden className="h-4 w-4 shrink-0 text-fg-muted" />
+              </a>
+            </li>
+          ))}
+        </ul>
+      </WorkspacePanel>
+    </div>
   );
 }

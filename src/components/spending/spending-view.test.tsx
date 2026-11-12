@@ -830,3 +830,39 @@ test("an agent with releases links to its approvals and releases in Activity", (
   // No activity link is invented for an agent without releases or a link.
   assert.ok(!links.some((l) => /agent-mail/.test(l.href)), "no link is fabricated for an agent without one");
 });
+
+// ================================================================================
+// UI/UX pass (containment-21, newcomer-02, newcomer-11): every piece of the page sits in
+// a bounded surface — the heading band holds the title and the currency form, "Your
+// agents" is a bounded group even before any agent is connected (with the next step), and
+// the household totals are one panel of divider rows with no card inside it.
+// ================================================================================
+
+test("the heading band holds the title, its purpose and the currency form", () => {
+  const markup = render(base({ currencyAction: saveCurrency }));
+  const band = /<header class="wh-page-heading">([\s\S]*?)<\/header>/.exec(markup)?.[1] ?? "";
+  assert.match(band, /<h1>Spending<\/h1>/);
+  assert.match(band, /class="wh-page-description"/);
+  assert.match(band, /name="account-currency"/, "the currency form is the band's action");
+});
+
+test("with no agents, Your agents is still a bounded panel that offers connecting one", () => {
+  const markup = render(base({ own: { agents: [] }, household: null }));
+  const panel = /<section aria-labelledby="[^"]+" class="wh-panel">([\s\S]*?)<\/section>/.exec(markup)?.[1] ?? "";
+  assert.match(panel, /Your agents/);
+  assert.match(panel, /No agents connected yet\./);
+  assert.match(panel, /href="\/agents\/connect"[^>]*>Connect your first agent<\/a>/);
+});
+
+test("Your agents links to where card budgets are set", () => {
+  for (const own of [{ agents: [] }, { agents: [AGENT_SHOP] }]) {
+    assert.match(render(base({ own })), /href="\/rules\?view=budgets"[^>]*>Card budgets<\/a>/);
+  }
+});
+
+test("the household totals are one panel of divider rows, with no card nested inside", () => {
+  const markup = render(base());
+  const section = sectionByHeading(markup, /^household$/i) ?? "";
+  assert.ok(section.includes("Household total"), "the household panel holds the total");
+  assert.doesNotMatch(section, /wh-card|rounded-card border/, "no card inside the panel");
+});

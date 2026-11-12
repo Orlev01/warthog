@@ -237,6 +237,10 @@ function selectableNames(markup: string): string[] {
     if (hasBoolAttr(b.attrs, "disabled")) continue;
     out.push((visibleText(b.inner) || attr(b.attrs, "aria-label") || "").trim());
   }
+  // A disclosure's <summary> is a live control too (Edit opens the skill's form).
+  for (const sm of findAll(markup, "summary")) {
+    out.push((visibleText(sm.inner) || attr(sm.attrs, "aria-label") || "").trim());
+  }
   for (const m of markup.matchAll(/<input\b([^>]*?)\/?>/gi)) {
     const attrs = m[1];
     if (hasBoolAttr(attrs, "disabled")) continue;

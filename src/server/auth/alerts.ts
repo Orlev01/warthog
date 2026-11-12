@@ -26,6 +26,7 @@ import { redact } from "../../domain/redaction/redact";
 import { getUserById } from "../db/users";
 import type { EmailSender } from "../notify/senders";
 import type { Db } from "../db/index";
+import { SUPPORT_EMAIL } from "../../components/public/operator";
 
 // Email alerts only (the brief says "email alerts"); the dev/test outbox
 // satisfies EmailSender, so tests pass it directly.
@@ -122,7 +123,7 @@ export async function alertAccountRecovered(
     userId,
     "Your Warthog account was recovered using your recovery code. A new passkey was added " +
       "and a new recovery code was issued, so your old recovery code no longer works. " +
-      "If this wasn't you, contact support straight away.",
+      `If this wasn't you, email ${SUPPORT_EMAIL} straight away.`,
     deps,
   );
 }

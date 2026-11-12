@@ -159,7 +159,9 @@ const CONTENT_MAX = 20_000;
 
 const memoryIdSchema = z.uuid();
 const scopeSchema = z.enum(["kept", "shared"]);
-const contentSchema = z.string().min(1).max(CONTENT_MAX);
+// Trimmed before it is checked, so content of only spaces is refused like empty content
+// and never saved as a blank memory an agent would read (interaction-02).
+const contentSchema = z.string().trim().min(1).max(CONTENT_MAX);
 
 const addMemorySchema = z.object({
   content: contentSchema,
@@ -197,7 +199,9 @@ function localDayNumber(instant: Date, timeZone: string): number {
   return Date.UTC(part("year"), part("month") - 1, part("day")) / 86_400_000;
 }
 
-const SCOPE_LABELS: Record<MemoryScope, string> = { shared: "Shared", kept: "Kept" };
+// The sharing filter in the person's words: a "kept" memory is private to the agent that
+// saved it (or to no agent, when the person added it).
+const SCOPE_LABELS: Record<MemoryScope, string> = { shared: "Shared", kept: "Private" };
 
 export function createMemoryActions(deps: MemoryActionsDeps): MemoryActions {
   const { db, keyWrapper, clock } = deps;
@@ -344,7 +348,7 @@ export function createMemoryActions(deps: MemoryActionsDeps): MemoryActions {
     const sourceTotal =
       facets.source.person + [...facets.source.agents.values()].reduce((sum, n) => sum + n, 0);
     const scopeOptions: MemoryFilterOption[] = [
-      { value: null, label: "All scopes", ...counted(scopeTotal) },
+      { value: null, label: "All", ...counted(scopeTotal) },
       ...(["shared", "kept"] as const).map((key) => ({
         value: key,
         label: SCOPE_LABELS[key],

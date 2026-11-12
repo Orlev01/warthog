@@ -1,9 +1,9 @@
 "use client";
 
 import * as React from "react";
-import { AlertTriangle, CheckCircle2 } from "lucide-react";
 
 import { Button } from "../ui/button";
+import { Notice } from "../ui/notice";
 import { formatAccountTime } from "@/domain/display-time";
 
 // Review fix W3.3 — the banner every signed-in screen shows while an account reset is
@@ -49,49 +49,50 @@ export function PendingResetBanner({ requestedAt, completesAt, timeZone, fetch: 
   const [error, setError] = React.useState<string | undefined>(undefined);
   const cancel = React.useMemo(() => createCancelReset(fetchImpl ?? defaultFetch), [fetchImpl]);
 
+  // Both states sit on the page grid as a page-level notice (desktop-07): the same measure and
+  // gutters as the page below, never bare text on the canvas. The slot drops its bottom
+  // padding so it shares the page's own rhythm.
   if (state === "cancelled") {
     return (
-      <div role="status" className="mx-auto flex w-full max-w-3xl items-start gap-3 px-4 pt-6 text-sm text-fg sm:px-6">
-        <CheckCircle2 aria-hidden={true} className="mt-0.5 h-5 w-5 shrink-0" />
-        <p>The reset is cancelled. Nothing will be erased.</p>
+      <div className="wh-page" style={{ paddingBottom: 0 }}>
+        <Notice tone="success" className="wh-page-notice">The reset is cancelled. Nothing will be erased.</Notice>
       </div>
     );
   }
 
   return (
-    <div className="mx-auto w-full max-w-3xl px-4 pt-6 sm:px-6">
-      <div role="alert" className="flex flex-col gap-3 rounded-card border border-line bg-surface p-4 text-sm text-fg">
-        <div className="flex items-start gap-3">
-          <AlertTriangle aria-hidden={true} className="mt-0.5 h-5 w-5 shrink-0" />
+    <div className="wh-page" style={{ paddingBottom: 0 }}>
+      <Notice tone="error" className="wh-page-notice">
+        <div className="flex flex-col gap-3">
           <p>
             A reset of your account was asked for on {formatAccountTime(requestedAt, timeZone)}. On {formatAccountTime(completesAt, timeZone)} it will
             erase your saved cards and protected details and disconnect your agents. If this wasn&apos;t you,
             cancel it now.
           </p>
+          {error ? <p className="text-danger">{error}</p> : null}
+          <div>
+            <Button
+              type="button"
+              variant="primary"
+              aria-busy={state === "busy" ? true : undefined}
+              onClick={() => {
+                if (state === "busy") return;
+                setState("busy");
+                void cancel().then((result) => {
+                  if (result.ok) {
+                    setState("cancelled");
+                  } else {
+                    setError(result.error);
+                    setState("pending");
+                  }
+                });
+              }}
+            >
+              Cancel the reset
+            </Button>
+          </div>
         </div>
-        {error ? <p className="text-sm text-danger">{error}</p> : null}
-        <div>
-          <Button
-            type="button"
-            variant="primary"
-            aria-busy={state === "busy" ? true : undefined}
-            onClick={() => {
-              if (state === "busy") return;
-              setState("busy");
-              void cancel().then((result) => {
-                if (result.ok) {
-                  setState("cancelled");
-                } else {
-                  setError(result.error);
-                  setState("pending");
-                }
-              });
-            }}
-          >
-            Cancel the reset
-          </Button>
-        </div>
-      </div>
+      </Notice>
     </div>
   );
 }

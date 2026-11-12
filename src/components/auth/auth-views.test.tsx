@@ -514,24 +514,28 @@ test("passkey cancellation and email delivery failures describe the form without
     const markup = renderToStaticMarkup(<SigninView step={step} email="sam@example.test" error="Please try again." />);
     const formDescription = markup.match(/<form[^>]*aria-describedby="([^"]+)"/)?.[1];
     assert.ok(formDescription);
-    assert.ok(markup.includes(`id="${formDescription}" role="alert"`));
+    // The form points at its one Notice slot, which carries the alert (public-13).
+    assert.match(markup, new RegExp(`id="${formDescription}"[^>]*><div role="alert"`));
     assert.equal((markup.match(/role="alert"/g) ?? []).length, 1);
     assert.ok(!/<input[^>]*aria-invalid="true"/.test(markup));
   }
 });
 
-test("the sign-in screen links to sign-up, recovery and signing in from another device", () => {
+test("the sign-in screen links to sign-up, recovery and reset, and never to the unfinished device approval", () => {
   for (const step of ["passkey", "code"] as const) {
     const links = hrefsWithText(renderToStaticMarkup(<SigninView step={step} />));
     for (const [href, words] of [
       ["/signup", /create an account/i],
       ["/recover", /recover/i],
-      ["/device", /another device/i],
+      ["/reset", /reset/i],
     ] as const) {
       const link = links.find((l) => l.href === href);
       assert.ok(link, `sign-in (${step}) links to ${href}, got ${JSON.stringify(links)}`);
       assert.match(link.text, words, `the ${href} link says where it goes`);
     }
+    // public-01: nothing in the app can approve a device request yet, so sign-in never
+    // offers that route.
+    assert.ok(!links.some((l) => l.href.startsWith("/device")), `sign-in (${step}) must not link to /device`);
   }
 });
 
@@ -548,7 +552,8 @@ test("sign-up, recovery and new-device screens link back to sign-in", () => {
 });
 
 // Review (unverified, medium; WCAG 4.1.3) — a step's error is announced to screen readers
-// (role="alert"), and each auth screen is a <main> landmark.
+// (role="alert"), and each auth screen is a <main> landmark whose brand bar sits before it
+// as the page banner (public-27).
 test("auth step errors are announced, and each auth screen is a main landmark", () => {
   for (const markup of [
     renderToStaticMarkup(<SigninView step="passkey" error="We couldn't sign you in." />),
@@ -556,7 +561,7 @@ test("auth step errors are announced, and each auth screen is a main landmark", 
     renderToStaticMarkup(<SignupView step="passkey" error="We couldn't sign you in." />),
     renderToStaticMarkup(<RecoverView step="passkey" error="We couldn't sign you in." />),
   ]) {
-    assert.match(markup, /<p[^>]*role="alert"[^>]*>We couldn&#x27;t sign you in\.<\/p>/, markup);
-    assert.match(markup, /^<main\b/, "the screen is a main landmark");
+    assert.match(markup, /role="alert"[^>]*>(?:<[^>]*>)*We couldn&#x27;t sign you in\./, markup);
+    assert.match(markup, /^<header class="wh-auth-header[^"]*">[\s\S]*<\/header><main\b/, "the brand bar is a banner before the main landmark");
   }
 });

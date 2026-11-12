@@ -8,7 +8,7 @@
 //   • rules are grouped by scope: all agents first, then each agent by name, with counts;
 //   • a status filter (?status=active|paused) shows as links with counts, an applied-filter
 //     chip and an empty state with a way back;
-//   • each rule shows its kind as a word ("Ask first" / "Never allow"), and its status in
+//   • each rule shows its kind as a word ("Ask me first" / "Never allow"), and its status in
 //     words;
 //   • Delete asks for confirmation in a native disclosure, then posts to the same handler;
 //   • Budgets links each agent's real card-budget control (its workspace Spending section)
@@ -32,7 +32,7 @@ const RULES: RulesViewRule[] = [
   { id: "g-ask", sentence: "Ask me before any agent sends email", scope: ANY, status: "active", kind: "ask_first" },
   { id: "z-never", sentence: "Never allow Zed to make any change", scope: agent("c-zed", "Zed"), status: "active", kind: "never_allow" },
   { id: "a-ask", sentence: "Ask me before Alpha requests a card", scope: agent("c-alpha", "Alpha"), status: "paused", kind: "ask_first" },
-  { id: "g-never", sentence: "Never allow any agent to request a high-tier identity detail", scope: ANY, status: "paused", kind: "never_allow" },
+  { id: "g-never", sentence: "Never allow any agent to request a protected detail", scope: ANY, status: "paused", kind: "never_allow" },
   { id: "a-never", sentence: "Never allow Alpha to send a post", scope: agent("c-alpha", "Alpha"), status: "active", kind: "never_allow" },
 ];
 
@@ -113,12 +113,16 @@ function rowFor(html: string, sentence: string): string {
 
 // --- page title and views ---------------------------------------------------------------
 
-test("the page is titled like its navigation entry, with the house h1", () => {
+test("the page is titled like its navigation entry, in the heading band with its tabs", () => {
+  // UI/UX pass: the title, its purpose and the three tabs share one WorkspaceHeading band.
   const markup = render();
   const h1s = findAll(markup, "h1");
   assert.equal(h1s.length, 1);
   assert.equal(visibleText(h1s[0]!.inner), "Rules & budgets");
-  assert.equal(attr(h1s[0]!.attrs, "class"), "text-2xl font-semibold tracking-tight text-fg");
+  const band = findAll(markup, "header").find((h) => /class="wh-page-heading"/.test(h.attrs));
+  assert.ok(band, "the heading band is rendered");
+  assert.match(band!.inner, /<h1>Rules &amp; budgets<\/h1>/);
+  assert.match(band!.inner, /role="tablist" aria-label="Rules and budgets"/);
 });
 
 test("browsing, building and budgets are separate tabs; the rules tab counts every rule", () => {
@@ -194,10 +198,10 @@ test("groupRulesByScope orders same-named agents by id and keeps every rule", ()
 test("each rule shows its kind and its status in words", () => {
   const html = rulesPanel(render());
   const ask = visibleText(rowFor(html, "Ask me before any agent sends email"));
-  assert.match(ask, /Ask first/);
+  assert.match(ask, /Ask me first/);
   assert.match(ask, /Active/);
-  const never = visibleText(rowFor(html, "Never allow any agent to request a high-tier identity detail"))
-    .replace("Never allow any agent to request a high-tier identity detail", "");
+  const never = visibleText(rowFor(html, "Never allow any agent to request a protected detail"))
+    .replace("Never allow any agent to request a protected detail", "");
   assert.match(never, /Never allow/, "the kind badge, not only the sentence");
   assert.match(never, /Paused/);
 });
@@ -224,7 +228,7 @@ test("a status filter shows only matching rules and a removable chip", () => {
   const html = rulesPanel(render({ statusFilter: "paused" }));
   const text = visibleText(html);
   assert.ok(text.includes("Ask me before Alpha requests a card"));
-  assert.ok(text.includes("Never allow any agent to request a high-tier identity detail"));
+  assert.ok(text.includes("Never allow any agent to request a protected detail"));
   assert.ok(!text.includes("Ask me before any agent sends email"), "active rules are filtered out");
   assert.ok(!text.includes("Never allow Zed to make any change"), "active rules are filtered out");
   assert.deepEqual(groupHeadings(html), [

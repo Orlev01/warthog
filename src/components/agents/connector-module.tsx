@@ -27,7 +27,7 @@ export type ConnectorModuleProps = {
     readTools: ReadonlyArray<string>;
     changeTools: ReadonlyArray<string>;
   };
-  // The agent-wide defaults a "Use agent default" choice follows.
+  // The agent-wide defaults a "Same as this agent's setting" choice follows.
   defaultReads: boolean;
   defaultChanges: ChangePolicy;
   defaultOpen?: boolean;
@@ -134,7 +134,7 @@ export function ConnectorModule({ agentName, connector, defaultReads, defaultCha
             <input type="checkbox" name={`connector:${connector.id}`} defaultChecked={connector.granted} className="mt-1 h-4 w-4 shrink-0" />
             <span className="flex flex-col gap-0.5">
               <span className="font-medium text-fg">Let {agentName} use {connector.name}</span>
-              <span className="text-sm text-fg-muted">Access follows this service’s settings and your global and agent rules.</span>
+              <span className="text-sm text-fg-muted">Access follows this service’s settings and your rules.</span>
             </span>
           </label>
         )}
@@ -165,15 +165,15 @@ export function ConnectorModule({ agentName, connector, defaultReads, defaultCha
               name={`connectorPolicyRead:${connector.id}`}
               defaultValue={connector.policy?.readTools === undefined ? "default" : connector.policy.readTools ? "on" : "off"}
             >
-              <option value="default">Use agent default ({defaultReads ? "allowed" : "off"})</option>
-              <option value="on">Allow reads</option>
+              <option value="default">Same as this agent’s setting ({defaultReads ? "allowed" : "off"})</option>
+              <option value="on">Allowed</option>
               <option value="off">Off</option>
             </Select>
           </label>
           <label className="flex flex-col gap-1.5 text-sm font-medium">
             <span className="inline-flex items-center gap-1.5"><PencilLine aria-hidden={true} className="h-4 w-4 text-warning" /> Making changes</span>
             <Select name={`connectorPolicyChange:${connector.id}`} defaultValue={connector.policy?.changeTools ?? "default"}>
-              <option value="default">Use agent default ({CHANGE_WORDS[defaultChanges].toLowerCase()})</option>
+              <option value="default">Same as this agent’s setting ({CHANGE_WORDS[defaultChanges].toLowerCase()})</option>
               <option value="off">Off</option>
               <option value="ask_first">Ask me first</option>
               <option value="allow">Allow, subject to rules</option>
@@ -184,16 +184,16 @@ export function ConnectorModule({ agentName, connector, defaultReads, defaultCha
         <label className="flex flex-col gap-1.5 text-sm font-medium">
           Which tools
           <Select name={`connectorToolScope:${connector.id}`} defaultValue={allowed === null ? "all" : "chosen"}>
-            <option value="all">All tools, including future tools</option>
-            <option value="chosen">Only the tools ticked below</option>
+            <option value="all">All tools, including new ones</option>
+            <option value="chosen">Only the tools I tick</option>
           </Select>
           <span className="text-xs font-normal text-fg-muted">
-            With “only ticked tools”, newly discovered tools stay blocked. Reading and change settings and your global rules still apply. Provider-hosted tools always ask first.
+            With “Only the tools I tick”, new tools this service adds stay off until you tick them. The reading and change settings above, and your rules for all agents, still apply. Tools run by an outside provider always ask you first, because Warthog can’t check what they do.
           </span>
         </label>
 
         {total === 0 ? (
-          <p className="text-sm text-fg-muted">No tool inventory is available for the selected account. Reconnect or select its account to refresh discovery.</p>
+          <p className="text-sm text-fg-muted">We couldn&rsquo;t load this account&rsquo;s tools. Choose its account above, or try reconnecting it on the Connectors page.</p>
         ) : (
           <div className="grid gap-4 md:grid-cols-2">
             {connector.readTools.length > 0 ? (

@@ -159,23 +159,23 @@ const dateSchema = z.iso.date();
 
 const saveLowTierFieldSchema = z.object({
   kind: lowTierKindSchema,
-  value: z.string().min(1).max(VALUE_MAX),
+  value: z.string().trim().min(1).max(VALUE_MAX),
   movingOn: dateSchema.nullable().optional(),
 });
 const updateLowTierFieldSchema = z.object({
   fieldId: fieldIdSchema,
-  value: z.string().min(1).max(VALUE_MAX),
+  value: z.string().trim().min(1).max(VALUE_MAX),
   movingOn: dateSchema.nullable().optional(),
 });
 const saveHighTierFieldSchema = z.object({
   type: highTierTypeSchema,
-  label: z.string().min(1).max(LABEL_MAX),
+  label: z.string().trim().min(1).max(LABEL_MAX),
   ciphertext: z.string().min(1).max(CIPHERTEXT_MAX),
 });
 const raiseFieldToHighTierSchema = z.object({
   fieldId: fieldIdSchema,
   type: highTierTypeSchema,
-  label: z.string().min(1).max(LABEL_MAX),
+  label: z.string().trim().min(1).max(LABEL_MAX),
   ciphertext: z.string().min(1).max(CIPHERTEXT_MAX),
 });
 const setMovingDateSchema = z.object({

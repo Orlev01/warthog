@@ -1,9 +1,8 @@
 import * as React from "react";
-import { NavigationTabs } from "@/components/shell/section-navigation";
 import { cookies } from "next/headers";
 import { redirect } from "next/navigation";
 import { revalidatePath } from "next/cache";
-import { Notice as InlineNotice } from "@/components/ui/notice";
+import { PageNotice } from "@/components/ui/notice";
 
 import { loadConfig } from "@/server/config";
 import { getServerDb } from "@/server/db/server";
@@ -14,19 +13,19 @@ import { systemClock } from "@/server/seams/clock";
 import { HttpError } from "@/server/http/validate";
 import type { Db } from "@/server/db/index";
 import { createLifeAdminActions, type LifeAdminActions } from "./actions";
-import { LifeAdminView } from "@/components/life-admin/life-admin-view";
-import { TasksView } from "@/components/life-admin/tasks-view";
+import { LifeAdminScreen } from "@/components/life-admin/life-admin-screen";
 import { resolveAssigneeFilter } from "@/components/life-admin/task-groups";
 import { firstParam } from "@/lib/href";
-import { recordFields, recordDate, recordReturnPath, recordOffsets, recordStatus, taskReturnPath } from "./form-inputs";
+import { recordFields, recordDate, recordReturnPath, recordOffsets, recordStatus, recordTitle, taskReturnPath } from "./form-inputs";
 
 // E14-S13 — Life Admin page (the thin protected-page loader + action wiring over the
 // tested `createLifeAdminActions` seam, `./actions`). It reads the signed-in session
 // from the host-locked `__Host-wh_session` cookie, turns it (via the seam's `load`) into
 // the person's own records, moving checklist and tasks — content decrypted, each task's
 // assignee + note authors resolved to agent names — and mounts the already-render-tested
-// <LifeAdminView/> and <TasksView/> as two tabs (chosen by the `?view=` query param so a
-// server page needs no client state). Every control is BOUND to a `use server` wrapper
+// <LifeAdminView/> and <TasksView/> as the two in-page views of <LifeAdminScreen/> (the
+// `?view=` query param picks the first one shown; both stay mounted, so switching keeps a
+// half-typed record or task). Every control is BOUND to a `use server` wrapper
 // over the SAME seam; each wrapper re-derives the verified session (never trusting a
 // client value for identity), takes its input from the submitted form, persists
 // member-scoped through the seam, and redirects back with a `?notice=` the page renders
@@ -106,10 +105,13 @@ async function run(
 
 async function addRecordAction(formData: FormData): Promise<void> {
   "use server";
+  // A name made only of spaces is refused with a notice that names the field.
+  const title = recordTitle(formData);
+  if (title === null) redirect(`${recordReturnPath(formData)}&notice=record_title_missing`);
   await run("saved", (actions, session) =>
     actions.saveRecord(session, {
       kind: str(formData, "kind") as "subscription" | "receipt_warranty" | "renewal_appointment",
-      fields: { name: str(formData, "title") },
+      fields: { name: title },
       dueDate: recordDate(formData),
       status: recordStatus(formData),
     }),
@@ -168,7 +170,9 @@ async function handToAgentAction(formData: FormData): Promise<void> {
 
 async function createTaskAction(formData: FormData): Promise<void> {
   "use server";
-  await run("created", (actions, session) => actions.createTask(session, { title: str(formData, "title") }), "/life-admin?view=tasks");
+  // The boundary trims the title, so one made only of spaces is refused as a missing title.
+  await run("created", (actions, session) => actions.createTask(session, { title: str(formData, "title") }),
+    taskReturnPath(formData), "task_title_missing");
 }
 
 async function assignAction(formData: FormData): Promise<void> {
@@ -184,6 +188,7 @@ async function addNoteAction(formData: FormData): Promise<void> {
   await run("noted", (actions, session) =>
     actions.addTaskNote(session, { id: str(formData, "taskId"), text: str(formData, "note") }),
     taskReturnPath(formData),
+    "note_missing",
   );
 }
 
@@ -210,12 +215,15 @@ type Notice =
   | "completed"
   | "invalid_input"
   | "invalid_reminders"
+  | "record_title_missing"
+  | "task_title_missing"
+  | "note_missing"
   | "problem";
 
 const NOTICES: Record<Notice, { done: boolean; text: string }> = {
   deleted: { done: true, text: "Record and attached files deleted." },
-  file_too_large: { done: false, text: "Choose a file of 25 MiB or less." },
-  saved: { done: true, text: "Saved." },
+  file_too_large: { done: false, text: "Nothing was attached: choose a file of 25 MB or less." },
+  saved: { done: true, text: "Record added." },
   updated: { done: true, text: "Changes saved." },
   attached: { done: true, text: "File attached." },
   reminded: { done: true, text: "Reminders updated." },
@@ -225,37 +233,28 @@ const NOTICES: Record<Notice, { done: boolean; text: string }> = {
   assigned: { done: true, text: "Task reassigned." },
   noted: { done: true, text: "Note added." },
   completed: { done: true, text: "Task marked done." },
-  invalid_input: { done: false, text: "Check the values you entered and try again." },
-  invalid_reminders: { done: false, text: "Enter whole days from 0 to 36500, separated by commas. Leave the field empty to turn off reminders." },
-  problem: { done: false, text: "Something went wrong. Please try again." },
+  invalid_input: { done: false, text: "Nothing was saved. Check the values you entered and try again." },
+  invalid_reminders: { done: false, text: "Reminders weren't changed. Enter whole days from 0 to 36500, separated by commas, or leave the field empty to turn reminders off." },
+  record_title_missing: { done: false, text: "Nothing was added: give the record a name in \u201cWhat to add\u201d." },
+  task_title_missing: { done: false, text: "No task was created: describe what needs doing in a few words." },
+  note_missing: { done: false, text: "No note was added: write the note first." },
+  problem: { done: false, text: "We couldn't save that change. It may have been removed already, so refresh the page and try again." },
 };
 
 function toNotice(raw: string | string[] | undefined): Notice | null {
   return typeof raw === "string" && Object.hasOwn(NOTICES, raw) ? (raw as Notice) : null;
 }
 
-// The outcome of the last action, in words plus an icon (never colour alone). A problem
-// is announced immediately (alert); a success politely (status).
-function NoticeBanner({ notice }: { notice: Notice }) {
+// The outcome of the last action, in words plus an icon (never colour alone), as the page's
+// one notice slot under the heading band. A problem is announced immediately (alert); a
+// success politely (status). It removes `?notice=` from the address once shown.
+function OutcomeNotice({ notice }: { notice: Notice }) {
   const { done, text } = NOTICES[notice];
-  return (
-    <div className="mx-auto w-full max-w-3xl px-4 pt-8 sm:px-6">
-      <InlineNotice tone={done ? "success" : "error"}>{text}</InlineNotice>
-    </div>
-  );
+  return <PageNotice tone={done ? "success" : "error"}>{text}</PageNotice>;
 }
 
-// The two-tab nav over the Life Admin and Tasks surfaces. The chosen tab is carried in
-// the URL (`?view=`) so this server page needs no client state; both links are always
-// navigable.
+// Which of the two views opens first. The chosen view is carried in the URL (`?view=`).
 type LifeAdminTab = "life" | "tasks";
-
-function SectionTabs({ active }: { active: LifeAdminTab }) {
-  return <div className="wh-section-navigation"><NavigationTabs label="Life admin views" items={[
-    {label: "Records & reminders", href: "/life-admin?view=life", active: active === "life"},
-    {label: "Tasks", href: "/life-admin?view=tasks", active: active === "tasks"},
-  ]}/></div>;
-}
 
 export default async function LifeAdminPage({
   searchParams,
@@ -282,38 +281,36 @@ export default async function LifeAdminPage({
   await actions.refreshMovingChecklist(session);
   const data = await actions.load(session);
 
+  // Both views are rendered (and stay mounted); `active` only picks the one shown first.
   return (
-    <>
-      {notice ? <NoticeBanner notice={notice} /> : null}
-      <SectionTabs active={active} />
-      {active === "tasks" ? (
-        <div className="wh-page">
-          <TasksView
-            tasks={data.tasks}
-            agents={data.agents}
-            assignee={resolveAssigneeFilter(firstParam(params.assignee), data.agents)}
-            createTaskAction={createTaskAction}
-            assignAction={assignAction}
-            addNoteAction={addNoteAction}
-            completeAction={completeAction}
-          />
-        </div>
-      ) : (
-        <LifeAdminView
-          today={data.today}
-          initialTab={params.tab === "receipts" || params.tab === "renewals" || params.tab === "checklist" ? params.tab : "subscriptions"}
-          subscriptions={data.subscriptions}
-          receipts={data.receipts}
-          renewals={data.renewals}
-          checklist={data.checklist}
-          addRecordAction={addRecordAction}
-          editRecordAction={editRecordAction}
-          attachFileAction={attachFileAction}
-          deleteRecordAction={deleteRecordAction}
-          tickOffAction={tickOffAction}
-          handToAgentAction={handToAgentAction}
-        />
-      )}
-    </>
+    <div className="wh-page">
+      <LifeAdminScreen
+        initialView={active}
+        notice={notice ? <OutcomeNotice notice={notice} /> : null}
+        records={{
+          today: data.today,
+          initialTab: params.tab === "receipts" || params.tab === "renewals" || params.tab === "checklist" ? params.tab : "subscriptions",
+          subscriptions: data.subscriptions,
+          receipts: data.receipts,
+          renewals: data.renewals,
+          checklist: data.checklist,
+          addRecordAction,
+          editRecordAction,
+          attachFileAction,
+          deleteRecordAction,
+          tickOffAction,
+          handToAgentAction,
+        }}
+        tasks={{
+          tasks: data.tasks,
+          agents: data.agents,
+          assignee: resolveAssigneeFilter(firstParam(params.assignee), data.agents),
+          createTaskAction,
+          assignAction,
+          addNoteAction,
+          completeAction,
+        }}
+      />
+    </div>
   );
 }

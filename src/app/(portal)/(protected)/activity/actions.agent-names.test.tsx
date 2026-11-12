@@ -114,7 +114,7 @@ test("an agent-reported note reads 'Reported by <name>'", async () => {
   }
 });
 
-test("names resolve only from the session person's own agents: another person's agent reads as unknown", async () => {
+test("names resolve only from the session person's own agents: another person's agent reads as a removed agent", async () => {
   const db = await freshDb();
   try {
     const keyWrapper = localAesKeyWrapper(randomBytes(32));
@@ -135,7 +135,7 @@ test("names resolve only from the session person's own agents: another person's 
     });
 
     const view = await loaderFor(db, keyWrapper).load(alice.session, {});
-    assert.ok(view.entries[0]!.agent?.startsWith("Unknown agent"), String(view.entries[0]!.agent));
+    assert.equal(view.entries[0]!.agent, "Removed agent", String(view.entries[0]!.agent));
     const shown = text(renderToStaticMarkup(<ActivityView {...view} />));
     assert.ok(!shown.includes("Bob's private agent"), "another person's agent name never shows");
     assert.ok(!shown.includes(bobsAgent.id), "nor its raw id");

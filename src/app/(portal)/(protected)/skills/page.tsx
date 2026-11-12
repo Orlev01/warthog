@@ -2,7 +2,6 @@ import * as React from "react";
 import { cookies } from "next/headers";
 import { redirect } from "next/navigation";
 import { revalidatePath } from "next/cache";
-import { Notice as InlineNotice } from "@/components/ui/notice";
 
 import { loadConfig } from "@/server/config";
 import { getServerDb } from "@/server/db/server";
@@ -188,13 +187,13 @@ type Notice =
   | "storage_full";
 
 const NOTICES: Record<Notice, { done: boolean; text: string }> = {
-  saved: { done: true, text: "Your style profile was saved." },
+  saved: { done: true, text: "Your preferences were saved." },
   created: { done: true, text: "Skill created." },
   updated: { done: true, text: "Skill updated." },
   duplicated: { done: true, text: "Skill duplicated." },
   switched: { done: true, text: "Skill updated." },
   deleted: { done: true, text: "Skill deleted." },
-  problem: { done: false, text: "Something went wrong. Please try again." },
+  problem: { done: false, text: "We couldn't save that change. Check every field is filled in, then try again." },
   storage_full: {
     done: false,
     text: "Storage limit reached. Remove unused items or reduce their size before saving.",
@@ -207,15 +206,6 @@ function toNotice(raw: string | string[] | undefined): Notice | null {
 
 // The outcome of the last action, in words plus an icon (never colour alone). A problem
 // is announced immediately (alert); a success politely (status).
-function NoticeBanner({ notice }: { notice: Notice }) {
-  const { done, text } = NOTICES[notice];
-  return (
-    <InlineNotice tone={done ? "success" : "error"} className="mb-8">
-      {text}
-    </InlineNotice>
-  );
-}
-
 export default async function SkillsPage({
   searchParams,
 }: {
@@ -246,9 +236,9 @@ export default async function SkillsPage({
   const agents = await listAgentsForUser(db, session.userId);
 
   return (
-    <PageContainer size="wide">
-      {notice ? <NoticeBanner notice={notice} /> : null}
+    <PageContainer>
       <SkillsView
+        notice={notice ? { tone: NOTICES[notice].done ? "success" : "error", text: NOTICES[notice].text } : null}
         initialView={typeof params.view === "string" ? params.view : undefined}
         skills={data.skills.map((s) =>
           packagedIds.has(s.id) ? { ...s, fullText: undefined } : s,

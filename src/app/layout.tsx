@@ -2,6 +2,9 @@ import * as React from "react";
 import type { Metadata, Viewport } from "next";
 import "./fonts.css";
 import "./globals.css";
+import "./surfaces.css";
+import "./controls.css";
+import "./public.css";
 import { SITE_METADATA, SITE_VIEWPORT } from "./site-metadata";
 
 

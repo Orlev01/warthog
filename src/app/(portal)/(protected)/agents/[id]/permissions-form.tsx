@@ -211,9 +211,8 @@ export function PermissionsForm({
       ref={containerRef}
       onChange={onEdit}
       onClick={onClick}
-      className="flex flex-col gap-6"
+      className="flex flex-col gap-4 sm:gap-6"
     >
-      {notice ? <NoticeBanner notice={notice} /> : null}
       <fieldset
         disabled={!ready}
         aria-busy={!ready}
@@ -226,6 +225,9 @@ export function PermissionsForm({
           budget={budget}
         />
       </fieldset>
+      {/* The outcome sits under the Save bar it answers, where the person's attention is
+          after a long section, rather than off-screen at the top. */}
+      {notice ? <NoticeBanner notice={notice} /> : null}
     </div>
   );
 }

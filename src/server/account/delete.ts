@@ -65,9 +65,10 @@ const OWNS_HOUSEHOLD_REASON =
 // token, key or vault datum) and reads nothing from the environment, so no ambient
 // value can leak into it (INV-103).
 const CONFIRMATION_BODY =
-  "Your Warthog account has been deleted. Access has been revoked and your account's encryption-key reference " +
-  "has been removed from the live database. Every agent and connection has been cut off, and remaining live application data is scheduled for removal within 24 hours. " +
-  "Provider records, delivered messages and backups follow their separate retention schedules described in our privacy policy.";
+  "Your Warthog account has been deleted. Every agent and service has been disconnected and you've been signed out " +
+  "everywhere. We've removed the link to the key that protects your data from our live systems, and what's left is " +
+  "deleted within 24 hours. Backups, messages we've already sent and records kept by the services we use follow " +
+  "their own timelines, set out in our privacy policy.";
 
 // Delete the SESSION person's account. Returns { ok: true } once the whole unit has
 // run, or { ok: false, reason } when the person still owns a household (in which case

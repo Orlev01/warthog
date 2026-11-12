@@ -6,11 +6,7 @@ import { revalidatePath } from "next/cache";
 import { z } from "zod";
 import type { RegistrationResponseJSON } from "@simplewebauthn/server";
 
-import { Notice as InlineNotice } from "@/components/ui/notice";
-
-import { Button } from "@/components/ui/button";
-import { FactorControls } from "@/components/auth/factor-controls";
-import { ConfirmItsYou } from "@/components/ui/confirm-its-you";
+import { SecuritySettings } from "@/components/settings/security-view";
 
 import { loadConfig } from "../../../../../server/config";
 import { getServerDb } from "../../../../../server/db/server";
@@ -20,15 +16,13 @@ import { systemClock } from "../../../../../server/seams/clock";
 import { systemRandom } from "../../../../../server/seams/random";
 import {
   createSecurityActions,
-  type SecurityView,
   type ActionResult,
   type BeginAddPasskeyResult,
   type RegenerateRecoveryResult,
 } from "./actions";
-import { noticeLocation, securityNotice, type SecurityNotice } from "./notices";
+import { noticeLocation, securityNotice } from "./notices";
 import type { Db } from "../../../../../server/db/index";
 import type { Metadata } from "next";
-import { formatAccountTime } from "@/server/display-time";
 import { timeZoneFor } from "@/server/spending/time-zone";
 import { getUserById } from "@/server/db/users";
 import { selectKeyWrapper } from "@/server/crypto/key-wrapper";
@@ -175,135 +169,6 @@ async function regenerateRecoveryAction(): Promise<RegenerateRecoveryResult> {
   return buildActions(db).regenerateRecovery(session);
 }
 
-// The outcome of the last change, in words plus an icon (never colour alone). A
-// problem is announced immediately (alert); a success politely (status).
-function NoticeBanner({ notice }: { notice: SecurityNotice }) {
-  return (
-    <InlineNotice tone={notice.tone === "done" ? "success" : "error"}>{notice.text}</InlineNotice>
-  );
-}
-
-// One titled card section on the screen.
-function Section({ title, lead, children }: { title: string; lead: string; children: React.ReactNode }) {
-  return (
-    <section className="flex flex-col gap-4 rounded-card border border-line bg-surface p-4 sm:p-6">
-      <div className="flex flex-col gap-1">
-        <h2 className="text-lg font-semibold text-fg">{title}</h2>
-        <p className="text-sm text-fg-muted">{lead}</p>
-      </div>
-      {children}
-    </section>
-  );
-}
-
-// The presentation view: this person's passkeys, their active sessions (each also a
-// recent sign-in) and their recovery code, with the management controls.
-function SecuritySettings({
-  view,
-  currentSessionId,
-  notice,
-  timeZone,
-}: {
-  view: SecurityView;
-  currentSessionId: string;
-  notice: SecurityNotice | null;
-  timeZone: string;
-}) {
-  return (
-    <div className="wh-page wh-page--form flex flex-col gap-6">
-      <div className="flex flex-col gap-1">
-        <h1 className="text-2xl font-semibold tracking-tight text-fg">Security</h1>
-        <p className="text-sm text-fg-muted">
-          Manage how you sign in and where you&apos;re signed in. Sensitive changes ask you to
-          confirm it&apos;s you first.
-        </p>
-      </div>
-
-      {notice ? <NoticeBanner notice={notice} /> : null}
-      {notice?.offerConfirm ? (
-        <ConfirmItsYou confirmedText="Thanks — that's confirmed. Make your change again within the next five minutes." />
-      ) : null}
-
-      <Section title="Authenticator app" lead="Use a code from your Authenticator app after checking your email.">
-        <p className="text-sm text-fg">
-          {view.authenticatorEnabled ? "Your Authenticator app is set up." : "You haven’t set up an Authenticator app."}
-        </p>
-      </Section>
-
-      <Section title="Passkeys" lead="Sign in with your fingerprint, face or device PIN.">
-        {view.passkeys.length === 0 ? (
-          <p className="text-sm text-fg-muted">You don&apos;t have any passkeys yet.</p>
-        ) : (
-          <ul className="flex flex-col gap-2">
-            {view.passkeys.map((passkey) => (
-              <li
-                key={passkey.id}
-                className="flex items-center justify-between gap-3 rounded-card border border-line bg-surface-muted px-3 py-2"
-              >
-                <span className="text-sm text-fg">Added {formatAccountTime(passkey.createdAt, timeZone)}</span>
-                <form action={removePasskeyAction}>
-                  <input type="hidden" name="passkeyId" value={passkey.id} />
-                  <Button type="submit" variant="secondary">
-                    Remove
-                  </Button>
-                </form>
-              </li>
-            ))}
-          </ul>
-        )}
-      </Section>
-
-      <Section
-        title="Where you're signed in"
-        lead="Your active sessions and recent sign-ins. Sign out any you don't recognise."
-      >
-        <ul className="flex flex-col gap-2">
-          {view.sessions.map((session) => {
-            const isCurrent = session.id === currentSessionId;
-            return (
-              <li
-                key={session.id}
-                className="flex items-center justify-between gap-3 rounded-card border border-line bg-surface-muted px-3 py-2"
-              >
-                <span className="flex flex-col text-sm text-fg">
-                  <span>
-                    {isCurrent ? "This device" : "Signed in"} · last active{" "}
-                    {formatAccountTime(session.lastSeenAt, timeZone)}
-                  </span>
-                  <span className="text-fg-muted">Signed in {formatAccountTime(session.createdAt, timeZone)}</span>
-                </span>
-                {isCurrent ? (
-                  <span className="text-sm font-medium text-fg-muted">This device</span>
-                ) : (
-                  <form action={signOutSessionAction}>
-                    <input type="hidden" name="sessionId" value={session.id} />
-                    <Button type="submit" variant="secondary">
-                      Sign out
-                    </Button>
-                  </form>
-                )}
-              </li>
-            );
-          })}
-        </ul>
-      </Section>
-
-      <Section
-        title="Make a change"
-        lead="Add a passkey or create a new recovery code. We'll ask you to confirm it's you first."
-      >
-        <FactorControls
-          beginAddPasskey={beginAddPasskeyAction}
-          finishAddPasskey={finishAddPasskeyAction}
-          regenerateRecovery={regenerateRecoveryAction}
-        />
-      </Section>
-    </div>
-  );
-}
-
-// The protected loader: resolve the session (sign-in if none), load this person's
-// factors and sessions, and render the view (the group layout supplies the app shell).
 export default async function SecurityPage({
   searchParams,
 }: {
@@ -326,5 +191,17 @@ export default async function SecurityPage({
   const timeZone = await timeZoneFor(db, user.id, await wrapper.unwrap(user.wrappedDek));
   // The (portal)/(protected) layout already wraps every page in the app shell (PortalChrome);
   // wrapping again here rendered two sidebars and two <main> landmarks.
-  return <SecuritySettings view={view} currentSessionId={session.id} notice={notice} timeZone={timeZone} />;
+  return (
+    <SecuritySettings
+      view={view}
+      currentSessionId={session.id}
+      notice={notice}
+      timeZone={timeZone}
+      removePasskey={removePasskeyAction}
+      signOutSession={signOutSessionAction}
+      beginAddPasskey={beginAddPasskeyAction}
+      finishAddPasskey={finishAddPasskeyAction}
+      regenerateRecovery={regenerateRecoveryAction}
+    />
+  );
 }

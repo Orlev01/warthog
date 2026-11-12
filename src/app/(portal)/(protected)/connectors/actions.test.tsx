@@ -558,18 +558,18 @@ test("the loader returns the catalogue (grouped) and the person's own connection
   }
 });
 
-test("a search miss surfaces a LIVE Request-a-connector control wired to the request action", async () => {
+test("a search miss surfaces a LIVE Request-a-service control wired to the request action", async () => {
   const db = await freshDb();
   try {
     const userId = await makeUser(db, "miss");
     // A term that matches no fixture connector → a MISS: no groups, the Request affordance on.
     const data = await makeActions(db).actions.load(sessionFor(userId), { query: "zzqqxx-nothing-matches" });
-    assert.equal(data.canRequest, true, "a search that matches nothing offers Request a connector");
+    assert.equal(data.canRequest, true, "a search that matches nothing offers Request a service");
 
     const markup = renderScreen(data);
-    const requestForms = formsLabelled(markup, /request a connector/i);
-    assert.ok(requestForms.length >= 1, "a miss must render a Request-a-connector control");
-    assert.ok(requestForms.some(isBoundToAction), "the Request-a-connector control must be bound to the request action");
+    const requestForms = formsLabelled(markup, /request a service/i);
+    assert.ok(requestForms.length >= 1, "a miss must render a Request-a-service control");
+    assert.ok(requestForms.some(isBoundToAction), "the Request-a-service control must be bound to the request action");
   } finally {
     await db.close();
   }
@@ -1037,6 +1037,59 @@ test("requestConnector records a request for the SESSION user and emails the ope
       emails.some((m) => m.recipient === OPERATOR_EMAIL && m.body.includes("Review it in Warthog") && !m.body.includes("Fancy Spreadsheets")),
       "the operator gets a generic notice without user-entered request text",
     );
+  } finally {
+    await db.close();
+  }
+});
+
+test("askToJoin files an early-access request for a gated Google service, naming the catalogue's service", async () => {
+  const db = await freshDb();
+  try {
+    const userId = await makeUser(db, "early");
+    const dir = makeCatalogueDir([
+      ...FIXTURE_ENTRIES,
+      {
+        id: "google-gmail",
+        name: "Gmail",
+        aliases: [],
+        category: "email",
+        auth_kind: "oauth2",
+        base_url: "https://gmail.googleapis.com",
+        auth: { authorize_url: "https://accounts.google.com/a", token_url: "https://oauth2.googleapis.com/t", scopes: ["s"] },
+        google_early_access: true,
+      },
+    ]);
+    let catalogue: CatalogueIndex;
+    try {
+      catalogue = loadCatalogue({ dir, isOAuthClientConfigured: () => true });
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+    const { actions, emails } = makeActions(db, catalogue);
+    const session = sessionFor(userId);
+
+    await actions.askToJoin(session, { connectorId: "google-gmail" });
+    const requests = await listConnectorRequestsForUser(db, userId);
+    assert.deepEqual(requests.map((r) => r.serviceName), ["Google early access: Gmail"]);
+    assert.ok(emails.some((m) => m.recipient === OPERATOR_EMAIL && m.body.includes("Gmail")), "the operator is told which service");
+
+    // Only a service gated for this person can be asked for; nothing else is written.
+    await assertRejects4xx("a service that isn't in early access", () => actions.askToJoin(session, { connectorId: "acme-mail" }));
+    await assertRejects4xx("an unknown service", () => actions.askToJoin(session, { connectorId: "no-such-thing" }));
+    await assertRejects4xx("an empty id", () => actions.askToJoin(session, { connectorId: "" }));
+    assert.equal((await listConnectorRequestsForUser(db, userId)).length, 1);
+  } finally {
+    await db.close();
+  }
+});
+
+test("requestConnector refuses a name of only spaces, like an empty one", async () => {
+  const db = await freshDb();
+  try {
+    const userId = await makeUser(db, "req-blank");
+    const { actions } = makeActions(db);
+    await assertRejects4xx("spaces only", () => actions.requestConnector(sessionFor(userId), { name: "   " }));
+    assert.equal((await listConnectorRequestsForUser(db, userId)).length, 0);
   } finally {
     await db.close();
   }

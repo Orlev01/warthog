@@ -7,11 +7,11 @@ import {
   Ban,
   Bell,
   Bot,
-  CheckCheck,
   CheckCircle,
   CheckCircle2,
   Circle,
   Clock,
+  Inbox,
   ListChecks,
   type LucideIcon,
 } from "lucide-react";
@@ -19,8 +19,13 @@ import { WorkspaceHeading, WorkspacePanel } from "@/components/shell/workspace-s
 
 import type { SetupChecklistItem } from "@/domain/home/checklist";
 import type { OutcomeGroup } from "@/domain/activity/category";
+import { formatMoney } from "@/domain/approvals/request-sentence";
+import { NOTHING_WAITING } from "@/domain/approvals/inbox-copy";
 import { SetupChecklist } from "./setup-checklist";
 import { Status, type StatusKey } from "@/components/ui/status";
+import { Badge, type BadgeTone } from "@/components/ui/badge";
+import { ButtonLink } from "@/components/ui/button-link";
+import { EmptyState } from "@/components/ui/empty";
 import {
   InstallPrompt,
   type RegisterPushDeviceAction,
@@ -35,36 +40,46 @@ import {
 // all agents, each agent with its status and spend-this-period against its
 // budget, and the upcoming reminders.
 //
+// Onboarding first (UI/UX pass, newcomer-01): until every set-up step is done, the
+// set-up panel is the first thing under the greeting, full width. A member with no
+// agent yet sees it as "Get started" with one primary action, "Connect your first
+// agent"; the panels that can only fill once an agent is connected (Inbox, activity,
+// agents, reminders) appear as soon as they have something to show, so a newcomer's
+// Home is one clear task rather than a wall of empty panels. The panel goes once every
+// step is done.
+//
 // Beside the checklist sits the install prompt (review fix W4.1; brief "install the app
 // and turn on notifications"): the iOS Add-to-Home-Screen sheet or the Android install
 // button, and "Turn on notifications", which sets this device up for push through the
 // page's register action. It reads the browser only after mount and hides what is
 // already done (installed, or notifications decided).
 //
-// Every data-bearing section renders a PLAIN empty message when it has no data
-// (no pending approvals, no recent activity, no agents, no reminders) rather
-// than a dead control. The greeting and the checklist always show.
+// Every data-bearing panel renders a bounded empty state with a next step when it has
+// no data (no pending approvals, no recent activity, no reminders) rather than a dead
+// control. Every piece of text sits in the heading band or a panel, never on the canvas.
 //
 // This is purely a renderer: it takes already-computed, already-redacted,
-// already-formatted values as props. Dates/amounts arrive pre-formatted (or as
-// plain major-unit numbers) — the view never reaches for a clock or a locale.
-// Colour comes from the design tokens (globals.css), never raw hex.
+// already-formatted values as props. Dates arrive pre-formatted and amounts as
+// plain major-unit numbers (formatted here with the shared en-AU money formatter) —
+// the view never reaches for a clock. Colour comes from the design tokens, never raw hex.
 
 // One connected agent on the dashboard: its name, connection status, and the
-// spend in its current budget period against its budget. `spendThisPeriod` and
-// `budget` are plain amounts in the major unit.
+// spend in its current budget period against its card budget. `spendThisPeriod` and
+// `budget` are plain amounts in the major unit; `budget` is null (or absent) when the
+// agent has no card budget.
 export type DashboardAgent = {
   id: string;
   platform?: string; // identifies the agent's brand mark
   name: string;
   href?: string; // the agent's workspace
   activityHref?: string; // its activity
+  attentionHref?: string; // its activity that needs attention
   lastActive?: string; // "Today, 3:04 pm"
   todayCount?: number; // entries in the last 24 hours
   needsAttention?: number; // blocked, failed or disputed in the last 24 hours
   status: StatusKey;
   spendThisPeriod: number;
-  budget: number;
+  budget?: number | null;
   budgetPeriod: "day" | "week" | "month";
   currency?: string;
   spendUnavailable?: boolean;
@@ -115,15 +130,27 @@ export type DashboardViewProps = {
 const HOME_ACTIVITY_ROWS = 8;
 const HOME_REMINDER_ROWS = 5;
 
-const OUTCOME_ICONS: Partial<Record<OutcomeGroup, { Icon: LucideIcon; tone: string }>> = {
-  done: { Icon: CheckCircle, tone: "wh-tone-success" },
-  waiting: { Icon: Clock, tone: "wh-tone-warning" },
-  blocked: { Icon: Ban, tone: "wh-tone-danger" },
-  failed: { Icon: AlertTriangle, tone: "wh-tone-danger" },
+// What Warthog is, in one sentence (the Help page's own words), for a member who hasn't
+// connected an agent yet; once they have, the heading says what Home shows.
+const PRODUCT_LINE = "Warthog is the one place you own that every AI agent connects through.";
+const HOME_LINE = "What needs your decision, what your agents have done and what's coming up.";
+
+const OUTCOME_BADGES: Partial<Record<OutcomeGroup, { Icon: LucideIcon; tone: BadgeTone }>> = {
+  done: { Icon: CheckCircle, tone: "success" },
+  waiting: { Icon: Clock, tone: "warning" },
+  blocked: { Icon: Ban, tone: "danger" },
+  failed: { Icon: AlertTriangle, tone: "danger" },
 };
 
+// A standalone text link in a dense row: a full 44px target on phones and touch screens
+// that keeps its 20px line in the layout (the negative margin absorbs the extra height),
+// back to its text size with a mouse on a desktop.
+const ROW_LINK =
+  "-my-3 inline-flex min-h-11 items-center underline-offset-4 lg:pointer-fine:my-0 lg:pointer-fine:min-h-0";
+// A panel-header action link (By agent, View all activity, Open Life admin).
+const ACTION_LINK = "inline-flex min-h-11 items-center gap-2 underline underline-offset-4 lg:pointer-fine:min-h-9";
 
-// Plain words for the budget period, so spend reads "A$42 of A$200 this month".
+// Plain words for the budget period, so spend reads "$42.00 of $200.00 this month".
 function periodLabel(period: DashboardAgent["budgetPeriod"]): string {
   switch (period) {
     case "day":
@@ -133,6 +160,266 @@ function periodLabel(period: DashboardAgent["budgetPeriod"]): string {
     case "month":
       return "this month";
   }
+}
+
+// An agent's card spend against its card budget, or that it has none (the same words as
+// the Agents list), formatted with the shared en-AU money formatter.
+function SpendLine({ agent }: { agent: DashboardAgent }) {
+  if (agent.spendUnavailable) {
+    return <>Total unavailable: a reference rate is missing for earlier spending.</>;
+  }
+  if (agent.budget === null || agent.budget === undefined) {
+    const href = agent.href ? `${agent.href}?section=spending` : undefined;
+    return (
+      <>
+        No card budget
+        {href ? (
+          <>
+            {" · "}
+            <a href={href} className={`${ROW_LINK} underline`}>
+              Set a budget<span className="sr-only"> for {agent.name}</span>
+            </a>
+          </>
+        ) : null}
+      </>
+    );
+  }
+  const currency = agent.currency ?? "AUD";
+  return (
+    <>
+      {formatMoney(agent.spendThisPeriod, currency)} of {formatMoney(agent.budget, currency)} {periodLabel(agent.budgetPeriod)}
+    </>
+  );
+}
+
+// The set-up checklist panel. Until an agent is connected it is "Get started", leading
+// with the one action that makes Warthog work; after that it is "Finish setting up".
+function SetupPanel({
+  checklist,
+  completed,
+  hasAgents,
+  registerPushDevice,
+  vapidPublicKey,
+}: {
+  checklist: ReadonlyArray<SetupChecklistItem>;
+  completed: number;
+  hasAgents: boolean;
+  registerPushDevice?: RegisterPushDeviceAction;
+  vapidPublicKey?: string;
+}) {
+  return (
+    <WorkspacePanel
+      title={hasAgents ? "Finish setting up" : "Get started"}
+      description={`${completed} of ${checklist.length} steps done`}
+      icon={ListChecks}
+    >
+      {/* The install prompt's own sections sit as muted insets inside this panel (canvas →
+          panel → inset), and its wrapper drops out of the layout while it has nothing to say. */}
+      <div className="flex min-w-0 flex-col gap-4 [&>[data-install-prompt]:empty]:hidden [&_[data-install-prompt]_section]:rounded-[var(--wh-radius-inset)] [&_[data-install-prompt]_section]:border-transparent [&_[data-install-prompt]_section]:bg-surface-muted">
+        {hasAgents ? null : (
+          <div className="flex min-w-0 flex-col items-start gap-3">
+            <p className="max-w-prose text-sm leading-relaxed text-fg">
+              No agents connected yet. Start with the agent you already use, such as Claude or
+              ChatGPT: it gets its own connection, and you choose what it can reach.
+            </p>
+            <ButtonLink href="/agents/connect" variant="primary">
+              Connect your first agent
+              <ArrowRight aria-hidden={true} className="h-4 w-4 shrink-0" />
+            </ButtonLink>
+          </div>
+        )}
+        <SetupChecklist items={checklist} />
+        <InstallPrompt registerPushDevice={registerPushDevice} vapidPublicKey={vapidPublicKey} />
+      </div>
+    </WorkspacePanel>
+  );
+}
+
+function InboxPanel({ pendingApprovals }: { pendingApprovals: number }) {
+  return (
+    <WorkspacePanel title="Inbox" description="Requests waiting for your decision" icon={Inbox}>
+      {pendingApprovals > 0 ? (
+        <a className="wh-approval-summary underline-offset-4 hover:underline" href="/inbox">
+          <span>
+            {pendingApprovals} {pendingApprovals === 1 ? "request is" : "requests are"} waiting for your approval
+          </span>
+          <ArrowRight aria-hidden={true} className="h-4 w-4 shrink-0" />
+        </a>
+      ) : (
+        <EmptyState
+          variant="inline"
+          icon={CheckCircle2}
+          heading={NOTHING_WAITING.heading}
+          description={NOTHING_WAITING.description}
+        />
+      )}
+    </WorkspacePanel>
+  );
+}
+
+function ActivityPanel({
+  activity,
+  attention,
+}: {
+  activity: ReadonlyArray<DashboardActivity>;
+  attention?: DashboardViewProps["attention"];
+}) {
+  return (
+    <WorkspacePanel
+      title="Recent activity"
+      description="Recorded across all your agents"
+      icon={Activity}
+      action={
+        activity.length > 0 ? (
+          <span className="flex flex-wrap gap-x-4">
+            <a href="/activity?view=agents" className={ACTION_LINK}>By agent</a>
+            <a href="/activity" className={ACTION_LINK}>View all activity <ArrowRight aria-hidden={true} className="h-4 w-4 shrink-0" /></a>
+          </span>
+        ) : undefined
+      }
+    >
+      {/* What needs a look, as one muted inset link row above the timeline: a sentence that
+          wraps cleanly in a half-width panel, unlike a pill. */}
+      {attention ? (
+        <a
+          href={attention.href}
+          className="mb-4 flex min-h-11 items-center gap-2 rounded-[var(--wh-radius-inset)] bg-surface-muted px-3 py-2 text-sm font-medium text-fg underline decoration-line-strong underline-offset-4 hover:decoration-current"
+        >
+          <AlertTriangle aria-hidden={true} className="h-4 w-4 shrink-0 text-warning" />
+          {attention.count} {attention.count === 1 ? "entry needs" : "entries need"} attention from the last 24 hours
+        </a>
+      ) : null}
+      {activity.length > 0 ? (
+        <ul className="wh-timeline">
+          {activity.slice(0, HOME_ACTIVITY_ROWS).map((entry) => {
+            const badge = entry.outcomeGroup ? OUTCOME_BADGES[entry.outcomeGroup] : undefined;
+            const headline = entry.title ?? entry.summary;
+            return (
+              <li key={entry.id}>
+                <p className="flex items-center gap-2 text-sm font-medium text-fg">
+                  {entry.serviceId ? <ServiceMark id={entry.serviceId} name={entry.service ?? entry.serviceId} size="xs" /> : null}
+                  {entry.href ? (
+                    <a href={entry.href} className={`${ROW_LINK} hover:underline`}>
+                      {headline}<span className="sr-only">, {entry.at}</span>
+                    </a>
+                  ) : headline}
+                </p>
+                {entry.title && entry.summary !== entry.title ? (
+                  <p className="mt-1 text-sm leading-relaxed text-fg">{entry.summary}</p>
+                ) : null}
+                <div className="wh-timeline-meta">
+                  {entry.outcome ? (
+                    <Badge tone={badge?.tone ?? "neutral"} icon={badge?.Icon}>{entry.outcome}</Badge>
+                  ) : null}
+                  <span>
+                    {[entry.reported ? `Reported by ${entry.agent ?? "an agent"}` : entry.agent, entry.service].filter(Boolean).join(" · ")}
+                    {entry.reported || entry.agent || entry.service ? " · " : ""}
+                    <time dateTime={entry.dateTime}>{entry.when ?? entry.at}</time>
+                  </span>
+                </div>
+              </li>
+            );
+          })}
+        </ul>
+      ) : (
+        <EmptyState
+          variant="inline"
+          icon={Activity}
+          heading="No activity yet"
+          description="Everything your agents do through Warthog is recorded here, newest first."
+        />
+      )}
+    </WorkspacePanel>
+  );
+}
+
+function AgentsPanel({ agents }: { agents: ReadonlyArray<DashboardAgent> }) {
+  return (
+    <WorkspacePanel
+      title="Your agents"
+      description="Each agent has its own connection and controls"
+      icon={Bot}
+      action={<a href="/agents" className={ACTION_LINK}>All agents</a>}
+    >
+      <ul className="flex flex-col divide-y divide-line">
+        {agents.map((agent) => (
+          <li key={agent.id} className="flex min-w-0 flex-col gap-2 py-4 first:pt-0 last:pb-0">
+            <div className="flex min-w-0 items-start gap-3">
+              <AgentMark platform={agent.platform} name={agent.name} size="md" />
+              <div className="flex min-w-0 flex-1 flex-col items-start gap-1">
+                <a href={agent.href ?? `/agents/${encodeURIComponent(agent.id)}`} className="inline-flex min-h-11 items-center font-medium text-fg underline decoration-line-strong underline-offset-4 [overflow-wrap:anywhere]">{agent.name}</a>
+                <Status status={agent.status} />
+              </div>
+            </div>
+            {agent.activityHref ? (
+              <p className="text-sm leading-relaxed text-fg-muted">
+                <a href={agent.activityHref} className={`${ROW_LINK} underline hover:text-fg`}>
+                  {agent.todayCount ?? 0} {(agent.todayCount ?? 0) === 1 ? "entry" : "entries"} in the last 24 hours<span className="sr-only"> for {agent.name}</span>
+                </a>
+                {agent.needsAttention ? (
+                  <>
+                    {" · "}
+                    {/* The warning icon stays with its words when the line wraps. */}
+                    <span className="whitespace-nowrap">
+                      <AlertTriangle aria-hidden={true} className="inline h-4 w-4 align-[-3px] text-warning" />{" "}
+                      {agent.attentionHref ? (
+                        <a href={agent.attentionHref} className={`${ROW_LINK} underline hover:text-fg`}>
+                          {agent.needsAttention} need{agent.needsAttention === 1 ? "s" : ""} attention<span className="sr-only"> for {agent.name}</span>
+                        </a>
+                      ) : (
+                        <>{agent.needsAttention} need{agent.needsAttention === 1 ? "s" : ""} attention</>
+                      )}
+                    </span>
+                  </>
+                ) : null}
+                {agent.lastActive ? <> · last active {agent.lastActive}</> : null}
+              </p>
+            ) : null}
+            <p className="min-w-0 text-xs leading-relaxed text-fg-muted">
+              <SpendLine agent={agent} />
+            </p>
+          </li>
+        ))}
+      </ul>
+    </WorkspacePanel>
+  );
+}
+
+function RemindersPanel({ reminders }: { reminders: ReadonlyArray<DashboardReminder> }) {
+  return (
+    <WorkspacePanel
+      title="Reminders"
+      description="Coming up in your life admin"
+      icon={Bell}
+      action={reminders.length > 0 ? (
+        <a href="/life-admin" className={ACTION_LINK}>
+          {reminders.length > HOME_REMINDER_ROWS ? `View all ${reminders.length} in Life admin` : "Open Life admin"}
+        </a>
+      ) : undefined}
+    >
+      {reminders.length > 0 ? (
+        <ul className="flex flex-col divide-y divide-line">
+          {reminders.slice(0, HOME_REMINDER_ROWS).map((reminder) => (
+            <li key={reminder.id} className="flex items-start gap-3 py-3 first:pt-0 last:pb-0">
+              <Circle aria-hidden={true} className="mt-0.5 h-4 w-4 shrink-0 text-fg-muted" />
+              <div className="min-w-0">
+                <p className="text-sm text-fg [overflow-wrap:anywhere]">{reminder.title}</p>
+                {reminder.due ? <p className="mt-1 text-xs text-fg-muted">Due {reminder.due}</p> : null}
+              </div>
+            </li>
+          ))}
+        </ul>
+      ) : (
+        <EmptyState
+          variant="inline"
+          icon={Bell}
+          heading="No reminders coming up"
+          description="Subscriptions, renewals and appointments with a due date in Life admin show here."
+          action={<ButtonLink href="/life-admin" size="sm">Open Life admin</ButtonLink>}
+        />
+      )}
+    </WorkspacePanel>
+  );
 }
 
 export function DashboardView({
@@ -147,147 +434,44 @@ export function DashboardView({
   attention,
 }: DashboardViewProps) {
   const completed = checklist.filter((item) => item.done).length;
+  const setupOpen = checklist.length > 0 && completed < checklist.length;
+  const hasAgents = agents.length > 0;
+  const inbox = <InboxPanel key="inbox" pendingApprovals={pendingApprovals} />;
+  const recent = <ActivityPanel key="activity" activity={activity} attention={attention} />;
+  const upcoming = <RemindersPanel key="reminders" reminders={reminders} />;
+  // Before the first agent, only the panels with something in them appear (in one grid);
+  // after it, the full two-column dashboard.
+  const newcomerPanels = [
+    pendingApprovals > 0 ? inbox : null,
+    activity.length > 0 || attention ? recent : null,
+    reminders.length > 0 ? upcoming : null,
+  ].filter((panel) => panel !== null);
   return (
-    <div className="wh-page flex flex-col gap-6">
-      <WorkspaceHeading
-        eyebrow="Your workspace"
-        title={<>Hi, {personName}</>}
-        description="A place to oversee your agents, review their requests and keep track of what happens next."
-      />
-      <div className="wh-dashboard-grid">
-        <div className="wh-dashboard-column">
-          <WorkspacePanel title="Approvals" description="Requests waiting for your decision" icon={CheckCheck}>
-            {pendingApprovals > 0 ? (
-              <a className="wh-approval-summary" href="/inbox">
-                <span>{pendingApprovals} pending approval{pendingApprovals === 1 ? "" : "s"}</span>
-                <ArrowRight aria-hidden size={20} />
-              </a>
-            ) : (
-              <div className="wh-panel-empty">
-                <CheckCircle2 aria-hidden size={20} />
-                <div><p className="font-medium text-fg">No pending approvals.</p><p>Requests that need your decision will appear here.</p></div>
-              </div>
-            )}
-          </WorkspacePanel>
-          <WorkspacePanel
-            title="Recent activity"
-            description="Recorded across your Warthog connections"
-            icon={Activity}
-            action={
-              activity.length > 0 ? (
-                <span className="flex flex-wrap gap-x-4">
-                  <a href="/activity?view=agents">By agent</a>
-                  <a href="/activity">View all activity <ArrowRight aria-hidden size={14} /></a>
-                </span>
-              ) : undefined
-            }
-          >
-            {attention ? (
-              <a href={attention.href} className="mb-4 inline-flex min-h-11 items-center gap-2 rounded-card border border-line bg-surface-muted px-3 text-sm font-medium text-fg underline underline-offset-4">
-                <AlertTriangle aria-hidden={true} className="h-4 w-4 shrink-0 text-warning" />
-                {attention.count} {attention.count === 1 ? "entry needs" : "entries need"} attention from the last 24 hours
-              </a>
-            ) : null}
-            {activity.length > 0 ? (
-              <ul className="wh-timeline">
-                {activity.slice(0, HOME_ACTIVITY_ROWS).map((entry) => {
-                  const icon = entry.outcomeGroup ? OUTCOME_ICONS[entry.outcomeGroup] : undefined;
-                  const headline = entry.title ?? entry.summary;
-                  return (
-                    <li key={entry.id}>
-                      <p className="flex items-center gap-2 text-sm font-medium text-fg">
-                        {entry.serviceId ? <ServiceMark id={entry.serviceId} name={entry.service ?? entry.serviceId} size="xs" /> : null}
-                        {entry.href ? (
-                          <a href={entry.href} className="underline-offset-4 hover:underline">
-                            {headline}<span className="sr-only">, {entry.at}</span>
-                          </a>
-                        ) : headline}
-                      </p>
-                      {entry.title && entry.summary !== entry.title ? (
-                        <p className="mt-1 text-sm leading-relaxed text-fg">{entry.summary}</p>
-                      ) : null}
-                      <div className="wh-timeline-meta">
-                        {entry.outcome ? (
-                          <span className={`wh-tone-badge ${icon ? icon.tone : "wh-tone-neutral"}`}>
-                            {icon ? <icon.Icon aria-hidden={true} className="h-3.5 w-3.5 shrink-0" /> : null}
-                            {entry.outcome}
-                          </span>
-                        ) : null}
-                        <span>
-                          {[entry.reported ? `Reported by ${entry.agent ?? "an agent"}` : entry.agent, entry.service].filter(Boolean).join(" · ")}
-                          {entry.reported || entry.agent || entry.service ? " · " : ""}
-                          <time dateTime={entry.dateTime}>{entry.when ?? entry.at}</time>
-                        </span>
-                      </div>
-                    </li>
-                  );
-                })}
-              </ul>
-            ) : <p className="wh-panel-empty">No recent activity yet.</p>}
-          </WorkspacePanel>
+    <div className="wh-page">
+      <WorkspaceHeading title={<>Hi, {personName}</>} description={hasAgents ? HOME_LINE : PRODUCT_LINE} />
+      {setupOpen ? (
+        <SetupPanel
+          checklist={checklist}
+          completed={completed}
+          hasAgents={hasAgents}
+          registerPushDevice={registerPushDevice}
+          vapidPublicKey={vapidPublicKey}
+        />
+      ) : null}
+      {hasAgents ? (
+        <div className="wh-dashboard-grid">
+          <div className="wh-dashboard-column">
+            {inbox}
+            {recent}
+          </div>
+          <div className="wh-dashboard-column">
+            <AgentsPanel agents={agents} />
+            {upcoming}
+          </div>
         </div>
-        <div className="wh-dashboard-column">
-          <WorkspacePanel title="Your agents" description="Separate connections, individual controls" icon={Bot}>
-            {agents.length > 0 ? (
-              <ul className="flex flex-col divide-y divide-line">
-                {agents.map((agent) => (
-                  <li key={agent.id} className="flex min-w-0 flex-col gap-2 py-4 first:pt-0 last:pb-0">
-                    <div className="flex min-w-0 items-start gap-3">
-                      <AgentMark platform={agent.platform} name={agent.name} size="md" />
-                      <div className="flex min-w-0 flex-1 flex-col items-start gap-1">
-                        <a href={agent.href ?? `/agents/${encodeURIComponent(agent.id)}`} className="inline-flex min-h-11 items-center font-medium text-fg underline decoration-line-strong underline-offset-4 [overflow-wrap:anywhere]">{agent.name}</a>
-                        <Status status={agent.status} />
-                      </div>
-                    </div>
-                    {agent.activityHref ? (
-                      <span className="text-sm text-fg-muted">
-                        <a href={agent.activityHref} className="underline underline-offset-2 hover:text-fg">
-                          {agent.todayCount ?? 0} {(agent.todayCount ?? 0) === 1 ? "entry" : "entries"} in the last 24 hours<span className="sr-only"> for {agent.name}</span>
-                        </a>
-                        {agent.needsAttention ? <> · <AlertTriangle aria-hidden={true} className="inline h-3.5 w-3.5 text-warning" /> {agent.needsAttention} need{agent.needsAttention === 1 ? "s" : ""} attention</> : null}
-                        {agent.lastActive ? <> · last active {agent.lastActive}</> : null}
-                      </span>
-                    ) : null}
-                    <span className="min-w-0 text-xs leading-relaxed text-fg-muted">
-                      {agent.spendUnavailable
-                        ? "Total unavailable: a reference rate is missing for earlier spending."
-                        : `${agent.currency && agent.currency !== "AUD" ? agent.currency + " " : "A$"}${agent.spendThisPeriod} of ${agent.currency && agent.currency !== "AUD" ? agent.currency + " " : "A$"}${agent.budget} ${periodLabel(agent.budgetPeriod)}`}
-                    </span>
-                  </li>
-                ))}
-              </ul>
-            ) : <p className="wh-panel-empty">No agents connected yet.</p>}
-          </WorkspacePanel>
-          <WorkspacePanel title="Set up Warthog" description={`${completed} of ${checklist.length} steps complete`} icon={ListChecks}>
-            <SetupChecklist items={checklist} />
-            <InstallPrompt registerPushDevice={registerPushDevice} vapidPublicKey={vapidPublicKey} />
-          </WorkspacePanel>
-          <WorkspacePanel
-            title="Reminders"
-            description="Coming up in your life admin"
-            icon={Bell}
-            action={reminders.length > 0 ? (
-              <a href="/life-admin">
-                {reminders.length > HOME_REMINDER_ROWS ? `View all ${reminders.length} in Life admin` : "Open Life admin"}
-              </a>
-            ) : undefined}
-          >
-            {reminders.length > 0 ? (
-              <ul className="flex flex-col divide-y divide-line">
-                {reminders.slice(0, HOME_REMINDER_ROWS).map((reminder) => (
-                  <li key={reminder.id} className="flex items-start gap-3 py-3 first:pt-0 last:pb-0">
-                    <Circle aria-hidden size={15} className="mt-1 shrink-0 text-fg-muted" />
-                    <div className="min-w-0">
-                      <p className="text-sm text-fg [overflow-wrap:anywhere]">{reminder.title}</p>
-                      <p className="mt-1 text-xs text-fg-muted">Due {reminder.due}</p>
-                    </div>
-                  </li>
-                ))}
-              </ul>
-            ) : <p className="wh-panel-empty">No reminders yet.</p>}
-          </WorkspacePanel>
-        </div>
-      </div>
+      ) : newcomerPanels.length > 0 ? (
+        <div className="wh-dashboard-grid">{newcomerPanels}</div>
+      ) : null}
     </div>
   );
 }

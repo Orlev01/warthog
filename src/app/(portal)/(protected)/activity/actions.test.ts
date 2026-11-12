@@ -723,3 +723,13 @@ test("the activity actions read no process.env: a decoy env secret never appears
     else process.env.WARTHOG_DECOY_SECRET = prev;
   }
 });
+
+// interaction-02: a note of only spaces was filed as an empty dispute.
+test("disputeEntry refuses a note of only spaces with a 4xx, and never reaches the repo", async () => {
+  const { actions, disputes } = recordingActions();
+  const session = { userId: "session-user" } as unknown as Session;
+  await assertRejects4xx("disputeEntry(spaces)", () => actions.disputeEntry(session, 2, "   \n\t "));
+  assert.equal(disputes.filed.length, 0, "a blank note never reaches the dispute repo");
+  await actions.disputeEntry(session, 2, "  wrong amount  ");
+  assert.equal(disputes.filed[0]?.note, "wrong amount", "a real note is filed without its surrounding spaces");
+});

@@ -6,9 +6,12 @@ import { z } from "zod";
 import { parseParams } from "../../http/validate";
 import { pageMemories } from "../../db/memories";
 import { pageSkillsForAgent } from "../../db/skills";
+import { isPageCursor } from "../../db/pagination";
 export const getContextSchema = z.object({
-  memory_cursor: z.string().max(256).optional(),
-  skill_cursor: z.string().max(256).optional(),
+  // An agent is told its cursor is wrong rather than silently restarting at the first page,
+  // which could loop a client that follows next.* until null.
+  memory_cursor: z.string().max(256).refine(isPageCursor, "Invalid page cursor. Start from the first page.").optional(),
+  skill_cursor: z.string().max(256).refine(isPageCursor, "Invalid page cursor. Start from the first page.").optional(),
   limit: z.number().int().min(1).max(100).optional(),
   reason: z.string().max(2000).optional(),
 });

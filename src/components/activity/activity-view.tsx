@@ -9,39 +9,57 @@ import {
   Clock,
   Eye,
   KeyRound,
+  Link2,
   MessageSquareText,
   PencilLine,
   Plug,
+  Search,
   ShieldCheck,
   SlidersHorizontal,
   UserCog,
   type LucideIcon,
 } from "lucide-react";
-import { WorkspaceHeading } from "@/components/shell/workspace-surfaces";
+import { ActionBar, WorkspaceHeading } from "@/components/shell/workspace-surfaces";
 
-import { Input } from "@/components/ui/input";
+import { Button, buttonClasses } from "@/components/ui/button";
+import { ButtonLink } from "@/components/ui/button-link";
+import { ActionForm, FormSubmit } from "@/components/ui/form-submit";
+import { Input, Textarea } from "@/components/ui/input";
 import { Label } from "@/components/ui/field";
 import { Select } from "@/components/ui/select";
+import { Badge, CountBadge, type BadgeTone } from "@/components/ui/badge";
 import { EmptyState } from "@/components/ui/empty";
-import { Notice } from "@/components/ui/notice";
+import { PageNotice } from "@/components/ui/notice";
 import { ActiveFilters, FilterLinks, type AppliedFilter, type FilterLink } from "@/components/ui/filter-links";
-import { LIST_ROW } from "@/components/ui/list-group";
+import { LIST_ROW, ListGroup } from "@/components/ui/list-group";
+import { ListToolbar } from "@/components/ui/list-toolbar";
 import { AgentMark, ServiceMark } from "@/components/ui/brand-mark";
+import { SUPPORT_EMAIL } from "@/components/public/operator";
 import type { IntegrityResult } from "@/server/activity/integrity";
 import type { ActivityCategory, OutcomeGroup } from "@/domain/activity/category";
+import type { EvidenceLine } from "@/domain/activity/evidence";
 
 // E08-S08 — Activity view component (src/components/activity/activity-view.tsx), reorganised
-// 12 November at the founder's request ("the audit log is one long thread").
+// 12 November at the founder's request ("the audit log is one long thread"), and contained
+// in the UI/UX pass the same day (no text loose on the canvas).
 //
 // The timeline is the product's trust surface (brief "Activity feed", design §9,
 // constitution principle 14 "Warthog writes the record, not the agents"). This is ONE
 // render-testable, prop-driven component that the page loader feeds already-formatted
 // props: it reads nothing, reaches for no clock/locale/DB and decides nothing.
 //
+// The page, top to bottom: the heading band (with the record-wide Check integrity), the
+// outcome notice, ONE toolbar holding everything that narrows the list (view switch, quick
+// filters, search beside its Filters disclosure, applied filters, a status line), then the
+// list itself — each day of the timeline, or each grouped view, is one list-group panel of
+// divider rows — and the page links in a closing bar.
+//
 // Four views, switched by plain links (the loader builds every href, keeping filters):
 //   • Timeline — entries newest-first (never reversed) under day headings, as compact rows;
-//     each row's full detail, dispute history and Undo/Dispute controls sit in ONE
-//     "Details" disclosure, open by default for a disputed entry or a permalink.
+//     each row's evidence, dispute history and Undo/Dispute controls sit in ONE
+//     "View details" disclosure, open by default for a disputed entry or a permalink. The
+//     evidence reads as labelled plain-English lines; the identifiers that make the entry
+//     checkable sit in a collapsed "Technical details" list inside it.
 //   • By agent / By type / By service — one row per group with exact counts, its type
 //     split and anything that needs attention, each drilling into the filtered timeline.
 //
@@ -61,12 +79,13 @@ import type { ActivityCategory, OutcomeGroup } from "@/domain/activity/category"
 // — and `agent` is the agent's display name, never its raw id.
 export type ActivityEntryView = {
   seq: number;
-  kind: string; // display-ready, e.g. "Tool call"
+  kind: string; // display-ready, e.g. "Agent request"
   title?: string; // display-ready headline, e.g. "Save a memory" (absent ⇒ the kind)
   source: "warthog" | "agent_reported";
   agent?: string;
   agentHref?: string; // the timeline filtered to this agent
   agentRole?: "actor" | "subject"; // the agent acted, or an owner's change was about it
+  changedBy?: "you"; // the entry records the account owner's own change
   service?: string;
   serviceId?: string; // the connected service's catalogue id, for its mark
   outcome: string; // display-ready, e.g. "Done"
@@ -80,7 +99,9 @@ export type ActivityEntryView = {
   dayLabel?: string; // "Today", "Yesterday", "Mon 10 Nov"
   permalink?: string;
   summary: string; // one-line, already-redacted
-  detail: string; // full detail, already-redacted (the per-entry "open for detail")
+  detail: string; // full detail as text, already-redacted (shown when there are no `facts`)
+  facts?: readonly EvidenceLine[]; // labelled plain-English lines ("Warthog's decision: Allowed")
+  technical?: readonly EvidenceLine[]; // identifiers and measurements, shown collapsed
   canUndo: boolean;
   disputes?: readonly { note: string; at: string }[];
 };
@@ -136,6 +157,13 @@ export type ActivityActiveFilters = {
   to?: string; // "YYYY-MM-DD" (or an ISO date-time)
 };
 
+// The outcome of the last Dispute or Undo, in plain words (the page resolves `?notice=`).
+export type ActivityPageNotice = {
+  readonly tone: "done" | "problem" | "waiting";
+  readonly text: string;
+  readonly action?: { readonly href: string; readonly label: string };
+};
+
 export type ActivityViewProps = {
   entries: readonly ActivityEntryView[];
   nextHref?: string;
@@ -146,6 +174,7 @@ export type ActivityViewProps = {
   query: string; // the current search text (pre-fills the search box)
   activeFilters?: ActivityActiveFilters;
   integrity: IntegrityResult | null; // the latest Check-integrity result, if one has run
+  notice?: ActivityPageNotice | null;
   disputeAction?: (formData: FormData) => void | Promise<void>;
   undoAction?: (formData: FormData) => void | Promise<void>;
   // The organisation chrome (all links built by the loader).
@@ -157,19 +186,13 @@ export type ActivityViewProps = {
   breadcrumb?: { label: string; href: string };
   // The current view state, carried as hidden fields by the filter and integrity forms.
   formState?: Readonly<Record<string, string | undefined>>;
-  timeZoneLabel?: string;
+  timeZoneNote?: string; // "Times are Sydney time."
   groups?: readonly ActivityGroupView[];
   countsCaption?: string;
   singleEntry?: boolean;
+  // False when the person has no agents yet, so a first-run screen offers to connect one.
+  hasAgents?: boolean;
 };
-
-const BTN_BASE =
-  "inline-flex min-h-11 items-center justify-center gap-2 rounded-full px-4 text-sm font-medium transition-colors focus-visible:outline-hidden focus-visible:ring-2 focus-visible:ring-focus focus-visible:ring-offset-2 focus-visible:ring-offset-bg";
-const BTN_PRIMARY = `${BTN_BASE} bg-accent text-accent-fg hover:bg-accent-hover`;
-const BTN_SECONDARY = `${BTN_BASE} border border-line bg-surface text-fg hover:bg-surface-muted`;
-const BTN_DISABLED = `${BTN_BASE} border border-line bg-surface text-fg-muted opacity-50`;
-const LINK = "font-medium text-fg underline underline-offset-4 hover:text-fg-muted";
-const BADGE = "inline-flex items-center gap-1 rounded-card bg-surface-muted px-2 py-0.5 text-xs font-medium text-fg";
 
 const CATEGORY_ICONS: Record<ActivityCategory, LucideIcon> = {
   read: Eye,
@@ -182,11 +205,12 @@ const CATEGORY_ICONS: Record<ActivityCategory, LucideIcon> = {
   other: CircleDot,
 };
 
-const OUTCOME_ICONS: Partial<Record<OutcomeGroup, { Icon: LucideIcon; tone: string }>> = {
-  done: { Icon: CheckCircle, tone: "wh-tone-success" },
-  waiting: { Icon: Clock, tone: "wh-tone-warning" },
-  blocked: { Icon: Ban, tone: "wh-tone-danger" },
-  failed: { Icon: AlertTriangle, tone: "wh-tone-danger" },
+const OUTCOME_BADGES: Record<OutcomeGroup, { icon?: LucideIcon; tone: BadgeTone }> = {
+  done: { icon: CheckCircle, tone: "success" },
+  waiting: { icon: Clock, tone: "warning" },
+  blocked: { icon: Ban, tone: "danger" },
+  failed: { icon: AlertTriangle, tone: "danger" },
+  other: { tone: "neutral" },
 };
 
 // Each activity type's tone: reads blue, changes amber, approvals in the accent, rejected
@@ -202,15 +226,16 @@ const CATEGORY_TONES: Record<ActivityCategory, string> = {
   other: "wh-tone-neutral",
 };
 
+type FormAction = (formData: FormData) => void | Promise<void>;
+
 // The outcome in words, with a tone icon (the icon carries colour, the word carries meaning).
 function OutcomeBadge({ outcome, group }: { outcome: string; group?: OutcomeGroup }) {
   if (!outcome) return null;
-  const icon = group ? OUTCOME_ICONS[group] : undefined;
+  const badge = OUTCOME_BADGES[group ?? "other"];
   return (
-    <span className={`wh-tone-badge ${icon ? icon.tone : "wh-tone-neutral"}`}>
-      {icon ? <icon.Icon aria-hidden={true} className="h-3.5 w-3.5 shrink-0" /> : null}
+    <Badge tone={badge.tone} icon={badge.icon}>
       {outcome}
-    </span>
+    </Badge>
   );
 }
 
@@ -236,7 +261,7 @@ type Facet = {
 function FacetFilter({ name, label, all, options, value }: Facet) {
   const id = `activity-filter-${name}`;
   return (
-    <div className="flex flex-col gap-1.5">
+    <div className="flex min-w-0 flex-col gap-1.5">
       <Label htmlFor={id}>{label}</Label>
       <Select id={id} name={name} defaultValue={value ?? ""}>
         <option value="">{all}</option>
@@ -250,88 +275,117 @@ function FacetFilter({ name, label, all, options, value }: Facet) {
   );
 }
 
-// "Filtered by Agent: Claude · From 1 Mar 2026 (UTC)" — the plain-text summary used when
-// the loader supplies no chip list (named by each option's label, never the posted id).
+// "Filtered by Agent: Claude · From 2026-03-01" — the plain-text summary used when the
+// loader supplies no chip list (named by each option's label, never the posted id).
 function filterSummary(facets: readonly Facet[], active: ActivityActiveFilters): string[] {
   const labelOf = (facet: Facet, value: string): string =>
     facet.options.map(optionParts).find((option) => option.value === value)?.label ?? value;
   const parts = facets
     .filter((facet) => active[facet.name] !== undefined)
     .map((facet) => `${facet.label}: ${labelOf(facet, active[facet.name]!)}`);
-  if (active.from) parts.push(`From ${active.from} (UTC)`);
-  if (active.to) parts.push(`To ${active.to} (UTC)`);
+  if (active.from) parts.push(`From ${active.from.slice(0, 10)}`);
+  if (active.to) parts.push(`To ${active.to.slice(0, 10)}`);
   return parts;
 }
 
-// The record-wide Check-integrity result, in words plus an icon. A failure is announced.
-function IntegrityPanel({ result }: { result: IntegrityResult }) {
-  return result.intact ? (
-    <Notice tone="success">
-      Retained record intact — all {result.checked} entries checked and verified. This checks
-      the consistency of retained entries. It cannot prove every action was logged or detect a
-      privileged deletion of the end of the record. Disputes are notes alongside the record and
-      are not part of this check.
-    </Notice>
-  ) : (
-    <Notice tone="error">
-      Integrity check failed — entry {result.brokenSeq} of {result.checked} does not match the
-      record and may have been tampered with. Export your activity record and contact the operator.
-    </Notice>
+// The record-wide Check-integrity result, in words plus an icon. A failure is announced. The
+// check walks the hash chain over the stored entries, so the copy says what it does and
+// doesn't show; a failure points at the first entry that doesn't match.
+function IntegrityResultNotice({ result }: { result: IntegrityResult }) {
+  if (result.intact) {
+    return (
+      <PageNotice tone="success" clearParams={[]}>
+        <p className="font-medium">Your record checks out.</p>
+        <p className="mt-1 max-w-prose text-fg-muted">
+          All {result.checked} {result.checked === 1 ? "entry is" : "entries are"} intact: each is still linked to the one before
+          it, exactly as it was written. The check can&apos;t show whether something was never recorded, or whether the newest
+          entries were removed by someone with direct access to Warthog&apos;s database. Your disputes are kept alongside the
+          record and aren&apos;t part of this check.
+        </p>
+      </PageNotice>
+    );
+  }
+  return (
+    <PageNotice tone="error" clearParams={[]}>
+      <p className="font-medium">The integrity check failed.</p>
+      <p className="mt-1 max-w-prose">
+        {result.brokenSeq !== null ? (
+          <>
+            <a href={`/activity?entry=${result.brokenSeq}#entry-${result.brokenSeq}`} className="font-medium underline underline-offset-4">
+              Entry {result.brokenSeq}
+            </a>{" "}
+            doesn&apos;t match the record and may have been changed.
+          </>
+        ) : (
+          "An entry doesn't match the record and may have been changed."
+        )}{" "}
+        <a href="/settings/data" className="font-medium underline underline-offset-4">Export your activity</a>, then email{" "}
+        <a href={`mailto:${SUPPORT_EMAIL}`} className="font-medium underline underline-offset-4">{SUPPORT_EMAIL}</a>.
+      </p>
+    </PageNotice>
   );
 }
 
-function UndoControl({ entry, undoAction }: { entry: ActivityEntryView; undoAction?: (formData: FormData) => void | Promise<void> }) {
+const NOTICE_TONES = { done: "success", waiting: "info", problem: "error" } as const;
+
+function UndoControl({ entry, undoAction }: { entry: ActivityEntryView; undoAction?: FormAction }) {
   const context = <span className="sr-only"> {entry.title ?? entry.kind}, {entry.at}</span>;
   if (!undoAction) {
     return (
       <div className="flex flex-col gap-1">
-        <button type="button" disabled className={BTN_DISABLED}>
+        <Button type="button" variant="secondary" size="sm" disabled className="self-start">
           Undo{context}
-        </button>
+        </Button>
         <p className="text-xs text-fg-muted">Undoing isn&apos;t available just now.</p>
       </div>
     );
   }
   return (
-    <form action={undoAction}>
+    <ActionForm action={undoAction}>
       <input type="hidden" name="seq" value={String(entry.seq)} />
-      <button type="submit" className={BTN_SECONDARY}>
+      <FormSubmit variant="secondary" size="sm" pendingLabel="Undoing…">
         Undo{context}
-      </button>
-    </form>
+      </FormSubmit>
+    </ActionForm>
   );
 }
 
-function DisputeControl({ entry, disputeAction }: { entry: ActivityEntryView; disputeAction?: (formData: FormData) => void | Promise<void> }) {
+function DisputeControl({ entry, disputeAction }: { entry: ActivityEntryView; disputeAction?: FormAction }) {
   const context = <span className="sr-only"> {entry.title ?? entry.kind}, {entry.at}</span>;
   if (!disputeAction) {
     return (
       <div className="flex flex-col gap-1">
-        <button type="button" disabled className={BTN_DISABLED}>
+        <Button type="button" variant="secondary" size="sm" disabled className="self-start">
           Dispute{context}
-        </button>
+        </Button>
         <p className="text-xs text-fg-muted">Disputing isn&apos;t available just now.</p>
       </div>
     );
   }
   const noteId = `activity-dispute-note-${entry.seq}`;
   return (
-    <form action={disputeAction} className="flex w-full flex-col gap-2 sm:max-w-md">
+    <ActionForm action={disputeAction} className="flex w-full min-w-0 flex-col gap-2 sm:max-w-md">
       <input type="hidden" name="seq" value={String(entry.seq)} />
       <Label htmlFor={noteId}>Dispute this entry: tell us what&apos;s wrong</Label>
-      <textarea
-        id={noteId}
-        name="note"
-        required={true}
-        rows={2}
-        className="min-h-11 w-full rounded-field border border-line-input bg-surface px-3 py-2 text-base text-fg focus-visible:outline-hidden focus-visible:ring-2 focus-visible:ring-focus focus-visible:ring-offset-2 focus-visible:ring-offset-bg sm:text-sm"
-      />
-      <div>
-        <button type="submit" className={BTN_SECONDARY}>
-          Dispute{context}
-        </button>
-      </div>
-    </form>
+      <Textarea id={noteId} name="note" required={true} rows={2} />
+      <FormSubmit variant="secondary" size="sm" pendingLabel="Recording your dispute…" className="self-start">
+        Dispute{context}
+      </FormSubmit>
+    </ActionForm>
+  );
+}
+
+// Labelled lines: the label above its value on phones, beside it from 640px.
+function EvidenceList({ lines, compact = false }: { lines: readonly EvidenceLine[]; compact?: boolean }) {
+  return (
+    <dl className="flex min-w-0 flex-col gap-2">
+      {lines.map((line, index) => (
+        <div key={`${line.label}-${index}`} className="grid min-w-0 gap-0.5 sm:grid-cols-[11rem_minmax(0,1fr)] sm:gap-x-4">
+          <dt className="text-fg-muted">{line.label}</dt>
+          <dd className={`min-w-0 max-w-[72ch] whitespace-pre-line text-fg [overflow-wrap:anywhere] ${compact ? "font-mono text-xs leading-5" : ""}`}>{line.value}</dd>
+        </div>
+      ))}
+    </dl>
   );
 }
 
@@ -343,84 +397,119 @@ function ActivityEntryItem({
 }: {
   entry: ActivityEntryView;
   open: boolean;
-  disputeAction?: (formData: FormData) => void | Promise<void>;
-  undoAction?: (formData: FormData) => void | Promise<void>;
+  disputeAction?: FormAction;
+  undoAction?: FormAction;
 }) {
   const Icon = entry.category ? CATEGORY_ICONS[entry.category] : CircleDot;
+  const title = entry.title ?? entry.kind;
   const disputed = (entry.disputes?.length ?? 0) > 0;
   const reported = entry.source === "agent_reported";
-  const agentText = entry.agent ? (entry.agentHref ? <a href={entry.agentHref} className="underline underline-offset-2">{entry.agent}</a> : entry.agent) : null;
-  // Who: an agent acted, a person's change was about an agent, or the agent reported it.
-  const who = reported ? null : agentText ? (entry.agentRole === "subject" ? <>About {agentText}</> : agentText) : null;
+  const agentText = entry.agent ? (
+    entry.agentHref ? (
+      <a href={entry.agentHref} className="underline underline-offset-2 hover:text-fg">
+        <span className="sr-only">Show activity by </span>
+        {entry.agent}
+      </a>
+    ) : (
+      entry.agent
+    )
+  ) : null;
+  // Who: the agent that acted (or the agent a change was about), and whether it was you.
+  const who = reported ? null : agentText;
   const service = entry.service ? (
     <span className="inline-flex items-center gap-1 align-middle">
       {entry.serviceId ? <ServiceMark id={entry.serviceId} name={entry.service} size="xs" /> : null}
       {entry.service}
     </span>
   ) : null;
-  const meta = [who, service, entry.time ? null : entry.at].filter(Boolean);
+  const meta = [entry.categoryLabel ?? null, who, service, entry.changedBy === "you" ? "Changed by you" : null, entry.time ? null : entry.at].filter(Boolean);
+  const facts: readonly EvidenceLine[] = entry.facts && entry.facts.length > 0 ? [{ label: "Recorded", value: entry.at }, ...entry.facts] : [];
   return (
     <li id={`entry-${entry.seq}`} className={LIST_ROW}>
-      <div className="flex min-w-0 flex-wrap items-start justify-between gap-x-4 gap-y-1">
-        <div className="flex min-w-0 items-start gap-2">
-          <span className={`mt-0.5 inline-grid h-6 w-6 shrink-0 place-items-center rounded-md ${entry.category ? CATEGORY_TONES[entry.category] : "wh-tone-neutral"}`} style={{ background: "var(--wh-tone-soft)" }}>
-            <Icon aria-hidden={true} className="h-3.5 w-3.5 wh-tone-icon" />
-          </span>
-          <div className="min-w-0">
-            <h3 className="font-medium text-fg">{entry.title ?? entry.kind}</h3>
+      <div className="flex min-w-0 items-start gap-3">
+        <span className={`mt-0.5 inline-grid h-6 w-6 shrink-0 place-items-center rounded-md ${entry.category ? CATEGORY_TONES[entry.category] : "wh-tone-neutral"}`} style={{ background: "var(--wh-tone-soft)" }}>
+          <Icon aria-hidden={true} className="h-3.5 w-3.5 wh-tone-icon" />
+        </span>
+        <div className="flex min-w-0 flex-1 flex-col gap-1">
+          <div className="flex min-w-0 items-start justify-between gap-x-3">
+            <div className="flex min-w-0 flex-wrap items-center gap-x-2 gap-y-1">
+              <h3 className="font-medium text-fg">{title}</h3>
+              <OutcomeBadge outcome={entry.outcome} group={entry.outcomeGroup} />
+              {disputed ? (
+                <Badge tone="warning" icon={AlertTriangle}>
+                  Disputed
+                </Badge>
+              ) : null}
+            </div>
+            {entry.time ? (
+              <time dateTime={entry.dateTime} title={entry.at} className="shrink-0 text-sm tabular-nums text-fg-muted">
+                {entry.time}
+              </time>
+            ) : null}
+          </div>
+          {meta.length > 0 ? (
             <p className="text-sm text-fg-muted">
-              {entry.categoryLabel ? <span>{entry.categoryLabel}</span> : null}
               {meta.map((part, index) => (
                 <React.Fragment key={index}>
-                  {entry.categoryLabel || index > 0 ? " · " : null}
+                  {index > 0 ? " · " : null}
                   {part}
                 </React.Fragment>
               ))}
             </p>
-          </div>
-        </div>
-        <div className="flex shrink-0 items-center gap-2 text-sm text-fg-muted">
-          <OutcomeBadge outcome={entry.outcome} group={entry.outcomeGroup} />
-          {disputed ? (
-            <span className={BADGE}>
-              <AlertTriangle aria-hidden={true} className="h-3.5 w-3.5 shrink-0 text-warning" />
-              Disputed
-            </span>
           ) : null}
-          {entry.time ? <time dateTime={entry.dateTime} title={entry.at}>{entry.time}</time> : null}
+          {entry.summary !== title ? <p className="max-w-[72ch] text-fg">{entry.summary}</p> : null}
+          {reported ? <p className="text-sm text-fg-muted">Reported by {entry.agent}. Warthog did not observe this.</p> : null}
+          <details open={open || disputed} className="group text-sm">
+            <summary className="inline-flex min-h-11 cursor-pointer list-none items-center gap-1 self-start font-medium text-fg underline underline-offset-4 lg:pointer-fine:min-h-8 [&::-webkit-details-marker]:hidden">
+              View details<span className="sr-only"> for {title}, {entry.at}</span>
+              <ChevronDown aria-hidden={true} className="h-4 w-4 shrink-0 text-fg-muted transition-transform group-open:rotate-180" />
+            </summary>
+            <div className="flex min-w-0 flex-col gap-4 rounded-field bg-surface-muted p-3 sm:p-4">
+              {facts.length > 0 ? <EvidenceList lines={facts} /> : (
+                <>
+                  <p className="max-w-[72ch] whitespace-pre-wrap text-fg [overflow-wrap:anywhere]">{entry.detail}</p>
+                  {entry.time ? <p className="text-fg-muted">Recorded {entry.at}</p> : null}
+                </>
+              )}
+              {disputed ? (
+                <div aria-label="Dispute history" role="group" className="flex flex-col gap-2 border-l-2 border-warning pl-3">
+                  <p className="font-medium">Your disputes</p>
+                  {entry.disputes!.map((note, index) => (
+                    <p key={index} className="whitespace-pre-wrap [overflow-wrap:anywhere]">
+                      {note.note}
+                      <span className="block text-fg-muted">{note.at}</span>
+                    </p>
+                  ))}
+                </div>
+              ) : null}
+              {entry.technical && entry.technical.length > 0 ? (
+                <details className="group/technical">
+                  <summary className="inline-flex min-h-11 cursor-pointer list-none items-center gap-1 font-medium text-fg lg:pointer-fine:min-h-8 [&::-webkit-details-marker]:hidden">
+                    Technical details<span className="sr-only"> for {title}</span>
+                    <ChevronDown aria-hidden={true} className="h-4 w-4 shrink-0 text-fg-muted transition-transform group-open/technical:rotate-180" />
+                  </summary>
+                  <div className="flex flex-col gap-3 pt-1">
+                    <p className="max-w-prose text-fg-muted">
+                      These identify the entry in Warthog&apos;s tamper-evident record. Support may ask for them.
+                    </p>
+                    <EvidenceList lines={entry.technical} compact={true} />
+                  </div>
+                </details>
+              ) : null}
+              <div className="flex flex-col gap-3 border-t border-line pt-3 sm:flex-row sm:flex-wrap sm:items-start">
+                {entry.canUndo ? <UndoControl entry={entry} undoAction={undoAction} /> : null}
+                <DisputeControl entry={entry} disputeAction={disputeAction} />
+              </div>
+              {entry.permalink ? (
+                <a href={entry.permalink} className="inline-flex min-h-11 items-center gap-1.5 self-start font-medium text-fg underline underline-offset-4 lg:min-h-0">
+                  <Link2 aria-hidden={true} className="h-4 w-4 shrink-0 text-fg-muted" />
+                  Link to this entry<span className="sr-only">: {title}, {entry.at}</span>
+                </a>
+              ) : null}
+            </div>
+          </details>
         </div>
       </div>
-      {entry.summary !== (entry.title ?? entry.kind) ? <p className="ps-8 text-fg">{entry.summary}</p> : null}
-      {reported ? <p className="ps-8 text-sm text-fg-muted">Reported by {entry.agent}. Warthog did not observe this.</p> : null}
-      <details open={open || disputed} className="group ps-8 text-sm">
-        <summary className="inline-flex min-h-11 cursor-pointer items-center font-medium text-fg underline underline-offset-4">
-          View details<span className="sr-only"> for {entry.title ?? entry.kind}, {entry.at}</span>
-        </summary>
-        <div className="flex flex-col gap-3 pb-2">
-          <p className="whitespace-pre-wrap text-fg-muted">{entry.detail}</p>
-          {entry.time ? <p className="text-fg-muted">Recorded {entry.at}</p> : null}
-          {disputed ? (
-            <div aria-label="Dispute history" role="group" className="border-l-2 border-warning pl-3">
-              <p className="font-medium">Your disputes</p>
-              {entry.disputes!.map((note, index) => (
-                <p key={index} className="whitespace-pre-wrap">
-                  {note.note}
-                  <span className="block text-fg-muted">{note.at}</span>
-                </p>
-              ))}
-            </div>
-          ) : null}
-          <div className="flex flex-wrap items-start gap-3">
-            {entry.canUndo ? <UndoControl entry={entry} undoAction={undoAction} /> : null}
-            <DisputeControl entry={entry} disputeAction={disputeAction} />
-          </div>
-          {entry.permalink ? (
-            <a href={entry.permalink} className={`${LINK} self-start`}>
-              Link to this entry<span className="sr-only">: {entry.title ?? entry.kind}, {entry.at}</span>
-            </a>
-          ) : null}
-        </div>
-      </details>
     </li>
   );
 }
@@ -437,6 +526,7 @@ function byDay(entries: readonly ActivityEntryView[]): { key: string; label?: st
   return days;
 }
 
+// Each day is one list-group panel of divider rows (entries without a day go in one group).
 function Timeline({
   entries,
   singleEntry,
@@ -445,39 +535,25 @@ function Timeline({
 }: {
   entries: readonly ActivityEntryView[];
   singleEntry: boolean;
-  disputeAction?: (formData: FormData) => void | Promise<void>;
-  undoAction?: (formData: FormData) => void | Promise<void>;
+  disputeAction?: FormAction;
+  undoAction?: FormAction;
 }) {
-  const days = byDay(entries);
-  if (days.length === 1 && days[0]!.label === undefined) {
-    return (
-      <ol role="list" className="flex flex-col">
-        {entries.map((entry) => (
-          <ActivityEntryItem key={entry.seq} entry={entry} open={singleEntry} disputeAction={disputeAction} undoAction={undoAction} />
-        ))}
-      </ol>
-    );
-  }
   return (
-    <div className="flex flex-col gap-6">
-      {days.map((day, index) => (
-        <section key={`${day.key}-${index}`} aria-labelledby={`day-${day.key}-${index}`} className="flex min-w-0 flex-col">
-          <div className="flex flex-wrap items-baseline gap-2 border-b border-line-strong pb-2">
-            <h2 id={`day-${day.key}-${index}`} className="text-lg font-semibold text-fg">
-              <time dateTime={day.key}>{day.label}</time>
-            </h2>
-            <span className="text-sm text-fg-muted">
-              {day.entries.length} {day.entries.length === 1 ? "entry" : "entries"}{index === 0 || index === days.length - 1 ? " on this page" : ""}
-            </span>
-          </div>
-          <ol role="list" className="flex flex-col">
-            {day.entries.map((entry) => (
-              <ActivityEntryItem key={entry.seq} entry={entry} open={singleEntry} disputeAction={disputeAction} undoAction={undoAction} />
-            ))}
-          </ol>
-        </section>
+    <>
+      {byDay(entries).map((day, index) => (
+        <ListGroup
+          key={`${day.key}-${index}`}
+          id={`day-${day.key}-${index}`}
+          ordered
+          title={day.label === undefined ? "Entries" : <time dateTime={day.key}>{day.label}</time>}
+          count={singleEntry ? undefined : day.entries.length}
+        >
+          {day.entries.map((entry) => (
+            <ActivityEntryItem key={entry.seq} entry={entry} open={singleEntry} disputeAction={disputeAction} undoAction={undoAction} />
+          ))}
+        </ListGroup>
       ))}
-    </div>
+    </>
   );
 }
 
@@ -492,7 +568,7 @@ function GroupMark({ group }: { group: ActivityGroupView }) {
   if (mark.kind === "service") return <ServiceMark id={mark.id} name={group.label} size="md" />;
   const Icon = CATEGORY_ICONS[mark.type];
   return (
-    <span aria-hidden={true} className={`inline-grid h-9 w-9 shrink-0 place-items-center rounded-[10px] ${CATEGORY_TONES[mark.type]}`} style={{ background: "var(--wh-tone-soft)" }}>
+    <span aria-hidden={true} className={`inline-grid h-9 w-9 shrink-0 place-items-center rounded-card ${CATEGORY_TONES[mark.type]}`} style={{ background: "var(--wh-tone-soft)" }}>
       <Icon className="h-[18px] w-[18px] wh-tone-icon" />
     </span>
   );
@@ -506,46 +582,55 @@ function GroupRow({ group }: { group: ActivityGroupView }) {
   ].filter(Boolean).join(" · ");
   return (
     <li id={group.id} className={`${LIST_ROW} gap-2`}>
-      <div className="flex min-w-0 flex-wrap items-start justify-between gap-x-4 gap-y-1">
-        <div className="flex min-w-0 items-start gap-3">
-          <GroupMark group={group} />
-          <div className="min-w-0">
-          <h3 className="text-base font-semibold text-fg">
-            {group.href && group.total > 0 ? <a href={group.href} className="underline underline-offset-4 hover:text-fg-muted">{group.label}</a> : group.label}
-          </h3>
-          {group.detail ? <p className="text-sm text-fg-muted">{group.detail}</p> : null}
+      <div className="flex min-w-0 items-start gap-3">
+        <GroupMark group={group} />
+        <div className="flex min-w-0 flex-1 flex-col gap-1">
+          <div className="flex min-w-0 flex-wrap items-baseline justify-between gap-x-4 gap-y-1">
+            <h3 className="text-base font-semibold text-fg">
+              {group.href && group.total > 0 ? (
+                <a href={group.href} className="inline-flex min-h-11 items-center underline underline-offset-4 hover:text-fg-muted lg:min-h-0">
+                  {group.label}
+                </a>
+              ) : (
+                group.label
+              )}
+            </h3>
+            <p className="text-sm text-fg-muted">
+              <span className="font-semibold tabular-nums text-fg">{group.total}</span> {group.total === 1 ? "entry" : "entries"}
+              {group.lastAt ? <> · last <time dateTime={group.lastAtIso}>{group.lastAt}</time></> : null}
+            </p>
           </div>
+          {group.detail ? <p className="max-w-[72ch] text-sm text-fg-muted">{group.detail}</p> : null}
+          {group.split.length > 0 ? (
+            <ul role="list" aria-label={`${group.label} by type`} className="mt-1 flex flex-wrap gap-2">
+              {group.split.map((part) => (
+                <li key={part.label}>
+                  <a href={part.href} className={buttonClasses({ variant: "secondary", size: "sm" })}>
+                    {part.label}
+                    <CountBadge count={part.count} />
+                    <span className="sr-only"> by {group.label}</span>
+                  </a>
+                </li>
+              ))}
+            </ul>
+          ) : null}
+          {group.top ? <p className="text-sm text-fg-muted">Most active: {group.top}</p> : null}
+          {(attention && group.attentionHref) || group.manageHref ? (
+            <div className="flex flex-wrap items-center gap-x-4 text-sm">
+              {attention && group.attentionHref ? (
+                <a href={group.attentionHref} className="inline-flex min-h-11 items-center gap-1.5 font-medium text-fg underline underline-offset-4">
+                  <AlertTriangle aria-hidden={true} className="h-4 w-4 shrink-0 text-warning" />
+                  Needs attention: {attention}<span className="sr-only"> for {group.label}</span>
+                </a>
+              ) : null}
+              {group.manageHref ? (
+                <a href={group.manageHref} className="inline-flex min-h-11 items-center text-fg-muted underline underline-offset-4 hover:text-fg">
+                  Manage agent<span className="sr-only"> {group.label}</span>
+                </a>
+              ) : null}
+            </div>
+          ) : null}
         </div>
-        <p className="shrink-0 text-sm text-fg-muted">
-          <span className="font-semibold tabular-nums text-fg">{group.total}</span> {group.total === 1 ? "entry" : "entries"}
-          {group.lastAt ? <> · last <time dateTime={group.lastAtIso}>{group.lastAt}</time></> : null}
-        </p>
-      </div>
-      {group.split.length > 0 ? (
-        <ul role="list" aria-label={`${group.label} by type`} className="flex flex-wrap gap-x-4 gap-y-1 text-sm">
-          {group.split.map((part) => (
-            <li key={part.label}>
-              <a href={part.href} className="text-fg-muted underline underline-offset-2 hover:text-fg">
-                <span className="tabular-nums text-fg">{part.count}</span> {part.label.toLowerCase()}
-                <span className="sr-only"> by {group.label}</span>
-              </a>
-            </li>
-          ))}
-        </ul>
-      ) : null}
-      {group.top ? <p className="text-sm text-fg-muted">Most active: {group.top}</p> : null}
-      <div className="flex flex-wrap items-center gap-x-4 gap-y-1 text-sm">
-        {attention && group.attentionHref ? (
-          <a href={group.attentionHref} className="inline-flex min-h-11 items-center gap-1.5 font-medium text-fg underline underline-offset-4">
-            <AlertTriangle aria-hidden={true} className="h-4 w-4 shrink-0 text-warning" />
-            Needs attention: {attention}<span className="sr-only"> for {group.label}</span>
-          </a>
-        ) : null}
-        {group.manageHref ? (
-          <a href={group.manageHref} className="inline-flex min-h-11 items-center text-fg-muted underline underline-offset-4 hover:text-fg">
-            Manage agent<span className="sr-only"> {group.label}</span>
-          </a>
-        ) : null}
       </div>
     </li>
   );
@@ -559,19 +644,11 @@ const GROUP_HEADINGS: Record<Exclude<ActivityViewKey, "timeline">, string> = {
 
 function Groups({ view, groups, caption }: { view: Exclude<ActivityViewKey, "timeline">; groups: readonly ActivityGroupView[]; caption?: string }) {
   const populated = groups.filter((group) => group.total > 0);
+  const counted = view === "types" ? plural(populated.length, "type", "types") : view === "agents" ? plural(groups.length, "group", "groups") : plural(groups.length, "service", "services");
   return (
-    <section aria-labelledby="activity-groups-heading" className="flex min-w-0 flex-col gap-2">
-      <div className="flex flex-wrap items-baseline gap-2 border-b border-line-strong pb-2">
-        <h2 id="activity-groups-heading" className="text-lg font-semibold text-fg">{GROUP_HEADINGS[view]}</h2>
-        <span className="text-sm text-fg-muted">
-          {view === "types" ? plural(populated.length, "type", "types") : view === "agents" ? plural(groups.length, "group", "groups") : plural(groups.length, "service", "services")}
-        </span>
-      </div>
-      {caption ? <p className="text-sm text-fg-muted">{caption}</p> : null}
-      <ul role="list" className="flex flex-col">
-        {groups.map((group) => <GroupRow key={group.id} group={group} />)}
-      </ul>
-    </section>
+    <ListGroup id="activity-groups" title={GROUP_HEADINGS[view]} summary={caption ? `${counted}. ${caption}` : counted}>
+      {groups.map((group) => <GroupRow key={group.id} group={group} />)}
+    </ListGroup>
   );
 }
 
@@ -580,6 +657,7 @@ export function ActivityView({
   filterOptions,
   query,
   integrity,
+  notice,
   activeFilters = {},
   nextHref,
   newestHref,
@@ -593,140 +671,212 @@ export function ActivityView({
   clearHref,
   breadcrumb,
   formState,
-  timeZoneLabel,
+  timeZoneNote,
   groups,
   countsCaption,
   singleEntry = false,
+  hasAgents,
 }: ActivityViewProps) {
   const facets: Facet[] = [
     { name: "agent", label: "Agent", all: "All agents", options: filterOptions.agents, value: activeFilters.agent },
     { name: "service", label: "Service", all: "All services", options: filterOptions.services, value: activeFilters.service },
-    { name: "kind", label: "Kind", all: "All kinds", options: filterOptions.kinds, value: activeFilters.kind },
+    { name: "kind", label: "Event", all: "All events", options: filterOptions.kinds, value: activeFilters.kind },
     { name: "outcome", label: "Outcome", all: "All outcomes", options: filterOptions.outcomes, value: activeFilters.outcome },
   ];
   const summary = filterSummary(facets, activeFilters);
   const appliedCount = appliedFilters?.length ?? summary.length;
   const grouped = view !== "timeline" && groups !== undefined;
-  const nothingAtAll = entries.length === 0 && !query && appliedCount === 0 && !newestHref && !grouped;
+  // A brand-new record: no entries, nothing to narrow, no other page. The list tools would
+  // only push the empty state down, so the page shows the empty state alone.
+  const nothingAtAll = entries.length === 0 && !query && appliedCount === 0 && !newestHref && !nextHref && !grouped && !singleEntry;
+
+  const search = (
+    <form method="get" className="flex min-w-0 flex-wrap items-start gap-2">
+      <HiddenState state={formState} omit={["agent", "service", "kind", "outcome", "type", "from", "to", "q"]} />
+      {activeFilters.type ? <input type="hidden" name="type" value={activeFilters.type} /> : null}
+      {view === "timeline" ? (
+        <div className="flex min-w-0 flex-[1_1_10rem] gap-2">
+          <Label htmlFor="activity-search" className="sr-only">
+            Search
+          </Label>
+          <Input id="activity-search" type="search" name="q" defaultValue={query} placeholder="Search" />
+          <Button type="submit" variant="secondary" className="shrink-0 px-3 sm:px-4">
+            <Search aria-hidden={true} className="h-4 w-4 shrink-0" />
+            <span className="sr-only sm:not-sr-only">Search</span>
+          </Button>
+        </div>
+      ) : null}
+      {/* Applied filters already show as removable chips, so with chips the panel stays
+          closed (it would push the entries down on a phone); without them it opens when
+          anything is applied, so the applied values are visible. */}
+      <details open={appliedFilters ? false : query.length > 0 || appliedCount > 0} className="group min-w-0 open:basis-full">
+        <summary className={buttonClasses({ variant: "secondary", size: "md", className: "min-w-11 list-none px-3 [&::-webkit-details-marker]:hidden" })}>
+          <SlidersHorizontal aria-hidden={true} className="h-4 w-4 shrink-0 text-fg-muted" />
+          {/* The narrowest phones keep search and Filters on one line: the word is read out. */}
+          <span className="max-[359px]:sr-only">Filters</span>
+          {appliedCount > 0 ? <CountBadge count={appliedCount} label={`${appliedCount} applied`} /> : null}
+          <ChevronDown aria-hidden={true} className="hidden h-4 w-4 shrink-0 text-fg-muted transition-transform group-open:rotate-180 sm:block" />
+        </summary>
+        <div className="mt-3 grid grid-cols-1 gap-4 sm:grid-cols-2 xl:grid-cols-3">
+          {facets.map((facet) => (
+            <FacetFilter key={facet.name} {...facet} />
+          ))}
+          <div className="flex min-w-0 flex-col gap-1.5">
+            <Label htmlFor="activity-from">From</Label>
+            <Input id="activity-from" type="date" name="from" defaultValue={activeFilters.from?.slice(0, 10) ?? ""} />
+          </div>
+          <div className="flex min-w-0 flex-col gap-1.5">
+            <Label htmlFor="activity-to">To</Label>
+            <Input id="activity-to" type="date" name="to" defaultValue={activeFilters.to?.slice(0, 10) ?? ""} />
+          </div>
+        </div>
+        <div className="mt-4">
+          <Button type="submit" variant="secondary">
+            Apply filters
+          </Button>
+        </div>
+      </details>
+    </form>
+  );
+
+  const backLink = breadcrumb ? (
+    <a href={breadcrumb.href} className="inline-flex min-h-11 items-center gap-1 text-sm font-medium text-fg underline underline-offset-4">
+      <ChevronLeft aria-hidden={true} className="h-4 w-4 shrink-0" />
+      {breadcrumb.label}
+    </a>
+  ) : null;
+  const chips = appliedFilters && clearHref ? <ActiveFilters filters={appliedFilters} clearHref={clearHref} /> : null;
+  const plainSummary = !appliedFilters && summary.length > 0 ? (
+    <p className="flex flex-wrap items-center gap-x-3 text-sm text-fg">
+      <span>
+        <span className="font-medium">Filtered by</span> {summary.join(" · ")}
+      </span>
+      <a href="/activity" className="inline-flex min-h-11 items-center font-medium underline underline-offset-4">
+        Clear filters
+      </a>
+    </p>
+  ) : null;
+  const applied = backLink || (appliedFilters?.length ?? 0) > 0 || plainSummary ? (
+    <div className="flex min-w-0 flex-col gap-1">
+      {backLink}
+      {chips}
+      {plainSummary}
+    </div>
+  ) : null;
+  const status = !grouped && scannedCount !== undefined
+    ? `Search looked through the ${scannedCount} newest matching ${scannedCount === 1 ? "entry" : "entries"} on this page. Continue to older entries to search earlier history.`
+    : !grouped && singleEntry && entries.length > 0
+      ? "Showing one entry."
+      : undefined;
+
+  // Nothing recorded yet: one sentence on what will appear, and the next step.
+  const firstRun = hasAgents === false ? (
+    <EmptyState
+      heading="No activity yet"
+      description="Activity appears once you connect an agent and it starts using Warthog. Changes you make to your account show here too."
+      action={<ButtonLink href="/agents/connect" variant="primary">Connect your first agent</ButtonLink>}
+    />
+  ) : (
+    <EmptyState
+      heading="No activity yet"
+      description="Actions your agents take through Warthog, and changes to your account, appear here."
+      action={hasAgents ? <ButtonLink href="/agents">See your agents</ButtonLink> : undefined}
+    />
+  );
+
+  let empty: React.ReactNode = null;
+  if (grouped && groups.length === 0) {
+    empty = appliedCount === 0 ? firstRun : (
+      <EmptyState
+        heading="No activity matches these filters"
+        description="Remove a filter to see more. Requests and changes recorded through Warthog appear here."
+        action={clearHref ? <ButtonLink href={clearHref}>Clear all filters</ButtonLink> : undefined}
+      />
+    );
+  } else if (!grouped && entries.length === 0) {
+    if (singleEntry) {
+      empty = (
+        <EmptyState
+          heading="We couldn't find that activity entry"
+          description="It may belong to another account, or the link may be incomplete."
+          action={newestHref ? <ButtonLink href={newestHref}>Back to the timeline</ButtonLink> : undefined}
+        />
+      );
+    } else if (nothingAtAll) {
+      empty = firstRun;
+    } else if (query) {
+      empty = (
+        <EmptyState
+          heading="No matches on this page"
+          description="Search looks through the newest entries on this page. Try other words, or continue to older entries."
+          action={nextHref ? <ButtonLink href={nextHref}>Search older entries</ButtonLink> : undefined}
+        />
+      );
+    } else {
+      empty = (
+        <EmptyState
+          heading="No activity matches these filters"
+          description="Try other filters or continue to older entries. Requests and changes recorded through Warthog appear here."
+          action={clearHref && (appliedFilters?.length ?? 0) > 0 ? <ButtonLink href={clearHref}>Clear all filters</ButtonLink> : undefined}
+        />
+      );
+    }
+  }
 
   return (
-    <div className="wh-page flex flex-col gap-6">
+    <div className="wh-page">
       <WorkspaceHeading
-        eyebrow="Insights"
         title="Activity"
-        description={`What your agents did through Warthog, and changes to your account.${timeZoneLabel ? ` Times in ${timeZoneLabel}.` : ""}`}
+        description={`What your agents did through Warthog, and changes to your account.${timeZoneNote ? ` ${timeZoneNote}` : ""}`}
       >
         <form method="get">
           <HiddenState state={formState} omit={["verify"]} />
           <input type="hidden" name="verify" value="1" />
-          <button type="submit" className={BTN_PRIMARY}>
+          <Button type="submit" variant="secondary" size="sm">
             <ShieldCheck aria-hidden={true} className="h-4 w-4 shrink-0" />
             Check integrity
-          </button>
+          </Button>
         </form>
       </WorkspaceHeading>
 
-      {integrity ? <IntegrityPanel result={integrity} /> : null}
-
-      {viewLinks ? (
-        <div className="flex flex-col gap-1">
-          <FilterLinks label="Activity views" items={viewLinks} />
-          {quickLinks ? <FilterLinks label="Quick filters" items={quickLinks} variant="chips" /> : null}
-        </div>
-      ) : null}
-
-      <form method="get" className="wh-card flex flex-col gap-3 rounded-card border border-line bg-surface p-4">
-        <HiddenState state={formState} omit={["agent", "service", "kind", "outcome", "type", "from", "to", "q"]} />
-        {activeFilters.type ? <input type="hidden" name="type" value={activeFilters.type} /> : null}
-        {view === "timeline" ? (
-          <div className="flex flex-col gap-1.5">
-            <Label htmlFor="activity-search">Search</Label>
-            <div className="flex flex-col gap-2 sm:flex-row">
-              <Input id="activity-search" type="search" name="q" defaultValue={query} placeholder="Search activity" />
-              <button type="submit" className={`${BTN_SECONDARY} shrink-0`}>
-                Search
-              </button>
-            </div>
-          </div>
-        ) : null}
-        {!appliedFilters && summary.length > 0 ? (
-          <p className="flex flex-wrap items-center gap-x-3 gap-y-1 text-sm text-fg">
-            <span>
-              <span className="font-medium">Filtered by</span> {summary.join(" · ")}
-            </span>
-            <a href="/activity" className={LINK}>
-              Clear filters
-            </a>
-          </p>
-        ) : null}
-        {/* Applied filters already show as removable chips, so with chips the panel stays
-            closed (it would push the entries down on a phone); without them it opens when
-            anything is applied, so the applied values are visible. */}
-        <details open={appliedFilters ? false : query.length > 0 || appliedCount > 0} className="group">
-          <summary className="inline-flex min-h-11 cursor-pointer list-none items-center gap-2 font-medium text-fg [&::-webkit-details-marker]:hidden">
-            <SlidersHorizontal aria-hidden={true} className="h-4 w-4 shrink-0 text-fg-muted" />
-            Filters{appliedCount > 0 ? ` (${appliedCount} applied)` : ""}
-            <ChevronDown aria-hidden={true} className="h-4 w-4 shrink-0 text-fg-muted transition-transform group-open:rotate-180" />
-          </summary>
-          <div className="mt-3 grid grid-cols-1 gap-4 sm:grid-cols-2 xl:grid-cols-3">
-            {facets.map((facet) => (
-              <FacetFilter key={facet.name} {...facet} />
-            ))}
-            <div className="flex flex-col gap-1.5">
-              <Label htmlFor="activity-from">From (UTC)</Label>
-              <Input id="activity-from" type="date" name="from" defaultValue={activeFilters.from?.slice(0, 10) ?? ""} />
-            </div>
-            <div className="flex flex-col gap-1.5">
-              <Label htmlFor="activity-to">To (UTC)</Label>
-              <Input id="activity-to" type="date" name="to" defaultValue={activeFilters.to?.slice(0, 10) ?? ""} />
-            </div>
-          </div>
-          <div className="mt-4">
-            <button type="submit" className={BTN_SECONDARY}>
-              Apply filters
-            </button>
-          </div>
-        </details>
-      </form>
-
-      {breadcrumb ? (
-        <a href={breadcrumb.href} className="inline-flex min-h-11 items-center gap-1 self-start text-sm font-medium text-fg underline underline-offset-4">
-          <ChevronLeft aria-hidden={true} className="h-4 w-4 shrink-0" />
-          {breadcrumb.label}
-        </a>
-      ) : null}
-      {appliedFilters && clearHref ? <ActiveFilters filters={appliedFilters} clearHref={clearHref} /> : null}
-
-      {grouped ? (
-        groups.length === 0 ? (
-          <EmptyState heading="No activity matches these filters" description="Remove a filter to see more. Recorded requests and changes through Warthog appear here." />
-        ) : (
-          <Groups view={view as Exclude<ActivityViewKey, "timeline">} groups={groups} caption={countsCaption} />
-        )
-      ) : (
-        <>
-          {scannedCount !== undefined ? (
-            <p className="text-sm text-fg-muted">
-              Search looked through the {scannedCount} newest matching entries on this page. Continue to older entries to search earlier history.
-            </p>
+      {notice ? (
+        <PageNotice tone={NOTICE_TONES[notice.tone]}>
+          {notice.text}
+          {notice.action ? (
+            <>
+              {" "}
+              <a href={notice.action.href} className="font-medium underline underline-offset-4">
+                {notice.action.label}
+              </a>
+            </>
           ) : null}
-          {singleEntry && entries.length > 0 ? <p className="text-sm text-fg-muted">Showing one entry.</p> : null}
-          {entries.length === 0 ? (
-            <EmptyState
-              heading={nothingAtAll ? "No activity yet" : query ? "No matches on this page" : "No activity matches these filters"}
-              description={nothingAtAll
-                ? "Actions your agents take through Warthog, and changes to your account, appear here."
-                : "Try other filters or continue to older entries. Recorded requests and changes through Warthog appear here."}
-            />
-          ) : (
-            <Timeline entries={entries} singleEntry={singleEntry} disputeAction={disputeAction} undoAction={undoAction} />
-          )}
-        </>
+        </PageNotice>
+      ) : null}
+      {integrity ? <IntegrityResultNotice result={integrity} /> : null}
+
+      {nothingAtAll ? null : (
+        <ListToolbar
+          label="Find activity"
+          views={viewLinks ? <FilterLinks label="Activity views" items={viewLinks} /> : undefined}
+          filters={quickLinks ? <FilterLinks label="Quick filters" items={quickLinks} variant="scroll" /> : undefined}
+          search={search}
+          applied={applied}
+          status={status}
+        />
       )}
-      {nextHref || newestHref ? (
-        <nav aria-label="Activity pages" className="flex flex-wrap gap-3">
-          {nextHref ? <a className={BTN_SECONDARY} href={nextHref}>Older entries</a> : null}
-          {newestHref ? <a className={BTN_SECONDARY} href={newestHref}>{singleEntry ? "Back to the timeline" : "Newest entries"}</a> : null}
+
+      {empty ?? (grouped ? (
+        <Groups view={view as Exclude<ActivityViewKey, "timeline">} groups={groups} caption={countsCaption} />
+      ) : (
+        <Timeline entries={entries} singleEntry={singleEntry} disputeAction={disputeAction} undoAction={undoAction} />
+      ))}
+
+      {(nextHref || newestHref) && !(singleEntry && entries.length === 0) ? (
+        <nav aria-label="Activity pages">
+          <ActionBar>
+            {nextHref ? <ButtonLink href={nextHref}>Older entries</ButtonLink> : null}
+            {newestHref ? <ButtonLink href={newestHref}>{singleEntry ? "Back to the timeline" : "Newest entries"}</ButtonLink> : null}
+          </ActionBar>
         </nav>
       ) : null}
     </div>

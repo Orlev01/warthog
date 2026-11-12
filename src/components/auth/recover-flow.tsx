@@ -84,6 +84,9 @@ export interface RecoverFlowController {
   submitRecoveryCode(): Promise<void>;
   createPasskey(): Promise<void>;
   confirm(): Promise<void>;
+  // Back to the first step to change the address. Client-side only: it sends nothing, and
+  // the next "Send me a code" starts a fresh recovery.
+  changeEmail(): void;
 }
 
 const API_BASE = "/api/auth/recover";
@@ -290,6 +293,12 @@ export function createRecoverFlow(deps: RecoverFlowDeps): RecoverFlowController 
     setEmailCode: (value) => { if (!state.busy) set({ emailCode: value }); },
     setRecoveryCode: (value) => { if (!state.busy) set({ recoveryCode: value }); },
     setSavedConfirmed: (value) => { if (!state.busy) set({ savedConfirmed: value }); },
+    changeEmail: () => {
+      if (state.busy || (state.phase !== "email-code" && state.phase !== "recovery-code")) return;
+      recoveryId = undefined;
+      registrationOptions = undefined;
+      set({ phase: "identify", emailCode: "", recoveryCode: "", error: undefined });
+    },
     submitIdentify: () => run(submitIdentify, stepErrorCopy("identify")),
     submitEmailCode: () => run(submitEmailCode, stepErrorCopy("verify-email")),
     submitRecoveryCode: () => run(submitRecoveryCode, stepErrorCopy("verify-code")),
@@ -361,6 +370,7 @@ export function RecoverFlow(props: RecoverFlowProps = {}): React.ReactElement {
       onConfirm={() => {
         void flow.confirm();
       }}
+      onChangeEmail={() => flow.changeEmail()}
     />
   );
 }

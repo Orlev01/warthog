@@ -120,12 +120,15 @@ test("device code sending blocks competing approval requests and clears pending 
   assert.ok(!flow.getState().error?.includes("private connection detail"));
 });
 
-test("pending recovery, reset and device forms disable editable fields and expose progress", () => {
+test("pending recovery, reset and device forms freeze editable fields and expose progress", () => {
   for (const element of [<RecoverView key="recover" step="identify" busy />, <ResetView key="reset" step="identify" busy />, <DeviceView key="device" step="code" busy />]) {
     const html = renderToStaticMarkup(element);
     const fields = [...html.matchAll(/<input\b([^>]*)>/g)];
     assert.ok(fields.length > 0);
-    assert.ok(fields.every((field) => /disabled=""/.test(field[1]!)));
+    // Frozen but still focusable (a11y-01): read-only and aria-disabled, not natively
+    // disabled, so focus never drops to the page while a step is working.
+    assert.ok(fields.every((field) => /readOnly=""/.test(field[1]!) && /aria-disabled="true"/.test(field[1]!)));
+    assert.ok(fields.every((field) => !/\sdisabled=""/.test(field[1]!)));
     assert.match(html, /Please wait|Sending|Working/);
   }
 });

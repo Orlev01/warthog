@@ -805,6 +805,16 @@ test("malformed input is rejected with a 4xx and nothing is persisted", async ()
         createInput({ title: "x", useThisWhen: "y", fullText: "z", scope: "chosen", scopedAgentIds: ["not-a-uuid"] }),
       ),
     );
+    // Only spaces count as empty (interaction-02): a blank title, line or instructions,
+    // and a blank preference, are refused.
+    for (const blank of [{ title: "   " }, { useThisWhen: "  " }, { fullText: "\n  " }]) {
+      await assertRejects4xx(`createSkill(${JSON.stringify(blank)})`, () =>
+        actions.createSkill(session, createInput({ title: "x", useThisWhen: "y", fullText: "z", scope: "all", ...blank })),
+      );
+    }
+    await assertRejects4xx("savePreferences(a field of only spaces)", () =>
+      actions.savePreferences(session, prefsInput({ tone: "   ", length: "l", language: "en", units: "m", timeZone: "Z", briefing: "b" })),
+    );
     // savePreferences: a missing field, and a field that is not a string.
     await assertRejects4xx("savePreferences(missing field)", () =>
       actions.savePreferences(session, prefsInput({ tone: "t", length: "l", language: "en", units: "m", timeZone: "Z" })),

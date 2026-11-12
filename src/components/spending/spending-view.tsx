@@ -1,12 +1,15 @@
 "use client";
 
 import * as React from "react";
-import { AlertTriangle, ChevronDown } from "lucide-react";
+import { AlertTriangle, Bot, ChevronDown } from "lucide-react";
 
-import { Card } from "@/components/ui/card";
-import { FormSubmit } from "@/components/ui/form-submit";
-import { ListGroup } from "@/components/ui/list-group";
-import { Select } from "@/components/ui/select";
+import { Button } from "@/components/ui/button";
+import { ButtonLink } from "@/components/ui/button-link";
+import { EmptyState } from "@/components/ui/empty";
+import { ActionForm, FormSubmit } from "@/components/ui/form-submit";
+import { ListGroup, LIST_ROW } from "@/components/ui/list-group";
+import { SelectField } from "@/components/ui/field";
+import { WorkspaceHeading, WorkspacePanel } from "@/components/shell/workspace-surfaces";
 
 // E15-S10 — Spending view component (brief "Spending view" + "Household sharing";
 // design §8 step 4 / §9; constitution principle 14 "Warthog … labels
@@ -31,6 +34,11 @@ import { Select } from "@/components/ui/select";
 // the subtotal (per currency, never summed across currencies), largest first — with
 // the individual releases inside. An agent with releases links to its approvals and
 // releases in Activity.
+//
+// Layout (the UI/UX pass): the page heading band carries the title, its purpose and the
+// currency form; the outcome notice follows it; "Your agents" is always one bounded group
+// (with an empty state and a next step before any agent is connected) that links to where
+// card budgets are set; the household totals are one panel of divider rows.
 //
 // This is the render-testable, prop-driven VIEW (a Client Component): it renders the
 // screen entirely from its props so a render test pins each behaviour without a DOM.
@@ -159,7 +167,7 @@ function budgetLine(agent: SpendingOwnAgent, accountCurrency: string): string {
   if (agent.budget) {
     return `${spent} of ${money(agent.budget.amount, agent.budget.currency)} ${periodWords(agent.budget.period)}`;
   }
-  return `${spent} approved · No card budget set`;
+  return `${spent} approved · no card budget`;
 }
 
 // A member's total against their monthly limit (an unset limit reads as plain copy),
@@ -269,43 +277,36 @@ function CurrencyForm({
   action?: (formData: FormData) => void | Promise<void>;
 }) {
   const select = (
-    <div className="flex w-36 flex-col gap-1.5">
-      <label htmlFor="account-currency" className="text-sm font-medium text-fg">
-        Account currency
-      </label>
-      <Select id="account-currency" name="account-currency" defaultValue={accountCurrency}>
-        {currencyOptions.map((code) => (
-          <option key={code} value={code}>
-            {code}
-          </option>
-        ))}
-      </Select>
-    </div>
+    <SelectField label="Account currency" id="account-currency" name="account-currency" defaultValue={accountCurrency} className="w-36">
+      {currencyOptions.map((code) => (
+        <option key={code} value={code}>
+          {code}
+        </option>
+      ))}
+    </SelectField>
   );
   if (!action) {
     return (
       <div className="flex flex-col gap-1">
         <div className="flex flex-wrap items-end gap-2">
           {select}
-          <button
-            type="button"
-            disabled
-            className="inline-flex min-h-11 items-center justify-center rounded-full border border-line bg-surface px-4 text-sm font-medium text-fg-muted opacity-50"
-          >
+          <Button variant="secondary" disabled aria-describedby="account-currency-unavailable">
             Save currency
-          </button>
+          </Button>
         </div>
-        <p className="text-xs text-fg-muted">Saving the account currency isn&apos;t available just now.</p>
+        <p id="account-currency-unavailable" className="text-sm text-fg-muted">
+          Saving the account currency isn&apos;t available just now.
+        </p>
       </div>
     );
   }
   return (
-    <form action={action} className="flex flex-wrap items-end gap-2">
+    <ActionForm action={action} className="flex flex-wrap items-end gap-2">
       {select}
       <FormSubmit variant="secondary" pendingLabel="Saving…">
         Save currency
       </FormSubmit>
-    </form>
+    </ActionForm>
   );
 }
 
@@ -317,7 +318,7 @@ function MerchantRow({ group, agentName }: { group: MerchantGroup; agentName: st
   return (
     <li className="border-b border-line last:border-0">
       <details className="group">
-        <summary className="flex min-h-11 cursor-pointer list-none flex-wrap items-center gap-x-3 gap-y-1 rounded-field py-2 focus-visible:outline-hidden focus-visible:ring-2 focus-visible:ring-focus [&::-webkit-details-marker]:hidden">
+        <summary className="flex min-h-11 cursor-pointer list-none flex-wrap items-center gap-x-3 gap-y-1 rounded-field py-2 [&::-webkit-details-marker]:hidden">
           <ChevronDown aria-hidden={true} className="h-4 w-4 shrink-0 text-fg-muted transition-transform group-open:rotate-180" />
           <span className="min-w-0 flex-1 text-fg">{group.merchant}</span>
           <span className="text-sm text-fg-muted">
@@ -388,32 +389,41 @@ export function SpendingView({
   currencyAction,
   notice,
 }: SpendingViewProps) {
+  // Where each agent's card budget is set (Rules & budgets › Budgets links to every agent's
+  // Spending section), so "what was spent" and "what may be spent" are one click apart.
+  const budgetsLink = (
+    <a href="/rules?view=budgets" className="inline-flex min-h-11 items-center text-sm font-medium text-fg underline underline-offset-4">
+      Card budgets
+    </a>
+  );
   return (
-    <section className="wh-page flex flex-col gap-8 [overflow-wrap:anywhere]">
-      {/* ----- Title + the account-currency setting, one compact form ----- */}
-      <header className="flex flex-col gap-4 sm:flex-row sm:items-end sm:justify-between">
-        <div className="flex min-w-0 flex-col gap-1">
-          <h1 className="text-2xl font-semibold tracking-tight text-fg">Spending</h1>
-          <p className="text-sm text-fg-muted">
-            Approved card releases for your agents this period
-            {household ? ", and your household's shared totals" : ""}.
-          </p>
-        </div>
+    <div className="wh-page [overflow-wrap:anywhere]">
+      {/* ----- The heading band: title, purpose and the account-currency form ----- */}
+      <WorkspaceHeading
+        title="Spending"
+        description={`Approved card releases for your agents this period${household ? ", and your household's shared totals" : ""}.`}
+      >
         <CurrencyForm accountCurrency={accountCurrency} currencyOptions={currencyOptions} action={currencyAction} />
-      </header>
+      </WorkspaceHeading>
       {notice}
 
       {/* ----- Own agents: card budget + approved releases by merchant, in detail ----- */}
       {own.agents.length === 0 ? (
-        <div className="flex flex-col gap-1">
-          <h2 className="text-lg font-semibold text-fg">Your agents</h2>
-          <p className="text-sm text-fg-muted">No agents connected yet.</p>
-        </div>
+        <WorkspacePanel title="Your agents" action={budgetsLink}>
+          <EmptyState
+            variant="inline"
+            icon={Bot}
+            heading="No agents connected yet."
+            description="Each agent's approved card releases show here once you connect one and give it card access."
+            action={<ButtonLink href="/agents/connect" variant="primary" size="sm">Connect your first agent</ButtonLink>}
+          />
+        </WorkspacePanel>
       ) : (
         <ListGroup
           id="spending-agents"
           title="Your agents"
           count={own.agents.length}
+          action={budgetsLink}
           summary="Each agent's releases are grouped by merchant, largest first. Open a merchant to see each release."
         >
           {own.agents.map((agent) => (
@@ -425,35 +435,36 @@ export function SpendingView({
       {/* ----- Household totals: per-member against limit + the household total.
               TOTALS ONLY — never another member's merchants or release entries. ----- */}
       {household ? (
-        <div className="flex flex-col gap-3">
-          <h2 className="text-lg font-semibold text-fg">Household</h2>
-          <p className="text-sm text-fg-muted">Shared budgets and member limits reset together at the start of each calendar month in UTC.</p>
-          <p className="text-sm text-fg-muted">
-            Shared totals only — no one sees another member&apos;s merchants or entries.
-          </p>
-          <Card className="flex flex-col gap-3">
-            <ul className="flex flex-col gap-2">
-              {household.members.map((member, index) => (
-                <li key={member.userId} className="flex flex-wrap items-center justify-between gap-2">
-                  <span className="text-fg">Member {index + 1}</span>
-                  <span className="text-sm text-fg-muted">{memberLine(member, household.currency)}</span>
-                </li>
-              ))}
-            </ul>
-            <div className="flex flex-wrap items-center justify-between gap-2 border-t border-line pt-3">
+        <WorkspacePanel
+          title="Household"
+          description="Shared totals only: no one sees another member's merchants or entries. Budgets and limits reset at the start of each month, at the same moment for everyone in the household."
+          action={
+            <a href="/household" className="inline-flex min-h-11 items-center text-sm font-medium text-fg underline underline-offset-4">
+              Manage household
+            </a>
+          }
+        >
+          <ul role="list" className="flex flex-col">
+            {household.members.map((member, index) => (
+              <li key={member.userId} className={`${LIST_ROW} sm:flex-row sm:flex-wrap sm:items-center sm:justify-between sm:gap-x-4`}>
+                <span className="text-fg">Member {index + 1}</span>
+                <span className="text-sm text-fg-muted">{memberLine(member, household.currency)}</span>
+              </li>
+            ))}
+            <li className={`${LIST_ROW} sm:flex-row sm:flex-wrap sm:items-center sm:justify-between sm:gap-x-4`}>
               <span className="font-medium text-fg">Household total</span>
               <span className="font-medium text-fg">{householdLine(household)}</span>
-            </div>
-            {(household.unconverted ?? []).map((entry) => (
-              <p key={entry.currency} className="flex items-start gap-2 text-sm text-fg">
-                <AlertTriangle aria-hidden={true} className="mt-0.5 h-4 w-4 shrink-0 text-warning" />
-                {unconvertedLine(entry)}
-              </p>
-            ))}
-          </Card>
-        </div>
+            </li>
+          </ul>
+          {(household.unconverted ?? []).map((entry) => (
+            <p key={entry.currency} className="mt-3 flex items-start gap-2 text-sm text-fg">
+              <AlertTriangle aria-hidden={true} className="mt-0.5 h-4 w-4 shrink-0 text-warning" />
+              {unconvertedLine(entry)}
+            </p>
+          ))}
+        </WorkspacePanel>
       ) : null}
-    </section>
+    </div>
   );
 }
 

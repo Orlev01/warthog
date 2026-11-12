@@ -30,7 +30,8 @@ import { test } from "node:test";
 import assert from "node:assert/strict";
 import { renderToStaticMarkup } from "react-dom/server";
 
-import { Input } from "./input";
+import { Input, Textarea, INPUT_CLASS, TEXTAREA_CLASS } from "./input";
+import { Select, SELECT_CLASS } from "./select";
 
 // Parse the `name="value"` attribute pairs out of a tag's attribute text. The
 // tokenizer treats each attribute as a whole, so `aria-invalid="true"` never
@@ -107,4 +108,34 @@ test("Input uses design tokens, never a raw hex colour", () => {
     !/#[0-9a-fA-F]{3,8}\b/.test(markup),
     "no raw hex colour may appear in the Input's rendered markup",
   );
+});
+
+// ─── UI/UX pass: 16px on touch and narrow screens (mobile-06/07), widths (desktop-08) ───
+
+test("text controls stay 16px below 1024px and on touch screens; 14px only with a mouse on desktop", () => {
+  for (const cls of [INPUT_CLASS, TEXTAREA_CLASS, SELECT_CLASS]) {
+    assert.match(cls, /(^|\s)text-base(\s|$)/);
+    assert.match(cls, /\blg:pointer-fine:text-sm\b/);
+    assert.doesNotMatch(cls, /(^|\s)(sm|md):text-sm\b/, "a landscape phone is wider than 640px");
+  }
+});
+
+test("short values get short fields from 640px up, full width on phones", () => {
+  const short = inputAttrs(renderToStaticMarkup(<Input width="short" type="date" />)).class ?? "";
+  assert.match(short, /\bw-full\b/);
+  assert.match(short, /\bsm:max-w-48\b/);
+  assert.match(inputAttrs(renderToStaticMarkup(<Input width="code" />)).class ?? "", /\bsm:max-w-32\b/);
+  assert.match(inputAttrs(renderToStaticMarkup(<Input width="text" />)).class ?? "", /\bsm:max-w-md\b/);
+  assert.doesNotMatch(inputAttrs(renderToStaticMarkup(<Input />)).class ?? "", /max-w-(48|32|md)/);
+});
+
+test("Textarea and Select share the field look: token border, field radius, 44px target", () => {
+  const textarea = renderToStaticMarkup(<Textarea name="note" aria-label="Note" />);
+  assert.match(textarea, /^<textarea[^>]*rows="3"/);
+  for (const markup of [textarea, renderToStaticMarkup(<Select aria-label="Kind" width="short"><option>One</option></Select>)]) {
+    assert.match(markup, /\bborder-line-input\b/);
+    assert.match(markup, /\brounded-field\b/);
+    assert.doesNotMatch(markup, /\brounded-card\b/);
+  }
+  assert.match(renderToStaticMarkup(<Select aria-label="Kind" width="short"><option>One</option></Select>), /\bsm:max-w-48\b/);
 });

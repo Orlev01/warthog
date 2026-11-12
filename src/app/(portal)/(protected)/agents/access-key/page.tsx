@@ -26,7 +26,8 @@ import { PageContainer } from "@/components/shell/page-container";
 // This entry reads the signed-in session from the host-locked `__Host-wh_session` cookie
 // and mounts <AccessKeyFlow/>, giving it a `create` server action over the tested seam. The
 // flow names the agent and picks its starting set on ONE screen, creates the key and shows
-// it ONCE with a Copy control; the agents list then offers revoke / replace.
+// it ONCE with a Copy control. There is no separate revoke / replace control yet: a key
+// stops working when its agent is disconnected from the agent's page (interaction-07).
 //
 // Thin by design (the server-composition-roots addendum): per-request data (search params,
 // then the cookie) is read BEFORE `getServerDb()` so `next build` marks the page dynamic and
@@ -86,8 +87,8 @@ export default async function AccessKeyPage({
         random: systemRandom,
       }).create(requestSession, input);
       if (result.ok) {
-        // Re-run the agents list so the new agent (with its revoke / replace controls)
-        // lists right after the key is issued — no manual reload.
+        // Re-run the agents list so the new agent lists right after the key is issued —
+        // no manual reload.
         revalidatePath("/agents");
       }
       return result;

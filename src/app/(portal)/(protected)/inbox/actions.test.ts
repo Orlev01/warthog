@@ -1017,7 +1017,7 @@ test("a rule-triggered held email shows who it goes to and the rule's own senten
 
     assert.equal(line(view, "To"), "manager@example.com, hr@example.com", "every recipient");
     assert.equal(view.rule, "Ask me before any agent sends email to manager@example.com", "the rule's exact sentence");
-    assert.equal(view.sentence, "wants to run send_email on gmail", "a plain sentence");
+    assert.equal(view.sentence, "wants to use “Send email” in Gmail", "a plain sentence, in words (no tool or service ids)");
   } finally {
     await db.close();
   }
@@ -1074,6 +1074,50 @@ test("a high-tier request carries the person's saved details, the requested fiel
     assert.equal(fields[0]!.label, "Passport", "the requested field comes first");
     assert.equal(fields[0]!.ciphertext, "v1:passportCipher", "as the device-decryptable ciphertext");
     assert.equal(fields[1]!.label, "Driver licence");
+  } finally {
+    await db.close();
+  }
+});
+
+// =====================================================================================
+// UI/UX pass content-02 — a held change on a connected service reads by its human names:
+// the tool in words and the service as the catalogue names it, rebuilt at read time (so
+// requests stored with the old wording read well too), never `send_email on gmail`.
+// =====================================================================================
+
+test("a held service change reads as the tool in words in the service's catalogue name, pending and decided", async () => {
+  const db = await freshDb();
+  const keyWrapper = keyWrapperFor();
+  try {
+    const a = await arrangeHeld(db, keyWrapper, "c02-names", nonReleaseCall({ connector: "google-calendar", tool: "google-calendar__create_event" }));
+    const named = createInboxActions({
+      db,
+      clock: fixedClock(NOW),
+      keyWrapper,
+      executeApprovedHold: a.execHold.fn,
+      serviceName: (id) => (id === "google-calendar" ? "Google Calendar" : undefined),
+    });
+    const session = await freshSession(db, a.userId);
+    const loaded = await named.load(session);
+    assert.equal(loaded.pending[0]!.sentence, "wants to use “Create event” in Google Calendar");
+    assert.equal(loaded.hasAgents, true, "the loader says the person has an agent");
+
+    expectOk(await named.denyApproval(session, a.approvalId), "deny");
+    const after = await named.load(session);
+    assert.equal(after.history[0]!.sentence, "wants to use “Create event” in Google Calendar", "the history reads the same way");
+    assert.equal(after.history[0]!.outcome, "You denied this", "one verb pair: Approve / Deny");
+  } finally {
+    await db.close();
+  }
+});
+
+test("a person with no agents is told so by the loader", async () => {
+  const db = await freshDb();
+  const keyWrapper = keyWrapperFor();
+  try {
+    const { userId } = await makePerson(db, "c02-no-agents", keyWrapper);
+    const actions = createInboxActions({ db, clock: fixedClock(NOW), keyWrapper, executeApprovedHold: async () => { throw new Error("not run"); } });
+    assert.equal((await actions.load(await freshSession(db, userId))).hasAgents, false);
   } finally {
     await db.close();
   }

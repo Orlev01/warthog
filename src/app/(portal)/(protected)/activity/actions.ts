@@ -1,6 +1,7 @@
-import { activityEvidence } from "@/domain/activity/evidence";
+import { activityEvidence, withoutMatchedIntents } from "@/domain/activity/evidence";
 import { readDisputesForEntries } from "@/server/activity/disputes";
 import { formatAccountTime } from "@/server/display-time";
+import { timeZoneNote } from "@/domain/display-time";
 import { timeZoneFor } from "@/server/spending/time-zone";
 // E08-S07 — Activity page server actions (dispute, undo, check integrity).
 //
@@ -42,8 +43,7 @@ import {
 } from "@/server/activity/integrity";
 import { listActivity, listActivityFacets, summariseActivity, type ActivityFilters } from "@/server/activity/list";
 import { isReadOnlyTool } from "@/server/activity/tool-effects";
-import { activityCategory, agentRole, CATEGORY_LABELS, outcomeGroup } from "@/domain/activity/category";
-import { accountTimeZone } from "@/domain/time-zone";
+import { activityCategory, agentRole, CATEGORY_LABELS, outcomeGroup, outcomeLabel } from "@/domain/activity/category";
 import type { Clock } from "@/server/seams/clock";
 import {
   ACTIVITY_PATH,
@@ -53,7 +53,9 @@ import {
   appliedFilters,
   breadcrumb,
   countsCaption,
+  dayEndIn,
   dayOf,
+  dayStartIn,
   filtersFor,
   quickLinks,
   readActivityState,
@@ -68,6 +70,7 @@ import { calendarReversalForEntry } from "@/server/activity/calendar-reversal";
 import { getUserById } from "@/server/db/users";
 import { agentNamesForUser, listAgentsForUser } from "@/server/db/agents";
 import { agentLabel, entryTitle, kindLabel } from "@/domain/activity/describe";
+import { platformLabel } from "@/components/agents/platform-label";
 import type { KeyWrapper } from "@/server/crypto/key-wrapper";
 import type { ActivityEntry } from "@/server/activity/recorder";
 import type {
@@ -163,23 +166,35 @@ function payloadText(payload: unknown, key: string): string {
   return "";
 }
 
-// A stored code → a display label (e.g. "tool_call" → "Tool call"), since the view
-// shows `kind`/`outcome` to a person and the loader hands them already readable.
-function humanise(value: string): string {
-  const spaced = value.replace(/[_-]+/g, " ").trim();
-  return spaced.length === 0 ? spaced : spaced.charAt(0).toUpperCase() + spaced.slice(1);
-}
-
 // A stored instant → an absolute, readable label. The loader takes no clock seam, so
 // it shows WHEN an entry occurred rather than a relative "two minutes ago" — the DATE
 // and the TIME OF DAY, so two entries on the same day read as distinct moments.
-// The shared formatter below supplies the account zone and labels it explicitly.
+// The shared formatter below supplies the account zone (stated once on the page).
 
-// Widen a date-ONLY `to` filter (what the view's `<input type="date">` posts, e.g.
-// "2026-04-20") to the END of that day so the whole day is inside the inclusive upper
-// bound; a value that already carries a time of day is left exactly as given.
-function widenToEndOfDay(to: string): string {
-  return /^\d{4}-\d{2}-\d{2}$/.test(to) ? `${to}T23:59:59.999Z` : to;
+// The date inputs post a calendar day ("2026-04-20"). It is a day in the account's time zone,
+// like every time on the page: `from` starts at that day's local midnight and `to` is widened
+// to the END of that day so the whole day is inside the inclusive upper bound. A value that
+// already carries a time of day is left exactly as given.
+function dayBounds(timeZone: string) {
+  return { from: (from: string) => dayStartIn(from, timeZone), to: (to: string) => dayEndIn(to, timeZone) };
+}
+
+// Outcome choices for the filter, in the page's words. Several codes read the same ("Done"),
+// so a repeated label says which entries it covers rather than offering "Done" four times.
+const OUTCOME_COVERS: Record<string, string> = {
+  executed: "agent requests",
+  saved: "your changes",
+  reported: "agent details",
+  ok: "checks",
+  done: "other",
+};
+function outcomeOptions(codes: readonly string[]): { value: string; label: string }[] {
+  const labels = codes.map((code) => outcomeLabel(code));
+  return codes.map((code, index) => {
+    const label = labels[index]!;
+    const repeated = labels.filter((other) => other === label).length > 1;
+    return { value: code, label: repeated ? `${label} (${OUTCOME_COVERS[code] ?? code.replace(/_/g, " ")})` : label };
+  });
 }
 
 // An entry seq is a position within a person's own chain: a POSITIVE INTEGER. A
@@ -188,9 +203,10 @@ function widenToEndOfDay(to: string): string {
 // (OBS-049). A note must carry some text and stay within a sane bound; a reason is
 // optional but likewise bounded.
 const NOTE_MAX = 4000;
+// A note of only spaces says nothing, so it is refused like an empty one (interaction-02).
 const disputeInputSchema = z.object({
   entrySeq: z.number().int().positive(),
-  note: z.string().min(1).max(NOTE_MAX),
+  note: z.string().trim().min(1).max(NOTE_MAX),
 });
 // A date filter is a real ISO calendar date ("YYYY-MM-DD" — what the view's date inputs
 // post) or an ISO date-time. Anything else (a hand-edited `?from=yesterday-ish`) is
@@ -285,14 +301,14 @@ export function createActivityActions(deps: ActivityActionsDeps): ActivityAction
     timeZone: string,
     state: ActivityState,
     now: Date | undefined,
-  ): ActivityEntryView {
+  ): ActivityEntryView & { attemptId?: string; intent?: true } {
     const target = calendarReversalForEntry(entry);
     const canUndo = target !== undefined && reversalFor?.(entry.tool) === target.tool;
     const category = activityCategory(entry, isReadOnlyTool);
     const day = dayOf(entry.occurredAt, timeZone, now);
     return {
       seq: entry.seq,
-      kind: humanise(entry.kind),
+      kind: kindLabel(entry.kind),
       title: entryTitle(entry),
       source: entry.source,
       agent: agentLabel(agentNames, entry.agentId),
@@ -300,7 +316,7 @@ export function createActivityActions(deps: ActivityActionsDeps): ActivityAction
       agentRole: agentRole(entry.kind),
       service: entry.connectorId === undefined ? undefined : serviceLabel(entry.connectorId),
       serviceId: entry.connectorId,
-      outcome: entry.outcome === undefined ? "" : humanise(entry.outcome),
+      outcome: entry.outcome === undefined ? "" : outcomeLabel(entry.outcome),
       outcomeGroup: outcomeGroup(entry.outcome),
       category,
       categoryLabel: CATEGORY_LABELS[category],
@@ -358,7 +374,7 @@ export function createActivityActions(deps: ActivityActionsDeps): ActivityAction
         { value: NONE, label: "No connected service" },
       ],
       kinds: [...facets.kinds].map((value) => ({ value, label: kindLabel(value) })).sort((a, b) => a.label.localeCompare(b.label)),
-      outcomes: [...facets.outcomes].sort().map((value) => ({ value, label: humanise(value) })),
+      outcomes: outcomeOptions([...facets.outcomes].sort()),
     };
 
     // The validated screen state: the view, the drill-down it came from, and every filter.
@@ -366,7 +382,8 @@ export function createActivityActions(deps: ActivityActionsDeps): ActivityAction
     // The applied values go back to the view (`activeFilters`) so its controls show them
     // and a second Apply keeps them (review fix G11).
     const state = readActivityState(searchParams, validDate);
-    const filters: ActivityFilters = filtersFor(state, widenToEndOfDay);
+    const bounds = dayBounds(timeZone);
+    const filters: ActivityFilters = filtersFor(state, bounds.to, bounds.from);
     const activeFilters: NonNullable<ActivityViewProps["activeFilters"]> = {
       ...(state.agent !== undefined ? { agent: state.agent } : {}),
       ...(state.service !== undefined ? { service: state.service } : {}),
@@ -389,7 +406,7 @@ export function createActivityActions(deps: ActivityActionsDeps): ActivityAction
       clearHref: applied.clearHref,
       breadcrumb: breadcrumb(state),
       formState: stateQuery(state),
-      timeZoneLabel: accountTimeZone(timeZone),
+      timeZoneNote: timeZoneNote(timeZone),
       filterOptions,
       query: state.q ?? "",
       activeFilters,
@@ -415,8 +432,9 @@ export function createActivityActions(deps: ActivityActionsDeps): ActivityAction
           return {
             name: agentLabel(agentNames, id) ?? id,
             platform: agent?.platform,
+            platformName: agent ? platformLabel(agent.platform) : undefined,
             disconnected: agent ? agent.status !== "connected" : undefined,
-            connectedOn: agent ? formatAccountTime(agent.connectedAt, timeZone, { dateOnly: true }).replace(/ \(.*\)$/, "") : undefined,
+            connectedOn: agent ? formatAccountTime(agent.connectedAt, timeZone, { dateOnly: true }) : undefined,
             exists: agent !== undefined,
           };
         }, state, when);
@@ -431,7 +449,9 @@ export function createActivityActions(deps: ActivityActionsDeps): ActivityAction
       } else {
         groups = serviceGroups(await summariseActivity(db, session.userId, filters, "service"), serviceLabel, state, when);
       }
-      return { ...common, entries: [], groups, countsCaption: countsCaption(state), integrity };
+      // An empty grouped view with nothing applied is a first run: say so, with the next step.
+      const hasAgents = groups.length === 0 ? (await listAgentsForUser(db, session.userId)).length > 0 : true;
+      return { ...common, entries: [], groups, countsCaption: countsCaption(state), integrity, hasAgents };
     }
 
     // The shared filtered read (`listActivity`, E08-S05) narrows by facet/type/date in SQL,
@@ -445,22 +465,45 @@ export function createActivityActions(deps: ActivityActionsDeps): ActivityAction
     };
     const beforeSeq = positive(searchParams.before);
     const entrySeq = positive(searchParams.entry);
+    // A permalink that can't name an entry (`?entry=abc`) is a missing entry, not the whole
+    // timeline: the screen says it couldn't find it (interaction-21).
+    if (firstValue(searchParams.entry) !== undefined && entrySeq === undefined) {
+      return { ...common, entries: [], integrity, singleEntry: true, newestHref: activityHref(state) };
+    }
     if (entrySeq) filters.seq = entrySeq;
     const pageLimit = deps.pageLimit ?? (state.q ? ACTIVITY_SEARCH_LIMIT : ACTIVITY_PAGE_LIMIT);
     const limit = Math.max(1, Math.min(4999, pageLimit));
     const narrowed = await listActivity(db, session.userId, filters, dek, { limit: limit + 1, beforeSeq });
     const page = narrowed.slice(0, limit);
     const notes = await readDisputesForEntries(db, session.userId, page.map(e => e.seq), dek);
-    const views = page.map((entry) => ({ ...toEntryView(entry, agentNames, timeZone, state, now),
+    const allViews = page.map((entry) => ({ ...toEntryView(entry, agentNames, timeZone, state, now),
       disputes: notes.filter(note => note.entrySeq === entry.seq).map(note => ({ note: note.note, at: formatAccountTime(note.createdAt, timeZone) })),
     }));
+    // Each finished change appears once (content-04): the intent record written just before
+    // it ran is left out when its result is on the same page. It stays when it is the entry
+    // asked for, when the Event filter asks for intent records, when it was disputed, or when
+    // no result followed it (it then reads "Not confirmed"). The record itself is unchanged.
+    const views = entrySeq !== undefined || state.kind === "tool_attempt"
+      ? allViews
+      : withoutMatchedIntents(allViews, (view) => view.disputes.length > 0);
     const needle = (state.q ?? "").toLowerCase();
-    const entries = needle.length === 0 ? views : views.filter(view =>
-      [view.summary, view.detail, view.title, view.service, view.agent, ...view.disputes.map(n => n.note)]
-        .some(value => value?.toLowerCase().includes(needle)));
+    const searchable = (view: (typeof views)[number]) => [
+      view.summary, view.detail, view.title, view.service, view.agent,
+      ...(view.facts ?? []).map((line) => line.value),
+      ...(view.technical ?? []).map((line) => line.value),
+      ...view.disputes.map(n => n.note),
+    ];
+    const entries = (needle.length === 0 ? views : views.filter(view =>
+      searchable(view).some(value => value?.toLowerCase().includes(needle))))
+      .map(({ attemptId: _attemptId, intent: _intent, ...view }) => view);
     const newestHref = beforeSeq || entrySeq ? activityHref(state) : undefined;
     const lastSeq = page.at(-1)?.seq;
     const nextHref = narrowed.length > limit && lastSeq !== undefined ? activityHref(state, { before: String(lastSeq) }) : undefined;
+
+    // A first-run screen offers to connect an agent only when there is none yet.
+    const hasAgents = entries.length === 0 && newestHref === undefined
+      ? (await listAgentsForUser(db, session.userId)).length > 0
+      : true;
 
     return {
       ...common,
@@ -468,6 +511,7 @@ export function createActivityActions(deps: ActivityActionsDeps): ActivityAction
       integrity,
       nextHref,
       newestHref,
+      hasAgents,
       singleEntry: entrySeq !== undefined,
       scannedCount: state.q ? page.length : undefined,
     };

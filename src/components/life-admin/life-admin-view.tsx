@@ -1,16 +1,33 @@
 "use client";
 
 import * as React from "react";
-import { AlertTriangle, Bell, BellOff, Calendar, CalendarClock, CalendarOff, ChevronDown, Settings2, type LucideIcon } from "lucide-react";
+import {
+  AlertTriangle,
+  Bell,
+  BellOff,
+  Calendar,
+  CalendarClock,
+  CalendarOff,
+  ChevronDown,
+  Inbox,
+  ListChecks,
+  Plus,
+  Settings2,
+  Trash2,
+  type LucideIcon,
+} from "lucide-react";
 
 import { ViewPanels } from "@/components/ui/view-tabs";
 import { ListGroup, LIST_ROW } from "@/components/ui/list-group";
 import { ActionForm, FormSubmit, PendingFormFields } from "@/components/ui/form-submit";
-import { Input } from "@/components/ui/input";
-import { Label } from "@/components/ui/field";
+import { Button, buttonClasses, type ButtonVariant } from "@/components/ui/button";
+import { ButtonLink } from "@/components/ui/button-link";
+import { Field, Label, SelectField } from "@/components/ui/field";
+import { CONTROL_TEXT } from "@/components/ui/input";
 import { EmptyState } from "@/components/ui/empty";
 import { receiptUploadError } from "@/lib/receipt-upload";
 import { groupRecordsByDue, recordTitle, reminderSummary, type DueGroupKey } from "./record-groups";
+import { RECORD_STATUS_CHOICES, dueLine, fieldLabel, recordFacts, statusLabel } from "./record-format";
 
 // E14-S11 — Life-admin records and checklist view component
 // (src/components/life-admin/life-admin-view.tsx).
@@ -24,11 +41,17 @@ import { groupRecordsByDue, recordTitle, reminderSummary, type DueGroupKey } fro
 // warranty-end dates; each checklist item carries a tick-off and a "hand to an agent"
 // control.
 //
+// Layout (the UI/UX pass): the four record views are one bounded panel whose tab row is its
+// top ruled row, so the page reads as heading band → one panel, never text on the canvas.
+// Inside a view the Add disclosure comes first (a "+" button), then the due-date groups as
+// sub-sections with divider rows. A row leads with the record's name and "Due 1 Dec 2026 ·
+// Active", then its facts as label/value pairs in a fixed label column (record-format.ts:
+// plain labels, formatted dates, one "Cost" line), its reminder setting in words and one
+// "Manage" disclosure holding reminders, attach, edit and delete (delete asks first).
+//
 // Organisation (the "tidy and organise" pass): each record tab groups its records by how
 // soon they fall due — Overdue, Next 30 days, Later, No due date — soonest first, with
-// counts on the groups and on the tabs. A row leads with the record's name, due date,
-// other fields and a one-line reminder summary; its controls (reminders, attach, edit,
-// delete) sit behind ONE "Manage" disclosure. The `#record-<id>` anchor stays on the row
+// counts on the groups and on the tabs. The `#record-<id>` anchor stays on the row
 // (reminder notifications and other pages link to it). The loader passes the person's
 // local date as `today`, so grouping never reads the clock.
 //
@@ -36,14 +59,14 @@ import { groupRecordsByDue, recordTitle, reminderSummary, type DueGroupKey } fro
 // screen FROM the props the Life Admin page loader (E14-S10 `lifeAdminPageData`) hands
 // it, with fields already decrypted and server actions passed in — exactly the
 // precedent the sibling memory / inbox / connectors views set (pre-formatted values in,
-// no clock / DB / session in the view). The real page wiring (reading the data, binding
-// the server actions) lives in a LATER task.
+// no clock / DB / session in the view). The page heading and the Records | Tasks views
+// live in LifeAdminScreen (./life-admin-screen.tsx).
 //
 // No control may ever be dead (constitution: "No dead controls"): a control whose
 // server action is not supplied — or that cannot act because of the record's own state
 // (a checklist item already handed to an agent) — renders DISABLED with a one-line
-// reason. Colour comes from the design tokens (globals.css) and shared components, never
-// a raw hex.
+// reason tied to it. Colour comes from the design tokens (globals.css) and shared
+// components, never a raw hex.
 
 // ─── the prop contract this task introduces ─────────────────────────────────────────
 
@@ -107,32 +130,33 @@ export type LifeAdminViewProps = {
   handToAgentAction?: LifeAdminAction;
 };
 
-// ─── styling (design tokens; no raw hex) ─────────────────────────────────────────────
-//
-// Native control classes on the tokens. They deliberately omit the shared Button's
-// `disabled:` utility variants so a LIVE control's class never reads as "disabled"; the
-// one DISABLED control carries the native `disabled` attribute instead (same approach as
-// the sibling inbox / connectors views). The accent fill is a tab's / an Add's one
-// primary action; everything else is the neutral surface.
-const BTN_BASE =
-  "inline-flex min-h-11 items-center justify-center gap-2 rounded-full px-4 text-sm font-medium transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-focus focus-visible:ring-offset-2 focus-visible:ring-offset-bg";
-const BTN_DISABLED = `${BTN_BASE} border border-line bg-surface text-fg-muted opacity-50`;
+// ─── shared pieces ───────────────────────────────────────────────────────────────────
 
-const SUMMARY_CLASS =
-  "inline-flex min-h-11 w-fit cursor-pointer items-center gap-2 rounded-card text-sm font-medium text-fg focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-focus";
-const FILE_INPUT_CLASS =
-  "min-h-11 min-w-0 w-full max-w-full text-base text-fg file:me-3 file:rounded-card file:border file:border-line file:bg-surface file:px-3 file:py-2 file:text-sm file:text-fg sm:text-sm";
+// A <summary> that looks like a Button: the shared button look, with the disclosure marker
+// hidden because the label (and its chevron) says what opens.
+function summaryClass(variant: ButtonVariant, size: "sm" | "md" = "md"): string {
+  return buttonClasses({ variant, size, className: "w-fit list-none [&::-webkit-details-marker]:hidden" });
+}
+
+// The native file picker, on the field tokens: 16px text on touch screens, the picker
+// button as a quiet pill.
+const FILE_INPUT_CLASS = `min-h-11 min-w-0 w-full max-w-full text-fg file:me-3 file:min-h-9 file:cursor-pointer file:rounded-full file:border file:border-line file:bg-surface file:px-3 file:text-sm file:font-medium file:text-fg ${CONTROL_TEXT}`;
+
+// A small muted line under a control: help text or the reason a control is unavailable.
+const HINT_CLASS = "text-sm text-fg-muted";
 
 // ─── a present-but-not-actionable control (no dead controls) ─────────────────────────
 //
-// The native `disabled` attribute does the disabling, and a one-line reason says why.
+// The native `disabled` attribute does the disabling, and a one-line reason says why; the
+// reason is tied to the button so a screen reader announces it with the control.
 function DisabledControl({ label, reason }: { label: string; reason: string }) {
+  const reasonId = React.useId();
   return (
     <div className="flex flex-col gap-1">
-      <button type="button" disabled className={BTN_DISABLED}>
+      <Button variant="secondary" disabled aria-describedby={reasonId}>
         {label}
-      </button>
-      <p className="text-xs text-fg-muted">{reason}</p>
+      </Button>
+      <p id={reasonId} className={HINT_CLASS}>{reason}</p>
     </div>
   );
 }
@@ -152,18 +176,36 @@ const RECORD_TABS: Record<RecordKind, string> = {
   subscription: "subscriptions", receipt_warranty: "receipts", renewal_appointment: "renewals",
 };
 
+// The record's status as a choice: the usual statuses, plus the record's own value when an
+// agent saved something else, so editing never silently changes it.
+function StatusField({ id, status }: { id: string; status: string }) {
+  const current = status.trim() || "active";
+  const known = RECORD_STATUS_CHOICES.some((choice) => choice.value === current.toLowerCase());
+  return (
+    <SelectField label="Status" id={`${id}-status`} name="status" defaultValue={known ? current.toLowerCase() : current} width="short">
+      {known ? null : <option value={current}>{statusLabel(current)}</option>}
+      {RECORD_STATUS_CHOICES.map((choice) => (
+        <option key={choice.value} value={choice.value}>
+          {choice.label}
+        </option>
+      ))}
+    </SelectField>
+  );
+}
+
 function ScheduleFields({ id, dueDate, status = "active" }: { id: string; dueDate?: string | null; status?: string }) {
   return <>
     <input type="hidden" name="recordFormVersion" value="2" />
-    <div className="flex flex-col gap-1.5">
-      <Label htmlFor={`${id}-date`}>Due date (optional)</Label>
-      <Input id={`${id}-date`} type="date" name="dueDate" defaultValue={dueDate ?? ""} aria-describedby={`${id}-date-help`} />
-      <p id={`${id}-date-help`} className="text-xs text-fg-muted">Reminders use this date. Leave it empty for no reminders.</p>
-    </div>
-    <div className="flex flex-col gap-1.5">
-      <Label htmlFor={`${id}-status`}>Status</Label>
-      <Input id={`${id}-status`} name="status" defaultValue={status} required maxLength={200} />
-    </div>
+    <Field
+      label="Due date (optional)"
+      id={`${id}-date`}
+      type="date"
+      name="dueDate"
+      defaultValue={dueDate ?? ""}
+      hint="Reminders use this date. Leave it empty for no reminders."
+      width="short"
+    />
+    <StatusField id={id} status={status} />
   </>;
 }
 
@@ -185,26 +227,29 @@ function AddControl({
     );
   }
   return (
-    <details className="flex flex-col gap-3 rounded-card border border-line bg-surface p-4">
-      <summary className={SUMMARY_CLASS}>{label}</summary>
-      <ActionForm action={addRecordAction} className="mt-2 flex flex-col gap-3">
+    <details className="group/add min-w-0">
+      <summary className={summaryClass("secondary")}>
+        <Plus aria-hidden={true} className="h-4 w-4 shrink-0" />
+        {label}
+        <ChevronDown aria-hidden={true} className="h-4 w-4 shrink-0 text-fg-muted transition-transform group-open/add:rotate-180" />
+      </summary>
+      <ActionForm action={addRecordAction} className="mt-3 flex flex-col gap-4 rounded-card bg-surface-muted p-4">
         <PendingFormFields>
           <input type="hidden" name="kind" value={kind} />
           <input type="hidden" name="returnTab" value={RECORD_TABS[kind]} />
-          <div className="flex flex-col gap-1.5">
-            <Label htmlFor={fieldId}>What to add</Label>
-            <Input
-              id={fieldId}
-              name="title"
-              placeholder="Describe it"
-              required
-              maxLength={2000}
-            />
-          </div>
+          <Field
+            label="What to add"
+            id={fieldId}
+            name="title"
+            placeholder="Describe it"
+            required
+            maxLength={2000}
+            width="text"
+          />
           <ScheduleFields id={fieldId} />
         </PendingFormFields>
         <div>
-          <FormSubmit variant="primary" preserveFocus pendingLabel="Adding record…">{label}</FormSubmit>
+          <FormSubmit variant="primary" pendingLabel="Adding…">{label}</FormSubmit>
         </div>
       </ActionForm>
     </details>
@@ -226,34 +271,35 @@ function ReminderSetting({
   const value = record.reminderOffsets.join(", ");
   if (!editRecordAction) {
     return (
-      <div className="flex flex-col gap-1.5">
-        <Label htmlFor={fieldId}>Remind me (days before)</Label>
-        <Input
-          id={fieldId}
-          name="reminderOffsets"
-          defaultValue={value}
-          disabled
-        />
-        <p className="text-xs text-fg-muted">
-          Changing reminders isn't available just now.
-        </p>
-      </div>
+      <Field
+        label="Remind me (days before)"
+        id={fieldId}
+        name="reminderOffsets"
+        defaultValue={value}
+        disabled
+        hint="Changing reminders isn't available just now."
+        width="short"
+      />
     );
   }
   return (
-    <ActionForm action={editRecordAction} className="flex flex-col gap-1.5">
+    <ActionForm action={editRecordAction} className="flex flex-col gap-3">
       <PendingFormFields>
         <input type="hidden" name="recordId" value={record.id} />
         <input type="hidden" name="returnTab" value={RECORD_TABS[record.kind]} />
         <input type="hidden" name="setting" value="reminder" />
-        <Label htmlFor={fieldId}>Remind me (days before)</Label>
-        <Input id={fieldId} name="reminderOffsets" defaultValue={value} aria-describedby={`${fieldId}-help`} />
-        <p id={`${fieldId}-help`} className="text-xs text-fg-muted">
-          Use whole days from 0 to 36500, separated by commas (for example, 14, 1). Leave empty to turn reminders off.
-        </p>
+        <Field
+          label="Remind me (days before)"
+          id={fieldId}
+          name="reminderOffsets"
+          defaultValue={value}
+          inputMode="numeric"
+          hint="Whole days from 0 to 36500, separated by commas (for example, 14, 1). Leave it empty to turn reminders off."
+          width="short"
+        />
       </PendingFormFields>
       <div>
-        <FormSubmit variant="secondary" preserveFocus pendingLabel="Saving reminder…">Save reminder</FormSubmit>
+        <FormSubmit variant="secondary" pendingLabel="Saving…">Save reminder</FormSubmit>
       </div>
     </ActionForm>
   );
@@ -271,61 +317,67 @@ function AttachControl({
   const fieldId = React.useId();
   if (!attachFileAction) {
     return (
-      <div className="flex flex-col gap-1.5">
+      <div className="flex flex-col gap-2">
         <Label htmlFor={fieldId}>Attach a file</Label>
         <input
           id={fieldId}
           type="file"
           name="file"
           disabled
+          aria-describedby={`${fieldId}-reason`}
           className={FILE_INPUT_CLASS}
         />
-        <p className="text-xs text-fg-muted">
+        <p id={`${fieldId}-reason`} className={HINT_CLASS}>
           Attaching a file isn't available just now.
         </p>
       </div>
     );
   }
   return (
-    <ActionForm action={attachFileAction} className="flex flex-col gap-1.5">
+    <ActionForm action={attachFileAction} className="flex flex-col gap-3">
       <PendingFormFields>
         <input type="hidden" name="recordId" value={record.id} />
         <input type="hidden" name="returnTab" value={RECORD_TABS[record.kind]} />
-        <Label htmlFor={fieldId}>Attach a file</Label>
-        <input
-          id={fieldId}
-          type="file"
-          name="file"
-          required
-          className={FILE_INPUT_CLASS}
-          onChange={(event) => {
-            const input = event.currentTarget;
-            const file = input.files?.[0];
-            input.setCustomValidity(
-              file ? (receiptUploadError(file.size) ?? "") : "Choose a file.",
-            );
-            if (file) input.reportValidity();
-          }}
-        />
-        <p className="text-xs text-fg-muted">
-          Up to 25 MiB per file. Files are encrypted before storage.
-        </p>
+        <div className="flex flex-col gap-2">
+          <Label htmlFor={fieldId}>Attach a file</Label>
+          <p id={`${fieldId}-help`} className={`-mt-1 ${HINT_CLASS}`}>
+            Up to 25 MB per file. Files are encrypted before they&apos;re stored.
+          </p>
+          <input
+            id={fieldId}
+            type="file"
+            name="file"
+            required
+            aria-describedby={`${fieldId}-help`}
+            className={FILE_INPUT_CLASS}
+            onChange={(event) => {
+              const input = event.currentTarget;
+              const file = input.files?.[0];
+              input.setCustomValidity(
+                file ? (receiptUploadError(file.size) ?? "") : "Choose a file.",
+              );
+              if (file) input.reportValidity();
+            }}
+          />
+        </div>
       </PendingFormFields>
       <div>
-        <FormSubmit variant="secondary" preserveFocus pendingLabel="Attaching file…">Attach file</FormSubmit>
+        <FormSubmit variant="secondary" pendingLabel="Attaching…">Attach file</FormSubmit>
       </div>
     </ActionForm>
   );
 }
 
 // A record's Edit control: a disclosure whose form (bound to editRecordAction) carries
-// this record's id and an input per decrypted field prefilled with its value. DISABLED
-// with a reason when editRecordAction is not supplied.
+// this record's id and an input per decrypted field prefilled with its value, each with its
+// plain label. DISABLED with a reason when editRecordAction is not supplied.
 function EditControl({
   record,
+  name,
   editRecordAction,
 }: {
   record: LifeAdminRecordView;
+  name: string;
   editRecordAction?: LifeAdminAction;
 }) {
   const baseId = React.useId();
@@ -338,27 +390,62 @@ function EditControl({
     );
   }
   return (
-    <details className="flex flex-col gap-3">
-      <summary className={SUMMARY_CLASS}>Edit</summary>
-      <ActionForm action={editRecordAction} className="mt-2 flex flex-col gap-3">
+    <details className="group/edit min-w-0 open:basis-full">
+      <summary className={summaryClass("secondary", "sm")}>
+        Edit<span className="sr-only"> {name}</span>
+        <ChevronDown aria-hidden={true} className="h-4 w-4 shrink-0 text-fg-muted transition-transform group-open/edit:rotate-180" />
+      </summary>
+      <ActionForm action={editRecordAction} className="mt-3 flex flex-col gap-4">
         <PendingFormFields>
           <input type="hidden" name="recordId" value={record.id} />
           <input type="hidden" name="returnTab" value={RECORD_TABS[record.kind]} />
-          {Object.entries(record.fields).map(([key, fieldValue], index) => {
-            const fieldId = `${baseId}-${index}`;
-            return (
-              <div key={key} className="flex flex-col gap-1.5">
-                <Label htmlFor={fieldId}>{key}</Label>
-                <Input id={fieldId} name={`field:${key}`} defaultValue={fieldValue} />
-              </div>
-            );
-          })}
+          {Object.entries(record.fields).map(([key, fieldValue], index) => (
+            <Field
+              key={key}
+              label={fieldLabel(key)}
+              id={`${baseId}-${index}`}
+              name={`field:${key}`}
+              defaultValue={fieldValue}
+              width="text"
+            />
+          ))}
           <ScheduleFields id={baseId} dueDate={record.dueDate} status={record.status} />
         </PendingFormFields>
         <div>
-          <FormSubmit variant="secondary" preserveFocus pendingLabel="Saving changes…">Save changes</FormSubmit>
+          <FormSubmit variant="secondary" pendingLabel="Saving…">Save changes</FormSubmit>
         </div>
       </ActionForm>
+    </details>
+  );
+}
+
+// Delete cannot be undone, so it asks first: a danger disclosure whose panel says what will
+// go, then the final danger submit.
+function DeleteControl({
+  record,
+  name,
+  deleteRecordAction,
+}: {
+  record: LifeAdminRecordView;
+  name: string;
+  deleteRecordAction: LifeAdminAction;
+}) {
+  return (
+    <details className="min-w-0 open:basis-full">
+      <summary className={summaryClass("danger", "sm")}>
+        <Trash2 aria-hidden={true} className="h-4 w-4 shrink-0" />
+        Delete record<span className="sr-only"> {name}</span>
+      </summary>
+      <div className="mt-3 flex flex-col gap-3 rounded-card bg-surface-muted p-4">
+        <p className="text-sm text-fg">
+          Delete this record and all its attached files? This can&apos;t be undone.
+        </p>
+        <ActionForm action={deleteRecordAction}>
+          <input type="hidden" name="recordId" value={record.id} />
+          <input type="hidden" name="returnTab" value={RECORD_TABS[record.kind]} />
+          <FormSubmit variant="danger-solid" pendingLabel="Deleting…">Delete record and files</FormSubmit>
+        </ActionForm>
+      </div>
     </details>
   );
 }
@@ -388,8 +475,9 @@ function ManageControls({
   deleteRecordAction?: LifeAdminAction;
 }) {
   return (
-    <details className="group/manage">
-      <summary className={`${SUMMARY_CLASS} list-none [&::-webkit-details-marker]:hidden`}>
+    <details className="group/manage min-w-0">
+      {/* Pulled left by its own padding, so its icon lines up with the row's text. */}
+      <summary className={`${summaryClass("ghost", "sm")} -ms-3`}>
         <Settings2 aria-hidden={true} className="h-4 w-4 shrink-0 text-fg-muted" />
         Manage<span className="sr-only"> {name}</span>
         <ChevronDown aria-hidden={true} className="h-4 w-4 shrink-0 text-fg-muted transition-transform group-open/manage:rotate-180" />
@@ -397,30 +485,25 @@ function ManageControls({
       <div className="mt-2 flex min-w-0 flex-col gap-5 border-s-2 border-line ps-4">
         <ReminderSetting record={record} editRecordAction={editRecordAction} />
         {record.kind === "receipt_warranty" ? <AttachControl record={record} attachFileAction={attachFileAction} /> : null}
-        <EditControl record={record} editRecordAction={editRecordAction} />
-        {deleteRecordAction ? (
-          <details>
-            <summary className={SUMMARY_CLASS}>Delete record</summary>
-            <p className="my-3 text-sm text-fg-muted">
-              Delete this record and all its attached files? This cannot be
-              undone.
-            </p>
-            <ActionForm action={deleteRecordAction}>
-              <input type="hidden" name="recordId" value={record.id} />
-              <input type="hidden" name="returnTab" value={RECORD_TABS[record.kind]} />
-              <FormSubmit variant="secondary" preserveFocus pendingLabel="Deleting record…">Delete record and files</FormSubmit>
-            </ActionForm>
-          </details>
-        ) : null}
+        <div className="flex min-w-0 flex-wrap items-start gap-2 border-t border-line pt-4">
+          <EditControl record={record} name={name} editRecordAction={editRecordAction} />
+          {deleteRecordAction ? <DeleteControl record={record} name={name} deleteRecordAction={deleteRecordAction} /> : null}
+        </div>
       </div>
     </details>
   );
 }
 
-// One record as a divider row: its name, due date and status, its other decrypted fields,
-// its reminder setting in words, its downloads (receipts) and the Manage disclosure. The
-// row keeps the `record-<id>` anchor (focusable, clear of the sticky header) that
-// reminder notifications and other pages link to.
+// A file size in megabytes, for the download links.
+function megabytes(bytes: number): string {
+  const mb = bytes / 1024 / 1024;
+  return mb < 0.1 ? "under 0.1 MB" : `${mb.toFixed(1)} MB`;
+}
+
+// One record as a divider row: its name, due date and status, its other decrypted fields
+// as labelled facts, its reminder setting in words, its downloads (receipts) and the Manage
+// disclosure. The row keeps the `record-<id>` anchor (focusable, clear of the sticky header)
+// that reminder notifications and other pages link to.
 function RecordRow({
   record,
   editRecordAction,
@@ -434,30 +517,27 @@ function RecordRow({
 }) {
   const { title, key: titleKey } = recordTitle(record.fields);
   const name = title || KIND_NOUNS[record.kind];
-  const otherFields = Object.entries(record.fields).filter(([key]) => key !== titleKey);
+  const facts = recordFacts(record.fields, titleKey);
   const reminders = reminderSummary(record.dueDate, record.reminderOffsets);
   const ReminderIcon = reminders.on ? Bell : BellOff;
+  const line = dueLine(record.dueDate, record.status);
   return (
     <li id={`record-${record.id}`} tabIndex={-1} className={`${LIST_ROW} scroll-mt-32`}>
-      <div className="flex min-w-0 flex-col gap-2">
+      <div className="flex min-w-0 flex-col gap-3">
         <div className="flex min-w-0 flex-col gap-0.5">
-          <p className="text-sm font-medium text-fg">{name}</p>
-          <p className="text-sm text-fg-muted">
-            {record.dueDate
-              ? `Due ${record.dueDate} · ${record.status}`
-              : record.status}
-          </p>
+          <p className="font-medium text-fg">{name}</p>
+          {line ? <p className="text-sm text-fg-muted">{line}</p> : null}
         </div>
 
-        {otherFields.length ? (
-          <dl className="grid min-w-0 grid-cols-1 gap-x-3 gap-y-1 text-sm sm:grid-cols-[minmax(0,1fr)_minmax(0,2fr)]">
-            {otherFields.map(([key, fieldValue]) => (
-              <React.Fragment key={key}>
+        {facts.length ? (
+          <dl className="grid min-w-0 max-w-xl grid-cols-1 gap-x-4 gap-y-1 text-sm sm:grid-cols-[minmax(7rem,11rem)_minmax(0,1fr)]">
+            {facts.map((fact) => (
+              <React.Fragment key={fact.key}>
                 <dt className="min-w-0 text-fg-muted [overflow-wrap:anywhere]">
-                  {key}
+                  {fact.label}
                 </dt>
                 <dd className="mb-2 min-w-0 text-fg [overflow-wrap:anywhere] sm:mb-0">
-                  {fieldValue}
+                  {fact.value}
                 </dd>
               </React.Fragment>
             ))}
@@ -475,10 +555,10 @@ function RecordRow({
               <li key={file.id}>
                 <a
                   href={`/api/receipts/${file.id}`}
-                  className="inline-flex min-h-11 items-center text-sm underline underline-offset-4 focus-visible:outline focus-visible:outline-2 focus-visible:outline-focus"
+                  className="inline-flex min-h-11 items-center text-sm font-medium text-fg underline underline-offset-4"
                 >
-                  Download attachment {index + 1} (
-                  {(file.size / 1024 / 1024).toFixed(2)} MiB)
+                  Download attachment {index + 1} ({megabytes(file.size)})
+                  <span className="sr-only"> for {name}</span>
                 </a>
               </li>
             ))}
@@ -515,11 +595,27 @@ function DueGroupTitle({ group, title }: { group: DueGroupKey; title: string }) 
   );
 }
 
-// A record tab's panel: its Add control (offered even with no records) and the records,
-// grouped by due date (only the groups that have records), soonest first.
+// What an empty record view says will appear there.
+const EMPTY_COPY: Record<RecordKind, { heading: string; description: string }> = {
+  subscription: {
+    heading: "No subscriptions yet.",
+    description: "Add the services you pay for regularly. You and your agents see each one here with its cost, due date and reminders.",
+  },
+  receipt_warranty: {
+    heading: "No receipts yet.",
+    description: "Add a purchase to keep its receipt, return-by date and warranty in one place.",
+  },
+  renewal_appointment: {
+    heading: "No renewals or appointments yet.",
+    description: "Add a licence, registration or appointment and Warthog reminds you before it's due.",
+  },
+};
+
+// A record tab's content: its Add control (offered even with no records), then the records
+// grouped by due date (only the groups that have records), soonest first, as sub-sections
+// of the records panel.
 function RecordPanel({
   kind,
-  heading,
   records,
   today,
   addRecordAction,
@@ -528,7 +624,6 @@ function RecordPanel({
   deleteRecordAction,
 }: {
   kind: RecordKind;
-  heading: string;
   records: ReadonlyArray<LifeAdminRecordView>;
   today: string;
   addRecordAction?: LifeAdminAction;
@@ -537,21 +632,16 @@ function RecordPanel({
   deleteRecordAction?: LifeAdminAction;
 }) {
   return (
-    <section className="flex flex-col gap-4">
-      <h2 className="text-lg font-semibold text-fg">{heading}</h2>
+    <>
       <AddControl kind={kind} addRecordAction={addRecordAction} />
       {records.length === 0 ? (
-        <EmptyState
-          heading="Nothing here yet"
-          description="When you add one it'll show here with its details and reminders."
-        />
+        <EmptyState variant="inline" icon={Inbox} heading={EMPTY_COPY[kind].heading} description={EMPTY_COPY[kind].description} />
       ) : (
-        <div className="flex flex-col gap-6">
+        <div className="flex min-w-0 flex-col">
           {groupRecordsByDue(records, today).map((group) => (
             <ListGroup
               key={group.key}
               id={`records-${kind}-${group.key}`}
-              level={3}
               title={<DueGroupTitle group={group.key} title={group.title} />}
               count={group.records.length}
             >
@@ -568,14 +658,15 @@ function RecordPanel({
           ))}
         </div>
       )}
-    </section>
+    </>
   );
 }
 
 // ─── the moving checklist ────────────────────────────────────────────────────────────
 
-// The tick-off control: a checkbox reflecting whether the item is done. LIVE (ticking
-// submits the page's tickOffAction) when supplied; otherwise DISABLED with a reason.
+// The tick-off control: a checkbox reflecting whether the item is done, named for its item.
+// LIVE (ticking submits the page's tickOffAction) when supplied; otherwise DISABLED with a
+// reason.
 function TickControl({
   item,
   tickOffAction,
@@ -583,6 +674,7 @@ function TickControl({
   item: ChecklistItemView;
   tickOffAction?: LifeAdminAction;
 }) {
+  const reasonId = React.useId();
   if (!tickOffAction) {
     return (
       <div className="flex flex-col gap-1">
@@ -592,10 +684,11 @@ function TickControl({
             className="size-4"
             defaultChecked={item.done}
             disabled
+            aria-describedby={reasonId}
           />
-          Done
+          Done<span className="sr-only">: {item.label}</span>
         </label>
-        <p className="text-xs text-fg-muted">
+        <p id={reasonId} className={HINT_CLASS}>
           Ticking items off isn't available just now.
         </p>
       </div>
@@ -615,7 +708,7 @@ function TickControl({
               event.currentTarget.form?.requestSubmit()
             }
           />
-          Done
+          Done<span className="sr-only">: {item.label}</span>
         </label>
       </PendingFormFields>
     </ActionForm>
@@ -651,7 +744,9 @@ function HandControl({
   return (
     <ActionForm action={handToAgentAction}>
       <input type="hidden" name="itemId" value={item.id} />
-      <FormSubmit variant="secondary" preserveFocus pendingLabel="Handing to an agent…">Hand to an agent</FormSubmit>
+      <FormSubmit variant="secondary" size="sm" pendingLabel="Handing over…">
+        Hand to an agent<span className="sr-only">: {item.label}</span>
+      </FormSubmit>
     </ActionForm>
   );
 }
@@ -666,9 +761,9 @@ function ChecklistItem({
   handToAgentAction?: LifeAdminAction;
 }) {
   return (
-    <li className="flex flex-col gap-2 rounded-card border border-line bg-surface p-4">
+    <li className={LIST_ROW}>
       <p className="text-fg">{item.label}</p>
-      <div className="flex flex-wrap items-center gap-4">
+      <div className="flex flex-wrap items-center gap-x-4 gap-y-2">
         <TickControl item={item} tickOffAction={tickOffAction} />
         <HandControl item={item} handToAgentAction={handToAgentAction} />
       </div>
@@ -685,16 +780,24 @@ function ChecklistPanel({
   tickOffAction?: LifeAdminAction;
   handToAgentAction?: LifeAdminAction;
 }) {
+  const done = checklist.filter((item) => item.done).length;
   return (
-    <section className="flex flex-col gap-4">
-      <h2 className="text-lg font-semibold text-fg">Moving checklist</h2>
+    <>
+      {checklist.length === 0 ? null : (
+        <p className={HINT_CLASS}>
+          {`${done} of ${checklist.length} done. Tick items off, or hand one to an agent to do for you.`}
+        </p>
+      )}
       {checklist.length === 0 ? (
         <EmptyState
-          heading="No checklist items yet"
-          description="Your moving checklist will show here, each item ready to tick off or hand to an agent."
+          variant="inline"
+          icon={ListChecks}
+          heading="No moving checklist yet."
+          description="It appears when you add an upcoming address in About you, listing the places that still have your old one."
+          action={<ButtonLink href="/vault" size="sm">Go to About you</ButtonLink>}
         />
       ) : (
-        <ul className="flex flex-col gap-3">
+        <ul role="list" className="flex min-w-0 flex-col">
           {checklist.map((item) => (
             <ChecklistItem
               key={item.id}
@@ -705,7 +808,7 @@ function ChecklistPanel({
           ))}
         </ul>
       )}
-    </section>
+    </>
   );
 }
 
@@ -718,6 +821,10 @@ function counted(label: string, count: number): string {
   return `${label} (${count})`;
 }
 
+// The records half of Life admin: one bounded panel whose top row is the record-kind tab
+// row (scrolling in one line on phones, the selected tab kept in view) and whose body is
+// the selected kind's records. Everything stays mounted, so a half-typed record survives a
+// tab switch.
 export function LifeAdminView({
   today,
   subscriptions,
@@ -740,65 +847,43 @@ export function LifeAdminView({
     deleteRecordAction,
   };
   return (
-    <div className="wh-page flex flex-col gap-6">
-      <h1 className="text-2xl font-semibold tracking-tight text-fg">
-        Life admin
-      </h1>
-      <ViewPanels
-        label="Life admin sections"
-        parameter="tab"
-        initialTab={initialTab}
-        tabs={[
-          {
-            key: "subscriptions",
-            label: counted("Subscriptions", subscriptions.length),
-            content: (
-              <RecordPanel
-                kind="subscription"
-                heading="Subscriptions"
-                records={subscriptions}
-                {...recordActions}
-              />
-            ),
-          },
-          {
-            key: "receipts",
-            label: counted("Receipts & warranties", receipts.length),
-            content: (
-              <RecordPanel
-                kind="receipt_warranty"
-                heading="Receipts & warranties"
-                records={receipts}
-                {...recordActions}
-              />
-            ),
-          },
-          {
-            key: "renewals",
-            label: counted("Renewals & appointments", renewals.length),
-            content: (
-              <RecordPanel
-                kind="renewal_appointment"
-                heading="Renewals & appointments"
-                records={renewals}
-                {...recordActions}
-              />
-            ),
-          },
-          {
-            key: "checklist",
-            label: counted("Moving checklist", checklist.length),
-            content: (
-              <ChecklistPanel
-                checklist={checklist}
-                tickOffAction={tickOffAction}
-                handToAgentAction={handToAgentAction}
-              />
-            ),
-          },
-        ]}
-      />
-    </div>
+    <section aria-label="Records and reminders" className="wh-panel wh-records-panel">
+      <div className="wh-panel-body flex min-w-0 flex-col gap-4">
+        <ViewPanels
+          label="Record types"
+          parameter="tab"
+          initialTab={initialTab}
+          tabs={[
+            {
+              key: "subscriptions",
+              label: counted("Subscriptions", subscriptions.length),
+              content: <RecordPanel kind="subscription" records={subscriptions} {...recordActions} />,
+            },
+            {
+              key: "receipts",
+              label: counted("Receipts & warranties", receipts.length),
+              content: <RecordPanel kind="receipt_warranty" records={receipts} {...recordActions} />,
+            },
+            {
+              key: "renewals",
+              label: counted("Renewals & appointments", renewals.length),
+              content: <RecordPanel kind="renewal_appointment" records={renewals} {...recordActions} />,
+            },
+            {
+              key: "checklist",
+              label: counted("Moving checklist", checklist.length),
+              content: (
+                <ChecklistPanel
+                  checklist={checklist}
+                  tickOffAction={tickOffAction}
+                  handToAgentAction={handToAgentAction}
+                />
+              ),
+            },
+          ]}
+        />
+      </div>
+    </section>
   );
 }
 

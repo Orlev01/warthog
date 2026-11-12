@@ -46,7 +46,9 @@ operation completes or show raw exception text to the user.
   Use `Notice announce={false}` for static explanatory help that is not a new
   action outcome; it remains visible without an unnecessary live-region role.
 - The shared `Toast` takes `message` and `onDismiss`, keeps its polite announcer
-  mounted, and deliberately has no auto-dismiss timer. Its arrival does not steal
+  mounted and has no auto-dismiss timer by default; `CopyButton` opts into a short
+  one for routine copies, while a message that asks the member to act stays until
+  dismissed. Escape dismisses it. Its arrival does not steal
   focus; copy-toast dismissal returns focus to Copy. Preserve wrapping, mobile
   viewport/safe-area clearance and reduced-motion behavior. Essential recovery
   must remain available elsewhere after dismissal.

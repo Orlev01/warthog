@@ -22,7 +22,7 @@
 //
 //   type SetupSignals = {        // account state; each flag may be absent
 //     notificationsEnabled?: boolean;   // "Get notified" done
-//     identityAdded?: boolean;          // "About you" done
+//     identityAdded?: boolean;          // "Add your details" done
 //     cardAdded?: boolean;              // "Add a card" done   (named by the task)
 //     serviceConnected?: boolean;       // "Connect a service" done
 //     agentConnected?: boolean;         // "Connect an agent" done (named by the task)
@@ -31,12 +31,13 @@
 //   type SetupChecklistItem = { label: string; href: string; done: boolean };
 //
 //   computeSetupChecklist(signals: SetupSignals): SetupChecklistItem[]
-//     — returns EXACTLY the five first-run items, in documented order:
-//         Get notified      -> /settings/notifications   (notificationsEnabled)
-//         About you         -> /vault                    (identityAdded)
-//         Add a card        -> /vault/cards               (cardAdded)
+//     — returns EXACTLY the five first-run items, in documented order (UI/UX pass,
+//       newcomer-01: the step that makes Warthog work first, the optional card last):
+//         Connect an agent  -> /agents/connect            (agentConnected)
 //         Connect a service -> /connectors                (serviceConnected)
-//         Connect an agent  -> /agents                    (agentConnected)
+//         Add your details  -> /vault                    (identityAdded)
+//         Get notified      -> /settings/notifications   (notificationsEnabled)
+//         Add a card        -> /vault/cards               (cardAdded)
 //       Each item keeps its label and href regardless of signals; only `done`
 //       varies. An item is done IFF its own signal is present/truthy — so with
 //       every signal absent all five are not done, and e.g. agentConnected
@@ -76,11 +77,11 @@ const EXPECTED: ReadonlyArray<{
   href: string;
   signal: keyof SetupSignals;
 }> = [
-  { label: "Get notified", href: "/settings/notifications", signal: "notificationsEnabled" },
-  { label: "About you", href: "/vault", signal: "identityAdded" },
-  { label: "Add a card", href: "/vault/cards", signal: "cardAdded" },
+  { label: "Connect an agent", href: "/agents/connect", signal: "agentConnected" },
   { label: "Connect a service", href: "/connectors", signal: "serviceConnected" },
-  { label: "Connect an agent", href: "/agents", signal: "agentConnected" },
+  { label: "Add your details", href: "/vault", signal: "identityAdded" },
+  { label: "Get notified", href: "/settings/notifications", signal: "notificationsEnabled" },
+  { label: "Add a card", href: "/vault/cards", signal: "cardAdded" },
 ];
 
 function norm(s: string | undefined): string {
@@ -118,7 +119,7 @@ test("the five items carry their documented labels and links, in order", () => {
   assert.deepEqual(
     items.map((i) => i.href),
     EXPECTED.map((e) => e.href),
-    "the five items must link to /settings/notifications, /vault, /vault/cards, /connectors, /agents, in that order",
+    "the five items must link to /agents/connect, /connectors, /vault, /settings/notifications, /vault/cards, in that order (connecting an agent first; the optional card last)",
   );
   // Each item keeps its documented label, in the same order.
   EXPECTED.forEach((e, i) => {
@@ -196,7 +197,7 @@ test("each present signal marks ONLY its own item done", () => {
 
 test("agentConnected marks Connect an agent done (and nothing else)", () => {
   const items = run({ agentConnected: true });
-  assert.equal(byHref(items, "/agents").done, true, "agentConnected must mark Connect an agent done");
+  assert.equal(byHref(items, "/agents/connect").done, true, "agentConnected must mark Connect an agent done");
   assert.equal(byHref(items, "/vault/cards").done, false, "agentConnected must not mark Add a card done");
   assert.equal(
     byHref(items, "/settings/notifications").done,
@@ -208,7 +209,7 @@ test("agentConnected marks Connect an agent done (and nothing else)", () => {
 test("cardAdded marks Add a card done (and nothing else)", () => {
   const items = run({ cardAdded: true });
   assert.equal(byHref(items, "/vault/cards").done, true, "cardAdded must mark Add a card done");
-  assert.equal(byHref(items, "/agents").done, false, "cardAdded must not mark Connect an agent done");
+  assert.equal(byHref(items, "/agents/connect").done, false, "cardAdded must not mark Connect an agent done");
   assert.equal(byHref(items, "/connectors").done, false, "cardAdded must not mark Connect a service done");
 });
 

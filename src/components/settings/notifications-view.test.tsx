@@ -79,13 +79,29 @@ import { NotificationsView } from "./notifications-view";
 
 test("SMS-off settings show availability without enrolment or opt-in controls", () => {
   const html = renderToStaticMarkup(<NotificationsView devices={[{ id: "device" }]}
-    numbers={[{ id: "mobile", number: "+61412345678", verified: false }]} smsEnabled={false} smsFallback={true} />);
-  assert.match(html, /SMS is currently unavailable/);
+    numbers={[{ id: "mobile", number: "+61412345678", verified: false }]} smsEnabled={false} smsFallback={true} smsCountries={["AU"]} />);
+  assert.match(html, /Text message alerts aren(&#x27;|')t available yet/);
   for (const name of ["number", "code", "smsFallback"]) assert.ok(!html.includes(`name="${name}"`));
   assert.ok(!html.includes("+61412345678") && !html.includes("Send code"));
   assert.match(html, /name="emailFallback"/);
   assert.match(html, /Register this device/);
   assert.match(html, /Send a test notification/);
+});
+
+// content-30 — with no SMS destination enabled, every text would be refused, so the page
+// shows one plain line instead of the number form, the SMS switch and their legal text —
+// and a saved SMS-alert choice is carried through unchanged rather than silently cleared.
+test("with no SMS destination enabled, the number form, SMS switch and SMS terms are replaced by one line", () => {
+  const html = renderToStaticMarkup(<NotificationsView devices={[{ id: "device" }]}
+    numbers={[{ id: "mobile", number: "+61412345678", verified: true }]} smsFallback={true} smsCountries={[]} />);
+  assert.match(html, /Text message alerts aren(&#x27;|')t available yet/);
+  assert.ok(!html.includes('name="number"') && !html.includes("Send code") && !html.includes("+61412345678"));
+  assert.ok(!/type="checkbox"[^>]*name="smsFallback"/.test(html), "no SMS switch is offered");
+  assert.ok(!/Reply STOP/.test(html), "no SMS terms for a channel that can't be used");
+  assert.match(html, /<input type="hidden" name="smsFallback" value="on"\/>/, "a saved SMS-alert choice is kept");
+  assert.match(html, /name="emailFallback"/);
+  const off = renderToStaticMarkup(<NotificationsView devices={[]} numbers={[]} smsCountries={[]} />);
+  assert.ok(!off.includes('name="smsFallback"'), "nothing to keep when SMS alerts were never on");
 });
 
 // --- the prop shape this task introduces (described here as the contract) -------
@@ -98,6 +114,7 @@ type NotificationsViewProps = {
   numbers: ReadonlyArray<NotificationsViewNumber>;
   emailFallback?: boolean;
   fallbackDelayMinutes?: number;
+  smsCountries?: readonly string[];
 };
 
 // --- fixtures -------------------------------------------------------------------
@@ -124,6 +141,8 @@ function base(overrides: Partial<NotificationsViewProps> = {}): NotificationsVie
   return {
     devices: [DEVICE],
     numbers: [VERIFIED_NUMBER, UNVERIFIED_NUMBER],
+    // one enabled SMS destination, so the number controls are offered (content-30)
+    smsCountries: ["AU"],
     // emailFallback + fallbackDelayMinutes intentionally omitted → the view's own
     // defaults (on / 2 minutes), which several tests pin.
     ...overrides,

@@ -17,7 +17,7 @@ import { test } from "node:test";
 import assert from "node:assert/strict";
 import { renderToStaticMarkup } from "react-dom/server";
 
-import { createConfirmItsYou, ConfirmItsYou } from "./confirm-its-you";
+import { createConfirmItsYou, ConfirmItsYou, confirmItsYouExplanation } from "./confirm-its-you";
 
 type Sent = { url: string; method: string; body: unknown };
 
@@ -168,4 +168,33 @@ test("the shared confirmation view offers a labelled authenticator alternative",
   assert.match(markup, /Authenticator app code/);
   assert.match(markup, /autocomplete="one-time-code"/i);
   assert.match(markup, /Confirm with authenticator app/);
+});
+
+// ─── UI/UX pass: only the ways this member can confirm (interaction-16, newcomer-16) ────
+
+test("a member without an authenticator is not offered a code they cannot get", () => {
+  const markup = renderToStaticMarkup(<ConfirmItsYou authenticator={false} />);
+  assert.doesNotMatch(markup, /Authenticator app code|Confirm with authenticator app|authenticator/i);
+  assert.match(markup, /Confirm it(&#x27;|')s you/);
+  assert.match(markup, /Use your passkey\./);
+});
+
+test("an authenticator-only member gets the code form as the main action and no passkey button", () => {
+  const markup = renderToStaticMarkup(<ConfirmItsYou passkey={false} authenticator={true} />);
+  assert.match(markup, /Authenticator app code/);
+  assert.doesNotMatch(markup, />Confirm it(&#x27;|')s you</);
+  assert.match(markup, /<button[^>]*type="submit"[^>]*bg-accent/);
+});
+
+test("when the screen doesn't know, both ways stay available (an enrolled factor must be usable)", () => {
+  const markup = renderToStaticMarkup(<ConfirmItsYou passkey={false} authenticator={false} />);
+  assert.match(markup, /Authenticator app code/);
+  assert.match(markup, /Confirm it(&#x27;|')s you/);
+  assert.equal(confirmItsYouExplanation({ passkey: true, authenticator: true }), "We need to check it's really you before this goes ahead. Use your passkey or a code from your authenticator app.");
+});
+
+test("the code field is short and the controls keep focus while checking (never natively disabled)", () => {
+  const markup = renderToStaticMarkup(<ConfirmItsYou />);
+  assert.match(markup, /sm:max-w-48/);
+  assert.doesNotMatch(markup, /\sdisabled=""/);
 });

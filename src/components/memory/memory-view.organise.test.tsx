@@ -41,9 +41,9 @@ const FILTERS: NonNullable<MemoryViewProps["filters"]> = {
   scope: null,
   source: null,
   scopeOptions: [
-    { value: null, label: "All scopes", count: 4 },
+    { value: null, label: "All", count: 4 },
     { value: "shared", label: "Shared", count: 2 },
-    { value: "kept", label: "Kept", count: 2 },
+    { value: "kept", label: "Private", count: 2 },
   ],
   sourceOptions: [
     { value: null, label: "Anyone", count: 4 },
@@ -93,27 +93,27 @@ test("a heading with no memories is left out", () => {
   assert.ok(!markup.includes('id="memories-week-heading"'));
 });
 
-test("scope and saved-by filter links mark the current choice, show counts and keep the search", () => {
+test("sharing and saved-by filter links mark the current choice, show counts and keep the search", () => {
   const markup = render({
     query: "seat",
     filters: { ...FILTERS, scope: "kept" },
   });
-  assert.match(markup, /<nav aria-label="Filter by scope"/);
+  assert.match(markup, /<nav aria-label="Filter by sharing"/);
   assert.match(markup, /<nav aria-label="Filter by who saved it"/);
-  assert.match(markup, /href="\/memory\?q=seat&amp;scope=kept" aria-current="page"/, "Kept is current and keeps the search");
-  assert.match(markup, /href="\/memory\?q=seat"[^>]*>All scopes/, "All scopes removes only the scope");
+  assert.match(markup, /href="\/memory\?q=seat&amp;scope=kept" aria-current="page"/, "Private is current and keeps the search");
+  assert.match(markup, /href="\/memory\?q=seat"[^>]*>All</, "All removes only the sharing filter");
   assert.match(markup, /href="\/memory\?q=seat&amp;scope=kept&amp;source=you"[^>]*>You/, "a saved-by link keeps scope and search");
   assert.match(markup, /href="\/memory\?q=seat&amp;scope=kept&amp;source=agent-claude"[^>]*>Claude/);
-  assert.match(markup, />Kept<span[^>]*>2<\/span>/, "the count is shown with its option");
+  assert.match(markup, />Private<span[^>]*>2<\/span>/, "the count is shown with its option");
 });
 
 test("applied filters are removable chips with a Clear all, and the search form keeps them", () => {
   const markup = render({ query: "seat", filters: { ...FILTERS, scope: "kept", source: "agent-claude" } });
   const t = text(markup);
-  assert.ok(t.includes("Remove filter Scope: Kept"));
+  assert.ok(t.includes("Remove filter Sharing: Private"));
   assert.ok(t.includes("Remove filter Saved by: Claude"));
   assert.ok(t.includes("Remove filter Search: “seat”"));
-  assert.match(markup, /href="\/memory\?q=seat&amp;source=agent-claude"[^>]*><span class="sr-only">Remove filter <\/span>Scope: Kept/);
+  assert.match(markup, /href="\/memory\?q=seat&amp;source=agent-claude"[^>]*><span class="sr-only">Remove filter <\/span>Sharing: Private/);
   assert.match(markup, /href="\/memory"[^>]*>Clear all filters/);
   const search = markup.match(/<form\b[^>]*method="get"[^>]*>[\s\S]*?<\/form>/)?.[0] ?? "";
   assert.match(search, /<input type="hidden" name="scope" value="kept"/);
@@ -153,4 +153,40 @@ test("Delete asks for confirmation first: the delete form sits inside a disclosu
   assert.match(confirm!, /<form[^>]*>[\s\S]*name="id" value="mem-today"[\s\S]*Delete memory[\s\S]*<\/form>/);
   const outside = markup.replace(/<details\b[\s\S]*?<\/details>/g, "");
   assert.ok(!/<button[^>]*>[\s\S]{0,200}Delete/.test(outside), "no one-click Delete button outside the confirmation");
+});
+
+test("a memory's three controls share one action row; Edit and Delete open underneath it", () => {
+  const markup = render({ memories: [TODAY] });
+  const row = markup.match(/<div class="flex min-w-0 flex-wrap items-center gap-2">([\s\S]*)<\/div><\/div><\/li>/)?.[1] ?? "";
+  assert.match(row, /Make private/, "the sharing control is in the row");
+  assert.equal((row.match(/<details\b/g) ?? []).length, 2, "Edit and Delete disclosures are in the same row");
+  assert.match(row, /<summary[^>]*>[\s\S]*?Edit<\/summary>/);
+  assert.match(row, /<summary[^>]*class="[^"]*border-danger[^"]*"[^>]*>[\s\S]*?Delete<\/summary>/, "Delete is styled as destructive");
+});
+
+test("first run: no search or filters around an empty list, just the add panel and the empty state", () => {
+  const markup = render({ memories: [], filters: { ...FILTERS, scopeOptions: FILTERS.scopeOptions.map((o) => ({ ...o, count: 0 })) } });
+  assert.ok(!markup.includes('aria-label="Find memories"'), "no toolbar until there is something to find");
+  assert.ok(markup.includes("Add a memory"));
+  assert.ok(text(markup).includes("No memories yet"));
+  assert.ok(render().includes('aria-label="Find memories"'), "the toolbar returns once there are memories");
+});
+
+test("every form tells the page which search, filters and page to return to", () => {
+  const markup = render({ memories: [TODAY], query: "seat", filters: { ...FILTERS, scope: "shared" }, cursor: "abc", hasPreviousPage: true, rescopeAction: noop, editAction: noop, addAction: noop });
+  const forms = [...markup.matchAll(/<form\b(?![^>]*method="get")[^>]*>([\s\S]*?)<\/form>/g)].map((m) => m[1]!);
+  assert.ok(forms.length >= 4, "add, rescope, edit and delete forms");
+  for (const form of forms) {
+    assert.match(form, /name="return_q" value="seat"/);
+    assert.match(form, /name="return_scope" value="shared"/);
+    assert.match(form, /name="return_cursor" value="abc"/);
+  }
+});
+
+test("the outcome notice sits straight after the heading band", () => {
+  const markup = render({ notice: { tone: "success", text: "Memory deleted." } });
+  const heading = markup.indexOf("</header>");
+  const notice = markup.indexOf("Memory deleted.");
+  const add = markup.indexOf("Add a memory");
+  assert.ok(heading > 0 && notice > heading && notice < add, "heading, then notice, then the page");
 });

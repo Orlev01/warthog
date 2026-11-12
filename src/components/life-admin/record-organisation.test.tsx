@@ -122,7 +122,7 @@ test("recordTitle prefers a name or title field, else the first filled-in field"
 
 test("a record tab groups its records by due date with a count on each group, soonest first", () => {
   const markup = render();
-  assert.deepEqual(headings(markup, 3), ["Overdue", "Next 30 days", "Later", "No due date"]);
+  assert.deepEqual(headings(markup, 2), ["Overdue", "Next 30 days", "Later", "No due date"]);
   assert.match(text(markup), /Overdue 1 .*Next 30 days 2 .*Later 1 .*No due date 1/);
   const order = ["over", "today", "boundary", "later", "undated"].map((id) => markup.indexOf(`id="record-${id}"`));
   assert.deepEqual([...order].sort((a, b) => a - b), order, "rows render in due order");
@@ -131,13 +131,14 @@ test("a record tab groups its records by due date with a count on each group, so
 
 test("only groups with records render", () => {
   const markup = render({ subscriptions: [UNDATED, DUE_TODAY] });
-  assert.deepEqual(headings(markup, 3), ["Next 30 days", "No due date"]);
+  assert.deepEqual(headings(markup, 2), ["Next 30 days", "No due date"]);
 });
 
 test("an empty tab keeps its empty state and its Add control", () => {
   const markup = render({ subscriptions: [] });
-  assert.deepEqual(headings(markup, 3), []);
-  assert.match(text(markup), /Nothing here yet/);
+  assert.deepEqual(headings(markup, 2), []);
+  // UI/UX pass: the empty view says what will appear there, inside the records panel.
+  assert.match(text(markup), /No subscriptions yet\./);
   assert.match(text(markup), /Add a subscription/);
 });
 
@@ -153,11 +154,13 @@ test("the category tabs carry their counts", () => {
   assert.deepEqual(tabs, ["Subscriptions (5)", "Receipts & warranties (1)", "Renewals & appointments (0)", "Moving checklist (2)"]);
 });
 
-test("the view has exactly one h1, 'Life admin', in the house style", () => {
-  const h1s = [...render().matchAll(/<h1\b([^>]*)>([\s\S]*?)<\/h1>/g)];
-  assert.equal(h1s.length, 1);
-  assert.equal(text(h1s[0]![2]!), "Life admin");
-  assert.match(h1s[0]![1]!, /text-2xl font-semibold tracking-tight text-fg/);
+test("the records view leaves the page title to the Life admin heading band and sits in one bounded panel", () => {
+  // UI/UX pass: the h1 lives in LifeAdminScreen's WorkspaceHeading (life-admin-screen.test.tsx);
+  // the records view is one panel whose record-kind tabs are its ruled top row.
+  const markup = render();
+  assert.doesNotMatch(markup, /<h1\b/);
+  assert.match(markup, /^<section aria-label="Records and reminders" class="wh-panel/);
+  assert.match(markup, /role="tablist" aria-label="Record types"/);
 });
 
 test("each row leads with its name, due date and a reminder summary; its controls sit behind one Manage disclosure", () => {
@@ -181,10 +184,11 @@ test("each row leads with its name, due date and a reminder summary; its control
     assert.match(inside, /name="setting" value="reminder"/);
     assert.match(inside, /name="reminderOffsets"/);
     assert.match(inside, /name="recordFormVersion" value="2"/, "the Edit form");
-    assert.match(text(inside), /Delete this record and all its attached files\? This cannot be undone\./, "the delete confirmation step is kept");
+    assert.match(text(inside), /Delete this record and all its attached files\? This can't be undone\./, "the delete confirmation step is kept");
     assert.match(text(inside), /Delete record and files/);
   }
-  assert.match(text(rowOf(markup, "today")), new RegExp(`Due ${TODAY} · active`));
+  // The due date and status read in words (record-format.ts), not as "2026-11-12 · active".
+  assert.match(text(rowOf(markup, "today")), /Due 12 Nov 2026 · Active/);
 });
 
 test("a receipt's attach control and its downloads keep their places: attach inside Manage, downloads visible", () => {

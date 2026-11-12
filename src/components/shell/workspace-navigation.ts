@@ -9,10 +9,16 @@ const destinations = [
   ...(PORTAL_NAV.find((n) => n.key === "more")?.children ?? []),
 ];
 const item = (key: string) => destinations.find((n) => n.key === key)!;
-export const NAV_GROUPS: readonly {
-  label: string;
-  items: readonly NavNode[];
-}[] = [
+// Sidebar groups. Every group name is distinct; "Resources" belongs to an agent's own
+// resources (AGENT_GROUPS below), so the account-level group is "Account resources" and the
+// help group is "Help". A one-item group whose label would only repeat its item
+// (`hideLabel`) keeps the label as the group's accessible name but shows a divider instead.
+export type NavGroup = {
+  readonly label: string;
+  readonly items: readonly NavNode[];
+  readonly hideLabel?: boolean;
+};
+export const NAV_GROUPS: readonly NavGroup[] = [
   { label: "Workspace", items: ["home", "agents", "inbox"].map(item) },
   {
     label: "Account resources",
@@ -20,8 +26,45 @@ export const NAV_GROUPS: readonly {
   },
   { label: "Insights", items: ["activity", "spending"].map(item) },
   { label: "Manage", items: ["rules", "household", "settings"].map(item) },
-  { label: "Resources", items: ["help"].map(item) },
+  { label: "Help", items: ["help"].map(item), hideLabel: true },
 ];
+
+// The sidebar group that owns a section key (for the breadcrumb and page eyebrows).
+export function navGroupFor(section: string): NavGroup | undefined {
+  return NAV_GROUPS.find((g) => g.items.some((i) => i.key === section));
+}
+
+// One page width per section family, so sibling route tabs never move the page's left
+// edge. AppShell publishes it as `data-measure` on the main column; every .wh-page and the
+// chrome above it (top bar, route tabs, scope strip) read the same measure, so they share
+// one left and right edge at every width.
+//   wide    1216px  dashboards, timelines and catalogues: Home, Activity, Spending, Connectors
+//   reading  896px  lists and detail pages: Agents (all), Inbox, Vault, Memory, Skills,
+//                   Life admin, Rules, Household, More, Connectors › API key
+//   form     768px  focused settings forms: every Settings page
+export type PageMeasure = "wide" | "reading" | "form";
+const SECTION_MEASURE: Readonly<Record<string, PageMeasure>> = {
+  home: "wide",
+  activity: "wide",
+  spending: "wide",
+  connectors: "wide",
+  agents: "reading",
+  inbox: "reading",
+  vault: "reading",
+  memory: "reading",
+  skills: "reading",
+  "life-admin": "reading",
+  rules: "reading",
+  household: "reading",
+  more: "reading",
+  settings: "form",
+};
+export function pageMeasureFor(pathname: string): PageMeasure | undefined {
+  const path = pathname.replace(/\/$/, "") || "/";
+  if (path === "/connectors/key" || path.startsWith("/connectors/key/")) return "reading";
+  const section = activeSectionForPath(path);
+  return section ? SECTION_MEASURE[section] : undefined;
+}
 
 export type NavigationLink = { label: string; href: string; active: boolean };
 export function sectionNavigation(pathname: string): {
@@ -45,14 +88,14 @@ export function sectionNavigation(pathname: string): {
   } else if (section === "vault") {
     label = "Vault";
     links = [
-      ["Identity", "/vault"],
+      ["About you", "/vault"],
       ["Cards", "/vault/cards"],
     ];
   } else if (section === "memory" || section === "skills") {
-    label = "Knowledge";
+    label = "Memory and skills";
     links = [
       ["Memory", "/memory"],
-      ["Skills & plugins", "/skills"],
+      ["Skills", "/skills"],
     ];
   } else if (section === "activity" || section === "spending") {
     label = "Insights";
@@ -87,7 +130,7 @@ const AGENT_GROUPS: readonly {
   { label: "Overview", sections: ["overview"] },
   { label: "Resources", sections: ["connectors", "vault", "skills", "memory"] },
   { label: "Controls", sections: ["spending", "rules", "settings"] },
-  { label: "Audit log", sections: ["activity"] },
+  { label: "Activity", sections: ["activity"] },
 ];
 export function agentNavigation(id: string, section: AgentSection) {
   const group = AGENT_GROUPS.find((g) => g.sections.includes(section))!;

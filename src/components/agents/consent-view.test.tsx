@@ -294,13 +294,13 @@ type BoolCap =
   | "learningSharing";
 
 const CAPS: Array<{ key: BoolCap; re: RegExp; label: string }> = [
-  { key: "lowTierProfile", re: /profile/i, label: "low-tier profile" },
+  { key: "lowTierProfile", re: /everyday details/i, label: "everyday details" },
   { key: "sharedMemoryRead", re: /shared memor/i, label: "shared-memory read" },
   { key: "ownMemorySave", re: /own memor|save[^.|]*memor/i, label: "its own memories" },
   { key: "tasks", re: /tasks?/i, label: "tasks" },
   { key: "lifeAdmin", re: /life[\s-]?admin/i, label: "life-admin" },
   // Always opt-in — OFF in every starting set (Standard/Minimal/Custom alike).
-  { key: "highTier", re: /protected identity/i, label: "protected identity requests" },
+  { key: "highTier", re: /request protected details/i, label: "protected details requests" },
   { key: "card", re: /\bcard/i, label: "card requests" },
   { key: "learningSharing", re: /what it learns|shares? what|learns?\b/i, label: "sharing what it learns" },
 ];
@@ -442,16 +442,26 @@ test("shows every requested scope in plain words", () => {
   }
 });
 
-test("renders an Approve and a Refuse control, both live", () => {
+// The refusal reads "Deny", the product's one word for saying no (canonical terms, content-12).
+test("renders an Approve and a Deny control, both live", () => {
   const buttons = actionableButtons(render(base()));
   assert.ok(
     buttons.some((b) => /approve/i.test(b)),
     `a live Approve control must be present; buttons=${JSON.stringify(buttons)}`,
   );
   assert.ok(
-    buttons.some((b) => /refuse/i.test(b)),
-    `a live Refuse control must be present; buttons=${JSON.stringify(buttons)}`,
+    buttons.some((b) => /^deny$/i.test(b.trim())),
+    `a live Deny control must be present; buttons=${JSON.stringify(buttons)}`,
   );
+});
+
+// public-20: an unrecognised callback is named by its host only in the destination inset.
+test("an unrecognised platform is called 'an agent', never titled after its callback host", () => {
+  const markup = render(base({ platform: "relay.example-platform.com", redirect: { host: "relay.example-platform.com:8443", verified: false } }));
+  assert.match(markup, /<h1>Connect an agent<\/h1>/);
+  assert.match(markup, /What this agent is asking for/);
+  assert.match(markup, /rename your account on that platform/);
+  assert.match(markup, /relay\.example-platform\.com:8443/, "the host still shows in the destination inset");
 });
 
 // === AC2 — Verified-platform badge vs. a prominent other host ===================
@@ -541,8 +551,9 @@ test("A2: every adjustable toggle on the live form has a name the decision reads
 test("included connection behavior is explained without pretend permission switches", () => {
   const markup = liveRender();
   const text = visibleText(markup);
-  assert.match(text, /preferences and skills assigned to this agent/i);
-  assert.match(text, /records activity through this connection/i);
+  // content-56: one plain line for what every connection includes.
+  assert.match(text, /your preferences and the skills you.ve given it/i);
+  assert.match(text, /Warthog records what it does/i);
   assert.ok(!namedControls(markup).some(control => control.disabled), "included behavior is prose, not dead switches");
   const memoryWrite = namedControls(markup).find(control => control.name === "memoryWrite");
   assert.equal(memoryWrite?.type, "checkbox");

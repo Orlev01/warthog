@@ -28,6 +28,10 @@
   --wh-tint: light-dark(#4f46e5, #a5a1ff);
   --wh-info: light-dark(#0b6bcb, #6cb4ff);
   --wh-radius: 0.75rem;
+  /* Radius tokens: field 8px, card 12px (--wh-radius), inset 10px, raised workspace panel 14px. */
+  --wh-radius-field: 0.5rem;
+  --wh-radius-inset: 0.625rem;
+  --wh-radius-panel: 0.875rem;
   --wh-overlay: rgb(0 0 0 / 40%);
   color-scheme: light;
 }
@@ -97,7 +101,8 @@
   --color-tint: var(--wh-tint);
   --color-info: var(--wh-info);
   --radius-card: var(--wh-radius);
-  --radius-field: 0.5rem;
+  --radius-field: var(--wh-radius-field);
+  --radius-panel: var(--wh-radius-panel);
   --font-sans: var(--font-inter), ui-sans-serif, system-ui, sans-serif;
 }
 
@@ -730,7 +735,9 @@ html:has(.wh-landing) { scroll-padding-top: calc(128px + env(safe-area-inset-top
 .wh-permission-editor > summary::-webkit-details-marker, .wh-permission-help > summary::-webkit-details-marker { display: none; }
 .wh-permission-editor[open] > summary > svg:last-child, .wh-permission-help[open] > summary > svg:last-child { transform: rotate(180deg); }
 .wh-permission-editor-body { padding: 0 16px 20px; }
-.wh-permission-group { min-width: 0; margin-top: 24px; }
+.wh-permission-group { min-width: 0; }
+/* The consent flow's stacked fieldsets; workspace permission panels take their parent's gap. */
+:not(.wh-permissions) > .wh-permission-group { margin-top: 24px; }
 .wh-permission-group > legend { padding-bottom: 8px; font-size: 15px; font-weight: 600; }
 .wh-permission-row { padding: 12px 0; border-bottom: 1px solid var(--wh-line); }
 .wh-permission-row:last-child { border-bottom: 0; }

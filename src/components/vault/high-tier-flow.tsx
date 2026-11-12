@@ -1,7 +1,7 @@
 "use client";
 
 import * as React from "react";
-import { ArrowUp, Plus } from "lucide-react";
+import { Lock, Plus } from "lucide-react";
 
 import { Button } from "@/components/ui/button";
 import { Card } from "@/components/ui/card";
@@ -154,6 +154,8 @@ const DEFAULT_TYPE: HighTierFieldType = "custom";
 const SETUP_FAILED_COPY =
   "We couldn't unlock your vault on this device, so your detail wasn't saved. Check your passkey and try again.";
 const SAVE_FAILED_COPY = "We couldn't save your detail just now. Please try again.";
+const LABEL_MISSING_COPY = "Say what this detail is, for example Passport.";
+const VALUE_MISSING_COPY = "Type the detail you want to protect.";
 const PHRASE_FAILED_COPY =
   "We couldn't save your recovery phrase, so your detail wasn't saved. Please try again.";
 
@@ -231,6 +233,18 @@ export function createHighTierFlow(deps: HighTierFlowDeps): HighTierController {
 
   async function submit(): Promise<void> {
     if (state.status === "working" || state.status === "phrase") return; // no double confirm
+    // A new detail needs a name and a value (spaces alone don't count); say which, before
+    // the vault is unlocked or anything is sealed.
+    if (deps.mode === "add") {
+      if (state.label.trim() === "") {
+        set({ status: "error", error: LABEL_MISSING_COPY });
+        return;
+      }
+      if (state.value.trim() === "") {
+        set({ status: "error", error: VALUE_MISSING_COPY });
+        return;
+      }
+    }
     set({ status: "working", error: undefined });
 
     // 1. Unlock (or set up) the vault key on this device. A cancelled prompt, an
@@ -300,11 +314,13 @@ const defaultStartAuthentication = async (opts: {
 
 // ─── copy (plain Australian English; no protocol jargon) ───────────────────────────────
 
-// The sensitive-moment explainer: HOW the detail is protected (locked on the device,
-// never readable by Warthog) and WHO can ever read it (only the person, only when they
-// approve a release).
+// The sensitive-moment explainer: HOW the detail is protected (encrypted on this device, so
+// Warthog stores only a copy it can't read) and WHO can read it (an agent, only when the
+// person approves that one request). It states the release mechanism as it is — the value
+// passes through Warthog once, for that approval — rather than an absolute "never"
+// (content-31; matches the privacy page).
 const PROTECTION_EXPLAINER =
-  "This detail is locked on your device with your vault key before it is saved — only the sealed version ever leaves, and Warthog can never read it. It is released only when you approve it for one agent at one moment; no one else, not even Warthog's team, can ever see it.";
+  "This detail is encrypted on this device before it's saved, so Warthog stores only a locked copy it can't read. It's released only when you approve a request: then it's unlocked on your device and passed through Warthog once, to that one agent, and not kept.";
 
 // ─── the client component (a thin binding over the controller) ─────────────────────────
 
@@ -356,37 +372,47 @@ export function HighTierFlow(props: HighTierFlowProps): React.ReactElement {
   const labelId = React.useId();
   const valueId = React.useId();
 
+  // Everyday and protected are the two tiers' names everywhere (content-09); "Add a detail"
+  // is the page's main action, so adding a protected one is the secondary.
   if (!open) {
     return (
       <div className="flex">
         <Button
-          variant={isRaise ? "secondary" : "primary"}
+          variant="secondary"
+          size={isRaise ? "sm" : "md"}
           type="button"
           onClick={() => setOpen(true)}
         >
           {isRaise ? (
-            <ArrowUp aria-hidden={true} className="h-4 w-4 shrink-0" />
+            <Lock aria-hidden={true} className="h-4 w-4 shrink-0" />
           ) : (
             <Plus aria-hidden={true} className="h-4 w-4 shrink-0" />
           )}
-          {isRaise ? "Raise to high tier" : "Add a high-tier detail"}
+          {isRaise ? "Make protected" : "Add a protected detail"}
+          {isRaise && props.field?.label ? <span className="sr-only"> {props.field.label}</span> : null}
         </Button>
       </div>
     );
   }
 
   return (
-    <Card className="flex flex-col gap-4">
-      <h3 className="text-sm font-semibold text-fg">
-        {isRaise ? "Raise to high tier" : "Add a high-tier detail"}
+    <Card className="flex w-full basis-full flex-col gap-4">
+      <h3 className="wh-group-title">
+        {isRaise ? "Make this a protected detail" : "Add a protected detail"}
       </h3>
+      {isRaise ? (
+        <p className="text-sm text-fg-muted">
+          Agents will have to ask you each time they need your {props.field?.label ? props.field.label.toLowerCase() : "detail"}.
+        </p>
+      ) : null}
 
       {isRaise ? null : (
         <>
           <Field
             label="What is it?"
             id={labelId}
-            placeholder="e.g. Passport"
+            placeholder="For example, Passport"
+            width="text"
             value={state.label}
             onChange={(event) => flow.setLabel(event.target.value)}
           />
@@ -395,6 +421,7 @@ export function HighTierFlow(props: HighTierFlowProps): React.ReactElement {
             id={valueId}
             autoComplete="off"
             placeholder="Type the detail to protect"
+            width="text"
             value={state.value}
             onChange={(event) => flow.setValue(event.target.value)}
           />
@@ -436,14 +463,37 @@ export function HighTierFlow(props: HighTierFlowProps): React.ReactElement {
           error={state.status === "phrase" ? state.error : undefined}
           continueLabel="Save the phrase and my detail"
         />
-      ) : (
+      ) : state.status === "saved" ? null : (
         <SensitiveNotice
           explanation={PROTECTION_EXPLAINER}
+          confirmLabel={isRaise ? "Save as protected" : "Save protected detail"}
+          pending={state.status === "working"}
+          pendingLabel="Saving…"
           onConfirm={() => {
             void flow.submit();
           }}
         />
       )}
+
+      {/* A way back out before anything is saved. Not offered while the vault is being
+          unlocked or a new vault recovery phrase is on screen (that step finishes or is
+          retried on its own). */}
+      {state.status !== "working" && state.status !== "phrase" && unlock.newPhrase === null ? (
+        <div className="flex">
+          <Button
+            type="button"
+            variant="ghost"
+            onClick={() => {
+              // A fresh flow next time: nothing typed lingers, and a saved add can't be
+              // confirmed a second time.
+              flowRef.current = null;
+              setOpen(false);
+            }}
+          >
+            {state.status === "saved" ? "Close" : "Cancel"}
+          </Button>
+        </div>
+      ) : null}
     </Card>
   );
 }

@@ -121,7 +121,10 @@ test("marketing artwork is decorative and server content does not depend on anim
   const markup = render();
   assert.match(markup, /class="wh-landing-backdrop" aria-hidden="true"/);
   assert.match(markup, /data-motion="off"/);
-  assert.match(markup, /<button[^>]*type="button"[^>]*>[^]*Motion off<\/button>/);
+  // Before hydration the motion control is hidden; it never renders as a dead, disabled
+  // "Motion off" button (public-26) — reduced motion shows a plain note instead.
+  assert.match(markup, /<button[^>]*type="button"[^>]*hidden=""[^>]*>[^]*Play animations<\/button>/);
+  assert.doesNotMatch(markup, /Motion off|<button[^>]*disabled/);
   assert.ok(!/<(?:main|section|article|h[1-3])\b[^>]*(?:hidden|aria-hidden)/.test(markup));
 });
 

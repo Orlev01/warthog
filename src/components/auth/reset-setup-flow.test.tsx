@@ -159,7 +159,8 @@ test("the set-up screens are labelled and plain, and the code is shown once with
   assert.match(passkey, /old passkeys/i, "it says the old passkeys will stop working");
 
   const recovery = renderToStaticMarkup(<ResetView step="setup-recovery" recoveryCode={NEW_RECOVERY_CODE} />);
-  assert.match(recovery, /ABCD EFGH JKMN PQRS/, "the new code, grouped");
+  // Groups render as separate unbreakable spans (public-15); the text still reads in fours.
+  assert.match(recovery.replace(/<\/?span>/g, ""), /ABCD EFGH JKMN PQRS/, "the new code, grouped");
   assert.match(recovery, /only show it once/i);
   assert.match(recovery, /I&#x27;ve saved it/);
   assert.match(recovery, /<button[^>]*disabled[^>]*>Continue<\/button>/, "Continue waits for the tick");

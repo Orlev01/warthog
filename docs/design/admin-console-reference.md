@@ -11,7 +11,8 @@ are not included in this repository.
 A neutral workspace with a narrow, grouped sidebar; compact page chrome; horizontal
 underline navigation; and restrained surfaces separated by fine dividers. The
 page hierarchy is navigation group → section → view → optional sub-view. Lists
-and settings use aligned rows rather than a card around every paragraph. A black
+and settings use aligned rows rather than a card around every paragraph, inside
+bounded panels: no text sits loose on the canvas ([contained text](../adr/contained-text.md)). A black
 or white primary action carries emphasis; semantic colour communicates state.
 
 The implementation source is [globals.css](../../src/app/globals.css). Keep
@@ -65,9 +66,9 @@ external activity.
 | Account resources | Connectors, Vault, Skills, Memory, Life admin | Connected services / Catalogue; Identity / Cards; Memory / Skills & plugins; Records / Tasks |
 | Insights | Activity, Spending | Persistent links between activity and aggregate spending |
 | Manage | Rules & budgets, Household, Settings | Settings overview, agent defaults, security, notifications, data & privacy |
-| Resources | Help | Existing help routes |
+| Help | Help | Existing help routes |
 
-An individual agent has **Overview, Resources, Controls, Audit log** as primary
+An individual agent has **Overview, Resources, Controls, Activity** as primary
 tabs. Resources contains Connectors, Vault, Skills and Memory; Controls contains
 Spending, Rules and Settings. Existing `?section=` links remain valid and select
 both levels. All links remain scoped to the same agent.

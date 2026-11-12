@@ -10,28 +10,39 @@ import { reprotectDeviceProtected } from "@/client/vault/import";
 import { plaintextVaultSchema, sealedVaultSchema } from "@/domain/data-transfer";
 import { exportDocumentSchema, type ExportDocument } from "@/server/export/schema";
 import { createVaultKeyStep, VaultUnlockChoice, RecoveryPhraseReveal } from "@/components/vault/vault-key-step";
+import { Download, LoaderCircle, Upload } from "lucide-react";
 import { ConfirmItsYou } from "@/components/ui/confirm-its-you";
 import { Button } from "@/components/ui/button";
+import { CONTROL_TEXT } from "@/components/ui/input";
+import { WorkspacePanel } from "@/components/shell/workspace-surfaces";
 
 interface LocalFile { size: number; text(): Promise<string> }
-interface TransferState { working: boolean; error: string | null; notice: string | null; needsConfirm: boolean; includeProtected: boolean; hasFile: boolean }
-interface TransferDeps { vault: DeviceVault; fetch: typeof fetch; download(contents: string, filename: string): void; onChange?(): void }
+// `activity` names the transfer that is running (or ran last), so its pending label, error
+// and outcome show next to the button that started it.
+type TransferActivity = "export" | "import";
+interface TransferState { working: boolean; activity: TransferActivity | null; error: string | null; notice: string | null; needsConfirm: boolean; includeProtected: boolean; hasFile: boolean }
+interface TransferDeps { vault: DeviceVault; fetch: typeof fetch; download(contents: string, filename: string): void; onChange?(): void; onStepUpRequired?(): void }
 class TransferError extends Error {}
 
 // A file and any pending plaintext live only in this controller's memory. Every POST
 // is constructed from the ordinary document plus freshly encrypted protected records.
 export function createDataTransfer(deps: TransferDeps) {
-  let state: TransferState = { working: false, error: null, notice: null, needsConfirm: false, includeProtected: false, hasFile: false };
+  let state: TransferState = { working: false, activity: null, error: null, notice: null, needsConfirm: false, includeProtected: false, hasFile: false };
   let file: LocalFile | null = null;
   let pending: ExportDocument | null = null;
   const set = (patch: Partial<TransferState>) => { state = { ...state, ...patch }; deps.onChange?.(); };
   const keyStep = createVaultKeyStep({ vault: deps.vault, createIfMissing: true, onChange: deps.onChange });
-  async function run(action: () => Promise<void>) {
+  async function run(activity: TransferActivity, action: () => Promise<void>) {
     if (state.working) return;
-    set({ working: true, error: null, notice: null });
+    set({ working: true, activity, error: null, notice: null });
     try { await action(); }
     catch (error) {
-      if (error instanceof StepUpRequiredError) set({ needsConfirm: true, error: "Confirm it's you below, then try the transfer again." });
+      if (error instanceof StepUpRequiredError) {
+        set({ needsConfirm: true, error: activity === "export"
+          ? "Nothing was exported. Confirm it's you, then choose Export my data again."
+          : "Nothing was imported. Confirm it's you, then choose the file and import it again." });
+        deps.onStepUpRequired?.();
+      }
       else set({ error: error instanceof TransferError ? error.message : "The transfer could not be completed. Check the file and vault unlock method, then try again." });
     } finally { set({ working: false }); }
   }
@@ -39,7 +50,7 @@ export function createDataTransfer(deps: TransferDeps) {
     const response = await deps.fetch(url, { method: "POST", credentials: "same-origin", cache: "no-store", redirect: "error", headers: { "content-type": "application/json" }, ...(body ? { body: JSON.stringify(body) } : {}) });
     if (response.status === 403) throw new StepUpRequiredError();
     if (response.status === 401) throw new TransferError("Your session ended. Sign in again before transferring data.");
-    if (!response.ok) throw new TransferError("The server could not accept this transfer. Check the file and try again; an interrupted response may need checking before you repeat an import.");
+    if (!response.ok) throw new TransferError("We couldn't finish that. If you were importing, check this account for anything already imported before you try the file again.");
     return response.json();
   }
   function ordinaryDocument(doc: ExportDocument): ExportDocument {
@@ -87,10 +98,10 @@ export function createDataTransfer(deps: TransferDeps) {
     setIncludeProtected(value: boolean) { if (!state.working && !pending) set({ includeProtected: value }); },
     setFile(value: LocalFile | null) { if (!state.working && !pending) { file = value; set({ hasFile: value !== null, error: null, notice: null }); } },
     clearConfirmation() { set({ needsConfirm: false }); },
-    cancel() { if (!state.working) { pending = null; file = null; keyStep.cancelPhrase(); keyStep.setPassphrase(""); keyStep.setRecoveryPhrase(""); set({ hasFile: false, error: null, notice: "Transfer cancelled." }); } },
+    cancel() { if (!state.working) { pending = null; file = null; keyStep.cancelPhrase(); keyStep.setPassphrase(""); keyStep.setRecoveryPhrase(""); set({ activity: "import", hasFile: false, error: null, notice: "Import cancelled. Nothing was imported." }); } },
     async exportData() {
       if (pending) return;
-      await run(async () => {
+      await run("export", async () => {
         const bundle = await request("/settings/data/export?device=1");
         const doc = exportDocumentSchema.parse(bundle.document);
         let download = ordinaryDocument(doc);
@@ -112,7 +123,7 @@ export function createDataTransfer(deps: TransferDeps) {
     },
     async importData() {
       if (pending) return;
-      await run(async () => {
+      await run("import", async () => {
         if (!file) throw new TransferError("Choose a Warthog export file first.");
         const raw = await file.text();
         const doc = exportDocumentSchema.parse(JSON.parse(raw));
@@ -126,7 +137,7 @@ export function createDataTransfer(deps: TransferDeps) {
       });
     },
     async confirmRecovery() {
-      await run(async () => {
+      await run("import", async () => {
         if (!pending) return;
         if (!keyStep.getState().phraseSaved) throw new TransferError("Save your vault recovery phrase and tick the box before continuing.");
         const doc = pending;
@@ -145,28 +156,97 @@ function downloadFile(contents: string, filename: string) {
   const link = document.createElement("a"); link.href = url; link.download = filename; link.click();
   setTimeout(() => URL.revokeObjectURL(url), 1000);
 }
-export function DataTransferControls() {
+// The native file picker, styled as the secondary button the rest of the workspace uses.
+const FILE_INPUT_CLASS =
+  `min-h-11 min-w-0 w-full max-w-full text-fg-muted ${CONTROL_TEXT} file:me-3 file:min-h-11 file:cursor-pointer file:rounded-full file:border file:border-solid file:border-line file:bg-surface file:px-4 file:text-sm file:font-medium file:text-fg hover:file:bg-surface-muted`;
+
+// The outcome of the last transfer, shown next to the button that started it.
+function TransferOutcome({ state, activity }: { state: TransferState; activity: TransferActivity }) {
+  if (state.activity !== activity) return null;
+  if (state.error) return <p role="alert" className="min-w-0 basis-full text-sm text-danger">{state.error}</p>;
+  if (state.notice) return <p role="status" className="min-w-0 basis-full text-sm text-fg">{state.notice}</p>;
+  return null;
+}
+
+/**
+ * Export and import, as two panels (Settings › Data & privacy). Everything runs in this
+ * browser so protected plaintext never enters a native form. When the page already offers
+ * "Confirm it's you" (`onStepUpRequired` given), a refused transfer points there instead of
+ * mounting a second confirmation; on its own the controls offer their own.
+ */
+export function DataTransferControls({ onStepUpRequired }: { onStepUpRequired?: () => void } = {}) {
   const [, redraw] = React.useReducer((value: number) => value + 1, 0);
-  const [flow] = React.useState(() => createDataTransfer({ fetch: (...args) => fetch(...args), vault: createDeviceVault({ fetch: (...args) => fetch(...args), startAuthentication: ({ optionsJSON }) => startVaultAuthentication(optionsJSON), createVaultKey }), download: downloadFile, onChange: redraw }));
+  const stepUp = React.useRef(onStepUpRequired);
+  stepUp.current = onStepUpRequired;
+  const [flow] = React.useState(() => createDataTransfer({ fetch: (...args) => fetch(...args), vault: createDeviceVault({ fetch: (...args) => fetch(...args), startAuthentication: ({ optionsJSON }) => startVaultAuthentication(optionsJSON), createVaultKey }), download: downloadFile, onChange: redraw, onStepUpRequired: () => stepUp.current?.() }));
   const state = flow.getState(); const unlock = flow.keyStep.getState();
-  return <section className="flex flex-col gap-4" aria-label="Export and import your data">
-    <h2 className="text-sm font-semibold text-fg">Export your data</h2>
-    <p className="text-sm text-fg-muted">Downloads your everyday details and activity. If you include protected details, the file also contains readable card numbers and sensitive identity details. Store it privately; anyone with the file can read it.</p>
-    <fieldset disabled={state.working || unlock.newPhrase !== null} className="flex min-w-0 flex-col gap-4">
-      <label className="flex min-h-11 items-center gap-2 text-sm"><input type="checkbox" checked={state.includeProtected} onChange={(event) => flow.setIncludeProtected(event.target.checked)} />Include protected details and saved cards</label>
-      <p className="text-sm text-fg-muted">Unlock only when including protected details or importing them. For a new vault, choose a passphrase of at least 12 characters if your passkey cannot unlock it. Save the new vault recovery phrase before importing; your account recovery code is different.</p>
-      <VaultUnlockChoice state={unlock} onMethod={(method) => flow.keyStep.setMethod(method)} onPassphrase={(value) => flow.keyStep.setPassphrase(value)} onRecoveryPhrase={(value) => flow.keyStep.setRecoveryPhrase(value)} />
-      <p className="text-sm text-fg-muted">This is a sensitive download. Keep the file somewhere safe.</p>
-      <Button type="button" variant="secondary" onClick={() => void flow.exportData()}>Export my data</Button>
-      <h2 className="text-sm font-semibold text-fg">Import a previous export</h2>
-      <p className="text-sm text-fg-muted">Adds the file's details to this account; repeated imports add duplicates. Protected values are encrypted on this device before upload. Activity goes into a read-only archive. Reconnect agents and services separately.</p>
-      <label className="flex min-w-0 flex-col gap-2 text-sm">Choose a file to import<input type="file" className="min-h-11 min-w-0 max-w-full text-base sm:text-sm" accept="application/json,.json" onChange={(event) => flow.setFile(event.target.files?.[0] ?? null)} /></label>
-      <Button type="button" variant="secondary" disabled={!state.hasFile} onClick={() => void flow.importData()}>Import this file</Button>
-    </fieldset>
-    {unlock.newPhrase ? <RecoveryPhraseReveal phrase={unlock.newPhrase} saved={unlock.phraseSaved} onSavedChange={(saved) => flow.keyStep.setPhraseSaved(saved)} onContinue={() => void flow.confirmRecovery()} working={state.working} continueLabel="Save phrase and import" /> : null}
-    {state.hasFile || unlock.newPhrase ? <Button type="button" variant="secondary" disabled={state.working} onClick={() => flow.cancel()}>Cancel transfer</Button> : null}
-    {state.error ? <p role="alert" className="text-sm text-danger">{state.error}</p> : null}
-    {state.notice ? <p role="status" className="text-sm text-fg">{state.notice}</p> : null}
-    {state.needsConfirm ? <ConfirmItsYou onConfirmed={() => flow.clearConfirmation()} explanation="Confirm it's you, then choose the transfer again." /> : null}
-  </section>;
+  // Fields freeze while a transfer runs or a new vault recovery phrase is waiting to be saved.
+  const locked = state.working || unlock.newPhrase !== null;
+  const exporting = state.working && state.activity === "export";
+  const importing = state.working && state.activity === "import";
+  const unlockChoice = <VaultUnlockChoice state={unlock} onMethod={(method) => flow.keyStep.setMethod(method)} onPassphrase={(value) => flow.keyStep.setPassphrase(value)} onRecoveryPhrase={(value) => flow.keyStep.setRecoveryPhrase(value)} />;
+  return <>
+    <WorkspacePanel
+      title="Export your data"
+      description="Downloads a file of everything Warthog keeps about you: your everyday details, preferences, agent defaults, skills, memory, rules, tasks, life-admin records, the services you've connected (without their passwords or keys) and your activity. Cards and protected details are left out unless you include them."
+      footer={<>
+        <Button type="button" variant="secondary" aria-disabled={locked || undefined} aria-busy={exporting || undefined}
+          onClick={() => { if (!locked) void flow.exportData(); }}>
+          {exporting ? <><LoaderCircle aria-hidden={true} className="h-4 w-4 shrink-0 animate-spin" />Preparing export…</> : <><Download aria-hidden={true} className="h-4 w-4 shrink-0" />Export my data</>}
+        </Button>
+        <span className="min-w-0">Anyone with the file can read it, so keep it somewhere private.</span>
+        <TransferOutcome state={state} activity="export" />
+      </>}
+    >
+      <fieldset disabled={locked} className="flex min-w-0 flex-col gap-3">
+        <div className="flex min-w-0 flex-col">
+          <label className="flex min-h-11 items-center gap-3 text-sm text-fg">
+            <input type="checkbox" className="h-4 w-4 shrink-0" checked={state.includeProtected} aria-describedby="data-export-protected-note" onChange={(event) => flow.setIncludeProtected(event.target.checked)} />
+            Include protected details and saved cards
+          </label>
+          <p id="data-export-protected-note" className="pl-7 text-sm text-fg-muted">The file will then contain readable card numbers and protected details.</p>
+        </div>
+        {state.includeProtected ? (
+          <div className="flex min-w-0 flex-col gap-3 rounded-field bg-surface-muted p-3 sm:p-4">
+            <p className="text-sm text-fg">To include protected details, unlock your vault first.</p>
+            {unlockChoice}
+          </div>
+        ) : null}
+      </fieldset>
+    </WorkspacePanel>
+
+    <WorkspacePanel
+      title="Import a previous export"
+      description="Adds a Warthog export file's details to this account. Importing the same file twice adds everything twice. Activity goes into Imported history below, and agents and services need connecting again."
+      footer={<>
+        <Button type="button" variant="secondary" disabled={!state.hasFile} aria-disabled={state.hasFile && locked ? true : undefined} aria-busy={importing || undefined}
+          onClick={() => { if (!locked) void flow.importData(); }}>
+          {importing ? <><LoaderCircle aria-hidden={true} className="h-4 w-4 shrink-0 animate-spin" />Importing…</> : <><Upload aria-hidden={true} className="h-4 w-4 shrink-0" />Import this file</>}
+        </Button>
+        {state.hasFile || unlock.newPhrase ? <Button type="button" variant="ghost" aria-disabled={state.working || undefined} onClick={() => { if (!state.working) flow.cancel(); }}>Cancel import</Button> : null}
+        {state.hasFile || unlock.newPhrase ? null : <span className="min-w-0">Choose a file first.</span>}
+        <TransferOutcome state={state} activity="import" />
+      </>}
+    >
+      <div className="flex min-w-0 flex-col gap-4">
+        <fieldset disabled={locked} className="flex min-w-0 flex-col gap-4">
+          <label className="flex min-w-0 flex-col gap-2 text-sm font-medium text-fg">
+            Choose a file to import
+            <input type="file" className={FILE_INPUT_CLASS} accept="application/json,.json" onChange={(event) => flow.setFile(event.target.files?.[0] ?? null)} />
+          </label>
+          {state.hasFile ? (
+            <div className="flex min-w-0 flex-col gap-3 rounded-field bg-surface-muted p-3 sm:p-4">
+              <p className="text-sm text-fg">
+                If the file includes cards or protected details, they&apos;re encrypted on this device before they&apos;re sent. Choose how to unlock your vault. If you don&apos;t have a vault yet and your passkey can&apos;t unlock one, choose a vault passphrase of at least 12 characters.
+              </p>
+              {unlockChoice}
+            </div>
+          ) : null}
+        </fieldset>
+        {unlock.newPhrase ? <RecoveryPhraseReveal phrase={unlock.newPhrase} saved={unlock.phraseSaved} onSavedChange={(saved) => flow.keyStep.setPhraseSaved(saved)} onContinue={() => void flow.confirmRecovery()} working={state.working} continueLabel="Save phrase and import" /> : null}
+      </div>
+    </WorkspacePanel>
+
+    {state.needsConfirm && !onStepUpRequired ? <ConfirmItsYou onConfirmed={() => flow.clearConfirmation()} explanation="Confirm it's you, then choose the transfer again." /> : null}
+  </>;
 }

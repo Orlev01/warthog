@@ -4,12 +4,19 @@
 // inbox formats the exact amounts with the same helper, so the two never disagree.
 //
 // Pure domain module: no React, no DB, no clock. The view renders "<agent> <sentence>",
-// so every sentence starts with a verb ("wants to …").
+// so every sentence starts with a verb ("wants to …"). A connected service's tool reads by
+// its human names ("wants to use “Send” in Gmail"), never its internal ids (UI/UX pass
+// content-02): the caller passes the service's display name when it knows it.
+
+import { humanise, toolLabel } from "../activity/describe";
 
 /** The fields of a held call a sentence is built from. */
 export interface RequestSummary {
   readonly tool: string;
   readonly connector?: string | null;
+  // The connected service's display name ("Gmail"), when the caller can resolve it from the
+  // connector catalogue. Absent, the connector id is tidied into words.
+  readonly service?: string;
   readonly request?: "card" | "high_tier";
   readonly amount?: number;
   readonly currency?: string;
@@ -69,9 +76,12 @@ export function requestSentence(call: RequestSummary): string {
   if (call.request === "high_tier") {
     return call.field
       ? `wants to see your ${highTierFieldLabel(call.field)}`
-      : "wants to see one of your high-tier identity details";
+      : "wants to see one of your protected details";
   }
   const core = CORE_TOOL_WORDS[call.tool];
   if (core && !call.connector) return `wants to ${core}`;
-  return call.connector ? `wants to run ${call.tool} on ${call.connector}` : `wants to run ${call.tool}`;
+  const tool = `“${toolLabel(call.tool)}”`;
+  if (!call.connector) return `wants to use ${tool}`;
+  const service = call.service?.trim() || humanise(call.connector);
+  return `wants to use ${tool} in ${service}`;
 }

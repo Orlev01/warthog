@@ -799,11 +799,14 @@ test("failed and cancelled passkey sign-ins release the pending guard for a retr
 
 test("the pending passkey view prevents identity and method edits and keeps its initiating button focusable", () => {
   const html = renderToStaticMarkup(<SigninView step="passkey" email={EMAIL} busy />);
-  assert.match(html, /<input[^>]*disabled=""/);
+  // The email stays focusable while pending (a11y-01): read-only and marked disabled for
+  // assistive technology, never natively disabled.
+  assert.match(html, /<input[^>]*readOnly=""[^>]*aria-disabled="true"/);
+  assert.doesNotMatch(html, /<input[^>]*\sdisabled=""/);
   const buttons = [...html.matchAll(/<button([^>]*)>(.*?)<\/button>/gs)];
   const primary = buttons.find((button) => button[1]?.includes('type="submit"'));
   assert.match(primary?.[1] ?? "", /aria-disabled="true"/);
   assert.doesNotMatch(primary?.[1] ?? "", /\sdisabled=""/);
   assert.match(primary?.[2] ?? "", /Signing in/);
-  assert.match(buttons.find((button) => /authenticator/.test(button[2] ?? ""))?.[1] ?? "", /disabled=""/);
+  assert.match(buttons.find((button) => /authenticator/.test(button[2] ?? ""))?.[1] ?? "", /aria-disabled="true"/);
 });

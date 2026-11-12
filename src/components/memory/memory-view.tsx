@@ -2,14 +2,18 @@
 
 import * as React from "react";
 import { WorkspaceHeading } from "@/components/shell/workspace-surfaces";
-import { Bot, Lock, Pencil, Plus, Save, Share, Trash2 } from "lucide-react";
+import { Bot, ChevronDown, Lock, Pencil, Plus, Share, Trash2 } from "lucide-react";
 
-import { Button } from "@/components/ui/button";
+import { Button, buttonClasses } from "@/components/ui/button";
+import { ButtonLink } from "@/components/ui/button-link";
 import { Input } from "@/components/ui/input";
-import { Label } from "@/components/ui/field";
+import { SelectField, TextareaField } from "@/components/ui/field";
+import { ActionForm, FormSubmit, PendingFormFields } from "@/components/ui/form-submit";
 import { EmptyState } from "@/components/ui/empty";
 import { ActiveFilters, FilterLinks, type AppliedFilter } from "@/components/ui/filter-links";
 import { ListGroup, LIST_ROW } from "@/components/ui/list-group";
+import { ListToolbar } from "@/components/ui/list-toolbar";
+import { PageNotice, type NoticeTone } from "@/components/ui/notice";
 import { hrefWith, type QueryState } from "@/lib/href";
 
 // E13-S10 — Memory view component (brief "Skills, preferences and shared memory";
@@ -36,10 +40,21 @@ import { hrefWith, type QueryState } from "@/lib/href";
 // (globals.css) — never a raw hex.
 //
 // Organisation: the list sits under date headings the loader computed in the account
-// time zone (Today / This week / Earlier). Scope and saved-by filter links, removable
+// time zone (Today / This week / Earlier). Sharing and saved-by filter links, removable
 // applied-filter chips and the page links are plain same-page links built with
-// `hrefWith`, so every filter survives paging, reloads and Back/Forward. Delete asks for
-// confirmation in a disclosure before it submits.
+// `hrefWith`, so every filter survives paging, reloads and Back/Forward; every form also
+// tells the page which filters to come back to, so an edit or a delete keeps the person's
+// place. Delete asks for confirmation in a disclosure before it submits.
+//
+// Layout (rule 1: no text on the canvas): the heading band, the outcome of the last action,
+// a collapsible "Add a memory" panel, one toolbar for search and filters (left out until
+// there is something to search), the date groups as list panels, and a bounded page bar.
+// Each memory's three controls share one row; an opened Edit or Delete panel spans the row
+// underneath them.
+//
+// Sharing, in the person's words: a "kept" memory is PRIVATE to the agent that saved it
+// (or, when the person added it, to no agent); a "shared" one is shared with every agent
+// they let read memory. The stored values stay "kept" / "shared".
 
 type MemoryScope = "kept" | "shared";
 
@@ -96,6 +111,10 @@ export type MemoryViewProps = {
   filters?: MemoryFilterState;
   nextCursor?: string | null;
   hasPreviousPage?: boolean;
+  // The page cursor in force (so a form returns to the same page after it saves).
+  cursor?: string | null;
+  // The outcome of the last action, in plain words (the page maps `?notice=`).
+  notice?: { readonly tone: NoticeTone; readonly text: string } | null;
   // Controls bound to the server actions the page passes. OPTIONAL: the view renders its
   // controls live regardless (they submit to these when supplied); the page always
   // supplies them, so in the running app every control acts — never a dead button.
@@ -105,48 +124,74 @@ export type MemoryViewProps = {
   addAction?: MemoryAction;
 };
 
-// A multi-line / select control styled on the same tokens as the shared Input primitive
-// (token colour / border / focus) — no raw colour.
-const CONTROL_BASE =
-  "w-full rounded-card border border-line bg-surface px-3 py-2 text-sm text-fg placeholder:text-fg-muted focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-focus focus-visible:ring-offset-2 focus-visible:ring-offset-bg";
-
-// A disclosure summary that reads as a quiet control (Edit, Delete, Add a memory).
-const SUMMARY_CLASS =
-  "inline-flex min-h-11 w-fit cursor-pointer items-center gap-2 rounded-card text-sm font-medium text-fg focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-focus";
-const PAGE_LINK = "inline-flex min-h-11 items-center text-accent underline";
+// The add and edit forms report "what to remember" left blank (or only spaces) before the
+// round trip; the server refuses it too (memory/actions.ts trims before it validates).
+const BLANK_COPY = "Type what to remember. A memory can't be blank.";
+function checkNotBlank(event: React.FormEvent<HTMLTextAreaElement>) {
+  const field = event.currentTarget;
+  field.setCustomValidity(field.value.trim() === "" ? BLANK_COPY : "");
+}
 
 // The editable content field, shared by the add and edit forms (one source of truth).
 // Pre-filled from `content` on edit, empty on add.
 function ContentField({ content }: { content?: string }) {
-  const id = React.useId();
   return (
-    <div className="flex flex-col gap-1.5">
-      <Label htmlFor={id}>What to remember</Label>
-      <textarea
-        id={id}
-        name="content"
-        required
-        maxLength={20_000}
-        rows={3}
-        className={`${CONTROL_BASE} min-h-20`}
-        placeholder="A short fact or note"
-        defaultValue={content ?? ""}
-      />
-    </div>
+    <TextareaField
+      label="What to remember"
+      name="content"
+      required
+      maxLength={20_000}
+      rows={3}
+      placeholder="A short fact, like a preference, a routine or a date"
+      defaultValue={content ?? ""}
+      onInput={checkNotBlank}
+      onInvalid={checkNotBlank}
+    />
   );
 }
 
+// The list state a form brings the person back to after it saves (the page validates it).
+function ReturnState({ state }: { state: QueryState }) {
+  return (
+    <>
+      {Object.entries(state).map(([name, value]) =>
+        value ? <input key={name} type="hidden" name={`return_${name}`} value={value} /> : null,
+      )}
+    </>
+  );
+}
+
+// A form needs a function action; in a prop-only render (a preview, a render test) with no
+// action supplied, nothing is stored.
+const noAction = async (_formData: FormData): Promise<void> => {};
+
+// Who can read a memory, in the person's words (never the stored "kept" / "shared").
+export function sharingLabel(memory: Pick<MemoryViewItem, "scope" | "sourceAgentName">): string {
+  if (memory.scope === "shared") return "Shared with your agents";
+  return memory.sourceAgentName ? `Private to ${memory.sourceAgentName}` : "Private";
+}
+
+// Edit and Delete are native disclosures (they work before hydration, and focus returns to
+// their summary after a save), laid out so all three controls share one row: where the
+// browser supports it, each <details> lets its summary sit in the row and its opened panel
+// span the full width under the row. Elsewhere an opened disclosure takes the row's width.
+const ROW_DISCLOSURE =
+  "min-w-0 open:basis-full supports-[selector(::details-content)]:contents details-content:basis-full details-content:order-last not-open:details-content:hidden";
+const DISCLOSURE_PANEL = "flex min-w-0 flex-col gap-3 rounded-card bg-surface-muted p-4";
+
 // One memory, as a divider row: its content, its saved-at time and its "Saved by
-// <agent> · shared / · kept" label (a person-added memory labelled as saved by you), with
-// live re-scope, edit and delete controls. Each control submits to the server action the
-// page passes, carrying this memory's id; Delete first asks for confirmation.
+// <agent> · <sharing>" label (a person-added memory labelled as saved by you), with live
+// re-scope, edit and delete controls in one row. Each control submits to the server action
+// the page passes, carrying this memory's id; Delete first asks for confirmation.
 function MemoryRow({
   memory,
+  state,
   editAction,
   rescopeAction,
   deleteAction,
 }: {
   memory: MemoryViewItem;
+  state: QueryState;
   editAction?: MemoryAction;
   rescopeAction?: MemoryAction;
   deleteAction?: MemoryAction;
@@ -154,88 +199,97 @@ function MemoryRow({
   const savedBy = memory.sourceAgentName ?? "you";
   const targetScope: MemoryScope =
     memory.scope === "shared" ? "kept" : "shared";
+  // The row's controls are described by the memory itself, so "Edit" or "Delete" in a
+  // screen reader's list of controls says which memory it acts on (a11y-12).
+  const contentId = React.useId();
   return (
     <div className="flex min-w-0 flex-col gap-3">
-      <p className="min-w-0 whitespace-pre-wrap text-fg [overflow-wrap:anywhere]">
+      <p id={contentId} className="min-w-0 whitespace-pre-wrap text-fg [overflow-wrap:anywhere]">
         {memory.content}
       </p>
-      {memory.audience && (
-        <p className="min-w-0 text-sm text-fg-muted [overflow-wrap:anywhere]">
-          Available to:{" "}
-          {memory.audience.length ? memory.audience.join(", ") : "no agents"}.{" "}
-          <a href="/agents" className="text-accent underline">
-            Manage agent access
-          </a>
-        </p>
-      )}
-
-      <div className="flex flex-wrap items-center gap-x-3 gap-y-1 text-sm text-fg-muted">
-        <span className="inline-flex min-w-0 items-center gap-1.5 [overflow-wrap:anywhere]">
-          <Bot aria-hidden={true} className="h-4 w-4 shrink-0" />
-          Saved by {savedBy} · default: {memory.scope}
-        </span>
-        <time className="text-xs">{memory.savedAt}</time>
+      <div className="flex flex-col gap-1">
+        <div className="flex flex-wrap items-center gap-x-3 gap-y-1 text-sm text-fg-muted">
+          <span className="inline-flex min-w-0 items-center gap-1.5 [overflow-wrap:anywhere]">
+            <Bot aria-hidden={true} className="h-4 w-4 shrink-0" />
+            Saved by {savedBy} · {sharingLabel(memory)}
+          </span>
+          <time className="text-xs">{memory.savedAt}</time>
+        </div>
+        {memory.audience && (
+          <p className="min-w-0 text-sm text-fg-muted [overflow-wrap:anywhere]">
+            Agents that can read it:{" "}
+            {memory.audience.length ? memory.audience.join(", ") : "none"}.{" "}
+            <a href="/agents" className="font-medium text-fg underline underline-offset-4">
+              Manage agent access
+            </a>
+          </p>
+        )}
       </div>
 
-      <div className="flex flex-wrap items-center gap-2">
-        <form action={rescopeAction}>
+      <div className="flex min-w-0 flex-wrap items-center gap-2">
+        <ActionForm action={rescopeAction ?? noAction}>
           <input type="hidden" name="id" value={memory.id} />
           <input type="hidden" name="scope" value={targetScope} />
-          <Button variant="secondary" type="submit">
+          <ReturnState state={state} />
+          <FormSubmit variant="secondary" size="sm" pendingLabel="Saving…" aria-describedby={contentId}>
             {memory.scope === "shared" ? (
               <>
                 <Lock aria-hidden={true} className="h-4 w-4 shrink-0" />
-                Change to kept
+                Make private
               </>
             ) : (
               <>
                 <Share aria-hidden={true} className="h-4 w-4 shrink-0" />
-                Change to shared
+                Share with my agents
               </>
             )}
-          </Button>
-        </form>
-      </div>
+          </FormSubmit>
+        </ActionForm>
 
-      <details className="flex flex-col gap-3">
-        <summary className={SUMMARY_CLASS}>
-          <Pencil aria-hidden={true} className="h-4 w-4 shrink-0" />
-          Edit
-        </summary>
-        <form action={editAction} className="flex flex-col gap-3">
-          <input type="hidden" name="id" value={memory.id} />
-          <ContentField content={memory.content} />
-          <div className="flex flex-wrap items-center gap-2">
-            <Button variant="secondary" type="submit">
-              <Save aria-hidden={true} className="h-4 w-4 shrink-0" />
-              Save
-            </Button>
-          </div>
-        </form>
-      </details>
+        <details className={ROW_DISCLOSURE}>
+          <summary aria-describedby={contentId} className={`${buttonClasses({ variant: "secondary", size: "sm" })} list-none [&::-webkit-details-marker]:hidden`}>
+            <Pencil aria-hidden={true} className="h-4 w-4 shrink-0" />
+            Edit
+          </summary>
+          <ActionForm action={editAction ?? noAction} className={DISCLOSURE_PANEL}>
+            <input type="hidden" name="id" value={memory.id} />
+            <ReturnState state={state} />
+            <PendingFormFields>
+              <ContentField content={memory.content} />
+            </PendingFormFields>
+            <div className="flex flex-wrap items-center gap-2">
+              <FormSubmit pendingLabel="Saving…">Save changes</FormSubmit>
+            </div>
+          </ActionForm>
+        </details>
 
-      <details className="flex flex-col gap-3">
-        <summary className={SUMMARY_CLASS}>
-          <Trash2 aria-hidden={true} className="h-4 w-4 shrink-0" />
-          Delete
-        </summary>
-        <p className="my-2 text-sm text-fg-muted">
-          Delete this memory? Your agents will no longer be able to use it. This
-          cannot be undone.
-        </p>
-        <form action={deleteAction}>
-          <input type="hidden" name="id" value={memory.id} />
-          <Button variant="secondary" type="submit">
+        <details className={ROW_DISCLOSURE}>
+          <summary aria-describedby={contentId} className={`${buttonClasses({ variant: "danger", size: "sm" })} list-none [&::-webkit-details-marker]:hidden`}>
             <Trash2 aria-hidden={true} className="h-4 w-4 shrink-0" />
-            Delete memory
-          </Button>
-        </form>
-      </details>
+            Delete
+          </summary>
+          <div className={DISCLOSURE_PANEL}>
+            <p className="text-sm text-fg">
+              Delete this memory? Your agents will no longer be able to use it. This
+              cannot be undone.
+            </p>
+            <ActionForm action={deleteAction ?? noAction}>
+              <input type="hidden" name="id" value={memory.id} />
+              <ReturnState state={state} />
+              <FormSubmit variant="danger-solid" pendingLabel="Deleting…">
+                <Trash2 aria-hidden={true} className="h-4 w-4 shrink-0" />
+                Delete memory
+              </FormSubmit>
+            </ActionForm>
+          </div>
+        </details>
+      </div>
     </div>
   );
 }
 
-// The scope and saved-by filter rows, each a labelled set of same-page links.
+// The sharing and saved-by filter rows, each a labelled set of same-page links that
+// scrolls in one line on phones.
 function FilterRow({
   label,
   name,
@@ -252,17 +306,20 @@ function FilterRow({
   state: QueryState;
 }) {
   return (
-    <div className="flex min-w-0 flex-wrap items-center gap-x-3">
-      <span className="text-sm text-fg-muted">{name}</span>
-      <FilterLinks
-        label={label}
-        items={options.map((option) => ({
-          label: option.label,
-          href: hrefWith(PATH, state, { [param]: option.value ?? undefined }),
-          active: option.value === current,
-          ...(option.count !== undefined ? { count: option.count } : {}),
-        }))}
-      />
+    <div className="flex min-w-0 flex-col gap-2 sm:flex-row sm:items-center sm:gap-3">
+      <span className="shrink-0 text-sm font-medium text-fg-muted sm:w-20">{name}</span>
+      <div className="min-w-0 flex-1">
+        <FilterLinks
+          label={label}
+          variant="scroll"
+          items={options.map((option) => ({
+            label: option.label,
+            href: hrefWith(PATH, state, { [param]: option.value ?? undefined }),
+            active: option.value === current,
+            ...(option.count !== undefined ? { count: option.count } : {}),
+          }))}
+        />
+      </div>
     </div>
   );
 }
@@ -278,7 +335,7 @@ function appliedFilters(
     options.find((option) => option.value === value)?.label ?? value;
   if (filters?.scope) {
     applied.push({
-      label: `Scope: ${labelOf(filters.scopeOptions, filters.scope)}`,
+      label: `Sharing: ${labelOf(filters.scopeOptions, filters.scope)}`,
       removeHref: hrefWith(PATH, state, { scope: undefined }),
     });
   }
@@ -297,108 +354,135 @@ function appliedFilters(
   return applied;
 }
 
+// "Showing 4 memories.", "2 memories match “seat” on this page."
+function listStatus(count: number, query: string | null | undefined, paged: boolean): string {
+  const memories = `${count} ${count === 1 ? "memory" : "memories"}`;
+  const where = paged ? " on this page" : "";
+  if (query) return `${memories} ${count === 1 ? "matches" : "match"} “${query}”${where}.`;
+  return `Showing ${memories}${where}.`;
+}
+
 export function MemoryView({
   memories,
   query,
   filters,
   nextCursor,
   hasPreviousPage,
+  cursor,
+  notice,
   editAction,
   rescopeAction,
   deleteAction,
   addAction,
 }: MemoryViewProps) {
-  const scopeId = React.useId();
   // The list state every same-page link keeps (never a page cursor or a one-off notice).
   const state: QueryState = {
     q: query ?? undefined,
     scope: filters?.scope ?? undefined,
     source: filters?.source ?? undefined,
   };
+  // What a form returns to after it saves: the same filters, and the same page.
+  const returnState: QueryState = { ...state, cursor: cursor ?? undefined };
   const applied = appliedFilters(state, query, filters);
   const groups = DATE_GROUPS.map((group) => ({
     ...group,
     items: memories.filter((memory) => memory.dateGroup === group.key),
   })).filter((group) => group.items.length > 0);
+  // Nothing saved at all (not just nothing matching): searching and filtering would be dead
+  // controls around an empty list, so they wait until there is a memory.
+  const firstRun = memories.length === 0 && applied.length === 0 && !hasPreviousPage;
+  const paged = Boolean(nextCursor || hasPreviousPage);
 
   return (
-    <section className="flex flex-col gap-8">
-      <WorkspaceHeading eyebrow="Account resources" title="Memory" description="What your agents remember about you, and who each memory is shared with." />
+    <>
+      <WorkspaceHeading
+        title="Memory"
+        description="What your agents remember about you. Shared memories can be read by every agent you let read memory; private ones stay with the agent that saved them."
+      />
+      {notice ? <PageNotice tone={notice.tone}>{notice.text}</PageNotice> : null}
 
       {/* ----- Add your own memory (offered even with no memories) ----- */}
-      <details className="flex flex-col gap-3 wh-card rounded-card border border-line bg-surface p-4">
-        <summary className={SUMMARY_CLASS}>
-          <Plus aria-hidden={true} className="h-4 w-4 shrink-0" />
-          Add a memory
-        </summary>
-        <form action={addAction} className="flex flex-col gap-3">
-          <ContentField />
-          <div className="flex flex-col gap-1.5">
-            <Label htmlFor={scopeId}>Who can see it</Label>
-            <select
-              id={scopeId}
-              name="scope"
-              className={`${CONTROL_BASE} min-h-11`}
-              defaultValue="shared"
-            >
-              <option value="shared">Shared with your other agents</option>
-              <option value="kept">Kept to this memory only</option>
-            </select>
-          </div>
-          <div className="flex flex-wrap items-center gap-2">
-            <Button variant="primary" type="submit">
+      <details id="add-memory" className="wh-panel group">
+        <summary className="wh-panel-header flex min-h-11 cursor-pointer list-none items-center gap-3 border-b-0! [&::-webkit-details-marker]:hidden">
+          <span className="wh-panel-title">
+            <span className="flex items-center gap-2 font-semibold text-fg">
               <Plus aria-hidden={true} className="h-4 w-4 shrink-0" />
-              Add memory
-            </Button>
-          </div>
-        </form>
+              Add a memory
+            </span>
+          </span>
+          <ChevronDown aria-hidden={true} className="h-4 w-4 shrink-0 text-fg-muted transition-transform group-open:rotate-180" />
+        </summary>
+        <div className="wh-panel-body border-t border-line">
+          <ActionForm action={addAction ?? noAction} className="flex max-w-prose flex-col gap-4">
+            <ReturnState state={returnState} />
+            <PendingFormFields>
+              <ContentField />
+              <SelectField label="Who can read it" name="scope" defaultValue="shared" width="text">
+                <option value="shared">Shared with your agents</option>
+                <option value="kept">Private: no agent can read it</option>
+              </SelectField>
+            </PendingFormFields>
+            <div className="flex flex-wrap items-center gap-2">
+              <FormSubmit pendingLabel="Adding…">
+                <Plus aria-hidden={true} className="h-4 w-4 shrink-0" />
+                Add memory
+              </FormSubmit>
+            </div>
+          </ActionForm>
+        </div>
       </details>
 
-      <div className="flex flex-col gap-2">
-        {/* ----- Search over the memories (a GET the loader reads; keeps the filters) ----- */}
-        <form
-          method="get"
-          className="flex flex-col gap-2 sm:flex-row sm:items-end"
-        >
-          {filters?.scope ? <input type="hidden" name="scope" value={filters.scope} /> : null}
-          {filters?.source ? <input type="hidden" name="source" value={filters.source} /> : null}
-          <div className="flex min-w-0 flex-1 flex-col gap-1.5">
-            <Label htmlFor="memory-search">Search</Label>
-            <Input
-              id="memory-search"
-              type="search"
-              name="q"
-              defaultValue={query ?? ""}
-              placeholder="Search your memories"
-            />
-          </div>
-          <Button variant="secondary" type="submit">
-            Search
-          </Button>
-        </form>
-
-        {filters ? (
-          <>
-            <FilterRow
-              label="Filter by scope"
-              name="Scope"
-              param="scope"
-              options={filters.scopeOptions}
-              current={filters.scope}
-              state={state}
-            />
-            <FilterRow
-              label="Filter by who saved it"
-              name="Saved by"
-              param="source"
-              options={filters.sourceOptions}
-              current={filters.source}
-              state={state}
-            />
-          </>
-        ) : null}
-        <ActiveFilters filters={applied} clearHref={PATH} />
-      </div>
+      {firstRun ? null : (
+        <ListToolbar
+          label="Find memories"
+          filters={
+            filters ? (
+              <div className="flex min-w-0 flex-col gap-3">
+                <FilterRow
+                  label="Filter by sharing"
+                  name="Sharing"
+                  param="scope"
+                  options={filters.scopeOptions}
+                  current={filters.scope}
+                  state={state}
+                />
+                <FilterRow
+                  label="Filter by who saved it"
+                  name="Saved by"
+                  param="source"
+                  options={filters.sourceOptions}
+                  current={filters.source}
+                  state={state}
+                />
+              </div>
+            ) : null
+          }
+          search={
+            /* A GET the loader reads; it keeps the filters. */
+            <form method="get" className="flex flex-col gap-2 sm:flex-row sm:items-end">
+              {filters?.scope ? <input type="hidden" name="scope" value={filters.scope} /> : null}
+              {filters?.source ? <input type="hidden" name="source" value={filters.source} /> : null}
+              <div className="flex min-w-0 flex-1 flex-col gap-2">
+                <label htmlFor="memory-search" className="text-sm font-medium text-fg">
+                  Search
+                </label>
+                <Input
+                  id="memory-search"
+                  type="search"
+                  name="q"
+                  defaultValue={query ?? ""}
+                  placeholder="Search your memories"
+                />
+              </div>
+              <Button variant="secondary" type="submit">
+                Search
+              </Button>
+            </form>
+          }
+          applied={<ActiveFilters filters={applied} clearHref={PATH} />}
+          status={memories.length > 0 ? listStatus(memories.length, query, paged) : undefined}
+        />
+      )}
 
       {/* ----- The memories, under date headings ----- */}
       {memories.length === 0 ? (
@@ -407,64 +491,59 @@ export function MemoryView({
             heading="No memories match"
             description="Nothing on this page matches the search and filters you chose."
             action={
-              <a href={PATH} className={PAGE_LINK}>
+              <ButtonLink href={PATH} variant="secondary">
                 Clear filters
-              </a>
+              </ButtonLink>
             }
           />
         ) : (
           <EmptyState
             heading="No memories yet"
-            description="Memories your agents save about you will appear here, each labelled by who saved it."
+            description="When an agent saves something about you, it appears here with who saved it and who can read it. You can add your own above."
           />
         )
       ) : (
-        <div className="flex flex-col gap-6">
-          {groups.map((group) => (
-            <ListGroup
-              key={group.key}
-              id={`memories-${group.key}`}
-              title={group.title}
-              count={group.items.length}
-            >
-              {group.items.map((memory) => (
-                <li key={memory.id} className={LIST_ROW}>
-                  <MemoryRow
-                    memory={memory}
-                    editAction={editAction}
-                    rescopeAction={rescopeAction}
-                    deleteAction={deleteAction}
-                  />
-                </li>
-              ))}
-            </ListGroup>
-          ))}
-        </div>
+        groups.map((group) => (
+          <ListGroup
+            key={group.key}
+            id={`memories-${group.key}`}
+            title={group.title}
+            count={group.items.length}
+          >
+            {group.items.map((memory) => (
+              <li key={memory.id} className={`${LIST_ROW} py-4`}>
+                <MemoryRow
+                  memory={memory}
+                  state={returnState}
+                  editAction={editAction}
+                  rescopeAction={rescopeAction}
+                  deleteAction={deleteAction}
+                />
+              </li>
+            ))}
+          </ListGroup>
+        ))
       )}
-      {(nextCursor || hasPreviousPage) && (
-        <nav
-          aria-label="Memory pages"
-          className="flex flex-wrap items-center gap-4 text-sm"
-        >
-          {hasPreviousPage && (
-            <a className={PAGE_LINK} href={hrefWith(PATH, state)}>
-              First page
-            </a>
-          )}
-          {nextCursor && (
-            <a className={PAGE_LINK} href={hrefWith(PATH, state, { cursor: nextCursor })}>
-              {query ? "Search older memories" : "Older memories"}
-            </a>
-          )}
+      {paged && (
+        <nav aria-label="Memory pages" className="wh-form-actions">
+          <div className="wh-form-actions-buttons">
+            {hasPreviousPage && (
+              <ButtonLink href={hrefWith(PATH, state)} variant="secondary" size="sm">
+                First page
+              </ButtonLink>
+            )}
+            {nextCursor && (
+              <ButtonLink href={hrefWith(PATH, state, { cursor: nextCursor })} variant="secondary" size="sm">
+                {query ? "Search older memories" : "Older memories"}
+              </ButtonLink>
+            )}
+          </div>
           {query && nextCursor && (
-            <span className="text-fg-muted">
-              Search continues on the next page, even if this page has no
-              matches.
-            </span>
+            <p>Search continues on the next page, even if this page has no matches.</p>
           )}
         </nav>
       )}
-    </section>
+    </>
   );
 }
 

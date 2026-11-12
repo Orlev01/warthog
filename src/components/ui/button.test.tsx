@@ -30,7 +30,8 @@ import { test } from "node:test";
 import assert from "node:assert/strict";
 import { renderToStaticMarkup } from "react-dom/server";
 
-import { Button } from "./button";
+import { Button, buttonClasses } from "./button";
+import { ButtonLink } from "./button-link";
 
 // The class attribute of the rendered ROOT element (the button itself). Variant
 // and focus assertions read THIS string, so each is scoped to the button under
@@ -116,4 +117,66 @@ test("an enabled button is actionable (no disabled attribute)", () => {
     !markup.includes('disabled=""'),
     "an enabled Button must not render the native disabled attribute",
   );
+});
+
+// ─── UI/UX pass: one button system (visual-08/09/12/13, a11y-04) ─────────────────────
+
+test("every variant is a pill with one focus outline and no Tailwind focus ring", () => {
+  for (const variant of ["primary", "secondary", "ghost", "danger", "danger-solid"] as const) {
+    const cls = rootClass(renderToStaticMarkup(<Button variant={variant}>Go</Button>));
+    assert.match(cls, /\brounded-full\b/, `${variant} is a pill`);
+    assert.match(cls, /\bfocus-visible:outline-focus\b/, `${variant} uses the focus outline`);
+    assert.doesNotMatch(cls, /\bring-/, `${variant} draws no second ring`);
+  }
+});
+
+test("filled variants carry a transparent border so forced colours still paint a boundary", () => {
+  for (const variant of ["primary", "danger-solid"] as const) {
+    const cls = rootClass(renderToStaticMarkup(<Button variant={variant}>Go</Button>));
+    assert.match(cls, /(^|\s)border(\s|$)/, `${variant} has a border`);
+    assert.match(cls, /\bborder-transparent\b/, `${variant}'s border is invisible until forced colours`);
+  }
+});
+
+test("destructive actions have their own danger treatment, distinct from browsing actions", () => {
+  const danger = rootClass(renderToStaticMarkup(<Button variant="danger">Disconnect</Button>));
+  const solid = rootClass(renderToStaticMarkup(<Button variant="danger-solid">Disconnect agent</Button>));
+  const secondary = rootClass(renderToStaticMarkup(<Button variant="secondary">View activity</Button>));
+  assert.match(danger, /\btext-danger\b/);
+  assert.match(solid, /\bbg-danger\b/);
+  assert.notEqual(danger, secondary);
+  assert.ok(!/bg-accent(?![\w-])/.test(danger) && !/bg-accent(?![\w-])/.test(solid), "never the neutral primary fill");
+});
+
+test("sizes keep a 44px target on phones and touch; only `sm` compacts, on a desktop with a mouse", () => {
+  assert.match(buttonClasses({ size: "md" }), /\bmin-h-11\b/);
+  assert.match(buttonClasses({ size: "lg" }), /\bmin-h-12\b/);
+  const sm = buttonClasses({ size: "sm" });
+  assert.match(sm, /\bmin-h-11\b/);
+  assert.match(sm, /\blg:pointer-fine:min-h-9\b/);
+  assert.doesNotMatch(sm, /(^|\s)(sm|md):min-h-/);
+});
+
+test("width is explicit: natural by default, full or phone-only full on request", () => {
+  const auto = renderToStaticMarkup(<Button>Save</Button>);
+  assert.doesNotMatch(auto, /data-width/);
+  assert.doesNotMatch(rootClass(auto), /\bw-full\b/);
+  const full = renderToStaticMarkup(<Button width="full">Continue</Button>);
+  assert.match(full, /data-width="full"/);
+  assert.match(rootClass(full), /\bw-full\b/);
+  assert.match(rootClass(renderToStaticMarkup(<Button width="phone-full">Save</Button>)), /\bw-full sm:w-auto\b/);
+});
+
+test("ButtonLink is a real link with the button look (secondary by default)", () => {
+  const markup = renderToStaticMarkup(<ButtonLink href="/agents/access-key">Create an access key</ButtonLink>);
+  assert.match(markup, /^<a[^>]*href="\/agents\/access-key"/);
+  assert.equal(rootClass(markup), buttonClasses({ variant: "secondary" }));
+  assert.ok(textOf(markup).includes("Create an access key"));
+  assert.match(rootClass(renderToStaticMarkup(<ButtonLink href="/x" variant="primary">Go</ButtonLink>)), /\bbg-accent\b/);
+});
+
+test("a pressed toggle looks selected, not only announced", () => {
+  const cls = rootClass(renderToStaticMarkup(<Button variant="secondary" aria-pressed={true}>Preview</Button>));
+  assert.match(cls, /\baria-pressed:border-fg\b/);
+  assert.match(cls, /\baria-pressed:font-semibold\b/);
 });

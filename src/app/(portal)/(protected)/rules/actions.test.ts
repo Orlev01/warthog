@@ -576,22 +576,25 @@ test("a SQL-injection probe in a rule field is bound and stored as data, never a
     const proxy = recordingProxy(db);
     const actions = createRulesActions({ db: proxy, clock: fixedClock(NOW), keyWrapper });
 
-    // The probe rides a plaintext-bound field (the tool name inside the action jsonb).
+    // The probe rides a plaintext-bound field: the chosen-agent scope's name (a bound text
+    // column). (A tool name must now be a real tool, so a probe there is refused before any
+    // write: actions.rule-targets.test.ts.)
     const PROBE = "'; DROP TABLE rules; -- send_email";
+    const AGENT = "6f1b4c8e-2d3a-4b5c-9d7e-0a1b2c3d4e5f";
     expectOk(
       await actions.createRule(
         session,
-        validInput({ action: { type: "specific_tool", tool: PROBE } }),
+        validInput({ scope: { type: "agent", agentId: AGENT, name: PROBE } }),
       ),
-      "createRule with a SQL probe in the tool name",
+      "createRule with a SQL probe in the scope name",
     );
 
     // Stored verbatim as DATA: the table still exists and the value round-trips unchanged.
     const rules = await rulesOf(db, alice.userId, alice.dek);
     assert.equal(rules.length, 1, "the rule was stored (the table was not dropped)");
     assert.deepEqual(
-      rules[0]!.action,
-      { type: "specific_tool", tool: PROBE },
+      rules[0]!.scope,
+      { type: "agent", agentId: AGENT, name: PROBE },
       "the probe is stored verbatim as data, not executed",
     );
 
@@ -601,7 +604,7 @@ test("a SQL-injection probe in a rule field is bound and stored as data, never a
     const allValues = proxy.calls.flatMap((c) => c.values);
     assert.ok(
       allValues.some((v) => typeof v === "string" && v.includes(PROBE)),
-      "the probe travels as a bound value (inside the action json)",
+      "the probe travels as a bound value (the scope name column)",
     );
     assert.ok(allValues.includes(alice.userId), "the acting user id travels as a bound value");
     for (const call of proxy.calls) {

@@ -49,6 +49,7 @@ const NOTICES: Record<string, ActivityNotice> = {
     action: { href: "/inbox", label: "Review approval" } },
   undo_failed: { tone: "problem", text: "The service couldn't complete the undo. Check the activity and service before trying again." },
   dispute_refused: { tone: "problem", text: "That activity entry can't be disputed." },
+  dispute_note_missing: { tone: "problem", text: "Nothing was disputed: add a note saying what's wrong with the entry, then select Dispute again." },
   undo_refused: { tone: "problem", text: "That action couldn't be undone." },
   invalid_request: { tone: "problem", text: "Nothing was changed: that request wasn't valid. Please try again." },
 };

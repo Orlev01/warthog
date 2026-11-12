@@ -1142,6 +1142,42 @@ test("malformed / oversized input is rejected with a 4xx and nothing is persiste
   }
 });
 
+// UI/UX pass (interaction-02): a title or note made only of spaces is not a task or a note.
+// The boundary trims before it checks, so it is refused with a 4xx (the page shows a notice
+// naming the field) and nothing blank is stored; a real title is stored trimmed.
+test("a whitespace-only task title or note is refused at the boundary and nothing blank is stored", async () => {
+  const db = await freshDb();
+  const keyWrapper = makeKeyWrapper();
+  try {
+    const { userId, dek } = await makeUserWithDek(db, keyWrapper, "blank-input");
+    const actions = makeActions(db, keyWrapper);
+    const session = sessionFor(userId);
+
+    for (const blank of ["", "   ", "\t\n  "]) {
+      await assertRejects4xx(`createTask(title=${JSON.stringify(blank)})`, () =>
+        actions.createTask(session, as<"createTask">({ title: blank })),
+      );
+    }
+    assert.deepEqual(await listTasksForUser(db, userId, dek), [], "no blank task was stored");
+
+    assert.equal(okOf(await actions.createTask(session, as<"createTask">({ title: "  Book a plumber  " }))), true);
+    const task = (await listTasksForUser(db, userId, dek))[0]!;
+    assert.equal(task.title, "Book a plumber", "a real title is stored trimmed");
+
+    await assertRejects4xx("addTaskNote(text of spaces)", () =>
+      actions.addTaskNote(session, as<"addTaskNote">({ id: task.id, text: "    " })),
+    );
+    await assertRejects4xx("updateTask(title of spaces)", () =>
+      actions.updateTask(session, as<"updateTask">({ id: task.id, title: "  ", assignee: "any", status: "open" })),
+    );
+    const after = (await listTasksForUser(db, userId, dek))[0]!;
+    assert.equal(after.notes.length, 0, "no blank note was appended");
+    assert.equal(after.title, "Book a plumber", "the title was not blanked");
+  } finally {
+    await db.close();
+  }
+});
+
 test("a SQL-injection probe in a record field / task title is bound as data: the tables survive and the values round-trip", async () => {
   const db = await freshDb();
   const keyWrapper = makeKeyWrapper();

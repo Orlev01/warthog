@@ -1,5 +1,7 @@
 import * as React from "react";
+import type { Metadata } from "next";
 import { cookies } from "next/headers";
+import { redirect } from "next/navigation";
 
 import { loadConfig } from "@/server/config";
 import { requireDevTools } from "@/server/dev/guard";
@@ -9,7 +11,11 @@ import { systemClock } from "@/server/seams/clock";
 import { systemRandom } from "@/server/seams/random";
 import { createAgentConsoleActions } from "./actions";
 import { AgentConsoleView } from "@/components/dev/agent-console-view";
+import { DevFrame } from "@/components/dev/dev-frame";
 import type { Db } from "@/server/db/index";
+
+// "Agent console · Warthog" in the tab (the dev pages used to be titled just "Warthog").
+export const metadata: Metadata = { title: "Agent console" };
 
 // E17-S11 — Dev agent console (loader). The `/dev/agent-console` page provisions (once per
 // person, then reuses) a REAL dev agent FOR THE SIGNED-IN PERSON through the sibling
@@ -43,6 +49,18 @@ async function resolveSession(db: Db): Promise<Session | null> {
   return token ? verifySession(db, token, { clock: systemClock }) : null;
 }
 
+// Issue a fresh key for the dev agent, on request only — loading the page reuses the key it
+// already issued (interaction-09). Re-checks the dev-tools guard and the soft session.
+async function rotateKey(): Promise<void> {
+  "use server";
+  const config = loadConfig();
+  requireDevTools(config);
+  const db = await getServerDb();
+  const session = await resolveSession(db);
+  await createAgentConsoleActions({ db, clock: systemClock, random: systemRandom, config }).rotate(session);
+  redirect("/dev/agent-console");
+}
+
 export default async function DevAgentConsolePage({
   searchParams,
 }: {
@@ -64,14 +82,12 @@ export default async function DevAgentConsolePage({
   }).load(session);
 
   return (
-    <main className="mx-auto flex w-full max-w-2xl flex-col gap-6 px-4 py-8 sm:px-6">
-      <header className="flex flex-col gap-1">
-        <h1 className="text-2xl font-semibold tracking-tight text-fg">Agent console</h1>
-        <p className="text-sm text-fg-muted">
-          Call <code>/mcp</code> as an agent with a dev access key and see the tool response.
-        </p>
-      </header>
-      <AgentConsoleView accessKey={accessKey} endpoint={endpoint} />
-    </main>
+    <DevFrame
+      current="/dev/agent-console"
+      title="Agent console"
+      description={<p>Call Warthog&rsquo;s agent endpoint as an agent, with a dev access key, and see the tool&rsquo;s response.</p>}
+    >
+      <AgentConsoleView accessKey={accessKey} endpoint={endpoint} rotateAction={rotateKey} />
+    </DevFrame>
   );
 }

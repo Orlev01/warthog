@@ -3,11 +3,11 @@ import * as React from "react";
 import { cookies } from "next/headers";
 import { redirect } from "next/navigation";
 import { revalidatePath } from "next/cache";
-import { Notice as InlineNotice } from "@/components/ui/notice";
+import { PageNotice } from "@/components/ui/notice";
 
 import { HouseholdView } from "@/components/household/household-view";
-import { Button } from "@/components/ui/button";
-import { Card } from "@/components/ui/card";
+import { ActionForm, FormSubmit } from "@/components/ui/form-submit";
+import { WorkspaceHeading, WorkspacePanel } from "@/components/shell/workspace-surfaces";
 import { loadConfig } from "@/server/config";
 import { getServerDb } from "@/server/db/server";
 import { selectKeyWrapper } from "@/server/crypto/key-wrapper";
@@ -24,7 +24,7 @@ import {
 import type { SharedAddressNotifier } from "@/server/db/household-shared-address";
 import { HttpError } from "@/server/http/validate";
 import type { Db } from "@/server/db/index";
-import { createHouseholdActions, type ActionResult } from "./actions";
+import { amountInput, createHouseholdActions, type ActionResult } from "./actions";
 
 // E15-S14 — Household page (the thin protected-page loader over the tested
 // `createHouseholdActions` seam, `./actions`) wired to its controls.
@@ -35,7 +35,7 @@ import { createHouseholdActions, type ActionResult } from "./actions";
 // the roster, any pending transfer and any still-open invites — and mounts the
 // render-tested <HouseholdView/>. A person in no household is offered the create control.
 //
-// Each control submits a native <form action={…}>: a thin `"use server"` wrapper
+// Each control submits a guarded form bound to a server action: a thin `"use server"` wrapper
 // re-derives the verified session (never trusting a client value, design §5), calls the
 // seam member-scoped to that session person, and redirects back with a `?notice=` code
 // this page maps to plain words — a refusal (a non-owner mutation, a mis-shaped id) or a
@@ -96,10 +96,11 @@ async function resolveSession(db: Db): Promise<Session | null> {
 }
 
 // Where a finished form action sends the person: back to the screen with the success
-// code, the refusal's reason, or `invalid_request` for a boundary 4xx. Anything else is a
+// code, the refusal's reason, or — for a boundary 4xx — `invalidCode` (a notice naming the
+// field when the form has one field, `invalid_request` otherwise). Anything else is a
 // genuine server fault and is rethrown, never dressed up as a notice.
-function noticeLocation(successCode: string, outcome: ActionResult | unknown): string {
-  if (outcome instanceof HttpError) return `${SCREEN}?notice=invalid_request`;
+function noticeLocation(successCode: string, outcome: ActionResult | unknown, invalidCode = "invalid_request"): string {
+  if (outcome instanceof HttpError) return `${SCREEN}?notice=${invalidCode}`;
   if (outcome instanceof Error) throw outcome;
   const result = outcome as ActionResult;
   const code = result.ok ? successCode : result.reason;
@@ -131,13 +132,13 @@ async function inviteMemberAction(formData: FormData): Promise<void> {
   let outcome: ActionResult | unknown;
   try {
     outcome = await buildActions(db).inviteMember(session, {
-      email: String(formData.get("invite-email") ?? ""),
+      email: String(formData.get("invite-email") ?? "").trim(),
     });
   } catch (error) {
     outcome = error;
   }
   revalidatePath(SCREEN);
-  redirect(noticeLocation("invite_sent", outcome));
+  redirect(noticeLocation("invite_sent", outcome, "invite_email_invalid"));
 }
 
 async function editAddressAction(formData: FormData): Promise<void> {
@@ -154,7 +155,7 @@ async function editAddressAction(formData: FormData): Promise<void> {
     outcome = error;
   }
   revalidatePath(SCREEN);
-  redirect(noticeLocation("address_saved", outcome));
+  redirect(noticeLocation("address_saved", outcome, "address_missing"));
 }
 
 async function followChoiceAction(formData: FormData): Promise<void> {
@@ -179,16 +180,17 @@ async function budgetAction(formData: FormData): Promise<void> {
   const db = await getServerDb();
   const session = await resolveSession(db);
   if (!session) redirect("/signin");
+  // An empty field is a missing amount, never a budget of 0 (which would allow no spending).
+  const monthlyBudget = amountInput(formData.get("household-budget"));
+  if (monthlyBudget === null) redirect(`${SCREEN}?notice=amount_missing`);
   let outcome: ActionResult | unknown;
   try {
-    outcome = await buildActions(db).setHouseholdBudget(session, {
-      monthlyBudget: Number(formData.get("household-budget")),
-    });
+    outcome = await buildActions(db).setHouseholdBudget(session, { monthlyBudget });
   } catch (error) {
     outcome = error;
   }
   revalidatePath(SCREEN);
-  redirect(noticeLocation("budget_saved", outcome));
+  redirect(noticeLocation("budget_saved", outcome, "amount_invalid"));
 }
 
 async function limitAction(formData: FormData): Promise<void> {
@@ -196,17 +198,19 @@ async function limitAction(formData: FormData): Promise<void> {
   const db = await getServerDb();
   const session = await resolveSession(db);
   if (!session) redirect("/signin");
+  const monthlyLimit = amountInput(formData.get("member-limit"));
+  if (monthlyLimit === null) redirect(`${SCREEN}?notice=amount_missing`);
   let outcome: ActionResult | unknown;
   try {
     outcome = await buildActions(db).setMemberLimit(session, {
       memberId: String(formData.get("member-id") ?? session.userId),
-      monthlyLimit: Number(formData.get("member-limit")),
+      monthlyLimit,
     });
   } catch (error) {
     outcome = error;
   }
   revalidatePath(SCREEN);
-  redirect(noticeLocation("limit_saved", outcome));
+  redirect(noticeLocation("limit_saved", outcome, "amount_invalid"));
 }
 
 async function currencyAction(formData: FormData): Promise<void> {
@@ -347,6 +351,10 @@ const NOTICES: Record<string, Notice> = {
   },
   no_pending_transfer: { tone: "problem", text: "There's no ownership transfer waiting for you to accept." },
   unknown_currency: { tone: "problem", text: "Nothing was changed: that isn't a currency we recognise." },
+  invite_email_invalid: { tone: "problem", text: "No invite was sent: enter their email address, like name@example.com." },
+  address_missing: { tone: "problem", text: "The shared address wasn't changed: enter the address first." },
+  amount_missing: { tone: "problem", text: "Nothing was changed: enter an amount first. An amount of 0 allows no spending." },
+  amount_invalid: { tone: "problem", text: "Nothing was changed: enter the amount as a number of 0 or more, like 500." },
   invalid_request: { tone: "problem", text: "Nothing was changed: that request wasn't valid. Please try again." },
 };
 
@@ -354,44 +362,31 @@ function householdNotice(code: string | undefined): Notice | null {
   return (code !== undefined && Object.hasOwn(NOTICES, code) && NOTICES[code]) || null;
 }
 
-function NoticeBanner({ notice }: { notice: Notice }) {
-  return (
-    <div className="mx-auto w-full max-w-3xl px-4 pt-8 sm:px-6">
-      <InlineNotice tone={notice.tone === "done" ? "success" : "error"}>{notice.text}</InlineNotice>
-    </div>
-  );
+// The outcome of the last action, as the page's one notice slot under the heading band.
+// It removes `?notice=` from the address once shown.
+function OutcomeNotice({ notice }: { notice: Notice }) {
+  return <PageNotice tone={notice.tone === "done" ? "success" : "error"}>{notice.text}</PageNotice>;
 }
 
 // Offered to a person in no household: the one control that starts one they own.
-function CreateHouseholdPrompt() {
+function CreateHouseholdPrompt({ notice }: { notice: React.ReactNode }) {
   return (
-    <section className="wh-page wh-page--reading flex flex-col gap-4">
-      <h1 className="text-2xl font-semibold tracking-tight text-fg">Household</h1>
-      <Card className="flex flex-col gap-3">
-        <p className="text-fg">
-          You're not in a household yet. Create one to share a postal address, a monthly budget and
-          per-member limits with the people you live with.
-        </p>
-        <form action={createHouseholdAction}>
-          <Button type="submit">Create a household</Button>
-        </form>
-      </Card>
-    </section>
-  );
-}
-
-// Offered to the named target of a pending transfer: the control that accepts ownership —
-// the view carries no accept slot, so this sits alongside it (never a dead control).
-function AcceptOwnershipPrompt() {
-  return (
-    <section className="mx-auto flex max-w-3xl flex-col gap-3 px-4 pb-8 sm:px-6">
-      <Card className="flex flex-col gap-3">
-        <p className="text-fg">The current owner has asked to transfer this household to you.</p>
-        <form action={acceptOwnershipAction}>
-          <Button type="submit">Accept ownership</Button>
-        </form>
-      </Card>
-    </section>
+    <div className="wh-page">
+      <WorkspaceHeading
+        title="Household"
+        description="Share an address and a monthly budget with the people you live with. Everyone keeps their own account and private details."
+      />
+      {notice}
+      <WorkspacePanel
+        title="Start a household"
+        description="You're not in a household yet. Start one to share a postal address, a monthly budget and per-member limits. You'll be its owner and can invite up to 7 people by email."
+        footer={
+          <ActionForm action={createHouseholdAction}>
+            <FormSubmit pendingLabel="Creating…">Create a household</FormSubmit>
+          </ActionForm>
+        }
+      />
+    </div>
   );
 }
 
@@ -410,31 +405,27 @@ export default async function HouseholdPage({
 
   const data = await buildActions(db).load(session);
 
-  return (
-    <div className="flex w-full flex-col">
-      {notice ? <NoticeBanner notice={notice} /> : null}
-      {data ? (
-        <>
-          <HouseholdView
-            household={data}
-            currentUserId={session.userId}
-            currencyOptions={KNOWN_CURRENCIES}
-            inviteAction={inviteMemberAction}
-            editAddressAction={editAddressAction}
-            followChoiceAction={followChoiceAction}
-            budgetAction={budgetAction}
-            limitAction={limitAction}
-            currencyAction={currencyAction}
-            removeMemberAction={removeMemberAction}
-            leaveAction={leaveAction}
-            transferAction={transferAction}
-            closeAction={closeAction}
-          />
-          {data.pendingTransfer?.toUserId === session.userId ? <AcceptOwnershipPrompt /> : null}
-        </>
-      ) : (
-        <CreateHouseholdPrompt />
-      )}
-    </div>
+  const outcome = notice ? <OutcomeNotice notice={notice} /> : null;
+  // The view offers "Accept ownership" itself when a transfer is waiting for this person.
+  return data ? (
+    <HouseholdView
+      household={data}
+      currentUserId={session.userId}
+      currencyOptions={KNOWN_CURRENCIES}
+      notice={outcome}
+      inviteAction={inviteMemberAction}
+      editAddressAction={editAddressAction}
+      followChoiceAction={followChoiceAction}
+      budgetAction={budgetAction}
+      limitAction={limitAction}
+      currencyAction={currencyAction}
+      removeMemberAction={removeMemberAction}
+      leaveAction={leaveAction}
+      transferAction={transferAction}
+      closeAction={closeAction}
+      acceptOwnershipAction={acceptOwnershipAction}
+    />
+  ) : (
+    <CreateHouseholdPrompt notice={outcome} />
   );
 }

@@ -201,7 +201,7 @@ const HIST_DENIED: DecidedRequestView = {
   agent: "ChatGPT",
   sentence: "wanted to post to the forum",
   status: "denied",
-  outcome: "Turned down",
+  outcome: "Denied",
   decidedAt: "this morning",
 };
 const HIST_EXPIRED: DecidedRequestView = {
@@ -290,8 +290,10 @@ function controlFace(el: El): string {
   return parts.join(" ").replace(/\s+/g, " ").trim();
 }
 
+// Unavailable means the native attribute or aria-disabled — not the shared Button's
+// Tailwind `disabled:` class variants, which every button carries.
 function isDisabled(el: El): boolean {
-  return /\bdisabled\b/i.test(el.attrs);
+  return /\sdisabled=""|aria-disabled="true"/i.test(el.attrs);
 }
 
 // Every <button> whose accessible name matches `re` (disabled ones included).
@@ -666,7 +668,7 @@ test("a more-detail history entry shows the question that was asked", () => {
 test("a decided request offers none of the pending decision controls", () => {
   // History only: a decided request is settled — no Approve / Deny / Ask / release
   // control hangs off it (those belong to pending requests). The outcome LABELS
-  // ("Approved", "Turned down", "You asked for more") are plain text, not controls.
+  // ("Approved", "Denied", "You asked for more") are plain text, not controls.
   const markup = render(base({ pending: [] }));
   assert.equal(controlsMatching(markup, APPROVE_RE).length, 0, "no Approve control on decided requests");
   assert.equal(controlsMatching(markup, DENY_RE).length, 0, "no Deny control on decided requests");
@@ -1369,11 +1371,12 @@ test("one agent's pending requests stay a single list with no agent headings", (
 
 test("repeated decision controls name the request they decide for screen readers", () => {
   const markup = render(base({ history: [] }));
-  // Deny buttons, the Ask disclosures and the Ask submit buttons each repeat per request.
+  // Deny buttons, the Ask disclosures and the Ask submit buttons ("Ask the agent") each
+  // repeat per request.
   for (const [tag, re] of [
     ["button", /^Deny\b/],
     ["summary", /^Ask for more detail\b/],
-    ["button", /^Ask for more detail\b/],
+    ["button", /^Ask the agent\b/],
   ] as const) {
     const faces = findAll(markup, tag).map(controlFace).filter((face) => re.test(face));
     assert.equal(faces.length, 3, `one ${tag} ${re} per request, got ${JSON.stringify(faces)}`);
@@ -1402,7 +1405,7 @@ test("history filters offer each outcome and agent as links with counts, marking
   assert.deepEqual(navLinks(markup, "Filter decisions by outcome"), [
     { text: "All 3", href: `/inbox?agent=${AGENT_CLAUDE}&view=history`, current: true },
     { text: "Approved 1", href: `/inbox?agent=${AGENT_CLAUDE}&outcome=approved&view=history`, current: false },
-    { text: "Turned down 0", href: `/inbox?agent=${AGENT_CLAUDE}&outcome=denied&view=history`, current: false },
+    { text: "Denied 0", href: `/inbox?agent=${AGENT_CLAUDE}&outcome=denied&view=history`, current: false },
     { text: "Expired 1", href: `/inbox?agent=${AGENT_CLAUDE}&outcome=expired&view=history`, current: false },
     { text: "Asked for more detail 1", href: `/inbox?agent=${AGENT_CLAUDE}&outcome=more_detail&view=history`, current: false },
   ]);
@@ -1425,7 +1428,7 @@ test("applied history filters are removable chips with a way to clear them all",
     liveBase({ historyFilter: { outcome: "denied", agent: AGENT_CLAUDE }, historySummary: { ...SUMMARY, matching: 1 }, history: [HIST_DENIED] }),
   );
   const chips = findAll(markup, "a").map((a) => ({ text: visibleText(a.inner), href: decode(attr(a.attrs, "href") ?? "") }));
-  assert.ok(chips.some((c) => c.text === "Remove filter Outcome: Turned down" && c.href === `/inbox?agent=${AGENT_CLAUDE}&view=history`));
+  assert.ok(chips.some((c) => c.text === "Remove filter Outcome: Denied" && c.href === `/inbox?agent=${AGENT_CLAUDE}&view=history`));
   assert.ok(chips.some((c) => c.text === "Remove filter Agent: Claude" && c.href === "/inbox?outcome=denied&view=history"));
   assert.ok(chips.some((c) => c.text === "Clear all filters" && c.href === "/inbox?view=history"));
 });
@@ -1453,7 +1456,7 @@ test("history rows show each outcome in words with an icon, as divider rows", ()
   const row = itemFor(markup, HIST_DENIED.id);
   assert.ok(row, "the decision renders as a list item");
   assert.match(row.inner, /<svg[^>]*aria-hidden="true"/, "an icon accompanies the words");
-  assert.match(visibleText(row.inner), /Turned down/, "the outcome reads as words");
+  assert.match(visibleText(row.inner), /Denied/, "the outcome reads as words");
   assert.match(attr(row.attrs, "class") ?? "", /border-b/, "a divider row, not a card per decision");
 });
 
@@ -1464,4 +1467,78 @@ test("a decision's outcome notice renders inside the page width", () => {
   assert.doesNotMatch(markup, /max-w-3xl/, "no narrower wrapper outside the page");
   const error = renderLive(liveBase({ notice: { tone: "error", text: "We couldn't complete that just now." } }));
   assert.match(error, /role="alert"/, "a problem is announced immediately");
+});
+
+// ═══ UI/UX pass (lane A) — contained, consistent and explained ══════════════════════════
+
+test("the page title, its purpose and the tabs share one heading band; no text sits on the canvas", () => {
+  const markup = renderLive(liveBase());
+  assert.match(markup, /^<div class="wh-page">/, "one page container, with no local spacing utilities");
+  const band = markup.slice(markup.indexOf('<header class="wh-page-heading"'), markup.indexOf("</header>"));
+  assert.match(band, /<h1>Inbox<\/h1>/, "the title is in the heading band");
+  assert.match(band, /Requests from your agents that need your decision/, "with a one-line purpose");
+  assert.match(band, /role="tablist"/, "and the Waiting on you / History tabs in its nav row");
+});
+
+test("pending requests are divider rows of one list group, not a card per request", () => {
+  const markup = renderLive(liveBase({ pending: [PENDING_CARD, { ...PENDING_HELD, agent: "Claude" }], history: [] }));
+  assert.match(markup, /<h2[^>]*>Requests to decide<\/h2>\s*<span[^>]*>2<\/span>/, "one titled group with its count");
+  const item = itemFor(markup, PENDING_HELD.id);
+  assert.ok(item, "each request is a list row");
+  assert.doesNotMatch(attr(item.attrs, "class") ?? "", /rounded-card|bg-surface\b|\bp-4\b/, "no card chrome on a row");
+  assert.match(attr(item.attrs, "class") ?? "", /border-b/, "a divider row");
+});
+
+test("the agent's reason is labelled as such, and a missing one says so", () => {
+  const text = visibleText(render(base({ pending: [{ ...PENDING_HELD, reason: "" }], history: [] })));
+  assert.match(text, /Agent's reason No reason given/, "an empty reason reads as not given, never a blank line");
+  assert.doesNotMatch(text, /\bWhy\b/, "the old 'Why' label is gone");
+});
+
+test("an unavailable control stays reachable and is described by its reason (a11y-18)", () => {
+  const dead = render(base({ pending: [PENDING_HELD], history: [], denyAction: undefined }));
+  const deny = buttonsMatching(dead, DENY_RE)[0]!;
+  assert.equal(attr(deny.attrs, "aria-disabled"), "true", "marked unavailable without leaving the Tab order");
+  const reasonId = attr(deny.attrs, "aria-describedby");
+  assert.ok(reasonId, "the reason is tied to the control");
+  const reason = findAll(dead, "p").find((p) => attr(p.attrs, "id") === reasonId);
+  assert.ok(reason && /Denying isn't available/.test(decode(reason.inner)), "and says why");
+});
+
+test("decision controls are guarded forms that say what they're doing", () => {
+  const markup = render(base({ pending: [PENDING_HELD], history: [] }));
+  const approve = buttonsMatching(markup, /^Approve\b/)[0]!;
+  assert.equal(attr(approve.attrs, "type"), "submit");
+  assert.doesNotMatch(approve.attrs, /\sdisabled=""|aria-disabled="true"/, "live before it is pressed");
+  assert.equal(buttonsMatching(markup, /^Approve\b/).length, 1, "one primary decision per request");
+});
+
+test("an empty inbox says what will appear and offers the next step", () => {
+  const fresh = visibleText(renderLive(liveBase({ pending: [], history: [], historySummary: undefined, hasAgents: false })));
+  assert.match(fresh, /Nothing waiting for you/);
+  assert.match(fresh, /Once you connect an agent/);
+  const freshMarkup = renderLive(liveBase({ pending: [], history: [], historySummary: undefined, hasAgents: false }));
+  assert.match(freshMarkup, /href="\/agents\/connect"[^>]*>Connect your first agent/, "a newcomer is pointed at connecting an agent");
+
+  const connected = renderLive(liveBase({ pending: [], history: [], historySummary: undefined, hasAgents: true }));
+  assert.match(visibleText(connected), /Nothing waiting for you When an agent asks to do something that needs your approval, you'll see it here\./, "the same words as Home");
+  assert.match(connected, /href="\/rules"[^>]*>Choose what needs your approval/, "and a way to choose what needs approval");
+});
+
+test("an empty tab is a bounded empty state with a way to the other tab", () => {
+  const noPending = renderLive(liveBase({ pending: [], historySummary: SUMMARY }));
+  assert.match(noPending, /class="wh-card wh-empty[^"]*"[\s\S]*Nothing waiting for you/, "nothing waiting is a bounded empty state");
+  assert.match(noPending, /href="\/inbox\?view=history"[^>]*>See past decisions/);
+  const noHistory = renderLive(liveBase({ history: [], historySummary: { ...SUMMARY, total: 0, matching: 0, outcomes: [], agents: [], allOutcomesCount: 0, allAgentsCount: 0 } }));
+  assert.match(visibleText(noHistory), /No decisions yet/);
+  assert.doesNotMatch(noHistory, /Nothing decided yet/);
+});
+
+test("a decision notice sits straight under the heading band, in the tab that opens", () => {
+  const markup = renderLive(liveBase({ notice: { tone: "info", text: "That approval link has expired or was already used." } }));
+  const bandEnd = markup.indexOf("</header>");
+  const noticeAt = markup.indexOf("That approval link has expired");
+  const firstRequest = markup.indexOf("ferry fare");
+  assert.ok(bandEnd < noticeAt && noticeAt < firstRequest, "after the band, before the requests");
+  assert.equal(markup.split("That approval link has expired").length - 1, 1, "shown once, not once per tab");
 });

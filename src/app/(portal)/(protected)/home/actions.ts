@@ -26,8 +26,8 @@ import { activityEvidence } from "@/domain/activity/evidence";
 // first-run empty states exactly as the minimal loader did.
 
 import { computeSetupChecklist } from "@/domain/home/checklist";
-import { agentLabel, entryTitle, humanise } from "@/domain/activity/describe";
-import { outcomeGroup } from "@/domain/activity/category";
+import { agentLabel, entryTitle } from "@/domain/activity/describe";
+import { outcomeGroup, outcomeLabel } from "@/domain/activity/category";
 import { dayOf, timeOfDay } from "@/domain/display-time";
 import { agentNamesForUser } from "@/server/db/agents";
 import type { ActivityGroupSummary } from "@/server/activity/list";
@@ -106,7 +106,7 @@ function toDashboardActivity(
     id: entry.entryHash,
     title: entryTitle(entry),
     summary: activityEvidence(entry).summary,
-    outcome: entry.outcome !== undefined ? humanise(entry.outcome) : undefined,
+    outcome: entry.outcome !== undefined ? outcomeLabel(entry.outcome) : undefined,
     outcomeGroup: outcomeGroup(entry.outcome),
     agent: agentLabel(agentNames, entry.agentId),
     reported: entry.source === "agent_reported",
@@ -131,18 +131,20 @@ function toDashboardAgent(
   now: Date | undefined,
 ): DashboardAgent {
   const lastActive = agent.lastActiveAt == null ? undefined : new Date(agent.lastActiveAt).toISOString();
+  const agentParam = encodeURIComponent(agent.agentId);
   return {
     id: agent.agentId,
     platform: agent.platform,
-    href: `/agents/${encodeURIComponent(agent.agentId)}`,
-    activityHref: `/activity?agent=${encodeURIComponent(agent.agentId)}&via=agents`,
+    href: `/agents/${agentParam}`,
+    activityHref: `/activity?agent=${agentParam}&via=agents`,
+    attentionHref: `/activity?attention=1&agent=${agentParam}`,
     lastActive: lastActive ? `${dayOf(lastActive, timeZone, now).label}, ${timeOfDay(lastActive, timeZone)}` : undefined,
     todayCount: lastDay?.total ?? 0,
     needsAttention: lastDay ? lastDay.byOutcome.blocked + lastDay.byOutcome.failed + lastDay.disputed : 0,
     name: agent.displayName,
     status: agent.status === "connected" ? "connected" : "needs-reconnect",
     spendThisPeriod: Number(agent.spendThisPeriod),
-    budget: Number(agent.budget),
+    budget: agent.budget === null ? null : Number(agent.budget),
     budgetPeriod: agent.budgetPeriod,
     currency: agent.currency,
     ...(agent.spendUnavailable ? { spendUnavailable: true } : {}),
@@ -181,17 +183,18 @@ export function createHomeActions(deps: HomeActionsDeps): HomeActions {
     const localPart = email.split("@")[0] ?? email;
 
     // Greet by the person's own low-tier name when it is readable: preferred name
-    // first, then name, else the email's local part. The fields decrypt only under
-    // THIS person's DEK, so the greeting can never name another account.
+    // first, then the first word of their name ("Hi, Alexandra", not the full legal
+    // name — UI/UX pass content-52), else the email's local part. The fields decrypt
+    // only under THIS person's DEK, so the greeting can never name another account.
     let personName = localPart;
     let timeZone: string | undefined;
     if (user && keyWrapper) {
       const dek = await keyWrapper.unwrap(user.wrappedDek);
       timeZone = await timeZoneFor(db, user.id, dek);
       const fields = await listIdentityFields(db, user.id, dek);
-      const preferred = fields.find((field) => field.kind === "preferred_name")?.value;
-      const name = fields.find((field) => field.kind === "name")?.value;
-      personName = preferred ?? name ?? localPart;
+      const preferred = fields.find((field) => field.kind === "preferred_name")?.value.trim();
+      const firstName = fields.find((field) => field.kind === "name")?.value.trim().split(/\s+/)[0];
+      personName = preferred || firstName || localPart;
     }
 
     // Without the key wrapper AND clock the two owner-scoped reads cannot run (they
@@ -226,7 +229,11 @@ export function createHomeActions(deps: HomeActionsDeps): HomeActions {
       personName,
       checklist,
       pendingApprovals: metrics.pendingApprovals,
-      activity: metrics.activity.map((entry) => toDashboardActivity(entry, agentNames, timeZone, serviceName, now)),
+      // The intent record written just before a change runs is always followed by its own
+      // result entry, so Home shows the result once rather than "Started: …" beside it.
+      activity: metrics.activity
+        .filter((entry) => entry.kind !== "tool_attempt")
+        .map((entry) => toDashboardActivity(entry, agentNames, timeZone, serviceName, now)),
       agents: metrics.agents.map((agent) =>
         toDashboardAgent(agent, lastDay.find((group) => group.key === agent.agentId), timeZone, now)),
       reminders: metrics.reminders.map(toDashboardReminder),
