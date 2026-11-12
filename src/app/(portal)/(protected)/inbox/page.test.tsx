@@ -72,7 +72,7 @@ import { Buffer } from "node:buffer";
 import { randomBytes, randomUUID } from "node:crypto";
 import { renderToStaticMarkup } from "react-dom/server";
 
-import { createInboxActions } from "./actions";
+import { createInboxActions, inboxQueryFrom } from "./actions";
 
 import {
   InboxView,
@@ -1125,4 +1125,175 @@ test("W6 — a card with no name and no saved name offers no name, rather than a
   } finally {
     await db.close();
   }
+});
+
+// =====================================================================================
+// Inbox organisation — the loader feeds the tabs, the per-agent grouping of pending
+// requests and the history filters. Filters arrive from the address bar, so the loader
+// validates them: an outcome must be a known one and an agent must be one of the
+// SESSION person's own agents — anything else is ignored, never trusted. The history is a
+// bounded, newest-first page; its counts cover every decision.
+// =====================================================================================
+
+// The full factory (no test-only cast), for the loader's organisation options.
+function liveActions(db: Db, keyWrapper: KeyWrapper) {
+  return createInboxActions({
+    db,
+    clock: fixedClock(NOW),
+    keyWrapper,
+    executeApprovedHold: async (): Promise<never> => {
+      throw new Error("the inbox loader must not execute a held call — it only reads");
+    },
+  });
+}
+
+async function agentFor(db: Db, userId: string, displayName: string) {
+  return createAgent(db, { userId, connectionId: randomUUID(), displayName, platform: "claude" }, fixedClock(T_SEED));
+}
+
+// One decision by a named agent, decided at `minute` past 11:50 (inside the window).
+async function seedDecisionBy(
+  db: Db,
+  input: {
+    userId: string;
+    dek: Uint8Array;
+    agentId: string;
+    sentence: string;
+    decision: Parameters<typeof decide>[1]["decision"];
+    minute: number;
+  },
+): Promise<string> {
+  const created = await createApproval(
+    db,
+    { userId: input.userId, agentId: input.agentId, detail: detailFor({ sentence: input.sentence }), expiryMinutes: 15 },
+    input.dek,
+    fixedClock(T_SEED),
+  );
+  await decide(
+    db,
+    { userId: input.userId, id: created.id, decision: input.decision },
+    input.dek,
+    fixedClock(new Date(T_SEED.getTime() + input.minute * 60_000)),
+  );
+  return created.id;
+}
+
+test("the loader carries each pending request's agent, so the view can group requests by agent", async () => {
+  const db = await freshDb();
+  const keyWrapper = keyWrapperFor();
+  try {
+    const alice = await makePerson(db, keyWrapper, "alice");
+    const claude = await agentFor(db, alice.userId, "Claude");
+    const chatgpt = await agentFor(db, alice.userId, "ChatGPT");
+    for (const [agentId, at] of [
+      [claude.id, T_OLD],
+      [chatgpt.id, T_NEW],
+    ] as const) {
+      await createApproval(
+        db,
+        { userId: alice.userId, agentId, detail: detailFor({}), expiryMinutes: 15 },
+        alice.dek,
+        fixedClock(at),
+      );
+    }
+    const view = await liveActions(db, keyWrapper).load(await sessionFor(db, alice.userId));
+    assert.deepEqual(
+      view.pending.map((request) => [request.agentId, request.agent]),
+      [
+        [chatgpt.id, "ChatGPT"],
+        [claude.id, "Claude"],
+      ],
+      "newest first, each with its agent's id and name",
+    );
+    const markup = renderInbox(view);
+    assert.match(markup, /<h2[^>]*>ChatGPT<\/h2>/, "two agents waiting: the screen groups by agent");
+  } finally {
+    await db.close();
+  }
+});
+
+test("the loader filters the history by a known outcome and the person's own agent, with counts for the tabs and filters", async () => {
+  const db = await freshDb();
+  const keyWrapper = keyWrapperFor();
+  try {
+    const alice = await makePerson(db, keyWrapper, "alice");
+    const bob = await makePerson(db, keyWrapper, "bob");
+    const claude = await agentFor(db, alice.userId, "Claude");
+    const chatgpt = await agentFor(db, alice.userId, "ChatGPT");
+    const bobsAgent = await agentFor(db, bob.userId, "Bob's helper");
+    const approved = await seedDecisionBy(db, { ...alice, agentId: claude.id, sentence: "booked a table", decision: { status: "approved" }, minute: 1 });
+    const denied = await seedDecisionBy(db, { ...alice, agentId: claude.id, sentence: "wanted to email the club", decision: { status: "denied" }, minute: 3 });
+    const deniedOther = await seedDecisionBy(db, { ...alice, agentId: chatgpt.id, sentence: "wanted to post", decision: { status: "denied" }, minute: 2 });
+    await seedDecisionBy(db, { ...bob, agentId: bobsAgent.id, sentence: "a Bob decision", decision: { status: "denied" }, minute: 4 });
+    const session = await sessionFor(db, alice.userId);
+    const actions = liveActions(db, keyWrapper);
+
+    const all = await actions.load(session);
+    assert.deepEqual(all.history.map((entry) => entry.id), [denied, deniedOther, approved], "newest decision first");
+    assert.deepEqual(all.historyFilter, {}, "no filter");
+    assert.equal(all.historySummary?.total, 3, "every one of Alice's decisions is counted, never Bob's");
+
+    const narrowed = await actions.load(session, { outcome: "denied", agent: claude.id });
+    assert.deepEqual(narrowed.history.map((entry) => entry.id), [denied], "turned down, by Claude");
+    assert.deepEqual(narrowed.historyFilter, { outcome: "denied", agent: claude.id });
+    assert.deepEqual(narrowed.historySummary, {
+      total: 3,
+      matching: 1,
+      outcomes: [
+        { status: "approved", count: 1 },
+        { status: "denied", count: 1 },
+      ],
+      allOutcomesCount: 2,
+      agents: [
+        { id: chatgpt.id, name: "ChatGPT", count: 1 },
+        { id: claude.id, name: "Claude", count: 1 },
+      ],
+      allAgentsCount: 2,
+    }, "outcome counts within the agent; agent counts within the outcome");
+
+    for (const ignored of [{ outcome: "pending" }, { agent: bobsAgent.id }, { agent: "x'; DROP TABLE approvals; --" }]) {
+      const view = await actions.load(session, ignored);
+      assert.deepEqual(view.historyFilter, {}, `${JSON.stringify(ignored)} is not a filter Alice can apply`);
+      assert.equal(view.history.length, 3, "so her whole history shows");
+    }
+  } finally {
+    await db.close();
+  }
+});
+
+test("a notification for a decision outside the loaded history still finds it — only the person's own", async () => {
+  const db = await freshDb();
+  const keyWrapper = keyWrapperFor();
+  try {
+    const alice = await makePerson(db, keyWrapper, "alice");
+    const bob = await makePerson(db, keyWrapper, "bob");
+    const claude = await agentFor(db, alice.userId, "Claude");
+    const denied = await seedDecisionBy(db, { ...alice, agentId: claude.id, sentence: "wanted to email the club", decision: { status: "denied" }, minute: 1 });
+    await seedDecisionBy(db, { ...alice, agentId: claude.id, sentence: "booked a table", decision: { status: "approved" }, minute: 2 });
+    const bobs = await seedDecisionBy(db, { ...bob, agentId: randomUUID(), sentence: "a Bob decision", decision: { status: "denied" }, minute: 3 });
+    const session = await sessionFor(db, alice.userId);
+    const actions = liveActions(db, keyWrapper);
+
+    const outside = await actions.load(session, { outcome: "approved", focusApproval: denied });
+    assert.equal(outside.openedEntry?.id, denied, "the opened decision is loaded even though the filter hides it");
+    assert.equal(outside.openedEntry?.status, "denied");
+    assert.equal(outside.openedEntry?.agent, "Claude");
+    const markup = renderInbox(outside, {});
+    assert.match(markup, new RegExp(`id="approval-${denied}"`), "and it is on the screen to focus");
+
+    assert.equal((await actions.load(session, { focusApproval: denied })).openedEntry, undefined, "already on the page: no extra copy");
+    assert.equal((await actions.load(session, { focusApproval: bobs })).openedEntry, undefined, "never another person's");
+    assert.equal((await actions.load(session, { focusApproval: "not-an-id" })).openedEntry, undefined, "a malformed id is simply not found");
+  } finally {
+    await db.close();
+  }
+});
+
+test("inboxQueryFrom validates the view and passes the filters and opened approval through", () => {
+  assert.deepEqual(
+    inboxQueryFrom({ view: "history", outcome: "denied", agent: "a1", approval: "z9", notice: "approved" }),
+    { initialView: "history", outcome: "denied", agent: "a1", focusApproval: "z9" },
+  );
+  assert.deepEqual(inboxQueryFrom({ view: "everything" }), {}, "an unknown view falls back to the default tab");
+  assert.deepEqual(inboxQueryFrom({ view: ["pending", "history"], outcome: "" }), { initialView: "pending" }, "first value wins; empty is absent");
 });
