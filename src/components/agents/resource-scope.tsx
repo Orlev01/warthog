@@ -50,11 +50,11 @@ const RESOURCES: Record<string, { section: string; noun: string; description: st
     section: "rules",
     noun: "rules",
     description:
-      "Rules can apply globally or to a chosen agent. Global restrictions still apply when you customise an agent.",
+      "Rules can apply to all agents or to a chosen one. Your rules for all agents still apply when you customise one.",
   },
 };
-// `connected: false` marks a disconnected agent: still listed (its history and settings stay
-// reachable) but labelled, so it isn't mistaken for one that can use the resource.
+// `connected: false` marks a disconnected agent. It is left out of "Manage for one agent":
+// its settings are read-only and it can't use the resource; its history stays on its own page.
 export type ScopeAgent = { id: string; name: string; connected?: boolean };
 
 export function resourceScopeFor(pathname: string) {
@@ -72,6 +72,7 @@ export function ResourceScope({
 }) {
   const resource = resourceScopeFor(pathname);
   if (!resource) return null;
+  const manageable = agents.filter((agent) => agent.connected !== false);
   const row = (
     <>
       <details className="wh-scope-disclosure">
@@ -81,18 +82,17 @@ export function ResourceScope({
         </summary>
         <p>{resource.description}</p>
       </details>
-      {agents.length ? (
+      {manageable.length ? (
         <details className="wh-scope-disclosure">
           <summary>
             Manage for one agent
             <ChevronDown aria-hidden size={14} className="wh-scope-chevron" />
           </summary>
           <ul role="list" aria-label={`Manage ${resource.noun} for one agent`} className="wh-scope-agents">
-            {agents.map((agent) => (
+            {manageable.map((agent) => (
               <li key={agent.id}>
                 <a href={`/agents/${encodeURIComponent(agent.id)}?section=${resource.section}`}>
                   <span>{agent.name}</span>
-                  {agent.connected === false ? <span className="wh-scope-agent-state">Disconnected</span> : null}
                   <ChevronRight aria-hidden size={16} />
                 </a>
               </li>

@@ -268,7 +268,6 @@ html:has(.wh-nav-dialog[open]) { overflow: hidden; }
 .wh-scope-agents a { display: flex; min-height: 44px; align-items: center; justify-content: space-between; gap: 12px; padding: 8px 12px; border-radius: var(--wh-radius-field); background: var(--wh-surface-muted); color: var(--wh-fg); overflow-wrap: anywhere; }
 .wh-scope-agents a:hover { background: color-mix(in srgb, var(--wh-fg) 7%, var(--wh-surface-muted)); }
 .wh-scope-agents a > span:first-child { flex: 1; min-width: 0; }
-.wh-scope-agent-state { flex-shrink: 0; color: var(--wh-fg-muted); font-size: 12px; }
 .wh-scope-agents svg { flex-shrink: 0; color: var(--wh-fg-muted); }
 
 /* ---------- Panels (WorkspacePanel), cards and the light-mode edge ---------- */

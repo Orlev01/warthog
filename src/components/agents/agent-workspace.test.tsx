@@ -35,6 +35,16 @@ test("resource screens explain account scope and link to each agent's matching s
   const none = renderToStaticMarkup(<ResourceScope pathname="/memory" agents={[]} />);
   assert.match(none, /How access works/);
   assert.doesNotMatch(none, /Manage for one agent|Connect your first agent/);
+  // A disconnected agent can't be managed (its settings are read-only), so it isn't offered.
+  const mixed = renderToStaticMarkup(
+    <ResourceScope pathname="/memory" agents={[{ id: "on", name: "On" }, { id: "off", name: "Off", connected: false }]} />,
+  );
+  assert.match(mixed, /href="\/agents\/on\?section=memory"/);
+  assert.doesNotMatch(mixed, /\/agents\/off/);
+  const allOff = renderToStaticMarkup(
+    <ResourceScope pathname="/memory" agents={[{ id: "off", name: "Off", connected: false }]} />,
+  );
+  assert.doesNotMatch(allOff, /Manage for one agent/);
   // Inside the page heading band it is a labelled group, not a second landmark.
   const heading = renderToStaticMarkup(
     <ResourceScope variant="heading" pathname="/memory" agents={[{ id: "a", name: "A" }]} />,

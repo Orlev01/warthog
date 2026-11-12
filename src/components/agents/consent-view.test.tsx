@@ -294,13 +294,13 @@ type BoolCap =
   | "learningSharing";
 
 const CAPS: Array<{ key: BoolCap; re: RegExp; label: string }> = [
-  { key: "lowTierProfile", re: /profile/i, label: "low-tier profile" },
+  { key: "lowTierProfile", re: /everyday details/i, label: "everyday details" },
   { key: "sharedMemoryRead", re: /shared memor/i, label: "shared-memory read" },
   { key: "ownMemorySave", re: /own memor|save[^.|]*memor/i, label: "its own memories" },
   { key: "tasks", re: /tasks?/i, label: "tasks" },
   { key: "lifeAdmin", re: /life[\s-]?admin/i, label: "life-admin" },
   // Always opt-in — OFF in every starting set (Standard/Minimal/Custom alike).
-  { key: "highTier", re: /protected identity/i, label: "protected identity requests" },
+  { key: "highTier", re: /request protected details/i, label: "protected details requests" },
   { key: "card", re: /\bcard/i, label: "card requests" },
   { key: "learningSharing", re: /what it learns|shares? what|learns?\b/i, label: "sharing what it learns" },
 ];
