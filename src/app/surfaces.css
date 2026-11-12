@@ -1,0 +1,6 @@
+/* Containment and layout surfaces (UI/UX pass, 12 Nov 2026).
+ * Rule: no free text on the canvas — every text node sits inside a bounded component
+ * (heading band, panel, list group, toolbar, notice, empty state, tab strip, bar).
+ * Loaded after globals.css/workspace.css, unlayered like them, so equal-specificity rules win.
+ * Depth model stays canvas → panel → inset (docs/design/workspace-depth.md); no card-in-card.
+ */

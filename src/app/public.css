@@ -1,0 +1,4 @@
+/* Public, account-entry and standalone screens (UI/UX pass, 12 Nov 2026): landing, help, legal,
+ * sign-in/up/recover/reset/device, consent and status pages. Every text block sits in a bounded
+ * band, panel or bar (docs/design/public-front-door.md). Loaded last; unlayered.
+ */
