@@ -3,7 +3,7 @@
 import * as React from "react";
 import { Lock } from "lucide-react";
 
-import { Card } from "@/components/ui/card";
+import { ListGroup, LIST_ROW } from "@/components/ui/list-group";
 import { encryptValue } from "@/client/vault/values";
 import {
   HighTierFlow,
@@ -15,7 +15,6 @@ import {
   type SaveLowTierFieldAction,
   type UpdateLowTierFieldAction,
 } from "./low-tier-detail-flow";
-import { VaultNav } from "./vault-nav";
 
 // E11-S13 — Vault identity view component (brief "Identity vault"; design §4.1
 // low tier + §4.2 device-held vault; primary journey "About you").
@@ -33,6 +32,12 @@ import { VaultNav } from "./vault-nav";
 //   - an "Add a high-tier detail" control opens, at that sensitive moment, the plain
 //     explainer of HOW the detail is protected (sealed on the device) and WHO can
 //     ever read it (only when the person approves).
+//
+// Organisation: within each tier the details are grouped by purpose (names, contact,
+// preferences; identity, vehicle, other) under titled groups with their counts, each
+// detail a divider row rather than its own card — so an opened raise panel is never a
+// card inside a card. A purpose with no details is not shown. The shell's section tabs
+// (Identity / Cards) are the Vault's one tab row; the view adds no second one.
 //
 // This is the render-testable, prop-driven VIEW (a Client Component in the app). The
 // "Add a high-tier detail" panel AND each low-tier field's "Raise to high tier" control
@@ -151,13 +156,49 @@ const LOW_TIER_LABELS: Record<LowTierFieldKind, string> = {
   preference: "Preference",
 };
 
-// --- field cards -------------------------------------------------------------------
+// --- purpose groups ----------------------------------------------------------------
+
+// The everyday details, grouped by what they are for, in reading order. Every kind is
+// in exactly one group, so no detail can be dropped.
+const LOW_TIER_GROUPS: ReadonlyArray<{ id: string; title: string; kinds: readonly LowTierFieldKind[] }> = [
+  { id: "names", title: "Names", kinds: ["name", "preferred_name"] },
+  { id: "contact", title: "Contact", kinds: ["email", "phone", "postal_address"] },
+  { id: "preferences", title: "Preferences", kinds: ["language", "time_zone", "preference"] },
+];
+
+// The protected details, grouped by kind. A custom detail (and any kind added later)
+// lands in "Other", so no detail can be dropped.
+const HIGH_TIER_GROUPS: ReadonlyArray<{ id: string; title: string; types: readonly HighTierFieldType[] }> = [
+  { id: "identity", title: "Identity", types: ["date_of_birth", "passport", "driver_licence"] },
+  { id: "vehicle", title: "Vehicle", types: ["car_registration"] },
+];
+
+// `fields` in their groups, in group order, keeping each group's kind order and then the
+// order the fields arrived in; groups with nothing in them are left out.
+function groupLowTier(fields: ReadonlyArray<LowTierField>) {
+  return LOW_TIER_GROUPS.map((group) => ({
+    ...group,
+    fields: group.kinds.flatMap((kind) => fields.filter((field) => field.kind === kind)),
+  })).filter((group) => group.fields.length > 0);
+}
+
+function groupHighTier(fields: ReadonlyArray<HighTierField>) {
+  const grouped = HIGH_TIER_GROUPS.map((group) => ({
+    ...group,
+    fields: group.types.flatMap((type) => fields.filter((field) => field.type === type)),
+  }));
+  const known = new Set(HIGH_TIER_GROUPS.flatMap((group) => group.types));
+  grouped.push({ id: "other", title: "Other", types: [], fields: fields.filter((field) => !known.has(field.type)) });
+  return grouped.filter((group) => group.fields.length > 0);
+}
+
+// --- field rows --------------------------------------------------------------------
 
 // A low-tier field: editable in place (a postal address also carrying its moving-on
 // date) with a Save that re-saves it through updateLowTierField, plus a live "Raise to
 // high tier" flow that re-seals its current value on the device and submits only the
 // ciphertext + metadata (the device behaviour is pinned by high-tier-flow.test.tsx).
-function LowTierCard({
+function LowTierRow({
   field,
   raiseFieldToHighTier,
   updateLowTierField,
@@ -168,7 +209,7 @@ function LowTierCard({
 }) {
   const label = LOW_TIER_LABELS[field.kind];
   return (
-    <Card className="flex flex-col gap-3">
+    <li className="flex min-w-0 flex-col gap-3 border-b border-line py-4 last:border-0 [overflow-wrap:anywhere]">
       <LowTierDetailFlow
         mode="edit"
         field={field}
@@ -180,15 +221,15 @@ function LowTierCard({
         field={{ id: field.id, value: field.value, label }}
         raiseFieldToHighTier={raiseFieldToHighTier}
       />
-    </Card>
+    </li>
   );
 }
 
 // A high-tier field: LOCKED — its label and tier shown in words, never its value
 // (the view is only ever handed metadata).
-function HighTierCard({ field }: { field: HighTierField }) {
+function HighTierRow({ field }: { field: HighTierField }) {
   return (
-    <Card className="flex flex-col gap-2">
+    <li className={LIST_ROW}>
       <div className="flex flex-wrap items-center gap-2">
         <span className="font-medium text-fg">{field.label}</span>
         <span className="inline-flex items-center gap-1.5 rounded-card border border-line bg-surface-muted px-2 py-0.5 text-xs font-medium text-fg-muted">
@@ -199,7 +240,7 @@ function HighTierCard({ field }: { field: HighTierField }) {
       <p className="text-sm text-fg-muted">
         Locked on your device — released only when you approve it.
       </p>
-    </Card>
+    </li>
   );
 }
 
@@ -214,35 +255,40 @@ export function IdentityView({
 }: IdentityViewProps) {
   return (
     <section className="flex flex-col gap-8">
-      <div className="flex flex-col gap-4">
-        <h1 className="text-xl font-semibold text-fg">About you</h1>
-        <VaultNav current="identity" />
-      </div>
+      <h1 className="text-2xl font-semibold tracking-tight text-fg">About you</h1>
 
-      {/* ----- Low-tier: your everyday details, editable in place ----- */}
-      <div className="flex flex-col gap-3">
-        <h2 className="text-sm font-semibold text-fg">Your details</h2>
+      {/* ----- Low-tier: your everyday details, editable in place, by purpose ----- */}
+      <div className="flex flex-col gap-4">
+        <h2 className="text-lg font-semibold text-fg">Your details</h2>
         {lowTierFields.length === 0 ? (
           <p className="text-sm text-fg-muted">
             Add your name, email, phone or postal address so your agents can use them.
           </p>
         ) : null}
-        {lowTierFields.map((field) => (
-          <LowTierCard
-            key={field.id}
-            field={field}
-            raiseFieldToHighTier={raiseFieldToHighTier}
-            updateLowTierField={updateLowTierField}
-          />
+        {groupLowTier(lowTierFields).map((group) => (
+          <ListGroup key={group.id} id={`vault-${group.id}`} title={group.title} count={group.fields.length} level={3}>
+            {group.fields.map((field) => (
+              <LowTierRow
+                key={field.id}
+                field={field}
+                raiseFieldToHighTier={raiseFieldToHighTier}
+                updateLowTierField={updateLowTierField}
+              />
+            ))}
+          </ListGroup>
         ))}
         <LowTierDetailFlow mode="add" saveLowTierField={saveLowTierField} />
       </div>
 
-      {/* ----- High-tier: protected details, locked on the device ----- */}
-      <div className="flex flex-col gap-3">
-        <h2 className="text-sm font-semibold text-fg">Protected details</h2>
-        {highTierFields.map((field) => (
-          <HighTierCard key={field.id} field={field} />
+      {/* ----- High-tier: protected details, locked on the device, by kind ----- */}
+      <div className="flex flex-col gap-4">
+        <h2 className="text-lg font-semibold text-fg">Protected details</h2>
+        {groupHighTier(highTierFields).map((group) => (
+          <ListGroup key={group.id} id={`vault-protected-${group.id}`} title={group.title} count={group.fields.length} level={3}>
+            {group.fields.map((field) => (
+              <HighTierRow key={field.id} field={field} />
+            ))}
+          </ListGroup>
         ))}
         {/* The live on-device add flow: closed it is the "Add a high-tier detail"
             control, open it seals the value under the vault key and submits only

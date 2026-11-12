@@ -7,7 +7,6 @@ import { Button } from "@/components/ui/button";
 import { Card } from "@/components/ui/card";
 import { encryptValue } from "@/client/vault/values";
 import { AddCardFlow } from "./add-card-flow";
-import { VaultNav } from "./vault-nav";
 
 // E11-S14 — Vault cards view component (brief "Identity vault"; constitution §17
 // "No readable card numbers or security codes"; design §4.2 device-held vault).
@@ -291,10 +290,8 @@ export function CardsView({
 }: CardsViewProps) {
   return (
     <section className="flex flex-col gap-8">
-      <div className="flex flex-col gap-4">
-        <h1 className="text-xl font-semibold text-fg">Your cards</h1>
-        <VaultNav current="cards" />
-      </div>
+      {/* The shell's section tabs (Identity / Cards) are the Vault's one tab row. */}
+      <h1 className="text-2xl font-semibold tracking-tight text-fg">Your cards</h1>
 
       <div className="flex flex-col gap-3">
         {cards.length === 0 ? (

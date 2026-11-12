@@ -52,7 +52,6 @@
 //                                  //   reported for THIS release — shown LABELLED,
 //                                  //   never added to the counted total; null when
 //                                  //   the agent reported nothing
-//     activityLink: unknown;       // a non-empty link/reference to the activity entry
 //   }
 //
 //   // One of the owner's agents, with its budget and its releases this period.
@@ -63,6 +62,11 @@
 //               period: "day" | "week" | "month" } | null;
 //     approvedTotal: number | string;  // the sum of the APPROVED amounts only —
 //                                  //   reported amounts are NEVER part of it
+//     activityLink: string;       // this agent's approvals & releases in Activity
+//                                  //   (`/activity?agent=<agentId>&type=approval` —
+//                                  //   the feed filters by agent and type; it has no
+//                                  //   per-release view, so a release link would land
+//                                  //   on an unfiltered feed)
 //     releases: OwnSpendingRelease[];
 //   }
 //
@@ -346,7 +350,7 @@ test("readOwnSpending returns, per the owner's agent, this period's approved rel
   }
 });
 
-test("each release carries a non-empty link to its activity entry", async () => {
+test("each agent links to its own approvals and releases in Activity (agent + type filter, never an unsupported release link)", async () => {
   const db = await freshDb();
   try {
     const userId = await makeUser(db, "ac1-link");
@@ -371,8 +375,15 @@ test("each release carries a non-empty link to its activity entry", async () => 
     const entry = agentNamed(out, "Linker");
     assert.ok(entry, "the agent appears");
     assert.equal(entry.releases.length, 1, "the one release is listed");
-    const link = entry.releases[0].activityLink;
-    assert.ok(link != null && String(link).length > 0, "the release links to its activity entry");
+    assert.equal(
+      entry.activityLink,
+      `/activity?agent=${agentId}&type=approval`,
+      "the agent links to the Activity feed filtered to its own approvals and releases",
+    );
+    assert.ok(
+      !JSON.stringify(out).includes("release="),
+      "no link targets the unsupported per-release Activity parameter",
+    );
   } finally {
     await db.close();
   }
