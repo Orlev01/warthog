@@ -15,6 +15,7 @@ import { renderToStaticMarkup } from "react-dom/server";
 import { ErrorScreen, NotFoundScreen } from "./status-screens";
 import AppError from "../../app/error";
 import ProtectedNotFound from "../../app/(portal)/(protected)/not-found";
+import ProtectedError from "../../app/(portal)/(protected)/error";
 import Loading from "../../app/(portal)/(protected)/loading";
 
 function text(markup: string): string {
@@ -63,6 +64,15 @@ test("inside the workspace the 404 is a panel in the page container, with Home a
   assert.doesNotMatch(markup, /<main\b/, "the shell already owns <main>");
   assert.match(markup, /href="\/home"[^>]*>[\s\S]*?Go to Home/);
   assert.match(markup, /href="\/agents"[^>]*>[\s\S]*?Your agents/);
+});
+
+test("a signed-in page that fails keeps the workspace shell and never shows the raw error", () => {
+  const error = Object.assign(new Error("relation \"agents\" does not exist"), { digest: "def456" });
+  const markup = renderToStaticMarkup(<ProtectedError error={error} reset={() => {}} />);
+  assert.doesNotMatch(markup, /<main\b/, "the shell already owns <main>");
+  assert.match(markup, /<button\b[^>]*>[\s\S]*?Try again/);
+  assert.ok(!markup.includes("relation"), "the raw error message never reaches the screen");
+  assert.ok(text(markup).includes("def456"), "the support reference (digest) is shown");
 });
 
 test("the loading state is announced to assistive technology", () => {
