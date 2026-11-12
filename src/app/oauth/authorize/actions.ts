@@ -85,6 +85,7 @@ export interface ConsentApproval {
   readonly tickedServices?: readonly string[];
   readonly identity?: boolean;
   readonly memoryRead?: boolean;
+  readonly memoryWrite?: boolean;
   readonly tasks?: boolean;
   readonly records?: boolean;
   readonly highTier?: boolean;
@@ -143,6 +144,7 @@ const approvalSchema = z
     tickedServices: z.array(z.string().max(MAX_SERVICE_LENGTH)).max(MAX_SERVICES).optional(),
     identity: z.boolean().optional(),
     memoryRead: z.boolean().optional(),
+    memoryWrite: z.boolean().optional(),
     tasks: z.boolean().optional(),
     records: z.boolean().optional(),
     highTier: z.boolean().optional(),

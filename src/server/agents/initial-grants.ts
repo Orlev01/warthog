@@ -14,6 +14,7 @@ export function initialGrants(
     identity?: boolean;
     highTier?: boolean;
     memoryRead?: boolean;
+    memoryWrite?: boolean;
     tasks?: boolean;
     records?: boolean;
     card?: boolean;
@@ -37,7 +38,7 @@ export function initialGrants(
     cardBudget: cardAccess ? (input.cardBudget ?? null) : null,
     skillsScope: [],
     memoryRead: input.memoryRead ?? set.sharedMemoryRead,
-    memoryWrite: set.ownMemorySave,
+    memoryWrite: input.memoryWrite ?? set.ownMemorySave,
     sharing: input.learningSharing === true,
     rulesScope: [],
     rateLimit: 120,

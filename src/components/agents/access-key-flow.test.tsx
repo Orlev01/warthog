@@ -56,7 +56,11 @@
 //     create: (input: {                       // the page's "use server" wrapper over
 //       name: string; platform: string;       //   createAccessKeyActions.create — the only
 //       template: "minimal"|"standard"|"custom";
-//       tickedServices?: readonly string[];   //   callable a server page hands the client
+//       tickedServices?: readonly string[];
+//   identity?: boolean;
+//   memoryRead?: boolean;
+//   memoryWrite?: boolean;
+//   tasks?: boolean;   //   callable a server page hands the client
 //       highTier?: boolean; card?: boolean;
 //       cardBudget?: { amount: number; currency: string; period: string } | null;
 //       learningSharing?: boolean;
@@ -116,6 +120,10 @@ type CreateInput = {
   platform: string;
   template: "minimal" | "standard" | "custom";
   tickedServices?: readonly string[];
+  identity?: boolean;
+  memoryRead?: boolean;
+  memoryWrite?: boolean;
+  tasks?: boolean;
   highTier?: boolean;
   card?: boolean;
   cardBudget?: { amount: number; currency: string; period: string } | null;
@@ -471,12 +479,12 @@ test("the create surface offers the three starting sets (Minimal, Standard, Cust
   }
 });
 
-test("the create surface offers a live Create control", () => {
+test("the create surface waits for hydration before enabling submission", () => {
   const markup = renderToStaticMarkup(<AccessKeyFlow create={noopCreate} defaultPlatform="grok" />);
-  assert.ok(
-    liveButtons(markup).some((n) => /create|generate|issue|make/i.test(n)),
-    `the create surface must offer a live control to create the access key; live controls=${JSON.stringify(liveButtons(markup))}`,
-  );
+  const create = findAll(markup, "button").find(button => /Create access key/.test(visibleText(button.inner)));
+  assert.ok(create, "the create action is present");
+  assert.match(create.attrs, /disabled/, "the browser must not submit before handlers are ready");
+  assert.match(markup, /<form[^>]*method="post"/, "form values must never fall back to a URL query");
 });
 
 test("the create surface shows no key before one is issued", () => {
@@ -561,4 +569,21 @@ test("shows no protocol or security jargon in its prose (create surface + issued
       assert.ok(!re.test(prose), `the flow must speak plainly — found jargon "${label}" in: "${prose}"`);
     }
   }
+});
+
+
+test("Custom preserves edited choices and submits independent grants before issuing a key", async () => {
+  const create = makeCreate();
+  const flow = createAccessKeyFlow({ create: create.fn, defaultName: "Research", defaultPlatform: "Other" });
+  flow.setTemplate("minimal");
+  flow.setTemplate("custom");
+  assert.equal(flow.getState().choices.tasks, false, "opening Custom must not silently add Standard permissions");
+  flow.setChoices({ ...flow.getState().choices, identity: false, memoryRead: true, memoryWrite: false });
+  await flow.submit();
+  assert.equal(create.inputs[0]?.identity, false);
+  assert.equal(create.inputs[0]?.memoryRead, true);
+  assert.equal(create.inputs[0]?.memoryWrite, false);
+  assert.equal(create.inputs[0]?.tasks, false);
+  await flow.submit();
+  assert.equal(create.count, 1, "a completed flow cannot issue another key on a repeated submit");
 });

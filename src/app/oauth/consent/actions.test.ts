@@ -237,6 +237,7 @@ test("a known host on a non-default port is shown but not marked verified", asyn
   const handle = putPendingAuthorization(authorizeParams("https://claude.ai:8443/api/mcp/auth_callback"), SESSION_USER, systemRandom);
   const props = await loadConsentView(handle, SESSION_USER);
   assert.ok(props != null, "an https callback on another port still renders");
+  assert.equal(props!.redirect.host, "claude.ai:8443", "the non-default port remains visible in the destination");
   assert.equal(props!.redirect.verified, false, "only the platform's default https origin earns the badge");
 });
 

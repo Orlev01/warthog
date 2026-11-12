@@ -140,6 +140,7 @@ test("the toggles the person leaves on the screen are exactly the grants stored"
     const left = {
       ...consentToggleState("standard", []),
       memoryRead: false,
+      memoryWrite: false,
       tasks: false,
       highTier: true,
       card: true,
@@ -158,6 +159,7 @@ test("the toggles the person leaves on the screen are exactly the grants stored"
     assert.equal(agent!.displayName, props!.defaultName, "the name field is submitted");
     assert.equal(grants!.identityAccess, true, "basic profile: ticked");
     assert.equal(grants!.memoryRead, false, "shared memory: unticked");
+    assert.equal(grants!.memoryWrite, false, "saving memories: independently unticked");
     assert.equal(grants!.tasksAccess, false, "tasks: unticked");
     assert.equal(grants!.recordsAccess, true, "life-admin records: ticked");
     assert.equal(grants!.highTierAccess, true, "high-tier: ticked");
