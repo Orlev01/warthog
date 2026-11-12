@@ -152,22 +152,27 @@ for (const href of ["/", "/home"]) {
   });
 }
 
-// It is "text plus a glyph": the product name "Warthog" is shown as visible text,
-// alongside a decorative shield-style glyph rendered as an <svg> (lucide renders an
-// <svg>). The glyph adds no words — the accessible name assertion above already
-// pins the name to exactly "Warthog home".
-test("Wordmark shows the word 'Warthog' and a glyph (an <svg>)", () => {
+// It is the founder's Warthog logo (13 Nov 2026): the logo image, which carries the
+// head and the WARTHOG lettering, replaces the old shield glyph and visible word. The
+// image is decorative to assistive technology (the link's name comes from its
+// visually-hidden "Warthog home"), and it is a CSS-masked asset so its colour follows
+// the theme token in light and dark.
+test("Wordmark shows the Warthog logo image in place of the shield and word", () => {
   const markup = renderToStaticMarkup(<Wordmark href="/home" />);
-  assert.match(
-    visibleText(markup),
-    /warthog/i,
-    `the wordmark must show the product name "Warthog" as visible text, got: "${visibleText(markup)}"`,
-  );
-  assert.match(
-    markup,
-    /<svg\b/i,
-    `the wordmark must render a shield-style glyph (an <svg>), got: ${markup}`,
-  );
+  assert.match(markup, /<span aria-hidden="true" class="wh-logo[^"]*"><\/span>/, `the logo image must render, got: ${markup}`);
+  assert.ok(!/<svg\b/i.test(markup), "the shield glyph is gone");
+  assert.ok(!/>\s*Warthog\s*</.test(markup.replace(/<span class="sr-only">[^<]*<\/span>/g, "")), "no separate visible word beside the logo");
+});
+
+test("the logo asset exists and the logo class masks it with a theme colour", async () => {
+  const { readFileSync, existsSync } = await import("node:fs");
+  const { join } = await import("node:path");
+  assert.ok(existsSync(join(process.cwd(), "public/brand/warthog-logo.png")), "the logo asset is committed");
+  const css = readFileSync(join(process.cwd(), "src/app/globals.css"), "utf8");
+  const rule = css.slice(css.indexOf(".wh-logo {"), css.indexOf("}", css.indexOf(".wh-logo {")));
+  assert.match(rule, /mask:[^;]*url\("?\/brand\/warthog-logo\.png"?\)/, "the logo is a mask over the asset");
+  assert.match(rule, /background-color:\s*var\(--wh-logo\)/, "its colour is the theme token");
+  assert.match(css, /--wh-logo:\s*light-dark\(/, "the token has a light and a dark value");
 });
 
 // AC2 — design tokens only: no raw hex colour in the wordmark's own markup. Scoped

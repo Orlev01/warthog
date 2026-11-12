@@ -27,6 +27,8 @@
      follows the explicit/system color-scheme set below. */
   --wh-tint: light-dark(#4f46e5, #a5a1ff);
   --wh-info: light-dark(#0b6bcb, #6cb4ff);
+  /* The Warthog logo's ink: the logo's own navy in light mode, near-white in dark. */
+  --wh-logo: light-dark(#0a1b30, #eef2f8);
   --wh-radius: 0.75rem;
   /* Radius tokens: field 8px, card 12px (--wh-radius), inset 10px, raised workspace panel 14px. */
   --wh-radius-field: 0.5rem;
@@ -176,7 +178,8 @@ body {
   display: flex;
   align-items: center;
   justify-content: space-between;
-  padding: 0 16px;
+  /* Room above and below the logo, which is taller than the old one-line wordmark. */
+  padding: 16px 16px 8px;
   flex-shrink: 0;
 }
 .wh-sidebar-brand a {
@@ -777,3 +780,17 @@ html:has(.wh-landing) { scroll-padding-top: calc(128px + env(safe-area-inset-top
   .wh-permission-editor-body { padding: 4px 24px 24px; }
 }
 .wh-connection-name { width: 100%; max-width: 480px; }
+
+/* The Warthog logo (components/shell/wordmark.tsx): the transparent logo asset used as a
+   mask and filled with the theme token, so one image serves light and dark. The width
+   follows the asset's aspect ratio from the height the component sets. */
+.wh-logo {
+  display: block;
+  aspect-ratio: 311 / 240;
+  background-color: var(--wh-logo);
+  -webkit-mask: url("/brand/warthog-logo.png") center / contain no-repeat;
+  mask: url("/brand/warthog-logo.png") center / contain no-repeat;
+}
+@media (forced-colors: active) {
+  .wh-logo { forced-color-adjust: none; background-color: CanvasText; }
+}

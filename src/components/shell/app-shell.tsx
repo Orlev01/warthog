@@ -184,7 +184,7 @@ export function AppShell({
       </a>
       <aside ref={sidebar} className="wh-sidebar">
         <div className="wh-sidebar-brand">
-          <Wordmark href="/home" />
+          <Wordmark href="/home" size="lg" />
         </div>
         <div className="wh-workspace-label">
           <span aria-hidden className="wh-workspace-avatar">
@@ -223,7 +223,7 @@ export function AppShell({
           }}
         >
           <div className="wh-sidebar-brand">
-            <Wordmark href="/home" />
+            <Wordmark href="/home" size="lg" />
             <button
               type="button"
               onClick={close}

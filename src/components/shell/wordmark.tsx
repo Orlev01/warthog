@@ -1,25 +1,26 @@
 import * as React from "react";
-import { Shield } from "lucide-react";
 
-// Wordmark — the small Warthog product identity: the product name beside a simple
-// shield-style glyph (brief design_ux.feel — a polished security-portal look). It
-// is a single link whose destination the caller decides: / when signed out (the
-// auth screens) and /home when signed in (the shell). The glyph is decorative
-// (aria-hidden). The visible word is "Warthog"; a visually-hidden "home" gives the
-// link the fuller accessible name "Warthog home" (so it reads as the home link to
-// a screen reader without crowding the visible mark). Colour and radius come from
-// the design tokens (globals.css) — never a raw value. It is a 44px-tall target on every
-// surface (WCAG 2.5.8 and the 44px touch rule), whatever header it sits in.
+// Wordmark — the Warthog product identity: the founder's Warthog logo (the head and the
+// WARTHOG lettering, public/brand/warthog-logo.png). It is a single link whose
+// destination the caller decides: / when signed out (the auth and public screens) and
+// /home when signed in (the shell). The logo is a CSS mask over that asset filled with the
+// `--wh-logo` theme token, so it reads navy in light mode and near-white in dark mode
+// without a second image (globals.css `.wh-logo`). The image carries the name visually and
+// is hidden from assistive technology; a visually-hidden "Warthog home" names the link.
+// It is at least a 44px-tall target on every surface (WCAG 2.5.8 and the 44px touch rule).
 
-export function Wordmark({ href }: { href: string }) {
+const SIZES = {
+  // Page headers (auth, public and status screens).
+  md: "h-12",
+  // The workspace sidebar, where the logo is the only brand element.
+  lg: "h-16",
+} as const;
+
+export function Wordmark({ href, size = "md" }: { href: string; size?: keyof typeof SIZES }) {
   return (
-    <a
-      href={href}
-      className="inline-flex min-h-11 items-center gap-2 rounded-card text-lg font-semibold tracking-tight text-fg"
-    >
-      <Shield aria-hidden={true} className="h-5 w-5 shrink-0 text-accent" />
-      <span>Warthog</span>
-      <span className="sr-only"> home</span>
+    <a href={href} className="inline-flex min-h-11 items-center rounded-card">
+      <span aria-hidden={true} className={`wh-logo ${SIZES[size]}`}></span>
+      <span className="sr-only">Warthog home</span>
     </a>
   );
 }

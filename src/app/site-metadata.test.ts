@@ -70,3 +70,12 @@ test("the browser theme colour follows the light and dark page backgrounds", () 
   assert.ok(themes.some((t) => /light/.test(t.media)));
   assert.ok(themes.some((t) => /dark/.test(t.media)));
 });
+
+test("the browser tab has a small icon and a favicon.ico from the Warthog logo", () => {
+  const icons = SITE_METADATA.icons as { icon: Array<{ url: string; sizes: string }> };
+  const small = icons.icon.find((icon) => icon.sizes === "32x32");
+  assert.ok(small, "a 32x32 tab icon is declared");
+  assert.deepEqual(pngSize(publicPath(small!.url)), { width: 32, height: 32 });
+  assert.equal(icons.icon[0]!.sizes, "32x32", "the tab-sized icon is listed first");
+  assert.ok(existsSync(publicPath("/favicon.ico")), "a favicon.ico is served for browsers that ask for it");
+});
