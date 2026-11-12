@@ -123,7 +123,7 @@ const CLAUDE_SCOPE: RuleScope = { type: "agent", agentId: "a-claude", name: "Cla
 const EXISTING: RulesViewRule[] = [
   {
     id: "r1",
-    sentence: "Ask me before any agent requests a high-tier identity detail",
+    sentence: "Ask me before any agent requests a protected detail",
     scope: ANY_AGENT,
     status: "active",
     kind: "ask_first",

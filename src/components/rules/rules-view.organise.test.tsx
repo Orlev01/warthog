@@ -32,7 +32,7 @@ const RULES: RulesViewRule[] = [
   { id: "g-ask", sentence: "Ask me before any agent sends email", scope: ANY, status: "active", kind: "ask_first" },
   { id: "z-never", sentence: "Never allow Zed to make any change", scope: agent("c-zed", "Zed"), status: "active", kind: "never_allow" },
   { id: "a-ask", sentence: "Ask me before Alpha requests a card", scope: agent("c-alpha", "Alpha"), status: "paused", kind: "ask_first" },
-  { id: "g-never", sentence: "Never allow any agent to request a high-tier identity detail", scope: ANY, status: "paused", kind: "never_allow" },
+  { id: "g-never", sentence: "Never allow any agent to request a protected detail", scope: ANY, status: "paused", kind: "never_allow" },
   { id: "a-never", sentence: "Never allow Alpha to send a post", scope: agent("c-alpha", "Alpha"), status: "active", kind: "never_allow" },
 ];
 
@@ -200,8 +200,8 @@ test("each rule shows its kind and its status in words", () => {
   const ask = visibleText(rowFor(html, "Ask me before any agent sends email"));
   assert.match(ask, /Ask me first/);
   assert.match(ask, /Active/);
-  const never = visibleText(rowFor(html, "Never allow any agent to request a high-tier identity detail"))
-    .replace("Never allow any agent to request a high-tier identity detail", "");
+  const never = visibleText(rowFor(html, "Never allow any agent to request a protected detail"))
+    .replace("Never allow any agent to request a protected detail", "");
   assert.match(never, /Never allow/, "the kind badge, not only the sentence");
   assert.match(never, /Paused/);
 });
@@ -228,7 +228,7 @@ test("a status filter shows only matching rules and a removable chip", () => {
   const html = rulesPanel(render({ statusFilter: "paused" }));
   const text = visibleText(html);
   assert.ok(text.includes("Ask me before Alpha requests a card"));
-  assert.ok(text.includes("Never allow any agent to request a high-tier identity detail"));
+  assert.ok(text.includes("Never allow any agent to request a protected detail"));
   assert.ok(!text.includes("Ask me before any agent sends email"), "active rules are filtered out");
   assert.ok(!text.includes("Never allow Zed to make any change"), "active rules are filtered out");
   assert.deepEqual(groupHeadings(html), [
