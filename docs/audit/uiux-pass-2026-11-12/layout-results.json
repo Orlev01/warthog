@@ -1,0 +1,342 @@
+{
+ "captures": {
+  "before": 594,
+  "after": 594,
+  "failedAfter": []
+ },
+ "metrics": {
+  "freeText": {
+   "before": 17166,
+   "after": 0,
+   "screensBefore": 61,
+   "screensAfter": 0
+  },
+  "offscreen": {
+   "before": 2,
+   "after": 0,
+   "screensBefore": 1,
+   "screensAfter": 0
+  },
+  "truncated": {
+   "before": 1731,
+   "after": 2949,
+   "screensBefore": 63,
+   "screensAfter": 64
+  },
+  "smallTargets": {
+   "before": 741,
+   "after": 0,
+   "screensBefore": 34,
+   "screensAfter": 0
+  },
+  "smallInputs": {
+   "before": 497,
+   "after": 0,
+   "screensBefore": 44,
+   "screensAfter": 0
+  },
+  "lowContrast": {
+   "before": 43,
+   "after": 36,
+   "screensBefore": 2,
+   "screensAfter": 1
+  },
+  "errors": {
+   "before": 0,
+   "after": 0,
+   "screensBefore": 0,
+   "screensAfter": 0
+  },
+  "overflowX": {
+   "before": 1,
+   "after": 0
+  }
+ },
+ "remaining": {
+  "freeText": [],
+  "offscreen": [],
+  "smallTargets": [],
+  "smallInputs": [],
+  "lowContrast": [
+   "dark-1440 signup=4",
+   "dark-390 signup=4",
+   "light-1024 signup=4",
+   "light-1440 signup=4",
+   "light-1920 signup=4",
+   "light-320 signup=4",
+   "light-390 signup=4",
+   "light-768 signup=4",
+   "light-land signup=4"
+  ],
+  "errors": [],
+  "overflowX": []
+ },
+ "redirected": [],
+ "status": [],
+ "freeTextWorstPerScreen": {
+  "activity__agent-ae14093b_9efa_4bc2_b835_fcd236d31e4a": {
+   "before": 354,
+   "after": 0
+  },
+  "activity__attention-1": {
+   "before": 25,
+   "after": 0
+  },
+  "activity__entry-14": {
+   "before": 15,
+   "after": 0
+  },
+  "activity__entry-1": {
+   "before": 16,
+   "after": 0
+  },
+  "activity__entry-28": {
+   "before": 16,
+   "after": 0
+  },
+  "activity__type-approval": {
+   "before": 15,
+   "after": 0
+  },
+  "activity__type-change": {
+   "before": 186,
+   "after": 0
+  },
+  "activity__type-read": {
+   "before": 15,
+   "after": 0
+  },
+  "activity__type-report": {
+   "before": 36,
+   "after": 0
+  },
+  "activity__view-agents": {
+   "before": 27,
+   "after": 0
+  },
+  "activity__view-services": {
+   "before": 20,
+   "after": 0
+  },
+  "activity__view-types": {
+   "before": 46,
+   "after": 0
+  },
+  "activity": {
+   "before": 353,
+   "after": 0
+  },
+  "agents_access-key": {
+   "before": 14,
+   "after": 0
+  },
+  "agents_connect": {
+   "before": 40,
+   "after": 0
+  },
+  "agents_ID__section-activity": {
+   "before": 158,
+   "after": 0
+  },
+  "agents_ID__section-connectors": {
+   "before": 0,
+   "after": 0
+  },
+  "agents_ID__section-memory": {
+   "before": 3,
+   "after": 0
+  },
+  "agents_ID__section-overview": {
+   "before": 3,
+   "after": 0
+  },
+  "agents_ID__section-rules": {
+   "before": 0,
+   "after": 0
+  },
+  "agents_ID__section-settings": {
+   "before": 0,
+   "after": 0
+  },
+  "agents_ID__section-skills": {
+   "before": 0,
+   "after": 0
+  },
+  "agents_ID__section-spending": {
+   "before": 5,
+   "after": 0
+  },
+  "agents_ID__section-vault": {
+   "before": 0,
+   "after": 0
+  },
+  "agents": {
+   "before": 4,
+   "after": 0
+  },
+  "connectors__category-customer_support_view-catalogue": {
+   "before": 12,
+   "after": 0
+  },
+  "connectors__category-email_view-catalogue": {
+   "before": 12,
+   "after": 0
+  },
+  "connectors__category-travel_view-catalogue": {
+   "before": 12,
+   "after": 0
+  },
+  "connectors__view-catalogue": {
+   "before": 45,
+   "after": 0
+  },
+  "connectors_key": {
+   "before": 2,
+   "after": 0
+  },
+  "connectors": {
+   "before": 10,
+   "after": 0
+  },
+  "dev_agent-console": {
+   "before": 9,
+   "after": 0
+  },
+  "dev_outbox": {
+   "before": 2,
+   "after": 0
+  },
+  "device": {
+   "before": 15,
+   "after": 0
+  },
+  "help_compatibility": {
+   "before": 14,
+   "after": 0
+  },
+  "help": {
+   "before": 12,
+   "after": 0
+  },
+  "home": {
+   "before": 3,
+   "after": 0
+  },
+  "household": {
+   "before": 1,
+   "after": 0
+  },
+  "inbox": {
+   "before": 1,
+   "after": 0
+  },
+  "landing": {
+   "before": 59,
+   "after": 0
+  },
+  "life-admin__view-life": {
+   "before": 29,
+   "after": 0
+  },
+  "life-admin__view-tasks": {
+   "before": 21,
+   "after": 0
+  },
+  "life-admin": {
+   "before": 29,
+   "after": 0
+  },
+  "memory__scope-kept": {
+   "before": 48,
+   "after": 0
+  },
+  "memory__scope-shared": {
+   "before": 11,
+   "after": 0
+  },
+  "memory__source-you": {
+   "before": 11,
+   "after": 0
+  },
+  "memory": {
+   "before": 47,
+   "after": 0
+  },
+  "more": {
+   "before": 15,
+   "after": 0
+  },
+  "oauth_consent": {
+   "before": 10,
+   "after": 0
+  },
+  "privacy": {
+   "before": 30,
+   "after": 0
+  },
+  "recover": {
+   "before": 15,
+   "after": 0
+  },
+  "reset_setup": {
+   "before": 15,
+   "after": 0
+  },
+  "reset": {
+   "before": 15,
+   "after": 0
+  },
+  "rules": {
+   "before": 9,
+   "after": 0
+  },
+  "settings_agents": {
+   "before": 10,
+   "after": 0
+  },
+  "settings_data": {
+   "before": 22,
+   "after": 0
+  },
+  "settings_notifications": {
+   "before": 21,
+   "after": 0
+  },
+  "settings_security": {
+   "before": 2,
+   "after": 0
+  },
+  "settings": {
+   "before": 3,
+   "after": 0
+  },
+  "signin": {
+   "before": 15,
+   "after": 0
+  },
+  "signup": {
+   "before": 15,
+   "after": 0
+  },
+  "skills": {
+   "before": 15,
+   "after": 0
+  },
+  "spending": {
+   "before": 15,
+   "after": 0
+  },
+  "terms": {
+   "before": 15,
+   "after": 0
+  },
+  "vault_cards": {
+   "before": 6,
+   "after": 0
+  },
+  "vault": {
+   "before": 9,
+   "after": 0
+  }
+ }
+}
