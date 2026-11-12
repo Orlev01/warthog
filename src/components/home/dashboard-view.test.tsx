@@ -422,6 +422,6 @@ test("W4.1: Home mounts the install prompt in the set-up section", () => {
       reminders={[]}
     />,
   );
-  const setup = markup.slice(markup.indexOf("Set up Warthog"), markup.indexOf("Approvals"));
+  const setup = markup.slice(markup.indexOf("Set up Warthog"), markup.indexOf("Reminders"));
   assert.match(setup, /data-install-prompt/, "the install prompt is mounted beside the checklist");
 });

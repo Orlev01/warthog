@@ -1,0 +1,22 @@
+[
+  {
+    "check": "mobile-drawer-open-focus-contained",
+    "pass": true
+  },
+  {
+    "check": "escape-closes-drawer-and-returns-focus",
+    "pass": true
+  },
+  {
+    "check": "desktop-breakpoint-closes-drawer",
+    "pass": true
+  },
+  {
+    "check": "keyboard-tabs-update-selection-and-url",
+    "pass": true
+  },
+  {
+    "check": "catalogue-search-draft-survives-tab-switch",
+    "pass": true
+  }
+]
