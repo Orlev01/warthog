@@ -35,6 +35,11 @@ import { auditedOwnerChange } from "@/server/activity/owner-change";
 //     delete, never cast at `WHERE id = $1` (INV-102).
 //   • Every statement the rules store issues is parameterized, so a SQL-shaped
 //     value travels as a BOUND value and cannot alter a query (INV-102).
+//   • setApprovalExpiry VALIDATES the person's approval expiry (a whole number of
+//     minutes from 2 to 1440, brief "approvals expire after the configured time (default
+//     15 minutes, adjustable from 2 minutes to 24 hours)") at the boundary with a 4xx,
+//     saves it under the SESSION user only and records the change in the same
+//     transaction as an account change (never anything secret).
 //   • The actions run purely from their injected seams (db, clock, keyWrapper):
 //     they read no `process.env` and hold no secret (INV-103).
 
@@ -52,6 +57,9 @@ import { rulesPageData } from "@/server/rules/page-data";
 import { agentNamesForUser, listAgentsForUser } from "@/server/db/agents";
 import { getUserById } from "@/server/db/users";
 import { getAccountCurrency } from "@/server/db/account-currency";
+import { getApprovalExpiryMinutes, setApprovalExpiryMinutes } from "@/server/db/approval-settings";
+import { getNotificationPrefs } from "@/server/db/notification-prefs";
+import { MAX_EXPIRY_MINUTES, MIN_EXPIRY_MINUTES } from "@/domain/approvals/state-machine";
 import {
   type RuleKind,
   type RuleScope,
@@ -121,6 +129,14 @@ const RULES_NOTICES: Record<string, RulesNotice> = {
     tone: "problem",
     text: "No rule was added: Warthog has no service with that name. Choose the service from the list and try again.",
   },
+  expiry_saved: {
+    tone: "done",
+    text: "Approval expiry saved. New requests wait for the time you chose; requests already waiting keep theirs.",
+  },
+  expiry_invalid: {
+    tone: "problem",
+    text: "Nothing was saved. Choose an approval expiry from 2 minutes to 24 hours.",
+  },
   error: { tone: "problem", text: "We couldn't complete that just now. Please try again." },
 };
 
@@ -187,6 +203,20 @@ export function rulesMutationNotice(outcome: ActionResult | unknown, doneCode: s
   return "error";
 }
 
+// Map an approval-expiry save outcome (or a thrown error) to its notice code: saved; refused
+// (out of range, not a whole number — a 4xx from the boundary or the store's refusal); or a
+// generic problem.
+export function approvalExpiryNotice(outcome: ActionResult | unknown): string {
+  if (outcome && typeof outcome === "object" && "ok" in outcome) {
+    return (outcome as ActionResult).ok ? "expiry_saved" : "expiry_invalid";
+  }
+  if (outcome && typeof outcome === "object" && "status" in outcome) {
+    const status = (outcome as { status: unknown }).status;
+    if (typeof status === "number" && status >= 400 && status < 500) return "expiry_invalid";
+  }
+  return "error";
+}
+
 // The content of a rule, as the create form's FormData maps to it and the store
 // writes it (the member scope — the userId — is bound separately from the session).
 export interface RuleInput {
@@ -207,6 +237,12 @@ export interface RulesLoadData {
   // The real tools and services a new rule may name, grouped for the builder's choices.
   readonly toolChoices: RuleTargetGroup[];
   readonly serviceChoices: RuleTargetGroup[];
+  // How long a held request waits for the person's decision, in minutes (15 when unset).
+  readonly approvalExpiryMinutes: number;
+  // The person's text/email reminder for an unopened approval (Settings › Notifications):
+  // whether either channel is switched on, and how long it waits before it is sent. The
+  // panel warns when the expiry leaves the reminder no time to go out.
+  readonly approvalReminder: { readonly on: boolean; readonly delayMinutes: number };
 }
 
 export interface RulesActions {
@@ -226,6 +262,9 @@ export interface RulesActions {
   // Validate the id (4xx when mis-shaped) and delete the person's OWN rule; refuse
   // when the id is not theirs.
   deleteRule(session: Session, id: string): Promise<ActionResult>;
+  // Validate the approval expiry (4xx unless a whole number of minutes from 2 to 1440)
+  // and save it for the SESSION user, recording the change. Any other field is ignored.
+  setApprovalExpiry(session: Session, input: unknown): Promise<ActionResult>;
 }
 
 // The refusal reason code (mapped to copy by the page) when a rule id is not this
@@ -272,6 +311,12 @@ const scopeSchema = z.discriminatedUnion("type", [
   z.object({ type: z.literal("any_agent") }),
   z.object({ type: z.literal("agent"), agentId: nameSchema, name: nameSchema }),
 ]);
+
+// The approval expiry: a whole number of minutes from 2 minutes to 24 hours. Any other
+// field (an id from the client, say) is stripped, never used.
+const approvalExpirySchema = z.object({
+  minutes: z.number().int().min(MIN_EXPIRY_MINUTES).max(MAX_EXPIRY_MINUTES),
+});
 
 const ruleContentSchema = z.object({
   kind: z.enum(["ask_first", "never_allow"]),
@@ -361,6 +406,13 @@ export function ruleInputFromForm(formData: FormData): RuleInput {
   };
 }
 
+// Map the approval-expiry form to its input: the chosen preset's minutes. A missing, empty
+// or non-numeric value becomes NaN, which setApprovalExpiry refuses.
+export function approvalExpiryInputFromForm(formData: FormData): { minutes: number } {
+  const value = field(formData, "approval-expiry-minutes");
+  return { minutes: value === "" ? Number.NaN : Number(value) };
+}
+
 export function createRulesActions(deps: RulesActionsDeps): RulesActions {
   const { db, keyWrapper } = deps;
   const catalogue = (): CatalogueIndex => deps.catalogue ?? catalogueFromDataFiles();
@@ -415,7 +467,16 @@ export function createRulesActions(deps: RulesActionsDeps): RulesActions {
       currency: await getAccountCurrency(db, session.userId),
       toolChoices: targets.tools,
       serviceChoices: targets.services,
+      approvalExpiryMinutes: await getApprovalExpiryMinutes(db, session.userId),
+      approvalReminder: await reminderFor(session.userId),
     };
+  }
+
+  // The session person's own reminder setting (member-scoped by session.userId). A reminder
+  // is "on" when either the email or the text-message fallback is switched on.
+  async function reminderFor(userId: string): Promise<RulesLoadData["approvalReminder"]> {
+    const prefs = await getNotificationPrefs(db, userId);
+    return { on: prefs.emailFallback || prefs.smsFallback === true, delayMinutes: prefs.fallbackDelayMinutes };
   }
 
   // A specific-tool or service rule must name a real tool or service, or it would match
@@ -495,5 +556,16 @@ export function createRulesActions(deps: RulesActionsDeps): RulesActions {
     return removed ? { ok: true } : { ok: false, reason: NOT_FOUND };
   }
 
-  return { load, createRule, updateRule, pauseRule, deleteRule };
+  async function setApprovalExpiry(session: Session, input: unknown): Promise<ActionResult> {
+    const { minutes } = parseParams(approvalExpirySchema, input);
+    return auditedOwnerChange<ActionResult>(deps, session.userId, async (tx, record) => {
+      const before = await getApprovalExpiryMinutes(tx, session.userId);
+      const saved = await setApprovalExpiryMinutes(tx, { userId: session.userId, minutes, now: deps.clock.now() });
+      if (!saved.ok) return { ok: false, reason: saved.reason };
+      await record("approval_expiry_change", { before: { expiryMinutes: before }, after: { expiryMinutes: minutes } });
+      return { ok: true };
+    });
+  }
+
+  return { load, createRule, updateRule, pauseRule, deleteRule, setApprovalExpiry };
 }

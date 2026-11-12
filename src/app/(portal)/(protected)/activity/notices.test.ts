@@ -225,7 +225,9 @@ test("pending Undo links to approval while provider failure and refusal remain d
     const recorder = createDbRecorder({ db, clock, dekFor: async () => dek });
     await recorder.record({ userId: user.id, kind: "tool_call", source: "warthog", tool: "google-calendar__create", payload: {} });
     const session = await sessionFor(db, user.id);
-    for (const [status, code] of [["pending_approval", "undo_pending"], ["failed", "undo_failed"], ["refused", "undo_refused"]] as const) {
+    // A failed or refused reversal releases the entry's undo claim; an approval-held one
+    // keeps it, so it is tried last on the same entry.
+    for (const [status, code] of [["failed", "undo_failed"], ["refused", "undo_refused"], ["pending_approval", "undo_pending"]] as const) {
       const undo = createUndoService({ db, recorder, reversalFor: () => "google-calendar__delete",
         runReversal: async () => ({ status, outcome: "Fixed internal explanation" }),
       });
@@ -242,6 +244,41 @@ test("pending Undo links to approval while provider failure and refusal remain d
         assert.deepEqual(notice.action, { href: "/inbox", label: "Review approval" });
       } else assert.equal(notice.action, undefined);
     }
+  } finally { await db.close(); }
+});
+
+// 13 Nov — an entry is undone at most once. A second Undo (a double-click, or Undo pressed
+// again later) is refused before anything runs, and lands on its own plain-words notice —
+// distinct from a refusal or a failure — saying nothing was changed.
+test("a second Undo of the same entry maps to the undo_already notice, in plain words", async () => {
+  const db = await freshDb();
+  try {
+    const user = await createUser(db, { email: "undo-already@warthog.com.au", wrappedDek: "synthetic" });
+    const dek = randomBytes(32);
+    const clock = fixedClock(new Date("2026-11-13T09:00:00Z"));
+    const recorder = createDbRecorder({ db, clock, dekFor: async () => dek });
+    await recorder.record({ userId: user.id, kind: "tool_call", source: "warthog", tool: "google-calendar__create", payload: {} });
+    const session = await sessionFor(db, user.id);
+    let runs = 0;
+    const undo = createUndoService({ db, recorder, reversalFor: () => "google-calendar__delete",
+      runReversal: async () => { runs += 1; return { status: "executed", outcome: "Undone." }; },
+    });
+    const actions = createActivityActions({ db, undo, disputes: { fileDispute: async () => {} } });
+
+    assert.equal(noticeCode(noticeLocation("undo_done", await actions.undoEntry(session, 1))), "undo_done");
+    const again = await actions.undoEntry(session, 1);
+    assert.deepEqual(again, { ok: false, reason: "undo_already" }, "the repeat is a stable refusal code");
+    assert.equal(noticeLocation("undo_done", again, 1), "/activity?entry=1&notice=undo_already#entry-1");
+    assert.equal(runs, 1, "the reversal ran once");
+
+    const notice = activityNotice("undo_already");
+    assert.ok(notice, "undo_already has copy");
+    assert.match(notice.text, /nothing was changed/i);
+    assert.match(notice.text, /already been undone/i);
+    assert.match(notice.text, /in progress/i);
+    assert.doesNotMatch(notice.text, JARGON);
+    assert.equal(notice.tone, "waiting", "it is information, not a success or a fault");
+    assert.equal(notice.action, undefined);
   } finally { await db.close(); }
 });
 

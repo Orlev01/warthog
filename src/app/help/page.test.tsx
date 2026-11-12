@@ -243,3 +243,18 @@ test("help page copy carries no protocol jargon (no OAuth / MCP / DCR / token)",
     );
   }
 });
+
+// Brief "Agents wait safely": approvals expire after the configured time (default 15
+// minutes, adjustable from 2 minutes to 24 hours) and an expired request is denied. The
+// help copy must not promise a request waits "until you decide" without saying it expires,
+// and it says where the time is set.
+test("help page says an unanswered request expires and is denied, and where its time is set", async () => {
+  const text = visibleText(await renderPage());
+  const approvals = text.slice(text.indexOf("Approvals and"), text.indexOf("Getting back into your account"));
+  assert.match(approvals, /expires?/i, `the approvals section says requests expire, got: "${approvals}"`);
+  assert.match(approvals, /denied/i, "an expired request is denied");
+  assert.match(approvals, /15 minutes/, "it gives the default");
+  assert.match(approvals, /2 minutes/, "and the shortest time");
+  assert.match(approvals, /24 hours/, "and the longest time");
+  assert.match(approvals, /Rules & budgets/, "and names the screen where it is set");
+});

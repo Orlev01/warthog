@@ -48,6 +48,8 @@ const NOTICES: Record<string, ActivityNotice> = {
   undo_pending: { tone: "waiting", text: "Undo is waiting for your approval. The action has not been undone.",
     action: { href: "/inbox", label: "Review approval" } },
   undo_failed: { tone: "problem", text: "The service couldn't complete the undo. Check the activity and service before trying again." },
+  // A second Undo of the same entry (a double-click, or pressing Undo again later) runs nothing.
+  undo_already: { tone: "waiting", text: "Nothing was changed: that action has already been undone, or an undo is still in progress." },
   dispute_refused: { tone: "problem", text: "That activity entry can't be disputed." },
   dispute_note_missing: { tone: "problem", text: "Nothing was disputed: add a note saying what's wrong with the entry, then select Dispute again." },
   undo_refused: { tone: "problem", text: "That action couldn't be undone." },

@@ -487,6 +487,10 @@ test("AC3: tools/call request_card returns pending_approval (structured) and cre
     assert.equal(fromText.approval_id, structured!.approval_id, "the text carries the approval_id");
     assert.equal(fromText.status, "pending_approval");
     assert.match(String(fromText.next ?? ""), /check_approval/, "and tells the agent what to call next");
+    // The expiry is the person's own setting, so the hint points at expires_at rather than a fixed time.
+    assert.match(String(fromText.next ?? ""), /expires_at/, "and that the request expires at expires_at");
+    assert.match(String(fromText.next ?? ""), /refused|denied/, "after which it is refused");
+    assert.doesNotMatch(String(fromText.next ?? ""), /\b15 minutes\b/, "never a hard-coded time");
 
     // The approval is visible in the person's inbox, still PENDING — nothing released.
     const pending = await listPendingForUser(db, userId, dek);
@@ -1209,7 +1213,12 @@ test("calendar Undo uses the created event id and reports permission, account an
     await upsertPermissions(db, { ...stored, changeTools: "off", connectorAccounts: { "google-calendar": account.id } });
     assert.equal((await executors.runReversal(job)).status, "refused");
     await upsertPermissions(db, { ...stored, changeTools: "ask_first", connectorAccounts: { "google-calendar": account.id } });
-    assert.equal((await executors.runReversal(job)).status, "pending_approval");
+    const heldReversal = await executors.runReversal(job);
+    assert.equal(heldReversal.status, "pending_approval");
+    // The held reversal names the approval it waits on, so the undo claim can follow it.
+    assert.ok(heldReversal.approvalId, "a held reversal names its approval");
+    const heldApproval = await db.query("SELECT status FROM approvals WHERE id = $1 AND user_id = $2", [heldReversal.approvalId, userId]);
+    assert.equal(heldApproval.rows[0]?.status, "pending", "that approval is the person's own pending request");
     assert.equal(sent.length, sentBeforePolicy, "denied and pending reversals send nothing");
     const other = await createConnection(db, { userId, connectorId: "google-calendar", accountLabel: "Work",
       credentials: { access_token: "synthetic-other-token" } }, dek, systemClock);

@@ -1299,3 +1299,26 @@ test("inboxQueryFrom validates the view and passes the filters and opened approv
   assert.deepEqual(inboxQueryFrom({ view: "everything" }), {}, "an unknown view falls back to the default tab");
   assert.deepEqual(inboxQueryFrom({ view: ["pending", "history"], outcome: "" }), { initialView: "pending" }, "first value wins; empty is absent");
 });
+
+// Approval expiry is set per person from 2 minutes to 24 hours, so a long wait reads in hours
+// and minutes ("24 hours left"), never as thousands of minutes.
+test("a request's time left reads in hours once the person's expiry runs past an hour", async () => {
+  const db = await freshDb();
+  const keyWrapper = keyWrapperFor();
+  try {
+    const alice = await makePerson(db, keyWrapper, "alice-long-expiry");
+    const hold = async (expiryMinutes: number, sentence: string) =>
+      (await createApproval(db, { userId: alice.userId, agentId: randomUUID(), detail: detailFor({ sentence }), expiryMinutes }, alice.dek, fixedClock(NOW))).id;
+    const day = await hold(1440, "wants a day to wait");
+    const longer = await hold(90, "wants an hour and a half");
+    const short = await hold(2, "wants two minutes");
+
+    const view = await makeActions(db, keyWrapper, fixedClock(NOW)).load(await sessionFor(db, alice.userId));
+    const left = new Map(view.pending.map((p) => [p.id, p.timeLeft]));
+    assert.equal(left.get(day), "24 hours left");
+    assert.equal(left.get(longer), "1 hour 30 minutes left");
+    assert.equal(left.get(short), "2 minutes left");
+  } finally {
+    await db.close();
+  }
+});

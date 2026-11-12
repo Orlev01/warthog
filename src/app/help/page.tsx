@@ -63,6 +63,11 @@ export default function HelpPage() {
             Set a rule to “Ask me first” for anything you always want to check. Warthog holds the
             request until you decide.
           </p>
+          <p>
+            A request waits 15 minutes for your answer unless you change the approval expiry in
+            Rules &amp; budgets, to anything from 2 minutes to 24 hours. If you don’t decide in
+            time, the request expires and is denied, and the agent is told.
+          </p>
         </PublicSection>
 
         <PublicSection id="recovering" title="Getting back into your account">
