@@ -1,4 +1,20 @@
-# Delivery status — 12 November 2026 (activity organisation)
+# Delivery status — 13 November 2026 (combined release, deletion journal active)
+
+**The combined release is live at [app.warthog.com.au](https://app.warthog.com.au).**
+Application source `df88bbcc193465130873781294774d9028e36404` runs as
+`warthog--r43217944024a1`, with one healthy replica, explicit 100% traffic and zero
+old replicas. It carries the brand marks, accent and collapsible connector modules,
+the whole-app UI/UX pass, and the account deletion journal with its recovery work.
+This release activated the deletion journal (`DELETION_JOURNAL_CONTAINER=account-deletions`,
+the only configuration change) after the storage protections and the add-only writer
+grant were rechecked. See the
+[release record](docs/audit/combined-release-df88bbc-2026-11-13.md).
+
+Main and pinned-image CI passed 5,685 tests; no migration changes. The founder
+approved both protected environments in GitHub. The temporary runner is verified
+removed. The Azure recovery drill remains a separate, unapproved step.
+
+# Earlier delivery status — 12 November 2026 (activity organisation)
 
 **The activity organisation release is live at [app.warthog.com.au](https://app.warthog.com.au).**
 Application source `80a353084e1e17eb6f5e0b2811de83f5a7c213a4` runs as
