@@ -1,7 +1,7 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import { NextRequest } from "next/server";
-import { middleware } from "./middleware";
+import { proxy as middleware } from "./proxy";
 
 test("middleware replaces supplied nonces and gives Next and the browser the same fresh policy", () => {
   const saved = process.env.NODE_ENV;

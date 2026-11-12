@@ -3,7 +3,7 @@ import { randomBytes } from "node:crypto";
 import { contentSecurityPolicy, createAuthIpLimiter } from "./server/http/production-policy";
 import { processSingleton } from "./server/seams/process-singleton";
 
-export function middleware(request: NextRequest) {
+export function proxy(request: NextRequest) {
   // Framework environment flag, like next.config.mjs; no application secrets are
   // read here. Runtime application configuration remains in server/config.ts.
   const development = process.env.NODE_ENV !== "production";
@@ -36,6 +36,5 @@ export function middleware(request: NextRequest) {
 }
 
 export const config = {
-  runtime: "nodejs",
   matcher: ["/((?!_next/static|_next/image|favicon.ico|sw.js|manifest.webmanifest|icons/).*)"],
 };
