@@ -133,6 +133,8 @@ interface JsonRpcResponse {
   result?: {
     tools?: Array<{
       name: string;
+      title?: string;
+      annotations?: { title?: string; readOnlyHint?: boolean; destructiveHint?: boolean; idempotentHint?: boolean; openWorldHint?: boolean };
       description?: string;
       inputSchema?: { type?: string; properties?: Record<string, unknown>; required?: string[] };
     }>;
@@ -332,6 +334,11 @@ test("D1: tools/list advertises each tool's real required fields and a plain des
 
     // Every tool says what it does in words, not just its own name.
     for (const tool of tools) {
+      assert.ok(tool.title, `${tool.name} must have a human-readable title`);
+      assert.equal(tool.annotations?.title, tool.title);
+      for (const key of ["readOnlyHint", "destructiveHint", "idempotentHint", "openWorldHint"] as const) {
+        assert.equal(typeof tool.annotations?.[key], "boolean", `${tool.name}.${key} must reach tools/list`);
+      }
       const description = tool.description ?? "";
       assert.ok(description.trim().length > 20, `${tool.name} must carry a plain-English description`);
       assert.notEqual(description, tool.name, `${tool.name}'s description must not be just its name`);
@@ -847,16 +854,29 @@ test("D5: curated Gmail tools are served (no general request tool) and message r
     const upstream = recordingFetch();
     const dispatch = createMcpDispatch({ db, config, fetch: upstream.fetch });
 
-    const names = ((await readRpc(await dispatch(connectionId, mcpPost(LIST_BODY)))).result?.tools ?? []).map((t) => t.name);
+    const listed = (await readRpc(await dispatch(connectionId, mcpPost(LIST_BODY)))).result?.tools ?? [];
+    const names = listed.map((t) => t.name);
     assert.ok(names.includes("google-gmail__send") && names.includes("google-gmail__search"));
     assert.ok(!names.includes("google-gmail__request"), "a curated service is not reachable around its curated tools");
+    assert.equal(listed.find(t => t.name === "google-gmail__search")?.annotations?.readOnlyHint, true);
+    assert.equal(listed.find(t => t.name === "google-gmail__send")?.annotations?.readOnlyHint, false);
+    assert.equal(listed.find(t => t.name === "google-gmail__send")?.title, "Gmail: Send email");
 
     const mime = (to: string) => JSON.stringify({ raw: Buffer.from(`To: ${to}\r\nSubject: hi\r\n\r\nhello`).toString("base64url") });
     const held = await readRpc(
-      await dispatch(connectionId, mcpPost(callBody("google-gmail__send", { body: mime("Bob <bob@example.com>") }))),
+      await dispatch(connectionId, mcpPost(callBody("google-gmail__send", {
+        body: mime("Bob <bob@example.com>"),
+        approved: true, // A client's claimed approval cannot override Warthog's rule.
+        annotations: { readOnlyHint: true },
+      }))),
     );
     assert.equal(held.result?.structuredContent?.status, "pending_approval", "a send to the ruled domain asks first");
     assert.equal(upstream.sent.length, 0);
+    const pending = await readRpc(await dispatch(connectionId, mcpPost(callBody("check_approval", {
+      approval_id: held.result!.structuredContent!.approval_id, wait_seconds: 0,
+    }))));
+    assert.equal(JSON.parse(contentText(pending.result)).status, "pending");
+    assert.equal(upstream.sent.length, 0, "polling cannot approve a held send");
 
     const sent = await readRpc(await dispatch(connectionId, mcpPost(callBody("google-gmail__send", { body: mime("bob@other.org") }))));
     assert.notEqual(sent.result?.isError, true, `a send elsewhere goes through, got: ${JSON.stringify(sent)}`);
@@ -1242,7 +1262,7 @@ test("large provider inventories support discovery, pagination and policy-gated 
  try {
   const {createConnection}=await import("../db/connections");
   const config=devConfig(),{userId,connectionId,dek}=await seedConnection(db,config,{grantedConnectors:["notion"]});
-  const tools=Array.from({length:90},(_,i)=>({name:`tool_${i}`,description:`Tool ${i}`,inputSchema:{type:"object",properties:{}}}));
+  const tools=Array.from({length:90},(_,i)=>({name:`tool_${i}`,description:`Tool ${i}`,inputSchema:{type:"object",properties:{}},annotations:{readOnlyHint:true,destructiveHint:false}}));
   await createConnection(db,{userId,connectorId:"notion",accountLabel:"Fixture",credentials:{providerMcp:{tools,tokens:{access_token:"synthetic",token_type:"Bearer"}}}},dek,fixedClock(NOW));
   const dispatch=createMcpDispatch({db,config});
   const listed=await readRpc(await dispatch(connectionId,mcpPost(LIST_BODY)));
@@ -1250,6 +1270,9 @@ test("large provider inventories support discovery, pagination and policy-gated 
   const found=await readRpc(await dispatch(connectionId,mcpPost(callBody("find_tools",{limit:10}))));
   const page=JSON.parse(contentText(found.result));
   assert.equal(page.tools.length,10);assert.equal(page.nextCursor,10);assert.ok(page.tools[0].inputSchema);
+  assert.ok(page.tools[0].title);
+  assert.equal(page.tools[0].annotations.readOnlyHint,false,"provider effects remain untrusted");
+  assert.equal(page.tools[0].annotations.destructiveHint,true);
   const called=await readRpc(await dispatch(connectionId,mcpPost(callBody("call_tool",{name:"notion__tool_0",arguments:{arguments:{}}}))));
   assert.equal(JSON.parse(contentText(called.result)).status,"pending_approval");
   const unknown=await readRpc(await dispatch(connectionId,mcpPost(callBody("call_tool",{name:"gmail__send",arguments:{}}))));

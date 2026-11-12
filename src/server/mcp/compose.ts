@@ -126,7 +126,7 @@ function registerTool(
 ): void {
   server.registerTool(
     tool.name,
-    { description: tool.description, inputSchema: tool.inputSchema },
+    { title: tool.title, description: tool.description, inputSchema: tool.inputSchema, annotations: tool.annotations },
     async (args: unknown) => {
       // The connection is the verified bearer's; a request that never resolved one cannot
       // be scoped to a person, so it is refused rather than run (never a silent success).
@@ -332,7 +332,7 @@ function buildAgentPipeline(deps: McpDispatchDeps): AgentCallPipeline {
         const declarations=connectorToolsetFor(connections,grants.grantedConnectors,catalogue,grants.connectorAccounts,await provider.toolsets(connection.userId,selected));
         const all=createToolRegistry({pipeline}).resolveTools(grants,declarations,{expanded:true}).filter(t=>t.name.includes("__")&&(!query.query||`${t.name} ${t.description}`.toLowerCase().includes(query.query.toLowerCase())));
         const start=query.cursor??0,end=start+(query.limit??20);
-        return {tools:all.slice(start,end).map(t=>({name:t.name,description:t.description,inputSchema:z.toJSONSchema(t.inputSchema)})),nextCursor:end<all.length?end:null};
+        return {tools:all.slice(start,end).map(t=>({name:t.name,title:t.title,description:t.description,inputSchema:z.toJSONSchema(t.inputSchema),annotations:t.annotations})),nextCursor:end<all.length?end:null};
       }
       case "call_tool": return {status:"refused",reason:"That tool is not available to this agent. Use find_tools for its current tools."};
       case "get_context":

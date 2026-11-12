@@ -132,11 +132,32 @@ function mimeRecipients(raw: string): string[] {
 // One curated tool as the registry's declaration: its verb (the namespace is added by the
 // registry), its declared class, and — for a tool that sends a message — the channel (every
 // curated message tool today sends email) plus how to read its recipients.
+const GMAIL_PRESENTATION: Readonly<Record<string, { title: string; description: string }>> = {
+  search: {
+    title: "Gmail: Search messages",
+    description: "Search the connected Gmail account for message IDs and thread IDs. Put Gmail search syntax in query.q; query.maxResults and query.pageToken control pagination. This does not return message bodies or change mail. Gmail API: https://developers.google.com/workspace/gmail/api/reference/rest/v1/users.messages/list",
+  },
+  read: {
+    title: "Gmail: Read message",
+    description: "Read one message from the connected Gmail account using query.id from search results. query.format selects full, metadata, minimal or raw. This does not mark the message as read or otherwise change mail. Gmail API: https://developers.google.com/workspace/gmail/api/reference/rest/v1/users.messages/get",
+  },
+  draft: {
+    title: "Gmail: Create unsent draft",
+    description: "Create a new draft in the connected Gmail account; this does not send an email. body is a JSON string containing message.raw: a base64url-encoded RFC 2822 message with recipients, subject and content. Creating the draft is a change subject to Warthog permissions and rules. Gmail API: https://developers.google.com/workspace/gmail/api/reference/rest/v1/users.drafts/create",
+  },
+  send: {
+    title: "Gmail: Send email",
+    description: "Sends an email from the connected Gmail account to its To, Cc and Bcc recipients. body is a JSON string containing raw: a base64url-encoded RFC 2822 message. This sends immediately only when Warthog permissions and rules allow it; pending_approval means nothing has been sent. Gmail API: https://developers.google.com/workspace/gmail/api/reference/rest/v1/users.messages/send",
+  },
+};
+
 function declarationOf(tool: CuratedTool, serviceName: string): ConnectorToolDeclaration {
   const verb = tool.name.slice(tool.connectorId.length + NAMESPACE.length);
+  const presentation = tool.connectorId === "google-gmail" ? GMAIL_PRESENTATION[verb] : undefined;
   return {
     name: verb,
-    description: `${serviceName}: ${verb.replace(/_/g, " ")} (${tool.makesChange ? "makes a change" : "reads only"}).`,
+    title: presentation?.title ?? `${serviceName}: ${verb.replace(/_/g, " ")}`,
+    description: presentation?.description ?? `${serviceName}: ${verb.replace(/_/g, " ")} (${tool.makesChange ? "makes a change" : "reads only"}).`,
     makesChange: tool.makesChange,
     ...(tool.sendsMessage ? { messageChannel: "email" as const, recipients: messageRecipients } : {}),
   };
