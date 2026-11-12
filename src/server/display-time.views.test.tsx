@@ -66,22 +66,29 @@ test("loaders and rendered activity consistently use the encrypted account zone 
         (await notifications.load(session)).devices[0]!.label,
         (await agents.load(session)).agents[0]!.connectedAt,
         (await memories.load(session)).memories[0]!.savedAt];
+      // The day proves the account zone was used; the zone itself is stated once per page,
+      // never repeated as a "(Australia/Sydney)" suffix on every value.
       for (const label of labels) {
         assert.ok(label?.includes(day!), String(label));
-        assert.ok(label?.includes(`(${zone})`), String(label));
+        assert.ok(!label?.includes(`(${zone})`), String(label));
       }
-      assert.ok(renderToStaticMarkup(<DashboardView {...dashboard} />).includes(`(${zone})`));
+      assert.ok(!renderToStaticMarkup(<DashboardView {...dashboard} />).includes(`(${zone})`));
       const markup = renderToStaticMarkup(<ActivityView {...timeline} />);
-      assert.ok(markup.includes(`(${zone})`));
+      assert.ok(markup.includes(day!));
+      // "From (UTC)" / "To (UTC)" label the date filters, which really are UTC bounds.
+      if (zone !== "UTC") assert.ok(!markup.includes(`(${zone})`));
       assert.ok(markup.includes("From (UTC)") && markup.includes("To (UTC)"), "date filters keep explicit UTC bounds");
     }
   } finally { await db.close(); }
 });
 
-test("reset notices label UTC before sign-in and use the saved account zone after sign-in", () => {
+test("reset notices show plain times with no zone id: the browser's own zone before sign-in, the account zone after", () => {
   const instant = "2026-11-09T02:15:00Z";
+  // Before sign-in there is no account zone; the flow renders in the browser, in its own zone.
   const publicNotice = renderToStaticMarkup(<ResetView step="requested" completesAt={instant} />);
-  assert.ok(publicNotice.includes("9 Nov 2026, 2:15 am (UTC)"));
+  assert.match(publicNotice, /It will finish on [A-Za-z]+ (8|9) November 2026 at \d{1,2}:15 (am|pm)\./);
+  assert.doesNotMatch(publicNotice, /\((UTC|[A-Za-z]+\/[A-Za-z_]+)\)/, "no raw zone suffix");
   const accountNotice = renderToStaticMarkup(<PendingResetBanner requestedAt={instant} completesAt={instant} timeZone="America/Los_Angeles" />);
-  assert.ok(accountNotice.includes("8 Nov 2026, 6:15 pm (America/Los_Angeles)"));
+  assert.ok(accountNotice.includes("8 Nov 2026, 6:15 pm"));
+  assert.ok(!accountNotice.includes("(America/Los_Angeles)"), "a signed-in member's own zone is not repeated on the value");
 });

@@ -1,3 +1,138 @@
 /* Controls and feedback (UI/UX pass, 12 Nov 2026): buttons, fields, focus, toasts, native controls.
  * Loaded after surfaces.css; unlayered like globals.css so equal-specificity rules win.
+ * Component API and migration notes: the primitives in src/components/ui (button, input, field,
+ * form-submit, toast, copy-button, badge).
  */
+
+/* ── Focus ────────────────────────────────────────────────────────────────────────────────
+ * One focus indicator everywhere: the global :focus-visible outline in globals.css (2px focus
+ * token, 2px transparent offset, so the gap shows whatever surface is behind the control).
+ * Class strings that still add a Tailwind focus ring drew a second ring on top, with an
+ * offset band painted in --wh-bg rather than the panel colour. While such an element is
+ * focused, its ring layers are emptied; the outline remains. */
+:is([class*="focus-visible:ring"], [class*="focus:ring"]):focus-visible {
+  --tw-ring-shadow: 0 0 #0000;
+  --tw-ring-offset-shadow: 0 0 #0000;
+}
+
+/* ── Native checkboxes, radios, ranges and progress ─────────────────────────────────────
+ * The neutral accent outside the workspace; workspace.css tints them inside it. */
+:root {
+  accent-color: var(--wh-accent);
+}
+
+/* ── Buttons ─────────────────────────────────────────────────────────────────────────────
+ * In the signed-in workspace a Button (or ButtonLink, or anything using buttonClasses()) is
+ * its natural width from 640px up, even inside a flex or grid column, so a secondary action
+ * never becomes a 700px bar. Pass width="full" to fill the container on purpose. Layered,
+ * so a caller's own width utility still wins. */
+@layer components {
+  @media (min-width: 640px) {
+    .wh-workspace .wh-button:not([data-width]) {
+      width: fit-content;
+    }
+  }
+}
+
+/* Everything that acts like a button shows the pointer, unless it is disabled or
+ * aria-disabled. Layered, so a utility such as cursor-wait still wins; a busy submit shows
+ * progress (below). */
+@layer base {
+  :where(button, [role="button"], input[type="submit"], input[type="button"], input[type="reset"], .wh-button):not(:disabled):not([aria-disabled="true"]) {
+    cursor: pointer;
+  }
+}
+
+/* The button that submitted keeps full strength while it says "Saving…"; its siblings dim. */
+.wh-button[aria-busy="true"] {
+  opacity: 1;
+  cursor: progress;
+}
+
+/* Forced colours drop backgrounds: keep a visible boundary on every filled action. Buttons
+ * carry a transparent border for this; these older classes get an explicit one. */
+@media (forced-colors: active) {
+  .wh-button,
+  .wh-connection-link-primary,
+  .wh-skip-link {
+    border: 1px solid ButtonText;
+  }
+  .wh-button[aria-disabled="true"],
+  .wh-button:disabled {
+    border-color: GrayText;
+    color: GrayText;
+  }
+}
+
+/* ── Pending form fields ─────────────────────────────────────────────────────────────────
+ * PendingFormFields keeps fields focusable while a save runs (they ignore input instead). */
+.wh-pending-fields[aria-busy="true"] > * {
+  opacity: 0.6;
+  cursor: progress;
+  transition: opacity 0.15s;
+}
+
+/* ── Sensitive steps inside a panel ──────────────────────────────────────────────────────
+ * ConfirmItsYou and SensitiveNotice are their own bordered card on the canvas; nested in a
+ * panel or card they become a muted inset (canvas → panel → inset, never card-in-card). */
+:is(.wh-panel, .wh-card, .wh-surface) :is(.wh-confirm-its-you, .wh-sensitive-notice) {
+  border-color: transparent;
+  background: var(--wh-surface-muted);
+  box-shadow: none;
+}
+
+/* ── Toasts ──────────────────────────────────────────────────────────────────────────────
+ * While a toast is on screen the document reserves room for it at the bottom: focus and
+ * scrollIntoView stop above it, and the page's last control can scroll clear of it. The
+ * clearance is the toast (54px) plus its offset from the edge and a gap. */
+:root {
+  --wh-toast-clearance: 5.5rem;
+}
+@media (min-width: 1024px) {
+  :root {
+    --wh-toast-clearance: 6rem;
+  }
+}
+html:has([data-wh-toast]) {
+  scroll-padding-bottom: calc(var(--wh-toast-clearance) + env(safe-area-inset-bottom));
+}
+html:has([data-wh-toast]) body {
+  padding-bottom: calc(var(--wh-toast-clearance) + env(safe-area-inset-bottom));
+}
+@media (forced-colors: active) {
+  .wh-toast {
+    border: 1px solid CanvasText;
+  }
+}
+
+/* ── Badges ──────────────────────────────────────────────────────────────────────────────
+ * One height and corner for every small label (Badge) and count (CountBadge). */
+.wh-badge {
+  min-height: 20px;
+  padding: 2px 8px;
+  font-size: 12px;
+  line-height: 16px;
+  font-weight: 500;
+  vertical-align: middle;
+}
+.wh-count {
+  display: inline-flex;
+  flex-shrink: 0;
+  align-items: center;
+  justify-content: center;
+  min-width: 20px;
+  height: 20px;
+  padding-inline: 6px;
+  border-radius: 9999px;
+  background: var(--wh-surface-muted);
+  color: var(--wh-fg-muted);
+  font-size: 12px;
+  line-height: 16px;
+  font-weight: 500;
+  font-variant-numeric: tabular-nums;
+}
+@media (forced-colors: active) {
+  .wh-count {
+    border: 1px solid CanvasText;
+  }
+}

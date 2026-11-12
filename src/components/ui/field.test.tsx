@@ -34,7 +34,7 @@ import { test } from "node:test";
 import assert from "node:assert/strict";
 import { renderToStaticMarkup } from "react-dom/server";
 
-import { Field, Label } from "./field";
+import { Field, Label, SelectField, TextareaField } from "./field";
 
 function parseAttrs(attrText: string): Record<string, string> {
   const attrs: Record<string, string> = {};
@@ -203,4 +203,41 @@ test("Field preserves an external invalid state when no inline error is given", 
   const input = firstTagAttrs(markup, "input");
   assert.equal(input["aria-describedby"], "help");
   assert.equal(input["aria-invalid"], "grammar");
+});
+
+// ─── UI/UX pass: wrapper className, hint, widths, textarea/select parity ─────────────
+
+test("Field's className styles its wrapper so it can grow in a row; inputClassName reaches the input", () => {
+  const markup = renderToStaticMarkup(<Field label="Mobile number" className="sm:flex-1" inputClassName="font-mono" />);
+  const wrapper = firstTagAttrs(markup, "div").class ?? "";
+  const input = firstTagAttrs(markup, "input").class ?? "";
+  assert.match(wrapper, /\bsm:flex-1\b/);
+  assert.doesNotMatch(input, /\bsm:flex-1\b/);
+  assert.match(input, /\bfont-mono\b/);
+});
+
+test("Field's hint is read with the control, before any error", () => {
+  const markup = renderToStaticMarkup(<Field label="Due date" id="due" hint="Reminders use this date." error="Pick a date" />);
+  assert.deepEqual(firstTagAttrs(markup, "input")["aria-describedby"].split(/\s+/), ["due-hint", "due-error"]);
+  assert.equal(textOfElementById(markup, "due-hint"), "Reminders use this date.");
+});
+
+test("Field passes autocomplete and input mode through and sizes its control, not its label", () => {
+  const markup = renderToStaticMarkup(<Field label="Code" autoComplete="one-time-code" inputMode="numeric" width="code" />);
+  const input = firstTagAttrs(markup, "input");
+  // HTML attribute names are case-insensitive; React writes autoComplete / inputMode.
+  assert.equal(input.autoComplete ?? input.autocomplete, "one-time-code");
+  assert.equal(input.inputMode ?? input.inputmode, "numeric");
+  assert.match(input.class ?? "", /\bsm:max-w-32\b/);
+  assert.doesNotMatch(firstTagAttrs(markup, "div").class ?? "", /max-w-32/);
+});
+
+test("TextareaField and SelectField wire label, error and touch target like Field", () => {
+  const textarea = renderToStaticMarkup(<TextareaField label="Note" id="note" error="Too long" />);
+  assert.equal(firstTagAttrs(textarea, "label").for, "note");
+  assert.equal(firstTagAttrs(textarea, "textarea")["aria-describedby"], "note-error");
+  assert.equal(firstTagAttrs(textarea, "textarea")["aria-invalid"], "true");
+  const select = renderToStaticMarkup(<SelectField label="Assignee" id="who"><option>Me</option></SelectField>);
+  assert.equal(firstTagAttrs(select, "label").for, "who");
+  assert.ok(hasTouchTarget(firstTagAttrs(select, "select").class ?? ""));
 });

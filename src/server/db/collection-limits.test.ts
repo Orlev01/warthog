@@ -70,9 +70,9 @@ test("keyset pages are bounded and do not duplicate same-time memories or expose
     } while (cursor);
     assert.equal(ids.length, 7);
     assert.equal(new Set(ids).size, 7);
-    await assert.rejects(() =>
-      pageMemories(db, a.id, dek, { cursor: "invalid" }),
-    );
+    // A stale or edited cursor reads the first page instead of failing the page (interaction-03).
+    const reset = await pageMemories(db, a.id, dek, { limit: 3, cursor: "invalid" });
+    assert.deepEqual(reset.items.map((m) => m.id), ids.slice(0, 3));
   } finally {
     await db.close();
   }

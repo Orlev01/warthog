@@ -43,6 +43,7 @@ import type { KeyWrapper } from "../../crypto/key-wrapper";
 import type { Clock } from "../../seams/clock";
 import type { AgentConnection } from "../context";
 import type { Db } from "../../db/index";
+import { isPageCursor } from "../../db/pagination";
 
 // Field caps, so a grossly oversized value is refused at the boundary before any db
 // access (INV-102). A memory is a SHORT fact or note; `reason` matches the registry's
@@ -62,7 +63,8 @@ export const rememberSchema = z.object({
 
 // Search one bounded page. Follow nextCursor even when this page has no matches.
 export const searchMemorySchema = z.object({
-  cursor: z.string().max(256).optional(),
+  // Refused rather than restarted at page one, so a client following nextCursor can't loop.
+  cursor: z.string().max(256).refine(isPageCursor, "Invalid page cursor. Start from the first page.").optional(),
   limit: z.number().int().min(1).max(200).optional(),
   query: z.string().max(MAX_QUERY).optional(),
   reason: z.string().max(MAX_REASON).optional(),
