@@ -551,8 +551,9 @@ test("A2: every adjustable toggle on the live form has a name the decision reads
 test("included connection behavior is explained without pretend permission switches", () => {
   const markup = liveRender();
   const text = visibleText(markup);
-  assert.match(text, /preferences and skills assigned to this agent/i);
-  assert.match(text, /records activity through this connection/i);
+  // content-56: one plain line for what every connection includes.
+  assert.match(text, /your preferences and the skills you.ve given it/i);
+  assert.match(text, /Warthog records what it does/i);
   assert.ok(!namedControls(markup).some(control => control.disabled), "included behavior is prose, not dead switches");
   const memoryWrite = namedControls(markup).find(control => control.name === "memoryWrite");
   assert.equal(memoryWrite?.type, "checkbox");

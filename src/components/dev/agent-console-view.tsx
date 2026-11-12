@@ -3,7 +3,10 @@
 import * as React from "react";
 
 import { Button } from "@/components/ui/button";
-import { Field, Label } from "@/components/ui/field";
+import { Field, TextareaField } from "@/components/ui/field";
+import { Notice } from "@/components/ui/notice";
+import { ActionForm, FormSubmit } from "@/components/ui/form-submit";
+import { WorkspacePanel } from "@/components/shell/workspace-surfaces";
 
 // E17-S10 — Dev fake agent console (view).
 //
@@ -41,6 +44,7 @@ export interface AgentConsoleState {
   readonly args: string; // the arguments, as JSON text (survives a call)
   readonly response?: string; // the tool response to show, after a SUCCESSFUL call
   readonly error?: string; // failure copy, after a FAILED call (never fail silently)
+  readonly working?: boolean; // a call is in flight: a second Send is ignored
 }
 
 export interface AgentConsoleController {
@@ -75,6 +79,9 @@ export function createAgentConsole(deps: AgentConsoleDeps): AgentConsoleControll
   }
 
   async function callTool(): Promise<void> {
+    // One call at a time: a double click or a repeated Enter while a call is in flight
+    // sends nothing more (interaction-09).
+    if (state.working) return;
     // Parse the arguments as structured DATA: empty text is a no-argument call ({}),
     // malformed JSON is reported and NOTHING is posted (never fail silently).
     let args: unknown;
@@ -98,6 +105,9 @@ export function createAgentConsole(deps: AgentConsoleDeps): AgentConsoleControll
       params: { name: state.tool, arguments: args },
     };
 
+    // The previous result is cleared while this call runs, so the screen never shows an
+    // old response as if it were this call's.
+    set({ working: true, response: undefined, error: undefined });
     try {
       const response = await deps.fetch(deps.endpoint, {
         method: "POST",
@@ -114,13 +124,13 @@ export function createAgentConsole(deps: AgentConsoleDeps): AgentConsoleControll
       });
       const text = await response.text();
       if (!response.ok) {
-        set({ error: `/mcp rejected the call (${response.status}). ${text}`.trim(), response: undefined });
+        set({ working: false, error: `/mcp rejected the call (${response.status}). ${text}`.trim(), response: undefined });
         return;
       }
-      set({ response: pretty(text), error: undefined });
+      set({ working: false, response: pretty(text), error: undefined });
     } catch {
       // A thrown fetch (offline) is reported, not crashed through.
-      set({ error: NETWORK_FAILED_COPY, response: undefined });
+      set({ working: false, error: NETWORK_FAILED_COPY, response: undefined });
     }
   }
 
@@ -142,6 +152,8 @@ export interface AgentConsoleViewProps {
   // Optional override so the view can be driven with a fake fetch; the page mounts it with
   // just the key and endpoint.
   readonly fetch?: typeof fetch;
+  // Issue a fresh key on request (the page's server action). Loading the page never does.
+  readonly rotateAction?: (formData: FormData) => void | Promise<void>;
 }
 
 export function AgentConsoleView(props: AgentConsoleViewProps): React.ReactElement {
@@ -157,63 +169,87 @@ export function AgentConsoleView(props: AgentConsoleViewProps): React.ReactEleme
   }
   const agentConsole = consoleRef.current;
   const state = agentConsole.getState();
-  const argsId = React.useId();
 
   return (
-    <div className="flex flex-col gap-4">
-      <dl className="flex flex-col gap-2 text-sm">
-        <div className="flex flex-col gap-0.5">
-          <dt className="font-medium text-fg">Endpoint</dt>
-          <dd className="break-all text-fg-muted">{props.endpoint}</dd>
-        </div>
-        <div className="flex flex-col gap-0.5">
-          <dt className="font-medium text-fg">Dev access key</dt>
-          <dd className="break-all font-mono text-fg-muted">{props.accessKey}</dd>
-        </div>
-      </dl>
+    <>
+      <WorkspacePanel
+        title="This console’s agent"
+        description="Calls go to Warthog as your “Dev console” agent, using its access key. Reloading keeps the same key."
+        footer={
+          props.rotateAction ? (
+            <ActionForm action={props.rotateAction}>
+              <FormSubmit variant="secondary" size="sm" pendingLabel="Issuing a new key…">
+                Issue a new key
+              </FormSubmit>
+            </ActionForm>
+          ) : undefined
+        }
+      >
+        <dl className="flex flex-col gap-3 rounded-field bg-surface-muted p-3 text-sm">
+          <div className="flex flex-col gap-0.5">
+            <dt className="font-medium text-fg">Endpoint</dt>
+            <dd className="break-all text-fg-muted">{props.endpoint}</dd>
+          </div>
+          <div className="flex flex-col gap-0.5">
+            <dt className="font-medium text-fg">Dev access key</dt>
+            <dd className="break-all font-mono text-fg-muted">{props.accessKey}</dd>
+          </div>
+        </dl>
+      </WorkspacePanel>
 
-      <Field
-        label="Tool name"
-        value={state.tool}
-        placeholder="get_context"
-        onChange={(event) => agentConsole.setTool(event.target.value)}
-      />
-
-      <div className="flex flex-col gap-1.5">
-        <Label htmlFor={argsId}>Arguments (JSON)</Label>
-        <textarea
-          id={argsId}
-          value={state.args}
-          rows={5}
-          placeholder="{}"
-          onChange={(event) => agentConsole.setArguments(event.target.value)}
-          className="min-h-11 w-full rounded-card border border-line bg-surface px-3 py-2 font-mono text-sm text-fg placeholder:text-fg-muted focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-focus focus-visible:ring-offset-2 focus-visible:ring-offset-bg"
-        />
-      </div>
-
-      <div>
-        <Button
-          variant="primary"
-          onClick={() => {
-            void agentConsole.callTool();
-          }}
+      <form
+        onSubmit={(event) => {
+          event.preventDefault();
+          void agentConsole.callTool();
+        }}
+      >
+        <WorkspacePanel
+          title="Call a tool"
+          description="The tool’s name and its arguments as JSON. Leave the arguments empty for none."
+          footer={
+            <Button
+              type="submit"
+              variant="primary"
+              aria-disabled={state.working || undefined}
+              aria-busy={state.working || undefined}
+            >
+              {state.working ? "Sending…" : "Send to /mcp"}
+            </Button>
+          }
         >
-          Send to /mcp
-        </Button>
-      </div>
+          <div className="flex flex-col gap-4">
+            <Field
+              label="Tool name"
+              value={state.tool}
+              placeholder="get_context"
+              width="text"
+              autoComplete="off"
+              spellCheck={false}
+              onChange={(event) => agentConsole.setTool(event.target.value)}
+            />
+            <TextareaField
+              label="Arguments (JSON)"
+              value={state.args}
+              rows={5}
+              placeholder="{}"
+              spellCheck={false}
+              inputClassName="font-mono"
+              onChange={(event) => agentConsole.setArguments(event.target.value)}
+            />
+          </div>
+        </WorkspacePanel>
+      </form>
 
-      {state.error ? (
-        <p role="alert" className="text-sm text-danger">
-          {state.error}
-        </p>
-      ) : null}
+      {state.error ? <Notice tone="error">{state.error}</Notice> : null}
 
       {state.response ? (
-        <pre className="overflow-x-auto rounded-card border border-line bg-surface-muted p-4 text-sm text-fg">
-          {state.response}
-        </pre>
+        <WorkspacePanel title="Response">
+          <pre className="overflow-x-auto whitespace-pre-wrap rounded-field bg-surface-muted p-4 text-sm text-fg [overflow-wrap:anywhere]">
+            {state.response}
+          </pre>
+        </WorkspacePanel>
       ) : null}
-    </div>
+    </>
   );
 }
 

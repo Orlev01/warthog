@@ -5,6 +5,12 @@ import { WorkspaceHeading } from "@/components/shell/workspace-surfaces";
 
 import { Status, type StatusKey } from "@/components/ui/status";
 import { EmptyState } from "@/components/ui/empty";
+import { PageNotice, type NoticeTone } from "@/components/ui/notice";
+import { Button } from "@/components/ui/button";
+import { ButtonLink } from "@/components/ui/button-link";
+import { ActionForm, FormSubmit } from "@/components/ui/form-submit";
+import { formatMoney } from "@/domain/approvals/request-sentence";
+import { platformLabel } from "./platform-label";
 
 // E10-S10 — Agent list view component (src/components/agents/agent-list-view.tsx).
 //
@@ -57,26 +63,11 @@ export type AgentListViewProps = {
   // one-line reason rather than a live button over a missing action (constitution: no
   // dead controls — disable it and say why).
   disconnectAction?: (formData: FormData) => void | Promise<void>;
+  // The outcome of the last disconnect, shown once in the page's notice slot.
+  notice?: { tone: NoticeTone; text: string } | null;
 };
 
-// The person's currency label — matches the dashboard's spend display ("A$42 of A$200").
-const CURRENCY = "A$";
-
-// Native action buttons mirror the shared Button primitive's look on the design tokens
-// (≥44px target, token colour/radius/focus) but as native <button>s: the live Disconnect
-// is ALWAYS live, so it deliberately omits the primitive's `disabled:` utility variants.
-// Everything here is the neutral surface variant (the accent is reserved for a screen's
-// one primary action). Styled through tokens, no raw colour. (Same pattern as ActivityView.)
-const BTN_BASE =
-  "inline-flex min-h-11 items-center justify-center gap-2 rounded-full px-4 text-sm font-medium transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-focus focus-visible:ring-offset-2 focus-visible:ring-offset-bg";
-const BTN_PRIMARY = `${BTN_BASE} bg-accent text-accent-fg hover:bg-accent-hover`;
-const BTN_SECONDARY = `${BTN_BASE} border border-line bg-surface text-fg hover:bg-surface-muted`;
-// A control that is present but not actionable (Disconnect when no action is configured):
-// the neutral surface look, dimmed and non-interactive, the native `disabled` attribute
-// doing the disabling. Styled through tokens, no raw colour.
-const BTN_DISABLED = `${BTN_BASE} border border-line bg-surface text-fg-muted opacity-50`;
-
-// Plain words for the budget period, so spend reads "A$42 of A$200 this month".
+// Plain words for the budget period, so spend reads "$42.00 of $200.00 approved this month".
 function periodLabel(period: AgentListItem["budgetPeriod"]): string {
   switch (period) {
     case "day":
@@ -106,23 +97,30 @@ export function agentSummary(agents: readonly AgentListItem[]): string {
   return [total, ...(parts.length ? parts : ["all connected"])].join(" · ");
 }
 
+// A disconnected agent ("Reconnect needed") can't be disconnected again: it offers the way
+// back instead (interaction-08). Every other state keeps its live Disconnect.
+function isDisconnected(agent: AgentListItem): boolean {
+  return agent.status === "needs-reconnect";
+}
+
 // The Disconnect control for one agent. LIVE (bound to `disconnectAction`, carrying THIS
 // agent's id so the action disconnects the right one) when an action is supplied;
 // otherwise DISABLED with a one-line reason — never a live button over a missing action
-// (constitution: no dead controls — disable it and say why).
+// (constitution: no dead controls — disable it and say why). It is the entry point to a
+// destructive step, so it carries the danger treatment; the confirm dialog follows.
 function DisconnectControl({
-  agentId,
+  agent,
   disconnectAction,
 }: {
-  agentId: string;
+  agent: AgentListItem;
   disconnectAction?: (formData: FormData) => void | Promise<void>;
 }) {
   if (!disconnectAction) {
     return (
       <div className="flex flex-col gap-1">
-        <button type="button" disabled className={BTN_DISABLED}>
+        <Button type="button" variant="danger" disabled>
           Disconnect
-        </button>
+        </Button>
         <p className="text-xs text-fg-muted">
           Disconnecting isn&apos;t available just now.
         </p>
@@ -130,13 +128,19 @@ function DisconnectControl({
     );
   }
   return (
-    <form action={disconnectAction}>
-      <input type="hidden" name="agentId" value={agentId} />
-      <button type="submit" className={BTN_SECONDARY}>
-        Disconnect
-      </button>
-    </form>
+    <ActionForm action={disconnectAction}>
+      <input type="hidden" name="agentId" value={agent.id} />
+      <FormSubmit variant="danger" pendingLabel="Disconnecting…">
+        Disconnect<span className="sr-only"> {agent.name}</span>
+      </FormSubmit>
+    </ActionForm>
   );
+}
+
+function spendLine(agent: AgentListItem): string {
+  if (agent.hasBudget === false) return "No card budget";
+  const currency = agent.currency ?? "AUD";
+  return `Card budget: ${formatMoney(agent.spendThisPeriod, currency)} of ${formatMoney(agent.budget, currency)} approved ${periodLabel(agent.budgetPeriod)}`;
 }
 
 function AgentCard({
@@ -146,21 +150,26 @@ function AgentCard({
   agent: AgentListItem;
   disconnectAction?: (formData: FormData) => void | Promise<void>;
 }) {
+  const platform = platformLabel(agent.platform);
+  const disconnected = isDisconnected(agent);
   return (
     <li className="wh-surface wh-agent-row">
       <div className="flex min-w-0 flex-col gap-3">
         <div className="wh-agent-row-heading">
           <AgentMark platform={agent.platform} name={agent.name} size="md" />
-          <div className="flex min-w-0 flex-1 flex-col gap-0.5 [overflow-wrap:anywhere]">
+          <div className="flex min-w-0 flex-1 flex-col gap-1 [overflow-wrap:anywhere]">
+            {/* The full name always shows: two agents can share a long prefix. */}
             <a
               href={`/agents/${agent.id}`}
-              className="line-clamp-2 font-medium text-fg underline underline-offset-2"
+              className="inline-flex min-h-11 items-center self-start font-medium text-fg underline underline-offset-2 lg:min-h-0"
             >
               {agent.name}
             </a>
-            <span className="text-sm text-fg-muted">{agent.platform}</span>
+            <span className="flex flex-wrap items-center gap-x-3 gap-y-1 text-sm text-fg-muted sm:gap-x-2">
+              <Status status={agent.status} />
+              {platform ? <><span aria-hidden className="hidden sm:inline">·</span><span>{platform}</span></> : null}
+            </span>
           </div>
-          <Status status={agent.status} />
         </div>
 
         <p className="text-sm text-fg-muted">
@@ -171,26 +180,27 @@ function AgentCard({
         </p>
 
         <p className="text-sm text-fg-muted">
-          {agent.requestCount} request{agent.requestCount === 1 ? "" : "s"} ·{" "}
-          {agent.hasBudget === false
-            ? "No card budget"
-            : `${agent.currency ?? CURRENCY} ${agent.spendThisPeriod} of ${agent.currency ?? CURRENCY} ${agent.budget} ${periodLabel(agent.budgetPeriod)} approved`}
+          {agent.requestCount} request{agent.requestCount === 1 ? "" : "s"} · {spendLine(agent)}
           {agent.spendIncomplete
             ? " · Total incomplete: exchange rate unavailable"
             : null}
         </p>
       </div>
       <div className="wh-agent-row-actions">
-        <a href={`/agents/${agent.id}`} className={BTN_SECONDARY}>
-          Manage agent
-        </a>
-        <a href={agent.activityHref} className={BTN_SECONDARY}>
-          View activity
-        </a>
-        <DisconnectControl
-          agentId={agent.id}
-          disconnectAction={disconnectAction}
-        />
+        <ButtonLink href={`/agents/${agent.id}`}>
+          {disconnected ? "View agent" : "Manage agent"}
+          <span className="sr-only">: {agent.name}</span>
+        </ButtonLink>
+        <ButtonLink href={agent.activityHref}>
+          View activity<span className="sr-only">: {agent.name}</span>
+        </ButtonLink>
+        {disconnected ? (
+          <ButtonLink href="/agents/connect">
+            Connect it again<span className="sr-only">: {agent.name}</span>
+          </ButtonLink>
+        ) : (
+          <DisconnectControl agent={agent} disconnectAction={disconnectAction} />
+        )}
       </div>
     </li>
   );
@@ -199,22 +209,43 @@ function AgentCard({
 export function AgentListView({
   agents,
   disconnectAction,
+  notice,
 }: AgentListViewProps) {
+  const empty = agents.length === 0;
   return (
-    <div className="wh-page flex flex-col gap-6">
-      <WorkspaceHeading eyebrow="Connections" title="Your agents" description="Choose an agent to manage its connectors, vault access, skills, memory, spending and audit log." meta={agents.length > 0 ? agentSummary(agents) : undefined}>
-        <a href="/agents/connect" className={BTN_PRIMARY}><Plus aria-hidden size={16} />Connect an agent</a>
-        <a href="/settings/agents" className={BTN_SECONDARY}>Global agent settings</a>
+    <div className="wh-page">
+      <WorkspaceHeading
+        title="Your agents"
+        description={
+          empty
+            ? "The AI assistants you connect to Warthog appear here, each with its own permissions and activity."
+            : "Choose an agent to manage its connectors, vault access, skills, memory, spending and activity."
+        }
+        meta={empty ? undefined : agentSummary(agents)}
+      >
+        {/* With no agents the empty state carries the one call to action (newcomer-19). */}
+        {empty ? null : (
+          <>
+            <ButtonLink href="/agents/connect" variant="primary">
+              <Plus aria-hidden className="h-4 w-4 shrink-0" />
+              Connect an agent
+            </ButtonLink>
+            <ButtonLink href="/settings/agents">Agent defaults</ButtonLink>
+          </>
+        )}
       </WorkspaceHeading>
 
-      {agents.length === 0 ? (
+      {notice ? <PageNotice tone={notice.tone}>{notice.text}</PageNotice> : null}
+
+      {empty ? (
         <EmptyState
+          icon={Bot}
           heading="No agents connected yet"
-          description="Connect an agent and it'll appear here with its status and spend."
+          description="Agents are AI assistants like Claude or ChatGPT. Connect one and it gets its own permissions, card budget and activity record."
           action={
-            <a href="/agents/connect" className={BTN_PRIMARY}>
-              Connect an agent
-            </a>
+            <ButtonLink href="/agents/connect" variant="primary">
+              Connect your first agent
+            </ButtonLink>
           }
         />
       ) : (

@@ -109,8 +109,8 @@ function devConfig(overrides: Record<string, string> = {}): Config {
 
 // Build the provisioning seam under test with the pinned deps — a real db seam, a fixed
 // clock + the given randomness source, and an explicit config.
-function makeActions(db: Db, random: Random, config: Config = devConfig()) {
-  return createAgentConsoleActions({ db, clock, random, config });
+function makeActions(db: Db, random: Random, config: Config = devConfig(), keyCache = new Map<string, string>()) {
+  return createAgentConsoleActions({ db, clock, random, config, keyCache });
 }
 
 // A plain signed-in session for `userId` — the page resolves this from the
@@ -410,6 +410,77 @@ test("reloading the console reuses the same dev agent rather than creating a new
       firstConn,
       "the reload's key binds to the SAME connection (the reused dev agent)",
     );
+  } finally {
+    await db.close();
+  }
+});
+
+// =====================================================================================
+// interaction-09 — loading the console has no side effects once a key is issued: a reload
+// (or a second tab) gets the SAME key, so no "Agent key replaced" entry is written per visit
+// and an open tab's key keeps working. Only an explicit rotate issues a new key, and a dev
+// agent that was disconnected is never reused.
+// =====================================================================================
+
+async function keyReplacedCount(db: Db): Promise<number> {
+  const result = await db.query("SELECT count(*)::int AS n FROM activity_entries WHERE kind = 'agent_key_replaced'");
+  return Number(result.rows[0]?.n ?? -1);
+}
+
+test("reloading the console keeps the issued key instead of rotating it", async () => {
+  const db = await freshDb();
+  try {
+    const config = devConfig();
+    const { session } = await makePerson(db, config, "no-rotate");
+    const actions = makeActions(db, systemRandom, config);
+    const first = await actions.load(session);
+    const replacedBefore = await keyReplacedCount(db);
+    const second = await actions.load(session);
+    const third = await actions.load(session);
+    assert.equal(second.accessKey, first.accessKey, "a reload reuses the key it already issued");
+    assert.equal(third.accessKey, first.accessKey);
+    assert.ok(await verifyAccessKey(db, first.accessKey), "the first tab's key still works");
+    assert.equal(await keyReplacedCount(db), replacedBefore, "visiting the console writes no 'key replaced' entry");
+  } finally {
+    await db.close();
+  }
+});
+
+test("rotating issues a new key for the same dev agent, and the old key stops working", async () => {
+  const db = await freshDb();
+  try {
+    const config = devConfig();
+    const { userId, session } = await makePerson(db, config, "rotate");
+    const actions = makeActions(db, systemRandom, config);
+    const first = await actions.load(session);
+    const replacedBefore = await keyReplacedCount(db);
+    const rotated = await actions.rotate(session);
+    assert.notEqual(rotated.accessKey, first.accessKey);
+    assert.equal(await keyReplacedCount(db), replacedBefore + 1, "an explicit rotate is recorded, once");
+    assert.equal(await verifyAccessKey(db, first.accessKey), null, "the old key no longer verifies");
+    assert.ok(await verifyAccessKey(db, rotated.accessKey));
+    assert.equal((await actions.load(session)).accessKey, rotated.accessKey, "a reload after rotating keeps the new key");
+    assert.equal((await listAgentsForUser(db, userId)).length, 1, "rotating provisions no new agent");
+  } finally {
+    await db.close();
+  }
+});
+
+test("a disconnected dev agent is not reused: the console provisions a new, connected one", async () => {
+  const db = await freshDb();
+  try {
+    const config = devConfig();
+    const { userId, session } = await makePerson(db, config, "after-disconnect");
+    const actions = makeActions(db, systemRandom, config);
+    const first = await actions.load(session);
+    const before = await verifyAccessKey(db, first.accessKey);
+    await db.query("UPDATE agents SET status = 'disconnected' WHERE user_id = $1", [userId]);
+    await db.query("DELETE FROM oauth_access_keys WHERE connection_id = $1::uuid", [before!.connectionId]);
+    const next = await actions.load(session);
+    const resolved = await verifyAccessKey(db, next.accessKey);
+    assert.ok(resolved, "the console has a working key again");
+    assert.notEqual(resolved!.connectionId, before!.connectionId, "it belongs to a new dev agent");
+    assert.equal((await getAgentByConnectionId(db, resolved!.connectionId))?.status, "connected");
   } finally {
     await db.close();
   }

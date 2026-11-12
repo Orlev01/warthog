@@ -2,11 +2,14 @@ import type { PermissionsSection } from "@/domain/permissions/workspace";
 import { CONNECTION_CAPABILITIES } from "@/domain/permissions/connection-choices";
 import { Select } from "@/components/ui/select";
 import * as React from "react";
-import { CreditCard, TriangleAlert } from "lucide-react";
+import { ChevronDown, CreditCard, Plug, Sparkles, TriangleAlert } from "lucide-react";
 
 import { Button } from "@/components/ui/button";
+import { ButtonLink } from "@/components/ui/button-link";
 import { Card } from "@/components/ui/card";
+import { EmptyState } from "@/components/ui/empty";
 import { Field } from "@/components/ui/field";
+import { ActionBar } from "@/components/shell/workspace-surfaces";
 import {
   DEFAULT_CARD_BUDGET,
   budgetAllowsCard,
@@ -59,6 +62,9 @@ export type ConnectorAccess = {
 };
 
 export type SkillGrant = { id: string; name: string; granted: boolean };
+// A life-admin record the agent may be given: its own name, plus its type in words
+// ("Subscription") so two records are never told apart by an enum (interaction-12).
+export type RecordGrant = SkillGrant & { description?: string };
 
 export type PermissionsViewProps = {
   // the agent being shaped, named on the screen.
@@ -87,7 +93,7 @@ export type PermissionsViewProps = {
   skills: ReadonlyArray<SkillGrant>;
   // the person's tasks and life-admin records (their own grants, migration 0068).
   resourceControls?: { tasksWrite?: boolean; recordsWrite?: boolean; recordIds?: string[] | null };
-  recordChoices?: readonly SkillGrant[];
+  recordChoices?: readonly RecordGrant[];
   tasksAccess: boolean;
   recordsAccess: boolean;
   // read the person's shared memory; share what it learns with other agents.
@@ -99,6 +105,9 @@ export type PermissionsViewProps = {
   requestLimit?: number;
   // the person's currency label (e.g. "A$").
   currency?: string;
+  // A disconnected agent: its settings are shown but can't be saved, and the save bar
+  // says why instead of offering Save (interaction-08).
+  readOnly?: boolean;
 };
 
 // One capability toggle: a native, user-adjustable checkbox whose initial checked
@@ -134,7 +143,7 @@ function Toggle({
 }
 
 function SectionHeading({ children }: { children: React.ReactNode }) {
-  return <h2 className="text-sm font-semibold text-fg">{children}</h2>;
+  return <h2 className="wh-group-title">{children}</h2>;
 }
 
 export function PermissionsView({
@@ -162,6 +171,7 @@ export function PermissionsView({
   rules,
   requestLimit,
   currency = "A$",
+  readOnly = false,
 }: PermissionsViewProps) {
   const [vaultScope, setVaultScope] = React.useState(
     identityFields === null ? "all" : "chosen",
@@ -176,7 +186,7 @@ export function PermissionsView({
   const show = (part: PermissionsSection) =>
     section === "all" || section === part;
   return (
-    <section className="wh-permissions flex flex-col gap-6">
+    <section className="wh-permissions flex flex-col gap-4 sm:gap-6">
       {!embedded ? (
         <header className="flex flex-col gap-1">
           <h1 className="text-xl font-semibold text-fg">
@@ -201,7 +211,7 @@ export function PermissionsView({
                 use and how. Connecting a service does not grant agent access.
               </p>
             </div>
-            <div className="flex flex-col gap-3 rounded-card border border-line bg-surface-muted p-3">
+            <div className="flex flex-col gap-3 rounded-field bg-surface-muted p-3">
               <p className="text-sm font-medium text-fg">Defaults for every service</p>
               <div className="grid gap-3 sm:grid-cols-2">
                 <Toggle
@@ -218,19 +228,16 @@ export function PermissionsView({
                   </Select>
                 </label>
               </div>
-              <p className="text-xs text-fg-muted">A service set to “Use agent default” follows these.</p>
+              <p className="text-xs text-fg-muted">A service set to “Same as this agent’s setting” follows these.</p>
             </div>
             {connectors.length === 0 ? (
-              <p className="text-sm text-fg-muted">
-                No services connected yet.{" "}
-                <a
-                  href="/connectors"
-                  className="font-medium text-accent underline underline-offset-2"
-                >
-                  Connect one
-                </a>{" "}
-                to let {agentName} use it.
-              </p>
+              <EmptyState
+                variant="inline"
+                icon={Plug}
+                heading="No services connected yet."
+                description={`Connect a service, such as Gmail, then come back to let ${agentName} use it.`}
+                action={<ButtonLink href="/connectors" size="sm">Connect a service</ButtonLink>}
+              />
             ) : (
               <div className="flex flex-col gap-3">
                 <p className="text-sm text-fg-muted">
@@ -259,17 +266,19 @@ export function PermissionsView({
         <>
           {/* Identity: low-tier read vs. the high-tier REQUEST toggle. */}
           <div className="wh-permission-group flex flex-col gap-3">
-            <SectionHeading>Your identity</SectionHeading>
+            <SectionHeading>Your details</SectionHeading>
             <label className="flex flex-col gap-1 text-sm">
-              Vault fields
+              Which details it can read
               <Select
                 name="identityScope"
                 value={vaultScope}
                 onChange={(event) => setVaultScope(event.target.value)}
               >
-                <option value="all">All fields, including future fields</option>
-                <option value="chosen">Only chosen fields</option>
+                {/* Short labels, so a closed select never clips a word at 320px (mobile-23). */}
+                <option value="all">All my details</option>
+                <option value="chosen">Only the ones I choose</option>
               </Select>
+              <span className="text-xs text-fg-muted">“All my details” includes details you add later.</span>
             </label>
             {vaultScope === "chosen" && (
               <div className="flex flex-col gap-2">
@@ -281,8 +290,8 @@ export function PermissionsView({
                     label={field.name}
                     description={
                       field.tier === "high"
-                        ? "Sensitive · always asks first"
-                        : "Everyday detail"
+                        ? "Protected · asks you each time"
+                        : "Everyday"
                     }
                   />
                 ))}
@@ -290,22 +299,22 @@ export function PermissionsView({
             )}
 
             <p className="text-sm text-fg-muted">
-              Your vault is shared storage owned by you. These controls apply
-              only to this agent. Sensitive details always need your approval.{" "}
+              These choices apply only to {agentName}. Protected details always
+              need your approval.{" "}
               <a href="/vault" className="text-accent underline">
-                Manage vault contents
+                Manage your details
               </a>
             </p>
             <Toggle
               name="identity"
               on={lowTierRead}
-              label="Read your low-tier identity details"
+              label="Read your everyday details"
               description={CONNECTION_CAPABILITIES.identity.description}
             />
             <Toggle
               name="highTier"
               on={highTierRequest}
-              label="Let it ask for high-tier identity details"
+              label="Let it ask for protected details"
               description={CONNECTION_CAPABILITIES.highTier.description}
             />
           </div>
@@ -333,7 +342,8 @@ export function PermissionsView({
               <Card className="flex flex-col gap-2">
                 <Field
                   name="cardBudget"
-                  label={`Budget per ${budgetPeriod} (${currency})`}
+                  label={`Card budget per ${budgetPeriod} (${currency})`}
+                  width="short"
                   type="number"
                   min={0}
                   step="0.01"
@@ -343,13 +353,15 @@ export function PermissionsView({
                 />
                 <Field
                   name="cardBudgetCurrency"
-                  label="Budget currency (three-letter code)"
+                  label="Currency"
+                  hint="A three-letter code, such as AUD."
+                  width="code"
                   defaultValue={currency}
                   maxLength={3}
                 />
                 <label className="flex flex-col gap-2 text-sm font-medium">
                   Budget period
-                  <Select name="cardBudgetPeriod" defaultValue={budgetPeriod}>
+                  <Select name="cardBudgetPeriod" defaultValue={budgetPeriod} width="short">
                     <option value="day">Day</option>
                     <option value="week">Week</option>
                     <option value="month">Month</option>
@@ -371,18 +383,23 @@ export function PermissionsView({
           <div className="wh-permission-group flex flex-col gap-3">
             <SectionHeading>Skills</SectionHeading>
             <p className="text-sm text-fg-muted">
-              Choose skills for this agent. Your choices override each skill’s
-              shared or chosen-agent default; disabled skills remain
-              unavailable. Warthog’s house instructions always apply.
+              Choose which skills {agentName} can use. Your choice here overrides
+              the skill&rsquo;s own setting, and skills you&rsquo;ve switched off
+              stay off. Warthog&rsquo;s own instructions always apply.
             </p>
             {skills.length === 0 ? (
-              <p className="text-sm text-fg-muted">
-                No enabled personal skills yet.
-              </p>
-            ) : null}
-            <a href="/skills" className="text-sm text-accent underline">
-              Manage the shared skills library
-            </a>
+              <EmptyState
+                variant="inline"
+                icon={Sparkles}
+                heading="No skills are switched on yet."
+                description="Skills you add and switch on appear here."
+                action={<ButtonLink href="/skills" size="sm">Manage your skills</ButtonLink>}
+              />
+            ) : (
+              <a href="/skills" className="inline-flex min-h-11 items-center self-start text-sm text-accent underline lg:min-h-0">
+                Manage your skills
+              </a>
+            )}
             {skills.map((skill) => (
               <Toggle
                 key={skill.id}
@@ -400,27 +417,28 @@ export function PermissionsView({
           {/* The person's tasks and life-admin records — their own grants. */}
           <div className="wh-permission-group flex flex-col gap-3">
             <SectionHeading>Tasks and records</SectionHeading>
-            <Toggle name="tasksWrite" on={resourceControls?.tasksWrite !== false} label="Allow task changes" description="Requires task access below. Turn off for read-only access." />
-            <Toggle name="recordsWrite" on={resourceControls?.recordsWrite !== false} label="Allow record changes" description="Requires record access below. Turn off for read-only access." />
-            <label className="flex flex-col gap-1 text-sm">Record audience
-              <Select name="recordScope" defaultValue={resourceControls?.recordIds == null ? "all" : "chosen"}>
-                <option value="all">All your records, including future records</option>
-                <option value="chosen">Checked records and records this agent creates</option>
-              </Select>
-            </label>
-            {recordChoices?.map(record => <Toggle key={record.id} name={`record:${record.id}`} on={record.granted} label={record.name} />)}
+            {/* Each "change" switch sits under the access it depends on (content-37). */}
             <Toggle
               name="tasks"
               on={tasksAccess}
               label="Your tasks"
-              description="Read tasks assigned to this agent or available to any agent. The change setting above controls whether it can create, update and complete tasks."
+              description="Read tasks assigned to this agent or available to any agent."
             />
+            <Toggle name="tasksWrite" on={resourceControls?.tasksWrite !== false} label="Let it add and update tasks" description="Needs “Your tasks” on. Turn off to let it read tasks only." />
             <Toggle
               name="records"
               on={recordsAccess}
               label="Your life-admin records"
-              description="Read records in the selected audience. The change setting above controls whether it can save and update records."
+              description="Read the records chosen below."
             />
+            <Toggle name="recordsWrite" on={resourceControls?.recordsWrite !== false} label="Let it save and update records" description="Needs “Your life-admin records” on. Turn off to let it read records only." />
+            <label className="flex flex-col gap-1 text-sm">Which records it can see
+              <Select name="recordScope" defaultValue={resourceControls?.recordIds == null ? "all" : "chosen"}>
+                <option value="all">All my records, including new ones</option>
+                <option value="chosen">Only records I tick, plus ones it creates</option>
+              </Select>
+            </label>
+            {recordChoices?.map(record => <Toggle key={record.id} name={`record:${record.id}`} on={record.granted} label={record.name} description={record.description} />)}
           </div>
         </>
       ) : null}
@@ -431,9 +449,8 @@ export function PermissionsView({
           <div className="wh-permission-group flex flex-col gap-3">
             <SectionHeading>Memory and sharing</SectionHeading>
             <p className="text-sm text-fg-muted">
-              Shared and source-agent memory are the defaults. Choose individual
-              memories below to override access for this agent; reading must
-              also be on.
+              By default {agentName} reads shared memories and the ones it saved.
+              Turn individual memories on or off below; reading must also be on.
             </p>
             <Toggle
               name="memoryRead"
@@ -476,14 +493,16 @@ export function PermissionsView({
       {show("settings") ? (
         <>
           {/* Advanced: the per-minute request limit (default 120/min). */}
-          <details className="rounded-card border border-line bg-surface p-3">
-            <summary className="cursor-pointer text-sm font-semibold text-fg">
+          <details className="wh-permission-group group">
+            <summary className="flex min-h-11 cursor-pointer list-none items-center justify-between gap-3 text-sm font-semibold text-fg [&::-webkit-details-marker]:hidden">
               Advanced
+              <ChevronDown aria-hidden={true} className="h-4 w-4 shrink-0 text-fg-muted transition-transform group-open:rotate-180" />
             </summary>
-            <div className="mt-3">
+            <div className="pt-3">
               <Field
                 name="requestLimit"
-                label="Request limit (per minute)"
+                label="Maximum requests per minute"
+                width="code"
                 type="number"
                 min={1}
                 max={10000}
@@ -495,30 +514,33 @@ export function PermissionsView({
         </>
       ) : null}
 
-      {section !== "rules" ? (
-        <>
-          {/* Save — disabled with a stated reason when card access has no budget. */}
-          <div className="flex flex-col gap-2">
-            {cardNeedsBudget ? (
-              <p className="inline-flex items-center gap-2 text-sm font-medium text-warning">
-                <TriangleAlert
-                  aria-hidden={true}
-                  className="h-4 w-4 shrink-0"
-                />
+      {section !== "rules" && readOnly ? (
+        // A disconnected agent: nothing here can be saved, and the bar says why.
+        <ActionBar note="This agent is disconnected, so its access can’t be changed. Connect it again to set what it can use.">
+          <ButtonLink href="/agents/connect" size="sm">Connect it again</ButtonLink>
+        </ActionBar>
+      ) : section !== "rules" ? (
+        // Save — disabled with a stated reason when card access has no budget. One bounded
+        // bar closes the section's panels (containment-35).
+        <ActionBar
+          note={
+            cardNeedsBudget ? (
+              <span className="inline-flex items-center gap-2 font-medium text-warning">
+                <TriangleAlert aria-hidden={true} className="h-4 w-4 shrink-0" />
                 Add a budget before you can save card access.
-              </p>
-            ) : null}
-            <Button
-              type="button"
-              variant="primary"
-              disabled={cardNeedsBudget || saving}
-              data-action="save"
-              className="self-start"
-            >
-              {saving ? "Saving…" : "Save changes"}
-            </Button>
-          </div>
-        </>
+              </span>
+            ) : undefined
+          }
+        >
+          <Button
+            type="button"
+            variant="primary"
+            disabled={cardNeedsBudget || saving}
+            data-action="save"
+          >
+            {saving ? "Saving…" : "Save changes"}
+          </Button>
+        </ActionBar>
       ) : null}
     </section>
   );
@@ -540,19 +562,19 @@ function AgentRules({ agentName, rules }: { agentName: string; rules: ReadonlyAr
   );
   const stillApplies =
     inherited.length === 0
-      ? "No global rules apply either."
+      ? "No rules for all agents apply either."
       : inherited.length === 1
-        ? "The global rule above still applies."
-        : `The ${inherited.length} global rules above still apply.`;
+        ? "The rule for all agents above still applies."
+        : `The ${inherited.length} rules for all agents above still apply.`;
   return (
     <div className="flex flex-col gap-4">
       <div className="flex flex-col gap-1">
         <SectionHeading>Rules for {agentName}</SectionHeading>
         <p className="text-sm text-fg-muted">
-          Global rules apply to every agent. Individual settings cannot
-          override a global denial.{" "}
+          Rules for all agents apply to {agentName} too, and its own settings
+          can&rsquo;t override them.{" "}
           <a href="/rules" className="text-accent underline">
-            Manage global and agent rules
+            Manage rules
           </a>
         </p>
       </div>
@@ -560,9 +582,9 @@ function AgentRules({ agentName, rules }: { agentName: string; rules: ReadonlyAr
         <ListGroup
           id="agent-rules-inherited"
           level={3}
-          title="Inherited global rules"
+          title="Rules for all agents"
           count={inherited.length}
-          summary="Set for all agents on the Rules page."
+          summary="Set on the Rules page."
         >
           {inherited.map(row)}
         </ListGroup>

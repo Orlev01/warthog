@@ -9,6 +9,7 @@ import {
   type ChoiceKey, type ConnectionChoices, type ConnectionService,
 } from "@/domain/permissions/connection-choices";
 import type { PermissionTemplate } from "@/domain/permissions/templates";
+import { formatMoney } from "@/domain/approvals/request-sentence";
 
 export function PermissionHelp({ label, children }: { label: string; children: React.ReactNode }) {
   return <details className="wh-permission-help">
@@ -38,10 +39,10 @@ export function ConnectionPermissions({ template, state, services = [], onTempla
   const id = React.useId();
   React.useEffect(() => { if (template === "custom") setEditing(true); }, [template]);
   const groups: { title: string; choices: ChoiceKey[] }[] = [
-    { title: "Everyday information", choices: ["identity"] },
+    { title: "Everyday details", choices: ["identity"] },
     { title: "Memory", choices: ["memoryRead", "memoryWrite", "learningSharing"] },
     { title: "Tasks and records", choices: ["tasks", "records"] },
-    { title: "Sensitive requests · off by default", choices: ["highTier", "card"] },
+    { title: "Protected details and cards · off by default", choices: ["highTier", "card"] },
   ];
   return <section className="wh-connection-section" aria-labelledby={`${id}-heading`}>
     <div className="wh-connection-section-heading"><span>02</span><div><h2 id={`${id}-heading`}>Choose its access</h2><p>Pick a starting set, then review or adjust the individual permissions.</p></div></div>
@@ -52,16 +53,15 @@ export function ConnectionPermissions({ template, state, services = [], onTempla
         <span>{preset.description}</span>
       </label>)}
     </fieldset>
-    <p className="wh-permission-preset-note">Choosing Minimal or Standard replaces the choices below. Neither enables services, protected identity, card requests or sharing automatically.</p>
+    <p className="wh-permission-preset-note">Minimal and Standard replace your choices below. Neither turns on services, protected details, cards or sharing.</p>
     <details className="wh-permission-editor" open={editing} onToggle={event => setEditing(event.currentTarget.open)}>
       <summary><SlidersHorizontal size={18} aria-hidden="true" /><span>{template === "custom" ? "Custom permissions — edit your choices" : "Review and customise permissions"}</span><ChevronDown size={18} aria-hidden="true" /></summary>
       <div className="wh-permission-editor-body">
-        <p className="text-sm text-fg-muted">Each switch below is independent. Editing a permission selects Custom and keeps your other choices.</p>
         {groups.map(group => <fieldset className="wh-permission-group" key={group.title}>
           <legend>{group.title}</legend>
           {group.choices.map(choice => <PermissionChoice key={choice} choice={choice} state={state} onChange={onChange} />)}
           {group.choices.includes("card") && state.card ? <div className="wh-permission-budget">
-            <Field label={`Card release budget (${currency})`} name="cardBudgetAmount" type="number" inputMode="decimal" min="0.01" step="0.01" required value={state.cardBudget.amount} onChange={e => onChange({ ...state, cardBudget: { ...state.cardBudget, amount: e.target.value } })} />
+            <Field label={`Card budget (${currency})`} name="cardBudgetAmount" type="number" inputMode="decimal" min="0.01" step="0.01" required value={state.cardBudget.amount} onChange={e => onChange({ ...state, cardBudget: { ...state.cardBudget, amount: e.target.value } })} />
             <label htmlFor={`${id}-period`}>Budget period<Select id={`${id}-period`} name="cardBudgetPeriod" value={state.cardBudget.period} onChange={e => onChange({ ...state, cardBudget: { ...state.cardBudget, period: e.target.value as ConnectionChoices["cardBudget"]["period"] } })}><option value="day">Per day</option><option value="week">Per week</option><option value="month">Per month</option></Select></label>
             <input type="hidden" name="cardBudgetCurrency" value={currency} />
             <p>Limits the total amount approved for card releases in each period. Every release still asks you first; this is not a limit enforced by your bank.</p>
@@ -80,10 +80,16 @@ export function ConnectionPermissions({ template, state, services = [], onTempla
     </details>
     <div className="wh-permission-included">
       <h3><Check size={16} aria-hidden="true" /> Included with every connection</h3>
-      <p>Your preferences and skills assigned to this agent are available. Warthog records activity through this connection. These are not optional switches here.</p>
-      <PermissionHelp label="What stays under your control">Only enabled skills whose audience includes this agent are available. You can manage skill audiences, individual vault fields, memory audiences and service accounts in the agent’s workspace. Global rules remain enforced. Warthog cannot control the platform’s separate tools, billing or private model memory.</PermissionHelp>
+      <p>Every agent gets your preferences and the skills you’ve given it, and Warthog records what it does.</p>
+      <PermissionHelp label="What stays under your control">Only skills you’ve switched on for this agent are available. You can choose individual details, memories, skills and service accounts on the agent’s page later. Your rules for all agents still apply. Warthog can’t control the platform’s own tools, billing or the model’s private memory.</PermissionHelp>
     </div>
   </section>;
+}
+
+// "$200.00" for a typed budget, or a dash while the field is empty (content-20).
+function budgetText(amount: string, currency: string): string {
+  const value = Number(amount.trim());
+  return amount.trim() === "" || !Number.isFinite(value) ? "—" : formatMoney(value, currency);
 }
 
 export function ConnectionAccessSummary({ state, services = [], currency = "AUD" }: { state: ConnectionChoices; services?: readonly ConnectionService[]; currency?: string }) {
@@ -94,9 +100,9 @@ export function ConnectionAccessSummary({ state, services = [], currency = "AUD"
       <ul>{everyday.filter(key => state[key]).map(key => <li key={key}>{CONNECTION_CAPABILITIES[key].label}</li>)}<li>Assigned skills and your preferences</li>{selected.map(service => <li key={service.id}>Read from {service.name}; changes ask you first</li>)}</ul>
     </div>
     <div><h3>Requests and sharing</h3><ul>
-      <li>Protected identity: {state.highTier ? "may request; each release needs approval" : "off"}</li>
-      <li>Card requests: {state.card ? `${currency} ${state.cardBudget.amount || "—"} per ${state.cardBudget.period}; each release needs approval` : "off"}</li>
-      <li>Sharing new memories: {state.learningSharing ? (state.memoryWrite ? "on, with other permitted agents" : "on, but saving memories is off") : "off; new notes stay private to this agent"}</li>
+      <li>Protected details: {state.highTier ? "may ask; you approve each one" : "off"}</li>
+      <li>Card requests: {state.card ? `${budgetText(state.cardBudget.amount, currency)} a ${state.cardBudget.period}; you approve each one` : "off"}</li>
+      <li>Sharing new memories: {state.learningSharing ? (state.memoryWrite ? "on, with your other agents" : "on, but saving memories is off") : "off; new memories stay private to this agent"}</li>
       {!selected.length ? <li>Connected services: none selected</li> : null}
     </ul></div>
   </div>;

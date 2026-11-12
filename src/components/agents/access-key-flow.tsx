@@ -1,11 +1,12 @@
 "use client";
 
 import * as React from "react";
-import { KeyRound, AlertTriangle, TriangleAlert } from "lucide-react";
+import { KeyRound, TriangleAlert } from "lucide-react";
 
 import { Button } from "@/components/ui/button";
-import { Card } from "@/components/ui/card";
+import { ButtonLink } from "@/components/ui/button-link";
 import { Field } from "@/components/ui/field";
+import { Notice } from "@/components/ui/notice";
 import { CopyButton } from "@/components/ui/copy-button";
 import { ConnectionPermissions, ConnectionAccessSummary } from "./connection-permissions";
 import { connectionChoices, connectionChoiceInput, type ConnectionChoices, type ConnectionService } from "@/domain/permissions/connection-choices";
@@ -14,6 +15,8 @@ import { connectionChoices, connectionChoiceInput, type ConnectionChoices, type 
 // the standard connector sign-in, 'Create an access key' lets the person name the agent
 // and set its permissions on the same screen as the consent screen, shows the key once
 // with a copy button, and lets them revoke or replace the key later"; design §6.1;
+// today a key is revoked by disconnecting its agent — there is no separate replace
+// control yet, so the copy says exactly that (interaction-07);
 // constitution 16 — each agent has its own revocable credential, a per-agent access key
 // where a platform cannot use the connector flow).
 //
@@ -171,34 +174,47 @@ export function createAccessKeyFlow(deps: AccessKeyFlowDeps): AccessKeyControlle
 // ─── the key-shown surface (the key once, a Copy control, instructions, a warning) ─────
 
 function IssuedPanel({ keyValue, agentId }: { keyValue: string; agentId?: string }) {
+  // The create surface is replaced by this one, so focus moves to its heading — a keyboard
+  // or screen-reader user lands on the key, not on an empty page.
+  const heading = React.useRef<HTMLHeadingElement>(null);
+  React.useEffect(() => { heading.current?.focus(); }, []);
   return (
-    <section className="flex flex-col gap-6">
-      <header className="flex flex-col gap-1">
-        <h1 className="text-xl font-semibold text-fg">Your access key is ready</h1>
-        <p className="text-sm text-fg-muted">
-          Paste this key into your agent where it asks for an access key.
-        </p>
+    <div className="wh-connection-flow">
+      <header className="wh-connection-intro">
+        <span className="wh-connection-mark"><KeyRound size={24} aria-hidden="true" /></span>
+        <p className="wh-connection-eyebrow">Agent connection</p>
+        <h1 ref={heading} tabIndex={-1}>Your access key is ready</h1>
+        <p>Paste this key into your agent where it asks for an access key.</p>
       </header>
 
-      <Card className="flex flex-col gap-3">
+      <section className="wh-connection-section" aria-labelledby="access-key-issued-heading">
+        <h2 id="access-key-issued-heading" className="sr-only">Your access key</h2>
         <div className="flex flex-col gap-2 sm:flex-row sm:items-center">
-          <code className="block min-w-0 flex-1 select-all overflow-x-auto rounded-card border border-line bg-surface-muted px-3 py-2 font-mono text-sm text-fg">
+          <code className="block min-w-0 flex-1 select-all overflow-x-auto rounded-field bg-surface-muted px-3 py-2 font-mono text-sm text-fg [overflow-wrap:anywhere]">
             {keyValue}
           </code>
-          <CopyButton value={keyValue} successMessage="Access key copied. Paste it into your agent, then clear your clipboard." />
+          <CopyButton value={keyValue} label="access key" successMessage="Access key copied. Paste it into your agent, then clear your clipboard." />
         </div>
-        <p className="inline-flex items-center gap-2 text-sm font-medium text-warning">
-          <TriangleAlert aria-hidden={true} className="h-4 w-4 shrink-0" />
+        <p className="inline-flex items-start gap-2 text-sm font-medium text-warning">
+          <TriangleAlert aria-hidden={true} className="mt-0.5 h-4 w-4 shrink-0" />
           Copy it now — for your security this key won&rsquo;t be shown again.
         </p>
-      </Card>
+        <p className="wh-connection-help">
+          Add it in your agent&rsquo;s connector or access-key settings. If the key is lost or
+          shared by mistake, disconnect this agent from its page in Agents — that stops the key
+          working — then create a new one.
+        </p>
+      </section>
 
-      <p className="text-sm text-fg-muted">
-        Add it in your agent&rsquo;s connector or access-key settings. You can revoke or
-        replace it any time from your agents list.
-      </p>
-      <a className="inline-flex min-h-11 w-fit items-center text-sm font-medium underline underline-offset-4" href={agentId ? `/agents/${encodeURIComponent(agentId)}` : "/agents"}>Review this agent’s permissions</a>
-    </section>
+      <div className="wh-connection-actionbar">
+        <div className="wh-connection-actions">
+          <ButtonLink href={agentId ? `/agents/${encodeURIComponent(agentId)}` : "/agents"} variant="primary">
+            Review this agent&rsquo;s permissions
+          </ButtonLink>
+          <ButtonLink href="/agents">Go to your agents</ButtonLink>
+        </div>
+      </div>
+    </div>
   );
 }
 
@@ -253,30 +269,34 @@ export function AccessKeyFlow(props: AccessKeyFlowProps): React.ReactElement {
     <form method="post" className="wh-connection-flow" onSubmit={event => { event.preventDefault(); if (ready) void flow.submit(); }}>
       <header className="wh-connection-intro">
         <span className="wh-connection-mark"><KeyRound size={24} aria-hidden="true" /></span>
-        <p className="wh-connection-eyebrow">Agent connection · access key</p>
+        <p className="wh-connection-eyebrow">Agent connection</p>
         <h1>Create an access key</h1>
         <p>Choose what this agent can access before creating its key. Anyone with the key can use these permissions, so only share it with the agent you intend to connect.</p>
       </header>
       <fieldset disabled={!ready || state.status === "working"} className="contents">
         <section className="wh-connection-section">
           <div className="wh-connection-section-heading"><span>01</span><div><h2>Name this agent</h2><p>Use a name you’ll recognise in approvals and activity.</p></div></div>
-          <Field label="Agent name" name="name" id={nameId} value={state.name} placeholder={props.defaultName} required maxLength={200} onChange={event => flow.setName(event.target.value)} />
+          {/* The same 480px name field as the consent screen (public-22). */}
+          <div className="wh-connection-name"><Field label="Agent name" name="name" id={nameId} value={state.name} placeholder={props.defaultName} required maxLength={200} aria-describedby={`${nameId}-help`} onChange={event => flow.setName(event.target.value)} /></div>
+          <p id={`${nameId}-help`} className="wh-connection-name-help">This name appears in your agent list, approval requests and activity.</p>
         </section>
         <ConnectionPermissions template={state.template} state={state.choices} services={props.services} onTemplate={flow.setTemplate} onChange={flow.setChoices} />
         <section className="wh-connection-section">
           <div className="wh-connection-section-heading"><span>03</span><div><h2>Review before creating the key</h2><p>The key will be limited to the choices shown here.</p></div></div>
           <ConnectionAccessSummary state={state.choices} services={props.services} />
-          <p className="wh-connection-boundary">Global rules still apply. You can change access or disconnect this agent later. These controls only cover requests made through Warthog; information already received cannot be recalled.</p>
+          <p className="wh-connection-boundary">Your rules for all agents still apply. Warthog controls only what an agent does through Warthog, not its own tools or chats. You can change its access or disconnect it later; information it has already received can’t be recalled.</p>
         </section>
       </fieldset>
-      {state.error ? <p role="alert" className="flex items-start gap-2 text-sm text-danger"><AlertTriangle size={18} aria-hidden="true" />{state.error} Your choices have been kept.</p> : null}
-      <div className="wh-connection-actions">
-        <Button type="submit" variant="primary" disabled={!ready} aria-disabled={state.status === "working" || undefined} aria-busy={state.status === "working"} onClick={event => { if (state.status === "working") event.preventDefault(); }}>
-          <KeyRound aria-hidden="true" size={16} />{state.status === "working" ? "Creating…" : "Create access key"}
-        </Button>
-        <a href="/agents">Cancel</a>
+      {state.error ? <Notice tone="error">{state.error} Your choices have been kept.</Notice> : null}
+      <div className="wh-connection-actionbar">
+        <div className="wh-connection-actions">
+          <Button type="submit" variant="primary" disabled={!ready} aria-disabled={state.status === "working" || undefined} aria-busy={state.status === "working"} onClick={event => { if (state.status === "working") event.preventDefault(); }}>
+            <KeyRound aria-hidden="true" size={16} />{state.status === "working" ? "Creating…" : "Create access key"}
+          </Button>
+          <ButtonLink href="/agents">Cancel</ButtonLink>
+        </div>
+        <p className="wh-connection-footer">The key is shown once. Copy it somewhere safe before leaving the next screen.</p>
       </div>
-      <p className="wh-connection-footer">The key is shown once. Copy it somewhere safe before leaving the next screen.</p>
     </form>
   );
 }

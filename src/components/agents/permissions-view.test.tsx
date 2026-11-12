@@ -464,17 +464,38 @@ test("renders a supplied request limit instead of the default", () => {
 // The identity, card, memory and sharing toggles reflect their props.
 // ================================================================================
 
-test("shows low-tier identity read and a high-tier-request toggle that reflects its prop", () => {
+// content-09 — the identity tiers have one name each: "everyday details" (read) and
+// "protected details" (ask each time), never low-/high-tier.
+test("shows the everyday-details read and a protected-details request toggle that reflects its prop", () => {
   const text = visibleText(render(base()));
-  assert.match(text, /low[\s-]?tier/i, `low-tier identity read must be shown; text="${text}"`);
+  assert.match(text, /everyday details/i, `the everyday-details read must be shown; text="${text}"`);
+  assert.doesNotMatch(text, /low[\s-]?tier|high[\s-]?tier/i, "no tier jargon");
 
-  // High-tier is a REQUEST toggle whose on-state follows the prop.
-  const off = toggle(render(base({ highTierRequest: false })), /high[\s-]?tier/i);
-  assert.ok(off, "a high-tier-request toggle must be rendered");
-  assert.ok(off && off.on === false, "high-tier request must be OFF when its prop is false");
+  // Protected details is a REQUEST toggle whose on-state follows the prop.
+  const off = toggle(render(base({ highTierRequest: false })), /protected details/i);
+  assert.ok(off, "a protected-details request toggle must be rendered");
+  assert.ok(off && off.on === false, "the protected-details request must be OFF when its prop is false");
 
-  const on = toggle(render(base({ highTierRequest: true })), /high[\s-]?tier/i);
-  assert.ok(on && on.on === true, "high-tier request must be ON when its prop is true");
+  const on = toggle(render(base({ highTierRequest: true })), /protected details/i);
+  assert.ok(on && on.on === true, "the protected-details request must be ON when its prop is true");
+});
+
+// interaction-08 — a disconnected agent's settings are read-only: no Save, and the bar says
+// why and offers the way back.
+test("a read-only (disconnected) agent offers no Save and says why", () => {
+  const markup = render(base({ readOnly: true }));
+  assert.equal(allButtons(markup).filter((b) => /save/i.test(b.name)).length, 0, "no Save control");
+  assert.match(visibleText(markup), /disconnected, so its access can.t be changed/);
+  assert.match(markup, /href="\/agents\/connect"/);
+});
+
+// interaction-12 — each record is named after itself, with its type in words underneath.
+test("record choices show the record's own name and its type in words", () => {
+  const markup = render(base({ section: "settings", recordChoices: [{ id: "r1", name: "Netflix Premium", description: "Subscription", granted: true }] }));
+  const choice = toggle(markup, /Netflix Premium/);
+  assert.ok(choice, "the record's toggle is named after the record");
+  assert.match(visibleText(markup), /Netflix Premium Subscription/);
+  assert.doesNotMatch(visibleText(markup), /renewal_appointment|receipt_warranty/);
 });
 
 test("the card-access toggle reflects its prop", () => {

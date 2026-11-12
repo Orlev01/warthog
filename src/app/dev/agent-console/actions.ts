@@ -14,6 +14,14 @@
 // database (`getServerDb()`), the signed-in session (from the `__Host-wh_session` cookie)
 // and config at request time, then builds this factory and renders the view.
 //
+// Loading the console has no side effects once a key is issued (interaction-09): the raw
+// key is kept in this process's memory (like the dev outbox) for the dev agent it belongs
+// to, and a reload, a second tab or a prefetch reuses it rather than rotating the key —
+// which used to write an "Agent key replaced" entry on every visit and break the other open
+// tabs. A key is replaced only on an explicit `rotate`, or when the cache can't vouch for
+// one (a fresh server process). A dev agent that has been disconnected is never reused: a
+// new one is provisioned.
+//
 // The provisioned key reuses the SAME credential path `/mcp` verifies — a genuine `wh_ak_`
 // bearer stored ONLY as its SHA-256 hash in `oauth_access_keys` and bound to the one
 // connection of a real, CONNECTED agent OWNED BY the person — so it resolves through
@@ -25,6 +33,7 @@
 import { randomBytes } from "node:crypto";
 
 import { createAccessKeyActions } from "../../(portal)/(protected)/agents/access-key/actions";
+import { verifyAccessKey } from "../../../server/oauth/access-key";
 import { listAgentsForUser } from "../../../server/db/agents";
 import { createUser, getUserByEmail } from "../../../server/db/users";
 import { selectKeyWrapper } from "../../../server/crypto/key-wrapper";
@@ -41,11 +50,20 @@ export interface AgentConsoleActionsDeps {
   readonly clock: Clock;
   readonly random: Random;
   readonly config: Config;
+  // The raw keys already issued, by dev agent. Defaults to one map for the whole process,
+  // so every request of a running dev server shares it; a test passes its own.
+  readonly keyCache?: Map<string, string>;
 }
 
 export interface AgentConsoleActions {
   load(session: Session | null): Promise<{ accessKey: string; endpoint: string }>;
+  // Issue a fresh key for the dev agent (the old one stops working), on request only.
+  rotate(session: Session | null): Promise<{ accessKey: string; endpoint: string }>;
 }
+
+// One cache per dev server process. It lives on globalThis so a hot reload of this module
+// doesn't forget the keys the open console tabs are using.
+const PROCESS_KEYS: Map<string, string> = ((globalThis as { __warthogDevConsoleKeys?: Map<string, string> }).__warthogDevConsoleKeys ??= new Map());
 
 // The dev agent the console provisions is marked by this platform label, so a reload finds
 // and reuses it rather than minting another. Its display name is the one the person sees in
@@ -71,7 +89,7 @@ function mcpEndpoint(config: Config): string {
 }
 
 export function createAgentConsoleActions(deps: AgentConsoleActionsDeps): AgentConsoleActions {
-  const { db, clock, random, config } = deps;
+  const { db, clock, random, config, keyCache = PROCESS_KEYS } = deps;
 
   // The dev fallback person for a session-less load: the one with the stable dev email, or
   // a freshly created one with a DEK wrapped under the SAME KEK the MCP dispatch derives
@@ -92,24 +110,31 @@ export function createAgentConsoleActions(deps: AgentConsoleActionsDeps): AgentC
   // working bearer for it. For a signed-in person the agent is OWNED BY `session.userId`;
   // with no session it is the self-contained dev fallback. Either way the agent and its key
   // go through the REAL per-agent access-key mechanism (`createAccessKeyActions`), so the
-  // key verifies at `/mcp` and a tool call executes rather than being refused.
-  async function load(session: Session | null): Promise<{ accessKey: string; endpoint: string }> {
+  // key verifies at `/mcp` and a tool call executes rather than being refused. The key
+  // already issued for that agent is reused unless `fresh` asks for a new one.
+  async function issue(session: Session | null, fresh: boolean): Promise<{ accessKey: string; endpoint: string }> {
     const owner = session ?? (await fallbackSession());
     const accessKeys = createAccessKeyActions({ db, clock, random, keyWrapper: selectKeyWrapper({ nodeEnv: config.nodeEnv, localKek: config.devKek }) });
 
-    // Reuse the one dev agent already provisioned for this person (marked by its platform),
-    // re-issuing its key; otherwise create it with sensible default permissions.
+    // Reuse the one CONNECTED dev agent already provisioned for this person (marked by its
+    // platform); a disconnected one is left as history and a new one is created.
     const existing = (await listAgentsForUser(db, owner.userId)).find(
-      (agent) => agent.platform === DEV_AGENT_PLATFORM,
+      (agent) => agent.platform === DEV_AGENT_PLATFORM && agent.status === "connected",
     );
 
     let accessKey: string;
     if (existing) {
+      const slot = `${owner.userId}:${existing.id}`;
+      const cached = keyCache.get(slot);
+      if (!fresh && cached && (await verifyAccessKey(db, cached))?.connectionId === existing.connectionId) {
+        return { accessKey: cached, endpoint: mcpEndpoint(config) };
+      }
       const replaced = await accessKeys.replace(owner, existing.id);
       if (!replaced.ok) {
         throw new Error(`agent-console: could not reuse the dev agent (${replaced.reason})`);
       }
       accessKey = replaced.key;
+      keyCache.set(slot, accessKey);
     } else {
       const created = await accessKeys.create(owner, {
         name: DEV_AGENT_NAME,
@@ -120,10 +145,11 @@ export function createAgentConsoleActions(deps: AgentConsoleActionsDeps): AgentC
         throw new Error(`agent-console: could not provision the dev agent (${created.reason})`);
       }
       accessKey = created.key;
+      keyCache.set(`${owner.userId}:${created.agentId}`, accessKey);
     }
 
     return { accessKey, endpoint: mcpEndpoint(config) };
   }
 
-  return { load };
+  return { load: (session) => issue(session, false), rotate: (session) => issue(session, true) };
 }

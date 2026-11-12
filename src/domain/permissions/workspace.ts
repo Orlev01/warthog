@@ -6,7 +6,7 @@ export const AGENT_SECTIONS = [
   ["memory", "Memory"],
   ["spending", "Spending"],
   ["rules", "Rules"],
-  ["activity", "Audit log"],
+  ["activity", "Activity"],
   ["settings", "Settings"],
 ] as const;
 export type AgentSection = (typeof AGENT_SECTIONS)[number][0];

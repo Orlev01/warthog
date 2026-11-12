@@ -1,6 +1,9 @@
 import * as React from "react";
+import { Inbox } from "lucide-react";
 
 import { EmptyState } from "@/components/ui/empty";
+import { Badge } from "@/components/ui/badge";
+import { ListGroup, LIST_ROW } from "@/components/ui/list-group";
 import type { SentMessage } from "@/server/notify/outbox";
 
 // E17-S08 — Dev outbox viewer (view). A plain, prop-driven, synchronously
@@ -8,9 +11,11 @@ import type { SentMessage } from "@/server/notify/outbox";
 // developer driving the primary journey over HTTP can read the push / email / SMS
 // that would otherwise go to a real device — and click through any single-use
 // approval or sign-in link. It reads nothing itself: the `/dev/outbox` loader
-// passes it `outbox.list()`. Built on the design tokens (globals.css), never a raw
-// hex colour; a read-only viewer, so no buttons and no dead controls — a message
-// carrying no link renders no link control at all.
+// passes it `outbox.list()`. The messages are divider rows in one bounded list (never
+// loose on the page), and a long plus-addressed recipient wraps inside its row instead of
+// widening the page on a phone (mobile-22). Built on the design tokens, never a raw hex
+// colour; a read-only viewer, so no buttons and no dead controls — a message carrying no
+// link renders no link control at all.
 
 // A developer-facing label for each channel the outbox stamps a message with.
 const CHANNEL_LABEL: Record<SentMessage["channel"], string> = {
@@ -23,32 +28,28 @@ export function OutboxView({ messages }: { messages: readonly SentMessage[] }) {
   if (messages.length === 0) {
     return (
       <EmptyState
+        icon={Inbox}
         heading="Nothing captured yet"
         description="Notifications and their single-use links appear here as the journey sends them."
       />
     );
   }
   return (
-    <ul className="flex flex-col gap-3">
+    <ListGroup id="dev-outbox-messages" title="Captured messages" count={messages.length} summary="Oldest first, as the journey sent them.">
       {messages.map((message, index) => (
-        <li
-          key={index}
-          className="flex flex-col gap-2 rounded-card border border-line bg-surface p-4"
-        >
-          <div className="flex items-center gap-3">
-            <span className="rounded-card bg-surface-muted px-2 py-0.5 text-xs font-medium uppercase tracking-wide text-fg-muted">
-              {CHANNEL_LABEL[message.channel]}
-            </span>
-            <span className="text-sm font-medium text-fg">{message.recipient}</span>
+        <li key={index} className={LIST_ROW}>
+          <div className="flex min-w-0 flex-wrap items-center gap-x-3 gap-y-1">
+            <Badge>{CHANNEL_LABEL[message.channel]}</Badge>
+            <span className="min-w-0 text-sm font-medium text-fg [overflow-wrap:anywhere]">{message.recipient}</span>
           </div>
-          <p className="text-sm text-fg">{message.body}</p>
+          <p className="whitespace-pre-wrap text-sm text-fg [overflow-wrap:anywhere]">{message.body}</p>
           {message.link ? (
-            <a href={message.link} className="break-all text-sm font-medium text-accent underline">
+            <a href={message.link} className="inline-flex min-h-11 items-center break-all text-sm font-medium text-accent underline lg:min-h-0">
               {message.link}
             </a>
           ) : null}
         </li>
       ))}
-    </ul>
+    </ListGroup>
   );
 }

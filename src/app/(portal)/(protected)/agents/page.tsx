@@ -2,7 +2,7 @@ import * as React from "react";
 import { cookies } from "next/headers";
 import { redirect } from "next/navigation";
 import { revalidatePath } from "next/cache";
-import { Notice as InlineNotice } from "@/components/ui/notice";
+import type { Metadata } from "next";
 
 import { loadConfig } from "@/server/config";
 import { getServerDb } from "@/server/db/server";
@@ -79,11 +79,11 @@ async function disconnectAction(formData: FormData): Promise<void> {
   const raw = formData.get("agentId");
   const agentId = typeof raw === "string" ? raw : "";
   const config = loadConfig();
-  let notice = "disconnected";
+  let notice: NoticeKey = "disconnected";
   try {
     const result = await buildActions(db, config.nodeEnv, config.devKek).disconnect(session, agentId);
     if (!result.ok) {
-      notice = "problem";
+      notice = result.reason === "not_connected" ? "already" : "problem";
     }
   } catch (error) {
     if (!(error instanceof HttpError)) {
@@ -95,17 +95,18 @@ async function disconnectAction(formData: FormData): Promise<void> {
   redirect(`/agents?notice=${notice}`);
 }
 
-// The outcome of the last disconnect, in words plus an icon (never colour alone). A problem
-// is announced immediately (alert); a success politely (status).
-function NoticeBanner({ notice }: { notice: "disconnected" | "problem" }) {
-  const done = notice === "disconnected";
-  const text = done ? "Agent disconnected." : "We couldn't disconnect that agent. Please try again.";
-  return (
-    <div className="mx-auto w-full max-w-3xl px-4 pt-8 sm:px-6">
-      <InlineNotice tone={done ? "success" : "error"}>{text}</InlineNotice>
-    </div>
-  );
-}
+// The outcome of the last disconnect, in words plus an icon (never colour alone), shown in
+// the page's one notice slot after the heading. A problem is announced immediately (alert);
+// a success politely (status).
+const NOTICES = {
+  disconnected: { tone: "success", text: "Agent disconnected. It can't use Warthog any more, and its history stays in Activity." },
+  already: { tone: "info", text: "That agent was already disconnected, so nothing changed." },
+  problem: { tone: "error", text: "We couldn't disconnect that agent. Please try again." },
+} as const;
+type NoticeKey = keyof typeof NOTICES;
+
+// The tab names the screen as its heading does ("Your agents · Warthog").
+export const metadata: Metadata = { title: "Your agents" };
 
 export default async function AgentsPage({
   searchParams,
@@ -117,7 +118,9 @@ export default async function AgentsPage({
   const params = await searchParams;
   const rawNotice = params.notice;
   const notice =
-    rawNotice === "disconnected" || rawNotice === "problem" ? rawNotice : null;
+    typeof rawNotice === "string" && Object.hasOwn(NOTICES, rawNotice)
+      ? NOTICES[rawNotice as NoticeKey]
+      : null;
   const config = loadConfig();
   const db = await getServerDb();
   const session = await resolveSession(db);
@@ -126,10 +129,5 @@ export default async function AgentsPage({
   }
 
   const view = await buildActions(db, config.nodeEnv, config.devKek).load(session);
-  return (
-    <>
-      {notice ? <NoticeBanner notice={notice} /> : null}
-      <AgentsScreen agents={view.agents} disconnect={disconnectAction} />
-    </>
-  );
+  return <AgentsScreen agents={view.agents} disconnect={disconnectAction} notice={notice} />;
 }

@@ -62,13 +62,13 @@ function groups(markup: string): Array<{ title: string; count: number; html: str
   });
 }
 
-test("inherited global rules and the agent's own rules are separate groups with counts", () => {
+test("rules for all agents and the agent's own rules are separate groups with counts", () => {
   const markup = render([GLOBAL_ASK, OWN_NEVER, GLOBAL_NEVER]);
   const found = groups(markup);
   assert.deepEqual(
     found.map(({ title, count }) => ({ title, count })),
     [
-      { title: "Inherited global rules", count: 2 },
+      { title: "Rules for all agents", count: 2 },
       { title: "Just for Claude", count: 1 },
     ],
   );
@@ -79,24 +79,25 @@ test("inherited global rules and the agent's own rules are separate groups with 
   }
   assert.ok(visibleText(own!.html).includes(ruleSentence(OWN_NEVER)));
   assert.ok(!visibleText(inherited!.html).includes(ruleSentence(OWN_NEVER)));
-  // Kind reads as a word on each row, beyond the sentence itself.
-  assert.match(visibleText(inherited!.html), /Ask first/);
+  // Kind reads as a word on each row, beyond the sentence itself ("Ask me first", the house
+  // wording the shared RuleKindBadge uses).
+  assert.match(visibleText(inherited!.html), /Ask me first/);
 });
 
-test("with global rules but none of its own, the empty message says the global rules still apply", () => {
+test("with rules for all agents but none of its own, the empty message says those rules still apply", () => {
   const markup = render([GLOBAL_ASK, GLOBAL_NEVER]);
   const own = groups(markup).find((g) => g.title === "Just for Claude");
   assert.ok(own, "the agent's own group is shown even when empty");
   assert.equal(own.count, 0);
   const text = visibleText(own.html);
   assert.match(text, /No rules just for Claude yet/);
-  assert.match(text, /2 global rules above still apply/);
+  assert.match(text, /2 rules for all agents above still apply/);
   assert.match(own.html, /href="\/rules\?view=new"/, "a route to the rule builder");
 });
 
 test("with one global rule the message is singular", () => {
   const own = groups(render([GLOBAL_ASK])).find((g) => g.title === "Just for Claude");
-  assert.match(visibleText(own!.html), /The global rule above still applies/);
+  assert.match(visibleText(own!.html), /The rule for all agents above still applies/);
 });
 
 test("with no rules at all, the message says nothing applies yet and no inherited group is shown", () => {
@@ -105,7 +106,7 @@ test("with no rules at all, the message says nothing applies yet and no inherite
   assert.deepEqual(found.map((g) => g.title), ["Just for Claude"]);
   const text = visibleText(found[0]!.html);
   assert.match(text, /No rules just for Claude yet/);
-  assert.match(text, /no global rules apply either/i);
+  assert.match(text, /no rules for all agents apply either/i);
   assert.match(markup, /href="\/rules"/, "the section still links the Rules page");
 });
 
