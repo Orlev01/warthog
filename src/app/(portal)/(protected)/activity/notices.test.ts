@@ -244,3 +244,15 @@ test("pending Undo links to approval while provider failure and refusal remain d
     }
   } finally { await db.close(); }
 });
+
+// interaction-02: a dispute with a blank note files nothing and says what to do instead.
+test("a blank dispute note lands back on the entry with a plain-words problem notice", () => {
+  assert.equal(
+    noticeLocation("dispute_filed", { ok: false, reason: "dispute_note_missing" }, 42),
+    "/activity?entry=42&notice=dispute_note_missing#entry-42",
+  );
+  const notice = activityNotice("dispute_note_missing");
+  assert.equal(notice?.tone, "problem");
+  assert.match(notice?.text ?? "", /add a note/i);
+  assert.doesNotMatch(notice!.text, JARGON);
+});

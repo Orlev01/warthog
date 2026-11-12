@@ -75,9 +75,11 @@ test("loaders and rendered activity consistently use the encrypted account zone 
       assert.ok(!renderToStaticMarkup(<DashboardView {...dashboard} />).includes(`(${zone})`));
       const markup = renderToStaticMarkup(<ActivityView {...timeline} />);
       assert.ok(markup.includes(day!));
-      // "From (UTC)" / "To (UTC)" label the date filters, which really are UTC bounds.
+      // The date filters are calendar days in the account zone (UI/UX pass, content-47), which
+      // the page states once, so their labels carry no zone suffix either.
       if (zone !== "UTC") assert.ok(!markup.includes(`(${zone})`));
-      assert.ok(markup.includes("From (UTC)") && markup.includes("To (UTC)"), "date filters keep explicit UTC bounds");
+      assert.ok(/>From<\/label>/.test(markup) && />To<\/label>/.test(markup), "the date filters are labelled From and To");
+      assert.ok(!markup.includes("(UTC)"), "no UTC suffix on a page that states its zone once");
     }
   } finally { await db.close(); }
 });

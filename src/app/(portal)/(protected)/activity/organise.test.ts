@@ -143,3 +143,32 @@ test("the type view lists every type in a fixed order; an empty type has no dead
   assert.equal(rows[1]!.total, 0);
   assert.equal(rows[1]!.href, undefined);
 });
+
+// UI/UX pass (content-47): the page states its times in the account's zone, so a calendar-day
+// filter means that day there, not in UTC.
+test("calendar-day filters cover the whole day in the account's time zone", async () => {
+  const { dayStartIn, dayEndIn } = await import("./organise");
+  assert.equal(dayStartIn("2026-11-12", "Australia/Sydney"), "2026-11-11T13:00:00.000Z", "midnight in Sydney (summer time, UTC+11)");
+  assert.equal(dayEndIn("2026-11-12", "Australia/Sydney"), "2026-11-12T12:59:59.999Z");
+  assert.equal(dayStartIn("2026-06-01", "Australia/Sydney"), "2026-05-31T14:00:00.000Z", "winter time, UTC+10");
+  assert.equal(dayStartIn("2026-04-05", "Australia/Sydney"), "2026-04-04T13:00:00.000Z", "the day daylight saving ends starts at its local midnight");
+  assert.equal(dayEndIn("2026-04-05", "Australia/Sydney"), "2026-04-05T13:59:59.999Z", "and that day is 25 hours long");
+  assert.equal(dayStartIn("2026-11-12", "UTC"), "2026-11-12T00:00:00.000Z");
+  assert.equal(dayEndIn("2026-11-12T05:00:00Z", "UTC"), "2026-11-12T05:00:00Z", "a date-time is left exactly as given");
+});
+
+test("applied date chips and the counts caption name the day without a UTC suffix", async () => {
+  const { countsCaption } = await import("./organise");
+  const state = readActivityState({ from: "2026-03-01", to: "2026-03-31", kind: "tool_call", outcome: "pending_approval" }, anyDate);
+  const labels = appliedFilters(state, {}).filters.map((f) => f.label);
+  assert.deepEqual(labels, ["Event: Agent request", "Outcome: Waiting for you", "From 1 Mar 2026", "To 31 Mar 2026"]);
+  assert.equal(countsCaption(state).startsWith("Counts cover 1 Mar 2026 to 31 Mar 2026, within the filters shown."), true);
+  assert.ok(!/UTC|intent record/.test(countsCaption(state)));
+});
+
+test("an agent row names its platform in words, and leaves out a placeholder", () => {
+  const detail = (facts: Parameters<typeof agentGroups>[1]) => agentGroups([summary(AGENT)], facts, readActivityState({}, anyDate), () => "")[0]!.detail;
+  assert.equal(detail(() => ({ name: "Dev console", platform: "dev-console", platformName: "Developer console", exists: true })), "Developer console");
+  assert.equal(detail(() => ({ name: "Helper", platform: "Other", platformName: null, exists: true })), undefined);
+  assert.equal(detail(() => ({ name: "Claude", platform: "Claude", platformName: "Claude", exists: true })), undefined, "a platform that repeats the name adds nothing");
+});

@@ -147,6 +147,73 @@ export function outcomeGroup(outcome: string | null | undefined): OutcomeGroup {
   return "other";
 }
 
+// Each stored outcome code in the words a person uses (UI/UX pass, content-04): one small
+// vocabulary — Done, Waiting for you, Blocked, Failed, Undone — instead of the engine's own
+// codes ("Executed", "Attempted", "Saved"). Connection and approval outcomes keep the verb
+// that says what happened ("Connected", "Approved"). An intent record ("attempted") is "Not
+// confirmed": the entry itself never confirms that the change finished.
+export const OUTCOME_LABELS: Readonly<Record<string, string>> = {
+  executed: "Done",
+  ok: "Done",
+  saved: "Done",
+  reported: "Done",
+  done: "Done",
+  approved: "Approved",
+  released: "Released",
+  connected: "Connected",
+  reconnected: "Reconnected",
+  disconnected: "Disconnected",
+  reversed: "Undone",
+  pending_approval: "Waiting for you",
+  pending: "Waiting",
+  attempted: "Not confirmed",
+  more_detail: "Asked for detail",
+  denied: "Denied",
+  refused: "Blocked",
+  rate_limited: "Too many requests",
+  expired: "Expired",
+  failed: "Failed",
+  error: "Failed",
+  unknown: "Result unknown",
+  needs_reconnect: "Reconnect needed",
+};
+
+function tidy(value: string): string {
+  const spaced = value.replace(/[_-]+/g, " ").trim();
+  return spaced.length === 0 ? spaced : spaced.charAt(0).toUpperCase() + spaced.slice(1);
+}
+
+/**
+ * An outcome in words: "executed" → "Done", "pending_approval" → "Waiting for you". Accepts the
+ * stored code or its tidied form ("Pending approval", which older loaders hand over), so it
+ * can be applied at any boundary; anything unrecognised (including the sentences older Undo
+ * entries stored) reads as itself, tidied.
+ */
+export function outcomeLabel(outcome: string | null | undefined): string {
+  if (outcome === null || outcome === undefined) return "";
+  const code = outcome.trim().toLowerCase().replace(/[\s-]+/g, "_");
+  return Object.hasOwn(OUTCOME_LABELS, code) ? OUTCOME_LABELS[code]! : tidy(outcome);
+}
+
+// What one entry of each type is called, for counts in a sentence ("1 read", "2 rejected
+// requests") — the plural type labels above read wrongly after "1" (content-38).
+export const CATEGORY_NOUNS: Readonly<Record<ActivityCategory, readonly [string, string]>> = {
+  read: ["read", "reads"],
+  change: ["change", "changes"],
+  approval: ["approval or release", "approvals and releases"],
+  report: ["agent report", "agent reports"],
+  rejected: ["rejected request", "rejected requests"],
+  access: ["connection or access change", "connection and access changes"],
+  account: ["account change", "account changes"],
+  other: ["other entry", "other entries"],
+};
+
+/** "1 read", "3 rejected requests". */
+export function categoryCount(category: ActivityCategory, count: number): string {
+  const [one, many] = CATEGORY_NOUNS[category];
+  return `${count} ${count === 1 ? one : many}`;
+}
+
 // The outcomes a person should look at: requests that were blocked or failed. Disputed
 // entries are added to "Needs attention" separately (a dispute is not an outcome).
 export const ATTENTION_OUTCOMES: readonly string[] = [...OUTCOME_CODES.blocked, ...OUTCOME_CODES.failed];
