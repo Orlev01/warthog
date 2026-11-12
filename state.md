@@ -1,4 +1,43 @@
-# Delivery status — 11 November 2026
+# Delivery status — 12 November 2026
+
+**The product review fixes and latest main integration are live at
+[app.warthog.com.au](https://app.warthog.com.au).** Application source
+`9f2ef12dbf6b1c8c75797b1c647d694cd4b3b7ee` runs as
+`warthog--r43149429380a1`, with one healthy replica, explicit 100% traffic and
+zero old replicas. The [release record](docs/audit/product-review-release-2026-11-12.md)
+contains the immutable image, retained findings, maintenance scope and verification.
+
+The thirteen functional review findings have implementation and acceptance
+records covering granular agent controls, accurate execution evidence, lifecycle
+events, client metadata, account provenance, usable audit history and large data
+transfers. The consent improvements and MCP tool metadata from the latest main
+are preserved. The agents coordinated one release, with no competing deployment.
+
+Both source and pinned-image CI passed **5,259 tests**, with zero failures or
+skips, plus real PostgreSQL 16, runtime, infrastructure and delivery checks.
+All **36 public production checks** passed before and after deployment. An
+independent reviewer also passed 24 public and 17 browser checks, covering
+expired consent, recovery navigation and responsive access-key controls without
+creating credentials or changing account settings. These public counts overlap.
+Two additive migrations bring the runtime to 78 migrations; all existing migration
+files and dependencies are unchanged. Older images ignore the new restrictions,
+so rollback requires a permission-policy review and is never automatic.
+
+The founder approved both protected GitHub environments. The current scan retains
+219 OS findings, including four newly listed glibc package/advisory pairs, with
+zero non-OS findings in the runtime. The release record explains applicability
+and limits; this is not a vulnerability-free image. Existing allocation,
+versioned secret references, identity, hostname and SMS-off settings are preserved.
+
+Temporary runner cleanup is independently verified: no owned cloud resources,
+scoped grants, subnet NAT association or GitHub registration remain. The ephemeral
+private key and local registry credentials are removed. Private operational
+evidence is retained under `.delivery/product-review-release/` in the isolated
+review worktree. Live all-provider, real-device notification and coordinated
+restore verification retain their documented boundaries. Earlier status below
+is historical where superseded by this release.
+
+# Historical bug-bash delivery — 11 November 2026
 
 **The bug-bash fixes are live at [app.warthog.com.au](https://app.warthog.com.au).**
 Application source `9a7de2e58e9ed3bede61d65bbb9716d0a2214900` runs as

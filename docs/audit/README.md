@@ -1,10 +1,11 @@
 # Warthog comprehensive engineering audit
 
-**Product review implementation, 12 November:** the thirteen findings below have
-changes and acceptance evidence in the isolated review branch. See the
+**Product review deployed, 12 November:** the thirteen findings below have
+changes and acceptance evidence, deployed from integrated main `9f2ef12`. See the
 [implementation record](product-review-2026-11-12/implementation.md) for granular
 controls, audit evidence, metadata, large transfers and the per-service verification
-matrix. This local implementation is separate from the deployed release below.
+matrix, and the [release record](product-review-release-2026-11-12.md) for exact
+image, two additive migrations, 5,259 tests in each CI run and live acceptance.
 
 **Functional product review, 12 November:** the live Claude/Gmail flow works, but
 the [product review](product-review-2026-11-12/review.md) identifies gaps in audit

@@ -1,5 +1,10 @@
 # Product review implementation — 12 November 2026
 
+**Subsequent deployment:** these changes and the latest main were released as
+application source `9f2ef12`. See the [production release record](../product-review-release-2026-11-12.md)
+for the immutable image, hosted checks and live acceptance. The evidence below
+describes the preceding implementation phase.
+
 The thirteen review findings have implementation changes and explicit acceptance
 records on isolated branch `codex/warthog-product-review`. This is local
 implementation evidence, not a deployment attestation or certification of all
