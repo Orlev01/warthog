@@ -733,23 +733,48 @@ async function claimCount(db: Db, userId: string, seq: number): Promise<number> 
 }
 
 // An undo service whose reversal reports the given statuses in turn (the last one repeats),
-// logging every run.
+// logging every run. A held (pending_approval) reversal names the approval `approvalFor`
+// returns for that run, as the production executor does.
 function scriptedUndo(
   db: Db,
   recorder: ActivityRecorder,
   statuses: readonly ("executed" | "refused" | "pending_approval" | "failed")[],
   runCalls: unknown[],
+  approvalFor?: (run: number) => Promise<string>,
 ) {
   return createUndoService({
     db,
     recorder,
     reversalFor: (tool) => (tool ? REVERSALS[tool] : undefined),
     runReversal: async (job) => {
-      const status = statuses[Math.min(runCalls.length, statuses.length - 1)]!;
+      const run = runCalls.length;
+      const status = statuses[Math.min(run, statuses.length - 1)]!;
       runCalls.push(job);
-      return { status, outcome: status === "executed" ? "Undone." : "Not undone." };
+      const approvalId = status === "pending_approval" && approvalFor ? await approvalFor(run) : undefined;
+      return { status, outcome: status === "executed" ? "Undone." : "Not undone.", ...(approvalId ? { approvalId } : {}) };
     },
   });
+}
+
+// A real approval row for `userId` in the given status (plaintext metadata; the detail is a
+// stand-in envelope this flow never reads). Returns its id.
+async function makeApproval(db: Db, userId: string, status: string): Promise<string> {
+  const result = await db.query(
+    `INSERT INTO approvals (user_id, agent_id, status, detail, created_at, expires_at)
+     VALUES ($1, gen_random_uuid(), $2, 'v1:synthetic', $3::timestamptz, $4::timestamptz) RETURNING id`,
+    [userId, status, T0.toISOString(), new Date(T0.getTime() + 86_400_000).toISOString()],
+  );
+  return String(result.rows[0]!.id);
+}
+
+// The approval id recorded on this person's claim for an entry (null when none).
+async function claimApproval(db: Db, userId: string, seq: number): Promise<string | null> {
+  const result = await db.query(
+    "SELECT approval_id FROM activity_undo_claims WHERE user_id = $1 AND entry_seq = $2",
+    [userId, seq],
+  );
+  const value = result.rows[0]?.approval_id;
+  return value == null ? null : String(value);
 }
 
 test("a second undo of the same entry is refused as already undone, and the reversal runs once", async () => {
@@ -864,18 +889,20 @@ test("a reversal that throws releases the claim and surfaces the error, so a ret
   }
 });
 
-test("a reversal held for approval keeps the claim, so the entry can't be undone twice", async () => {
+test("a reversal held for approval keeps the claim and records its approval, so the entry can't be undone twice", async () => {
   const db = await freshDb();
   try {
     const alice = await makeUser(db, "pending-keeps");
     const recorder = makeRecorder(db, { [alice]: freshDek() });
     await seedChain(recorder, alice, [CREATE_EVENT]);
+    const approval = await makeApproval(db, alice, "pending");
     const runCalls: unknown[] = [];
-    const service = scriptedUndo(db, recorder, ["pending_approval", "executed"], runCalls);
+    const service = scriptedUndo(db, recorder, ["pending_approval", "executed"], runCalls, async () => approval);
 
     const first = await service.undo({ userId: alice, entrySeq: 1 });
     assert.ok(!first.ok && first.status === "pending_approval");
     assert.equal(await claimCount(db, alice, 1), 1, "the approval-held undo keeps its claim");
+    assert.equal(await claimApproval(db, alice, 1), approval, "and the claim names the approval it waits on");
 
     const second = await service.undo({ userId: alice, entrySeq: 1 });
     assert.ok(!second.ok && second.status === "already_undone", "a second undo would ask for a duplicate approval");
@@ -980,5 +1007,150 @@ test("the claim and its release bind the person and position as parameters, memb
   }
   for (const call of calls) {
     assert.ok(!call.text.includes(probe), "the id is never woven into the SQL");
+  }
+});
+
+// ===================================================================================
+// An undo held for approval (13 Nov follow-up). Most agents default to "Changes: ask me
+// first", so an Undo usually comes back pending_approval. The claim records the approval it
+// waits on; while that approval is pending, asking for more detail or approved, the entry
+// stays claimed. Once it is declined, expires or no longer exists for this person, the claim
+// is STALE: the next undo removes exactly that claim and tries once more.
+// ===================================================================================
+
+// Seed one reversible entry, undo it once into an approval-held state naming a fresh
+// approval in `firstStatus`, and return what a test needs to drive the retry.
+async function heldUndo(who: string) {
+  const db = await freshDb();
+  const alice = await makeUser(db, who);
+  const recorder = makeRecorder(db, { [alice]: freshDek() });
+  await seedChain(recorder, alice, [CREATE_EVENT]);
+  const approval = await makeApproval(db, alice, "pending");
+  const runCalls: unknown[] = [];
+  const service = scriptedUndo(db, recorder, ["pending_approval", "executed"], runCalls, async () => approval);
+  const held = await service.undo({ userId: alice, entrySeq: 1 });
+  assert.ok(!held.ok && held.status === "pending_approval", "the first undo is held for approval");
+  assert.equal(await claimApproval(db, alice, 1), approval);
+  return { db, alice, recorder, approval, runCalls, service };
+}
+
+test("a declined, an expired, a missing or another person's approval frees the entry, so a retry runs", async () => {
+  for (const ending of ["denied", "expired", "missing", "not-theirs"] as const) {
+    const { db, alice, approval, runCalls, service } = await heldUndo(`stale-${ending}`);
+    try {
+      if (ending === "denied" || ending === "expired") {
+        await db.query("UPDATE approvals SET status = $1 WHERE id = $2", [ending, approval]);
+      } else if (ending === "missing") {
+        await db.query("DELETE FROM approvals WHERE id = $1", [approval]);
+      } else {
+        // The claim names an approval that exists, but belongs to someone else: for this
+        // person it does not exist, so it can never hold their entry.
+        const bob = await makeUser(db, "stale-owner-bob");
+        await db.query("UPDATE approvals SET user_id = $1 WHERE id = $2", [bob, approval]);
+      }
+
+      const retry = await service.undo({ userId: alice, entrySeq: 1 });
+      assert.ok(retry.ok, `after a ${ending} approval the retry runs`);
+      assert.equal(runCalls.length, 2, `the reversal ran again after a ${ending} approval`);
+      assert.equal(await claimCount(db, alice, 1), 1, "the retry holds a fresh claim");
+      assert.equal(await claimApproval(db, alice, 1), null, "which no longer names the stale approval");
+    } finally {
+      await db.close();
+    }
+  }
+});
+
+test("a pending, more-detail or approved approval still holds the entry: a retry is refused and runs nothing", async () => {
+  for (const status of ["pending", "more_detail", "approved"] as const) {
+    const { db, alice, approval, runCalls, service } = await heldUndo(`live-${status}`);
+    try {
+      await db.query("UPDATE approvals SET status = $1 WHERE id = $2", [status, approval]);
+      const retry = await service.undo({ userId: alice, entrySeq: 1 });
+      assert.ok(!retry.ok && retry.status === "already_undone", `a ${status} approval refuses the retry`);
+      assert.equal(runCalls.length, 1, "nothing more runs");
+      assert.equal(await claimApproval(db, alice, 1), approval, "the claim still names its approval");
+      assert.equal(await entryCount(db, alice), 2, "nothing more is recorded");
+    } finally {
+      await db.close();
+    }
+  }
+});
+
+test("two concurrent undos racing on a stale claim run the reversal at most once", async () => {
+  const { db, alice, approval, recorder } = await heldUndo("stale-race");
+  try {
+    await db.query("UPDATE approvals SET status = 'denied' WHERE id = $1", [approval]);
+    let runs = 0;
+    const service = createUndoService({
+      db,
+      recorder,
+      reversalFor: (tool) => (tool ? REVERSALS[tool] : undefined),
+      runReversal: async () => {
+        runs += 1;
+        await new Promise((resolve) => setTimeout(resolve, 20));
+        return { status: "executed", outcome: "Undone." };
+      },
+    });
+
+    const results = await Promise.all([
+      service.undo({ userId: alice, entrySeq: 1 }),
+      service.undo({ userId: alice, entrySeq: 1 }),
+    ]);
+
+    assert.equal(runs, 1, "the stale claim is replaced once, and the reversal runs once");
+    assert.equal(results.filter((r) => r.ok).length, 1, "exactly one undo succeeds");
+    assert.ok(results.some((r) => !r.ok && r.status === "already_undone"), "the other is refused");
+    assert.equal(await claimCount(db, alice, 1), 1);
+  } finally {
+    await db.close();
+  }
+});
+
+test("clearing a stale claim binds the person, position and that approval id, so a fresh claim is never removed", async () => {
+  const probe = "u'); DROP TABLE activity_undo_claims; --";
+  const stale = "00000000-0000-4000-8000-000000000001";
+  const held = "00000000-0000-4000-8000-000000000002";
+  const calls: { text: string; values: unknown[] }[] = [];
+  let inserts = 0;
+  const db: Db = {
+    query(text: string, values: unknown[] = []) {
+      calls.push({ text, values });
+      if (/FROM activity_entries/.test(text)) {
+        return Promise.resolve({ rows: [{ seq: 7, tool: CREATE_EVENT, kind: "tool_call", source: "warthog", connector_id: null }] });
+      }
+      // The first claim finds a stale one in the way; the retry wins.
+      if (/INSERT INTO activity_undo_claims/.test(text)) {
+        inserts += 1;
+        return Promise.resolve({ rows: inserts === 1 ? [] : [{ entry_seq: 7 }] });
+      }
+      if (/SELECT[\s\S]*FROM activity_undo_claims/.test(text)) {
+        return Promise.resolve({ rows: [{ approval_id: stale, state: null }] });
+      }
+      if (/DELETE FROM activity_undo_claims/.test(text)) return Promise.resolve({ rows: [{ entry_seq: 7 }] });
+      return Promise.resolve({ rows: [] as Record<string, unknown>[] });
+    },
+    close: () => Promise.resolve(),
+  };
+  const service = createUndoService({
+    db,
+    recorder: recordingRecorder(),
+    reversalFor: (tool) => (tool ? REVERSALS[tool] : undefined),
+    runReversal: async () => ({ status: "pending_approval", outcome: "Approval needed.", approvalId: held }),
+  });
+
+  const result = await service.undo({ userId: probe, entrySeq: 7 });
+  assert.ok(!result.ok && result.status === "pending_approval", "the retry ran and was held");
+
+  const read = calls.find((c) => /SELECT[\s\S]*FROM activity_undo_claims/.test(c.text));
+  const clear = calls.find((c) => /DELETE FROM activity_undo_claims/.test(c.text));
+  const hold = calls.find((c) => /UPDATE activity_undo_claims/.test(c.text));
+  assert.ok(read && clear && hold, "the stale claim is read, cleared, and the new claim records its approval");
+  assert.match(read.text, /approvals/, "the approval's status is read alongside the claim");
+  assert.deepEqual([...clear.values].sort(), [probe, 7, stale].sort(), "the clear names the person, position and stale approval");
+  assert.match(clear.text, /approval_id/, "so it can only remove that stale claim");
+  assert.ok(hold.values.includes(probe) && hold.values.includes(7) && hold.values.includes(held), "the hold is member-scoped and bound");
+  assert.equal(inserts, 2, "the claim is retried exactly once");
+  for (const call of calls) {
+    assert.ok(!call.text.includes(probe) && !call.text.includes(stale), "no value is woven into the SQL");
   }
 });

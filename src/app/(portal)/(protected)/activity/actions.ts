@@ -121,6 +121,12 @@ export interface ActivityActionsDeps {
   readonly serviceName?: (connectorId: string) => string | undefined;
 }
 
+// The Inbox opens one approval at `/inbox?approval=<id>` — the deep link a push notification
+// uses (public/sw.js) — marking it and bringing it into view.
+function approvalHref(approvalId: string): string {
+  return `/inbox?approval=${encodeURIComponent(approvalId)}`;
+}
+
 // The newest entries the Activity timeline shows at once, and how many a free-text search
 // scans (search can only match decrypted text, so it reads a larger bounded page).
 export const ACTIVITY_PAGE_LIMIT = 100;
@@ -300,9 +306,11 @@ export function createActivityActions(deps: ActivityActionsDeps): ActivityAction
   // Map a decrypted entry to the view's row. `canUndo` is `reversalFor(tool)` — true
   // only where the entry's tool declares a reversal — so the view mounts an Undo
   // control exactly where undoEntry can act and nowhere else (never a dead control).
-  // An entry that has already been undone (or has an undo in progress — it holds an undo
-  // claim) is never undoable again: `canUndo` is false and `undone` tells the view to say
-  // "Undone" where the button was.
+  // An entry whose undo stands (it holds a live undo claim) is never undoable again:
+  // `canUndo` is false and `undoStatus` tells the view what to say where the button was —
+  // "Undone", or "Undo waiting for your approval" linking to that request in the Inbox. A
+  // stale claim (its approval declined, expired or gone) reaches here as no claim, so the
+  // entry is undoable again.
   // The agent is shown by the name the person gave it (`agentNames`: their OWN agents,
   // read member-scoped), never its raw id, and an agent call is titled by its tool.
   function toEntryView(
@@ -313,8 +321,8 @@ export function createActivityActions(deps: ActivityActionsDeps): ActivityAction
     now: Date | undefined,
   ): ActivityEntryView & { attemptId?: string; intent?: true } {
     const target = calendarReversalForEntry(entry);
-    const undone = entry.undoClaimed === true;
-    const canUndo = !undone && target !== undefined && reversalFor?.(entry.tool) === target.tool;
+    const claim = entry.undoClaim;
+    const canUndo = claim === undefined && target !== undefined && reversalFor?.(entry.tool) === target.tool;
     const category = activityCategory(entry, isReadOnlyTool);
     const day = dayOf(entry.occurredAt, timeZone, now);
     return {
@@ -339,7 +347,8 @@ export function createActivityActions(deps: ActivityActionsDeps): ActivityAction
       permalink: `${ACTIVITY_PATH}?entry=${entry.seq}#entry-${entry.seq}`,
       ...activityEvidence(entry),
       canUndo,
-      ...(undone ? { undone: true } : {}),
+      ...(claim ? { undoStatus: claim.state === "done" ? { state: "done" as const }
+        : { state: "waiting" as const, approvalHref: approvalHref(claim.approvalId) } } : {}),
     };
   }
 

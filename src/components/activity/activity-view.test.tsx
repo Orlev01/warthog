@@ -65,7 +65,9 @@ type ActivityEntryView = {
   summary: string; // one-line, already-redacted
   detail: string; // full detail, already-redacted (the per-entry "open for detail")
   canUndo: boolean;
-  undone?: boolean; // the entry has been undone (or an undo is in progress) — 13 Nov
+  // Where the entry's undo stands once one was asked for (13 Nov): done, or held for the
+  // person's approval with a link to that request in the Inbox.
+  undoStatus?: { state: "done" } | { state: "waiting"; approvalHref: string };
 };
 
 // The values each filter dropdown offers (resolved display names / labels).
@@ -527,11 +529,11 @@ test("shows NO Undo control on an entry whose tool declares no reversal (with or
 });
 
 // 13 Nov — an entry is undone at most once. Once undone (or while its undo is in progress)
-// the loader hands it in with `canUndo: false, undone: true`: the view shows a small plain
+// the loader hands it in with `canUndo: false, undoStatus: { state: "done" }`: the view shows a small plain
 // "Undone" status where the Undo button was, offers no Undo control (live or disabled), and
 // keeps Dispute.
 test("an undone entry shows an Undone status and no Undo control", () => {
-  const undone: ActivityEntryView = { ...ENTRY_TOOL_CALL, canUndo: false, undone: true };
+  const undone: ActivityEntryView = { ...ENTRY_TOOL_CALL, canUndo: false, undoStatus: { state: "done" } };
   for (const undoAction of [noopUndoAction, undefined]) {
     const markup = render(base({ entries: [undone], undoAction }));
     assert.equal(buttonsMatching(markup, /\bundo\b/i).length, 0, "no Undo control, not even a disabled one");
@@ -546,6 +548,29 @@ test("an undone entry shows an Undone status and no Undo control", () => {
   assert.ok(badges.some((badge) => /^Undone$/.test(visibleText(badge.inner))), "Undone is shown as a status badge");
   // A reversible entry that has NOT been undone never says Undone.
   assert.doesNotMatch(visibleText(render(base({ entries: [ENTRY_TOOL_CALL] }))), /\bUndone\b/);
+});
+
+// 13 Nov follow-up — an undo held for the person's approval is not "Undone". The view says
+// it is waiting for their approval, in words and an icon, links to that request in the
+// Inbox, and offers no Undo control and no "Undone".
+test("an undo waiting for approval says so, links to the approval in the Inbox, and offers no Undo", () => {
+  const approvalHref = "/inbox?approval=6f1c2d3e-0000-4000-8000-000000000042";
+  const waiting: ActivityEntryView = { ...ENTRY_TOOL_CALL, canUndo: false, undoStatus: { state: "waiting", approvalHref } };
+  for (const undoAction of [noopUndoAction, undefined]) {
+    const markup = render(base({ entries: [waiting], undoAction }));
+    assert.equal(buttonsMatching(markup, /\bundo\b/i).length, 0, "no Undo control, not even a disabled one");
+    assert.equal(formsForControl(markup, /\bundo\b/i).length, 0, "and no Undo form");
+    assert.match(visibleText(markup), /Undo waiting for your approval/, "it says the undo is waiting for approval");
+    assert.doesNotMatch(visibleText(markup), /\bUndone\b/, "and never that it was undone");
+    const links = findAll(markup, "a").filter((a) => attr(a.attrs, "href") === approvalHref);
+    assert.equal(links.length, 1, "it links to that approval in the Inbox");
+    assert.match(visibleText(links[0]!.inner), /approval/i, "with a link that names what it opens");
+    assert.ok(buttonsMatching(markup, /dispute/i).length >= 1, "Dispute is still offered");
+  }
+  const badges = findAll(render(base({ entries: [waiting] })), "span")
+    .filter((span) => /\bwh-badge\b/.test(attr(span.attrs, "class") ?? ""));
+  assert.ok(badges.some((badge) => /^Undo waiting for your approval$/.test(visibleText(badge.inner))),
+    "the waiting state is a status badge, contained like every other status");
 });
 
 // === The rest of the component's surface (brief "Activity feed") ===================

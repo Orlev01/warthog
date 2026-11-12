@@ -458,7 +458,7 @@ test("an entry with an undo claim is not undoable and shows Undone instead of an
     const before = await loader.load(aliceSession, {});
     assert.deepEqual(before.entries.filter((entry) => entry.canUndo).map((entry) => entry.seq), [1],
       "another person's claim never marks the session person's entry");
-    assert.ok(before.entries.every((entry) => !entry.undone), "nothing reads as undone yet");
+    assert.ok(before.entries.every((entry) => entry.undoStatus === undefined), "nothing reads as undone yet");
     assert.doesNotMatch(strip(render(before, { disputeAction: noopAction, undoAction: noopAction })), /\bundone\b/);
 
     await claim(aliceId, 1);
@@ -466,8 +466,8 @@ test("an entry with an undo claim is not undoable and shows Undone instead of an
     const entry = view.entries.find((candidate) => candidate.seq === 1);
     assert.ok(entry, "the claimed entry is still listed");
     assert.equal(entry.canUndo, false, "a claimed entry is not undoable");
-    assert.equal(entry.undone, true, "and is marked undone");
-    assert.deepEqual(view.entries.filter((candidate) => candidate.undone).map((candidate) => candidate.seq), [1],
+    assert.deepEqual(entry.undoStatus, { state: "done" }, "and is marked undone");
+    assert.deepEqual(view.entries.filter((candidate) => candidate.undoStatus).map((candidate) => candidate.seq), [1],
       "only the claimed entry reads as undone");
 
     const markup = render(view, { disputeAction: noopAction, undoAction: noopAction });
@@ -475,6 +475,64 @@ test("an entry with an undo claim is not undoable and shows Undone instead of an
     assert.equal(formsFor(markup, /\bundo\b/i).length, 0, "and no Undo form");
     assert.match(strip(markup), /\bundone\b/, "the entry says it has been undone");
     assert.equal(liveCount(markup, /dispute/i), 3, "Dispute stays on every entry");
+  } finally {
+    await db.close();
+  }
+});
+
+// 13 Nov follow-up — an undo held for approval is the common path (agents default to
+// "Changes: ask me first"), so the screen says truthfully where it stands, read in SQL
+// from the claim's approval: approved ⇒ "Undone"; pending or asked for more detail ⇒
+// "Undo waiting for your approval" linking to that request in the Inbox; declined,
+// expired or gone ⇒ no claim at all, so Undo is offered again.
+test("an undo held for approval reads Undone, waiting for approval, or undoable again, by its approval's state", async () => {
+  const db = await freshDb();
+  try {
+    const keyWrapper = localAesKeyWrapper(randomBytes(KEK_BYTES));
+    const { aliceId, aliceSession } = await seedWorld(db, keyWrapper);
+    const loader = makeLoader(db, keyWrapper);
+    const approval = String((await db.query(
+      `INSERT INTO approvals (user_id, agent_id, status, detail, created_at, expires_at)
+       VALUES ($1, gen_random_uuid(), 'pending', 'v1:synthetic', $2::timestamptz, $3::timestamptz) RETURNING id`,
+      [aliceId, "2026-05-01T00:00:00.000Z", "2026-05-02T00:00:00.000Z"],
+    )).rows[0]!.id);
+    await db.query(
+      "INSERT INTO activity_undo_claims (user_id, entry_seq, claimed_at, approval_id) VALUES ($1, 1, $2, $3)",
+      [aliceId, "2026-05-01T00:00:00.000Z", approval],
+    );
+    const entryOne = async (status: string | null) => {
+      if (status === null) await db.query("DELETE FROM approvals WHERE id = $1", [approval]);
+      else await db.query("UPDATE approvals SET status = $1 WHERE id = $2", [status, approval]);
+      const view = await loader.load(aliceSession, {});
+      const markup = render(view, { disputeAction: noopAction, undoAction: noopAction });
+      return { entry: view.entries.find((candidate) => candidate.seq === 1)!, markup };
+    };
+    const href = `/inbox?approval=${approval}`;
+
+    for (const status of ["pending", "more_detail"]) {
+      const { entry, markup } = await entryOne(status);
+      assert.equal(entry.canUndo, false, `a ${status} approval holds the entry`);
+      assert.deepEqual(entry.undoStatus, { state: "waiting", approvalHref: href }, `${status} reads as waiting, linked to its approval`);
+      assert.match(strip(markup), /undo waiting for your approval/);
+      assert.doesNotMatch(strip(markup), /\bundone\b/, "never claims it was undone");
+      assert.ok(markup.includes(`href="${href}"`), "the screen links to that approval in the Inbox");
+      assert.equal(liveCount(markup, /\bundo\b/i), 0, "and offers no second Undo");
+    }
+
+    const approved = await entryOne("approved");
+    assert.equal(approved.entry.canUndo, false);
+    assert.deepEqual(approved.entry.undoStatus, { state: "done" }, "an approved undo reads as done");
+    assert.match(strip(approved.markup), /\bundone\b/);
+    assert.ok(!approved.markup.includes(href), "with no approval link");
+
+    for (const status of ["denied", "expired", null]) {
+      const { entry, markup } = await entryOne(status);
+      const label = status ?? "a missing";
+      assert.equal(entry.undoStatus, undefined, `${label} approval leaves no claim on the entry`);
+      assert.equal(entry.canUndo, true, `so after ${label} approval Undo is offered again`);
+      assert.equal(liveCount(markup, /\bundo\b/i), 1);
+      assert.doesNotMatch(strip(markup), /\bundone\b|waiting for your approval/);
+    }
   } finally {
     await db.close();
   }

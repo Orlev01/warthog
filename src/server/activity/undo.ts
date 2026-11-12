@@ -26,6 +26,13 @@
 // would raise a duplicate approval). It is released when the reversal is refused, fails
 // or throws, so the person can try again.
 //
+// A held undo records the approval it waits on, on its claim. If that approval is later
+// denied, expires or no longer exists, the claim is stale — it undid nothing — so a later
+// undo clears exactly that claim (matched on its approval id) and claims once more. Two
+// requests racing on a stale claim still run the reversal at most once: only one of them
+// can win the fresh claim. The claim statements live in `./undo-claims`, shared with the
+// Activity list so the two always agree.
+//
 // Every statement is parameterized through the `Db` seam (INV-102): the user id and
 // seq travel as BOUND values, never concatenated into the SQL text, so a value shaped
 // like SQL is read as inert data and cannot alter the query. This module reads no
@@ -35,6 +42,7 @@
 import type { Db } from "../db/index";
 import { systemClock, type Clock } from "../seams/clock";
 import type { ActivityEntry, ActivityRecorder } from "./recorder";
+import { claimUndo, clearStaleUndo, holdUndoForApproval, releaseUndo } from "./undo-claims";
 
 // What the caller asks to undo: the person (the SESSION user id, the member scope),
 // the entry's seq within THAT person's chain, and an optional plain reason.
@@ -71,6 +79,8 @@ export interface UndoReversalJob {
 export interface UndoReversalResult {
   readonly status: "executed" | "refused" | "pending_approval" | "failed";
   readonly outcome: string;
+  // The approval a pending_approval reversal waits on, so the undo's claim can follow it.
+  readonly approvalId?: string;
 }
 
 export interface UndoServiceOptions {
@@ -128,19 +138,17 @@ export function createUndoService(options: UndoServiceOptions): UndoService {
       }
 
       // Claim the entry before anything runs. The insert is atomic, so of two concurrent
-      // undos exactly one gets its row back; the other (and any later undo) is refused
-      // here, with nothing run and nothing recorded.
-      const claimed = await db.query(
-        `INSERT INTO activity_undo_claims (user_id, entry_seq, claimed_at) VALUES ($1, $2, $3::timestamptz)
-         ON CONFLICT (user_id, entry_seq) DO NOTHING RETURNING entry_seq`,
-        [userId, entrySeq, clock.now().toISOString()],
-      );
-      if (claimed.rows.length === 0) {
+      // undos exactly one wins; the other (and any later undo) is refused here, with
+      // nothing run and nothing recorded — unless the claim in the way is stale (its
+      // approval was denied, expired or is gone), which is cleared before one more try.
+      let claimed = await claimUndo(db, userId, entrySeq, clock.now());
+      if (!claimed && (await clearStaleUndo(db, userId, entrySeq))) {
+        claimed = await claimUndo(db, userId, entrySeq, clock.now());
+      }
+      if (!claimed) {
         return { ok: false, reason: ALREADY_UNDONE, status: "already_undone" };
       }
-      const release = async (): Promise<void> => {
-        await db.query("DELETE FROM activity_undo_claims WHERE user_id = $1 AND entry_seq = $2", [userId, entrySeq]);
-      };
+      const release = (): Promise<void> => releaseUndo(db, userId, entrySeq);
 
       // Run the declared reversal, then WRITE a NEW entry for it. The original entry
       // is never touched; the record is append-only (design §9). A reversal that throws
@@ -153,8 +161,12 @@ export function createUndoService(options: UndoServiceOptions): UndoService {
         throw error;
       }
       // A refused or failed reversal did not undo the action: release the claim so the
-      // person can try again. An executed or approval-held one keeps it.
+      // person can try again. An executed or approval-held one keeps it, and a held one
+      // records the approval it waits on, so the claim frees itself if that is declined.
       if (reversal.status === "refused" || reversal.status === "failed") await release();
+      if (reversal.status === "pending_approval" && reversal.approvalId !== undefined) {
+        await holdUndoForApproval(db, userId, entrySeq, reversal.approvalId);
+      }
 
       // The stored outcome is a stable code (filterable and groupable, like every other
       // entry's); the plain-words sentence stays in the encrypted payload.

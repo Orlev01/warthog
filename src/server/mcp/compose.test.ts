@@ -1209,7 +1209,12 @@ test("calendar Undo uses the created event id and reports permission, account an
     await upsertPermissions(db, { ...stored, changeTools: "off", connectorAccounts: { "google-calendar": account.id } });
     assert.equal((await executors.runReversal(job)).status, "refused");
     await upsertPermissions(db, { ...stored, changeTools: "ask_first", connectorAccounts: { "google-calendar": account.id } });
-    assert.equal((await executors.runReversal(job)).status, "pending_approval");
+    const heldReversal = await executors.runReversal(job);
+    assert.equal(heldReversal.status, "pending_approval");
+    // The held reversal names the approval it waits on, so the undo claim can follow it.
+    assert.ok(heldReversal.approvalId, "a held reversal names its approval");
+    const heldApproval = await db.query("SELECT status FROM approvals WHERE id = $1 AND user_id = $2", [heldReversal.approvalId, userId]);
+    assert.equal(heldApproval.rows[0]?.status, "pending", "that approval is the person's own pending request");
     assert.equal(sent.length, sentBeforePolicy, "denied and pending reversals send nothing");
     const other = await createConnection(db, { userId, connectorId: "google-calendar", accountLabel: "Work",
       credentials: { access_token: "synthetic-other-token" } }, dek, systemClock);

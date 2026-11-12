@@ -32,9 +32,10 @@ test("purge role can remove an account and OAuth credentials but cannot rewrite 
 });
 
 // 13 Nov — the single-shot undo guard. The runtime role claims an entry's undo and releases
-// it again (INSERT, SELECT, DELETE) but can never rewrite a claim; the purge role's account
-// delete carries the person's claims away by cascade.
-test("runtime role claims and releases undo claims but cannot rewrite them; an account purge removes them", async () => {
+// it again (INSERT, SELECT, DELETE) and may record the approval a held undo waits on
+// (UPDATE of approval_id only), but can never rewrite who or what a claim is for, or when it
+// was made; the purge role's account delete carries the person's claims away by cascade.
+test("runtime role claims and releases undo claims, may set only their approval, and an account purge removes them", async () => {
   const db = await freshDb();
   try {
     const user = await createUser(db, { email: "undo-claim-roles@warthog.com.au", wrappedDek: "synthetic" });
@@ -43,8 +44,11 @@ test("runtime role claims and releases undo claims but cannot rewrite them; an a
     assert.equal((await db.query(claim, [user.id, 2])).rows.length, 1, "the runtime role wins a fresh claim");
     assert.equal((await db.query(claim, [user.id, 2])).rows.length, 0, "a second claim of the same entry is not won");
     await db.query("DELETE FROM activity_undo_claims WHERE user_id = $1 AND entry_seq = $2", [user.id, 2]);
-    await assert.rejects(db.query("UPDATE activity_undo_claims SET claimed_at = now() WHERE false"), /permission denied/);
     await db.query(claim, [user.id, 1]);
+    await db.query("UPDATE activity_undo_claims SET approval_id = gen_random_uuid() WHERE user_id = $1 AND entry_seq = $2", [user.id, 1]);
+    for (const column of ["claimed_at = now()", "user_id = user_id", "entry_seq = entry_seq + 1"]) {
+      await assert.rejects(db.query(`UPDATE activity_undo_claims SET ${column} WHERE false`), /permission denied/, column);
+    }
     await db.query("RESET ROLE");
 
     await db.query("SET ROLE warthog_purge");

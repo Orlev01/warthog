@@ -51,9 +51,3 @@ export function outcomeGroupCaseSql(bind: Bind): string {
 // owner and the entry position so one person's dispute never marks another's entry.
 export const DISPUTED_SQL =
   "EXISTS (SELECT 1 FROM activity_disputes d WHERE d.user_id = activity_entries.user_id AND d.entry_seq = activity_entries.seq)";
-
-// Whether an activity_entries row (unaliased) has been undone, or has an undo in progress
-// (`activity_undo_claims`, 13 Nov), matched on BOTH the owner and the entry position so one
-// person's undo never marks another's entry.
-export const UNDO_CLAIMED_SQL =
-  "EXISTS (SELECT 1 FROM activity_undo_claims u WHERE u.user_id = activity_entries.user_id AND u.entry_seq = activity_entries.seq)";

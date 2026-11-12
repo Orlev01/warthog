@@ -268,11 +268,15 @@ sentence by a pure function (`ruleSentence`).
   account-deletion job.
 - Disputes are a separate append-only table referencing the entry. Undo writes a new entry.
 - Undo is single-shot: before the reversal runs, the service claims `(user_id, entry_seq)` in
-  `activity_undo_claims` (plaintext metadata; runtime role SELECT/INSERT/DELETE) with one atomic
-  `INSERT … ON CONFLICT DO NOTHING`. A request that does not win the claim runs and records
-  nothing. The claim is kept once the reversal executed or is held for approval, and released when
-  it was refused, failed or threw. The Activity page shows "Undone" instead of Undo for a claimed
-  entry. Account deletion cascades to the claims.
+  `activity_undo_claims` (plaintext metadata; runtime role SELECT/INSERT/DELETE plus UPDATE of
+  `approval_id` only) with one atomic `INSERT … ON CONFLICT DO NOTHING`. A request that does not
+  win the claim runs and records nothing. The claim is kept once the reversal executed or is held
+  for approval — a held one records its `approval_id` — and released when it was refused, failed
+  or threw. A claim whose approval was denied, expired or is gone (for that person) is stale: it
+  counts as no claim, and the next undo deletes exactly that claim (matched on its approval id)
+  and claims once more. The Activity page reads the state in SQL: "Undone" (no approval, or
+  approved), "Undo waiting for your approval" linking to `/inbox?approval=<id>` (pending or more
+  detail), or Undo again (stale). Account deletion cascades to the claims.
 
 ## 10. Notifications
 - Web Push (VAPID via `@pushforge/builder`), service worker `public/sw.js`, every push shows a

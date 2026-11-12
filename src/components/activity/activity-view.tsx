@@ -67,8 +67,8 @@ import type { EvidenceLine } from "@/domain/activity/evidence";
 // Trust rules carried into every view: agent-submitted summaries are labelled "Reported by
 // <agent>" and never presented as fact; blocked/failed outcomes and disputes are visible on
 // the collapsed row and on group rows; Dispute stays available on EVERY entry; Undo only
-// where the entry's tool declares a reversal (`canUndo`), and an entry already undone says
-// "Undone" in its place (`undone`) so Undo is never offered twice; the integrity check is
+// where the entry's tool declares a reversal (`canUndo`), and an entry whose undo stands
+// says so in its place (`undoStatus`) so Undo is never offered twice; the integrity check is
 // record-wide and never shown per group. Controls are live forms or links, never dead
 // buttons. Colour comes from the design tokens; meaning is always words plus an icon.
 
@@ -76,9 +76,10 @@ import type { EvidenceLine } from "@/domain/activity/evidence";
 // fact Warthog recorded itself; "agent_reported" is a summary an agent submitted, shown
 // labelled "Reported by <agent>" and never treated as the source of truth. `agent` is
 // the connected AI client, `service` the connected service it touched (either may be
-// absent). `canUndo` is true ⇔ the entry's tool declares a reversal and it has not already
-// been undone; `undone` marks an entry that has been undone (or has an undo in progress),
-// shown as a plain "Undone" status where the Undo button would be. `title` is the
+// absent). `canUndo` is true ⇔ the entry's tool declares a reversal and no undo of it
+// stands; `undoStatus` says where a standing undo is, shown where the Undo button would be:
+// "done" reads "Undone"; "waiting" reads "Undo waiting for your approval" with a link to
+// that request in the Inbox (`approvalHref`). `title` is the
 // row's headline in plain words — an agent call is titled by its tool ("Save a memory")
 // — and `agent` is the agent's display name, never its raw id.
 export type ActivityEntryView = {
@@ -107,7 +108,7 @@ export type ActivityEntryView = {
   facts?: readonly EvidenceLine[]; // labelled plain-English lines ("Warthog's decision: Allowed")
   technical?: readonly EvidenceLine[]; // identifiers and measurements, shown collapsed
   canUndo: boolean;
-  undone?: boolean;
+  undoStatus?: { readonly state: "done" } | { readonly state: "waiting"; readonly approvalHref: string };
   disputes?: readonly { note: string; at: string }[];
 };
 
@@ -355,6 +356,23 @@ function UndoControl({ entry, undoAction }: { entry: ActivityEntryView; undoActi
   );
 }
 
+// Where a standing undo is, in place of a second Undo button: done, or waiting for the
+// person's approval with a link to that request in the Inbox. Words plus an icon, never
+// colour alone; each status is a badge, so its words sit inside a bounded component.
+function UndoStatus({ entry, status }: { entry: ActivityEntryView; status: NonNullable<ActivityEntryView["undoStatus"]> }) {
+  if (status.state === "done") {
+    return <Badge tone="neutral" icon={Undo2} className="self-start">Undone</Badge>;
+  }
+  return (
+    <div className="flex flex-wrap items-center gap-x-3 gap-y-1 self-start">
+      <Badge tone="warning" icon={Clock}>Undo waiting for your approval</Badge>
+      <a href={status.approvalHref} className="inline-flex min-h-11 items-center font-medium text-fg underline underline-offset-4 lg:min-h-0">
+        Review approval<span className="sr-only"> to undo {entry.title ?? entry.kind}, {entry.at}</span>
+      </a>
+    </div>
+  );
+}
+
 function DisputeControl({ entry, disputeAction }: { entry: ActivityEntryView; disputeAction?: FormAction }) {
   const context = <span className="sr-only"> {entry.title ?? entry.kind}, {entry.at}</span>;
   if (!disputeAction) {
@@ -502,9 +520,8 @@ function ActivityEntryItem({
                 </details>
               ) : null}
               <div className="flex flex-col gap-3 border-t border-line pt-3 sm:flex-row sm:flex-wrap sm:items-start">
-                {entry.canUndo ? <UndoControl entry={entry} undoAction={undoAction} /> : entry.undone ? (
-                  <Badge tone="neutral" icon={Undo2} className="self-start">Undone</Badge>
-                ) : null}
+                {entry.canUndo ? <UndoControl entry={entry} undoAction={undoAction} />
+                  : entry.undoStatus ? <UndoStatus entry={entry} status={entry.undoStatus} /> : null}
                 <DisputeControl entry={entry} disputeAction={disputeAction} />
               </div>
               {entry.permalink ? (
