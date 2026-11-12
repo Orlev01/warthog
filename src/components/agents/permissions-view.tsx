@@ -207,7 +207,7 @@ export function PermissionsView({
             <div className="flex flex-col gap-1">
               <SectionHeading>Connected services</SectionHeading>
               <p className="text-sm text-fg-muted">
-                Service accounts belong to you. Choose which services {agentName} may
+                Services you connect belong to you. Choose which ones {agentName} may
                 use and how. Connecting a service does not grant agent access.
               </p>
             </div>

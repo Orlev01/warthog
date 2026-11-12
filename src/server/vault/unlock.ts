@@ -195,7 +195,7 @@ export function createVaultUnlockActions(deps: VaultUnlockActionsDeps): VaultUnl
           : {
               ok: false,
               reason:
-                "Add a passkey that can unlock your vault, or set a vault passphrase, before you save high-tier details or cards.",
+                "Add a passkey that can unlock your vault, or set a vault passphrase, before you save protected details or cards.",
             };
       }
 

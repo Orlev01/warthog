@@ -20,7 +20,7 @@ const RESOURCES: Record<string, { section: string; noun: string; description: st
     section: "connectors",
     noun: "connectors",
     description:
-      "Service accounts belong to you. Choose an agent to grant access or select which service account it uses.",
+      "Services you connect belong to you. Choose an agent to turn one on, or pick which account it uses.",
   },
   vault: {
     section: "vault",
@@ -32,7 +32,7 @@ const RESOURCES: Record<string, { section: string; noun: string; description: st
     section: "skills",
     noun: "skills",
     description:
-      "This is your shared skills library. Each skill has a default audience; individual agents can have their own assignments.",
+      "Your skills library. Each skill is available to all agents or to agents you choose.",
   },
   memory: {
     section: "memory",
