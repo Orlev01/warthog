@@ -28,6 +28,8 @@ Missing configuration or failed activation terminates production startup. A
 restore point before this recorded coverage cannot be certified by this journal.
 An older image must never resume deletion writes after activation: delivery rejects
 images without the `io.warthog.deletion-journal=v1` label once configured.
+Before stopping a healthy app, delivery also rejects a journal-required image
+unless journal configuration already exists or explicit activation is selected.
 
 ## Azure protection and cost
 

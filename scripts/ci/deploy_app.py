@@ -155,8 +155,14 @@ def verify_image(image, *, require_journal=False):
     require(labels.get("io.warthog.verified") == "linux-pg16"
             and re.fullmatch(r"node:22-bookworm-slim@sha256:[a-f0-9]{64}", labels.get("org.opencontainers.image.base.name", "")),
             "Image lacks the checked, pinned-base publication contract")
-    require(not require_journal or labels.get("io.warthog.deletion-journal") == "v1",
+    journal_version = labels.get("io.warthog.deletion-journal")
+    require(journal_version in (None, "v1"), "Unsupported deletion journal image contract")
+    require(not require_journal or journal_version == "v1",
             "A journal-enabled app cannot run an image without deletion journal support")
+    # The v1 runtime requires journal configuration at startup. Reject an image
+    # that needs activation BEFORE maintenance stops the currently healthy app.
+    require(journal_version != "v1" or require_journal,
+            "A deletion journal image requires existing configuration or explicit approved activation")
 
 
 def wait_ready(platform, revision, image, timeout=720):
