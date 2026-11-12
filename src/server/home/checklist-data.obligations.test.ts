@@ -89,7 +89,8 @@ async function seedConnection(db: Db, userId: string, dek: Uint8Array): Promise<
 // Seed every one of the five signals, so a probe or a decoy must leave a FULL account
 // untouched / unleaked.
 async function seedEverything(db: Db, userId: string, dek: Uint8Array): Promise<void> {
-  await saveIdentityField(db, { userId, kind: "name", value: "Real Owner" }, dek);
+  // A detail beyond the sign-up name (the name alone never marks "Add your details" done).
+  await saveIdentityField(db, { userId, kind: "phone", value: "0400 000 000" }, dek);
   await seedCard(db, userId);
   await seedConnection(db, userId, dek);
   await createAgent(

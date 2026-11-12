@@ -176,7 +176,7 @@ export function createCheckApprovalTool(deps: CheckApprovalDeps): CheckApprovalT
         return outcome.status === "in_progress" ? null : outcome;
       }
       case "denied":
-        return { status: "refused", reason: "You turned this request down." };
+        return { status: "refused", reason: "The person denied this request." };
       case "expired":
         return { status: "refused", reason: EXPIRED };
       case "more_detail":

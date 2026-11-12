@@ -298,7 +298,7 @@ test("composes every section together in one render", () => {
   assert.ok(text.includes("Sam Rivera"), "greeting present");
   // checklist (one representative item + its link)
   assert.ok(low.includes("connect an agent"), "checklist present");
-  assert.equal(anchorsTo(markup, "/agents").length, 1, "checklist links present");
+  assert.equal(anchorsTo(markup, "/agents/connect").length, 1, "checklist links present");
   // approvals count → inbox
   assert.equal(anchorsTo(markup, "/inbox").length, 1, "approvals count links to inbox");
   // activity
@@ -323,9 +323,10 @@ test("no pending approvals: a plain message, and no count-link to the inbox", ()
     0,
     "with no pending approvals there must be no count-link to /inbox",
   );
+  // One empty-inbox wording everywhere (UI/UX pass content-40), shared with the Inbox page.
   assert.ok(
-    namesEmptySection(strip(markup), "approvals?"),
-    `the empty approvals section must read as a plain "no pending approvals" message, got: "${strip(markup)}"`,
+    strip(markup).includes("Nothing waiting for you") && /needs your approval/.test(strip(markup)),
+    `the empty Inbox panel must read as the plain "Nothing waiting for you" message, got: "${strip(markup)}"`,
   );
 });
 
@@ -368,30 +369,52 @@ test("no reminders: a plain message for the reminders section", () => {
   );
 });
 
-test("an all-empty dashboard still greets and shows the checklist, with plain empty messages", () => {
+// UI/UX pass newcomer-01: a brand-new member's Home is one clear task. The set-up panel
+// comes first as "Get started", with exactly one primary action (Connect your first agent,
+// straight to the connect guide) and the agent step first in the checklist; the panels
+// that can only fill once an agent is connected stay out of the way until they have data.
+test("a brand-new account sees Get started first, with one action to connect an agent", () => {
   const markup = render(
-    base({ pendingApprovals: 0, activity: [], agents: [], reminders: [] }),
+    base({ checklist: computeSetupChecklist({}), pendingApprovals: 0, activity: [], agents: [], reminders: [] }),
   );
   const text = strip(markup);
-  const low = text.toLowerCase();
 
-  // The greeting and the checklist are NOT empty-state sections — they always show.
   assert.ok(text.includes("Sam Rivera"), "the greeting still shows for a brand-new account");
-  for (const item of CHECKLIST) {
-    assert.ok(low.includes(item.label.toLowerCase()), `the checklist item "${item.label}" still shows`);
-  }
+  assert.ok(text.includes("the one place you own that every AI agent connects through"), "the heading says what Warthog is");
+  assert.ok(text.indexOf("Get started") > text.indexOf("Sam Rivera"), "Get started sits straight under the greeting");
+  assert.ok(text.includes("0 of 5 steps done"), "progress reads from the real checklist");
+  assert.ok(namesEmptySection(text, "agents?"), "it says plainly that no agent is connected yet");
 
-  // No dead control: with nothing pending there is no count-link to the inbox.
+  const connect = anchorsTo(markup, "/agents/connect");
+  assert.equal(connect.length, 2, "the primary action and the checklist's first step both go to the connect guide");
+  assert.match(markup, /<a class="[^"]*bg-accent[^"]*" href="\/agents\/connect">Connect your first agent/, "one primary action: Connect your first agent");
+  assert.equal((markup.match(/\bbg-accent\s/g) ?? []).length, 1, "exactly one primary action on the page");
+  assert.ok(text.indexOf("Connect an agent") < text.indexOf("Add a card"), "the agent step leads the checklist");
+
   assert.equal(anchorsTo(markup, "/inbox").length, 0, "no count-link to /inbox when nothing is pending");
+  for (const empty of ["Recent activity", "Reminders", "Your agents", "Nothing waiting"]) {
+    assert.ok(!text.includes(empty), `no empty "${empty}" panel before the first agent`);
+  }
+});
 
-  // The data-bearing sections read as plain messages (the agents message is checked
-  // rigorously in its own test above — the checklist's "Connect an agent" label
-  // would contaminate a whole-text "agents" match here, so we assert the agent
-  // DATA is absent instead).
-  assert.ok(namesEmptySection(text, "approvals?"), "a plain no-approvals message shows");
-  assert.ok(namesEmptySection(text, "activit(?:y|ies)"), "a plain no-activity message shows");
-  assert.ok(namesEmptySection(text, "reminders?"), "a plain no-reminders message shows");
-  assert.ok(!text.includes("Claude") && !text.includes("ChatGPT"), "no agents are listed");
+test("before the first agent, a panel with something in it still shows", () => {
+  const text = textOf(base({ agents: [], pendingApprovals: 0, activity: [] }));
+  assert.ok(text.includes("Renew your passport"), "reminders the member added themselves show");
+  assert.ok(!text.includes("Recent activity"), "an empty activity panel stays out of the way");
+});
+
+test("once every step is done the set-up panel goes", () => {
+  const all = computeSetupChecklist({ notificationsEnabled: true, identityAdded: true, cardAdded: true, serviceConnected: true, agentConnected: true });
+  const text = textOf(base({ checklist: all }));
+  assert.ok(!/Finish setting up|Get started/.test(text), "no set-up panel once it's all done");
+});
+
+test("an agent with no card budget says so, with a way to set one", () => {
+  const markup = render(base({ agents: [{ id: "ag-1", name: "Helper", status: "connected", spendThisPeriod: 0, budget: null, budgetPeriod: "month", href: "/agents/ag-1" }] }));
+  const text = strip(markup);
+  assert.ok(text.includes("No card budget"), "no budget reads as none");
+  assert.ok(!/A\$0|\$0\.00 of/.test(text), "never a zero budget");
+  assert.match(markup, /href="\/agents\/ag-1\?section=spending"[^>]*>Set a budget/);
 });
 
 // === Design system — colour comes from tokens, never a raw hex literal ==========
@@ -422,6 +445,7 @@ test("W4.1: Home mounts the install prompt in the set-up section", () => {
       reminders={[]}
     />,
   );
-  const setup = markup.slice(markup.indexOf("Set up Warthog"), markup.indexOf("Reminders"));
+  const setup = markup.slice(markup.indexOf("Get started"));
+  assert.ok(markup.includes("Get started"), "the set-up panel shows");
   assert.match(setup, /data-install-prompt/, "the install prompt is mounted beside the checklist");
 });

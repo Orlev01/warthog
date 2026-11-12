@@ -103,11 +103,11 @@ const keyWrapper: KeyWrapper = localAesKeyWrapper(randomBytes(32));
 // The five set-up checklist labels, in documented order (the one source of them is
 // the domain module; this test hard-codes none of the done-state logic).
 const SET_UP_TITLES = [
-  "Get notified",
-  "About you",
-  "Add a card",
-  "Connect a service",
   "Connect an agent",
+  "Connect a service",
+  "Add your details",
+  "Get notified",
+  "Add a card",
 ] as const;
 
 test("reminders use the owner's saved title or name and friendly category fallbacks", async () => {
@@ -273,8 +273,11 @@ test("a freshly signed-up user: all five set-up items not done and plain empty s
     for (const title of SET_UP_TITLES) {
       assert.ok(text.includes(title), `the home screen must show the set-up item "${title}", got: "${text}"`);
     }
-    assert.ok(text.includes("No pending approvals."), "the approvals section shows its plain empty message");
-    assert.ok(text.includes("No recent activity yet."), "the activity section shows its plain empty message");
+    // Before the first agent, Home is one task (UI/UX pass newcomer-01): Get started, with
+    // the one action that makes Warthog work, and no wall of empty panels.
+    assert.ok(text.includes("Get started"), "a brand-new member is asked to get started");
+    assert.ok(text.includes("Connect your first agent"), "with one action: connect the first agent");
+    assert.ok(!text.includes("Recent activity"), "no empty activity panel before the first agent");
   } finally {
     await db.close();
   }
@@ -331,7 +334,7 @@ test("a user with a pending approval and recent activity sees the count and the 
     // /inbox, not a dead/empty message.
     const markup = render(view);
     const text = strip(markup);
-    assert.ok(/pending approval/i.test(text), `the home screen shows the pending-approval count, got: "${text}"`);
+    assert.ok(/1 request is waiting for your approval/i.test(text), `the home screen shows the pending-approval count, got: "${text}"`);
     assert.ok(anchorsTo(markup, "/inbox") >= 1, "the pending-approval count links to the inbox");
     assert.ok(text.includes("Booked a flight to Perth"), "the home screen shows the recent activity entry");
     assert.ok(text.includes("Rearranged the sock drawer"), "the home screen shows the older activity entry");
@@ -350,14 +353,15 @@ test("the set-up checklist reflects the person's real progress: completed steps 
   try {
     const { session, userId, dek } = await seedSignedIn(db, "keenkoala@people.example");
 
-    // Complete two set-up steps: save a low-tier identity field ("About you") and
-    // connect an agent ("Connect an agent"). The other three remain not done.
-    await saveIdentityField(db, { userId, kind: "name", value: "Sam Rivera" }, dek);
+    // Complete two set-up steps: save an everyday detail ("Add your details"; the name
+    // sign-up saves doesn't count on its own) and connect an agent ("Connect an agent").
+    // The other three remain not done.
+    await saveIdentityField(db, { userId, kind: "phone", value: "0400 000 000" }, dek);
     await connectAgent(db, userId, "Claude");
 
     const view = await makeActions(db).load(session);
 
-    assert.equal(checklistDone(view, "About you"), true, "a saved identity field marks 'About you' done");
+    assert.equal(checklistDone(view, "Add your details"), true, "a saved everyday detail marks 'Add your details' done");
     assert.equal(checklistDone(view, "Connect an agent"), true, "a connected agent marks 'Connect an agent' done");
     assert.equal(checklistDone(view, "Get notified"), false, "an untouched step stays not done");
     assert.equal(checklistDone(view, "Add a card"), false, "an untouched step stays not done");

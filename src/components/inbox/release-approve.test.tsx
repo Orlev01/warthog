@@ -525,8 +525,10 @@ function controlFace(el: El): string {
   return parts.join(" ").replace(/\s+/g, " ").trim();
 }
 
+// Unavailable means the native attribute or aria-disabled — not the shared Button's
+// Tailwind `disabled:` class variants, which every button carries.
 function isDisabled(el: El): boolean {
-  return /\bdisabled\b/i.test(el.attrs);
+  return /\sdisabled=""|aria-disabled="true"/i.test(el.attrs);
 }
 
 // Every CONTROL (a <button> or a disclosure <summary>) whose accessible name matches `re`.
@@ -898,4 +900,24 @@ test("the Approve and release control names the request it decides for screen re
   assert.ok(control, "an Approve and release control renders");
   assert.match(controlFace(control), /^Approve and release\s*:\s*Claude wants to use a card to pay the ferry fare$/);
   assert.match(control.inner, /<span class="sr-only">/, "the context is read out, not shown");
+});
+
+// ═══ UI/UX pass (lane A) ═══════════════════════════════════════════════════════════════
+
+test("with nothing to hand over, the release asks for nothing it can't use and links to the fix", () => {
+  const markup = renderToStaticMarkup(<ReleaseApprove request={PENDING_CARD} savedCards={[]} />);
+  assert.equal(findAll(markup, "select").length, 0, "no empty card picker");
+  assert.ok(!SECURITY_CODE_RE.test(controlLabelText(markup)), "no security code to type for nothing");
+  assert.doesNotMatch(visibleText(markup), /How would you like to unlock/, "no unlock choice");
+  assert.match(markup, /href="\/vault\/cards"[^>]*>Add a card/, "a way to add the missing card");
+  const control = findAll(markup, "button").find((b) => /^Approve and release/.test(controlFace(b)))!;
+  const reasonId = attr(control.attrs, "aria-describedby");
+  assert.ok(reasonId && markup.includes(`id="${reasonId}"`), "the reason is tied to the unavailable control");
+});
+
+test("the explainer says what approving does, for this agent", () => {
+  const text = visibleText(renderToStaticMarkup(<ReleaseApprove request={PENDING_CARD} savedCards={SAVED_CARDS} />));
+  assert.match(text, new RegExp(`Approving hands this to ${PENDING_CARD.agent} once`));
+  assert.doesNotMatch(text, /This is a sensitive step|take a moment/, "no generic opener");
+  assert.match(text, /Use your vault recovery phrase/, "the vault recovery phrase by its full name");
 });

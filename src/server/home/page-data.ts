@@ -58,7 +58,9 @@ export interface HomeMetricsDeps {
 // One of the person's agents on the dashboard: its identity, connection status,
 // last-active time, and the spend in its current budget period against its budget
 // — both expressed in the person's account currency (`spendThisPeriod`/`budget`
-// may come back as a number or a numeric string, like the ledger sums).
+// may come back as a number or a numeric string, like the ledger sums). `budget` is
+// null when the agent has no card budget, so Home never shows a budget that doesn't
+// exist ("A$0 of A$0", UI/UX pass content-20).
 export interface HomeAgentSpend {
   readonly agentId: string;
   readonly displayName: string;
@@ -67,7 +69,7 @@ export interface HomeAgentSpend {
   readonly lastActiveAt: Date | string | null;
   readonly spendThisPeriod: number | string;
   readonly spendUnavailable?: boolean;
-  readonly budget: number | string;
+  readonly budget: number | string | null;
   readonly budgetPeriod: PeriodKind;
   readonly currency: string;
 }
@@ -156,7 +158,7 @@ export async function loadHomeMetrics(
     const permissions = await getConnectionPermissions(db, userId, agent.connectionId);
     const cardBudget = permissions?.cardBudget ?? null;
     const budgetPeriod: PeriodKind = cardBudget?.period ?? "month";
-    const budget = cardBudget?.amount ?? 0;
+    const budget = cardBudget?.amount ?? null;
     // Only an agent with a card budget has a period to bucket its releases by; the
     // sum uses the SHARED budget-period math to pick the current bucket.
     const spending = cardBudget

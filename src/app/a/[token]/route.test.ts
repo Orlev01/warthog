@@ -327,6 +327,43 @@ test("[AC1] an unknown token is rejected and opens nothing", async () => {
   }
 });
 
+// UI/UX pass interaction-22 / public-28: a link that can't open anything (used, expired,
+// unknown, or someone else's) lands on the inbox WITH a notice saying so, never silently.
+function landsOnLinkExpiredNotice(res: Response, request: Request): boolean {
+  const loc = locationOf(res, request);
+  return REDIRECT_CODES.has(res.status) && loc !== null && loc.pathname === "/inbox" && loc.searchParams.get("notice") === "link_expired" && !loc.searchParams.has("approval");
+}
+
+test("a used, expired, unknown or someone else's link lands on the inbox with a notice that says why", async () => {
+  const db = await freshDb();
+  try {
+    const ownerId = await seedUser(db, "dead-link-owner");
+    const approvalId = await seedApproval(db, ownerId);
+    const { token } = await issueApprovalLink(db, { approvalId }, { clock: fixedClock(T0), random: systemRandom });
+    const cookie = await sessionCookie(db, ownerId);
+
+    const expiredReq = linkRequest(token, { cookie });
+    assert.ok(landsOnLinkExpiredNotice(await callGet(handlerOver(db, fixedClock(TOKEN_EXPIRED)), expiredReq, token), expiredReq), "expired");
+
+    const unknown = "C".repeat(43);
+    const unknownReq = linkRequest(unknown, { cookie });
+    assert.ok(landsOnLinkExpiredNotice(await callGet(handlerOver(db, fixedClock(WITHIN)), unknownReq, unknown), unknownReq), "unknown");
+
+    const { token: second } = await issueApprovalLink(db, { approvalId }, { clock: fixedClock(T0), random: systemRandom });
+    const handlers = handlerOver(db, fixedClock(WITHIN));
+    const intruderCookie = await sessionCookie(db, await seedUser(db, "dead-link-intruder"));
+    const intruderReq = linkRequest(second, { cookie: intruderCookie });
+    assert.ok(landsOnLinkExpiredNotice(await callGet(handlers, intruderReq, second), intruderReq), "someone else's, told nothing more");
+
+    const { token: third } = await issueApprovalLink(db, { approvalId }, { clock: fixedClock(T0), random: systemRandom });
+    await callGet(handlers, linkRequest(third, { cookie }), third);
+    const reusedReq = linkRequest(third, { cookie });
+    assert.ok(landsOnLinkExpiredNotice(await callGet(handlers, reusedReq, third), reusedReq), "already used");
+  } finally {
+    await db.close();
+  }
+});
+
 // ===========================================================================
 // AC2 — an unauthenticated request is sent to sign-in; the link never records a
 // decision by itself and the single-use token is NOT consumed before sign-in.

@@ -68,6 +68,7 @@ import { loadSetupChecklist } from "./checklist-data";
 import { computeSetupChecklist, type SetupSignals } from "../../domain/home/checklist";
 import { createUser } from "../db/users";
 import { saveIdentityField } from "../db/identity-fields";
+import { saveHighTierField } from "../db/high-tier-fields";
 import { addCard } from "../db/cards";
 import { createConnection } from "../db/connections";
 import { createAgent } from "../db/agents";
@@ -119,8 +120,14 @@ interface SeedCtx {
   readonly dek: Uint8Array;
 }
 
+// A detail the person added themselves. Sign-up saves their name for them, so the name
+// alone never marks "Add your details" done (see the sign-up-name case below).
 async function seedIdentity({ db, userId, dek }: SeedCtx): Promise<void> {
-  await saveIdentityField(db, { userId, kind: "name", value: "Quokka Xylophone" }, dek);
+  await saveIdentityField(db, { userId, kind: "phone", value: "0400 000 000" }, dek);
+}
+
+async function seedProtectedDetail({ db, userId }: SeedCtx): Promise<void> {
+  await saveHighTierField(db, { userId, type: "passport", label: "Passport", ciphertext: "v1:passport-ciphertext" });
 }
 
 async function seedCard({ db, userId }: SeedCtx): Promise<void> {
@@ -175,7 +182,8 @@ const CASES: ReadonlyArray<{
   readonly expected: SetupSignals;
   readonly seed: (ctx: SeedCtx) => Promise<void>;
 }> = [
-  { name: "a saved low-tier identity field → \"About you\"", expected: { identityAdded: true }, seed: seedIdentity },
+  { name: "a saved everyday detail → \"Add your details\"", expected: { identityAdded: true }, seed: seedIdentity },
+  { name: "a saved protected detail → \"Add your details\"", expected: { identityAdded: true }, seed: seedProtectedDetail },
   { name: "a saved card → \"Add a card\"", expected: { cardAdded: true }, seed: seedCard },
   { name: "a connected service → \"Connect a service\"", expected: { serviceConnected: true }, seed: seedConnection },
   { name: "a connected agent → \"Connect an agent\"", expected: { agentConnected: true }, seed: seedAgent },
@@ -202,6 +210,26 @@ test("a user who has only signed up reads as the five items, every one NOT done"
     assert.ok(
       checklist.every((item) => item.done === false),
       "every set-up item is NOT done for an account with no identity, card, connection, agent or push device",
+    );
+  } finally {
+    await db.close();
+  }
+});
+
+// UI/UX pass, newcomer-01: sign-up saves the person's name for them, so a brand-new member
+// who has only signed up must not see "Add your details · Done" (and "1 of 5 steps").
+test("the name saved at sign-up alone leaves \"Add your details\" not done", async () => {
+  const db = await freshDb();
+  try {
+    const { userId, dek } = await makeUserWithDek(db, "signup-name");
+    await saveIdentityField(db, { userId, kind: "name", value: "Quokka Xylophone" }, dek);
+    assert.deepEqual(await load(db, userId), computeSetupChecklist({}), "the sign-up name marks nothing done");
+
+    await saveIdentityField(db, { userId, kind: "preferred_name", value: "Quokka" }, dek);
+    assert.deepEqual(
+      await load(db, userId),
+      computeSetupChecklist({ identityAdded: true }),
+      "a detail the person adds themselves marks it done",
     );
   } finally {
     await db.close();

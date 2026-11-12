@@ -102,20 +102,22 @@ function render(view: HomeView): string {
 // AC2 — the greeting prefers the saved name over the email's local part.
 // ===========================================================================
 
-test("a person who saved the name 'Sam Rivera' is greeted by it, not by their email prefix", async () => {
+// UI/UX pass content-52: Home greets by first name ("Hi, Sam"), not the full legal name.
+test("a person who saved the name 'Sam Rivera' is greeted by its first name, not by their email prefix", async () => {
   const db = await freshDb();
   try {
     // An email whose local part is NOT the name, so the greeting can only read
-    // 'Sam Rivera' from the saved low-tier name field.
+    // 'Sam' from the saved low-tier name field.
     const { session } = await seedPerson(db, "sierrapenguin@people.example", [
       { kind: "name", value: "Sam Rivera" },
     ]);
 
     const view = await makeActions(db).load(session);
-    assert.equal(view.personName, "Sam Rivera", "the loader greets by the saved low-tier name");
+    assert.equal(view.personName, "Sam", "the loader greets by the first word of the saved low-tier name");
 
     const text = strip(render(view));
-    assert.ok(text.includes("Sam Rivera"), `the home screen greets 'Sam Rivera', got: "${text}"`);
+    assert.ok(text.includes("Hi, Sam"), `the home screen greets 'Sam', got: "${text}"`);
+    assert.ok(!text.includes("Rivera"), `the greeting doesn't use the full name, got: "${text}"`);
     assert.ok(
       !text.includes("sierrapenguin"),
       `the greeting must not fall back to the email prefix when a name is saved, got: "${text}"`,
@@ -176,9 +178,9 @@ test("the greeting names the session's own person, never another account's name"
     ]); // a second, unrelated account
 
     const view = await makeActions(db).load(mine.session);
-    assert.equal(view.personName, "Alice Anderson", "the loader greets the session's own person by name");
+    assert.equal(view.personName, "Alice", "the loader greets the session's own person by name");
     assert.ok(
-      !view.personName.includes("Bob Baxter"),
+      !view.personName.includes("Bob"),
       `the loader must never name another account, got personName="${view.personName}"`,
     );
   } finally {

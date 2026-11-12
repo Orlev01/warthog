@@ -73,7 +73,7 @@ import { listIdentityFields } from "../../../../server/db/identity-fields";
 import { withTransaction } from "../../../../server/db/index";
 import { createRedactingRecorder } from "../../../../server/mcp/recorder";
 import { isReleaseRequest } from "../../../../domain/approvals/release-kind";
-import { formatMoney, highTierFieldLabel } from "../../../../domain/approvals/request-sentence";
+import { formatMoney, highTierFieldLabel, requestSentence } from "../../../../domain/approvals/request-sentence";
 import type { Session } from "../../../../server/auth/session";
 import type { Clock } from "../../../../server/seams/clock";
 import type { KeyWrapper } from "../../../../server/crypto/key-wrapper";
@@ -114,6 +114,9 @@ export interface InboxActionsDeps {
   readonly keyWrapper: KeyWrapper;
   readonly executeApprovedHold: (userId: string, approvalId: string) => Promise<ApprovedHoldResult>;
   readonly recordMetric?: RecordMetricSeam;
+  // Names a connected service through the connector catalogue ("google-gmail" → "Gmail"),
+  // so a request reads in the person's words. Absent (or unknown), the id is tidied.
+  readonly serviceName?: (connectorId: string) => string | undefined;
 }
 
 // A decision's result: success, or a refusal naming its reason (an id/approval
@@ -130,7 +133,7 @@ export type ActionResult = { ok: true } | { ok: false; reason: string };
 // approval that is not on the loaded page — that one decision.
 export type InboxLoadData = Pick<
   InboxViewProps,
-  "pending" | "history" | "savedCards" | "historyFilter" | "historySummary" | "openedEntry"
+  "pending" | "history" | "savedCards" | "historyFilter" | "historySummary" | "openedEntry" | "hasAgents"
 >;
 
 // What the inbox address bar may ask for, as raw strings. `load` validates every value:
@@ -278,21 +281,43 @@ function timeLeftLabel(timeLeftMs: number): string {
   return minutes === 1 ? "1 minute left" : `${minutes} minutes left`;
 }
 
-// A decided status as plain-words outcome copy (the view adds the per-status icon).
+// A decided status as plain-words outcome copy (the view adds the per-status icon). One
+// verb pair everywhere: Approve / Deny, Approved / Denied (UI/UX pass content-12).
 const OUTCOME: Record<DecidedStatus, string> = {
   approved: "You approved this",
-  denied: "You turned this down",
+  denied: "You denied this",
   expired: "This expired before you decided",
   more_detail: "You asked for more detail",
 };
 
+// What a request reads as, rebuilt from its stored detail at read time so every request —
+// including ones stored before the wording improved — names its tool and service in words
+// ("wants to use “Send” in Gmail", never the raw ids; UI/UX pass content-02). A detail
+// without the call's fields (an older shape) keeps its stored sentence.
+type ServiceNamer = (connectorId: string) => string | undefined;
+
+function sentenceFor(detail: Record<string, unknown>, serviceName: ServiceNamer): string {
+  if (typeof detail.tool !== "string" || detail.tool === "") return text(detail.sentence);
+  const connector = text(detail.connector) || undefined;
+  return requestSentence({
+    tool: detail.tool,
+    connector,
+    service: connector ? serviceName(connector) : undefined,
+    request: isReleaseRequest(detail.request) ? detail.request : undefined,
+    amount: typeof detail.amount === "number" ? detail.amount : undefined,
+    currency: text(detail.currency) || undefined,
+    merchant: text(detail.merchant) || undefined,
+    field: text(detail.field) || undefined,
+  });
+}
+
 // One pending approval → the view's already-formatted pending row.
-function toPendingView(request: PendingApproval): PendingRequestView {
+function toPendingView(request: PendingApproval, serviceName: ServiceNamer): PendingRequestView {
   return {
     id: request.id,
     agentId: request.agent.id,
     agent: request.agent.displayName,
-    sentence: text(request.detail.sentence),
+    sentence: sentenceFor(request.detail, serviceName),
     details: detailLines(request.detail),
     reason: text(request.detail.reason),
     rule: text(request.detail.rule),
@@ -302,11 +327,11 @@ function toPendingView(request: PendingApproval): PendingRequestView {
 }
 
 // One decided approval → the view's already-formatted history row.
-function toDecidedView(entry: DecidedApproval, timeZone: string): DecidedRequestView {
+function toDecidedView(entry: DecidedApproval, timeZone: string, serviceName: ServiceNamer): DecidedRequestView {
   const view: DecidedRequestView = {
     id: entry.id,
     agent: entry.agent.displayName,
-    sentence: text(entry.detail.sentence),
+    sentence: sentenceFor(entry.detail, serviceName),
     status: entry.status,
     outcome: OUTCOME[entry.status],
     decidedAt: entry.decidedAt ? formatAccountTime(entry.decidedAt, timeZone) : "",
@@ -374,6 +399,7 @@ function historySummaryFrom(
 
 export function createInboxActions(deps: InboxActionsDeps): InboxActions {
   const { db, clock, keyWrapper, executeApprovedHold } = deps;
+  const serviceName: ServiceNamer = (connectorId) => deps.serviceName?.(connectorId);
 
   // Record the two metrics for one successful decision (task E17-S04): a response-time
   // reading (created-to-decided ms, finite and ≥ 0) and an outcome-count increment (value 1),
@@ -611,7 +637,7 @@ export function createInboxActions(deps: InboxActionsDeps): InboxActions {
       await markOpened(db, { id: request.id, userId: session.userId }, clock);
     }
 
-    let pending = inbox.pending.map(toPendingView);
+    let pending = inbox.pending.map((request) => toPendingView(request, serviceName));
     // A high-tier release needs the person's saved detail to decrypt on their device.
     if (pending.some((request) => request.release === "high_tier")) {
       const fields = await loadHighTierFields(session.userId);
@@ -637,12 +663,15 @@ export function createInboxActions(deps: InboxActionsDeps): InboxActions {
             })
           ).map((row) => asDecided(row, nameById))
         : inbox.history;
-    const history = decided.map((entry) => toDecidedView(entry, timeZone));
+    const history = decided.map((entry) => toDecidedView(entry, timeZone, serviceName));
     const data: InboxLoadData = {
       pending,
       history,
       historyFilter,
       historySummary: historySummaryFrom(counts, agents, historyFilter),
+      // Whether the person has connected an agent yet: an empty inbox then points at
+      // connecting one rather than at rules.
+      hasAgents: agents.length > 0,
     };
 
     // A notification can open a decided approval that is not on this page (older, or
@@ -656,7 +685,7 @@ export function createInboxActions(deps: InboxActionsDeps): InboxActions {
     ) {
       const opened = await getApproval(db, session.userId, focus, dek);
       if (opened && opened.status !== "pending") {
-        data.openedEntry = toDecidedView(asDecided(opened, nameById), timeZone);
+        data.openedEntry = toDecidedView(asDecided(opened, nameById), timeZone, serviceName);
       }
     }
 

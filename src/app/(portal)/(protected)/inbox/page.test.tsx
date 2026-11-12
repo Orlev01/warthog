@@ -329,8 +329,10 @@ function controlFace(el: El): string {
   return parts.join(" ").replace(/\s+/g, " ").trim();
 }
 
+// Unavailable means the native attribute or aria-disabled — not the shared Button's
+// Tailwind `disabled:` class variants, which every button carries.
 function isDisabled(el: El): boolean {
-  return /\bdisabled\b/i.test(el.attrs);
+  return /\sdisabled=""|aria-disabled="true"/i.test(el.attrs);
 }
 
 // Every LIVE control (a <button> or a disclosure <summary>, not disabled) whose accessible

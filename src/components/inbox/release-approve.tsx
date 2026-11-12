@@ -4,8 +4,9 @@ import * as React from "react";
 import type { PublicKeyCredentialRequestOptionsJSON } from "@simplewebauthn/browser";
 import { ShieldAlert } from "lucide-react";
 
-import { Input } from "@/components/ui/input";
-import { Label } from "@/components/ui/field";
+import { Button } from "@/components/ui/button";
+import { ButtonLink } from "@/components/ui/button-link";
+import { Field, SelectField } from "@/components/ui/field";
 import { ConfirmItsYou } from "@/components/ui/confirm-its-you";
 import { unlockVault, type UnlockRequest } from "@/client/vault/unlock";
 import { decryptValue } from "@/client/vault/values";
@@ -148,8 +149,8 @@ export interface ReleaseApproveController {
 const UNLOCK_FAILED_COPY =
   "We couldn't unlock your vault on this device. Check how you unlocked it, then try again.";
 const CONFIRMED_NOTICE = "Thanks, that's confirmed. Approve and release again to hand it over.";
-const PHRASE_NOT_SAVED_COPY = "Tick the box once you've saved your recovery phrase.";
-const PHRASE_FAILED_COPY = "We couldn't save your recovery phrase just now. Please try again.";
+const PHRASE_NOT_SAVED_COPY = "Tick the box once you've saved your vault recovery phrase.";
+const PHRASE_FAILED_COPY = "We couldn't save your vault recovery phrase just now. Please try again.";
 const PHRASE_SAVED_NOTICE = "Your vault recovery phrase is saved.";
 
 // The release refusal reason that "Confirm it's you" resolves.
@@ -412,8 +413,8 @@ async function defaultUnlockByRecoveryPhrase(phrase: string): Promise<UnlockRequ
 // recover the vault key from the same unlock material, then re-seal it under this device's
 // passkey after a phrase unlock, or prepare a new recovery phrase when the vault has none.
 const ADOPTED_NOTICE = "This device's passkey can now unlock your vault, so you won't need the phrase here next time.";
-const UNSUPPORTED_NOTICE = "This device's passkey can't unlock your vault, so use your recovery phrase here.";
-const ADOPT_FAILED_NOTICE = "This passkey wasn't set up to unlock your vault. You can use your recovery phrase again next time.";
+const UNSUPPORTED_NOTICE = "This device's passkey can't unlock your vault, so use your vault recovery phrase here.";
+const ADOPT_FAILED_NOTICE = "This passkey wasn't set up to unlock your vault. You can use your vault recovery phrase again next time.";
 
 async function defaultAfterRelease(unlockRequest: UnlockRequest): Promise<AfterRelease> {
   const vault = createDeviceVault({
@@ -465,21 +466,18 @@ function getDefaultReleaseFlow(): ReleaseFlow {
   return cachedReleaseFlow;
 }
 
-// ─── styling (design tokens; no raw hex) ──────────────────────────────────────────────
+// ─── copy ───────────────────────────────────────────────────────────────────────────
 
-const BTN_BASE =
-  "inline-flex min-h-11 items-center justify-center gap-2 rounded-full px-4 text-sm font-medium transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-focus focus-visible:ring-offset-2 focus-visible:ring-offset-bg";
-// Deliberately omits any `disabled:` utility variant so a LIVE control's class never
-// reads as "disabled" to a markup scan; the native `disabled` attribute disables it.
-const BTN_PRIMARY = `${BTN_BASE} bg-accent text-accent-fg hover:bg-accent-hover`;
-const BTN_PRIMARY_DISABLED = `${BTN_BASE} border border-line bg-surface text-fg-muted opacity-50`;
-const SELECT_CLASS =
-  "min-h-11 w-full rounded-card border border-line bg-surface px-3 text-sm text-fg focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-focus focus-visible:ring-offset-2 focus-visible:ring-offset-bg";
+// The sensitive-moment explainer, shown for every release (card and high-tier alike): the
+// specific consequence, in everyday words (UI/UX pass content-44), rather than a generic
+// "this is a sensitive step".
+function releaseExplainer(request: PendingRequestView): string {
+  const agent = request.agent || "the agent";
+  return `Check the details. Approving hands this to ${agent} once, and it can't be collected again.`;
+}
 
-// The sensitive-moment explainer — a plain "slow down for this one moment" panel, in
-// everyday words with no jargon, shown for every release (card and high-tier alike).
-const RELEASE_EXPLAINER =
-  "This is a sensitive step, so take a moment before it goes ahead. Check the details are right, then approve to hand the value over just once.";
+// Radio choices keep a full 44px target on phones and touch screens.
+const CHOICE = "flex min-h-11 items-center gap-3 text-sm text-fg lg:pointer-fine:min-h-8";
 
 // ─── the client component (a thin binding over the controller) ────────────────────────
 
@@ -496,15 +494,18 @@ export interface ReleaseApproveProps {
   unlockByRecoveryPhrase?: (phrase: string) => Promise<UnlockRequest>;
   afterRelease?: (unlockRequest: UnlockRequest) => Promise<AfterRelease>;
   onReleased?: () => void;
+  // The request's other decisions (Deny, Ask for more detail), shown in the same action row
+  // as "Approve and release" so every decision sits together.
+  secondaryActions?: React.ReactNode;
 }
 
-// Why a release has nothing to hand over (no dead control: the button is disabled and
-// this one line says why).
+// Why a release has nothing to hand over (no dead control: the button is marked
+// unavailable, this one line says why, and a link goes where it can be fixed).
 const NO_CARD_REASON = "Add a card in your vault first, then approve and release.";
 const NO_HIGH_TIER_REASON = "Save this detail in your vault first, then approve and release.";
 
 export function ReleaseApprove(props: ReleaseApproveProps): React.ReactElement {
-  const { request, approvalId, savedCards, highTierCiphertext } = props;
+  const { request, approvalId, savedCards, highTierCiphertext, secondaryActions } = props;
   const [, forceUpdate] = React.useReducer((n: number) => n + 1, 0);
   const flowRef = React.useRef<ReleaseApproveController | null>(null);
   if (flowRef.current === null) {
@@ -546,67 +547,85 @@ export function ReleaseApprove(props: ReleaseApproveProps): React.ReactElement {
       ? NO_HIGH_TIER_REASON
       : null;
 
+  const reasonId = React.useId();
+  const working = state.status === "working";
+  // Nothing to hand over: say so with a way to fix it, and skip the picker and unlock
+  // choices that could only lead to a refusal.
+  if (unavailableReason !== null && !state.confirmRequired) {
+    return (
+      <div className="flex min-w-0 flex-col items-start gap-3">
+        <div className="flex w-full items-start gap-2 rounded-[var(--wh-radius-inset)] bg-surface-muted p-3 text-sm text-fg">
+          <ShieldAlert aria-hidden={true} className="mt-0.5 h-5 w-5 shrink-0 text-warning" />
+          <p id={reasonId}>{unavailableReason}</p>
+        </div>
+        <div className="flex min-w-0 flex-wrap items-center gap-2">
+          <Button type="button" variant="primary" aria-disabled={true} aria-describedby={reasonId}>
+            Approve and release
+            <RequestContext request={request} />
+          </Button>
+          <ButtonLink href={isCard ? "/vault/cards" : "/vault"}>{isCard ? "Add a card" : "Open your vault"}</ButtonLink>
+          {secondaryActions}
+        </div>
+      </div>
+    );
+  }
+
   return (
-    <div className="flex flex-col gap-3">
-      <div className="flex items-start gap-2 rounded-card border border-line bg-surface-muted p-3 text-sm text-fg">
+    <div className="flex min-w-0 flex-col gap-4">
+      <div className="flex items-start gap-2 rounded-[var(--wh-radius-inset)] bg-surface-muted p-3 text-sm text-fg">
         <ShieldAlert aria-hidden={true} className="mt-0.5 h-5 w-5 shrink-0 text-warning" />
-        <p>{RELEASE_EXPLAINER}</p>
+        <p>{releaseExplainer(request)}</p>
       </div>
 
       {isCard ? (
-        <>
-          <div className="flex flex-col gap-1.5">
-            <Label htmlFor={cardFieldId}>Which card</Label>
-            <select
-              id={cardFieldId}
-              name="card"
-              value={state.cardId ?? ""}
-              onChange={(event) => flow.setCardId(event.target.value)}
-              className={SELECT_CLASS}
-            >
-              {cards.map((card) => (
-                <option key={card.id} value={card.id}>
-                  {card.label}
-                </option>
-              ))}
-            </select>
-          </div>
-          <div className="flex flex-col gap-1.5">
-            <Label htmlFor={codeFieldId}>Security code</Label>
-            <Input
-              id={codeFieldId}
-              name="securityCode"
-              inputMode="numeric"
-              autoComplete="off"
-              value={state.securityCode}
-              onChange={(event) => flow.setSecurityCode(event.target.value)}
-            />
-          </div>
-        </>
-      ) : null}
-
-      {!isCard && highTierFields !== undefined && highTierFields.length > 1 ? (
-        <div className="flex flex-col gap-1.5">
-          <Label htmlFor={highTierFieldIdAttr}>Which detail</Label>
-          <select
-            id={highTierFieldIdAttr}
-            name="highTierField"
-            value={state.highTierFieldId ?? ""}
-            onChange={(event) => flow.setHighTierFieldId(event.target.value)}
-            className={SELECT_CLASS}
+        <div className="flex min-w-0 flex-col gap-3 sm:flex-row sm:items-end">
+          <SelectField
+            id={cardFieldId}
+            label="Which card"
+            name="card"
+            width="text"
+            value={state.cardId ?? ""}
+            onChange={(event) => flow.setCardId(event.target.value)}
           >
-            {highTierFields.map((field) => (
-              <option key={field.id} value={field.id}>
-                {field.label}
+            {cards.map((card) => (
+              <option key={card.id} value={card.id}>
+                {card.label}
               </option>
             ))}
-          </select>
+          </SelectField>
+          <Field
+            id={codeFieldId}
+            label="Security code"
+            name="securityCode"
+            width="code"
+            inputMode="numeric"
+            autoComplete="off"
+            value={state.securityCode}
+            onChange={(event) => flow.setSecurityCode(event.target.value)}
+          />
         </div>
       ) : null}
 
-      <fieldset className="flex flex-col gap-2">
-        <legend className="text-sm font-medium text-fg">How would you like to unlock your vault?</legend>
-        <label className="flex items-center gap-2 text-sm text-fg">
+      {!isCard && highTierFields !== undefined && highTierFields.length > 1 ? (
+        <SelectField
+          id={highTierFieldIdAttr}
+          label="Which detail"
+          name="highTierField"
+          width="text"
+          value={state.highTierFieldId ?? ""}
+          onChange={(event) => flow.setHighTierFieldId(event.target.value)}
+        >
+          {highTierFields.map((field) => (
+            <option key={field.id} value={field.id}>
+              {field.label}
+            </option>
+          ))}
+        </SelectField>
+      ) : null}
+
+      <fieldset className="flex min-w-0 flex-col gap-1">
+        <legend className="mb-1 text-sm font-medium text-fg">How would you like to unlock your vault?</legend>
+        <label className={CHOICE}>
           <input
             type="radio"
             name={methodName}
@@ -616,7 +635,7 @@ export function ReleaseApprove(props: ReleaseApproveProps): React.ReactElement {
           />
           Use your passkey
         </label>
-        <label className="flex items-center gap-2 text-sm text-fg">
+        <label className={CHOICE}>
           <input
             type="radio"
             name={methodName}
@@ -626,7 +645,7 @@ export function ReleaseApprove(props: ReleaseApproveProps): React.ReactElement {
           />
           Use your vault passphrase
         </label>
-        <label className="flex items-center gap-2 text-sm text-fg">
+        <label className={CHOICE}>
           <input
             type="radio"
             name={methodName}
@@ -634,38 +653,36 @@ export function ReleaseApprove(props: ReleaseApproveProps): React.ReactElement {
             checked={state.method === "recovery"}
             onChange={() => flow.setMethod("recovery")}
           />
-          Use your recovery phrase
+          Use your vault recovery phrase
         </label>
       </fieldset>
 
       {state.method === "passphrase" ? (
-        <div className="flex flex-col gap-1.5">
-          <Label htmlFor={passphraseFieldId}>Vault passphrase</Label>
-          <Input
-            id={passphraseFieldId}
-            name="passphrase"
-            type="password"
-            autoComplete="off"
-            value={state.passphrase}
-            onChange={(event) => flow.setPassphrase(event.target.value)}
-          />
-        </div>
+        <Field
+          id={passphraseFieldId}
+          label="Vault passphrase"
+          name="passphrase"
+          type="password"
+          width="text"
+          autoComplete="off"
+          value={state.passphrase}
+          onChange={(event) => flow.setPassphrase(event.target.value)}
+        />
       ) : null}
 
       {state.method === "recovery" ? (
-        <div className="flex flex-col gap-1.5">
-          <Label htmlFor={recoveryPhraseFieldId}>Recovery phrase</Label>
-          <Input
-            id={recoveryPhraseFieldId}
-            name="recoveryPhrase"
-            autoComplete="off"
-            autoCapitalize="characters"
-            spellCheck={false}
-            placeholder="ABCD-EFGH-…"
-            value={state.recoveryPhrase}
-            onChange={(event) => flow.setRecoveryPhrase(event.target.value)}
-          />
-        </div>
+        <Field
+          id={recoveryPhraseFieldId}
+          label="Vault recovery phrase"
+          name="recoveryPhrase"
+          width="text"
+          autoComplete="off"
+          autoCapitalize="characters"
+          spellCheck={false}
+          placeholder="ABCD-EFGH-…"
+          value={state.recoveryPhrase}
+          onChange={(event) => flow.setRecoveryPhrase(event.target.value)}
+        />
       ) : null}
 
       {state.error ? (
@@ -680,7 +697,7 @@ export function ReleaseApprove(props: ReleaseApproveProps): React.ReactElement {
       ) : null}
       {state.status === "released" ? (
         <p role="status" className="text-sm text-success">
-          Handed over — the agent can collect it once.
+          Handed over. The agent can collect it once.
         </p>
       ) : null}
       {state.newPhrase !== null ? (
@@ -692,33 +709,33 @@ export function ReleaseApprove(props: ReleaseApproveProps): React.ReactElement {
             void flow.confirmRecoveryPhrase();
           }}
           error={state.phraseError}
-          continueLabel="Save my recovery phrase"
+          continueLabel="Save my vault recovery phrase"
         />
       ) : null}
 
       {state.confirmRequired ? (
-        <ReleaseStepUp onConfirmed={() => flow.confirmed()} />
-      ) : unavailableReason !== null ? (
-        <div className="flex flex-col gap-1">
-          <button type="button" disabled className={BTN_PRIMARY_DISABLED}>
-            Approve and release
-            <RequestContext request={request} />
-          </button>
-          <p className="text-xs text-fg-muted">{unavailableReason}</p>
-        </div>
+        <>
+          <ReleaseStepUp onConfirmed={() => flow.confirmed()} />
+          {secondaryActions ? <div className="flex min-w-0 flex-wrap items-center gap-2">{secondaryActions}</div> : null}
+        </>
       ) : (
-        <div>
-          <button
+        <div className="flex min-w-0 flex-wrap items-center gap-2">
+          {/* While the hand-over runs the button stays focused and says so; a second tap is
+              ignored rather than starting another release (UI/UX pass interaction-01). */}
+          <Button
             type="button"
-            className={BTN_PRIMARY}
-            disabled={state.status === "working"}
+            variant="primary"
+            aria-disabled={working || undefined}
+            aria-busy={working || undefined}
             onClick={() => {
+              if (working) return;
               void flow.submit();
             }}
           >
-            Approve and release
+            {working ? "Releasing…" : "Approve and release"}
             <RequestContext request={request} />
-          </button>
+          </Button>
+          {secondaryActions}
         </div>
       )}
     </div>

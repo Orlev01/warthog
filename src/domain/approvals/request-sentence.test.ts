@@ -34,15 +34,31 @@ test("a high-tier request reads as the field it wants", () => {
   );
   assert.equal(
     requestSentence({ tool: "request_identity_detail", request: "high_tier" }),
-    "wants to see one of your high-tier identity details",
+    "wants to see one of your protected details",
   );
 });
 
-test("a held change reads as the tool, on its service when it has one", () => {
-  assert.equal(requestSentence({ tool: "send_email", connector: "gmail" }), "wants to run send_email on gmail");
+// UI/UX pass content-02: the person decides at a glance, so a held change names the tool
+// and the service in words, never as `google-gmail__send on google-gmail`.
+test("a held change reads as the tool in words, in its service when it has one", () => {
+  assert.equal(
+    requestSentence({ tool: "google-gmail__send", connector: "google-gmail", service: "Gmail" }),
+    "wants to use “Send” in Gmail",
+  );
+  assert.equal(
+    requestSentence({ tool: "google_calendar__create_event", connector: "google_calendar" }),
+    "wants to use “Create event” in Google calendar",
+    "without a catalogue name the service id is tidied into words, never shown raw",
+  );
   assert.equal(requestSentence({ tool: "remember" }), "wants to save a memory");
   assert.equal(requestSentence({ tool: "create_task" }), "wants to add a task");
-  assert.equal(requestSentence({ tool: "some_new_tool" }), "wants to run some_new_tool");
+  assert.equal(requestSentence({ tool: "some_new_tool" }), "wants to use “Some new tool”");
+  for (const sentence of [
+    requestSentence({ tool: "google-gmail__send", connector: "google-gmail", service: "Gmail" }),
+    requestSentence({ tool: "some_new_tool" }),
+  ]) {
+    assert.doesNotMatch(sentence, /__|_tool|google-gmail/, `no internal id in "${sentence}"`);
+  }
 });
 
 test("highTierFieldLabel turns a field code into words, and passes custom labels through", () => {

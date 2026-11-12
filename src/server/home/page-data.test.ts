@@ -119,7 +119,7 @@ interface HomeAgentLike {
   readonly status: string;
   readonly lastActiveAt: Date | string | null;
   readonly spendThisPeriod: number | string;
-  readonly budget: number | string;
+  readonly budget: number | string | null;
   readonly budgetPeriod: string;
   readonly currency: string;
 }
@@ -431,6 +431,22 @@ test("an agent carries its status, last-active and this-period spend against its
       "only the releases in the CURRENT budget period are counted (shared budget-period math); the other-period release is excluded",
     );
     assert.equal(agent!.currency, "AUD", "the figures are expressed in the person's account currency (AUD default)");
+  } finally {
+    await db.close();
+  }
+});
+
+// UI/UX pass content-20: an agent with no card budget carries no budget (null), so Home
+// says "No card budget" instead of showing "A$0 of A$0 this month".
+test("an agent without a card budget carries no budget, and no spend is summed for it", async () => {
+  const db = await freshDb();
+  try {
+    const { userId } = await makeUserWithDek(db, "no-budget");
+    await createAgent(db, { userId, connectionId: randomUUID(), displayName: "Unbudgeted", platform: "Claude Desktop" }, clock);
+    const agent = agentNamed(await load(db, userId), "Unbudgeted");
+    assert.ok(agent, "the person's agent is present");
+    assert.equal(agent!.budget, null, "no card budget reads as none, never as a zero budget");
+    assert.equal(num(agent!.spendThisPeriod), 0);
   } finally {
     await db.close();
   }

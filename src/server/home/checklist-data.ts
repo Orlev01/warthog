@@ -3,8 +3,8 @@
 // a client value).
 //
 // The home loader needs ONE owner-scoped read that turns the person's REAL set-up
-// state into the checklist. It gathers the five first-run signals — a low-tier
-// identity field set, a saved card, a connected service, a connected agent, a
+// state into the checklist. It gathers the five first-run signals — an identity
+// detail beyond the sign-up name, a saved card, a connected service, a connected agent, a
 // registered push device — by REUSING the already-built stores (`identity-fields`,
 // `cards`, `connections`, `agents`, `push-subscriptions`) rather than re-querying
 // ad hoc, and turns them into the checklist through the ONE pure source of the five
@@ -22,6 +22,7 @@ import { computeSetupChecklist, type SetupChecklistItem } from "../../domain/hom
 import { listAgentsForUser } from "../db/agents";
 import { listCards } from "../db/cards";
 import { listConnectionsForUser } from "../db/connections";
+import { listHighTierFields } from "../db/high-tier-fields";
 import { listIdentityFields } from "../db/identity-fields";
 import type { Db } from "../db/index";
 import { listSubscriptions } from "../db/push-subscriptions";
@@ -65,13 +66,17 @@ export async function loadSetupChecklist(
   const dek = await dataKeyFor(db, keyWrapper, userId);
 
   const identityFields = await listIdentityFields(db, userId, dek);
+  const protectedDetails = await listHighTierFields(db, userId);
   const cards = await listCards(db, userId);
   const connections = await listConnectionsForUser(db, userId);
   const agents = await listAgentsForUser(db, userId);
   const subscriptions = await listSubscriptions(db, userId, dek, clock);
 
   return computeSetupChecklist({
-    identityAdded: identityFields.length > 0,
+    // "Add your details" is done once the person has added a detail of their own: sign-up
+    // saves their name for them, so the name alone never counts (UI/UX pass, newcomer-01).
+    // A protected detail (passport, licence…) counts too.
+    identityAdded: identityFields.some((field) => field.kind !== "name") || protectedDetails.length > 0,
     cardAdded: cards.length > 0,
     serviceConnected: connections.length > 0,
     agentConnected: agents.length > 0,
