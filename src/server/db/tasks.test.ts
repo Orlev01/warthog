@@ -418,6 +418,43 @@ test("listTasksForUser returns an empty array for a person with no tasks", async
   }
 });
 
+// The Tasks view groups the list by status but keeps the order inside each group, so the
+// owner list-all must come back in a stable order: oldest first, then by id for tasks
+// created at the same instant — never whatever order the heap happens to return after an
+// update moved a row.
+test("listTasksForUser returns the owner's tasks oldest first, ties broken by id, even after updates", async () => {
+  const db = await freshDb();
+  try {
+    const userId = await makeUser(db, "order");
+    const dek = freshDek();
+    const created: { id: string; title: string }[] = [];
+    for (const title of ["Newest", "Oldest", "Tie A", "Tie B"]) {
+      const task = await createTask(db, { userId, title, assignee: "any", createdBy: { kind: "person" } }, dek);
+      created.push({ id: task.id, title });
+    }
+    const at: Record<string, string> = {
+      Newest: "2026-11-03T00:00:00Z",
+      Oldest: "2026-11-01T00:00:00Z",
+      "Tie A": "2026-11-02T00:00:00Z",
+      "Tie B": "2026-11-02T00:00:00Z",
+    };
+    for (const task of created) {
+      await db.query("UPDATE tasks SET created_at = $1 WHERE id = $2", [at[task.title], task.id]);
+    }
+    // Touch the oldest so its row version moves in the heap.
+    const oldest = created.find((t) => t.title === "Oldest")!;
+    await completeTask(db, { userId, id: oldest.id });
+
+    const ties = created.filter((t) => t.title.startsWith("Tie")).sort((a, b) => (a.id < b.id ? -1 : 1));
+    const expected = ["Oldest", ...ties.map((t) => t.title), "Newest"];
+    const titles = (await listTasksForUser(db, userId, dek)).map((t) => t.title);
+    assert.deepEqual(titles, expected);
+    assert.deepEqual((await listTasksForUser(db, userId, dek)).map((t) => t.title), expected, "the order repeats");
+  } finally {
+    await db.close();
+  }
+});
+
 // ===========================================================================
 // AC2 — the agent-scoped read; completeTask; add-note.
 // ===========================================================================
