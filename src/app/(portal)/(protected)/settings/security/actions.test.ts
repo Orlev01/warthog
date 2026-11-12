@@ -96,6 +96,9 @@ import { systemRandom } from "../../../../../server/seams/random";
 import { freshDb } from "../../../../../test/db";
 import { createAuthenticator, type SoftwareAuthenticator } from "../../../../../test/authenticator";
 import type { Db } from "../../../../../server/db/index";
+import { randomBytes } from "node:crypto";
+import { localAesKeyWrapper } from "../../../../../server/crypto/key-wrapper";
+import { createTotpSecretStore } from "../../../../../server/auth/totp-store";
 
 // A frozen instant used as "now" for every test: a session stepped up at T0, read by a
 // clock also at T0, is comfortably inside the 5-minute step-up window, with no
@@ -632,6 +635,135 @@ test("adding a passkey emails the person a new-passkey alert; a send failure nev
     assert.ok(again.ok);
     const added = await failing.finishAddPasskey(session, await createAuthenticator().register(again.options));
     assert.equal(added.ok, true, "the passkey is still added when the alert cannot be sent");
+  } finally {
+    await db.close();
+  }
+});
+
+// =====================================================================================
+// Follow-up S1 — an authenticator app can be set up from this screen. The rules live in
+// src/server/auth/totp-enrolment.ts (its own tests); here: the screen's actions are wired
+// to it, gated on a fresh confirmation, and the loader reflects the result.
+// =====================================================================================
+
+// The RFC 6238 SHA-1 vector: this secret gives CODE at Unix time 1111111111.
+const VECTOR_SECRET = "GEZDGNBVGY3TQOJQGEZDGNBVGY3TQOJQ";
+const VECTOR_CODE = "050471";
+const VECTOR_CLOCK: Clock = fixedClock(new Date(1111111111 * 1000));
+
+test("an authenticator app can be set up here after confirming it's you, and the screen then shows it", async () => {
+  const db = await freshDb();
+  try {
+    const keyWrapper = localAesKeyWrapper(randomBytes(32));
+    const user = await createUser(db, { email: "settings-totp@warthog.com.au", wrappedDek: await keyWrapper.wrap(randomBytes(32)) });
+    const sent: { body: string }[] = [];
+    const actions = createSecurityActions({
+      db,
+      clock: VECTOR_CLOCK,
+      random: { randomBytes: (n) => (n === 20 ? Buffer.from("12345678901234567890") : systemRandom.randomBytes(n)) },
+      rpId: RP_ID,
+      totpSecrets: createTotpSecretStore({ db, keyWrapper }),
+      alerts: { emailSender: { sendEmail: async (m) => void sent.push(m) } },
+    });
+    const plain = (await createSession(db, user.id, { clock: VECTOR_CLOCK, random: systemRandom })).session;
+    assert.deepEqual(await actions.beginAddAuthenticator(plain), { ok: false, reason: "step_up_required" });
+
+    const confirmed = await recordStepUp(db, plain.id, { clock: VECTOR_CLOCK });
+    const begun = await actions.beginAddAuthenticator(confirmed);
+    assert.ok(begun.ok);
+    assert.equal(begun.secret, VECTOR_SECRET);
+    assert.deepEqual(await actions.verifyAddAuthenticator(confirmed, "000000"), { ok: false, reason: "invalid_code" });
+    assert.equal((await actions.load(confirmed)).authenticatorEnabled, false);
+    assert.deepEqual(await actions.verifyAddAuthenticator(confirmed, VECTOR_CODE), { ok: true });
+    assert.equal((await actions.load(confirmed)).authenticatorEnabled, true);
+    assert.equal(sent.length, 1, "the new-sign-in-method alert is sent once");
+  } finally {
+    await db.close();
+  }
+});
+
+// =====================================================================================
+// Follow-up S2 — never remove the last sign-in method. Removing the account's only passkey
+// is refused when there is no authenticator app; with one, it is allowed (the dialog still
+// warns). The step-up gate still comes first, and the check holds under parallel removals.
+// =====================================================================================
+
+test("the only passkey cannot be removed when there is no authenticator app; it survives", async () => {
+  const db = await freshDb();
+  try {
+    const actions = makeActions(db);
+    const alice = await createPerson(db, "last-method@warthog.com.au");
+    await registerPasskeyFor(db, alice, createAuthenticator());
+    const session = await steppedUpSession(db, alice);
+    const only = (await actions.load(session)).passkeys[0]!.id;
+    assert.deepEqual(await actions.removePasskey(session, only), { ok: false, reason: "last_sign_in_method" });
+    assert.equal(await passkeyCount(db, alice), 1, "the last passkey survives");
+
+    // The step-up gate still answers first.
+    const stale = (await freshSession(db, alice)).session;
+    assert.deepEqual(await actions.removePasskey(stale, only), { ok: false, reason: "step_up_required" });
+  } finally {
+    await db.close();
+  }
+});
+
+test("the only passkey can be removed when an authenticator app is set up", async () => {
+  const db = await freshDb();
+  try {
+    const actions = makeActions(db);
+    const alice = await createPerson(db, "last-with-app@warthog.com.au");
+    await registerPasskeyFor(db, alice, createAuthenticator());
+    await db.query("INSERT INTO totp_secrets (user_id, secret_enc) VALUES ($1, $2)", [alice, "opaque"]);
+    const session = await steppedUpSession(db, alice);
+    const only = (await actions.load(session)).passkeys[0]!.id;
+    assert.deepEqual(await actions.removePasskey(session, only), { ok: true });
+    assert.equal(await passkeyCount(db, alice), 0);
+  } finally {
+    await db.close();
+  }
+});
+
+test("with two passkeys and no authenticator, one can go but never both — even removed in parallel", async () => {
+  const db = await freshDb();
+  try {
+    const actions = makeActions(db);
+    const alice = await createPerson(db, "two-passkeys@warthog.com.au");
+    await registerPasskeyFor(db, alice, createAuthenticator());
+    await registerPasskeyFor(db, alice, createAuthenticator());
+    const session = await steppedUpSession(db, alice);
+    const ids = (await actions.load(session)).passkeys.map((p) => p.id);
+    const results = await Promise.all(ids.map((id) => actions.removePasskey(session, id)));
+    assert.equal(results.filter((r) => r.ok).length, 1, "exactly one removal goes through");
+    assert.deepEqual(results.find((r) => !r.ok), { ok: false, reason: "last_sign_in_method" });
+    assert.equal(await passkeyCount(db, alice), 1, "one passkey always remains");
+  } finally {
+    await db.close();
+  }
+});
+
+// =====================================================================================
+// Follow-up S3 — the screen counts the session's own waiting sign-in requests (to link to
+// Settings › Security › Sign-in requests); another account's never count.
+// =====================================================================================
+
+test("the loader counts only this person's waiting sign-in requests", async () => {
+  const db = await freshDb();
+  try {
+    const { requestNewDeviceApproval } = await import("../../../../../server/auth/new-device");
+    const { issueEmailCode } = await import("../../../../../server/auth/email-code");
+    const { createOutbox } = await import("../../../../../server/notify/outbox");
+    const outbox = createOutbox();
+    const hmacKey = new Uint8Array(32).fill(7);
+    const alice = await createPerson(db, "requests-alice@warthog.com.au");
+    const bob = await createPerson(db, "requests-bob@warthog.com.au");
+    await issueEmailCode(db, "requests-bob@warthog.com.au", { purpose: "device", clock, random: systemRandom, hmacKey, emailSender: outbox });
+    const code = outbox.list().at(-1)!.body.match(/(?<!\d)\d{6}(?!\d)/)![0];
+    const started = await requestNewDeviceApproval(db, { email: "requests-bob@warthog.com.au", code, deviceLabel: "Chrome on Mac" },
+      { clock, random: systemRandom, hmacKey, emailSender: outbox, pushSender: outbox });
+    assert.ok(started.ok);
+    const actions = makeActions(db);
+    assert.equal((await actions.load((await freshSession(db, alice)).session)).pendingSignInRequests, 0);
+    assert.equal((await actions.load((await freshSession(db, bob)).session)).pendingSignInRequests, 1);
   } finally {
     await db.close();
   }

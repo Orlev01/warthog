@@ -78,6 +78,23 @@ export async function alertNewPasskey(
   );
 }
 
+// An authenticator app was set up from Settings › Security (follow-up S1): the same kind of
+// new-sign-in-method alert as a new passkey. Fixed copy — carries no secret, code or token.
+export async function alertNewAuthenticator(
+  db: Db,
+  { userId }: { userId: string },
+  deps: AlertDeps,
+): Promise<void> {
+  await sendAlert(
+    db,
+    userId,
+    "An authenticator app was added to your Warthog account. You can now sign in with your email " +
+      "and a code from the app. If this wasn't you, sign in, sign out every device you don't " +
+      `recognise and email ${SUPPORT_EMAIL} straight away.`,
+    deps,
+  );
+}
+
 // A new agent connected. `agentName` is untrusted free text, so the scrub pass
 // masks any card number planted in it before the body is delivered.
 export async function alertNewAgentConnection(

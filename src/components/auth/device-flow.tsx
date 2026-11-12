@@ -22,8 +22,11 @@ import { safeReturnPath } from "../../server/auth/return-path";
 //              → verifies the emailed one-time code, records a pending request, sends ONE
 //                approval push to a device the person already uses, and returns
 //                { requestId } — this device's own collection handle. No session minted.
+//              The response also names the label the request is listed under on the
+//              approving device and when it expires (follow-up S3), so the waiting step can
+//              say what to look for.
 //   (approve → an EXISTING signed-in device approves out of band, inside the signed-in
-//              app — NOT part of this new-device flow.)
+//              app at Settings › Security › Sign-in requests — NOT part of this flow.)
 //   collect  → POST /api/auth/device/collect { requestId }
 //              → while not approved yet: 400 { error: "not_approved" } — keep WAITING
 //                (this is the poll). Once approved: a followed 303 → /home carrying this
@@ -67,6 +70,10 @@ export interface DeviceFlowState {
   readonly error?: string;
   // A plain, non-error status line (e.g. "we've emailed you a code").
   readonly notice?: string;
+  // While waiting: the label the approving device lists this request under, and when the
+  // request expires (this device's local time).
+  readonly deviceLabel?: string;
+  readonly expires?: string;
 }
 
 export interface DeviceFlowController {
@@ -104,6 +111,14 @@ const REQUEST_GONE_COPY =
   "That approval request has expired or was turned down. You can start again when you're ready.";
 
 type StepPath = "send-code" | "request" | "collect";
+
+// "10:52 am" in this device's own time zone (a signed-out device has no account zone).
+function localTime(value: unknown): string | undefined {
+  if (typeof value !== "string") return undefined;
+  const instant = new Date(value);
+  if (!Number.isFinite(instant.getTime())) return undefined;
+  return new Intl.DateTimeFormat("en-AU", { hour: "numeric", minute: "2-digit" }).format(instant);
+}
 
 export function createDeviceFlow(deps: DeviceFlowDeps): DeviceFlowController {
   // The collection handle lives in this closure, never in the rendered snapshot — it is
@@ -185,7 +200,12 @@ export function createDeviceFlow(deps: DeviceFlowDeps): DeviceFlowController {
     requestId = typeof body.requestId === "string" ? body.requestId : undefined;
     if (!requestId) { set({ error: REQUEST_FAILED_COPY }); return; }
     // The request is recorded and the push is on its way — start waiting for approval.
-    set({ phase: "waiting", error: undefined });
+    set({
+      phase: "waiting",
+      error: undefined,
+      deviceLabel: typeof body.deviceLabel === "string" ? body.deviceLabel.slice(0, 80) : undefined,
+      expires: localTime(body.expiresAt),
+    });
   }
 
   async function poll(): Promise<void> {
@@ -227,7 +247,7 @@ export function createDeviceFlow(deps: DeviceFlowDeps): DeviceFlowController {
     if (state.busy) return;
     generation++;
     requestId = undefined;
-    set({ phase: "code", code: "", notice: undefined, error: undefined });
+    set({ phase: "code", code: "", notice: undefined, error: undefined, deviceLabel: undefined, expires: undefined });
   }
 
   return {
@@ -295,6 +315,8 @@ export function DeviceFlow(props: DeviceFlowProps = {}): React.ReactElement {
       code={state.code}
       error={state.error}
       notice={state.notice}
+      deviceLabel={state.deviceLabel}
+      expires={state.expires}
       busy={state.busy}
       onEmailChange={(value) => flow.setEmail(value)}
       onCodeChange={(value) => flow.setCode(value)}

@@ -43,6 +43,14 @@ import {
 import { issueRecoveryCode } from "../../../../../server/auth/recovery";
 import { alertNewPasskey, deliverAlert, type AlertDeps } from "../../../../../server/auth/alerts";
 import { getUserById } from "../../../../../server/db/users";
+import {
+  createTotpEnrolment,
+  type BeginTotpEnrolmentResult,
+  type VerifyTotpEnrolmentResult,
+} from "../../../../../server/auth/totp-enrolment";
+import type { TotpSecretStore } from "../../../../../server/auth/totp-store";
+import { listDeviceSignInRequests } from "../../../../../server/auth/new-device";
+import { withTransaction } from "../../../../../server/db/index";
 import type { Session } from "../../../../../server/auth/session";
 import type { Clock } from "../../../../../server/seams/clock";
 import type { Random } from "../../../../../server/seams/random";
@@ -61,6 +69,9 @@ export interface SecurityActionsDeps {
   // Where the "a new passkey was added" security alert is sent (brief). Optional so a
   // bundle without a sender behaves as before; the page always wires it.
   readonly alerts?: AlertDeps;
+  // The encrypted authenticator-secret store an authenticator set-up writes through
+  // (follow-up S1). Optional so a bundle without one behaves as before; the page wires it.
+  readonly totpSecrets?: Pick<TotpSecretStore, "enrol">;
 }
 
 // A passkey as the loader surfaces it: its id (the handle remove takes) and when it
@@ -82,6 +93,8 @@ export interface SessionSummary {
 // What the loader returns: only this person's passkeys and sessions.
 export interface SecurityView {
   readonly authenticatorEnabled: boolean;
+  // How many "approve from another device" requests are waiting for this person (S3).
+  readonly pendingSignInRequests: number;
   readonly passkeys: PasskeySummary[];
   readonly sessions: SessionSummary[];
 }
@@ -102,6 +115,11 @@ export type RegenerateRecoveryResult =
   | { ok: true; code: string }
   | { ok: false; reason: string };
 
+// Setting up an authenticator app (follow-up S1): begin hands back the pending secret and
+// its QR for display during set-up only; verify takes the six-digit code.
+export type BeginAddAuthenticatorResult = BeginTotpEnrolmentResult | { ok: false; reason: "unavailable" };
+export type VerifyAddAuthenticatorResult = VerifyTotpEnrolmentResult | { ok: false; reason: "unavailable" };
+
 // The security actions the loader + its server-action wrappers drive.
 export interface SecurityActions {
   load(session: Session): Promise<SecurityView>;
@@ -110,6 +128,8 @@ export interface SecurityActions {
   removePasskey(session: Session, passkeyId: string): Promise<ActionResult>;
   signOutSession(session: Session, sessionId: string): Promise<ActionResult>;
   regenerateRecovery(session: Session): Promise<RegenerateRecoveryResult>;
+  beginAddAuthenticator(session: Session): Promise<BeginAddAuthenticatorResult>;
+  verifyAddAuthenticator(session: Session, code: string): Promise<VerifyAddAuthenticatorResult>;
 }
 
 // The one reason string the step-up gate refuses with.
@@ -121,7 +141,8 @@ const STEP_UP_REQUIRED = "step_up_required";
 const uuidSchema = z.uuid();
 
 export function createSecurityActions(deps: SecurityActionsDeps): SecurityActions {
-  const { db, clock, random, rpId, origin, alerts } = deps;
+  const { db, clock, random, rpId, origin, alerts, totpSecrets } = deps;
+  const enrolment = totpSecrets ? createTotpEnrolment({ db, clock, random, totpSecrets, alerts }) : null;
 
   // List only the acting person's passkeys and sessions, scoped by the session's
   // own user id (never a client value). Sessions double as recent sign-ins, so
@@ -139,6 +160,7 @@ export function createSecurityActions(deps: SecurityActionsDeps): SecurityAction
     );
     return {
       authenticatorEnabled: factors.rows[0]?.enabled === true,
+      pendingSignInRequests: listDeviceSignInRequests(session, { clock }).length,
       passkeys: passkeyRows.rows.map((row) => ({
         id: row.id as string,
         createdAt: new Date(row.created_at as string | number | Date),
@@ -182,14 +204,33 @@ export function createSecurityActions(deps: SecurityActionsDeps): SecurityAction
   // Remove one of this person's passkeys. Validate the id shape at the boundary
   // first (a malformed id throws a 4xx), then require a fresh step-up, then delete
   // scoped to this person — an id that is not theirs deletes nothing ({ ok: false }).
+  //
+  // Never the last sign-in method (follow-up S2): the account's only passkey is kept
+  // when it has no authenticator app either ({ ok: false, reason: last_sign_in_method }).
+  // The check and the delete run in one transaction that first locks the person's row,
+  // so two removals in parallel are serialized and cannot both see "another passkey left".
   async function removePasskey(session: Session, passkeyId: string): Promise<ActionResult> {
     const id = parseParams(uuidSchema, passkeyId);
     if (!requireStepUp(session, { clock })) return { ok: false, reason: STEP_UP_REQUIRED };
-    const result = await db.query(
-      `DELETE FROM passkeys WHERE id = $1 AND user_id = $2 RETURNING id`,
-      [id, session.userId],
-    );
-    return result.rows.length > 0 ? { ok: true } : { ok: false, reason: "not_found" };
+    return withTransaction(db, async (tx) => {
+      await tx.query(`SELECT id FROM users WHERE id = $1 FOR UPDATE`, [session.userId]);
+      const owned = await tx.query(
+        `SELECT id FROM passkeys WHERE id = $1 AND user_id = $2`,
+        [id, session.userId],
+      );
+      if (owned.rows.length === 0) return { ok: false, reason: "not_found" };
+      const others = await tx.query(
+        `SELECT EXISTS (SELECT 1 FROM passkeys WHERE user_id = $1 AND id <> $2) AS other_passkey,
+                EXISTS (SELECT 1 FROM totp_secrets WHERE user_id = $1) AS authenticator`,
+        [session.userId, id],
+      );
+      const row = others.rows[0];
+      if (row?.other_passkey !== true && row?.authenticator !== true) {
+        return { ok: false, reason: "last_sign_in_method" };
+      }
+      await tx.query(`DELETE FROM passkeys WHERE id = $1 AND user_id = $2`, [id, session.userId]);
+      return { ok: true };
+    });
   }
 
   // Sign out another of this person's sessions. Same discipline: validate the id
@@ -215,6 +256,19 @@ export function createSecurityActions(deps: SecurityActionsDeps): SecurityAction
     return { ok: true, code };
   }
 
+  // Set up an authenticator app (follow-up S1): the step-up gate, the pending secret, the
+  // attempt limit, single-flight, encrypted storage and the alert all live in the
+  // enrolment seam, scoped to the session's own account.
+  async function beginAddAuthenticator(session: Session): Promise<BeginAddAuthenticatorResult> {
+    if (!enrolment) return { ok: false, reason: "unavailable" };
+    return enrolment.begin(session);
+  }
+
+  async function verifyAddAuthenticator(session: Session, code: string): Promise<VerifyAddAuthenticatorResult> {
+    if (!enrolment) return { ok: false, reason: "unavailable" };
+    return enrolment.verify(session, code);
+  }
+
   return {
     load,
     beginAddPasskey,
@@ -222,5 +276,7 @@ export function createSecurityActions(deps: SecurityActionsDeps): SecurityAction
     removePasskey,
     signOutSession,
     regenerateRecovery,
+    beginAddAuthenticator,
+    verifyAddAuthenticator,
   };
 }

@@ -27,6 +27,15 @@ export type SecurityNotice = { tone: "done" | "problem"; text: string; offerConf
 
 const NOTICES: Record<string, SecurityNotice> = {
   passkey_removed: { tone: "done", text: "Passkey removed." },
+  authenticator_added: {
+    tone: "done",
+    text: "Your authenticator app is set up. You can now sign in with your email and a code from the app, and use a code to confirm it's you.",
+  },
+  // Follow-up S2: the server kept the account's last sign-in method.
+  last_sign_in_method: {
+    tone: "problem",
+    text: "Nothing was changed: this passkey is the only way you can sign in. Add another passkey or set up an authenticator app first, then remove it.",
+  },
   session_signed_out: { tone: "done", text: "Signed out of that device." },
   step_up_required: {
     tone: "problem",

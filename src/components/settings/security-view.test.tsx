@@ -20,6 +20,7 @@ const OTHER = "00000000-0000-4000-8000-000000000002";
 function view(overrides: Partial<SecurityView> = {}): SecurityView {
   return {
     authenticatorEnabled: false,
+    pendingSignInRequests: 0,
     passkeys: [{ id: "10000000-0000-4000-8000-000000000001", createdAt: new Date("2026-11-12T07:17:00Z") }],
     sessions: [
       { id: CURRENT, createdAt: new Date("2026-11-12T07:10:00Z"), lastSeenAt: new Date("2026-11-12T07:17:00Z") },
@@ -42,6 +43,8 @@ function render(v: SecurityView, notice: ReturnType<typeof securityNotice> = nul
       beginAddPasskey={async () => ({ ok: false, reason: "step_up_required" })}
       finishAddPasskey={async () => ({ ok: true })}
       regenerateRecovery={async () => ({ ok: false, reason: "step_up_required" })}
+      beginAddAuthenticator={async () => ({ ok: false, reason: "step_up_required" })}
+      verifyAddAuthenticator={async () => ({ ok: false, reason: "step_up_required" })}
     />,
   );
 }
@@ -64,8 +67,13 @@ test("the page is a heading band plus one panel per task, with no hand-rolled he
   assert.doesNotMatch(markup, /text-2xl/);
 });
 
+const TWO_PASSKEYS = [
+  { id: "10000000-0000-4000-8000-000000000001", createdAt: new Date("2026-11-12T07:17:00Z") },
+  { id: "10000000-0000-4000-8000-000000000002", createdAt: new Date("2026-11-12T08:17:00Z") },
+];
+
 test("Remove opens a confirmation first: the row's button is not a submit, the dialog's is", () => {
-  const markup = render(view());
+  const markup = render(view({ passkeys: TWO_PASSKEYS }));
   const trigger = /<button[^>]*aria-label="Remove Passkey 1"[^>]*>/.exec(markup)?.[0] ?? "";
   assert.match(trigger, /type="button"/, "the row's Remove never posts on its own");
   assert.match(trigger, /aria-haspopup="dialog"/);
@@ -75,12 +83,22 @@ test("Remove opens a confirmation first: the row's button is not a submit, the d
   assert.match(markup, /<input type="hidden" name="passkeyId" value="10000000-0000-4000-8000-000000000001"\/>/);
 });
 
-test("removing the only passkey says so plainly, and what you'd need to get back in", () => {
-  const dialog = text(/<dialog\b[\s\S]*?<\/dialog>/.exec(render(view()))?.[0] ?? "");
-  assert.match(dialog, /Remove your only passkey\?/);
-  assert.match(dialog, /can't sign in or confirm it's you on any device/);
-  assert.match(dialog, /recovery code/);
-  assert.match(dialog, /add the new one first/);
+test("the only passkey with no authenticator app can't be removed: the dialog says why and links to both alternatives", () => {
+  const markup = /<dialog\b[\s\S]*?<\/dialog>/.exec(render(view()))?.[0] ?? "";
+  const dialog = text(markup);
+  assert.match(dialog, /You can't remove your only passkey/);
+  assert.match(dialog, /only way you can sign in/);
+  assert.doesNotMatch(markup, /type="submit"/, "there is no Remove passkey button to press");
+  assert.match(markup, /href="#add-a-passkey"[^>]*>Add a passkey</);
+  assert.match(markup, /href="#set-up-authenticator"[^>]*>Set up an authenticator app</);
+  assert.match(dialog, /Close/);
+});
+
+test("the only passkey with an authenticator app can still be removed, with a plain warning", () => {
+  const markup = /<dialog\b[\s\S]*?<\/dialog>/.exec(render(view({ authenticatorEnabled: true })))?.[0] ?? "";
+  assert.match(text(markup), /Remove your only passkey\?/);
+  assert.match(text(markup), /email and authenticator app/);
+  assert.match(markup, /type="submit"[^>]*>Remove passkey/);
 });
 
 test("the confirmation copy fits the situation", () => {
@@ -92,6 +110,10 @@ test("the confirmation copy fits the situation", () => {
   assert.match(withApp.body.join(" "), /email and authenticator app/);
   assert.doesNotMatch(withApp.body.join(" "), /can't sign in/);
   for (const copy of [many, withApp]) assert.match(copy.body.join(" "), /vault recovery phrase/);
+  for (const copy of [many, withApp]) assert.equal(copy.blocked, false);
+  const blocked = removePasskeyCopy({ name: "Passkey 1", added: "x", onlyPasskey: true, authenticatorEnabled: false });
+  assert.equal(blocked.blocked, true);
+  assert.match(blocked.body.join(" "), /Add another passkey or set up an authenticator app first/);
 });
 
 test("passkeys are named rows, and an empty list says what to do next", () => {
@@ -117,10 +139,13 @@ test("the current session is 'This device' once; other sessions get a named Sign
 });
 
 test("the authenticator section is no dead end, in sentence case", () => {
-  const off = text(render(view()));
+  const offMarkup = render(view());
+  const off = text(offMarkup);
   assert.match(off, /Authenticator app Not set up|Not set up/);
-  assert.match(off, /only add one when you create an account/);
+  assert.doesNotMatch(off, /only add one when you create an account/, "no 'sign-up only' dead end");
+  assert.match(offMarkup, /id="set-up-authenticator"[\s\S]*>Set up an authenticator app</);
   assert.doesNotMatch(off, /Authenticator App/);
+  assert.doesNotMatch(text(render(view({ authenticatorEnabled: true }))), /Set up an authenticator app/);
   const on = text(render(view({ authenticatorEnabled: true })));
   assert.match(on, /Set up/);
   assert.match(on, /email and a code from your authenticator app/);
@@ -135,4 +160,23 @@ test("a step-up refusal is said inside Confirm it's you, offering only the membe
   assert.doesNotMatch(markup, /wh-page-notice/, "no second notice repeating the refusal");
   const done = render(view(), securityNotice("passkey_removed"));
   assert.match(done, /wh-page-notice[\s\S]*Passkey removed\./);
+});
+
+test("the new outcomes read plainly: an authenticator was set up, the last sign-in method was kept", () => {
+  assert.deepEqual(securityNotice("authenticator_added")?.tone, "done");
+  assert.match(securityNotice("authenticator_added")?.text ?? "", /authenticator app is set up/i);
+  const kept = securityNotice("last_sign_in_method");
+  assert.equal(kept?.tone, "problem");
+  assert.match(kept?.text ?? "", /Nothing was changed/);
+  assert.match(kept?.text ?? "", /add another passkey or set up an authenticator app first/i);
+  assert.match(render(view(), kept ?? null), /wh-page-notice[\s\S]*only way you can sign in/);
+});
+
+test("Security links to sign-in requests, and says when some are waiting", () => {
+  const none = render(view());
+  assert.match(none, /href="\/settings\/security\/sign-in-requests"[^>]*>[\s\S]*?Review sign-in requests/);
+  assert.match(text(none), /Approve a new device that's asking to sign in/);
+  assert.doesNotMatch(text(none), /waiting/);
+  const two = text(render(view({ pendingSignInRequests: 2 })));
+  assert.match(two, /2 waiting/);
 });

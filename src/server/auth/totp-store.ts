@@ -37,6 +37,11 @@ export interface TotpSecretStore {
   set(userId: string, secret: string): Promise<void>;
   // Clear that person's secret; get then returns null. Safe when none exists.
   remove(userId: string): Promise<void>;
+  // First enrolment after sign-up (Settings › Security): store the secret DEK-encrypted
+  // with the time step its verification code was accepted at (so that code is spent for
+  // sign-in and step-up too), ONLY when the person has none yet. Resolves false — and
+  // changes nothing — when an authenticator is already on the account: this never replaces.
+  enrol(userId: string, secret: string, acceptedStep: number): Promise<boolean>;
 }
 
 export interface TotpSecretStoreDeps {
@@ -86,6 +91,19 @@ export function createTotpSecretStore(deps: TotpSecretStoreDeps): TotpSecretStor
 
     async remove(userId: string): Promise<void> {
       await db.query(`DELETE FROM ${TABLE} WHERE user_id = $1`, [userId]);
+    },
+
+    async enrol(userId: string, secret: string, acceptedStep: number): Promise<boolean> {
+      const dek = await dataKeyFor(userId);
+      const ciphertext = await encrypt(dek, TABLE, SECRET_COLUMN, userId, secret);
+      const result = await db.query(
+        `INSERT INTO ${TABLE} (user_id, ${SECRET_COLUMN}, last_step)
+         VALUES ($1, $2, $3::bigint)
+         ON CONFLICT (user_id) DO NOTHING
+         RETURNING user_id`,
+        [userId, ciphertext, acceptedStep],
+      );
+      return result.rows.length > 0;
     },
   };
 }

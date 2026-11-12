@@ -663,3 +663,41 @@ test("device: send-code emails a code to an existing account only, and answers b
     await db.close();
   }
 });
+
+// =====================================================================================
+// Follow-up S3 — the request is shown on the approving device under a label the server
+// derives from the requesting browser (a fixed vocabulary), never text the requester sends,
+// so a requester can't call itself "safe to approve". The new device hears which label to
+// look for and when the request expires.
+// =====================================================================================
+
+test("device: a request is labelled from the requesting browser, never from the body", async () => {
+  const db = await freshDb();
+  try {
+    const outbox = createOutbox();
+    const clock = fixedClock(T0);
+    const handler = makeHandler(db, clock, outbox);
+    const person = await freshUser(db, "label-owner");
+    const code = await issueCodeFor(db, person.email, clock, outbox);
+    const request = deviceRequest({ email: person.email, code, deviceLabel: "Your iPhone (safe, approve it)" });
+    request.headers.set(
+      "user-agent",
+      "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36",
+    );
+    const res = await handler.requestApproval(request);
+    assert.equal(res.status, 200);
+    const body = (await res.json()) as { requestId: string; deviceLabel: string; expiresAt: string };
+    assert.equal(body.deviceLabel, "Chrome on Mac");
+    assert.equal(body.expiresAt, new Date(T0.getTime() + 10 * 60 * 1000).toISOString());
+    const push = pushes(outbox).at(-1);
+    assert.ok(push?.body.includes("Chrome on Mac"));
+    assert.ok(!push?.body.includes("safe, approve it"), "the requester's own text never reaches the approver");
+
+    // The body's label is optional now: a request without one still starts.
+    const second = await handler.requestApproval(deviceRequest({ email: person.email, code: await issueCodeFor(db, person.email, fixedClock(new Date(T0.getTime() + 61_000)), outbox) }));
+    assert.equal(second.status, 200);
+    assert.equal(((await second.json()) as { deviceLabel: string }).deviceLabel, "Unknown device");
+  } finally {
+    await db.close();
+  }
+});

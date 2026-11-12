@@ -1,6 +1,6 @@
 import * as React from "react";
 import type { RegistrationResponseJSON } from "@simplewebauthn/server";
-import { CheckCircle2, KeyRound } from "lucide-react";
+import { CheckCircle2, KeyRound, MonitorSmartphone } from "lucide-react";
 
 import { PageNotice } from "@/components/ui/notice";
 import { UrlParamCleanup } from "@/components/ui/url-param-cleanup";
@@ -12,12 +12,17 @@ import { ActionForm, FormSubmit } from "@/components/ui/form-submit";
 import { FactorControls } from "@/components/auth/factor-controls";
 import { ConfirmItsYou } from "@/components/ui/confirm-its-you";
 import { formatAccountTime, timeZoneNote } from "@/domain/display-time";
-import { RemovePasskeyControl } from "./remove-passkey";
+import { ButtonLink } from "@/components/ui/button-link";
+import { SIGN_IN_REQUESTS_PATH } from "@/server/auth/sign-in-requests-path";
+import { ADD_PASSKEY_ANCHOR, RemovePasskeyControl, SET_UP_AUTHENTICATOR_ANCHOR } from "./remove-passkey";
+import { AddAuthenticator } from "./add-authenticator";
 import type {
   ActionResult,
+  BeginAddAuthenticatorResult,
   BeginAddPasskeyResult,
   RegenerateRecoveryResult,
   SecurityView,
+  VerifyAddAuthenticatorResult,
 } from "@/app/(portal)/(protected)/settings/security/actions";
 import type { SecurityNotice } from "@/app/(portal)/(protected)/settings/security/notices";
 
@@ -44,6 +49,8 @@ export function SecuritySettings({
   beginAddPasskey,
   finishAddPasskey,
   regenerateRecovery,
+  beginAddAuthenticator,
+  verifyAddAuthenticator,
 }: {
   view: SecurityView;
   currentSessionId: string;
@@ -55,6 +62,8 @@ export function SecuritySettings({
   beginAddPasskey: () => Promise<BeginAddPasskeyResult>;
   finishAddPasskey: (response: RegistrationResponseJSON) => Promise<ActionResult>;
   regenerateRecovery: () => Promise<RegenerateRecoveryResult>;
+  beginAddAuthenticator: () => Promise<BeginAddAuthenticatorResult>;
+  verifyAddAuthenticator: (code: string) => Promise<VerifyAddAuthenticatorResult>;
 }) {
   const hasPasskey = view.passkeys.length > 0;
   const onlyPasskey = view.passkeys.length === 1;
@@ -137,11 +146,16 @@ export function SecuritySettings({
           }
         >
           <li className={LIST_ROW}>
-            <span className="text-sm text-fg-muted">
-              {view.authenticatorEnabled
-                ? "You can sign in with your email and a code from your authenticator app, and use a code to confirm it's you."
-                : "You haven't set up an authenticator app. For now you can only add one when you create an account, so use your passkeys to sign in and confirm it's you."}
-            </span>
+            {view.authenticatorEnabled ? (
+              <span className="text-sm text-fg-muted">
+                You can sign in with your email and a code from your authenticator app, and use a code to confirm it&apos;s you.
+              </span>
+            ) : (
+              // Follow-up S1: set one up here (step-up gated), instead of the old sign-up-only dead end.
+              <div id={SET_UP_AUTHENTICATOR_ANCHOR} className="min-w-0 scroll-mt-24">
+                <AddAuthenticator begin={beginAddAuthenticator} verify={verifyAddAuthenticator} passkey={hasPasskey} />
+              </div>
+            )}
           </li>
         </ListGroup>
       </WorkspacePanel>
@@ -180,6 +194,22 @@ export function SecuritySettings({
             );
           })}
         </ul>
+        {/* Follow-up S3: approving a new device happens here, in the signed-in app. */}
+        <div className="mt-4 flex min-w-0 flex-col gap-3 border-t border-line pt-4 text-sm sm:flex-row sm:items-center sm:justify-between [overflow-wrap:anywhere]">
+          <span className="flex min-w-0 flex-1 flex-col gap-0.5">
+            <span className="flex flex-wrap items-center gap-2 font-medium text-fg">
+              Sign-in requests
+              {view.pendingSignInRequests > 0 ? (
+                <Badge tone="warning">{`${view.pendingSignInRequests} waiting`}</Badge>
+              ) : null}
+            </span>
+            <span className="text-fg-muted">Approve a new device that&apos;s asking to sign in to your account.</span>
+          </span>
+          <ButtonLink href={SIGN_IN_REQUESTS_PATH} size="sm" className="shrink-0">
+            <MonitorSmartphone aria-hidden={true} className="h-4 w-4 shrink-0" />
+            Review sign-in requests
+          </ButtonLink>
+        </div>
       </WorkspacePanel>
 
       <WorkspacePanel
@@ -187,11 +217,13 @@ export function SecuritySettings({
         description="Add a passkey or create a new recovery code. We'll ask you to confirm it's you first."
         footer="Your recovery code gets you back into your account if you lose your passkeys. It's different from your vault recovery phrase, which unlocks your cards and protected details."
       >
-        <FactorControls
-          beginAddPasskey={beginAddPasskey}
-          finishAddPasskey={finishAddPasskey}
-          regenerateRecovery={regenerateRecovery}
-        />
+        <div id={ADD_PASSKEY_ANCHOR} className="min-w-0 scroll-mt-24">
+          <FactorControls
+            beginAddPasskey={beginAddPasskey}
+            finishAddPasskey={finishAddPasskey}
+            regenerateRecovery={regenerateRecovery}
+          />
+        </div>
       </WorkspacePanel>
     </div>
   );

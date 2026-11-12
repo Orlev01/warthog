@@ -17,9 +17,12 @@ import { systemRandom } from "../../../../../server/seams/random";
 import {
   createSecurityActions,
   type ActionResult,
+  type BeginAddAuthenticatorResult,
   type BeginAddPasskeyResult,
   type RegenerateRecoveryResult,
+  type VerifyAddAuthenticatorResult,
 } from "./actions";
+import { createTotpSecretStore } from "../../../../../server/auth/totp-store";
 import { noticeLocation, securityNotice } from "./notices";
 import type { Db } from "../../../../../server/db/index";
 import type { Metadata } from "next";
@@ -59,9 +62,8 @@ const registrationResponseSchema = z.looseObject({
 // Sensitive changes (add / remove a passkey, sign out a session, regenerate the
 // recovery code) require a fresh step-up; the server-action wrappers below enforce
 // that through the same seam, and every outcome comes back as a plain-words notice.
-// The step-up confirmation, the WebAuthn add-passkey ceremony and the one-time
-// display of a regenerated recovery code need the client factor component; until it
-// lands those two controls render disabled with the reason.
+// The step-up confirmation, the WebAuthn add-passkey ceremony, the one-time display of
+// a regenerated recovery code and the authenticator set-up run in client components.
 
 const SESSION_COOKIE = "__Host-wh_session";
 
@@ -73,17 +75,26 @@ async function resolveSession(db: Db): Promise<Session | null> {
   return token ? verifySession(db, token, { clock: systemClock }) : null;
 }
 
-// Build the security actions with the real seams, taking the RP ID from config.
+// Build the security actions with the real seams, taking the RP ID from config. The
+// authenticator store encrypts through the person's own data key (design §4.1).
 function buildActions(db: Db) {
+  const config = loadConfig();
   return createSecurityActions({
     db,
     clock: systemClock,
     random: systemRandom,
-    rpId: loadConfig().webauthnRpId,
-    origin: new URL(loadConfig().publicBaseUrl).origin,
-    alerts: { emailSender: notificationSenders(loadConfig(), db).email },
+    rpId: config.webauthnRpId,
+    origin: new URL(config.publicBaseUrl).origin,
+    alerts: { emailSender: notificationSenders(config, db).email },
+    totpSecrets: createTotpSecretStore({
+      db,
+      keyWrapper: selectKeyWrapper({ nodeEnv: config.nodeEnv, localKek: config.devKek }),
+    }),
   });
 }
+
+// The six-digit authenticator code, validated at this server-action boundary.
+const totpCodeSchema = z.string().regex(/^[0-9]{6}$/);
 
 // Remove one of this person's passkeys. A thin server-action wrapper over the
 // factory: it re-derives the verified session (never trusting a client value),
@@ -169,6 +180,32 @@ async function regenerateRecoveryAction(): Promise<RegenerateRecoveryResult> {
   return buildActions(db).regenerateRecovery(session);
 }
 
+// Set up an authenticator app (follow-up S1): begin hands back the pending secret and its
+// QR for display during set-up only (never logged, never in a notice); verify checks the
+// six-digit code. Both re-derive the session and require a fresh confirmation.
+async function beginAddAuthenticatorAction(): Promise<BeginAddAuthenticatorResult> {
+  "use server";
+  const db = await getServerDb();
+  const session = await resolveSession(db);
+  if (!session) {
+    redirect("/signin");
+  }
+  return buildActions(db).beginAddAuthenticator(session);
+}
+
+async function verifyAddAuthenticatorAction(code: string): Promise<VerifyAddAuthenticatorResult> {
+  "use server";
+  const db = await getServerDb();
+  const session = await resolveSession(db);
+  if (!session) {
+    redirect("/signin");
+  }
+  const parsed = totpCodeSchema.safeParse(code);
+  if (!parsed.success) return { ok: false, reason: "invalid_code" };
+  // On success the client reloads the screen with its "set up" notice.
+  return buildActions(db).verifyAddAuthenticator(session, parsed.data);
+}
+
 export default async function SecurityPage({
   searchParams,
 }: {
@@ -202,6 +239,8 @@ export default async function SecurityPage({
       beginAddPasskey={beginAddPasskeyAction}
       finishAddPasskey={finishAddPasskeyAction}
       regenerateRecovery={regenerateRecoveryAction}
+      beginAddAuthenticator={beginAddAuthenticatorAction}
+      verifyAddAuthenticator={verifyAddAuthenticatorAction}
     />
   );
 }

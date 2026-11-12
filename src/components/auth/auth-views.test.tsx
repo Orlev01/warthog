@@ -521,7 +521,7 @@ test("passkey cancellation and email delivery failures describe the form without
   }
 });
 
-test("the sign-in screen links to sign-up, recovery and reset, and never to the unfinished device approval", () => {
+test("the sign-in screen links to sign-up, recovery, reset and approval from another device", () => {
   for (const step of ["passkey", "code"] as const) {
     const links = hrefsWithText(renderToStaticMarkup(<SigninView step={step} />));
     for (const [href, words] of [
@@ -533,9 +533,11 @@ test("the sign-in screen links to sign-up, recovery and reset, and never to the 
       assert.ok(link, `sign-in (${step}) links to ${href}, got ${JSON.stringify(links)}`);
       assert.match(link.text, words, `the ${href} link says where it goes`);
     }
-    // public-01: nothing in the app can approve a device request yet, so sign-in never
-    // offers that route.
-    assert.ok(!links.some((l) => l.href.startsWith("/device")), `sign-in (${step}) must not link to /device`);
+    // Follow-up S3: approving a device request is real now (Settings › Security › Sign-in
+    // requests), so "Other ways to sign in" offers it again.
+    const device = links.find((l) => l.href === "/device");
+    assert.ok(device, `sign-in (${step}) offers approval from another device`);
+    assert.match(device.text, /Approve from another device/);
   }
 });
 

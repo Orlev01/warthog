@@ -34,7 +34,7 @@ const ICONS: Record<string, LucideIcon> = {
 // its IA `key` — what the screen is for, so the destinations are self-explaining.
 const DESCRIPTIONS: Record<string, string> = {
   "agent-defaults": "Starting permissions for agents you connect from now on.",
-  security: "Manage your passkeys, recovery code and where you're signed in.",
+  security: "Manage your passkeys, authenticator app, recovery code, sign-in requests and where you're signed in.",
   notifications: "Choose how Warthog lets you know about approvals and alerts.",
   data: "Export or import your data, or delete your account.",
 };

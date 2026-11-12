@@ -35,6 +35,10 @@ export interface PendingStore<T> {
   // Store `value` under `key`, live until `now + ttlMs`.
   set(key: string, value: T, now: Date): void;
   delete(key: string): void;
+  // Every live entry at `now`, oldest first, with when it expires; expired entries are
+  // dropped on the way. For a signed-in member's own listing (e.g. their pending sign-in
+  // requests): the caller filters by the session's account, never by a client value.
+  live(now: Date): { key: string; value: T; expiresAt: Date }[];
   readonly size: number;
 }
 
@@ -76,6 +80,16 @@ export function pendingStore<T>(name: string, options: PendingStoreOptions): Pen
     },
     delete(key) {
       entries.delete(key);
+    },
+    live(now) {
+      const nowMs = now.getTime();
+      prune(nowMs);
+      const out: { key: string; value: T; expiresAt: Date }[] = [];
+      for (const [key, entry] of entries) {
+        if (entry.expiresAt <= nowMs) continue;
+        out.push({ key, value: entry.value, expiresAt: new Date(entry.expiresAt) });
+      }
+      return out;
     },
     get size() {
       return entries.size;
