@@ -459,6 +459,7 @@ function CategoryLinks({
   const total = categories.reduce((sum, c) => sum + c.count, 0);
   return (
     <FilterLinks
+      variant="scroll"
       label="Catalogue categories"
       items={[
         { label: "All", href: hrefWith(PATH, state, { category: undefined }), active: category === null, count: total },

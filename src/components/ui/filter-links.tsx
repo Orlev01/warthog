@@ -32,12 +32,20 @@ export function FilterLinks({
 }: {
   label: string;
   items: readonly FilterLink[];
-  variant?: "tabs" | "chips";
+  // `scroll`: chips in one horizontally scrolling strip on phones (a long list such as 30+
+  // categories would otherwise fill the screen), wrapping from the `sm` breakpoint up.
+  variant?: "tabs" | "chips" | "scroll";
 }) {
+  const row =
+    variant === "tabs"
+      ? "wh-subtabs"
+      : variant === "scroll"
+        ? "-mx-1 flex gap-2 overflow-x-auto px-1 py-1 sm:mx-0 sm:flex-wrap sm:overflow-visible sm:px-0"
+        : "flex flex-wrap gap-2";
   return (
-    <nav aria-label={label} className={variant === "tabs" ? "wh-subtabs" : "flex flex-wrap gap-2"}>
+    <nav aria-label={label} className={row}>
       {items.map((item) => (
-        <a key={item.href} href={item.href} aria-current={item.active ? "page" : undefined} className={variant === "tabs" ? "wh-subtab gap-2" : CHIP_LINK}>
+        <a key={item.href} href={item.href} aria-current={item.active ? "page" : undefined} className={variant === "tabs" ? "wh-subtab gap-2" : variant === "scroll" ? `${CHIP_LINK} shrink-0 whitespace-nowrap` : CHIP_LINK}>
           {item.label}
           {item.count !== undefined ? (
             <span className="rounded-card bg-surface-muted px-1.5 text-xs font-medium tabular-nums text-fg-muted">
