@@ -398,9 +398,12 @@ test("offers the Ask-me-first and Never-allow rule templates as live choices", (
 test("offers only the two rule templates: no disabled spending or approval-expiry choices", () => {
   // SUPERSEDES (rules tidy-up) the E12-S17 "shown DISABLED, set elsewhere" contract. Those
   // five radios were never selectable and pointed at settings that do not exist (no
-  // per-purchase limit, merchant list or approval-expiry setting exists anywhere in the
-  // app; only a per-agent card budget does, which the Budgets tab now links to). The form
-  // offers exactly the two templates the rules store holds, and no disabled template.
+  // per-purchase limit or merchant list exists anywhere in the app; only a per-agent card
+  // budget does, which the Budgets tab now links to). The form offers exactly the two
+  // templates the rules store holds, and no disabled template.
+  // SUPERSEDED IN PART (approval expiry): the approval expiry is now a real setting, a live
+  // select in its own panel on the Your rules tab (pinned in the rules page's
+  // approval-expiry test), so its name may appear on the page; it is still never a template.
   const markup = render(base());
   const templateRadios = [...markup.matchAll(/<input\b([^>]*\bname="rule-template"[^>]*?)\/?>/gi)].map((m) => m[1]!);
   assert.deepEqual(
@@ -410,7 +413,7 @@ test("offers only the two rule templates: no disabled spending or approval-expir
   );
   assert.ok(templateRadios.every((attrs) => !hasBoolAttr(attrs, "disabled")), "neither template is disabled");
   const text = visibleText(markup);
-  for (const gone of [/per[- ]purchase limit/i, /allowed merchants only/i, /blocked merchants/i, /approval expiry/i, /approvals stay open/i]) {
+  for (const gone of [/per[- ]purchase limit/i, /allowed merchants only/i, /blocked merchants/i, /approvals stay open/i]) {
     assert.doesNotMatch(text, gone, `no copy names a setting that does not exist (${gone})`);
   }
   assert.equal(disabledNames(markup).filter((n) => /template|merchant|expir|purchase/i.test(n)).length, 0);

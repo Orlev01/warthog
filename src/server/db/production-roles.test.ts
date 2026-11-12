@@ -13,6 +13,9 @@ test("runtime role writes ordinary data but cannot bypass append-only activity o
     await assert.rejects(db.query("DELETE FROM approval_sms_attempts WHERE false"), /permission denied/);
     await assert.rejects(db.query("UPDATE approval_sms_attempts SET attempted_at = now() WHERE false"), /permission denied/);
     await db.query("UPDATE oauth_clients SET redirect_uris = redirect_uris WHERE false");
+    for (const sql of ["SELECT * FROM approval_settings LIMIT 0", "INSERT INTO approval_settings (user_id, expiry_minutes, updated_at) SELECT gen_random_uuid(), 15, now() WHERE false", "UPDATE approval_settings SET expiry_minutes = 15 WHERE false", "DELETE FROM approval_settings WHERE false"]) {
+      await db.query(sql);
+    }
     for (const sql of ["DELETE FROM users WHERE false", "UPDATE activity_entries SET kind = kind WHERE false", "DELETE FROM activity_entries WHERE false", "DELETE FROM activity_disputes WHERE false", "TRUNCATE activity_entries", "DELETE FROM schema_migrations WHERE false"]) {
       await assert.rejects(db.query(sql), /permission denied/, sql);
     }

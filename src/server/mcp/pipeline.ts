@@ -48,6 +48,7 @@ import {
   type AgentContext,
 } from "./context";
 import { createApproval, getApproval } from "../db/approvals";
+import { getApprovalExpiryMinutes } from "../db/approval-settings";
 import {
   createHeldRequest,
   getByApproval,
@@ -476,11 +477,16 @@ export function createAgentCallPipeline(deps: PipelineDeps): AgentCallPipeline {
       // The pending approval and the held call it guards are written together: a
       // failure part-way never leaves an approval in the inbox with nothing behind it.
       const approval = await withTransaction(db, async (tx) => {
+        // The approval waits for the connection OWNER's configured expiry (default 15
+        // minutes; 2 minutes to 24 hours). Read only here, when a call is actually held,
+        // so allowed and denied calls pay no extra query.
+        const expiryMinutes = await getApprovalExpiryMinutes(tx, connection.userId);
         const created = await createApproval(
           tx,
           {
             userId: connection.userId,
             agentId: connection.agentId,
+            expiryMinutes,
             // The same rate the engine checked, so the approval's converted amount and
             // the release's ledger amount match it.
             detail: toApprovalDetail(call, call.requiresApproval && decision.decision === "allow" ? {reason:"Provider-hosted tools require approval because their effects are not verified by Warthog."} : decision, context, effectiveRate(context, rate)),

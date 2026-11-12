@@ -487,6 +487,10 @@ test("AC3: tools/call request_card returns pending_approval (structured) and cre
     assert.equal(fromText.approval_id, structured!.approval_id, "the text carries the approval_id");
     assert.equal(fromText.status, "pending_approval");
     assert.match(String(fromText.next ?? ""), /check_approval/, "and tells the agent what to call next");
+    // The expiry is the person's own setting, so the hint points at expires_at rather than a fixed time.
+    assert.match(String(fromText.next ?? ""), /expires_at/, "and that the request expires at expires_at");
+    assert.match(String(fromText.next ?? ""), /refused|denied/, "after which it is refused");
+    assert.doesNotMatch(String(fromText.next ?? ""), /\b15 minutes\b/, "never a hard-coded time");
 
     // The approval is visible in the person's inbox, still PENDING — nothing released.
     const pending = await listPendingForUser(db, userId, dek);

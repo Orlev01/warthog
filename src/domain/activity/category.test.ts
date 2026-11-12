@@ -61,7 +61,7 @@ test("rejected requests, connection and account changes have their own types", (
   for (const kind of ["agent_connected", "agent_key_revoked", "agent_key_replaced", "connection_change", "permission_change", "agent_defaults_change", "skill_access_change", "memory_scope_change", "client_observed"]) {
     assert.equal(cat(kind), "access", kind);
   }
-  for (const kind of ["rule_created", "rule_updated", "rule_paused", "rule_deleted", "memory_created", "memory_updated", "memory_deleted", "account_imported"]) {
+  for (const kind of ["rule_created", "rule_updated", "rule_paused", "rule_deleted", "approval_expiry_change", "memory_created", "memory_updated", "memory_deleted", "account_imported"]) {
     assert.equal(cat(kind), "account", kind);
   }
 });
