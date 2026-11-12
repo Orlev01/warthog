@@ -197,6 +197,10 @@ the workflow's temporary files and Docker config are additionally cleaned normal
 
 ## Release sequence
 
+The separate [isolated recovery-drill cleanup supervisor](azure-recovery-drill.md)
+is manual and inactive until its exact temporary scope is approved. It does not
+grant recovery access or change the release sequence below.
+
 1. Pass the push CI on the intended main commit. Review its source and the still-open
    [audit gates](audit/README.md). Reuse the already-approved setup, recheck eligible
    credits and approve the exact image/workload and maintenance window. Review
