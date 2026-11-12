@@ -174,7 +174,7 @@ function toggleControls(markup) {
     const id = attr(attrs, "id");
     const name = ((id && labels[id]) || attr(attrs, "aria-label") || "").trim();
     const on = hasBoolAttr(attrs, "checked") || attr(attrs, "aria-checked") === "true";
-    out.push({ name, on, disabled: hasBoolAttr(attrs, "disabled") });
+    out.push({ name, on, type, disabled: hasBoolAttr(attrs, "disabled") });
   }
 
   // wrapping-label toggles: <label ...><input type=checkbox .../> Name</label>
@@ -185,7 +185,7 @@ function toggleControls(markup) {
     const type = (attr(iattrs, "type") ?? "text").toLowerCase();
     if (type !== "checkbox" && type !== "radio") continue;
     const on = hasBoolAttr(iattrs, "checked") || attr(iattrs, "aria-checked") === "true";
-    out.push({ name: visibleText(l.inner), on, disabled: hasBoolAttr(iattrs, "disabled") });
+    out.push({ name: visibleText(l.inner), on, type, disabled: hasBoolAttr(iattrs, "disabled") });
   }
 
   // role=switch / aria-checked / aria-pressed buttons
@@ -206,7 +206,7 @@ function toggleControls(markup) {
 // surface: a capability is granted iff its keyword appears here.
 function grantedText(markup) {
   return toggleControls(markup)
-    .filter((c) => c.on)
+    .filter((c) => c.on && c.type !== "radio")
     .map((c) => c.name)
     .join(" | ")
     .toLowerCase();
@@ -295,15 +295,12 @@ type BoolCap =
 
 const CAPS: Array<{ key: BoolCap; re: RegExp; label: string }> = [
   { key: "lowTierProfile", re: /profile/i, label: "low-tier profile" },
-  { key: "skills", re: /skills?/i, label: "skills" },
-  { key: "preferences", re: /preferences?/i, label: "preferences" },
-  { key: "activityLogging", re: /activity/i, label: "activity logging" },
   { key: "sharedMemoryRead", re: /shared memor/i, label: "shared-memory read" },
   { key: "ownMemorySave", re: /own memor|save[^.|]*memor/i, label: "its own memories" },
   { key: "tasks", re: /tasks?/i, label: "tasks" },
   { key: "lifeAdmin", re: /life[\s-]?admin/i, label: "life-admin" },
   // Always opt-in — OFF in every starting set (Standard/Minimal/Custom alike).
-  { key: "highTier", re: /high[\s-]?tier/i, label: "high-tier requests" },
+  { key: "highTier", re: /protected identity/i, label: "protected identity requests" },
   { key: "card", re: /\bcard/i, label: "card requests" },
   { key: "learningSharing", re: /what it learns|shares? what|learns?\b/i, label: "sharing what it learns" },
 ];
@@ -536,18 +533,20 @@ function namedControls(markup: string) {
 
 test("A2: every adjustable toggle on the live form has a name the decision reads", () => {
   const names = new Set(namedControls(liveRender()).filter((c) => c.type === "checkbox").map((c) => c.name));
-  for (const name of ["identity", "memoryRead", "tasks", "records", "highTier", "card", "learningSharing", "service"]) {
+  for (const name of ["identity", "memoryRead", "memoryWrite", "tasks", "records", "highTier", "card", "learningSharing", "service"]) {
     assert.ok(names.has(name), `the live form submits "${name}"; got ${[...names].join(", ")}`);
   }
 });
 
-test("A2: the always-included rows are fixed (disabled, unnamed), never dead live controls", () => {
-  const controls = toggleControls(liveRender());
-  for (const re of [/your skills/i, /your preferences/i, /logging its activity/i, /save its own memories/i]) {
-    const control = controls.find((c) => re.test(c.name));
-    assert.ok(control, `a ${re} row is shown`);
-    assert.equal(control!.disabled, true, `${re} cannot be toggled on its own`);
-  }
+test("included connection behavior is explained without pretend permission switches", () => {
+  const markup = liveRender();
+  const text = visibleText(markup);
+  assert.match(text, /preferences and skills assigned to this agent/i);
+  assert.match(text, /records activity through this connection/i);
+  assert.ok(!namedControls(markup).some(control => control.disabled), "included behavior is prose, not dead switches");
+  const memoryWrite = namedControls(markup).find(control => control.name === "memoryWrite");
+  assert.equal(memoryWrite?.type, "checkbox");
+  assert.equal(memoryWrite?.disabled, false);
 });
 
 test("A2: ticked services submit their ids; un-ticked ones are present but unchecked", () => {
@@ -597,4 +596,17 @@ test("A2: switching the starting set re-seeds the toggles (Standard → Minimal 
     assert.equal(standard[optIn], false);
     assert.equal(minimal[optIn], false);
   }
+});
+
+
+test("Custom opens the editor and review accurately describes an explicit denial", () => {
+  const state = { ...consentToggleState("standard", []), memoryWrite: false, tasks: false };
+  const markup = renderToStaticMarkup(<ConsentView {...base({ template: "custom" })} initialState={state} />);
+  assert.match(markup, /<details[^>]*class="wh-permission-editor"[^>]*open/);
+  const summary = markup.slice(markup.indexOf('class="wh-permission-summary"'));
+  assert.doesNotMatch(summary, /<li>Save its own memories<\/li>/);
+  assert.doesNotMatch(summary, /<li>Manage your tasks<\/li>/);
+  assert.match(summary, /<li>Read shared memory<\/li>/);
+  assert.match(visibleText(markup), /does not verify the agent/);
+  assert.match(visibleText(markup), /cannot recall information already received/);
 });

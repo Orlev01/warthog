@@ -60,7 +60,7 @@ export interface ConsentServicesSource {
   readonly nameOf?: (connectorId: string) => string | undefined;
 }
 
-async function connectedServices(source: ConsentServicesSource, userId: string): Promise<ConsentViewService[]> {
+export async function connectedServices(source: ConsentServicesSource, userId: string): Promise<ConsentViewService[]> {
   const ids = [...new Set((await listConnectionsForUser(source.db, userId)).map((c) => c.connectorId))];
   return ids.map((id) => ({ id, name: source.nameOf?.(id) ?? id, ticked: false }));
 }
@@ -93,7 +93,7 @@ export async function loadConsentView(
     defaultName: platform,
     requestedScopes: REQUESTED_SCOPES,
     template: services ? (await getAgentDefaults(services.db, userId)).template : DEFAULT_TEMPLATE,
-    redirect: { host, verified },
+    redirect: { host: url.host, verified },
     ...(services ? { services: await connectedServices(services, userId) } : {}),
   };
 }
@@ -119,6 +119,7 @@ export function approvalFromForm(formData: FormData, platform: string): ConsentA
     template,
     identity: ticked("identity"),
     memoryRead: ticked("memoryRead"),
+    memoryWrite: ticked("memoryWrite"),
     tasks: ticked("tasks"),
     records: ticked("records"),
     highTier: ticked("highTier"),

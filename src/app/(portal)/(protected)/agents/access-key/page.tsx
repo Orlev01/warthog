@@ -11,6 +11,10 @@ import { systemRandom } from "@/server/seams/random";
 import { HttpError } from "@/server/http/validate";
 import { createAccessKeyActions, type AccessKeyInput, type CreateResult } from "./actions";
 import { AccessKeyFlow } from "@/components/agents/access-key-flow";
+import { connectedServices } from "@/app/oauth/consent/actions";
+import { getProcessCatalogue } from "@/server/connectors/catalogue";
+import { loadConfig } from "@/server/config";
+import { PageContainer } from "@/components/shell/page-container";
 
 // E10-S13 — Access-key page (the thin protected-page loader that mounts the access-key flow
 // over the already-tested `createAccessKeyActions` seam, `./actions`). A platform that
@@ -94,9 +98,11 @@ export default async function AccessKeyPage({
   }
 
   const defaults = await getAgentDefaults(db, session.userId);
+  const catalogue = getProcessCatalogue(loadConfig());
+  const services = await connectedServices({ db, nameOf: id => catalogue.get(id)?.name }, session.userId);
   return (
-    <div className="wh-page flex flex-col gap-6">
-      <AccessKeyFlow defaultTemplate={defaults.template} create={create} defaultName={defaultName} defaultPlatform={platformParam} />
-    </div>
+    <PageContainer className="flex flex-col gap-6">
+      <AccessKeyFlow services={services} defaultTemplate={defaults.template} create={create} defaultName={defaultName} defaultPlatform={platformParam} />
+    </PageContainer>
   );
 }

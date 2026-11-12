@@ -75,6 +75,11 @@ export interface AccessKeyInput {
   readonly platform: string;
   readonly template: string;
   readonly tickedServices?: readonly string[];
+  readonly identity?: boolean;
+  readonly memoryRead?: boolean;
+  readonly memoryWrite?: boolean;
+  readonly tasks?: boolean;
+  readonly records?: boolean;
   readonly highTier?: boolean;
   readonly card?: boolean;
   readonly cardBudget?: { amount: number; currency: string; period: string } | null;
@@ -128,6 +133,11 @@ const inputSchema = z
     platform: z.string().min(1).max(MAX_PLATFORM_LENGTH),
     template: z.enum(["minimal", "standard", "custom"]),
     tickedServices: z.array(z.string().max(MAX_SERVICE_LENGTH)).max(MAX_SERVICES).optional(),
+    identity: z.boolean().optional(),
+    memoryRead: z.boolean().optional(),
+    memoryWrite: z.boolean().optional(),
+    tasks: z.boolean().optional(),
+    records: z.boolean().optional(),
     highTier: z.boolean().optional(),
     card: z.boolean().optional(),
     cardBudget: cardBudgetSchema.nullable().optional(),

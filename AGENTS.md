@@ -18,6 +18,11 @@ and only the focused skills relevant to the change:
 These are contributor skills, separate from the application's user-authored Skills feature.
 Use the current checkout explicitly when other agents are working in another worktree.
 
+For consent and access-key setup, follow the
+[agent connection guidance](docs/design/agent-connection-consent.md). Include
+standalone consent, expired requests and the access-key alternative in UI reviews;
+these flows do not all inherit the workspace shell.
+
 For the signed-out landing page, also follow the
 [public front-door design](docs/design/public-front-door.md): its marketing
 hierarchy shares the console's tokens but has its own bounded composition.

@@ -17,6 +17,25 @@ import type { Session } from "../../../../../server/auth/session";
 
 const NOW = new Date("2026-06-01T00:00:00.000Z");
 
+test("custom access-key permissions persist explicit denials and independent memory write", async () => {
+  const db = await freshDb();
+  try {
+    const user = await createUser(db, { email: "ak-custom-edits@example.com", wrappedDek: "d3JhcHBlZA==" });
+    const actions = createAccessKeyActions({ db, clock: fixedClock(NOW), random: systemRandom });
+    assert.ok((await actions.create(sessionFor(user.id), {
+      name: "Research", platform: "Other", template: "custom",
+      identity: false, memoryRead: true, memoryWrite: false, tasks: false, records: false,
+    })).ok);
+    const [agent] = await listAgentsForUser(db, user.id);
+    const grants = await getConnectionPermissions(db, user.id, agent!.connectionId);
+    assert.equal(grants?.identityAccess, false);
+    assert.equal(grants?.memoryRead, true);
+    assert.equal(grants?.memoryWrite, false);
+    assert.equal(grants?.tasksAccess, false);
+    assert.equal(grants?.recordsAccess, false);
+  } finally { await db.close(); }
+});
+
 function sessionFor(userId: string): Session {
   return { id: `sess-${userId}`, userId, createdAt: NOW, lastSeenAt: NOW, steppedUpAt: null };
 }
