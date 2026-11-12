@@ -116,10 +116,10 @@ const HOME_ACTIVITY_ROWS = 8;
 const HOME_REMINDER_ROWS = 5;
 
 const OUTCOME_ICONS: Partial<Record<OutcomeGroup, { Icon: LucideIcon; tone: string }>> = {
-  done: { Icon: CheckCircle, tone: "text-success" },
-  waiting: { Icon: Clock, tone: "text-fg-muted" },
-  blocked: { Icon: Ban, tone: "text-danger" },
-  failed: { Icon: AlertTriangle, tone: "text-danger" },
+  done: { Icon: CheckCircle, tone: "wh-tone-success" },
+  waiting: { Icon: Clock, tone: "wh-tone-warning" },
+  blocked: { Icon: Ban, tone: "wh-tone-danger" },
+  failed: { Icon: AlertTriangle, tone: "wh-tone-danger" },
 };
 
 
@@ -208,8 +208,8 @@ export function DashboardView({
                       ) : null}
                       <div className="wh-timeline-meta">
                         {entry.outcome ? (
-                          <span className="inline-flex items-center gap-1 rounded-full bg-surface-muted px-2 py-0.5 font-medium text-fg">
-                            {icon ? <icon.Icon aria-hidden={true} className={`h-3.5 w-3.5 shrink-0 ${icon.tone}`} /> : null}
+                          <span className={`wh-tone-badge ${icon ? icon.tone : "wh-tone-neutral"}`}>
+                            {icon ? <icon.Icon aria-hidden={true} className="h-3.5 w-3.5 shrink-0" /> : null}
                             {entry.outcome}
                           </span>
                         ) : null}
