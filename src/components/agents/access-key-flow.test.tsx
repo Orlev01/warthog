@@ -545,6 +545,21 @@ test("AC1 — the issued panel warns the key is shown only once", () => {
   );
 });
 
+// interaction-07 follow-up — a lost or leaked key is replaced or revoked from the agent's
+// Settings, so the issued panel points there instead of telling the person to disconnect.
+test("the issued panel points to the agent's Settings to replace or revoke the key", () => {
+  const markup = renderIssued();
+  const text = visibleText(markup);
+  assert.match(text, /replace it/i, `text="${text}"`);
+  assert.match(text, /revoke/i, `text="${text}"`);
+  assert.match(text, /old key stops working/i, `text="${text}"`);
+  assert.ok(
+    findAll(markup, "a").some((a) => attr(a.attrs, "href") === `/agents/${ISSUED_AGENT_ID}?section=settings`),
+    "a link to this agent's Settings section",
+  );
+  assert.doesNotMatch(text, /disconnect this agent/i, "disconnecting is no longer the way to stop a key");
+});
+
 // ─── design system + plain-copy discipline ─────────────────────────────────────────────
 
 test("uses design tokens, never a raw hex colour (create surface + issued panel)", () => {

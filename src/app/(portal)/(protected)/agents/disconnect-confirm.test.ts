@@ -47,7 +47,7 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
 
-import { createDisconnectConfirm } from "./disconnect-confirm";
+import { confirmKeyHint, createDisconnectConfirm } from "./disconnect-confirm";
 
 // The agent id the view's hidden field carries into the submitted form — the disconnect
 // action must receive it so it disconnects the right agent.
@@ -151,4 +151,17 @@ test("a cancelled confirm does NOT run the disconnect (but still asked exactly o
   assert.equal(h.confirmCalls, 1, "a single confirm is asked even when the person cancels");
   assert.deepEqual(h.order, ["confirm"], "a cancelled confirm must NOT run the disconnect");
   assert.equal(h.received, null, "the disconnect action is never called when the person cancels");
+});
+
+// interaction-07 follow-up — someone disconnecting an access-key agent to get rid of a lost
+// key is pointed at the gentler fix: replacing the key in the agent's Settings. Agents
+// without a working access key (OAuth ones) get no such line.
+test("the confirmation points an access-key agent at replacing its key instead", () => {
+  const hint = confirmKeyHint({ id: AGENT_ID, accessKey: true });
+  assert.ok(hint, "an access-key agent gets the hint");
+  assert.match(hint!.text, /replace it in this agent’s Settings instead/i);
+  assert.equal(hint!.href, `/agents/${AGENT_ID}?section=settings`);
+  assert.equal(confirmKeyHint({ id: AGENT_ID, accessKey: false }), null);
+  assert.equal(confirmKeyHint({ id: AGENT_ID }), null);
+  assert.equal(confirmKeyHint(undefined), null);
 });

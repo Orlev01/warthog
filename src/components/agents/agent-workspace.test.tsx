@@ -123,8 +123,10 @@ test("the agent header shows its state with the shared Status and the platform i
   assert.match(text(html), /Connected · Developer console · 13 requests/);
   assert.doesNotMatch(text(html), /dev-console/);
   const off = renderToStaticMarkup(<AgentWorkspaceHeader data={workspaceData({ status: "disconnected" })} section="overview" />);
-  assert.match(text(off), /Reconnect needed/);
+  assert.match(text(off), /\bDisconnected\b/);
+  assert.doesNotMatch(text(off), /Reconnect needed/, "there is no reconnecting a disconnected agent");
   assert.match(off, /href="\/agents\/connect"[^>]*>Connect it again/, "a disconnected agent offers the way back");
+  assert.match(text(off), /Connecting it again adds it as a new agent/, "and says it comes back as a new agent");
 });
 
 test("the Overview leads with a plain summary and folds the diagnostics away", () => {

@@ -516,7 +516,7 @@ export function PermissionsView({
 
       {section !== "rules" && readOnly ? (
         // A disconnected agent: nothing here can be saved, and the bar says why.
-        <ActionBar note="This agent is disconnected, so its access can’t be changed. Connect it again to set what it can use.">
+        <ActionBar note="This agent is disconnected, so its access can’t be changed. Connecting it again adds it as a new agent, with its own settings.">
           <ButtonLink href="/agents/connect" size="sm">Connect it again</ButtonLink>
         </ActionBar>
       ) : section !== "rules" ? (

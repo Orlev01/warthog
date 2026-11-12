@@ -16,10 +16,12 @@ import {
 import * as React from "react";
 import { cookies } from "next/headers";
 import { notFound, redirect } from "next/navigation";
+import { revalidatePath } from "next/cache";
 
 import { getServerDb } from "@/server/db/server";
 import { verifySession, type Session } from "@/server/auth/session";
 import { systemClock } from "@/server/seams/clock";
+import { systemRandom } from "@/server/seams/random";
 import { HttpError } from "@/server/http/validate";
 import { getProcessCatalogue } from "@/server/connectors/catalogue";
 import { loadConfig } from "@/server/config";
@@ -30,6 +32,8 @@ import {
   type SaveResult,
 } from "./actions";
 import { PermissionsForm } from "./permissions-form";
+import { createAccessKeyActions, type ReplaceResult, type RevokeResult } from "../access-key/actions";
+import { AccessKeyPanel } from "@/components/agents/access-key-panel";
 import type { Db } from "@/server/db/index";
 
 // E10-S08 — Per-agent permissions page (the thin loader + save server action over the
@@ -93,6 +97,52 @@ async function savePermissions(
   } catch (error) {
     if (error instanceof HttpError)
       return { ok: false, reason: "invalid_request" };
+    throw error;
+  }
+}
+
+// Replace or revoke this agent's access key, from the "Access key" panel in its Settings
+// section. Thin "use server" wrappers over the tested access-key actions: re-derive the
+// verified session (never a client value), act only on that person's own agent (the bound
+// id is re-validated and member-scoped by the actions), and report every outcome. The new
+// key goes back to the panel once, to be shown once; it is never logged. A malformed id is
+// a 4xx at the actions' boundary, reported as a plain refusal.
+function accessKeyActions(db: Db) {
+  const config = loadConfig();
+  return createAccessKeyActions({
+    db,
+    keyWrapper: selectKeyWrapper({ nodeEnv: config.nodeEnv, localKek: config.devKek }),
+    clock: systemClock,
+    random: systemRandom,
+  });
+}
+
+async function replaceAccessKey(agentId: string): Promise<ReplaceResult> {
+  "use server";
+  const db = await getServerDb();
+  const session = await resolveSession(db);
+  if (!session) return { ok: false, reason: "unauthenticated" };
+  try {
+    const result = await accessKeyActions(db).replace(session, agentId);
+    if (result.ok) revalidatePath(`/agents/${agentId}`);
+    return result;
+  } catch (error) {
+    if (error instanceof HttpError) return { ok: false, reason: "invalid" };
+    throw error;
+  }
+}
+
+async function revokeAccessKey(agentId: string): Promise<RevokeResult> {
+  "use server";
+  const db = await getServerDb();
+  const session = await resolveSession(db);
+  if (!session) return { ok: false, reason: "unauthenticated" };
+  try {
+    const result = await accessKeyActions(db).revoke(session, agentId);
+    if (result.ok) revalidatePath(`/agents/${agentId}`);
+    return result;
+  } catch (error) {
+    if (error instanceof HttpError) return { ok: false, reason: "invalid" };
     throw error;
   }
 }
@@ -226,6 +276,16 @@ export default async function AgentPermissionsPage({
                 save={savePermissions.bind(null, id)}
               />
             </fieldset>
+          ) : null}
+          {section === "settings" && data.accessKey ? (
+            // Only an agent connected with a Warthog access key (never an OAuth one), and
+            // only while it is connected: a disconnect already revoked its key.
+            <AccessKeyPanel
+              agentName={data.agent.displayName}
+              state={data.accessKey}
+              replace={replaceAccessKey.bind(null, id)}
+              revoke={revokeAccessKey.bind(null, id)}
+            />
           ) : null}
           {firstPage || nextPage ? (
             <nav aria-label={section === "memory" ? "Memory pages" : "Skill pages"} className="wh-form-actions">

@@ -26,8 +26,8 @@ import { PageContainer } from "@/components/shell/page-container";
 // This entry reads the signed-in session from the host-locked `__Host-wh_session` cookie
 // and mounts <AccessKeyFlow/>, giving it a `create` server action over the tested seam. The
 // flow names the agent and picks its starting set on ONE screen, creates the key and shows
-// it ONCE with a Copy control. There is no separate revoke / replace control yet: a key
-// stops working when its agent is disconnected from the agent's page (interaction-07).
+// it ONCE with a Copy control. The key is replaced or revoked later from the "Access key"
+// panel in that agent's Settings section (`agents/[id]/page.tsx`, interaction-07).
 //
 // Thin by design (the server-composition-roots addendum): per-request data (search params,
 // then the cookie) is read BEFORE `getServerDb()` so `next build` marks the page dynamic and

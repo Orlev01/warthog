@@ -1,13 +1,13 @@
 "use client";
 
 import * as React from "react";
-import { KeyRound, TriangleAlert } from "lucide-react";
+import { KeyRound } from "lucide-react";
 
 import { Button } from "@/components/ui/button";
 import { ButtonLink } from "@/components/ui/button-link";
 import { Field } from "@/components/ui/field";
 import { Notice } from "@/components/ui/notice";
-import { CopyButton } from "@/components/ui/copy-button";
+import { IssuedKey } from "./issued-key";
 import { ConnectionPermissions, ConnectionAccessSummary } from "./connection-permissions";
 import { connectionChoices, connectionChoiceInput, type ConnectionChoices, type ConnectionService } from "@/domain/permissions/connection-choices";
 
@@ -15,9 +15,9 @@ import { connectionChoices, connectionChoiceInput, type ConnectionChoices, type 
 // the standard connector sign-in, 'Create an access key' lets the person name the agent
 // and set its permissions on the same screen as the consent screen, shows the key once
 // with a copy button, and lets them revoke or replace the key later"; design §6.1;
-// today a key is revoked by disconnecting its agent — there is no separate replace
-// control yet, so the copy says exactly that (interaction-07);
-// constitution 16 — each agent has its own revocable credential, a per-agent access key
+// the key is replaced or revoked later from the "Access key" panel in that agent's
+// Settings section (`access-key-panel.tsx`), and the issued panel points there
+// (interaction-07); constitution 16 — each agent has its own revocable credential, a per-agent access key
 // where a platform cannot use the connector flow).
 //
 // The `/agents/access-key` page mounts this flow over the already-built, already-tested
@@ -189,20 +189,18 @@ function IssuedPanel({ keyValue, agentId }: { keyValue: string; agentId?: string
 
       <section className="wh-connection-section" aria-labelledby="access-key-issued-heading">
         <h2 id="access-key-issued-heading" className="sr-only">Your access key</h2>
-        <div className="flex flex-col gap-2 sm:flex-row sm:items-center">
-          <code className="block min-w-0 flex-1 select-all overflow-x-auto rounded-field bg-surface-muted px-3 py-2 font-mono text-sm text-fg [overflow-wrap:anywhere]">
-            {keyValue}
-          </code>
-          <CopyButton value={keyValue} label="access key" successMessage="Access key copied. Paste it into your agent, then clear your clipboard." />
-        </div>
-        <p className="inline-flex items-start gap-2 text-sm font-medium text-warning">
-          <TriangleAlert aria-hidden={true} className="mt-0.5 h-4 w-4 shrink-0" />
-          Copy it now — for your security this key won&rsquo;t be shown again.
-        </p>
+        <IssuedKey keyValue={keyValue} />
         <p className="wh-connection-help">
           Add it in your agent&rsquo;s connector or access-key settings. If the key is lost or
-          shared by mistake, disconnect this agent from its page in Agents — that stops the key
-          working — then create a new one.
+          shared by mistake, replace it in{" "}
+          {agentId ? (
+            <a href={`/agents/${encodeURIComponent(agentId)}?section=settings`} className="font-medium text-fg underline underline-offset-4">
+              this agent&rsquo;s Settings
+            </a>
+          ) : (
+            "this agent’s Settings in Agents"
+          )}
+          : the old key stops working straight away. You can revoke it there too.
         </p>
       </section>
 

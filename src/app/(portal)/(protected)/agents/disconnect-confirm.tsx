@@ -37,6 +37,17 @@ export interface DisconnectConfirmDeps {
 export const CONFIRM_MESSAGE =
   "It loses access straight away. Requests waiting for your approval are denied, and any card or detail it hasn't collected yet is cancelled. To use it again, you'll need to connect it from the start.";
 
+// For an agent holding a working access key: if the person only wants rid of a lost or
+// shared key, replacing it is the gentler fix, and it keeps the agent. Null for any other
+// agent (an OAuth agent has no access key).
+export function confirmKeyHint(agent?: { id: string; accessKey?: boolean } | null): { text: string; href: string } | null {
+  if (!agent?.accessKey) return null;
+  return {
+    text: "If you only need a new access key, replace it in this agent’s Settings instead. It keeps its permissions and history.",
+    href: `/agents/${encodeURIComponent(agent.id)}?section=settings`,
+  };
+}
+
 // The dialog's question, naming the agent when its name is known.
 export function confirmTitle(name?: string | null): string {
   const named = name?.trim();
@@ -67,6 +78,8 @@ export interface AgentsScreenProps {
 export function AgentsScreen({ agents, disconnect, notice }: AgentsScreenProps) {
   const dialog = React.useRef<HTMLDialogElement>(null);
   const title = React.useRef<HTMLHeadingElement>(null);
+  const hint = React.useRef<HTMLParagraphElement>(null);
+  const hintLink = React.useRef<HTMLAnchorElement>(null);
   const decision = React.useRef<((approved: boolean) => void) | null>(null);
   const titleId = React.useId();
   const descriptionId = React.useId();
@@ -88,7 +101,11 @@ export function AgentsScreen({ agents, disconnect, notice }: AgentsScreenProps) 
       // promise, so opening through state would deadlock the confirmation. The agent's
       // name is written straight into the title for the same reason.
       const id = formData?.get("agentId");
-      if (title.current) title.current.textContent = confirmTitle(agents.find((agent) => agent.id === id)?.name);
+      const agent = agents.find((candidate) => candidate.id === id);
+      if (title.current) title.current.textContent = confirmTitle(agent?.name);
+      const keyHint = confirmKeyHint(agent);
+      if (hint.current) hint.current.hidden = keyHint === null;
+      if (keyHint && hintLink.current) hintLink.current.href = keyHint.href;
       if (!modal.open) modal.showModal();
     }),
   });
@@ -101,6 +118,12 @@ export function AgentsScreen({ agents, disconnect, notice }: AgentsScreenProps) 
           plain consequences, the safe choice first and focused, the final step danger-solid. */}
       <h2 ref={title} id={titleId} className="wh-section-title [overflow-wrap:anywhere]">{confirmTitle()}</h2>
       <p id={descriptionId} className="mt-3 text-sm text-fg-muted">{CONFIRM_MESSAGE}</p>
+      {/* Shown only for an agent with a working access key (set as the dialog opens). */}
+      <p ref={hint} hidden className="mt-2 text-sm text-fg-muted">
+        If you only need a new access key,{" "}
+        <a ref={hintLink} href="/agents" className="font-medium text-fg underline underline-offset-4">replace it in this agent&rsquo;s Settings</a>{" "}
+        instead. It keeps its permissions and history.
+      </p>
       <div className="mt-6 flex flex-col-reverse gap-3 sm:flex-row sm:justify-end">
         <Button autoFocus variant="secondary" onClick={() => finish(false)}>Keep connected</Button>
         <Button variant="danger-solid" onClick={() => finish(true)}>Disconnect agent</Button>

@@ -57,7 +57,7 @@ export function AgentWorkspaceHeader({
           {/* The state with its icon and colour (as <Status> shows it everywhere), then the
               platform in words and the request count as plain meta. */}
           <p className="mt-1 flex flex-wrap items-center gap-x-3 gap-y-1 text-sm text-fg-muted sm:gap-x-2">
-            <Status status={connected ? "connected" : "needs-reconnect"} />
+            <Status status={connected ? "connected" : "disconnected"} />
             {platform ? <><span aria-hidden className="hidden sm:inline">·</span><span>{platform}</span></> : null}
             <span aria-hidden className="hidden sm:inline">·</span>
             <span>{plural(data.agent.requestCount, "request", "requests")}</span>
@@ -76,12 +76,14 @@ export function AgentWorkspaceHeader({
       </div>
       {!connected ? (
         // A disconnected agent is a dead end without the way back (interaction-08): say what
-        // it means here, and offer the one route there is — connecting it from the start.
+        // it means here, and offer the one route there is — connecting it from the start,
+        // which adds a new agent (there is no reviving this connection).
         <Notice tone="info" announce={false}>
           <div className="flex flex-col items-start gap-3">
             <p>
               This agent is disconnected, so it can&rsquo;t use anything in Warthog. Its
-              settings are shown read-only, and its history stays in Activity.
+              settings are shown read-only, and its history stays in Activity. Connecting it
+              again adds it as a new agent.
             </p>
             <ButtonLink href="/agents/connect" size="sm">
               Connect it again
