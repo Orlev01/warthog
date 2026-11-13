@@ -2,6 +2,7 @@ import { createHash, createHmac } from "node:crypto";
 import { EmailClient } from "@azure/communication-email";
 import type { EmailSender, OutgoingMessage, SmsSender } from "./senders";
 import { systemClock } from "../seams/clock";
+import { renderMessageEmail } from "./email";
 
 const PHONE = /^\+[1-9]\d{7,14}$/;
 const EMAIL = /^[^\s@<>]+@[^\s@<>]+\.[^\s@<>]+$/;
@@ -80,17 +81,20 @@ export function createAcsSmsSender(deps: {
 }
 
 interface EmailTransport {
-  beginSend(message: { senderAddress: string; recipients: { to: { address: string }[] }; content: { subject: string; plainText: string } },
+  beginSend(message: { senderAddress: string; recipients: { to: { address: string }[] }; content: { subject: string; plainText: string; html: string } },
     options?: { abortSignal: AbortSignal }): Promise<{ pollUntilDone(): Promise<{ status?: string }> }>;
 }
 
+// Not wired into production (Resend sends email there); kept consistent with it: every email
+// is the branded HTML and text from ./email.
 export function createAcsEmailSender(deps: {
-  senderAddress: string; connectionString?: string; client?: EmailTransport;
+  senderAddress: string; connectionString?: string; client?: EmailTransport; logoUrl?: string;
 }): EmailSender {
   if (!EMAIL.test(deps.senderAddress)) throw new Error("Invalid ACS email sender configuration");
   let client = deps.client;
   return { async sendEmail(message) {
     if (!EMAIL.test(message.recipient) || message.recipient.length > 320) throw new Error("Invalid email recipient");
+    const { subject, html, text } = renderMessageEmail(message, { logoUrl: deps.logoUrl });
     try {
       if (!client) {
         if (!deps.connectionString) throw new Error();
@@ -98,7 +102,7 @@ export function createAcsEmailSender(deps: {
       }
       const poller = await client.beginSend({ senderAddress: deps.senderAddress,
         recipients: { to: [{ address: message.recipient }] },
-        content: { subject: "Warthog", plainText: content(message) } }, { abortSignal: AbortSignal.timeout(30_000) });
+        content: { subject, plainText: text, html } }, { abortSignal: AbortSignal.timeout(30_000) });
       const result = await poller.pollUntilDone();
       if (result.status !== "Succeeded") throw new Error();
     } catch {

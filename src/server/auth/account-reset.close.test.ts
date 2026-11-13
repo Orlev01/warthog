@@ -24,6 +24,7 @@ import {
 } from "./account-reset";
 import { beginPasskeyRegistration } from "./passkey";
 import { createUser, type User } from "../db/users";
+import { renderEmail } from "../notify/email";
 import { createOutbox, type Outbox } from "../notify/outbox";
 import { systemRandom } from "../seams/random";
 import { fixedClock, type Clock } from "../seams/clock";
@@ -108,6 +109,29 @@ test("completing a reset alerts push, email and each verified mobile once", asyn
     // A retried or duplicate completion transitions nothing and sends nothing.
     assert.equal((await completeAccountReset(db, { userId: person.id }, completeDeps(outbox))).ok, false);
     assert.equal(outbox.list().length, sent.length, "no second alert");
+  } finally {
+    await db.close();
+  }
+});
+
+
+test("the reset-finished email is branded and keeps the 7-day warning, how to close it and the support address", async () => {
+  const db = await freshDb();
+  try {
+    const person = await freshUser(db, "complete-branded");
+    await setReset(db, person.id, "pending");
+    const outbox = createOutbox();
+    await completeAccountReset(db, { userId: person.id }, completeDeps(outbox));
+    const email = outbox.list().find((m) => m.channel === "email")!.email!;
+    assert.equal(email.subject, "Your Warthog account reset has finished");
+    assert.equal(email.heading, "Your account reset has finished");
+    const text = email.paragraphs.join(" ");
+    assert.match(text, /saved cards and protected details were erased/);
+    assert.match(text, /For the next 7 days/);
+    assert.match(text, /This wasn't me — close re-enrolment/);
+    assert.ok(text.includes(SUPPORT_EMAIL));
+    assert.equal(email.action, undefined, "no link");
+    assert.doesNotMatch(renderEmail(email).html, /href=/);
   } finally {
     await db.close();
   }

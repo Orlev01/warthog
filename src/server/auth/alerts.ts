@@ -25,6 +25,7 @@
 import { redact } from "../../domain/redaction/redact";
 import { getUserById } from "../db/users";
 import type { EmailSender } from "../notify/senders";
+import { mapEmailText, SECURITY_ALERT_FOOTNOTE, type EmailContent } from "../notify/email";
 import type { Db } from "../db/index";
 import { SUPPORT_EMAIL } from "../../components/public/operator";
 
@@ -41,14 +42,38 @@ function scrub(body: string): string {
   return redact(body, () => false) as string;
 }
 
+// An alert is its plain-text body (the outbox's and any plain reader's copy) plus the
+// branded email it renders as. An alert email never carries a code or a button: it tells
+// the person to sign in themselves rather than follow a link (anti-phishing).
+interface Alert {
+  readonly body: string;
+  readonly email: Omit<EmailContent, "code" | "action">;
+}
+
+// Untrusted free text (an agent's name, a device label) shown in an alert email: on one
+// line and shortened, so it can't push the fixed copy around or fake a line of its own. It is
+// scrubbed BEFORE it is cut: a cut through a card number would hide the card from the
+// card rules and leave its leading digits in the alert.
+const ALERT_NAME_CHARS = 60;
+function shortName(name: string): string {
+  const plain = scrub(name).replace(/\s+/g, " ").trim();
+  return plain.length > ALERT_NAME_CHARS ? `${plain.slice(0, ALERT_NAME_CHARS).trimEnd()}…` : plain;
+}
+
+// An agent's name is also quoted, so it can't pass for our own words.
+function quotedAgentName(name: string): string {
+  return `"${shortName(name.replaceAll('"', "'"))}"`;
+}
+
 // Resolve the person by the session's `userId` and send exactly one email to
-// that person's own address, with the body scrubbed through redaction first. A
-// missing person is a programming error (the id comes from an authenticated
-// session), reported rather than failing silently.
-async function sendAlert(db: Db, userId: string, body: string, deps: AlertDeps): Promise<void> {
+// that person's own address, with the body and every text field of the email scrubbed
+// through redaction first. A missing person is a programming error (the id comes from an
+// authenticated session), reported rather than failing silently.
+async function sendAlert(db: Db, userId: string, alert: Alert, deps: AlertDeps): Promise<void> {
   const person = await getUserById(db, userId);
   if (!person) throw new Error("alert: no person for the session userId");
-  await deps.emailSender.sendEmail({ recipient: person.email, body: scrub(body) });
+  const email = mapEmailText({ ...alert.email, footnote: alert.email.footnote ?? SECURITY_ALERT_FOOTNOTE }, scrub);
+  await deps.emailSender.sendEmail({ recipient: person.email, body: scrub(alert.body), email });
 }
 
 // Send an alert without letting a delivery failure fail the security event it reports.
@@ -69,13 +94,19 @@ export async function alertNewPasskey(
   { userId }: { userId: string },
   deps: AlertDeps,
 ): Promise<void> {
-  await sendAlert(
-    db,
-    userId,
-    "A new passkey was added to your Warthog account. " +
+  await sendAlert(db, userId, {
+    body:
+      "A new passkey was added to your Warthog account. " +
       "If this wasn't you, sign in and remove it, then contact support.",
-    deps,
-  );
+    email: {
+      subject: "New passkey added",
+      heading: "A new passkey was added",
+      paragraphs: [
+        "A new passkey was added to your Warthog account.",
+        `If this wasn't you, sign in and remove it, then email ${SUPPORT_EMAIL}.`,
+      ],
+    },
+  }, deps);
 }
 
 // An authenticator app was set up from Settings › Security (follow-up S1): the same kind of
@@ -85,14 +116,22 @@ export async function alertNewAuthenticator(
   { userId }: { userId: string },
   deps: AlertDeps,
 ): Promise<void> {
-  await sendAlert(
-    db,
-    userId,
-    "An authenticator app was added to your Warthog account. You can now sign in with your email " +
+  await sendAlert(db, userId, {
+    body:
+      "An authenticator app was added to your Warthog account. You can now sign in with your email " +
       "and a code from the app. If this wasn't you, sign in, sign out every device you don't " +
       `recognise and email ${SUPPORT_EMAIL} straight away.`,
-    deps,
-  );
+    email: {
+      subject: "Authenticator app added",
+      heading: "An authenticator app was added",
+      paragraphs: [
+        "An authenticator app was added to your Warthog account. You can now sign in with your " +
+          "email and a code from the app.",
+        "If this wasn't you, sign in, sign out every device you don't recognise and email " +
+          `${SUPPORT_EMAIL} straight away.`,
+      ],
+    },
+  }, deps);
 }
 
 // The authenticator app was removed from Settings › Security (sign-in audit, founder
@@ -103,14 +142,22 @@ export async function alertAuthenticatorRemoved(
   { userId }: { userId: string },
   deps: AlertDeps,
 ): Promise<void> {
-  await sendAlert(
-    db,
-    userId,
-    "An authenticator app was removed from your Warthog account. Codes from it no longer sign you " +
+  await sendAlert(db, userId, {
+    body:
+      "An authenticator app was removed from your Warthog account. Codes from it no longer sign you " +
       "in or confirm it's you; your passkeys still do. If this wasn't you, sign in, sign out every " +
       `device you don't recognise and email ${SUPPORT_EMAIL} straight away.`,
-    deps,
-  );
+    email: {
+      subject: "Authenticator app removed",
+      heading: "An authenticator app was removed",
+      paragraphs: [
+        "An authenticator app was removed from your Warthog account. Codes from it no longer sign " +
+          "you in or confirm it's you, but your passkeys still do.",
+        "If this wasn't you, sign in, sign out every device you don't recognise and email " +
+          `${SUPPORT_EMAIL} straight away.`,
+      ],
+    },
+  }, deps);
 }
 
 // A new agent connected. `agentName` is untrusted free text, so the scrub pass
@@ -120,13 +167,19 @@ export async function alertNewAgentConnection(
   { userId, agentName }: { userId: string; agentName: string },
   deps: AlertDeps,
 ): Promise<void> {
-  await sendAlert(
-    db,
-    userId,
-    `A new agent connected to your Warthog account: ${agentName}. ` +
+  await sendAlert(db, userId, {
+    body:
+      `A new agent connected to your Warthog account: ${agentName}. ` +
       "If you didn't connect it, sign in and revoke it.",
-    deps,
-  );
+    email: {
+      subject: "New agent connected",
+      heading: "A new agent connected",
+      paragraphs: [
+        `A new agent connected to your Warthog account: ${quotedAgentName(agentName)}.`,
+        "If you didn't connect it, sign in and revoke it.",
+      ],
+    },
+  }, deps);
 }
 
 // A sign-in from a new device. `deviceLabel` is untrusted free text, so the
@@ -139,13 +192,20 @@ export async function alertAccessKeyReplaced(
   { userId, agentName }: { userId: string; agentName: string },
   deps: AlertDeps,
 ): Promise<void> {
-  await sendAlert(
-    db,
-    userId,
-    `A new access key was made for ${agentName} on your Warthog account, and its old key ` +
+  await sendAlert(db, userId, {
+    body:
+      `A new access key was made for ${agentName} on your Warthog account, and its old key ` +
       "stopped working. If you didn't do this, sign in and revoke the key.",
-    deps,
-  );
+    email: {
+      subject: "Agent access key replaced",
+      heading: "An agent's access key was replaced",
+      paragraphs: [
+        `A new access key was made for ${quotedAgentName(agentName)} on your Warthog account, and its ` +
+          "old key stopped working.",
+        "If you didn't do this, sign in and revoke the key.",
+      ],
+    },
+  }, deps);
 }
 
 export async function alertNewDeviceSignIn(
@@ -153,13 +213,19 @@ export async function alertNewDeviceSignIn(
   { userId, deviceLabel }: { userId: string; deviceLabel: string },
   deps: AlertDeps,
 ): Promise<void> {
-  await sendAlert(
-    db,
-    userId,
-    `Your Warthog account was signed in to from a new device: ${deviceLabel}. ` +
+  await sendAlert(db, userId, {
+    body:
+      `Your Warthog account was signed in to from a new device: ${deviceLabel}. ` +
       "If this wasn't you, sign in and sign out all devices.",
-    deps,
-  );
+    email: {
+      subject: "New device signed in",
+      heading: "A new device signed in",
+      paragraphs: [
+        `Your Warthog account was signed in to from a new device: ${shortName(deviceLabel)}.`,
+        "If this wasn't you, sign in and sign out all devices.",
+      ],
+    },
+  }, deps);
 }
 
 // The account was recovered with its recovery code (the brief's recovery: email code
@@ -172,13 +238,6 @@ export async function alertNewDeviceSignIn(
 // first, and the names are quoted, shortened and capped so they can't crowd either out.
 // Carries no code, token or credential.
 const RECOVERY_ALERT_AGENTS = 5;
-const RECOVERY_ALERT_NAME_CHARS = 60;
-
-function quotedAgentName(name: string): string {
-  const plain = name.replaceAll('"', "'").replace(/\s+/g, " ").trim();
-  const short = plain.length > RECOVERY_ALERT_NAME_CHARS ? `${plain.slice(0, RECOVERY_ALERT_NAME_CHARS).trimEnd()}…` : plain;
-  return `"${short}"`;
-}
 
 export async function alertAccountRecovered(
   db: Db,
@@ -191,16 +250,27 @@ export async function alertAccountRecovered(
     ? `These agents are still connected and can still use your account: ${shown}${more > 0 ? ` and ${more} more` : ""}. ` +
       "If you don't recognise one, sign in and disconnect it from Agents, or replace its key in its settings."
     : "No agents are connected to your account.";
-  await sendAlert(
-    db,
-    userId,
-    "Your Warthog account was recovered using your recovery code. A new passkey was added, your " +
+  // The email keeps the body's order: what happened and the support address first, the
+  // (untrusted, quoted, capped) agent names last.
+  await sendAlert(db, userId, {
+    body:
+      "Your Warthog account was recovered using your recovery code. A new passkey was added, your " +
       "old passkeys and authenticator app were removed, and every device was signed out. A new " +
       "recovery code was issued, so your old recovery code no longer works. " +
       `If this wasn't you, email ${SUPPORT_EMAIL} straight away. ` +
       agents,
-    deps,
-  );
+    email: {
+      subject: "Your Warthog account was recovered",
+      heading: "Your account was recovered",
+      paragraphs: [
+        "Your Warthog account was recovered using your recovery code. A new passkey was added, " +
+          "your old passkeys and authenticator app were removed, and every device was signed out. " +
+          "A new recovery code was issued, so your old recovery code no longer works.",
+        `If this wasn't you, email ${SUPPORT_EMAIL} straight away.`,
+        agents,
+      ],
+    },
+  }, deps);
 }
 
 // A new passkey was set up after a completed account reset (review fix W5). The reset
@@ -212,12 +282,20 @@ export async function alertAccountReenrolled(
   { userId }: { userId: string },
   deps: AlertDeps,
 ): Promise<void> {
-  await sendAlert(
-    db,
-    userId,
-    "A new passkey was set up on your Warthog account after its reset. Your old passkeys and " +
+  await sendAlert(db, userId, {
+    body:
+      "A new passkey was set up on your Warthog account after its reset. Your old passkeys and " +
       "old recovery code no longer work, every other device was signed out and a new recovery " +
       "code was issued. If this wasn't you, contact support straight away.",
-    deps,
-  );
+    email: {
+      subject: "New passkey set up after your reset",
+      heading: "A new passkey was set up after your reset",
+      paragraphs: [
+        "A new passkey was set up on your Warthog account after its reset. Your old passkeys and " +
+          "old recovery code no longer work, every other device was signed out and a new " +
+          "recovery code was issued.",
+        `If this wasn't you, email ${SUPPORT_EMAIL} straight away.`,
+      ],
+    },
+  }, deps);
 }

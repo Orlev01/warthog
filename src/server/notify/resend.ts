@@ -1,6 +1,7 @@
 import { domainToASCII } from "node:url";
 import { randomUUID } from "node:crypto";
 import type { EmailSender } from "./senders";
+import { renderMessageEmail } from "./email";
 
 // International destinations are allowed. SMTPUTF8 local parts are not supported
 // by this adapter; use an ASCII mailbox local part (IDN domains are normalized).
@@ -17,8 +18,11 @@ export function isMessagingEmail(value: string | undefined): boolean {
   try { normaliseMessagingEmail(value ?? ""); return true; } catch { return false; }
 }
 
+// Every email is branded: the message's own `email` content, or the generic layout built
+// from its body and link (./email). `logoUrl` is the hosted Warthog mark; without it the
+// header is the text wordmark alone.
 export function createResendEmailSender(deps: {
-  apiKey?: string; from?: string; sendingDomain?: string; replyTo?: string; fetch?: typeof fetch;
+  apiKey?: string; from?: string; sendingDomain?: string; replyTo?: string; fetch?: typeof fetch; logoUrl?: string;
 }): EmailSender {
   if (!isMessagingEmail(deps.from)) throw new Error("Invalid configuration: RESEND_FROM_ADDRESS");
   // A provider-verified sender domain is independent of the passkey RP ID. Only
@@ -34,12 +38,12 @@ export function createResendEmailSender(deps: {
   if (!deps.apiKey || /\s/.test(deps.apiKey)) throw new Error("Invalid configuration: RESEND_API_KEY");
   return { async sendEmail(message) {
     const recipient = normaliseMessagingEmail(message.recipient);
+    const { subject, html, text } = renderMessageEmail(message, { logoUrl: deps.logoUrl });
     try {
       const response = await (deps.fetch ?? fetch)("https://api.resend.com/emails", {
         method: "POST", redirect: "error", signal: AbortSignal.timeout(20_000),
         headers: { Authorization: `Bearer ${deps.apiKey}`, "Content-Type": "application/json", "Idempotency-Key": randomUUID() },
-        body: JSON.stringify({ from: `Warthog <${from}>`, reply_to: replyTo, to: [recipient], subject: "Warthog",
-          text: message.link ? `${message.body}\n${message.link}` : message.body }),
+        body: JSON.stringify({ from: `Warthog <${from}>`, reply_to: replyTo, to: [recipient], subject, html, text }),
       });
       if (!response.ok) throw new Error();
       const result = await response.json() as { id?: unknown };

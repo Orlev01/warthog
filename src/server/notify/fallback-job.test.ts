@@ -79,6 +79,7 @@ import assert from "node:assert/strict";
 import { randomBytes, randomUUID } from "node:crypto";
 
 import { runApprovalFallback } from "./fallback-job";
+import { renderEmail } from "./email";
 import type { Senders, SmsSender, OutgoingMessage } from "./senders";
 import { createApproval, decide } from "../db/approvals";
 import { markOpened } from "../approvals/opened";
@@ -575,6 +576,36 @@ test("the SMS and email carry no approval detail (personal content)", async () =
 // before anything is sent or any link is issued; a SQL-injection-shaped id is rejected and the
 // tables are intact (the probe cannot alter a query — values are bound, the id is shape-guarded).
 // ===========================================================================
+
+
+test("the fallback email is branded: the single-use link is its one button, with the expiry and no detail", async () => {
+  const db = await freshDb();
+  try {
+    const clock = fixedClock(NOW);
+    const { userId, dek } = await makePerson(db, "branded-email");
+    const secret = `top-secret-recipient-${randomUUID()}`;
+    const approvalId = await createPendingApproval(db, userId, dek, clock, { recipient: secret, amount: 10000, field: "card" });
+    const { senders, email: emails, sms } = recordingSenders();
+    await addVerifiedNumber(db, userId, "+61404000112", clock);
+    await runApprovalFallback({ db, clock, random: systemRandom, senders, publicBaseUrl: PUBLIC_BASE_URL }, { approvalId });
+
+    const message = emails[0]!;
+    const email = message.email!;
+    assert.equal(email.subject, "An approval is waiting");
+    assert.equal(email.heading, "An approval is waiting for you");
+    assert.deepEqual(email.action, { label: "Open approval", url: message.link }, "the button is the single-use link");
+    assert.match(email.paragraphs.join(" "), /works once and expires 10 minutes after it was sent/);
+    assert.match(email.footnote ?? "", /If you didn't expect this, you can ignore this email/);
+    assert.ok(!JSON.stringify(email).includes(secret), "no approval detail in the email");
+    const rendered = renderEmail(email);
+    assert.ok(!rendered.subject.includes(message.link!), "the link is never in the subject");
+    assert.ok(rendered.html.includes(`href="${message.link!.replaceAll("&", "&amp;")}"`), "the link is the button's href");
+    assert.ok(rendered.text.includes(message.link!), "and in the text part");
+    for (const text of sms) assert.equal(text.email, undefined, "an SMS sends only its plain body");
+  } finally {
+    await db.close();
+  }
+});
 
 test("rejects an empty approval id with a 4xx before sending or issuing anything", async () => {
   const db = await freshDb();

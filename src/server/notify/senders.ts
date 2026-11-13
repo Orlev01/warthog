@@ -6,15 +6,22 @@
 // are injected. Selection is driven by config alone.
 
 import { outbox } from "./outbox";
+import type { EmailContent } from "./email";
 
 // One outbound message, the same shape for every channel. `link` is optional: a
 // push may carry only a body, while an email/SMS usually carries the deep link
 // to the approval. Redaction happens in the caller (a different module) before
 // anything reaches a sender — a sender receives already-safe content.
+//
+// `email` is the structured content an email sender renders as a branded email (subject,
+// heading, short paragraphs, an optional code, button and footnote; see ./email). SMS and
+// push ignore it and keep sending `body`, which stays the plain-text version of the
+// message. An email sender given no `email` renders a generic layout from `body` and `link`.
 export interface OutgoingMessage {
   readonly recipient: string;
   readonly body: string;
   readonly link?: string;
+  readonly email?: EmailContent;
 }
 
 export interface PushSender {

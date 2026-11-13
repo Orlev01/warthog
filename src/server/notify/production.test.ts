@@ -74,3 +74,26 @@ test("a sign-in request push carries only the fixed sign-in-requests kind, never
     assert.equal(payloads.at(-1), undefined, "only the exact path routes; anything else is dropped");
   }
 });
+
+test("the production email sender brands every email with the logo hosted on the public base URL", async () => {
+  const config = loadConfig({ PUBLIC_BASE_URL: "https://app.example.test", WEBAUTHN_RP_ID: "app.example.test",
+    DATABASE_URL: "pglite:memory", WARTHOG_HMAC_KEY: Buffer.alloc(32, 1).toString("base64"),
+    WARTHOG_DEV_KEK: Buffer.alloc(32, 2).toString("base64"), SMS_ENABLED: "false",
+    RESEND_API_KEY: "re_synthetic", RESEND_FROM_ADDRESS: "notifications@mail.example.test",
+    RESEND_SENDING_DOMAIN: "mail.example.test", RESEND_REPLY_TO_ADDRESS: "operator@support.example.test" });
+  const realFetch = globalThis.fetch;
+  let payload: Record<string, unknown> | undefined;
+  globalThis.fetch = (async (_url: unknown, init?: RequestInit) => {
+    payload = JSON.parse(String(init?.body));
+    return new Response(JSON.stringify({ id: "synthetic" }));
+  }) as typeof fetch;
+  try {
+    await notificationSenders({ ...config, devTools: false }).email.sendEmail({ recipient: "person@example.test", body: "Hello",
+      email: { subject: "New passkey added", heading: "A new passkey was added", paragraphs: ["A new passkey was added."] } });
+  } finally {
+    globalThis.fetch = realFetch;
+  }
+  assert.equal(payload?.subject, "New passkey added");
+  assert.match(String(payload?.html), /<img src="https:\/\/app\.example\.test\/icons\/icon-192\.png"[^>]*alt="Warthog"/);
+  assert.match(String(payload?.text), /A new passkey was added\./);
+});

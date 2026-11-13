@@ -9,6 +9,7 @@ import { selectKeyWrapper } from "../crypto/key-wrapper";
 import { createGuardedFetch } from "../http/guarded-fetch";
 import { systemClock } from "../seams/clock";
 import { createResendEmailSender } from "./resend";
+import { emailLogoUrl } from "./email";
 import { createTwilioSmsSender } from "./twilio";
 import { reserveSmsSegments } from "./sms-budget";
 import { createWebPushSender, SIGN_IN_REQUESTS_TARGET, type PushDeviceSubscription, type PushTarget } from "./web-push";
@@ -68,7 +69,7 @@ export function notificationSenders(config: Config, suppliedDb?: Db): Senders {
   return { push,
     email: { async sendEmail(message) {
       if (!config.messaging?.email.apiKey || !config.messaging.email.from) throw new Error("Email sending is not configured");
-      await createResendEmailSender(config.messaging.email).sendEmail(message);
+      await createResendEmailSender({ ...config.messaging.email, logoUrl: emailLogoUrl(config.publicBaseUrl) }).sendEmail(message);
     } },
     sms: config.smsEnabled === false ? disabledSmsSender : { enabled: true, async sendSms(message) {
       if (!config.messaging) throw new Error("SMS sending is not configured");

@@ -64,6 +64,7 @@ import { test } from "node:test";
 import assert from "node:assert/strict";
 
 import { issueEmailCode, verifyEmailCode } from "./email-code";
+import { renderEmail } from "../notify/email";
 import { freshDb } from "../../test/db";
 import { loadMigrations, runMigrations, type Db } from "../db/index";
 import { createOutbox, type Outbox, type SentMessage } from "../notify/outbox";
@@ -656,6 +657,58 @@ test("a code issued to one spelling verifies under another", async () => {
     await issueEmailCode(db, "Person@Warthog.com.au", issueDeps(clock, outbox, HMAC_KEY_A, constantRandom(0)));
     const ok = await verifyEmailCode(db, "  person@warthog.com.au", codeFor(0), verifyDeps(clock, outbox));
     assert.equal(ok.ok, true);
+  } finally {
+    await db.close();
+  }
+});
+
+// ---------------------------------------------------------------------------
+// Branded emails — the code email shows the code in its own box (never in the subject or
+// the inbox preview) and keeps its expiry; the failed-attempts notice carries no code.
+// ---------------------------------------------------------------------------
+
+test("the code email is branded: a specific subject, the code in its own box, the expiry kept", async () => {
+  const { clock } = mutableClock(T0);
+  const outbox = createOutbox();
+  const db = await freshDb();
+  try {
+    await issueEmailCode(db, EMAIL, issueDeps(clock, outbox, HMAC_KEY_A, constantRandom(7)));
+    const [sent] = emailsTo(outbox, EMAIL);
+    const code = codeFor(7);
+    assert.equal(extractCode(sent!.body), code, "the plain body still carries the code");
+    const email = sent!.email!;
+    assert.equal(email.subject, "Your Warthog verification code");
+    assert.equal(email.heading, "Your verification code");
+    assert.equal(email.code, code, "the code is the email's code");
+    assert.match(email.paragraphs.join(" "), /expires in 10 minutes/);
+    assert.match(email.footnote ?? "", /If you didn't request this, you can ignore this email/);
+    assert.equal(email.action, undefined, "no link");
+    const rendered = renderEmail(email);
+    assert.ok(!rendered.subject.includes(code), "the code is never in the subject");
+    const preheader = rendered.html.match(/<div class="wh-preheader"[^>]*>([\s\S]*?)<\/div>/)?.[1] ?? "";
+    assert.ok(!preheader.includes(code), "nor in the inbox preview");
+    assert.equal(extractCode(rendered.text), code, "the text part carries the code");
+  } finally {
+    await db.close();
+  }
+});
+
+test("the failed-attempts notice is branded and carries no code", async () => {
+  const { clock } = mutableClock(T0);
+  const outbox = createOutbox();
+  const db = await freshDb();
+  try {
+    await issueEmailCode(db, EMAIL, issueDeps(clock, outbox, HMAC_KEY_A, constantRandom(0)));
+    const wrong = wrongCode(codeFor(0));
+    for (let i = 0; i < 6; i++) await verifyEmailCode(db, EMAIL, wrong, verifyDeps(clock, outbox));
+    const [alert] = alertsTo(outbox, EMAIL);
+    const email = alert!.email!;
+    assert.equal(email.subject, "Verification code attempts paused");
+    assert.equal(email.heading, "We've paused code attempts");
+    assert.match(email.paragraphs.join(" "), /No code was accepted/);
+    assert.equal(email.code, undefined);
+    assert.equal(email.action, undefined);
+    assert.doesNotMatch(renderEmail(email).text, /\d{6}/, "no code-shaped digits anywhere");
   } finally {
     await db.close();
   }

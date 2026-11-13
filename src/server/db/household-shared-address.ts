@@ -31,6 +31,7 @@ import { decrypt, encrypt } from "../crypto/envelope";
 import type { Clock } from "../seams/clock";
 import type { Db } from "./index";
 import { getHouseholdForMember, isHouseholdMember } from "./households";
+import type { EmailContent } from "../notify/email";
 
 // The envelope's associated data binds each encrypted value to its exact location, so a
 // row lifted into another row/column/table fails to decrypt. The row id is the household
@@ -44,6 +45,13 @@ const UPCOMING_COLUMN = "upcoming";
 // the new address. A fixed string, so nothing dynamic (and no ambient value) can leak.
 const CHANGED_BODY = "Your household's shared address has been updated.";
 
+// The branded email for the same nudge: still no address, just where to see it.
+const CHANGED_EMAIL: EmailContent = {
+  subject: "Your household's shared address changed",
+  heading: "Your shared address was updated",
+  paragraphs: [CHANGED_BODY, "Open Warthog to see the new address."],
+};
+
 // A household's one shared postal address, as handed back to a member (decrypted).
 export interface SharedAddress {
   readonly householdId: string;
@@ -55,7 +63,7 @@ export interface SharedAddress {
 // The narrow injected sender seam: one member at a time. The dev outbox (dev) and the
 // real senders (prod) both satisfy it; which is wired is the composition root's job.
 export interface SharedAddressNotifier {
-  notifyMember(message: { userId: string; body: string }): Promise<void>;
+  notifyMember(message: { userId: string; body: string; email?: EmailContent }): Promise<void>;
 }
 
 // The injected dependency bag for an edit: just the notifier seam.
@@ -136,7 +144,7 @@ export async function setSharedAddress(
   for (const row of members.rows) {
     const memberId = String(row.user_id);
     if (memberId === input.actorId) continue;
-    await deps.notify.notifyMember({ userId: memberId, body: CHANGED_BODY });
+    await deps.notify.notifyMember({ userId: memberId, body: CHANGED_BODY, email: CHANGED_EMAIL });
   }
 
   return {

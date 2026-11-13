@@ -83,6 +83,7 @@ import { freshDb } from "../../test/db";
 import type { Db } from "../db/index";
 import { fixedClock } from "../seams/clock";
 import { createOutbox, type Outbox, type SentMessage } from "../notify/outbox";
+import { OPERATOR_EMAIL_REASON } from "../notify/email";
 import { parseBody, HttpError } from "../http/validate";
 
 // --- fixtures ---------------------------------------------------------------------
@@ -278,6 +279,29 @@ test("askToJoinEarlyAccess emails exactly the configured operator address", asyn
     assert.equal(emails.length, 1, "exactly one operator email is sent");
     assert.equal(emails[0]!.recipient, OPERATOR, "it goes to the configured operator address");
     assert.ok(emails[0]!.body.includes(GMAIL.name), "the email names the Google service");
+  } finally {
+    await db.close();
+  }
+});
+
+
+test("the early-access operator email is branded, names the service and is scrubbed like the body", async () => {
+  const db = await freshDb();
+  try {
+    const userId = await makeUser(db, "ask-branded");
+    const box = createOutbox();
+    await askToJoinEarlyAccess(
+      { userId, connector: { ...GMAIL, name: "Gmail 4111 1111 1111 1111" } },
+      { db, email: box, operatorEmail: OPERATOR, clock: fixedClock(T0) },
+    );
+    const email = emailsOf(box)[0]!.email!;
+    assert.equal(email.subject, "Google early access request");
+    assert.equal(email.heading, "Someone asked to join Google early access");
+    assert.ok(email.paragraphs.join(" ").includes('for "Gmail'), "it names the service");
+    assert.ok(!email.paragraphs.join(" ").includes("4111 1111 1111 1111"), "a card number is masked");
+    assert.match(email.paragraphs.join(" "), /early-access allowlist/);
+    assert.equal(email.reason, OPERATOR_EMAIL_REASON, "the footer says why the operator gets it");
+    assert.equal(email.action, undefined);
   } finally {
     await db.close();
   }

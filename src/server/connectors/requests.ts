@@ -33,6 +33,7 @@ import {
 import type { Db } from "../db/index";
 import type { Clock } from "../seams/clock";
 import type { EmailSender, PushSender } from "../notify/senders";
+import { mapEmailText, OPERATOR_EMAIL_REASON } from "../notify/email";
 
 // What the CREATE path records: the owner (the session's id, never a client value) and
 // the free-text service name the person requested.
@@ -90,6 +91,15 @@ export async function requestConnector(
       "Someone requested a connector that is not in the catalogue yet. " +
         "Review it in Warthog and add the service if it fits.",
     ),
+    email: mapEmailText({
+      subject: "New connector request",
+      heading: "Someone requested a connector",
+      paragraphs: [
+        "Someone requested a connector that isn't in the catalogue yet.",
+        "Review it in Warthog and add the service if it fits.",
+      ],
+      reason: OPERATOR_EMAIL_REASON,
+    }, scrub),
   });
 
   return request;

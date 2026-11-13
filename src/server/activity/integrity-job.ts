@@ -23,6 +23,7 @@ import { recordMetricEvent } from "../metrics/record";
 import type { Db } from "../db/index";
 import type { Clock } from "../seams/clock";
 import type { Senders, OutgoingMessage } from "../notify/senders";
+import { SECURITY_ALERT_FOOTNOTE, type EmailContent } from "../notify/email";
 
 // What the job runs from: the parameterizing db seam (INV-102), the clock every recorded
 // metric is stamped from (never Date.now()), and the configured channel bundle (only push and
@@ -43,6 +44,14 @@ const OUTCOME_FAIL = "fail";
 // (principle 19): just that the record needs attention. Review happens inside the signed-in
 // app (principle 18), so no deep link built from config/env is folded in here.
 const ALERT_BODY = "Your activity record failed its integrity check — open Warthog to review it.";
+
+// The same alert as a branded email (the push sends only the body). Still no link.
+const ALERT_EMAIL: EmailContent = {
+  subject: "Activity record integrity check failed",
+  heading: "Your activity record needs attention",
+  paragraphs: ["Your activity record failed its integrity check.", "Open Warthog to review it."],
+  footnote: SECURITY_ALERT_FOOTNOTE,
+};
 
 // Sweep every account, run its per-account integrity check, append a pass/fail count to
 // metrics, and alert (push + email) each person whose record failed.
@@ -96,7 +105,7 @@ export async function runDailyIntegrityCheck(deps: DailyIntegrityCheckDeps): Pro
 // fixed non-personal body and no link. No SMS is sent. Both channels are always attempted —
 // a failed push never costs the email — and the failures are returned for the caller to report.
 async function alertFailure(senders: Senders, recipient: string): Promise<unknown[]> {
-  const message: OutgoingMessage = { recipient, body: ALERT_BODY };
+  const message: OutgoingMessage = { recipient, body: ALERT_BODY, email: ALERT_EMAIL };
   const failures: unknown[] = [];
   for (const send of [() => senders.push.sendPush(message), () => senders.email.sendEmail(message)]) {
     try {

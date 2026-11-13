@@ -62,10 +62,10 @@ const SCREEN = "/household";
 // skipped rather than crashing the edit.
 function buildSharedAddressNotifier(db: Db, senders: Senders): SharedAddressNotifier {
   return {
-    async notifyMember({ userId, body }) {
+    async notifyMember({ userId, body, email }) {
       const member = await getUserById(db, userId);
       if (!member) return;
-      await senders.email.sendEmail({ recipient: member.email, body });
+      await senders.email.sendEmail({ recipient: member.email, body, ...(email ? { email } : {}) });
     },
   };
 }

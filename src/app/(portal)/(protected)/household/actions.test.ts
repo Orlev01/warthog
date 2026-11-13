@@ -592,6 +592,29 @@ test("inviteMember issues an owner's invite (emailed + shown as pending) and ref
 
 // Review fix W3.1 — invites are bounded: past the household's free places, or past the
 // hourly invite allowance, inviteMember refuses with a plain reason and sends nothing.
+
+test("the invite email is branded: the invite link is its one button, with the 7-day expiry and no personal content", async () => {
+  const db = await freshDb();
+  try {
+    const alice = await makeUser(db, "owner-branded");
+    await seedHousehold(db, { ownerId: alice.id, currency: "AUD" });
+    const sent: OutgoingMessage[] = [];
+    const actions = makeActions(db, { email: { async sendEmail(message) { sent.push(message); } } });
+    expectOk(await actions.inviteMember(sessionFor(alice.id), { email: "branded@invites.example" }), "owner invites");
+    const message = sent[0]!;
+    const email = message.email!;
+    assert.equal(email.subject, "You're invited to join a household on Warthog");
+    assert.equal(email.heading, "Join a household on Warthog");
+    assert.deepEqual(email.action, { label: "Open invitation", url: message.link }, "the invite link is the button");
+    assert.match(email.paragraphs.join(" "), /expires in 7 days/);
+    assert.match(email.footnote ?? "", /If you weren't expecting this, you can ignore this email/);
+    assert.ok(!JSON.stringify(email).includes(alice.id), "nothing about the inviter is in the email");
+    assert.ok(!email.subject.includes(message.link!), "the link is never in the subject");
+  } finally {
+    await db.close();
+  }
+});
+
 test("inviteMember refuses once open invites fill the free places, and when the hourly allowance is spent", async () => {
   const db = await freshDb();
   try {
