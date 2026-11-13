@@ -36,3 +36,95 @@ test("oversized declared multipart uploads receive 413 before framework actions"
     }
   }
 });
+
+// --- Admin host routing (docs/design/admin-portal.md §1) -----------------------------------
+import { ADMIN_PATH_HEADER } from "./proxy";
+import { getTrafficCounter } from "./server/http/traffic";
+
+function withEnv<T>(env: Record<string, string | undefined>, run: () => T): T {
+  const saved: Record<string, string | undefined> = {};
+  for (const key of Object.keys(env)) {
+    saved[key] = process.env[key];
+    if (env[key] === undefined) delete (process.env as Record<string, string | undefined>)[key];
+    else (process.env as Record<string, string>)[key] = env[key]!;
+  }
+  try {
+    return run();
+  } finally {
+    for (const key of Object.keys(saved)) {
+      if (saved[key] === undefined) delete (process.env as Record<string, string | undefined>)[key];
+      else (process.env as Record<string, string>)[key] = saved[key]!;
+    }
+  }
+}
+
+const PROD = { NODE_ENV: "production", PUBLIC_BASE_URL: "https://app.example.test", ADMIN_BASE_URL: undefined };
+
+test("on the admin host pages are rewritten under /admin with the original path forwarded, noindex and the same CSP discipline", () => {
+  withEnv(PROD, () => {
+    for (const [path, target] of [["/", "/admin"], ["/usage?range=30d", "/admin/usage?range=30d"], ["/session?handoff=abc", "/admin/session?handoff=abc"]]) {
+      const response = middleware(new NextRequest(`https://admin.example.test${path}`, { headers: { host: "admin.example.test" } }));
+      assert.equal(response.status, 200, path);
+      assert.equal(new URL(response.headers.get("x-middleware-rewrite")!).pathname + new URL(response.headers.get("x-middleware-rewrite")!).search, target, path);
+      assert.equal(response.headers.get("x-middleware-request-" + ADMIN_PATH_HEADER), path!.split("?")[0]);
+      assert.equal(response.headers.get("x-robots-tag"), "noindex, nofollow");
+      assert.match(response.headers.get("content-security-policy")!, /nonce-/);
+      assert.equal(response.headers.get("cache-control"), "private, no-store");
+    }
+    // The ingress's forwarded host wins over a differing Host header.
+    const forwarded = middleware(new NextRequest("https://app.example.test/usage", { headers: { host: "app.example.test", "x-forwarded-host": "admin.example.test" } }));
+    assert.equal(new URL(forwarded.headers.get("x-middleware-rewrite")!).pathname, "/admin/usage");
+  });
+});
+
+test("the member app, auth, OAuth, MCP and dev routes do not exist on the admin host; assets pass through; /admin itself is refused", () => {
+  withEnv(PROD, () => {
+    for (const path of ["/home", "/api/auth/signin/begin", "/oauth/authorize", "/mcp", "/.well-known/oauth-protected-resource", "/dev/outbox"]) {
+      const response = middleware(new NextRequest(`https://admin.example.test${path}`, { headers: { host: "admin.example.test" } }));
+      assert.equal(new URL(response.headers.get("x-middleware-rewrite")!).pathname, `/admin${path}`, `${path} lands where nothing serves it`);
+    }
+    const asset = middleware(new NextRequest("https://admin.example.test/brands/gmail.svg", { headers: { host: "admin.example.test" } }));
+    assert.equal(asset.headers.get("x-middleware-rewrite"), null);
+    assert.equal(asset.status, 200);
+    for (const path of ["/admin", "/admin/usage"]) {
+      const refused = middleware(new NextRequest(`https://admin.example.test${path}`, { headers: { host: "admin.example.test" } }));
+      assert.equal(refused.status, 404, path);
+      assert.equal(refused.headers.get("cache-control"), "no-store");
+    }
+  });
+});
+
+test("on the app host /admin is 404 and everything else is untouched; with no admin host configured the app behaves as before", () => {
+  withEnv(PROD, () => {
+    for (const path of ["/admin", "/admin/session?handoff=x", "/admin/usage"]) {
+      const refused = middleware(new NextRequest(`https://app.example.test${path}`, { headers: { host: "app.example.test" } }));
+      assert.equal(refused.status, 404, path);
+    }
+    const page = middleware(new NextRequest("https://app.example.test/home", { headers: { host: "app.example.test" } }));
+    assert.equal(page.status, 200);
+    assert.equal(page.headers.get("x-middleware-rewrite"), null);
+    assert.equal(page.headers.get("x-robots-tag"), null);
+  });
+  withEnv({ NODE_ENV: "production", PUBLIC_BASE_URL: undefined, ADMIN_BASE_URL: undefined }, () => {
+    assert.equal(middleware(new NextRequest("https://admin.example.test/usage", { headers: { host: "admin.example.test" } })).headers.get("x-middleware-rewrite"), null);
+    assert.equal(middleware(new NextRequest("https://app.example.test/admin", { headers: { host: "app.example.test" } })).status, 404);
+  });
+});
+
+test("the handoff exchange shares the auth limiter and every request is counted by host and route class only", () => {
+  withEnv(PROD, () => {
+    getTrafficCounter().drain();
+    const exchange = () => middleware(new NextRequest("https://admin.example.test/session?handoff=x", { headers: { host: "admin.example.test", "x-forwarded-for": "203.0.113.77", "sec-fetch-dest": "document" } }));
+    let limited = 0;
+    for (let i = 0; i < 70; i++) if (exchange().status === 429) limited++;
+    assert.ok(limited > 0, "a flood of exchanges is refused");
+    middleware(new NextRequest("https://app.example.test/home", { headers: { host: "app.example.test", "sec-fetch-dest": "document" } }));
+    middleware(new NextRequest("https://app.example.test/admin", { headers: { host: "app.example.test" } }));
+    const drained = Object.fromEntries(getTrafficCounter().drain().map((e) => [e.label, e.count]));
+    assert.equal(drained["admin.admin.document"] + drained["admin.admin.limited"], 70);
+    assert.equal(drained["admin.admin.limited"], limited);
+    assert.equal(drained["app.portal.document"], 1);
+    assert.equal(drained["app.admin.fetch"], 1);
+    assert.ok(!Object.keys(drained).some((label) => label.includes("handoff") || label.includes("203.0")), "no path, query or address in a label");
+  });
+});

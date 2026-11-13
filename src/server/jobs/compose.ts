@@ -56,6 +56,7 @@ export async function composeJobSeams(
       container: config.blob.container,
     }),
     publicBaseUrl: config.publicBaseUrl,
+    operatorEmail: config.operatorEmail,
   };
 }
 

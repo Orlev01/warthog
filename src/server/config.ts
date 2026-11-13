@@ -13,6 +13,7 @@
 import { createHash } from "node:crypto";
 import { parseCountryRoutes, type TwilioConfig } from "./notify/twilio";
 import type { SmsLimits } from "./notify/sms-budget";
+import { adminOriginFor, hostnameOf } from "./admin/origin";
 
 // A local-development fallback only. When the host injects `PORT` (12-factor,
 // INV-104) the server binds that value; this fallback never overrides it.
@@ -51,6 +52,10 @@ export interface BlobConfig {
 export interface Config {
   readonly nodeEnv: string;
   readonly publicBaseUrl: string;
+  // Where the admin portal is served (docs/design/admin-portal.md §1): derived from
+  // PUBLIC_BASE_URL (`app.` → `admin.`) so production needs no new setting; ADMIN_BASE_URL
+  // may override it only outside production.
+  readonly adminBaseUrl: string;
   readonly webauthnRpId: string;
   readonly databaseUrl: string;
   readonly migrationDatabaseUrl?: string;
@@ -181,6 +186,37 @@ function parseDevKek(env: NodeJS.ProcessEnv, nodeEnv: string): Uint8Array | unde
   return kek;
 }
 
+// The admin origin: derived from the public base URL, overridable by ADMIN_BASE_URL only
+// outside production (production refuses the variable, like WARTHOG_DEV_KEK, so the
+// release contract stays image-only). A public base URL that does not derive is reported
+// by name; the value never appears in the error.
+function parseAdminBaseUrl(env: NodeJS.ProcessEnv, nodeEnv: string, publicBaseUrl: string): string {
+  const override = env.ADMIN_BASE_URL;
+  if (override !== undefined && override !== "") {
+    if (nodeEnv === "production") {
+      throw new Error("Refusing to start in production with ADMIN_BASE_URL set; the admin origin is derived from PUBLIC_BASE_URL");
+    }
+    if (hostnameOf(override) === null) throw new Error("Invalid configuration: ADMIN_BASE_URL must be an absolute URL");
+    return new URL(override).origin;
+  }
+  const derived = adminOriginFor(publicBaseUrl);
+  if (derived === null) throw new Error("Invalid configuration: PUBLIC_BASE_URL must be an absolute http(s) URL");
+  return derived;
+}
+
+// The admin hostname for the request proxy, which must never call loadConfig (it runs for
+// every request and under `next build`): a non-throwing read of the same two variables
+// through the same derivation, or null when the public base URL is absent or invalid.
+export function adminHostFromEnv(env: NodeJS.ProcessEnv = process.env): string | null {
+  const nodeEnv = env.NODE_ENV ?? "development";
+  const override = env.ADMIN_BASE_URL;
+  if (nodeEnv !== "production" && override !== undefined && override !== "") return hostnameOf(override);
+  const publicBaseUrl = env.PUBLIC_BASE_URL;
+  if (publicBaseUrl === undefined || publicBaseUrl === "") return null;
+  const derived = adminOriginFor(publicBaseUrl);
+  return derived === null ? null : hostnameOf(derived);
+}
+
 // Production must never run with dev tools enabled or an in-process pglite database.
 function assertProductionSafe(config: Config): void {
   if (config.nodeEnv !== "production") return;
@@ -199,10 +235,12 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): Config {
   }
   // Existing installations stay enabled unless SMS is explicitly switched off.
   const smsEnabled = env.SMS_ENABLED !== "false";
+  const publicBaseUrl = required(env, "PUBLIC_BASE_URL");
   const config: Config = {
     nodeEnv,
     smsEnabled,
-    publicBaseUrl: required(env, "PUBLIC_BASE_URL"),
+    publicBaseUrl,
+    adminBaseUrl: parseAdminBaseUrl(env, nodeEnv, publicBaseUrl),
     webauthnRpId: required(env, "WEBAUTHN_RP_ID"),
     databaseUrl: required(env, "DATABASE_URL"),
     migrationDatabaseUrl: env.MIGRATION_DATABASE_URL,
