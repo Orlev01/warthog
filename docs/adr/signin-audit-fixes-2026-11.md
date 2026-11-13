@@ -58,14 +58,18 @@ final step, so a recovery abandoned after its passkey was saved did neither.
   replaces the recovery code, in re-enrolment's lock order (account row first, then the factor
   and session rows). It removes every other passkey and the authenticator app, deletes every
   session, and records an "Account recovered" activity entry. Re-enrolment now uses the same
-  eviction helper. Both also discard the account's pending "approve from another device"
-  requests, so one approved from a session that no longer exists can't be collected.
+  eviction helper, and takes the recovery code row straight after the account row, so the two
+  can't deadlock. Both also discard the account's pending "approve from another device"
+  requests, so one approved from a session that no longer exists can't be collected, and any
+  half-finished authenticator set-up, so its secret is never handed to the owner afterwards.
 - The account-recovered alert is sent from that step, once it commits. Only the recovery holding
   the current recovery code can commit, and committing replaces the code, so a duplicate,
   retried or competing passkey step sends nothing. `finish` only mints the new session and sets
   the cookies; it sends nothing and ends no session (one made since with the new passkey is the
   person's own). The alert says the old passkeys and authenticator app were removed and every
-  device signed out, names every connected agent as still connected, and gives `SUPPORT_EMAIL`.
+  device signed out, and gives `SUPPORT_EMAIL`. Then it names the connected agents as still
+  connected, quoted, shortened and capped at five ("and N more"), because whoever connected an
+  agent chose its name and must not be able to crowd out the fixed copy.
 - Agent access keys and OAuth connections are kept. For two weeks after a recovery, Home shows
   a contained notice naming the agents connected at the time that still are. Each links to its
   Settings (Replace key), and one link goes to Agents, where an agent is disconnected; the
@@ -73,17 +77,17 @@ final step, so a recovery abandoned after its passkey was saved did neither.
 - Notice mechanism, no schema change: it is derived from the recovery's activity entry (kind,
   time and entry hash only, never the payload). It disappears 14 days after the newest recovery.
   Dismiss sets an HttpOnly cookie naming that entry, read on the server, so it hides that notice
-  on that browser only, and a later recovery shows a fresh one.
+  on that browser only, and a later recovery shows a fresh one. The cookie is set only if the
+  entry on screen is still the newest, so a recovery after the page loaded isn't hidden unseen.
 
 ## 5. A completed reset alerts, closes after 7 days and can be closed sooner
 
 Founder decision, 13 November 2026. A completed reset stayed re-enrollable for 30 days, sent
 nothing, and the banner and cancel covered only pending resets.
 
-- Re-enrolment is open for 7 days after completion. No completion time is stored, so the window
-  is measured from the earliest moment the reset can complete (`requested_at` + 7 days). It is
-  therefore never longer than 7 days after the actual completion, and shorter only if the
-  completion job ran late.
+- Re-enrolment is open for 7 days after completion. No completion time is stored: completing
+  moves `requested_at` to exactly 7 days before the job ran, and the window is measured from
+  `requested_at` + 7 days, so a completion job that ran late still leaves the full 7 days.
 - Completion alerts push, email and each verified mobile, as a request does, once it commits.
   Only the call that claims the reset sends, so a retried timer sends nothing; a failed send is
   logged without the recipient and never undoes the completion.
@@ -120,6 +124,13 @@ These audit findings remain founder decisions:
   no alert; completed resets staying re-enrollable for 30 days with no alert, cancel or banner;
   and the authenticator app being impossible to remove. Recovery still keeps agent keys and
   tokens, by decision, and names the agents for review instead.
+- The eviction isn't serialised against a sign-in, passkey add or authenticator set-up already
+  under way on a lost device. Recovery and re-enrolment take the account row `FOR SHARE`, as
+  `createSession` does, and adding a factor takes no account lock. A sign-in that checked its
+  passkey just before the eviction can still mint a session just after it. The window is the
+  milliseconds between those two statements. Closing it means taking a stronger account lock
+  for the eviction and re-checking the credential, under that lock, when a sign-in session is
+  minted or a factor is added.
 - There's no "sign out everywhere", and removing a passkey leaves the sessions it made.
 - Wrong email codes and failed passkey attempts are counted per address across every purpose.
   Anyone who knows the address can keep its owner locked out of sign-in for 15 minutes at a

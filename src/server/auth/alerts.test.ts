@@ -364,3 +364,24 @@ test("the account-recovered alert names the connected agents as still connected,
     await db.close();
   }
 });
+
+// Agent names are chosen by whoever connected the agent — possibly whoever holds the lost
+// device. However many there are and however long, they can't push the support address or
+// the fixed copy out of the alert, and each is quoted so it can't pass for our own words.
+test("the account-recovered alert keeps its own copy and support address whatever the agents are called", async () => {
+  const db = await freshDb();
+  try {
+    const person = await freshUser(db, "recovered-many");
+    const outbox = createOutbox();
+    const names = Array.from({ length: 12 }, (_, i) => `Agent ${i} ${"x".repeat(190)}`);
+    await alertAccountRecovered(db, { userId: person.id, agentNames: names }, { emailSender: outbox });
+    const [mail] = emailsTo(outbox, person.email);
+    assert.ok(mail.body.includes(SUPPORT_EMAIL), "the support address survives");
+    assert.match(mail.body, /old passkeys and authenticator app were removed/i);
+    assert.match(mail.body, /"Agent 0 x+…"/, "names are quoted and shortened");
+    assert.match(mail.body, /and 7 more/, "the rest are counted, not listed");
+    assert.ok(mail.body.length < 2000, "the body fits before truncation");
+  } finally {
+    await db.close();
+  }
+});

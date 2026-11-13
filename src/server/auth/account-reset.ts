@@ -54,10 +54,9 @@ export const RESET_WAIT_MS = SEVEN_DAYS_MS;
 // fix W5; 7 days by the sign-in audit's founder decision of 13 November 2026, was 30). A
 // finished reset is a standing way in for whoever holds the email address, so it does not
 // stay open for long: after this the person asks for a new reset, with its own 7-day wait
-// and alerts. Measured from requested_at + RESET_WAIT_MS, the earliest the reset can have
-// completed, so the window is never longer than 7 days after the actual completion (the
-// completion job runs at that moment unless the scheduler was down). No completion time is
-// stored: this needs no schema change.
+// and alerts. Measured from requested_at + RESET_WAIT_MS: completion moves requested_at to
+// exactly one wait before it ran, so that is the actual completion even when the job ran
+// late. No completion time is stored: this needs no schema change.
 export const REENROL_WINDOW_MS = SEVEN_DAYS_MS;
 
 // The background-job type the 7-day timer fires; its payload names the account so
@@ -267,7 +266,7 @@ export async function closeAccountReset(
 }
 
 // The person's completed reset that can still be re-enrolled, for the signed-in banner that
-// offers to close it: when it completed (at the earliest) and when re-enrolment closes by
+// offers to close it: when it completed and when re-enrolment closes by
 // itself. Member-scoped by the session's user id; null for a pending, cancelled,
 // re-enrolled, closed or lapsed reset, or none.
 export async function getCompletedAccountReset(
@@ -332,8 +331,11 @@ export async function completeAccountReset(
   deps: CompleteAccountResetDeps,
 ): Promise<{ ok: true } | { ok: false; reason: string }> {
   const outcome = await withTransaction(db, async (tx) => {
+    // No completion time is stored: a done reset's window is measured from requested_at +
+    // the wait. So the claim moves requested_at to exactly one wait ago, and a job that ran
+    // late still leaves the full re-enrolment window from the actual completion.
     const claimed = await tx.query(
-      `UPDATE account_resets SET status = 'done'
+      `UPDATE account_resets SET status = 'done', requested_at = $2::timestamptz
        WHERE user_id = $1 AND status = 'pending' AND requested_at <= $2::timestamptz
        RETURNING user_id`,
       [userId, new Date(deps.clock.now().getTime() - RESET_WAIT_MS).toISOString()],
@@ -422,6 +424,10 @@ export async function reenrolAfterReset(
   const { rpId, origin, clock, random } = deps;
   return withTransaction(db, async (tx): Promise<ReenrolResult> => {
     await lockActiveAccount(tx, userId);
+    // Recovery's order: the account, then the recovery code row, before any factor. A
+    // recovery racing this re-enrolment then waits here rather than deadlocking, and the
+    // later of the two sees (and evicts) the earlier one's passkey.
+    await tx.query("SELECT 1 FROM recovery_codes WHERE user_id = $1 FOR UPDATE", [userId]);
     const claimed = await tx.query(
       `UPDATE account_resets SET status = 'reenrolled'
         WHERE user_id = $1 AND status = 'done' AND requested_at > $2::timestamptz

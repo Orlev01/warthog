@@ -254,6 +254,7 @@ export function createHomeActions(deps: HomeActionsDeps): HomeActions {
       ...(review
         ? {
             recoveryReview: {
+              id: review.id,
               recoveredAt: formatAccountTime(review.recoveredAt.toISOString(), timeZone),
               agents: review.agents.map((agent) => ({
                 id: agent.id,

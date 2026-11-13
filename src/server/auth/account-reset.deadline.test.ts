@@ -8,7 +8,14 @@ import { createOutbox } from "../notify/outbox";
 import { fixedClock } from "../seams/clock";
 import { systemRandom } from "../seams/random";
 import { issueEmailCode } from "./email-code";
-import { completeAccountReset, requestAccountReset, RESET_WAIT_MS } from "./account-reset";
+import {
+  completeAccountReset,
+  getCompletedAccountReset,
+  hasCompletedReset,
+  requestAccountReset,
+  REENROL_WINDOW_MS,
+  RESET_WAIT_MS,
+} from "./account-reset";
 
 // Completion now alerts every channel; these tests are about the deadline, so the alerts
 // land in a throwaway outbox.
@@ -18,6 +25,7 @@ function quietSenders() {
 }
 
 const START = new Date("2026-11-01T00:00:00Z");
+const DAY_MS = 24 * 60 * 60 * 1000;
 
 test("reset completion enforces the seven-day boundary and claims a due reset only once", async () => {
   const db = await freshDb();
@@ -128,4 +136,28 @@ test("failed alerts from a superseded request cannot cancel the newer reset or d
       clock: fixedClock(new Date(START.getTime() + RESET_WAIT_MS)) })).ok, false);
     assert.equal(erases, 0);
   } finally { releaseAlerts?.(); await db.close(); }
+});
+
+// The re-enrolment window is measured from when the reset actually completed. A completion
+// job that ran days late (an outage) still erased the vault, so the person still gets the
+// full 7 days the completion alert promises, not whatever is left of them.
+test("a reset completed late still leaves the full 7 days to re-enrol", async () => {
+  const db = await freshDb();
+  try {
+    const user = await createUser(db, { email: "reset-late@example.test", wrappedDek: "test-key" });
+    await db.query("INSERT INTO account_resets (user_id, status, requested_at) VALUES ($1, 'pending', $2)",
+      [user.id, START.toISOString()]);
+    const executor = { eraseVaultData: async () => {}, revokeAgentsAndConnections: async () => {} };
+    const late = new Date(START.getTime() + RESET_WAIT_MS + 10 * DAY_MS);
+    assert.equal((await completeAccountReset(db, { userId: user.id }, { executor, senders: quietSenders(), clock: fixedClock(late) })).ok, true);
+
+    assert.deepEqual(await getCompletedAccountReset(db, { userId: user.id }, { clock: fixedClock(late) }), {
+      completedAt: late,
+      reenrolUntil: new Date(late.getTime() + REENROL_WINDOW_MS),
+    });
+    const lastMoment = fixedClock(new Date(late.getTime() + REENROL_WINDOW_MS - 1));
+    assert.equal(await hasCompletedReset(db, { userId: user.id }, { clock: lastMoment }), true);
+    const after = fixedClock(new Date(late.getTime() + REENROL_WINDOW_MS));
+    assert.equal(await hasCompletedReset(db, { userId: user.id }, { clock: after }), false);
+  } finally { await db.close(); }
 });

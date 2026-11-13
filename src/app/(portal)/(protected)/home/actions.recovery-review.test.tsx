@@ -53,7 +53,7 @@ test("after a recovery Home lists the kept agents, each linking to its settings"
   try {
     const owner = await seed(db, "home-recovered@example.com");
     const claude = await createAgent(db, { userId: owner.userId, connectionId: randomUUID(), displayName: "Claude Desktop", platform: "claude" }, fixedClock(new Date("2026-11-01T00:00:00Z")));
-    await recordRecovery(db, owner.userId, owner.dek);
+    const recoveryId = await recordRecovery(db, owner.userId, owner.dek);
 
     const view = await createHomeActions({ db, keyWrapper, clock }).load(owner.session);
     assert.ok(view.recoveryReview, "the review notice is offered");
@@ -70,6 +70,9 @@ test("after a recovery Home lists the kept agents, each linking to its settings"
     assert.ok(markup.includes(`href="/agents/${claude.id}?section=settings"`), "a link to the agent's settings");
     assert.ok(markup.includes(`href="/agents"`), "a link to Agents, where an agent is disconnected");
     assert.match(words, /Dismiss/);
+    // Dismiss names the recovery on screen, so one that lands after the page loaded is not
+    // hidden unseen.
+    assert.match(markup, new RegExp(`<input type="hidden" name="review" value="${recoveryId}"/>`));
     assert.match(markup, /data-tone="warning"/, "inside a notice, never loose on the page");
   } finally {
     await db.close();

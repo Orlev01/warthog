@@ -116,6 +116,8 @@ export type DashboardReminder = {
 // After an account recovery (sign-in audit, founder decision 13 November 2026): when it
 // happened, pre-formatted, and the agents it kept, each linking to its settings.
 export type DashboardRecoveryReview = {
+  // The recovery's activity entry hash: Dismiss posts it so only the notice shown is hidden.
+  id: string;
   recoveredAt: string;
   agents: ReadonlyArray<{ id: string; name: string; href: string }>;
 };
@@ -479,6 +481,7 @@ function RecoveryReviewNotice({
           </a>
           {dismiss ? (
             <ActionForm action={dismiss}>
+              <input type="hidden" name="review" value={review.id} />
               <FormSubmit variant="secondary" size="sm" pendingLabel="Dismissing…">
                 Dismiss
               </FormSubmit>

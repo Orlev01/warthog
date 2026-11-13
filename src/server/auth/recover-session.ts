@@ -13,6 +13,7 @@
 import type { Db } from "../db/index";
 import type { Clock } from "../seams/clock";
 import { discardDeviceSignInRequests } from "./new-device";
+import { discardTotpEnrolment } from "./totp-enrolment";
 
 export interface EvictedFactors {
   readonly passkeys: number;
@@ -35,7 +36,9 @@ export async function evictLostFactors(tx: Db, userId: string, keepCredentialId:
 }
 
 // After the eviction commits: a sign-in request another device is waiting on (possibly
-// approved from a session that no longer exists) must not be collected afterwards.
+// approved from a session that no longer exists) must not be collected afterwards, and an
+// authenticator set-up begun from an evicted session must not be handed to the owner.
 export function discardPendingSignIns(userId: string, deps: { clock: Clock }): void {
   discardDeviceSignInRequests(userId, deps);
+  discardTotpEnrolment(userId);
 }

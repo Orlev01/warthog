@@ -22,6 +22,7 @@ import assert from "node:assert/strict";
 import { randomBytes } from "node:crypto";
 
 import { createTotpEnrolment, TOTP_ENROLMENT_TTL_MS } from "./totp-enrolment";
+import { discardPendingSignIns } from "./recover-session";
 import { createTotpSecretStore } from "./totp-store";
 import { checkTotpSignIn } from "./totp-attempts";
 import { createSession, recordStepUp, type Session } from "./session";
@@ -258,6 +259,24 @@ test("a pending enrolment belongs to its own account only", async () => {
     const bobStart = await f.enrolment.begin(bobSession);
     assert.ok(bobStart.ok);
     assert.notEqual(bobStart.secret, aliceStart.secret, "another account never sees this account's secret");
+  } finally {
+    await f.db.close();
+  }
+});
+
+// Recovery and reset re-enrolment evict the lost devices. A set-up the lost device began
+// (holding its secret) must not survive that, or the owner adding an authenticator
+// afterwards would be handed a secret the other device already has.
+test("evicting the lost factors discards a pending set-up, so the owner gets a new secret", async () => {
+  const f = await fixture({ random: systemRandom });
+  try {
+    const userId = await f.person("evict");
+    const lost = await f.enrolment.begin(await f.session(userId));
+    assert.ok(lost.ok);
+    discardPendingSignIns(userId, { clock: f.clock });
+    const owner = await f.enrolment.begin(await f.session(userId));
+    assert.ok(owner.ok);
+    assert.notEqual(owner.secret, lost.secret, "the lost device's secret is never handed out again");
   } finally {
     await f.db.close();
   }

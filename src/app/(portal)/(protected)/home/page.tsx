@@ -81,9 +81,10 @@ async function registerPushDeviceAction(input: RegisterPushDeviceInput): Promise
 
 // Hide the recovery review notice on this browser (sign-in audit, founder decision 13
 // November 2026). The cookie names the session account's newest recovery, read on the
-// server, never a value from the form, and it only hides a notice, so it grants nothing.
-// It lasts as long as the notice would have.
-async function dismissRecoveryReviewAction(): Promise<void> {
+// server, and is set only when that is the one the form was showing: a recovery that
+// landed after the page loaded is never hidden unseen. It only hides a notice, so it
+// grants nothing, and it lasts as long as the notice would have.
+async function dismissRecoveryReviewAction(formData: FormData): Promise<void> {
   "use server";
   const store = await cookies();
   const token = store.get(SESSION_COOKIE)?.value ?? null;
@@ -93,7 +94,7 @@ async function dismissRecoveryReviewAction(): Promise<void> {
     redirect("/signin");
   }
   const review = await getRecoveryReview(db, { userId: session.userId }, { clock: systemClock });
-  if (review) {
+  if (review && formData.get("review") === review.id) {
     store.set(RECOVERY_REVIEW_COOKIE, review.id, {
       httpOnly: true,
       secure: true,
