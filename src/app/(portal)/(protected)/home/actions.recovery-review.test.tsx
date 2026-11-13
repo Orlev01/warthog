@@ -1,7 +1,7 @@
 // Home after an account recovery (sign-in audit, founder decision 13 November 2026).
 // Recovery keeps agents and their keys, so for two weeks after it Home shows a contained
 // notice naming every agent that was connected at the time, each linking to its settings
-// (where Disconnect and Replace key live). It says the agents are still connected and never
+// (Replace key) and to Agents (Disconnect). It says the agents are still connected and never
 // that Warthog removed one. A dismissed notice stays hidden on that browser.
 // Real PGlite, the real activity writer and the real loader; rendered with react-dom/server.
 
@@ -68,6 +68,7 @@ test("after a recovery Home lists the kept agents, each linking to its settings"
     assert.match(words, /still connected/i);
     assert.doesNotMatch(words, /(agents?|keys?) (was|were) removed|removed (your|the) agents?/i, "never implies Warthog removed an agent");
     assert.ok(markup.includes(`href="/agents/${claude.id}?section=settings"`), "a link to the agent's settings");
+    assert.ok(markup.includes(`href="/agents"`), "a link to Agents, where an agent is disconnected");
     assert.match(words, /Dismiss/);
     assert.match(markup, /data-tone="warning"/, "inside a notice, never loose on the page");
   } finally {

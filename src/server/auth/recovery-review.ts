@@ -4,7 +4,7 @@
 // sign-in methods, and cutting them off would break whatever the person relies on. Whoever
 // had the lost devices may have connected an agent of their own, though, so after a
 // recovery Home shows a contained notice naming every agent that was connected at the time,
-// with a link to each agent's settings, where Disconnect and Replace key live.
+// with a link to each agent's settings (Replace key) and to Agents (Disconnect).
 //
 // The mechanism needs no schema change. The recovery's passkey step records one
 // "account_recovered" activity entry (the person's own record of the event, on the

@@ -176,7 +176,7 @@ export async function alertAccountRecovered(
 ): Promise<void> {
   const agents = agentNames.length > 0
     ? `These agents are still connected and can still use your account: ${agentNames.join(", ")}. ` +
-      "If you don't recognise one, sign in and open its settings to disconnect it or replace its key. "
+      "If you don't recognise one, sign in and disconnect it from Agents, or replace its key in its settings. "
     : "No agents are connected to your account. ";
   await sendAlert(
     db,

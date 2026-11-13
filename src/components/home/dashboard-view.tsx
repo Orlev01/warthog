@@ -437,9 +437,9 @@ function RemindersPanel({ reminders }: { reminders: ReadonlyArray<DashboardRemin
 
 // The review notice after an account recovery. Recovery removed the lost sign-in methods
 // but kept every agent and its key, so this names each one as still connected (never as
-// removed) and links to its settings, where Disconnect and Replace key live. A contained,
-// page-level notice; "Dismiss" hides it on this browser, and it goes by itself two weeks
-// after the recovery.
+// removed) and links to its settings, where its key is replaced or revoked, and to Agents,
+// where any agent is disconnected. A contained, page-level notice; "Dismiss" hides it on
+// this browser, and it goes by itself two weeks after the recovery.
 function RecoveryReviewNotice({
   review,
   dismiss,
@@ -453,10 +453,10 @@ function RecoveryReviewNotice({
         <p className="font-medium text-fg">Your account was recovered on {review.recoveredAt}.</p>
         <p className="text-fg-muted">
           Your old passkeys and authenticator app were removed and every other device was signed out. These agents
-          are still connected and can still use your account. Check you recognise each one: in its settings you can
-          disconnect it or replace its key.
+          are still connected and can still use your account. Check you recognise each one. You can replace an
+          agent&apos;s key in its settings, or disconnect it from Agents.
         </p>
-        <ul role="list" aria-label="Agents to review" className="flex min-w-0 flex-col">
+        <ul role="list" aria-label="Agents to review" className="-my-1 flex min-w-0 flex-col">
           {review.agents.map((agent) => (
             <li key={agent.id} className="min-w-0">
               <a
@@ -469,13 +469,22 @@ function RecoveryReviewNotice({
             </li>
           ))}
         </ul>
-        {dismiss ? (
-          <ActionForm action={dismiss}>
-            <FormSubmit variant="ghost" size="sm" pendingLabel="Dismissing…">
-              Dismiss
-            </FormSubmit>
-          </ActionForm>
-        ) : null}
+        <div className="flex min-w-0 flex-wrap items-center justify-between gap-x-4 gap-y-1 border-t border-line pt-2">
+          <a
+            href="/agents"
+            className="inline-flex min-h-11 min-w-0 items-center gap-2 font-medium text-fg underline underline-offset-4 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-focus"
+          >
+            Disconnect an agent from Agents
+            <ArrowRight aria-hidden={true} className="h-4 w-4 shrink-0" />
+          </a>
+          {dismiss ? (
+            <ActionForm action={dismiss}>
+              <FormSubmit variant="secondary" size="sm" pendingLabel="Dismissing…">
+                Dismiss
+              </FormSubmit>
+            </ActionForm>
+          ) : null}
+        </div>
       </div>
     </Notice>
   );
