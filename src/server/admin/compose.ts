@@ -40,3 +40,25 @@ export async function getAdminDeps(overrides: AdminComposeOverrides = {}): Promi
     recordMetric: metricSeamFor(db, systemClock),
   };
 }
+
+// The seams the admin pages' loaders run from (docs/design/admin-portal.md §5). The portal
+// shows every instant in the operator's established default zone and reads no data key.
+import { DEFAULT_TIME_ZONE } from "../../domain/time-zone";
+import type { AdminPageDeps } from "./page-data";
+
+// Azure's own ingress metrics (status codes, latency) are not visible to the app; the
+// Traffic page links to the Container Apps blade instead of extending the app's identity.
+export const AZURE_CONTAINER_APPS_URL = "https://portal.azure.com/#view/HubsExtension/BrowseResource/resourceType/Microsoft.App%2FcontainerApps";
+
+export async function getAdminPageDeps(overrides: AdminComposeOverrides = {}): Promise<AdminPageDeps> {
+  const config = overrides.config ?? loadConfig();
+  const db = await (overrides.getDb ?? getServerDb)();
+  return {
+    db,
+    clock: systemClock,
+    timeZone: DEFAULT_TIME_ZONE,
+    smsEnabled: config.smsEnabled,
+    azureMetricsUrl: config.nodeEnv === "production" ? AZURE_CONTAINER_APPS_URL : null,
+    recordMetric: metricSeamFor(db, systemClock),
+  };
+}
