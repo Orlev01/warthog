@@ -1,5 +1,5 @@
 import * as React from "react";
-import { safeReturnPath } from "@/server/auth/return-path";
+import { safeReturnPath, wantsFreshSignIn } from "@/server/auth/return-path";
 import SigninFlow from "@/components/auth/signin-flow";
 import { redirectSignedInVisitor } from "@/server/auth/public-entry";
 
@@ -13,12 +13,15 @@ import { redirectSignedInVisitor } from "@/server/auth/public-entry";
 // Review fix B6: a flow started while signed out (an agent connection, an approval link,
 // a household invite) arrives as `?next=<relative path>`; it is validated here (and again
 // in the flow) and the person goes back there after success, never off-site.
+// `?fresh=1` shows the form even to a signed-in visitor instead of forwarding them, for a
+// flow that needs a fresh confirmation (the new session carries a fresh step-up).
 export default async function SignInPage({
   searchParams,
 }: {
   searchParams?: Promise<Record<string, string | string[] | undefined>>;
 }) {
-  const next = (await searchParams)?.next;
-  await redirectSignedInVisitor(next);
+  const params = await searchParams;
+  const next = params?.next;
+  if (!wantsFreshSignIn(params?.fresh)) await redirectSignedInVisitor(next);
   return <SigninFlow returnTo={safeReturnPath(next)} />;
 }

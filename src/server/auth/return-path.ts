@@ -61,3 +61,11 @@ export function withReturnPath(href: string, returnTo: string | undefined): stri
   if (safe === DEFAULT_RETURN_PATH) return href;
   return `${href}?next=${encodeURIComponent(safe)}`;
 }
+
+// Whether sign-in was asked to show its form even to a visitor who is already signed in
+// (`?fresh=1`), rather than forwarding them to the return path: the person proves it's them
+// again and the new session carries a fresh step-up. Only the exact value "1" counts.
+export function wantsFreshSignIn(raw: unknown): boolean {
+  const value = Array.isArray(raw) ? raw[0] : raw;
+  return value === "1";
+}

@@ -7,7 +7,7 @@ import type { Tone } from "@/domain/admin/model";
 // StatTiles — the headline numbers of an admin page (docs/design/admin-portal.md §5): a row
 // of raised tiles, each one label, one value and, in words, how it moved against the previous
 // window (icon plus text, never colour alone). A tile may carry a sparkline and may be a link
-// to its detail page. Two-up on phones, up to five-up on desktop (admin.css). Values arrive
+// to its detail page. Two-up on phones, up to five-up on desktop (the portal stylesheet). Values arrive
 // computed; this renders them.
 
 export type StatTile = {

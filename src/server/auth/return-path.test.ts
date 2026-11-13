@@ -7,7 +7,7 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
 
-import { safeReturnPath, withReturnPath, DEFAULT_RETURN_PATH } from "./return-path";
+import { safeReturnPath, withReturnPath, wantsFreshSignIn, DEFAULT_RETURN_PATH } from "./return-path";
 
 test("the default return path is /home", () => {
   assert.equal(DEFAULT_RETURN_PATH, "/home");
@@ -84,4 +84,13 @@ test("withReturnPath carries a non-default return path onto an auth link, and le
     "/recover?next=%2Foauth%2Fauthorize%3Fclient_id%3Da%26state%3Db",
   );
   assert.equal(withReturnPath("/device", "//evil.example"), "/device", "an unsafe value is dropped");
+});
+
+// `?fresh=1` asks sign-in to show its form even to a signed-in visitor (instead of
+// forwarding them), so the person proves it's them again and the new session carries a
+// fresh step-up. Only the exact value counts.
+test("only fresh=1 asks for a fresh sign-in", () => {
+  assert.equal(wantsFreshSignIn("1"), true);
+  assert.equal(wantsFreshSignIn(["1"]), true);
+  for (const value of [undefined, "", "0", "true", "yes", ["0"], 1, null]) assert.equal(wantsFreshSignIn(value), false, String(value));
 });

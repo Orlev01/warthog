@@ -9,6 +9,7 @@ import { freshDb } from "../../test/db";
 import { fixedClock } from "../seams/clock";
 import { queryMetrics } from "../db/metrics";
 import { classifyRoute, createTrafficCounter, flushTraffic, requestKind } from "./traffic";
+import { ADMIN_PREFIX } from "./admin-routing";
 
 test("route classes come from path prefixes at segment boundaries, never the path", () => {
   const cases: Record<string, string> = {
@@ -18,7 +19,7 @@ test("route classes come from path prefixes at segment boundaries, never the pat
     "/api/receipts/1": "api", "/api/vault/unlock-method": "api", "/api/data/import": "api",
     "/mcp": "mcp", "/.well-known/oauth-authorization-server": "mcp",
     "/oauth/authorize": "oauth", "/oauth/token": "oauth", "/connect/callback": "oauth",
-    "/admin": "admin", "/admin/usage": "admin",
+    [ADMIN_PREFIX]: "admin", [`${ADMIN_PREFIX}/handoff`]: "admin", "/admin": "other", "/admin/usage": "other",
     "/api/health": "health", "/api/health/live": "health",
     "/dev/outbox": "other", "/homework": "other", "/signinx": "other", "/apis": "other",
   };

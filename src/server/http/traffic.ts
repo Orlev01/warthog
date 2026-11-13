@@ -13,6 +13,7 @@ import type { Clock } from "../seams/clock";
 import { processSingleton } from "../seams/process-singleton";
 import { recordMetricEvent } from "../metrics/record";
 import { HTTP_REQUESTS, trafficLabel, type HostClass, type RequestKind, type RouteClass } from "../metrics/names";
+import { ADMIN_PREFIX } from "./admin-routing";
 
 // Route classes by path prefix, first match wins. Lookalikes are excluded by the segment
 // boundary check in `classifyRoute`.
@@ -22,7 +23,7 @@ const PREFIXES: readonly (readonly [RouteClass, readonly string[]])[] = [
   ["oauth", ["/oauth", "/connect"]],
   ["mcp", ["/mcp", "/.well-known"]],
   ["api", ["/api"]],
-  ["admin", ["/admin"]],
+  ["admin", [ADMIN_PREFIX]],
   ["public", ["/help", "/privacy", "/terms"]],
   ["portal", ["/home", "/inbox", "/activity", "/agents", "/more", "/vault", "/connectors", "/rules", "/spending", "/skills", "/memory", "/life-admin", "/household", "/settings", "/a"]],
 ];
