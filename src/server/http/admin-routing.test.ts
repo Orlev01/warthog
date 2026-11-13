@@ -26,10 +26,10 @@ test("on the admin host assets pass through and an explicit /admin path is refus
   assert.deepEqual(routeForHost(ADMIN, ADMIN, "/administer"), { kind: "admin", rewriteTo: "/admin/administer" }, "a lookalike is not the prefix");
 });
 
-test("on the app host, an unknown host, or with no admin host configured, /admin is 404 and the app is unchanged", () => {
+test("on the app host, an unknown host, or with no admin host configured, /admin is an ordinary unknown page and the app is unchanged", () => {
   for (const [host, admin] of [["app.example.test", ADMIN], ["evil.example.test", ADMIN], [ADMIN, null], [null, ADMIN]] as const) {
-    assert.deepEqual(routeForHost(host, admin, "/admin"), { kind: "not-found" }, `${host} ${admin}`);
-    assert.deepEqual(routeForHost(host, admin, "/admin/session?handoff=x".split("?")[0]!), { kind: "not-found" });
+    assert.deepEqual(routeForHost(host, admin, "/admin"), { kind: "unknown-page" }, `${host} ${admin}`);
+    assert.deepEqual(routeForHost(host, admin, "/admin/session?handoff=x".split("?")[0]!), { kind: "unknown-page" });
     assert.deepEqual(routeForHost(host, admin, "/home"), { kind: "app" });
     assert.deepEqual(routeForHost(host, admin, "/"), { kind: "app" });
     assert.deepEqual(routeForHost(host, admin, "/administer"), { kind: "app" });

@@ -316,3 +316,12 @@ test("an unknown token is sent to sign-in; a valid session reaches /settings as 
     await db.close();
   }
 });
+
+// The member app gives no sign that an admin portal exists (founder, 13 November 2026):
+// Settings has no admin panel, link or notice for anyone, the operator included. The only
+// way in is typing the admin host's address (docs/design/admin-portal.md §2).
+test("Settings carries no admin entry, link or notice", () => {
+  const html = renderToStaticMarkup(<SettingsIndex />);
+  assert.doesNotMatch(html, /admin/i);
+  assert.doesNotMatch(html, /handoff/i);
+});

@@ -2,6 +2,7 @@ import { test } from "node:test";
 import assert from "node:assert/strict";
 import { NextRequest } from "next/server";
 import { proxy as middleware } from "./proxy";
+import { UNKNOWN_PAGE_PATH } from "./server/http/admin-routing";
 
 test("middleware replaces supplied nonces and gives Next and the browser the same fresh policy", () => {
   const saved = process.env.NODE_ENV;
@@ -94,11 +95,17 @@ test("the member app, auth, OAuth, MCP and dev routes do not exist on the admin 
   });
 });
 
-test("on the app host /admin is 404 and everything else is untouched; with no admin host configured the app behaves as before", () => {
+test("on the app host /admin is answered exactly like any page the app does not have; everything else is untouched", () => {
   withEnv(PROD, () => {
     for (const path of ["/admin", "/admin/session?handoff=x", "/admin/usage"]) {
-      const refused = middleware(new NextRequest(`https://app.example.test${path}`, { headers: { host: "app.example.test" } }));
-      assert.equal(refused.status, 404, path);
+      const hidden = middleware(new NextRequest(`https://app.example.test${path}`, { headers: { host: "app.example.test" } }));
+      // Rendered by Next's ordinary not-found page (404, same frame, same headers), never a
+      // bare proxy 404 that would tell /admin apart from any other missing path.
+      assert.equal(new URL(hidden.headers.get("x-middleware-rewrite")!).pathname, UNKNOWN_PAGE_PATH, path);
+      assert.match(hidden.headers.get("content-security-policy")!, /nonce-/);
+      assert.equal(hidden.headers.get("cache-control"), "private, no-store");
+      assert.equal(hidden.headers.get("x-robots-tag"), null);
+      assert.equal(hidden.headers.get("x-middleware-request-x-admin-pathname"), null);
     }
     const page = middleware(new NextRequest("https://app.example.test/home", { headers: { host: "app.example.test" } }));
     assert.equal(page.status, 200);
@@ -107,7 +114,7 @@ test("on the app host /admin is 404 and everything else is untouched; with no ad
   });
   withEnv({ NODE_ENV: "production", PUBLIC_BASE_URL: undefined, ADMIN_BASE_URL: undefined }, () => {
     assert.equal(middleware(new NextRequest("https://admin.example.test/usage", { headers: { host: "admin.example.test" } })).headers.get("x-middleware-rewrite"), null);
-    assert.equal(middleware(new NextRequest("https://app.example.test/admin", { headers: { host: "app.example.test" } })).status, 404);
+    assert.equal(new URL(middleware(new NextRequest("https://app.example.test/admin", { headers: { host: "app.example.test" } })).headers.get("x-middleware-rewrite")!).pathname, UNKNOWN_PAGE_PATH);
   });
 });
 

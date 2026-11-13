@@ -49,17 +49,27 @@ proof minted by the app host.
    `UPDATE users SET role = 'admin' WHERE lower(email) = $1 AND role <> 'admin'
    AND wrapped_dek <> ''`. Promote only; never demote; config is never read at
    request time.
-2. **Entry control.** Settings (`SettingsIndex`) shows an "Admin portal" panel
-   only when the signed-in person's role is `admin`. Its button calls the server
-   action `startAdminHandoff` (inline in `settings/page.tsx`, logic in
-   `src/server/admin/handoff.ts`), which re-derives the session from
-   `__Host-wh_session`, requires `role = 'admin'`, a live account
-   (`wrapped_dek <> ''`) and a fresh step-up (`requireStepUp`, 5 minutes). A stale
-   step-up returns `step_up_required`; the control mounts the existing
-   `ConfirmItsYou` inline and retries on confirmation. On success it returns the
-   URL `<adminOrigin>/session?handoff=<token>` and the client runs
-   `window.location.assign(url)` — script navigation is not governed by CSP
-   `form-action`, so the strict policy stays.
+2. **Entry control (amended 13 November 2026).** The member app shows no admin
+   entry, link or notice anywhere, for anyone, the operator included; the only way
+   in is typing the admin host's address. Its `/signin` page (outside the guarded
+   group; where the guard sends everyone without an admin session) offers one
+   "Sign in" link to `<publicOrigin>/signin?next=%2Fhandoff`, the app's ordinary
+   sign-in. A visitor already signed in is forwarded straight on; a fresh sign-in
+   records a step-up, so straight after signing in nothing more is asked. The
+   unlinked app route `/handoff` (outside every route group, so no layout sends a
+   signed-out visitor to sign-in) renders only for a live admin (`admitHandoff`
+   in `src/server/admin/entry.ts`) and otherwise calls `notFound()`: the app's
+   ordinary 404. For an admin it calls the server action `startAdminHandoff`
+   (logic in `src/server/admin/handoff.ts`) on mount, which re-derives the
+   session from `__Host-wh_session`, requires `role = 'admin'`, a live account
+   (`wrapped_dek <> ''`) and a fresh step-up (`requireStepUp`, 5 minutes). A
+   stale step-up returns `step_up_required`; the screen mounts the existing
+   `ConfirmItsYou` and retries on confirmation. On success it returns the URL
+   `<adminOrigin>/session?handoff=<token>` and the client runs
+   `window.location.assign(url)`: script navigation is not governed by CSP
+   `form-action`, so the strict policy stays. On the app host, `/admin` and
+   `/admin/*` are rewritten to a path no route serves, so they get the same
+   not-found page and headers as any other missing path.
 3. **Handoff token.** 32 random bytes (hex), stored only as SHA-256 in
    `admin_sessions.handoff_hash`, 60-second TTL, one live handoff per app session
    (minting deletes that session's unexchanged rows). Stateless tokens cannot be
@@ -69,7 +79,7 @@ proof minted by the app host.
    the app session to exist and the user to still be an admin; exactly one
    concurrent request can win. It sets `__Host-wh_admin` and 303-redirects to
    `/` so the token leaves the address bar at once. Any invalid, expired or
-   reused token gives the same 303 to `<publicOrigin>/settings?notice=admin_handoff_expired`.
+   reused token gives the same 303 to the admin host's `/signin?notice=expired`.
    The exchange path shares the proxy's auth IP limiter.
 5. **Admin session.** `admin_sessions.session_id REFERENCES sessions(id) ON
    DELETE CASCADE`, so sign-out, "sign out this session", recovery, reset and
@@ -77,8 +87,8 @@ proof minted by the app host.
    HttpOnly, Secure, SameSite=Lax, 12 h absolute, 60 min idle. Every verify is
    one guarded UPDATE that re-checks the role, the tombstone and the app
    session's own 14-day/30-day windows. `POST /signout` on the admin host ends
-   only the admin session (Origin must equal the admin origin) and returns to
-   `<publicOrigin>/settings?notice=admin_signed_out`.
+   only the admin session (Origin must equal the admin origin) and lands on the
+   admin host's `/signed-out` page, whose "Sign in again" goes to its `/signin`.
 6. **Audit.** Metric events, never personal content: `admin.handoff`
    (`minted | step_up_required | not_admin`), `admin.session`
    (`exchanged | rejected`), `admin.signout`, `admin.lookup` (`found | none`).
