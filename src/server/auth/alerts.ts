@@ -51,10 +51,12 @@ interface Alert {
 }
 
 // Untrusted free text (an agent's name, a device label) shown in an alert email: on one
-// line and shortened, so it can't push the fixed copy around or fake a line of its own.
+// line and shortened, so it can't push the fixed copy around or fake a line of its own. It is
+// scrubbed BEFORE it is cut: a cut through a card number would hide the card from the
+// card rules and leave its leading digits in the alert.
 const ALERT_NAME_CHARS = 60;
 function shortName(name: string): string {
-  const plain = name.replace(/\s+/g, " ").trim();
+  const plain = scrub(name).replace(/\s+/g, " ").trim();
   return plain.length > ALERT_NAME_CHARS ? `${plain.slice(0, ALERT_NAME_CHARS).trimEnd()}…` : plain;
 }
 

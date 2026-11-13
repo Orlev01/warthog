@@ -532,3 +532,29 @@ test("the account-recovered email puts its own copy and the support address befo
     await db.close();
   }
 });
+
+// A name is redacted BEFORE it is shortened: cutting first could split a card number so the
+// card rules no longer recognise it, and leave its leading digits in the alert.
+test("a card number straddling the name cut is masked, not half-shown", async () => {
+  const db = await freshDb();
+  try {
+    const name = `${"x".repeat(50)} ${CARD_SPACED}`;
+    const sends = [
+      (userId: string, deps: { emailSender: Outbox }) => alertNewAgentConnection(db, { userId, agentName: name }, deps),
+      (userId: string, deps: { emailSender: Outbox }) => alertAccessKeyReplaced(db, { userId, agentName: name }, deps),
+      (userId: string, deps: { emailSender: Outbox }) => alertNewDeviceSignIn(db, { userId, deviceLabel: name }, deps),
+      (userId: string, deps: { emailSender: Outbox }) => alertAccountRecovered(db, { userId, agentNames: [name] }, deps),
+    ];
+    for (const send of sends) {
+      const outbox = createOutbox();
+      const person = await freshUser(db, "straddle");
+      await send(person.id, { emailSender: outbox });
+      const [message] = outbox.list();
+      for (const text of [message!.body, renderEmail(message!.email!).text, renderEmail(message!.email!).html]) {
+        assert.doesNotMatch(text, /4111 1111|41111111/, "no leading digits of the card survive the cut");
+      }
+    }
+  } finally {
+    await db.close();
+  }
+});
