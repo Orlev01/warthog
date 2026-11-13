@@ -1,4 +1,20 @@
-# Delivery status — 13 November 2026 (logo, UI/UX follow-ups, sign-in audit fixes)
+# Delivery status — 13 November 2026 (admin portal, branch `claude/admin-portal`, not yet released)
+
+**Built and verified locally, awaiting review, release and the hostname binding.** The
+admin portal for `admin.warthog.com.au` is on branch `claude/admin-portal` from main
+`75bdbf0`: sign-ups and activation, usage, accounts (no addresses listed), reliability,
+traffic and system pages, read only from plaintext operational metadata and the metric
+store; entered from Settings by the `admin` role (the configured `OPERATOR_EMAIL`,
+promoted hourly) after a fresh step-up, through a single-use handoff to the admin host's own
+session. The admin origin is derived from `PUBLIC_BASE_URL`, so the release stays
+image-only; binding the hostname is a separate approved step
+([runbook](docs/admin-portal-launch.md)). Three additive migrations (0110–0112), nine new
+metric names and three sweeps. Typecheck, the production build and the full suite
+(5,947 tests) pass on the branch. See the [decision](docs/adr/admin-portal.md), the
+[design](docs/design/admin-portal.md) and the
+[build and verification record](docs/audit/admin-portal-2026-11-13/README.md).
+
+# Earlier delivery status — 13 November 2026 (logo, UI/UX follow-ups, sign-in audit fixes)
 
 **Live at [app.warthog.com.au](https://app.warthog.com.au).** Application source
 `75bdbf0c708a65d42a17f56716b48bc45d635922` runs as `warthog--r43339696686a1`, with one
