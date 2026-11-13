@@ -1,0 +1,86 @@
+/* Admin portal data displays (docs/design/admin-portal.md §5): stat tiles, sparklines, bar
+ * lists, funnels and the small tables. Loaded after controls.css. Tokens only: the workspace
+ * accent for series and bars, semantic tones only where a number means something. */
+
+/* ---------- Stat tiles ---------- */
+.wh-stat-tiles { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 12px; list-style: none; margin: 0; padding: 0; }
+.wh-stat-tile { min-width: 0; }
+.wh-stat-tile-link,
+.wh-stat-tile-body { display: flex; min-width: 0; flex-direction: column; gap: 4px; padding: 16px; border-radius: inherit; color: var(--wh-fg); }
+.wh-stat-tile-link { min-height: 44px; }
+.wh-stat-tile-link:hover { background: var(--wh-surface-muted); }
+.wh-stat-label { color: var(--wh-fg-muted); font-size: 12px; font-weight: 500; line-height: 16px; }
+.wh-stat-value { font-size: 28px; font-weight: 600; line-height: 32px; letter-spacing: -.02em; font-variant-numeric: tabular-nums; overflow-wrap: anywhere; }
+.wh-stat-sub { color: var(--wh-fg-muted); font-size: 12px; line-height: 16px; }
+.wh-stat-delta { display: inline-flex; min-width: 0; align-items: flex-start; gap: 4px; margin-top: 4px; color: var(--wh-fg-muted); font-size: 12px; line-height: 16px; }
+.wh-stat-delta svg { margin-top: 0; }
+.wh-stat-spark { display: block; margin-top: 8px; }
+.wh-stat-tile[data-tone="danger"] { border-color: color-mix(in srgb, var(--wh-danger) 45%, var(--wh-edge, var(--wh-line))); }
+.wh-stat-tile[data-tone="danger"] .wh-stat-value { color: var(--wh-danger); }
+.wh-stat-tile[data-tone="success"] .wh-stat-value { color: var(--wh-success); }
+@media (min-width: 640px) {
+  .wh-stat-tiles { gap: 16px; }
+  .wh-stat-tile-link, .wh-stat-tile-body { padding: 20px; }
+}
+@media (min-width: 1024px) {
+  .wh-stat-tiles { grid-template-columns: repeat(auto-fit, minmax(176px, 1fr)); }
+}
+
+/* ---------- Sparkline ---------- */
+.wh-sparkline { display: block; width: 100%; min-width: 0; }
+.wh-sparkline svg { display: block; width: 100%; height: 32px; overflow: visible; }
+.wh-sparkline[data-height="56"] svg { height: 56px; }
+
+/* ---------- Bar list and funnel ---------- */
+.wh-bar-list, .wh-funnel { display: flex; flex-direction: column; gap: 10px; list-style: none; margin: 0; padding: 0; }
+.wh-bar-row { display: grid; grid-template-columns: minmax(0, 1fr) auto; column-gap: 12px; row-gap: 4px; align-items: center; min-width: 0; font-size: 14px; line-height: 20px; }
+.wh-bar-label { display: flex; min-width: 0; align-items: center; gap: 8px; overflow-wrap: anywhere; }
+.wh-bar-label a { min-height: 0; }
+.wh-bar-count { color: var(--wh-fg); font-variant-numeric: tabular-nums; text-align: end; }
+.wh-bar-track { grid-column: 1 / -1; display: block; height: 6px; overflow: hidden; border-radius: 9999px; background: var(--wh-surface-muted); }
+.wh-bar-fill { display: block; height: 100%; border-radius: inherit; background: var(--wh-tint); }
+.wh-bar-row[data-tone="danger"] .wh-bar-fill { background: var(--wh-danger); }
+.wh-bar-row[data-tone="warning"] .wh-bar-fill { background: var(--wh-warning); }
+.wh-funnel-step { display: flex; min-width: 0; flex-direction: column; gap: 4px; font-size: 14px; line-height: 20px; }
+.wh-funnel-head { display: flex; min-width: 0; align-items: baseline; justify-content: space-between; gap: 12px; }
+.wh-funnel-label { min-width: 0; overflow-wrap: anywhere; }
+.wh-funnel-count { font-variant-numeric: tabular-nums; }
+.wh-funnel-conversion { display: flex; flex-wrap: wrap; align-items: center; gap: 4px 8px; color: var(--wh-fg-muted); font-size: 12px; line-height: 16px; }
+.wh-funnel-drop { display: inline-flex; align-items: center; gap: 4px; font-weight: 500; }
+.wh-funnel-step[data-drop] .wh-bar-fill { background: color-mix(in srgb, var(--wh-warning) 70%, var(--wh-tint)); }
+
+/* ---------- Facts, trends, attention ---------- */
+.wh-fact-list { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+.wh-fact-list dd { overflow-wrap: anywhere; }
+@media (min-width: 640px) { .wh-fact-list { grid-template-columns: repeat(3, minmax(0, 1fr)); } }
+.wh-trend-list { display: flex; flex-direction: column; gap: 16px; list-style: none; margin: 0; padding: 0; }
+.wh-trend { display: flex; min-width: 0; flex-direction: column; gap: 6px; }
+.wh-trend-head { display: flex; align-items: baseline; justify-content: space-between; gap: 12px; font-size: 14px; line-height: 20px; }
+.wh-trend-head strong { font-variant-numeric: tabular-nums; font-weight: 600; }
+.wh-attention-row { display: flex; min-width: 0; align-items: flex-start; gap: 10px; }
+.wh-attention-row a { min-height: 44px; display: inline-flex; align-items: center; text-decoration: underline; text-underline-offset: 4px; overflow-wrap: anywhere; }
+.wh-attention-row svg { flex-shrink: 0; margin-top: 12px; }
+@media (min-width: 1024px) { .wh-attention-row a { min-height: 0; padding-block: 2px; } .wh-attention-row svg { margin-top: 2px; } }
+
+/* ---------- Tables (System sweeps) ---------- */
+.wh-admin-table-region { overflow-x: auto; -webkit-overflow-scrolling: touch; }
+.wh-admin-table { width: 100%; min-width: 480px; border-collapse: collapse; font-size: 14px; line-height: 20px; }
+.wh-admin-table caption { padding-bottom: 8px; color: var(--wh-fg-muted); font-size: 12px; text-align: start; }
+.wh-admin-table th, .wh-admin-table td { padding: 8px 12px 8px 0; border-bottom: 1px solid var(--wh-line); text-align: start; vertical-align: top; }
+.wh-admin-table th { color: var(--wh-fg-muted); font-size: 12px; font-weight: 500; }
+.wh-admin-table tr:last-child td { border-bottom: 0; }
+.wh-admin-table td[data-numeric], .wh-admin-table th[data-numeric] { text-align: end; font-variant-numeric: tabular-nums; }
+
+/* ---------- Sidebar footer (two ways out) ---------- */
+.wh-admin-footer { display: flex; flex-direction: column; gap: 2px; }
+
+/* ---------- Lookup form ---------- */
+.wh-admin-lookup { display: flex; flex-wrap: wrap; align-items: flex-end; gap: 12px; }
+.wh-admin-lookup > div:first-child { min-width: 0; flex: 1 1 18rem; }
+
+@media (forced-colors: active) {
+  .wh-bar-track { border: 1px solid CanvasText; }
+  .wh-bar-fill { background: Highlight; forced-color-adjust: none; }
+  .wh-sparkline svg { color: CanvasText; }
+  .wh-stat-tile { border: 1px solid CanvasText; }
+}

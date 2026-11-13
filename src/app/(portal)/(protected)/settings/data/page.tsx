@@ -20,6 +20,7 @@ import { selectSenders, type Senders, type OutgoingMessage } from "@/server/noti
 import { HttpError } from "@/server/http/validate";
 import type { DeletionExecutor } from "@/server/account/delete";
 import { selectDeletionJournal } from "@/server/storage/deletion-journal";
+import { metricSeamFor } from "@/server/metrics/seam";
 import type { Db } from "@/server/db/index";
 import { createDataActions, DELETE_ACCOUNT_CONFIRMATION, type ActionResult } from "./actions";
 import type { Metadata } from "next";
@@ -86,6 +87,7 @@ function buildActions(db: Db, revoker: DeletionExecutor = deletionRevokerFor(db)
     senders: notificationSenders(config, db),
     journal: selectDeletionJournal({ nodeEnv: config.nodeEnv, account: config.blob.account,
       container: config.blob.deletionJournalContainer }),
+    recordMetric: metricSeamFor(db, systemClock),
   });
 }
 

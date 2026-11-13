@@ -26,6 +26,7 @@ import { buildDispatchTable, buildPeriodicSweeps, type JobSeams } from "./regist
 import { createScheduler, type Scheduler } from "./scheduler";
 import type { Db } from "../db/index";
 import { createConnectorRuntime } from "../connectors/runtime";
+import { metricSeamFor } from "../metrics/seam";
 
 const FRANKFURTER_BASE_URL = "https://api.frankfurter.app";
 
@@ -35,6 +36,7 @@ export async function composeJobSeams(
   const config = overrides.config ?? loadConfig();
   const db = await (overrides.getDb ?? getServerDb)();
   const senders = notificationSenders(config, db);
+  const recordMetric = metricSeamFor(db, systemClock);
   return {
     db,
     getPurgeDb: config.nodeEnv === "production" ? getPurgeDb : async () => db,
@@ -43,7 +45,7 @@ export async function composeJobSeams(
     random: systemRandom,
     senders,
     push: senders.push,
-    refresh: (target) => createConnectorRuntime({ config, db }).refresh(target),
+    refresh: (target) => createConnectorRuntime({ config, db, recordMetric }).refresh(target),
     resetExecutor: createResetExecutor(db),
     deletionJournal: selectDeletionJournal({ nodeEnv: config.nodeEnv, account: config.blob.account,
       container: config.blob.deletionJournalContainer }),
@@ -57,6 +59,7 @@ export async function composeJobSeams(
     }),
     publicBaseUrl: config.publicBaseUrl,
     operatorEmail: config.operatorEmail,
+    recordMetric,
   };
 }
 
@@ -70,5 +73,6 @@ export async function composeScheduler(): Promise<Scheduler> {
     sweeps: buildPeriodicSweeps(seams),
     dispatch: buildDispatchTable(seams),
     log: (entry) => console.error("[warthog jobs]", JSON.stringify(entry)),
+    recordMetric: seams.recordMetric,
   });
 }

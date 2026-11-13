@@ -23,6 +23,7 @@ export const CONNECTOR_CONNECT = "connector.connect";
 export const CONNECTOR_REFRESH = "connector.refresh";
 export const JOB_FAILURE = "job.failure";
 export const ACCOUNT_DELETED = "account.deleted";
+export const AGENT_TOKEN = "agent.token";
 export const HTTP_REQUESTS = "http.requests";
 export const ADMIN_HANDOFF = "admin.handoff";
 export const ADMIN_SESSION = "admin.session";

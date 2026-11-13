@@ -29,7 +29,9 @@
 
 import { redact } from "../../domain/redaction/redact";
 import { enqueue, type Job } from "../db/jobs";
-import { updateConnectionStatus } from "../db/connections";
+import { getConnectionById, updateConnectionStatus } from "../db/connections";
+import { tryRecord, type MetricSeam } from "../metrics/seam";
+import { CONNECTOR_REFRESH, REFRESH_OUTCOMES } from "../metrics/names";
 import type { Db } from "../db/index";
 import type { Clock } from "../seams/clock";
 import type { PushSender } from "../notify/senders";
@@ -73,6 +75,10 @@ export interface ConnectorJobDeps {
   readonly clock: Clock;
   readonly push: PushSender;
   readonly refresh: RefreshConnection;
+  // Optional, best-effort: a Google early-access lapse is one `connector.refresh` event
+  // with outcome `lapsed` for its connector (docs/design/admin-portal.md §4). A failed
+  // renewal is recorded by the renewal itself, never twice.
+  readonly recordMetric?: MetricSeam;
 }
 
 // Every connector job carries the owning person and the connection it acts on. The
@@ -166,11 +172,15 @@ async function handleGoogleReminder(deps: ConnectorJobDeps, target: ConnectionTa
 // A due Google lapse (at the 7-day mark): the testing-mode connection has expired —
 // mark it needs_reconnect.
 async function handleGoogleLapse(deps: ConnectorJobDeps, target: ConnectionTarget): Promise<void> {
+  const connection = await getConnectionById(deps.db, target.userId, target.connectionId);
   await updateConnectionStatus(deps.db, {
     userId: target.userId,
     id: target.connectionId,
     status: "needs_reconnect",
   });
+  if (connection) {
+    await tryRecord(deps.recordMetric, { name: CONNECTOR_REFRESH, value: 1, dimensions: { connectorId: connection.connectorId, outcome: REFRESH_OUTCOMES.lapsed } });
+  }
 }
 
 // The dispatcher handed to the queue runner (`run(db, clock, handler)`). It routes a

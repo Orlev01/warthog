@@ -29,6 +29,8 @@ import type { Connection } from "../../../server/db/connections";
 import { pendingConnects } from "../../../server/connectors/pending";
 import { createConnectorRuntime } from "../../../server/connectors/runtime";
 import { standaloneResponse } from "../../../components/public/standalone-html";
+import { metricSeamFor, tryRecord, type MetricSeam } from "../../../server/metrics/seam";
+import { CONNECTOR_CONNECT, CONNECT_OUTCOMES } from "../../../server/metrics/names";
 
 // The connect-start secrets stashed for a pending provider sign-in — NOT the user id (the
 // lookup is already scoped by the session user, so the flow needn't carry it).
@@ -57,6 +59,10 @@ export interface ConnectCallbackSeams {
   readonly takePendingFlow?: (userId: string, state: string, sessionId?: string) => Promise<PendingConnectFlow | null>;
   readonly completeConnection?: (input: CompleteConnectionInput) => Promise<Connection>;
   readonly config?: Config;
+  // Optional, best-effort: a person declining at the provider is one `connector.connect`
+  // event with outcome `declined` for that connector (docs/design/admin-portal.md §4); the
+  // runtime records the connect itself. Production supplies the real seam lazily.
+  readonly recordMetric?: MetricSeam;
 }
 
 // The provider redirect carries two short opaque values. Both are required (the CSRF
@@ -100,10 +106,15 @@ async function defaultTakePendingFlow(userId: string, state: string, sessionId?:
   return pendingConnects().take(userId,sessionId,state) ?? await createConnectorRuntime({config:loadConfig(),db:await getServerDb()}).takeProvider(userId,sessionId,state);
 }
 
-// Exchange and persist through the connector runtime after the state check.
+// Exchange and persist through the connector runtime after the state check, recording the
+// connect outcome through the process-wide database.
 async function defaultCompleteConnection(input: CompleteConnectionInput, config: Config): Promise<Connection> {
-  return createConnectorRuntime({ config, db: await getServerDb() }).complete(input);
+  const db = await getServerDb();
+  return createConnectorRuntime({ config, db, recordMetric: metricSeamFor(db, systemClock) }).complete(input);
 }
+
+// The real metric seam, resolved per call so importing this module opens no database.
+const defaultRecordMetric: MetricSeam = async (input) => metricSeamFor(await getServerDb(), systemClock)(input);
 
 // --- responses ----------------------------------------------------------------------
 
@@ -138,6 +149,7 @@ export function createConnectCallbackHandler(
   const resolveSession = seams.resolveSession ?? defaultResolveSession;
   const takePendingFlow = seams.takePendingFlow ?? defaultTakePendingFlow;
   const completeConnection = seams.completeConnection;
+  const recordMetric = seams.recordMetric ?? defaultRecordMetric;
 
   async function GET(request: Request): Promise<Response> {
     const config = seams.config ?? loadConfig();
@@ -152,7 +164,9 @@ export function createConnectCallbackHandler(
     const query = new URL(request.url).searchParams;
     if (query.has("error")) {
       const state = query.get("state");
-      if (!state || state.length > MAX_FIELD || !(await takePendingFlow(session.userId, state, session.id))) return badRequest("This sign-in link has expired or is invalid.");
+      const declined = state && state.length <= MAX_FIELD ? await takePendingFlow(session.userId, state, session.id) : null;
+      if (!declined) return badRequest("This sign-in link has expired or is invalid.");
+      await tryRecord(recordMetric, { name: CONNECTOR_CONNECT, value: 1, dimensions: { connectorId: declined.connectorId, outcome: CONNECT_OUTCOMES.declined } });
       return redirect(appUrl(config, "/connectors?notice=connection-declined"));
     }
 

@@ -18,6 +18,8 @@ import { gateGoogleConnector } from "./google-early-access";
 import { scheduleConnectionRefresh, scheduleGoogleLapse } from "./jobs";
 import { HttpError } from "../http/validate";
 import type { CatalogueEntry } from "../../domain/catalogue/schema";
+import { tryRecord, type MetricSeam } from "../metrics/seam";
+import { CONNECTOR_CONNECT, CONNECTOR_REFRESH, CONNECT_OUTCOMES, REFRESH_OUTCOMES } from "../metrics/names";
 
 function reportConnectorFailure(stage: string, error: unknown) {
   const detail = error as { code?: unknown; cause?: { claim?: unknown } } | null;
@@ -34,8 +36,12 @@ export interface CompleteConnectorInput extends PendingConnectFlow { readonly us
 
 export function createConnectorRuntime(deps: {
   config: Config; db: Db; clock?: Clock; fetch?: typeof fetch; keyWrapper?: KeyWrapper; catalogue?: CatalogueIndex;
+  // Optional, best-effort connect/refresh outcome metrics (docs/design/admin-portal.md §4):
+  // the connector id, the outcome and, on a failed connect, the failing stage — never an
+  // account label, token or identity value.
+  recordMetric?: MetricSeam;
 }) {
-  const { config, db } = deps;
+  const { config, db, recordMetric } = deps;
   const clock = deps.clock ?? systemClock;
   const request = deps.fetch ?? createGuardedProviderFetch();
   const wrapper = deps.keyWrapper ?? selectKeyWrapper({ nodeEnv: config.nodeEnv, localKek: config.devKek });
@@ -94,7 +100,7 @@ export function createConnectorRuntime(deps: {
       const dek = await keyFor(input.userId);
       let stage = "token_exchange";
       try {
-        return await withTransaction(db, async (tx) => {
+        const connection = await withTransaction(db, async (tx) => {
           const connection = await exchangeCodeForConnection({ ...input, entry, config: oauthClientFor(config, entry.id), dek }, { db: tx, clock, fetch: request, accountLabelFor });
           stage = "schedule_refresh";
           await schedule(tx, input.userId, connection.id, dek);
@@ -104,8 +110,11 @@ export function createConnectorRuntime(deps: {
             kind: "connection_change", source: "warthog", connectorId: entry.id, outcome: "connected", payload: { service: entry.name } });
           return connection;
         });
+        await tryRecord(recordMetric, { name: CONNECTOR_CONNECT, value: 1, dimensions: { connectorId: entry.id, outcome: CONNECT_OUTCOMES.ok } });
+        return connection;
       } catch (error) {
         reportConnectorFailure(stage, error);
+        await tryRecord(recordMetric, { name: CONNECTOR_CONNECT, value: 1, dimensions: { connectorId: entry.id, outcome: CONNECT_OUTCOMES.failed, errorCategory: stage } });
         throw new HttpError(502, "The service could not be connected. Try connecting again.");
       }
       finally { dek.fill(0); }
@@ -113,19 +122,28 @@ export function createConnectorRuntime(deps: {
     async refresh(target: { userId: string; connectionId: string }) {
       const connection = await getConnectionById(db, target.userId, target.connectionId);
       if (!connection || connection.status !== "connected") return;
-      const entry = entryFor(connection.connectorId);
-      await allowed(target.userId, entry);
-      if (entry.google_early_access && new Date(connection.connectedAt).getTime() + 7 * 86_400_000 <= clock.now().getTime()) throw new Error("Google consent has expired");
-      const dek = await keyFor(target.userId);
+      const connectorId = connection.connectorId;
+      // Every way this renewal can fail is one `connector.refresh` failure for its connector;
+      // a renewal that goes through is one success.
       try {
-        await withTransaction(db, async (tx) => {
-          await tx.query("SELECT pg_advisory_xact_lock(hashtextextended($1, 0))", [`connector-refresh:${target.connectionId}`]);
-          if (!(await getConnectionById(tx, target.userId, target.connectionId))) return;
-          await refreshConnectionTokens({ ...target, entry, config: oauthClientFor(config, entry.id), dek }, { db: tx, clock, fetch: request });
-          await schedule(tx, target.userId, target.connectionId, dek);
-        });
-      } catch { throw new Error("Connector refresh failed"); }
-      finally { dek.fill(0); }
+        const entry = entryFor(connectorId);
+        await allowed(target.userId, entry);
+        if (entry.google_early_access && new Date(connection.connectedAt).getTime() + 7 * 86_400_000 <= clock.now().getTime()) throw new Error("Google consent has expired");
+        const dek = await keyFor(target.userId);
+        try {
+          await withTransaction(db, async (tx) => {
+            await tx.query("SELECT pg_advisory_xact_lock(hashtextextended($1, 0))", [`connector-refresh:${target.connectionId}`]);
+            if (!(await getConnectionById(tx, target.userId, target.connectionId))) return;
+            await refreshConnectionTokens({ ...target, entry, config: oauthClientFor(config, entry.id), dek }, { db: tx, clock, fetch: request });
+            await schedule(tx, target.userId, target.connectionId, dek);
+          });
+        } catch { throw new Error("Connector refresh failed"); }
+        finally { dek.fill(0); }
+      } catch (error) {
+        await tryRecord(recordMetric, { name: CONNECTOR_REFRESH, value: 1, dimensions: { connectorId, outcome: REFRESH_OUTCOMES.failed } });
+        throw error;
+      }
+      await tryRecord(recordMetric, { name: CONNECTOR_REFRESH, value: 1, dimensions: { connectorId, outcome: REFRESH_OUTCOMES.ok } });
     },
     async revoke(input: { userId: string; connectionId: string; connectorId: string; credentials: Record<string, unknown> }) {
       if (providerFor(input.connectorId) !== "google") throw new Error("Remove Warthog access in your provider account to revoke its consent.");

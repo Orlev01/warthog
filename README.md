@@ -47,6 +47,19 @@ See [the ownership and access model](docs/adr/agent-first-management.md) and
 [the cross-domain review](docs/audit/agent-first-review-2026-11-10.md) for enforced
 behaviour, validation and remaining integration limits.
 
+## Admin portal
+
+The founder's operational view lives on a second host served by the same container,
+`admin.warthog.com.au`: sign-ups and activation, usage, reliability, traffic and system
+health, read only from plaintext operational metadata and the personal-content-free metric
+store (never vault contents, never a list of addresses). It is entered from **Settings →
+Admin portal** by an account with the `admin` role (the configured `OPERATOR_EMAIL`,
+promoted hourly) after a fresh passkey or authenticator confirmation; the admin host never
+signs anyone in itself. See the [decision](docs/adr/admin-portal.md), the
+[design](docs/design/admin-portal.md) and the [launch runbook](docs/admin-portal-launch.md)
+(binding the hostname is a separate approved step). Locally the portal is
+`http://admin.localhost:3000` with `OPERATOR_EMAIL` set to your own sign-up address.
+
 ## OAuth connection compatibility
 
 The 11 November security update binds refresh tokens to their issuing OAuth

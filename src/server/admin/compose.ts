@@ -44,6 +44,7 @@ export async function getAdminDeps(overrides: AdminComposeOverrides = {}): Promi
 // The seams the admin pages' loaders run from (docs/design/admin-portal.md §5). The portal
 // shows every instant in the operator's established default zone and reads no data key.
 import { DEFAULT_TIME_ZONE } from "../../domain/time-zone";
+import { getProcessCatalogue } from "../connectors/catalogue";
 import type { AdminPageDeps } from "./page-data";
 
 // Azure's own ingress metrics (status codes, latency) are not visible to the app; the
@@ -60,5 +61,6 @@ export async function getAdminPageDeps(overrides: AdminComposeOverrides = {}): P
     smsEnabled: config.smsEnabled,
     azureMetricsUrl: config.nodeEnv === "production" ? AZURE_CONTAINER_APPS_URL : null,
     recordMetric: metricSeamFor(db, systemClock),
+    connectorName: (id) => getProcessCatalogue(config).get(id)?.name,
   };
 }

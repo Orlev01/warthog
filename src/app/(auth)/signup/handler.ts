@@ -59,6 +59,8 @@ import { withTransaction, type Db } from "../../../server/db/index";
 import { pendingStore } from "../../../server/auth/pending-store";
 import { enrollTotp, matchTotpStep } from "../../../server/auth/totp";
 import { encrypt } from "../../../server/crypto/envelope";
+import { tryRecord, type MetricSeam } from "../../../server/metrics/seam";
+import { FACTORS, SIGNUP_COMPLETED, SIGNUP_OUTCOMES, SIGNUP_STEP, SIGNUP_STEPS } from "../../../server/metrics/names";
 
 // The dependency bundle. Each step reads the subset it needs; the superset is
 // structurally assignable to each. `rpId` is the WebAuthn RP ID (from config, never
@@ -72,6 +74,11 @@ export interface SignupHandlerDeps {
   readonly keyWrapper: KeyWrapper;
   readonly rpId: string;
   readonly publicOrigin: string;
+  // The optional, best-effort sign-up funnel metrics (docs/design/admin-portal.md §4): one
+  // `signup.step` per stage reached or refused and one `signup.completed` at the end, with
+  // only the stage/outcome/factor labels — never an address, name, code or handle. A
+  // handler built without the seam records nothing; a failing seam changes no response.
+  readonly recordMetric?: MetricSeam;
 }
 
 // The steps the thin `actions.ts` / route verbs call.
@@ -211,7 +218,14 @@ function throttled(retryAfterMs: number): Response {
 }
 
 export function createSignupHandler(deps: SignupHandlerDeps): SignupHandler {
-  const { db, clock, random, hmacKey, emailSender, keyWrapper, rpId, publicOrigin } = deps;
+  const { db, clock, random, hmacKey, emailSender, keyWrapper, rpId, publicOrigin, recordMetric } = deps;
+
+  // One funnel stage reached (or refused), as a metric carrying only its label and, when a
+  // factor was enrolled, which kind — nothing that could identify the person.
+  const recordStep = (outcome: string, platform?: string): Promise<void> =>
+    tryRecord(recordMetric, { name: SIGNUP_STEP, value: 1, dimensions: platform ? { outcome, platform } : { outcome } });
+  const recordCompleted = (outcome: string, platform: string): Promise<void> =>
+    tryRecord(recordMetric, { name: SIGNUP_COMPLETED, value: 1, dimensions: { outcome, platform } });
 
   // The request is same-origin only when it carries exactly the configured Origin. A
   // missing header (`null`) or a foreign one cannot be proven same-origin → refused.
@@ -244,7 +258,11 @@ export function createSignupHandler(deps: SignupHandlerDeps): SignupHandler {
       // nothing and says when to try again; the limit is per address, whether or not an
       // account exists, so the refusal reveals nothing about existence.
       const issued = await issueEmailCode(db, email, { purpose: "signup", clock, random, hmacKey, emailSender });
-      if (!issued.ok) return throttled(issued.retryAfterMs);
+      if (!issued.ok) {
+        await recordStep(SIGNUP_STEPS.throttled);
+        return throttled(issued.retryAfterMs);
+      }
+      await recordStep(SIGNUP_STEPS.codeSent);
       // Park the name against the email until verify-email mints a signupId and
       // takes it onto the pending sign-up (never a plaintext column).
       if (name !== undefined) {
@@ -267,7 +285,11 @@ export function createSignupHandler(deps: SignupHandlerDeps): SignupHandler {
       });
 
       const result = await verifyEmailCode(db, email, code, { purpose: "signup", clock, hmacKey, emailSender });
-      if (!result.ok) return json(400, { error: "invalid_code" });
+      if (!result.ok) {
+        await recordStep(SIGNUP_STEPS.codeRejected);
+        return json(400, { error: "invalid_code" });
+      }
+      await recordStep(SIGNUP_STEPS.emailVerified);
 
       // A full-entropy handle for the pending sign-up.
       const signupId = Buffer.from(random.randomBytes(32)).toString("hex");
@@ -339,6 +361,7 @@ export function createSignupHandler(deps: SignupHandlerDeps): SignupHandler {
       pending.totp = undefined;
 
       const code = await prepareRecovery(pending, signupId);
+      await recordStep(SIGNUP_STEPS.factorEnrolled, FACTORS.passkey);
       return json(200, { recoveryCode: code });
     } catch (error) {
       return handleError(error);
@@ -403,6 +426,7 @@ export function createSignupHandler(deps: SignupHandlerDeps): SignupHandler {
       claimed = pending;
       const recoveryCode = await prepareRecovery(pending, signupId);
       pending.totp.verifiedStep = step;
+      await recordStep(SIGNUP_STEPS.factorEnrolled, FACTORS.totp);
       return json(200, { recoveryCode });
     } catch (error) { return handleError(error); }
     finally { if (claimed) claimed.processing = false; }
@@ -485,12 +509,15 @@ export function createSignupHandler(deps: SignupHandlerDeps): SignupHandler {
       } catch (error) {
         if (isEmailTaken(error)) {
           pendingSignups.delete(signupId);
+          await recordCompleted(SIGNUP_OUTCOMES.accountExists, credential ? FACTORS.passkey : FACTORS.totp);
           return json(409, { error: "account_exists" });
         }
         throw error;
       }
 
       pendingSignups.delete(signupId);
+      // The funnel's end, recorded after the account committed (the transaction above).
+      await recordCompleted(SIGNUP_OUTCOMES.ok, credential ? FACTORS.passkey : FACTORS.totp);
       // The session cookie, plus the device cookie marking this browser as one the
       // person signs in on, so their next sign-in here raises no new-device alert.
       const headers = new Headers({ location: "/home" });

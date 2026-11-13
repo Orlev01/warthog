@@ -43,6 +43,7 @@ import type { KeyWrapper } from "../crypto/key-wrapper";
 import type { PushSender, Senders } from "../notify/senders";
 import type { RateSource } from "../currency/rate-source";
 import type { BlobStore } from "../storage/blob";
+import type { MetricSeam } from "../metrics/seam";
 
 const MINUTE_MS = 60 * 1000;
 const HOUR_MS = 60 * MINUTE_MS;
@@ -73,6 +74,8 @@ export interface JobSeams {
   // The configured operator address the `operator-role` sweep promotes to admin
   // (docs/design/admin-portal.md §2); absent outside production when unset.
   readonly operatorEmail?: string;
+  // Optional, best-effort metrics for the connector jobs (docs/design/admin-portal.md §4).
+  readonly recordMetric?: MetricSeam;
 }
 
 // A payload that names one approval (approval.fallback rows carry it).
@@ -93,6 +96,7 @@ export function buildDispatchTable(seams: JobSeams): Record<string, JobHandler> 
     clock: seams.clock,
     push: seams.push,
     refresh: seams.refresh,
+    recordMetric: seams.recordMetric,
   });
   return {
     [FALLBACK_JOB_TYPE]: (job) =>
