@@ -10,6 +10,13 @@ import { systemRandom } from "../seams/random";
 import { issueEmailCode } from "./email-code";
 import { completeAccountReset, requestAccountReset, RESET_WAIT_MS } from "./account-reset";
 
+// Completion now alerts every channel; these tests are about the deadline, so the alerts
+// land in a throwaway outbox.
+function quietSenders() {
+  const outbox = createOutbox();
+  return { push: outbox, email: outbox, sms: outbox };
+}
+
 const START = new Date("2026-11-01T00:00:00Z");
 
 test("reset completion enforces the seven-day boundary and claims a due reset only once", async () => {
@@ -24,13 +31,13 @@ test("reset completion enforces the seven-day boundary and claims a due reset on
       eraseVaultData: async () => { erases++; },
       revokeAgentsAndConnections: async () => { revokes++; },
     };
-    const before = { executor, clock: fixedClock(new Date(START.getTime() + RESET_WAIT_MS - 1)) };
+    const before = { executor, senders: quietSenders(), clock: fixedClock(new Date(START.getTime() + RESET_WAIT_MS - 1)) };
     assert.equal((await completeAccountReset(db, { userId: user.id }, before)).ok, false);
     assert.equal(erases, 0);
     assert.equal(revokes, 0);
     assert.equal((await db.query("SELECT status FROM account_resets WHERE user_id = $1", [user.id])).rows[0]?.status, "pending");
 
-    const due = { executor, clock: fixedClock(new Date(START.getTime() + RESET_WAIT_MS)) };
+    const due = { executor, senders: quietSenders(), clock: fixedClock(new Date(START.getTime() + RESET_WAIT_MS)) };
     const outcomes = await Promise.all([
       completeAccountReset(db, { userId: user.id }, due),
       completeAccountReset(db, { userId: user.id }, due),
@@ -65,12 +72,12 @@ test("an already-claimed older timer cannot complete a newly requested reset", a
     assert.equal((await db.query("SELECT status FROM jobs WHERE id = $1", [claimed.id])).rows[0]?.status, "claimed");
 
     assert.equal((await completeAccountReset(db, { userId: user.id },
-      { executor, clock: fixedClock(originalDue) })).ok, false);
+      { executor, senders: quietSenders(), clock: fixedClock(originalDue) })).ok, false);
     assert.equal(erases, 0, "the superseded running timer cannot erase the vault");
     assert.equal((await db.query("SELECT status FROM account_resets WHERE user_id = $1", [user.id])).rows[0]?.status, "pending");
 
     assert.deepEqual(await completeAccountReset(db, { userId: user.id },
-      { executor, clock: fixedClock(new Date(originalDue.getTime() + RESET_WAIT_MS)) }), { ok: true });
+      { executor, senders: quietSenders(), clock: fixedClock(new Date(originalDue.getTime() + RESET_WAIT_MS)) }), { ok: true });
     assert.equal(erases, 1, "the new reset completes only after its own seven-day wait");
   } finally { await db.close(); }
 });
@@ -117,7 +124,7 @@ test("failed alerts from a superseded request cannot cancel the newer reset or d
     assert.equal(new Date(timers[0]!.run_at as string).getTime(), renewedAt.getTime() + RESET_WAIT_MS);
     let erases = 0;
     const executor = { eraseVaultData: async () => { erases++; }, revokeAgentsAndConnections: async () => {} };
-    assert.equal((await completeAccountReset(db, { userId: user.id }, { executor,
+    assert.equal((await completeAccountReset(db, { userId: user.id }, { executor, senders: quietSenders(),
       clock: fixedClock(new Date(START.getTime() + RESET_WAIT_MS)) })).ok, false);
     assert.equal(erases, 0);
   } finally { releaseAlerts?.(); await db.close(); }

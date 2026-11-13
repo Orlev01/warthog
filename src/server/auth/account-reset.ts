@@ -28,12 +28,14 @@
 
 import type { RegistrationResponseJSON } from "@simplewebauthn/server";
 
-import { getUserByEmail } from "../db/users";
+import { getUserByEmail, getUserById } from "../db/users";
 import { listMobileNumbers } from "../db/mobile-numbers";
 import { verifyEmailCode } from "./email-code";
 import { finishPasskeyRegistration } from "./passkey";
 import { issueRecoveryCode } from "./recovery";
 import { createSession, lockActiveAccount, type CreatedSession } from "./session";
+import { evictLostFactors } from "./recover-session";
+import { SUPPORT_EMAIL } from "../../components/public/operator";
 import { enqueue } from "../db/jobs";
 import { withTransaction } from "../db/index";
 import type { Clock } from "../seams/clock";
@@ -49,11 +51,14 @@ const SEVEN_DAYS_MS = 7 * 24 * 60 * MINUTE_MS;
 export const RESET_WAIT_MS = SEVEN_DAYS_MS;
 
 // How long after a reset completes the person may use it to set up a new passkey (review
-// fix W5). A finished reset is a standing way in for whoever holds the email address, so
-// it does not stay open for ever: after this the person asks for a new reset, with its own
-// 7-day wait and alerts. Measured from requested_at + RESET_WAIT_MS (the earliest the
-// reset can have completed).
-export const REENROL_WINDOW_MS = 30 * 24 * 60 * MINUTE_MS;
+// fix W5; 7 days by the sign-in audit's founder decision of 13 November 2026, was 30). A
+// finished reset is a standing way in for whoever holds the email address, so it does not
+// stay open for long: after this the person asks for a new reset, with its own 7-day wait
+// and alerts. Measured from requested_at + RESET_WAIT_MS, the earliest the reset can have
+// completed, so the window is never longer than 7 days after the actual completion (the
+// completion job runs at that moment unless the scheduler was down). No completion time is
+// stored: this needs no schema change.
+export const REENROL_WINDOW_MS = SEVEN_DAYS_MS;
 
 // The background-job type the 7-day timer fires; its payload names the account so
 // the handler can drive completeAccountReset for the right person.
@@ -67,6 +72,16 @@ export const COMPLETE_JOB_TYPE = "account_reset.complete";
 const ALERT_BODY =
   "A reset of your Warthog account was requested and will complete in 7 days. " +
   "If this wasn't you, open the Warthog app on a device you're still signed in on and cancel it.";
+
+// The fixed notice sent on every channel when a reset completes (sign-in audit, founder
+// decision 13 November 2026). The completed reset is a way back in for whoever reads the
+// email for the next 7 days, so the person hears about it everywhere and is told how to
+// close it. Carries no code, token or link.
+const COMPLETED_ALERT_BODY =
+  "Your Warthog account reset has finished: your saved cards and protected details were erased " +
+  "and your agents were disconnected. For the next 7 days, anyone who can read your email can " +
+  "use it to set up a new passkey. If this wasn't you, open Warthog on a device you're still " +
+  `signed in on, choose "This wasn't me — close re-enrolment" and email ${SUPPORT_EMAIL}.`;
 
 // The cross-aggregate work a completed reset performs, injected because the vault /
 // agent / connection stores live in other aggregates (and are built later).
@@ -90,11 +105,13 @@ export interface RequestAccountResetDeps {
   readonly senders: Senders;
 }
 
-// Completing reads only the executor — the seam that erases the vault and revokes
-// the agents/connections of a reset that is still pending.
+// Completing reads the executor — the seam that erases the vault and revokes the
+// agents/connections of a reset that is still pending — and every channel's sender, which
+// carries the completion alert.
 export interface CompleteAccountResetDeps {
   readonly executor: ResetExecutor;
   readonly clock: Clock;
+  readonly senders: Senders;
   readonly releases?: Pick<ReleaseStore, "discardScope">;
 }
 
@@ -153,19 +170,8 @@ export async function requestAccountReset(
   });
 
   // Alert every registered channel once, so the person sees the reset on whatever
-  // they still have access to and can cancel it from a signed-in device. Push is
-  // addressed to the person (the sender finds their devices); SMS only ever goes to a
-  // number they verified.
-  const mobiles = deps.senders.sms.enabled === false ? []
-    : (await listMobileNumbers(db, person.id)).filter((number) => number.verified);
-  const sends: (() => Promise<void>)[] = [
-    () => deps.senders.push.sendPush({ recipient: person.id, body: ALERT_BODY }),
-    () => deps.senders.email.sendEmail({ recipient: person.email, body: ALERT_BODY }),
-    ...mobiles.map((mobile) => () => deps.senders.sms.sendSms({ recipient: mobile.number, body: ALERT_BODY })),
-  ];
-  // Each send is isolated, even one that throws before returning a promise.
-  const outcomes = await Promise.allSettled(sends.map(async (send) => send()));
-  if (!outcomes.some((outcome) => outcome.status === "fulfilled")) {
+  // they still have access to and can cancel it from a signed-in device.
+  if (!(await alertEveryChannel(db, person, ALERT_BODY, deps.senders))) {
     // Nobody could be told: withdraw the reset and its timer rather than let it run
     // unannounced. The send errors are not logged (they may name a recipient).
     await withTransaction(db, async (tx) => {
@@ -185,6 +191,28 @@ export async function requestAccountReset(
   }
 
   return { ok: true };
+}
+
+// Send one fixed body on every channel the person has registered: push (addressed to the
+// person; the sender finds their devices), email, and an SMS to each VERIFIED mobile. Each
+// channel is sent independently, so one failing sender never silences the others, even one
+// that throws before returning a promise. True when at least one channel accepted it. The
+// send errors are not logged (they may name a recipient).
+async function alertEveryChannel(
+  db: Db,
+  person: { id: string; email: string },
+  body: string,
+  senders: Senders,
+): Promise<boolean> {
+  const mobiles = senders.sms.enabled === false ? []
+    : (await listMobileNumbers(db, person.id)).filter((number) => number.verified);
+  const sends: (() => Promise<void>)[] = [
+    () => senders.push.sendPush({ recipient: person.id, body }),
+    () => senders.email.sendEmail({ recipient: person.email, body }),
+    ...mobiles.map((mobile) => () => senders.sms.sendSms({ recipient: mobile.number, body })),
+  ];
+  const outcomes = await Promise.allSettled(sends.map(async (send) => send()));
+  return outcomes.some((outcome) => outcome.status === "fulfilled");
 }
 
 // Remove this person's still-pending completion timers.
@@ -216,6 +244,55 @@ export async function cancelAccountReset(
   return { ok: true };
 }
 
+// Close re-enrolment on the person's completed reset ("This wasn't me", sign-in audit,
+// founder decision 13 November 2026). The same status-guarded update as cancel: only a
+// 'done' reset still inside its re-enrolment window moves to 'closed', so a close racing a
+// re-enrolment is safe. Re-enrolment claims 'done' → 'reenrolled' under the same row lock,
+// and whichever commits first leaves the other matching nothing. The userId comes from the
+// session (member-scoped). The caller requires a fresh step-up first. A closed reset can't
+// be re-enrolled; asking for a new reset starts a new 7-day wait with its own alerts.
+export async function closeAccountReset(
+  db: Db,
+  { userId }: { userId: string },
+  deps: { readonly clock: Clock },
+): Promise<{ ok: true } | { ok: false; reason: "no_completed_reset" }> {
+  const result = await db.query(
+    `UPDATE account_resets SET status = 'closed'
+     WHERE user_id = $1 AND status = 'done' AND requested_at > $2::timestamptz
+     RETURNING user_id`,
+    [userId, reenrolFloor(deps.clock.now())],
+  );
+  if (result.rows.length === 0) return { ok: false, reason: "no_completed_reset" };
+  return { ok: true };
+}
+
+// The person's completed reset that can still be re-enrolled, for the signed-in banner that
+// offers to close it: when it completed (at the earliest) and when re-enrolment closes by
+// itself. Member-scoped by the session's user id; null for a pending, cancelled,
+// re-enrolled, closed or lapsed reset, or none.
+export async function getCompletedAccountReset(
+  db: Db,
+  { userId }: { userId: string },
+  deps: { readonly clock: Clock },
+): Promise<{ completedAt: Date; reenrolUntil: Date } | null> {
+  const found = await db.query(
+    `SELECT requested_at FROM account_resets
+      WHERE user_id = $1 AND status = 'done' AND requested_at > $2::timestamptz`,
+    [userId, reenrolFloor(deps.clock.now())],
+  );
+  const row = found.rows[0];
+  if (!row) return null;
+  const completedAt = new Date(new Date(row.requested_at as string | Date).getTime() + RESET_WAIT_MS);
+  return { completedAt, reenrolUntil: new Date(completedAt.getTime() + REENROL_WINDOW_MS) };
+}
+
+// Whether the person's reset was closed from a signed-in device, so the set-up screens can
+// say so plainly instead of "no finished reset". Member-scoped by the verified user id.
+export async function isResetClosed(db: Db, { userId }: { userId: string }): Promise<boolean> {
+  const found = await db.query("SELECT 1 FROM account_resets WHERE user_id = $1 AND status = 'closed'", [userId]);
+  return found.rows.length > 0;
+}
+
 // The person's pending reset, for the signed-in banner that offers to cancel it: when it
 // was requested and when it will complete. Member-scoped by the session's user id; null
 // when nothing is pending.
@@ -245,6 +322,10 @@ export async function getPendingAccountReset(
 // fails, the status change rolls back with it and the error surfaces, so the job runner
 // retries a reset that is still pending — never one marked done but half done.
 // Everything else is kept: the users row and the wrapped DEK are untouched.
+//
+// Once the completion commits, every channel is told (sign-in audit, founder decision 13
+// November 2026), exactly once: only the call that claimed the row sends, so a retried or
+// duplicate timer sends nothing. A failed send never undoes the completion.
 export async function completeAccountReset(
   db: Db,
   { userId }: { userId: string },
@@ -263,7 +344,17 @@ export async function completeAccountReset(
     await deps.executor.revokeAgentsAndConnections(userId, tx);
     return { ok: true as const };
   });
-  if (outcome.ok) (deps.releases ?? releaseStore).discardScope(`${userId}:`);
+  if (outcome.ok) {
+    (deps.releases ?? releaseStore).discardScope(`${userId}:`);
+    try {
+      const person = await getUserById(db, userId);
+      const reached = person ? await alertEveryChannel(db, person, COMPLETED_ALERT_BODY, deps.senders) : false;
+      if (!reached) console.error("[warthog alerts] reset-completed alert not delivered on any channel");
+    } catch (error) {
+      const name = error instanceof Error ? error.name : "UnknownError";
+      console.error(`[warthog alerts] reset-completed alert not delivered (${name})`);
+    }
+  }
   return outcome;
 }
 
@@ -308,7 +399,7 @@ export interface ReenrolDeps {
 
 export type ReenrolResult =
   | { ok: true; recoveryCode: string; session: CreatedSession }
-  | { ok: false; reason: "no_completed_reset" | "bad_attestation" };
+  | { ok: false; reason: "no_completed_reset" | "reset_closed" | "bad_attestation" };
 
 // Register the person's new passkey and re-enrol them, in ONE transaction:
 //   1. claim the reset: UPDATE … SET status = 'reenrolled' WHERE status = 'done' RETURNING.
@@ -337,7 +428,9 @@ export async function reenrolAfterReset(
         RETURNING user_id`,
       [userId, reenrolFloor(clock.now())],
     );
-    if (claimed.rows.length === 0) return { ok: false, reason: "no_completed_reset" };
+    if (claimed.rows.length === 0) {
+      return { ok: false, reason: (await isResetClosed(tx, { userId })) ? "reset_closed" : "no_completed_reset" };
+    }
 
     const registered = await finishPasskeyRegistration(tx, { userId, response }, { rpId, origin, clock });
     if (!registered.ok) {
@@ -348,12 +441,7 @@ export async function reenrolAfterReset(
       return { ok: false, reason: "bad_attestation" };
     }
 
-    await tx.query("DELETE FROM passkeys WHERE user_id = $1 AND credential_id <> $2", [
-      userId,
-      registered.credentialId,
-    ]);
-    await tx.query("DELETE FROM totp_secrets WHERE user_id = $1", [userId]);
-    await tx.query("DELETE FROM sessions WHERE user_id = $1", [userId]);
+    await evictLostFactors(tx, userId, registered.credentialId);
 
     const { code } = await issueRecoveryCode(tx, userId, { random });
     const session = await createSession(tx, userId, { clock, random });

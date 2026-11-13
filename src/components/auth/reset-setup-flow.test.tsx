@@ -176,3 +176,27 @@ test("/reset and sign-in lead to the set-up, and its page renders for a signed-o
   assert.match(page, /Set up a new passkey/);
   assert.match(page, /Email address/);
 });
+
+// Sign-in audit (founder decision 13 November 2026): a signed-in owner can close
+// re-enrolment on a completed reset. The set-up screens then say so plainly, whether the
+// close lands before the code is checked or before the new passkey is saved.
+test("a reset closed from a signed-in device is refused in plain words at either step", async () => {
+  const atVerify = setupFlow({ ...HAPPY, "setup-verify": () => jsonResponse(409, { error: "reset_closed" }) });
+  atVerify.flow.setEmail(EMAIL);
+  await atVerify.flow.submitIdentify();
+  atVerify.flow.setEmailCode(CODE);
+  await atVerify.flow.submitEmailCode();
+  assert.equal(atVerify.flow.getState().phase, "setup-email-code");
+  assert.match(atVerify.flow.getState().error ?? "", /closed from a device that's signed in/i);
+  assert.match(atVerify.flow.getState().error ?? "", /ask for a new reset/i);
+
+  const atFinish = setupFlow({ ...HAPPY, "setup-finish": () => jsonResponse(409, { error: "reset_closed" }) });
+  atFinish.flow.setEmail(EMAIL);
+  await atFinish.flow.submitIdentify();
+  atFinish.flow.setEmailCode(CODE);
+  await atFinish.flow.submitEmailCode();
+  await atFinish.flow.createPasskey();
+  assert.equal(atFinish.flow.getState().phase, "setup-identify");
+  assert.match(atFinish.flow.getState().error ?? "", /closed from a device that's signed in/i);
+  assert.equal(atFinish.flow.getState().newRecoveryCode, undefined);
+});

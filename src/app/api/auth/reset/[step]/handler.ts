@@ -24,6 +24,8 @@ const STEP_METHOD = new Map<string, keyof ResetHandler>([
   ["setup-send-code", "setupSendCode"],
   ["setup-verify", "setupVerify"],
   ["setup-finish", "setupFinish"],
+  // Sign-in audit — "This wasn't me — close re-enrolment" on a completed reset.
+  ["close", "close"],
 ]);
 
 export interface ResetStepSeams {

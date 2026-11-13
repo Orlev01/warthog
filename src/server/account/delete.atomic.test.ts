@@ -177,7 +177,7 @@ for (const fails of [false, true]) {
         if (fails && text.includes("UPDATE agents SET status")) return Promise.reject(new Error("synthetic reset failure"));
         return real.query(text, values);
       }, close: () => real.close() };
-      const completion = completeAccountReset(db, { userId }, { executor: createResetExecutor(db), releases, clock: fixedClock(new Date(clock.now().getTime() + RESET_WAIT_MS)) });
+      const completion = completeAccountReset(db, { userId }, { executor: createResetExecutor(db), senders: quietSenders(), releases, clock: fixedClock(new Date(clock.now().getTime() + RESET_WAIT_MS)) });
       if (fails) await assert.rejects(completion, /synthetic reset failure/);
       else assert.deepEqual(await completion, { ok: true });
       assert.equal(releases.collect(key), fails ? "private release" : undefined);
@@ -187,4 +187,11 @@ for (const fails of [false, true]) {
         "wrapped-key", "reset preserves the account data key");
     } finally { await real.close(); }
   });
+}
+
+// Completion alerts every channel; these tests are about the erase and revoke, so the
+// alerts land in a throwaway outbox.
+function quietSenders() {
+  const outbox = createOutbox();
+  return { push: outbox, email: outbox, sms: outbox };
 }

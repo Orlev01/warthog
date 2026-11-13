@@ -5,10 +5,12 @@ import { redirect } from "next/navigation";
 
 import { getServerDb } from "@/server/db/server";
 import { requireSession } from "@/server/auth/guard";
-import { getPendingAccountReset } from "@/server/auth/account-reset";
+import { getCompletedAccountReset, getPendingAccountReset } from "@/server/auth/account-reset";
+import { confirmFactors } from "@/server/auth/confirm-factors";
 import { systemClock } from "@/server/seams/clock";
 import { PortalChrome } from "@/components/shell/portal-chrome";
 import { PendingResetBanner } from "@/components/auth/pending-reset-banner";
+import { CompletedResetBanner } from "@/components/auth/completed-reset-banner";
 import { timeZoneFor } from "@/server/spending/time-zone";
 import { getUserById } from "@/server/db/users";
 import { loadConfig } from "@/server/config";
@@ -34,6 +36,11 @@ import { selectKeyWrapper } from "@/server/crypto/key-wrapper";
 // While the person has an account reset pending, every signed-in screen leads with a banner
 // that offers to cancel it (review fix W3.3; the brief: a reset "can be cancelled from any
 // signed-in device"). The read is member-scoped by the verified session's user id.
+//
+// Once a reset has completed and until it is used to set up a new passkey (7 days at most),
+// every signed-in screen instead leads with a banner offering "This wasn't me — close
+// re-enrolment" (sign-in audit, founder decision 13 November 2026), which asks the person to
+// confirm it's them first.
 
 // The host-locked session cookie set by the session module.
 const SESSION_COOKIE = "__Host-wh_session";
@@ -49,8 +56,12 @@ export default async function ProtectedLayout({ children }: { children: React.Re
   if (!result.ok) redirect(result.redirectTo);
 
   const pendingReset = await getPendingAccountReset(db, { userId: result.session.userId });
+  const completedReset = pendingReset
+    ? null
+    : await getCompletedAccountReset(db, { userId: result.session.userId }, { clock: systemClock });
+  const factors = completedReset ? await confirmFactors(db, result.session.userId) : null;
   let timeZone: string | undefined;
-  if (pendingReset) {
+  if (pendingReset || completedReset) {
     const user = await getUserById(db, result.session.userId);
     if (!user) redirect("/signin");
     const config = loadConfig();
@@ -65,6 +76,15 @@ export default async function ProtectedLayout({ children }: { children: React.Re
           requestedAt={pendingReset.requestedAt.toISOString()}
           completesAt={pendingReset.completesAt.toISOString()}
           timeZone={timeZone}
+        />
+      ) : null}
+      {completedReset ? (
+        <CompletedResetBanner
+          completedAt={completedReset.completedAt.toISOString()}
+          reenrolUntil={completedReset.reenrolUntil.toISOString()}
+          timeZone={timeZone}
+          passkey={factors?.passkey}
+          authenticator={factors?.authenticator}
         />
       ) : null}
       {children}
