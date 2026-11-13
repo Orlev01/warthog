@@ -34,6 +34,15 @@ For the signed-out landing page, also follow the
 [public front-door design](docs/design/public-front-door.md): its marketing
 hierarchy shares the console's tokens but has its own bounded composition.
 
+## Admin portal
+
+The operator's portal on `admin.warthog.com.au` is the same process on a second host
+([design](docs/design/admin-portal.md), [decision](docs/adr/admin-portal.md)). Its reads
+live only in `src/server/admin/reads.ts` and must stay aggregate-only with an explicit
+column allowlist; its views reuse the shell and surfaces plus the inline-SVG primitives in
+`src/components/admin/`. Keep the admin origin derived from `PUBLIC_BASE_URL`; never add a
+production setting or a second sign-in for it.
+
 ## Agent-first product model
 
 Read [the agent-first decision](docs/adr/agent-first-management.md) when changing

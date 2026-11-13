@@ -41,6 +41,8 @@
 // hashes) — the raw bearer is returned once, in the response, and never persisted.
 
 import { createHash } from "node:crypto";
+import { tryRecord, type MetricSeam } from "../metrics/seam";
+import { AGENT_TOKEN } from "../metrics/names";
 
 import { consumeAuthCode, createToken, getAuthCode, resolveToken } from "./store";
 import { withTransaction } from "../db/index";
@@ -82,6 +84,10 @@ export interface TokenDeps {
   readonly clock: Clock;
   readonly random: Random;
   readonly hmacKey: Uint8Array;
+  // Optional, best-effort: every token request is one `agent.token` event whose outcome is
+  // `ok` or the OAuth error code (docs/design/admin-portal.md §4) — never a token, code,
+  // client id or connection id.
+  readonly recordMetric?: MetricSeam;
 }
 
 // The JSON the endpoint returns on success (RFC 6749 §5.1).
@@ -123,9 +129,11 @@ function successorOf(presented: string, hmacKey: Uint8Array): string {
 
 export async function exchangeToken(input: TokenInput, deps: TokenDeps): Promise<TokenResult> {
   const grantType = input.params.get("grant_type");
-  if (grantType === "authorization_code") return exchangeAuthorizationCode(input.params, deps);
-  if (grantType === "refresh_token") return exchangeRefreshToken(input.params, deps);
-  return { ok: false, error: "unsupported_grant_type" };
+  const result = grantType === "authorization_code" ? await exchangeAuthorizationCode(input.params, deps)
+    : grantType === "refresh_token" ? await exchangeRefreshToken(input.params, deps)
+    : { ok: false as const, error: "unsupported_grant_type" };
+  await tryRecord(deps.recordMetric, { name: AGENT_TOKEN, value: 1, dimensions: { outcome: result.ok ? "ok" : result.error } });
+  return result;
 }
 
 // authorization_code grant: a one-time code + its matching PKCE verifier → a fresh

@@ -29,9 +29,15 @@ export const NAV_GROUPS: readonly NavGroup[] = [
   { label: "Help", items: ["help"].map(item), hideLabel: true },
 ];
 
-// The sidebar group that owns a section key (for the breadcrumb and page eyebrows).
+// The group that owns a section key within any grouped IA (the member portal's NAV_GROUPS or
+// the admin portal's groups), for the breadcrumb and page eyebrows.
+export function navGroupIn(groups: readonly NavGroup[], section: string): NavGroup | undefined {
+  return groups.find((g) => g.items.some((i) => i.key === section));
+}
+
+// The sidebar group that owns a section key in the member portal's IA.
 export function navGroupFor(section: string): NavGroup | undefined {
-  return NAV_GROUPS.find((g) => g.items.some((i) => i.key === section));
+  return navGroupIn(NAV_GROUPS, section);
 }
 
 // One page width per section family, so sibling route tabs never move the page's left

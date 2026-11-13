@@ -23,6 +23,12 @@ export function assertProductionReleaseConfiguration(config: Config): void {
   valid("PUBLIC_BASE_URL", address.pathname === "/" && address.hostname.includes(".") && !isIP(address.hostname));
   valid("WEBAUTHN_RP_ID", /^[a-z0-9.-]+$/.test(config.webauthnRpId) && config.webauthnRpId.includes(".")
     && (address.hostname === config.webauthnRpId || address.hostname.endsWith(`.${config.webauthnRpId}`)));
+  // The derived admin origin (docs/design/admin-portal.md §1): its own https host, never the
+  // app host, never an IP. Serving it is the proxy's job; binding its name is a separate
+  // approved step, so this proves only the derivation, not DNS or a certificate.
+  const admin = https("ADMIN_BASE_URL", config.adminBaseUrl);
+  valid("ADMIN_BASE_URL", admin.pathname === "/" && admin.hostname.includes(".") && !isIP(admin.hostname)
+    && admin.hostname !== address.hostname);
   const email = (value: string | undefined) => typeof value === "string" && /^[^\s@<>]+@[^\s@<>]+\.[^\s@<>]+$/.test(value);
   valid("OPERATOR_EMAIL", email(config.operatorEmail));
   https("EXCHANGE_RATE_BASE_URL", config.exchangeRateBaseUrl);

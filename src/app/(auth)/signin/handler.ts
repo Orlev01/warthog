@@ -28,6 +28,8 @@ import {
   finishPasskeyAuthentication,
 } from "../../../server/auth/passkey";
 import { checkTotpSignIn } from "../../../server/auth/totp-attempts";
+import { tryRecord, type MetricSeam } from "../../../server/metrics/seam";
+import { FACTORS, SIGNIN_ATTEMPT, SIGNIN_CATEGORIES, SIGNIN_OUTCOMES } from "../../../server/metrics/names";
 import { issueEmailCode, verifyEmailCode } from "../../../server/auth/email-code";
 import { pendingStore } from "../../../server/auth/pending-store";
 import { createSession, recordStepUp } from "../../../server/auth/session";
@@ -63,6 +65,10 @@ export interface SigninHandlerDeps {
   readonly rpId: string;
   readonly publicOrigin: string;
   readonly totpSecrets: TotpSecretStore;
+  // The optional, best-effort sign-in outcome metrics (docs/design/admin-portal.md §4):
+  // one `signin.attempt` per completed, failed or throttled attempt with only the outcome,
+  // the factor and the failing step's category — never an address, code or user id.
+  readonly recordMetric?: MetricSeam;
 }
 
 // The three methods the thin `actions.ts` / route verbs call.
@@ -129,7 +135,13 @@ function json(status: number, body: unknown): Response {
 }
 
 export function createSigninHandler(deps: SigninHandlerDeps): SigninHandler {
-  const { db, clock, random, hmacKey, emailSender, rpId, publicOrigin, totpSecrets } = deps;
+  const { db, clock, random, hmacKey, emailSender, rpId, publicOrigin, totpSecrets, recordMetric } = deps;
+
+  // One sign-in outcome as a metric carrying only its labels.
+  const recordAttempt = (outcome: string, labels: { platform?: string; errorCategory?: string }): Promise<void> =>
+    tryRecord(recordMetric, { name: SIGNIN_ATTEMPT, value: 1, dimensions: { outcome, ...labels } });
+  const recordFailure = (category: string, throttled = false): Promise<void> =>
+    recordAttempt(throttled ? SIGNIN_OUTCOMES.throttled : SIGNIN_OUTCOMES.failed, { errorCategory: category });
 
   // The request is same-origin only when it carries exactly the configured Origin. A
   // missing header (`null`) or a foreign one cannot be proven same-origin → refused.
@@ -152,9 +164,10 @@ export function createSigninHandler(deps: SigninHandlerDeps): SigninHandler {
   // A sign-in from a browser this person has not signed in on before emails them the
   // brief's new-device alert (best effort: a failed send never fails the sign-in) and
   // marks the browser with a device cookie, so later sign-ins from it stay quiet.
-  async function mintSession(userId: string, request: Request): Promise<Response> {
+  async function mintSession(userId: string, request: Request, factor: string): Promise<Response> {
     const created = await createSession(db, userId, { clock, random });
     await recordStepUp(db, created.session.id, { clock });
+    await recordAttempt(SIGNIN_OUTCOMES.ok, { platform: factor });
     const headers = new Headers({ location: "/home" });
     headers.append("set-cookie", created.cookie);
     if (!isRecognisedDevice(request, userId, hmacKey)) {
@@ -201,7 +214,10 @@ export function createSigninHandler(deps: SigninHandlerDeps): SigninHandler {
       });
 
       const user = await getUserByEmail(db, email);
-      if (!user) return json(401, { error: "invalid_assertion" });
+      if (!user) {
+        await recordFailure(SIGNIN_CATEGORIES.passkey);
+        return json(401, { error: "invalid_assertion" });
+      }
 
       const result = await checkPasskeyAttempt(db, user.id, async () => (await finishPasskeyAuthentication(
         db,
@@ -212,10 +228,16 @@ export function createSigninHandler(deps: SigninHandlerDeps): SigninHandler {
         },
         { rpId, origin: publicOrigin, clock },
       )).ok, { clock, emailSender });
-      if (result.reason === "throttled") return new Response(JSON.stringify({ error: "throttled" }), { status: 429, headers: { "content-type": "application/json", "retry-after": String(Math.ceil((result.retryAfterMs ?? 1000) / 1000)) } });
-      if (!result.ok) return json(401, { error: "invalid_assertion" });
+      if (result.reason === "throttled") {
+        await recordFailure(SIGNIN_CATEGORIES.passkey, true);
+        return new Response(JSON.stringify({ error: "throttled" }), { status: 429, headers: { "content-type": "application/json", "retry-after": String(Math.ceil((result.retryAfterMs ?? 1000) / 1000)) } });
+      }
+      if (!result.ok) {
+        await recordFailure(SIGNIN_CATEGORIES.passkey);
+        return json(401, { error: "invalid_assertion" });
+      }
 
-      return await mintSession(user.id, request);
+      return await mintSession(user.id, request, FACTORS.passkey);
     } catch (error) {
       return handleError(error);
     }
@@ -228,8 +250,11 @@ export function createSigninHandler(deps: SigninHandlerDeps): SigninHandler {
       // Same response/delivery path for existing and unknown accounts. Mailbox
       // verification alone never grants access or discloses account enrollment.
       const issued = await issueEmailCode(db, email, { purpose: "signin_totp", clock, random, hmacKey, emailSender });
-      if (!issued.ok) return new Response(JSON.stringify({ error: "throttled" }), { status: 429,
-        headers: { "content-type": "application/json", "retry-after": String(Math.ceil(issued.retryAfterMs / 1000)) } });
+      if (!issued.ok) {
+        await recordFailure(SIGNIN_CATEGORIES.emailCode, true);
+        return new Response(JSON.stringify({ error: "throttled" }), { status: 429,
+          headers: { "content-type": "application/json", "retry-after": String(Math.ceil(issued.retryAfterMs / 1000)) } });
+      }
       return json(200, { ok: true });
     } catch (error) { return handleError(error); }
   }
@@ -239,7 +264,10 @@ export function createSigninHandler(deps: SigninHandlerDeps): SigninHandler {
     try {
       const { email, code } = await parseBody(verifyTotpEmailSchema, request, { maxBytes: MAX_BODY_BYTES });
       const checked = await verifyEmailCode(db, email, code, { purpose: "signin_totp", clock, hmacKey, emailSender });
-      if (!checked.ok) return json(checked.reason === "throttled" ? 429 : 401, { error: "invalid_code" });
+      if (!checked.ok) {
+        await recordFailure(SIGNIN_CATEGORIES.emailCode, checked.reason === "throttled");
+        return json(checked.reason === "throttled" ? 429 : 401, { error: "invalid_code" });
+      }
       const user = await getUserByEmail(db, email);
       const signinId = Buffer.from(random.randomBytes(32)).toString("hex");
       pendingTotpSignins.set(signinId, { userId: user?.id ?? null }, clock.now());
@@ -259,14 +287,21 @@ export function createSigninHandler(deps: SigninHandlerDeps): SigninHandler {
       });
 
       const pending = pendingTotpSignins.get(signinId, clock.now());
-      if (!pending?.userId) return json(401, { error: "invalid_code" });
+      if (!pending?.userId) {
+        await recordFailure(SIGNIN_CATEGORIES.totp);
+        return json(401, { error: "invalid_code" });
+      }
 
       const secret = await totpSecrets.get(pending.userId);
-      if (!secret) return json(401, { error: "invalid_code" });
+      if (!secret) {
+        await recordFailure(SIGNIN_CATEGORIES.totp);
+        return json(401, { error: "invalid_code" });
+      }
       // Limited and single use (review fix W3.5): 5 failures in 15 minutes slow further
       // attempts, and a code (or one from an earlier step) is accepted only once.
       const checked = await checkTotpSignIn(db, { userId: pending.userId, secret, code: totp }, { clock });
       if (!checked.ok) {
+        await recordFailure(SIGNIN_CATEGORIES.totp, checked.reason === "throttled");
         if (checked.reason === "throttled") {
           return new Response(JSON.stringify({ error: "throttled" }), {
             status: 429,
@@ -281,9 +316,12 @@ export function createSigninHandler(deps: SigninHandlerDeps): SigninHandler {
 
       // Consume synchronously before the next await. Even concurrent valid codes
       // cannot exchange the same email proof for two sessions.
-      if (pendingTotpSignins.get(signinId, clock.now()) !== pending) return json(401, { error: "invalid_code" });
+      if (pendingTotpSignins.get(signinId, clock.now()) !== pending) {
+        await recordFailure(SIGNIN_CATEGORIES.totp);
+        return json(401, { error: "invalid_code" });
+      }
       pendingTotpSignins.delete(signinId);
-      return await mintSession(pending.userId, request);
+      return await mintSession(pending.userId, request, FACTORS.totp);
     } catch (error) {
       return handleError(error);
     }

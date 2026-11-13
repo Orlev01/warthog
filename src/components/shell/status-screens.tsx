@@ -67,6 +67,31 @@ function ScreenFrame({ variant, children }: { variant: StatusVariant; children: 
   );
 }
 
+// A generic status screen for a one-off outcome page (the admin portal's signed-out page):
+// the same frame and panel the error and not-found screens use, with the caller's icon,
+// title, copy and actions.
+export function StatusScreen({
+  icon,
+  title,
+  children,
+  actions,
+  variant = "public",
+}: {
+  icon: React.ReactNode;
+  title: string;
+  children: React.ReactNode;
+  actions: React.ReactNode;
+  variant?: StatusVariant;
+}) {
+  return (
+    <ScreenFrame variant={variant}>
+      <StatusPanel icon={icon} title={title} actions={actions}>
+        {children}
+      </StatusPanel>
+    </ScreenFrame>
+  );
+}
+
 export type ErrorScreenProps = {
   // Next's opaque error reference (never the message), shown for support.
   digest?: string;

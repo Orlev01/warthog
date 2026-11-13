@@ -90,3 +90,11 @@ test("production mail requires an exact sending domain and valid reply-to withou
     });
   }
 });
+
+test("production validates the derived admin origin as its own https host, distinct from the app host", () => {
+  const config = loadConfig(base);
+  assert.equal(config.adminBaseUrl, "https://admin.example.test");
+  assert.doesNotThrow(() => assertProductionReleaseConfiguration(config));
+  // A public base URL that already is the admin host would make the two coincide.
+  assert.throws(() => assertProductionReleaseConfiguration(loadConfig({ ...base, PUBLIC_BASE_URL: "https://app.example.test" , ADMIN_BASE_URL: "https://app.example.test" })), /ADMIN_BASE_URL/);
+});

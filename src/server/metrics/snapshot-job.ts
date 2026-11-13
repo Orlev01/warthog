@@ -41,7 +41,8 @@ function readCount(rows: readonly Record<string, unknown>[], column: string): nu
 export async function runMetricsSnapshot(db: Db, clock: Clock): Promise<void> {
   // The two headline global counts — one row each, every run, so the time series has a
   // data point even when a count is 0.
-  const users = await db.query("SELECT count(*)::int AS n FROM users");
+  // A deleted account keeps a crypto-shredded row until purge; it is not a user.
+  const users = await db.query("SELECT count(*)::int AS n FROM users WHERE wrapped_dek <> ''");
   await recordMetricEvent(db, clock, { name: USERS_TOTAL, value: readCount(users.rows, "n") });
 
   const households = await db.query("SELECT count(*)::int AS n FROM households");
