@@ -227,3 +227,57 @@ test("the panel uses tokens and plain words (no raw hex, no protocol jargon)", (
     for (const re of JARGON.slice(0, 4)) assert.doesNotMatch(prose, re);
   }
 });
+
+// ─── a fresh "confirm it's you" before a new key (security audit 2026-11-13) ──────────
+
+function confirmFirst() {
+  const calls = { replace: 0, revoke: 0 };
+  let confirmedYet = false;
+  return {
+    calls,
+    confirm: () => { confirmedYet = true; },
+    replace: async () => {
+      calls.replace++;
+      return (confirmedYet ? { ok: true, key: NEW_KEY } : { ok: false, reason: "step_up_required" }) as
+        { ok: true; key: string } | { ok: false; reason: string };
+    },
+    revoke: async () => { calls.revoke++; return { ok: true } as const; },
+  };
+}
+
+test("a replace that needs a fresh confirmation asks for it, with no error and no key", async () => {
+  const actions = confirmFirst();
+  const panel = createAccessKeyPanel({ agentName: NAME, initial: "active", replace: actions.replace, revoke: actions.revoke });
+  await panel.replace();
+  const state = panel.getState();
+  assert.equal(state.confirmRequired, true);
+  assert.equal(state.notice, undefined, "nothing failed");
+  assert.equal(state.issuedKey, undefined);
+  assert.equal(state.working, null);
+});
+
+test("once confirmed, the new key is made and shown without pressing Replace again", async () => {
+  const actions = confirmFirst();
+  const panel = createAccessKeyPanel({ agentName: NAME, initial: "active", replace: actions.replace, revoke: actions.revoke });
+  await panel.replace();
+  actions.confirm();
+  await panel.confirmed();
+  const state = panel.getState();
+  assert.equal(state.issuedKey, NEW_KEY);
+  assert.equal(state.replacedOldKey, true);
+  assert.equal(state.confirmRequired, false);
+  assert.equal(actions.calls.replace, 2);
+});
+
+test("the panel shows the confirm-it's-you control when a new key needs a confirmation", () => {
+  for (const state of ["active", "revoked"] as const) {
+    const markup = withoutDialogs(render({ state, initialConfirmRequired: true }));
+    assert.match(markup, /check it(&#x27;|')s really you/i, `${state}: it says why`);
+    assert.match(markup, /Confirm it(&#x27;|')s you/, `${state}: it offers a way to confirm`);
+  }
+});
+
+test("the panel's confirmation offers only the ways this person can confirm", () => {
+  assert.doesNotMatch(render({ initialConfirmRequired: true, passkey: true, authenticator: false }), /Authenticator app code/);
+  assert.match(render({ initialConfirmRequired: true, passkey: true, authenticator: true }), /Authenticator app code/);
+});

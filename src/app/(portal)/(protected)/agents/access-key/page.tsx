@@ -15,6 +15,8 @@ import { AccessKeyFlow } from "@/components/agents/access-key-flow";
 import { connectedServices } from "@/app/oauth/consent/actions";
 import { getProcessCatalogue } from "@/server/connectors/catalogue";
 import { loadConfig } from "@/server/config";
+import { notificationSenders } from "@/server/notify/production";
+import { confirmFactors } from "@/server/auth/confirm-factors";
 import { PageContainer } from "@/components/shell/page-container";
 
 // E10-S13 — Access-key page (the thin protected-page loader that mounts the access-key flow
@@ -80,11 +82,13 @@ export default async function AccessKeyPage({
       return { ok: false, reason: "unauthenticated" };
     }
     try {
+      const config = loadConfig();
       const result = await createAccessKeyActions({
         db: requestDb,
-        keyWrapper: selectKeyWrapper({ nodeEnv: loadConfig().nodeEnv, localKek: loadConfig().devKek }),
+        keyWrapper: selectKeyWrapper({ nodeEnv: config.nodeEnv, localKek: config.devKek }),
         clock: systemClock,
         random: systemRandom,
+        alerts: { emailSender: notificationSenders(config, requestDb).email },
       }).create(requestSession, input);
       if (result.ok) {
         // Re-run the agents list so the new agent lists right after the key is issued —
@@ -103,9 +107,10 @@ export default async function AccessKeyPage({
   const defaults = await getAgentDefaults(db, session.userId);
   const catalogue = getProcessCatalogue(loadConfig());
   const services = await connectedServices({ db, nameOf: id => catalogue.get(id)?.name }, session.userId);
+  const factors = await confirmFactors(db, session.userId);
   return (
     <PageContainer className="flex flex-col gap-6">
-      <AccessKeyFlow services={services} defaultTemplate={defaults.template} create={create} defaultName={defaultName} defaultPlatform={platformParam} />
+      <AccessKeyFlow services={services} defaultTemplate={defaults.template} create={create} defaultName={defaultName} defaultPlatform={platformParam} passkey={factors.passkey} authenticator={factors.authenticator} />
     </PageContainer>
   );
 }

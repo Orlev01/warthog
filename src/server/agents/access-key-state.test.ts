@@ -27,7 +27,7 @@ const keyWrapper = { wrap: async () => "test-wrapped", unwrap: async () => DEK }
 const dek = async () => DEK;
 
 function session(userId: string): Session {
-  return { id: `sess-${userId}`, userId, createdAt: NOW, lastSeenAt: NOW, steppedUpAt: null };
+  return { id: `sess-${userId}`, userId, createdAt: NOW, lastSeenAt: NOW, steppedUpAt: NOW };
 }
 
 async function makeUser(db: Db, who: string): Promise<string> {
@@ -35,7 +35,7 @@ async function makeUser(db: Db, who: string): Promise<string> {
 }
 
 function actions(db: Db) {
-  return createAccessKeyActions({ db, keyWrapper, clock: fixedClock(NOW), random: systemRandom });
+  return createAccessKeyActions({ db, keyWrapper, clock: fixedClock(NOW), random: systemRandom, alerts: { emailSender: { sendEmail: async () => {} } } });
 }
 
 // An agent connected through the OAuth consent flow, recorded as that flow records it.

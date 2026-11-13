@@ -54,6 +54,22 @@ test("anything that could leave the site, run a script or smuggle a header falls
   }
 });
 
+test("a path that only normalises to a protocol-relative URL falls back to /home", () => {
+  // Each passes the raw-string checks, but URL parsing collapses its dot segment and
+  // the re-serialised pathname would be `//evil.example` — an off-site redirect.
+  for (const hostile of [
+    "/.//evil.example",
+    "/..//evil.example",
+    "/%2e//evil.example",
+    "/%2E%2E//evil.example",
+    "/a/..//evil.example",
+    "/a/b/../..//evil.example/path?x=1",
+  ]) {
+    assert.equal(safeReturnPath(hostile), "/home", `${JSON.stringify(hostile)} must not be followed`);
+  }
+  assert.equal(safeReturnPath("/a/../inbox"), "/inbox", "a dot segment that stays on-site is kept, normalised");
+});
+
 test("a return path back into the auth screens themselves falls back to /home (no loops)", () => {
   for (const loop of ["/signin", "/signin?next=%2Finbox", "/signup", "/recover", "/device", "/signin/"]) {
     assert.equal(safeReturnPath(loop), "/home", `${loop} is not a destination`);

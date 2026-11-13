@@ -101,7 +101,7 @@ function tag(): string {
 
 // Build the handler under test. Each test uses its own db, so nothing leaks across tests.
 function makeHandler(db: Db, publicOrigin: string = GOOD_ORIGIN): StepUpHandler {
-  const deps: StepUpHandlerDeps = { db, clock: fixedClock(T0), rpId: RP_ID, publicOrigin };
+  const deps: StepUpHandlerDeps = { db, clock: fixedClock(T0), random: systemRandom, rpId: RP_ID, publicOrigin };
   return createStepUpHandler(deps);
 }
 
@@ -167,6 +167,15 @@ async function beginAndAuthenticate(handler: StepUpHandler, auth: SoftwareAuthen
   const body = (await res.json()) as { options?: PublicKeyCredentialRequestOptionsJSON };
   assert.ok(body.options, "begin returns WebAuthn authentication options");
   return auth.authenticate(body.options);
+}
+
+// The rotated session token a successful step-up hands back in its `__Host-wh_session`
+// Set-Cookie (a step-up retires the token it was made with). Fails when there is none.
+function rotatedToken(res: Response): string {
+  const header = res.headers.get("set-cookie") ?? "";
+  const match = new RegExp(`(?:^|,\\s*)${COOKIE_NAME}=([^;]+)`).exec(header);
+  assert.ok(match, `a successful step-up sets a new ${COOKIE_NAME} cookie, got ${JSON.stringify(header)}`);
+  return match[1];
 }
 
 // Read the step-up time currently stored on the session the `token` identifies, or null
@@ -236,8 +245,9 @@ test("finish with the person's own passkey assertion records a step-up on their 
 
     assert.ok(res.status < 400, `a valid own-passkey finish succeeds (not a 4xx/5xx), got ${res.status}`);
 
-    const session = await verifySession(db, created.token, { clock: fixedClock(T0) });
-    assert.ok(session, "the current session still verifies");
+    const session = await verifySession(db, rotatedToken(res), { clock: fixedClock(T0) });
+    assert.ok(session, "the current session still verifies under its rotated token");
+    assert.equal(session.id, created.session.id, "the same session row carries on");
     assert.ok(session.steppedUpAt != null, "finish recorded a step-up on the current session");
     assert.equal(
       requireStepUp(session, { clock: fixedClock(T0) }),
@@ -266,7 +276,7 @@ test("finish records a step-up on the CURRENT session only — the person's othe
     );
     assert.ok(res.status < 400, `the step-up succeeds, got ${res.status}`);
 
-    assert.notEqual(await steppedUpAt(db, sessionOne.token), null, "the session used to confirm is stepped up");
+    assert.notEqual(await steppedUpAt(db, rotatedToken(res)), null, "the session used to confirm is stepped up");
     assert.equal(
       await steppedUpAt(db, sessionTwo.token),
       null,
@@ -535,8 +545,70 @@ test("a step-up assertion cannot be replayed", async () => {
     const first = await handler.finish(finishRequest({ token: created.token, body: { authenticationResponse: assertion } }));
     assert.equal(first.status, 200);
     await db.query(`UPDATE passkeys SET counter = 0 WHERE user_id = $1`, [person.id]);
-    const replay = await handler.finish(finishRequest({ token: created.token, body: { authenticationResponse: assertion } }));
+    const replay = await handler.finish(finishRequest({ token: rotatedToken(first), body: { authenticationResponse: assertion } }));
     assert.equal(replay.status, 401, "the consumed challenge refuses the replay");
+  } finally {
+    await db.close();
+  }
+});
+
+// =====================================================================================
+// Security audit 2026-11-13 — a step-up rotates the session token. Step-up used to be
+// stamped on the shared session row, so anyone holding a copy of the cookie inherited
+// the person's fresh step-up and could add their own passkey within the window.
+// =====================================================================================
+
+test("a passkey step-up retires the cookie it was made with: an old copy of the token is signed out, the new one carries the step-up", async () => {
+  const db = await freshDb();
+  try {
+    const handler = makeHandler(db);
+    const auth = createAuthenticator();
+    const person = await freshUser(db, "stepup-rotate");
+    await registerPasskeyFor(db, auth, person);
+    const created = await createSession(db, person.id, { clock: fixedClock(T0), random: systemRandom });
+    const copiedCookie = created.token; // what a thief holding the cookie would present
+
+    const assertion = await beginAndAuthenticate(handler, auth, created.token);
+    const res = await handler.finish(finishRequest({ token: created.token, body: { authenticationResponse: assertion } }));
+    assert.equal(res.status, 200);
+
+    const fresh = rotatedToken(res);
+    assert.notEqual(fresh, copiedCookie, "the step-up issues a different token");
+    const cookie = res.headers.get("set-cookie") ?? "";
+    for (const attribute of ["Path=/", "HttpOnly", "Secure", "SameSite=Lax"]) {
+      assert.ok(cookie.includes(attribute), `the rotated cookie keeps ${attribute}`);
+    }
+
+    assert.equal(
+      await verifySession(db, copiedCookie, { clock: fixedClock(T0) }),
+      null,
+      "the old token no longer verifies, so a copy of it cannot use the step-up",
+    );
+    const session = await verifySession(db, fresh, { clock: fixedClock(T0) });
+    assert.ok(session && requireStepUp(session, { clock: fixedClock(T0) }), "the rotated token holds the fresh step-up");
+  } finally {
+    await db.close();
+  }
+});
+
+test("a step-up that fails rotates nothing: the presented token keeps working and no cookie is set", async () => {
+  const db = await freshDb();
+  try {
+    const handler = makeHandler(db);
+    const auth = createAuthenticator();
+    const stranger = createAuthenticator();
+    const person = await freshUser(db, "stepup-norotate");
+    await registerPasskeyFor(db, auth, person);
+    await registerPasskeyFor(db, stranger, await freshUser(db, "stepup-norotate-stranger"));
+    const created = await createSession(db, person.id, { clock: fixedClock(T0), random: systemRandom });
+
+    const res = await handler.begin(beginRequest({ token: created.token }));
+    const { options } = (await res.json()) as { options: PublicKeyCredentialRequestOptionsJSON };
+    const wrong = await stranger.authenticate(options);
+    const refused = await handler.finish(finishRequest({ token: created.token, body: { authenticationResponse: wrong } }));
+    assert.ok(refused.status >= 400 && refused.status < 500);
+    assert.equal(refused.headers.get("set-cookie"), null, "a refused step-up sets no cookie");
+    assert.ok(await verifySession(db, created.token, { clock: fixedClock(T0) }), "the presented token still verifies");
   } finally {
     await db.close();
   }

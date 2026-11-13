@@ -329,7 +329,12 @@ test("built from the real composition root, a valid own-passkey begin→finish r
     );
     assert.ok(finishRes.status < 400, `a valid finish succeeds (not a 4xx/5xx), got ${finishRes.status}`);
 
-    const session = await verifySession(db, created.token, { clock: systemClock });
+    // A confirmed step-up rotates the session token: the response sets the new cookie and
+    // the old token no longer verifies (security audit 2026-11-13).
+    const rotated = /__Host-wh_session=([^;]+)/.exec(finishRes.headers.get("set-cookie") ?? "")?.[1];
+    assert.ok(rotated, "the finish sets the rotated session cookie");
+    assert.equal(await verifySession(db, created.token, { clock: systemClock }), null, "the old token is retired");
+    const session = await verifySession(db, rotated, { clock: systemClock });
     assert.ok(session?.steppedUpAt != null, "the finish recorded a step-up on the current session");
   } finally {
     await db.close();

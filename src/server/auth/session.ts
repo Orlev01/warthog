@@ -13,7 +13,8 @@
 // unknown, tampered or malformed token — yields no session, never a throw.
 //
 // `stepped_up_at` records the last re-authentication (step-up); recordStepUp sets
-// it so a later verify surfaces it. Every statement is parameterized (INV-102):
+// it on a just-minted session, and stepUpAndRotate sets it on an existing one while
+// replacing its token, so a later verify surfaces it. Every statement is parameterized (INV-102):
 // the token reaches the query layer only as the bound hash, never woven into SQL.
 
 import { createHash } from "node:crypto";
@@ -178,4 +179,28 @@ export async function recordStepUp(
   const row = result.rows[0];
   if (!row) throw new Error("recordStepUp: no session with that id");
   return toSession(row);
+}
+
+// Record a step-up on the session the PRESENTED token identifies and rotate that token
+// in the same write (security audit 2026-11-13). A step-up is what lets a session make
+// security changes, so a copy of the old cookie (stolen, or left on another device) must
+// not inherit it: the old token stops verifying and the browser that confirmed gets the
+// new one. The row keeps its id and both windows; only `token_hash` and `stepped_up_at`
+// change. Null when the presented token no longer matches a live session (signed out,
+// or already rotated by a concurrent step-up).
+export async function stepUpAndRotate(
+  db: Db,
+  presentedToken: string,
+  deps: { clock: Clock; random: Random },
+): Promise<CreatedSession | null> {
+  const token = Buffer.from(deps.random.randomBytes(SESSION_ID_BYTES)).toString("hex");
+  const result = await db.query(
+    `UPDATE sessions SET token_hash = $2, stepped_up_at = $3::timestamptz
+     WHERE token_hash = $1
+       AND EXISTS (SELECT 1 FROM users WHERE users.id = sessions.user_id AND wrapped_dek <> '')
+     RETURNING ${RETURNING}`,
+    [hashToken(presentedToken), hashToken(token), deps.clock.now().toISOString()],
+  );
+  const row = result.rows[0];
+  return row ? { session: toSession(row), token, cookie: sessionCookie(token) } : null;
 }

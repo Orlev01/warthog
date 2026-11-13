@@ -13,6 +13,7 @@ import { getServerDb } from "@/server/db/server";
 import { selectKeyWrapper } from "@/server/crypto/key-wrapper";
 import { verifySession, COOKIE_NAME, type Session } from "@/server/auth/session";
 import { requireStepUp } from "@/server/auth/step-up";
+import { confirmFactors } from "@/server/auth/confirm-factors";
 import { createResetExecutor } from "@/server/account/reset-executor";
 import { systemClock } from "@/server/seams/clock";
 import { selectSenders, type Senders, type OutgoingMessage } from "@/server/notify/senders";
@@ -176,17 +177,6 @@ const NOTICES: Record<string, Notice> = {
 
 function dataNotice(code: string | undefined): Notice | null {
   return (code !== undefined && Object.hasOwn(NOTICES, code) && NOTICES[code]) || null;
-}
-
-// Which ways this member can confirm it's you, so the inline control offers only those
-// (enrolment metadata only: no secret is read). Scoped to the session person.
-async function confirmFactors(db: Db, userId: string): Promise<{ passkey: boolean; authenticator: boolean }> {
-  const result = await db.query(
-    `SELECT EXISTS (SELECT 1 FROM passkeys WHERE user_id = $1) AS passkey,
-            EXISTS (SELECT 1 FROM totp_secrets WHERE user_id = $1) AS authenticator`,
-    [userId],
-  );
-  return { passkey: result.rows[0]?.passkey === true, authenticator: result.rows[0]?.authenticator === true };
 }
 
 export default async function DataPage({

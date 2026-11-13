@@ -106,9 +106,9 @@ export async function getSignoutDeps(
 }
 
 // Build the StepUpHandlerDeps bundle from validated config: the shared db, the clock
-// that judges session freshness and stamps the recorded step-up, the configured RP ID
-// and the origin the Origin check (and assertion verification) uses. No random — a
-// step-up mints no new token; it stamps the existing session.
+// that judges session freshness and stamps the recorded step-up, the random source the
+// rotated session token is drawn from (a step-up replaces the session's token), the
+// configured RP ID and the origin the Origin check (and assertion verification) uses.
 export async function getStepUpDeps(
   overrides: ComposeOverrides = {},
 ): Promise<StepUpHandlerDeps> {
@@ -117,6 +117,7 @@ export async function getStepUpDeps(
   return {
     db,
     clock: systemClock,
+    random: systemRandom,
     rpId: config.webauthnRpId,
     publicOrigin: publicOrigin(config),
     totpSecrets: createTotpSecretStore({ db, keyWrapper: keyWrapperFor(config) }),
