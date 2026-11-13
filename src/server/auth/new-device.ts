@@ -272,6 +272,15 @@ export function listDeviceSignInRequests(session: Session, deps: { clock: Clock 
     .sort((a, b) => b.requestedAt.getTime() - a.requestedAt.getTime());
 }
 
+// Drop every pending sign-in request for this account, approved or not. Recovery and
+// re-enrolment sign every device out, so a request approved from a session that no longer
+// exists must not be collected afterwards. Scoped by the account id the caller resolved.
+export function discardDeviceSignInRequests(userId: string, deps: { clock: Clock }): void {
+  for (const { key, value } of pendingRequests.live(deps.clock.now())) {
+    if (value.userId === userId) pendingRequests.delete(key);
+  }
+}
+
 // Find the session's own waiting request by its approval id (an id that is someone else's,
 // expired, approved or unknown finds nothing).
 function findOwnRequest(

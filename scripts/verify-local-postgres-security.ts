@@ -7,6 +7,7 @@ import { createUser } from "../src/server/db/users";
 import { createSession, verifySession } from "../src/server/auth/session";
 import { issueRecoveryCode, verifyRecoveryCode } from "../src/server/auth/recovery";
 import { createRecoverHandler } from "../src/app/(auth)/recover/handler";
+import { localAesKeyWrapper } from "../src/server/crypto/key-wrapper";
 import { createAuthenticator } from "../src/test/authenticator";
 import { createOutbox } from "../src/server/notify/outbox";
 import type { PublicKeyCredentialCreationOptionsJSON } from "@simplewebauthn/server";
@@ -233,10 +234,14 @@ async function recoveryGenerationChecks(runtime: Db, purge: Db) {
   const request = (body: unknown) => new Request(`${origin}/api/auth/recover`, {
     method: "POST", headers: { origin, "content-type": "application/json" }, body: JSON.stringify(body),
   });
+  // Recovery records an encrypted "account recovered" activity entry, so the account needs a
+  // real (synthetic-KEK) wrapped data key.
+  const keyWrapper = localAesKeyWrapper(new Uint8Array(32).fill(23));
   for (const firstOperation of ["rotation", "registration"] as const) {
-    const user = await createUser(runtime, { email: `local-recovery-${randomUUID()}@example.test`, wrappedDek: "synthetic-only" });
+    const user = await createUser(runtime, { email: `local-recovery-${randomUUID()}@example.test`,
+      wrappedDek: await keyWrapper.wrap(new Uint8Array(32).fill(29)) });
     const outbox = createOutbox();
-    const handlerFor = (db: Db) => createRecoverHandler({ db, clock, random: systemRandom, emailSender: outbox,
+    const handlerFor = (db: Db) => createRecoverHandler({ db, clock, random: systemRandom, emailSender: outbox, keyWrapper,
       hmacKey: new Uint8Array(32).fill(17), rpId: "synthetic.example", publicOrigin: origin });
     const paused = deferred<void>(), resume = deferred<void>(), secondPid = deferred<number>();
     let registering: Promise<Response> | undefined;

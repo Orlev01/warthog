@@ -95,6 +95,24 @@ export async function alertNewAuthenticator(
   );
 }
 
+// The authenticator app was removed from Settings › Security (sign-in audit, founder
+// decision 13 November 2026): the counterpart of the "authenticator added" alert. Fixed
+// copy — carries no secret, code or token.
+export async function alertAuthenticatorRemoved(
+  db: Db,
+  { userId }: { userId: string },
+  deps: AlertDeps,
+): Promise<void> {
+  await sendAlert(
+    db,
+    userId,
+    "An authenticator app was removed from your Warthog account. Codes from it no longer sign you " +
+      "in or confirm it's you; your passkeys still do. If this wasn't you, sign in, sign out every " +
+      `device you don't recognise and email ${SUPPORT_EMAIL} straight away.`,
+    deps,
+  );
+}
+
 // A new agent connected. `agentName` is untrusted free text, so the scrub pass
 // masks any card number planted in it before the body is delivered.
 export async function alertNewAgentConnection(
@@ -145,19 +163,42 @@ export async function alertNewDeviceSignIn(
 }
 
 // The account was recovered with its recovery code (the brief's recovery: email code
-// plus recovery code, then a new passkey and a new recovery code). Fixed copy —
-// carries no code, token or credential.
+// plus recovery code, then a new passkey and a new recovery code). Sent once, when the new
+// passkey is saved (sign-in audit, founder decision 13 November 2026). Recovery removed the
+// old passkeys and authenticator app and signed every device out, but it KEEPS agents and
+// their keys, so the alert names every agent still connected, never implying Warthog
+// removed one. `agentNames` is untrusted free text (scrubbed like the new-agent alert's),
+// possibly chosen by whoever holds the lost device: the fixed copy and support address come
+// first, and the names are quoted, shortened and capped so they can't crowd either out.
+// Carries no code, token or credential.
+const RECOVERY_ALERT_AGENTS = 5;
+const RECOVERY_ALERT_NAME_CHARS = 60;
+
+function quotedAgentName(name: string): string {
+  const plain = name.replaceAll('"', "'").replace(/\s+/g, " ").trim();
+  const short = plain.length > RECOVERY_ALERT_NAME_CHARS ? `${plain.slice(0, RECOVERY_ALERT_NAME_CHARS).trimEnd()}…` : plain;
+  return `"${short}"`;
+}
+
 export async function alertAccountRecovered(
   db: Db,
-  { userId }: { userId: string },
+  { userId, agentNames }: { userId: string; agentNames: readonly string[] },
   deps: AlertDeps,
 ): Promise<void> {
+  const shown = agentNames.slice(0, RECOVERY_ALERT_AGENTS).map(quotedAgentName).join(", ");
+  const more = agentNames.length - RECOVERY_ALERT_AGENTS;
+  const agents = agentNames.length > 0
+    ? `These agents are still connected and can still use your account: ${shown}${more > 0 ? ` and ${more} more` : ""}. ` +
+      "If you don't recognise one, sign in and disconnect it from Agents, or replace its key in its settings."
+    : "No agents are connected to your account.";
   await sendAlert(
     db,
     userId,
-    "Your Warthog account was recovered using your recovery code. A new passkey was added " +
-      "and a new recovery code was issued, so your old recovery code no longer works. " +
-      `If this wasn't you, email ${SUPPORT_EMAIL} straight away.`,
+    "Your Warthog account was recovered using your recovery code. A new passkey was added, your " +
+      "old passkeys and authenticator app were removed, and every device was signed out. A new " +
+      "recovery code was issued, so your old recovery code no longer works. " +
+      `If this wasn't you, email ${SUPPORT_EMAIL} straight away. ` +
+      agents,
     deps,
   );
 }

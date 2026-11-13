@@ -19,6 +19,11 @@ import {
 } from "../settings/notifications/actions";
 import { createHomeActions } from "./actions";
 import { getProcessCatalogue } from "@/server/connectors/catalogue";
+import {
+  getRecoveryReview,
+  RECOVERY_REVIEW_COOKIE,
+  RECOVERY_REVIEW_WINDOW_MS,
+} from "@/server/auth/recovery-review";
 
 // E18-S08 — Home page (the thin protected-page loader).
 //
@@ -74,9 +79,38 @@ async function registerPushDeviceAction(input: RegisterPushDeviceInput): Promise
   }
 }
 
+// Hide the recovery review notice on this browser (sign-in audit, founder decision 13
+// November 2026). The cookie names the session account's newest recovery, read on the
+// server, and is set only when that is the one the form was showing: a recovery that
+// landed after the page loaded is never hidden unseen. It only hides a notice, so it
+// grants nothing, and it lasts as long as the notice would have.
+async function dismissRecoveryReviewAction(formData: FormData): Promise<void> {
+  "use server";
+  const store = await cookies();
+  const token = store.get(SESSION_COOKIE)?.value ?? null;
+  const db = await getServerDb();
+  const session = token ? await verifySession(db, token, { clock: systemClock }) : null;
+  if (!session) {
+    redirect("/signin");
+  }
+  const review = await getRecoveryReview(db, { userId: session.userId }, { clock: systemClock });
+  if (review && formData.get("review") === review.id) {
+    store.set(RECOVERY_REVIEW_COOKIE, review.id, {
+      httpOnly: true,
+      secure: true,
+      sameSite: "lax",
+      path: "/",
+      maxAge: Math.floor(RECOVERY_REVIEW_WINDOW_MS / 1000),
+    });
+  }
+  redirect("/home");
+}
+
 export default async function HomePage() {
   // Read per-request data first so the page is dynamic (never prerendered at build).
-  const token = (await cookies()).get(SESSION_COOKIE)?.value ?? null;
+  const store = await cookies();
+  const token = store.get(SESSION_COOKIE)?.value ?? null;
+  const dismissedRecoveryReview = store.get(RECOVERY_REVIEW_COOKIE)?.value ?? null;
   const config = loadConfig();
   const db = await getServerDb();
   const session = token ? await verifySession(db, token, { clock: systemClock }) : null;
@@ -88,7 +122,9 @@ export default async function HomePage() {
   // can decrypt their own data; the clock is "now" for the set-up and metrics reads.
   const keyWrapper = selectKeyWrapper({ nodeEnv: config.nodeEnv, localKek: config.devKek });
   const serviceName = (connectorId: string): string | undefined => getProcessCatalogue().get(connectorId)?.name;
-  const view = await createHomeActions({ db, keyWrapper, clock: systemClock, serviceName }).load(session);
+  const view = await createHomeActions({ db, keyWrapper, clock: systemClock, serviceName }).load(session, {
+    dismissedRecoveryReview,
+  });
   // The install prompt's "Turn on notifications" sets this device up for push: the
   // register action above and the PUBLIC VAPID key (never a secret; undefined when push
   // isn't configured, which the prompt reports as "not available").
@@ -97,6 +133,7 @@ export default async function HomePage() {
       {...view}
       registerPushDevice={registerPushDeviceAction}
       vapidPublicKey={config.vapid.publicKey}
+      dismissRecoveryReview={dismissRecoveryReviewAction}
     />
   );
 }

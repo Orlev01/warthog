@@ -35,6 +35,13 @@
 // The verified account between steps 5 and 6 lives in the bounded, expiring pending store
 // under a full-entropy handle (the recover handler's pattern).
 //
+// Sign-in audit (founder decision 13 November 2026) — a completed reset can be re-enrolled
+// for 7 days, and the signed-in owner can close that ("This wasn't me"):
+//   7. close — a signed-in device closes re-enrolment on the person's own completed reset.
+//              Identity is the session cookie alone, and a fresh step-up is required; the
+//              status-guarded 'done' → 'closed' update makes a close racing a re-enrolment
+//              safe. After a close, set-up verify and finish refuse with 409 reset_closed.
+//
 // Security (each a reviewer veto): every step checks the request `Origin` against the
 // configured `publicOrigin` first — a missing or foreign Origin is 403 and changes nothing
 // (design §5). Every body is validated at the boundary through the shared `parseBody`
@@ -50,10 +57,14 @@ import { issueEmailCode, verifyEmailCode } from "../../../server/auth/email-code
 import {
   requestAccountReset,
   cancelAccountReset,
+  closeAccountReset,
   hasCompletedReset,
+  isResetClosed,
   reenrolAfterReset,
   RESET_WAIT_MS,
 } from "../../../server/auth/account-reset";
+import { requireStepUp } from "../../../server/auth/step-up";
+import { discardPendingSignIns } from "../../../server/auth/recover-session";
 import { beginPasskeyRegistration } from "../../../server/auth/passkey";
 import { alertAccountReenrolled, deliverAlert } from "../../../server/auth/alerts";
 import { deviceCookieFor } from "../../../server/auth/device-recognition";
@@ -86,6 +97,7 @@ export interface ResetHandler {
   setupSendCode(request: Request): Promise<Response>;
   setupVerify(request: Request): Promise<Response>;
   setupFinish(request: Request): Promise<Response>;
+  close(request: Request): Promise<Response>;
 }
 
 // A verified set-up between setupVerify and setupFinish: the account whose email code
@@ -215,6 +227,21 @@ export function createResetHandler(deps: ResetHandlerDeps): ResetHandler {
     return json(200, { ok: true });
   }
 
+  // Step 7 — the signed-in person closes re-enrolment on their own completed reset ("This
+  // wasn't me"). The person is the session cookie's; a body is never read. No session is
+  // 401; no fresh confirmation is 403 step_up_required (nothing changes, and the banner asks
+  // the person to confirm it's them); nothing to close is 404.
+  async function close(request: Request): Promise<Response> {
+    if (!sameOrigin(request)) return json(403, { error: "forbidden" });
+    const token = readCookie(request, SESSION_COOKIE);
+    const session = token ? await verifySession(db, token, { clock }) : null;
+    if (!session) return json(401, { error: "unauthenticated" });
+    if (!requireStepUp(session, { clock })) return json(403, { error: "step_up_required" });
+    const result = await closeAccountReset(db, { userId: session.userId }, { clock });
+    if (!result.ok) return json(404, { error: "no_completed_reset" });
+    return json(200, { ok: true });
+  }
+
   // Step 4 — email a code to an address whose reset has finished. Only such an account is
   // emailed; every address (a pending or cancelled reset, no reset, no account, or a code
   // limit reached) gets the same 200, so the step reveals nothing.
@@ -258,7 +285,10 @@ export function createResetHandler(deps: ResetHandlerDeps): ResetHandler {
       const user = await getUserByEmail(db, email);
       if (!user) return json(400, { error: "invalid_code" });
       if (!(await hasCompletedReset(db, { userId: user.id }, { clock }))) {
-        return json(409, { error: "no_completed_reset" });
+        // The address is proven, so say plainly when its reset was closed from a signed-in
+        // device rather than that there is none.
+        const closed = await isResetClosed(db, { userId: user.id });
+        return json(409, { error: closed ? "reset_closed" : "no_completed_reset" });
       }
 
       const registrationOptions = await beginPasskeyRegistration(
@@ -294,7 +324,8 @@ export function createResetHandler(deps: ResetHandlerDeps): ResetHandler {
         { userId, response: registrationResponse as RegistrationResponseJSON },
         { rpId, origin: publicOrigin, clock, random },
       );
-      if (!result.ok) return json(400, { error: result.reason });
+      if (!result.ok) return json(result.reason === "reset_closed" ? 409 : 400, { error: result.reason });
+      discardPendingSignIns(userId, { clock });
 
       await deliverAlert("account-reenrolled", () =>
         alertAccountReenrolled(db, { userId }, { emailSender: senders.email }),
@@ -310,5 +341,5 @@ export function createResetHandler(deps: ResetHandlerDeps): ResetHandler {
     }
   }
 
-  return { sendCode, request: requestReset, cancel, setupSendCode, setupVerify, setupFinish };
+  return { sendCode, request: requestReset, cancel, setupSendCode, setupVerify, setupFinish, close };
 }

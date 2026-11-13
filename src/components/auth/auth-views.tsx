@@ -725,7 +725,7 @@ export function RecoverView({
       return (
         <AuthScreen
           title="Set up a new passkey"
-          lead="Now create a new passkey so you can sign in on this device from now on."
+          lead="Now create a new passkey so you can sign in on this device from now on. Once it's saved, your old passkeys and authenticator app stop working and every other device is signed out."
           error={error}
         >
           <FormNotice message={error} />
@@ -738,7 +738,7 @@ export function RecoverView({
       return (
         <AuthScreen
           title="Save your new recovery code"
-          lead="Here's your new recovery code — your old one no longer works. Write it down or copy it somewhere safe, and we'll only show it once."
+          lead="Your old passkeys, authenticator app and recovery code no longer work, and every other device was signed out. Here's your new recovery code. Write it down or copy it somewhere safe, and we'll only show it once."
           icon={KeyRound}
         >
           <SaveRecoveryCode
@@ -1045,6 +1045,7 @@ export function ResetView({
             <p className="font-medium">Before you reset</p>
             <ul className="wh-auth-steps mt-2 text-fg-muted">
               <li>The reset takes 7 days. We'll let you know by email, text and notification.</li>
+              <li>When it finishes, you have 7 days to set up a new passkey.</li>
               <li>You can cancel it from any device you're still signed in on.</li>
               <li>
                 It erases your saved cards and protected details, and disconnects your agents and services.
@@ -1073,8 +1074,8 @@ export function ResetView({
         <AuthScreen title="Your reset has started" icon={RotateCcw}>
           <Notice tone="success">
             {when ? `It will finish on ${when}.` : "It will finish in 7 days."} We've let you know on every
-            channel you have with us. If you didn't ask for this, open Warthog on a device you're still
-            signed in on and cancel it.
+            channel you have with us. When it finishes, you'll have 7 days to set up a new passkey. If you
+            didn't ask for this, open Warthog on a device you're still signed in on and cancel it.
           </Notice>
           <AuthLinks
             links={[

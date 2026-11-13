@@ -128,8 +128,9 @@ export async function getStepUpDeps(
 
 // Build the RecoverHandlerDeps bundle from validated config: the shared db, the clock
 // and random that mint the recovery session and new recovery code, the HMAC key and
-// email sender the email one-time code (and the recovery alert) need, the configured RP
-// ID and the origin every recovery step checks the request against. Recovery is email
+// email sender the email one-time code (and the recovery alert) need, the KeyWrapper the
+// "account recovered" activity entry is encrypted through, the configured RP ID and the
+// origin every recovery step checks the request against. Recovery is email
 // code plus recovery code, then a new passkey (it never verifies an authenticator code).
 export async function getRecoverDeps(
   overrides: ComposeOverrides = {},
@@ -142,6 +143,7 @@ export async function getRecoverDeps(
     random: systemRandom,
     hmacKey: config.hmacKey,
     emailSender: notificationSenders(config, db).email,
+    keyWrapper: keyWrapperFor(config),
     rpId: config.webauthnRpId,
     publicOrigin: publicOrigin(config),
   };

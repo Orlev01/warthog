@@ -114,9 +114,14 @@ export function buildDispatchTable(seams: JobSeams): Record<string, JobHandler> 
     [GOOGLE_REMINDER_TYPE]: connector,
     [GOOGLE_LAPSE_TYPE]: connector,
     // A reset cancelled in its waiting week is no longer pending: completion reports
-    // ok:false and there is nothing to do, so that is not a failure.
+    // ok:false and there is nothing to do, so that is not a failure. A completion alerts
+    // every channel the person registered.
     [COMPLETE_JOB_TYPE]: async (job) => {
-      await completeAccountReset(seams.db, payloadOf(userPayload, job), { executor: seams.resetExecutor, clock: seams.clock });
+      await completeAccountReset(seams.db, payloadOf(userPayload, job), {
+        executor: seams.resetExecutor,
+        clock: seams.clock,
+        senders: seams.senders,
+      });
     },
   };
 }

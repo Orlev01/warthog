@@ -121,6 +121,8 @@ import { fixedClock, type Clock } from "../../../server/seams/clock";
 import { freshDb } from "../../../test/db";
 import { createAuthenticator, type SoftwareAuthenticator } from "../../../test/authenticator";
 import { withTransaction, type Db } from "../../../server/db/index";
+import { localAesKeyWrapper } from "../../../server/crypto/key-wrapper";
+import { randomBytes } from "node:crypto";
 
 // A frozen instant: the session is minted and verified at the same clock, so it is
 // comfortably inside its idle/absolute windows with no wall-clock dependence.
@@ -135,10 +137,9 @@ const RP_ID = "warthog.com.au";
 const GOOD_ORIGIN = "https://warthog.com.au";
 const FOREIGN_ORIGIN = "https://evil.example";
 
-// A placeholder wrapped-DEK reference: `createUser` stores it verbatim (opaque to the
-// app). Recovery never unwraps it — we only need a real `users` row to hang a recovery
-// code, a passkey and a session off a genuine userId.
-const WRAPPED_DEK = "wrapped-dek-placeholder";
+// The test KEK the account's data key is wrapped under. Recovery unwraps it once, to write
+// its "account recovered" activity entry encrypted like every other entry.
+const KEY_WRAPPER = localAesKeyWrapper(randomBytes(32));
 
 // Build the handler under test with the real seams and the test fakes. Recovery drives
 // the recovery/passkey/session modules only — it issues no email and creates no account,
@@ -155,6 +156,7 @@ function makeHandler(db: Db, clock: Clock = fixedClock(T0), outbox: Outbox = cre
     random: systemRandom,
     hmacKey: HMAC_KEY,
     emailSender: outbox,
+    keyWrapper: KEY_WRAPPER,
     rpId: RP_ID,
     publicOrigin: GOOD_ORIGIN,
   });
@@ -198,7 +200,7 @@ function recoverRequest(body: unknown, origin: string | null = GOOD_ORIGIN): Req
 // plaintext code the person would have saved at sign-up (the "old" code recovery
 // replaces). Distinct labels keep emails unique within a test.
 async function seedAccount(db: Db, label: string): Promise<{ user: User; recoveryCode: string }> {
-  const user = await createUser(db, { email: `${label}@warthog.com.au`, wrappedDek: WRAPPED_DEK });
+  const user = await createUser(db, { email: `${label}@warthog.com.au`, wrappedDek: await KEY_WRAPPER.wrap(randomBytes(32)) });
   const { code } = await issueRecoveryCode(db, user.id, { random: systemRandom });
   return { user, recoveryCode: code };
 }
@@ -828,20 +830,28 @@ test("recovery: register-passkey is refused on a recovery whose recovery code ne
   }
 });
 
-test("recovery: finishing a recovery emails the account holder an alert that carries no code", async () => {
+// Sign-in audit (founder decision 13 November 2026): the alert goes out when the new
+// passkey is saved, so an abandoned recovery is still reported; finish sends nothing.
+test("recovery: saving the new passkey emails the account holder an alert that carries no code", async () => {
   const db = await freshDb();
   try {
     const handler = makeHandler(db);
     const auth = createAuthenticator();
     const { user, recoveryCode } = await seedAccount(db, "alerted-recoverer");
-    const { recoveryId, newRecoveryCode } = await throughRegisterPasskey(handler, auth, user.email, recoveryCode);
+    const { recoveryId: verifiedId, registrationOptions } = await throughVerifyCode(handler, user.email, recoveryCode);
     const before = emailsTo(handler.outbox, user.email).length;
 
-    const res = await handler.finish(recoverRequest({ recoveryId }));
-    assert.equal(res.status, 303);
+    const registered = await handler.registerPasskey(
+      recoverRequest({ recoveryId: verifiedId, registrationResponse: await auth.register(registrationOptions) }),
+    );
+    assert.equal(registered.status, 200);
+    const { recoveryCode: newRecoveryCode } = (await registered.json()) as { recoveryCode: string };
 
     const after = emailsTo(handler.outbox, user.email);
     assert.equal(after.length, before + 1, "exactly one alert is sent to the account holder");
+    const res = await handler.finish(recoverRequest({ recoveryId: verifiedId }));
+    assert.equal(res.status, 303);
+    assert.equal(emailsTo(handler.outbox, user.email).length, before + 1, "finishing sends nothing more");
     const alert = after.at(-1)!.body;
     assert.match(alert, /recover/i, "the alert says the account was recovered");
     assert.ok(!alert.includes(newRecoveryCode) && !alert.includes(recoveryCode), "the alert carries no recovery code");
@@ -869,6 +879,7 @@ test("recovery: an alert that cannot be delivered does not undo a completed reco
         random: systemRandom,
         hmacKey: HMAC_KEY,
         emailSender: flaky,
+        keyWrapper: KEY_WRAPPER,
         rpId: RP_ID,
         publicOrigin: GOOD_ORIGIN,
       }),
@@ -876,9 +887,14 @@ test("recovery: an alert that cannot be delivered does not undo a completed reco
     );
     const auth = createAuthenticator();
     const { user, recoveryCode } = await seedAccount(db, "flaky-alert");
-    const { recoveryId } = await throughRegisterPasskey(handler, auth, user.email, recoveryCode);
+    const { recoveryId, registrationOptions } = await throughVerifyCode(handler, user.email, recoveryCode);
 
     failSends = true;
+    const registered = await handler.registerPasskey(
+      recoverRequest({ recoveryId, registrationResponse: await auth.register(registrationOptions) }),
+    );
+    assert.equal(registered.status, 200, "the passkey step still succeeds when the alert can't be sent");
+    assert.equal(await countFor(db, "passkeys", user.id), 1, "and the new passkey is kept");
     const res = await handler.finish(recoverRequest({ recoveryId }));
     assert.equal(res.status, 303, "the recovery still completes");
     assert.ok(res.headers.get("set-cookie"), "and the session is still issued");

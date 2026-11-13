@@ -12,11 +12,17 @@ const SCREEN = "/settings/security";
 // Where a finished server action sends the person: back to the screen with the success code,
 // the refusal's reason, or `invalid_request` for a boundary 4xx. Anything else is a genuine
 // server fault and is rethrown, never dressed up as a notice.
-export function noticeLocation(successCode: string, outcome: ActionResult | unknown): string {
+// `rename` maps a refusal reason to this action's own notice code, where one reason reads
+// differently by action (the last sign-in method kept: a passkey, or the authenticator app).
+export function noticeLocation(
+  successCode: string,
+  outcome: ActionResult | unknown,
+  rename: Readonly<Record<string, string>> = {},
+): string {
   if (outcome instanceof HttpError) return `${SCREEN}?notice=invalid_request`;
   if (outcome instanceof Error) throw outcome;
   const result = outcome as ActionResult;
-  const code = result.ok ? successCode : result.reason;
+  const code = result.ok ? successCode : (Object.hasOwn(rename, result.reason) ? rename[result.reason]! : result.reason);
   return `${SCREEN}?notice=${encodeURIComponent(code)}`;
 }
 
@@ -35,6 +41,15 @@ const NOTICES: Record<string, SecurityNotice> = {
   last_sign_in_method: {
     tone: "problem",
     text: "Nothing was changed: this passkey is the only way you can sign in. Add another passkey or set up an authenticator app first, then remove it.",
+  },
+  // Sign-in audit: removing the authenticator app, and keeping it when it's the only way in.
+  authenticator_removed: {
+    tone: "done",
+    text: "Authenticator app removed. Use your passkey to sign in and to confirm it's you.",
+  },
+  authenticator_last_sign_in_method: {
+    tone: "problem",
+    text: "Nothing was changed: your authenticator app is the only way you can sign in. Add a passkey first, then remove the app.",
   },
   session_signed_out: { tone: "done", text: "Signed out of that device." },
   step_up_required: {

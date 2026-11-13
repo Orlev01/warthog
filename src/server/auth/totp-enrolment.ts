@@ -85,6 +85,13 @@ const pendingEnrolments = pendingStore<PendingEnrolment>("auth.settingsTotpEnrol
 
 const SIX_DIGITS = /^[0-9]{6}$/;
 
+// Recovery and reset re-enrolment evict the lost devices (recover-session). A set-up begun
+// before that belongs to them, so it goes too: otherwise the owner adding an authenticator
+// within its lifetime would be handed a secret the other device already holds.
+export function discardTotpEnrolment(userId: string): void {
+  pendingEnrolments.delete(userId);
+}
+
 export function createTotpEnrolment(deps: TotpEnrolmentDeps): TotpEnrolment {
   const { db, clock, random, totpSecrets, alerts } = deps;
 

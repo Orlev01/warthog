@@ -73,7 +73,8 @@ export default function HelpPage() {
         <PublicSection id="recovering" title="Getting back into your account">
           <p>
             Lost your passkey? Sign in with your email and the recovery code you saved when you
-            signed up.
+            signed up. Recovering removes your old passkeys and authenticator app and signs out every
+            other device. Your agents stay connected, so check them afterwards.
           </p>
           <div className="wh-public-actions">
             <Action href="/recover">Recover your account</Action>
@@ -81,7 +82,8 @@ export default function HelpPage() {
           <p>
             Lost your recovery code too? You can reset your account by email. A reset takes 7
             days, erases your saved cards and protected details, and disconnects your agents and
-            services. Everything else is kept.
+            services. Everything else is kept. Once it finishes, you have 7 days to set up a new
+            passkey.
           </p>
           <div className="wh-public-actions">
             <Action href="/reset">Reset your account</Action>

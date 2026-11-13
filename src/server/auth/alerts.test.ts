@@ -332,11 +332,55 @@ test("the account-recovered alert says how to reach support, not just 'contact s
   try {
     const person = await freshUser(db, "recovered");
     const outbox = createOutbox();
-    await alertAccountRecovered(db, { userId: person.id }, { emailSender: outbox });
+    await alertAccountRecovered(db, { userId: person.id, agentNames: [] }, { emailSender: outbox });
     const mail = emailsTo(outbox, person.email);
     assert.equal(mail.length, 1);
     assert.ok(mail[0].body.includes(SUPPORT_EMAIL), "the alert carries the support address");
+    assert.match(mail[0].body, /old passkeys and authenticator app were removed/i, "it says what recovery removed");
+    assert.match(mail[0].body, /no agents are connected/i, "with no agents it says so");
     assertNoCodeOrToken(mail[0].body);
+  } finally {
+    await db.close();
+  }
+});
+
+// Sign-in audit (founder decision 13 November 2026): recovery keeps agents and their keys,
+// so the alert names every connected agent for the person to review. Agent names are
+// untrusted free text, so a card number planted in one is masked.
+test("the account-recovered alert names the connected agents as still connected, masking a planted card", async () => {
+  const db = await freshDb();
+  try {
+    assert.ok(passesLuhn(CARD_BARE), "test setup: the planted number is Luhn-valid");
+    const person = await freshUser(db, "recovered-agents");
+    const outbox = createOutbox();
+    await alertAccountRecovered(db, { userId: person.id, agentNames: ["Claude", `Pay ${CARD_SPACED}`] }, { emailSender: outbox });
+    const mail = emailsTo(outbox, person.email);
+    assert.equal(mail.length, 1);
+    assert.match(mail[0].body, /still connected/i);
+    assert.ok(mail[0].body.includes("Claude"), "the agent is named");
+    assert.doesNotMatch(mail[0].body, /removed[^.]*agent/i, "it never says an agent was removed");
+    assertCardMasked(mail[0].body);
+  } finally {
+    await db.close();
+  }
+});
+
+// Agent names are chosen by whoever connected the agent — possibly whoever holds the lost
+// device. However many there are and however long, they can't push the support address or
+// the fixed copy out of the alert, and each is quoted so it can't pass for our own words.
+test("the account-recovered alert keeps its own copy and support address whatever the agents are called", async () => {
+  const db = await freshDb();
+  try {
+    const person = await freshUser(db, "recovered-many");
+    const outbox = createOutbox();
+    const names = Array.from({ length: 12 }, (_, i) => `Agent ${i} ${"x".repeat(190)}`);
+    await alertAccountRecovered(db, { userId: person.id, agentNames: names }, { emailSender: outbox });
+    const [mail] = emailsTo(outbox, person.email);
+    assert.ok(mail.body.includes(SUPPORT_EMAIL), "the support address survives");
+    assert.match(mail.body, /old passkeys and authenticator app were removed/i);
+    assert.match(mail.body, /"Agent 0 x+…"/, "names are quoted and shortened");
+    assert.match(mail.body, /and 7 more/, "the rest are counted, not listed");
+    assert.ok(mail.body.length < 2000, "the body fits before truncation");
   } finally {
     await db.close();
   }

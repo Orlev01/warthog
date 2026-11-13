@@ -76,6 +76,7 @@ const KIND_LABELS: Record<string, string> = {
   memory_updated: "Memory edited",
   memory_deleted: "Memory deleted",
   account_imported: "Account import",
+  account_recovered: "Account recovered",
 };
 
 /** A recorded kind in words: "tool_call" → "Agent request". */

@@ -10,6 +10,7 @@ import { renderToStaticMarkup } from "react-dom/server";
 
 import { SecuritySettings } from "./security-view";
 import { removePasskeyCopy } from "./remove-passkey";
+import { removeAuthenticatorCopy } from "./remove-authenticator";
 import type { SecurityView } from "@/app/(portal)/(protected)/settings/security/actions";
 import { securityNotice } from "@/app/(portal)/(protected)/settings/security/notices";
 
@@ -39,6 +40,7 @@ function render(v: SecurityView, notice: ReturnType<typeof securityNotice> = nul
       notice={notice}
       timeZone={ZONE}
       removePasskey={noop}
+      removeAuthenticator={noop}
       signOutSession={noop}
       beginAddPasskey={async () => ({ ok: false, reason: "step_up_required" })}
       finishAddPasskey={async () => ({ ok: true })}
@@ -179,4 +181,58 @@ test("Security links to sign-in requests, and says when some are waiting", () =>
   assert.doesNotMatch(text(none), /waiting/);
   const two = text(render(view({ pendingSignInRequests: 2 })));
   assert.match(two, /2 waiting/);
+});
+
+// Sign-in audit (founder decision 13 November 2026): the authenticator app can be removed
+// here, behind the same in-page danger confirmation as a passkey, and never when it is the
+// account's only way to sign in.
+function authenticatorDialog(markup: string): string {
+  return [...markup.matchAll(/<dialog\b[\s\S]*?<\/dialog>/g)]
+    .map((match) => match[0])
+    .find((dialog) => /<h2[^>]*>[^<]*authenticator app/i.test(dialog)) ?? "";
+}
+
+test("with a passkey, Remove authenticator app asks first and its dialog removes it", () => {
+  const markup = render(view({ authenticatorEnabled: true }));
+  const trigger = /<button[^>]*aria-label="Remove authenticator app"[^>]*>/.exec(markup)?.[0] ?? "";
+  assert.match(trigger, /type="button"/, "the row's Remove never posts on its own");
+  assert.match(trigger, /aria-haspopup="dialog"/);
+  const dialog = authenticatorDialog(markup);
+  assert.match(text(dialog), /Remove your authenticator app\?/);
+  assert.match(text(dialog), /passkeys keep working/);
+  assert.match(dialog, /type="submit"[^>]*>[\s\S]*Remove authenticator app/);
+  assert.match(dialog, /data-variant="danger-solid"|danger/, "a danger confirmation");
+  assert.match(text(dialog), /Keep authenticator app/);
+});
+
+test("without a passkey the authenticator app can't be removed: the dialog says why and links to Add a passkey", () => {
+  const markup = render(view({ passkeys: [], authenticatorEnabled: true }));
+  const dialog = authenticatorDialog(markup);
+  assert.match(text(dialog), /You can't remove your authenticator app/);
+  assert.match(text(dialog), /only way you can sign in/);
+  assert.doesNotMatch(dialog, /type="submit"/, "no Remove button to press");
+  assert.match(dialog, /href="#add-a-passkey"[^>]*>Add a passkey</);
+});
+
+test("no authenticator app, no Remove authenticator app", () => {
+  assert.doesNotMatch(render(view()), /Remove authenticator app/);
+});
+
+test("the authenticator removal copy fits the situation", () => {
+  const ok = removeAuthenticatorCopy({ hasPasskey: true });
+  assert.equal(ok.blocked, false);
+  assert.match(ok.body.join(" "), /no longer sign in or confirm it's you with a code/);
+  const blocked = removeAuthenticatorCopy({ hasPasskey: false });
+  assert.equal(blocked.blocked, true);
+  assert.match(blocked.body.join(" "), /Add a passkey first/);
+});
+
+test("the authenticator outcomes read plainly", () => {
+  assert.equal(securityNotice("authenticator_removed")?.tone, "done");
+  assert.match(securityNotice("authenticator_removed")?.text ?? "", /Authenticator app removed/);
+  const kept = securityNotice("authenticator_last_sign_in_method");
+  assert.equal(kept?.tone, "problem");
+  assert.match(kept?.text ?? "", /Nothing was changed/);
+  assert.match(kept?.text ?? "", /only way you can sign in/);
+  assert.match(kept?.text ?? "", /Add a passkey first/);
 });

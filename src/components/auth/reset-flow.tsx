@@ -83,7 +83,10 @@ const CODE_MISMATCH_COPY = "That code didn't match. Check the code from your ema
 const REQUEST_FAILED_COPY = "We couldn't start the reset just now. Please try again in a few minutes.";
 const THROTTLED_COPY = "Too many tries with that code. Please wait a few minutes, then try again.";
 const NO_FINISHED_RESET_COPY =
-  "There's no finished reset for that account. A reset finishes 7 days after you ask for it.";
+  "There's no finished reset for that account. A reset finishes 7 days after you ask for it, and you then have 7 days to set up a new passkey.";
+// Sign-in audit: the signed-in owner closed re-enrolment on the completed reset.
+const RESET_CLOSED_COPY =
+  "This reset was closed from a device that's signed in to the account, so it can't be used to set up a new passkey. If you still need to get back in, ask for a new reset.";
 const VERIFY_FAILED_COPY = "We couldn't check that code just now. Please try again in a few minutes.";
 const PASSKEY_CANCELLED_COPY =
   "Creating your passkey was cancelled. You can try again when you're ready.";
@@ -155,14 +158,17 @@ export function createResetFlow(deps: ResetFlowDeps): ResetFlowController {
   async function submitSetupEmailCode(): Promise<void> {
     const response = await post("setup-verify", { email: state.email, code: state.emailCode });
     if (!response || !response.ok) {
+      const closed = response?.status === 409 && (await readJson(response)).error === "reset_closed";
       const copy =
         response?.status === 400
           ? CODE_MISMATCH_COPY
           : response?.status === 429
             ? THROTTLED_COPY
-            : response?.status === 409
-              ? NO_FINISHED_RESET_COPY
-              : VERIFY_FAILED_COPY;
+            : closed
+              ? RESET_CLOSED_COPY
+              : response?.status === 409
+                ? NO_FINISHED_RESET_COPY
+                : VERIFY_FAILED_COPY;
       set({ error: copy });
       return;
     }
@@ -196,7 +202,8 @@ export function createResetFlow(deps: ResetFlowDeps): ResetFlowController {
     }
     const response = await post("setup-finish", { setupId, registrationResponse });
     if (!response || !response.ok) {
-      startAgain(SETUP_FAILED_COPY);
+      const closed = response?.status === 409 && (await readJson(response)).error === "reset_closed";
+      startAgain(closed ? RESET_CLOSED_COPY : SETUP_FAILED_COPY);
       return;
     }
     const body = await readJson(response);
