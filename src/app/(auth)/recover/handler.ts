@@ -351,8 +351,9 @@ export function createRecoverHandler(deps: RecoverHandlerDeps): RecoverHandler {
       try {
         // Resolve the data key before the transaction (the owner-change pattern), so the
         // activity append inside it never waits on the key service.
+        // A deleted account keeps its row with an empty key until purge: it can't be recovered.
         const user = await getUserById(db, userId);
-        if (!user) return json(400, { error: "unknown_recovery" });
+        if (!user || user.wrappedDek === "") return json(400, { error: "unknown_recovery" });
         const dek = await keyWrapper.unwrap(user.wrappedDek);
         result = await withTransaction(db, async (tx) => {
           await lockActiveAccount(tx, userId);

@@ -392,3 +392,21 @@ test("a sign-in request approved before the recovery can't be collected after it
     await db.close();
   }
 });
+
+test("an account deleted mid-recovery can't be recovered: nothing is added, removed or sent", async () => {
+  const db = await freshDb();
+  try {
+    const handler = makeHandler(db);
+    const seeded = await seedAccount(db, "evict-deleted");
+    const { recoveryId, registrationOptions } = await throughVerifyCode(handler, seeded.user.email, seeded.recoveryCode);
+    await db.query("UPDATE users SET wrapped_dek = '' WHERE id = $1", [seeded.user.id]);
+
+    const refused = await handler.registerPasskey(post({ recoveryId, registrationResponse: await createAuthenticator().register(registrationOptions) }));
+    assert.equal(refused.status, 400);
+    assert.equal(await count(db, "passkeys", seeded.user.id), 2);
+    assert.equal(await count(db, "totp_secrets", seeded.user.id), 1);
+    assert.equal(alertsTo(handler.outbox, seeded.user.email).length, 0);
+  } finally {
+    await db.close();
+  }
+});
