@@ -276,3 +276,8 @@ test("the panel shows the confirm-it's-you control when a new key needs a confir
     assert.match(markup, /Confirm it(&#x27;|')s you/, `${state}: it offers a way to confirm`);
   }
 });
+
+test("the panel's confirmation offers only the ways this person can confirm", () => {
+  assert.doesNotMatch(render({ initialConfirmRequired: true, passkey: true, authenticator: false }), /Authenticator app code/);
+  assert.match(render({ initialConfirmRequired: true, passkey: true, authenticator: true }), /Authenticator app code/);
+});

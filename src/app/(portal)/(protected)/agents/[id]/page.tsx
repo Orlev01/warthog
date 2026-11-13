@@ -27,6 +27,7 @@ import { getProcessCatalogue } from "@/server/connectors/catalogue";
 import { loadConfig } from "@/server/config";
 import { selectKeyWrapper } from "@/server/crypto/key-wrapper";
 import { notificationSenders } from "@/server/notify/production";
+import { confirmFactors } from "@/server/auth/confirm-factors";
 import {
   createPermissionsActions,
   type PermissionsSaveInput,
@@ -243,6 +244,8 @@ export default async function AgentPermissionsPage({
   );
   if (!data) notFound();
   const connected = data.agent.status === "connected";
+  // Which ways the person can confirm it's you, for the Access key panel's confirmation.
+  const factors = section === "settings" && data.accessKey ? await confirmFactors(db, session.userId) : null;
   // "Today, 6:17 pm" for the Overview's "Last request", in the member's own time zone.
   const lastActiveAt = data.agent.lastActiveAt != null ? new Date(data.agent.lastActiveAt) : null;
   const lastActive =
@@ -287,6 +290,8 @@ export default async function AgentPermissionsPage({
               state={data.accessKey}
               replace={replaceAccessKey.bind(null, id)}
               revoke={revokeAccessKey.bind(null, id)}
+              passkey={factors?.passkey}
+              authenticator={factors?.authenticator}
             />
           ) : null}
           {firstPage || nextPage ? (

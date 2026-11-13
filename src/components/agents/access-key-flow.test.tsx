@@ -668,3 +668,10 @@ test("the confirm-it's-you control is never inside the create form (its code for
   assert.ok(!form.includes("wh-confirm-its-you"), "the confirmation is outside the create form");
   assert.ok(markup.includes("wh-confirm-its-you"), "the confirmation renders");
 });
+
+test("the confirmation offers only the ways this person can confirm", () => {
+  const passkeyOnly = renderToStaticMarkup(<AccessKeyFlow create={noopCreate} defaultName="My Grok" defaultPlatform="grok" initialConfirmRequired passkey authenticator={false} />);
+  assert.doesNotMatch(passkeyOnly, /Authenticator app code/, "no authenticator field for a passkey-only person");
+  const both = renderToStaticMarkup(<AccessKeyFlow create={noopCreate} defaultName="My Grok" defaultPlatform="grok" initialConfirmRequired passkey authenticator />);
+  assert.match(both, /Authenticator app code/);
+});

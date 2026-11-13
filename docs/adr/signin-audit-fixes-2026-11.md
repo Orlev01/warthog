@@ -15,8 +15,9 @@ enough for persistent access to mail, memory and records through an agent.
 
 - `create` and `replace` refuse with `step_up_required`, writing nothing, unless the session
   confirmed it's you in the last five minutes. The screens show "Confirm it's you" and, once
-  confirmed, finish the request without another tap. The confirmation sits outside the create
-  form, because its authenticator-code form must not nest inside it.
+  confirmed, finish the request without another tap. The confirmation offers only the ways the
+  person can confirm, and sits outside the create form, because its authenticator-code form
+  must not nest inside it.
 - A created key sends the existing new-agent email, and a replaced key sends a new
   "a new access key was made for <agent>" email. Neither carries the key. A failed send is
   logged and never undoes the key.
@@ -75,3 +76,14 @@ Test-first: each fix has failing tests first.
 - Step-up: the old token stops verifying, the new cookie keeps its attributes and carries the
   step-up, the session id is kept, and a refused step-up sets nothing. These cover both the
   passkey and authenticator paths.
+
+The full suite passed except one composed step-up route test that still read the retired
+token; it was updated and passes. A real-browser run used Chromium with a virtual passkey
+against a local `next dev`:
+- Sign-up gives a session with no step-up. Create access key then asked to confirm, and
+  confirming made and showed the key with no second tap.
+- The session cookie changed. A copy of the old cookie was redirected to sign-in, while the
+  confirming browser stayed signed in.
+- The new-agent email reached the dev outbox without the key.
+- Replace within the window made a new key with no prompt, and sent its email.
+- A signed-in `/signin?next=/.//evil.example` redirected to `/home`.

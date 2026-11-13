@@ -191,6 +191,9 @@ export interface AccessKeyPanelProps {
   // Seed the confirm-it's-you prompt for a render test (production reaches it through a
   // `step_up_required` refusal).
   initialConfirmRequired?: boolean;
+  // Which ways this person can confirm it's you (the page reads them); omitted offers both.
+  passkey?: boolean;
+  authenticator?: boolean;
 }
 
 export function AccessKeyPanel(props: AccessKeyPanelProps): React.ReactElement {
@@ -229,7 +232,7 @@ export function AccessKeyPanel(props: AccessKeyPanelProps): React.ReactElement {
     <Notice tone={state.notice.tone}>{state.notice.text}</Notice>
   ) : null;
   const confirm = state.confirmRequired || props.initialConfirmRequired ? (
-    <ConfirmItsYou explanation={CONFIRM_TO_REPLACE} onConfirmed={() => { void panel.confirmed(); }} />
+    <ConfirmItsYou explanation={CONFIRM_TO_REPLACE} passkey={props.passkey} authenticator={props.authenticator} onConfirmed={() => { void panel.confirmed(); }} />
   ) : null;
 
   if (issuedKey) {

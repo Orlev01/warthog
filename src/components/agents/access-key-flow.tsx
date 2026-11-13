@@ -250,6 +250,9 @@ export interface AccessKeyFlowProps {
   // Seed the confirm-it's-you prompt for a render test (production reaches it through a
   // `step_up_required` refusal).
   initialConfirmRequired?: boolean;
+  // Which ways this person can confirm it's you (the page reads them); omitted offers both.
+  passkey?: boolean;
+  authenticator?: boolean;
   // Called once a key is issued (the page refreshes the agents list).
   onCreated?: () => void;
 }
@@ -287,7 +290,7 @@ export function AccessKeyFlow(props: AccessKeyFlowProps): React.ReactElement {
   // The confirmation sits after the form, never inside it: it has its own authenticator-code
   // form, and a nested form would submit Create instead.
   const confirm = state.confirmRequired || props.initialConfirmRequired ? (
-    <ConfirmItsYou explanation={CONFIRM_TO_CREATE_COPY} onConfirmed={() => { void flow.confirmed(); }} />
+    <ConfirmItsYou explanation={CONFIRM_TO_CREATE_COPY} passkey={props.passkey} authenticator={props.authenticator} onConfirmed={() => { void flow.confirmed(); }} />
   ) : null;
 
   return (

@@ -16,6 +16,7 @@ import { connectedServices } from "@/app/oauth/consent/actions";
 import { getProcessCatalogue } from "@/server/connectors/catalogue";
 import { loadConfig } from "@/server/config";
 import { notificationSenders } from "@/server/notify/production";
+import { confirmFactors } from "@/server/auth/confirm-factors";
 import { PageContainer } from "@/components/shell/page-container";
 
 // E10-S13 — Access-key page (the thin protected-page loader that mounts the access-key flow
@@ -106,9 +107,10 @@ export default async function AccessKeyPage({
   const defaults = await getAgentDefaults(db, session.userId);
   const catalogue = getProcessCatalogue(loadConfig());
   const services = await connectedServices({ db, nameOf: id => catalogue.get(id)?.name }, session.userId);
+  const factors = await confirmFactors(db, session.userId);
   return (
     <PageContainer className="flex flex-col gap-6">
-      <AccessKeyFlow services={services} defaultTemplate={defaults.template} create={create} defaultName={defaultName} defaultPlatform={platformParam} />
+      <AccessKeyFlow services={services} defaultTemplate={defaults.template} create={create} defaultName={defaultName} defaultPlatform={platformParam} passkey={factors.passkey} authenticator={factors.authenticator} />
     </PageContainer>
   );
 }
