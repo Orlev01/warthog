@@ -250,6 +250,9 @@ test("getRecoverDeps carries the config's HMAC key and a dev-outbox email sender
     outbox.list().some((m) => m.channel === "email" && m.recipient === recipient && m.body === body),
     "the recovery email sender is the dev outbox when dev tools are on",
   );
+  // The "account recovered" activity entry is encrypted under the account's own data key.
+  const dek = new Uint8Array(32).fill(5);
+  assert.deepEqual(Buffer.from(await deps.keyWrapper.unwrap(await deps.keyWrapper.wrap(dek))), Buffer.from(dek));
 });
 
 // --- Review fix W5 — a new passkey after a finished reset registers under the RP ID ------

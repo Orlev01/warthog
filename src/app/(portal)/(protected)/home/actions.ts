@@ -49,6 +49,7 @@ import type { Session } from "@/server/auth/session";
 import type { Db } from "@/server/db/index";
 import { formatAccountTime } from "@/server/display-time";
 import { timeZoneFor } from "@/server/spending/time-zone";
+import { getRecoveryReview } from "@/server/auth/recovery-review";
 
 // The dependency bundle: the database seam, plus the KeyWrapper that unwraps the
 // person's DEK (so the greeting and the two owner-scoped reads can decrypt their
@@ -62,10 +63,16 @@ export interface HomeActionsDeps {
   readonly serviceName?: (connectorId: string) => string | undefined;
 }
 
+// What the page knows about this browser: the recovery review notice it dismissed (the
+// entry hash in the review cookie), so that notice stays hidden here.
+export interface HomeLoadOptions {
+  readonly dismissedRecoveryReview?: string | null;
+}
+
 // The home actions the thin loader drives: turn the verified session into the
 // dashboard's props.
 export interface HomeActions {
-  load(session: Session): Promise<DashboardViewProps>;
+  load(session: Session, options?: HomeLoadOptions): Promise<DashboardViewProps>;
 }
 
 // A string field of a decrypted payload (e.g. `summary`), or "" when the field is
@@ -175,7 +182,7 @@ export function createHomeActions(deps: HomeActionsDeps): HomeActions {
 
   // Assemble the dashboard's props for the signed-in person — scoped by the
   // session's user id, never a client value.
-  async function load(session: Session): Promise<DashboardViewProps> {
+  async function load(session: Session, options: HomeLoadOptions = {}): Promise<DashboardViewProps> {
     const user = await getUserById(db, session.userId);
     // The email's local part is the fallback greeting when no name is saved (or no
     // key is available to decrypt one).
@@ -224,6 +231,12 @@ export function createHomeActions(deps: HomeActionsDeps): HomeActions {
     const now = clock.now();
     const lastDay = metrics.lastDayByAgent ?? [];
     const attention = lastDay.reduce((sum, group) => sum + group.byOutcome.blocked + group.byOutcome.failed + group.disputed, 0);
+    // After an account recovery: the agents it kept, for the person to review (sign-in
+    // audit, founder decision 13 November 2026). Scoped by the session's own account.
+    const review = await getRecoveryReview(db, { userId: session.userId }, {
+      clock,
+      dismissed: options.dismissedRecoveryReview,
+    });
 
     return {
       personName,
@@ -238,6 +251,18 @@ export function createHomeActions(deps: HomeActionsDeps): HomeActions {
         toDashboardAgent(agent, lastDay.find((group) => group.key === agent.agentId), timeZone, now)),
       reminders: metrics.reminders.map(toDashboardReminder),
       attention: attention > 0 ? { count: attention, href: "/activity?attention=1" } : undefined,
+      ...(review
+        ? {
+            recoveryReview: {
+              recoveredAt: formatAccountTime(review.recoveredAt.toISOString(), timeZone),
+              agents: review.agents.map((agent) => ({
+                id: agent.id,
+                name: agent.name,
+                href: `/agents/${encodeURIComponent(agent.id)}?section=settings`,
+              })),
+            },
+          }
+        : {}),
     };
   }
 

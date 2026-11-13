@@ -725,7 +725,7 @@ export function RecoverView({
       return (
         <AuthScreen
           title="Set up a new passkey"
-          lead="Now create a new passkey so you can sign in on this device from now on."
+          lead="Now create a new passkey so you can sign in on this device from now on. Once it's saved, your old passkeys and authenticator app stop working and every other device is signed out."
           error={error}
         >
           <FormNotice message={error} />
@@ -738,7 +738,7 @@ export function RecoverView({
       return (
         <AuthScreen
           title="Save your new recovery code"
-          lead="Here's your new recovery code — your old one no longer works. Write it down or copy it somewhere safe, and we'll only show it once."
+          lead="Your old passkeys, authenticator app and recovery code no longer work, and every other device was signed out. Here's your new recovery code. Write it down or copy it somewhere safe, and we'll only show it once."
           icon={KeyRound}
         >
           <SaveRecoveryCode

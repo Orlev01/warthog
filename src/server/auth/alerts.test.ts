@@ -332,11 +332,34 @@ test("the account-recovered alert says how to reach support, not just 'contact s
   try {
     const person = await freshUser(db, "recovered");
     const outbox = createOutbox();
-    await alertAccountRecovered(db, { userId: person.id }, { emailSender: outbox });
+    await alertAccountRecovered(db, { userId: person.id, agentNames: [] }, { emailSender: outbox });
     const mail = emailsTo(outbox, person.email);
     assert.equal(mail.length, 1);
     assert.ok(mail[0].body.includes(SUPPORT_EMAIL), "the alert carries the support address");
+    assert.match(mail[0].body, /old passkeys and authenticator app were removed/i, "it says what recovery removed");
+    assert.match(mail[0].body, /no agents are connected/i, "with no agents it says so");
     assertNoCodeOrToken(mail[0].body);
+  } finally {
+    await db.close();
+  }
+});
+
+// Sign-in audit (founder decision 13 November 2026): recovery keeps agents and their keys,
+// so the alert names every connected agent for the person to review. Agent names are
+// untrusted free text, so a card number planted in one is masked.
+test("the account-recovered alert names the connected agents as still connected, masking a planted card", async () => {
+  const db = await freshDb();
+  try {
+    assert.ok(passesLuhn(CARD_BARE), "test setup: the planted number is Luhn-valid");
+    const person = await freshUser(db, "recovered-agents");
+    const outbox = createOutbox();
+    await alertAccountRecovered(db, { userId: person.id, agentNames: ["Claude", `Pay ${CARD_SPACED}`] }, { emailSender: outbox });
+    const mail = emailsTo(outbox, person.email);
+    assert.equal(mail.length, 1);
+    assert.match(mail[0].body, /still connected/i);
+    assert.ok(mail[0].body.includes("Claude"), "the agent is named");
+    assert.doesNotMatch(mail[0].body, /removed[^.]*agent/i, "it never says an agent was removed");
+    assertCardMasked(mail[0].body);
   } finally {
     await db.close();
   }

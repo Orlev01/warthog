@@ -26,6 +26,8 @@ import { Status, type DisplayStatus } from "@/components/ui/status";
 import { Badge, type BadgeTone } from "@/components/ui/badge";
 import { ButtonLink } from "@/components/ui/button-link";
 import { EmptyState } from "@/components/ui/empty";
+import { Notice } from "@/components/ui/notice";
+import { ActionForm, FormSubmit } from "@/components/ui/form-submit";
 import {
   InstallPrompt,
   type RegisterPushDeviceAction,
@@ -111,6 +113,13 @@ export type DashboardReminder = {
   due: string;
 };
 
+// After an account recovery (sign-in audit, founder decision 13 November 2026): when it
+// happened, pre-formatted, and the agents it kept, each linking to its settings.
+export type DashboardRecoveryReview = {
+  recoveredAt: string;
+  agents: ReadonlyArray<{ id: string; name: string; href: string }>;
+};
+
 export type DashboardViewProps = {
   personName: string;
   checklist: ReadonlyArray<SetupChecklistItem>;
@@ -124,6 +133,10 @@ export type DashboardViewProps = {
   vapidPublicKey?: string;
   // Blocked, failed or disputed activity in the last 24 hours, linking to it.
   attention?: { count: number; href: string };
+  // The agents a recent account recovery kept, for the person to review, and the page's
+  // server action that hides the notice on this browser.
+  recoveryReview?: DashboardRecoveryReview;
+  dismissRecoveryReview?: (formData: FormData) => void | Promise<void>;
 };
 
 // How many of each list Home shows before "View all".
@@ -422,6 +435,52 @@ function RemindersPanel({ reminders }: { reminders: ReadonlyArray<DashboardRemin
   );
 }
 
+// The review notice after an account recovery. Recovery removed the lost sign-in methods
+// but kept every agent and its key, so this names each one as still connected (never as
+// removed) and links to its settings, where Disconnect and Replace key live. A contained,
+// page-level notice; "Dismiss" hides it on this browser, and it goes by itself two weeks
+// after the recovery.
+function RecoveryReviewNotice({
+  review,
+  dismiss,
+}: {
+  review: DashboardRecoveryReview;
+  dismiss?: (formData: FormData) => void | Promise<void>;
+}) {
+  return (
+    <Notice tone="warning" announce={false} className="wh-page-notice">
+      <div className="flex min-w-0 flex-col gap-3">
+        <p className="font-medium text-fg">Your account was recovered on {review.recoveredAt}.</p>
+        <p className="text-fg-muted">
+          Your old passkeys and authenticator app were removed and every other device was signed out. These agents
+          are still connected and can still use your account. Check you recognise each one: in its settings you can
+          disconnect it or replace its key.
+        </p>
+        <ul role="list" aria-label="Agents to review" className="flex min-w-0 flex-col">
+          {review.agents.map((agent) => (
+            <li key={agent.id} className="min-w-0">
+              <a
+                href={agent.href}
+                className="inline-flex min-h-11 min-w-0 items-center gap-2 font-medium text-fg underline underline-offset-4 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-focus [overflow-wrap:anywhere]"
+              >
+                {agent.name} settings
+                <ArrowRight aria-hidden={true} className="h-4 w-4 shrink-0" />
+              </a>
+            </li>
+          ))}
+        </ul>
+        {dismiss ? (
+          <ActionForm action={dismiss}>
+            <FormSubmit variant="ghost" size="sm" pendingLabel="Dismissing…">
+              Dismiss
+            </FormSubmit>
+          </ActionForm>
+        ) : null}
+      </div>
+    </Notice>
+  );
+}
+
 export function DashboardView({
   personName,
   checklist,
@@ -432,6 +491,8 @@ export function DashboardView({
   registerPushDevice,
   vapidPublicKey,
   attention,
+  recoveryReview,
+  dismissRecoveryReview,
 }: DashboardViewProps) {
   const completed = checklist.filter((item) => item.done).length;
   const setupOpen = checklist.length > 0 && completed < checklist.length;
@@ -449,6 +510,7 @@ export function DashboardView({
   return (
     <div className="wh-page">
       <WorkspaceHeading title={<>Hi, {personName}</>} description={hasAgents ? HOME_LINE : PRODUCT_LINE} />
+      {recoveryReview ? <RecoveryReviewNotice review={recoveryReview} dismiss={dismissRecoveryReview} /> : null}
       {setupOpen ? (
         <SetupPanel
           checklist={checklist}

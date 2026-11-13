@@ -90,6 +90,8 @@ export const ACCOUNT_KINDS: readonly string[] = [
   "memory_updated",
   "memory_deleted",
   "account_imported",
+  // Recovery with the recovery code (it removed the old passkeys and authenticator app).
+  "account_recovered",
 ];
 
 // The metadata classification reads. `source` "agent_reported" is always a report.

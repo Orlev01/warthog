@@ -14,10 +14,18 @@
 //                        five wrong tries per recovery, then the recovery is closed), and
 //                        hand back WebAuthn registration options for a new passkey.
 //   4. registerPasskey — only after the recovery code: register the new passkey (the new
-//                        SECOND factor) and issue a new recovery code that REPLACES the old
-//                        one, shown ONCE here.
-//   5. finish          — only after a new passkey is registered: mint a session → /home,
-//                        and email the account holder that their account was recovered.
+//                        SECOND factor), remove the lost factors (every other passkey, the
+//                        authenticator app, every session) and issue a new recovery code that
+//                        REPLACES the old one, shown ONCE here; then email the account holder
+//                        that their account was recovered (once per recovery).
+//   5. finish          — only after a new passkey is registered: mint a session → /home.
+//
+// Sign-in audit (founder decision 13 November 2026): the eviction and the alert happen at
+// step 4, in the transaction that saves the new passkey, so a recovery abandoned after its
+// passkey is saved still signs the lost devices out and still tells the person. Agents and
+// their keys are KEPT; the alert names every connected agent so the person can review them,
+// and the step records an "account recovered" activity entry that Home's review notice is
+// derived from (src/server/auth/recovery-review.ts).
 //
 // Across the separate requests a pending recovery (the resolved account and how far it
 // has progressed) lives in PROCESS MEMORY keyed by a
@@ -48,13 +56,17 @@ import { parseBody, HttpError } from "../../../server/http/validate";
 import { verifyRecoveryCodeGeneration, issueRecoveryCode } from "../../../server/auth/recovery";
 import { issueEmailCode, verifyEmailCode } from "../../../server/auth/email-code";
 import { alertAccountRecovered, deliverAlert } from "../../../server/auth/alerts";
+import { ACCOUNT_RECOVERED_KIND, ACCOUNT_RECOVERED_SUMMARY, connectedAgentNames } from "../../../server/auth/recovery-review";
+import { createRedactingRecorder } from "../../../server/mcp/recorder";
+import type { KeyWrapper } from "../../../server/crypto/key-wrapper";
 import { deviceCookieFor } from "../../../server/auth/device-recognition";
 import {
   beginPasskeyRegistration,
   finishPasskeyRegistration,
 } from "../../../server/auth/passkey";
-import { recoverSession } from "../../../server/auth/recover-session";
-import { getUserByEmail } from "../../../server/db/users";
+import { discardPendingSignIns, evictLostFactors } from "../../../server/auth/recover-session";
+import { createSession, lockActiveAccount } from "../../../server/auth/session";
+import { getUserByEmail, getUserById } from "../../../server/db/users";
 import type { Clock } from "../../../server/seams/clock";
 import type { Random } from "../../../server/seams/random";
 import type { EmailSender } from "../../../server/notify/senders";
@@ -65,12 +77,15 @@ import { pendingStore } from "../../../server/auth/pending-store";
 // structurally assignable to each. `rpId` is the WebAuthn RP ID (from config, never
 // hard-coded); `publicOrigin` is the origin every step checks the request against.
 // `hmacKey` and `emailSender` carry the email one-time code (and the recovery alert).
+// `keyWrapper` unwraps the account's data key so the "account recovered" activity entry is
+// written encrypted, like every other entry.
 export interface RecoverHandlerDeps {
   readonly db: Db;
   readonly clock: Clock;
   readonly random: Random;
   readonly hmacKey: Uint8Array;
   readonly emailSender: EmailSender;
+  readonly keyWrapper: KeyWrapper;
   readonly rpId: string;
   readonly publicOrigin: string;
 }
@@ -171,7 +186,7 @@ function json(status: number, body: unknown): Response {
 }
 
 export function createRecoverHandler(deps: RecoverHandlerDeps): RecoverHandler {
-  const { db, clock, random, hmacKey, emailSender, rpId, publicOrigin } = deps;
+  const { db, clock, random, hmacKey, emailSender, keyWrapper, rpId, publicOrigin } = deps;
 
   // The request is same-origin only when it carries exactly the configured Origin. A
   // missing header (`null`) or a foreign one cannot be proven same-origin → refused.
@@ -303,11 +318,18 @@ export function createRecoverHandler(deps: RecoverHandlerDeps): RecoverHandler {
   }
 
   // Step 4 — verify the WebAuthn attestation against the challenge step 3 issued (the
-  // real verifier) and store the new passkey for the account, then issue the NEW recovery
-  // code, which REPLACES the old one (issueRecoveryCode overwrites the current row). The
-  // new code is handed to the person only in this response (shown once). A bad attestation
-  // / unknown handle / a handle whose recovery code never verified → 4xx, and no
-  // replacement code is issued.
+  // real verifier) and store the new passkey for the account, remove the lost factors,
+  // then issue the NEW recovery code, which REPLACES the old one (issueRecoveryCode
+  // overwrites the current row). The new code is handed to the person only in this
+  // response (shown once). A bad attestation / unknown handle / a handle whose recovery
+  // code never verified → 4xx, and nothing is removed, replaced, recorded or sent.
+  //
+  // One transaction, in the reset re-enrolment's lock order: the account row first, then
+  // the recovery code (serialising competing recoveries and code regeneration), then the
+  // new passkey, the evicted passkeys, authenticator app and sessions, the new code and,
+  // last, the activity entry. Only the recovery that holds the CURRENT recovery code can
+  // commit, and committing replaces that code, so a duplicate, retried or competing passkey
+  // step finds nothing to do: the alert below is sent exactly once per recovery.
   async function registerPasskey(request: Request): Promise<Response> {
     if (!sameOrigin(request)) return json(403, { error: "forbidden" });
     try {
@@ -327,7 +349,13 @@ export function createRecoverHandler(deps: RecoverHandlerDeps): RecoverHandler {
       pending.registering = true;
       let result: { error: "not_verified" | "bad_attestation" } | { code: string };
       try {
+        // Resolve the data key before the transaction (the owner-change pattern), so the
+        // activity append inside it never waits on the key service.
+        const user = await getUserById(db, userId);
+        if (!user) return json(400, { error: "unknown_recovery" });
+        const dek = await keyWrapper.unwrap(user.wrappedDek);
         result = await withTransaction(db, async (tx) => {
+          await lockActiveAccount(tx, userId);
           // Serialize with code regeneration and competing recoveries. Checking only
           // the earlier proof flag would let a revoked code add a durable passkey.
           const current = await tx.query("SELECT salt FROM recovery_codes WHERE user_id = $1 FOR UPDATE", [userId]);
@@ -340,9 +368,21 @@ export function createRecoverHandler(deps: RecoverHandlerDeps): RecoverHandler {
           );
           if (!registered.ok) return { error: "bad_attestation" } as const;
 
+          // What the lost devices still hold stops working in the same commit.
+          await evictLostFactors(tx, userId, registered.credentialId);
+
           // The factor and replacement code commit together. Failure leaves neither
           // a newly usable factor nor a replacement code the person never received.
           const { code } = await issueRecoveryCode(tx, userId, { random });
+
+          // Activity is written last, after the account mutations (writer.ts lock order).
+          await createRedactingRecorder({ db: tx, clock, dekFor: async () => dek }).record({
+            userId,
+            kind: ACCOUNT_RECOVERED_KIND,
+            source: "warthog",
+            outcome: "saved",
+            payload: { summary: ACCOUNT_RECOVERED_SUMMARY },
+          });
           return { code };
         });
       } finally { pending.registering = false; }
@@ -351,6 +391,13 @@ export function createRecoverHandler(deps: RecoverHandlerDeps): RecoverHandler {
         return json(400, { error: result.error });
       }
       pending.passkeyRegistered = true;
+      discardPendingSignIns(userId, { clock });
+
+      // Tell the account holder now, not at finish, so an abandoned recovery is still
+      // reported (best effort: a failed alert never undoes the recovery).
+      await deliverAlert("account-recovered", async () =>
+        alertAccountRecovered(db, { userId, agentNames: await connectedAgentNames(db, userId) }, { emailSender }),
+      );
 
       return json(200, { recoveryCode: result.code });
     } catch (error) {
@@ -360,9 +407,10 @@ export function createRecoverHandler(deps: RecoverHandlerDeps): RecoverHandler {
 
   // Step 5 — the front door closes here. Refuse (4xx, nothing minted) unless a new
   // passkey was registered for this pending recovery (the new second factor). Only then
-  // mint a session, host-locked in the `__Host-wh_session` cookie, redirect to /home, and
-  // tell the account holder their account was recovered (best effort: a failed alert
-  // never undoes the recovery).
+  // mint a session, host-locked in the `__Host-wh_session` cookie, and redirect to /home.
+  // The lost factors were removed and the alert sent at step 4, so this step only signs
+  // this browser in: it ends no session (one made since with the new passkey is the
+  // person's own) and sends nothing, so a repeated finish can never alert twice.
   async function finish(request: Request): Promise<Response> {
     if (!sameOrigin(request)) return json(403, { error: "forbidden" });
     try {
@@ -373,11 +421,8 @@ export function createRecoverHandler(deps: RecoverHandlerDeps): RecoverHandler {
       if (!pending.passkeyRegistered) return json(400, { error: "no_second_factor" });
 
       pendingRecoveries.delete(recoveryId);
-      const created = await recoverSession(db, pending.userId, { clock, random });
       const userId = pending.userId;
-      await deliverAlert("account-recovered", () =>
-        alertAccountRecovered(db, { userId }, { emailSender }),
-      );
+      const created = await createSession(db, userId, { clock, random });
       // The session cookie, plus the device cookie marking this browser as one the
       // person signs in on (the recovery alert has already told them about it).
       const headers = new Headers({ location: "/home" });

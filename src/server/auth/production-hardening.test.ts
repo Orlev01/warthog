@@ -1,10 +1,10 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { createDb, loadMigrations, runMigrations } from "../db/index";
+import { createDb, loadMigrations, runMigrations, withTransaction } from "../db/index";
 import { issueEmailCode, verifyEmailCode } from "./email-code";
 import { createUser } from "../db/users";
-import { createSession, verifySession } from "./session";
-import { recoverSession } from "./recover-session";
+import { createSession, lockActiveAccount, verifySession } from "./session";
+import { evictLostFactors } from "./recover-session";
 import { checkPasskeyAttempt } from "./passkey-attempts";
 
 test("email codes cannot be redeemed in another authentication flow", async () => {
@@ -22,7 +22,7 @@ test("email codes cannot be redeemed in another authentication flow", async () =
   } finally { await db.close(); }
 });
 
-test("recovery atomically revokes older sessions while leaving other accounts signed in", async () => {
+test("evicting lost factors removes the other passkeys, the authenticator app and every session of that account only", async () => {
   const db = await createDb("pglite:memory");
   try {
     await runMigrations(db, await loadMigrations());
@@ -31,10 +31,19 @@ test("recovery atomically revokes older sessions while leaving other accounts si
     let sequence = 0;
     const deps = { clock: { now: () => new Date("2026-11-09T00:00:00Z") }, random: { randomBytes: (n: number) => new Uint8Array(n).fill(++sequence) } };
     const old = await createSession(db, person.id, deps), unrelated = await createSession(db, other.id, deps);
-    const recovered = await recoverSession(db, person.id, deps);
+    await db.query("INSERT INTO passkeys (user_id, credential_id, public_key, counter) VALUES ($1, 'kept', 'k', 0), ($1, 'lost', 'l', 0), ($2, 'theirs', 't', 0)", [person.id, other.id]);
+    await db.query("INSERT INTO totp_secrets (user_id, secret_enc) VALUES ($1, 'mine'), ($2, 'theirs')", [person.id, other.id]);
+    const evicted = await withTransaction(db, async (tx) => {
+      await lockActiveAccount(tx, person.id);
+      return evictLostFactors(tx, person.id, "kept");
+    });
+    assert.deepEqual(evicted, { passkeys: 1, authenticator: true, sessions: 1 });
     assert.equal(await verifySession(db, old.token, deps), null);
-    assert.ok(await verifySession(db, recovered.token, deps));
     assert.ok(await verifySession(db, unrelated.token, deps));
+    const passkeys = await db.query("SELECT credential_id FROM passkeys ORDER BY credential_id");
+    assert.deepEqual(passkeys.rows.map((row) => row.credential_id), ["kept", "theirs"]);
+    const totp = await db.query("SELECT user_id FROM totp_secrets");
+    assert.deepEqual(totp.rows.map((row) => row.user_id), [other.id]);
   } finally { await db.close(); }
 });
 
