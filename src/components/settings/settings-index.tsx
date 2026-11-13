@@ -3,9 +3,6 @@ import { WorkspaceHeading } from "@/components/shell/workspace-surfaces";
 import { Bell, ChevronRight, Database, Lock, MessageSquareText, Settings, SlidersHorizontal, type LucideIcon } from "lucide-react";
 
 import { PORTAL_NAV } from "@/components/shell/nav";
-import { PageNotice } from "@/components/ui/notice";
-import { AdminPortalEntry, type StartHandoff } from "./admin-portal-entry";
-import { ADMIN_NOTICES, type AdminNoticeKey } from "@/server/admin/entry";
 
 // SettingsIndex — the /settings index (E18-S15). Settings is one area grouping
 // three screens; landing on /settings would otherwise dead-end, so this screen
@@ -56,14 +53,7 @@ const SETTINGS_CHILDREN =
   PORTAL_NAV.find((n) => n.key === "more")?.children?.find((c) => c.key === "settings")?.children ??
   [];
 
-// The admin portal entry (docs/design/admin-portal.md §2), passed only for a live admin; a
-// notice the portal sent the person back with ("that link expired") shows at the top.
-export type SettingsIndexProps = {
-  admin?: { passkey: boolean; authenticator: boolean; startHandoff: StartHandoff };
-  notice?: AdminNoticeKey | null;
-};
-
-export function SettingsIndex({ admin, notice }: SettingsIndexProps = {}) {
+export function SettingsIndex() {
   const links = [
     ...SETTINGS_CHILDREN.map((child) => ({
       key: child.key,
@@ -77,7 +67,6 @@ export function SettingsIndex({ admin, notice }: SettingsIndexProps = {}) {
   return (
     <div className="wh-page">
       <WorkspaceHeading title="Settings" description="Keep your account secure, choose how you hear from Warthog and manage your data." />
-      {notice ? <PageNotice tone={ADMIN_NOTICES[notice].tone}>{ADMIN_NOTICES[notice].text}</PageNotice> : null}
 
       <nav aria-label="Settings" className="wh-settings-links">
         {links.map(({ key, label, href, description, Icon }) => (
@@ -95,7 +84,6 @@ export function SettingsIndex({ admin, notice }: SettingsIndexProps = {}) {
           </a>
         ))}
       </nav>
-      {admin ? <AdminPortalEntry startHandoff={admin.startHandoff} passkey={admin.passkey} authenticator={admin.authenticator} /> : null}
     </div>
   );
 }

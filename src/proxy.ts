@@ -1,7 +1,7 @@
 import { NextResponse, type NextRequest } from "next/server";
 import { randomBytes } from "node:crypto";
 import { contentSecurityPolicy, createAuthIpLimiter } from "./server/http/production-policy";
-import { ADMIN_EXCHANGE_PATH, routeForHost } from "./server/http/admin-routing";
+import { ADMIN_EXCHANGE_PATH, UNKNOWN_PAGE_PATH, routeForHost } from "./server/http/admin-routing";
 import { classifyRoute, getTrafficCounter, requestKind } from "./server/http/traffic";
 import { requestHostname } from "./server/admin/origin";
 import { adminHostFromEnv } from "./server/config";
@@ -21,7 +21,8 @@ export function proxy(request: NextRequest) {
   const development = process.env.NODE_ENV !== "production";
   const path = request.nextUrl.pathname;
   // Which host this request arrived on decides what is served (docs/design/admin-portal.md §1):
-  // the admin origin serves only the portal; the app origin never serves /admin.
+  // the admin origin serves only the portal; the app origin never serves /admin, and answers
+  // it exactly like any other missing page.
   const adminHost = adminHostFromEnv();
   const hostname = requestHostname(request.headers);
   const route = routeForHost(hostname, adminHost, path);
@@ -72,6 +73,10 @@ export function proxy(request: NextRequest) {
     target.pathname = route.rewriteTo;
     response = NextResponse.rewrite(target, { request: { headers } });
     response.headers.set("x-robots-tag", "noindex, nofollow");
+  } else if (route.kind === "unknown-page") {
+    const target = request.nextUrl.clone();
+    target.pathname = UNKNOWN_PAGE_PATH;
+    response = NextResponse.rewrite(target, { request: { headers } });
   } else {
     response = NextResponse.next({ request: { headers } });
   }

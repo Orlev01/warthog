@@ -13,9 +13,9 @@ import { systemClock } from "@/server/seams/clock";
 // The admin-area guard layout (docs/design/admin-portal.md §2): every page under /admin —
 // reached only on the admin host, where the proxy rewrites `/usage` to `/admin/usage` —
 // requires a live `__Host-wh_admin` session verified on the server (which re-checks the
-// admin role and the app session on every request). Anyone else is sent to the app's
-// Settings, where the admin entry lives, with a notice. Route handlers (the exchange and
-// sign-out) are not wrapped by a layout and guard themselves.
+// admin role and the app session on every request). Anyone else is sent to the admin
+// host's own sign-in page. Route handlers (the exchange and sign-out) are not wrapped by a
+// layout and guard themselves.
 //
 // Thin by design: this entry reads the cookie and the proxy's forwarded original path, and
 // delegates the admit/redirect decision to the tested `requireAdminSession` seam. The
@@ -29,7 +29,7 @@ export default async function AdminLayout({ children }: { children: React.ReactN
   const pathname = (await headers()).get(ADMIN_PATH_HEADER) ?? "/";
   const config = loadConfig();
   const db = await getServerDb();
-  const result = await requireAdminSession(token, { db, clock: systemClock, publicOrigin: new URL(config.publicBaseUrl).origin });
+  const result = await requireAdminSession(token, { db, clock: systemClock });
   if (!result.ok) redirect(result.redirectTo);
   return (
     <AdminChrome pathname={pathname} appOrigin={new URL(config.publicBaseUrl).origin}>

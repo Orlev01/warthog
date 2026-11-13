@@ -2,8 +2,8 @@
 // (served as /admin/session after the proxy's rewrite). The token is consumed exactly once
 // through the store's conditional UPDATE; success sets the host-locked admin cookie and
 // 303-redirects to the portal root so the token leaves the address bar at once. Every other
-// outcome — missing, malformed, expired, reused, demoted — is the SAME 303 back to the app's
-// Settings with one notice, so the admin host never reveals whether a token ever existed.
+// outcome — missing, malformed, expired, reused, demoted — is the SAME 303 to the admin
+// host's own sign-in page with one notice, so it never reveals whether a token ever existed.
 // Nothing here reads the body or trusts any other client value.
 //
 // Two seams, like the auth routes: the pure handler (unit-tested over an in-memory db) and
@@ -15,13 +15,12 @@ import { adminSignInUrl } from "./guard";
 import { ADMIN_SESSION, ADMIN_SESSION_OUTCOMES } from "../metrics/names";
 import { tryRecord } from "../metrics/seam";
 
-export const HANDOFF_EXPIRED_NOTICE = "admin_handoff_expired";
 const HANDOFF_TOKEN = /^[0-9a-f]{64}$/;
 
 export type AdminExchangeHandler = (request: Request) => Promise<Response>;
 
-export function createAdminExchangeHandler(deps: Pick<AdminDeps, "db" | "clock" | "random" | "publicOrigin" | "recordMetric">): AdminExchangeHandler {
-  const { db, clock, random, publicOrigin, recordMetric } = deps;
+export function createAdminExchangeHandler(deps: Pick<AdminDeps, "db" | "clock" | "random" | "recordMetric">): AdminExchangeHandler {
+  const { db, clock, random, recordMetric } = deps;
   const headersFor = (location: string, cookie?: string): Headers => {
     const headers = new Headers({ location, "cache-control": "no-store" });
     if (cookie) headers.append("set-cookie", cookie);
@@ -32,7 +31,7 @@ export function createAdminExchangeHandler(deps: Pick<AdminDeps, "db" | "clock" 
     const exchanged = handoff && HANDOFF_TOKEN.test(handoff) ? await exchangeHandoff(db, handoff, { clock, random }) : null;
     if (!exchanged) {
       await tryRecord(recordMetric, { name: ADMIN_SESSION, value: 1, dimensions: { outcome: ADMIN_SESSION_OUTCOMES.rejected } });
-      return new Response(null, { status: 303, headers: headersFor(adminSignInUrl(publicOrigin, HANDOFF_EXPIRED_NOTICE)) });
+      return new Response(null, { status: 303, headers: headersFor(adminSignInUrl("expired")) });
     }
     await tryRecord(recordMetric, { name: ADMIN_SESSION, value: 1, dimensions: { outcome: ADMIN_SESSION_OUTCOMES.exchanged } });
     return new Response(null, { status: 303, headers: headersFor("/", exchanged.cookie) });

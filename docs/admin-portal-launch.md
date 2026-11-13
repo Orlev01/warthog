@@ -14,10 +14,10 @@ own founder decision under [the delivery controls](adr/production-delivery-contr
 3. Run `azure-release.yml` `inspect`, review the configuration hash, then `update` with the
    digest and the hash. The image-only revision copy preserves every existing custom-domain
    binding, and `validate_live` still proves `PUBLIC_BASE_URL` and the RP ID unchanged.
-4. After the release: `https://app.warthog.com.au/admin` must answer 404 (the app origin
-   never serves the portal), and Settings on the app shows the "Admin portal" panel for the
-   operator's account within an hour (the `operator-role` sweep; restart or wait for the
-   first tick after boot).
+4. After the release: `https://app.warthog.com.au/admin` and `/handoff` must answer the
+   app's ordinary not-found page (the app origin never serves or mentions the portal). The
+   operator's account becomes an admin within an hour (the `operator-role` sweep; restart
+   or wait for the first tick after boot).
 
 ## 2. Bind the hostname (separate approval; run by the founder)
 
@@ -62,15 +62,18 @@ the record first.
 
 ## 3. Verify
 
-- `https://admin.warthog.com.au/` redirects to `https://app.warthog.com.au/settings?notice=admin_signin_required`
-  when no admin session exists; `https://admin.warthog.com.au/api/auth/signin` and
+- `https://admin.warthog.com.au/` redirects to its own `/signin` when no admin session
+  exists; `https://admin.warthog.com.au/api/auth/signin` and
   `/oauth/authorize` are 404; the response carries `X-Robots-Tag: noindex, nofollow` and the
   same CSP/HSTS as the app.
-- From the app's Settings, "Open admin portal" asks for a passkey or authenticator
-  confirmation when the last one is older than five minutes, then lands on the Overview at
-  `https://admin.warthog.com.au/`. Range tabs, Back/Forward and deep links work.
-- "Sign out of admin" returns to Settings with "You've signed out of the admin portal."
-  Signing out of the app on Security ends the admin session too.
+- Type `admin.warthog.com.au` and choose "Sign in": the app's ordinary sign-in asks for
+  your passkey (or, if you are already signed in, forwards you on), the unlinked
+  `/handoff` asks to confirm only when the last confirmation is older than five minutes,
+  and you land on the Overview at `https://admin.warthog.com.au/`. Range tabs,
+  Back/Forward and deep links work. The app shows no admin entry anywhere.
+- "Sign out of admin" lands on the admin host's signed-out page, whose "Sign in again"
+  returns to its sign-in page. Signing out of the app on Security ends the admin session
+  too.
 - Traffic appears on the Traffic page within two minutes (the `traffic-flush` sweep).
 - Record the binding, certificate expiry and these checks in a release note under
   `docs/audit/`, as the app launch did.

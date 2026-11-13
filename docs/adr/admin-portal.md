@@ -50,3 +50,27 @@ decisions that shape the architecture:
 Not decided here: binding `admin.warthog.com.au` (DNS and the managed certificate), which
 remains a founder-approved operation per the delivery controls; showing addresses in the
 portal; cohort retention and alerting (later, once there are enough accounts).
+
+## Amendment, 13 November 2026: no entry in the member app
+
+After the launch the founder asked that the member app give no sign the portal exists:
+"The only way to access admin portal is to type admin.warthog.com.au, there should not be a
+link to it in app.warthog.com.au". So:
+
+- Settings no longer has the "Admin portal" panel or the admin notices. It is back to its
+  pre-portal form, and a test keeps "admin" out of its markup.
+- The admin host has its own sign-in page. Its "Sign in" goes through the app's ordinary
+  sign-in to the unlinked `/handoff` route, which mints the same single-use handoff (role,
+  live account and five-minute step-up unchanged). A fresh sign-in counts as the step-up,
+  so it normally takes one passkey prompt.
+- `/handoff` answers the app's ordinary 404 to anyone who is not a signed-in live admin.
+  On the app host, `/admin` paths now get the ordinary not-found page instead of a bare
+  proxy 404 that told them apart from other missing paths.
+- Decision 3 stands: passkeys remain scoped to `app.warthog.com.au`, and the admin host
+  still checks no factor itself. Moving the RP ID would invalidate every member's passkeys.
+
+Limit: the hostname is public by nature. Certificate Transparency logs list every issued
+certificate, including `admin.warthog.com.au`'s, and DNS answers for it. The member app
+reveals nothing, but anyone who finds the hostname reaches a sign-in page that only an admin
+can get past.
+

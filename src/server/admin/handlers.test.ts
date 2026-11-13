@@ -25,12 +25,12 @@ async function minted(db: Awaited<ReturnType<typeof freshDb>>) {
   return { clock, userId, handoff };
 }
 
-test("a fresh handoff exchanges into the admin cookie and lands on the portal root; reuse and garbage go quietly back to Settings", async () => {
+test("a fresh handoff exchanges into the admin cookie and lands on the portal root; reuse and garbage go quietly to the admin sign-in page", async () => {
   const db = await freshDb();
   try {
     const { clock, handoff } = await minted(db);
     const metrics: RecordMetricInput[] = [];
-    const exchange = createAdminExchangeHandler({ db, clock, random: systemRandom, publicOrigin: PUBLIC, recordMetric: async (m) => { metrics.push(m); } });
+    const exchange = createAdminExchangeHandler({ db, clock, random: systemRandom, recordMetric: async (m) => { metrics.push(m); } });
 
     const ok = await exchange(new Request(`${ADMIN}/session?handoff=${handoff.token}`));
     assert.equal(ok.status, 303);
@@ -44,7 +44,7 @@ test("a fresh handoff exchanges into the admin cookie and lands on the portal ro
     for (const url of [`${ADMIN}/session?handoff=${handoff.token}`, `${ADMIN}/session?handoff=zz`, `${ADMIN}/session`, `${ADMIN}/session?handoff=${"0".repeat(64)}`]) {
       const refused = await exchange(new Request(url));
       assert.equal(refused.status, 303, url);
-      assert.equal(refused.headers.get("location"), `${PUBLIC}/settings?notice=admin_handoff_expired`);
+      assert.equal(refused.headers.get("location"), "/signin?notice=expired");
       assert.equal(refused.headers.get("set-cookie"), null, "no cookie on a refusal");
     }
     assert.deepEqual(metrics.map((m) => m.dimensions?.outcome), ["exchanged", "rejected", "rejected", "rejected", "rejected"]);
@@ -63,7 +63,7 @@ test("the lazy route dispatcher builds the handler once from the composition sea
     const first = await dispatch(new Request(`${ADMIN}/session?handoff=${handoff.token}`));
     const second = await dispatch(new Request(`${ADMIN}/session?handoff=${handoff.token}`));
     assert.equal(first.headers.get("location"), "/");
-    assert.equal(second.headers.get("location"), `${PUBLIC}/settings?notice=admin_handoff_expired`);
+    assert.equal(second.headers.get("location"), "/signin?notice=expired");
     assert.equal(builds, 1);
   } finally {
     await db.close();
@@ -74,7 +74,7 @@ test("sign-out requires the admin Origin, ends only the admin session, clears th
   const db = await freshDb();
   try {
     const { clock, handoff } = await minted(db);
-    const exchange = createAdminExchangeHandler({ db, clock, random: systemRandom, publicOrigin: PUBLIC, recordMetric: async () => {} });
+    const exchange = createAdminExchangeHandler({ db, clock, random: systemRandom, recordMetric: async () => {} });
     const token = (await exchange(new Request(`${ADMIN}/session?handoff=${handoff.token}`))).headers.get("set-cookie")!.split(";")[0]!.split("=")[1]!;
     const metrics: RecordMetricInput[] = [];
     const signout = createAdminSignoutHandler({ db, publicOrigin: PUBLIC, adminOrigin: ADMIN, recordMetric: async (m) => { metrics.push(m); } });
