@@ -118,6 +118,25 @@ async function removePasskeyAction(formData: FormData): Promise<void> {
   redirect(noticeLocation("passkey_removed", outcome));
 }
 
+// Remove this person's authenticator app (sign-in audit). Same discipline as removing a
+// passkey; the "last sign-in method" refusal gets its own copy about the app.
+async function removeAuthenticatorAction(): Promise<void> {
+  "use server";
+  const db = await getServerDb();
+  const session = await resolveSession(db);
+  if (!session) {
+    redirect("/signin");
+  }
+  let outcome: unknown;
+  try {
+    outcome = await buildActions(db).removeAuthenticator(session);
+  } catch (error) {
+    outcome = error;
+  }
+  revalidatePath("/settings/security");
+  redirect(noticeLocation("authenticator_removed", outcome, { last_sign_in_method: "authenticator_last_sign_in_method" }));
+}
+
 // Sign out another of this person's sessions. Same discipline as above.
 async function signOutSessionAction(formData: FormData): Promise<void> {
   "use server";
@@ -235,6 +254,7 @@ export default async function SecurityPage({
       notice={notice}
       timeZone={timeZone}
       removePasskey={removePasskeyAction}
+      removeAuthenticator={removeAuthenticatorAction}
       signOutSession={signOutSessionAction}
       beginAddPasskey={beginAddPasskeyAction}
       finishAddPasskey={finishAddPasskeyAction}

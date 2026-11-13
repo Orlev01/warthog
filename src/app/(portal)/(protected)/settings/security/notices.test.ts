@@ -50,3 +50,18 @@ test("the step-up notice offers the inline confirm instead of sign-out-and-back-
   assert.match(notice!.text, /confirm it.s you/i);
   assert.ok(!securityNotice("passkey_removed")?.offerConfirm, "a success notice offers no confirm");
 });
+
+// Sign-in audit: removing the authenticator app reuses the server's last_sign_in_method
+// reason, renamed for the screen so the copy talks about the app, not a passkey.
+test("an authenticator refusal can be renamed to its own notice", () => {
+  const rename = { last_sign_in_method: "authenticator_last_sign_in_method" };
+  assert.equal(
+    noticeLocation("authenticator_removed", { ok: false, reason: "last_sign_in_method" }, rename),
+    "/settings/security?notice=authenticator_last_sign_in_method",
+  );
+  assert.equal(noticeLocation("authenticator_removed", { ok: true }, rename), "/settings/security?notice=authenticator_removed");
+  assert.equal(
+    noticeLocation("authenticator_removed", { ok: false, reason: "step_up_required" }, rename),
+    "/settings/security?notice=step_up_required",
+  );
+});

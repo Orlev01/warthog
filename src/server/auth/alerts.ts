@@ -95,6 +95,24 @@ export async function alertNewAuthenticator(
   );
 }
 
+// The authenticator app was removed from Settings › Security (sign-in audit, founder
+// decision 13 November 2026): the counterpart of the "authenticator added" alert. Fixed
+// copy — carries no secret, code or token.
+export async function alertAuthenticatorRemoved(
+  db: Db,
+  { userId }: { userId: string },
+  deps: AlertDeps,
+): Promise<void> {
+  await sendAlert(
+    db,
+    userId,
+    "An authenticator app was removed from your Warthog account. Codes from it no longer sign you " +
+      "in or confirm it's you; your passkeys still do. If this wasn't you, sign in, sign out every " +
+      `device you don't recognise and email ${SUPPORT_EMAIL} straight away.`,
+    deps,
+  );
+}
+
 // A new agent connected. `agentName` is untrusted free text, so the scrub pass
 // masks any card number planted in it before the body is delivered.
 export async function alertNewAgentConnection(

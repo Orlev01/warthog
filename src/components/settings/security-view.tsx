@@ -16,6 +16,7 @@ import { ButtonLink } from "@/components/ui/button-link";
 import { SIGN_IN_REQUESTS_PATH } from "@/server/auth/sign-in-requests-path";
 import { ADD_PASSKEY_ANCHOR, RemovePasskeyControl, SET_UP_AUTHENTICATOR_ANCHOR } from "./remove-passkey";
 import { AddAuthenticator } from "./add-authenticator";
+import { RemoveAuthenticatorControl } from "./remove-authenticator";
 import type {
   ActionResult,
   BeginAddAuthenticatorResult,
@@ -45,6 +46,7 @@ export function SecuritySettings({
   notice,
   timeZone,
   removePasskey,
+  removeAuthenticator,
   signOutSession,
   beginAddPasskey,
   finishAddPasskey,
@@ -58,6 +60,7 @@ export function SecuritySettings({
   timeZone: string;
   // The page's server actions (thin "use server" wrappers that re-derive the session).
   removePasskey: (formData: FormData) => void | Promise<void>;
+  removeAuthenticator: (formData: FormData) => void | Promise<void>;
   signOutSession: (formData: FormData) => void | Promise<void>;
   beginAddPasskey: () => Promise<BeginAddPasskeyResult>;
   finishAddPasskey: (response: RegistrationResponseJSON) => Promise<ActionResult>;
@@ -145,18 +148,22 @@ export function SecuritySettings({
             </Badge>
           }
         >
-          <li className={LIST_ROW}>
-            {view.authenticatorEnabled ? (
-              <span className="text-sm text-fg-muted">
+          {view.authenticatorEnabled ? (
+            // Sign-in audit: the app can be removed here too, behind the same danger confirmation.
+            <li className={ROW}>
+              <span className="min-w-0 flex-1 text-fg-muted">
                 You can sign in with your email and a code from your authenticator app, and use a code to confirm it&apos;s you.
               </span>
-            ) : (
-              // Follow-up S1: set one up here (step-up gated), instead of the old sign-up-only dead end.
+              <RemoveAuthenticatorControl action={removeAuthenticator} hasPasskey={hasPasskey} />
+            </li>
+          ) : (
+            <li className={LIST_ROW}>
+              {/* Follow-up S1: set one up here (step-up gated), instead of the old sign-up-only dead end. */}
               <div id={SET_UP_AUTHENTICATOR_ANCHOR} className="min-w-0 scroll-mt-24">
                 <AddAuthenticator begin={beginAddAuthenticator} verify={verifyAddAuthenticator} passkey={hasPasskey} />
               </div>
-            )}
-          </li>
+            </li>
+          )}
         </ListGroup>
       </WorkspacePanel>
 

@@ -41,7 +41,12 @@ import {
   finishPasskeyRegistration,
 } from "../../../../../server/auth/passkey";
 import { issueRecoveryCode } from "../../../../../server/auth/recovery";
-import { alertNewPasskey, deliverAlert, type AlertDeps } from "../../../../../server/auth/alerts";
+import {
+  alertAuthenticatorRemoved,
+  alertNewPasskey,
+  deliverAlert,
+  type AlertDeps,
+} from "../../../../../server/auth/alerts";
 import { getUserById } from "../../../../../server/db/users";
 import {
   createTotpEnrolment,
@@ -130,6 +135,7 @@ export interface SecurityActions {
   regenerateRecovery(session: Session): Promise<RegenerateRecoveryResult>;
   beginAddAuthenticator(session: Session): Promise<BeginAddAuthenticatorResult>;
   verifyAddAuthenticator(session: Session, code: string): Promise<VerifyAddAuthenticatorResult>;
+  removeAuthenticator(session: Session): Promise<ActionResult>;
 }
 
 // The one reason string the step-up gate refuses with.
@@ -269,6 +275,34 @@ export function createSecurityActions(deps: SecurityActionsDeps): SecurityAction
     return enrolment.verify(session, code);
   }
 
+  // Remove this person's authenticator app (sign-in audit, founder decision 13 November
+  // 2026). A sensitive change: a fresh step-up first. Never the last sign-in method: with no
+  // passkey the app is the only way in, so it is kept ({ ok: false, reason:
+  // last_sign_in_method }). As for passkey removal, the checks and the delete run in one
+  // transaction that first locks the person's row, so removing the only passkey and the app
+  // in parallel can't both succeed. Scoped to the session's own account: a person with no
+  // app gets not_found. The member is emailed afterwards (best effort, never undoing it).
+  async function removeAuthenticator(session: Session): Promise<ActionResult> {
+    if (!requireStepUp(session, { clock })) return { ok: false, reason: STEP_UP_REQUIRED };
+    const result = await withTransaction(db, async (tx): Promise<ActionResult> => {
+      await tx.query(`SELECT id FROM users WHERE id = $1 FOR UPDATE`, [session.userId]);
+      const factors = await tx.query(
+        `SELECT EXISTS (SELECT 1 FROM totp_secrets WHERE user_id = $1) AS authenticator,
+                EXISTS (SELECT 1 FROM passkeys WHERE user_id = $1) AS passkey`,
+        [session.userId],
+      );
+      const row = factors.rows[0];
+      if (row?.authenticator !== true) return { ok: false, reason: "not_found" };
+      if (row?.passkey !== true) return { ok: false, reason: "last_sign_in_method" };
+      await tx.query(`DELETE FROM totp_secrets WHERE user_id = $1`, [session.userId]);
+      return { ok: true };
+    });
+    if (result.ok && alerts) {
+      await deliverAlert("authenticator-removed", () => alertAuthenticatorRemoved(db, { userId: session.userId }, alerts));
+    }
+    return result;
+  }
+
   return {
     load,
     beginAddPasskey,
@@ -278,5 +312,6 @@ export function createSecurityActions(deps: SecurityActionsDeps): SecurityAction
     regenerateRecovery,
     beginAddAuthenticator,
     verifyAddAuthenticator,
+    removeAuthenticator,
   };
 }
