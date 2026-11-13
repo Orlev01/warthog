@@ -1,4 +1,19 @@
-# Delivery status — 13 November 2026 (undo guard, approval expiry, Inbox marks)
+# Delivery status — 13 November 2026 (logo, UI/UX follow-ups, sign-in audit fixes)
+
+**Live at [app.warthog.com.au](https://app.warthog.com.au).** Application source
+`75bdbf0c708a65d42a17f56716b48bc45d635922` runs as `warthog--r43339696686a1`, with one
+healthy replica, explicit 100% traffic and zero old replicas. It carries:
+- the founder's Warthog logo, as the browser tab icon and as the brand mark in the
+  sidebar and headers;
+- the UI/UX follow-ups (PR #18);
+- the sign-in audit fixes (PR #19): access-key step-up and alerts, the open-redirect
+  fix, and session rotation on step-up.
+
+Main and pinned-image CI passed 5,863 tests; no migration changes. See the
+[release record](docs/audit/logo-signin-fixes-release-2026-11-13.md). Audit items 4–5
+are in progress for a later release.
+
+# Earlier delivery status — 13 November 2026 (undo guard, approval expiry, Inbox marks)
 
 **Live at [app.warthog.com.au](https://app.warthog.com.au).** Application source
 `81a98621567c3638248bbcf0de4b6da6e320f6e7` runs as `warthog--r43325136204a1`, with one
