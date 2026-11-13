@@ -2,8 +2,9 @@
 
 Application source `40f0db356c2120d14c9b8f90ed025690a9bd2ae0` is live at
 [app.warthog.com.au](https://app.warthog.com.au) as revision
-`warthog--r43390913050a1`. The `admin.warthog.com.au` hostname binding is the separate
-step in [the launch runbook](../admin-portal-launch.md) and waits for its two DNS records.
+`warthog--r43390913050a1`. `admin.warthog.com.au` was bound the same evening, after the
+follow-up [recovery hardening release](recovery-hardening-release-2026-11-13.md) (see
+"Hostname binding" below).
 
 ## What shipped
 
@@ -56,6 +57,32 @@ step in [the launch runbook](../admin-portal-launch.md) and waits for its two DN
 - Runner: fresh private lease (11 reviewed creates, plan `9302f8d7…`), private Postgres
   TLS checked without credentials, destroyed after the job. The group, resources, grants
   and subnet NAT were verified absent, and no GitHub runner remains.
+
+## Hostname binding
+
+Bound on 13 November, between releases, as [the launch runbook](../admin-portal-launch.md)
+§2 describes.
+
+- DNS (added by the founder at GoDaddy; existing records untouched):
+  - CNAME `admin` → `warthog.orangestone-a3a5c61a.australiaeast.azurecontainerapps.io`;
+  - TXT `asuid.admin` → the app's custom-domain verification id.
+  - Both resolved identically at ns19/ns20.domaincontrol.com, 1.1.1.1 and 8.8.8.8.
+- `az containerapp hostname add`, then `bind --validation-method CNAME`:
+  - managed certificate `mc-cae-warthog-pr-admin-warthog-co-9287`, state `Succeeded`;
+  - served as CN=admin.warthog.com.au by GeoTrust TLS RSA CA G1, expiring 13 May 2027;
+  - SNI binding beside the unchanged `app.warthog.com.au` binding.
+- The live revision stayed `warthog--r43398915940a1`, Running, with 100% traffic. The
+  binding changes the configuration fingerprint, so the next `update` must take its
+  expected hash from a fresh snapshot.
+- External checks on `https://admin.warthog.com.au`:
+  - `/` and `/usage` without an admin session redirect to
+    `https://app.warthog.com.au/settings?notice=admin_signin_required`;
+  - `/session` without a handoff redirects to `…?notice=admin_handoff_expired`;
+  - `/api/auth/signin`, `/oauth/authorize` and `/api/health` return 404;
+  - responses carry `X-Robots-Tag: noindex, nofollow`, HSTS and the app's CSP.
+- On the app host, health is ok, `/` returns 200 and `/admin` returns 404.
+- Not yet recorded: `existingCustomDomains` in the private workload parameters (only a
+  future `create` needs it).
 
 ## Coordination
 

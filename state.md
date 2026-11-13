@@ -9,8 +9,9 @@ it carries PR #21 (sign-in audit items 4–6):
 - members can remove their authenticator app from Security.
 
 Main and pinned-image CI passed 6,015 tests; no migration changes. See the
-[release record](docs/audit/recovery-hardening-release-2026-11-13.md). Binding
-`admin.warthog.com.au` waits for its two DNS records ([runbook](docs/admin-portal-launch.md)).
+[release record](docs/audit/recovery-hardening-release-2026-11-13.md).
+`admin.warthog.com.au` is bound with a managed certificate (expires 13 May 2027). See
+"Hostname binding" in the [admin portal release record](docs/audit/admin-portal-release-2026-11-13.md).
 
 # Earlier delivery status — 13 November 2026 (admin portal)
 
@@ -19,9 +20,8 @@ Main and pinned-image CI passed 6,015 tests; no migration changes. See the
 healthy replica, explicit 100% traffic and zero old replicas. It carries the operator
 admin portal (PR #20): sign-ups and activation, usage, accounts (no addresses listed),
 reliability, traffic and system pages, entered from Settings by the `admin` role after a
-fresh step-up through a single-use handoff. Migrations 0110–0112 are additive. Binding
-`admin.warthog.com.au` is the separate runbook step
-([runbook](docs/admin-portal-launch.md)) and waits for its two DNS records.
+fresh step-up through a single-use handoff. Migrations 0110–0112 are additive. `admin.warthog.com.au`
+was bound after the next release ([runbook](docs/admin-portal-launch.md)).
 
 Main and pinned-image CI passed 5,966 tests. See the
 [release record](docs/audit/admin-portal-release-2026-11-13.md) and the

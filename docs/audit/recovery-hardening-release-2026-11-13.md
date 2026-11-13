@@ -49,5 +49,5 @@ Application source `1faf694339b9f76ab12bddcb989c65e55e49078e` is live at
 ## Coordination
 
 Session skynet-group-d3 built PR #21 and the founder merged it. Session skynet-group-be
-released it as the sole release operator. The `admin.warthog.com.au` binding still waits
-for its DNS records and will run only between releases.
+released it as the sole release operator. `admin.warthog.com.au` was bound after this
+release, with no release in flight (see the admin portal release record).
