@@ -208,6 +208,24 @@ test("with dev tools on, the page lists the push, email and SMS captured by the 
   }
 });
 
+// Branded emails: each captured email is previewed as the real email would render, in a
+// fully sandboxed iframe, with the logo hosted on the configured public base URL.
+test("with dev tools on, each captured email is previewed as the rendered branded email", async () => {
+  const tag = randomUUID();
+  await outbox.sendEmail({
+    recipient: `preview-${tag}@example.com`,
+    body: `plain body ${tag}`,
+    email: { subject: `Preview subject ${tag}`, heading: "A new passkey was added", paragraphs: [`Preview paragraph ${tag}`] },
+  });
+  const markup = await renderPage(devEnv({ WARTHOG_DEV_TOOLS: "1" }));
+  assert.ok(visibleText(markup).includes(`Preview subject ${tag}`), "the subject is listed");
+  const frame = [...markup.matchAll(/<iframe\b([^>]*)>/gi)].map((m) => m[1]!)
+    .find((attrs) => decode(attrs).includes(`Preview paragraph ${tag}`));
+  assert.ok(frame, "the email has a preview frame carrying its content");
+  assert.match(frame, /\bsandbox=""/, "the preview is fully sandboxed");
+  assert.ok(decode(frame).includes('<img src="https://warthog.example/icons/icon-192.png"'), "the logo comes from PUBLIC_BASE_URL");
+});
+
 // AC1 — the loader reflects the LIVE outbox: a message recorded after this test
 // begins still appears, proving it reads `outbox.list()` at request time rather than
 // a build-time snapshot.

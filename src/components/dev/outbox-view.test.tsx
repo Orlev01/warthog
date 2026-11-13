@@ -278,10 +278,56 @@ test("OutboxView renders an empty state for no captured messages", () => {
 // Design system — colour comes from tokens, never a raw hex literal. The caller
 // content carries no "#", so any `#rrggbb` in the output could only be a hard-coded
 // colour.
+// The email preview's srcdoc is the email itself (inline-styled, email-safe HTML with its
+// own colours), not the view's UI, so it is left out of the scan.
 test("OutboxView uses design tokens, never a raw hex colour", () => {
-  const markup = render(<OutboxView messages={ALL} />);
+  const markup = render(<OutboxView messages={ALL} />).replace(/\ssrcdoc="[^"]*"/gi, "");
   assert.ok(
     !/#[0-9a-fA-F]{3,8}\b/.test(markup),
     `no raw hex colour may appear in the OutboxView markup, got: ${markup}`,
   );
+});
+
+// --- the branded email preview ----------------------------------------------
+
+function iframes(markup: string): { sandbox: string | null; srcdoc: string; title: string | null }[] {
+  return [...markup.matchAll(/<iframe\b([^>]*)>/gi)].map((m) => ({
+    sandbox: attr(m[1]!, "sandbox"),
+    srcdoc: decode(attr(m[1]!, "srcdoc") ?? ""),
+    title: attr(m[1]!, "title"),
+  }));
+}
+
+const BRANDED: SentMessage = {
+  channel: "email",
+  recipient: "kim@example.com",
+  body: "Your Warthog verification code is 135790.",
+  email: {
+    subject: "Your Warthog verification code",
+    heading: "Your verification code",
+    paragraphs: ["Enter this code in Warthog to continue. It expires in 10 minutes."],
+    code: "135790",
+  },
+};
+
+test("OutboxView previews a branded email in a fully sandboxed iframe, with its subject", () => {
+  const markup = render(<OutboxView messages={[PUSH, BRANDED, SMS]} logoUrl="https://warthog.example/icons/icon-192.png" />);
+  assert.ok(visibleText(markup).includes("Your Warthog verification code"), "the subject is listed");
+  assert.ok(visibleText(markup).includes(BRANDED.body), "the plain body is still listed");
+  const frames = iframes(markup);
+  assert.equal(frames.length, 1, "only the email gets a preview");
+  assert.equal(frames[0]!.sandbox, "", "the preview runs with every sandbox restriction (no scripts, no same-origin)");
+  assert.match(frames[0]!.srcdoc, /^<!doctype html>/i, "the srcdoc is the rendered email");
+  assert.match(frames[0]!.srcdoc, /class="wh-code"[^>]*>135790</, "with its code box");
+  assert.match(frames[0]!.srcdoc, /<img src="https:\/\/warthog\.example\/icons\/icon-192\.png"/, "and the hosted logo");
+  assert.doesNotMatch(frames[0]!.srcdoc, /<script/i);
+  assert.ok(frames[0]!.title, "the frame is named for assistive technology");
+});
+
+test("OutboxView previews an email sent without content in the generic layout", () => {
+  const frames = iframes(render(<OutboxView messages={[EMAIL]} />));
+  assert.equal(frames.length, 1);
+  assert.match(frames[0]!.srcdoc, /<title>Warthog<\/title>/, "the generic subject");
+  assert.ok(frames[0]!.srcdoc.includes("Open the approval to continue."), "the body is the paragraph");
+  assert.ok(frames[0]!.srcdoc.includes('href="https://warthog.com.au/a/approval-token-email"'), "the link is the button");
 });

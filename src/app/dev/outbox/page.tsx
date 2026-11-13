@@ -4,6 +4,7 @@ import type { Metadata } from "next";
 import { loadConfig } from "@/server/config";
 import { requireDevTools } from "@/server/dev/guard";
 import { outbox } from "@/server/notify/outbox";
+import { emailLogoUrl } from "@/server/notify/email";
 import { OutboxView } from "@/components/dev/outbox-view";
 import { DevFrame } from "@/components/dev/dev-frame";
 
@@ -33,15 +34,16 @@ export default async function DevOutboxPage({
   // Touch request data first so `next build` marks this page dynamic and never
   // prerenders it — `loadConfig()` reads runtime config, which is absent at build.
   await searchParams;
-  requireDevTools(loadConfig());
+  const config = loadConfig();
+  requireDevTools(config);
   const messages = outbox.list();
   return (
     <DevFrame
       current="/dev/outbox"
       title="Dev outbox"
-      description="Every push, email and SMS the dev outbox captured, with their single-use links."
+      description="Every push, email and SMS the dev outbox captured, with their single-use links and a preview of each email."
     >
-      <OutboxView messages={messages} />
+      <OutboxView messages={messages} logoUrl={emailLogoUrl(config.publicBaseUrl)} />
     </DevFrame>
   );
 }
