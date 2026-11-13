@@ -3,6 +3,7 @@ import { test } from "node:test";
 import assert from "node:assert/strict";
 import { createTwilioSmsSender, parseCountryRoutes } from "./twilio";
 import { createResendEmailSender, normaliseMessagingEmail } from "./resend";
+import { renderMessageEmail } from "./email";
 import { normaliseInternationalPhone } from "../../domain/international-phone";
 
 const sid = (prefix: string) => prefix + "a".repeat(32);
@@ -92,7 +93,14 @@ test("Resend supports international domains without exposing metadata or retryin
   const sender = createResendEmailSender({ ...emailConfig, fetch: async (url, init) => {
     calls++; assert.equal(url, "https://api.resend.com/emails"); assert.equal(init?.redirect, "error"); assert.ok(init?.signal);
     assert.match(new Headers(init?.headers).get("Idempotency-Key") ?? "", /^[a-f0-9-]{36}$/);
-    assert.deepEqual(JSON.parse(String(init?.body)), { from: "Warthog <notifications@mail.example.test>", reply_to: "operator@support.example.test", to: ["person@example.jp"], subject: "Warthog", text: "Your code: 123456\nhttps://app.example.test/signin" });
+    // A message with no email content renders the generic layout: subject "Warthog", the
+    // body as its paragraph and the link as an "Open Warthog" button, in HTML and text.
+    const generic = renderMessageEmail({ recipient: "person@example.jp", body: "Your code: 123456", link: "https://app.example.test/signin" });
+    assert.deepEqual(JSON.parse(String(init?.body)), { from: "Warthog <notifications@mail.example.test>", reply_to: "operator@support.example.test", to: ["person@example.jp"],
+      subject: "Warthog", html: generic.html, text: generic.text });
+    assert.match(generic.html, /href="https:\/\/app\.example\.test\/signin"/);
+    assert.match(generic.text, /Your code: 123456/);
+    assert.match(generic.text, /Open Warthog: https:\/\/app\.example\.test\/signin/);
     return json({ id: "synthetic-message-id" });
   } });
   await sender.sendEmail({ recipient: "person@example.jp", body: "Your code: 123456", link: "https://app.example.test/signin" });
@@ -103,6 +111,24 @@ test("Resend supports international domains without exposing metadata or retryin
   assert.equal(calls, 1);
 });
 
+
+test("Resend sends the branded email's subject, HTML and text, with the configured logo", async () => {
+  let sent: Record<string, unknown> | undefined;
+  const sender = createResendEmailSender({ ...emailConfig, logoUrl: "https://app.example.test/icons/icon-192.png",
+    fetch: async (_url, init) => { sent = JSON.parse(String(init?.body)); return json({ id: "synthetic" }); } });
+  const email = { subject: "Your Warthog verification code", heading: "Your verification code",
+    paragraphs: ["Enter this code in Warthog to continue. It expires in 10 minutes."], code: "246810",
+    footnote: "If you didn't request this, you can ignore this email." };
+  await sender.sendEmail({ recipient: "person@example.test", body: "Your Warthog verification code is 246810.", email });
+  const rendered = renderMessageEmail({ recipient: "person@example.test", body: "", email }, { logoUrl: "https://app.example.test/icons/icon-192.png" });
+  assert.deepEqual(Object.keys(sent ?? {}).sort(), ["from", "html", "reply_to", "subject", "text", "to"]);
+  assert.equal(sent?.subject, "Your Warthog verification code");
+  assert.equal(sent?.html, rendered.html);
+  assert.equal(sent?.text, rendered.text);
+  assert.match(String(sent?.html), /<img src="https:\/\/app\.example\.test\/icons\/icon-192\.png"/);
+  assert.match(String(sent?.text), /^246810$/m);
+  assert.ok(!String(sent?.subject).includes("246810"), "the code never reaches the subject");
+});
 
 test("international email domains are IDNA-normalized while unsupported SMTPUTF8 is explicit", () => {
   assert.equal(normaliseMessagingEmail("person@bücher.de"), "person@xn--bcher-kva.de");
