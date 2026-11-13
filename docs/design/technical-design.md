@@ -163,14 +163,17 @@ Redaction is a pure module with exhaustive unit tests; the activity writer and t
 - Passkeys via SimpleWebAuthn, RP ID `app.warthog.com.au` (from config), `residentKey: required`,
   `userVerification: required`, PRF requested on create and get.
 - Authenticator app fallback: RFC 6238 TOTP implemented with `node:crypto` (30 s, 6 digits, ±1 step).
-- Recovery code issued at sign-up (shown once, confirmed saved).
+- Recovery code issued at sign-up (shown once, confirmed saved). Recovery (email code + recovery
+  code + new passkey) removes every other passkey, the authenticator app and every session in the
+  transaction that saves the new passkey, and alerts once, naming the agents it keeps.
 - Sessions: random 256-bit id in a `__Host-wh_session` cookie (HttpOnly, Secure, SameSite=Lax), stored
   hashed; 14-day idle / 30-day absolute expiry; `stepped_up_at` on the session; step-up valid 5 minutes.
 - New-device sign-in: email code + (synced passkey | hybrid QR | approval from a signed-in device via
   push + step-up | recovery code).
 - Account reset when every passkey and the recovery code are lost: email code + 7-day wait, alerts on
   every channel, cancellable from any signed-in device; erases VK-wrapped data and revokes agents and
-  connections.
+  connections. Completion alerts every channel again; a new passkey can then be set up for 7 days,
+  and a signed-in device can close that sooner after a step-up.
 - Every server action and route checks `Origin` (Next's server-action check plus our own for routes),
   and every member-scoped query is filtered by the session's user id (never an id from the client).
 
