@@ -61,16 +61,26 @@ export function UsageView({ model }: { model: UsageModel }) {
                 { key: "p50", label: "Typical response", value: formatDurationMs(requests.latency.p50) },
                 { key: "p95", label: "Slowest 5%", value: formatDurationMs(requests.latency.p95) },
               ]} />
-              <BarList label="Requests by outcome" rows={requests.byOutcome} empty="No agent requests in this period." />
-              <BarList label="Requests by platform" marks="agent" rows={requests.byPlatform} empty="No agent requests in this period." />
-              <BarList label="Requests by service" marks="service" rows={requests.byConnector} empty="No request reached a connected service in this period." />
+              {requests.total.value === 0 ? (
+                <EmptyState variant="inline" heading="No agent requests in this period." description="Requests appear here as soon as a connected agent calls a Warthog tool." />
+              ) : (
+                <>
+                  <BarList label="Requests by outcome" rows={requests.byOutcome} empty="No agent requests in this period." />
+                  <BarList label="Requests by platform" marks="agent" rows={requests.byPlatform} empty="No agent requests in this period." />
+                  <BarList label="Requests by service" marks="service" rows={requests.byConnector} empty="No request reached a connected service in this period." />
+                </>
+              )}
             </div>
           </WorkspacePanel>
         </div>
         <div className="wh-dashboard-column">
           <WorkspacePanel title="Approvals" icon={Inbox} description={`Decisions per ${range.bucket} and how long people took to reply.`}>
             <div className="flex flex-col gap-4">
-              <Sparkline label={`Approvals decided per ${range.bucket}`} points={approvals.decidedSeries} height={56} timeZone={model.timeZone} />
+              {approvals.decided.value === 0 ? (
+                <EmptyState variant="inline" heading="No approvals decided in this period." description="Decisions appear here once an agent asks for something and someone replies." />
+              ) : (
+                <Sparkline label={`Approvals decided per ${range.bucket}`} points={approvals.decidedSeries} height={56} timeZone={model.timeZone} />
+              )}
               <FactList label="Approval timing" facts={[
                 { key: "median", label: "Median reply", value: formatDurationMs(approvals.medianResponseMs) },
                 { key: "p95", label: "Slowest 5%", value: formatDurationMs(approvals.p95ResponseMs) },

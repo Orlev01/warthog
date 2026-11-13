@@ -1,0 +1,1807 @@
+{
+  "base": "http://localhost:3217",
+  "admin": "http://admin.localhost:3217",
+  "when": "2026-11-13T01:04:58.619Z",
+  "handoff": {
+    "unauthenticatedLandsOn": "http://localhost:3217/settings?notice=admin_signin_required",
+    "landedOn": "http://admin.localhost:3217/",
+    "cookie": true,
+    "appOriginAdmin404": 404,
+    "adminOriginSignin404": 404,
+    "adminOriginOauth404": 404,
+    "robots": "noindex, nofollow"
+  },
+  "pages": {
+    "light-320-overview": {
+      "title": "Overview · Warthog",
+      "h1": [
+        "Overview"
+      ],
+      "docOverflowX": false,
+      "freeText": [],
+      "freeTextCount": 0,
+      "offscreen": [],
+      "offscreenCount": 0,
+      "truncated": [],
+      "truncatedCount": 0,
+      "smallTargets": [],
+      "smallTargetCount": 0,
+      "smallInputs": [],
+      "lowContrast": [],
+      "lowContrastCount": 0,
+      "unnamedControls": [],
+      "chartsWithoutName": 0,
+      "textSample": "Overview How Warthog is being used and where it needs attention. Times are Sydney time. Showing the last 7 days · nothing needs attention Today 7 days 30 days 90 days Sign-ups 1 up 1 on the previous 7 days Active people 1 up 1 on the previous 7 days Agent requests 0 0 refused or failed no change on ",
+      "status": 200,
+      "url": "http://admin.localhost:3217/",
+      "consoleErrors": []
+    },
+    "light-320-signups": {
+      "title": "Sign-ups · Warthog",
+      "h1": [
+        "Sign-ups"
+      ],
+      "docOverflowX": false,
+      "freeText": [],
+      "freeTextCount": 0,
+      "offscreen": [],
+      "offscreenCount": 0,
+      "truncated": [],
+      "truncatedCount": 0,
+      "smallTargets": [],
+      "smallTargetCount": 0,
+      "smallInputs": [],
+      "lowContrast": [],
+      "lowContrastCount": 0,
+      "unnamedControls": [],
+      "chartsWithoutName": 0,
+      "textSample": "Sign-ups Who's joining, where sign-up stalls, and how far new accounts get. Times are Sydney time. 1 sign-up the last 7 days · 1 account in total Today 7 days 30 days 90 days Sign-ups 1 up 1 on the previous 7 days Accounts 1 all time Sign-up funnel From the first code sent to a finished account, the",
+      "status": 200,
+      "url": "http://admin.localhost:3217/signups",
+      "consoleErrors": []
+    },
+    "light-320-usage": {
+      "title": "Usage · Warthog",
+      "h1": [
+        "Usage"
+      ],
+      "docOverflowX": false,
+      "freeText": [],
+      "freeTextCount": 0,
+      "offscreen": [],
+      "offscreenCount": 0,
+      "truncated": [],
+      "truncatedCount": 0,
+      "smallTargets": [],
+      "smallTargetCount": 0,
+      "smallInputs": [],
+      "lowContrast": [],
+      "lowContrastCount": 0,
+      "unnamedControls": [],
+      "chartsWithoutName": 0,
+      "textSample": "Usage Who is active, what agents are asking for, and how approvals are going. Times are Sydney time. 1 person active in the last 7 days · 0 agent requests the last 7 days Today 7 days 30 days 90 days Agent requests 0 no change on the previous 7 days Approvals decided 0 No replies yet no change on th",
+      "status": 200,
+      "url": "http://admin.localhost:3217/usage",
+      "consoleErrors": []
+    },
+    "light-320-accounts": {
+      "title": "Accounts · Warthog",
+      "h1": [
+        "Accounts"
+      ],
+      "docOverflowX": false,
+      "freeText": [],
+      "freeTextCount": 0,
+      "offscreen": [],
+      "offscreenCount": 0,
+      "truncated": [],
+      "truncatedCount": 0,
+      "smallTargets": [],
+      "smallTargetCount": 0,
+      "smallInputs": [],
+      "lowContrast": [],
+      "lowContrastCount": 0,
+      "unnamedControls": [],
+      "chartsWithoutName": 0,
+      "textSample": "Accounts How each account is going, without reading anything personal: no addresses are listed here. Times are Sydney time. 1 account · 0 without a second factor · 0 needing a reconnection Look up an account One exact email address shows that account's operational facts. Nothing here reveals what th",
+      "status": 200,
+      "url": "http://admin.localhost:3217/accounts",
+      "consoleErrors": []
+    },
+    "light-320-reliability": {
+      "title": "Reliability · Warthog",
+      "h1": [
+        "Reliability"
+      ],
+      "docOverflowX": false,
+      "freeText": [],
+      "freeTextCount": 0,
+      "offscreen": [],
+      "offscreenCount": 0,
+      "truncated": [],
+      "truncatedCount": 0,
+      "smallTargets": [],
+      "smallTargetCount": 0,
+      "smallInputs": [],
+      "lowContrast": [],
+      "lowContrastCount": 0,
+      "unnamedControls": [],
+      "chartsWithoutName": 0,
+      "textSample": "Reliability Where things fail: sign-ins, agent requests, connected services and background work. Times are Sydney time. 0 failed agent requests the last 7 days · 0 failed sign-ins · 0 failed jobs · every sweep on time Today 7 days 30 days 90 days Failed agent requests 0 no requests yet no change on ",
+      "status": 200,
+      "url": "http://admin.localhost:3217/reliability",
+      "consoleErrors": []
+    },
+    "light-320-traffic": {
+      "title": "Traffic · Warthog",
+      "h1": [
+        "Traffic"
+      ],
+      "docOverflowX": false,
+      "freeText": [],
+      "freeTextCount": 0,
+      "offscreen": [],
+      "offscreenCount": 0,
+      "truncated": [],
+      "truncatedCount": 0,
+      "smallTargets": [],
+      "smallTargetCount": 0,
+      "smallInputs": [],
+      "lowContrast": [],
+      "lowContrastCount": 0,
+      "unnamedControls": [],
+      "chartsWithoutName": 0,
+      "textSample": "Traffic Requests and page loads by what was asked for and which host, counted without storing anything about who asked. Times are Sydney time. 173 requests the last 7 days · 113 page loads · 0 refusals for too many attempts Today 7 days 30 days 90 days Requests 173 up 173 on the previous 7 days Page",
+      "status": 200,
+      "url": "http://admin.localhost:3217/traffic",
+      "consoleErrors": []
+    },
+    "light-320-system": {
+      "title": "System · Warthog",
+      "h1": [
+        "System"
+      ],
+      "docOverflowX": false,
+      "freeText": [],
+      "freeTextCount": 0,
+      "offscreen": [],
+      "offscreenCount": 0,
+      "truncated": [],
+      "truncatedCount": 0,
+      "smallTargets": [],
+      "smallTargetCount": 0,
+      "smallInputs": [],
+      "lowContrast": [],
+      "lowContrastCount": 0,
+      "unnamedControls": [],
+      "chartsWithoutName": 0,
+      "textSample": "System The release that is running, what it is configured to do, and whether its background work is keeping up. Times are Sydney time. Schema 0112_admin_indexes · scheduler last ran Today, 12:04 pm · every sweep on time Release What this process is running with. Latest migration 0112_admin_indexes T",
+      "status": 200,
+      "url": "http://admin.localhost:3217/system",
+      "consoleErrors": []
+    },
+    "light-320-signups_range_30d": {
+      "title": "Sign-ups · Warthog",
+      "h1": [
+        "Sign-ups"
+      ],
+      "docOverflowX": false,
+      "freeText": [],
+      "freeTextCount": 0,
+      "offscreen": [],
+      "offscreenCount": 0,
+      "truncated": [],
+      "truncatedCount": 0,
+      "smallTargets": [],
+      "smallTargetCount": 0,
+      "smallInputs": [],
+      "lowContrast": [],
+      "lowContrastCount": 0,
+      "unnamedControls": [],
+      "chartsWithoutName": 0,
+      "textSample": "Sign-ups Who's joining, where sign-up stalls, and how far new accounts get. Times are Sydney time. 1 sign-up the last 30 days · 1 account in total Today 7 days 30 days 90 days Sign-ups 1 up 1 on the previous 30 days Sign-ups per day When Value 2026-10-14T13:00:00.000Z 0 2026-10-15T13:00:00.000Z 0 20",
+      "status": 200,
+      "url": "http://admin.localhost:3217/signups?range=30d",
+      "consoleErrors": []
+    },
+    "light-320-usage_range_today": {
+      "title": "Usage · Warthog",
+      "h1": [
+        "Usage"
+      ],
+      "docOverflowX": false,
+      "freeText": [],
+      "freeTextCount": 0,
+      "offscreen": [],
+      "offscreenCount": 0,
+      "truncated": [],
+      "truncatedCount": 0,
+      "smallTargets": [],
+      "smallTargetCount": 0,
+      "smallInputs": [],
+      "lowContrast": [],
+      "lowContrastCount": 0,
+      "unnamedControls": [],
+      "chartsWithoutName": 0,
+      "textSample": "Usage Who is active, what agents are asking for, and how approvals are going. Times are Sydney time. 1 person active in the last 7 days · 0 agent requests today Today 7 days 30 days 90 days Agent requests 0 no change on yesterday Agent requests per hour When Value 2026-11-12T13:00:00.000Z 0 2026-11-",
+      "status": 200,
+      "url": "http://admin.localhost:3217/usage?range=today",
+      "consoleErrors": []
+    },
+    "light-320-accounts_filter_no_agent": {
+      "title": "Accounts · Warthog",
+      "h1": [
+        "Accounts"
+      ],
+      "docOverflowX": false,
+      "freeText": [],
+      "freeTextCount": 0,
+      "offscreen": [],
+      "offscreenCount": 0,
+      "truncated": [],
+      "truncatedCount": 0,
+      "smallTargets": [],
+      "smallTargetCount": 0,
+      "smallInputs": [],
+      "lowContrast": [],
+      "lowContrastCount": 0,
+      "unnamedControls": [],
+      "chartsWithoutName": 0,
+      "textSample": "Accounts How each account is going, without reading anything personal: no addresses are listed here. Times are Sydney time. 1 account · 0 without a second factor · 0 needing a reconnection Look up an account One exact email address shows that account's operational facts. Nothing here reveals what th",
+      "status": 200,
+      "url": "http://admin.localhost:3217/accounts?filter=no_agent",
+      "consoleErrors": []
+    },
+    "light-320-accounts_email_admin_40example_test": {
+      "title": "Accounts · Warthog",
+      "h1": [
+        "Accounts"
+      ],
+      "docOverflowX": false,
+      "freeText": [],
+      "freeTextCount": 0,
+      "offscreen": [],
+      "offscreenCount": 0,
+      "truncated": [],
+      "truncatedCount": 0,
+      "smallTargets": [],
+      "smallTargetCount": 0,
+      "smallInputs": [],
+      "lowContrast": [],
+      "lowContrastCount": 0,
+      "unnamedControls": [],
+      "chartsWithoutName": 0,
+      "textSample": "Accounts How each account is going, without reading anything personal: no addresses are listed here. Times are Sydney time. 1 account · 0 without a second factor · 0 needing a reconnection Look up an account One exact email address shows that account's operational facts. Nothing here reveals what th",
+      "status": 200,
+      "url": "http://admin.localhost:3217/accounts?email=admin%40example.test",
+      "consoleErrors": []
+    },
+    "light-390-overview": {
+      "title": "Overview · Warthog",
+      "h1": [
+        "Overview"
+      ],
+      "docOverflowX": false,
+      "freeText": [],
+      "freeTextCount": 0,
+      "offscreen": [],
+      "offscreenCount": 0,
+      "truncated": [],
+      "truncatedCount": 0,
+      "smallTargets": [],
+      "smallTargetCount": 0,
+      "smallInputs": [],
+      "lowContrast": [],
+      "lowContrastCount": 0,
+      "unnamedControls": [],
+      "chartsWithoutName": 0,
+      "textSample": "Overview How Warthog is being used and where it needs attention. Times are Sydney time. Showing the last 7 days · nothing needs attention Today 7 days 30 days 90 days Sign-ups 1 up 1 on the previous 7 days Active people 1 up 1 on the previous 7 days Agent requests 0 0 refused or failed no change on ",
+      "status": 200,
+      "url": "http://admin.localhost:3217/",
+      "consoleErrors": []
+    },
+    "light-390-signups": {
+      "title": "Sign-ups · Warthog",
+      "h1": [
+        "Sign-ups"
+      ],
+      "docOverflowX": false,
+      "freeText": [],
+      "freeTextCount": 0,
+      "offscreen": [],
+      "offscreenCount": 0,
+      "truncated": [],
+      "truncatedCount": 0,
+      "smallTargets": [],
+      "smallTargetCount": 0,
+      "smallInputs": [],
+      "lowContrast": [],
+      "lowContrastCount": 0,
+      "unnamedControls": [],
+      "chartsWithoutName": 0,
+      "textSample": "Sign-ups Who's joining, where sign-up stalls, and how far new accounts get. Times are Sydney time. 1 sign-up the last 7 days · 1 account in total Today 7 days 30 days 90 days Sign-ups 1 up 1 on the previous 7 days Accounts 1 all time Sign-up funnel From the first code sent to a finished account, the",
+      "status": 200,
+      "url": "http://admin.localhost:3217/signups",
+      "consoleErrors": []
+    },
+    "light-390-usage": {
+      "title": "Usage · Warthog",
+      "h1": [
+        "Usage"
+      ],
+      "docOverflowX": false,
+      "freeText": [],
+      "freeTextCount": 0,
+      "offscreen": [],
+      "offscreenCount": 0,
+      "truncated": [],
+      "truncatedCount": 0,
+      "smallTargets": [],
+      "smallTargetCount": 0,
+      "smallInputs": [],
+      "lowContrast": [],
+      "lowContrastCount": 0,
+      "unnamedControls": [],
+      "chartsWithoutName": 0,
+      "textSample": "Usage Who is active, what agents are asking for, and how approvals are going. Times are Sydney time. 1 person active in the last 7 days · 0 agent requests the last 7 days Today 7 days 30 days 90 days Agent requests 0 no change on the previous 7 days Approvals decided 0 No replies yet no change on th",
+      "status": 200,
+      "url": "http://admin.localhost:3217/usage",
+      "consoleErrors": []
+    },
+    "light-390-accounts": {
+      "title": "Accounts · Warthog",
+      "h1": [
+        "Accounts"
+      ],
+      "docOverflowX": false,
+      "freeText": [],
+      "freeTextCount": 0,
+      "offscreen": [],
+      "offscreenCount": 0,
+      "truncated": [],
+      "truncatedCount": 0,
+      "smallTargets": [],
+      "smallTargetCount": 0,
+      "smallInputs": [],
+      "lowContrast": [],
+      "lowContrastCount": 0,
+      "unnamedControls": [],
+      "chartsWithoutName": 0,
+      "textSample": "Accounts How each account is going, without reading anything personal: no addresses are listed here. Times are Sydney time. 1 account · 0 without a second factor · 0 needing a reconnection Look up an account One exact email address shows that account's operational facts. Nothing here reveals what th",
+      "status": 200,
+      "url": "http://admin.localhost:3217/accounts",
+      "consoleErrors": []
+    },
+    "light-390-reliability": {
+      "title": "Reliability · Warthog",
+      "h1": [
+        "Reliability"
+      ],
+      "docOverflowX": false,
+      "freeText": [],
+      "freeTextCount": 0,
+      "offscreen": [],
+      "offscreenCount": 0,
+      "truncated": [],
+      "truncatedCount": 0,
+      "smallTargets": [],
+      "smallTargetCount": 0,
+      "smallInputs": [],
+      "lowContrast": [],
+      "lowContrastCount": 0,
+      "unnamedControls": [],
+      "chartsWithoutName": 0,
+      "textSample": "Reliability Where things fail: sign-ins, agent requests, connected services and background work. Times are Sydney time. 0 failed agent requests the last 7 days · 0 failed sign-ins · 0 failed jobs · every sweep on time Today 7 days 30 days 90 days Failed agent requests 0 no requests yet no change on ",
+      "status": 200,
+      "url": "http://admin.localhost:3217/reliability",
+      "consoleErrors": []
+    },
+    "light-390-traffic": {
+      "title": "Traffic · Warthog",
+      "h1": [
+        "Traffic"
+      ],
+      "docOverflowX": false,
+      "freeText": [],
+      "freeTextCount": 0,
+      "offscreen": [],
+      "offscreenCount": 0,
+      "truncated": [],
+      "truncatedCount": 0,
+      "smallTargets": [],
+      "smallTargetCount": 0,
+      "smallInputs": [],
+      "lowContrast": [],
+      "lowContrastCount": 0,
+      "unnamedControls": [],
+      "chartsWithoutName": 0,
+      "textSample": "Traffic Requests and page loads by what was asked for and which host, counted without storing anything about who asked. Times are Sydney time. 173 requests the last 7 days · 113 page loads · 0 refusals for too many attempts Today 7 days 30 days 90 days Requests 173 up 173 on the previous 7 days Page",
+      "status": 200,
+      "url": "http://admin.localhost:3217/traffic",
+      "consoleErrors": []
+    },
+    "light-390-system": {
+      "title": "System · Warthog",
+      "h1": [
+        "System"
+      ],
+      "docOverflowX": false,
+      "freeText": [],
+      "freeTextCount": 0,
+      "offscreen": [],
+      "offscreenCount": 0,
+      "truncated": [],
+      "truncatedCount": 0,
+      "smallTargets": [],
+      "smallTargetCount": 0,
+      "smallInputs": [],
+      "lowContrast": [],
+      "lowContrastCount": 0,
+      "unnamedControls": [],
+      "chartsWithoutName": 0,
+      "textSample": "System The release that is running, what it is configured to do, and whether its background work is keeping up. Times are Sydney time. Schema 0112_admin_indexes · scheduler last ran Today, 12:04 pm · every sweep on time Release What this process is running with. Latest migration 0112_admin_indexes T",
+      "status": 200,
+      "url": "http://admin.localhost:3217/system",
+      "consoleErrors": []
+    },
+    "light-390-signups_range_30d": {
+      "title": "Sign-ups · Warthog",
+      "h1": [
+        "Sign-ups"
+      ],
+      "docOverflowX": false,
+      "freeText": [],
+      "freeTextCount": 0,
+      "offscreen": [],
+      "offscreenCount": 0,
+      "truncated": [],
+      "truncatedCount": 0,
+      "smallTargets": [],
+      "smallTargetCount": 0,
+      "smallInputs": [],
+      "lowContrast": [],
+      "lowContrastCount": 0,
+      "unnamedControls": [],
+      "chartsWithoutName": 0,
+      "textSample": "Sign-ups Who's joining, where sign-up stalls, and how far new accounts get. Times are Sydney time. 1 sign-up the last 30 days · 1 account in total Today 7 days 30 days 90 days Sign-ups 1 up 1 on the previous 30 days Sign-ups per day When Value 2026-10-14T13:00:00.000Z 0 2026-10-15T13:00:00.000Z 0 20",
+      "status": 200,
+      "url": "http://admin.localhost:3217/signups?range=30d",
+      "consoleErrors": []
+    },
+    "light-390-usage_range_today": {
+      "title": "Usage · Warthog",
+      "h1": [
+        "Usage"
+      ],
+      "docOverflowX": false,
+      "freeText": [],
+      "freeTextCount": 0,
+      "offscreen": [],
+      "offscreenCount": 0,
+      "truncated": [],
+      "truncatedCount": 0,
+      "smallTargets": [],
+      "smallTargetCount": 0,
+      "smallInputs": [],
+      "lowContrast": [],
+      "lowContrastCount": 0,
+      "unnamedControls": [],
+      "chartsWithoutName": 0,
+      "textSample": "Usage Who is active, what agents are asking for, and how approvals are going. Times are Sydney time. 1 person active in the last 7 days · 0 agent requests today Today 7 days 30 days 90 days Agent requests 0 no change on yesterday Agent requests per hour When Value 2026-11-12T13:00:00.000Z 0 2026-11-",
+      "status": 200,
+      "url": "http://admin.localhost:3217/usage?range=today",
+      "consoleErrors": []
+    },
+    "light-390-accounts_filter_no_agent": {
+      "title": "Accounts · Warthog",
+      "h1": [
+        "Accounts"
+      ],
+      "docOverflowX": false,
+      "freeText": [],
+      "freeTextCount": 0,
+      "offscreen": [],
+      "offscreenCount": 0,
+      "truncated": [],
+      "truncatedCount": 0,
+      "smallTargets": [],
+      "smallTargetCount": 0,
+      "smallInputs": [],
+      "lowContrast": [],
+      "lowContrastCount": 0,
+      "unnamedControls": [],
+      "chartsWithoutName": 0,
+      "textSample": "Accounts How each account is going, without reading anything personal: no addresses are listed here. Times are Sydney time. 1 account · 0 without a second factor · 0 needing a reconnection Look up an account One exact email address shows that account's operational facts. Nothing here reveals what th",
+      "status": 200,
+      "url": "http://admin.localhost:3217/accounts?filter=no_agent",
+      "consoleErrors": []
+    },
+    "light-390-accounts_email_admin_40example_test": {
+      "title": "Accounts · Warthog",
+      "h1": [
+        "Accounts"
+      ],
+      "docOverflowX": false,
+      "freeText": [],
+      "freeTextCount": 0,
+      "offscreen": [],
+      "offscreenCount": 0,
+      "truncated": [],
+      "truncatedCount": 0,
+      "smallTargets": [],
+      "smallTargetCount": 0,
+      "smallInputs": [],
+      "lowContrast": [],
+      "lowContrastCount": 0,
+      "unnamedControls": [],
+      "chartsWithoutName": 0,
+      "textSample": "Accounts How each account is going, without reading anything personal: no addresses are listed here. Times are Sydney time. 1 account · 0 without a second factor · 0 needing a reconnection Look up an account One exact email address shows that account's operational facts. Nothing here reveals what th",
+      "status": 200,
+      "url": "http://admin.localhost:3217/accounts?email=admin%40example.test",
+      "consoleErrors": []
+    },
+    "light-1440-overview": {
+      "title": "Overview · Warthog",
+      "h1": [
+        "Overview"
+      ],
+      "docOverflowX": false,
+      "freeText": [],
+      "freeTextCount": 0,
+      "offscreen": [],
+      "offscreenCount": 0,
+      "truncated": [
+        {
+          "path": "div.wh-workspace > aside.wh-sidebar > div.wh-sidebar-brand > a > span",
+          "text": "Warthog home"
+        },
+        {
+          "path": "div.wh-workspace > aside.wh-sidebar > nav.wh-sidebar-nav > div.wh-nav-group > p.wh-nav-label",
+          "text": "Overview"
+        }
+      ],
+      "truncatedCount": 2,
+      "smallTargets": [],
+      "smallTargetCount": 0,
+      "smallInputs": [],
+      "lowContrast": [],
+      "lowContrastCount": 0,
+      "unnamedControls": [],
+      "chartsWithoutName": 0,
+      "textSample": "Overview How Warthog is being used and where it needs attention. Times are Sydney time. Showing the last 7 days · nothing needs attention Today 7 days 30 days 90 days Sign-ups 1 up 1 on the previous 7 days Active people 1 up 1 on the previous 7 days Agent requests 0 0 refused or failed no change on ",
+      "status": 200,
+      "url": "http://admin.localhost:3217/",
+      "consoleErrors": []
+    },
+    "light-1440-signups": {
+      "title": "Sign-ups · Warthog",
+      "h1": [
+        "Sign-ups"
+      ],
+      "docOverflowX": false,
+      "freeText": [],
+      "freeTextCount": 0,
+      "offscreen": [],
+      "offscreenCount": 0,
+      "truncated": [
+        {
+          "path": "div.wh-workspace > aside.wh-sidebar > div.wh-sidebar-brand > a > span",
+          "text": "Warthog home"
+        },
+        {
+          "path": "div.wh-workspace > aside.wh-sidebar > nav.wh-sidebar-nav > div.wh-nav-group > p.wh-nav-label",
+          "text": "Overview"
+        }
+      ],
+      "truncatedCount": 2,
+      "smallTargets": [],
+      "smallTargetCount": 0,
+      "smallInputs": [],
+      "lowContrast": [],
+      "lowContrastCount": 0,
+      "unnamedControls": [],
+      "chartsWithoutName": 0,
+      "textSample": "Sign-ups Who's joining, where sign-up stalls, and how far new accounts get. Times are Sydney time. 1 sign-up the last 7 days · 1 account in total Today 7 days 30 days 90 days Sign-ups 1 up 1 on the previous 7 days Accounts 1 all time Sign-up funnel From the first code sent to a finished account, the",
+      "status": 200,
+      "url": "http://admin.localhost:3217/signups",
+      "consoleErrors": []
+    },
+    "light-1440-usage": {
+      "title": "Usage · Warthog",
+      "h1": [
+        "Usage"
+      ],
+      "docOverflowX": false,
+      "freeText": [],
+      "freeTextCount": 0,
+      "offscreen": [],
+      "offscreenCount": 0,
+      "truncated": [
+        {
+          "path": "div.wh-workspace > aside.wh-sidebar > div.wh-sidebar-brand > a > span",
+          "text": "Warthog home"
+        },
+        {
+          "path": "div.wh-workspace > aside.wh-sidebar > nav.wh-sidebar-nav > div.wh-nav-group > p.wh-nav-label",
+          "text": "Overview"
+        }
+      ],
+      "truncatedCount": 2,
+      "smallTargets": [],
+      "smallTargetCount": 0,
+      "smallInputs": [],
+      "lowContrast": [],
+      "lowContrastCount": 0,
+      "unnamedControls": [],
+      "chartsWithoutName": 0,
+      "textSample": "Usage Who is active, what agents are asking for, and how approvals are going. Times are Sydney time. 1 person active in the last 7 days · 0 agent requests the last 7 days Today 7 days 30 days 90 days Agent requests 0 no change on the previous 7 days Approvals decided 0 No replies yet no change on th",
+      "status": 200,
+      "url": "http://admin.localhost:3217/usage",
+      "consoleErrors": []
+    },
+    "light-1440-accounts": {
+      "title": "Accounts · Warthog",
+      "h1": [
+        "Accounts"
+      ],
+      "docOverflowX": false,
+      "freeText": [],
+      "freeTextCount": 0,
+      "offscreen": [],
+      "offscreenCount": 0,
+      "truncated": [
+        {
+          "path": "div.wh-workspace > aside.wh-sidebar > div.wh-sidebar-brand > a > span",
+          "text": "Warthog home"
+        },
+        {
+          "path": "div.wh-workspace > aside.wh-sidebar > nav.wh-sidebar-nav > div.wh-nav-group > p.wh-nav-label",
+          "text": "Overview"
+        }
+      ],
+      "truncatedCount": 2,
+      "smallTargets": [],
+      "smallTargetCount": 0,
+      "smallInputs": [],
+      "lowContrast": [],
+      "lowContrastCount": 0,
+      "unnamedControls": [],
+      "chartsWithoutName": 0,
+      "textSample": "Accounts How each account is going, without reading anything personal: no addresses are listed here. Times are Sydney time. 1 account · 0 without a second factor · 0 needing a reconnection Look up an account One exact email address shows that account's operational facts. Nothing here reveals what th",
+      "status": 200,
+      "url": "http://admin.localhost:3217/accounts",
+      "consoleErrors": []
+    },
+    "light-1440-reliability": {
+      "title": "Reliability · Warthog",
+      "h1": [
+        "Reliability"
+      ],
+      "docOverflowX": false,
+      "freeText": [],
+      "freeTextCount": 0,
+      "offscreen": [],
+      "offscreenCount": 0,
+      "truncated": [
+        {
+          "path": "div.wh-workspace > aside.wh-sidebar > div.wh-sidebar-brand > a > span",
+          "text": "Warthog home"
+        },
+        {
+          "path": "div.wh-workspace > aside.wh-sidebar > nav.wh-sidebar-nav > div.wh-nav-group > p.wh-nav-label",
+          "text": "Overview"
+        }
+      ],
+      "truncatedCount": 2,
+      "smallTargets": [],
+      "smallTargetCount": 0,
+      "smallInputs": [],
+      "lowContrast": [],
+      "lowContrastCount": 0,
+      "unnamedControls": [],
+      "chartsWithoutName": 0,
+      "textSample": "Reliability Where things fail: sign-ins, agent requests, connected services and background work. Times are Sydney time. 0 failed agent requests the last 7 days · 0 failed sign-ins · 0 failed jobs · every sweep on time Today 7 days 30 days 90 days Failed agent requests 0 no requests yet no change on ",
+      "status": 200,
+      "url": "http://admin.localhost:3217/reliability",
+      "consoleErrors": []
+    },
+    "light-1440-traffic": {
+      "title": "Traffic · Warthog",
+      "h1": [
+        "Traffic"
+      ],
+      "docOverflowX": false,
+      "freeText": [],
+      "freeTextCount": 0,
+      "offscreen": [],
+      "offscreenCount": 0,
+      "truncated": [
+        {
+          "path": "div.wh-workspace > aside.wh-sidebar > div.wh-sidebar-brand > a > span",
+          "text": "Warthog home"
+        },
+        {
+          "path": "div.wh-workspace > aside.wh-sidebar > nav.wh-sidebar-nav > div.wh-nav-group > p.wh-nav-label",
+          "text": "Overview"
+        }
+      ],
+      "truncatedCount": 2,
+      "smallTargets": [],
+      "smallTargetCount": 0,
+      "smallInputs": [],
+      "lowContrast": [],
+      "lowContrastCount": 0,
+      "unnamedControls": [],
+      "chartsWithoutName": 0,
+      "textSample": "Traffic Requests and page loads by what was asked for and which host, counted without storing anything about who asked. Times are Sydney time. 289 requests the last 7 days · 180 page loads · 0 refusals for too many attempts Today 7 days 30 days 90 days Requests 289 up 289 on the previous 7 days Page",
+      "status": 200,
+      "url": "http://admin.localhost:3217/traffic",
+      "consoleErrors": []
+    },
+    "light-1440-system": {
+      "title": "System · Warthog",
+      "h1": [
+        "System"
+      ],
+      "docOverflowX": false,
+      "freeText": [],
+      "freeTextCount": 0,
+      "offscreen": [],
+      "offscreenCount": 0,
+      "truncated": [
+        {
+          "path": "div.wh-workspace > aside.wh-sidebar > div.wh-sidebar-brand > a > span",
+          "text": "Warthog home"
+        },
+        {
+          "path": "div.wh-workspace > aside.wh-sidebar > nav.wh-sidebar-nav > div.wh-nav-group > p.wh-nav-label",
+          "text": "Overview"
+        }
+      ],
+      "truncatedCount": 2,
+      "smallTargets": [],
+      "smallTargetCount": 0,
+      "smallInputs": [],
+      "lowContrast": [],
+      "lowContrastCount": 0,
+      "unnamedControls": [],
+      "chartsWithoutName": 0,
+      "textSample": "System The release that is running, what it is configured to do, and whether its background work is keeping up. Times are Sydney time. Schema 0112_admin_indexes · scheduler last ran Today, 12:05 pm · every sweep on time Release What this process is running with. Latest migration 0112_admin_indexes T",
+      "status": 200,
+      "url": "http://admin.localhost:3217/system",
+      "consoleErrors": []
+    },
+    "light-1440-signups_range_30d": {
+      "title": "Sign-ups · Warthog",
+      "h1": [
+        "Sign-ups"
+      ],
+      "docOverflowX": false,
+      "freeText": [],
+      "freeTextCount": 0,
+      "offscreen": [],
+      "offscreenCount": 0,
+      "truncated": [
+        {
+          "path": "div.wh-workspace > aside.wh-sidebar > div.wh-sidebar-brand > a > span",
+          "text": "Warthog home"
+        },
+        {
+          "path": "div.wh-workspace > aside.wh-sidebar > nav.wh-sidebar-nav > div.wh-nav-group > p.wh-nav-label",
+          "text": "Overview"
+        }
+      ],
+      "truncatedCount": 2,
+      "smallTargets": [],
+      "smallTargetCount": 0,
+      "smallInputs": [],
+      "lowContrast": [],
+      "lowContrastCount": 0,
+      "unnamedControls": [],
+      "chartsWithoutName": 0,
+      "textSample": "Sign-ups Who's joining, where sign-up stalls, and how far new accounts get. Times are Sydney time. 1 sign-up the last 30 days · 1 account in total Today 7 days 30 days 90 days Sign-ups 1 up 1 on the previous 30 days Sign-ups per day When Value 2026-10-14T13:00:00.000Z 0 2026-10-15T13:00:00.000Z 0 20",
+      "status": 200,
+      "url": "http://admin.localhost:3217/signups?range=30d",
+      "consoleErrors": []
+    },
+    "light-1440-usage_range_today": {
+      "title": "Usage · Warthog",
+      "h1": [
+        "Usage"
+      ],
+      "docOverflowX": false,
+      "freeText": [],
+      "freeTextCount": 0,
+      "offscreen": [],
+      "offscreenCount": 0,
+      "truncated": [
+        {
+          "path": "div.wh-workspace > aside.wh-sidebar > div.wh-sidebar-brand > a > span",
+          "text": "Warthog home"
+        },
+        {
+          "path": "div.wh-workspace > aside.wh-sidebar > nav.wh-sidebar-nav > div.wh-nav-group > p.wh-nav-label",
+          "text": "Overview"
+        }
+      ],
+      "truncatedCount": 2,
+      "smallTargets": [],
+      "smallTargetCount": 0,
+      "smallInputs": [],
+      "lowContrast": [],
+      "lowContrastCount": 0,
+      "unnamedControls": [],
+      "chartsWithoutName": 0,
+      "textSample": "Usage Who is active, what agents are asking for, and how approvals are going. Times are Sydney time. 1 person active in the last 7 days · 0 agent requests today Today 7 days 30 days 90 days Agent requests 0 no change on yesterday Agent requests per hour When Value 2026-11-12T13:00:00.000Z 0 2026-11-",
+      "status": 200,
+      "url": "http://admin.localhost:3217/usage?range=today",
+      "consoleErrors": []
+    },
+    "light-1440-accounts_filter_no_agent": {
+      "title": "Accounts · Warthog",
+      "h1": [
+        "Accounts"
+      ],
+      "docOverflowX": false,
+      "freeText": [],
+      "freeTextCount": 0,
+      "offscreen": [],
+      "offscreenCount": 0,
+      "truncated": [
+        {
+          "path": "div.wh-workspace > aside.wh-sidebar > div.wh-sidebar-brand > a > span",
+          "text": "Warthog home"
+        },
+        {
+          "path": "div.wh-workspace > aside.wh-sidebar > nav.wh-sidebar-nav > div.wh-nav-group > p.wh-nav-label",
+          "text": "Overview"
+        }
+      ],
+      "truncatedCount": 2,
+      "smallTargets": [],
+      "smallTargetCount": 0,
+      "smallInputs": [],
+      "lowContrast": [],
+      "lowContrastCount": 0,
+      "unnamedControls": [],
+      "chartsWithoutName": 0,
+      "textSample": "Accounts How each account is going, without reading anything personal: no addresses are listed here. Times are Sydney time. 1 account · 0 without a second factor · 0 needing a reconnection Look up an account One exact email address shows that account's operational facts. Nothing here reveals what th",
+      "status": 200,
+      "url": "http://admin.localhost:3217/accounts?filter=no_agent",
+      "consoleErrors": []
+    },
+    "light-1440-accounts_email_admin_40example_test": {
+      "title": "Accounts · Warthog",
+      "h1": [
+        "Accounts"
+      ],
+      "docOverflowX": false,
+      "freeText": [],
+      "freeTextCount": 0,
+      "offscreen": [],
+      "offscreenCount": 0,
+      "truncated": [
+        {
+          "path": "div.wh-workspace > aside.wh-sidebar > div.wh-sidebar-brand > a > span",
+          "text": "Warthog home"
+        },
+        {
+          "path": "div.wh-workspace > aside.wh-sidebar > nav.wh-sidebar-nav > div.wh-nav-group > p.wh-nav-label",
+          "text": "Overview"
+        }
+      ],
+      "truncatedCount": 2,
+      "smallTargets": [],
+      "smallTargetCount": 0,
+      "smallInputs": [],
+      "lowContrast": [],
+      "lowContrastCount": 0,
+      "unnamedControls": [],
+      "chartsWithoutName": 0,
+      "textSample": "Accounts How each account is going, without reading anything personal: no addresses are listed here. Times are Sydney time. 1 account · 0 without a second factor · 0 needing a reconnection Look up an account One exact email address shows that account's operational facts. Nothing here reveals what th",
+      "status": 200,
+      "url": "http://admin.localhost:3217/accounts?email=admin%40example.test",
+      "consoleErrors": []
+    },
+    "dark-390-overview": {
+      "title": "Overview · Warthog",
+      "h1": [
+        "Overview"
+      ],
+      "docOverflowX": false,
+      "freeText": [],
+      "freeTextCount": 0,
+      "offscreen": [],
+      "offscreenCount": 0,
+      "truncated": [],
+      "truncatedCount": 0,
+      "smallTargets": [],
+      "smallTargetCount": 0,
+      "smallInputs": [],
+      "lowContrast": [],
+      "lowContrastCount": 0,
+      "unnamedControls": [],
+      "chartsWithoutName": 0,
+      "textSample": "Overview How Warthog is being used and where it needs attention. Times are Sydney time. Showing the last 7 days · nothing needs attention Today 7 days 30 days 90 days Sign-ups 1 up 1 on the previous 7 days Active people 1 up 1 on the previous 7 days Agent requests 0 0 refused or failed no change on ",
+      "status": 200,
+      "url": "http://admin.localhost:3217/",
+      "consoleErrors": []
+    },
+    "dark-390-signups": {
+      "title": "Sign-ups · Warthog",
+      "h1": [
+        "Sign-ups"
+      ],
+      "docOverflowX": false,
+      "freeText": [],
+      "freeTextCount": 0,
+      "offscreen": [],
+      "offscreenCount": 0,
+      "truncated": [],
+      "truncatedCount": 0,
+      "smallTargets": [],
+      "smallTargetCount": 0,
+      "smallInputs": [],
+      "lowContrast": [],
+      "lowContrastCount": 0,
+      "unnamedControls": [],
+      "chartsWithoutName": 0,
+      "textSample": "Sign-ups Who's joining, where sign-up stalls, and how far new accounts get. Times are Sydney time. 1 sign-up the last 7 days · 1 account in total Today 7 days 30 days 90 days Sign-ups 1 up 1 on the previous 7 days Accounts 1 all time Sign-up funnel From the first code sent to a finished account, the",
+      "status": 200,
+      "url": "http://admin.localhost:3217/signups",
+      "consoleErrors": []
+    },
+    "dark-390-usage": {
+      "title": "Usage · Warthog",
+      "h1": [
+        "Usage"
+      ],
+      "docOverflowX": false,
+      "freeText": [],
+      "freeTextCount": 0,
+      "offscreen": [],
+      "offscreenCount": 0,
+      "truncated": [],
+      "truncatedCount": 0,
+      "smallTargets": [],
+      "smallTargetCount": 0,
+      "smallInputs": [],
+      "lowContrast": [],
+      "lowContrastCount": 0,
+      "unnamedControls": [],
+      "chartsWithoutName": 0,
+      "textSample": "Usage Who is active, what agents are asking for, and how approvals are going. Times are Sydney time. 1 person active in the last 7 days · 0 agent requests the last 7 days Today 7 days 30 days 90 days Agent requests 0 no change on the previous 7 days Approvals decided 0 No replies yet no change on th",
+      "status": 200,
+      "url": "http://admin.localhost:3217/usage",
+      "consoleErrors": []
+    },
+    "dark-390-accounts": {
+      "title": "Accounts · Warthog",
+      "h1": [
+        "Accounts"
+      ],
+      "docOverflowX": false,
+      "freeText": [],
+      "freeTextCount": 0,
+      "offscreen": [],
+      "offscreenCount": 0,
+      "truncated": [],
+      "truncatedCount": 0,
+      "smallTargets": [],
+      "smallTargetCount": 0,
+      "smallInputs": [],
+      "lowContrast": [],
+      "lowContrastCount": 0,
+      "unnamedControls": [],
+      "chartsWithoutName": 0,
+      "textSample": "Accounts How each account is going, without reading anything personal: no addresses are listed here. Times are Sydney time. 1 account · 0 without a second factor · 0 needing a reconnection Look up an account One exact email address shows that account's operational facts. Nothing here reveals what th",
+      "status": 200,
+      "url": "http://admin.localhost:3217/accounts",
+      "consoleErrors": []
+    },
+    "dark-390-reliability": {
+      "title": "Reliability · Warthog",
+      "h1": [
+        "Reliability"
+      ],
+      "docOverflowX": false,
+      "freeText": [],
+      "freeTextCount": 0,
+      "offscreen": [],
+      "offscreenCount": 0,
+      "truncated": [],
+      "truncatedCount": 0,
+      "smallTargets": [],
+      "smallTargetCount": 0,
+      "smallInputs": [],
+      "lowContrast": [],
+      "lowContrastCount": 0,
+      "unnamedControls": [],
+      "chartsWithoutName": 0,
+      "textSample": "Reliability Where things fail: sign-ins, agent requests, connected services and background work. Times are Sydney time. 0 failed agent requests the last 7 days · 0 failed sign-ins · 0 failed jobs · every sweep on time Today 7 days 30 days 90 days Failed agent requests 0 no requests yet no change on ",
+      "status": 200,
+      "url": "http://admin.localhost:3217/reliability",
+      "consoleErrors": []
+    },
+    "dark-390-traffic": {
+      "title": "Traffic · Warthog",
+      "h1": [
+        "Traffic"
+      ],
+      "docOverflowX": false,
+      "freeText": [],
+      "freeTextCount": 0,
+      "offscreen": [],
+      "offscreenCount": 0,
+      "truncated": [],
+      "truncatedCount": 0,
+      "smallTargets": [],
+      "smallTargetCount": 0,
+      "smallInputs": [],
+      "lowContrast": [],
+      "lowContrastCount": 0,
+      "unnamedControls": [],
+      "chartsWithoutName": 0,
+      "textSample": "Traffic Requests and page loads by what was asked for and which host, counted without storing anything about who asked. Times are Sydney time. 289 requests the last 7 days · 180 page loads · 0 refusals for too many attempts Today 7 days 30 days 90 days Requests 289 up 289 on the previous 7 days Page",
+      "status": 200,
+      "url": "http://admin.localhost:3217/traffic",
+      "consoleErrors": []
+    },
+    "dark-390-system": {
+      "title": "System · Warthog",
+      "h1": [
+        "System"
+      ],
+      "docOverflowX": false,
+      "freeText": [],
+      "freeTextCount": 0,
+      "offscreen": [],
+      "offscreenCount": 0,
+      "truncated": [],
+      "truncatedCount": 0,
+      "smallTargets": [],
+      "smallTargetCount": 0,
+      "smallInputs": [],
+      "lowContrast": [],
+      "lowContrastCount": 0,
+      "unnamedControls": [],
+      "chartsWithoutName": 0,
+      "textSample": "System The release that is running, what it is configured to do, and whether its background work is keeping up. Times are Sydney time. Schema 0112_admin_indexes · scheduler last ran Today, 12:05 pm · every sweep on time Release What this process is running with. Latest migration 0112_admin_indexes T",
+      "status": 200,
+      "url": "http://admin.localhost:3217/system",
+      "consoleErrors": []
+    },
+    "dark-390-signups_range_30d": {
+      "title": "Sign-ups · Warthog",
+      "h1": [
+        "Sign-ups"
+      ],
+      "docOverflowX": false,
+      "freeText": [],
+      "freeTextCount": 0,
+      "offscreen": [],
+      "offscreenCount": 0,
+      "truncated": [],
+      "truncatedCount": 0,
+      "smallTargets": [],
+      "smallTargetCount": 0,
+      "smallInputs": [],
+      "lowContrast": [],
+      "lowContrastCount": 0,
+      "unnamedControls": [],
+      "chartsWithoutName": 0,
+      "textSample": "Sign-ups Who's joining, where sign-up stalls, and how far new accounts get. Times are Sydney time. 1 sign-up the last 30 days · 1 account in total Today 7 days 30 days 90 days Sign-ups 1 up 1 on the previous 30 days Sign-ups per day When Value 2026-10-14T13:00:00.000Z 0 2026-10-15T13:00:00.000Z 0 20",
+      "status": 200,
+      "url": "http://admin.localhost:3217/signups?range=30d",
+      "consoleErrors": []
+    },
+    "dark-390-usage_range_today": {
+      "title": "Usage · Warthog",
+      "h1": [
+        "Usage"
+      ],
+      "docOverflowX": false,
+      "freeText": [],
+      "freeTextCount": 0,
+      "offscreen": [],
+      "offscreenCount": 0,
+      "truncated": [],
+      "truncatedCount": 0,
+      "smallTargets": [],
+      "smallTargetCount": 0,
+      "smallInputs": [],
+      "lowContrast": [],
+      "lowContrastCount": 0,
+      "unnamedControls": [],
+      "chartsWithoutName": 0,
+      "textSample": "Usage Who is active, what agents are asking for, and how approvals are going. Times are Sydney time. 1 person active in the last 7 days · 0 agent requests today Today 7 days 30 days 90 days Agent requests 0 no change on yesterday Agent requests per hour When Value 2026-11-12T13:00:00.000Z 0 2026-11-",
+      "status": 200,
+      "url": "http://admin.localhost:3217/usage?range=today",
+      "consoleErrors": []
+    },
+    "dark-390-accounts_filter_no_agent": {
+      "title": "Accounts · Warthog",
+      "h1": [
+        "Accounts"
+      ],
+      "docOverflowX": false,
+      "freeText": [],
+      "freeTextCount": 0,
+      "offscreen": [],
+      "offscreenCount": 0,
+      "truncated": [],
+      "truncatedCount": 0,
+      "smallTargets": [],
+      "smallTargetCount": 0,
+      "smallInputs": [],
+      "lowContrast": [],
+      "lowContrastCount": 0,
+      "unnamedControls": [],
+      "chartsWithoutName": 0,
+      "textSample": "Accounts How each account is going, without reading anything personal: no addresses are listed here. Times are Sydney time. 1 account · 0 without a second factor · 0 needing a reconnection Look up an account One exact email address shows that account's operational facts. Nothing here reveals what th",
+      "status": 200,
+      "url": "http://admin.localhost:3217/accounts?filter=no_agent",
+      "consoleErrors": []
+    },
+    "dark-390-accounts_email_admin_40example_test": {
+      "title": "Accounts · Warthog",
+      "h1": [
+        "Accounts"
+      ],
+      "docOverflowX": false,
+      "freeText": [],
+      "freeTextCount": 0,
+      "offscreen": [],
+      "offscreenCount": 0,
+      "truncated": [],
+      "truncatedCount": 0,
+      "smallTargets": [],
+      "smallTargetCount": 0,
+      "smallInputs": [],
+      "lowContrast": [],
+      "lowContrastCount": 0,
+      "unnamedControls": [],
+      "chartsWithoutName": 0,
+      "textSample": "Accounts How each account is going, without reading anything personal: no addresses are listed here. Times are Sydney time. 1 account · 0 without a second factor · 0 needing a reconnection Look up an account One exact email address shows that account's operational facts. Nothing here reveals what th",
+      "status": 200,
+      "url": "http://admin.localhost:3217/accounts?email=admin%40example.test",
+      "consoleErrors": []
+    },
+    "dark-1440-overview": {
+      "title": "Overview · Warthog",
+      "h1": [
+        "Overview"
+      ],
+      "docOverflowX": false,
+      "freeText": [],
+      "freeTextCount": 0,
+      "offscreen": [],
+      "offscreenCount": 0,
+      "truncated": [
+        {
+          "path": "div.wh-workspace > aside.wh-sidebar > div.wh-sidebar-brand > a > span",
+          "text": "Warthog home"
+        },
+        {
+          "path": "div.wh-workspace > aside.wh-sidebar > nav.wh-sidebar-nav > div.wh-nav-group > p.wh-nav-label",
+          "text": "Overview"
+        }
+      ],
+      "truncatedCount": 2,
+      "smallTargets": [],
+      "smallTargetCount": 0,
+      "smallInputs": [],
+      "lowContrast": [],
+      "lowContrastCount": 0,
+      "unnamedControls": [],
+      "chartsWithoutName": 0,
+      "textSample": "Overview How Warthog is being used and where it needs attention. Times are Sydney time. Showing the last 7 days · nothing needs attention Today 7 days 30 days 90 days Sign-ups 1 up 1 on the previous 7 days Active people 1 up 1 on the previous 7 days Agent requests 0 0 refused or failed no change on ",
+      "status": 200,
+      "url": "http://admin.localhost:3217/",
+      "consoleErrors": []
+    },
+    "dark-1440-signups": {
+      "title": "Sign-ups · Warthog",
+      "h1": [
+        "Sign-ups"
+      ],
+      "docOverflowX": false,
+      "freeText": [],
+      "freeTextCount": 0,
+      "offscreen": [],
+      "offscreenCount": 0,
+      "truncated": [
+        {
+          "path": "div.wh-workspace > aside.wh-sidebar > div.wh-sidebar-brand > a > span",
+          "text": "Warthog home"
+        },
+        {
+          "path": "div.wh-workspace > aside.wh-sidebar > nav.wh-sidebar-nav > div.wh-nav-group > p.wh-nav-label",
+          "text": "Overview"
+        }
+      ],
+      "truncatedCount": 2,
+      "smallTargets": [],
+      "smallTargetCount": 0,
+      "smallInputs": [],
+      "lowContrast": [],
+      "lowContrastCount": 0,
+      "unnamedControls": [],
+      "chartsWithoutName": 0,
+      "textSample": "Sign-ups Who's joining, where sign-up stalls, and how far new accounts get. Times are Sydney time. 1 sign-up the last 7 days · 1 account in total Today 7 days 30 days 90 days Sign-ups 1 up 1 on the previous 7 days Accounts 1 all time Sign-up funnel From the first code sent to a finished account, the",
+      "status": 200,
+      "url": "http://admin.localhost:3217/signups",
+      "consoleErrors": []
+    },
+    "dark-1440-usage": {
+      "title": "Usage · Warthog",
+      "h1": [
+        "Usage"
+      ],
+      "docOverflowX": false,
+      "freeText": [],
+      "freeTextCount": 0,
+      "offscreen": [],
+      "offscreenCount": 0,
+      "truncated": [
+        {
+          "path": "div.wh-workspace > aside.wh-sidebar > div.wh-sidebar-brand > a > span",
+          "text": "Warthog home"
+        },
+        {
+          "path": "div.wh-workspace > aside.wh-sidebar > nav.wh-sidebar-nav > div.wh-nav-group > p.wh-nav-label",
+          "text": "Overview"
+        }
+      ],
+      "truncatedCount": 2,
+      "smallTargets": [],
+      "smallTargetCount": 0,
+      "smallInputs": [],
+      "lowContrast": [],
+      "lowContrastCount": 0,
+      "unnamedControls": [],
+      "chartsWithoutName": 0,
+      "textSample": "Usage Who is active, what agents are asking for, and how approvals are going. Times are Sydney time. 1 person active in the last 7 days · 0 agent requests the last 7 days Today 7 days 30 days 90 days Agent requests 0 no change on the previous 7 days Approvals decided 0 No replies yet no change on th",
+      "status": 200,
+      "url": "http://admin.localhost:3217/usage",
+      "consoleErrors": []
+    },
+    "dark-1440-accounts": {
+      "title": "Accounts · Warthog",
+      "h1": [
+        "Accounts"
+      ],
+      "docOverflowX": false,
+      "freeText": [],
+      "freeTextCount": 0,
+      "offscreen": [],
+      "offscreenCount": 0,
+      "truncated": [
+        {
+          "path": "div.wh-workspace > aside.wh-sidebar > div.wh-sidebar-brand > a > span",
+          "text": "Warthog home"
+        },
+        {
+          "path": "div.wh-workspace > aside.wh-sidebar > nav.wh-sidebar-nav > div.wh-nav-group > p.wh-nav-label",
+          "text": "Overview"
+        }
+      ],
+      "truncatedCount": 2,
+      "smallTargets": [],
+      "smallTargetCount": 0,
+      "smallInputs": [],
+      "lowContrast": [],
+      "lowContrastCount": 0,
+      "unnamedControls": [],
+      "chartsWithoutName": 0,
+      "textSample": "Accounts How each account is going, without reading anything personal: no addresses are listed here. Times are Sydney time. 1 account · 0 without a second factor · 0 needing a reconnection Look up an account One exact email address shows that account's operational facts. Nothing here reveals what th",
+      "status": 200,
+      "url": "http://admin.localhost:3217/accounts",
+      "consoleErrors": []
+    },
+    "dark-1440-reliability": {
+      "title": "Reliability · Warthog",
+      "h1": [
+        "Reliability"
+      ],
+      "docOverflowX": false,
+      "freeText": [],
+      "freeTextCount": 0,
+      "offscreen": [],
+      "offscreenCount": 0,
+      "truncated": [
+        {
+          "path": "div.wh-workspace > aside.wh-sidebar > div.wh-sidebar-brand > a > span",
+          "text": "Warthog home"
+        },
+        {
+          "path": "div.wh-workspace > aside.wh-sidebar > nav.wh-sidebar-nav > div.wh-nav-group > p.wh-nav-label",
+          "text": "Overview"
+        }
+      ],
+      "truncatedCount": 2,
+      "smallTargets": [],
+      "smallTargetCount": 0,
+      "smallInputs": [],
+      "lowContrast": [],
+      "lowContrastCount": 0,
+      "unnamedControls": [],
+      "chartsWithoutName": 0,
+      "textSample": "Reliability Where things fail: sign-ins, agent requests, connected services and background work. Times are Sydney time. 0 failed agent requests the last 7 days · 0 failed sign-ins · 0 failed jobs · every sweep on time Today 7 days 30 days 90 days Failed agent requests 0 no requests yet no change on ",
+      "status": 200,
+      "url": "http://admin.localhost:3217/reliability",
+      "consoleErrors": []
+    },
+    "dark-1440-traffic": {
+      "title": "Traffic · Warthog",
+      "h1": [
+        "Traffic"
+      ],
+      "docOverflowX": false,
+      "freeText": [],
+      "freeTextCount": 0,
+      "offscreen": [],
+      "offscreenCount": 0,
+      "truncated": [
+        {
+          "path": "div.wh-workspace > aside.wh-sidebar > div.wh-sidebar-brand > a > span",
+          "text": "Warthog home"
+        },
+        {
+          "path": "div.wh-workspace > aside.wh-sidebar > nav.wh-sidebar-nav > div.wh-nav-group > p.wh-nav-label",
+          "text": "Overview"
+        }
+      ],
+      "truncatedCount": 2,
+      "smallTargets": [],
+      "smallTargetCount": 0,
+      "smallInputs": [],
+      "lowContrast": [],
+      "lowContrastCount": 0,
+      "unnamedControls": [],
+      "chartsWithoutName": 0,
+      "textSample": "Traffic Requests and page loads by what was asked for and which host, counted without storing anything about who asked. Times are Sydney time. 289 requests the last 7 days · 180 page loads · 0 refusals for too many attempts Today 7 days 30 days 90 days Requests 289 up 289 on the previous 7 days Page",
+      "status": 200,
+      "url": "http://admin.localhost:3217/traffic",
+      "consoleErrors": []
+    },
+    "dark-1440-system": {
+      "title": "System · Warthog",
+      "h1": [
+        "System"
+      ],
+      "docOverflowX": false,
+      "freeText": [],
+      "freeTextCount": 0,
+      "offscreen": [],
+      "offscreenCount": 0,
+      "truncated": [
+        {
+          "path": "div.wh-workspace > aside.wh-sidebar > div.wh-sidebar-brand > a > span",
+          "text": "Warthog home"
+        },
+        {
+          "path": "div.wh-workspace > aside.wh-sidebar > nav.wh-sidebar-nav > div.wh-nav-group > p.wh-nav-label",
+          "text": "Overview"
+        }
+      ],
+      "truncatedCount": 2,
+      "smallTargets": [],
+      "smallTargetCount": 0,
+      "smallInputs": [],
+      "lowContrast": [],
+      "lowContrastCount": 0,
+      "unnamedControls": [],
+      "chartsWithoutName": 0,
+      "textSample": "System The release that is running, what it is configured to do, and whether its background work is keeping up. Times are Sydney time. Schema 0112_admin_indexes · scheduler last ran Today, 12:05 pm · every sweep on time Release What this process is running with. Latest migration 0112_admin_indexes T",
+      "status": 200,
+      "url": "http://admin.localhost:3217/system",
+      "consoleErrors": []
+    },
+    "dark-1440-signups_range_30d": {
+      "title": "Sign-ups · Warthog",
+      "h1": [
+        "Sign-ups"
+      ],
+      "docOverflowX": false,
+      "freeText": [],
+      "freeTextCount": 0,
+      "offscreen": [],
+      "offscreenCount": 0,
+      "truncated": [
+        {
+          "path": "div.wh-workspace > aside.wh-sidebar > div.wh-sidebar-brand > a > span",
+          "text": "Warthog home"
+        },
+        {
+          "path": "div.wh-workspace > aside.wh-sidebar > nav.wh-sidebar-nav > div.wh-nav-group > p.wh-nav-label",
+          "text": "Overview"
+        }
+      ],
+      "truncatedCount": 2,
+      "smallTargets": [],
+      "smallTargetCount": 0,
+      "smallInputs": [],
+      "lowContrast": [],
+      "lowContrastCount": 0,
+      "unnamedControls": [],
+      "chartsWithoutName": 0,
+      "textSample": "Sign-ups Who's joining, where sign-up stalls, and how far new accounts get. Times are Sydney time. 1 sign-up the last 30 days · 1 account in total Today 7 days 30 days 90 days Sign-ups 1 up 1 on the previous 30 days Sign-ups per day When Value 2026-10-14T13:00:00.000Z 0 2026-10-15T13:00:00.000Z 0 20",
+      "status": 200,
+      "url": "http://admin.localhost:3217/signups?range=30d",
+      "consoleErrors": []
+    },
+    "dark-1440-usage_range_today": {
+      "title": "Usage · Warthog",
+      "h1": [
+        "Usage"
+      ],
+      "docOverflowX": false,
+      "freeText": [],
+      "freeTextCount": 0,
+      "offscreen": [],
+      "offscreenCount": 0,
+      "truncated": [
+        {
+          "path": "div.wh-workspace > aside.wh-sidebar > div.wh-sidebar-brand > a > span",
+          "text": "Warthog home"
+        },
+        {
+          "path": "div.wh-workspace > aside.wh-sidebar > nav.wh-sidebar-nav > div.wh-nav-group > p.wh-nav-label",
+          "text": "Overview"
+        }
+      ],
+      "truncatedCount": 2,
+      "smallTargets": [],
+      "smallTargetCount": 0,
+      "smallInputs": [],
+      "lowContrast": [],
+      "lowContrastCount": 0,
+      "unnamedControls": [],
+      "chartsWithoutName": 0,
+      "textSample": "Usage Who is active, what agents are asking for, and how approvals are going. Times are Sydney time. 1 person active in the last 7 days · 0 agent requests today Today 7 days 30 days 90 days Agent requests 0 no change on yesterday Agent requests per hour When Value 2026-11-12T13:00:00.000Z 0 2026-11-",
+      "status": 200,
+      "url": "http://admin.localhost:3217/usage?range=today",
+      "consoleErrors": []
+    },
+    "dark-1440-accounts_filter_no_agent": {
+      "title": "Accounts · Warthog",
+      "h1": [
+        "Accounts"
+      ],
+      "docOverflowX": false,
+      "freeText": [],
+      "freeTextCount": 0,
+      "offscreen": [],
+      "offscreenCount": 0,
+      "truncated": [
+        {
+          "path": "div.wh-workspace > aside.wh-sidebar > div.wh-sidebar-brand > a > span",
+          "text": "Warthog home"
+        },
+        {
+          "path": "div.wh-workspace > aside.wh-sidebar > nav.wh-sidebar-nav > div.wh-nav-group > p.wh-nav-label",
+          "text": "Overview"
+        }
+      ],
+      "truncatedCount": 2,
+      "smallTargets": [],
+      "smallTargetCount": 0,
+      "smallInputs": [],
+      "lowContrast": [],
+      "lowContrastCount": 0,
+      "unnamedControls": [],
+      "chartsWithoutName": 0,
+      "textSample": "Accounts How each account is going, without reading anything personal: no addresses are listed here. Times are Sydney time. 1 account · 0 without a second factor · 0 needing a reconnection Look up an account One exact email address shows that account's operational facts. Nothing here reveals what th",
+      "status": 200,
+      "url": "http://admin.localhost:3217/accounts?filter=no_agent",
+      "consoleErrors": []
+    },
+    "dark-1440-accounts_email_admin_40example_test": {
+      "title": "Accounts · Warthog",
+      "h1": [
+        "Accounts"
+      ],
+      "docOverflowX": false,
+      "freeText": [],
+      "freeTextCount": 0,
+      "offscreen": [],
+      "offscreenCount": 0,
+      "truncated": [
+        {
+          "path": "div.wh-workspace > aside.wh-sidebar > div.wh-sidebar-brand > a > span",
+          "text": "Warthog home"
+        },
+        {
+          "path": "div.wh-workspace > aside.wh-sidebar > nav.wh-sidebar-nav > div.wh-nav-group > p.wh-nav-label",
+          "text": "Overview"
+        }
+      ],
+      "truncatedCount": 2,
+      "smallTargets": [],
+      "smallTargetCount": 0,
+      "smallInputs": [],
+      "lowContrast": [],
+      "lowContrastCount": 0,
+      "unnamedControls": [],
+      "chartsWithoutName": 0,
+      "textSample": "Accounts How each account is going, without reading anything personal: no addresses are listed here. Times are Sydney time. 1 account · 0 without a second factor · 0 needing a reconnection Look up an account One exact email address shows that account's operational facts. Nothing here reveals what th",
+      "status": 200,
+      "url": "http://admin.localhost:3217/accounts?email=admin%40example.test",
+      "consoleErrors": []
+    },
+    "light-land-overview": {
+      "title": "Overview · Warthog",
+      "h1": [
+        "Overview"
+      ],
+      "docOverflowX": false,
+      "freeText": [],
+      "freeTextCount": 0,
+      "offscreen": [],
+      "offscreenCount": 0,
+      "truncated": [],
+      "truncatedCount": 0,
+      "smallTargets": [],
+      "smallTargetCount": 0,
+      "smallInputs": [],
+      "lowContrast": [],
+      "lowContrastCount": 0,
+      "unnamedControls": [],
+      "chartsWithoutName": 0,
+      "textSample": "Overview How Warthog is being used and where it needs attention. Times are Sydney time. Showing the last 7 days · nothing needs attention Today 7 days 30 days 90 days Sign-ups 1 up 1 on the previous 7 days Active people 1 up 1 on the previous 7 days Agent requests 0 0 refused or failed no change on ",
+      "status": 200,
+      "url": "http://admin.localhost:3217/",
+      "consoleErrors": []
+    },
+    "light-land-signups": {
+      "title": "Sign-ups · Warthog",
+      "h1": [
+        "Sign-ups"
+      ],
+      "docOverflowX": false,
+      "freeText": [],
+      "freeTextCount": 0,
+      "offscreen": [],
+      "offscreenCount": 0,
+      "truncated": [],
+      "truncatedCount": 0,
+      "smallTargets": [],
+      "smallTargetCount": 0,
+      "smallInputs": [],
+      "lowContrast": [],
+      "lowContrastCount": 0,
+      "unnamedControls": [],
+      "chartsWithoutName": 0,
+      "textSample": "Sign-ups Who's joining, where sign-up stalls, and how far new accounts get. Times are Sydney time. 1 sign-up the last 7 days · 1 account in total Today 7 days 30 days 90 days Sign-ups 1 up 1 on the previous 7 days Accounts 1 all time Sign-up funnel From the first code sent to a finished account, the",
+      "status": 200,
+      "url": "http://admin.localhost:3217/signups",
+      "consoleErrors": []
+    },
+    "light-land-usage": {
+      "title": "Usage · Warthog",
+      "h1": [
+        "Usage"
+      ],
+      "docOverflowX": false,
+      "freeText": [],
+      "freeTextCount": 0,
+      "offscreen": [],
+      "offscreenCount": 0,
+      "truncated": [],
+      "truncatedCount": 0,
+      "smallTargets": [],
+      "smallTargetCount": 0,
+      "smallInputs": [],
+      "lowContrast": [],
+      "lowContrastCount": 0,
+      "unnamedControls": [],
+      "chartsWithoutName": 0,
+      "textSample": "Usage Who is active, what agents are asking for, and how approvals are going. Times are Sydney time. 1 person active in the last 7 days · 0 agent requests the last 7 days Today 7 days 30 days 90 days Agent requests 0 no change on the previous 7 days Approvals decided 0 No replies yet no change on th",
+      "status": 200,
+      "url": "http://admin.localhost:3217/usage",
+      "consoleErrors": []
+    },
+    "light-land-accounts": {
+      "title": "Accounts · Warthog",
+      "h1": [
+        "Accounts"
+      ],
+      "docOverflowX": false,
+      "freeText": [],
+      "freeTextCount": 0,
+      "offscreen": [],
+      "offscreenCount": 0,
+      "truncated": [],
+      "truncatedCount": 0,
+      "smallTargets": [],
+      "smallTargetCount": 0,
+      "smallInputs": [],
+      "lowContrast": [],
+      "lowContrastCount": 0,
+      "unnamedControls": [],
+      "chartsWithoutName": 0,
+      "textSample": "Accounts How each account is going, without reading anything personal: no addresses are listed here. Times are Sydney time. 1 account · 0 without a second factor · 0 needing a reconnection Look up an account One exact email address shows that account's operational facts. Nothing here reveals what th",
+      "status": 200,
+      "url": "http://admin.localhost:3217/accounts",
+      "consoleErrors": []
+    },
+    "light-land-reliability": {
+      "title": "Reliability · Warthog",
+      "h1": [
+        "Reliability"
+      ],
+      "docOverflowX": false,
+      "freeText": [],
+      "freeTextCount": 0,
+      "offscreen": [],
+      "offscreenCount": 0,
+      "truncated": [],
+      "truncatedCount": 0,
+      "smallTargets": [],
+      "smallTargetCount": 0,
+      "smallInputs": [],
+      "lowContrast": [],
+      "lowContrastCount": 0,
+      "unnamedControls": [],
+      "chartsWithoutName": 0,
+      "textSample": "Reliability Where things fail: sign-ins, agent requests, connected services and background work. Times are Sydney time. 0 failed agent requests the last 7 days · 0 failed sign-ins · 0 failed jobs · every sweep on time Today 7 days 30 days 90 days Failed agent requests 0 no requests yet no change on ",
+      "status": 200,
+      "url": "http://admin.localhost:3217/reliability",
+      "consoleErrors": []
+    },
+    "light-land-traffic": {
+      "title": "Traffic · Warthog",
+      "h1": [
+        "Traffic"
+      ],
+      "docOverflowX": false,
+      "freeText": [],
+      "freeTextCount": 0,
+      "offscreen": [],
+      "offscreenCount": 0,
+      "truncated": [],
+      "truncatedCount": 0,
+      "smallTargets": [],
+      "smallTargetCount": 0,
+      "smallInputs": [],
+      "lowContrast": [],
+      "lowContrastCount": 0,
+      "unnamedControls": [],
+      "chartsWithoutName": 0,
+      "textSample": "Traffic Requests and page loads by what was asked for and which host, counted without storing anything about who asked. Times are Sydney time. 289 requests the last 7 days · 180 page loads · 0 refusals for too many attempts Today 7 days 30 days 90 days Requests 289 up 289 on the previous 7 days Page",
+      "status": 200,
+      "url": "http://admin.localhost:3217/traffic",
+      "consoleErrors": []
+    },
+    "light-land-system": {
+      "title": "System · Warthog",
+      "h1": [
+        "System"
+      ],
+      "docOverflowX": false,
+      "freeText": [],
+      "freeTextCount": 0,
+      "offscreen": [],
+      "offscreenCount": 0,
+      "truncated": [],
+      "truncatedCount": 0,
+      "smallTargets": [],
+      "smallTargetCount": 0,
+      "smallInputs": [],
+      "lowContrast": [],
+      "lowContrastCount": 0,
+      "unnamedControls": [],
+      "chartsWithoutName": 0,
+      "textSample": "System The release that is running, what it is configured to do, and whether its background work is keeping up. Times are Sydney time. Schema 0112_admin_indexes · scheduler last ran Today, 12:05 pm · every sweep on time Release What this process is running with. Latest migration 0112_admin_indexes T",
+      "status": 200,
+      "url": "http://admin.localhost:3217/system",
+      "consoleErrors": []
+    },
+    "light-land-signups_range_30d": {
+      "title": "Sign-ups · Warthog",
+      "h1": [
+        "Sign-ups"
+      ],
+      "docOverflowX": false,
+      "freeText": [],
+      "freeTextCount": 0,
+      "offscreen": [],
+      "offscreenCount": 0,
+      "truncated": [],
+      "truncatedCount": 0,
+      "smallTargets": [],
+      "smallTargetCount": 0,
+      "smallInputs": [],
+      "lowContrast": [],
+      "lowContrastCount": 0,
+      "unnamedControls": [],
+      "chartsWithoutName": 0,
+      "textSample": "Sign-ups Who's joining, where sign-up stalls, and how far new accounts get. Times are Sydney time. 1 sign-up the last 30 days · 1 account in total Today 7 days 30 days 90 days Sign-ups 1 up 1 on the previous 30 days Sign-ups per day When Value 2026-10-14T13:00:00.000Z 0 2026-10-15T13:00:00.000Z 0 20",
+      "status": 200,
+      "url": "http://admin.localhost:3217/signups?range=30d",
+      "consoleErrors": []
+    },
+    "light-land-usage_range_today": {
+      "title": "Usage · Warthog",
+      "h1": [
+        "Usage"
+      ],
+      "docOverflowX": false,
+      "freeText": [],
+      "freeTextCount": 0,
+      "offscreen": [],
+      "offscreenCount": 0,
+      "truncated": [],
+      "truncatedCount": 0,
+      "smallTargets": [],
+      "smallTargetCount": 0,
+      "smallInputs": [],
+      "lowContrast": [],
+      "lowContrastCount": 0,
+      "unnamedControls": [],
+      "chartsWithoutName": 0,
+      "textSample": "Usage Who is active, what agents are asking for, and how approvals are going. Times are Sydney time. 1 person active in the last 7 days · 0 agent requests today Today 7 days 30 days 90 days Agent requests 0 no change on yesterday Agent requests per hour When Value 2026-11-12T13:00:00.000Z 0 2026-11-",
+      "status": 200,
+      "url": "http://admin.localhost:3217/usage?range=today",
+      "consoleErrors": []
+    },
+    "light-land-accounts_filter_no_agent": {
+      "title": "Accounts · Warthog",
+      "h1": [
+        "Accounts"
+      ],
+      "docOverflowX": false,
+      "freeText": [],
+      "freeTextCount": 0,
+      "offscreen": [],
+      "offscreenCount": 0,
+      "truncated": [],
+      "truncatedCount": 0,
+      "smallTargets": [],
+      "smallTargetCount": 0,
+      "smallInputs": [],
+      "lowContrast": [],
+      "lowContrastCount": 0,
+      "unnamedControls": [],
+      "chartsWithoutName": 0,
+      "textSample": "Accounts How each account is going, without reading anything personal: no addresses are listed here. Times are Sydney time. 1 account · 0 without a second factor · 0 needing a reconnection Look up an account One exact email address shows that account's operational facts. Nothing here reveals what th",
+      "status": 200,
+      "url": "http://admin.localhost:3217/accounts?filter=no_agent",
+      "consoleErrors": []
+    },
+    "light-land-accounts_email_admin_40example_test": {
+      "title": "Accounts · Warthog",
+      "h1": [
+        "Accounts"
+      ],
+      "docOverflowX": false,
+      "freeText": [],
+      "freeTextCount": 0,
+      "offscreen": [],
+      "offscreenCount": 0,
+      "truncated": [],
+      "truncatedCount": 0,
+      "smallTargets": [],
+      "smallTargetCount": 0,
+      "smallInputs": [],
+      "lowContrast": [],
+      "lowContrastCount": 0,
+      "unnamedControls": [],
+      "chartsWithoutName": 0,
+      "textSample": "Accounts How each account is going, without reading anything personal: no addresses are listed here. Times are Sydney time. 1 account · 0 without a second factor · 0 needing a reconnection Look up an account One exact email address shows that account's operational facts. Nothing here reveals what th",
+      "status": 200,
+      "url": "http://admin.localhost:3217/accounts?email=admin%40example.test",
+      "consoleErrors": []
+    }
+  },
+  "keyboard": {
+    "rangeLinkMarked": true,
+    "backRestoredUrl": "http://admin.localhost:3217/signups"
+  },
+  "signout": {
+    "signedOutPage": "http://admin.localhost:3217/signed-out",
+    "landedOn": "http://localhost:3217/settings",
+    "adminAfter": 307
+  }
+}

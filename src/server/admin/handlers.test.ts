@@ -70,7 +70,7 @@ test("the lazy route dispatcher builds the handler once from the composition sea
   }
 });
 
-test("sign-out requires the admin Origin, ends only the admin session, clears the cookie and returns to Settings", async () => {
+test("sign-out requires the admin Origin, ends only the admin session, clears the cookie and lands on the admin host's signed-out page", async () => {
   const db = await freshDb();
   try {
     const { clock, handoff } = await minted(db);
@@ -89,7 +89,8 @@ test("sign-out requires the admin Origin, ends only the admin session, clears th
 
     const done = await signout(new Request(`${ADMIN}/signout`, { method: "POST", headers: { origin: ADMIN, cookie: `other=1; ${ADMIN_COOKIE_NAME}=${token}` } }));
     assert.equal(done.status, 303);
-    assert.equal(done.headers.get("location"), `${PUBLIC}/settings?notice=admin_signed_out`);
+    // Same origin on purpose: a cross-origin 303 after a form POST is blocked by CSP form-action.
+    assert.equal(done.headers.get("location"), "/signed-out");
     assert.equal(done.headers.get("set-cookie"), `${ADMIN_COOKIE_NAME}=; Path=/; HttpOnly; Secure; SameSite=Lax; Max-Age=0`);
     assert.equal(await verifyAdminSession(db, token, { clock }), null);
     assert.equal(Number((await db.query("SELECT count(*)::int AS n FROM sessions")).rows[0]!.n), 1, "the app session stays");

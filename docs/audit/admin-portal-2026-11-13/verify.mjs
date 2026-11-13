@@ -136,7 +136,17 @@ async function virtualPasskey(context, page) {
   await cdp.send("WebAuthn.addVirtualAuthenticator", { options: { protocol: "ctap2", transport: "internal", hasResidentKey: true, hasUserVerification: true, isUserVerified: true, automaticPresenceSimulation: true } });
 }
 
+// The dev server compiles a route on first use and may fully reload open pages while new
+// chunks land; touching every route once before a flow keeps the flow's page stable.
+async function warmUp(browser, urls) {
+  const context = await browser.newContext();
+  const page = await context.newPage();
+  for (const url of urls) { try { await page.goto(url, { waitUntil: "networkidle" }); } catch {} }
+  await context.close();
+}
+
 async function signup(browser) {
+  await warmUp(browser, [`${BASE}/signup`, `${BASE}/dev/outbox`, `${BASE}/home`, `${BASE}/settings`, `${ADMIN}/`]);
   const context = await browser.newContext();
   const page = await context.newPage();
   await virtualPasskey(context, page);
@@ -177,6 +187,7 @@ async function verify(browser) {
   const consoleErrors = [];
   page.on("console", (m) => { if (m.type() === "error") consoleErrors.push(m.text().slice(0, 200)); });
   await signInAs(context);
+  await warmUp(browser, [`${BASE}/settings`, ...PAGES.map((p) => `${ADMIN}${p}`)]);
   const unauthenticated = await page.goto(`${ADMIN}/`);
   results.handoff.unauthenticatedLandsOn = page.url();
   step(`admin host without a session → ${page.url()} (${unauthenticated?.status()})`);
@@ -224,6 +235,7 @@ async function verify(browser) {
     await ctx.close();
   }
 
+  try {
   // 3. Keyboard: the range tabs are links with aria-current; Back restores the earlier range.
   const kb = await browser.newContext({ viewport: { width: 1440, height: 900 }, storageState: state });
   const kp = await kb.newPage();
@@ -235,12 +247,21 @@ async function verify(browser) {
   await kp.waitForLoadState("networkidle");
   results.keyboard = { rangeLinkMarked: current30 > 0, backRestoredUrl: kp.url() };
   step(`range tabs: current marked=${current30 > 0}, after Back → ${kp.url()}`);
-  // 4. Sign out of admin returns to Settings; the admin host then refuses.
+  // 4. Sign out of admin lands on the admin host's signed-out page (a cross-origin redirect
+  // after a form POST would be blocked by CSP form-action); its link leads back to Settings;
+  // the admin host then refuses.
   await kp.getByRole("button", { name: "Sign out of admin" }).click();
+  await kp.waitForURL(`${ADMIN}/signed-out`, { timeout: 60000 });
+  const signedOutPage = kp.url();
+  await kp.getByRole("link", { name: "Back to Settings" }).click();
   await kp.waitForURL((u) => u.origin === BASE, { timeout: 60000 });
-  results.signout = { landedOn: kp.url(), adminAfter: (await kb.request.get(`${ADMIN}/`, { maxRedirects: 0 })).status() };
-  step(`sign out → ${kp.url()}; admin host afterwards → ${results.signout.adminAfter}`);
+  results.signout = { signedOutPage, landedOn: kp.url(), adminAfter: (await kb.request.get(`${ADMIN}/`, { maxRedirects: 0 })).status() };
+  step(`sign out → ${signedOutPage} → ${kp.url()}; admin host afterwards → ${results.signout.adminAfter}`);
   await kb.close();
+  } catch (e) {
+    results.interactionError = String(e).slice(0, 300);
+    fail(`interaction checks: ${String(e).split("\n")[0]}`);
+  }
 
   await writeFile(`${OUT}/results.json`, JSON.stringify(results, null, 2));
   const pages = Object.values(results.pages);

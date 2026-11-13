@@ -167,9 +167,11 @@ function Breadcrumb({
   return (
     <nav aria-label="Breadcrumb" className="wh-breadcrumb">
       <ol data-has-page={sub ? "" : undefined}>
-        <li className="wh-crumb-group">{group?.label ?? "Workspace"}</li>
+        {/* A group whose label the sidebar hides (a one-item group named after its item) would
+            only repeat the section here, so it contributes no crumb. */}
+        {group?.hideLabel ? null : <li className="wh-crumb-group">{group?.label ?? "Workspace"}</li>}
         <li className="wh-crumb-section">
-          <ChevronRight aria-hidden className="wh-crumb-separator" />
+          {group?.hideLabel ? null : <ChevronRight aria-hidden className="wh-crumb-separator" />}
           {sub && current?.href ? (
             <a href={current.href}>{sectionLabel}</a>
           ) : (

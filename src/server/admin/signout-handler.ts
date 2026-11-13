@@ -2,15 +2,17 @@
 // admin host (served as /admin/signout). The request Origin must be exactly the admin
 // origin — a missing or foreign Origin is 403 and ends nothing. The presented admin token is
 // deleted by its hash (only that admin session ends; the app session stays), the cookie is
-// cleared, and the person returns to the app's Settings with a notice.
+// cleared, and the person lands on the admin host's own signed-out page. The redirect stays
+// on the admin origin on purpose: Chrome applies CSP `form-action 'self'` to the redirects
+// that follow a form submission, so a 303 straight to the app origin would be blocked; the
+// signed-out page offers the way back as ordinary links.
 
 import { getAdminDeps, type AdminDeps } from "./compose";
 import { ADMIN_COOKIE_NAME, clearedAdminCookie, deleteAdminSession } from "./session";
-import { adminSignInUrl } from "./guard";
 import { ADMIN_SIGNOUT } from "../metrics/names";
 import { tryRecord } from "../metrics/seam";
 
-export const ADMIN_SIGNED_OUT_NOTICE = "admin_signed_out";
+export const ADMIN_SIGNED_OUT_PATH = "/signed-out";
 
 export type AdminSignoutHandler = (request: Request) => Promise<Response>;
 
@@ -25,8 +27,8 @@ export function readCookie(request: Request, name: string): string | null {
   return null;
 }
 
-export function createAdminSignoutHandler(deps: Pick<AdminDeps, "db" | "publicOrigin" | "adminOrigin" | "recordMetric">): AdminSignoutHandler {
-  const { db, publicOrigin, adminOrigin, recordMetric } = deps;
+export function createAdminSignoutHandler(deps: Pick<AdminDeps, "db" | "adminOrigin" | "recordMetric">): AdminSignoutHandler {
+  const { db, adminOrigin, recordMetric } = deps;
   return async function signout(request: Request): Promise<Response> {
     if (request.headers.get("origin") !== adminOrigin) {
       return new Response(JSON.stringify({ error: "forbidden" }), { status: 403, headers: { "content-type": "application/json", "cache-control": "no-store" } });
@@ -34,7 +36,7 @@ export function createAdminSignoutHandler(deps: Pick<AdminDeps, "db" | "publicOr
     const token = readCookie(request, ADMIN_COOKIE_NAME);
     if (token) await deleteAdminSession(db, token);
     await tryRecord(recordMetric, { name: ADMIN_SIGNOUT, value: 1 });
-    const headers = new Headers({ location: adminSignInUrl(publicOrigin, ADMIN_SIGNED_OUT_NOTICE), "cache-control": "no-store" });
+    const headers = new Headers({ location: ADMIN_SIGNED_OUT_PATH, "cache-control": "no-store" });
     headers.append("set-cookie", clearedAdminCookie());
     return new Response(null, { status: 303, headers });
   };
