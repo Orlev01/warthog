@@ -1,4 +1,17 @@
-# Delivery status — 13 November 2026 (recovery and reset hardening)
+# Delivery status — 13 November 2026 (admin portal hidden from the member app)
+
+**Live at [app.warthog.com.au](https://app.warthog.com.au).** Application source
+`2366ed6964725097967035ffb546f588ef0f65f5` runs as `warthog--r43435987370a1`, with one
+healthy replica, explicit 100% traffic and zero old replicas. The member app gives no sign
+that the admin portal exists (PRs #22 and #23): no Settings entry, and its routes are under
+an unguessable internal prefix. The only way in is typing `admin.warthog.com.au` and signing
+in there through the app's ordinary sign-in. A production probe found `/admin` and
+`/handoff` identical to any missing page. Both hostnames are bound.
+
+The full suite passed 6,016 tests; no migration changes. See the
+[release record](docs/audit/admin-hidden-entry-release-2026-11-13.md).
+
+# Earlier delivery status — 13 November 2026 (recovery and reset hardening)
 
 **Live at [app.warthog.com.au](https://app.warthog.com.au).** Application source
 `1faf694339b9f76ab12bddcb989c65e55e49078e` runs as `warthog--r43398915940a1`, with one

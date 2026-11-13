@@ -1,5 +1,11 @@
 # Warthog comprehensive engineering audit
 
+**Admin portal hidden from the member app, 13 November:** main `2366ed6` runs as
+`warthog--r43435987370a1`. There is no admin entry in the app, and the portal's routes moved
+under an unguessable internal prefix. The only way in is typing `admin.warthog.com.au`. A
+production probe found `/admin` and `/handoff` identical to any missing page. See the
+[release record](admin-hidden-entry-release-2026-11-13.md).
+
 **Recovery and reset hardening released, 13 November:** main `1faf694` runs as
 `warthog--r43398915940a1` with PR #21 (sign-in audit items 4–6). 6,015 tests pass. See the
 [release record](recovery-hardening-release-2026-11-13.md).
