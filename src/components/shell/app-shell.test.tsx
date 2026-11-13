@@ -118,3 +118,31 @@ test("a section's own landing page is the last breadcrumb, not a link", () => {
   assert.match(html, /<span aria-current="page">Vault<\/span>/);
   assert.doesNotMatch(html, /About you<\/span>/);
 });
+
+// --- The `chrome` prop (docs/design/admin-portal.md §5): another portal's groups, icons and labels.
+import { Server } from "lucide-react";
+import { navGroupIn } from "./workspace-navigation";
+
+test("chrome swaps the groups, icons, wordmark link, workspace label and help link; defaults are unchanged", () => {
+  const groups = [
+    { label: "Overview", items: [{ key: "overview", label: "Overview", href: "/" }], hideLabel: true },
+    { label: "Health", items: [{ key: "system", label: "System", href: "/system" }] },
+  ];
+  const html = renderToStaticMarkup(
+    <AppShell activeSection="system" chrome={{ groups, icons: { system: Server }, homeHref: "/", workspace: { label: "Admin", initial: "A" }, helpHref: null }}>
+      <p>content</p>
+    </AppShell>,
+  );
+  assert.match(html, /href="\/system"/);
+  assert.doesNotMatch(html, /href="\/inbox"/, "the member portal's destinations are not listed");
+  assert.match(html, /<span>Admin<\/span>/);
+  assert.doesNotMatch(html, /Personal workspace/);
+  assert.doesNotMatch(html, /aria-label="Help and support"/, "helpHref null ships no dead link");
+  assert.match(html, /class="wh-crumb-group">Health</, "the breadcrumb group comes from the supplied groups");
+  assert.equal(navGroupIn(groups, "system")?.label, "Health");
+  assert.equal(navGroupIn(groups, "nowhere"), undefined);
+  const plain = renderToStaticMarkup(<AppShell activeSection="home"><p>x</p></AppShell>);
+  assert.match(plain, /Personal workspace/);
+  assert.match(plain, /aria-label="Help and support"/);
+  assert.match(plain, /href="\/home"/);
+});

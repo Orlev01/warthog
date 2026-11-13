@@ -12,6 +12,7 @@ import { readOAuthForm } from "../../../server/oauth/form";
 import { exchangeToken } from "../../../server/oauth/token";
 import { systemClock } from "../../../server/seams/clock";
 import { systemRandom } from "../../../server/seams/random";
+import { metricSeamFor } from "../../../server/metrics/seam";
 
 // Token responses must not be cached — they carry bearer credentials (RFC 6749 §5.1).
 const JSON_HEADERS = { "content-type": "application/json", "cache-control": "no-store" };
@@ -23,7 +24,7 @@ export async function POST(request: Request): Promise<Response> {
 
   const result = await exchangeToken(
     { params },
-    { db, clock: systemClock, random: systemRandom, hmacKey: loadConfig().hmacKey },
+    { db, clock: systemClock, random: systemRandom, hmacKey: loadConfig().hmacKey, recordMetric: metricSeamFor(db, systemClock) },
   );
 
   if (result.ok) {

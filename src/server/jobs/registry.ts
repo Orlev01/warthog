@@ -22,6 +22,9 @@ import { runRatesJob } from "../currency/rates-job";
 import { runAccountPurge } from "../account/purge-job";
 import type { DeletionJournal } from "../account/deletion-journal";
 import { runMetricsSnapshot } from "../metrics/snapshot-job";
+import { flushTraffic } from "../http/traffic";
+import { reconcileOperatorRole } from "../admin/role";
+import { pruneMetricEvents } from "../metrics/retention";
 import { runDailyIntegrityCheck } from "../activity/integrity-job";
 import { cleanupOAuth } from "../oauth/cleanup";
 import {
@@ -40,6 +43,7 @@ import type { KeyWrapper } from "../crypto/key-wrapper";
 import type { PushSender, Senders } from "../notify/senders";
 import type { RateSource } from "../currency/rate-source";
 import type { BlobStore } from "../storage/blob";
+import type { MetricSeam } from "../metrics/seam";
 
 const MINUTE_MS = 60 * 1000;
 const HOUR_MS = 60 * MINUTE_MS;
@@ -67,6 +71,11 @@ export interface JobSeams {
   readonly blobStore: BlobStore; // receipt ciphertext, deleted by the account purge
   readonly deletionJournal?: DeletionJournal;
   readonly publicBaseUrl: string;
+  // The configured operator address the `operator-role` sweep promotes to admin
+  // (docs/design/admin-portal.md §2); absent outside production when unset.
+  readonly operatorEmail?: string;
+  // Optional, best-effort metrics for the connector jobs (docs/design/admin-portal.md §4).
+  readonly recordMetric?: MetricSeam;
 }
 
 // A payload that names one approval (approval.fallback rows carry it).
@@ -87,6 +96,7 @@ export function buildDispatchTable(seams: JobSeams): Record<string, JobHandler> 
     clock: seams.clock,
     push: seams.push,
     refresh: seams.refresh,
+    recordMetric: seams.recordMetric,
   });
   return {
     [FALLBACK_JOB_TYPE]: (job) =>
@@ -173,5 +183,11 @@ export function buildPeriodicSweeps(seams: JobSeams): readonly PeriodicSweep[] {
       intervalMs: DAY_MS,
       run: () => runDailyIntegrityCheck({ db: seams.db, clock: seams.clock, senders: seams.senders }),
     },
+    // The admin portal's sweeps (docs/design/admin-portal.md §4): the proxy's traffic counts
+    // become metric rows once a minute; the configured operator is promoted to admin hourly
+    // (the first tick after boot included); metric rows older than 400 days are pruned daily.
+    { name: "traffic-flush", intervalMs: MINUTE_MS, run: async () => { await flushTraffic(seams.db, seams.clock); } },
+    { name: "operator-role", intervalMs: HOUR_MS, run: async () => { await reconcileOperatorRole(seams.db, seams.operatorEmail); } },
+    { name: "metrics-retention", intervalMs: DAY_MS, run: async () => { await pruneMetricEvents(seams.db, seams.clock); } },
   ];
 }

@@ -96,6 +96,9 @@ const EXPECTED_SWEEP_NAMES = [
   "metrics-snapshot",
   "daily-integrity-check",
   "oauth-cleanup",
+  "traffic-flush",
+  "operator-role",
+  "metrics-retention",
 ] as const;
 
 // The two registry entries that matched no real enqueued job — removed by this task.
@@ -239,6 +242,45 @@ test("the account-purge sweep deletes a purged person's receipt blobs through th
     assert.equal(await seams.blobStore.get("receipts/sweep"), null, "the receipt blob is deleted");
     const left = await db.query("SELECT 1 FROM users WHERE id = $1", [user.id]);
     assert.equal(left.rows.length, 0, "the account is purged");
+  } finally {
+    await db.close();
+  }
+});
+
+// --- The admin portal's sweeps (docs/design/admin-portal.md §4) -------------------------------
+import { getTrafficCounter } from "../http/traffic";
+import { queryMetrics, recordMetric } from "../db/metrics";
+
+test("traffic-flush, operator-role and metrics-retention run on their intervals and do what they say", async () => {
+  const db = await freshDb();
+  try {
+    const seams = { ...jobSeams(db), operatorEmail: "Operator@Example.test" };
+    const sweeps = buildPeriodicSweeps(seams);
+    const byName = Object.fromEntries(sweeps.map((s) => [s.name, s]));
+    assert.equal(byName["traffic-flush"]!.intervalMs, 60_000);
+    assert.equal(byName["operator-role"]!.intervalMs, 60 * 60_000);
+    assert.equal(byName["metrics-retention"]!.intervalMs, 24 * 60 * 60_000);
+
+    // traffic-flush drains the process-wide counter into http.requests rows.
+    getTrafficCounter().drain();
+    getTrafficCounter().count("app", "public", "document");
+    await byName["traffic-flush"]!.run();
+    const traffic = await queryMetrics(db, { name: "http.requests", from: "2026-02-28T00:00:00Z", to: "2026-03-02T00:00:00Z" });
+    assert.deepEqual(traffic.map((e) => [e.outcome, e.value]), [["app.public.document", 1]]);
+
+    // operator-role promotes the configured address, case-insensitively, and nobody else.
+    const operator = await createUser(db, { email: "operator@example.test", wrappedDek: "wrapped" });
+    const other = await createUser(db, { email: "other@example.test", wrappedDek: "wrapped" });
+    await byName["operator-role"]!.run();
+    assert.equal((await db.query("SELECT role FROM users WHERE id = $1", [operator.id])).rows[0]!.role, "admin");
+    assert.equal((await db.query("SELECT role FROM users WHERE id = $1", [other.id])).rows[0]!.role, "member");
+
+    // metrics-retention keeps the last 400 days and prunes older rows.
+    await recordMetric(db, { name: "users.total", value: 1, recordedAt: "2024-12-01T00:00:00Z" });
+    await recordMetric(db, { name: "users.total", value: 2, recordedAt: "2025-06-01T00:00:00Z" });
+    await byName["metrics-retention"]!.run();
+    const kept = await queryMetrics(db, { name: "users.total", from: "2000-01-01T00:00:00Z", to: "2030-01-01T00:00:00Z" });
+    assert.deepEqual(kept.map((e) => e.value), [2]);
   } finally {
     await db.close();
   }

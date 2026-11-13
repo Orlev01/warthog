@@ -427,3 +427,26 @@ test("production refuses the WARTHOG_HMAC_KEY published in .env.example", () => 
   // Development may use it (that is what it is for).
   assert.doesNotThrow(() => load({ ...DEV_ENV, WARTHOG_HMAC_KEY: published }));
 });
+
+// --- Admin portal origin (docs/design/admin-portal.md §1) --------------------------------
+import { adminHostFromEnv } from "./config";
+
+test("adminBaseUrl is derived from PUBLIC_BASE_URL: app. becomes admin., localhost gains an admin. label", () => {
+  assert.equal(loadConfig({ ...DEV_ENV, PUBLIC_BASE_URL: "https://app.warthog.example" }).adminBaseUrl, "https://admin.warthog.example");
+  assert.equal(loadConfig(DEV_ENV).adminBaseUrl, "http://admin.localhost:3000");
+});
+
+test("ADMIN_BASE_URL overrides the derivation outside production and is refused in production", () => {
+  assert.equal(loadConfig({ ...DEV_ENV, ADMIN_BASE_URL: "http://portal.localhost:4000/ignored" }).adminBaseUrl, "http://portal.localhost:4000");
+  assert.throws(() => loadConfig({ ...DEV_ENV, ADMIN_BASE_URL: "nope" }), /ADMIN_BASE_URL/);
+  assert.throws(() => loadConfig({ ...PROD_ENV, ADMIN_BASE_URL: "https://admin.example.test" }), /ADMIN_BASE_URL/);
+  assert.equal(loadConfig(PROD_ENV).adminBaseUrl, "https://admin.warthog.com.au");
+});
+
+test("adminHostFromEnv reads the same derivation without throwing, for the request proxy", () => {
+  assert.equal(adminHostFromEnv({ NODE_ENV: "production", PUBLIC_BASE_URL: "https://app.warthog.example" }), "admin.warthog.example");
+  assert.equal(adminHostFromEnv({ NODE_ENV: "development", PUBLIC_BASE_URL: "http://localhost:3000", ADMIN_BASE_URL: "http://portal.localhost:3000" }), "portal.localhost");
+  assert.equal(adminHostFromEnv({ NODE_ENV: "production", PUBLIC_BASE_URL: "https://app.warthog.example", ADMIN_BASE_URL: "https://x.example" }), "admin.warthog.example", "production ignores the override here; loadConfig refuses it");
+  assert.equal(adminHostFromEnv({ NODE_ENV: "production" }), null);
+  assert.equal(adminHostFromEnv({ NODE_ENV: "production", PUBLIC_BASE_URL: "garbage" }), null);
+});

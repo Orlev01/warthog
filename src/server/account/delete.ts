@@ -35,6 +35,8 @@ import { withTransaction, type Db } from "../db/index";
 import { releaseStore, type ReleaseStore } from "../crypto/release-store";
 import type { Senders } from "../notify/senders";
 import type { DeletionJournal } from "./deletion-journal";
+import { tryRecord, type MetricSeam } from "../metrics/seam";
+import { ACCOUNT_DELETED } from "../metrics/names";
 
 // The cross-aggregate revocation a deletion performs, injected because the agent /
 // connection / credential stores live in other aggregates. The account module owns
@@ -54,6 +56,9 @@ export interface DeleteAccountDeps {
   readonly senders: Senders;
   readonly releases?: Pick<ReleaseStore, "discardScope">;
   readonly journal?: DeletionJournal;
+  // Optional, best-effort: a committed deletion is one `account.deleted` event with no
+  // dimensions (docs/design/admin-portal.md §4).
+  readonly recordMetric?: MetricSeam;
 }
 
 // The plain reason shown to a person who still owns a household — they must transfer
@@ -110,6 +115,7 @@ export async function deleteAccount(
   // approval IDs. In-memory effects follow commit so rollback never loses a live
   // release. DEKs are resolved per request; there is no persistent DEK cache.
   (deps.releases ?? releaseStore).discardScope(`${userId}:`);
+  await tryRecord(deps.recordMetric, { name: ACCOUNT_DELETED, value: 1 });
 
   try {
     await deps.journal?.completed(userId);

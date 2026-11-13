@@ -75,6 +75,10 @@ output fabricated DNS records. Preserve all existing records; review exact new
 records after provider generation. The approved application origin and narrow RP
 ID are both `app.warthog.com.au`; email sender identity is validated independently.
 
+The admin portal (13 November 2026) is served by the same container on a second custom
+domain, `admin.warthog.com.au`, derived from the public base URL and bound separately; see
+[admin-portal.md](admin-portal.md) and [the decision](../adr/admin-portal.md).
+
 ## 3. Libraries (job ADR — extends the bundle allowlist)
 
 The `nextjs-postgres` bundle allows `next, react, react-dom, pg, zod`. This job ADR adds only
@@ -176,6 +180,11 @@ Redaction is a pure module with exhaustive unit tests; the activity writer and t
   and a signed-in device can close that sooner after a step-up.
 - Every server action and route checks `Origin` (Next's server-action check plus our own for routes),
   and every member-scoped query is filtered by the session's user id (never an id from the client).
+
+- Admin portal access: `users.role = 'admin'` (reconciled hourly from `OPERATOR_EMAIL`), a
+  single-use 60-second handoff minted on the app host after a fresh step-up, exchanged on the
+  admin host for `__Host-wh_admin` (12 h absolute / 60 min idle) that cascades from the app
+  session ([admin-portal.md](admin-portal.md) §2).
 
 ## 6. Agents: OAuth 2.1 + MCP
 

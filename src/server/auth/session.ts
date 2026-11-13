@@ -33,8 +33,10 @@ export const COOKIE_NAME = "__Host-wh_session";
 const SESSION_ID_BYTES = 32;
 
 const DAY_MS = 24 * 60 * 60 * 1000;
-const IDLE_MS = 14 * DAY_MS; // no activity for longer than this ends the session
-const ABSOLUTE_MS = 30 * DAY_MS; // a session may never live longer than this
+// Exported so the admin session (src/server/admin/session.ts) re-checks the app session
+// against the same windows on every request (one source of truth).
+export const IDLE_MS = 14 * DAY_MS; // no activity for longer than this ends the session
+export const ABSOLUTE_MS = 30 * DAY_MS; // a session may never live longer than this
 
 // The columns every read returns, kept in one place so create, verify and step-up
 // hand back the same shape.

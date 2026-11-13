@@ -27,6 +27,7 @@ import {
 } from "../notify/senders";
 import { selectKeyWrapper, type KeyWrapper } from "../crypto/key-wrapper";
 import { createTotpSecretStore } from "./totp-store";
+import { metricSeamFor } from "../metrics/seam";
 import type { Db } from "../db/index";
 import type { SignupHandlerDeps } from "../../app/(auth)/signup/handler";
 import type { SigninHandlerDeps } from "../../app/(auth)/signin/handler";
@@ -88,6 +89,7 @@ export async function getSignupDeps(
     keyWrapper: keyWrapperFor(config),
     rpId: config.webauthnRpId,
     publicOrigin: publicOrigin(config),
+    recordMetric: metricSeamFor(db, systemClock),
   };
 }
 
@@ -205,5 +207,6 @@ export async function getSigninDeps(
     rpId: config.webauthnRpId,
     publicOrigin: publicOrigin(config),
     totpSecrets: createTotpSecretStore({ db, keyWrapper: keyWrapperFor(config) }),
+    recordMetric: metricSeamFor(db, systemClock),
   };
 }
