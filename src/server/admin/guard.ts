@@ -1,4 +1,4 @@
-// The admin-area guard (docs/design/admin-portal.md §2): the one place the `/admin` layout
+// The admin-area guard (docs/design/admin-portal.md §2): the one place the portal's layout
 // turns "the `__Host-wh_admin` cookie the browser presented" into "admit this admin, or
 // send them to the admin host's own sign-in page". A null, unknown, tampered, expired or
 // revoked token (the app session gone, the person demoted or deleted) yields the redirect;

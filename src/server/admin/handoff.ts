@@ -1,10 +1,10 @@
 // Starting the admin handoff from the app host (docs/design/admin-portal.md §2): the
-// Settings page's server action calls this with the raw `__Host-wh_session` cookie value.
+// app-host handoff route calls this with the raw `__Host-wh_session` cookie value.
 // Identity comes from that cookie alone (never a client value); the person must be a live
 // admin with a step-up fresher than five minutes; only then is a single-use handoff minted
 // and the admin host's exchange URL returned. The destination is fixed (the derived admin
 // origin plus `/session`), so there is nothing to redirect open. Every refusal is a plain
-// reason the control turns into words; the audit metric carries only the outcome.
+// reason the route turns into a redirect or a 404; the audit metric carries only the outcome.
 
 import { verifySession } from "../auth/session";
 import { requireStepUp } from "../auth/step-up";

@@ -59,18 +59,28 @@ link to it in app.warthog.com.au". So:
 
 - Settings no longer has the "Admin portal" panel or the admin notices. It is back to its
   pre-portal form, and a test keeps "admin" out of its markup.
+- The portal's routes moved from `/admin` to an internal prefix that is not a guessable
+  word. On the app host, `/admin` is now simply a path the app does not have: the same
+  not-found page, status and headers as any other. A first attempt answered it with a
+  rewrite and a not-found page instead. It still differed (Next exposes the rewrite in an
+  `x-middleware-rewrite` header, and a page-level `notFound()` kept its own title), so the
+  measured differences, not intent, decided this design.
 - The admin host has its own sign-in page. Its "Sign in" goes through the app's ordinary
-  sign-in to the unlinked `/handoff` route, which mints the same single-use handoff (role,
-  live account and five-minute step-up unchanged). A fresh sign-in counts as the step-up,
-  so it normally takes one passkey prompt.
-- `/handoff` answers the app's ordinary 404 to anyone who is not a signed-in live admin.
-  On the app host, `/admin` paths now get the ordinary not-found page instead of a bare
-  proxy 404 that told them apart from other missing paths.
+  sign-in to `<prefix>/handoff`, a server-only route on the app host that mints the same
+  single-use handoff (role, live account and five-minute step-up unchanged) and redirects.
+  A stale step-up is sent to a fresh sign-in (`/signin?fresh=1`) rather than an inline
+  confirmation, so no portal code or wording reaches a member's browser. A fresh sign-in
+  counts as the step-up, so it takes one passkey prompt.
+- The portal's stylesheet is imported only by the portal layout. It was in the root
+  layout, so every member page downloaded its `.wh-admin-*` selectors.
 - Decision 3 stands: passkeys remain scoped to `app.warthog.com.au`, and the admin host
   still checks no factor itself. Moving the RP ID would invalidate every member's passkeys.
 
-Limit: the hostname is public by nature. Certificate Transparency logs list every issued
-certificate, including `admin.warthog.com.au`'s, and DNS answers for it. The member app
-reveals nothing, but anyone who finds the hostname reaches a sign-in page that only an admin
-can get past.
-
+Limits:
+- The hostname is public by nature. Certificate Transparency logs list every issued
+  certificate, including `admin.warthog.com.au`'s, and DNS answers for it. The member app
+  reveals nothing, but anyone who finds the hostname reaches a sign-in page that only an
+  admin can get past.
+- A fresh sign-in replaces the browser's session cookie. The previous session in that
+  browser stays listed under Security until it idles out (14 days), and can be signed out
+  there.

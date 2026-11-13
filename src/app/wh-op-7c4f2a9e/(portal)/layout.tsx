@@ -9,9 +9,10 @@ import { loadConfig } from "@/server/config";
 import { requireAdminSession } from "@/server/admin/guard";
 import { ADMIN_COOKIE_NAME } from "@/server/admin/session";
 import { systemClock } from "@/server/seams/clock";
+import "../portal.css";
 
-// The admin-area guard layout (docs/design/admin-portal.md §2): every page under /admin —
-// reached only on the admin host, where the proxy rewrites `/usage` to `/admin/usage` —
+// The admin-area guard layout (docs/design/admin-portal.md §2): every page under the internal prefix —
+// reached only on the admin host, where the proxy rewrites `/usage` to `<prefix>/usage` —
 // requires a live `__Host-wh_admin` session verified on the server (which re-checks the
 // admin role and the app session on every request). Anyone else is sent to the admin
 // host's own sign-in page. Route handlers (the exchange and sign-out) are not wrapped by a

@@ -2,36 +2,46 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
 
-import { routeForHost } from "./admin-routing";
+import { ADMIN_PREFIX, APP_HANDOFF_PATH, routeForHost } from "./admin-routing";
 
 const ADMIN = "admin.example.test";
+const P = ADMIN_PREFIX;
 
-test("on the admin host every page path is rewritten under /admin, including the root and the exchange route", () => {
-  assert.deepEqual(routeForHost(ADMIN, ADMIN, "/"), { kind: "admin", rewriteTo: "/admin" });
-  assert.deepEqual(routeForHost(ADMIN, ADMIN, "/usage"), { kind: "admin", rewriteTo: "/admin/usage" });
-  assert.deepEqual(routeForHost(ADMIN, ADMIN, "/session"), { kind: "admin", rewriteTo: "/admin/session" });
-  assert.deepEqual(routeForHost(ADMIN, ADMIN, "/signout"), { kind: "admin", rewriteTo: "/admin/signout" });
-  // The member app, auth, OAuth, MCP and dev routes land under /admin/… where nothing serves them.
-  for (const path of ["/home", "/signin", "/api/auth/signin/begin", "/oauth/authorize", "/mcp", "/.well-known/oauth-authorization-server", "/dev/outbox", "/connect/callback", "/a/token", "/api/health"]) {
-    assert.deepEqual(routeForHost(ADMIN, ADMIN, path), { kind: "admin", rewriteTo: `/admin${path}` }, path);
+test("the portal's internal prefix is not a word anyone would guess, and /admin is not it", () => {
+  assert.match(P, /^\/[a-z0-9-]{12,}$/);
+  assert.doesNotMatch(P, /admin|portal|console|dashboard/i);
+  assert.equal(APP_HANDOFF_PATH, `${P}/handoff`);
+});
+
+test("on the admin host every page path is rewritten under the internal prefix, including the root and the exchange route", () => {
+  assert.deepEqual(routeForHost(ADMIN, ADMIN, "/"), { kind: "admin", rewriteTo: P });
+  assert.deepEqual(routeForHost(ADMIN, ADMIN, "/usage"), { kind: "admin", rewriteTo: `${P}/usage` });
+  assert.deepEqual(routeForHost(ADMIN, ADMIN, "/session"), { kind: "admin", rewriteTo: `${P}/session` });
+  assert.deepEqual(routeForHost(ADMIN, ADMIN, "/signout"), { kind: "admin", rewriteTo: `${P}/signout` });
+  assert.deepEqual(routeForHost(ADMIN, ADMIN, "/signin"), { kind: "admin", rewriteTo: `${P}/signin` });
+  // The member app, auth, OAuth, MCP and dev routes land under the prefix where nothing serves them.
+  for (const path of ["/home", "/api/auth/signin/begin", "/oauth/authorize", "/mcp", "/.well-known/oauth-authorization-server", "/dev/outbox", "/connect/callback", "/a/token", "/api/health", "/admin"]) {
+    assert.deepEqual(routeForHost(ADMIN, ADMIN, path), { kind: "admin", rewriteTo: `${P}${path}` }, path);
   }
 });
 
-test("on the admin host assets pass through and an explicit /admin path is refused", () => {
+test("on the admin host assets pass through and an explicit internal-prefix path is refused", () => {
   for (const path of ["/_next/static/chunk.js", "/icons/icon-192.png", "/brands/gmail.svg", "/brand/warthog-logo.png", "/fonts/inter/latin.woff2", "/favicon.ico", "/manifest.webmanifest", "/sw.js", "/robots.txt"]) {
     assert.deepEqual(routeForHost(ADMIN, ADMIN, path), { kind: "passthrough" }, path);
   }
-  assert.deepEqual(routeForHost(ADMIN, ADMIN, "/admin"), { kind: "not-found" });
-  assert.deepEqual(routeForHost(ADMIN, ADMIN, "/admin/usage"), { kind: "not-found" });
-  assert.deepEqual(routeForHost(ADMIN, ADMIN, "/administer"), { kind: "admin", rewriteTo: "/admin/administer" }, "a lookalike is not the prefix");
+  assert.deepEqual(routeForHost(ADMIN, ADMIN, P), { kind: "not-found" });
+  assert.deepEqual(routeForHost(ADMIN, ADMIN, `${P}/usage`), { kind: "not-found" });
+  assert.deepEqual(routeForHost(ADMIN, ADMIN, `${P}x`), { kind: "admin", rewriteTo: `${P}${P}x` }, "a lookalike is not the prefix");
 });
 
-test("on the app host, an unknown host, or with no admin host configured, /admin is an ordinary unknown page and the app is unchanged", () => {
+test("on the app host /admin is simply a page the app does not have; the portal's internal paths are refused except the handoff", () => {
   for (const [host, admin] of [["app.example.test", ADMIN], ["evil.example.test", ADMIN], [ADMIN, null], [null, ADMIN]] as const) {
-    assert.deepEqual(routeForHost(host, admin, "/admin"), { kind: "unknown-page" }, `${host} ${admin}`);
-    assert.deepEqual(routeForHost(host, admin, "/admin/session?handoff=x".split("?")[0]!), { kind: "unknown-page" });
-    assert.deepEqual(routeForHost(host, admin, "/home"), { kind: "app" });
-    assert.deepEqual(routeForHost(host, admin, "/"), { kind: "app" });
-    assert.deepEqual(routeForHost(host, admin, "/administer"), { kind: "app" });
+    for (const path of ["/admin", "/admin/usage", "/handoff", "/home", "/", "/administer"]) {
+      assert.deepEqual(routeForHost(host, admin, path), { kind: "app" }, `${host} ${admin} ${path}`);
+    }
+    assert.deepEqual(routeForHost(host, admin, APP_HANDOFF_PATH), { kind: "app" }, "the handoff is served on the app host");
+    for (const path of [P, `${P}/usage`, `${P}/session`, `${P}/signin`]) {
+      assert.deepEqual(routeForHost(host, admin, path), { kind: "not-found" }, `${host} ${admin} ${path}`);
+    }
   }
 });

@@ -50,26 +50,25 @@ proof minted by the app host.
    AND wrapped_dek <> ''`. Promote only; never demote; config is never read at
    request time.
 2. **Entry control (amended 13 November 2026).** The member app shows no admin
-   entry, link or notice anywhere, for anyone, the operator included; the only way
-   in is typing the admin host's address. Its `/signin` page (outside the guarded
-   group; where the guard sends everyone without an admin session) offers one
-   "Sign in" link to `<publicOrigin>/signin?next=%2Fhandoff`, the app's ordinary
-   sign-in. A visitor already signed in is forwarded straight on; a fresh sign-in
-   records a step-up, so straight after signing in nothing more is asked. The
-   unlinked app route `/handoff` (outside every route group, so no layout sends a
-   signed-out visitor to sign-in) renders only for a live admin (`admitHandoff`
-   in `src/server/admin/entry.ts`) and otherwise calls `notFound()`: the app's
-   ordinary 404. For an admin it calls the server action `startAdminHandoff`
-   (logic in `src/server/admin/handoff.ts`) on mount, which re-derives the
-   session from `__Host-wh_session`, requires `role = 'admin'`, a live account
-   (`wrapped_dek <> ''`) and a fresh step-up (`requireStepUp`, 5 minutes). A
-   stale step-up returns `step_up_required`; the screen mounts the existing
-   `ConfirmItsYou` and retries on confirmation. On success it returns the URL
-   `<adminOrigin>/session?handoff=<token>` and the client runs
-   `window.location.assign(url)`: script navigation is not governed by CSP
-   `form-action`, so the strict policy stays. On the app host, `/admin` and
-   `/admin/*` are rewritten to a path no route serves, so they get the same
-   not-found page and headers as any other missing path.
+   entry, link, notice, script or style, for anyone, the operator included; the
+   only way in is typing the admin host's address. The portal's routes live under
+   an internal prefix that is not a guessable word (`ADMIN_PREFIX` in
+   `src/server/http/admin-routing.ts`), so `/admin` on the app host is simply a
+   path the app does not have; the prefix is visible only to visitors of the
+   admin host. The admin host's `/signin` page (outside the guarded group; where
+   the guard sends everyone without an admin session) offers one "Sign in" link to
+   `<publicOrigin>/signin?next=<prefix>/handoff`, the app's ordinary sign-in. A
+   visitor already signed in is forwarded straight on; a fresh sign-in records a
+   step-up. `<prefix>/handoff` is the one internal path the app host serves: a
+   server-only route (`src/server/admin/app-handoff-handler.ts`, no page, no
+   client code) that calls `startAdminHandoff` (logic in
+   `src/server/admin/handoff.ts`). That re-derives the session from
+   `__Host-wh_session` and requires `role = 'admin'`, a live account
+   (`wrapped_dek <> ''`) and a fresh step-up (`requireStepUp`, 5 minutes). Success
+   is a 303 to `<adminOrigin>/session?handoff=<token>`; a stale step-up is a 303 to
+   `/signin?next=<prefix>/handoff&fresh=1`, where `fresh=1` shows the sign-in form
+   even to a signed-in visitor; anyone else gets a bare 404. The portal's
+   stylesheet is imported only by the portal layout.
 3. **Handoff token.** 32 random bytes (hex), stored only as SHA-256 in
    `admin_sessions.handoff_hash`, 60-second TTL, one live handoff per app session
    (minting deletes that session's unexchanged rows). Stateless tokens cannot be
@@ -226,7 +225,7 @@ the UI shows absolute deltas and "n of m", never a percentage.
 - **System.** Migration version, scheduler and sweep health, SMS enabled flag,
   households, accounts and tombstones awaiting purge, metric-store size.
 
-New primitives (`src/components/admin/`, styles in `src/app/admin.css`, tokens
+New primitives (`src/components/admin/`, styles in `src/app/<internal prefix>/portal.css`, imported only by the portal layout, tokens
 only, inline SVG, no new dependency): `StatTiles`, `Sparkline` (`role="img"`,
 `<title>`, `currentColor` on `--wh-tint`, a visually hidden table for longer
 series), `BarList` (inline-style widths; the count carries the meaning),

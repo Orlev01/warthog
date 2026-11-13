@@ -1,6 +1,7 @@
 /* Admin portal data displays (docs/design/admin-portal.md §5): stat tiles, sparklines, bar
- * lists, funnels and the small tables. Loaded after controls.css. Tokens only: the workspace
- * accent for series and bars, semantic tones only where a number means something. */
+ * lists, funnels and the small tables. Imported only by the portal layout, never by the
+ * member app, so after the root stylesheets. Tokens only: the workspace accent for series
+ * and bars, semantic tones only where a number means something. */
 
 /* ---------- Stat tiles ---------- */
 .wh-stat-tiles { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 12px; list-style: none; margin: 0; padding: 0; }

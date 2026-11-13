@@ -4,7 +4,6 @@ import "./fonts.css";
 import "./globals.css";
 import "./surfaces.css";
 import "./controls.css";
-import "./admin.css";
 import "./public.css";
 import { SITE_METADATA, SITE_VIEWPORT } from "./site-metadata";
 
