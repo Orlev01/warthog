@@ -1,12 +1,13 @@
 # Warthog comprehensive engineering audit
 
-**Admin portal built, 13 November (branch `claude/admin-portal`, unreleased):** the
-operator's portal on `admin.warthog.com.au` with sign-ups, usage, accounts, reliability,
-traffic and system pages; handoff-based access under the app's own passkey or
-authenticator step-up; aggregate-only reads. Typecheck, build and the full suite pass; the
-browser run covered 66 page states with no layout, contrast or console findings and fixed
-one sign-out redirect. See the [build and verification record](admin-portal-2026-11-13/README.md).
-The hostname binding is a separate approved step ([runbook](../admin-portal-launch.md)).
+**Admin portal released, 13 November:** main `40f0db3` runs as
+`warthog--r43390913050a1` with the operator's portal for `admin.warthog.com.au`: sign-ups,
+usage, accounts, reliability, traffic and system pages, handoff-based access under the
+app's own passkey or authenticator step-up, aggregate-only reads. 5,966 tests pass; the
+browser runs covered 66 page states and the step-up handoff. See the
+[release record](admin-portal-release-2026-11-13.md) and the
+[build and verification record](admin-portal-2026-11-13/README.md). The hostname binding
+is the separate runbook step ([runbook](../admin-portal-launch.md)).
 
 **Whole-app UI/UX pass, deployed 13 November:** nine audit lenses found 270
 issues; the fixes (PR #17, main `df88bbc`) contain every piece of text in a
