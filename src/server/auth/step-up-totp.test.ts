@@ -96,7 +96,7 @@ test("five incorrect authenticator attempts throttle later correct codes", async
 test("authenticator codes already consumed by signin cannot confirm a session", async () => {
   const f = await fixture();
   try {
-    assert.deepEqual(await checkTotpSignIn(f.db, { userId: f.user.id, secret: SECRET, code: CODE }, { clock }), { ok: true });
+    assert.deepEqual(await checkTotpSignIn(f.db, { userId: f.user.id, secret: SECRET, code: CODE }, { clock }), { ok: true, step: Math.floor(clock.now().getTime() / 30_000) });
     assert.equal((await f.send()).status, 401);
     assert.equal((await verifySession(f.db, f.a.token, { clock }))?.steppedUpAt, null);
   } finally { await f.db.close(); }

@@ -7,8 +7,9 @@
 // sign-in methods and are kept (recovery names them in its alert instead).
 //
 // The caller runs this inside the transaction that saved the new passkey, AFTER taking the
-// account lock (`lockActiveAccount`), so the lock order matches deletion, removal and
-// re-enrolment: account row first, then the factor and session rows.
+// eviction's account lock (`lockAccountForEviction`), so the lock order matches deletion,
+// removal and re-enrolment (account row first, then the factor and session rows), and a
+// sign-in or new sign-in method still under way can't land after it (sign-in-guard.ts).
 
 import type { Db } from "../db/index";
 import type { Clock } from "../seams/clock";

@@ -485,6 +485,21 @@ test("a refused finishAddPasskey reports the problem in plain words and never cl
   assertPlainEnglish(s.notice!.text, "refused finish");
 });
 
+test("a change refused because this device was signed out (by a recovery) says so and changes nothing", async () => {
+  const ctx = setup({ stepUp: true });
+  ctx.setFinishResult(() => ({ ok: false, reason: "signed_out" }));
+  await ctx.flow.addPasskey();
+  assert.equal(ctx.flow.getState().notice?.tone, "problem");
+  assert.match(ctx.flow.getState().notice!.text, /signed out on this device, so nothing was changed/);
+
+  ctx.setRegenerateResult(() => ({ ok: false, reason: "signed_out" }));
+  await ctx.flow.generateRecoveryCode();
+  const s = ctx.flow.getState();
+  assert.equal(s.recoveryCode, undefined, "no code is shown");
+  assert.match(s.notice!.text, /signed out on this device, so nothing was changed/);
+  assertPlainEnglish(s.notice!.text, "signed out");
+});
+
 // ════════════════════════════════════════════════════════════════════════════════════
 // AC2 — Generate a new recovery code: show it once, never store it in the browser, report
 // success in plain words.

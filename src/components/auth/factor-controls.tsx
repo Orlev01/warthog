@@ -125,7 +125,11 @@ const COPY = {
     "Before you can create a new recovery code, we need to check it's really you. Choose “Confirm it's you” to continue.",
   confirmFailed: "We couldn't check it's you. Please try again.",
   confirmCancelled: "Confirming it's you was cancelled. You can try again when you're ready.",
+  signedOut: "You've been signed out on this device, so nothing was changed. Sign in again to carry on.",
 } as const;
+
+// The server's refusal when this device's session ended before the change was saved.
+const SIGNED_OUT = "signed_out";
 
 export function createFactorControls(deps: FactorControlsDeps): FactorControlsController {
   let state: FactorControlsState = { confirmRequired: false, busy: false };
@@ -201,7 +205,7 @@ export function createFactorControls(deps: FactorControlsDeps): FactorControlsCo
 
     const finish = await deps.finishAddPasskey(registrationResponse);
     if (!finish.ok) {
-      set({ notice: { tone: "problem", text: COPY.addFailed } });
+      set({ notice: { tone: "problem", text: finish.reason === SIGNED_OUT ? COPY.signedOut : COPY.addFailed } });
       return;
     }
     set({ confirmRequired: false, notice: { tone: "done", text: COPY.addSuccess } });
@@ -217,7 +221,7 @@ export function createFactorControls(deps: FactorControlsDeps): FactorControlsCo
         pendingResume = { action: generateRecoveryCode, failure: COPY.generateFailed };
         set({ confirmRequired: true, notice: { tone: "problem", text: COPY.generateConfirmRequired } });
       } else {
-        set({ notice: { tone: "problem", text: COPY.generateFailed } });
+        set({ notice: { tone: "problem", text: result.reason === SIGNED_OUT ? COPY.signedOut : COPY.generateFailed } });
       }
       return;
     }

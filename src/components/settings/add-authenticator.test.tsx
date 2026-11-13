@@ -47,6 +47,18 @@ test("start shows the QR and setup key; a correct code finishes and leaves the s
   assert.equal(h.flow.getState().secret, undefined, "the secret is dropped once set up");
 });
 
+test("a set-up refused because this device was signed out drops the secret and says so", async () => {
+  const h = harness([{ ok: true, secret: SECRET, qr: QR }], [{ ok: false, reason: "signed_out" }]);
+  await h.flow.start();
+  h.flow.setCode("050471");
+  await h.flow.submit();
+  const state = h.flow.getState();
+  assert.equal(state.phase, "idle");
+  assert.equal(state.secret, undefined, "the secret is dropped");
+  assert.match(state.error ?? "", /signed out on this device, so the app wasn't saved/);
+  assert.equal(h.done(), 0);
+});
+
 test("a step-up refusal offers Confirm it's you, and confirming resumes the set-up", async () => {
   const h = harness([{ ok: false, reason: "step_up_required" }, { ok: true, secret: SECRET, qr: QR }]);
   await h.flow.start();

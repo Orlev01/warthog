@@ -29,6 +29,8 @@ const AT_STEP_36 = new Date(1111111109 * 1000);
 const CODE_STEP_36 = "081804";
 const AT_STEP_37 = new Date(1111111111 * 1000);
 const CODE_STEP_37 = "050471";
+const STEP_36 = Math.floor(AT_STEP_36.getTime() / 30_000);
+const STEP_37 = Math.floor(AT_STEP_37.getTime() / 30_000);
 
 const keyWrapper = localAesKeyWrapper(randomBytes(32));
 
@@ -47,7 +49,7 @@ test("a correct code is accepted once; the same code again is refused", async ()
   try {
     const userId = await enrolled(db, "totp-once");
     const clock = fixedClock(AT_STEP_37);
-    assert.deepEqual(await checkTotpSignIn(db, { userId, secret: SECRET, code: CODE_STEP_37 }, { clock }), { ok: true });
+    assert.deepEqual(await checkTotpSignIn(db, { userId, secret: SECRET, code: CODE_STEP_37 }, { clock }), { ok: true, step: STEP_37 });
     assert.deepEqual(
       await checkTotpSignIn(db, { userId, secret: SECRET, code: CODE_STEP_37 }, { clock }),
       { ok: false, reason: "invalid" },
@@ -63,7 +65,7 @@ test("after a step is used, a code from an earlier step is refused even inside t
   try {
     const userId = await enrolled(db, "totp-earlier");
     const clock = fixedClock(AT_STEP_37);
-    assert.deepEqual(await checkTotpSignIn(db, { userId, secret: SECRET, code: CODE_STEP_37 }, { clock }), { ok: true });
+    assert.deepEqual(await checkTotpSignIn(db, { userId, secret: SECRET, code: CODE_STEP_37 }, { clock }), { ok: true, step: STEP_37 });
     assert.deepEqual(
       await checkTotpSignIn(db, { userId, secret: SECRET, code: CODE_STEP_36 }, { clock }),
       { ok: false, reason: "invalid" },
@@ -108,6 +110,7 @@ test("a success clears earlier failures", async () => {
     }
     assert.deepEqual(await checkTotpSignIn(db, { userId, secret: SECRET, code: CODE_STEP_36 }, { clock: clock36 }), {
       ok: true,
+      step: STEP_36,
     });
     const clock37 = fixedClock(AT_STEP_37);
     for (let i = 0; i < TOTP_MAX_FAILURES - 1; i++) {
@@ -145,7 +148,7 @@ test("failures on one account never slow another", async () => {
     for (let i = 0; i < TOTP_MAX_FAILURES + 2; i++) {
       await checkTotpSignIn(db, { userId: a, secret: SECRET, code: wrong(CODE_STEP_36) }, { clock });
     }
-    assert.deepEqual(await checkTotpSignIn(db, { userId: b, secret: SECRET, code: CODE_STEP_36 }, { clock }), { ok: true });
+    assert.deepEqual(await checkTotpSignIn(db, { userId: b, secret: SECRET, code: CODE_STEP_36 }, { clock }), { ok: true, step: STEP_36 });
   } finally {
     await db.close();
   }

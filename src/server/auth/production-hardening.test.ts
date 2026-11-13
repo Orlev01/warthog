@@ -3,7 +3,7 @@ import assert from "node:assert/strict";
 import { createDb, loadMigrations, runMigrations, withTransaction } from "../db/index";
 import { issueEmailCode, verifyEmailCode } from "./email-code";
 import { createUser } from "../db/users";
-import { createSession, lockActiveAccount, verifySession } from "./session";
+import { createSession, lockAccountForEviction, verifySession } from "./session";
 import { evictLostFactors } from "./recover-session";
 import { checkPasskeyAttempt } from "./passkey-attempts";
 
@@ -34,7 +34,7 @@ test("evicting lost factors removes the other passkeys, the authenticator app an
     await db.query("INSERT INTO passkeys (user_id, credential_id, public_key, counter) VALUES ($1, 'kept', 'k', 0), ($1, 'lost', 'l', 0), ($2, 'theirs', 't', 0)", [person.id, other.id]);
     await db.query("INSERT INTO totp_secrets (user_id, secret_enc) VALUES ($1, 'mine'), ($2, 'theirs')", [person.id, other.id]);
     const evicted = await withTransaction(db, async (tx) => {
-      await lockActiveAccount(tx, person.id);
+      await lockAccountForEviction(tx, person.id);
       return evictLostFactors(tx, person.id, "kept");
     });
     assert.deepEqual(evicted, { passkeys: 1, authenticator: true, sessions: 1 });

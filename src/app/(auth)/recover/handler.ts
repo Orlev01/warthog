@@ -65,7 +65,7 @@ import {
   finishPasskeyRegistration,
 } from "../../../server/auth/passkey";
 import { discardPendingSignIns, evictLostFactors } from "../../../server/auth/recover-session";
-import { createSession, lockActiveAccount } from "../../../server/auth/session";
+import { createSession, lockAccountForEviction } from "../../../server/auth/session";
 import { getUserByEmail, getUserById } from "../../../server/db/users";
 import type { Clock } from "../../../server/seams/clock";
 import type { Random } from "../../../server/seams/random";
@@ -356,7 +356,10 @@ export function createRecoverHandler(deps: RecoverHandlerDeps): RecoverHandler {
         if (!user || user.wrappedDek === "") return json(400, { error: "unknown_recovery" });
         const dek = await keyWrapper.unwrap(user.wrappedDek);
         result = await withTransaction(db, async (tx) => {
-          await lockActiveAccount(tx, userId);
+          // The eviction's lock (sign-in-guard.ts): a sign-in or new sign-in method under
+          // way on a lost device either commits first and is evicted below, or waits and is
+          // refused.
+          await lockAccountForEviction(tx, userId);
           // Serialize with code regeneration and competing recoveries. Checking only
           // the earlier proof flag would let a revoked code add a durable passkey.
           const current = await tx.query("SELECT salt FROM recovery_codes WHERE user_id = $1 FOR UPDATE", [userId]);

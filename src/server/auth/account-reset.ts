@@ -33,7 +33,7 @@ import { listMobileNumbers } from "../db/mobile-numbers";
 import { verifyEmailCode } from "./email-code";
 import { finishPasskeyRegistration } from "./passkey";
 import { issueRecoveryCode } from "./recovery";
-import { createSession, lockActiveAccount, type CreatedSession } from "./session";
+import { createSession, lockAccountForEviction, type CreatedSession } from "./session";
 import { evictLostFactors } from "./recover-session";
 import { SUPPORT_EMAIL } from "../../components/public/operator";
 import { enqueue } from "../db/jobs";
@@ -423,7 +423,9 @@ export async function reenrolAfterReset(
 ): Promise<ReenrolResult> {
   const { rpId, origin, clock, random } = deps;
   return withTransaction(db, async (tx): Promise<ReenrolResult> => {
-    await lockActiveAccount(tx, userId);
+    // The eviction's lock (sign-in-guard.ts): a sign-in or new sign-in method under way on a
+    // lost device either commits first and is evicted below, or waits and is refused.
+    await lockAccountForEviction(tx, userId);
     // Recovery's order: the account, then the recovery code row, before any factor. A
     // recovery racing this re-enrolment then waits here rather than deadlocking, and the
     // later of the two sees (and evicts) the earlier one's passkey.

@@ -97,6 +97,16 @@ export async function lockActiveAccount(tx: Db, userId: string): Promise<void> {
   if (!active.rows[0]) throw new HttpError(401, "Authentication failed");
 }
 
+// The stronger account lock an eviction takes (recovery, re-enrolment after a reset): FOR
+// NO KEY UPDATE waits for every FOR SHARE holder (a sign-in minting its session, a signed-in
+// change adding a sign-in method; see sign-in-guard.ts) and holds new ones off until the
+// eviction commits. Like deletion's lock it leaves FOR KEY SHARE alone, so foreign-key
+// inserts elsewhere on the account never wait on it.
+export async function lockAccountForEviction(tx: Db, userId: string): Promise<void> {
+  const active = await tx.query("SELECT id FROM users WHERE id = $1 AND wrapped_dek <> '' FOR NO KEY UPDATE", [userId]);
+  if (!active.rows[0]) throw new HttpError(401, "Authentication failed");
+}
+
 // Create a session for `userId`: draw a 256-bit id, store it hashed, anchor both
 // timers at the clock, and return the session together with the raw token and its
 // cookie. `stepped_up_at` is left unset.
