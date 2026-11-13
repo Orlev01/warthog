@@ -128,6 +128,7 @@ import { addCard, listCards } from "../db/cards";
 import { issueEmailCode } from "./email-code";
 import { freshDb } from "../../test/db";
 import { createUser, getUserById, type User } from "../db/users";
+import { SECURITY_ALERT_FOOTNOTE } from "../notify/email";
 import { createOutbox, type Outbox } from "../notify/outbox";
 import { systemRandom } from "../seams/random";
 import { fixedClock, type Clock } from "../seams/clock";
@@ -337,6 +338,32 @@ test("the reset request alerts every registered channel (push, email and SMS)", 
     assert.ok(channels.has("push"), "a reset alert is sent on the push channel");
     assert.ok(channels.has("email"), "a reset alert is sent on the email channel");
     assert.ok(channels.has("sms"), "a reset alert is sent on the sms channel");
+  } finally {
+    await db.close();
+  }
+});
+
+
+test("the reset-requested email is branded, keeps the 7 days and the way to cancel, and has no link", async () => {
+  const clock = fixedClock(T0);
+  const alertOutbox = createOutbox();
+  const { executor } = makeExecutorSpy();
+  const db = await freshDb();
+  try {
+    const person = await freshUser(db, "alerts-branded");
+    await addMobile(db, person.id, "+61 400 000 112", true);
+    await requestResetFor(db, person, clock, alertOutbox, executor);
+    const sent = alertOutbox.list();
+    const email = sent.find((m) => m.channel === "email")!.email!;
+    assert.equal(email.subject, "Account reset requested");
+    assert.equal(email.heading, "A reset of your account was requested");
+    assert.match(email.paragraphs.join(" "), /will complete in 7 days/);
+    assert.match(email.paragraphs.join(" "), /If this wasn't you, open the Warthog app on a device you're still signed in on and cancel it/);
+    assert.equal(email.action, undefined, "no link: cancelling happens only in the signed-in app");
+    assert.equal(email.footnote, SECURITY_ALERT_FOOTNOTE);
+    for (const message of sent.filter((m) => m.channel !== "email")) {
+      assert.equal(message.email, undefined, `${message.channel} sends only the plain body`);
+    }
   } finally {
     await db.close();
   }

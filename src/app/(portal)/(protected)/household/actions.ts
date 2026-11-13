@@ -66,6 +66,7 @@ import type { Clock } from "@/server/seams/clock";
 import type { Random } from "@/server/seams/random";
 import type { KeyWrapper } from "@/server/crypto/key-wrapper";
 import type { EmailSender } from "@/server/notify/senders";
+import type { EmailContent } from "@/server/notify/email";
 import type { Db } from "@/server/db/index";
 
 // The injected seams — no process.env (INV-103). `keyWrapper` wraps/unwraps the HOUSEHOLD's
@@ -195,6 +196,22 @@ const editAddressSchema = z.object({
 // thing that matters); the invited person opens it to accept.
 const INVITE_BODY = "You've been invited to join a household on Warthog. Open the link to accept.";
 
+// The branded invite email: the same fixed nudge, with the link as its one button. The
+// link is valid for 7 days (brief) and opening it only shows what joining shares.
+function inviteEmail(link: string): EmailContent {
+  return {
+    subject: "You're invited to join a household on Warthog",
+    heading: "Join a household on Warthog",
+    paragraphs: [
+      "You've been invited to join a household on Warthog.",
+      "Open the invitation to see what joining shares before you accept. The link expires in 7 days.",
+    ],
+    action: { label: "Open invitation", url: link },
+    footnote: "If you weren't expecting this, you can ignore this email.",
+    reason: "You're getting this because someone invited this address to a household on Warthog.",
+  };
+}
+
 export function createHouseholdActions(deps: HouseholdActionsDeps): HouseholdActions {
   const { db, keyWrapper, clock, random, notify, email, publicBaseUrl } = deps;
 
@@ -259,7 +276,7 @@ export function createHouseholdActions(deps: HouseholdActionsDeps): HouseholdAct
     // The link is built on the CONFIGURED public origin, never the request host; it carries
     // the raw token exactly once, in this single delivering message.
     const link = `${publicBaseUrl}/household/join/${invite.token}`;
-    await email.sendEmail({ recipient, body: INVITE_BODY, link });
+    await email.sendEmail({ recipient, body: INVITE_BODY, link, email: inviteEmail(link) });
     return { ok: true };
   }
 

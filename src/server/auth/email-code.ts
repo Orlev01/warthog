@@ -33,6 +33,7 @@ import { normaliseEmail } from "../db/users";
 import type { Clock } from "../seams/clock";
 import type { Random } from "../seams/random";
 import type { EmailSender } from "../notify/senders";
+import { SECURITY_ALERT_FOOTNOTE } from "../notify/email";
 import type { Db } from "../db/index";
 
 const CODE_DIGITS = 6;
@@ -161,6 +162,14 @@ export async function issueEmailCode(
       body:
         `Your Warthog verification code is ${code}. ` +
         `It expires in 10 minutes. If you did not request this, you can ignore this email.`,
+      // The code is in its own box, never in the subject or the inbox preview.
+      email: {
+        subject: "Your Warthog verification code",
+        heading: "Your verification code",
+        paragraphs: ["Enter this code in Warthog to continue. It expires in 10 minutes."],
+        code,
+        footnote: "If you didn't request this, you can ignore this email.",
+      },
     });
   } catch (error) {
     // Undelivered: the code must not stay usable (nobody legitimate can know it).
@@ -304,5 +313,15 @@ async function alertHolderOnce(
       "We noticed several failed verification-code attempts on your Warthog account, " +
       "so we have briefly paused further attempts. If this was not you, no action is " +
       "needed — no code was accepted.",
+    email: {
+      subject: "Verification code attempts paused",
+      heading: "We've paused code attempts",
+      paragraphs: [
+        "We noticed several failed verification-code attempts on your Warthog account, so " +
+          "we've briefly paused further attempts.",
+        "If this wasn't you, you don't need to do anything. No code was accepted.",
+      ],
+      footnote: SECURITY_ALERT_FOOTNOTE,
+    },
   });
 }

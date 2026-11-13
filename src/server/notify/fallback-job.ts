@@ -46,6 +46,7 @@ import { listMobileNumbers } from "../db/mobile-numbers";
 import { getNotificationPrefs } from "../db/notification-prefs";
 import { parseParams } from "../http/validate";
 import type { Senders } from "./senders";
+import type { EmailContent } from "./email";
 import type { Clock } from "../seams/clock";
 import type { Random } from "../seams/random";
 import type { Db } from "../db/index";
@@ -82,6 +83,21 @@ const EMAIL_BODY =
   "You have an approval waiting in Warthog. Open the secure link to sign in and " +
   "decide. The link works once and expires 10 minutes after it was sent. If you did " +
   "not expect this, you can ignore this message.";
+
+// The branded email: the same copy, with the single-use link as its one button. No
+// approval detail, so nothing personal reaches the email.
+function fallbackEmail(link: string): EmailContent {
+  return {
+    subject: "An approval is waiting",
+    heading: "An approval is waiting for you",
+    paragraphs: [
+      "You have an approval waiting in Warthog. Open the secure link to sign in and decide.",
+      "The link works once and expires 10 minutes after it was sent.",
+    ],
+    action: { label: "Open approval", url: link },
+    footnote: "If you didn't expect this, you can ignore this email.",
+  };
+}
 
 // Build the single-use link the SMS and email carry: the configured public address
 // (trailing slash trimmed) + the approval-open path + the raw token (base64url, so it
@@ -190,7 +206,7 @@ export async function runApprovalFallback(
         if (claim.rows.length === 0) continue;
         await senders.sms.sendSms({ recipient: verified.number, body: SMS_BODY, link });
       } else if (channel === "email") {
-        await senders.email.sendEmail({ recipient: state.email, body: EMAIL_BODY, link });
+        await senders.email.sendEmail({ recipient: state.email, body: EMAIL_BODY, link, email: fallbackEmail(link) });
       }
       await markSent(db, approvalId, channel, now);
     } catch (error) {

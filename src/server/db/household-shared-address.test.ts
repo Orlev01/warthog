@@ -132,6 +132,7 @@ import { freshDb } from "../../test/db";
 import { loadMigrations, runMigrations, type Db, type QueryResult } from "./index";
 import { parseBody, HttpError } from "../http/validate";
 import { fixedClock, type Clock } from "../seams/clock";
+import type { EmailContent } from "../notify/email";
 
 // --- pinned shapes, derived from the store's own signatures so a later type rename that
 // preserves behaviour does not redden these tests. ---------------------------------------
@@ -187,15 +188,15 @@ function recordingDb(): RecordingDb {
 // outbox (dev) / the real senders (prod) behind this same seam, like the approval notifier's
 // injected push sender — the module depends only on the seam, never a concrete Azure sender.
 interface RecordingNotifier {
-  readonly calls: { userId: string; body: string }[];
-  notifyMember(message: { userId: string; body: string }): Promise<void>;
+  readonly calls: { userId: string; body: string; email?: EmailContent }[];
+  notifyMember(message: { userId: string; body: string; email?: EmailContent }): Promise<void>;
 }
 function recordingNotifier(): RecordingNotifier {
-  const calls: { userId: string; body: string }[] = [];
+  const calls: { userId: string; body: string; email?: EmailContent }[] = [];
   return {
     calls,
-    notifyMember(message: { userId: string; body: string }): Promise<void> {
-      calls.push({ userId: message.userId, body: message.body });
+    notifyMember(message: { userId: string; body: string; email?: EmailContent }): Promise<void> {
+      calls.push({ userId: message.userId, body: message.body, ...(message.email ? { email: message.email } : {}) });
       return Promise.resolve();
     },
   };
@@ -537,6 +538,24 @@ test("a notification does not leak the address plaintext (personal content stays
         "the notification tells members the address changed WITHOUT carrying the address plaintext",
       );
     }
+  } finally {
+    await db.close();
+  }
+});
+
+test("the shared-address email is branded and, like the body, carries no address", async () => {
+  const db = await freshDb();
+  try {
+    const { householdId, memberIds, dek } = await makeHousehold(db, "notify-branded-owner", ["notify-branded-bob"]);
+    const marker = "ZZXWARTHOGBRANDEDZZ 404 Nowhere St";
+    const notifier = recordingNotifier();
+    await setSharedAddress(db, { householdId, actorId: memberIds[0]!, current: marker }, dek, { notify: notifier });
+    const email = notifier.calls[0]!.email!;
+    assert.equal(email.subject, "Your household's shared address changed");
+    assert.equal(email.heading, "Your shared address was updated");
+    assert.match(email.paragraphs.join(" "), /Open Warthog to see the new address/);
+    assert.ok(!JSON.stringify(email).includes("ZZXWARTHOGBRANDEDZZ"), "no address plaintext in the email");
+    assert.equal(email.action, undefined);
   } finally {
     await db.close();
   }

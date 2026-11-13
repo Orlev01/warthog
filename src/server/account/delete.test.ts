@@ -304,6 +304,29 @@ test("a successful deletion enqueues the account for purge and sends a confirmat
 // transferred or closed; a non-owner member is never blocked.
 // ===========================================================================
 
+
+test("the deletion confirmation email is branded and keeps the exact, careful copy", async () => {
+  const db = await freshDb();
+  const outbox = createOutbox();
+  const { revoker } = makeRevokerSpy();
+  try {
+    const person = await makeUser(db, "confirm-branded");
+    await deleteAccount(makeDeps(db, revoker, outbox), { userId: person.id });
+    const email = emailsTo(outbox, person.email)[0]!.email!;
+    assert.equal(email.subject, "Your Warthog account has been deleted");
+    assert.equal(email.heading, "Your account has been deleted");
+    const text = email.paragraphs.join(" ");
+    assert.match(text, /signed out everywhere/);
+    assert.match(text, /removed the link to the key that protects your data from our live systems/);
+    assert.match(text, /deleted within 24 hours/);
+    assert.match(text, /Backups, messages we've already sent and records kept by the services we use follow their own timelines/);
+    assert.doesNotMatch(text, /Your data is now unreadable|can no longer be opened|all.*backups.*destroyed/i);
+    assert.equal(email.action, undefined);
+  } finally {
+    await db.close();
+  }
+});
+
 test("deletion is refused with a plain reason while the person still owns a household, and nothing changes", async () => {
   const db = await freshDb();
   const outbox = createOutbox();

@@ -6,6 +6,8 @@ import { createUser } from "../db/users";
 import { createSession, lockActiveAccount, verifySession } from "./session";
 import { evictLostFactors } from "./recover-session";
 import { checkPasskeyAttempt } from "./passkey-attempts";
+import { SECURITY_ALERT_FOOTNOTE } from "../notify/email";
+import type { OutgoingMessage } from "../notify/senders";
 
 test("email codes cannot be redeemed in another authentication flow", async () => {
   const db = await createDb("pglite:memory");
@@ -63,3 +65,22 @@ test("passkey failures are bounded per account and generate only one safe alert 
     assert.equal(alerts, 1);
   } finally { await db.close(); }
 });
+
+test("the passkey-failures alert is a branded email with no link and no code", async () => {
+  const db = await createDb("pglite:memory");
+  try {
+    await runMigrations(db, await loadMigrations());
+    const person = await createUser(db, { email: "person@example.test", wrappedDek: "test-key" });
+    const sent: OutgoingMessage[] = [];
+    const deps = { clock: { now: () => new Date("2026-11-09T00:00:00Z") }, emailSender: { sendEmail: async (m: OutgoingMessage) => { sent.push(m); } } };
+    for (let i = 0; i < 6; i++) await checkPasskeyAttempt(db, person.id, async () => false, deps);
+    const email = sent[0]!.email!;
+    assert.equal(email.subject, "Passkey sign-in attempts limited");
+    assert.equal(email.heading, "Several passkey sign-ins failed");
+    assert.match(email.paragraphs.join(" "), /temporarily limited further attempts/);
+    assert.match(email.paragraphs.join(" "), /None of the failed attempts signed in to your account/);
+    assert.equal(email.action, undefined);
+    assert.equal(email.footnote, SECURITY_ALERT_FOOTNOTE);
+  } finally { await db.close(); }
+});
+

@@ -85,6 +85,7 @@ import { freshDb } from "../../test/db";
 import type { Db } from "../db/index";
 import { fixedClock } from "../seams/clock";
 import { createOutbox, type Outbox, type SentMessage } from "../notify/outbox";
+import { OPERATOR_EMAIL_REASON } from "../notify/email";
 import { parseBody, HttpError } from "../http/validate";
 
 // --- fixtures ---------------------------------------------------------------------
@@ -193,6 +194,27 @@ test("requestConnector emails exactly the configured operator address", async ()
 // The MATCH-NOTIFY path — a matching catalogue entry marks the request and
 // notifies the person; a non-matching entry leaves requests Requested.
 // ===========================================================================
+
+
+test("the connector-request operator email is branded and still leaves the free text out", async () => {
+  const db = await freshDb();
+  try {
+    const userId = await makeUser(db, "op-branded");
+    const box = createOutbox();
+    await requestConnector(
+      { userId, serviceName: "Dropbox" },
+      { db, email: box, operatorEmail: OPERATOR, clock: fixedClock(T0) },
+    );
+    const email = emailsOf(box)[0]!.email!;
+    assert.equal(email.subject, "New connector request");
+    assert.equal(email.heading, "Someone requested a connector");
+    assert.match(email.paragraphs.join(" "), /Review it in Warthog/);
+    assert.ok(!JSON.stringify(email).includes("Dropbox"), "free-text requests stay out of provider mail");
+    assert.equal(email.reason, OPERATOR_EMAIL_REASON);
+  } finally {
+    await db.close();
+  }
+});
 
 test("adding a matching entry marks the person's request matched and notifies them", async () => {
   const db = await freshDb();

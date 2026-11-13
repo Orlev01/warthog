@@ -34,6 +34,7 @@ import { deleteAccountJobs, enqueueAccountPurge } from "../db/account-purge";
 import { withTransaction, type Db } from "../db/index";
 import { releaseStore, type ReleaseStore } from "../crypto/release-store";
 import type { Senders } from "../notify/senders";
+import type { EmailContent } from "../notify/email";
 import type { DeletionJournal } from "./deletion-journal";
 import { tryRecord, type MetricSeam } from "../metrics/seam";
 import { ACCOUNT_DELETED } from "../metrics/names";
@@ -74,6 +75,19 @@ const CONFIRMATION_BODY =
   "everywhere. We've removed the link to the key that protects your data from our live systems, and what's left is " +
   "deleted within 24 hours. Backups, messages we've already sent and records kept by the services we use follow " +
   "their own timelines, set out in our privacy policy.";
+
+// The same confirmation as a branded email, split into short paragraphs.
+const CONFIRMATION_EMAIL: EmailContent = {
+  subject: "Your Warthog account has been deleted",
+  heading: "Your account has been deleted",
+  paragraphs: [
+    "Every agent and service has been disconnected and you've been signed out everywhere.",
+    "We've removed the link to the key that protects your data from our live systems, and what's " +
+      "left is deleted within 24 hours.",
+    "Backups, messages we've already sent and records kept by the services we use follow their own " +
+      "timelines, set out in our privacy policy.",
+  ],
+};
 
 // Delete the SESSION person's account. Returns { ok: true } once the whole unit has
 // run, or { ok: false, reason } when the person still owns a household (in which case
@@ -129,7 +143,7 @@ export async function deleteAccount(
   // channel failure here must not turn it into an error the person would retry: it is
   // reported (with no address or other personal detail) and the deletion stands.
   try {
-    await senders.email.sendEmail({ recipient: outcome.email, body: CONFIRMATION_BODY });
+    await senders.email.sendEmail({ recipient: outcome.email, body: CONFIRMATION_BODY, email: CONFIRMATION_EMAIL });
   } catch {
     console.error("[warthog account] deletion confirmation email could not be sent");
   }

@@ -2,6 +2,7 @@ import type { Db } from "../db/index";
 import type { Clock } from "../seams/clock";
 import type { EmailSender } from "../notify/senders";
 import { deliverAlert } from "./alerts";
+import { SECURITY_ALERT_FOOTNOTE } from "../notify/email";
 
 const WINDOW = 15 * 60_000;
 export async function checkPasskeyAttempt(db: Db, userId: string, verify: () => Promise<boolean>,
@@ -29,7 +30,16 @@ export async function checkPasskeyAttempt(db: Db, userId: string, verify: () => 
     if (claimed.rows.length) {
       const user = await db.query("SELECT email FROM users WHERE id = $1", [userId]);
       if (user.rows[0]) await deliverAlert("passkey-failures", () => deps.emailSender.sendEmail({ recipient: user.rows[0]!.email as string,
-        body: "Several passkey sign-in attempts failed. We have temporarily limited further attempts. No failed attempt signed in to your account." }));
+        body: "Several passkey sign-in attempts failed. We have temporarily limited further attempts. No failed attempt signed in to your account.",
+        email: {
+          subject: "Passkey sign-in attempts limited",
+          heading: "Several passkey sign-ins failed",
+          paragraphs: [
+            "Several attempts to sign in to your Warthog account with a passkey failed, so we've temporarily limited further attempts.",
+            "None of the failed attempts signed in to your account.",
+          ],
+          footnote: SECURITY_ALERT_FOOTNOTE,
+        } }));
     }
   }
   return { ok: false, reason: "invalid" };

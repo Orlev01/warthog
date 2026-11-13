@@ -433,6 +433,26 @@ test("a failing account is messaged by push and email to that person, and never 
   }
 });
 
+
+test("the integrity email is branded and, like the push, carries no link and no personal content", async () => {
+  const db = await freshDb();
+  try {
+    const { failEmail } = await seedWorld(db);
+    const senders = recordingSenders();
+    await runDailyIntegrityCheck({ db, clock: CLOCK, senders });
+    const [message] = onChannel(senders.list(), "email");
+    const email = message!.email!;
+    assert.equal(email.subject, "Activity record integrity check failed");
+    assert.equal(email.heading, "Your activity record needs attention");
+    assert.match(email.paragraphs.join(" "), /failed its integrity check/);
+    assert.match(email.paragraphs.join(" "), /Open Warthog to review it/);
+    assert.equal(email.action, undefined, "review happens in the signed-in app: no link");
+    assert.ok(!JSON.stringify(email).includes(failEmail), "the email content names no person");
+  } finally {
+    await db.close();
+  }
+});
+
 test("a world in which every account passes triggers no notification on any channel", async () => {
   const db = await freshDb();
   try {
