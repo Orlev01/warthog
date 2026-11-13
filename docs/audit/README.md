@@ -1,5 +1,9 @@
 # Warthog comprehensive engineering audit
 
+**Recovery and reset hardening released, 13 November:** main `1faf694` runs as
+`warthog--r43398915940a1` with PR #21 (sign-in audit items 4–6). 6,015 tests pass. See the
+[release record](recovery-hardening-release-2026-11-13.md).
+
 **Admin portal released, 13 November:** main `40f0db3` runs as
 `warthog--r43390913050a1` with the operator's portal for `admin.warthog.com.au`: sign-ups,
 usage, accounts, reliability, traffic and system pages, handoff-based access under the

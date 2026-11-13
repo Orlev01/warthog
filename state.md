@@ -1,4 +1,18 @@
-# Delivery status — 13 November 2026 (admin portal)
+# Delivery status — 13 November 2026 (recovery and reset hardening)
+
+**Live at [app.warthog.com.au](https://app.warthog.com.au).** Application source
+`1faf694339b9f76ab12bddcb989c65e55e49078e` runs as `warthog--r43398915940a1`, with one
+healthy replica, explicit 100% traffic and zero old replicas. On top of the admin portal
+it carries PR #21 (sign-in audit items 4–6):
+- recovery removes the lost sign-in methods;
+- a completed reset alerts, can be closed by the owner, and re-enrols within 7 days;
+- members can remove their authenticator app from Security.
+
+Main and pinned-image CI passed 6,015 tests; no migration changes. See the
+[release record](docs/audit/recovery-hardening-release-2026-11-13.md). Binding
+`admin.warthog.com.au` waits for its two DNS records ([runbook](docs/admin-portal-launch.md)).
+
+# Earlier delivery status — 13 November 2026 (admin portal)
 
 **Live at [app.warthog.com.au](https://app.warthog.com.au).** Application source
 `40f0db356c2120d14c9b8f90ed025690a9bd2ae0` runs as `warthog--r43390913050a1`, with one
