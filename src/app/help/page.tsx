@@ -2,6 +2,7 @@ import * as React from "react";
 import { ArrowRight } from "lucide-react";
 
 import { PublicPage, PublicPanel, PublicSection } from "@/components/public/public-page";
+import { publicLinksFromEnv } from "@/server/config";
 
 // E18-S16 — Help page entry (`/help`). A PUBLIC page, reachable by anyone with NO
 // authentication: it sits at the top level, under no guard layout, because a person
@@ -10,8 +11,10 @@ import { PublicPage, PublicPanel, PublicSection } from "@/components/public/publ
 // how approvals and "Ask me first" work, the two ways back into an account (linking
 // /recover and /reset) and the privacy summary (linking /privacy).
 //
-// The screen is static — it needs no session and no config — so the entry mounts it
-// directly, inside the shared public document frame. No protocol or security jargon
+// The screen is static — it needs no session — so the entry mounts it directly, inside the
+// shared public document frame. Its one configured input is where the brand and the
+// account links (sign-in, recover, reset) point when the website has its own host
+// (docs/adr/website-root-domain.md). No protocol or security jargon
 // reaches this primary screen (brief design_ux.copy): no "OAuth", "MCP", "DCR" or
 // "token" in the copy. The copy matches the landing's scope statement: Warthog's
 // controls apply to requests made through Warthog.
@@ -25,8 +28,10 @@ function Action({ href, children }: { href: string; children: React.ReactNode })
 }
 
 export default function HelpPage() {
+  const links = publicLinksFromEnv();
   return (
     <PublicPage
+      links={links}
       title="Help"
       current="help"
       lead="The basics of Warthog in plain words. You can read this page even when you’re locked out of your account."
@@ -77,7 +82,7 @@ export default function HelpPage() {
             other device. Your agents stay connected, so check them afterwards.
           </p>
           <div className="wh-public-actions">
-            <Action href="/recover">Recover your account</Action>
+            <Action href={`${links.account}/recover`}>Recover your account</Action>
           </div>
           <p>
             Lost your recovery code too? You can reset your account by email. A reset takes 7
@@ -86,7 +91,7 @@ export default function HelpPage() {
             passkey.
           </p>
           <div className="wh-public-actions">
-            <Action href="/reset">Reset your account</Action>
+            <Action href={`${links.account}/reset`}>Reset your account</Action>
           </div>
         </PublicSection>
 

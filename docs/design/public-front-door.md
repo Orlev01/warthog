@@ -7,7 +7,14 @@ It does not change the signed-in workspace's dimensions or navigation.
 
 ## Entry behaviour
 
-Both `/` and `/signin` verify an existing browser session on the server before
+When the app lives at `app.<domain>`, the front door has its own host, `<domain>`
+([website-root-domain](../adr/website-root-domain.md)). There `/` always shows the
+front door, signed in or not, and never opens the database; Help, compatibility,
+privacy and terms are served on both hosts; every other path forwards to the app,
+and `www.` forwards to the website. On the app host, `/` sends a signed-out visitor
+to sign-in. Without a separate host, `/` shows the front door as described here.
+
+Both `/` (on the app host) and `/signin` verify an existing browser session on the server before
 redirecting to Home. Sign-in preserves a validated local return path, including
 agent-connection and approval links. Cookie presence alone never proves identity.
 Missing, invalid, expired and revoked sessions leave these pages public; an
@@ -111,8 +118,10 @@ every step. The form is a bounded panel at every width; phones show it first,
 without the desktop introduction, which is its own panel on wider screens. Help,
 compatibility, privacy and terms share the `PublicPage` frame: header and footer
 bars outside `<main>` and content in panels.
-The brand and home link lead to `/`; account-method links retain the validated
-return destination. Returning to the homepage never submits a form.
+The brand and home link lead to the front door (the website's root when it has its
+own host, else `/`); account-method links retain the validated return destination.
+On the website host, every sign-in, sign-up, recover and reset link is an absolute
+link to the app. Returning to the homepage never submits a form.
 
 Signup shows four stages: details, email verification, sign-in method and saving
 the recovery code. Passkey and authenticator setup are alternatives within the

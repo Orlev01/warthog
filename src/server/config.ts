@@ -14,6 +14,7 @@ import { createHash } from "node:crypto";
 import { parseCountryRoutes, type TwilioConfig } from "./notify/twilio";
 import type { SmsLimits } from "./notify/sms-budget";
 import { adminOriginFor, hostnameOf } from "./admin/origin";
+import { publicLinksFor, websiteFor, type PublicLinks, type Website } from "./http/website";
 
 // A local-development fallback only. When the host injects `PORT` (12-factor,
 // INV-104) the server binds that value; this fallback never overrides it.
@@ -215,6 +216,19 @@ export function adminHostFromEnv(env: NodeJS.ProcessEnv = process.env): string |
   if (publicBaseUrl === undefined || publicBaseUrl === "") return null;
   const derived = adminOriginFor(publicBaseUrl);
   return derived === null ? null : hostnameOf(derived);
+}
+
+// The public website for the request proxy and the public pages (docs/adr/website-root-domain.md):
+// derived from PUBLIC_BASE_URL (`app.<domain>` → `<domain>`) without throwing, so it is safe per
+// request and under `next build`; null when there is no separate website host.
+export function websiteFromEnv(env: NodeJS.ProcessEnv = process.env): Website | null {
+  const publicBaseUrl = env.PUBLIC_BASE_URL;
+  return publicBaseUrl === undefined || publicBaseUrl === "" ? null : websiteFor(publicBaseUrl);
+}
+
+/** Where the public screens' brand and account links point (relative without a website host). */
+export function publicLinksFromEnv(env: NodeJS.ProcessEnv = process.env): PublicLinks {
+  return publicLinksFor(websiteFromEnv(env));
 }
 
 // Production must never run with dev tools enabled or an in-process pglite database.

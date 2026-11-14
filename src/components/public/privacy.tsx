@@ -1,5 +1,6 @@
 import * as React from "react";
 
+import { RELATIVE_LINKS, type PublicLinks } from "@/server/http/website";
 import { PublicPage, PublicPanel, PublicSection } from "./public-page";
 import { LAST_UPDATED, OPERATOR_NAME, SUPPORT_EMAIL } from "./operator";
 
@@ -25,9 +26,10 @@ import { LAST_UPDATED, OPERATOR_NAME, SUPPORT_EMAIL } from "./operator";
 // use security words like "encryption" (brief design_ux.copy expressly permits them
 // here); the rest stays plain Australian English.
 
-export function Privacy() {
+export function Privacy({ links = RELATIVE_LINKS }: { links?: PublicLinks } = {}) {
   return (
     <PublicPage
+      links={links}
       title="Privacy"
       current="privacy"
       lead="Your privacy and security, in plain words: what we store, where we keep it, who can read it, and how you take it back."

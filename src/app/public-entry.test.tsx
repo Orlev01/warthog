@@ -131,3 +131,62 @@ test("a cookie is not proof: forged, expired and revoked sessions still see sign
     );
   }
 });
+
+// --- The website's own host (docs/adr/website-root-domain.md) ------------------------------
+
+async function withPublicBaseUrl<T>(value: string, run: () => Promise<T>): Promise<T> {
+  const saved = process.env.PUBLIC_BASE_URL;
+  process.env.PUBLIC_BASE_URL = value;
+  try {
+    return await run();
+  } finally {
+    if (saved === undefined) delete process.env.PUBLIC_BASE_URL;
+    else process.env.PUBLIC_BASE_URL = saved;
+  }
+}
+
+function hrefsOf(markup: string): string[] {
+  return [...markup.matchAll(/<a\b[^>]*\bhref="([^"]*)"/gi)].map((m) => m[1]!);
+}
+
+test("the website host always shows the front door, signed in or not, without opening a database", async () => {
+  await withPublicBaseUrl("https://app.warthog.example", async () => {
+    shared[key] = async () => {
+      throw new Error("the website host must not query a database");
+    };
+    try {
+      for (const cookie of [undefined, `__Host-wh_session=${token}`]) {
+        const markup = renderToStaticMarkup(
+          await withPageRequest("/", cookie, () => Home(), { host: "warthog.example" }),
+        );
+        assert.match(markup, /Your rules\./);
+        const links = hrefsOf(markup);
+        assert.ok(links.includes("https://app.warthog.example/signin"), "Sign in goes to the app");
+        assert.ok(links.includes("https://app.warthog.example/signup"), "Sign up goes to the app");
+        assert.ok(links.includes("https://warthog.example/"), "the brand stays on the website");
+        assert.ok(!links.some((href) => href === "/signin" || href === "/signup"), "no account link is relative to the website");
+      }
+    } finally {
+      shared[key] = async () => db;
+    }
+  });
+});
+
+test("with a website host, the app's root sends signed-out visitors to sign-in and members home", async () => {
+  await withPublicBaseUrl("https://app.warthog.example", async () => {
+    const app = { host: "app.warthog.example" };
+    await expectRedirect(() => withPageRequest("/", undefined, () => Home(), app), "/signin");
+    await expectRedirect(() => withPageRequest("/", "__Host-wh_session=malformed", () => Home(), app), "/signin");
+    await expectRedirect(() => withPageRequest("/", `__Host-wh_session=${token}`, () => Home(), app), "/home");
+  });
+});
+
+test("without a website host the app's root keeps the front door with relative account links", async () => {
+  await withPublicBaseUrl("http://localhost:3000", async () => {
+    const markup = renderToStaticMarkup(
+      await withPageRequest("/", undefined, () => Home(), { host: "localhost:3000" }),
+    );
+    assert.ok(hrefsOf(markup).includes("/signin"));
+    assert.ok(hrefsOf(markup).includes("/signup"));
+  });
+});

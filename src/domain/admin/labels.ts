@@ -76,7 +76,7 @@ const ROUTES: Readonly<Record<RouteClass, string>> = {
   other: "Other",
 };
 
-const HOSTS: Readonly<Record<HostClass, string>> = { app: "App", admin: "Admin portal", other: "Other hosts" };
+const HOSTS: Readonly<Record<HostClass, string>> = { app: "App", admin: "Admin portal", site: "Website", other: "Other hosts" };
 
 export function routeLabel(route: RouteClass): string {
   return ROUTES[route];
