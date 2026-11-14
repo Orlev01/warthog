@@ -26,12 +26,15 @@ export function proxy(request: NextRequest) {
   // internal paths except the handoff, and `/admin` there is an ordinary path.
   // The public website host (docs/adr/website-root-domain.md), when the app has one, serves
   // only the front door and the public pages; its www. name and every other path forward to
-  // the website or the app with a permanent redirect to a configured origin.
+  // the website or the app with a permanent redirect to a configured origin. A redirect is not
+  // counted: the request it leads to is, so a visit counts once.
+  // The host comes from the request's headers, which a non-browser client can set (the ingress
+  // passes X-Forwarded-Host through), so it only chooses which host's routing a request gets;
+  // nothing that protects an account or the portal depends on it.
   const hostname = requestHostname(request.headers);
   const site = routeForWebsite(hostname, websiteFromEnv(), path);
   if (site.kind === "passthrough") return NextResponse.next();
   if (site.kind === "redirect") {
-    getTrafficCounter().count("site", classifyRoute(path), requestKind(request.headers, false));
     return NextResponse.redirect(redirectTarget(site.origin, path, request.nextUrl.search), { status: 308, headers: NO_STORE });
   }
   const adminHost = adminHostFromEnv();

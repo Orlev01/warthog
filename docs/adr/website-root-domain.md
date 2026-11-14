@@ -20,9 +20,11 @@ Website Builder placeholder.
   Every other path answers `308` to the same path and query on the app. Old links and bookmarks,
   such as `/signin?next=…`, therefore still land in the right place.
 - **`www.<domain>`** answers `308` to the website, keeping the path and query.
-- **The app host** (`app.warthog.com.au`) behaves as before, except at `/`:
-  - signed-in members still go to Home;
-  - signed-out visitors now go to `/signin` instead of the front door.
+- **The app host** (`app.warthog.com.au`) behaves as before, except:
+  - at `/`, signed-out visitors now go to `/signin` instead of the front door (signed-in
+    members still go to Home);
+  - a signed-in member who opens Sign up (the website shows it to everyone) goes to Home, or
+    their safe `next`, as Sign in already does. `/signin?fresh=1` is unaffected.
 
   Help, compatibility, privacy and terms stay on the app host too, so the workspace's Help link
   and the account screens' policy links never leave the app.
@@ -31,20 +33,46 @@ Website Builder placeholder.
     and the brand links to the website.
   - The account screens' brand and "Back to home" lead to the website, so they never loop back
     to sign-in.
+  - The public 404's brand and "Go to Warthog" lead to the website too, not the app's `/` (it is
+    shown to visitors who aren't signed in); on the admin host they keep `/`. The error screen
+    keeps `/`: it also catches errors in the signed-in workspace, and `/` takes a member Home.
   - Without a separate host, all of these stay relative.
-- **Traffic.** Website requests are counted under their own host class, `site`, labelled
-  "Website" on the admin Traffic page.
+  - The link helpers live in `src/server/http/public-links.ts`, which has no runtime imports, so
+    the public components never import the admin routing module (and its internal prefix), even
+    if one becomes a client component.
+- **Metadata.**
+  - On the website and admin hosts, the root metadata leaves out the web app manifest and the
+    iOS standalone tags (`apple-mobile-web-app-capable`), so installing from either cannot create
+    an app on the wrong origin (the manifest starts at `/home`, which the website forwards to the
+    app and the admin host does not have). Only the app host keeps them.
+  - `/`, `/help`, `/help/compatibility`, `/privacy` and `/terms` declare a canonical URL on the
+    website origin, on both hosts, so search engines index the website rather than the app
+    host's copies.
+- **Traffic.** Requests the website serves itself are counted under their own host class, `site`,
+  labelled "Website" on the admin Traffic page. Its redirects (www → website, website → app) are
+  not counted; the request they lead to is, so a visit counts once.
 
 ## Rules
 
-- Only the proxy branches on the host, and only to narrow what a host serves. Every redirect
-  target is an origin derived from configuration, never the request's own `Host`. The path is set
-  as a pathname, so `//elsewhere` cannot change the target host.
+- **Host checks** only narrow what a host serves, or which links and metadata a page shows
+  (today in the proxy, the root page, the root metadata and the 404 page). Every redirect target
+  and absolute URL comes from configuration, never the request's own `Host`. The path is set as a
+  pathname, so `//elsewhere` cannot change the target host.
+- **The request host is not a security boundary.** It is read from `x-forwarded-host`, else
+  `host` (`requestHostname` in `src/server/admin/origin.ts`). Azure Container Apps ingress passes
+  a client-supplied `X-Forwarded-Host` through, so a non-browser client can choose which host's
+  routing applies to its own request: in production, `X-Forwarded-Host: evil.example` sent to
+  `warthog.com.au/signin` serves the app's sign-in page. The host split is a routing convenience,
+  and nothing security-relevant may depend on it. Cookies are `__Host-`, Origin checks compare
+  against configured origins, and responses are `no-store` (no cache keeps a response routed by a
+  forged header). Open item: reading only `Host` may be better, but first verify with a header
+  echo on a non-production revision what the ingress puts in `Host`.
 - **Redirects** are permanent (`308` keeps the method) and sent with `cache-control: no-store`, so
   browsers don't remember them if this changes.
 - **Sessions.** The session cookie is `__Host-` (host-only), so the website never receives it.
-  Passkeys keep the RP ID `warthog.com.au`, which covers both hosts, so existing passkeys are
-  unaffected.
+  Passkeys keep the RP ID `app.warthog.com.au`, so existing passkeys are unaffected. The website
+  never runs a passkey ceremony and, like the admin host, cannot use members' passkeys, so sign-in
+  has to stay on the app host.
 - **The admin portal stays hidden.** The website serves none of its paths, and anything else on
   the website forwards to the app. There, `/admin` is an ordinary missing page.
 - `Strict-Transport-Security: …; includeSubDomains` is now also sent from the root domain. Every
@@ -72,6 +100,23 @@ az containerapp hostname bind -g "$RESOURCE_GROUP" -n "$APP_NAME" --hostname www
   --environment "$ENVIRONMENT_NAME" --validation-method CNAME
 ```
 
-Certificate renewal needs the A record to keep pointing at the environment's IP; a new environment
-would need the record updated. As with `app` and `admin`, never delete the container app while
-these records point at it.
+Both certificates expire on 14 May 2027; check before then that they have renewed. The apex's
+certificate uses HTTP validation. Its first issuance succeeded while the previous image, which
+answers the validation paths with `404`, served the apex, so the platform ingress answers the
+validation, not the app, and the website's `308`s don't affect renewal. Renewal needs the A
+record to keep pointing at the environment's IP; a new environment would need the record updated.
+As with `app` and `admin`, never delete the container app while these records point at it.
+
+## Releases and rollback
+
+- The website shares the app's single replica, so every release's stop-before-start window also
+  takes the front door down.
+- **Prefer fixing forward.** An image older than `d45072c`, with the apex and www still bound,
+  serves the whole app on `warthog.com.au` and `www`: its proxy routes every host but the admin
+  host as the app. Sign-in there fails, because the Origin check answers `403` and the RP ID
+  `app.warthog.com.au` covers neither name. Its admin Traffic page also drops `site.*` rows
+  from the breakdowns, while the request total includes them.
+- To go below `d45072c`, first remove both hostnames
+  (`az containerapp hostname delete -g "$RESOURCE_GROUP" -n "$APP_NAME" --hostname …`) and take
+  the expected configuration hash afterwards, or accept a broken front door for the window. Bind
+  them again, as above, once a later image is back.

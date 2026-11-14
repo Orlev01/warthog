@@ -14,13 +14,19 @@ delivery, UX and design) fed it; where they differed the stricter option won.
 
 - **One container, two hosts.** The same Next.js process serves both hosts.
   `src/proxy.ts` decides by the request host (`x-forwarded-host`, else `host`,
-  lower-cased, port stripped). On the admin host every path is rewritten under
-  `/admin` (`/` → `/admin`, `/usage` → `/admin/usage`, `/session` →
-  `/admin/session`), static assets pass through, and a path that already starts
-  with `/admin` is 404. On the app host (and any unknown host) `/admin` and
-  `/admin/*` are 404. So the member app, `/api/auth`, `/oauth`, `/mcp`, `/dev`
-  and `/connect` do not exist on the admin origin, and no admin page exists on
-  the app origin. Admin responses carry `X-Robots-Tag: noindex, nofollow`.
+  lower-cased, port stripped). The ingress passes a client-supplied
+  `X-Forwarded-Host` through, so a non-browser client can choose which host's
+  routing its own request gets: the split is a routing convenience, not a
+  security boundary, and the portal's own session gate is what protects it
+  (see [the website decision](../adr/website-root-domain.md#rules)). On the
+  admin host every path is rewritten under the internal prefix (§2; `/` →
+  `<prefix>`, `/usage` → `<prefix>/usage`, `/session` → `<prefix>/session`),
+  static assets pass through, and a path that already starts with the prefix is
+  404. On the app host (and any unknown host) the prefix's paths are 404 except
+  `<prefix>/handoff`, and `/admin` is an ordinary missing page. So the member
+  app, `/api/auth`, `/oauth`, `/mcp`, `/dev` and `/connect` do not exist on the
+  admin origin, and no admin page exists on the app origin. Admin responses
+  carry `X-Robots-Tag: noindex, nofollow`.
   The proxy also forwards the original path as `x-admin-pathname` so the admin
   chrome lights the current section without `usePathname` (a rewritten request
   would otherwise hydrate with a different path).
@@ -150,7 +156,7 @@ metrics failure never fails the user's action), names in
 | `connector.refresh` | 1 | `connectorId`; `outcome`: `ok`, `failed`, `lapsed` |
 | `job.failure` | 1 | `outcome`: the sweep name or job type |
 | `account.deleted` | 1 | — |
-| `http.requests` | count per minute | `outcome`: `<host>.<route>.<kind>` from closed vocabularies (host `app`, `admin`, `other`; route `public`, `auth`, `portal`, `api`, `mcp`, `oauth`, `admin`, `health`, `other`; kind `document`, `fetch`, `limited`) |
+| `http.requests` | count per minute | `outcome`: `<host>.<route>.<kind>` from closed vocabularies (host `app`, `admin`, `site` for the website host (labelled "Website"), `other`; route `public`, `auth`, `portal`, `api`, `mcp`, `oauth`, `admin`, `health`, `other`; kind `document`, `fetch`, `limited`) |
 | `admin.handoff`, `admin.session`, `admin.signout`, `admin.lookup` | 1 | `outcome` as in §2 |
 
 Traffic is counted in the proxy into a process singleton keyed by those labels

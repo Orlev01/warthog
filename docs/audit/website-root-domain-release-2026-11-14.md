@@ -18,8 +18,10 @@ as well as their logged in portal independently". This is PR #26 (main `d45072c`
   The brand on the sign-in screens leads to the website.
 
 The website host is derived from `PUBLIC_BASE_URL`, like the admin host, so this was a plain
-image-only `update`. There are no migrations (still 83) and no configuration, infrastructure,
-workflow or delivery-script changes. The traffic counters gained a `site` host class.
+image-only `update` that changed no configuration. The hostname binding, done separately before
+it, added two custom domains and their certificates. There are no migrations (still 83) and no
+infrastructure, workflow or delivery-script changes. The traffic counters gained a `site` host
+class.
 
 ## Hostname binding (before the release)
 
@@ -43,8 +45,19 @@ following were then bound with free managed certificates, both issued at once an
 All four hostnames are SNI bindings. The expected configuration hash (`cb8af1b4…`) was taken
 after the binding.
 
-Not yet recorded: `existingCustomDomains` in the private workload parameters, which matters only
-for a future `create`. It should now list all four domains. `update` never needs it.
+`existingCustomDomains` in the private workload parameters should stay `[]`. `update` never uses
+the workload template, and `create` refuses any other value (first creation cannot bind a
+domain). After a `create`, all four hostnames would be bound again:
+
+- `app` and `admin` with CNAME validation;
+- the apex with the A record and HTTP validation (the IP from
+  `az containerapp env show … --query properties.staticIp`);
+- `www` with CNAME validation.
+
+The value matters only for a manual template apply over the live app, which is a full resource
+update. It must then list all four bindings exactly as
+`az containerapp show … --query properties.configuration.ingress.customDomains` prints them, or
+the apply drops the ones left out.
 
 ## Verification
 

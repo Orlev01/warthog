@@ -18,9 +18,11 @@
 // page with nothing to tell it apart. The prefix is visible only to visitors of the admin
 // host, who already know the portal exists.
 //
-// Only the proxy branches on the host, and only to NARROW what is served; nothing builds a
-// URL from it (every absolute URL still comes from config), so a spoofed Host header can at
-// most reach a 404.
+// The proxy branches on the host only to NARROW what is served (and a few public pages only to
+// pick their links); nothing builds a URL from it (every absolute URL still comes from config).
+// The host is not a security boundary: a non-browser client can send its own X-Forwarded-Host
+// and get another host's routing for its own request, which still meets the same sessions
+// (host-only cookies), Origin checks and portal sign-in.
 
 export const ADMIN_PREFIX = "/wh-op-7c4f2a9e";
 export const ADMIN_EXCHANGE_PATH = "/session";

@@ -2,7 +2,7 @@ import { AGENT_PLATFORMS as PLATFORMS } from "@/domain/agents/compatibility";
 import * as React from "react";
 import { ExternalLink } from "lucide-react";
 
-import { RELATIVE_LINKS, type PublicLinks } from "@/server/http/website";
+import { RELATIVE_LINKS, type PublicLinks } from "@/server/http/public-links";
 import { CopyButton } from "../ui/copy-button";
 import { PublicPage, PublicPanel, PublicSection } from "./public-page";
 

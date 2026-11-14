@@ -81,8 +81,9 @@ Bound on 13 November, between releases, as [the launch runbook](../admin-portal-
   - `/api/auth/signin`, `/oauth/authorize` and `/api/health` return 404;
   - responses carry `X-Robots-Tag: noindex, nofollow`, HSTS and the app's CSP.
 - On the app host, health is ok, `/` returns 200 and `/admin` returns 404.
-- Not yet recorded: `existingCustomDomains` in the private workload parameters (only a
-  future `create` needs it).
+- `existingCustomDomains` in the private workload parameters should stay `[]`: `create`
+  refuses any other value and `update` never uses it (corrected 14 November; see
+  [the launch runbook](../admin-portal-launch.md) §2).
 
 ## Coordination
 

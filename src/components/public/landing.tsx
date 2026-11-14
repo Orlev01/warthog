@@ -18,7 +18,7 @@ import {
   SlidersHorizontal,
 } from "lucide-react";
 
-import { RELATIVE_LINKS, type PublicLinks } from "@/server/http/website";
+import { RELATIVE_LINKS, type PublicLinks } from "@/server/http/public-links";
 import { Wordmark } from "../shell/wordmark";
 import { PolicyLinks } from "./policy-links";
 import { AskFirstFlow, ConnectOnceDiagrams, SharedMemoryFlow } from "./landing-diagrams";

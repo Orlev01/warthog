@@ -2,6 +2,7 @@ import * as React from "react";
 
 import { loadConfig, publicLinksFromEnv } from "@/server/config";
 import { Help } from "@/components/public/help";
+import { publicPageMetadata } from "@/app/site-metadata";
 
 // E05-S02 — Compatibility page entry. A PUBLIC `/help/compatibility` page, reachable
 // by anyone with no authentication (it sits at the top level, under no guard layout),
@@ -11,6 +12,10 @@ import { Help } from "@/components/public/help";
 // values are read only through the config module (secrets-from-env; INV-103).
 //
 // Thin entry over the render-tested view: all content lives in src/components/public/help.tsx.
+
+export function generateMetadata() {
+  return publicPageMetadata("/help/compatibility");
+}
 
 export default async function CompatibilityPage({
   searchParams,

@@ -74,8 +74,9 @@ function signInLocation(url: URL): string {
 // (no protocol jargon on a primary screen); nothing from the request is echoed, so a
 // hostile redirect or client id never reaches the page.
 // It uses the shared standalone page (Warthog's tokens, both colour schemes, a brand bar and
-// one panel), and its way forward works signed in or out: "/" opens Home for a member and the
-// front door for anyone else (public-09, visual-03).
+// one panel), and its way forward works signed in or out: "/" opens Home for a member and,
+// for anyone else, sign-in when the front door has its own host, else the front door
+// (public-09, visual-03).
 function invalidRequestPage(): Response {
   return standaloneResponse({
     title: "Connection request not valid",

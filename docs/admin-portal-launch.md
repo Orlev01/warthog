@@ -54,9 +54,14 @@ az containerapp hostname bind -g "$RESOURCE_GROUP" -n "$APP_NAME" --hostname adm
 az containerapp hostname list -g "$RESOURCE_GROUP" -n "$APP_NAME" -o table
 ```
 
-Record both bindings in the private workload parameters (`existingCustomDomains`, copied
-exactly from `az containerapp show … --query properties.configuration.ingress.customDomains`)
-so a future `create` operation would carry them; `update` never needs them.
+Leave `existingCustomDomains` in the private workload parameters as `[]`. `update` never uses
+the workload template, and `create` refuses any other value (first creation cannot bind a
+domain), so after a `create` every hostname is bound again: this one as above, the website's as
+in [its decision](adr/website-root-domain.md#hostname-binding-separate-from-the-release). The
+value matters only for a manual template apply over the live app, which is a full resource
+update: it must then list every binding exactly as
+`az containerapp show … --query properties.configuration.ingress.customDomains` prints them, or
+the apply drops the ones left out.
 
 Never delete the container app while the `admin` CNAME exists (subdomain takeover); remove
 the record first.

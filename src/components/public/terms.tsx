@@ -1,6 +1,6 @@
 import * as React from "react";
 
-import { RELATIVE_LINKS, type PublicLinks } from "@/server/http/website";
+import { RELATIVE_LINKS, type PublicLinks } from "@/server/http/public-links";
 import { PublicPage, PublicPanel, PublicSection } from "./public-page";
 import { LAST_UPDATED, OPERATOR_NAME, SUPPORT_EMAIL } from "./operator";
 

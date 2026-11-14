@@ -3,6 +3,7 @@ import { ArrowRight } from "lucide-react";
 
 import { PublicPage, PublicPanel, PublicSection } from "@/components/public/public-page";
 import { publicLinksFromEnv } from "@/server/config";
+import { publicPageMetadata } from "@/app/site-metadata";
 
 // E18-S16 — Help page entry (`/help`). A PUBLIC page, reachable by anyone with NO
 // authentication: it sits at the top level, under no guard layout, because a person
@@ -25,6 +26,10 @@ function Action({ href, children }: { href: string; children: React.ReactNode })
       {children} <ArrowRight size={16} aria-hidden="true" />
     </a>
   );
+}
+
+export function generateMetadata() {
+  return publicPageMetadata("/help");
 }
 
 export default function HelpPage() {

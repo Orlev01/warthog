@@ -1,5 +1,6 @@
 import * as React from "react";
 import { safeReturnPath } from "@/server/auth/return-path";
+import { redirectSignedInVisitor } from "@/server/auth/public-entry";
 import SignupFlow from "@/components/auth/signup-flow";
 
 // Thin sign-up entry (task E04-S13, wired by E04-S24): mounts the client sign-up flow,
@@ -11,11 +12,15 @@ import SignupFlow from "@/components/auth/signup-flow";
 // Review fix B6: a flow started while signed out (an agent connection, an approval link,
 // a household invite) arrives as `?next=<relative path>`; it is validated here (and again
 // in the flow) and the person goes back there after success, never off-site.
+// A visitor who is already signed in goes on to Home (or that safe return path), as on
+// sign-in: the website's Sign up buttons can't know the app's session (it is host-only), so a
+// member who follows one lands in their workspace instead of a second account's form.
 export default async function CreateYourAccountPage({
   searchParams,
 }: {
   searchParams?: Promise<Record<string, string | string[] | undefined>>;
 }) {
   const next = (await searchParams)?.next;
+  await redirectSignedInVisitor(next);
   return <SignupFlow returnTo={safeReturnPath(next)} />;
 }

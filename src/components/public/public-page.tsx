@@ -1,6 +1,6 @@
 import * as React from "react";
 
-import { RELATIVE_LINKS, type PublicLinks } from "@/server/http/website";
+import { RELATIVE_LINKS, type PublicLinks } from "@/server/http/public-links";
 import { Wordmark } from "../shell/wordmark";
 import { PolicyLinks } from "./policy-links";
 

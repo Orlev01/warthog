@@ -45,20 +45,6 @@ export function websiteFor(publicBaseUrl: string): Website | null {
   };
 }
 
-// Where the public screens point. `home` is the brand link; `account` prefixes the paths
-// only the app serves (/signin, /signup, /recover, /reset). Without a separate website both
-// stay relative, which is also what a render test without configuration sees.
-export interface PublicLinks {
-  readonly home: string;
-  readonly account: string;
-}
-
-export const RELATIVE_LINKS: PublicLinks = { home: "/", account: "" };
-
-export function publicLinksFor(website: Website | null): PublicLinks {
-  return website ? { home: `${website.origin}/`, account: website.appOrigin } : RELATIVE_LINKS;
-}
-
 // The paths the website host serves itself. Everything public a visitor reads before
 // signing in; nothing that needs a session or the app's cookies.
 export function isWebsitePath(pathname: string): boolean {

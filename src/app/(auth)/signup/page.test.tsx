@@ -30,6 +30,7 @@
 // We render with `react-dom/server` (no DOM/jsdom — React component testing is a
 // per-job ADR) and read the emitted markup, mirroring the view render tests.
 
+import { withPageRequest } from "@/test/page-request";
 import * as React from "react";
 import { test } from "node:test";
 import assert from "node:assert/strict";
@@ -131,8 +132,8 @@ function actionableButtons(markup: string): { name: string; attrs: string }[] {
     .map((b) => ({ name: visibleText(b.inner) || attr(b.attrs, "aria-label") || "", attrs: b.attrs }));
 }
 
-// Render the page entry's default export (the route's screen). The thin entry mounts
-// a view from props alone, so it renders without a live request scope. `searchParams`
+// Render the page entry's default export (the route's screen) in an anonymous request, with
+// no cookie or database (a signed-in visitor is sent on; src/app/public-entry.test.tsx). `searchParams`
 // / `params` are supplied as resolved promises (the Next 15 shape) so an entry that
 // reads them sees an empty, fresh-GET request; an entry that ignores them is
 // unaffected. The result may be sync JSX or an async server component — await either.
@@ -142,11 +143,13 @@ async function renderPage(Page: unknown): Promise<string> {
     "function",
     "the sign-up entry must have a default-exported page component",
   );
-  const element = await Promise.resolve(
-    (Page as (props: unknown) => unknown)({
-      searchParams: Promise.resolve({}),
-      params: Promise.resolve({}),
-    }),
+  const element = await withPageRequest("/signup", undefined, () =>
+    Promise.resolve(
+      (Page as (props: unknown) => unknown)({
+        searchParams: Promise.resolve({}),
+        params: Promise.resolve({}),
+      }),
+    ),
   );
   return renderToStaticMarkup(element as React.ReactElement);
 }

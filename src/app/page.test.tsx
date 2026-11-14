@@ -65,20 +65,29 @@ function hrefs(markup: string): (string | null)[] {
   return out;
 }
 
-// Render the real page in an anonymous request, with no cookie or database.
+// Render the real page in an anonymous request, with no cookie or database. These tests are
+// about an app whose root shows the front door, so the public base URL is pinned to one with
+// no separate website host (src/app/public-entry.test.tsx covers the website host).
 async function renderPage(Page: unknown): Promise<string> {
   assert.equal(
     typeof Page,
     "function",
     "the home entry must have a default-exported page component",
   );
-  const element = await withPageRequest("/", undefined, () =>
-    (Page as (props: unknown) => unknown)({
-      searchParams: Promise.resolve({}),
-      params: Promise.resolve({}),
-    }),
-  );
-  return renderToStaticMarkup(element as React.ReactElement);
+  const saved = process.env.PUBLIC_BASE_URL;
+  process.env.PUBLIC_BASE_URL = "http://localhost:3000";
+  try {
+    const element = await withPageRequest("/", undefined, () =>
+      (Page as (props: unknown) => unknown)({
+        searchParams: Promise.resolve({}),
+        params: Promise.resolve({}),
+      }),
+    );
+    return renderToStaticMarkup(element as React.ReactElement);
+  } finally {
+    if (saved === undefined) delete process.env.PUBLIC_BASE_URL;
+    else process.env.PUBLIC_BASE_URL = saved;
+  }
 }
 
 // === AC2 — public, no authentication ===========================================

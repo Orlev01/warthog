@@ -4,6 +4,7 @@ import assert from "node:assert/strict";
 import { renderToStaticMarkup } from "react-dom/server";
 import Home from "./page";
 import SignInPage from "./(auth)/signin/page";
+import SignUpPage from "./(auth)/signup/page";
 import { freshDb } from "../test/db";
 import { createUser } from "../server/db/users";
 import { createSession, deleteSession } from "../server/auth/session";
@@ -42,6 +43,17 @@ after(async () => {
 function signin(cookie?: string, next?: unknown) {
   return withPageRequest("/signin", cookie, () =>
     SignInPage({
+      searchParams: Promise.resolve({ next } as Record<
+        string,
+        string | string[] | undefined
+      >),
+    }),
+  );
+}
+
+function signup(cookie?: string, next?: unknown) {
+  return withPageRequest("/signup", cookie, () =>
+    SignUpPage({
       searchParams: Promise.resolve({ next } as Record<
         string,
         string | string[] | undefined
@@ -93,16 +105,22 @@ test("external, ambiguous and self-referential return paths go to Home", async (
   }
 });
 
+// The tests up to the website section are about an app whose root shows the front door, so
+// they pin a public base URL with no separate website host.
+const NO_WEBSITE = "http://localhost:3000";
+
 test("a missing session serves public pages without opening a database", async () => {
   shared[key] = async () => {
     throw new Error("anonymous entry must not query a database");
   };
   try {
     assert.match(renderToStaticMarkup(await signin()), /Welcome back/);
-    assert.match(
-      renderToStaticMarkup(await withPageRequest("/", undefined, () => Home())),
-      /Sign up/,
-    );
+    await withPublicBaseUrl(NO_WEBSITE, async () => {
+      assert.match(
+        renderToStaticMarkup(await withPageRequest("/", undefined, () => Home())),
+        /Sign up/,
+      );
+    });
   } finally {
     shared[key] = async () => db;
   }
@@ -123,12 +141,14 @@ test("a cookie is not proof: forged, expired and revoked sessions still see sign
       renderToStaticMarkup(await signin(`__Host-wh_session=${value}`)),
       /Welcome back/,
     );
-    assert.match(
-      renderToStaticMarkup(
-        await withPageRequest("/", `__Host-wh_session=${value}`, () => Home()),
-      ),
-      /Sign up/,
-    );
+    await withPublicBaseUrl(NO_WEBSITE, async () => {
+      assert.match(
+        renderToStaticMarkup(
+          await withPageRequest("/", `__Host-wh_session=${value}`, () => Home()),
+        ),
+        /Sign up/,
+      );
+    });
   }
 });
 
@@ -189,4 +209,17 @@ test("without a website host the app's root keeps the front door with relative a
     assert.ok(hrefsOf(markup).includes("/signin"));
     assert.ok(hrefsOf(markup).includes("/signup"));
   });
+});
+
+// The website's Sign up buttons can't know the app's host-only session, so a member who
+// follows one is sent on like sign-in does; everyone else still sees the form.
+test("a signed-in member who opens sign-up goes Home or to a safe return path; visitors see the form", async () => {
+  const cookie = `__Host-wh_session=${token}`;
+  await expectRedirect(() => signup(cookie), "/home");
+  const next = "/oauth/authorize?state=opaque&redirect_uri=http%3A%2F%2F127.0.0.1%3A54321%2Fcallback";
+  await expectRedirect(() => signup(cookie, next), next);
+  await expectRedirect(() => signup(cookie, "//evil.example"), "/home");
+  for (const visitor of [undefined, "__Host-wh_session=malformed"]) {
+    assert.match(renderToStaticMarkup(await signup(visitor)), /Create your account/);
+  }
 });
