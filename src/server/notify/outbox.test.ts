@@ -116,6 +116,17 @@ test("sendSms records one message stamped channel 'sms' with recipient, body and
 // AC: every channel is recorded into ONE list, readable in send order.
 // ---------------------------------------------------------------------------
 
+test("sendEmail records the branded email content when the message carries it, and nothing extra when not", async () => {
+  const ob = createOutbox();
+  const email = { subject: "New passkey added", heading: "A new passkey was added", paragraphs: ["A new passkey was added."] };
+  await ob.sendEmail({ recipient: "person@example.com", body: "A new passkey was added.", email });
+  await ob.sendEmail({ recipient: "person@example.com", body: "plain" });
+  const [branded, plain] = ob.list();
+  assert.deepEqual(branded!.email, email, "the email content is recorded verbatim");
+  assert.equal(branded!.body, "A new passkey was added.", "the plain body is still recorded");
+  assert.ok(!("email" in plain!), "a message without email content records none");
+});
+
 test("messages from every channel accumulate in ONE list, in send order", async () => {
   const ob = createOutbox();
 

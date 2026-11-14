@@ -33,7 +33,7 @@ import { listMobileNumbers } from "../db/mobile-numbers";
 import { verifyEmailCode } from "./email-code";
 import { finishPasskeyRegistration } from "./passkey";
 import { issueRecoveryCode } from "./recovery";
-import { createSession, lockActiveAccount, type CreatedSession } from "./session";
+import { createSession, lockAccountForEviction, type CreatedSession } from "./session";
 import { evictLostFactors } from "./recover-session";
 import { SUPPORT_EMAIL } from "../../components/public/operator";
 import { enqueue } from "../db/jobs";
@@ -41,6 +41,7 @@ import { withTransaction } from "../db/index";
 import type { Clock } from "../seams/clock";
 import type { Random } from "../seams/random";
 import type { Senders } from "../notify/senders";
+import { SECURITY_ALERT_FOOTNOTE, type EmailContent } from "../notify/email";
 import type { Db } from "../db/index";
 import { releaseStore, type ReleaseStore } from "../crypto/release-store";
 
@@ -63,24 +64,55 @@ export const REENROL_WINDOW_MS = SEVEN_DAYS_MS;
 // the handler can drive completeAccountReset for the right person.
 export const COMPLETE_JOB_TYPE = "account_reset.complete";
 
+// A reset alert: the plain `body` every channel sends (push, SMS, and the email's plain
+// copy) and the branded `email` it renders as. Neither carries a code, token or link.
+interface ResetAlert {
+  readonly body: string;
+  readonly email: EmailContent;
+}
+
 // A fixed, code-free notice sent on every channel when a reset is requested. It
 // carries no sensitive value (no code, token or link that could be acted on by
 // reply): approvals and cancellation happen only inside the signed-in app
 // (INV-18), so the alert simply tells the person to open the app if it wasn't
 // them.
-const ALERT_BODY =
-  "A reset of your Warthog account was requested and will complete in 7 days. " +
-  "If this wasn't you, open the Warthog app on a device you're still signed in on and cancel it.";
+const ALERT_BODY: ResetAlert = {
+  body:
+    "A reset of your Warthog account was requested and will complete in 7 days. " +
+    "If this wasn't you, open the Warthog app on a device you're still signed in on and cancel it.",
+  email: {
+    subject: "Account reset requested",
+    heading: "A reset of your account was requested",
+    paragraphs: [
+      "A reset of your Warthog account was requested. It will complete in 7 days.",
+      "If this wasn't you, open the Warthog app on a device you're still signed in on and cancel it.",
+    ],
+    footnote: SECURITY_ALERT_FOOTNOTE,
+  },
+};
 
 // The fixed notice sent on every channel when a reset completes (sign-in audit, founder
 // decision 13 November 2026). The completed reset is a way back in for whoever reads the
 // email for the next 7 days, so the person hears about it everywhere and is told how to
 // close it. Carries no code, token or link.
-const COMPLETED_ALERT_BODY =
-  "Your Warthog account reset has finished: your saved cards and protected details were erased " +
-  "and your agents were disconnected. For the next 7 days, anyone who can read your email can " +
-  "use it to set up a new passkey. If this wasn't you, open Warthog on a device you're still " +
-  `signed in on, choose "This wasn't me — close re-enrolment" and email ${SUPPORT_EMAIL}.`;
+const COMPLETED_ALERT_BODY: ResetAlert = {
+  body:
+    "Your Warthog account reset has finished: your saved cards and protected details were erased " +
+    "and your agents were disconnected. For the next 7 days, anyone who can read your email can " +
+    "use it to set up a new passkey. If this wasn't you, open Warthog on a device you're still " +
+    `signed in on, choose "This wasn't me — close re-enrolment" and email ${SUPPORT_EMAIL}.`,
+  email: {
+    subject: "Your Warthog account reset has finished",
+    heading: "Your account reset has finished",
+    paragraphs: [
+      "Your saved cards and protected details were erased and your agents were disconnected.",
+      "For the next 7 days, anyone who can read your email can use it to set up a new passkey.",
+      "If this wasn't you, open Warthog on a device you're still signed in on, choose " +
+        `"This wasn't me — close re-enrolment" and email ${SUPPORT_EMAIL}.`,
+    ],
+    footnote: SECURITY_ALERT_FOOTNOTE,
+  },
+};
 
 // The cross-aggregate work a completed reset performs, injected because the vault /
 // agent / connection stores live in other aggregates (and are built later).
@@ -192,22 +224,23 @@ export async function requestAccountReset(
   return { ok: true };
 }
 
-// Send one fixed body on every channel the person has registered: push (addressed to the
-// person; the sender finds their devices), email, and an SMS to each VERIFIED mobile. Each
-// channel is sent independently, so one failing sender never silences the others, even one
-// that throws before returning a promise. True when at least one channel accepted it. The
-// send errors are not logged (they may name a recipient).
+// Send one fixed alert on every channel the person has registered: push (addressed to the
+// person; the sender finds their devices), email (rendered from the alert's email content),
+// and an SMS to each VERIFIED mobile. Each channel is sent independently, so one failing
+// sender never silences the others, even one that throws before returning a promise. True
+// when at least one channel accepted it. The send errors are not logged (they may name a
+// recipient).
 async function alertEveryChannel(
   db: Db,
   person: { id: string; email: string },
-  body: string,
+  { body, email }: ResetAlert,
   senders: Senders,
 ): Promise<boolean> {
   const mobiles = senders.sms.enabled === false ? []
     : (await listMobileNumbers(db, person.id)).filter((number) => number.verified);
   const sends: (() => Promise<void>)[] = [
     () => senders.push.sendPush({ recipient: person.id, body }),
-    () => senders.email.sendEmail({ recipient: person.email, body }),
+    () => senders.email.sendEmail({ recipient: person.email, body, email }),
     ...mobiles.map((mobile) => () => senders.sms.sendSms({ recipient: mobile.number, body })),
   ];
   const outcomes = await Promise.allSettled(sends.map(async (send) => send()));
@@ -423,7 +456,9 @@ export async function reenrolAfterReset(
 ): Promise<ReenrolResult> {
   const { rpId, origin, clock, random } = deps;
   return withTransaction(db, async (tx): Promise<ReenrolResult> => {
-    await lockActiveAccount(tx, userId);
+    // The eviction's lock (sign-in-guard.ts): a sign-in or new sign-in method under way on a
+    // lost device either commits first and is evicted below, or waits and is refused.
+    await lockAccountForEviction(tx, userId);
     // Recovery's order: the account, then the recovery code row, before any factor. A
     // recovery racing this re-enrolment then waits here rather than deadlocking, and the
     // later of the two sees (and evicts) the earlier one's passkey.

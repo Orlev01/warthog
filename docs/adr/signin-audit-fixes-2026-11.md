@@ -6,7 +6,8 @@ Settings › Security), then chose to fix its three most serious findings before
 release. All three were already live; none came from the
 [security follow-ups](security-followups-2026-11.md). No new dependency, schema or migration.
 The same day the founder decided three of the findings left open; they are §4–§6, also with no
-new dependency, schema or migration.
+new dependency, schema or migration. On 14 November the founder asked for the race §4 left open
+to be fixed; that is §7, again with no new dependency, schema or migration.
 
 ## 1. Making or replacing an agent access key needs a fresh confirmation, and says so
 
@@ -115,6 +116,42 @@ Founder decision, 13 November 2026.
 - A removal emails the member, alongside the "authenticator added" alert; a failed send never
   undoes it. Passkey removal and authenticator set-up record no activity, so this doesn't either.
 
+## 7. A sign-in or new sign-in method under way on a lost device can't outlive the eviction
+
+Founder request, 14 November 2026. §4's eviction took the account row `FOR SHARE`, as
+`createSession` does, and adding a sign-in method took no account lock. So a sign-in that had
+checked its passkey or code just before a recovery committed could still mint its session just
+after it, and a lost device's session could still store a passkey, an authenticator app or a
+new recovery code.
+
+- Recovery and re-enrolment now take the account row `FOR NO KEY UPDATE`
+  (`lockAccountForEviction`) before they remove anything. That waits for every `FOR SHARE`
+  holder and holds new ones off until the eviction commits. Like deletion's lock, it leaves
+  `FOR KEY SHARE` alone, so foreign-key inserts elsewhere on the account don't wait on it.
+- Every sign-in mints its session in a transaction that takes the row `FOR SHARE` and then
+  checks again that what proved the sign-in is still there (`createSessionWhileProofHolds` in
+  `src/server/auth/sign-in-guard.ts`). That is the passkey the assertion verified, the
+  authenticator app that accepted the code (its row still holding that code's time step or a
+  later one), the recovery code generation the code matched, or the session that approved a new
+  device. If it is gone the sign-in is refused exactly as a failed check is, with nothing
+  written. A passkey sign-in's step-up is stamped in the same transaction.
+- This covers the sign-in page (passkey, and email plus authenticator code) and new-device
+  sign-in (passkey, recovery code, and approval from a signed-in device). An approval now
+  records the approving session, and collecting it is refused once that session has gone, even
+  before recovery discards the account's pending requests after it commits.
+- Adding a passkey, finishing an authenticator set-up and regenerating the recovery code from
+  Settings › Security write in a transaction that takes the row `FOR SHARE` and then checks the
+  session still exists (`whileSignedIn`, `stillSignedIn`). If it has gone they return
+  `signed_out` and write nothing. The authenticator secret is encrypted before that transaction
+  opens, so the lock never waits on the key service.
+- Whichever side commits first, the other sees it. An eviction that commits first leaves nothing
+  to re-check, so the sign-in or change is refused. A session or method that commits first is
+  removed by the eviction along with everything else. Settings removals already take the row
+  `FOR UPDATE`, so a sign-in with a passkey being removed is now refused too.
+- Agent connections made by a lost device's session are still kept, as §4 decided, and each
+  sends its new-agent email. A confirmed step-up needs no change: it is one guarded write to
+  the session row, which the eviction deletes.
+
 ## Left open
 
 These audit findings remain founder decisions:
@@ -124,13 +161,8 @@ These audit findings remain founder decisions:
   no alert; completed resets staying re-enrollable for 30 days with no alert, cancel or banner;
   and the authenticator app being impossible to remove. Recovery still keeps agent keys and
   tokens, by decision, and names the agents for review instead.
-- The eviction isn't serialised against a sign-in, passkey add or authenticator set-up already
-  under way on a lost device. Recovery and re-enrolment take the account row `FOR SHARE`, as
-  `createSession` does, and adding a factor takes no account lock. A sign-in that checked its
-  passkey just before the eviction can still mint a session just after it. The window is the
-  milliseconds between those two statements. Closing it means taking a stronger account lock
-  for the eviction and re-checking the credential, under that lock, when a sign-in session is
-  minted or a factor is added.
+- Resolved by §7 (founder request of 14 November 2026): a sign-in, passkey add or
+  authenticator set-up already under way on a lost device could land just after the eviction.
 - There's no "sign out everywhere", and removing a passkey leaves the sessions it made.
 - Wrong email codes and failed passkey attempts are counted per address across every purpose.
   Anyone who knows the address can keep its owner locked out of sign-in for 15 minutes at a
@@ -162,3 +194,16 @@ against a local `next dev`:
 - The new-agent email reached the dev outbox without the key.
 - Replace within the window made a new key with no prompt, and sent its email.
 - A signed-in `/signin?next=/.//evil.example` redirected to `/home`.
+
+§7 was test-first as well. Each test lands an eviction, or a code regeneration, in the gap
+between a path's check and its write, and fails without the re-check:
+- a passkey sign-in, an authenticator sign-in, and a new-device recovery-code sign-in;
+- a new-device approval whose approving session was evicted;
+- adding a passkey, finishing an authenticator set-up and regenerating the recovery code.
+
+Matching tests show the same paths still succeed with no eviction. PGlite has one connection,
+so the lock waits are certified separately against PostgreSQL 16 in
+`scripts/verify-local-postgres-security.ts`:
+- an eviction holding its lock blocks a sign-in, which is then refused;
+- a sign-in that has passed its re-check, or a passkey being added, blocks the eviction, and
+  the eviction then removes what committed.

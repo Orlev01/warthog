@@ -6,15 +6,19 @@
 // what it is handed, verbatim.
 
 import type { OutgoingMessage, PushSender, EmailSender, SmsSender } from "./senders";
+import type { EmailContent } from "./email";
 import { processSingleton } from "../seams/process-singleton";
 
 // A recorded message: an OutgoingMessage stamped with the channel it was sent
-// on, so the single combined list stays readable per channel.
+// on, so the single combined list stays readable per channel. `email` is the branded
+// content the message carried (present only when it carried some), so `/dev/outbox` can
+// preview the email exactly as a real sender would render it.
 export interface SentMessage {
   readonly channel: "push" | "email" | "sms";
   readonly recipient: string;
   readonly body: string;
   readonly link?: string;
+  readonly email?: EmailContent;
 }
 
 // The outbox serves as all three channel senders and exposes the recorded list
@@ -34,6 +38,7 @@ export function createOutbox(): Outbox {
       recipient: message.recipient,
       body: message.body,
       link: message.link,
+      ...(message.email ? { email: message.email } : {}),
     });
   }
 

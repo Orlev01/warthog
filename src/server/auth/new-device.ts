@@ -37,11 +37,12 @@
 import type { AuthenticationResponseJSON } from "@simplewebauthn/server";
 
 import { verifyEmailCode } from "./email-code";
-import { verifyRecoveryCode } from "./recovery";
+import { verifyRecoveryCodeGeneration } from "./recovery";
 import { finishPasskeyAuthentication } from "./passkey";
 import { pendingStore } from "./pending-store";
 import { SIGN_IN_REQUESTS_PATH } from "./sign-in-requests-path";
-import { createSession, type Session } from "./session";
+import type { Session } from "./session";
+import { createSessionWhileProofHolds, type SignInProof } from "./sign-in-guard";
 import { alertNewDeviceSignIn, deliverAlert } from "./alerts";
 import { requireStepUp } from "./step-up";
 import { getUserByEmail, type User } from "../db/users";
@@ -114,6 +115,9 @@ interface PendingRequest {
   readonly approvalId: string;
   readonly requestedAt: Date;
   approved: boolean;
+  // The signed-in session that approved it. Collecting re-checks that it still exists, so a
+  // request approved from a device that a recovery has since signed out yields nothing.
+  approvingSessionId?: string;
 }
 
 // How long a request can wait to be approved and collected.
@@ -166,14 +170,18 @@ async function completeFirstFactor(
 
 // Mint a fresh session for `userId`, tell the account holder a new device signed in
 // (review fix B7; best effort — a failed alert never undoes the sign-in), and shape it
-// as a successful NewDeviceResult.
+// as a successful NewDeviceResult. The session is minted only while what proved the
+// sign-in is still on the account (sign-in-guard.ts); otherwise it fails with `refused`.
 async function issueSessionFor(
   db: Db,
   userId: string,
   deviceLabel: string,
+  proof: SignInProof,
+  refused: string,
   deps: { clock: Clock; random: Random; emailSender: EmailSender },
 ): Promise<NewDeviceResult> {
-  const created = await createSession(db, userId, { clock: deps.clock, random: deps.random });
+  const created = await createSessionWhileProofHolds(db, userId, proof, { clock: deps.clock, random: deps.random });
+  if (!created) return { ok: false, reason: refused };
   await deliverAlert("new-device-sign-in", () =>
     alertNewDeviceSignIn(db, { userId, deviceLabel }, { emailSender: deps.emailSender }),
   );
@@ -199,7 +207,8 @@ export async function signInNewDeviceWithPasskey(
   );
   if (!assertion.ok) return { ok: false, reason: assertion.reason };
 
-  return issueSessionFor(db, person.id, UNNAMED_DEVICE, deps);
+  const proof: SignInProof = { kind: "passkey", credentialId: assertion.credentialId };
+  return issueSessionFor(db, person.id, UNNAMED_DEVICE, proof, "unknown_credential", deps);
 }
 
 // Recovery code: email code + the person's current recovery code. A failed code,
@@ -212,10 +221,12 @@ export async function signInNewDeviceWithRecoveryCode(
   const person = await completeFirstFactor(db, params.email, params.code, deps);
   if (!person) return { ok: false, reason: "invalid_code" };
 
-  const ok = await verifyRecoveryCode(db, person.id, params.recoveryCode);
-  if (!ok) return { ok: false, reason: "recovery_rejected" };
+  const generation = await verifyRecoveryCodeGeneration(db, person.id, params.recoveryCode);
+  if (!generation) return { ok: false, reason: "recovery_rejected" };
 
-  return issueSessionFor(db, person.id, UNNAMED_DEVICE, deps);
+  // A recovery or regeneration since then replaced the code, and the session is refused.
+  const proof: SignInProof = { kind: "recovery_code", generation };
+  return issueSessionFor(db, person.id, UNNAMED_DEVICE, proof, "recovery_rejected", deps);
 }
 
 // Start an approval-from-a-signed-in-device request. Gated on the email code: a
@@ -306,6 +317,7 @@ export async function approveDeviceSignInRequest(
   const found = findOwnRequest(params.approvalId, params.approvingSession.userId, deps.clock.now());
   if (!found) return { ok: false, reason: "not_found" };
   found.value.approved = true;
+  found.value.approvingSessionId = params.approvingSession.id;
   return { ok: true };
 }
 
@@ -344,6 +356,7 @@ export async function approveNewDeviceRequest(
   }
 
   request.approved = true;
+  request.approvingSessionId = params.approvingSession.id;
   return { ok: true };
 }
 
@@ -359,8 +372,9 @@ export async function collectNewDeviceApproval(
 ): Promise<NewDeviceResult> {
   const request = pendingRequests.get(params.requestId, deps.clock.now());
   if (!request) return { ok: false, reason: "unknown_request" };
-  if (!request.approved) return { ok: false, reason: "not_approved" };
+  if (!request.approved || !request.approvingSessionId) return { ok: false, reason: "not_approved" };
 
   pendingRequests.delete(params.requestId);
-  return issueSessionFor(db, request.userId, request.deviceLabel, deps);
+  const proof: SignInProof = { kind: "approval", sessionId: request.approvingSessionId };
+  return issueSessionFor(db, request.userId, request.deviceLabel, proof, "not_approved", deps);
 }

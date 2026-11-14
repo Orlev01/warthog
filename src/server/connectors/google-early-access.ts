@@ -29,6 +29,7 @@ import { createConnectorRequest, type ConnectorRequest } from "../db/connector-r
 import type { Db } from "../db/index";
 import type { Clock } from "../seams/clock";
 import type { EmailSender } from "../notify/senders";
+import { mapEmailText, OPERATOR_EMAIL_REASON } from "../notify/email";
 
 // The exact funnel label a non-allowlisted person sees (UI copy; do not drift).
 const ASK_TO_JOIN_LABEL = "Early access — ask to join";
@@ -123,6 +124,15 @@ export async function askToJoinEarlyAccess(
       `Someone asked to join Google early access for "${input.connector.name}". ` +
         "Add their email to the early-access allowlist in Warthog if it fits.",
     ),
+    email: mapEmailText({
+      subject: "Google early access request",
+      heading: "Someone asked to join Google early access",
+      paragraphs: [
+        `Someone asked to join Google early access for "${input.connector.name}".`,
+        "Add their email to the early-access allowlist in Warthog if it fits.",
+      ],
+      reason: OPERATOR_EMAIL_REASON,
+    }, scrub),
   });
 
   return request;

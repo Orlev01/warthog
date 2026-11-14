@@ -76,6 +76,7 @@ const COPY = {
   tooMany: "Too many incorrect codes. Wait 10 minutes, then start again.",
   expired: "This set-up has expired. Start again to get a new QR code.",
   verifyFailed: "We couldn't save your authenticator app. Please try again.",
+  signedOut: "You've been signed out on this device, so the app wasn't saved. Sign in again to carry on.",
 } as const;
 
 export function createAddAuthenticator(deps: AddAuthenticatorDeps): AddAuthenticatorController {
@@ -147,6 +148,9 @@ export function createAddAuthenticator(deps: AddAuthenticatorDeps): AddAuthentic
         return;
       case "in_progress":
         set({ error: COPY.inProgress });
+        return;
+      case "signed_out":
+        set({ phase: "idle", secret: undefined, qr: undefined, code: "", error: COPY.signedOut });
         return;
       default:
         set({ error: COPY.verifyFailed });

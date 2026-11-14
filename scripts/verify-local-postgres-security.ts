@@ -4,7 +4,9 @@ import assert from "node:assert/strict";
 import { createHash, randomUUID } from "node:crypto";
 import { withTransaction, type Db } from "../src/server/db/index";
 import { createUser } from "../src/server/db/users";
-import { createSession, verifySession } from "../src/server/auth/session";
+import { createSession, lockAccountForEviction, verifySession } from "../src/server/auth/session";
+import { evictLostFactors } from "../src/server/auth/recover-session";
+import { createSessionWhileProofHolds, whileSignedIn } from "../src/server/auth/sign-in-guard";
 import { issueRecoveryCode, verifyRecoveryCode } from "../src/server/auth/recovery";
 import { createRecoverHandler } from "../src/app/(auth)/recover/handler";
 import { localAesKeyWrapper } from "../src/server/crypto/key-wrapper";
@@ -331,6 +333,66 @@ async function sessionCheck(runtime: Db, purge: Db) {
   }
 }
 
+// A sign-in or a new sign-in method under way on a lost device, against the recovery that evicts
+// it (sign-in audit, 14 November 2026). Each side waits on the other's account lock: an
+// eviction that goes first leaves the sign-in nothing to re-check, and a sign-in or new
+// passkey that goes first is evicted with everything else.
+async function signInEvictionChecks(runtime: Db, purge: Db) {
+  const deps = { clock, random: systemRandom };
+  const evict = (db: Db, userId: string) => withTransaction(db, async (tx) => {
+    await lockAccountForEviction(tx, userId);
+    await evictLostFactors(tx, userId, "recovered");
+  });
+  for (const first of ["eviction", "sign-in", "new passkey"] as const) {
+    const user = await createUser(runtime, { email: `local-evict-${randomUUID()}@example.test`, wrappedDek: "synthetic-only" });
+    await runtime.query("INSERT INTO passkeys(user_id,credential_id,public_key,counter) VALUES ($1,'lost','synthetic',0)", [user.id]);
+    const lostSession = await createSession(runtime, user.id, deps);
+    const paused = deferred<void>(), resume = deferred<void>(), secondPid = deferred<number>();
+    let held: Promise<unknown> | undefined, waiting: Promise<unknown> | undefined;
+    try {
+      if (first === "eviction") {
+        held = withTransaction(runtime, async (tx) => {
+          await lockAccountForEviction(tx, user.id);
+          await evictLostFactors(tx, user.id, "recovered");
+          paused.resolve(); await resume.promise;
+        });
+        await beforeCompletion(paused.promise, held, "eviction lock");
+        waiting = createSessionWhileProofHolds(observed(runtime, { pid: secondPid.resolve }), user.id,
+          { kind: "passkey", credentialId: "lost" }, deps);
+        await assertBlocked(runtime, await beforeCompletion(secondPid.promise, waiting, "sign-in backend"), "sign-in versus eviction");
+        resume.resolve(); await held;
+        assert.equal(await waiting, null, "the evicted passkey mints no session");
+        assert.equal((await runtime.query("SELECT id FROM sessions WHERE user_id = $1", [user.id])).rows.length, 0);
+      } else {
+        const pauseAfter = first === "sign-in" ? /FROM passkeys WHERE user_id/ : /FROM sessions WHERE id/;
+        const pausing = observed(runtime, { intercept: async (text, _values, run) => {
+          const result = await run();
+          if (pauseAfter.test(text)) { paused.resolve(); await resume.promise; }
+          return result;
+        } });
+        held = first === "sign-in"
+          ? createSessionWhileProofHolds(pausing, user.id, { kind: "passkey", credentialId: "lost" }, deps)
+          : whileSignedIn(pausing, lostSession.session, (tx) => tx.query(
+            "INSERT INTO passkeys(user_id,credential_id,public_key,counter) VALUES ($1,'added-late','synthetic',0)", [user.id]));
+        await beforeCompletion(paused.promise, held, `${first} re-check`);
+        waiting = evict(observed(runtime, { pid: secondPid.resolve }), user.id);
+        await assertBlocked(runtime, await beforeCompletion(secondPid.promise, waiting, "eviction backend"), `eviction versus ${first}`);
+        resume.resolve();
+        const committed = await held;
+        assert.ok(committed, `the ${first} committed before the eviction`);
+        await waiting;
+        if (first === "sign-in") assert.equal(await verifySession(runtime, (committed as { token: string }).token, { clock }), null);
+        assert.equal((await runtime.query("SELECT id FROM sessions WHERE user_id = $1", [user.id])).rows.length, 0);
+        assert.equal((await runtime.query("SELECT id FROM passkeys WHERE user_id = $1", [user.id])).rows.length, 0,
+          "the eviction removed what committed first");
+      }
+    } finally {
+      resume.resolve(); await Promise.allSettled([held, waiting]);
+      await purge.query("DELETE FROM users WHERE id = $1", [user.id]);
+    }
+  }
+}
+
 async function activityChecks(runtime: Db, purge: Db) {
   for (const rollback of [false, true]) {
     const user = await createUser(runtime, { email: `local-activity-${randomUUID()}@example.test`, wrappedDek: "synthetic-only" });
@@ -429,7 +491,8 @@ export async function verifyPostgresSecurityContention(runtime: Db, purge: Db): 
   await recoveryGenerationChecks(runtime, purge);
   await registrationCheck(runtime);
   await sessionCheck(runtime, purge);
+  await signInEvictionChecks(runtime, purge);
   await activityChecks(runtime, purge);
   await receiptChecks(runtime, purge);
-  console.log("PostgreSQL security contention: OAuth rollback/revocation/client binding, recovery generation ordering, DCR final-slot capacity, session/deletion activity-chain and receipt upload/deletion locks passed.");
+  console.log("PostgreSQL security contention: OAuth rollback/revocation/client binding, recovery generation ordering, DCR final-slot capacity, session/deletion, sign-in/eviction, activity-chain and receipt upload/deletion locks passed.");
 }

@@ -26,7 +26,8 @@ export const TOTP_MAX_FAILURES = 5;
 export const TOTP_FAILURE_WINDOW_MS = 15 * 60 * 1000;
 
 export type TotpSignInResult =
-  | { ok: true }
+  // `step` is the accepted code's time step: a sign-in re-checks it when it mints the session.
+  | { ok: true; step: number }
   | { ok: false; reason: "invalid" }
   | { ok: false; reason: "throttled"; retryAfterMs: number };
 
@@ -71,5 +72,5 @@ export async function checkTotpSignIn(
       RETURNING user_id`,
     [input.userId, step],
   );
-  return accepted.rows.length > 0 ? { ok: true } : { ok: false, reason: "invalid" };
+  return accepted.rows.length > 0 ? { ok: true, step } : { ok: false, reason: "invalid" };
 }

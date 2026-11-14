@@ -24,6 +24,7 @@
 import { enrollTotp, matchTotpStep } from "./totp";
 import { pendingStore } from "./pending-store";
 import { requireStepUp } from "./step-up";
+import { stillSignedIn } from "./sign-in-guard";
 import { alertNewAuthenticator, deliverAlert, type AlertDeps } from "./alerts";
 import type { Session } from "./session";
 import type { TotpSecretStore } from "./totp-store";
@@ -61,7 +62,8 @@ export type VerifyTotpEnrolmentResult =
         | "no_enrolment"
         | "in_progress"
         | "invalid_code"
-        | "too_many_attempts";
+        | "too_many_attempts"
+        | "signed_out";
     };
 
 export interface TotpEnrolment {
@@ -149,8 +151,11 @@ export function createTotpEnrolment(deps: TotpEnrolmentDeps): TotpEnrolment {
 
     pending.processing = true;
     try {
-      const stored = await totpSecrets.enrol(userId, pending.secret, step);
+      // Stored only while this session still exists, under the account lock: a recovery that
+      // signed it out first leaves nothing to add to (sign-in-guard.ts).
+      const stored = await totpSecrets.enrol(userId, pending.secret, step, (tx) => stillSignedIn(tx, session));
       pendingEnrolments.delete(userId);
+      if (stored === null) return { ok: false, reason: "signed_out" };
       if (!stored) return { ok: false, reason: "already_enrolled" };
     } finally {
       pending.processing = false;

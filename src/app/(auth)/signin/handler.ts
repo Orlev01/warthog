@@ -32,7 +32,7 @@ import { tryRecord, type MetricSeam } from "../../../server/metrics/seam";
 import { FACTORS, SIGNIN_ATTEMPT, SIGNIN_CATEGORIES, SIGNIN_OUTCOMES } from "../../../server/metrics/names";
 import { issueEmailCode, verifyEmailCode } from "../../../server/auth/email-code";
 import { pendingStore } from "../../../server/auth/pending-store";
-import { createSession, recordStepUp } from "../../../server/auth/session";
+import { createSessionWhileProofHolds, type SignInProof } from "../../../server/auth/sign-in-guard";
 import { alertNewDeviceSignIn, deliverAlert } from "../../../server/auth/alerts";
 import {
   describeDevice,
@@ -164,9 +164,13 @@ export function createSigninHandler(deps: SigninHandlerDeps): SigninHandler {
   // A sign-in from a browser this person has not signed in on before emails them the
   // brief's new-device alert (best effort: a failed send never fails the sign-in) and
   // marks the browser with a device cookie, so later sign-ins from it stay quiet.
-  async function mintSession(userId: string, request: Request, factor: string): Promise<Response> {
-    const created = await createSession(db, userId, { clock, random });
-    await recordStepUp(db, created.session.id, { clock });
+  //
+  // The session is minted only while the passkey or authenticator that proved the sign-in
+  // is still on the account, re-checked under the account lock (sign-in-guard.ts): null
+  // when a recovery or removal took it away in the meantime, and the caller refuses.
+  async function mintSession(userId: string, request: Request, factor: string, proof: SignInProof): Promise<Response | null> {
+    const created = await createSessionWhileProofHolds(db, userId, proof, { clock, random }, { stepUp: true });
+    if (!created) return null;
     await recordAttempt(SIGNIN_OUTCOMES.ok, { platform: factor });
     const headers = new Headers({ location: "/home" });
     headers.append("set-cookie", created.cookie);
@@ -219,25 +223,32 @@ export function createSigninHandler(deps: SigninHandlerDeps): SigninHandler {
         return json(401, { error: "invalid_assertion" });
       }
 
-      const result = await checkPasskeyAttempt(db, user.id, async () => (await finishPasskeyAuthentication(
-        db,
-        {
-          userId: user.id,
-          response: authenticationResponse as AuthenticationResponseJSON,
-          purpose: "signin",
-        },
-        { rpId, origin: publicOrigin, clock },
-      )).ok, { clock, emailSender });
+      let credentialId: string | null = null;
+      const result = await checkPasskeyAttempt(db, user.id, async () => {
+        const verified = await finishPasskeyAuthentication(
+          db,
+          {
+            userId: user.id,
+            response: authenticationResponse as AuthenticationResponseJSON,
+            purpose: "signin",
+          },
+          { rpId, origin: publicOrigin, clock },
+        );
+        if (verified.ok) credentialId = verified.credentialId;
+        return verified.ok;
+      }, { clock, emailSender });
       if (result.reason === "throttled") {
         await recordFailure(SIGNIN_CATEGORIES.passkey, true);
         return new Response(JSON.stringify({ error: "throttled" }), { status: 429, headers: { "content-type": "application/json", "retry-after": String(Math.ceil((result.retryAfterMs ?? 1000) / 1000)) } });
       }
-      if (!result.ok) {
+      const signedIn = result.ok && credentialId !== null
+        ? await mintSession(user.id, request, FACTORS.passkey, { kind: "passkey", credentialId })
+        : null;
+      if (!signedIn) {
         await recordFailure(SIGNIN_CATEGORIES.passkey);
         return json(401, { error: "invalid_assertion" });
       }
-
-      return await mintSession(user.id, request, FACTORS.passkey);
+      return signedIn;
     } catch (error) {
       return handleError(error);
     }
@@ -321,7 +332,12 @@ export function createSigninHandler(deps: SigninHandlerDeps): SigninHandler {
         return json(401, { error: "invalid_code" });
       }
       pendingTotpSignins.delete(signinId);
-      return await mintSession(pending.userId, request, FACTORS.totp);
+      const signedIn = await mintSession(pending.userId, request, FACTORS.totp, { kind: "authenticator", step: checked.step });
+      if (!signedIn) {
+        await recordFailure(SIGNIN_CATEGORIES.totp);
+        return json(401, { error: "invalid_code" });
+      }
+      return signedIn;
     } catch (error) {
       return handleError(error);
     }

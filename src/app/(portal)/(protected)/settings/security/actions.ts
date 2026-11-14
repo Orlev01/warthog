@@ -36,6 +36,7 @@ import type {
 
 import { parseParams } from "../../../../../server/http/validate";
 import { requireStepUp } from "../../../../../server/auth/step-up";
+import { whileSignedIn } from "../../../../../server/auth/sign-in-guard";
 import {
   beginPasskeyRegistration,
   finishPasskeyRegistration,
@@ -140,6 +141,8 @@ export interface SecurityActions {
 
 // The one reason string the step-up gate refuses with.
 const STEP_UP_REQUIRED = "step_up_required";
+// The session making a change has ended (signed out, or by a recovery) before it was stored.
+const SIGNED_OUT = "signed_out";
 
 // A well-formed uuid: the only shape an id handle may take. A malformed value is
 // rejected at the validation boundary (parseParams throws a 4xx HttpError) before
@@ -200,7 +203,11 @@ export function createSecurityActions(deps: SecurityActionsDeps): SecurityAction
     response: RegistrationResponseJSON,
   ): Promise<ActionResult> {
     if (!requireStepUp(session, { clock })) return { ok: false, reason: STEP_UP_REQUIRED };
-    const result = await finishPasskeyRegistration(db, { userId: session.userId, response }, { rpId, origin });
+    // Stored only while this session still exists, under the account lock: a recovery that
+    // signed it out first leaves nothing to add to (sign-in-guard.ts).
+    const result = await whileSignedIn(db, session, (tx) =>
+      finishPasskeyRegistration(tx, { userId: session.userId, response }, { rpId, origin }));
+    if (!result) return { ok: false, reason: SIGNED_OUT };
     if (!result.ok) return { ok: false, reason: result.reason };
     // Tell the person (best effort: a send failure never undoes the added passkey).
     if (alerts) await deliverAlert("new-passkey", () => alertNewPasskey(db, { userId: session.userId }, alerts));
@@ -258,8 +265,10 @@ export function createSecurityActions(deps: SecurityActionsDeps): SecurityAction
   // row, so exactly one code is current and the old one stops verifying.
   async function regenerateRecovery(session: Session): Promise<RegenerateRecoveryResult> {
     if (!requireStepUp(session, { clock })) return { ok: false, reason: STEP_UP_REQUIRED };
-    const { code } = await issueRecoveryCode(db, session.userId, { random });
-    return { ok: true, code };
+    // Like adding a passkey: not after a recovery has signed this session out.
+    const issued = await whileSignedIn(db, session, (tx) => issueRecoveryCode(tx, session.userId, { random }));
+    if (!issued) return { ok: false, reason: SIGNED_OUT };
+    return { ok: true, code: issued.code };
   }
 
   // Set up an authenticator app (follow-up S1): the step-up gate, the pending secret, the

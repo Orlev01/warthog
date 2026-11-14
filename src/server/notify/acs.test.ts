@@ -2,6 +2,7 @@ import { test } from "node:test";
 import assert from "node:assert/strict";
 import { createHash, createHmac } from "node:crypto";
 import { createAcsEmailSender, createAcsSmsSender, smsSegments } from "./acs";
+import { renderMessageEmail } from "./email";
 
 const key = Buffer.alloc(32, 7);
 const connectionString = `endpoint=https://test.communication.azure.com/;accesskey=${key.toString("base64")}`;
@@ -71,13 +72,20 @@ test("SMS rejects unsafe configured endpoints and refuses automatic redirects", 
   }
 });
 
-test("Email sends plain text and waits for successful ACS acceptance; errors contain no provider details", async () => {
+test("Email sends the branded HTML and text and waits for successful ACS acceptance; errors contain no provider details", async () => {
   let message: unknown;
   const sender = createAcsEmailSender({ senderAddress: "no-reply@mail.example.test", client: {
     beginSend: async (input) => { message = input; return { pollUntilDone: async () => ({ status: "Succeeded" }) }; },
   } });
   await sender.sendEmail({ recipient: "person@example.test", body: "Your code", link: "https://example.test/" });
-  assert.deepEqual(message, { senderAddress: "no-reply@mail.example.test", recipients: { to: [{ address: "person@example.test" }] }, content: { subject: "Warthog", plainText: "Your code\nhttps://example.test/" } });
+  const generic = renderMessageEmail({ recipient: "person@example.test", body: "Your code", link: "https://example.test/" });
+  assert.deepEqual(message, { senderAddress: "no-reply@mail.example.test", recipients: { to: [{ address: "person@example.test" }] },
+    content: { subject: "Warthog", plainText: generic.text, html: generic.html } });
+  assert.match(generic.text, /Open Warthog: https:\/\/example\.test\//);
+  const email = { subject: "New passkey added", heading: "A new passkey was added", paragraphs: ["A new passkey was added to your Warthog account."] };
+  await sender.sendEmail({ recipient: "person@example.test", body: "plain", email });
+  assert.equal((message as { content: { subject: string } }).content.subject, "New passkey added");
+  assert.equal((message as { content: { html: string } }).content.html, renderMessageEmail({ recipient: "", body: "", email }).html);
   for (const status of ["Failed", "Canceled", "Running"]) {
     const failing = createAcsEmailSender({ senderAddress: "no-reply@mail.example.test", client: { beginSend: async () => ({ pollUntilDone: async () => ({ status }) }) } });
     await assert.rejects(failing.sendEmail({ recipient: "person@example.test", body: "secret" }), /^Error: Email delivery failed$/);
