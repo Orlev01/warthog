@@ -1,5 +1,10 @@
 # Warthog comprehensive engineering audit
 
+**Landing diagrams released, 14 November:** main `7eb72f6` runs as
+`warthog--r43555128449a1`. It adds three animated diagrams to the public front door (PR #25),
+plus PR #24 (sign-in race fix, branded emails) and lucide-react 1.70.0. 6,077 tests pass.
+See the [release record](landing-diagrams-release-2026-11-14.md).
+
 **Admin portal hidden from the member app, 13 November:** main `2366ed6` runs as
 `warthog--r43435987370a1`. There is no admin entry in the app, and the portal's routes moved
 under an unguessable internal prefix. The only way in is typing `admin.warthog.com.au`. A

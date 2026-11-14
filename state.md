@@ -1,4 +1,17 @@
-# Delivery status — 13 November 2026 (admin portal hidden from the member app)
+# Delivery status — 14 November 2026 (landing diagrams)
+
+**Live at [app.warthog.com.au](https://app.warthog.com.au).** Application source
+`7eb72f683057464726568329f632132030592385` runs as `warthog--r43555128449a1`, with one
+healthy replica, explicit 100% traffic and zero old replicas. It carries:
+- PR #25: three animated diagrams on the public front door (why one home, ask me first,
+  shared memory);
+- PR #24: the sign-in vs eviction race fix and branded HTML emails;
+- the lucide-react 1.70.0 update.
+
+The image suite passed 6,077 tests; no migration changes. See the
+[release record](docs/audit/landing-diagrams-release-2026-11-14.md).
+
+# Earlier delivery status — 13 November 2026 (admin portal hidden from the member app)
 
 **Live at [app.warthog.com.au](https://app.warthog.com.au).** Application source
 `2366ed6964725097967035ffb546f588ef0f65f5` runs as `warthog--r43435987370a1`, with one
