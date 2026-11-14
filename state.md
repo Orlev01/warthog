@@ -11,6 +11,10 @@ healthy replica, explicit 100% traffic and zero old replicas. It carries:
 The image suite passed 6,077 tests; no migration changes. See the
 [release record](docs/audit/landing-diagrams-release-2026-11-14.md).
 
+The GitHub repository became private on 14 November at the founder's request. Releases
+still work. The foundation environments lost their required-reviewer gate (see the
+amendment in [Azure delivery](docs/azure-delivery.md)).
+
 # Earlier delivery status — 13 November 2026 (admin portal hidden from the member app)
 
 **Live at [app.warthog.com.au](https://app.warthog.com.au).** Application source

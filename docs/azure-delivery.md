@@ -55,6 +55,22 @@ approve a release. The approval click is still required. Do not remove this gate
 or automatically approve waiting jobs. Environment creation alone creates no cloud
 identity, resources or credentials.
 
+**Amended 13 and 14 November 2026.** On 13 November, at the founder's request, the
+required reviewers were removed from `azure-images` and `azure-production`. The release
+operator now runs image publication and production releases end to end.
+
+On 14 November the founder made the repository private. GitHub does not offer required
+reviewers on private repositories on this account's plan, so the change also dropped
+the `Orlev01` reviewer rule from `azure-foundation-plan` and `azure-foundation-apply`.
+
+- All five environments keep their `main`-only branch policy, variables and secrets.
+- A dispatched `azure-runner-cleanup` run signed in to Azure afterwards, which confirms
+  environment variables still reach jobs.
+- Foundation plan and apply now run without an approval click. Dispatch them only on
+  the founder's explicit instruction, and review the plan before any apply.
+- Hosted Actions minutes now count against the account's monthly allowance; the
+  private Azure runners are not counted.
+
 Inspect eligible billing-profile credit availability before further paid stages.
 The founder selected estimate-based usage alerts after reviewing the lack of a
 custom cash cap; do not reopen that superseded decision. Keep account-specific
