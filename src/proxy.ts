@@ -4,7 +4,8 @@ import { contentSecurityPolicy, createAuthIpLimiter } from "./server/http/produc
 import { ADMIN_EXCHANGE_PATH, routeForHost } from "./server/http/admin-routing";
 import { classifyRoute, getTrafficCounter, requestKind } from "./server/http/traffic";
 import { requestHostname } from "./server/admin/origin";
-import { adminHostFromEnv } from "./server/config";
+import { adminHostFromEnv, websiteFromEnv } from "./server/config";
+import { redirectTarget, routeForWebsite } from "./server/http/website";
 import { processSingleton } from "./server/seams/process-singleton";
 import type { HostClass } from "./server/metrics/names";
 
@@ -23,10 +24,20 @@ export function proxy(request: NextRequest) {
   // Which host this request arrived on decides what is served (docs/design/admin-portal.md §1):
   // the admin origin serves only the portal; the app origin serves none of the portal's
   // internal paths except the handoff, and `/admin` there is an ordinary path.
-  const adminHost = adminHostFromEnv();
+  // The public website host (docs/adr/website-root-domain.md), when the app has one, serves
+  // only the front door and the public pages; its www. name and every other path forward to
+  // the website or the app with a permanent redirect to a configured origin.
   const hostname = requestHostname(request.headers);
-  const route = routeForHost(hostname, adminHost, path);
-  const hostClass: HostClass = route.kind === "admin" || route.kind === "passthrough" ? "admin" : "app";
+  const site = routeForWebsite(hostname, websiteFromEnv(), path);
+  if (site.kind === "passthrough") return NextResponse.next();
+  if (site.kind === "redirect") {
+    getTrafficCounter().count("site", classifyRoute(path), requestKind(request.headers, false));
+    return NextResponse.redirect(redirectTarget(site.origin, path, request.nextUrl.search), { status: 308, headers: NO_STORE });
+  }
+  const adminHost = adminHostFromEnv();
+  const route = site.kind === "website" ? ({ kind: "app" } as const) : routeForHost(hostname, adminHost, path);
+  const hostClass: HostClass = site.kind === "website" ? "site"
+    : route.kind === "admin" || route.kind === "passthrough" ? "admin" : "app";
   const traffic = getTrafficCounter();
   const count = (limited: boolean) =>
     traffic.count(hostClass, route.kind === "admin" ? "admin" : classifyRoute(path), requestKind(request.headers, limited));

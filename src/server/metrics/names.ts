@@ -49,7 +49,7 @@ export const ADMIN_SESSION_OUTCOMES = { exchanged: "exchanged", rejected: "rejec
 export const ADMIN_LOOKUP_OUTCOMES = { found: "found", none: "none" } as const;
 
 // Traffic labels: `<host>.<route>.<kind>` in the outcome dimension (closed vocabularies).
-export const HOST_CLASSES = ["app", "admin", "other"] as const;
+export const HOST_CLASSES = ["app", "admin", "site", "other"] as const;
 export const ROUTE_CLASSES = ["public", "auth", "portal", "api", "mcp", "oauth", "admin", "health", "other"] as const;
 export const REQUEST_KINDS = ["document", "fetch", "limited"] as const;
 export type HostClass = (typeof HOST_CLASSES)[number];

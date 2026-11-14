@@ -1,6 +1,6 @@
 import * as React from "react";
 
-import { loadConfig } from "@/server/config";
+import { loadConfig, publicLinksFromEnv } from "@/server/config";
 import { Help } from "@/components/public/help";
 
 // E05-S02 — Compatibility page entry. A PUBLIC `/help/compatibility` page, reachable
@@ -22,5 +22,5 @@ export default async function CompatibilityPage({
   await searchParams;
   const config = loadConfig();
   const connectorAddress = `${config.publicBaseUrl.replace(/\/+$/, "")}/mcp`;
-  return <Help connectorAddress={connectorAddress} />;
+  return <Help connectorAddress={connectorAddress} links={publicLinksFromEnv()} />;
 }

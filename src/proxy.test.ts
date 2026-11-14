@@ -135,3 +135,58 @@ test("the handoff exchange shares the auth limiter and every request is counted 
     assert.ok(!Object.keys(drained).some((label) => label.includes("handoff") || label.includes("203.0")), "no path, query or address in a label");
   });
 });
+
+// --- Website host routing (docs/adr/website-root-domain.md) --------------------------------
+
+test("the website host serves its pages with the app's CSP and caching, never a rewrite", () => {
+  withEnv(PROD, () => {
+    for (const path of ["/", "/help", "/help/compatibility", "/privacy", "/terms"]) {
+      const response = middleware(new NextRequest(`https://example.test${path}`, { headers: { host: "example.test" } }));
+      assert.equal(response.status, 200, path);
+      assert.equal(response.headers.get("x-middleware-rewrite"), null, path);
+      assert.equal(response.headers.get("location"), null, path);
+      assert.match(response.headers.get("content-security-policy")!, /nonce-/);
+      assert.equal(response.headers.get("cache-control"), "private, no-store");
+    }
+  });
+});
+
+test("every other website path forwards to the app, and www. forwards to the website, with a permanent uncached redirect", () => {
+  withEnv(PROD, () => {
+    for (const [host, path, location] of [
+      ["example.test", "/signin?next=%2Fhome", "https://app.example.test/signin?next=%2Fhome"],
+      ["example.test", "/signup", "https://app.example.test/signup"],
+      ["example.test", "/admin", "https://app.example.test/admin"],
+      ["example.test", "//evil.test/x", "https://app.example.test//evil.test/x"],
+      ["www.example.test", "/", "https://example.test/"],
+      ["www.example.test", "/privacy", "https://example.test/privacy"],
+    ] as const) {
+      const response = middleware(new NextRequest(`https://${host}${path}`, { headers: { host } }));
+      assert.equal(response.status, 308, `${host}${path}`);
+      assert.equal(response.headers.get("location"), location, `${host}${path}`);
+      assert.equal(response.headers.get("cache-control"), "no-store");
+    }
+    // The ingress's forwarded host decides, and a spoofed Host can only reach a configured origin.
+    const forwarded = middleware(new NextRequest("https://app.example.test/signin", { headers: { host: "app.example.test", "x-forwarded-host": "www.example.test" } }));
+    assert.equal(forwarded.headers.get("location"), "https://example.test/signin");
+  });
+});
+
+test("without an app. public base URL there is no website host and the app routes as before", () => {
+  withEnv({ NODE_ENV: "production", PUBLIC_BASE_URL: "https://example.test", ADMIN_BASE_URL: undefined }, () => {
+    const response = middleware(new NextRequest("https://example.test/signin", { headers: { host: "example.test" } }));
+    assert.equal(response.status, 200);
+    assert.equal(response.headers.get("location"), null);
+  });
+});
+
+test("website traffic is counted under its own host class", () => {
+  withEnv(PROD, () => {
+    getTrafficCounter().drain();
+    middleware(new NextRequest("https://example.test/", { headers: { host: "example.test", "sec-fetch-dest": "document" } }));
+    middleware(new NextRequest("https://example.test/signin", { headers: { host: "example.test", "sec-fetch-dest": "document" } }));
+    middleware(new NextRequest("https://www.example.test/", { headers: { host: "www.example.test", "sec-fetch-dest": "document" } }));
+    const drained = Object.fromEntries(getTrafficCounter().drain().map((e) => [e.label, e.count]));
+    assert.deepEqual(drained, { "site.public.document": 2, "site.auth.document": 1 });
+  });
+});

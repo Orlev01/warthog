@@ -4,6 +4,7 @@ import * as React from "react";
 import { ArrowLeft, Bot, Fingerprint, ShieldCheck, SlidersHorizontal, type LucideIcon } from "lucide-react";
 
 import { Wordmark } from "../shell/wordmark";
+import { useWebsiteHome } from "../public/website-home";
 
 const SETUP_STEPS = ["Your details", "Verify email", "Sign-in method", "Recovery"];
 
@@ -50,12 +51,13 @@ export function AuthScreen({ title, lead, children, stage, icon: Icon = Fingerpr
   const panel = React.useRef<HTMLElement>(null);
   const heading = React.useRef<HTMLHeadingElement>(null);
   useStepFocus(panel, heading, title, error);
+  const home = useWebsiteHome();
   return (
     <>
       <header className="wh-auth-header wh-public-bar">
         <div className="wh-public-bar-inner">
-          <Wordmark href="/" />
-          <a href="/" className="wh-public-back">
+          <Wordmark href={home} />
+          <a href={home} className="wh-public-back">
             <ArrowLeft size={16} aria-hidden="true" /> Back to home
           </a>
         </div>

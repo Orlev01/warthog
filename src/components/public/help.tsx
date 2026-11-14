@@ -2,6 +2,7 @@ import { AGENT_PLATFORMS as PLATFORMS } from "@/domain/agents/compatibility";
 import * as React from "react";
 import { ExternalLink } from "lucide-react";
 
+import { RELATIVE_LINKS, type PublicLinks } from "@/server/http/website";
 import { CopyButton } from "../ui/copy-button";
 import { PublicPage, PublicPanel, PublicSection } from "./public-page";
 
@@ -19,9 +20,10 @@ import { PublicPage, PublicPanel, PublicSection } from "./public-page";
 
 // The agent platforms the task/brief name, each with plain connect steps. The steps
 // say exactly where to paste the Warthog address shown above them.
-export function Help({ connectorAddress }: { connectorAddress: string }) {
+export function Help({ connectorAddress, links = RELATIVE_LINKS }: { connectorAddress: string; links?: PublicLinks }) {
   return (
     <PublicPage
+      links={links}
       title="Connect your agents"
       current="compatibility"
       lead="Choose your agent below. Each one gets its own connection, so you can set and remove its access separately."

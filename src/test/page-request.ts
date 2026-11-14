@@ -12,9 +12,10 @@ export function withPageRequest<T>(
   path: string,
   cookie: string | undefined,
   render: () => T,
+  headers: Record<string, string> = {},
 ): T {
   const request = new NextRequest(`https://warthog.example${path}`, {
-    headers: cookie ? { cookie } : {},
+    headers: cookie ? { ...headers, cookie } : headers,
   });
   const work = createWorkStore({
     page: path,

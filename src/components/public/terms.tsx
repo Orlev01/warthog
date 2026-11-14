@@ -1,13 +1,14 @@
 import * as React from "react";
 
+import { RELATIVE_LINKS, type PublicLinks } from "@/server/http/website";
 import { PublicPage, PublicPanel, PublicSection } from "./public-page";
 import { LAST_UPDATED, OPERATOR_NAME, SUPPORT_EMAIL } from "./operator";
 
 // Terms — the public terms of use, inside the shared public document frame (PublicPage).
 // Australian spelling throughout; deletion is described the same way as on the privacy page.
-export function Terms() {
+export function Terms({ links = RELATIVE_LINKS }: { links?: PublicLinks } = {}) {
   return (
-    <PublicPage title="Terms of use" current="terms" meta={`Last updated ${LAST_UPDATED}`}>
+    <PublicPage links={links} title="Terms of use" current="terms" meta={`Last updated ${LAST_UPDATED}`}>
       <PublicPanel>
         <PublicSection id="using-warthog" title="Using Warthog">
           <p>Warthog is operated by {OPERATOR_NAME}. It helps you connect services, set rules for your agents, and review requests to use your information. These terms describe your use of Warthog and its optional messaging service.</p>

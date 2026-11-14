@@ -1,8 +1,13 @@
 import * as React from "react";
 import type { Metadata } from "next";
+import { headers } from "next/headers";
+import { redirect } from "next/navigation";
 
 import { Landing } from "@/components/public/landing";
+import { requestHostname } from "@/server/admin/origin";
 import { redirectSignedInVisitor } from "@/server/auth/public-entry";
+import { websiteFromEnv } from "@/server/config";
+import { publicLinksFor } from "@/server/http/website";
 
 export const metadata: Metadata = {
   // The front door names the product in the tab and history (public-19).
@@ -15,9 +20,16 @@ export const metadata: Metadata = {
   },
 };
 
-// Returning members enter their workspace; signed-out visitors see the public
-// front door. This stays outside the protected route group.
+// The website host always shows the front door, signed in or not, and never opens the
+// database (docs/adr/website-root-domain.md). On the app host, returning members enter their
+// workspace; signed-out visitors go to sign-in when the front door has its own host, and see
+// it here otherwise. This stays outside the protected route group.
 export default async function Home() {
+  const website = websiteFromEnv();
+  if (website && requestHostname(await headers()) === website.host) {
+    return <Landing links={publicLinksFor(website)} />;
+  }
   await redirectSignedInVisitor();
+  if (website) redirect("/signin");
   return <Landing />;
 }

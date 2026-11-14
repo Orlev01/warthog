@@ -18,6 +18,7 @@ import {
   SlidersHorizontal,
 } from "lucide-react";
 
+import { RELATIVE_LINKS, type PublicLinks } from "@/server/http/website";
 import { Wordmark } from "../shell/wordmark";
 import { PolicyLinks } from "./policy-links";
 import { AskFirstFlow, ConnectOnceDiagrams, SharedMemoryFlow } from "./landing-diagrams";
@@ -176,7 +177,9 @@ function WorkspacePreview() {
   );
 }
 
-export function Landing() {
+// `links` points the brand and account links at the website and the app when the front door
+// has its own host (docs/adr/website-root-domain.md); without one they stay relative.
+export function Landing({ links = RELATIVE_LINKS }: { links?: PublicLinks } = {}) {
   return (
     <LandingMotion>
       <a className="wh-landing-skip" href="#main-content">
@@ -186,13 +189,13 @@ export function Landing() {
           a strip that scrolls away on phones, drawn inside the sticky bar from 768px
           (public.css), so the bar stays about 64px tall everywhere (mobile-14). */}
       <header className="wh-landing-header">
-        <Wordmark href="/" />
+        <Wordmark href={links.home} />
         <div className="wh-landing-account">
-          <a href="/signin" className="wh-landing-link">
+          <a href={`${links.account}/signin`} className="wh-landing-link">
             Sign in
           </a>
           <a
-            href="/signup"
+            href={`${links.account}/signup`}
             className="wh-landing-button wh-landing-header-signup"
           >
             Sign up <ArrowRight size={16} aria-hidden="true" />
@@ -226,7 +229,7 @@ export function Landing() {
               each agent can access, what it can do, and when it needs to ask.
             </p>
             <div className="wh-landing-actions">
-              <a href="/signup" className="wh-landing-button">
+              <a href={`${links.account}/signup`} className="wh-landing-button">
                 Sign up for Warthog <ArrowRight size={18} aria-hidden="true" />
               </a>
               <a href="#how-it-works" className="wh-landing-link">
@@ -427,21 +430,21 @@ export function Landing() {
             </h2>
             <p>Your agents, brought together on your terms.</p>
           </div>
-          <a href="/signup" className="wh-landing-button">
+          <a href={`${links.account}/signup`} className="wh-landing-button">
             Sign up for Warthog <ArrowRight size={18} aria-hidden="true" />
           </a>
         </section>
       </main>
       <footer className="wh-landing-footer">
         <div>
-          <Wordmark href="/" />
+          <Wordmark href={links.home} />
           <p>A home for your agents. Control for you.</p>
         </div>
         <nav aria-label="Support">
           <a href="/help/compatibility" className="wh-landing-link">
             Help & compatibility
           </a>
-          <a href="/signin" className="wh-landing-link">
+          <a href={`${links.account}/signin`} className="wh-landing-link">
             Sign in
           </a>
         </nav>

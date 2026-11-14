@@ -38,6 +38,11 @@ export type HostRoute =
   | { readonly kind: "not-found" }
   | { readonly kind: "admin"; readonly rewriteTo: string };
 
+/** A build asset or installable-app file, served as-is on every host. */
+export function isAssetPath(pathname: string): boolean {
+  return PASSTHROUGH_PATHS.has(pathname) || PASSTHROUGH_PREFIXES.some((prefix) => pathname.startsWith(prefix));
+}
+
 export function isAdminPath(pathname: string): boolean {
   return pathname === ADMIN_PREFIX || pathname.startsWith(`${ADMIN_PREFIX}/`);
 }
@@ -45,9 +50,7 @@ export function isAdminPath(pathname: string): boolean {
 export function routeForHost(hostname: string | null, adminHost: string | null, pathname: string): HostRoute {
   const onAdminHost = adminHost !== null && hostname !== null && hostname === adminHost;
   if (!onAdminHost) return isAdminPath(pathname) && pathname !== APP_HANDOFF_PATH ? { kind: "not-found" } : { kind: "app" };
-  if (PASSTHROUGH_PATHS.has(pathname) || PASSTHROUGH_PREFIXES.some((prefix) => pathname.startsWith(prefix))) {
-    return { kind: "passthrough" };
-  }
+  if (isAssetPath(pathname)) return { kind: "passthrough" };
   if (isAdminPath(pathname)) return { kind: "not-found" };
   return { kind: "admin", rewriteTo: pathname === "/" ? ADMIN_PREFIX : `${ADMIN_PREFIX}${pathname}` };
 }

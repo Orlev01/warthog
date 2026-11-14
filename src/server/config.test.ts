@@ -450,3 +450,14 @@ test("adminHostFromEnv reads the same derivation without throwing, for the reque
   assert.equal(adminHostFromEnv({ NODE_ENV: "production" }), null);
   assert.equal(adminHostFromEnv({ NODE_ENV: "production", PUBLIC_BASE_URL: "garbage" }), null);
 });
+
+import { publicLinksFromEnv, websiteFromEnv } from "./config";
+
+test("websiteFromEnv derives the website host from an app. public base URL without throwing", () => {
+  assert.equal(websiteFromEnv({ PUBLIC_BASE_URL: "https://app.warthog.example" })?.origin, "https://warthog.example");
+  assert.equal(websiteFromEnv({ PUBLIC_BASE_URL: "http://localhost:3000" }), null);
+  assert.equal(websiteFromEnv({ PUBLIC_BASE_URL: "garbage" }), null);
+  assert.equal(websiteFromEnv({}), null);
+  assert.deepEqual(publicLinksFromEnv({ PUBLIC_BASE_URL: "https://app.warthog.example" }), { home: "https://warthog.example/", account: "https://app.warthog.example" });
+  assert.deepEqual(publicLinksFromEnv({}), { home: "/", account: "" });
+});
