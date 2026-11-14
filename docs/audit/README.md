@@ -1,5 +1,11 @@
 # Warthog comprehensive engineering audit
 
+**Website on the root domain, 14 November:** main `d45072c` runs as
+`warthog--r43589445907a1`. `warthog.com.au` is the marketing website, signed in or not, and
+`www.` forwards to it. Sign-in, sign-up and the workspace stay on `app.warthog.com.au`, where
+`/` now sends signed-out visitors to sign-in (PR #26). 6,097 tests pass. See the
+[release record](website-root-domain-release-2026-11-14.md).
+
 **Landing diagrams released, 14 November:** main `7eb72f6` runs as
 `warthog--r43555128449a1`. It adds three animated diagrams to the public front door (PR #25),
 plus PR #24 (sign-in race fix, branded emails) and lucide-react 1.70.0. 6,077 tests pass.

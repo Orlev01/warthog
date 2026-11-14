@@ -1,4 +1,20 @@
-# Delivery status — 14 November 2026 (landing diagrams)
+# Delivery status — 14 November 2026 (website on the root domain)
+
+**Live at [warthog.com.au](https://warthog.com.au) (the website) and
+[app.warthog.com.au](https://app.warthog.com.au) (the app).** Application source
+`d45072c3bc4d282269f3c17b886daf743ebbf71d` runs as `warthog--r43589445907a1`, with one healthy
+replica, explicit 100% traffic and zero old replicas.
+
+PR #26 moved the marketing front door to its own host:
+- `warthog.com.au` always shows the front door and the public pages, signed in or not;
+- `www.` and every other path there forward to the app;
+- on the app, `/` sends a signed-out visitor to sign-in.
+
+Four hostnames are now bound (`warthog.com.au`, `www`, `app`, `admin`). The image suite passed
+6,097 tests; no migration changes. See the
+[release record](docs/audit/website-root-domain-release-2026-11-14.md).
+
+# Earlier delivery status — 14 November 2026 (landing diagrams)
 
 **Live at [app.warthog.com.au](https://app.warthog.com.au).** Application source
 `7eb72f683057464726568329f632132030592385` runs as `warthog--r43555128449a1`, with one
