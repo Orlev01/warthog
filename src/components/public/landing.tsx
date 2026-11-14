@@ -20,6 +20,7 @@ import {
 
 import { Wordmark } from "../shell/wordmark";
 import { PolicyLinks } from "./policy-links";
+import { AskFirstFlow, ConnectOnceDiagrams, SharedMemoryFlow } from "./landing-diagrams";
 import { LandingBackdrop, LandingMotion, LandingMotionControl } from "./landing-motion";
 
 const STEPS = [
@@ -266,6 +267,32 @@ export function Landing() {
         </section>
 
         <section
+          id="one-home"
+          className="wh-landing-section wh-landing-why"
+          aria-labelledby="why-title"
+        >
+          <div className="wh-landing-section-intro" data-motion-reveal>
+            <p className="wh-landing-eyebrow">Why one home</p>
+            <h2 id="why-title">
+              Connect your services once.
+              <br />
+              Point every agent at Warthog.
+            </h2>
+            <p>
+              Without a home, every agent needs its own connection to every
+              service. With Warthog, each service connects once, each agent
+              connects only to Warthog, and you decide what each one may use.
+            </p>
+          </div>
+          <ConnectOnceDiagrams />
+          <p className="wh-landing-scope">
+            <Link2 size={16} aria-hidden="true" /> Illustration · example agents
+            and services. Add a sixth agent: 5 more connections without
+            Warthog, 1 with it.
+          </p>
+        </section>
+
+        <section
           id="your-control"
           className="wh-landing-section wh-landing-controls"
           aria-labelledby="control-title"
@@ -301,6 +328,7 @@ export function Landing() {
               </article>
             ))}
           </div>
+          <AskFirstFlow />
           <p className="wh-landing-scope">
             <CircleHelp size={16} aria-hidden="true" /> These controls apply
             only to requests made through Warthog. Activity through an agent’s
@@ -309,6 +337,7 @@ export function Landing() {
         </section>
 
         <section
+          id="your-context"
           className="wh-landing-resources wh-landing-section"
           aria-labelledby="resources-title"
         >
@@ -329,6 +358,7 @@ export function Landing() {
               </article>
             ))}
           </div>
+          <SharedMemoryFlow />
         </section>
 
         <section

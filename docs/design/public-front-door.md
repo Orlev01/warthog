@@ -26,8 +26,8 @@ redirects to those flows.
 - The hero pairs a concise product promise and real signup action with a static
   workspace illustration. The illustration must say it is an example and must
   not present fake buttons, customer data, live metrics or endorsements.
-- Follow with compatibility, agent controls, owned resources, setup steps,
-  native FAQ disclosures and a closing action. Every section is a bounded band,
+- Follow with compatibility, why one home, agent controls, owned resources, setup
+  steps, native FAQ disclosures and a closing action. Every section is a bounded band,
   panel or card on a tinted page canvas; no copy sits loose on the background
   ([contained text](../adr/contained-text.md)). Inside a section, prefer aligned
   rows and dividers to a border around every paragraph.
@@ -55,7 +55,8 @@ references. Warthog's flowing SVG artwork and progressive entrance effects are
 original implementations using browser APIs; no library code or dependency is
 copied into the application.
 
-- Keep animated decoration inside the hero and closing section. Use the existing
+- Keep animated decoration inside the hero and closing section; the explanatory
+  diagrams below are the one other place that moves. Use the existing
   neutral tokens, preserve reading contrast and keep illustrative product data
   still. Do not imply that sample activity is live.
 - Gentle entrances may introduce sections once. All content is visible in the
@@ -68,6 +69,39 @@ copied into the application.
   native. No custom cursor, audio, flashing, full-page parallax or scroll capture.
 - Scope motion to the signed-out landing page. Account-entry screens and the
   signed-in workspace retain their existing presentation and behavior.
+
+## Diagrams
+
+Added on 14 November 2026 at the founder's request: "diagrams are a good way to
+illustrate the point and purpose of how the tool works and what it offers … don't
+overdo it". Three stories from the brief earn a picture, each inside the section it
+explains (`landing-diagrams.tsx`):
+
+- **Why one home** (its own section after compatibility): two side-by-side pictures
+  of the same five agents and five services. Without Warthog, 25 crossing lines.
+  With Warthog, 10 lines through one hub. The drawings carry exactly the counts their
+  labels claim.
+- **Ask me first** (in agent controls): the brief's primary journey as five ordered
+  steps. Claude asks; Warthog checks the rule; the phone buzzes and the person
+  approves; Warthog adds the event; it is on the record.
+- **Shared memory** (in owned resources): a memory Claude saves, which ChatGPT uses
+  later, with the note that an agent not allowed to read shared memory never sees it.
+
+Rules:
+
+- Every diagram is a figure labelled as an illustration with example agents,
+  services and requests. Names appear as text, never as logos, and there are no
+  buttons, links or live data inside.
+- The still picture tells the whole story in the server markup, so motion is never
+  needed to understand it. Lines and step cards are drawn statically. Pulses travel
+  the wires, the hub rings as it checks a request, the phone buzzes, and a step
+  lights as the pulse arrives. All of that runs only while `LandingMotion` reports
+  motion on, the tab visible and the figure in view (`data-motion-surface`). The
+  pause control, reduced motion and forced colours leave the still picture.
+- Colour: `--wh-tint` marks the path through Warthog and `--wh-danger` marks the
+  tangle it replaces. Text stays neutral; nothing is under 12px at 320px wide.
+- Claims stay within the front door's limits. Controls apply to requests made
+  through Warthog, and memory reaches only the agents allowed to read it.
 
 ## Account entry
 

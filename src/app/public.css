@@ -235,3 +235,98 @@ html:has(.wh-landing) { scroll-padding-top: calc(var(--wh-landing-bar, 64px) + 1
 @media (min-width: 640px) {
   .wh-connection-actions { align-items: center; }
 }
+
+/* --- Landing diagrams (landing-diagrams.tsx; docs/design/public-front-door.md "Diagrams") --- */
+/* Still pictures first: every label, step and caption is static markup. The pulses, ring, step
+ * highlights and buzz below play only while LandingMotion reports motion on, the tab visible
+ * and the figure in view; otherwise they stay invisible and nothing moves. The accent (--wh-tint)
+ * marks the path through Warthog; --wh-danger marks the tangle it replaces. */
+.wh-landing-why { display: grid; grid-template-columns: minmax(0, 1fr); gap: 32px; }
+.wh-diagram-pair { display: grid; grid-template-columns: minmax(0, 1fr); gap: 16px; }
+.wh-diagram, .wh-flow { margin: 0; min-width: 0; border: 1px solid var(--wh-line); border-radius: 14px; background: var(--wh-surface-muted); }
+/* Below 480px the section band is the only frame, so the drawing gets the full width. */
+.wh-diagram { display: grid; align-content: start; gap: 12px; padding: 0; border: 0; background: none; }
+.wh-diagram + .wh-diagram { padding-top: 24px; border-top: 1px solid var(--wh-line); border-radius: 0; }
+.wh-diagram-head, .wh-flow-head { display: flex; flex-wrap: wrap; align-items: center; justify-content: space-between; gap: 8px 16px; padding-inline: 4px; }
+.wh-diagram-head h3, .wh-flow-head h3 { font-size: 17px; font-weight: 500; line-height: 1.4; letter-spacing: -.025em; }
+.wh-flow-head p { font-size: 12px; color: var(--wh-fg-muted); }
+.wh-diagram-count { padding: 3px 10px; border-radius: 999px; font-size: 12px; font-weight: 500; font-variant-numeric: tabular-nums; }
+.wh-diagram-without .wh-diagram-count { color: color-mix(in srgb, var(--wh-danger) 78%, var(--wh-fg)); background: color-mix(in srgb, var(--wh-danger) 10%, var(--wh-surface)); }
+.wh-diagram-with .wh-diagram-count { color: color-mix(in srgb, var(--wh-tint) 78%, var(--wh-fg)); background: color-mix(in srgb, var(--wh-tint) 12%, var(--wh-surface)); }
+/* The column labels sit over the 96-unit pill columns of the 340-unit drawing. */
+.wh-diagram-columns { display: flex; justify-content: space-between; width: 100%; max-width: 380px; margin-inline: auto; font-size: 12px; font-weight: 600; letter-spacing: .09em; text-transform: uppercase; color: var(--wh-fg-muted); }
+.wh-diagram-columns span { width: 28.2%; text-align: center; }
+.wh-diagram svg { display: block; width: 100%; max-width: 380px; height: auto; margin-inline: auto; overflow: visible; }
+.wh-diagram-node rect { fill: var(--wh-surface); stroke: var(--wh-line-strong); stroke-width: 1; }
+.wh-diagram-node text { fill: var(--wh-fg); font-size: 17px; font-weight: 500; }
+.wh-diagram-wire { fill: none; stroke-width: 1.5; }
+.wh-diagram-without .wh-diagram-wire { stroke: var(--wh-danger); opacity: .4; }
+.wh-diagram-with .wh-diagram-wire { stroke: var(--wh-tint); opacity: .7; stroke-width: 2; }
+.wh-diagram-hub { fill: var(--wh-tint); }
+.wh-diagram-hub-label { fill: var(--wh-surface); font-size: 17px; font-weight: 600; }
+/* A pulse is one bright dash on a 100-unit path; the offsets park it past both round caps. */
+.wh-diagram-pulse { fill: none; stroke-width: 4; stroke-linecap: round; stroke-dasharray: 9 110; stroke-dashoffset: 13; opacity: 0; }
+.wh-diagram-without .wh-diagram-pulse { stroke: var(--wh-danger); }
+.wh-diagram-with .wh-diagram-pulse { stroke: var(--wh-tint); }
+.wh-diagram-ring { fill: none; stroke: var(--wh-tint); stroke-width: 3; opacity: 0; transform-box: fill-box; transform-origin: center; }
+.wh-diagram figcaption { padding-inline: 4px; font-size: 13px; line-height: 1.6; color: var(--wh-fg-muted); }
+
+/* Flows: an ordered list of step cards joined by connectors; vertical on phones and tablets,
+ * a row from 1024px. The connector and its travelling dot belong to the later step. */
+.wh-flow { --wh-flow-gap: 28px; display: grid; gap: 16px; padding: 16px; }
+.wh-landing-controls > .wh-flow { grid-column: 1 / -1; }
+.wh-landing-resources > .wh-flow { margin-top: 40px; background: var(--wh-surface); }
+.wh-flow-steps { display: grid; grid-template-columns: minmax(0, 1fr); gap: var(--wh-flow-gap); }
+.wh-flow-step { position: relative; display: grid; grid-template-columns: 44px minmax(0, 1fr); align-items: start; gap: 12px; padding: 14px; border: 1px solid var(--wh-line); border-radius: 12px; background: var(--wh-surface); }
+.wh-landing-resources .wh-flow-step { background: var(--wh-surface-muted); }
+.wh-flow-icon { display: flex; align-items: center; justify-content: center; width: 44px; height: 44px; border: 1px solid var(--wh-line); border-radius: 10px; background: var(--wh-sidebar); color: var(--wh-tint); }
+.wh-flow-title { font-size: 15px; font-weight: 500; line-height: 1.4; letter-spacing: -.02em; }
+.wh-flow-detail { margin-top: 4px; font-size: 13px; line-height: 1.55; color: var(--wh-fg-muted); }
+.wh-flow-status { display: inline-flex; align-items: center; gap: 6px; margin-top: 10px; padding: 3px 10px; border-radius: 999px; font-size: 12px; font-weight: 500; color: color-mix(in srgb, var(--wh-success) 80%, var(--wh-fg)); background: color-mix(in srgb, var(--wh-success) 12%, var(--wh-surface)); }
+.wh-flow-step + .wh-flow-step::before { content: ""; position: absolute; left: 35px; top: calc(-1 * var(--wh-flow-gap) - 1px); width: 2px; height: calc(var(--wh-flow-gap) + 1px); background: color-mix(in srgb, var(--wh-tint) 45%, transparent); }
+.wh-flow-step + .wh-flow-step::after { content: ""; position: absolute; left: 32px; top: calc(-1 * var(--wh-flow-gap) - 4px); width: 8px; height: 8px; border-radius: 50%; background: var(--wh-tint); box-shadow: 0 0 8px var(--wh-tint); opacity: 0; }
+.wh-flow-aside { display: flex; align-items: flex-start; gap: 10px; padding: 12px 16px; border-radius: 12px; background: var(--wh-surface-muted); font-size: 13px; line-height: 1.6; color: var(--wh-fg-muted); }
+.wh-flow-aside svg { flex-shrink: 0; margin-top: 3px; }
+
+@media (min-width: 480px) {
+  .wh-diagram, .wh-diagram + .wh-diagram { padding: 16px; border: 1px solid var(--wh-line); border-radius: 14px; background: var(--wh-surface-muted); }
+}
+@media (min-width: 768px) {
+  .wh-diagram-pair { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+  .wh-diagram, .wh-diagram + .wh-diagram { padding: 20px; }
+  .wh-flow { padding: 20px; }
+}
+@media (min-width: 1024px) {
+  .wh-flow { --wh-flow-gap: 32px; }
+  .wh-flow-steps { grid-template-columns: repeat(var(--wh-flow-count), minmax(0, 1fr)); }
+  .wh-flow-step { grid-template-columns: minmax(0, 1fr); align-content: start; }
+  .wh-flow-step + .wh-flow-step::before { left: calc(-1 * var(--wh-flow-gap) - 1px); top: 35px; width: calc(var(--wh-flow-gap) + 1px); height: 2px; }
+  .wh-flow-step + .wh-flow-step::after { left: calc(-1 * var(--wh-flow-gap) - 4px); top: 32px; }
+}
+
+/* One cycle per figure (--wh-flow-cycle); --wh-flow-at is when the pulse reaches a step. Delays
+ * are taken a cycle early so the first pass starts mid-story without a frozen first frame. */
+@keyframes wh-diagram-travel { from { stroke-dashoffset: 13; } to { stroke-dashoffset: -104; } }
+@keyframes wh-diagram-relay { 0% { stroke-dashoffset: 13; } 18%, 100% { stroke-dashoffset: -104; } }
+@keyframes wh-diagram-ring { 0% { transform: scale(1); opacity: .55; } 100% { transform: scale(1.45); opacity: 0; } }
+@keyframes wh-flow-dot-y { 0% { opacity: 0; transform: translateY(0); } 1.5% { opacity: 1; } 10% { opacity: 1; transform: translateY(var(--wh-flow-gap)); } 11%, 100% { opacity: 0; transform: translateY(var(--wh-flow-gap)); } }
+@keyframes wh-flow-dot-x { 0% { opacity: 0; transform: translateX(0); } 1.5% { opacity: 1; } 10% { opacity: 1; transform: translateX(var(--wh-flow-gap)); } 11%, 100% { opacity: 0; transform: translateX(var(--wh-flow-gap)); } }
+@keyframes wh-flow-arrive {
+  0%, 14% { border-color: var(--wh-tint); box-shadow: 0 0 0 3px color-mix(in srgb, var(--wh-tint) 22%, transparent); }
+  24%, 100% { border-color: var(--wh-line); box-shadow: none; }
+}
+@keyframes wh-flow-buzz { 0%, 12%, 100% { transform: rotate(0); } 2%, 6% { transform: rotate(-12deg); } 4%, 8% { transform: rotate(12deg); } 10% { transform: rotate(-6deg); } }
+@keyframes wh-flow-reveal { 0%, 60% { opacity: 1; } 62%, 100% { opacity: 0; } }
+@media (prefers-reduced-motion: no-preference) {
+  .wh-landing[data-motion="on"][data-motion-visible="true"] [data-in-view="true"] .wh-diagram-pulse { opacity: 1; }
+  .wh-landing[data-motion="on"][data-motion-visible="true"] [data-in-view="true"].wh-diagram-without .wh-diagram-pulse { animation: wh-diagram-travel var(--wh-pulse-duration, 2s) linear var(--wh-pulse-delay, 0s) infinite; }
+  .wh-landing[data-motion="on"][data-motion-visible="true"] [data-in-view="true"].wh-diagram-with .wh-diagram-pulse { animation: wh-diagram-relay 6s linear var(--wh-pulse-delay, 0s) infinite; }
+  .wh-landing[data-motion="on"][data-motion-visible="true"] [data-in-view="true"] .wh-diagram-ring { animation: wh-diagram-ring 1.2s ease-out 1.05s infinite; }
+  .wh-landing[data-motion="on"][data-motion-visible="true"] [data-in-view="true"] .wh-flow-step { animation: wh-flow-arrive var(--wh-flow-cycle) linear calc(var(--wh-flow-at, 0s) - var(--wh-flow-cycle)) infinite; }
+  .wh-landing[data-motion="on"][data-motion-visible="true"] [data-in-view="true"] .wh-flow-step + .wh-flow-step::after { animation: wh-flow-dot-y var(--wh-flow-cycle) linear calc(var(--wh-flow-at, 0s) - var(--wh-flow-cycle) * 1.1) infinite; }
+  .wh-landing[data-motion="on"][data-motion-visible="true"] [data-in-view="true"] .wh-flow-buzz .wh-flow-icon svg { animation: wh-flow-buzz var(--wh-flow-cycle) linear calc(var(--wh-flow-at, 0s) - var(--wh-flow-cycle)) infinite; }
+  .wh-landing[data-motion="on"][data-motion-visible="true"] [data-in-view="true"] .wh-flow-status { animation: wh-flow-reveal var(--wh-flow-cycle) linear calc(var(--wh-flow-at, 0s) - var(--wh-flow-cycle)) infinite; }
+  @media (min-width: 1024px) {
+    .wh-landing[data-motion="on"][data-motion-visible="true"] [data-in-view="true"] .wh-flow-step + .wh-flow-step::after { animation-name: wh-flow-dot-x; }
+  }
+}
