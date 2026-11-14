@@ -451,7 +451,7 @@ test("adminHostFromEnv reads the same derivation without throwing, for the reque
   assert.equal(adminHostFromEnv({ NODE_ENV: "production", PUBLIC_BASE_URL: "garbage" }), null);
 });
 
-import { publicLinksFromEnv, websiteFromEnv } from "./config";
+import { onWebsiteHost, publicHomeFor, publicLinksFromEnv, websiteFromEnv } from "./config";
 
 test("websiteFromEnv derives the website host from an app. public base URL without throwing", () => {
   assert.equal(websiteFromEnv({ PUBLIC_BASE_URL: "https://app.warthog.example" })?.origin, "https://warthog.example");
@@ -460,4 +460,14 @@ test("websiteFromEnv derives the website host from an app. public base URL witho
   assert.equal(websiteFromEnv({}), null);
   assert.deepEqual(publicLinksFromEnv({ PUBLIC_BASE_URL: "https://app.warthog.example" }), { home: "https://warthog.example/", account: "https://app.warthog.example" });
   assert.deepEqual(publicLinksFromEnv({}), { home: "/", account: "" });
+});
+
+test("only the website's own host is the website, and only the admin host keeps its own home", () => {
+  const env = { NODE_ENV: "production", PUBLIC_BASE_URL: "https://app.warthog.example" };
+  assert.equal(onWebsiteHost("warthog.example", env), true);
+  for (const host of ["app.warthog.example", "www.warthog.example", "admin.warthog.example", null]) assert.equal(onWebsiteHost(host, env), false, String(host));
+  assert.equal(onWebsiteHost("localhost", { PUBLIC_BASE_URL: "http://localhost:3000" }), false, "no website without an app. base URL");
+  for (const host of ["app.warthog.example", "warthog.example", "unknown.example", null]) assert.equal(publicHomeFor(host, env), "https://warthog.example/", String(host));
+  assert.equal(publicHomeFor("admin.warthog.example", env), "/", "the admin host's / is the portal");
+  assert.equal(publicHomeFor("localhost", { PUBLIC_BASE_URL: "http://localhost:3000" }), "/");
 });

@@ -71,6 +71,8 @@
 // page's default export (its only framework field) with `react-dom/server` and reading
 // the markup — the same no-DOM render the view/page tests use.
 
+// First: Next's environment baseline must load before the page pulls in its request stores.
+import { withPageRequest } from "../../test/page-request";
 import * as React from "react";
 import { test } from "node:test";
 import assert from "node:assert/strict";
@@ -615,11 +617,14 @@ function actionableButtons(markup: string): { name: string; attrs: string }[] {
 // or an async server component are both awaited.
 async function renderPage(Page: unknown): Promise<string> {
   assert.equal(typeof Page, "function", "the sign-up entry must have a default-exported page component");
-  const element = await Promise.resolve(
-    (Page as (props: unknown) => unknown)({
-      searchParams: Promise.resolve({}),
-      params: Promise.resolve({}),
-    }),
+  // An anonymous request: the entry forwards a signed-in visitor before rendering the flow.
+  const element = await withPageRequest("/signup", undefined, () =>
+    Promise.resolve(
+      (Page as (props: unknown) => unknown)({
+        searchParams: Promise.resolve({}),
+        params: Promise.resolve({}),
+      }),
+    ),
   );
   return renderToStaticMarkup(element as React.ReactElement);
 }

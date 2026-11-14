@@ -2,8 +2,9 @@ import * as React from "react";
 
 // Wordmark — the Warthog product identity: the founder's Warthog logo (the head and the
 // WARTHOG lettering, public/brand/warthog-logo.png). It is a single link whose
-// destination the caller decides: / when signed out (the auth and public screens) and
-// /home when signed in (the shell). The logo is a CSS mask over that asset filled with the
+// destination the caller decides: the front door when signed out (the auth and public
+// screens: the website when it has its own host, else /) and /home when signed in (the
+// shell). The logo is a CSS mask over that asset filled with the
 // `--wh-logo` theme token, so it reads navy in light mode and near-white in dark mode
 // without a second image (globals.css `.wh-logo`). The image carries the name visually and
 // is hidden from assistive technology; a visually-hidden "Warthog home" names the link.

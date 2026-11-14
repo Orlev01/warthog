@@ -12,7 +12,8 @@ import { Privacy } from "./privacy";
 import { Terms } from "./terms";
 import { WebsiteHome } from "./website-home";
 import HelpPage from "../../app/help/page";
-import { publicLinksFor, websiteFor } from "../../server/http/website";
+import { publicLinksFor } from "../../server/http/public-links";
+import { websiteFor } from "../../server/http/website";
 
 const LINKS = publicLinksFor(websiteFor("https://app.warthog.example"));
 const APP = "https://app.warthog.example";

@@ -115,7 +115,10 @@ If readiness or acceptance fails, deactivate the failed revision and repeat the
 zero-replica/lock-available checks. Reactivate the old digest only if its schema
 compatibility was reviewed. Otherwise retain the outage and fix forward or use
 the separately approved restore procedure. Do not automate rollback by activating
-an old revision while the failed process still exists.
+an old revision while the failed process still exists. An image older than
+`d45072c` serves the whole app on `warthog.com.au` and `www` while those hostnames
+are bound: remove them first, or accept a broken front door for the window (see
+the [website decision](adr/website-root-domain.md#releases-and-rollback)).
 
 Before reopening traffic after any database restore, reconcile deletion requests
 made after the restore point using approved evidence independent of that snapshot.

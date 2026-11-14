@@ -14,7 +14,8 @@ import { createHash } from "node:crypto";
 import { parseCountryRoutes, type TwilioConfig } from "./notify/twilio";
 import type { SmsLimits } from "./notify/sms-budget";
 import { adminOriginFor, hostnameOf } from "./admin/origin";
-import { publicLinksFor, websiteFor, type PublicLinks, type Website } from "./http/website";
+import { RELATIVE_LINKS, publicLinksFor, type PublicLinks } from "./http/public-links";
+import { websiteFor, type Website } from "./http/website";
 
 // A local-development fallback only. When the host injects `PORT` (12-factor,
 // INV-104) the server binds that value; this fallback never overrides it.
@@ -229,6 +230,21 @@ export function websiteFromEnv(env: NodeJS.ProcessEnv = process.env): Website | 
 /** Where the public screens' brand and account links point (relative without a website host). */
 export function publicLinksFromEnv(env: NodeJS.ProcessEnv = process.env): PublicLinks {
   return publicLinksFor(websiteFromEnv(env));
+}
+
+/** Whether a request hostname (requestHostname) is the website's own host. */
+export function onWebsiteHost(hostname: string | null, env: NodeJS.ProcessEnv = process.env): boolean {
+  const website = websiteFromEnv(env);
+  return website !== null && hostname === website.host;
+}
+
+/**
+ * Where the public 404 sends "home" for a request host: the website's front door when it has
+ * its own host, except on the admin host, whose own `/` is the portal's overview.
+ */
+export function publicHomeFor(hostname: string | null, env: NodeJS.ProcessEnv = process.env): string {
+  if (hostname !== null && hostname === adminHostFromEnv(env)) return RELATIVE_LINKS.home;
+  return publicLinksFromEnv(env).home;
 }
 
 // Production must never run with dev tools enabled or an in-process pglite database.

@@ -8,8 +8,9 @@
 // "Add to Home Screen" made a Safari bookmark, so iOS web push (which needs an installed
 // web app) was impossible.
 //
-// The metadata lives in `site-metadata.ts` (layout.tsx re-exports it) because layout.tsx
-// imports the global stylesheet and next/font, which only load under Next's bundler.
+// The metadata lives in `site-metadata.ts` (layout.tsx serves it from generateMetadata) because
+// layout.tsx imports the global stylesheet and next/font, which only load under Next's bundler.
+// The website and admin hosts leave out the installable-app tags (src/app/website-entries.test.tsx).
 
 import { test } from "node:test";
 import assert from "node:assert/strict";

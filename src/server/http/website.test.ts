@@ -1,9 +1,11 @@
 // The website host (src/server/http/website.ts; docs/adr/website-root-domain.md).
 import { test } from "node:test";
 import assert from "node:assert/strict";
+import { readFileSync } from "node:fs";
 
 import { ADMIN_PREFIX, APP_HANDOFF_PATH } from "./admin-routing";
-import { RELATIVE_LINKS, isWebsitePath, publicLinksFor, redirectTarget, routeForWebsite, websiteFor } from "./website";
+import { RELATIVE_LINKS, publicLinksFor } from "./public-links";
+import { isWebsitePath, redirectTarget, routeForWebsite, websiteFor } from "./website";
 
 const SITE = websiteFor("https://app.warthog.example")!;
 
@@ -67,4 +69,14 @@ test("public links point at the website and the app only when the website has it
   assert.deepEqual(publicLinksFor(SITE), { home: "https://warthog.example/", account: "https://app.warthog.example" });
   assert.deepEqual(publicLinksFor(null), RELATIVE_LINKS);
   assert.deepEqual(RELATIVE_LINKS, { home: "/", account: "" });
+});
+
+// The public components import the links module; a runtime import there could bring the host
+// routing, and the admin portal's internal prefix with it, into a public page's bundle.
+test("the public links module imports nothing at runtime", () => {
+  const source = readFileSync(new URL("./public-links.ts", import.meta.url), "utf8");
+  assert.match(source, /^import type \{ Website \} from "\.\/website";$/m);
+  assert.doesNotMatch(source, /^\s*import\s+(?!type\s)/m, "only type imports");
+  assert.doesNotMatch(source, /^\s*export\s[^;]*\bfrom\b/m, "no re-exports");
+  assert.doesNotMatch(source, /\b(require|import)\s*\(/, "no dynamic imports");
 });

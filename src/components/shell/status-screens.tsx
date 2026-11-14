@@ -18,7 +18,9 @@ import { Wordmark } from "./wordmark";
 // Two frames:
 //   • `public` — outside the workspace (signed out, or the root boundaries): the panel on the
 //     tinted public canvas under a wordmark bar, with the policy links in a footer bar. Its
-//     way back is "/", which already sends a signed-in member on to /home.
+//     way back is "/", which sends a signed-in member on to /home. The public 404 is shown
+//     only to visitors who aren't signed in, so its way back is `home` instead: the website's
+//     front door when it has its own host (not-found.tsx reads config.ts publicHomeFor).
 //   • `workspace` — inside AppShell: the panel in the page container, so the sidebar, top
 //     bar and drawer stay put and every destination is one click away.
 
@@ -48,13 +50,13 @@ function StatusPanel({
   );
 }
 
-function ScreenFrame({ variant, children }: { variant: StatusVariant; children: React.ReactNode }) {
+function ScreenFrame({ variant, home = "/", children }: { variant: StatusVariant; home?: string; children: React.ReactNode }) {
   if (variant === "workspace") return <div className="wh-page wh-status-page-body">{children}</div>;
   return (
     <div className="wh-status-page">
       <header className="wh-status-bar">
         <div className="wh-status-bar-inner">
-          <Wordmark href="/" />
+          <Wordmark href={home} />
         </div>
       </header>
       <main className="wh-status-main">{children}</main>
@@ -141,10 +143,10 @@ export function ErrorScreen({ digest, reset, variant = "public" }: ErrorScreenPr
   );
 }
 
-export function NotFoundScreen({ variant = "public" }: { variant?: StatusVariant }) {
+export function NotFoundScreen({ variant = "public", home = "/" }: { variant?: StatusVariant; home?: string }) {
   const workspace = variant === "workspace";
   return (
-    <ScreenFrame variant={variant}>
+    <ScreenFrame variant={variant} home={home}>
       <StatusPanel
         icon={<Compass aria-hidden={true} className="h-6 w-6 text-fg-muted" />}
         title="We couldn't find that page"
@@ -162,7 +164,7 @@ export function NotFoundScreen({ variant = "public" }: { variant?: StatusVariant
             </>
           ) : (
             <>
-              <ButtonLink href="/" variant="primary">
+              <ButtonLink href={home} variant="primary">
                 <Home aria-hidden={true} className="h-4 w-4 shrink-0" />
                 Go to Warthog
               </ButtonLink>

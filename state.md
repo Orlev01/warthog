@@ -7,7 +7,7 @@ replica, explicit 100% traffic and zero old replicas.
 
 PR #26 moved the marketing front door to its own host:
 - `warthog.com.au` always shows the front door and the public pages, signed in or not;
-- `www.` and every other path there forward to the app;
+- `www.` forwards to the website, and every other website path forwards to the app;
 - on the app, `/` sends a signed-out visitor to sign-in.
 
 Four hostnames are now bound (`warthog.com.au`, `www`, `app`, `admin`). The image suite passed

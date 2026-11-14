@@ -166,7 +166,7 @@ test("every other website path forwards to the app, and www. forwards to the web
       assert.equal(response.headers.get("location"), location, `${host}${path}`);
       assert.equal(response.headers.get("cache-control"), "no-store");
     }
-    // The ingress's forwarded host decides, and a spoofed Host can only reach a configured origin.
+    // The forwarded host decides (a client can set it), and any host still only reaches a configured origin.
     const forwarded = middleware(new NextRequest("https://app.example.test/signin", { headers: { host: "app.example.test", "x-forwarded-host": "www.example.test" } }));
     assert.equal(forwarded.headers.get("location"), "https://example.test/signin");
   });
@@ -180,13 +180,32 @@ test("without an app. public base URL there is no website host and the app route
   });
 });
 
-test("website traffic is counted under its own host class", () => {
+test("website pages are counted under their own host class, and a redirect is not counted", () => {
   withEnv(PROD, () => {
     getTrafficCounter().drain();
-    middleware(new NextRequest("https://example.test/", { headers: { host: "example.test", "sec-fetch-dest": "document" } }));
-    middleware(new NextRequest("https://example.test/signin", { headers: { host: "example.test", "sec-fetch-dest": "document" } }));
-    middleware(new NextRequest("https://www.example.test/", { headers: { host: "www.example.test", "sec-fetch-dest": "document" } }));
+    const document = { "sec-fetch-dest": "document" };
+    middleware(new NextRequest("https://example.test/", { headers: { host: "example.test", ...document } }));
+    middleware(new NextRequest("https://example.test/help", { headers: { host: "example.test", ...document } }));
+    // A www. visit and an old sign-in link each count once, at the request they lead to.
+    middleware(new NextRequest("https://www.example.test/", { headers: { host: "www.example.test", ...document } }));
+    middleware(new NextRequest("https://example.test/signin", { headers: { host: "example.test", ...document } }));
     const drained = Object.fromEntries(getTrafficCounter().drain().map((e) => [e.label, e.count]));
-    assert.deepEqual(drained, { "site.public.document": 2, "site.auth.document": 1 });
+    assert.deepEqual(drained, { "site.public.document": 2 });
+  });
+});
+
+test("on the website a POST keeps its method through the redirect, and build assets are served as-is", () => {
+  withEnv(PROD, () => {
+    const post = middleware(new NextRequest("https://example.test/api/auth/signin/begin", { method: "POST", headers: { host: "example.test" } }));
+    assert.equal(post.status, 308, "308, not 301/302, so the browser repeats the POST at the app");
+    assert.equal(post.headers.get("location"), "https://app.example.test/api/auth/signin/begin");
+    for (const path of ["/_next/static/chunks/app.js", "/fonts/inter/latin.woff2", "/brand/warthog-logo.png"]) {
+      const asset = middleware(new NextRequest(`https://example.test${path}`, { headers: { host: "example.test" } }));
+      assert.equal(asset.status, 200, path);
+      assert.equal(asset.headers.get("location"), null, path);
+      assert.equal(asset.headers.get("content-security-policy"), null, `${path} is passed through untouched`);
+    }
+    const query = middleware(new NextRequest("https://www.example.test/help?x=1", { headers: { host: "www.example.test" } }));
+    assert.equal(query.headers.get("location"), "https://example.test/help?x=1");
   });
 });
