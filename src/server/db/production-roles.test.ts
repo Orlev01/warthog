@@ -61,3 +61,36 @@ test("runtime role claims and releases undo claims, may set only their approval,
     assert.equal(Number(left.rows[0]?.n), 0, "the purged account's claims are gone");
   } finally { await db.query("RESET ROLE"); await db.close(); }
 });
+
+// 16 Nov — agent runs (docs/adr/agent-runs.md). The runtime role starts runs, reads them and
+// marks one seen (UPDATE of last_seen_at only); it can never rewrite whose a run is, when it
+// started or what the agent said it was for. Entry links are append-only like the entries.
+// An account purge carries both away by cascade.
+test("runtime role starts and touches runs but cannot rewrite them, links are append-only, and a purge removes both", async () => {
+  const db = await freshDb();
+  try {
+    const user = await createUser(db, { email: "run-roles@warthog.com.au", wrappedDek: "synthetic" });
+    const agent = await db.query("INSERT INTO agents (user_id, connection_id, display_name, platform, status, connected_at) VALUES ($1, gen_random_uuid(), 'Claude', 'claude', 'connected', now()) RETURNING id", [user.id]);
+    const agentId = String(agent.rows[0]!.id);
+    await db.query("SET ROLE warthog_app");
+    const run = "5d0c2a4e-8b1f-4c3d-9e2a-7f6b5a4c3d2e";
+    await db.query("INSERT INTO agent_runs (user_id, id, agent_id, started_at, last_seen_at) VALUES ($1, $2, $3, now(), now())", [user.id, run, agentId]);
+    await db.query("UPDATE agent_runs SET last_seen_at = now() WHERE user_id = $1 AND id = $2", [user.id, run]);
+    for (const column of ["label_ct = label_ct", "agent_id = agent_id", "user_id = user_id", "started_at = now()", "via = via"]) {
+      await assert.rejects(db.query(`UPDATE agent_runs SET ${column} WHERE false`), /permission denied/, column);
+    }
+    await assert.rejects(db.query("DELETE FROM agent_runs WHERE false"), /permission denied/);
+    await db.query("INSERT INTO activity_entry_runs (user_id, entry_seq, run_id) VALUES ($1, 1, $2)", [user.id, run]);
+    await assert.rejects(db.query("UPDATE activity_entry_runs SET run_id = run_id WHERE false"), /permission denied/);
+    await assert.rejects(db.query("DELETE FROM activity_entry_runs WHERE false"), /permission denied/);
+    await db.query("RESET ROLE");
+
+    await db.query("SET ROLE warthog_purge");
+    await db.query("DELETE FROM users WHERE id = $1", [user.id]);
+    await db.query("RESET ROLE");
+    for (const table of ["agent_runs", "activity_entry_runs"]) {
+      const left = await db.query(`SELECT count(*)::int AS n FROM ${table} WHERE user_id = $1`, [user.id]);
+      assert.equal(Number(left.rows[0]?.n), 0, `the purged account's ${table} are gone`);
+    }
+  } finally { await db.query("RESET ROLE"); await db.close(); }
+});

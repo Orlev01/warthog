@@ -212,7 +212,7 @@ const CORE_TOOL_SPECS: readonly CoreToolSpec[] = [
   {
     name: "get_context",
     description:
-      "Fetch your granted context: the person's profile you may see, the skills and preferences scoped to you, the rules you must follow, the shared memory you may read, your open tasks and Warthog's house skill. Call this first. Follow next.memory and next.skills with memory_cursor and skill_cursor to retrieve further pages.",
+      "Fetch your granted context: the person's profile you may see, the skills and preferences scoped to you, the rules you must follow, the shared memory you may read, your open tasks and Warthog's house skill. Call this first in every conversation, with working_on saying in a few words what the conversation is for: it starts this conversation's run, and you pass run.id as run on every later Warthog call. Follow next.memory and next.skills with memory_cursor and skill_cursor (and your run) to retrieve further pages.",
     makesChange: false,
     schema: getContextSchema,
   },

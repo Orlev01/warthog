@@ -97,3 +97,7 @@ contract, so the product does not invent setup steps for them.
 [Agent evidence and controls](agent-evidence-and-controls.md) adds explicit tool
 allowlists, task/record write controls, selected-record access, client observations,
 durable attempt/outcome evidence, investigation and chunked account transfers.
+
+[Agent runs](agent-runs.md) tells one agent's conversations apart without new credentials: Warthog
+hands each conversation a run through `get_context`, and Activity, the Inbox and the agent's
+Overview group by it.

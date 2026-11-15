@@ -1122,3 +1122,29 @@ test("a person with no agents is told so by the loader", async () => {
     await db.close();
   }
 });
+
+test("a request names the agent conversation that asked and the product it came through", async () => {
+  const db = await freshDb();
+  const keyWrapper = keyWrapperFor();
+  try {
+    const run = { id: "5d0c2a4e-8b1f-4c3d-9e2a-7f6b5a4c3d2e", label: "Buying the headphones" };
+    const a = await arrangeHeld(
+      db,
+      keyWrapper,
+      "runs-card",
+      { ...cardCall({ amount: 149.99, currency: "AUD", merchant: "JB Hi-Fi", reason: "new headphones" }), run, via: "Claude Code" },
+      { cardAccess: true, cardBudget: { amount: 500, currency: "AUD", period: "month" } },
+    );
+    const view = (await a.actions.load(await freshSession(db, a.userId))).pending[0]!;
+    assert.equal(line(view, "Conversation"), "Buying the headphones", "which of the agent's conversations is asking");
+    assert.equal(line(view, "Came through"), "Claude Code");
+    assert.equal(view.details[0]!.label, "Conversation", "it leads the request's details");
+
+    const plain = await arrangeHeld(db, keyWrapper, "runs-card-plain", cardCall({ amount: 10, currency: "AUD", merchant: "Cafe" }), { cardAccess: true, cardBudget: { amount: 500, currency: "AUD", period: "month" } });
+    const before = (await plain.actions.load(await freshSession(db, plain.userId))).pending[0]!;
+    assert.equal(line(before, "Conversation"), undefined, "a request made outside any conversation shows none");
+    assert.equal(line(before, "Came through"), undefined);
+  } finally {
+    await db.close();
+  }
+});

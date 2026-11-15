@@ -110,6 +110,9 @@ export type ActivityEntryView = {
   canUndo: boolean;
   undoStatus?: { readonly state: "done" } | { readonly state: "waiting"; readonly approvalHref: string };
   disputes?: readonly { note: string; at: string }[];
+  via?: string; // the product the request came through, as reported ("Claude Code")
+  conversation?: { id: string; label?: string }; // the agent conversation (run) it belongs to
+  conversationHref?: string; // the timeline filtered to that conversation
 };
 
 export type ActivityViewKey = "timeline" | "agents" | "types" | "services";
@@ -437,15 +440,24 @@ function ActivityEntryItem({
       entry.agent
     )
   ) : null;
-  // Who: the agent that acted (or the agent a change was about), and whether it was you.
-  const who = reported ? null : agentText;
+  // Who: the agent that acted (or the agent a change was about), and whether it was you —
+  // with the product the request came through, as the app reported it.
+  const who = reported || !agentText ? null : entry.via ? <>{agentText} via {entry.via}</> : agentText;
+  // The agent conversation it belongs to, linking to everything else recorded in it.
+  const conversationName = entry.conversation ? entry.conversation.label ?? "Untitled conversation" : null;
+  const conversation = conversationName === null ? null : entry.conversationHref ? (
+    <a href={entry.conversationHref} className="underline underline-offset-2 hover:text-fg">
+      <span className="sr-only">Show the conversation </span>
+      {conversationName}
+    </a>
+  ) : conversationName;
   const service = entry.service ? (
     <span className="inline-flex items-center gap-1 align-middle">
       {entry.serviceId ? <ServiceMark id={entry.serviceId} name={entry.service} size="xs" /> : null}
       {entry.service}
     </span>
   ) : null;
-  const meta = [entry.categoryLabel ?? null, who, service, entry.changedBy === "you" ? "Changed by you" : null, entry.time ? null : entry.at].filter(Boolean);
+  const meta = [entry.categoryLabel ?? null, who, conversation, service, entry.changedBy === "you" ? "Changed by you" : null, entry.time ? null : entry.at].filter(Boolean);
   const facts: readonly EvidenceLine[] = entry.facts && entry.facts.length > 0 ? [{ label: "Recorded", value: entry.at }, ...entry.facts] : [];
   return (
     <li id={`entry-${entry.seq}`} className={LIST_ROW}>

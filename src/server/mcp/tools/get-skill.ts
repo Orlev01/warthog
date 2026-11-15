@@ -66,6 +66,8 @@ export const getSkillSchema = z.object({
 export const HOUSE_SKILL_BODY = [
   "You are connected to this person through Warthog, their personal agent home. Warthog enforces permissions and records requests routed through this connection. It cannot observe your separate tools or private conversations.",
   "",
+  "Keep each conversation together: get_context starts a run for the conversation. Say in working_on what the conversation is for, then pass run.id as run on every Warthog call in that conversation. The person may have many conversations with you at once, and the run is how they tell them apart.",
+  "",
   "Before you act:",
   "- Use serviceAccounts in get_context to identify the selected account. The profile belongs to the consenting Warthog account and is not proof of the chat user’s identity.",
   "- An unknown outcome means a change may have happened. Check Activity and the service before retrying; never blindly replay a change.",

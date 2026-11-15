@@ -260,6 +260,12 @@ function convertedText(detail: Record<string, unknown>): string {
 // it (an omitted field drops out, exactly as it is stored).
 function detailLines(detail: Record<string, unknown>): RequestDetail[] {
   const lines: RequestDetail[] = [];
+  // Which of the agent's conversations is asking (docs/adr/agent-runs.md), as the agent
+  // described it, and the product the request came through, as the app reported it.
+  const run = detail.run !== null && typeof detail.run === "object" ? (detail.run as Record<string, unknown>) : undefined;
+  if (run && typeof run.id === "string") lines.push({ label: "Conversation", value: text(run.label) || "Untitled conversation" });
+  const via = text(detail.via);
+  if (via) lines.push({ label: "Came through", value: via });
   const account = text(detail.account);
   if (account) lines.push({ label: "Service account", value: account });
   const recipients = recipientsText(detail);

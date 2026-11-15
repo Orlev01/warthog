@@ -41,6 +41,8 @@ import type { Config } from "../config";
 import type { Db } from "../db/index";
 import { selectKeyWrapper, type KeyWrapper } from "../crypto/key-wrapper";
 import { createRedactingRecorder } from "./recorder";
+import { resolveRun } from "../agents/runs";
+import { ANTHROPIC_CLIENT_HEADER, clientSurface } from "../../domain/agents/client-surface";
 import { toEntry } from "../activity/writer";
 import { type UndoReversalJob, type UndoReversalResult } from "../activity/undo";
 import { calendarReversalForEntry, successfulConnectorResult } from "../activity/calendar-reversal";
@@ -116,6 +118,25 @@ const MCP_SERVER_VERSION = "0.1.0";
 // never surfaced verbatim (only the input-boundary's own fixed 4xx messages are safe).
 const TOOL_FAILED_REASON = "The tool call could not be completed. A change may have occurred; inspect Activity and the service before retrying.";
 
+// Every Warthog tool also takes the run `get_context` handed out for the conversation
+// (docs/adr/agent-runs.md). It is optional and never changes what a call may do: a run the
+// agent was not issued is simply not linked.
+const RUN_FIELD = z
+  .string()
+  .max(64)
+  .optional()
+  .describe("The run id get_context gave you for this conversation. Pass it on every Warthog call, so the person can see this conversation's actions together.");
+
+// The schema a tool advertises: its own plus the optional `run`. The tool body still
+// validates against its own schema, which drops `run`, so the run never reaches its params.
+export function withRunField(schema: z.ZodType): z.ZodType {
+  if (!(schema instanceof z.ZodObject) || "run" in schema.shape) return schema;
+  return schema.safeExtend({ run: RUN_FIELD });
+}
+
+// Links the current request to the run a call names, when it is one of this agent's.
+type AttachRun = (connection: AgentConnection, run: unknown) => Promise<void>;
+
 // Register `tool` on `server`, routing the call through `tool.handle` under the already
 // resolved `connection` (from the verified bearer). The advertised input schema is the
 // tool body's REAL schema and the description says what the tool does, so tools/list
@@ -126,10 +147,11 @@ function registerTool(
   server: McpServer,
   tool: ToolDefinition,
   connection: AgentConnection | null,
+  attachRun: AttachRun,
 ): void {
   server.registerTool(
     tool.name,
-    { title: tool.title, description: tool.description, inputSchema: tool.inputSchema, annotations: tool.annotations },
+    { title: tool.title, description: tool.description, inputSchema: withRunField(tool.inputSchema), annotations: tool.annotations },
     async (args: unknown) => {
       // The connection is the verified bearer's; a request that never resolved one cannot
       // be scoped to a person, so it is refused rather than run (never a silent success).
@@ -137,6 +159,7 @@ function registerTool(
         return errorResult("This agent is not connected.");
       }
       try {
+        await attachRun(connection, (args as { run?: unknown } | undefined)?.run);
         const outcome = await tool.handle(args, connection);
         return { ...toToolResult(outcome), _meta: { "app.warthog/requestId": requestObservation.getStore()?.requestId } };
       } catch (err) {
@@ -450,6 +473,20 @@ export function createMcpDispatch(deps: McpDispatchDeps): McpDispatch {
     };
   }
 
+  // Link this request to the run a call names (docs/adr/agent-runs.md), when Warthog issued
+  // it to this connection's agent. Anything else is ignored, and a failure here is logged
+  // but never stops the call: a run is bookkeeping, not permission.
+  async function attachRun(connection: AgentConnection, run: unknown): Promise<void> {
+    const observed = requestObservation.getStore();
+    if (!observed || run === undefined) return;
+    try {
+      const found = await resolveRun(db, connection, run, await dataKeyFor(connection.userId), clock);
+      if (found) observed.run = found;
+    } catch (err) {
+      logFailure("run_attach_failed", err);
+    }
+  }
+
   // Build a fresh MCP server for one request, registering the tools the registry resolves
   // for the verified connection (core tools + its permitted connector tools). Each handler
   // is bound to the resolved connection, so identity is taken ONLY from the verified bearer.
@@ -497,7 +534,7 @@ export function createMcpDispatch(deps: McpDispatchDeps): McpDispatch {
       }
     }
     for (const tool of tools) {
-      registerTool(server, tool, connection);
+      registerTool(server, tool, connection, attachRun);
     }
     return server;
   }
@@ -520,7 +557,8 @@ export function createMcpDispatch(deps: McpDispatchDeps): McpDispatch {
     const meta = body && typeof body === "object" ? (body as { _meta?: Record<string, unknown> })._meta : undefined;
     const run = meta?.["app.warthog/runId"];
     const reportedRunId = typeof run === "string" && /^[A-Za-z0-9_.:-]{1,120}$/.test(run) ? run : undefined;
-    return requestObservation.run({ requestId: randomUUID(), body, client, reportedRunId }, async () => {
+    const via = clientSurface(request.headers.get(ANTHROPIC_CLIENT_HEADER), client?.name);
+    return requestObservation.run({ requestId: randomUUID(), body, client, reportedRunId, agentId: connection?.agentId, via }, async () => {
       const response = await handler.fetch(request, {
         authInfo: { token: connectionId, clientId: connectionId, scopes: [MCP_SCOPE] },
       });

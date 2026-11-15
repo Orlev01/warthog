@@ -12,12 +12,16 @@ import { dayOf, timeOfDay } from "@/domain/display-time";
 export const AGENT_AUDIT_ROWS = 30;
 import { readAgentSpending } from "../spending/agent-spending";
 import { accessKeyState } from "./access-key-state";
+import { listRuns } from "./runs";
 import { timeZoneFor } from "../spending/time-zone";
 import { formatAccountTime } from "../display-time";
 import { entryTitle } from "@/domain/activity/describe";
 import type { AgentSection } from "@/domain/permissions/workspace";
 import type { Db } from "../db/index";
 import type { Clock } from "../seams/clock";
+
+// How many of an agent's conversations its overview lists.
+const RECENT_CONVERSATIONS = 8;
 
 export async function agentWorkspaceData(
   db: Db,
@@ -100,6 +104,19 @@ export async function agentWorkspaceData(
     refused: measured.filter(entry => ["refused","denied","rate_limited"].includes(entry.outcome ?? "")).length,
     p95Ms: durations.length ? Math.round(durations[Math.ceil(durations.length * 0.95) - 1]!) : null };
   const clientObservation = await readClientObservation(db, userId, agent.id, dek);
+  // The overview's most recent conversations (docs/adr/agent-runs.md), each linking to its
+  // entries on the Activity page.
+  const conversations = section === "overview"
+    ? (await listRuns(db, userId, dek, { agentId: agent.id, limit: RECENT_CONVERSATIONS })).map((run) => ({
+        id: run.id,
+        label: run.label ?? null,
+        via: run.via ?? null,
+        actions: run.actions,
+        lastActive: formatAccountTime(run.lastSeenAt, timeZone),
+        lastActiveAt: run.lastSeenAt,
+        href: `/activity?run=${run.id}`,
+      }))
+    : [];
   // The Settings section's "Access key" panel: only for a connected agent that connects with
   // a Warthog access key. A disconnected agent's key went with the disconnect, and an agent
   // connected over OAuth has none.
@@ -112,6 +129,7 @@ export async function agentWorkspaceData(
     performance,
     agent,
     clientObservation: clientObservation ? { ...clientObservation, displayObservedAt: formatAccountTime(clientObservation.observedAt, timeZone) } : null,
+    conversations,
     spending,
     memory,
     activity,

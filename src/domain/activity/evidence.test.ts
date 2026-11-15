@@ -153,3 +153,24 @@ test("unknown payload fields are never dumped", () => {
   assert.ok(!JSON.stringify(evidence).includes("do not show"));
   assert.equal(evidence.detail, "No other details were recorded for this entry.");
 });
+
+test("an entry names its agent conversation and the product it came through, as reported", () => {
+  const RUN = "5d0c2a4e-8b1f-4c3d-9e2a-7f6b5a4c3d2e";
+  const evidence = activityEvidence({ ...addTask, payload: { ...addTask.payload, run: { id: RUN, label: "Tidying the trial subscriptions" }, via: "Claude Code" } });
+  assert.deepEqual(evidence.conversation, { id: RUN, label: "Tidying the trial subscriptions" });
+  assert.equal(evidence.via, "Claude Code");
+  assert.equal(value(evidence, "Conversation (as the agent described it)"), "Tidying the trial subscriptions");
+  assert.equal(value(evidence, "Came through (as the app reported it)"), "Claude Code");
+  assert.equal(value(evidence, "Conversation ID", "technical"), RUN);
+
+  const unnamed = activityEvidence({ ...addTask, payload: { ...addTask.payload, run: { id: RUN } } });
+  assert.deepEqual(unnamed.conversation, { id: RUN });
+  assert.equal(value(unnamed, "Conversation (as the agent described it)"), undefined);
+
+  const before = activityEvidence(addTask);
+  assert.equal(before.conversation, undefined, "older entries have no conversation");
+  assert.equal(before.via, undefined);
+  for (const junk of [{ run: "x" }, { run: { id: 7 } }, { run: { id: "" } }]) {
+    assert.equal(activityEvidence({ ...addTask, payload: { ...addTask.payload, ...junk } }).conversation, undefined);
+  }
+});

@@ -14,6 +14,18 @@ export const getContextSchema = z.object({
   skill_cursor: z.string().max(256).refine(isPageCursor, "Invalid page cursor. Start from the first page.").optional(),
   limit: z.number().int().min(1).max(100).optional(),
   reason: z.string().max(2000).optional(),
+  // Runs (docs/adr/agent-runs.md): a short description of the conversation's work, kept with
+  // the run this call starts, and the run to continue when the agent already has one.
+  working_on: z
+    .string()
+    .max(200)
+    .optional()
+    .describe("A few words on what you are working on in this conversation, for example \"Fixing the website tests\". The person sees it next to everything this conversation does."),
+  run: z
+    .string()
+    .max(64)
+    .optional()
+    .describe("The run id an earlier get_context in this conversation gave you. Omit it at the start of a conversation."),
 });
 import { vaultFieldAllowed } from "../../agents/resource-access";
 // Review fix D7 — the `get_context` core tool (design §6.2 MCP core tools; brief "Agent
@@ -48,6 +60,13 @@ import type { KeyWrapper } from "../../crypto/key-wrapper";
 import type { Clock } from "../../seams/clock";
 import type { Db } from "../../db/index";
 import { loadAgentContext, type AgentConnection } from "../context";
+import { requestObservation } from "../client-observation";
+import { startRun, type RunRef } from "../../agents/runs";
+import { releasedValueMatcher } from "../../crypto/hmac";
+import { lookupForUser } from "../../db/release-fingerprints";
+
+// What the agent is told to do with its run.
+export const RUN_NOTE = "Pass this id as run on every Warthog call you make in this conversation, so the person can see this conversation's actions together. A new conversation starts its own run: call get_context without run.";
 
 export interface GetContextDeps {
   readonly db: Db;
@@ -65,6 +84,8 @@ export interface ProfileField {
 // Granted context with bounded skill/memory pages and opaque continuation cursors.
 export interface AgentContextView {
   readonly connection: { agentId: string; name: string; platform: string; identitySource: string };
+  // This conversation's run (docs/adr/agent-runs.md). Null only while paging without one.
+  readonly run: { id: string; workingOn: string | null; note: string } | null;
   readonly instructions: string;
   readonly serviceAccounts: readonly { service: string; accountId: string | null; label: string | null; status: string }[];
   readonly profile: readonly ProfileField[] | null;
@@ -203,10 +224,28 @@ export function createGetContextTool(deps: GetContextDeps): {
             }))
         : [];
 
+      // The conversation's run: the one this call named (already checked to be this agent's
+      // by the MCP layer), else a new one — except while paging, which continues a
+      // conversation that already has a run and must not start a stray one.
+      const observed = requestObservation.getStore();
+      let run: RunRef | undefined = observed?.run;
+      if (!run && pageInput.memory_cursor === undefined && pageInput.skill_cursor === undefined) {
+        // A run is bookkeeping, not permission: if one can't be started the context is still
+        // returned (without a run), and the failure is logged without any content.
+        try {
+          const matches = releasedValueMatcher(dek, await lookupForUser(db, userId, clock));
+          run = await startRun(db, connection, { label: pageInput.working_on, via: observed?.via }, dek, clock, matches);
+          if (observed) observed.run = run;
+        } catch {
+          console.error("[warthog mcp] a conversation run could not be started");
+        }
+      }
+
       const agent = await getAgentById(db, connection.userId, connection.agentId);
       const accounts = await listConnectionsForUser(db, connection.userId);
       return {
         connection: { agentId: connection.agentId, name: agent?.displayName ?? "This connection", platform: agent?.platform ?? "other", identitySource: "Warthog credential; display name and platform are owner supplied, not verification of the chat user or model." },
+        run: run ? { id: run.id, workingOn: run.label ?? null, note: RUN_NOTE } : null,
         instructions: HOUSE_SKILL_BODY,
         serviceAccounts: permissions.grantedConnectors.map(service => {
           const selected = selectConnectorAccount(accounts, service, permissions.connectorAccounts?.[service]);

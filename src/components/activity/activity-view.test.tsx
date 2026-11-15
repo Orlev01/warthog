@@ -791,3 +791,21 @@ test("with no filters applied there is no summary and the panel stays collapsed"
   assert.ok(!/Filtered by/.test(markup));
   assert.ok(!/<details[^>]*\sopen=""/.test(markup));
 });
+
+test("a row names the product it came through and links to its agent conversation", () => {
+  const entry: ActivityEntryView = {
+    ...ENTRY_TOOL_CALL,
+    via: "Claude Code",
+    conversation: { id: "5d0c2a4e-8b1f-4c3d-9e2a-7f6b5a4c3d2e", label: "Booking the check-up" },
+    conversationHref: "/activity?run=5d0c2a4e-8b1f-4c3d-9e2a-7f6b5a4c3d2e",
+  };
+  const markup = render(base({ entries: [entry] }));
+  assert.match(visibleText(markup), /Claude via Claude Code · Show the conversation Booking the check-up/);
+  assert.match(markup, /href="\/activity\?run=5d0c2a4e-8b1f-4c3d-9e2a-7f6b5a4c3d2e"/);
+
+  const unnamed = render(base({ entries: [{ ...entry, conversation: { id: entry.conversation!.id } }] }));
+  assert.match(visibleText(unnamed), /Untitled conversation/);
+
+  const before = visibleText(render(base({ entries: [ENTRY_TOOL_CALL] })));
+  assert.doesNotMatch(before, / via |conversation/i, "older entries read as before");
+});
