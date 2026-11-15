@@ -131,7 +131,7 @@ test("get_context starts a run, and calls that pass it are linked to it with the
     assert.equal((inOther[0]!.payload as { via?: string }).via, "Claude Cowork");
 
     const runs = await listRuns(db, userId, dek, { agentId });
-    assert.deepEqual(runs.map((run) => [run.label, run.via, run.actions]), [["Planning the trip", "Claude Cowork", 2], ["Fixing the website tests", "Claude Code", 3]]);
+    assert.deepEqual(runs.map((run) => [run.label, run.via, run.actions]), [["Planning the trip", "Claude Cowork", 2], ["Fixing the website tests", "Claude Code", 2]], "counted as Activity shows them");
   } finally { await db.close(); }
 });
 
@@ -188,5 +188,88 @@ test("a held call keeps its run through the person's approval", async () => {
     const executed = inRun.find((entry) => entry.tool === "remember" && entry.outcome === "executed");
     assert.ok(executed, "the approved execution is recorded under the run");
     assert.equal((executed!.payload as { via?: string }).via, "Claude Code");
+  } finally { await db.close(); }
+});
+
+test("a direct connection is named by the client name it sends in the request envelope", async () => {
+  const db = await freshDb();
+  try {
+    const config = devConfig();
+    const { userId, connectionId, dek } = await seed(db, config);
+    const dispatch = createMcpDispatch({ db, config });
+    // Claude Code 2.1.289 connected directly sends no product header; its client name rides in
+    // params._meta on every request (measured 16 Nov 2026).
+    const envelope = { "io.modelcontextprotocol/clientInfo": { name: "claude-code", title: "Claude Code", version: "2.1.289" } };
+    const body = { jsonrpc: "2.0", id: 1, method: "tools/call", params: { name: "get_context", arguments: { working_on: "Direct" }, _meta: envelope } };
+    const rpc = await readRpc(await dispatch(connectionId, mcpPost(body)));
+    assert.notEqual(rpc.result?.isError, true, JSON.stringify(rpc));
+    const entry = (await listActivity(db, userId, {}, dek)).find((item) => item.tool === "get_context")!;
+    assert.equal((entry.payload as { via?: string }).via, "Claude Code");
+  } finally { await db.close(); }
+});
+
+test("a malformed run never blocks a call, and refused calls and agent reports join their run", async () => {
+  const db = await freshDb();
+  try {
+    const config = devConfig();
+    const { userId, connectionId, dek } = await seed(db, config);
+    const dispatch = createMcpDispatch({ db, config });
+    const run = (await startRunOver(dispatch, connectionId, { working_on: "Odd inputs" })).run!;
+
+    // The whole run object, or an over-long string, instead of the id: the call still runs.
+    for (const odd of [run, "r".repeat(500), 42]) {
+      const rpc = await readRpc(await dispatch(connectionId, mcpPost(call("remember", { content: `odd ${typeof odd}`, run: odd }))));
+      assert.notEqual(rpc.result?.isError, true, `run ${JSON.stringify(odd).slice(0, 40)} must not block: ${JSON.stringify(rpc)}`);
+    }
+    const context = await startRunOver(dispatch, connectionId, { run: { id: run.id }, working_on: "w".repeat(5000) });
+    assert.ok(context.run, "a malformed run or description never withholds the context");
+
+    // A call refused for its own input, and an agent's own report, still join the run.
+    await readRpc(await dispatch(connectionId, mcpPost(call("remember", { run: run.id }))));
+    await readRpc(await dispatch(connectionId, mcpPost(call("log_activity", { reason: "Tidied the notes", run: run.id }))));
+    const kinds = (await listActivity(db, userId, { runId: run.id }, dek)).map((entry) => entry.kind);
+    assert.ok(kinds.includes("tool_rejected"), `the refused call is in the conversation: ${kinds}`);
+    assert.ok(kinds.some((kind) => kind !== "tool_call" && kind !== "tool_attempt" && kind !== "tool_rejected"), `the agent's report is in the conversation: ${kinds}`);
+  } finally { await db.close(); }
+});
+
+test("another agent of the same person cannot use a run", async () => {
+  const db = await freshDb();
+  try {
+    const config = devConfig();
+    const { userId, connectionId, dek } = await seed(db, config);
+    const secondConnection = randomUUID();
+    await createAgent(db, { userId, connectionId: secondConnection, displayName: "ChatGPT", platform: "chatgpt" }, fixedClock(NOW));
+    await upsertPermissions(db, {
+      userId, connectionId: secondConnection, grantedConnectors: [], readTools: true, changeTools: "allow",
+      identityAccess: true, highTierAccess: false, cardAccess: false, cardBudget: null, skillsScope: [],
+      memoryRead: true, sharing: false, rulesScope: [], rateLimit: 120,
+    });
+    const dispatch = createMcpDispatch({ db, config });
+    const run = (await startRunOver(dispatch, connectionId)).run!;
+    await readRpc(await dispatch(secondConnection, mcpPost(call("remember", { content: "not this run", run: run.id }))));
+    assert.deepEqual((await listActivity(db, userId, { runId: run.id }, dek)).map((entry) => entry.tool), ["get_context"]);
+  } finally { await db.close(); }
+});
+
+test("an approval checked from another conversation stays with the conversation that asked", async () => {
+  const db = await freshDb();
+  try {
+    const config = devConfig();
+    const { userId, connectionId, dek } = await seed(db, config);
+    await createRule(db, { userId, kind: "ask_first", scope: { type: "any_agent" }, action: { type: "specific_tool", tool: "remember" } }, dek);
+    const dispatch = createMcpDispatch({ db, config });
+    const asking = (await startRunOver(dispatch, connectionId, { working_on: "Asking" })).run!;
+    const held = await readRpc(await dispatch(connectionId, mcpPost(call("remember", { content: "Held", run: asking.id }))));
+    const approvalId = String(held.result!.structuredContent!.approval_id);
+    await decide(db, { userId, id: approvalId, decision: { status: "approved" } }, dek, systemClock);
+
+    const checking = (await startRunOver(dispatch, connectionId, { working_on: "Checking" })).run!;
+    await readRpc(await dispatch(connectionId, mcpPost(call("check_approval", { approval_id: approvalId, run: checking.id }))));
+    const executed = (await listActivity(db, userId, {}, dek)).find((entry) => entry.tool === "remember" && entry.outcome === "executed");
+    assert.ok(executed, "the held call ran when checked");
+    assert.equal((executed!.payload as { run?: { id: string } }).run?.id, asking.id, "its result is recorded under the conversation that asked");
+    assert.ok((await listActivity(db, userId, { runId: asking.id }, dek)).some((entry) => entry.seq === executed!.seq));
+    assert.ok((await listActivity(db, userId, { runId: checking.id }, dek)).some((entry) => entry.tool === "check_approval"), "the check itself is in the checking conversation");
   } finally { await db.close(); }
 });

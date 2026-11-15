@@ -71,6 +71,14 @@ test("labels are cleaned, bounded and redacted", () => {
   assert.doesNotMatch(cleanRunLabel("Paying with 4111 1111 1111 1111 now") ?? "", /4111 1111 1111 1111/);
   const released = cleanRunLabel("Using passport PA1234567", (token) => token === "pa1234567") ?? "";
   assert.doesNotMatch(released, /PA1234567/);
+
+  // Redaction sees the whole text before it is cut, and the cut never leaves part of a token.
+  const nearLimit = cleanRunLabel(`${"word ".repeat(17)}x 4111 1111 1111 1111 and more`) ?? "";
+  assert.doesNotMatch(nearLimit, /4111/, "a card number straddling the limit is never partly kept");
+  const passport = cleanRunLabel(`${"a".repeat(92)} PA1234567 tail`, (token) => token === "pa1234567") ?? "";
+  assert.doesNotMatch(passport, /PA123/, "a released value at the limit is redacted, not cut short of the matcher");
+  const words = cleanRunLabel("abcdefghij ".repeat(20)) ?? "";
+  assert.ok(words.length <= RUN_LABEL_MAX && !words.endsWith(" ") && words.endsWith("abcdefghij"), "cut at a word boundary");
 });
 
 test("runs list newest first with their entry counts, scoped to the person", async () => {

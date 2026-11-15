@@ -22,3 +22,8 @@ test("only a short printable name is ever shown", () => {
   assert.equal(clientSurface("Line\nBreak", "bad\u0000name"), undefined);
   assert.equal(clientSurface("  ClaudeCode  ", undefined), "Claude Code");
 });
+
+test("an unknown product name is redacted before it is shown or stored", () => {
+  assert.doesNotMatch(clientSurface("4111 1111 1111 1111") ?? "", /4111 1111 1111 1111/);
+  assert.doesNotMatch(clientSurface(null, "4111111111111111") ?? "", /4111111111111111/);
+});

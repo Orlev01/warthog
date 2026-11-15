@@ -442,12 +442,17 @@ function ActivityEntryItem({
   ) : null;
   // Who: the agent that acted (or the agent a change was about), and whether it was you —
   // with the product the request came through, as the app reported it.
-  const who = reported || !agentText ? null : entry.via ? <>{agentText} via {entry.via}</> : agentText;
-  // The agent conversation it belongs to, linking to everything else recorded in it.
-  const conversationName = entry.conversation ? entry.conversation.label ?? "Untitled conversation" : null;
+  const via = entry.via && entry.via.toLowerCase() !== entry.agent?.toLowerCase() ? entry.via : undefined;
+  const who = reported || !agentText ? null : via ? <>{agentText} via {via}</> : agentText;
+  // The agent conversation it belongs to, linking to everything else recorded in it. The
+  // name is the agent's own words, so it is quoted and introduced, never mistaken for
+  // Warthog's own labels.
+  const conversationName = entry.conversation
+    ? entry.conversation.label ? <>Conversation “{entry.conversation.label}”</> : "Untitled conversation"
+    : null;
   const conversation = conversationName === null ? null : entry.conversationHref ? (
     <a href={entry.conversationHref} className="underline underline-offset-2 hover:text-fg">
-      <span className="sr-only">Show the conversation </span>
+      <span className="sr-only">Show </span>
       {conversationName}
     </a>
   ) : conversationName;

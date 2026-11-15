@@ -1136,14 +1136,14 @@ test("a request names the agent conversation that asked and the product it came 
       { cardAccess: true, cardBudget: { amount: 500, currency: "AUD", period: "month" } },
     );
     const view = (await a.actions.load(await freshSession(db, a.userId))).pending[0]!;
-    assert.equal(line(view, "Conversation"), "Buying the headphones", "which of the agent's conversations is asking");
-    assert.equal(line(view, "Came through"), "Claude Code");
-    assert.equal(view.details[0]!.label, "Conversation", "it leads the request's details");
+    assert.equal(line(view, "Conversation (as the agent described it)"), "Buying the headphones", "which of the agent's conversations is asking, in its own words");
+    assert.equal(line(view, "Came through (as the app reported it)"), "Claude Code");
+    assert.deepEqual(view.details.map((detail) => detail.label).slice(-2), ["Conversation (as the agent described it)", "Came through (as the app reported it)"], "claims follow what Warthog checked");
+    assert.equal(view.details[0]!.label, "Amount");
 
     const plain = await arrangeHeld(db, keyWrapper, "runs-card-plain", cardCall({ amount: 10, currency: "AUD", merchant: "Cafe" }), { cardAccess: true, cardBudget: { amount: 500, currency: "AUD", period: "month" } });
     const before = (await plain.actions.load(await freshSession(db, plain.userId))).pending[0]!;
-    assert.equal(line(before, "Conversation"), undefined, "a request made outside any conversation shows none");
-    assert.equal(line(before, "Came through"), undefined);
+    assert.ok(before.details.every((detail) => !/Conversation|Came through/.test(detail.label)), "a request made outside any conversation shows none");
   } finally {
     await db.close();
   }

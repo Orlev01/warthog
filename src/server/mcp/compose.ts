@@ -1,5 +1,5 @@
 import { randomUUID } from "node:crypto";
-import { requestObservation, clientObservation, rememberClient } from "./client-observation";
+import { envelopeClientName, requestObservation, clientObservation, rememberClient } from "./client-observation";
 import { parseBody } from "../http/validate";
 import { z } from "zod";
 import { findToolsSchema } from "./tools/registry";
@@ -121,10 +121,13 @@ const TOOL_FAILED_REASON = "The tool call could not be completed. A change may h
 // Every Warthog tool also takes the run `get_context` handed out for the conversation
 // (docs/adr/agent-runs.md). It is optional and never changes what a call may do: a run the
 // agent was not issued is simply not linked.
-const RUN_FIELD = z
+// A malformed run (an object, a long string) is dropped rather than refused, so it can
+// never block the call it rides on.
+export const RUN_FIELD = z
   .string()
   .max(64)
   .optional()
+  .catch(undefined)
   .describe("The run id get_context gave you for this conversation. Pass it on every Warthog call, so the person can see this conversation's actions together.");
 
 // The schema a tool advertises: its own plus the optional `run`. The tool body still
@@ -524,7 +527,11 @@ export function createMcpDispatch(deps: McpDispatchDeps): McpDispatch {
     const envelope = requestObservation.getStore()?.body as { method?: string; params?: { name?: unknown; arguments?: unknown } } | undefined;
     if (connection && envelope?.method === "tools/call") {
       const requested = tools.find(tool => tool.name === envelope.params?.name);
-      if (!requested || !requested.inputSchema.safeParse(envelope.params?.arguments ?? {}).success) {
+      // The same schema the SDK checks (with `run`), so a call it refuses is always recorded.
+      if (!requested || !withRunField(requested.inputSchema).safeParse(envelope.params?.arguments ?? {}).success) {
+        // A refused call still belongs to the conversation that made it.
+        const args = envelope.params?.arguments;
+        await attachRun(connection, args !== null && typeof args === "object" ? (args as { run?: unknown }).run : undefined);
         const observation = requestObservation.getStore();
         if (observation) observation.boundaryRecorded = true;
         await recorder.record({ userId: connection.userId, agentId: connection.agentId, kind: "tool_rejected", source: "warthog", outcome: "refused",
@@ -557,7 +564,7 @@ export function createMcpDispatch(deps: McpDispatchDeps): McpDispatch {
     const meta = body && typeof body === "object" ? (body as { _meta?: Record<string, unknown> })._meta : undefined;
     const run = meta?.["app.warthog/runId"];
     const reportedRunId = typeof run === "string" && /^[A-Za-z0-9_.:-]{1,120}$/.test(run) ? run : undefined;
-    const via = clientSurface(request.headers.get(ANTHROPIC_CLIENT_HEADER), client?.name);
+    const via = clientSurface(request.headers.get(ANTHROPIC_CLIENT_HEADER), client?.name ?? envelopeClientName(body));
     return requestObservation.run({ requestId: randomUUID(), body, client, reportedRunId, agentId: connection?.agentId, via }, async () => {
       const response = await handler.fetch(request, {
         authInfo: { token: connectionId, clientId: connectionId, scopes: [MCP_SCOPE] },

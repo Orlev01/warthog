@@ -41,10 +41,14 @@ rejected as overwhelming.
   against `agent_runs` **for the calling connection's agent only**. Anything else is ignored: a
   malformed id, an unknown run, or another agent's or person's run.
   - A wrong run never blocks or changes the call. A run is bookkeeping, not permission.
+  - The `run` field and `get_context`'s `run` and `working_on` are lenient: an object, a number
+    or an over-long value is dropped rather than refused, so a malformed run can't cost the
+    agent its call or its context.
   - The tool body validates against its own schema, which drops `run`, so a run never reaches
     tool params or a provider.
 - **Recording.** The MCP recorder links every entry recorded for the calling agent during the
-  request to the run. That includes the pipeline's entries, `log_activity` and rejections.
+  request to the run. That includes the pipeline's entries, `log_activity` and calls refused for
+  their input. A request too malformed to read has no run to link to.
   - The link lives in `activity_entry_runs`, written in the entry's own transaction and only
     to the same person's run.
   - The entry's encrypted payload also carries `run: { id, label? }` inside the hash chain.
@@ -52,13 +56,16 @@ rejected as overwhelming.
 - **Held calls.** A held call stores its run with its arguments. The entry for its approved
   execution therefore joins the same run, and the approval's detail names it.
 - **"Via".** The product a request came through is `x-anthropic-client` when present, otherwise
-  the MCP client name. It is mapped to "Claude Code", "Claude Cowork" or "claude.ai", and
-  unknown values are shown as reported.
+  the MCP client name. A 2026-07-28 client sends that name in `params._meta` on every request; a
+  2025 client sends it only in `initialize`, so its later calls show no "via". It is mapped to "Claude Code", "Claude Cowork" or "claude.ai", and
+  unknown values are shown as reported, after redaction.
   - It is stored as plain metadata in the payload, the approval detail and the run.
   - It is a client claim, labelled as such, and never identity.
 
 The label is the agent's own description, so it is treated as personal content:
-- It is cleaned, cut to 100 characters, and redacted with the person's released-value matcher.
+- It is cleaned and redacted with the person's released-value matcher over the whole text.
+- It is then cut to 100 characters at a word boundary, so a cut can't split a secret past the
+  matcher or leave part of one.
 - It is encrypted under the person's data key (`agent_runs.label_ct`).
 
 **Screens.** The UI calls a run a **conversation**:
@@ -66,8 +73,13 @@ The label is the agent's own description, so it is treated as personal content:
   links to `/activity?run=<id>`, which shows the entries of that conversation, with a removable
   chip.
 - **Entry details** show both values, each with how it was reported.
-- **Inbox approval cards** lead with "Conversation" and "Came through".
-- **Each agent's Overview** lists its recent conversations.
+- **Inbox approval cards** add "Conversation (as the agent described it)" and "Came through (as
+  the app reported it)" after the details Warthog checked.
+- **Wording.** In Activity rows the agent's description is quoted and introduced ("Conversation
+  “…”"), so it can't pass for one of Warthog's own labels. An agent named after its product
+  isn't repeated ("Claude Code via Claude Code").
+- **Each agent's Overview** lists its eight most recent conversations. Their entry counts match
+  Activity: a change's "Started" record isn't counted separately.
 
 ## Storage
 
@@ -97,3 +109,8 @@ append-only. Account deletion cascades.
 - **When Anthropic sends a session id.** If Claude Code or claude.ai starts sending one,
   Warthog can read it alongside the run. The protocol's run slot (`_meta["app.warthog/runId"]`)
   stays as an agent-reported reference.
+- **App details.** Found while measuring: Warthog's per-agent "app details" read the 2026-07-28
+  envelope from the top level of the request instead of `params._meta`. So they are never
+  recorded for current clients. This change reads the client name correctly for "via" only.
+  Fixing the per-agent record itself would log "Client information reported" each time one agent
+  is used from different apps, so it needs de-duplicating first (a follow-up).

@@ -39,6 +39,7 @@ import { redact } from "../../domain/redaction/redact";
 import { decrypt, encrypt } from "../crypto/envelope";
 import { withTransaction, type Db, type Row } from "../db/index";
 import type { ActivityEntry, ActivityEntryInput, ActivityRecorder } from "./recorder";
+import { isRunId } from "../agents/runs";
 
 // The envelope's associated data binds each payload ciphertext to its exact
 // location, so a row lifted into another row/column/table fails to decrypt.
@@ -266,11 +267,11 @@ export function createDbRecorder(options: DbRecorderOptions): ActivityRecorder {
         // The run link is written in the same transaction as the entry, so an entry is never
         // left half-linked, and only to one of the same person's runs: a run that isn't
         // theirs (or no longer exists) leaves the entry unlinked rather than losing it.
-        if (input.runId !== undefined) {
+        if (input.runId !== undefined && isRunId(input.runId)) {
           await tx.query(
             `INSERT INTO activity_entry_runs (user_id, entry_seq, run_id)
-             SELECT $1, $2, id FROM agent_runs WHERE user_id = $1 AND id::text = $3`,
-            [userId, appended.seq, input.runId],
+             SELECT $1, $2, id FROM agent_runs WHERE user_id = $1 AND id = $3::uuid`,
+            [userId, appended.seq, input.runId.toLowerCase()],
           );
         }
         return appended;

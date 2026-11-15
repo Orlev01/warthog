@@ -242,11 +242,12 @@ const UNDO_CODES: Partial<Record<UndoRefusalStatus, string>> = {
   already_undone: "undo_already",
 };
 
-// The entry's evidence plus a link to everything recorded in the same agent conversation.
-function evidenceWithConversation(entry: ListedActivityEntry, state: ActivityState) {
+// The entry's evidence plus a link to everything recorded in the same agent conversation —
+// the whole conversation, whatever filters led here.
+function evidenceWithConversation(entry: ListedActivityEntry) {
   const evidence = activityEvidence(entry);
   return evidence.conversation
-    ? { ...evidence, conversationHref: activityHref(state, { run: evidence.conversation.id, view: undefined, via: undefined }, ["q"]) }
+    ? { ...evidence, conversationHref: `${ACTIVITY_PATH}?run=${encodeURIComponent(evidence.conversation.id)}` }
     : evidence;
 }
 
@@ -354,7 +355,7 @@ export function createActivityActions(deps: ActivityActionsDeps): ActivityAction
       dayKey: day.key,
       dayLabel: day.label,
       permalink: `${ACTIVITY_PATH}?entry=${entry.seq}#entry-${entry.seq}`,
-      ...evidenceWithConversation(entry, state),
+      ...evidenceWithConversation(entry),
       canUndo,
       ...(claim ? { undoStatus: claim.state === "done" ? { state: "done" as const }
         : { state: "waiting" as const, approvalHref: approvalHref(claim.approvalId) } } : {}),

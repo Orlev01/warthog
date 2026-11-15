@@ -16,15 +16,18 @@ export const getContextSchema = z.object({
   reason: z.string().max(2000).optional(),
   // Runs (docs/adr/agent-runs.md): a short description of the conversation's work, kept with
   // the run this call starts, and the run to continue when the agent already has one.
+  // Both are lenient: a malformed value is dropped, never a reason to withhold the context.
   working_on: z
     .string()
-    .max(200)
+    .max(2000)
     .optional()
+    .catch(undefined)
     .describe("A few words on what you are working on in this conversation, for example \"Fixing the website tests\". The person sees it next to everything this conversation does."),
   run: z
     .string()
     .max(64)
     .optional()
+    .catch(undefined)
     .describe("The run id an earlier get_context in this conversation gave you. Omit it at the start of a conversation."),
 });
 import { vaultFieldAllowed } from "../../agents/resource-access";

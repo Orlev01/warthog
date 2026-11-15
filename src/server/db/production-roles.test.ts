@@ -80,7 +80,12 @@ test("runtime role starts and touches runs but cannot rewrite them, links are ap
       await assert.rejects(db.query(`UPDATE agent_runs SET ${column} WHERE false`), /permission denied/, column);
     }
     await assert.rejects(db.query("DELETE FROM agent_runs WHERE false"), /permission denied/);
-    await db.query("INSERT INTO activity_entry_runs (user_id, entry_seq, run_id) VALUES ($1, 1, $2)", [user.id, run]);
+    // The exact statements the application runs: resolveRun's UPDATE … RETURNING under the
+    // column grant, and the writer's guarded INSERT … SELECT.
+    const touched = await db.query("UPDATE agent_runs SET last_seen_at = GREATEST(last_seen_at, now()) WHERE user_id = $1 AND id = $2 AND agent_id = $3 RETURNING id, label_ct", [user.id, run, agentId]);
+    assert.equal(touched.rows.length, 1);
+    await db.query("INSERT INTO activity_entry_runs (user_id, entry_seq, run_id) SELECT $1, 1, id FROM agent_runs WHERE user_id = $1 AND id = $2::uuid", [user.id, run]);
+    assert.equal((await db.query("SELECT count(*)::int AS n FROM activity_entry_runs WHERE user_id = $1", [user.id])).rows[0]!.n, 1);
     await assert.rejects(db.query("UPDATE activity_entry_runs SET run_id = run_id WHERE false"), /permission denied/);
     await assert.rejects(db.query("DELETE FROM activity_entry_runs WHERE false"), /permission denied/);
     await db.query("RESET ROLE");

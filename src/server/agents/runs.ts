@@ -37,6 +37,8 @@ export interface RunSummary extends RunRef {
   readonly via?: string;
   readonly startedAt: string;
   readonly lastSeenAt: string;
+  // Recorded entries, counted as Activity shows them: a change's "Started" intent record is
+  // not counted separately from its result.
   readonly actions: number;
 }
 
@@ -56,14 +58,19 @@ export interface RunOwner {
   readonly agentId: string;
 }
 
-// The label as stored and shown: control characters removed, whitespace collapsed, cut to
-// RUN_LABEL_MAX characters, then redacted with the person's released-value matcher. Empty
-// after cleaning ⇒ no label.
+// The label as stored and shown: control characters removed and whitespace collapsed, then
+// redacted with the person's released-value matcher over the WHOLE text (so cutting it can't
+// split a secret past the matcher), then cut to RUN_LABEL_MAX characters at a word boundary
+// so no partial token is left at the end. Empty after cleaning ⇒ no label.
 export function cleanRunLabel(label: string | undefined, matchesReleased: (token: string) => boolean = () => false): string | undefined {
   if (label === undefined) return undefined;
-  const cleaned = Array.from(label.replace(/[\u0000-\u001f\u007f]/g, " ").replace(/\s+/g, " ").trim()).slice(0, RUN_LABEL_MAX).join("");
+  const cleaned = label.replace(/[\u0000-\u001f\u007f]/g, " ").replace(/\s+/g, " ").trim();
   if (cleaned === "") return undefined;
-  return String(redact(cleaned, matchesReleased));
+  const redacted = Array.from(String(redact(cleaned, matchesReleased)));
+  if (redacted.length <= RUN_LABEL_MAX) return redacted.join("");
+  const cut = redacted.slice(0, RUN_LABEL_MAX).join("");
+  const boundary = cut.lastIndexOf(" ");
+  return (boundary > 0 ? cut.slice(0, boundary) : cut).trimEnd();
 }
 
 // Whether a value could be a run id at all. Checked before any query, so an agent's typo
@@ -142,7 +149,8 @@ export async function listRuns(
   const result = await db.query(
     `SELECT r.id, r.agent_id, r.started_at, r.last_seen_at, r.via, r.label_ct,
             (SELECT count(*)::int FROM activity_entry_runs e
-              WHERE e.user_id = r.user_id AND e.run_id = r.id) AS actions
+               JOIN activity_entries a ON a.user_id = e.user_id AND a.seq = e.entry_seq
+              WHERE e.user_id = r.user_id AND e.run_id = r.id AND a.kind <> 'tool_attempt') AS actions
        FROM agent_runs r
       WHERE ${conditions.join(" AND ")}
       ORDER BY r.last_seen_at DESC, r.started_at DESC

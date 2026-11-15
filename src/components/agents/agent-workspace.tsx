@@ -215,7 +215,7 @@ export function RecentConversations({ data }: { data: AgentWorkspaceData }) {
     <WorkspacePanel
       title="Recent conversations"
       icon={MessagesSquare}
-      description={`Each chat or session with ${name}, as ${name} described it.`}
+      description={`The latest chats and sessions ${name} started with Warthog, named as ${name} described them.`}
     >
       {conversations.length === 0 ? (
         <p className="text-sm text-fg-muted">

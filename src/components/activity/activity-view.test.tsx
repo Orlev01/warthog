@@ -800,7 +800,7 @@ test("a row names the product it came through and links to its agent conversatio
     conversationHref: "/activity?run=5d0c2a4e-8b1f-4c3d-9e2a-7f6b5a4c3d2e",
   };
   const markup = render(base({ entries: [entry] }));
-  assert.match(visibleText(markup), /Claude via Claude Code · Show the conversation Booking the check-up/);
+  assert.match(visibleText(markup), /Claude via Claude Code · Show Conversation “Booking the check-up”/, "the agent's words are quoted and introduced");
   assert.match(markup, /href="\/activity\?run=5d0c2a4e-8b1f-4c3d-9e2a-7f6b5a4c3d2e"/);
 
   const unnamed = render(base({ entries: [{ ...entry, conversation: { id: entry.conversation!.id } }] }));
@@ -808,4 +808,6 @@ test("a row names the product it came through and links to its agent conversatio
 
   const before = visibleText(render(base({ entries: [ENTRY_TOOL_CALL] })));
   assert.doesNotMatch(before, / via |conversation/i, "older entries read as before");
+  const same = visibleText(render(base({ entries: [{ ...ENTRY_TOOL_CALL, agent: "Claude Code", via: "Claude Code" }] })));
+  assert.doesNotMatch(same, /Claude Code via Claude Code/, "an agent named after its product isn't repeated");
 });

@@ -162,7 +162,7 @@ test("the Overview lists the agent's recent conversations, each linking to what 
   } as unknown as AgentWorkspaceData;
   const html = renderToStaticMarkup(<RecentConversations data={data} />);
   const shown = text(html);
-  assert.match(shown, /Recent conversations/);
+  assert.match(shown, /Recent conversations The latest chats and sessions Dev console started with Warthog/);
   assert.match(shown, /Fixing the website tests via Claude Code · 14 entries · last active Today, 10:42 am/);
   assert.match(shown, /Untitled conversation 1 entry · last active Yesterday, 4:00 pm/);
   assert.match(html, /href="\/activity\?run=5d0c2a4e-8b1f-4c3d-9e2a-7f6b5a4c3d2e"/);

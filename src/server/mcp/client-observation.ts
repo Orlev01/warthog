@@ -36,6 +36,17 @@ export function clientObservation(body: unknown, headers: Headers): ClientObserv
   return name || version || protocol || keys.length ? { name, version, protocol, ...(keys.length ? { capabilities: keys } : {}), source: "client_reported" } : undefined;
 }
 
+/**
+ * The client's own name from a 2026-07-28 request envelope, which carries it in
+ * `params._meta` on every request (measured 16 Nov 2026), or from a 2025 initialize. Used
+ * only to say which product a request came through (docs/adr/agent-runs.md).
+ */
+export function envelopeClientName(body: unknown): string | undefined {
+  const message = object(body), params = object(message.params);
+  const info = object(message.method === "initialize" ? params.clientInfo : object(params._meta)["io.modelcontextprotocol/clientInfo"]);
+  return bounded(info.name);
+}
+
 export async function readClientObservation(db: Db, userId: string, agentId: string, dek: Uint8Array): Promise<(ClientObservation & { observedAt: string }) | null> {
   const row = (await db.query("SELECT client_observation_ct FROM agents WHERE user_id = $1 AND id = $2", [userId, agentId])).rows[0];
   if (!row?.client_observation_ct) return null;
