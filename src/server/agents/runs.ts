@@ -69,6 +69,10 @@ export function cleanRunLabel(label: string | undefined, matchesReleased: (token
   const redacted = Array.from(String(redact(cleaned, matchesReleased)));
   if (redacted.length <= RUN_LABEL_MAX) return redacted.join("");
   const cut = redacted.slice(0, RUN_LABEL_MAX).join("");
+  // A redaction marker ("[card ••••1111]") cut part-way is dropped whole; otherwise the cut
+  // goes back to the last word boundary.
+  const open = cut.lastIndexOf("[");
+  if (open > cut.lastIndexOf("]")) return cut.slice(0, open).trimEnd();
   const boundary = cut.lastIndexOf(" ");
   return (boundary > 0 ? cut.slice(0, boundary) : cut).trimEnd();
 }

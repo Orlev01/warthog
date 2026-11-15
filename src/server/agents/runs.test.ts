@@ -77,6 +77,9 @@ test("labels are cleaned, bounded and redacted", () => {
   assert.doesNotMatch(nearLimit, /4111/, "a card number straddling the limit is never partly kept");
   const passport = cleanRunLabel(`${"a".repeat(92)} PA1234567 tail`, (token) => token === "pa1234567") ?? "";
   assert.doesNotMatch(passport, /PA123/, "a released value at the limit is redacted, not cut short of the matcher");
+  const straddling = cleanRunLabel(`${"a".repeat(90)} 4111 1111 1111 1111`) ?? "";
+  assert.doesNotMatch(straddling, /\[[^\]]*$/, "a redaction marker cut part-way is dropped whole");
+  assert.equal(straddling, "a".repeat(90));
   const words = cleanRunLabel("abcdefghij ".repeat(20)) ?? "";
   assert.ok(words.length <= RUN_LABEL_MAX && !words.endsWith(" ") && words.endsWith("abcdefghij"), "cut at a word boundary");
 });
