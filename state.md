@@ -1,4 +1,22 @@
-# Delivery status — 14 November 2026 (website on the root domain)
+# Delivery status — 15 November 2026 (website review fixes)
+
+**Live at [warthog.com.au](https://warthog.com.au) (the website) and
+[app.warthog.com.au](https://app.warthog.com.au) (the app).** Application source
+`c00f1e99874f7897a7effc78384b7e8dadaf87ba` runs as `warthog--r43644774383a1`, with one healthy
+replica, explicit 100% traffic and zero old replicas.
+
+PR #27 carries the fixes from a review of PR #26 (nothing exploitable was found):
+- only the app host is offered as an installable app;
+- the public pages name their website URL as canonical;
+- a signed-in member who opens Sign up goes Home;
+- the public 404 leads to the website;
+- website redirects are no longer counted in traffic;
+- documentation corrections (passkey RP ID, `existingCustomDomains` must stay `[]`, rollback).
+
+The image suite passed 6,106 tests; no migration changes. See the
+[release record](docs/audit/website-review-fixes-release-2026-11-15.md).
+
+# Earlier delivery status — 14 November 2026 (website on the root domain)
 
 **Live at [warthog.com.au](https://warthog.com.au) (the website) and
 [app.warthog.com.au](https://app.warthog.com.au) (the app).** Application source

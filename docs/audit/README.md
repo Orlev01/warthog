@@ -1,5 +1,11 @@
 # Warthog comprehensive engineering audit
 
+**Website review fixes, 15 November:** main `c00f1e9` runs as `warthog--r43644774383a1`. A
+five-way review of PR #26 found nothing exploitable. PR #27 makes only the app host installable,
+gives the public pages canonical website URLs, sends a signed-in member's Sign up to Home, points
+the public 404 at the website, stops counting redirects, and corrects the docs. 6,106 tests pass.
+See the [release record](website-review-fixes-release-2026-11-15.md).
+
 **Website on the root domain, 14 November:** main `d45072c` runs as
 `warthog--r43589445907a1`. `warthog.com.au` is the marketing website, signed in or not, and
 `www.` forwards to it. Sign-in, sign-up and the workspace stay on `app.warthog.com.au`, where
