@@ -222,6 +222,17 @@ test("help page shows all four sections: connecting an agent, approvals / Ask me
   );
 });
 
+// Read-side protection (docs/adr/read-side-protection.md): the main help page says what
+// agents see in email and, plainly, what Warthog can't do — never claiming to catch scams.
+test("help page says what agents see in your email, and what Warthog can't do", async () => {
+  const text = visibleText(await renderPage());
+  assert.match(text, /What agents see in your email/);
+  assert.match(text, /Sign-in codes, password reset links and card numbers are kept out\./);
+  assert.match(text, /What Warthog can’t do:/);
+  assert.match(text, /can’t tell a scam from a real request/);
+  assert.ok(!/untrusted|injection|malicious|taint/i.test(text));
+});
+
 // === AC2 — no protocol jargon in the visible copy ==============================
 //
 // The brief forbids protocol/security jargon on primary screens; this task names the

@@ -252,6 +252,9 @@ Redaction is a pure module with exhaustive unit tests; the activity writer and t
   removed, sign-in links/codes and card numbers hidden, download links dropped; Gmail and Outlook
   messages become a checked view and sign-in mail a stub. Mail reads may fetch 2 MiB internally
   so a whole message can be checked; Gmail is always read as `full` or `metadata`, never `raw`.
+  Gmail search returns checked summaries (headers + preview, ≤ 25); checked mail views are
+  returned to the agent as readable text with `structuredContent`; Drive `read_text` exports
+  Google Docs/Sheets and refuses binary files.
 - **Provider-hosted tools:** `readOnlyHint: true` → reads; otherwise makes changes.
 - **Curated tools** (declared reads/changes + reversal + "sends a message" flag): Gmail (search, read,
   draft, send), Google Calendar (list, create↔delete, update), Google Drive (search, read text,

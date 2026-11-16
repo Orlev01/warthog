@@ -98,13 +98,73 @@ const HIDING_STYLE = /(?:^|;)\s*(?:display\s*:\s*none|visibility\s*:\s*hidden|op
 // div or table cell it hides nothing.
 const ZERO_FONT = /(?:^|;)\s*font-size\s*:\s*0(?:\.\d+)?(?:px|pt|em|rem|%)?\s*(?:;|$|!)/i;
 const INLINE_TEXT = new Set(["span", "font", "a", "b", "strong", "i", "em", "small", "u", "s", "sub", "sup", "label", "mark"]);
+const VISIBLE_DISPLAY = /(?:^|;)\s*display\s*:\s*(?!none\b)[a-z-]+/i;
 
-function hidesContent(name: string, attrs: Map<string, string>): boolean {
+function hidesContent(name: string, attrs: Map<string, string>, hiddenClasses: ReadonlySet<string>): boolean {
   if (attrs.has("hidden")) return true;
   if (attrs.get("aria-hidden")?.toLowerCase() === "true" && !attrs.has("alt")) return true;
   const style = attrs.get("style");
-  if (style === undefined) return false;
-  return HIDING_STYLE.test(style) || (INLINE_TEXT.has(name) && ZERO_FONT.test(style));
+  if (style !== undefined && (HIDING_STYLE.test(style) || (INLINE_TEXT.has(name) && ZERO_FONT.test(style)))) return true;
+  if (hiddenClasses.size === 0) return false;
+  // An inline display (`style="display:block"`) wins over a class rule.
+  if (style !== undefined && VISIBLE_DISPLAY.test(style)) return false;
+  const classes = attrs.get("class");
+  return classes !== undefined && classes.split(/\s+/).some((name) => hiddenClasses.has(name));
+}
+
+// Class rules in a <style> block that hide what they style (".x{display:none}"). Only rules at
+// the top level count: a rule inside @media is how a responsive email swaps its mobile and
+// desktop copies, and dropping one of those would lose real content.
+// One linear pass over the braces, with comments removed first; a statement at-rule
+// (`@import …;`, `@charset …;`) ends at its semicolon.
+function hidingClasses(css: string, into: Set<string>): void {
+  const source = withoutComments(css.slice(0, 200_000));
+  let depth = 0;
+  let start = 0;
+  let selector: string | null = null;
+  let body = -1;
+  for (let i = 0; i < source.length; i += 1) {
+    const ch = source[i];
+    if (ch === ";" && depth === 0) {
+      start = i + 1;
+    } else if (ch === "{") {
+      if (depth === 0) {
+        const prelude = source.slice(start, i).trim();
+        selector = prelude.startsWith("@") ? null : prelude;
+        body = i + 1;
+      }
+      depth += 1;
+    } else if (ch === "}" && depth > 0) {
+      depth -= 1;
+      if (depth === 0) {
+        if (selector !== null && selector.length <= 500 && i - body <= 2000) addHidingRule(selector, source.slice(body, i), into);
+        selector = null;
+        start = i + 1;
+      }
+    } else if (ch === "}") {
+      start = i + 1;
+    }
+  }
+}
+
+function addHidingRule(selectors: string, declarations: string, into: Set<string>): void {
+  if (!HIDING_STYLE.test(declarations.trim())) return;
+  for (const selector of selectors.split(",")) {
+    const simple = /^\s*(?:[a-z][a-z0-9]*)?\.([A-Za-z_][\w-]{0,60})\s*$/i.exec(selector);
+    if (simple) into.add(simple[1]!);
+  }
+}
+
+function withoutComments(css: string): string {
+  let out = "";
+  let at = 0;
+  for (let open = css.indexOf("/*"); open >= 0; open = css.indexOf("/*", at)) {
+    out += css.slice(at, open);
+    const close = css.indexOf("*/", open + 2);
+    if (close < 0) return out;
+    at = close + 2;
+  }
+  return out + css.slice(at);
 }
 
 // Where a tag that starts at `start` ends (the index of its `>`), respecting quoted
@@ -150,6 +210,7 @@ export function htmlToText(html: string, options: HtmlTextOptions = {}): HtmlTex
   let hiddenLinks = 0;
   let hiddenElements = 0;
   let unlistedLinks = 0;
+  const hiddenClasses = new Set<string>();
   // The open anchor: its address and where its visible text starts in `parts`.
   let anchor: { href: string; from: number } | null = null;
   // While inside a hidden element: its name and how many same-named elements are open within it.
@@ -202,6 +263,25 @@ export function htmlToText(html: string, options: HtmlTextOptions = {}): HtmlTex
       const close = closingTag(lower, "head", i);
       const body = lower.indexOf("<body", i);
       const stop = close >= 0 && (body < 0 || close < body) ? close : body;
+      // Style blocks in the head still say which classes hide content. One inside a comment
+      // (`<!--[if mso]>…<![endif]-->`) is for Outlook only, so it doesn't count.
+      for (let at = i; ;) {
+        const style = lower.indexOf("<style", at);
+        if (style < 0 || (stop >= 0 && style >= stop)) break;
+        const comment = lower.indexOf("<!--", at);
+        if (comment >= 0 && comment < style) {
+          const commentEnd = lower.indexOf("-->", comment + 4);
+          if (commentEnd < 0) break;
+          at = commentEnd + 3;
+          continue;
+        }
+        const open = html.indexOf(">", style);
+        if (open < 0) break;
+        const end = closingTag(lower, "style", open);
+        hidingClasses(html.slice(open + 1, end < 0 ? html.length : end), hiddenClasses);
+        if (end < 0) break;
+        at = end;
+      }
       if (stop < 0) {
         i = html.length;
       } else {
@@ -212,6 +292,7 @@ export function htmlToText(html: string, options: HtmlTextOptions = {}): HtmlTex
     }
     if (!closing && SKIP_CONTENT.has(name) && !tag.endsWith("/>")) {
       const close = closingTag(lower, name, i);
+      if (name === "style") hidingClasses(html.slice(i, close < 0 ? html.length : close), hiddenClasses);
       if (close < 0) {
         i = html.length;
       } else {
@@ -234,7 +315,7 @@ export function htmlToText(html: string, options: HtmlTextOptions = {}): HtmlTex
       continue;
     }
 
-    if (!closing && !selfClosing && hidesContent(name, attributes(tag))) {
+    if (!closing && !selfClosing && hidesContent(name, attributes(tag), hiddenClasses)) {
       hidden = { name, depth: 1 };
       hiddenElements += 1;
       continue;

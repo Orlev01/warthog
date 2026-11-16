@@ -78,6 +78,8 @@ export interface CuratedToolResult {
   readonly body: string;
   readonly truncated: boolean;
   readonly tooLargeToCheck?: boolean;
+  /** Warthog's own note on what was read (a spreadsheet's first tab only). */
+  readonly note?: string;
 }
 
 // The internal richer declaration: the public fields plus how the tool is dispatched —
@@ -103,6 +105,9 @@ function gmailReadFormat(requested: string | undefined): "full" | "metadata" {
   const format = requested?.toLowerCase();
   return format === "metadata" || format === "minimal" ? "metadata" : "full";
 }
+
+// Calendar list parameters an agent may set (a time range, a search, paging, ordering).
+const CALENDAR_LIST_PARAMS = ["timeMin", "timeMax", "q", "maxResults", "pageToken", "singleEvents", "orderBy", "timeZone", "iCalUID", "updatedMin", "showDeleted", "eventTypes"] as const;
 
 // Gmail search parameters an agent may set; anything else (e.g. `fields`, `alt`) is dropped.
 const GMAIL_SEARCH_PARAMS = ["q", "maxResults", "pageToken", "labelIds", "includeSpamTrash"] as const;
@@ -185,7 +190,7 @@ const CURATED_DEFS: readonly CuratedToolDef[] = [
     makesChange: false,
     sendsMessage: false,
     method: "GET",
-    resolve: (i) => ({ path: "/calendar/v3/calendars/primary/events", query: i.query }),
+    resolve: (i) => ({ path: "/calendar/v3/calendars/primary/events", query: pick(i.query, CALENDAR_LIST_PARAMS) }),
   },
   {
     name: "google-calendar__create",
@@ -293,6 +298,8 @@ export async function callGoogleTool(
     body: input.body,
     contentType: "application/json" as const,
   };
+  if (def.name === "google-gmail__search") return searchWithSummaries(request, deps);
+  if (def.name === "google-drive__read_text") return readDriveText(request, deps);
   if (def.name !== "google-gmail__read" || query?.format !== "full") return sendConnectorRequest(request, deps);
 
   // A full message read: fetch the whole message so Warthog can check it. One that is still
@@ -361,4 +368,91 @@ export async function gmailHasSentTo(input: Pick<CuratedToolCallInput, "entry" |
     return recipients.some((value) => ((value.match(/[^\s<>,;"']+@[^\s<>,;"']+/g) ?? []) as string[]).includes(wanted));
   }));
   return hits.some(Boolean);
+}
+
+// Gmail search returns ids only, so an agent used to read every result to triage an inbox. A
+// search now fetches each result's headers and preview (never its body) and returns them
+// together, at most 25 a page (10 by default), so triage takes one call. Warthog checks the
+// previews like any other content. A result whose headers can't be fetched keeps its ids and
+// says so. Gmail's per-second quota can turn a busy search's fetch away (429): it's tried once more.
+const MAX_SEARCH_RESULTS = 25;
+const DEFAULT_SEARCH_RESULTS = 10;
+const SUMMARY_CONCURRENCY = 6;
+const RETRY_AFTER_MS = 400;
+
+async function searchWithSummaries(request: Parameters<typeof sendConnectorRequest>[0], deps: CuratedToolDeps): Promise<CuratedToolResult> {
+  const asked = Number.parseInt(request.query?.maxResults ?? "", 10);
+  const maxResults = Number.isFinite(asked) && asked > 0 ? Math.min(asked, MAX_SEARCH_RESULTS) : DEFAULT_SEARCH_RESULTS;
+  const list = await sendConnectorRequest({ ...request, query: { ...request.query, maxResults: String(maxResults) } }, deps);
+  if (list.status < 200 || list.status >= 300) return list;
+  let parsed: { messages?: { id?: unknown; threadId?: unknown }[]; nextPageToken?: unknown; resultSizeEstimate?: unknown };
+  try {
+    parsed = JSON.parse(list.body);
+  } catch {
+    return list;
+  }
+  const found = (parsed.messages ?? []).filter((m) => typeof m.id === "string" && GMAIL_ID.test(m.id)).slice(0, maxResults);
+  const summaries: unknown[] = new Array(found.length);
+  let next = 0;
+  await Promise.all(Array.from({ length: Math.min(SUMMARY_CONCURRENCY, found.length) }, async () => {
+    while (next < found.length) {
+      const index = next++;
+      const item = found[index]!;
+      const unavailable = { id: item.id, threadId: item.threadId, unavailable: true };
+      try {
+        const fetchOne = () => sendConnectorRequest({ ...request, path: `/gmail/v1/users/me/messages/${encodeURIComponent(String(item.id))}`, query: { format: "metadata" } }, deps);
+        let got = await fetchOne();
+        if (got.status === 429) {
+          await new Promise((resolve) => setTimeout(resolve, RETRY_AFTER_MS));
+          got = await fetchOne();
+        }
+        summaries[index] = got.status >= 200 && got.status < 300 && !got.truncated ? JSON.parse(got.body) : unavailable;
+      } catch {
+        summaries[index] = unavailable;
+      }
+    }
+  }));
+  return {
+    status: list.status,
+    truncated: false,
+    body: JSON.stringify({ messages: summaries, summaries: true, ...(typeof parsed.nextPageToken === "string" ? { nextPageToken: parsed.nextPageToken } : {}), ...(typeof parsed.resultSizeEstimate === "number" ? { resultSizeEstimate: parsed.resultSizeEstimate } : {}) }),
+  };
+}
+
+// A Drive file as text: Google Docs and Slides are exported as plain text and Sheets as CSV;
+// a file that is already text is read as it is; anything else (a PDF, an image, a zip) is not
+// read, and the agent is told so instead of being handed raw bytes.
+const DRIVE_EXPORTS: Readonly<Record<string, string>> = {
+  "application/vnd.google-apps.document": "text/plain",
+  "application/vnd.google-apps.presentation": "text/plain",
+  "application/vnd.google-apps.spreadsheet": "text/csv",
+};
+const TEXT_TYPE = /^(?:text\/|application\/(?:json|xml|csv|x-ndjson|javascript|x-yaml|yaml|rtf)$)|\+(?:json|xml)$/;
+
+async function readDriveText(request: Parameters<typeof sendConnectorRequest>[0], deps: CuratedToolDeps): Promise<CuratedToolResult> {
+  const filePath = request.path;
+  // supportsAllDrives: a file in a shared drive is otherwise "not found".
+  const meta = await sendConnectorRequest({ ...request, query: { fields: "id,name,mimeType,size", supportsAllDrives: "true" } }, deps);
+  if (meta.status < 200 || meta.status >= 300) return meta;
+  let file: { mimeType?: unknown; name?: unknown };
+  try {
+    file = JSON.parse(meta.body);
+  } catch {
+    return meta;
+  }
+  const mimeType = typeof file.mimeType === "string" ? file.mimeType : "";
+  const exportAs = DRIVE_EXPORTS[mimeType];
+  if (exportAs) {
+    const exported = await sendConnectorRequest({ ...request, path: `${filePath}/export`, query: { mimeType: exportAs } }, deps);
+    // Drive exports a spreadsheet's first tab only.
+    return exportAs === "text/csv" && exported.status >= 200 && exported.status < 300
+      ? { ...exported, note: "Only the first sheet of this spreadsheet is shown, as CSV." }
+      : exported;
+  }
+  if (TEXT_TYPE.test(mimeType)) return sendConnectorRequest({ ...request, query: { alt: "media", supportsAllDrives: "true" } }, deps);
+  return {
+    status: 200,
+    truncated: false,
+    body: JSON.stringify({ name: typeof file.name === "string" ? file.name : undefined, mimeType, unreadable: true, note: "Warthog can't read this file type yet. The person can open it in Google Drive." }),
+  };
 }

@@ -621,3 +621,11 @@ test("Custom opens the editor and review accurately describes an explicit denial
   assert.match(visibleText(markup), /does not verify the agent/);
   assert.match(visibleText(markup), /cannot recall information already received/);
 });
+
+// Read-side protection (docs/adr/read-side-protection.md): an email service's row says agents
+// read a checked copy without sign-in codes; other services keep their plain wording.
+test("an email service's row says it reads a checked copy; other services don't claim that", () => {
+  const text = visibleText(render(base({ services: [{ id: "google-gmail", name: "Gmail", ticked: true }, { id: "google-calendar", name: "Google Calendar", ticked: true }] })));
+  assert.match(text, /Read from Gmail Reads a checked copy of your email, without sign-in codes or password links\. Changes: Ask me first\./);
+  assert.match(text, /Read from Google Calendar Read information using this service’s available tools\. Changes: Ask me first\./);
+});

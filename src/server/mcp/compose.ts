@@ -62,6 +62,7 @@ import { createWebPushSender } from "../notify/web-push";
 import { outbox } from "../notify/outbox";
 import { recordMetricEvent } from "../metrics/record";
 import { createResultGuard } from "../connectors/result-guard";
+import { renderCheckedView } from "../../domain/content/render-view";
 import { gmailHasSentTo } from "../connectors/curated/google";
 import { outlookHasSentTo } from "../connectors/curated/microsoft";
 import { activeReadExposure, hasOpenReadWindow, recordReadExposure } from "../db/read-exposures";
@@ -191,9 +192,14 @@ function toToolResult(outcome: AgentCallResult): {
   isError?: boolean;
 } {
   switch (outcome.status) {
-    case "executed":
-      // An allowed read/write returns its result as content — never isError.
+    case "executed": {
+      // An allowed read/write returns its result as content — never isError. A checked mail
+      // view reads as plain text (models read it far better than escaped JSON), with the
+      // structured view alongside.
+      const readable = renderCheckedView(outcome.result);
+      if (readable !== null) return { content: [{ type: "text", text: readable }], structuredContent: outcome.result as Record<string, unknown> };
       return { content: [{ type: "text", text: JSON.stringify(outcome.result ?? null) }] };
+    }
     case "pending_approval": {
       // The ask outcome is carried as STRUCTURED content with the approval id and expiry;
       // nothing is released (the pipeline held the call behind a pending approval). The text

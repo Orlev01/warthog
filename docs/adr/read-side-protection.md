@@ -136,6 +136,54 @@ Every executed connector result passes `resultGuard.review(call, result)` in the
 - **Copy never says** "untrusted", "injection", "malicious", "token" or "taint", and never claims
   scam detection.
 
+## Faster, cleaner views
+
+- **Gmail search returns summaries.** One search gives who, subject, date, a checked preview and
+  unread for up to 25 results (10 by default). It fetches each result's headers and preview,
+  never its body. Sign-in code emails are withheld in the list too. Triage takes one or two calls
+  instead of one per message.
+  - A result whose headers can't be fetched says "Couldn't load this preview" and keeps its ids.
+  - **Cost:** a search costs Gmail 5 + 5 per result quota units (130 for 25), against 250 per
+    person per second. A fetch turned away for quota (429) is tried once more after 400 ms.
+- **Readable output.** A checked mail view (a message, a search, or a single link) goes to the
+  agent as plain lines (notice, headers, ids, flags, invitation, attachments, text, numbered
+  links), with the structured view as `structuredContent`. That is far fewer tokens than escaped
+  JSON, and it is what clients that show the model only text need.
+  - Every sender-written value except the body is put on one line, so a subject can't fake a
+    search result or a note of its own. The body sits between "Message text:" and "End of message
+    text.", and can't write the closing line itself.
+  - Flags say when mail is unread, in spam or the bin, or marked important. A cut-short body, an
+    unlisted-links note and Outlook's "has attachments" are said too.
+- **Long links.** A link over 300 characters is listed by its domain. `read {id, link: N}` returns
+  link N in full, and only links the checked view kept can be asked for, so a hidden sign-in link
+  never comes back.
+- **Hiding class rules.** `<style>` rules that hide a class (`.x{display:none}`) are honoured at
+  the top level only. A rule inside `@media` is how a responsive email swaps its mobile and desktop
+  copies, so it is left alone.
+  - Comments and statement rules (`@import …;`) are skipped. One linear pass reads the braces.
+  - A style block inside a comment (`<!--[if mso]>`) is for Outlook only, so it doesn't count.
+  - An element's own inline `display` wins over a class rule.
+- **Invitations.** A `text/calendar` part with data is read into title, start, end, location,
+  organiser, method and UID, so an agent can add an invitation to a calendar and check it isn't
+  there already.
+  - Every field is cleaned like any other text.
+  - A colon inside a quoted parameter (`SENT-BY="mailto:…"`, a Windows time zone) doesn't end
+    the name.
+  - An all-day event ends on its last day, not the day after.
+- **Drive.** `read_text` exports Google Docs and Slides as text and Sheets as CSV, and reads text
+  files as they are. Anything else (PDFs, images) returns "Warthog can't read this file type yet"
+  instead of raw bytes, and opens no "recently read" window.
+  - A sheet is its first tab only, and the result says so.
+  - Shared-drive files are read (`supportsAllDrives`).
+- **Calendar list** takes only `timeMin`, `timeMax`, `q`, `maxResults`, `pageToken`,
+  `singleEvents`, `orderBy`, `timeZone`, `iCalUID`, `updatedMin`, `showDeleted` and `eventTypes`.
+- **Copy:**
+  - An email service's consent row reads "Reads a checked copy of your email, without sign-in
+    codes or password links". Other services keep their wording.
+  - The main help page gains a "What agents see in your email" section, after approvals,
+    including what Warthog can't do.
+  - Activity entries say "Kept from the agent: 1 sign-in code".
+
 ## Recently read (the heads-up and narrow holds)
 
 **The window.** When the guard shows an agent content someone else wrote, Warthog opens a
@@ -147,15 +195,14 @@ Every executed connector result passes `resultGuard.review(call, result)` in the
 - **When it ends:** a passed window is ignored, overwritten by the agent's next read, and removed
   with the agent.
 - **What opens it:**
-  - Gmail mail, except mail labelled SENT or DRAFT;
+  - Gmail mail and search previews, except mail labelled SENT or DRAFT;
   - Outlook mail and search previews, except mail from the person's own address;
   - calendar events the person didn't organise (a list cut short counts);
   - Drive file text;
   - GET and HEAD reads through an email, messaging or calendar service's general request tool
     (ntfy included);
   - provider results, which are always approved first.
-- **What doesn't:** Gmail search ids, and general-request reads of the person's own tools
-  (Todoist and similar).
+- **What doesn't:** general-request reads of the person's own tools (Todoist and similar).
 
 **What it changes:**
 - **Every approval in the window** gets a Details line, "Claude recently read: an email from X,

@@ -15,6 +15,7 @@
 
 import { cleanJson, type JsonCleanCounts } from "../../domain/content/json-clean";
 import { gmailMessageView, type MailView } from "../../domain/content/gmail-message";
+import { MAIL_CONNECTOR_IDS } from "../../domain/content/mail-connectors";
 import { outlookMessageView } from "../../domain/content/outlook-message";
 import { anythingHidden, cleanText, type FilterCounts } from "../../domain/content/text-filters";
 import { untrustedNotice, type ContentKind } from "../../domain/content/untrusted";
@@ -54,9 +55,12 @@ const COULD_NOT_CHECK_CHANGE =
   "Done. Warthog couldn't check the service's reply, so it isn't shown.";
 
 const GMAIL_READ = "google-gmail__read";
+const GMAIL_SEARCH = "google-gmail__search";
+const DRIVE_READ_TEXT = "google-drive__read_text";
+const SUMMARY_FIELDS = ["id", "threadId", "labelIds", "date", "from", "subject", "preview", "withheld", "kind", "openInMail", "tellThePerson"] as const;
 const OUTLOOK_READ = "microsoft-outlook-mail__read";
 const OUTLOOK_SEARCH = "microsoft-outlook-mail__search";
-const MAIL_CONNECTORS = new Set(["google-gmail", "microsoft-outlook-mail"]);
+const MAIL_CONNECTORS = MAIL_CONNECTOR_IDS;
 const CALENDAR_CONNECTORS = new Set(["google-calendar", "microsoft-outlook-calendar"]);
 
 function emptyJsonCounts(): JsonCleanCounts {
@@ -89,6 +93,7 @@ interface Envelope {
   readonly body: string;
   readonly truncated?: boolean;
   readonly tooLargeToCheck?: boolean;
+  readonly note?: unknown;
 }
 
 function isEnvelope(value: unknown): value is Envelope {
@@ -99,6 +104,18 @@ function isEnvelope(value: unknown): value is Envelope {
 
 function isSuccess(status: number): boolean {
   return Number.isInteger(status) && status >= 200 && status < 300;
+}
+
+// A read with query.link=N asks for just that numbered link in full (a long one is shown by
+// its domain in the readable view). Only links the checked view kept can be asked for, so a
+// hidden sign-in link never comes back this way.
+function linkOnly(call: AgentCall, message: Record<string, unknown>): Record<string, unknown> | undefined {
+  const asked = (call.params as { query?: Record<string, unknown> } | undefined)?.query?.link;
+  if (asked === undefined) return undefined;
+  const n = Number.parseInt(String(asked), 10);
+  const links = Array.isArray(message.links) ? message.links : [];
+  if (!Number.isInteger(n) || n < 1 || n > links.length) return { id: message.id, link: asked, note: "That link number isn't in this message." };
+  return { id: message.id, link: n, url: links[n - 1] };
 }
 
 function gmailFormat(call: AgentCall): string | undefined {
@@ -122,6 +139,34 @@ export function createResultGuard(deps: ResultGuardDeps = {}): ResultGuard {
       if (view.stubbed) counts.stubs! += 1;
       return view.message;
     };
+    if (call.tool === GMAIL_SEARCH && (parsed as { summaries?: unknown } | null)?.summaries === true) {
+      const list = (parsed as { messages?: unknown }).messages;
+      const messages = (Array.isArray(list) ? list : []).map((item) => {
+        const missing = item as { id?: unknown; threadId?: unknown; unavailable?: unknown } | null;
+        if (missing?.unavailable === true) {
+          return { id: missing.id, threadId: missing.threadId, note: "Couldn't load this preview. Read the message by its id." };
+        }
+        const view = gmailMessageView(item, { account: call.connectorAccountLabel, headersOnly: true });
+        if (!view) return { withheld: true, note: "Warthog couldn't check this message, so it isn't shown." };
+        const message = tally(view);
+        const labels = Array.isArray(message.labelIds) ? message.labelIds : [];
+        // A triage line: who, what, when, a preview and whether it's unread (a stub keeps its
+        // note for the person) — not the headers an agent needs only to reply.
+        const summary: Record<string, unknown> = {};
+        for (const key of SUMMARY_FIELDS) if (message[key] !== undefined) summary[key] = message[key];
+        return { ...summary, unread: labels.includes("UNREAD") };
+      });
+      const extra = parsed as { nextPageToken?: unknown; resultSizeEstimate?: unknown };
+      return {
+        result: {
+          ...source(call, "email"), status: envelope.status, messages,
+          ...(typeof extra.nextPageToken === "string" ? { nextPageToken: extra.nextPageToken } : {}),
+          note: "Previews only: read a message by its id for its full text.",
+        },
+        counts,
+        fallback: false,
+      };
+    }
     if (call.tool === GMAIL_READ) {
       const format = gmailFormat(call);
       const view = gmailMessageView(parsed, {
@@ -130,7 +175,8 @@ export function createResultGuard(deps: ResultGuardDeps = {}): ResultGuard {
         headersOnly: format === "metadata" || format === "minimal",
       });
       if (!view) return null;
-      return { result: { ...source(call, "email"), status: envelope.status, message: tally(view) }, counts, fallback: view.fallback };
+      const message = tally(view);
+      return { result: { ...source(call, "email"), status: envelope.status, message: linkOnly(call, message) ?? message }, counts, fallback: view.fallback };
     }
     const tooLarge = envelope.tooLargeToCheck === true;
     const tooLargeNote = "This email is too large for Warthog to check, so its text isn't shown. The person can open it in Outlook.";
@@ -139,7 +185,7 @@ export function createResultGuard(deps: ResultGuardDeps = {}): ResultGuard {
       if (!view) return null;
       const message = tally(view);
       if (tooLarge && !view.stubbed) message.bodyNote = tooLargeNote;
-      return { result: { ...source(call, "email"), status: envelope.status, message }, counts, fallback: tooLarge };
+      return { result: { ...source(call, "email"), status: envelope.status, message: linkOnly(call, message) ?? message }, counts, fallback: tooLarge };
     }
     if (call.tool === OUTLOOK_SEARCH) {
       const list = (parsed as { value?: unknown } | null)?.value;
@@ -175,7 +221,8 @@ export function createResultGuard(deps: ResultGuardDeps = {}): ResultGuard {
     } catch {
       parsed = undefined;
     }
-    const mailTool = call.tool === GMAIL_READ || call.tool === OUTLOOK_READ || call.tool === OUTLOOK_SEARCH;
+    const mailTool = call.tool === GMAIL_READ || call.tool === OUTLOOK_READ || call.tool === OUTLOOK_SEARCH
+      || (call.tool === GMAIL_SEARCH && /"summaries":true/.test(envelope.body));
     if (isJson) {
       const mail = mailViews(call, parsed, envelope);
       if (mail) return { result: mail.result, evidence: { outcome: outcomeOf(mail.counts, mail.fallback), counts: nonZero(mail.counts) } };
@@ -184,8 +231,10 @@ export function createResultGuard(deps: ResultGuardDeps = {}): ResultGuard {
     if (mailTool) return withheld(call, envelope.status);
     const counts = emptyJsonCounts();
     const body = isJson ? JSON.stringify(cleanJson(parsed, counts, options)) : cleanText(envelope.body, counts, options);
+    // Warthog's own note on a Drive export (a sheet is read as its first tab only).
+    const note = call.tool === DRIVE_READ_TEXT && typeof envelope.note === "string" ? { note: envelope.note } : {};
     return {
-      result: { ...source(call, kind), status: envelope.status, body, truncated: envelope.truncated === true },
+      result: { ...source(call, kind), status: envelope.status, body, truncated: envelope.truncated === true, ...note },
       evidence: { outcome: outcomeOf(counts, false), counts: nonZero(counts) },
     };
   }
@@ -236,12 +285,14 @@ export function createResultGuard(deps: ResultGuardDeps = {}): ResultGuard {
 
   // What the agent was shown that someone else wrote, if anything (read-side protection's
   // "recently read" window). Mail the person sent or drafted, events they organised and the
-  // person's own tools don't count; Gmail search (ids only) doesn't either.
+  // person's own tools don't count.
   function exposureOf(call: AgentCall, guarded: GuardedResult): ReadSource | undefined {
     if (!call.connector || guarded.evidence.outcome === "withheld") return undefined;
     const service = deps.serviceName?.(call.connector) ?? call.connector;
     const result = (guarded.result ?? {}) as Record<string, unknown>;
     if (call.tool === GMAIL_READ) {
+      // Asking for one numbered link shows just its address, not the email again.
+      if ((call.params as { query?: { link?: unknown } } | undefined)?.query?.link !== undefined) return undefined;
       const message = (result.message ?? {}) as { labelIds?: unknown; from?: unknown };
       const labels = Array.isArray(message.labelIds) ? message.labelIds : [];
       if (labels.includes("SENT") || labels.includes("DRAFT")) return undefined;
@@ -255,9 +306,11 @@ export function createResultGuard(deps: ResultGuardDeps = {}): ResultGuard {
       const from = (result.message as { from?: unknown } | undefined)?.from;
       return fromSomeoneElse(from) ? { service, kind: "email", ...senderOf(from) } : undefined;
     }
-    if (call.tool === OUTLOOK_SEARCH) {
-      const list = Array.isArray(result.messages) ? (result.messages as { from?: unknown }[]) : [];
-      const first = list.find((m) => m.from !== undefined && fromSomeoneElse(m.from));
+    // A search shows each message's preview, so the first one someone else wrote counts.
+    if (call.tool === OUTLOOK_SEARCH || call.tool === GMAIL_SEARCH) {
+      const list = Array.isArray(result.messages) ? (result.messages as { from?: unknown; labelIds?: unknown }[]) : [];
+      const mine = (m: { labelIds?: unknown }) => Array.isArray(m.labelIds) && (m.labelIds.includes("SENT") || m.labelIds.includes("DRAFT"));
+      const first = list.find((m) => !mine(m) && m.from !== undefined && fromSomeoneElse(m.from));
       return first ? { service, kind: "email", ...senderOf(first.from) } : undefined;
     }
     if (call.tool === "google-calendar__list" || call.tool === "microsoft-outlook-calendar__list") {
@@ -276,7 +329,8 @@ export function createResultGuard(deps: ResultGuardDeps = {}): ResultGuard {
       }) as { organizer?: { email?: unknown; emailAddress?: { address?: unknown } } } | undefined;
       return foreign ? { service, kind: "event", ...senderOf(foreign.organizer?.email ?? foreign.organizer?.emailAddress?.address) } : undefined;
     }
-    if (call.tool === "google-drive__read_text") return { service, kind: "file" };
+    // A file Warthog couldn't read showed nothing anyone wrote.
+    if (call.tool === DRIVE_READ_TEXT) return /"unreadable":true/.test(String(result.body)) ? undefined : { service, kind: "file" };
     if (call.requiresApproval) return { service, kind: "content" };
     // A read (GET/HEAD — even through a service where every request counts as a change, like
     // ntfy) of a service that carries other people's messages or bookings.

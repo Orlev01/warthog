@@ -200,11 +200,11 @@ function mimeRecipients(raw: string): string[] {
 const GMAIL_PRESENTATION: Readonly<Record<string, { title: string; description: string }>> = {
   search: {
     title: "Gmail: Search messages",
-    description: "Search the connected Gmail account. query.q uses Gmail search syntax, e.g. from:qantas newer_than:30d; query.maxResults and query.pageToken page through results. Returns message and thread ids: read each message for its contents. Doesn't change mail.",
+    description: "Search the connected Gmail account. query.q uses Gmail search syntax, e.g. from:qantas newer_than:30d; query.maxResults (up to 25, default 10) and query.pageToken page through results. Returns who, subject, date, a preview and whether it's unread for each message: read one by id for its full text. Doesn't change mail.",
   },
   read: {
     title: "Gmail: Read message",
-    description: "Read one Gmail message by query.id from search results. Returns Warthog's checked view: from, to, subject, date, a preview, the text with its links numbered, and attachment names. query.format=metadata returns headers and the preview only. Sign-in code and password emails are withheld: tell the person to open those in Gmail. Doesn't change mail.",
+    description: "Read one Gmail message by query.id from search results. Returns Warthog's checked view: from, to, subject, date, a preview, the text with its links numbered, and attachment names. query.format=metadata returns headers and the preview only; query.link=N returns link N in full. Sign-in code and password emails are withheld: tell the person to open those in Gmail. Doesn't change mail.",
   },
   draft: {
     title: "Gmail: Create unsent draft",
