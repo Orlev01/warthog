@@ -419,7 +419,7 @@ function headsUpFor(detail: Record<string, unknown>, agent: string, now: Date): 
   if (fresh.length) {
     const first = fresh.length === 1 ? `You haven't emailed ${fresh[0]} before.` : `You haven't emailed ${fresh.length} of these addresses before.`;
     if (!read) return first;
-    if (fresh.length === 1 && latest?.sender === fresh[0]) return `${first} ${fresh[0]} sent the email ${agent} read ${agoText(recent!.at, now)}. Worth a second look if you didn't ask for this.`;
+    if (fresh.length === 1 && latest?.sender === fresh[0]) return `${first} They sent the email ${agent} read ${agoText(recent!.at, now)}. Worth a second look if you didn't ask for this.`;
     return `${first} ${read} Worth a second look if you didn't ask for this.`;
   }
   if (detail.readCheck === true && read) return `${read} Warthog is checking with you before this goes out.`;

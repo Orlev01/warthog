@@ -1254,7 +1254,7 @@ test("after reading a stranger's email, the card says so: a reply to that sender
 
     const same = await arrangeHeld(db, keyWrapper, "read-same", { ...emailCall({ recipients: ["billing@payfast-au.co"], params: { to: ["billing@payfast-au.co"], text: "Thanks" } }), tool: "google-gmail__send", connector: "google-gmail" }, { grantedConnectors: ["google-gmail"] }, extras(["billing@payfast-au.co"]));
     assert.equal((await same.actions.load(await freshSession(db, same.userId))).pending[0]!.headsUp,
-      "You haven't emailed billing@payfast-au.co before. billing@payfast-au.co sent the email Claude read 3 min ago. Worth a second look if you didn't ask for this.");
+      "You haven't emailed billing@payfast-au.co before. They sent the email Claude read 3 min ago. Worth a second look if you didn't ask for this.");
 
     const known = await arrangeHeld(db, keyWrapper, "read-known", { ...emailCall(), tool: "google-gmail__send", connector: "google-gmail" }, { grantedConnectors: ["google-gmail"] }, extras([]));
     const quiet = (await known.actions.load(await freshSession(db, known.userId))).pending[0]!;
