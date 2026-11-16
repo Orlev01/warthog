@@ -15,6 +15,7 @@
 
 import { cleanJson, type JsonCleanCounts } from "../../domain/content/json-clean";
 import { gmailMessageView, type MailView } from "../../domain/content/gmail-message";
+import { MAIL_CONNECTOR_IDS } from "../../domain/content/mail-connectors";
 import { outlookMessageView } from "../../domain/content/outlook-message";
 import { anythingHidden, cleanText, type FilterCounts } from "../../domain/content/text-filters";
 import { untrustedNotice, type ContentKind } from "../../domain/content/untrusted";
@@ -59,7 +60,7 @@ const DRIVE_READ_TEXT = "google-drive__read_text";
 const SUMMARY_FIELDS = ["id", "threadId", "labelIds", "date", "from", "subject", "preview", "withheld", "kind", "openInMail", "tellThePerson"] as const;
 const OUTLOOK_READ = "microsoft-outlook-mail__read";
 const OUTLOOK_SEARCH = "microsoft-outlook-mail__search";
-const MAIL_CONNECTORS = new Set(["google-gmail", "microsoft-outlook-mail"]);
+const MAIL_CONNECTORS = MAIL_CONNECTOR_IDS;
 const CALENDAR_CONNECTORS = new Set(["google-calendar", "microsoft-outlook-calendar"]);
 
 function emptyJsonCounts(): JsonCleanCounts {

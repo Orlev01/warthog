@@ -178,8 +178,10 @@ Every executed connector result passes `resultGuard.review(call, result)` in the
 - **Calendar list** takes only `timeMin`, `timeMax`, `q`, `maxResults`, `pageToken`,
   `singleEvents`, `orderBy`, `timeZone`, `iCalUID`, `updatedMin`, `showDeleted` and `eventTypes`.
 - **Copy:**
-  - The consent row reads "Reads a checked copy, without sign-in codes or password links".
-  - Help gains a "What agents see in your email" section, including what Warthog can't do.
+  - An email service's consent row reads "Reads a checked copy of your email, without sign-in
+    codes or password links". Other services keep their wording.
+  - The main help page gains a "What agents see in your email" section, after approvals,
+    including what Warthog can't do.
   - Activity entries say "Kept from the agent: 1 sign-in code".
 
 ## Recently read (the heads-up and narrow holds)
