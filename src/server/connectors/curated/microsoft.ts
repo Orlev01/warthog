@@ -64,6 +64,43 @@ function byId(prefix: string, key: string): CuratedToolDef["resolve"] {
   };
 }
 
+// Read-side protection (docs/adr/read-side-protection.md): Outlook message reads are checked
+// before an agent sees them, so a request may not reach around the checked view. Graph
+// accepts query options with or without their `$`, in any case, so they are normalised and
+// allowlisted: a search may filter, sort and page (and always returns headers and previews,
+// at most 25 a page, 10 by default); a read takes no options at all (so no `$select` can drop
+// the subject the sign-in check reads, and no `$expand` can inline attachment contents). An
+// id that is really a sub-path (`/$value` is the raw message source) is refused.
+const OUTLOOK_MESSAGE_ID = /^[A-Za-z0-9=_+-]{1,512}$/;
+const MAX_OUTLOOK_TOP = 25;
+const DEFAULT_OUTLOOK_TOP = 10;
+// A whole message (or a page of them) is read so it can be checked; agents see ~100 KB at most.
+const MESSAGE_READ_BYTES = 2 * 1024 * 1024;
+// The message fields a search returns: who, what, when and a preview. Read one by id for its text.
+const OUTLOOK_HEADERS_ONLY = "id,conversationId,internetMessageId,subject,from,sender,toRecipients,ccRecipients,replyTo,receivedDateTime,isRead,hasAttachments,importance,bodyPreview,webLink";
+const OUTLOOK_SEARCH_OPTIONS = new Set(["search", "filter", "orderby", "skip", "top", "count"]);
+
+function outlookSearchQuery(query: Record<string, string> | undefined): Record<string, string> {
+  const out: Record<string, string> = {};
+  for (const [key, value] of Object.entries(query ?? {})) {
+    const option = key.replace(/^\$/, "").toLowerCase();
+    if (!OUTLOOK_SEARCH_OPTIONS.has(option)) continue;
+    if (option === "top") {
+      const top = Number.parseInt(value, 10);
+      out.$top = String(Number.isFinite(top) && top > 0 ? Math.min(top, MAX_OUTLOOK_TOP) : DEFAULT_OUTLOOK_TOP);
+      continue;
+    }
+    out[`$${option}`] = value;
+  }
+  return { $top: String(DEFAULT_OUTLOOK_TOP), ...out, $select: OUTLOOK_HEADERS_ONLY };
+}
+
+function outlookMessage(input: CuratedToolCallInput): { path: string; query: Record<string, string> } {
+  const id = input.query?.id;
+  if (id === undefined || !OUTLOOK_MESSAGE_ID.test(id)) throw new HttpError(400, "query.id must be an Outlook message id from search results.");
+  return { path: `/v1.0/me/messages/${encodeURIComponent(id)}`, query: {} };
+}
+
 // The exact curated tool set this task adds (design §7). Read tools use GET; change tools use
 // the matching REST verb (POST to create/send, PATCH to update, DELETE to delete). Every path
 // carries the Graph `/v1.0` prefix.
@@ -75,7 +112,7 @@ const CURATED_DEFS: readonly CuratedToolDef[] = [
     makesChange: false,
     sendsMessage: false,
     method: "GET",
-    resolve: (i) => ({ path: "/v1.0/me/messages", query: i.query }),
+    resolve: (i) => ({ path: "/v1.0/me/messages", query: outlookSearchQuery(i.query) }),
   },
   {
     name: "microsoft-outlook-mail__read",
@@ -83,7 +120,7 @@ const CURATED_DEFS: readonly CuratedToolDef[] = [
     makesChange: false,
     sendsMessage: false,
     method: "GET",
-    resolve: byId("/v1.0/me/messages", "id"),
+    resolve: outlookMessage,
   },
   {
     name: "microsoft-outlook-mail__draft",
@@ -197,18 +234,24 @@ export async function callMicrosoftTool(
   }
 
   const { path, query } = def.resolve(input);
-  return sendConnectorRequest(
-    {
-      entry: input.entry,
-      userId: input.userId,
-      connectionId: input.connectionId,
-      dek: input.dek,
-      method: def.method,
-      path,
-      query,
-      body: input.body,
-      contentType: "application/json",
-    },
-    deps,
-  );
+  // Message reads and searches are checked whole before an agent sees them (read-side
+  // protection), so they may read past the agent-facing cap.
+  const checkedRead = def.name === "microsoft-outlook-mail__read" || def.name === "microsoft-outlook-mail__search";
+  const request = {
+    entry: input.entry,
+    userId: input.userId,
+    connectionId: input.connectionId,
+    dek: input.dek,
+    method: def.method,
+    path,
+    query,
+    body: input.body,
+    contentType: "application/json" as const,
+  };
+  if (!checkedRead) return sendConnectorRequest(request, deps);
+  const whole = await sendConnectorRequest({ ...request, maxBytes: MESSAGE_READ_BYTES }, deps);
+  if (!whole.truncated) return whole;
+  // Still too large to check whole: read the same message without its body.
+  const headers = await sendConnectorRequest({ ...request, query: { ...query, $select: OUTLOOK_HEADERS_ONLY } }, deps);
+  return { ...headers, tooLargeToCheck: true };
 }

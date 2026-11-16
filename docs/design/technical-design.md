@@ -245,7 +245,13 @@ Redaction is a pure module with exhaustive unit tests; the activity writer and t
   expiry; failures mark the connection "Reconnect needed" and notify.
 - **General request tool** per connector: `<id>__request {method, path, query, body}`; `path` is relative
   to the entry's base URL (host cannot be overridden → no SSRF); GET/HEAD = reads, anything else =
-  makes changes. Upstream timeout 20 s; responses truncated to 100 KB for agents.
+  makes changes (every request, for a catalogue entry with `get_is_change`). Upstream timeout 20 s;
+  responses truncated to 100 KB for agents.
+- **Checked reads** ([ADR](../adr/read-side-protection.md)): the pipeline passes every executed
+  connector result through `resultGuard` before the agent reads it — a notice, hidden characters
+  removed, sign-in links/codes and card numbers hidden, download links dropped; Gmail and Outlook
+  messages become a checked view and sign-in mail a stub. Mail reads may fetch 2 MiB internally
+  so a whole message can be checked; Gmail is always read as `full` or `metadata`, never `raw`.
 - **Provider-hosted tools:** `readOnlyHint: true` → reads; otherwise makes changes.
 - **Curated tools** (declared reads/changes + reversal + "sends a message" flag): Gmail (search, read,
   draft, send), Google Calendar (list, create↔delete, update), Google Drive (search, read text,

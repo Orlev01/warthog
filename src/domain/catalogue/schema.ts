@@ -52,6 +52,9 @@ export const catalogueEntrySchema = z.object({
   verify: verifySchema.optional(),
   curated_tools: z.array(curatedToolSchema).optional(),
   google_early_access: z.boolean().optional(),
+  // The service can send a message on a plain GET (e.g. ntfy's /<topic>/publish?message=),
+  // so its general request tool treats EVERY request as a change (read-side protection).
+  get_is_change: z.boolean().optional(),
 });
 
 export type CatalogueEntry = z.infer<typeof catalogueEntrySchema>;

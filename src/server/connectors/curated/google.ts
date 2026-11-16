@@ -67,10 +67,13 @@ export interface CuratedToolCallInput {
 }
 
 // The upstream status and body (truncated to ~100 KB by the transport), passed back.
+// `tooLargeToCheck` marks a message Warthog could only fetch the headers of, because the
+// whole message was too large to check (read-side protection).
 export interface CuratedToolResult {
   readonly status: number;
   readonly body: string;
   readonly truncated: boolean;
+  readonly tooLargeToCheck?: boolean;
 }
 
 // The internal richer declaration: the public fields plus how the tool is dispatched —
@@ -79,6 +82,40 @@ export interface CuratedToolResult {
 interface CuratedToolDef extends CuratedTool {
   readonly method: string;
   readonly resolve: (input: CuratedToolCallInput) => { path: string; query?: Record<string, string> };
+}
+
+// Read-side protection (docs/adr/read-side-protection.md): a whole message must be parsed
+// to be checked, so a message read may fetch up to this much; the agent still sees at most
+// ~100 KB of checked text.
+const MESSAGE_READ_BYTES = 2 * 1024 * 1024;
+
+// A Gmail message or thread id: opaque URL-safe characters only.
+const GMAIL_ID = /^[A-Za-z0-9_-]{1,64}$/;
+
+// The Gmail read formats an agent may ask for. Every full or raw request is read as
+// `full`, which Warthog turns into the checked view; the raw RFC 822 source is never
+// fetched for an agent. Headers-only stays available for triage.
+function gmailReadFormat(requested: string | undefined): "full" | "metadata" {
+  const format = requested?.toLowerCase();
+  return format === "metadata" || format === "minimal" ? "metadata" : "full";
+}
+
+// Gmail search parameters an agent may set; anything else (e.g. `fields`, `alt`) is dropped.
+const GMAIL_SEARCH_PARAMS = ["q", "maxResults", "pageToken", "labelIds", "includeSpamTrash"] as const;
+
+function pick(query: Record<string, string> | undefined, keys: readonly string[]): Record<string, string> {
+  const out: Record<string, string> = {};
+  for (const key of keys) {
+    const value = query?.[key];
+    if (value !== undefined) out[key] = value;
+  }
+  return out;
+}
+
+function gmailMessageId(query: Record<string, string> | undefined): string {
+  const id = query?.id;
+  if (id === undefined || !GMAIL_ID.test(id)) throw new HttpError(400, "query.id must be a Gmail message id from search results.");
+  return id;
 }
 
 // Build a resolver that takes a resource id from `query[key]`, URL-encodes it into the
@@ -107,7 +144,7 @@ const CURATED_DEFS: readonly CuratedToolDef[] = [
     makesChange: false,
     sendsMessage: false,
     method: "GET",
-    resolve: (i) => ({ path: "/gmail/v1/users/me/messages", query: i.query }),
+    resolve: (i) => ({ path: "/gmail/v1/users/me/messages", query: pick(i.query, GMAIL_SEARCH_PARAMS) }),
   },
   {
     name: "google-gmail__read",
@@ -115,7 +152,10 @@ const CURATED_DEFS: readonly CuratedToolDef[] = [
     makesChange: false,
     sendsMessage: false,
     method: "GET",
-    resolve: byId("/gmail/v1/users/me/messages", "id"),
+    resolve: (i) => ({
+      path: `/gmail/v1/users/me/messages/${encodeURIComponent(gmailMessageId(i.query))}`,
+      query: { format: gmailReadFormat(i.query?.format) },
+    }),
   },
   {
     name: "google-gmail__draft",
@@ -234,18 +274,23 @@ export async function callGoogleTool(
   }
 
   const { path, query } = def.resolve(input);
-  return sendConnectorRequest(
-    {
-      entry: input.entry,
-      userId: input.userId,
-      connectionId: input.connectionId,
-      dek: input.dek,
-      method: def.method,
-      path,
-      query,
-      body: input.body,
-      contentType: "application/json",
-    },
-    deps,
-  );
+  const request = {
+    entry: input.entry,
+    userId: input.userId,
+    connectionId: input.connectionId,
+    dek: input.dek,
+    method: def.method,
+    path,
+    query,
+    body: input.body,
+    contentType: "application/json" as const,
+  };
+  if (def.name !== "google-gmail__read" || query?.format !== "full") return sendConnectorRequest(request, deps);
+
+  // A full message read: fetch the whole message so Warthog can check it. One that is still
+  // too large is re-read as headers only, and the agent is told its text couldn't be checked.
+  const full = await sendConnectorRequest({ ...request, maxBytes: MESSAGE_READ_BYTES }, deps);
+  if (!full.truncated) return full;
+  const headers = await sendConnectorRequest({ ...request, query: { ...query, format: "metadata" } }, deps);
+  return { ...headers, tooLargeToCheck: true };
 }

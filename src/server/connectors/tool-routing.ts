@@ -135,11 +135,11 @@ function mimeRecipients(raw: string): string[] {
 const GMAIL_PRESENTATION: Readonly<Record<string, { title: string; description: string }>> = {
   search: {
     title: "Gmail: Search messages",
-    description: "Search the connected Gmail account for message IDs and thread IDs. Put Gmail search syntax in query.q; query.maxResults and query.pageToken control pagination. This does not return message bodies or change mail. Gmail API: https://developers.google.com/workspace/gmail/api/reference/rest/v1/users.messages/list",
+    description: "Search the connected Gmail account. query.q uses Gmail search syntax, e.g. from:qantas newer_than:30d; query.maxResults and query.pageToken page through results. Returns message and thread ids: read each message for its contents. Doesn't change mail.",
   },
   read: {
     title: "Gmail: Read message",
-    description: "Read one message from the connected Gmail account using query.id from search results. query.format selects full, metadata, minimal or raw. This does not mark the message as read or otherwise change mail. Gmail API: https://developers.google.com/workspace/gmail/api/reference/rest/v1/users.messages/get",
+    description: "Read one Gmail message by query.id from search results. Returns Warthog's checked view: from, to, subject, date, a preview, the text with its links numbered, and attachment names. query.format=metadata returns headers and the preview only. Sign-in code and password emails are withheld: tell the person to open those in Gmail. Doesn't change mail.",
   },
   draft: {
     title: "Gmail: Create unsent draft",
@@ -151,9 +151,21 @@ const GMAIL_PRESENTATION: Readonly<Record<string, { title: string; description: 
   },
 };
 
+const OUTLOOK_MAIL_PRESENTATION: Readonly<Record<string, { title: string; description: string }>> = {
+  search: {
+    title: "Outlook: Search messages",
+    description: "Search the connected Outlook mailbox. query.$search takes words, e.g. \"invoice\"; query.$filter, $orderby, $top (up to 25, default 10) and $skip page and sort. Returns who, subject, date and a preview for each message: read one by id for its text. Doesn't change mail.",
+  },
+  read: {
+    title: "Outlook: Read message",
+    description: "Read one Outlook message by query.id from search results. Returns Warthog's checked view: from, to, subject, date, a preview and the text with its links numbered. Sign-in code and password emails are withheld: tell the person to open those in Outlook. Doesn't change mail.",
+  },
+};
+
 function declarationOf(tool: CuratedTool, serviceName: string): ConnectorToolDeclaration {
   const verb = tool.name.slice(tool.connectorId.length + NAMESPACE.length);
-  const presentation = tool.connectorId === "google-gmail" ? GMAIL_PRESENTATION[verb] : undefined;
+  const presentation = tool.connectorId === "google-gmail" ? GMAIL_PRESENTATION[verb]
+    : tool.connectorId === "microsoft-outlook-mail" ? OUTLOOK_MAIL_PRESENTATION[verb] : undefined;
   return {
     name: verb,
     title: presentation?.title ?? `${serviceName}: ${verb.replace(/_/g, " ")}`,
@@ -189,10 +201,16 @@ export function connectorToolsetFor(
     toolset[id] = curated
       ? curated.map((tool) => declarationOf(tool, entry.name))
       : [
-          {
-            name: REQUEST_TOOL,
-            description: `Send one authenticated request to the person's ${entry.name} account (paths are relative to its API). GET and HEAD read; any other method makes a change.`,
-          },
+          entry.get_is_change
+            ? {
+                name: REQUEST_TOOL,
+                description: `Send one authenticated request to the person's ${entry.name} account (paths are relative to its API). ${entry.name} can send messages on any request, so every request, GET included, makes a change.`,
+                getIsChange: true,
+              }
+            : {
+                name: REQUEST_TOOL,
+                description: `Send one authenticated request to the person's ${entry.name} account (paths are relative to its API). GET and HEAD read; any other method makes a change.`,
+              },
         ];
   }
   return toolset;

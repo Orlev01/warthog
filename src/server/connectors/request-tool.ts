@@ -51,6 +51,10 @@ export interface ConnectorRequestInput {
   // Curated REST tools know their payload format. Generic requests keep their
   // existing raw-body contract; this is not an arbitrary caller header escape.
   readonly contentType?: "application/json";
+  // A curated read that Warthog checks before an agent sees it may read more than the
+  // agent-facing cap (read-side protection: a whole email must be parsed to be checked).
+  // Never a caller value.
+  readonly maxBytes?: number;
 }
 
 // The upstream status and body (truncated to ~100 KB), passed back to the agent.
@@ -139,7 +143,7 @@ export async function sendConnectorRequest(
     }
 
     const response = await deps.fetch(url.href, init);
-    return await readResponseCapped(response, controller.signal);
+    return await readResponseCapped(response, controller.signal, input.maxBytes ?? MAX_RESPONSE_BYTES);
   } finally {
     clearTimeout(timer);
   }
@@ -184,11 +188,12 @@ function buildTemplatedHeader(
 
 // Bound bytes while reading: reading text() and truncating afterwards can allocate
 // an arbitrarily large provider response in the single application's heap.
-async function readResponseCapped(response: Response, signal: AbortSignal): Promise<ConnectorRequestResult> {
+async function readResponseCapped(response: Response, signal: AbortSignal, maxBytes: number): Promise<ConnectorRequestResult> {
   signal.throwIfAborted();
   if (!response.body) return { status: response.status, body: "", truncated: false };
   const reader = response.body.getReader();
-  const bytes = new Uint8Array(MAX_RESPONSE_BYTES);
+  // Chunks are kept as they arrive (no up-front buffer of the whole cap) and joined once.
+  const chunks: Uint8Array[] = [];
   let length = 0;
   let truncated = false;
   const cancel = () => { void reader.cancel().catch(() => {}); };
@@ -198,9 +203,9 @@ async function readResponseCapped(response: Response, signal: AbortSignal): Prom
       const chunk = await reader.read();
       signal.throwIfAborted();
       if (chunk.done) break;
-      const remaining = MAX_RESPONSE_BYTES - length;
+      const remaining = maxBytes - length;
       const kept = Math.min(remaining, chunk.value.byteLength);
-      bytes.set(chunk.value.subarray(0, kept), length);
+      chunks.push(chunk.value.subarray(0, kept));
       length += kept;
       if (chunk.value.byteLength > remaining) {
         truncated = true;
@@ -208,9 +213,15 @@ async function readResponseCapped(response: Response, signal: AbortSignal): Prom
         break;
       }
     }
+    const bytes = new Uint8Array(length);
+    let at = 0;
+    for (const chunk of chunks) {
+      bytes.set(chunk, at);
+      at += chunk.byteLength;
+    }
     // A truncation can split a UTF-8 codepoint: leave only that incomplete tail
     // buffered in the decoder instead of returning a replacement character.
-    const body = new TextDecoder().decode(bytes.subarray(0, length), { stream: truncated });
+    const body = new TextDecoder().decode(bytes, { stream: truncated });
     return { status: response.status, body, truncated };
   } finally {
     signal.removeEventListener("abort", cancel);

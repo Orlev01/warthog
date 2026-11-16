@@ -16,6 +16,12 @@ import type { Session } from "../auth/session";
 import type { Clock } from "../seams/clock";
 import type { CatalogueIndex } from "./catalogue";
 import { HttpError, parseParams } from "../http/validate";
+import { cleanShortText } from "../../domain/content/untrusted";
+
+// A provider's own tool description reaches the agent before any approval, so it is
+// cleaned of hidden characters and capped (read-side protection).
+const MAX_PROVIDER_DESCRIPTION = 2000;
+const MAX_PROVIDER_SCHEMA = 8000;
 import {
   createGuardedMcpFetch,
   startProviderAuthorization,
@@ -317,7 +323,7 @@ export async function readProviderToolsets(db: Db, catalogue: CatalogueIndex, us
         )?.providerMcp as ProviderState | undefined;
         result[connection.id] = (state?.tools ?? []).map((tool) => ({
           name: tool.name,
-          description: `${tool.description ?? tool.name}\nPass the provider's fields in arguments. Provider schema: ${JSON.stringify(tool.inputSchema)}`,
+          description: `${cleanShortText(tool.description ?? tool.name, MAX_PROVIDER_DESCRIPTION)}\nPass the provider's fields in arguments. Provider schema: ${cleanShortText(JSON.stringify(tool.inputSchema), MAX_PROVIDER_SCHEMA)}`,
           makesChange: true,
           requiresApproval: true,
           schema: providerArgumentsSchema,
