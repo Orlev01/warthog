@@ -1,5 +1,11 @@
 # Warthog comprehensive engineering audit
 
+**Landing diagrams, round trips, 17 November:** main `75b433a` runs as
+`warthog--r43972166974a1`. PR #37 makes every request in the website's "why one home" diagrams a
+round trip, out to the service and its answer back to the agent, and lets the Without picture's
+lines take turns instead of running 25 pulses at once. No migrations. See the
+[release record](landing-round-trip-release-2026-11-17.md).
+
 **Email safety, part 2, 17 November:** main `102d77f` runs as `warthog--r43967617925a1`. PRs
 #33–#35 label memories and tasks with who saved them, note on approvals what an agent just read
 from someone else (and ask first for agents that act alone), and give agents checked search

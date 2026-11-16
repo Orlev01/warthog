@@ -1,4 +1,16 @@
-# Delivery status — 17 November 2026 (email safety, part 2)
+# Delivery status — 17 November 2026 (landing diagrams, round trips)
+
+**Live at [warthog.com.au](https://warthog.com.au) (the website) and
+[app.warthog.com.au](https://app.warthog.com.au) (the app).** Application source
+`75b433a2b6e2bb0caa46a8fdba46c9e28c8ea6f2` runs as `warthog--r43972166974a1`, with one healthy
+replica, explicit 100% traffic and zero old replicas.
+
+PR #37 changes the website's "why one home" diagrams. Every request now makes a round trip:
+out to the service and its answer back to the agent, through Warthog in the With picture. The
+Without picture runs two or three trips at a time instead of 25. No migrations (still 85) and no
+configuration change. See the [release record](docs/audit/landing-round-trip-release-2026-11-17.md).
+
+# Earlier delivery status — 17 November 2026 (email safety, part 2)
 
 **Live at [warthog.com.au](https://warthog.com.au) (the website) and
 [app.warthog.com.au](https://app.warthog.com.au) (the app).** Application source
