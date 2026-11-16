@@ -1,4 +1,22 @@
-# Delivery status — 16 November 2026 (agent conversations)
+# Delivery status — 17 November 2026 (combined release)
+
+**Live at [warthog.com.au](https://warthog.com.au) (the website) and
+[app.warthog.com.au](https://app.warthog.com.au) (the app).** Application source
+`e8c9781511c4be6faf041376beb8b2337d9cdf18` runs as `warthog--r43951592207a1`, with one healthy
+replica, explicit 100% traffic and zero old replicas.
+
+PRs #29–#32, in one release:
+- #29: each agent's app details are read from `params._meta` and recorded once per app;
+- #30: CI checks each version once, test databases are copies, and admin Traffic counts health
+  checks on their own;
+- #31: every connector result reaches agents checked (read guard);
+- #32: approval cards show what goes out; recipient rules also match calendar guests; Gmail and
+  Outlook drafts take plain fields.
+
+No migrations. The main suite passed 6,222 tests. The repository is public again. See the
+[release record](docs/audit/combined-release-2026-11-17.md).
+
+# Earlier delivery status — 16 November 2026 (agent conversations)
 
 **Live at [warthog.com.au](https://warthog.com.au) (the website) and
 [app.warthog.com.au](https://app.warthog.com.au) (the app).** Application source

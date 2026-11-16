@@ -1,5 +1,11 @@
 # Warthog comprehensive engineering audit
 
+**Combined release, 17 November:** main `e8c9781` runs as `warthog--r43951592207a1`. PRs #29–#32
+record each agent's app details once per app, cut CI to one full run per change and count health
+checks on their own in Traffic, give agents a checked view of what connectors return, and make
+approval cards show what goes out. No migrations. 6,222 tests pass. The repository is public again.
+See the [release record](combined-release-2026-11-17.md).
+
 **Agent conversations, 16 November:** main `aca2674` runs as `warthog--r43796560300a1`. PR #28
 lets one agent's conversations be told apart with no setup: `get_context` hands out a run, agents
 pass it back, and Activity, the Inbox and each agent's Overview group entries by conversation and
