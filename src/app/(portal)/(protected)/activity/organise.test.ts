@@ -172,3 +172,19 @@ test("an agent row names its platform in words, and leaves out a placeholder", (
   assert.equal(detail(() => ({ name: "Helper", platform: "Other", platformName: null, exists: true })), undefined);
   assert.equal(detail(() => ({ name: "Claude", platform: "Claude", platformName: "Claude", exists: true })), undefined, "a platform that repeats the name adds nothing");
 });
+
+test("one agent conversation is a filter: a run id selects it, a chip names it, anything else is ignored", () => {
+  const RUN = "5d0c2a4e-8b1f-4c3d-9e2a-7f6b5a4c3d2e";
+  const state = readActivityState({ run: RUN.toUpperCase(), agent: AGENT }, anyDate);
+  assert.equal(state.run, RUN, "a run id is read case-insensitively");
+  assert.deepEqual(filtersFor(state, widen), { agentId: AGENT, runId: RUN });
+  const { filters } = appliedFilters(state, { agent: "Claude", run: "Fixing the website tests" });
+  const chip = filters.find((filter) => filter.label === "Conversation: Fixing the website tests");
+  assert.ok(chip, "the chip names the conversation as the agent described it");
+  assert.doesNotMatch(chip!.removeHref, /run=/, "removing it drops only the conversation");
+  assert.match(chip!.removeHref, /agent=/);
+  assert.equal(appliedFilters(readActivityState({ run: RUN }, anyDate), {}).filters[0]!.label, "Conversation: Untitled conversation");
+  for (const bad of ["<script>", "not-a-run", `${RUN}x`, "1; DROP TABLE"]) {
+    assert.equal(readActivityState({ run: bad }, anyDate).run, undefined, bad);
+  }
+});

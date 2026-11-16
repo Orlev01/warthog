@@ -1,6 +1,6 @@
 import * as React from "react";
 import { AgentMark } from "@/components/ui/brand-mark";
-import { Activity, AlertTriangle, ArrowRight, Brain, ChevronDown, ChevronLeft, Gauge, Lock, Network, Plug, Settings, SlidersHorizontal, Sparkles, Wallet, type LucideIcon } from "lucide-react";
+import { Activity, AlertTriangle, ArrowRight, Brain, ChevronDown, ChevronLeft, Gauge, Lock, MessagesSquare, Network, Plug, Settings, SlidersHorizontal, Sparkles, Wallet, type LucideIcon } from "lucide-react";
 import { WorkspacePanel } from "@/components/shell/workspace-surfaces";
 import { type AgentSection } from "@/domain/permissions/workspace";
 import type { AgentWorkspaceData } from "@/server/agents/workspace-data";
@@ -200,7 +200,47 @@ export function AgentOverview({
         </div>
       </section>
       <RecentRequests data={data} lastActive={lastActive ?? null} activityHref={`/agents/${id}?section=activity`} attention={attention} />
+      <RecentConversations data={data} />
     </div>
+  );
+}
+
+// The agent's recent conversations (docs/adr/agent-runs.md): every chat or session with this
+// agent shares its connection, so Warthog hands each one a run and lists them here, each
+// linking to what it did. The names are the agent's own descriptions.
+export function RecentConversations({ data }: { data: AgentWorkspaceData }) {
+  const name = data.agent.displayName;
+  const conversations = data.conversations ?? [];
+  return (
+    <WorkspacePanel
+      title="Recent conversations"
+      icon={MessagesSquare}
+      description={`The latest chats and sessions ${name} started with Warthog, named as ${name} described them.`}
+    >
+      {conversations.length === 0 ? (
+        <p className="text-sm text-fg-muted">
+          None yet. A conversation shows up here once {name} checks in with Warthog at the start of a chat or session.
+        </p>
+      ) : (
+        <ul className="flex flex-col text-sm">
+          {conversations.map((conversation) => (
+            <li key={conversation.id} className={LIST_ROW}>
+              <a href={conversation.href} className="font-medium text-fg underline underline-offset-4">
+                {conversation.label ?? "Untitled conversation"}
+              </a>
+              <p className="text-fg-muted">
+                {[
+                  conversation.via ? `via ${conversation.via}` : null,
+                  conversation.actions === 1 ? "1 entry" : `${conversation.actions} entries`,
+                ].filter(Boolean).join(" · ")}
+                {" · last active "}
+                <time dateTime={conversation.lastActiveAt}>{conversation.lastActive}</time>
+              </p>
+            </li>
+          ))}
+        </ul>
+      )}
+    </WorkspacePanel>
   );
 }
 

@@ -48,6 +48,10 @@ export interface ActivityEvidence {
   // Pairs an intent record ("Started: …") with the result entry written for the same attempt.
   attemptId?: string;
   intent?: true;
+  // The agent conversation (run) the entry was recorded under, and the product the request
+  // came through, both as reported (docs/adr/agent-runs.md).
+  conversation?: { id: string; label?: string };
+  via?: string;
 }
 
 // The kinds that only ever record the account owner's own change.
@@ -332,6 +336,9 @@ export function activityEvidence(entry: EvidenceEntry): ActivityEvidence {
   if (payload.providerRevoked === false) fact("Service's confirmation", "The service didn't confirm it removed Warthog's access. You can also remove it from the service's own settings.");
   fact("Agent", text("displayName"));
   fact("Platform", text("platform"));
+  const conversation = runOf(payload.run);
+  fact("Conversation (as the agent described it)", conversation?.label);
+  fact("Came through (as the app reported it)", text("via"));
 
   // An agent's reason (the agent's claim) — shown here only when the summary doesn't already.
   if (reason && !rejected && !summary.includes(reason)) fact(reversal ? "Your reason" : "Agent's reason", reason);
@@ -380,6 +387,7 @@ export function activityEvidence(entry: EvidenceEntry): ActivityEvidence {
   id("Entry number", entry.seq);
   id("Request ID", payload.requestId);
   id("Attempt ID", payload.attemptId);
+  id("Conversation ID", conversation?.id);
   id("Agent's run ID", payload.reportedRunId);
   id("Approval ID", payload.approvalId);
   id("Memory ID", payload.memoryId);
@@ -405,7 +413,15 @@ export function activityEvidence(entry: EvidenceEntry): ActivityEvidence {
     ...(changedBy ? { changedBy } : {}),
     ...(attemptId ? { attemptId } : {}),
     ...(entry.kind === "tool_attempt" ? { intent: true as const } : {}),
+    ...(conversation ? { conversation } : {}),
+    ...(text("via") ? { via: text("via") } : {}),
   };
+}
+
+// A stored run reference ({ id, label? }) as the conversation it names, or undefined.
+function runOf(value: unknown): { id: string; label?: string } | undefined {
+  if (!isRecord(value) || typeof value.id !== "string" || value.id === "") return undefined;
+  return typeof value.label === "string" && value.label !== "" ? { id: value.id, label: value.label } : { id: value.id };
 }
 
 /**

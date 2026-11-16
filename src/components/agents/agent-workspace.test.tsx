@@ -5,7 +5,7 @@ import { renderToStaticMarkup } from "react-dom/server";
 import { ResourceScope } from "./resource-scope";
 import { agentSection, AGENT_SECTIONS } from "@/domain/permissions/workspace";
 import { collectEdits } from "@/app/(portal)/(protected)/agents/[id]/permission-edits";
-import { AgentWorkspaceHeader, AgentOverview, AgentResources } from "./agent-workspace";
+import { AgentWorkspaceHeader, AgentOverview, AgentResources, RecentConversations } from "./agent-workspace";
 import type { AgentWorkspaceData } from "@/server/agents/workspace-data";
 import type { PermissionsViewProps } from "./permissions-view";
 
@@ -150,4 +150,22 @@ test("the memory and spending read-outs are panels with a next step when empty",
   assert.match(text(memory), /No memories it can read yet\./);
   const spending = renderToStaticMarkup(<AgentResources data={workspaceData()} section="spending" />);
   assert.match(text(spending), /No card budget set for this agent\. Turn on card access below/);
+});
+
+test("the Overview lists the agent's recent conversations, each linking to what it did", () => {
+  const data = {
+    ...workspaceData(),
+    conversations: [
+      { id: "5d0c2a4e-8b1f-4c3d-9e2a-7f6b5a4c3d2e", label: "Fixing the website tests", via: "Claude Code", actions: 14, lastActive: "Today, 10:42 am", lastActiveAt: "2026-11-16T23:42:00.000Z", href: "/activity?run=5d0c2a4e-8b1f-4c3d-9e2a-7f6b5a4c3d2e" },
+      { id: "6e1d3b5f-9c2a-4d4e-8f3b-8a7c6b5d4e3f", label: null, via: null, actions: 1, lastActive: "Yesterday, 4:00 pm", lastActiveAt: "2026-11-15T05:00:00.000Z", href: "/activity?run=6e1d3b5f-9c2a-4d4e-8f3b-8a7c6b5d4e3f" },
+    ],
+  } as unknown as AgentWorkspaceData;
+  const html = renderToStaticMarkup(<RecentConversations data={data} />);
+  const shown = text(html);
+  assert.match(shown, /Recent conversations The latest chats and sessions Dev console started with Warthog/);
+  assert.match(shown, /Fixing the website tests via Claude Code · 14 entries · last active Today, 10:42 am/);
+  assert.match(shown, /Untitled conversation 1 entry · last active Yesterday, 4:00 pm/);
+  assert.match(html, /href="\/activity\?run=5d0c2a4e-8b1f-4c3d-9e2a-7f6b5a4c3d2e"/);
+  assert.match(text(renderToStaticMarkup(<RecentConversations data={workspaceData()} />)), /None yet/);
+  assert.match(text(renderToStaticMarkup(<AgentOverview data={data} permissions={PERMISSIONS} lastActive={null} />)), /Recent conversations/, "the Overview includes it");
 });

@@ -1122,3 +1122,29 @@ test("a person with no agents is told so by the loader", async () => {
     await db.close();
   }
 });
+
+test("a request names the agent conversation that asked and the product it came through", async () => {
+  const db = await freshDb();
+  const keyWrapper = keyWrapperFor();
+  try {
+    const run = { id: "5d0c2a4e-8b1f-4c3d-9e2a-7f6b5a4c3d2e", label: "Buying the headphones" };
+    const a = await arrangeHeld(
+      db,
+      keyWrapper,
+      "runs-card",
+      { ...cardCall({ amount: 149.99, currency: "AUD", merchant: "JB Hi-Fi", reason: "new headphones" }), run, via: "Claude Code" },
+      { cardAccess: true, cardBudget: { amount: 500, currency: "AUD", period: "month" } },
+    );
+    const view = (await a.actions.load(await freshSession(db, a.userId))).pending[0]!;
+    assert.equal(line(view, "Conversation (as the agent described it)"), "Buying the headphones", "which of the agent's conversations is asking, in its own words");
+    assert.equal(line(view, "Came through (as the app reported it)"), "Claude Code");
+    assert.deepEqual(view.details.map((detail) => detail.label).slice(-2), ["Conversation (as the agent described it)", "Came through (as the app reported it)"], "claims follow what Warthog checked");
+    assert.equal(view.details[0]!.label, "Amount");
+
+    const plain = await arrangeHeld(db, keyWrapper, "runs-card-plain", cardCall({ amount: 10, currency: "AUD", merchant: "Cafe" }), { cardAccess: true, cardBudget: { amount: 500, currency: "AUD", period: "month" } });
+    const before = (await plain.actions.load(await freshSession(db, plain.userId))).pending[0]!;
+    assert.ok(before.details.every((detail) => !/Conversation|Came through/.test(detail.label)), "a request made outside any conversation shows none");
+  } finally {
+    await db.close();
+  }
+});

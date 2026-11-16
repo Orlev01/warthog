@@ -14,3 +14,13 @@ test("legacy and modern client observations have the same bounded, untrusted con
   assert.equal(clientObservation({ method: "initialize", params: { clientInfo: { name: "x".repeat(121) } } }, new Headers()), undefined);
   assert.doesNotMatch(JSON.stringify(modern), /private|must not retain/);
 });
+
+test("the client's own name is read from where each protocol revision carries it", async () => {
+  const { envelopeClientName } = await import("./client-observation");
+  const info = { name: "claude-code", version: "2.1.289" };
+  assert.equal(envelopeClientName({ method: "tools/call", params: { _meta: { "io.modelcontextprotocol/clientInfo": info } } }), "claude-code");
+  assert.equal(envelopeClientName({ method: "initialize", params: { clientInfo: info } }), "claude-code");
+  assert.equal(envelopeClientName({ method: "tools/call", params: {} }), undefined);
+  assert.equal(envelopeClientName({ method: "tools/call", params: { _meta: { "io.modelcontextprotocol/clientInfo": { name: "x".repeat(121) } } } }), undefined);
+  assert.equal(envelopeClientName("not json"), undefined);
+});

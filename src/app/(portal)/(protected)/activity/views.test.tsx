@@ -263,3 +263,39 @@ test("an empty grouped view with nothing applied is a first run, not a filter pr
     await db.close();
   }
 });
+
+test("One conversation: the Activity page shows only its entries, names it, and never another person's", async () => {
+  const { startRun } = await import("@/server/agents/runs");
+  const { agentWorkspaceData } = await import("@/server/agents/workspace-data");
+  const db = await freshDb();
+  const keyWrapper = localAesKeyWrapper(randomBytes(32));
+  try {
+    const { alice, claude } = await seed(db, keyWrapper);
+    const run = await startRun(db, { userId: alice.userId, agentId: claude.id }, { label: "Fixing the website tests", via: "Claude Code" }, alice.dek, fixedClock(NOW));
+    const at = createDbRecorder({ db, clock: fixedClock(new Date("2026-11-12T02:30:00Z")), dekFor: async () => alice.dek });
+    await at.record({ userId: alice.userId, agentId: claude.id, kind: "tool_call", source: "warthog", tool: "remember", outcome: "executed", runId: run.id, payload: { summary: "saved the port", run, via: "Claude Code" } });
+
+    const view = await loaderFor(db, keyWrapper).load(alice.session, { run: run.id });
+    const markup = renderToStaticMarkup(<ActivityView {...view} />);
+    assert.match(text(markup), /Conversation: Fixing the website tests/, "the chip names the conversation");
+    assert.match(text(markup), /saved the port/);
+    assert.doesNotMatch(text(markup), /searched memory|send blocked|saved memory/, "only that conversation's entries");
+    assert.match(text(markup), /Claude via Claude Code/);
+    assert.match(markup, new RegExp(`href="/activity\\?run=${run.id}"`), "each row links to its whole conversation");
+
+    const bob = await makePerson(db, keyWrapper, "bob-runs");
+    const bobAgent = await createAgent(db, { userId: bob.userId, connectionId: randomUUID(), displayName: "Helper", platform: "Other" }, fixedClock(NOW));
+    const theirs = await startRun(db, { userId: bob.userId, agentId: bobAgent.id }, { label: "Bob's private plan" }, bob.dek, fixedClock(NOW));
+    const other = text(renderToStaticMarkup(<ActivityView {...await loaderFor(db, keyWrapper).load(alice.session, { run: theirs.id })} />));
+    assert.doesNotMatch(other, /Bob's private plan/, "another person's conversation name never shows");
+    assert.match(other, /Conversation: Untitled conversation/);
+    assert.doesNotMatch(other, /bob only|saved the port/, "and none of anyone's entries");
+
+    const { upsertPermissions } = await import("@/server/db/agent-permissions");
+    await upsertPermissions(db, { userId: alice.userId, connectionId: claude.connectionId, grantedConnectors: [], readTools: true, changeTools: "allow", identityAccess: false, highTierAccess: false, cardAccess: false, cardBudget: null, skillsScope: [], memoryRead: true, sharing: false, rulesScope: [], rateLimit: 120 });
+    const workspace = await agentWorkspaceData(db, alice.userId, claude.id, alice.dek, fixedClock(NOW), "overview");
+    assert.deepEqual(workspace?.conversations.map((item) => [item.label, item.via, item.actions, item.href]), [["Fixing the website tests", "Claude Code", 1, `/activity?run=${run.id}`]]);
+  } finally {
+    await db.close();
+  }
+});

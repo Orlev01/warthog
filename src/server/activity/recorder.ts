@@ -35,6 +35,10 @@ export interface ActivityEntryInput {
   outcome?: string;
   merchant?: string;
   payload?: unknown;
+  // The agent run this entry belongs to (docs/adr/agent-runs.md): a run Warthog issued to
+  // this entry's agent, already checked by the caller. The DB writer links the entry to it
+  // beside the chain; the entry itself is unchanged.
+  runId?: string;
 }
 
 // The stored, chained entry `record()` returns. `payload` is the REDACTED payload;

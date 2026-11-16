@@ -3,6 +3,7 @@ import { encrypt, decrypt } from "../crypto/envelope";
 import { withTransaction, type Db } from "../db/index";
 import type { AgentConnection } from "./context";
 import type { ActivityRecorder } from "../activity/recorder";
+import type { RunRef } from "../agents/runs";
 
 export interface ClientObservation {
   name?: string;
@@ -11,7 +12,12 @@ export interface ClientObservation {
   capabilities?: string[];
   source: "client_reported";
 }
-export const requestObservation = new AsyncLocalStorage<{ requestId: string; body: unknown; client?: ClientObservation; reportedRunId?: string; boundaryRecorded?: boolean }>();
+// One MCP request's context. `agentId` is the verified connection's agent. `via` is the
+// product the request came through, as the client reported it (`clientSurface`). `run` is
+// set once the call names a run Warthog issued to that agent, or when get_context starts
+// one (docs/adr/agent-runs.md); entries recorded during the request are linked to it.
+export interface RequestObservation { requestId: string; body: unknown; client?: ClientObservation; reportedRunId?: string; boundaryRecorded?: boolean; agentId?: string; via?: string; run?: RunRef }
+export const requestObservation = new AsyncLocalStorage<RequestObservation>();
 const object = (v: unknown): Record<string, unknown> => v && typeof v === "object" && !Array.isArray(v) ? v as Record<string, unknown> : {};
 const bounded = (v: unknown, max = 120): string | undefined => typeof v === "string" && v.length <= max ? v.replace(/[\u0000-\u001f]/g, "") : undefined;
 
@@ -28,6 +34,17 @@ export function clientObservation(body: unknown, headers: Headers): ClientObserv
   // declaration and must not erase the identity reported during initialization.
   if (!legacy && !name && !version && !keys.length) return undefined;
   return name || version || protocol || keys.length ? { name, version, protocol, ...(keys.length ? { capabilities: keys } : {}), source: "client_reported" } : undefined;
+}
+
+/**
+ * The client's own name from a 2026-07-28 request envelope, which carries it in
+ * `params._meta` on every request (measured 16 Nov 2026), or from a 2025 initialize. Used
+ * only to say which product a request came through (docs/adr/agent-runs.md).
+ */
+export function envelopeClientName(body: unknown): string | undefined {
+  const message = object(body), params = object(message.params);
+  const info = object(message.method === "initialize" ? params.clientInfo : object(params._meta)["io.modelcontextprotocol/clientInfo"]);
+  return bounded(info.name);
 }
 
 export async function readClientObservation(db: Db, userId: string, agentId: string, dek: Uint8Array): Promise<(ClientObservation & { observedAt: string }) | null> {

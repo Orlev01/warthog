@@ -274,6 +274,13 @@ function detailLines(detail: Record<string, unknown>): RequestDetail[] {
   if (field) lines.push({ label: "Field", value: highTierFieldLabel(field) });
   const purpose = text(detail.purpose);
   if (purpose) lines.push({ label: "Purpose", value: purpose });
+  // Which of the agent's conversations is asking and the product it came through
+  // (docs/adr/agent-runs.md). Both are claims, so they follow what Warthog itself checked and
+  // say whose words they are.
+  const run = detail.run !== null && typeof detail.run === "object" ? (detail.run as Record<string, unknown>) : undefined;
+  if (run && typeof run.id === "string") lines.push({ label: "Conversation (as the agent described it)", value: text(run.label) || "Untitled conversation" });
+  const via = text(detail.via);
+  if (via) lines.push({ label: "Came through (as the app reported it)", value: via });
   return lines;
 }
 

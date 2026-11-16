@@ -59,6 +59,7 @@ export interface ActivityState {
   q?: string;
   type?: ActivityCategory;
   attention?: boolean;
+  run?: string; // one agent conversation (docs/adr/agent-runs.md): a run id
 }
 
 type Params = Record<string, string | string[] | undefined>;
@@ -72,6 +73,7 @@ function first(raw: string | string[] | undefined): string | undefined {
 // any other shape is ignored rather than echoed into chips and links.
 const ID = /^[A-Za-z0-9][A-Za-z0-9_-]{0,99}$/;
 const CODE = /^[a-z][a-z0-9_]{0,63}$/;
+const RUN = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/;
 function shaped(value: string | undefined, pattern: RegExp): string | undefined {
   return value !== undefined && pattern.test(value) ? value : undefined;
 }
@@ -93,6 +95,7 @@ export function readActivityState(params: Params, validDate: (value: string | un
     q: q.length > 0 ? q : undefined,
     type: isActivityCategory(type) ? type : undefined,
     attention: first(params.attention) === "1" ? true : undefined,
+    run: shaped(first(params.run)?.toLowerCase(), RUN),
   };
 }
 
@@ -110,6 +113,7 @@ export function stateQuery(state: ActivityState): QueryState {
     q: state.q,
     type: state.type,
     attention: state.attention ? "1" : undefined,
+    run: state.run,
   };
 }
 
@@ -133,6 +137,7 @@ export function filtersFor(
   if (state.to !== undefined) filters.to = widenTo(state.to);
   if (state.type !== undefined) filters.category = state.type;
   if (state.attention) filters.attention = true;
+  if (state.run !== undefined) filters.runId = state.run;
   return filters;
 }
 
@@ -216,7 +221,7 @@ export function filterDate(value: string): string {
 /** The applied filters as removable chips, each linking to the screen without that filter. */
 export function appliedFilters(
   state: ActivityState,
-  names: { agent?: string; service?: string },
+  names: { agent?: string; service?: string; run?: string },
 ): { filters: AppliedFilter[]; clearHref: string } {
   const filters: AppliedFilter[] = [];
   const chip = (label: string, param: keyof ActivityState, extra: readonly string[] = []) =>
@@ -226,6 +231,7 @@ export function appliedFilters(
   if (state.service !== undefined) chip(`Service: ${state.service === NONE ? "No service" : names.service ?? state.service}`, "service", state.via === "services" ? ["via"] : []);
   if (state.type !== undefined) chip(`Type: ${CATEGORY_LABELS[state.type]}`, "type", state.via === "types" ? ["via"] : []);
   if (state.attention) chip("Needs attention", "attention");
+  if (state.run !== undefined) chip(`Conversation: ${names.run ?? "Untitled conversation"}`, "run");
   if (state.kind !== undefined) chip(`Event: ${kindLabel(state.kind)}`, "kind");
   if (state.outcome !== undefined) chip(`Outcome: ${outcomeLabel(state.outcome)}`, "outcome");
   // Dates are calendar days in the account's time zone, which the page states once.

@@ -1,4 +1,5 @@
 import { requestObservation } from "./client-observation";
+import type { RunRef } from "../agents/runs";
 import { randomUUID, createHash } from "node:crypto";
 import { observeResult } from "./result-evidence";
 import { highTierRequestAllowed } from "../agents/resource-access";
@@ -92,6 +93,12 @@ export interface AgentCall {
   readonly purpose?: string;
   readonly params?: unknown;
   readonly reason?: string;
+  // Server-owned, never read from agent arguments (docs/adr/agent-runs.md): the run this
+  // call was made under, as Warthog resolved it for this agent, and the product the request
+  // came through as the client reported it. A held call keeps both, so the entry for its
+  // approved execution joins the same run.
+  readonly run?: RunRef;
+  readonly via?: string;
 }
 
 // The side effect fired on approval creation (E12-S07): a push to every registered
@@ -318,6 +325,8 @@ function toApprovalDetail(
     field: call.field,
     purpose: call.purpose,
     reason: call.reason,
+    ...(call.run ? { run: call.run } : {}),
+    ...(call.via ? { via: call.via } : {}),
     sentence: requestSentence(call),
     rule: triggeringRule(decision, context),
     ...(converted ? { converted } : {}),
@@ -343,8 +352,12 @@ export function createAgentCallPipeline(deps: PipelineDeps): AgentCallPipeline {
     targetRecorder: ActivityRecorder = recorder,
     markTerminal = true,
   ): Promise<void> {
+    // The call's own run (an approved hold), else the request's: get_context starts a run
+    // while it runs, so its own entry joins it.
+    const run = call.run ?? requestObservation.getStore()?.run;
     await targetRecorder.record({
       userId: connection.userId,
+      ...(run ? { runId: run.id } : {}),
       kind: outcome === "attempted" ? "tool_attempt" : "tool_call",
       source: "warthog",
       agentId: connection.agentId,
@@ -357,6 +370,8 @@ export function createAgentCallPipeline(deps: PipelineDeps): AgentCallPipeline {
         requestId: call.audit?.requestId, attemptId: call.audit?.attemptId, policyFingerprint: call.audit?.policyFingerprint, reportedRunId: requestObservation.getStore()?.reportedRunId, parentRequestId: requestObservation.getStore()?.requestId, client: requestObservation.getStore()?.client, decision: call.audit?.decision, approvalId: call.audit?.approvalId,
         durationMs: call.audit ? Math.max(0, clock.now().getTime() - call.audit.startedAt) : undefined,
         resultEvidence: result === undefined ? { outcome } : observeResult(result).evidence,
+        ...(run ? { run } : {}),
+        ...(call.via ? { via: call.via } : {}),
         ...(outcome === "executed" ? { reversal: calendarReversalFromResult(call.tool, result) } : {}),
       },
     });
@@ -551,7 +566,8 @@ export function createAgentCallPipeline(deps: PipelineDeps): AgentCallPipeline {
       // timing, so it measures the request-count and request-latency metrics here (task
       // E17-S03). Start the timer before the gates run.
       const startedAt = clock.now().getTime();
-      call = { ...call, audit: { requestId: requestObservation.getStore()?.requestId ?? randomUUID(), attemptId: randomUUID(), startedAt } };
+      const observed = requestObservation.getStore();
+      call = { ...call, run: call.run ?? observed?.run, via: call.via ?? observed?.via, audit: { requestId: observed?.requestId ?? randomUUID(), attemptId: randomUUID(), startedAt } };
       let decided: DecidedCall;
       try {
         decided = await decide(connection, call);

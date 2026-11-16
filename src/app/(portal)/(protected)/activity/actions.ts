@@ -42,6 +42,7 @@ import {
   type IntegrityResult,
 } from "@/server/activity/integrity";
 import { listActivity, listActivityFacets, summariseActivity, type ActivityFilters, type ListedActivityEntry } from "@/server/activity/list";
+import { listRuns } from "@/server/agents/runs";
 import { isReadOnlyTool } from "@/server/activity/tool-effects";
 import { activityCategory, agentRole, CATEGORY_LABELS, outcomeGroup, outcomeLabel } from "@/domain/activity/category";
 import type { Clock } from "@/server/seams/clock";
@@ -241,6 +242,15 @@ const UNDO_CODES: Partial<Record<UndoRefusalStatus, string>> = {
   already_undone: "undo_already",
 };
 
+// The entry's evidence plus a link to everything recorded in the same agent conversation —
+// the whole conversation, whatever filters led here.
+function evidenceWithConversation(entry: ListedActivityEntry) {
+  const evidence = activityEvidence(entry);
+  return evidence.conversation
+    ? { ...evidence, conversationHref: `${ACTIVITY_PATH}?run=${encodeURIComponent(evidence.conversation.id)}` }
+    : evidence;
+}
+
 export function createActivityActions(deps: ActivityActionsDeps): ActivityActions {
   const { db, disputes, undo, keyWrapper, reversalFor, serviceName } = deps;
 
@@ -345,7 +355,7 @@ export function createActivityActions(deps: ActivityActionsDeps): ActivityAction
       dayKey: day.key,
       dayLabel: day.label,
       permalink: `${ACTIVITY_PATH}?entry=${entry.seq}#entry-${entry.seq}`,
-      ...activityEvidence(entry),
+      ...evidenceWithConversation(entry),
       canUndo,
       ...(claim ? { undoStatus: claim.state === "done" ? { state: "done" as const }
         : { state: "waiting" as const, approvalHref: approvalHref(claim.approvalId) } } : {}),
@@ -417,6 +427,7 @@ export function createActivityActions(deps: ActivityActionsDeps): ActivityAction
     const names = {
       agent: state.agent !== undefined && state.agent !== NONE ? agentLabel(agentNames, state.agent) : undefined,
       service: state.service !== undefined && state.service !== NONE ? serviceLabel(state.service) : undefined,
+      run: state.run !== undefined ? (await listRuns(db, session.userId, dek, { runIds: [state.run] }))[0]?.label : undefined,
     };
     const applied = appliedFilters(state, names);
     const common = {
