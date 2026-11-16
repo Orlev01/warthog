@@ -4,9 +4,12 @@ Pull requests and manual runs always run the full checks. A push to main and an 
 (the reusable call, which pins the Node base) skip them only when the same git tree, every file
 including these workflows, already passed on the same pinned Node base. The evidence is the
 final job of a full run, which runs only when every check passed and is named after the tree and
-base it checked (`marker`). It is looked for in runs of ci.yml or azure-image.yml on this commit
-or one of its parents, which is where a pull request's checks run. Anything uncertain (an API
-error, a base that cannot be resolved, no matching job) runs the full checks.
+base it checked (`marker`). It counts only where these flows leave it:
+- a push or image-build run on main, for this commit;
+- a pull request's run from a branch other than main, on the merged pull request's head (this
+  merge commit's second or later parent).
+Anything uncertain (an API error, a base that cannot be resolved, no matching job) runs the full
+checks. What the evidence can and cannot prove is in docs/adr/ci-cost.md.
 
 Read-only: it needs `actions: read` and `contents: read`, and never writes anything.
 """
@@ -19,7 +22,7 @@ import urllib.request
 
 DEFAULT_BASE = "node:22-bookworm-slim"
 PINNED_BASE = r"node:22-bookworm-slim@sha256:[a-f0-9]{64}"
-EVIDENCE_WORKFLOWS = {".github/workflows/ci.yml", ".github/workflows/azure-image.yml"}
+EVIDENCE_WORKFLOWS = ("ci.yml", "azure-image.yml")
 API = "https://api.github.com"
 
 
@@ -51,20 +54,31 @@ def docker_digest(reference):
         return None
 
 
+def trusted(run, repository, candidate, sha):
+    """Whether a run is one these flows leave evidence in, for this candidate commit."""
+    if (run.get("head_repository") or {}).get("full_name") != repository or run.get("head_sha") != candidate:
+        return False
+    if candidate == sha:
+        return run.get("event") in ("push", "workflow_dispatch") and run.get("head_branch") == "main"
+    return run.get("event") == "pull_request" and run.get("head_branch") not in (None, "", "main")
+
+
 def evidence(get, repository, sha, tree, base):
     """The URL of a run whose final full-checks job passed for this tree and base, or None."""
     mark = marker(tree, base)
     commit = get(f"/repos/{repository}/commits/{sha}")
-    candidates = [sha] + [parent["sha"] for parent in commit.get("parents", [])]
+    # This commit's own runs, then a merged pull request's head (never the first parent).
+    candidates = [sha] + [parent["sha"] for parent in commit.get("parents", [])[1:]]
     for candidate in candidates:
         query = urllib.parse.urlencode({"head_sha": candidate, "per_page": 100})
-        for run in get(f"/repos/{repository}/actions/runs?{query}").get("workflow_runs", []):
-            if run.get("path") not in EVIDENCE_WORKFLOWS or (run.get("head_repository") or {}).get("full_name") != repository:
-                continue
-            jobs = get(f"/repos/{repository}/actions/runs/{int(run['id'])}/jobs?per_page=100").get("jobs", [])
-            if any(job.get("conclusion") == "success" and (job.get("name") == mark or job.get("name", "").endswith(" / " + mark))
-                   for job in jobs):
-                return run.get("html_url") or str(run["id"])
+        for workflow in EVIDENCE_WORKFLOWS:
+            for run in get(f"/repos/{repository}/actions/workflows/{workflow}/runs?{query}").get("workflow_runs", []):
+                if not trusted(run, repository, candidate, sha):
+                    continue
+                jobs = get(f"/repos/{repository}/actions/runs/{int(run['id'])}/jobs?per_page=100").get("jobs", [])
+                if any(job.get("conclusion") == "success" and (job.get("name") == mark or job.get("name", "").endswith(" / " + mark))
+                       for job in jobs):
+                    return run.get("html_url") or str(run["id"])
     return None
 
 

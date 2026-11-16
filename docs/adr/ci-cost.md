@@ -34,11 +34,16 @@ CI cost so much, and for the safe fixes.
      commit when main has not moved. PR #29's tested merge `d63e3c8` and main's `7e7a4e6`
      both have tree `df6598a`.
    - **The evidence** is the final job of a full run, `Full checks passed for tree <tree> on
-     <base>`. It runs only when every check passed. `scripts/ci/reuse_checks.py` looks for it
-     on this commit and its parents, in runs of `ci.yml` or `azure-image.yml` from this
-     repository.
+     <base>`. It runs only when every check passed. `scripts/ci/reuse_checks.py` accepts it
+     only where these flows leave it, in runs of `ci.yml` or `azure-image.yml` from this
+     repository:
+     - a push or image-build run on `main`, for this commit;
+     - a pull request's run from a branch other than `main`, on the merged pull request's head
+       (the merge commit's second parent).
    - **Anything uncertain runs the full checks:** an API error, a base that can't be pinned,
      or no matching job.
+   - **Merge commits only.** Squash and rebase merges leave the pull request's head out of the
+     commit's parents, so their push runs the full checks.
 2. **One pinned Node base per run.** The `plan` job resolves `node:22-bookworm-slim` to its
    digest once, or takes the image build's reviewed digest, and every shard uses it. Before,
    each shard pulled the tag separately. An image build reuses only a result for its own base.
@@ -52,8 +57,9 @@ CI cost so much, and for the safe fixes.
 5. **Documentation-only changes run nothing.** That means `docs/**` and the top-level `*.md`
    files. None is in the build context, the image or any test. Markdown anywhere else still runs
    the checks, so a Markdown file the app later reads is checked.
-6. **Dependabot runs monthly, grouped.** Minor and patch npm updates arrive as one PR, Tailwind
-   as one, GitHub Actions as one and Docker as one. Majors still arrive one per PR.
+6. **Dependabot runs monthly, grouped.** Minor and patch updates arrive as one PR each for npm,
+   GitHub Actions and Docker, and Tailwind's packages as one. Other majors still arrive one per
+   PR.
 
 ## What stays the same
 
@@ -63,10 +69,19 @@ CI cost so much, and for the safe fixes.
   publishes passed every check.
 - **CI stays read-only.** `plan` needs `actions: read` and `contents: read`, and nothing in CI
   writes.
-- **The evidence can't be forged any more easily than before.** Forging it takes write access
-  to a branch and a changed `ci.yml`. The tree includes `ci.yml`, so a forged result can match
-  only a main commit that carries the forging `ci.yml`. Merging that commit would already
-  control the checks.
+- **What the evidence proves, and its limit.** An honest workflow only names the tree it checked,
+  and the tree includes `ci.yml`, so a matching result ran this commit's own checks.
+  - **The limit:** GitHub doesn't record which branch a pull request run targeted. Someone with
+    write access could open a pull request from a branch at the merged head into a branch whose
+    edited `ci.yml` names a passing job for main's tree. An image build of main would then skip
+    its checks.
+  - **Not a new power:** main has no branch protection (GitHub Free can't enforce it on a private
+    repository), so the same person can already change main's checks directly. Only main's own
+    code can be published this way.
+  - **If branch protection becomes available,** accept only the push and image-build evidence on
+    main. That costs one more full run per change.
+- **The PostgreSQL image is a tag** (`postgres:16-bookworm`), so a reused result may come from
+  an earlier 16.x patch release than a fresh run would use. That was already true between shards.
 
 ## Measured, and to be measured
 

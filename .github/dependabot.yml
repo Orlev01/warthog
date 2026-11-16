@@ -1,6 +1,7 @@
 version: 2
 # Monthly and grouped: every update PR runs the full checks, so a week of separate PRs cost
-# more than the updates were worth. Majors still arrive one per PR, to be reviewed alone.
+# more than the updates were worth. Majors still arrive one per PR, to be reviewed alone, except
+# Tailwind's packages, which always move together.
 # Security updates are a separate repository setting (Dependabot security updates), not this file.
 updates:
   - package-ecosystem: npm
@@ -29,6 +30,7 @@ updates:
     groups:
       actions:
         patterns: ['*']
+        update-types: [minor, patch]
   - package-ecosystem: docker
     directory: /
     schedule:
@@ -37,3 +39,4 @@ updates:
     groups:
       docker:
         patterns: ['*']
+        update-types: [minor, patch]

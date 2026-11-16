@@ -268,8 +268,9 @@ grant recovery access or change the release sequence below.
    pipeline creates placeholders or opens the database publicly.
 6. Review OS-image advisories and the exact official Node base digest. Dispatch
    image publication with `node:22-bookworm-slim@sha256:<64-hex-digest>`. The reusable
-   CI runs against that same base; only after it passes and the image environment
-   is approved can the job publish a candidate. The approval reference is checked
+   CI runs against that same base; only after it passes can the job publish a
+   candidate (the `azure-images` environment allows main only and, since 13 November,
+   has no required reviewers). The approval reference is checked
    before the checks start. To reuse the pull request's checks rather than run
    them again, dispatch with the base they passed on: the merged pull request's
    `Full checks passed for tree … on …` job names it. Record the returned

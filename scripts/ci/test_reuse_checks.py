@@ -18,16 +18,17 @@ def env(event="push", base_input=""):
 
 
 def api(runs_by_sha, jobs_by_run):
-    """A fake GitHub API: the main commit's parents, runs per head commit and jobs per run."""
+    """A fake GitHub API: the main commit's parents, each workflow's runs per head commit, jobs per run."""
     calls = []
 
     def get(path):
         calls.append(path)
         if path == f"/repos/{REPO}/commits/{MAIN}":
             return {"parents": [{"sha": PREVIOUS}, {"sha": PR_HEAD}]}
-        match = re.fullmatch(rf"/repos/{REPO}/actions/runs\?head_sha=([a-f0-9]+)&per_page=100", path)
+        match = re.fullmatch(rf"/repos/{REPO}/actions/workflows/([a-z-]+\.yml)/runs\?head_sha=([a-f0-9]+)&per_page=100", path)
         if match:
-            return {"workflow_runs": runs_by_sha.get(match.group(1), [])}
+            workflow, sha = match.groups()
+            return {"workflow_runs": [r for r in runs_by_sha.get(sha, []) if r["head_sha"] == sha and r["path"] == ".github/workflows/" + workflow]}
         match = re.fullmatch(rf"/repos/{REPO}/actions/runs/(\d+)/jobs\?per_page=100", path)
         if match:
             return {"jobs": jobs_by_run.get(int(match.group(1)), [])}
@@ -36,8 +37,11 @@ def api(runs_by_sha, jobs_by_run):
     return get
 
 
-def run(run_id, path=".github/workflows/ci.yml", repository=REPO):
-    return {"id": run_id, "path": path, "head_repository": {"full_name": repository},
+def run(run_id, sha=PR_HEAD, event=None, branch=None, path=".github/workflows/ci.yml", repository=REPO):
+    """A run as GitHub lists it. By default a pull request's run on the PR head, or a run on main."""
+    on_main = sha != PR_HEAD
+    return {"id": run_id, "head_sha": sha, "path": path, "head_repository": {"full_name": repository},
+            "event": event or ("push" if on_main else "pull_request"), "head_branch": branch or ("main" if on_main else "claude/feature"),
             "html_url": f"https://github.com/{REPO}/actions/runs/{run_id}"}
 
 
@@ -67,7 +71,7 @@ class ReuseTests(unittest.TestCase):
         self.assertIn("/actions/runs/7", note)
 
     def test_an_image_build_reuses_only_on_its_own_pinned_base(self):
-        get = api({MAIN: [run(8, ".github/workflows/azure-image.yml")]}, {8: [passed(prefix="checks / ")]})
+        get = api({MAIN: [run(8, MAIN, "workflow_dispatch", path=".github/workflows/azure-image.yml")]}, {8: [passed(prefix="checks / ")]})
         self.assertTrue(reuse_checks.decide(env("workflow_dispatch", BASE), TREE, get, pinned)[0])
         other = "node:22-bookworm-slim@sha256:" + "f" * 64
         self.assertFalse(reuse_checks.decide(env("workflow_dispatch", other), TREE, get, pinned)[0])
@@ -80,8 +84,14 @@ class ReuseTests(unittest.TestCase):
             "another base": ({PR_HEAD: [run(1)]}, {1: [passed(base="node:22-bookworm-slim@sha256:" + "f" * 64)]}),
             "the checks failed": ({PR_HEAD: [run(1)]}, {1: [passed(conclusion="failure")]}),
             "the checks were skipped": ({PR_HEAD: [run(1)]}, {1: [passed(conclusion="skipped")]}),
-            "another workflow": ({PR_HEAD: [run(1, ".github/workflows/other.yml")]}, {1: [passed()]}),
+            "another workflow": ({PR_HEAD: [run(1, path=".github/workflows/other.yml")]}, {1: [passed()]}),
             "another repository": ({PR_HEAD: [run(1, repository="someone/fork")]}, {1: [passed()]}),
+            # A pull request from main into another branch runs that branch's workflow on main's commit.
+            "a pull request run on this commit": ({MAIN: [run(1, MAIN, "pull_request", "claude/feature")]}, {1: [passed()]}),
+            "a pull request run from main": ({PR_HEAD: [run(1, branch="main")]}, {1: [passed()]}),
+            "a push run off main": ({MAIN: [run(1, MAIN, "push", "claude/feature")]}, {1: [passed()]}),
+            "a run on the first parent": ({PREVIOUS: [run(1, PREVIOUS), run(2, PREVIOUS, "pull_request", "claude/feature")]}, {1: [passed()], 2: [passed()]}),
+            "a push run on the pull request head": ({PR_HEAD: [run(1, event="push", branch="main")]}, {1: [passed()]}),
             "a name that only contains the marker": ({PR_HEAD: [run(1)]}, {1: [{"name": "x" + reuse_checks.marker(TREE, BASE), "conclusion": "success"}]}),
             "no earlier run": ({}, {}),
         }
@@ -135,6 +145,7 @@ class WorkflowWiringTests(unittest.TestCase):
         grants = re.findall(r"^\s+(\w[\w-]*): (read|write)$", self.ci, re.M)
         self.assertTrue(grants)
         self.assertTrue(all(level == "read" for _, level in grants), grants)
+        self.assertNotRegex(self.ci, r"write-all|:\s*write\b", "no write grant in any form")
 
     def test_the_image_build_checks_its_approval_before_the_long_checks(self):
         image = (WORKFLOWS / "azure-image.yml").read_text()
