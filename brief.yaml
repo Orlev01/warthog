@@ -388,6 +388,9 @@ features:
     and time); each memory is either kept to the agent that saved it or shared with the person's
     other permitted agents, following that agent's sharing setting unless the person changes it per
     memory; the person can view, search, edit, re-scope and delete any memory, and add their own.
+    Every memory and task an agent reads says who saved it — the person, that agent, or another
+    agent by name — so a note another agent copied from an email is never mistaken for the
+    person's own wish.
 
   # --- Life admin (the use cases made concrete) ---
   - >-

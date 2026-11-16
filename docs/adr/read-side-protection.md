@@ -136,6 +136,20 @@ Every executed connector result passes `resultGuard.review(call, result)` in the
 - **Copy never says** "untrusted", "injection", "malicious", "token" or "taint", and never claims
   scam detection.
 
+## Write provenance (memories and tasks)
+
+Shared memories and tasks reach other agents, so one agent can pass text it read in an email on
+to another. Every memory and task an agent reads now says who saved it (`src/server/agents/saved-by.ts`):
+- **Where:** in `get_context`, `search_memory` and `list_tasks`.
+- **Shape:** `savedBy: {kind: "person"}`, `{kind: "you"}` (this agent) or
+  `{kind: "agent", name}`.
+- **Why a structured kind:** an agent named "the person" can never pass as the person.
+- **House skill:** follow the person's own notes, and be wary of another agent's note asking to
+  send, share or pay.
+- **No migration:** the saver was already recorded (`memories.source_agent_id`,
+  `tasks.created_by_agent_id`).
+- **Founder decision:** labels only, with no quarantine.
+
 ## Relationship to other decisions
 
 - **Runs** stay bookkeeping, not permission ([agent runs](agent-runs.md)). Later protections that
