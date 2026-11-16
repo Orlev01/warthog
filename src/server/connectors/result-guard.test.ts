@@ -51,8 +51,8 @@ describe("createResultGuard", () => {
     assert.match(String(result.message.text), /\[sign-in link hidden by Warthog\]/);
     assert.ok(!JSON.stringify(result).includes("482913"));
     assert.equal(guarded.evidence.outcome, "masked");
-    // The code appears twice: in the body and in Gmail's preview, both masked.
-    assert.deepEqual(guarded.evidence.counts, { signInLinks: 1, codes: 2 });
+    // The code is counted once: a full read's preview comes from the checked text.
+    assert.deepEqual(guarded.evidence.counts, { signInLinks: 1, codes: 1 });
   });
 
   it("stubs a sign-in code email and reports it as stubbed", () => {

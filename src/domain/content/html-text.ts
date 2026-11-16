@@ -92,13 +92,19 @@ function attributes(tag: string): Map<string, string> {
 
 // Inline styles that hide an element from the reader. (`mso-hide` hides from Outlook only and
 // so is NOT hiding: the other version of that content is what everyone else sees.)
-const HIDING_STYLE = /(?:^|;)\s*(?:display\s*:\s*none|visibility\s*:\s*hidden|opacity\s*:\s*0(?:\.0+)?\s*(?:;|$|!)|font-size\s*:\s*0(?:\.\d+)?(?:px|pt|em|rem|%)?\s*(?:;|$|!)|max-height\s*:\s*0(?:px)?\s*(?:;|$|!))/i;
+const HIDING_STYLE = /(?:^|;)\s*(?:display\s*:\s*none|visibility\s*:\s*hidden|opacity\s*:\s*0(?:\.0+)?\s*(?:;|$|!)|max-height\s*:\s*0(?:px)?\s*(?:;|$|!))/i;
+// A zero font size hides text only on an inline element. Email builders (MJML and others) set
+// it on every layout block to close the gaps between columns, then reset it inside, so on a
+// div or table cell it hides nothing.
+const ZERO_FONT = /(?:^|;)\s*font-size\s*:\s*0(?:\.\d+)?(?:px|pt|em|rem|%)?\s*(?:;|$|!)/i;
+const INLINE_TEXT = new Set(["span", "font", "a", "b", "strong", "i", "em", "small", "u", "s", "sub", "sup", "label", "mark"]);
 
-function hidesContent(attrs: Map<string, string>): boolean {
+function hidesContent(name: string, attrs: Map<string, string>): boolean {
   if (attrs.has("hidden")) return true;
   if (attrs.get("aria-hidden")?.toLowerCase() === "true" && !attrs.has("alt")) return true;
   const style = attrs.get("style");
-  return style !== undefined && HIDING_STYLE.test(style);
+  if (style === undefined) return false;
+  return HIDING_STYLE.test(style) || (INLINE_TEXT.has(name) && ZERO_FONT.test(style));
 }
 
 // Where a tag that starts at `start` ends (the index of its `>`), respecting quoted
@@ -228,7 +234,7 @@ export function htmlToText(html: string, options: HtmlTextOptions = {}): HtmlTex
       continue;
     }
 
-    if (!closing && !selfClosing && hidesContent(attributes(tag))) {
+    if (!closing && !selfClosing && hidesContent(name, attributes(tag))) {
       hidden = { name, depth: 1 };
       hiddenElements += 1;
       continue;

@@ -10,9 +10,9 @@
 // links numbered, attachment names — with those few things hidden, and turns a sign-in or
 // password email into a short stub that tells the person where to find it.
 
-import { base64Bytes, decodeBytes, decodeHeaderWords, readableBody } from "./mail-body";
+import { base64Bytes, decodeBytes, decodeHeaderWords, previewOf, readableBody } from "./mail-body";
 import { classifySecurityMail, withheldSentence, type SecurityMailKind } from "./security-mail";
-import { cleanText, emptyCounts, type FilterCounts } from "./text-filters";
+import { addCounts, cleanText, emptyCounts, type FilterCounts } from "./text-filters";
 import { stripInvisible } from "./untrusted";
 
 interface GmailHeader {
@@ -177,16 +177,19 @@ export function gmailMessageView(input: unknown, options: GmailViewOptions = {})
   add("references", header(headers, "references", counts));
   add("listUnsubscribe", header(headers, "list-unsubscribe", counts));
   add("listId", header(headers, "list-id", counts));
+  // Gmail's snippet is what the person sees in their inbox list. It can carry a preheader the
+  // HTML hides, so once the checked text is read it gives way to that (and isn't counted).
+  const snippetCounts = emptyCounts();
   if (typeof message.snippet === "string" && message.snippet !== "") {
-    view.preview = cleanText(decodeEntitiesInSnippet(message.snippet), counts);
+    view.preview = cleanText(decodeEntitiesInSnippet(message.snippet), snippetCounts);
   }
   if (link) view.openInMail = link;
 
   if (options.tooLarge) {
     view.bodyNote = "This email is too large for Warthog to check, so its text isn't shown. The person can open it in Gmail.";
-    return { message: view, counts, stubbed: false, fallback: true };
+    return { message: view, counts: addCounts(counts, snippetCounts), stubbed: false, fallback: true };
   }
-  if (options.headersOnly) return { message: view, counts, stubbed: false, fallback: false };
+  if (options.headersOnly) return { message: view, counts: addCounts(counts, snippetCounts), stubbed: false, fallback: false };
 
   const state: Walk = { attachments: [], parts: 0, capped: false };
   walk(payload, 0, state);
@@ -201,13 +204,17 @@ export function gmailMessageView(input: unknown, options: GmailViewOptions = {})
     const raw = decodeBytes(base64Bytes(data), charsetOf(chosen));
     const body = readableBody(raw, chosen === state.html, counts);
     view.text = body.text;
+    if (view.preview !== undefined) view.preview = previewOf(body.text);
     if (body.links.length) view.links = body.links;
     if (body.shortened) view.shortened = true;
     if (body.unlistedLinks > 0) view.linksNote = `${body.unlistedLinks} more links aren't listed.`;
-  } else if (chosen && typeof chosen.body?.attachmentId === "string") {
-    view.bodyNote = "This email's text is too large for Warthog to check, so it isn't shown. The person can open it in Gmail.";
-  } else if (!chosen) {
-    view.bodyNote = "This email has no readable text.";
+  } else {
+    addCounts(counts, snippetCounts);
+    if (chosen && typeof chosen.body?.attachmentId === "string") {
+      view.bodyNote = "This email's text is too large for Warthog to check, so it isn't shown. The person can open it in Gmail.";
+    } else if (!chosen) {
+      view.bodyNote = "This email has no readable text.";
+    }
   }
   if (state.capped) view.bodyNote = "Part of this email is too complex for Warthog to check, so some of it isn't shown.";
   return { message: view, counts, stubbed: false, fallback: false };

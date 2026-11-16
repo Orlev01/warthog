@@ -26,6 +26,12 @@ function hideLink(url: string, text: string): boolean {
   return isSignInUrl(url) || isSignInLinkText(text);
 }
 
+/** The start of an email's checked text, on one line, like a mail app's own preview. */
+export function previewOf(text: string): string {
+  const flat = text.replace(/\s+/g, " ").trim();
+  return flat.length > 200 ? `${flat.slice(0, 199).trimEnd()}…` : flat;
+}
+
 /** An email body as an agent reads it: HTML turned into text with numbered links, then checked. */
 export function readableBody(content: string, isHtml: boolean, counts: FilterCounts, options: CleanOptions = {}): ReadableBody {
   let text = content;

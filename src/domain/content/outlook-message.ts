@@ -8,7 +8,7 @@
 // text with links numbered, and a short stub for a sign-in or password email.
 
 import type { MailView } from "./gmail-message";
-import { readableBody } from "./mail-body";
+import { previewOf, readableBody } from "./mail-body";
 import { classifySecurityMail, withheldSentence } from "./security-mail";
 import { cleanText, emptyCounts, type FilterCounts } from "./text-filters";
 import { stripInvisible } from "./untrusted";
@@ -97,13 +97,17 @@ export function outlookMessageView(input: unknown): MailView | null {
   if (typeof message.isRead === "boolean") view.isRead = message.isRead;
   if (typeof message.hasAttachments === "boolean") view.hasAttachments = message.hasAttachments;
   add(view, "importance", plain(message.importance, counts, 20));
-  if (typeof message.bodyPreview === "string" && message.bodyPreview !== "") {
-    view.preview = cleanText(message.bodyPreview, counts);
-  }
+  // Outlook's preview can carry text the HTML hides, so once the checked text is read it gives
+  // way to that (and isn't counted).
   const body = message.body as { contentType?: unknown; content?: unknown } | undefined;
-  if (body && typeof body.content === "string") {
-    const readable = readableBody(body.content, String(body.contentType).toLowerCase() === "html", counts);
+  const readsBody = body !== undefined && typeof body.content === "string";
+  if (typeof message.bodyPreview === "string" && message.bodyPreview !== "") {
+    view.preview = cleanText(message.bodyPreview, readsBody ? emptyCounts() : counts);
+  }
+  if (readsBody) {
+    const readable = readableBody(String(body.content), String(body.contentType).toLowerCase() === "html", counts);
     view.text = readable.text;
+    if (view.preview !== undefined) view.preview = previewOf(readable.text);
     if (readable.links.length) view.links = readable.links;
     if (readable.shortened) view.shortened = true;
   }

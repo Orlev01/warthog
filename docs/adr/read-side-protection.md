@@ -71,10 +71,18 @@ Every executed connector result passes `resultGuard.review(call, result)` in the
   plain-text part that could say something else. It becomes text with a small hand-written linear
   scanner (`html-text.ts`), because runtime dependencies are frozen.
   - Scripts, styles, the head, comments and image URLs are dropped.
-  - Elements hidden with inline styles (`display:none`, `visibility:hidden`, zero font size or
-    opacity, the `hidden` attribute) are dropped. `mso-hide` is not counted as hiding: it hides
-    only from Outlook.
+  - Elements hidden with inline styles (`display:none`, `visibility:hidden`, zero opacity, the
+    `hidden` attribute) are dropped. `mso-hide` is not counted as hiding: it hides only from
+    Outlook.
+  - A zero font size counts as hiding only on inline text (`span`, `font` and similar). Email
+    builders such as MJML set it on every layout block and reset it inside, so on a `div` or
+    table cell it would empty whole emails.
   - At most 200 links are listed.
+  - **Preview:** once the text is read, the preview is the start of the checked text. Gmail's
+    snippet and Outlook's `bodyPreview` can carry a preheader the HTML hides. A view without the
+    text (a search, metadata, or mail too large to check) keeps the provider's preview. That's an
+    accepted gap: it's the same line the person sees in their own inbox list, and it's cleaned
+    and masked.
   - There is no "sender verified" field, because a lookalike domain can pass its own checks.
 - **Sign-in mail becomes a stub.** A sign-in code, password-reset or sign-in-link email,
   recognised by strong subject wording only (`security-mail.ts`), becomes a stub. The stub has who,
