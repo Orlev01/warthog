@@ -87,7 +87,14 @@ explains (`landing-diagrams.tsx`):
 - **Why one home** (its own section after compatibility): two side-by-side pictures
   of the same five agents and five services. Without Warthog, 25 crossing lines.
   With Warthog, 10 lines through one hub. The drawings carry exactly the counts their
-  labels claim.
+  labels claim. Every request is a round trip (founder, 17 November 2026: "its not
+  just agents -> warthog -> service but agents -> warthog -> services -> warthog ->
+  agents"): a request pulse in the picture's colour goes out, and its answer comes
+  back in the text colour. With Warthog, one request starts per beat; its answer
+  passes back through the hub as the next request arrives, so the ring marks both and
+  only two pulses are in flight. Without Warthog, each line takes its own turn, two or
+  three at once, and lights while its trip runs, so a pulse can be followed through
+  the tangle.
 - **Ask me first** (in agent controls): the brief's primary journey as five ordered
   steps. Claude asks; Warthog checks the rule; the phone buzzes and the person
   approves; Warthog adds the event; it is on the record.

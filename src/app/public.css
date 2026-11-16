@@ -264,10 +264,13 @@ html:has(.wh-landing) { scroll-padding-top: calc(var(--wh-landing-bar, 64px) + 1
 .wh-diagram-with .wh-diagram-wire { stroke: var(--wh-tint); opacity: .7; stroke-width: 2; }
 .wh-diagram-hub { fill: var(--wh-tint); }
 .wh-diagram-hub-label { fill: var(--wh-surface); font-size: 17px; font-weight: 600; }
-/* A pulse is one bright dash on a 100-unit path; the offsets park it past both round caps. */
-.wh-diagram-pulse { fill: none; stroke-width: 4; stroke-linecap: round; stroke-dasharray: 9 110; stroke-dashoffset: 13; opacity: 0; }
+/* A pulse is one 10-unit dash; offset 13 parks it just before its line and --wh-pulse-end just
+ * past the end, both clear of the round caps. */
+.wh-diagram-pulse { fill: none; stroke-width: 5; stroke-linecap: round; stroke-dasharray: 10 1000; stroke-dashoffset: 13; opacity: 0; }
 .wh-diagram-without .wh-diagram-pulse { stroke: var(--wh-danger); }
 .wh-diagram-with .wh-diagram-pulse { stroke: var(--wh-tint); }
+/* An answer is the same dash in the text colour, on its way back to the agent. */
+.wh-diagram .wh-diagram-pulse[data-pulse="answer"] { stroke: var(--wh-fg); }
 .wh-diagram-ring { fill: none; stroke: var(--wh-tint); stroke-width: 3; opacity: 0; transform-box: fill-box; transform-origin: center; }
 .wh-diagram figcaption { padding-inline: 4px; font-size: 13px; line-height: 1.6; color: var(--wh-fg-muted); }
 
@@ -306,9 +309,16 @@ html:has(.wh-landing) { scroll-padding-top: calc(var(--wh-landing-bar, 64px) + 1
 
 /* One cycle per figure (--wh-flow-cycle); --wh-flow-at is when the pulse reaches a step. Delays
  * are taken a cycle early so the first pass starts mid-story without a frozen first frame. */
-@keyframes wh-diagram-travel { from { stroke-dashoffset: 13; } to { stroke-dashoffset: -104; } }
-@keyframes wh-diagram-relay { 0% { stroke-dashoffset: 13; } 18%, 100% { stroke-dashoffset: -104; } }
-@keyframes wh-diagram-ring { 0% { transform: scale(1); opacity: .55; } 100% { transform: scale(1.45); opacity: 0; } }
+/* Connect-once pictures (landing-diagrams.tsx): a pulse crosses its line in one leg, then waits
+ * out the cycle parked off the line. A request runs from the agent's end, an answer from the
+ * service's end. Leg shares: relay 0.9s of 12s, tangle 1.2s of 30s; a tangle trip lights its
+ * line for 2.7s of the 30. */
+@keyframes wh-relay-request { 0% { stroke-dashoffset: 13; } 7.5%, 100% { stroke-dashoffset: var(--wh-pulse-end); } }
+@keyframes wh-relay-answer { 0% { stroke-dashoffset: var(--wh-pulse-end); } 7.5%, 100% { stroke-dashoffset: 13; } }
+@keyframes wh-tangle-request { 0% { stroke-dashoffset: 13; } 4%, 100% { stroke-dashoffset: var(--wh-pulse-end); } }
+@keyframes wh-tangle-answer { 0% { stroke-dashoffset: var(--wh-pulse-end); } 4%, 100% { stroke-dashoffset: 13; } }
+@keyframes wh-tangle-line { 0%, 10%, 100% { opacity: .4; } 1%, 9% { opacity: .9; } }
+@keyframes wh-diagram-ring { 0% { transform: scale(1); opacity: .55; } 50%, 100% { transform: scale(1.45); opacity: 0; } }
 @keyframes wh-flow-dot-y { 0% { opacity: 0; transform: translateY(0); } 1.5% { opacity: 1; } 10% { opacity: 1; transform: translateY(var(--wh-flow-gap)); } 11%, 100% { opacity: 0; transform: translateY(var(--wh-flow-gap)); } }
 @keyframes wh-flow-dot-x { 0% { opacity: 0; transform: translateX(0); } 1.5% { opacity: 1; } 10% { opacity: 1; transform: translateX(var(--wh-flow-gap)); } 11%, 100% { opacity: 0; transform: translateX(var(--wh-flow-gap)); } }
 @keyframes wh-flow-arrive {
@@ -319,9 +329,12 @@ html:has(.wh-landing) { scroll-padding-top: calc(var(--wh-landing-bar, 64px) + 1
 @keyframes wh-flow-reveal { 0%, 60% { opacity: 1; } 62%, 100% { opacity: 0; } }
 @media (prefers-reduced-motion: no-preference) {
   .wh-landing[data-motion="on"][data-motion-visible="true"] [data-in-view="true"] .wh-diagram-pulse { opacity: 1; }
-  .wh-landing[data-motion="on"][data-motion-visible="true"] [data-in-view="true"].wh-diagram-without .wh-diagram-pulse { animation: wh-diagram-travel var(--wh-pulse-duration, 2s) linear var(--wh-pulse-delay, 0s) infinite; }
-  .wh-landing[data-motion="on"][data-motion-visible="true"] [data-in-view="true"].wh-diagram-with .wh-diagram-pulse { animation: wh-diagram-relay 6s linear var(--wh-pulse-delay, 0s) infinite; }
-  .wh-landing[data-motion="on"][data-motion-visible="true"] [data-in-view="true"] .wh-diagram-ring { animation: wh-diagram-ring 1.2s ease-out 1.05s infinite; }
+  .wh-landing[data-motion="on"][data-motion-visible="true"] [data-in-view="true"].wh-diagram-without .wh-diagram-pulse { animation: wh-tangle-request var(--wh-pulse-cycle) linear var(--wh-pulse-delay) infinite; }
+  .wh-landing[data-motion="on"][data-motion-visible="true"] [data-in-view="true"].wh-diagram-without .wh-diagram-pulse[data-pulse="answer"] { animation-name: wh-tangle-answer; }
+  .wh-landing[data-motion="on"][data-motion-visible="true"] [data-in-view="true"].wh-diagram-without .wh-diagram-wire { animation: wh-tangle-line var(--wh-pulse-cycle) linear var(--wh-pulse-delay) infinite; }
+  .wh-landing[data-motion="on"][data-motion-visible="true"] [data-in-view="true"].wh-diagram-with .wh-diagram-pulse { animation: wh-relay-request var(--wh-pulse-cycle) linear var(--wh-pulse-delay) infinite; }
+  .wh-landing[data-motion="on"][data-motion-visible="true"] [data-in-view="true"].wh-diagram-with .wh-diagram-pulse[data-pulse="answer"] { animation-name: wh-relay-answer; }
+  .wh-landing[data-motion="on"][data-motion-visible="true"] [data-in-view="true"] .wh-diagram-ring { animation: wh-diagram-ring var(--wh-ring-period) ease-out var(--wh-ring-delay) infinite; }
   .wh-landing[data-motion="on"][data-motion-visible="true"] [data-in-view="true"] .wh-flow-step { animation: wh-flow-arrive var(--wh-flow-cycle) linear calc(var(--wh-flow-at, 0s) - var(--wh-flow-cycle)) infinite; }
   .wh-landing[data-motion="on"][data-motion-visible="true"] [data-in-view="true"] .wh-flow-step + .wh-flow-step::after { animation: wh-flow-dot-y var(--wh-flow-cycle) linear calc(var(--wh-flow-at, 0s) - var(--wh-flow-cycle) * 1.1) infinite; }
   .wh-landing[data-motion="on"][data-motion-visible="true"] [data-in-view="true"] .wh-flow-buzz .wh-flow-icon svg { animation: wh-flow-buzz var(--wh-flow-cycle) linear calc(var(--wh-flow-at, 0s) - var(--wh-flow-cycle)) infinite; }
