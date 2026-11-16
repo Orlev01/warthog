@@ -142,23 +142,41 @@ Every executed connector result passes `resultGuard.review(call, result)` in the
   unread for up to 25 results (10 by default). It fetches each result's headers and preview,
   never its body. Sign-in code emails are withheld in the list too. Triage takes one or two calls
   instead of one per message.
+  - A result whose headers can't be fetched says "Couldn't load this preview" and keeps its ids.
+  - **Cost:** a search costs Gmail 5 + 5 per result quota units (130 for 25), against 250 per
+    person per second. A fetch turned away for quota (429) is tried once more after 400 ms.
 - **Readable output.** A checked mail view (a message, a search, or a single link) goes to the
-  agent as plain lines (notice, headers, ids, invitation, attachments, text, numbered links), with
-  the structured view as `structuredContent`. That is far fewer tokens than escaped JSON, and it is
-  what clients that show the model only text need.
+  agent as plain lines (notice, headers, ids, flags, invitation, attachments, text, numbered
+  links), with the structured view as `structuredContent`. That is far fewer tokens than escaped
+  JSON, and it is what clients that show the model only text need.
+  - Every sender-written value except the body is put on one line, so a subject can't fake a
+    search result or a note of its own. The body sits between "Message text:" and "End of message
+    text.", and can't write the closing line itself.
+  - Flags say when mail is unread, in spam or the bin, or marked important. A cut-short body, an
+    unlisted-links note and Outlook's "has attachments" are said too.
 - **Long links.** A link over 300 characters is listed by its domain. `read {id, link: N}` returns
   link N in full, and only links the checked view kept can be asked for, so a hidden sign-in link
   never comes back.
 - **Hiding class rules.** `<style>` rules that hide a class (`.x{display:none}`) are honoured at
   the top level only. A rule inside `@media` is how a responsive email swaps its mobile and desktop
   copies, so it is left alone.
-- **Invitations.** A `text/calendar` part is read into title, start, end, location, organiser and
-  method, so an agent can add an invitation to a calendar.
+  - Comments and statement rules (`@import …;`) are skipped. One linear pass reads the braces.
+  - A style block inside a comment (`<!--[if mso]>`) is for Outlook only, so it doesn't count.
+  - An element's own inline `display` wins over a class rule.
+- **Invitations.** A `text/calendar` part with data is read into title, start, end, location,
+  organiser, method and UID, so an agent can add an invitation to a calendar and check it isn't
+  there already.
+  - Every field is cleaned like any other text.
+  - A colon inside a quoted parameter (`SENT-BY="mailto:…"`, a Windows time zone) doesn't end
+    the name.
+  - An all-day event ends on its last day, not the day after.
 - **Drive.** `read_text` exports Google Docs and Slides as text and Sheets as CSV, and reads text
   files as they are. Anything else (PDFs, images) returns "Warthog can't read this file type yet"
-  instead of raw bytes.
+  instead of raw bytes, and opens no "recently read" window.
+  - A sheet is its first tab only, and the result says so.
+  - Shared-drive files are read (`supportsAllDrives`).
 - **Calendar list** takes only `timeMin`, `timeMax`, `q`, `maxResults`, `pageToken`,
-  `singleEvents`, `orderBy` and `timeZone`.
+  `singleEvents`, `orderBy`, `timeZone`, `iCalUID`, `updatedMin`, `showDeleted` and `eventTypes`.
 - **Copy:**
   - The consent row reads "Reads a checked copy, without sign-in codes or password links".
   - Help gains a "What agents see in your email" section, including what Warthog can't do.

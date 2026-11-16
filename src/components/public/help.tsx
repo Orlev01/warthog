@@ -79,8 +79,9 @@ export function Help({ connectorAddress, links = RELATIVE_LINKS }: { connectorAd
         </PublicSection>
         <PublicSection id="what-agents-see" title="What agents see in your email">
           <p>
-            Agents get a clean, readable copy of each email, with no hidden text or tracking
-            images. Sign-in codes, password reset links and card numbers are kept out. When a
+            Agents get a clean, readable copy of each email, without tracking images and with
+            hidden text removed where Warthog can spot it. Sign-in codes, password reset links
+            and card numbers are kept out. When a
             sign-in or password email arrives, your agent just tells you it’s there and links
             you to it.
           </p>

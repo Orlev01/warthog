@@ -78,6 +78,8 @@ export interface CuratedToolResult {
   readonly body: string;
   readonly truncated: boolean;
   readonly tooLargeToCheck?: boolean;
+  /** Warthog's own note on what was read (a spreadsheet's first tab only). */
+  readonly note?: string;
 }
 
 // The internal richer declaration: the public fields plus how the tool is dispatched —
@@ -105,7 +107,7 @@ function gmailReadFormat(requested: string | undefined): "full" | "metadata" {
 }
 
 // Calendar list parameters an agent may set (a time range, a search, paging, ordering).
-const CALENDAR_LIST_PARAMS = ["timeMin", "timeMax", "q", "maxResults", "pageToken", "singleEvents", "orderBy", "timeZone"] as const;
+const CALENDAR_LIST_PARAMS = ["timeMin", "timeMax", "q", "maxResults", "pageToken", "singleEvents", "orderBy", "timeZone", "iCalUID", "updatedMin", "showDeleted", "eventTypes"] as const;
 
 // Gmail search parameters an agent may set; anything else (e.g. `fields`, `alt`) is dropped.
 const GMAIL_SEARCH_PARAMS = ["q", "maxResults", "pageToken", "labelIds", "includeSpamTrash"] as const;
@@ -371,10 +373,12 @@ export async function gmailHasSentTo(input: Pick<CuratedToolCallInput, "entry" |
 // Gmail search returns ids only, so an agent used to read every result to triage an inbox. A
 // search now fetches each result's headers and preview (never its body) and returns them
 // together, at most 25 a page (10 by default), so triage takes one call. Warthog checks the
-// previews like any other content. A result whose headers can't be fetched keeps its ids.
+// previews like any other content. A result whose headers can't be fetched keeps its ids and
+// says so. Gmail's per-second quota can turn a busy search's fetch away (429): it's tried once more.
 const MAX_SEARCH_RESULTS = 25;
 const DEFAULT_SEARCH_RESULTS = 10;
 const SUMMARY_CONCURRENCY = 6;
+const RETRY_AFTER_MS = 400;
 
 async function searchWithSummaries(request: Parameters<typeof sendConnectorRequest>[0], deps: CuratedToolDeps): Promise<CuratedToolResult> {
   const asked = Number.parseInt(request.query?.maxResults ?? "", 10);
@@ -394,11 +398,17 @@ async function searchWithSummaries(request: Parameters<typeof sendConnectorReque
     while (next < found.length) {
       const index = next++;
       const item = found[index]!;
+      const unavailable = { id: item.id, threadId: item.threadId, unavailable: true };
       try {
-        const got = await sendConnectorRequest({ ...request, path: `/gmail/v1/users/me/messages/${encodeURIComponent(String(item.id))}`, query: { format: "metadata" } }, deps);
-        summaries[index] = got.status >= 200 && got.status < 300 && !got.truncated ? JSON.parse(got.body) : { id: item.id, threadId: item.threadId };
+        const fetchOne = () => sendConnectorRequest({ ...request, path: `/gmail/v1/users/me/messages/${encodeURIComponent(String(item.id))}`, query: { format: "metadata" } }, deps);
+        let got = await fetchOne();
+        if (got.status === 429) {
+          await new Promise((resolve) => setTimeout(resolve, RETRY_AFTER_MS));
+          got = await fetchOne();
+        }
+        summaries[index] = got.status >= 200 && got.status < 300 && !got.truncated ? JSON.parse(got.body) : unavailable;
       } catch {
-        summaries[index] = { id: item.id, threadId: item.threadId };
+        summaries[index] = unavailable;
       }
     }
   }));
@@ -421,7 +431,8 @@ const TEXT_TYPE = /^(?:text\/|application\/(?:json|xml|csv|x-ndjson|javascript|x
 
 async function readDriveText(request: Parameters<typeof sendConnectorRequest>[0], deps: CuratedToolDeps): Promise<CuratedToolResult> {
   const filePath = request.path;
-  const meta = await sendConnectorRequest({ ...request, query: { fields: "id,name,mimeType,size" } }, deps);
+  // supportsAllDrives: a file in a shared drive is otherwise "not found".
+  const meta = await sendConnectorRequest({ ...request, query: { fields: "id,name,mimeType,size", supportsAllDrives: "true" } }, deps);
   if (meta.status < 200 || meta.status >= 300) return meta;
   let file: { mimeType?: unknown; name?: unknown };
   try {
@@ -431,8 +442,14 @@ async function readDriveText(request: Parameters<typeof sendConnectorRequest>[0]
   }
   const mimeType = typeof file.mimeType === "string" ? file.mimeType : "";
   const exportAs = DRIVE_EXPORTS[mimeType];
-  if (exportAs) return sendConnectorRequest({ ...request, path: `${filePath}/export`, query: { mimeType: exportAs } }, deps);
-  if (TEXT_TYPE.test(mimeType)) return sendConnectorRequest({ ...request, query: { alt: "media" } }, deps);
+  if (exportAs) {
+    const exported = await sendConnectorRequest({ ...request, path: `${filePath}/export`, query: { mimeType: exportAs } }, deps);
+    // Drive exports a spreadsheet's first tab only.
+    return exportAs === "text/csv" && exported.status >= 200 && exported.status < 300
+      ? { ...exported, note: "Only the first sheet of this spreadsheet is shown, as CSV." }
+      : exported;
+  }
+  if (TEXT_TYPE.test(mimeType)) return sendConnectorRequest({ ...request, query: { alt: "media", supportsAllDrives: "true" } }, deps);
   return {
     status: 200,
     truncated: false,

@@ -84,7 +84,8 @@ function walk(part: GmailPart, depth: number, state: Walk): void {
   state.parts += 1;
   const mime = typeof part.mimeType === "string" ? part.mimeType.toLowerCase() : "";
   // An invitation's event, whether it comes as a body part or an .ics attachment.
-  if (mime === "text/calendar" && !state.calendar) state.calendar = part;
+  // The first one Warthog can read wins (an attachment-only copy has no data to decode).
+  if (mime === "text/calendar" && !state.calendar && typeof part.body?.data === "string") state.calendar = part;
   if (typeof part.filename === "string" && part.filename !== "") {
     state.attachments.push({
       filename: stripInvisible(part.filename).text.slice(0, 300),

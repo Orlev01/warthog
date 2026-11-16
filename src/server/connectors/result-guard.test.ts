@@ -141,8 +141,12 @@ describe("createResultGuard", () => {
     assert.equal(searched.exposure?.sender, "billing@payfast-au.co");
     const ownOnly = guard2.review(call("google-gmail__search"), { status: 200, truncated: false, body: JSON.stringify({ summaries: true, messages: [meta("a", "Sam <sam@example.com>", ["SENT"])] }) });
     assert.equal(ownOnly.exposure, undefined);
+    // A Drive file Warthog couldn't read, or one link asked for again, shows nothing new.
+    assert.equal(guard2.review(call("google-drive__read_text"), { status: 200, truncated: false, body: JSON.stringify({ name: "a.pdf", unreadable: true, note: "x" }) }).exposure, undefined);
+    assert.equal(guard2.review(call("google-drive__read_text"), { status: 200, truncated: false, body: "Budget,2026" }).exposure?.kind, "file");
+    assert.equal(guard2.review(call("google-gmail__read", { params: { query: { id: "m", link: "1" } } }), { status: 200, truncated: false, body: gmailMessage("Hi", "see https://a.example/x") }).exposure, undefined);
     // The person's own Outlook mail doesn't.
-    const own =guard2.review(call("microsoft-outlook-mail__read"), { status: 200, truncated: false, body: JSON.stringify({ id: "m", subject: "Re: hi", from: { emailAddress: { address: "sam@example.com" } }, body: { contentType: "text", content: "x" } }) });
+    const own = guard2.review(call("microsoft-outlook-mail__read"), { status: 200, truncated: false, body: JSON.stringify({ id: "m", subject: "Re: hi", from: { emailAddress: { address: "sam@example.com" } }, body: { contentType: "text", content: "x" } }) });
     assert.equal(own.exposure, undefined);
     // Reads (by method) through email, messaging and calendar services count; the person's own tools don't.
     const get = (tool: string) => call(tool, { params: { method: "GET", path: "/x" }, makesChange: tool.startsWith("ntfy") });

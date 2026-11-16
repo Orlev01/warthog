@@ -55,6 +55,7 @@ const COULD_NOT_CHECK_CHANGE =
 
 const GMAIL_READ = "google-gmail__read";
 const GMAIL_SEARCH = "google-gmail__search";
+const DRIVE_READ_TEXT = "google-drive__read_text";
 const SUMMARY_FIELDS = ["id", "threadId", "labelIds", "date", "from", "subject", "preview", "withheld", "kind", "openInMail", "tellThePerson"] as const;
 const OUTLOOK_READ = "microsoft-outlook-mail__read";
 const OUTLOOK_SEARCH = "microsoft-outlook-mail__search";
@@ -91,6 +92,7 @@ interface Envelope {
   readonly body: string;
   readonly truncated?: boolean;
   readonly tooLargeToCheck?: boolean;
+  readonly note?: unknown;
 }
 
 function isEnvelope(value: unknown): value is Envelope {
@@ -139,6 +141,10 @@ export function createResultGuard(deps: ResultGuardDeps = {}): ResultGuard {
     if (call.tool === GMAIL_SEARCH && (parsed as { summaries?: unknown } | null)?.summaries === true) {
       const list = (parsed as { messages?: unknown }).messages;
       const messages = (Array.isArray(list) ? list : []).map((item) => {
+        const missing = item as { id?: unknown; threadId?: unknown; unavailable?: unknown } | null;
+        if (missing?.unavailable === true) {
+          return { id: missing.id, threadId: missing.threadId, note: "Couldn't load this preview. Read the message by its id." };
+        }
         const view = gmailMessageView(item, { account: call.connectorAccountLabel, headersOnly: true });
         if (!view) return { withheld: true, note: "Warthog couldn't check this message, so it isn't shown." };
         const message = tally(view);
@@ -224,8 +230,10 @@ export function createResultGuard(deps: ResultGuardDeps = {}): ResultGuard {
     if (mailTool) return withheld(call, envelope.status);
     const counts = emptyJsonCounts();
     const body = isJson ? JSON.stringify(cleanJson(parsed, counts, options)) : cleanText(envelope.body, counts, options);
+    // Warthog's own note on a Drive export (a sheet is read as its first tab only).
+    const note = call.tool === DRIVE_READ_TEXT && typeof envelope.note === "string" ? { note: envelope.note } : {};
     return {
-      result: { ...source(call, kind), status: envelope.status, body, truncated: envelope.truncated === true },
+      result: { ...source(call, kind), status: envelope.status, body, truncated: envelope.truncated === true, ...note },
       evidence: { outcome: outcomeOf(counts, false), counts: nonZero(counts) },
     };
   }
@@ -282,6 +290,8 @@ export function createResultGuard(deps: ResultGuardDeps = {}): ResultGuard {
     const service = deps.serviceName?.(call.connector) ?? call.connector;
     const result = (guarded.result ?? {}) as Record<string, unknown>;
     if (call.tool === GMAIL_READ) {
+      // Asking for one numbered link shows just its address, not the email again.
+      if ((call.params as { query?: { link?: unknown } } | undefined)?.query?.link !== undefined) return undefined;
       const message = (result.message ?? {}) as { labelIds?: unknown; from?: unknown };
       const labels = Array.isArray(message.labelIds) ? message.labelIds : [];
       if (labels.includes("SENT") || labels.includes("DRAFT")) return undefined;
@@ -318,7 +328,8 @@ export function createResultGuard(deps: ResultGuardDeps = {}): ResultGuard {
       }) as { organizer?: { email?: unknown; emailAddress?: { address?: unknown } } } | undefined;
       return foreign ? { service, kind: "event", ...senderOf(foreign.organizer?.email ?? foreign.organizer?.emailAddress?.address) } : undefined;
     }
-    if (call.tool === "google-drive__read_text") return { service, kind: "file" };
+    // A file Warthog couldn't read showed nothing anyone wrote.
+    if (call.tool === DRIVE_READ_TEXT) return /"unreadable":true/.test(String(result.body)) ? undefined : { service, kind: "file" };
     if (call.requiresApproval) return { service, kind: "content" };
     // A read (GET/HEAD — even through a service where every request counts as a change, like
     // ntfy) of a service that carries other people's messages or bookings.
