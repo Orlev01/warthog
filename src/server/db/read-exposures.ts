@@ -22,6 +22,8 @@ export interface ReadSource {
   readonly service: string;
   readonly kind: "email" | "event" | "file" | "message" | "content";
   readonly sender?: string;
+  /** When it was read (set when it is recorded). */
+  readonly at?: string;
 }
 
 /** An open window: when the agent last read someone else's content, and from whom. */
@@ -56,7 +58,7 @@ export async function recordReadExposure(
   const open = row && new Date(String(row.until_at)).getTime() > input.at.getTime();
   const previous = row && open ? await sourcesOf(row, dek, input.agentId) : [];
   const same = (a: ReadSource, b: ReadSource) => a.service === b.service && a.kind === b.kind && a.sender === b.sender;
-  const sources = [input.source, ...previous.filter((s) => !same(s, input.source))].slice(0, MAX_SOURCES);
+  const sources = [{ ...input.source, at: input.at.toISOString() }, ...previous.filter((s) => !same(s, input.source))].slice(0, MAX_SOURCES);
   const detail = await encrypt(dek, TABLE, COLUMN, rowId(input.agentId), JSON.stringify(sources));
   const until = new Date(input.at.getTime() + READ_WINDOW_MS);
   await db.query(
@@ -81,4 +83,10 @@ export async function activeReadExposure(db: Db, userId: string, agentId: string
     return null;
   }
   return { lastReadAt: new Date(String(row.last_read_at)), untilAt, sources: await sourcesOf(row, dek, agentId) };
+}
+
+/** Whether the agent has an open window at `now`, from plain columns only (no data key needed). */
+export async function hasOpenReadWindow(db: Db, userId: string, agentId: string, now: Date): Promise<boolean> {
+  const result = await db.query(`SELECT 1 FROM ${TABLE} WHERE user_id = $1 AND agent_id = $2 AND until_at > $3`, [userId, agentId, now.toISOString()]);
+  return result.rows.length > 0;
 }

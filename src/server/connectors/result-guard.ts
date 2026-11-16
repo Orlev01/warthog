@@ -247,9 +247,17 @@ export function createResultGuard(deps: ResultGuardDeps = {}): ResultGuard {
       if (labels.includes("SENT") || labels.includes("DRAFT")) return undefined;
       return { service, kind: "email", ...senderOf(message.from) };
     }
-    if (call.tool === OUTLOOK_READ) return { service, kind: "email", ...senderOf((result.message as { from?: unknown } | undefined)?.from) };
+    // Outlook messages carry no Sent/Draft label in the view, so mail from the person's own
+    // address doesn't count (a sender can fake that only to keep the window shut on themselves).
+    const own = call.connectorAccountLabel?.toLowerCase();
+    const fromSomeoneElse = (from: unknown) => senderOf(from).sender !== own;
+    if (call.tool === OUTLOOK_READ) {
+      const from = (result.message as { from?: unknown } | undefined)?.from;
+      return fromSomeoneElse(from) ? { service, kind: "email", ...senderOf(from) } : undefined;
+    }
     if (call.tool === OUTLOOK_SEARCH) {
-      const first = Array.isArray(result.messages) ? (result.messages[0] as { from?: unknown } | undefined) : undefined;
+      const list = Array.isArray(result.messages) ? (result.messages as { from?: unknown }[]) : [];
+      const first = list.find((m) => m.from !== undefined && fromSomeoneElse(m.from));
       return first ? { service, kind: "email", ...senderOf(first.from) } : undefined;
     }
     if (call.tool === "google-calendar__list" || call.tool === "microsoft-outlook-calendar__list") {
@@ -258,8 +266,10 @@ export function createResultGuard(deps: ResultGuardDeps = {}): ResultGuard {
         const body = JSON.parse(String(result.body)) as { items?: unknown; value?: unknown };
         events = Array.isArray(body.items) ? body.items : Array.isArray(body.value) ? body.value : [];
       } catch {
-        return undefined;
+        // A list cut short (or otherwise unreadable) was still shown as text: count it.
+        return { service, kind: "event" };
       }
+      if (result.truncated === true) return { service, kind: "event" };
       const foreign = events.find((event) => {
         const e = (event ?? {}) as { organizer?: { self?: unknown }; isOrganizer?: unknown };
         return e.organizer?.self !== true && e.isOrganizer !== true;
@@ -268,9 +278,13 @@ export function createResultGuard(deps: ResultGuardDeps = {}): ResultGuard {
     }
     if (call.tool === "google-drive__read_text") return { service, kind: "file" };
     if (call.requiresApproval) return { service, kind: "content" };
-    if (call.tool === `${call.connector}__request` && !call.makesChange) {
+    // A read (GET/HEAD — even through a service where every request counts as a change, like
+    // ntfy) of a service that carries other people's messages or bookings.
+    if (call.tool === `${call.connector}__request`) {
+      const method = String((call.params as { method?: unknown } | undefined)?.method ?? "").toUpperCase();
       const category = deps.category?.(call.connector);
-      return category === "email" || category === "messaging" ? { service, kind: "message" } : undefined;
+      return (method === "GET" || method === "HEAD") && (category === "email" || category === "messaging" || category === "calendar")
+        ? { service, kind: "message" } : undefined;
     }
     return undefined;
   }
@@ -299,8 +313,11 @@ export function createResultGuard(deps: ResultGuardDeps = {}): ResultGuard {
 }
 
 // The address in a "Name <address>" header value, when there is one.
+// The LAST angle-address is the real one: a display name can contain a fake one
+// ("Westpac <alerts@westpac.com.au>" <evil@x.co>).
 function senderOf(value: unknown): { sender?: string } {
   if (typeof value !== "string") return {};
-  const address = /<([^<>\s]+@[^<>\s]+)>/.exec(value)?.[1] ?? (/^[^\s<>]+@[^\s<>]+$/.test(value.trim()) ? value.trim() : undefined);
+  const angled = [...value.matchAll(/<([^<>\s]+@[^<>\s]+)>/g)].at(-1)?.[1];
+  const address = angled ?? (/^[^\s<>]+@[^\s<>]+$/.test(value.trim()) ? value.trim() : undefined);
   return address ? { sender: address.toLowerCase().slice(0, 254) } : {};
 }

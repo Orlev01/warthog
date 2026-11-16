@@ -346,7 +346,8 @@ function extraLines(detail: Record<string, unknown>): RequestDetail[] {
   if (detail.recipientsUnchecked === true) lines.push({ label: "Sent mail", value: "Warthog couldn't check whether you've emailed these addresses before." });
   else if (unchecked.length) lines.push({ label: "Sent mail", value: `Warthog couldn't check whether you've emailed ${unchecked.join(", ")} before.` });
   const rule = text(detail.rule);
-  if (rule && detail.ruleSource !== "person") lines.push({ label: "Why you're asked", value: rule });
+  // A card held because of what the agent just read already says so in its heads-up.
+  if (rule && detail.ruleSource !== "person" && detail.readCheck !== true) lines.push({ label: "Why you're asked", value: rule });
   const run = detail.run !== null && typeof detail.run === "object" ? (detail.run as Record<string, unknown>) : undefined;
   if (run && typeof run.id === "string") lines.push({ label: "Conversation (as the agent described it)", value: text(run.label) || "Untitled conversation" });
   const via = text(detail.via);
@@ -390,14 +391,20 @@ function sourceText(source: RecentRead["sources"][number]): string {
 function agoText(at: Date, now: Date): string {
   const minutes = Math.round((now.getTime() - at.getTime()) / 60_000);
   if (minutes < 1) return "just now";
-  return minutes === 1 ? "1 min ago" : `${minutes} min ago`;
+  if (minutes < 60) return minutes === 1 ? "1 min ago" : `${minutes} min ago`;
+  const hours = Math.round(minutes / 60);
+  return hours === 1 ? "1 hour ago" : `${hours} hours ago`;
 }
 
-// The Details line: what the agent read from others in the last hour.
+// The Details line: what the agent read from others in the last hour, each with its own time.
 function recentReadLine(detail: Record<string, unknown>, agent: string, now: Date): RequestDetail | undefined {
   const recent = recentReadOf(detail);
   if (!recent || recent.sources.length === 0) return undefined;
-  return { label: `${agent} recently read`, value: `${recent.sources.map(sourceText).join("; ")}, ${agoText(recent.at, now)}` };
+  const timed = recent.sources.map((source, index) => {
+    const at = typeof (source as { at?: unknown }).at === "string" ? new Date((source as { at: string }).at) : index === 0 ? recent.at : undefined;
+    return at && Number.isFinite(at.getTime()) ? `${sourceText(source)}, ${agoText(at, now)}` : sourceText(source);
+  });
+  return { label: `${agent} recently read`, value: timed.join("; ") };
 }
 
 // At most one gentle heads-up, only when something is unusual: the first email to an address
@@ -412,7 +419,7 @@ function headsUpFor(detail: Record<string, unknown>, agent: string, now: Date): 
   if (fresh.length) {
     const first = fresh.length === 1 ? `You haven't emailed ${fresh[0]} before.` : `You haven't emailed ${fresh.length} of these addresses before.`;
     if (!read) return first;
-    if (fresh.length === 1 && latest?.sender === fresh[0]) return `${first} It's a reply to the email ${agent} read ${agoText(recent!.at, now)}.`;
+    if (fresh.length === 1 && latest?.sender === fresh[0]) return `${first} ${fresh[0]} sent the email ${agent} read ${agoText(recent!.at, now)}. Worth a second look if you didn't ask for this.`;
     return `${first} ${read} Worth a second look if you didn't ask for this.`;
   }
   if (detail.readCheck === true && read) return `${read} Warthog is checking with you before this goes out.`;

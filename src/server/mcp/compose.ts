@@ -64,7 +64,7 @@ import { recordMetricEvent } from "../metrics/record";
 import { createResultGuard } from "../connectors/result-guard";
 import { gmailHasSentTo } from "../connectors/curated/google";
 import { outlookHasSentTo } from "../connectors/curated/microsoft";
-import { activeReadExposure, recordReadExposure } from "../db/read-exposures";
+import { activeReadExposure, hasOpenReadWindow, recordReadExposure } from "../db/read-exposures";
 
 import {
   createAgentCallPipeline,
@@ -426,7 +426,12 @@ function buildAgentPipeline(deps: McpDispatchDeps): AgentCallPipeline {
     // read when it then wants to change or send something.
     readExposures: {
       record: async (connection, source) => recordReadExposure(db, { userId: connection.userId, agentId: connection.agentId, source, at: clock.now() }, await dataKeyFor(connection.userId)),
-      active: async (connection) => activeReadExposure(db, connection.userId, connection.agentId, clock.now(), await dataKeyFor(connection.userId)),
+      // The person's data key is unwrapped only when a window is actually open.
+      active: async (connection) => {
+        const now = clock.now();
+        if (!(await hasOpenReadWindow(db, connection.userId, connection.agentId, now))) return null;
+        return activeReadExposure(db, connection.userId, connection.agentId, now, await dataKeyFor(connection.userId));
+      },
     },
     // A held email's card says when the person has never emailed a recipient before, from a
     // search of their own Sent mail (nothing is stored but the answer, inside the approval).

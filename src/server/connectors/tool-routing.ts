@@ -274,6 +274,8 @@ function declarationOf(tool: CuratedTool, serviceName: string): ConnectorToolDec
       ? { messageChannel: "email" as const, schema: mailComposeSchema, recipientsOf: composedRecipients(verb === "send"), outbound: true }
       : {}),
     ...(CALENDAR_INVITE_TOOLS.has(tool.name) ? { recipients: calendarGuests, outbound: true } : {}),
+    // Editing an event notifies the guests it already has, even when the edit doesn't list them.
+    ...(tool.name.endsWith("calendar__update") ? { alwaysOutbound: true } : {}),
   };
 }
 
@@ -314,8 +316,9 @@ export function connectorToolsetFor(
                   name: REQUEST_TOOL,
                   description: `Send one authenticated request to the person's ${entry.name} account (paths are relative to its API). GET and HEAD read; any other method makes a change.`,
                 }),
-            // A change through an email or messaging service sends something to other people.
-            ...(entry.category === "email" || entry.category === "messaging" ? { outbound: true } : {}),
+            // A change through an email, messaging or calendar service (Nylas sends mail; booking
+            // services email invitees) sends something to other people.
+            ...(entry.category === "email" || entry.category === "messaging" || entry.category === "calendar" ? { outbound: true } : {}),
           },
         ];
   }

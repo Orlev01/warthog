@@ -89,6 +89,8 @@ export interface ConnectorToolDeclaration {
   readonly recipientsOf?: (params: Record<string, unknown>) => readonly string[];
   // The tool sends something to other people (an email, a calendar invitation).
   readonly outbound?: boolean;
+  // It always does, whatever its input lists (editing an event notifies its existing guests).
+  readonly alwaysOutbound?: boolean;
   // The general request tool of a service that can send a message on a GET: every request,
   // GET included, is classified as a change (catalogue `get_is_change`).
   readonly getIsChange?: boolean;
@@ -426,7 +428,8 @@ function buildConnectorTool(
         recipients,
         // It sends to other people: an email, an invitation that has guests, or a write
         // through a messaging service.
-        outbound: declaration.outbound === true && makesChange && (isRequest || declaration.messageChannel !== undefined || (recipients?.length ?? 0) > 0),
+        outbound: declaration.outbound === true && makesChange
+          && (isRequest || declaration.alwaysOutbound === true || declaration.messageChannel !== undefined || (recipients?.length ?? 0) > 0),
         reason: parsed.reason as string | undefined,
         params: parsed,
       };

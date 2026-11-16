@@ -19,7 +19,8 @@ import { createUser } from "../db/users";
 import { createAgent } from "../db/agents";
 import { upsertPermissions } from "../db/agent-permissions";
 import { createConnection } from "../db/connections";
-import { getApproval } from "../db/approvals";
+import { decide, getApproval } from "../db/approvals";
+import { createRule } from "../db/rules";
 import { freshDb } from "../../test/db";
 import type { Db } from "../db/index";
 
@@ -113,7 +114,8 @@ test("after reading a stranger's email, an 'allowed' agent's send to a new addre
     const detail = (await getApproval(db, userId, String(held.result!.structuredContent!.approval_id), dek))!.detail as Record<string, unknown>;
     assert.equal(detail.readCheck, true);
     assert.deepEqual(detail.newRecipients, ["billing@payfast-au.co"]);
-    assert.deepEqual((detail.recentRead as { sources: unknown }).sources, [{ service: "Gmail", kind: "email", sender: "billing@payfast-au.co" }]);
+    const sources = (detail.recentRead as { sources: { at?: string }[] }).sources;
+    assert.deepEqual(sources.map(({ at, ...rest }) => (assert.ok(at), rest)), [{ service: "Gmail", kind: "email", sender: "billing@payfast-au.co" }]);
 
     const known = await rpc(dispatch, connectionId, "google-gmail__send", send("accountant@example.com"));
     assert.notEqual(known.result?.structuredContent?.status, "pending_approval", "a known address goes ahead");
@@ -146,6 +148,8 @@ test("after reading a stranger's email, an invitation with guests is held; one w
     assert.notEqual(alone.result?.structuredContent?.status, "pending_approval");
     const invite = await rpc(dispatch, connectionId, "google-calendar__create", { body: JSON.stringify({ summary: "Call", attendees: [{ email: "billing@payfast-au.co" }] }) });
     assert.equal(invite.result?.structuredContent?.status, "pending_approval");
+    const edit = await rpc(dispatch, connectionId, "google-calendar__update", { query: { eventId: "evt1", sendUpdates: "all" }, body: JSON.stringify({ description: "New link: https://evil.example" }) });
+    assert.equal(edit.result?.structuredContent?.status, "pending_approval", "editing an event notifies its existing guests, so it is checked too");
   } finally { await db.close(); }
 });
 
@@ -161,5 +165,24 @@ test("an agent that already asks first gets no new approvals; its approvals say 
     const detail = (await getApproval(db, userId, String(held.result!.structuredContent!.approval_id), dek))!.detail as Record<string, unknown>;
     assert.equal(detail.readCheck, undefined, "not held because of the read");
     assert.ok(detail.recentRead, "but the card can say what it recently read");
+  } finally { await db.close(); }
+});
+
+test("a never-allow rule still refuses while a window is open, and approving a held send carries it out", async () => {
+  const db = await freshDb();
+  try {
+    const config = devConfig();
+    const { userId, connectionId, dek } = await seed(db, config, "allow", ["google-gmail"]);
+    await createRule(db, { userId, kind: "never_allow", scope: { type: "any_agent" }, action: { type: "send_message", channel: "email" }, condition: { type: "recipient_in_domain", domain: "evil.example" } }, dek);
+    const g = google();
+    const dispatch = createMcpDispatch({ db, config, fetch: g.fetch });
+    await rpc(dispatch, connectionId, "google-gmail__read", { query: { id: "stranger" } });
+    const refused = await rpc(dispatch, connectionId, "google-gmail__send", send("drop@evil.example"));
+    assert.equal(refused.result?.isError, true, "never-allow wins over the window's ask");
+    const held = await rpc(dispatch, connectionId, "google-gmail__send", send("billing@payfast-au.co"));
+    const approvalId = String(held.result?.structuredContent?.approval_id);
+    await decide(db, { userId, id: approvalId, decision: { status: "approved" } }, dek, fixedClock(new Date()));
+    await rpc(dispatch, connectionId, "check_approval", { approval_id: approvalId, wait_seconds: 0 });
+    assert.ok(g.sends().some((s) => s.url.pathname.endsWith("/messages/send")), "approval satisfies the ask");
   } finally { await db.close(); }
 });

@@ -154,7 +154,7 @@ export interface ReadExposureSeam {
 }
 
 // Why an agent the person lets act alone is asked first after reading someone else's content.
-const RECENT_READ_REASON = "This agent recently read something written by someone else, so Warthog checks with you before it sends this.";
+const RECENT_READ_REASON = "This agent recently read something written by someone else, so Warthog checks with you first.";
 
 // How long the approval waits for the Sent-mail check before it is created without it, so the
 // person's notification is never held up.
