@@ -330,10 +330,19 @@ features:
     is enforced by Warthog in code on every request.
   - >-
     Approval inbox — one list of every pending request from every agent, newest first, each showing
-    the agent, what it wants to do in plain words, the exact details (recipient, amount, field
-    requested), the agent's stated reason, the rule that triggered it and time left before expiry;
-    actions Approve, Deny, or Ask for more detail (the person types a question that is returned to
-    the agent, which may resubmit); history of past decisions including expired ones.
+    the agent, what it wants to do in plain words naming who it goes to (for example "Claude wants
+    to send an email to sam@example.com" or "Claude wants to add “Site visit” to your calendar"),
+    what goes out (an email's subject and opening words, an invitation's guests, the request a
+    service would receive), the exact details (amount, field requested), the agent's stated reason
+    in its own name ("Claude says …"), a rule the person wrote, and time left before expiry; the
+    rest (which account, everyone it goes to, the domains it links to, why it was asked, which
+    conversation and app it came from) sits behind "Details". At most one gentle heads-up appears,
+    and only when something is unusual: an email with text the recipient won't see, or the first
+    email to an address (checked against the person's own Sent mail; nothing is stored but the
+    answer). Agents draft and send email from plain fields (to, subject, text) and Warthog builds
+    the message, so what the person approves is exactly what is sent. Actions Approve, Deny, or
+    Ask for more detail (the person types a question that is returned to the agent, which may
+    resubmit); history of past decisions including expired ones.
   - >-
     Agents wait safely — a request that needs approval is held by Warthog, not executed; the agent is
     told it is pending and can check or wait on it; when approved, Warthog itself carries out the held
@@ -483,7 +492,8 @@ design_ux:
     ("Claude will be able to read your calendar. It will ask you before adding events."). Approvals
     read as one sentence a person can decide on in a glance ("Claude wants to pay $42.00 to BoxCo for
     moving boxes"). Money always with currency (default AUD, configurable). Agent-reported content is
-    always prefixed "Reported by <agent>". No jokes or wordplay in security or payment copy.
+    always prefixed "Reported by <agent>", and an agent's stated reason on an approval reads as its
+    own words ("Claude says “…”"). No jokes or wordplay in security or payment copy.
   primary_journey: >-
     LANDING — the public page shows "Your agents work for you, on your terms, from your home", the
     three steps, the compatible agents and Sign up. SIGN UP — enter name and email, type the 6-digit

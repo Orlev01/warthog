@@ -1489,9 +1489,11 @@ test("pending requests are divider rows of one list group, not a card per reques
   assert.match(attr(item.attrs, "class") ?? "", /border-b/, "a divider row");
 });
 
-test("the agent's reason is labelled as such, and a missing one says so", () => {
+test("the agent's reason is labelled as its words, and a missing one says so", () => {
   const text = visibleText(render(base({ pending: [{ ...PENDING_HELD, reason: "" }], history: [] })));
-  assert.match(text, /Agent's reason No reason given/, "an empty reason reads as not given, never a blank line");
+  assert.match(text, /ChatGPT gave no reason/, "an empty reason reads as not given, never a blank line");
+  const given = visibleText(render(base({ pending: [{ ...PENDING_HELD, reason: "Following up Tuesday" }], history: [] })));
+  assert.match(given, /ChatGPT says “Following up Tuesday”/, "the reason is the agent's own words, named as such");
   assert.doesNotMatch(text, /\bWhy\b/, "the old 'Why' label is gone");
 });
 

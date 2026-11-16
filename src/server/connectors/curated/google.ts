@@ -30,6 +30,7 @@ import { getConnectionById } from "../../db/connections";
 import type { Db } from "../../db/index";
 import { HttpError } from "../../http/validate";
 import { sendConnectorRequest } from "../request-tool";
+import { buildMimeMessage, MailComposeError, type MailDraft, type ReplyTarget } from "../../../domain/content/compose-mail";
 
 // One curated tool's declaration. The rules engine and the Undo flow read these.
 export interface CuratedTool {
@@ -64,6 +65,9 @@ export interface CuratedToolCallInput {
   readonly dek: Uint8Array;
   readonly query?: Record<string, string>;
   readonly body?: string;
+  // An email the agent drafted or is sending, from plain fields: Warthog builds the message
+  // (docs/adr/approval-card-truth.md). `replyId` threads it under that message.
+  readonly compose?: { readonly draft: MailDraft; readonly replyId?: string };
 }
 
 // The upstream status and body (truncated to ~100 KB by the transport), passed back.
@@ -273,6 +277,10 @@ export async function callGoogleTool(
     throw new HttpError(409, "connection needs reconnecting");
   }
 
+  if (input.compose && (def.name === "google-gmail__draft" || def.name === "google-gmail__send")) {
+    return sendComposedGmail(def, input, input.compose, deps);
+  }
+
   const { path, query } = def.resolve(input);
   const request = {
     entry: input.entry,
@@ -293,4 +301,53 @@ export async function callGoogleTool(
   if (!full.truncated) return full;
   const headers = await sendConnectorRequest({ ...request, query: { ...query, format: "metadata" } }, deps);
   return { ...headers, tooLargeToCheck: true };
+}
+
+// The headers a reply needs from the message it answers: read as metadata, never the body.
+async function gmailReplyTarget(input: CuratedToolCallInput, replyId: string, deps: CuratedToolDeps): Promise<{ target: ReplyTarget; threadId?: string }> {
+  if (!GMAIL_ID.test(replyId)) throw new HttpError(400, "reply.id must be a Gmail message id from search or read.");
+  const original = await sendConnectorRequest({
+    entry: input.entry, userId: input.userId, connectionId: input.connectionId, dek: input.dek,
+    method: "GET", path: `/gmail/v1/users/me/messages/${encodeURIComponent(replyId)}`, query: { format: "metadata" },
+  }, deps);
+  if (original.status < 200 || original.status >= 300) throw new HttpError(404, "The message being replied to wasn't found.");
+  let parsed: { threadId?: unknown; payload?: { headers?: { name?: unknown; value?: unknown }[] } };
+  try {
+    parsed = JSON.parse(original.body);
+  } catch {
+    throw new HttpError(502, "Warthog couldn't read the message being replied to.");
+  }
+  const header = (name: string) => parsed.payload?.headers?.find((h) => typeof h.name === "string" && h.name.toLowerCase() === name)?.value;
+  const text = (value: unknown) => (typeof value === "string" ? value : undefined);
+  return {
+    target: { messageId: text(header("message-id")), references: text(header("references")), subject: text(header("subject")) },
+    threadId: typeof parsed.threadId === "string" && GMAIL_ID.test(parsed.threadId) ? parsed.threadId : undefined,
+  };
+}
+
+// Draft or send an email Warthog builds from the agent's plain fields.
+async function sendComposedGmail(def: CuratedToolDef, input: CuratedToolCallInput, compose: { draft: MailDraft; replyId?: string }, deps: CuratedToolDeps): Promise<CuratedToolResult> {
+  const reply = compose.replyId ? await gmailReplyTarget(input, compose.replyId, deps) : undefined;
+  let raw: string;
+  try {
+    raw = buildMimeMessage(compose.draft, reply?.target);
+  } catch (err) {
+    if (err instanceof MailComposeError) throw new HttpError(400, err.message);
+    throw err;
+  }
+  const message = { raw, ...(reply?.threadId ? { threadId: reply.threadId } : {}) };
+  const { path } = def.resolve(input);
+  return sendConnectorRequest({
+    entry: input.entry, userId: input.userId, connectionId: input.connectionId, dek: input.dek,
+    method: def.method, path, body: JSON.stringify(def.name === "google-gmail__draft" ? { message } : message), contentType: "application/json",
+  }, deps);
+}
+
+/** Whether the connected Gmail account has ever sent mail to `address` (one search, at most one id back). */
+export async function gmailHasSentTo(input: Pick<CuratedToolCallInput, "entry" | "userId" | "connectionId" | "dek">, address: string, deps: CuratedToolDeps): Promise<boolean> {
+  const q = `in:sent {to:${address} cc:${address} bcc:${address}}`;
+  const result = await sendConnectorRequest({ ...input, method: "GET", path: "/gmail/v1/users/me/messages", query: { q, maxResults: "1" } }, deps);
+  if (result.status < 200 || result.status >= 300) throw new Error("sent-mail lookup failed");
+  const parsed = JSON.parse(result.body) as { messages?: unknown };
+  return Array.isArray(parsed.messages) && parsed.messages.length > 0;
 }

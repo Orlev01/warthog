@@ -295,6 +295,7 @@ async function arrangeHeld(
   who: string,
   call: AgentCallArg,
   grantsOverrides: Partial<Grants> = {},
+  pipelineExtras: Partial<Parameters<typeof createAgentCallPipeline>[0]> = {},
 ) {
   const clock: Clock = fixedClock(NOW);
   const { userId, dek } = await makePerson(db, who, keyWrapper);
@@ -313,6 +314,7 @@ async function arrangeHeld(
     rateLimiter: createRateLimiter(clock),
     recorder: createInMemoryRecorder({ clock }),
     executeTool: exec.fn,
+    ...pipelineExtras,
   });
   const execHold = wrapExecuteApprovedHold(pipeline);
   const actions = createInboxActions({ db, clock, keyWrapper, executeApprovedHold: execHold.fn });
@@ -916,8 +918,9 @@ test("each decision is recorded once in the person's activity feed, naming the a
 // Purpose — plus the plain sentence and the rule that triggered it.
 // =====================================================================================
 
-function line(view: { details: readonly { label: string; value: string }[] }, label: string): string | undefined {
-  return view.details.find((d) => d.label === label)?.value;
+// A line up front or behind "Details".
+function line(view: { details: readonly { label: string; value: string }[]; extras?: readonly { label: string; value: string }[] }, label: string): string | undefined {
+  return [...view.details, ...(view.extras ?? [])].find((d) => d.label === label)?.value;
 }
 
 test("a card request reaches the inbox with its amount, merchant, sentence, reason and rule", async () => {
@@ -937,7 +940,8 @@ test("a card request reaches the inbox with its amount, merchant, sentence, reas
     assert.equal(line(view, "Merchant"), "JB Hi-Fi", "the merchant");
     assert.equal(view.sentence, "wants to use your card for $149.99 at JB Hi-Fi", "a plain sentence");
     assert.equal(view.reason, "new headphones", "the agent's stated reason");
-    assert.ok(view.rule.length > 0, "the rule that triggered the approval");
+    assert.equal(view.rule, "", "the default 'needs your approval' reason isn't shown up front");
+    assert.ok(line(view, "Why you're asked"), "the reason it was held is in the details");
   } finally {
     await db.close();
   }
@@ -1138,12 +1142,93 @@ test("a request names the agent conversation that asked and the product it came 
     const view = (await a.actions.load(await freshSession(db, a.userId))).pending[0]!;
     assert.equal(line(view, "Conversation (as the agent described it)"), "Buying the headphones", "which of the agent's conversations is asking, in its own words");
     assert.equal(line(view, "Came through (as the app reported it)"), "Claude Code");
-    assert.deepEqual(view.details.map((detail) => detail.label).slice(-2), ["Conversation (as the agent described it)", "Came through (as the app reported it)"], "claims follow what Warthog checked");
+    assert.deepEqual(view.extras!.map((detail) => detail.label).slice(-2), ["Conversation (as the agent described it)", "Came through (as the app reported it)"], "claims follow what Warthog checked, in the details");
     assert.equal(view.details[0]!.label, "Amount");
 
     const plain = await arrangeHeld(db, keyWrapper, "runs-card-plain", cardCall({ amount: 10, currency: "AUD", merchant: "Cafe" }), { cardAccess: true, cardBudget: { amount: 500, currency: "AUD", period: "month" } });
     const before = (await plain.actions.load(await freshSession(db, plain.userId))).pending[0]!;
-    assert.ok(before.details.every((detail) => !/Conversation|Came through/.test(detail.label)), "a request made outside any conversation shows none");
+    assert.ok([...before.details, ...(before.extras ?? [])].every((detail) => !/Conversation|Came through/.test(detail.label)), "a request made outside any conversation shows none");
+  } finally {
+    await db.close();
+  }
+});
+
+// --- approval-card truth (docs/adr/approval-card-truth.md) -------------------------------
+
+function emailCall(overrides: Record<string, unknown> = {}): AgentCallArg {
+  return {
+    connector: "gmail",
+    tool: "gmail__send",
+    makesChange: true,
+    messageChannel: "email",
+    recipients: ["accounts@payfast-au.co"],
+    reason: "Following up the invoice email.",
+    params: { to: ["accounts@payfast-au.co"], subject: "Updated bank details", text: "Hi, as requested, here are the account details for the transfer." },
+    ...overrides,
+  } as AgentCallArg;
+}
+
+test("a held email shows who it goes to, its subject and opening words, with the rest behind Details", async () => {
+  const db = await freshDb();
+  const keyWrapper = keyWrapperFor();
+  try {
+    const a = await arrangeHeld(db, keyWrapper, "card-truth", { ...emailCall(), tool: "google-gmail__send", connector: "google-gmail", connectorAccountLabel: "sam@example.com" }, { grantedConnectors: ["google-gmail"] });
+    const view = (await a.actions.load(await freshSession(db, a.userId))).pending[0]!;
+    assert.equal(view.sentence, "wants to send an email to accounts@payfast-au.co");
+    assert.deepEqual(view.preview, { title: "Updated bank details", body: "Hi, as requested, here are the account details for the transfer." });
+    assert.equal(view.reason, "Following up the invoice email.");
+    assert.equal(view.rule, "", "the default ask-first reason isn't shown up front");
+    assert.equal(view.headsUp, undefined, "nothing unusual, no heads-up");
+    assert.equal(line(view, "Why you're asked"), "Changes with this connector need your approval first.");
+    assert.equal(line(view, "Goes to"), "accounts@payfast-au.co");
+    assert.ok(view.details.every((detail) => detail.label !== "To"), "the recipient is in the sentence, not repeated up front");
+  } finally {
+    await db.close();
+  }
+});
+
+test("a first email to a new address gets one gentle heads-up; a failed check says so only in Details", async () => {
+  const db = await freshDb();
+  const keyWrapper = keyWrapperFor();
+  try {
+    const fresh = await arrangeHeld(db, keyWrapper, "card-new", { ...emailCall(), tool: "google-gmail__send", connector: "google-gmail" }, { grantedConnectors: ["google-gmail"] },
+      { recipientHistory: async () => ["accounts@payfast-au.co"] });
+    const view = (await fresh.actions.load(await freshSession(db, fresh.userId))).pending[0]!;
+    assert.equal(view.headsUp, "You haven't emailed accounts@payfast-au.co before.");
+
+    const known = await arrangeHeld(db, keyWrapper, "card-known", { ...emailCall(), tool: "google-gmail__send", connector: "google-gmail" }, { grantedConnectors: ["google-gmail"] },
+      { recipientHistory: async () => [] });
+    assert.equal((await known.actions.load(await freshSession(db, known.userId))).pending[0]!.headsUp, undefined, "a known address shows nothing");
+
+    const failed = await arrangeHeld(db, keyWrapper, "card-unchecked", { ...emailCall(), tool: "google-gmail__send", connector: "google-gmail" }, { grantedConnectors: ["google-gmail"] },
+      { recipientHistory: async () => { throw new Error("offline"); } });
+    const unchecked = (await failed.actions.load(await freshSession(db, failed.userId))).pending[0]!;
+    assert.equal(unchecked.headsUp, undefined, "a failed check is not shouted about");
+    assert.match(line(unchecked, "Sent mail") ?? "", /couldn't check/);
+  } finally {
+    await db.close();
+  }
+});
+
+test("an email with text the recipient won't see is flagged, and an invitation names its event and guests", async () => {
+  const db = await freshDb();
+  const keyWrapper = keyWrapperFor();
+  try {
+    const hidden = await arrangeHeld(db, keyWrapper, "card-hidden", {
+      ...emailCall(), tool: "google-gmail__send", connector: "google-gmail",
+      params: { to: ["sam@example.com"], subject: "Hi", text: "Hi", html: "<p>Hi</p><div style=\"display:none\">secret one</div><span style=\"font-size:0\">two</span><p hidden>three</p>" },
+    }, { grantedConnectors: ["google-gmail"] });
+    assert.match((await hidden.actions.load(await freshSession(db, hidden.userId))).pending[0]!.headsUp ?? "", /text the recipient won't see/);
+
+    const invite = await arrangeHeld(db, keyWrapper, "card-invite", {
+      connector: "google-calendar", tool: "google-calendar__create", makesChange: true,
+      recipients: ["sarah@acme.com.au", "tom@acme.com.au", "jo@acme.com.au"],
+      params: { body: JSON.stringify({ summary: "Site visit", start: { dateTime: "2026-11-20T10:00:00+11:00" }, attendees: [{ email: "sarah@acme.com.au" }] }) },
+    } as AgentCallArg);
+    const view = (await invite.actions.load(await freshSession(db, invite.userId))).pending[0]!;
+    assert.equal(view.sentence, "wants to add “Site visit” to your calendar");
+    assert.equal(line(view, "Sends an invite to"), "sarah@acme.com.au, tom@acme.com.au and 1 more");
+    assert.equal(line(view, "Guests"), "sarah@acme.com.au, tom@acme.com.au, jo@acme.com.au");
   } finally {
     await db.close();
   }
