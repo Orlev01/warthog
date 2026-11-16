@@ -1,4 +1,22 @@
-# Delivery status — 17 November 2026 (combined release)
+# Delivery status — 17 November 2026 (email safety, part 2)
+
+**Live at [warthog.com.au](https://warthog.com.au) (the website) and
+[app.warthog.com.au](https://app.warthog.com.au) (the app).** Application source
+`102d77ffc1935ad8da91015fd6d537ee05840690` runs as `warthog--r43967617925a1`, with one healthy
+replica, explicit 100% traffic and zero old replicas.
+
+PRs #33–#35 finish the email-safety series:
+- #33: memories and tasks say who saved them (`savedBy`);
+- #34: recently read. Approvals say what an agent just read from someone else. For an hour after,
+  an agent the person lets act alone is asked first before emailing a new address, inviting
+  guests or writing through a messaging service;
+- #35: Gmail search returns checked summaries, mail views reach agents as readable text, and
+  invitations and Drive Docs and Sheets are read cleanly.
+
+Migration 0114 (`agent_read_exposures`, additive) makes 85. #35's checks passed 6,247 tests on the
+released tree. See the [release record](docs/audit/email-safety-release-2026-11-17.md).
+
+# Earlier delivery status — 17 November 2026 (combined release)
 
 **Live at [warthog.com.au](https://warthog.com.au) (the website) and
 [app.warthog.com.au](https://app.warthog.com.au) (the app).** Application source

@@ -1,5 +1,11 @@
 # Warthog comprehensive engineering audit
 
+**Email safety, part 2, 17 November:** main `102d77f` runs as `warthog--r43967617925a1`. PRs
+#33–#35 label memories and tasks with who saved them, note on approvals what an agent just read
+from someone else (and ask first for agents that act alone), and give agents checked search
+summaries and readable mail, invitations and Drive files. Migration 0114 makes 85. 6,247 tests
+pass. See the [release record](email-safety-release-2026-11-17.md).
+
 **Combined release, 17 November:** main `e8c9781` runs as `warthog--r43951592207a1`. PRs #29–#32
 record each agent's app details once per app, cut CI to one full run per change and count health
 checks on their own in Traffic, give agents a checked view of what connectors return, and make
