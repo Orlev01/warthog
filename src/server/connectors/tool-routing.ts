@@ -303,16 +303,20 @@ export function connectorToolsetFor(
     toolset[id] = curated
       ? curated.map((tool) => declarationOf(tool, entry.name))
       : [
-          entry.get_is_change
-            ? {
-                name: REQUEST_TOOL,
-                description: `Send one authenticated request to the person's ${entry.name} account (paths are relative to its API). ${entry.name} can send messages on any request, so every request, GET included, makes a change.`,
-                getIsChange: true,
-              }
-            : {
-                name: REQUEST_TOOL,
-                description: `Send one authenticated request to the person's ${entry.name} account (paths are relative to its API). GET and HEAD read; any other method makes a change.`,
-              },
+          {
+            ...(entry.get_is_change
+              ? {
+                  name: REQUEST_TOOL,
+                  description: `Send one authenticated request to the person's ${entry.name} account (paths are relative to its API). ${entry.name} can send messages on any request, so every request, GET included, makes a change.`,
+                  getIsChange: true,
+                }
+              : {
+                  name: REQUEST_TOOL,
+                  description: `Send one authenticated request to the person's ${entry.name} account (paths are relative to its API). GET and HEAD read; any other method makes a change.`,
+                }),
+            // A change through an email or messaging service sends something to other people.
+            ...(entry.category === "email" || entry.category === "messaging" ? { outbound: true } : {}),
+          },
         ];
   }
   return toolset;

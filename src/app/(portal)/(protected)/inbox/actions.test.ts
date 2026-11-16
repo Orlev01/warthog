@@ -1237,3 +1237,30 @@ test("an invitation names its event and guests, and an email's roles and whole t
     await db.close();
   }
 });
+
+test("after reading a stranger's email, the card says so: a reply to that sender, or a first email elsewhere", async () => {
+  const db = await freshDb();
+  const keyWrapper = keyWrapperFor();
+  try {
+    const recentRead = { lastReadAt: new Date(NOW.getTime() - 3 * 60_000), untilAt: new Date(NOW.getTime() + 57 * 60_000), sources: [{ service: "Gmail", kind: "email" as const, sender: "billing@payfast-au.co" }] };
+    const extras = (fresh: string[]) => ({
+      recipientHistory: async () => ({ fresh, unchecked: [] }),
+      readExposures: { record: async () => {}, active: async () => recentRead },
+    });
+    const reply = await arrangeHeld(db, keyWrapper, "read-reply", { ...emailCall(), tool: "google-gmail__send", connector: "google-gmail" }, { grantedConnectors: ["google-gmail"] }, extras(["accounts@payfast-au.co"]));
+    const elsewhere = (await reply.actions.load(await freshSession(db, reply.userId))).pending[0]!;
+    assert.equal(elsewhere.headsUp, "You haven't emailed accounts@payfast-au.co before. Claude read an email from billing@payfast-au.co 3 min ago. Worth a second look if you didn't ask for this.");
+    assert.equal(line(elsewhere, "Claude recently read"), "an email from billing@payfast-au.co, 3 min ago");
+
+    const same = await arrangeHeld(db, keyWrapper, "read-same", { ...emailCall({ recipients: ["billing@payfast-au.co"], params: { to: ["billing@payfast-au.co"], text: "Thanks" } }), tool: "google-gmail__send", connector: "google-gmail" }, { grantedConnectors: ["google-gmail"] }, extras(["billing@payfast-au.co"]));
+    assert.equal((await same.actions.load(await freshSession(db, same.userId))).pending[0]!.headsUp,
+      "You haven't emailed billing@payfast-au.co before. It's a reply to the email Claude read 3 min ago.");
+
+    const known = await arrangeHeld(db, keyWrapper, "read-known", { ...emailCall(), tool: "google-gmail__send", connector: "google-gmail" }, { grantedConnectors: ["google-gmail"] }, extras([]));
+    const quiet = (await known.actions.load(await freshSession(db, known.userId))).pending[0]!;
+    assert.equal(quiet.headsUp, undefined, "a known address stays quiet up front");
+    assert.ok(line(quiet, "Claude recently read"), "what it read is still in Details");
+  } finally {
+    await db.close();
+  }
+});

@@ -64,6 +64,7 @@ import { recordMetricEvent } from "../metrics/record";
 import { createResultGuard } from "../connectors/result-guard";
 import { gmailHasSentTo } from "../connectors/curated/google";
 import { outlookHasSentTo } from "../connectors/curated/microsoft";
+import { activeReadExposure, recordReadExposure } from "../db/read-exposures";
 
 import {
   createAgentCallPipeline,
@@ -420,7 +421,13 @@ function buildAgentPipeline(deps: McpDispatchDeps): AgentCallPipeline {
     executeTool,
     // Every executed connector result is checked before an agent reads it (sign-in codes and
     // links, card numbers and hidden characters hidden; mail turned into a readable view).
-    resultGuard: createResultGuard({ serviceName: (id) => catalogue.get(id)?.name }),
+    resultGuard: createResultGuard({ serviceName: (id) => catalogue.get(id)?.name, category: (id) => catalogue.get(id)?.category }),
+    // The "recently read" window per agent: opened when an agent is shown someone else's content,
+    // read when it then wants to change or send something.
+    readExposures: {
+      record: async (connection, source) => recordReadExposure(db, { userId: connection.userId, agentId: connection.agentId, source, at: clock.now() }, await dataKeyFor(connection.userId)),
+      active: async (connection) => activeReadExposure(db, connection.userId, connection.agentId, clock.now(), await dataKeyFor(connection.userId)),
+    },
     // A held email's card says when the person has never emailed a recipient before, from a
     // search of their own Sent mail (nothing is stored but the answer, inside the approval).
     recipientHistory: async (call, connection) => {

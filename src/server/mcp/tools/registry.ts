@@ -412,16 +412,21 @@ function buildConnectorTool(
       const parsed = parseParams(schema, input) as Record<string, unknown> & {
         body?: string;
       };
+      const makesChange = isRequest
+        ? declaration.getIsChange === true || requestMakesChange(String(parsed.method))
+        : (declaration.makesChange ?? true);
+      const recipients = declaration.recipientsOf ? declaration.recipientsOf(parsed) : declaration.recipients?.(parsed.body);
       const call: AgentCall = {
         connector: connectorId,
         tool: name,
-        makesChange: isRequest
-          ? declaration.getIsChange === true || requestMakesChange(String(parsed.method))
-          : (declaration.makesChange ?? true),
+        makesChange,
         requiresApproval: declaration.requiresApproval,
         unknownSemantics: isRequest || declaration.requiresApproval,
         messageChannel: declaration.messageChannel,
-        recipients: declaration.recipientsOf ? declaration.recipientsOf(parsed) : declaration.recipients?.(parsed.body),
+        recipients,
+        // It sends to other people: an email, an invitation that has guests, or a write
+        // through a messaging service.
+        outbound: declaration.outbound === true && makesChange && (isRequest || declaration.messageChannel !== undefined || (recipients?.length ?? 0) > 0),
         reason: parsed.reason as string | undefined,
         params: parsed,
       };

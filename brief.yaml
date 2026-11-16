@@ -344,6 +344,13 @@ features:
     Ask for more detail (the person types a question that is returned to the agent, which may
     resubmit); history of past decisions including expired ones.
   - >-
+    Recently read — for an hour after an agent reads something written by someone else (an email,
+    an event, a file, a message), its approvals say so ("Claude recently read an email from X,
+    3 min ago"), and an agent the person lets act without asking is asked first before it emails
+    an address the person has never emailed, sends an invitation with guests, or writes through a
+    messaging service; drafts, known addresses and everything else carry on as before, and an
+    agent that already asks first gets no new approvals.
+  - >-
     Agents wait safely — a request that needs approval is held by Warthog, not executed; the agent is
     told it is pending and can check or wait on it; when approved, Warthog itself carries out the held
     request exactly as it was approved and returns the result to the agent; when denied or expired

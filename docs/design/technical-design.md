@@ -276,6 +276,12 @@ Redaction is a pure module with exhaustive unit tests; the activity writer and t
 Rule actions/conditions are exactly the brief's vocabulary. Each rule renders back to an English
 sentence by a pure function (`ruleSentence`).
 
+- **Recently read** ([ADR](../adr/read-side-protection.md)): after `evaluate` (and `prepareCall`),
+  an `allow` for an outbound call (email send, invitation with guests, messaging write) by an agent
+  whose 60-minute `agent_read_exposures` window is open is escalated to `ask` when the recipient is
+  new to the person's Sent mail (or can't be checked), or for any invitation or messaging write.
+  Drafts never; denials and never-allow rules are unchanged; approval satisfies it.
+
 ## 9. Activity record
 - `activity_entries(user_id, seq, occurred_at, kind, source ['warthog' | 'agent_reported'], agent_id,
   connector_id, tool, outcome, amount, currency, merchant, payload_ct, prev_hash, entry_hash)`.

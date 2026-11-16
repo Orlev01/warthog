@@ -19,6 +19,7 @@ import { outlookMessageView } from "../../domain/content/outlook-message";
 import { anythingHidden, cleanText, type FilterCounts } from "../../domain/content/text-filters";
 import { untrustedNotice, type ContentKind } from "../../domain/content/untrusted";
 import type { AgentCall } from "../mcp/pipeline";
+import type { ReadSource } from "../db/read-exposures";
 
 /** How a checked result was handled — the `agent.read_guard` metric's outcome label. */
 export type GuardOutcome = "shown" | "masked" | "stubbed" | "withheld" | "fallback";
@@ -32,6 +33,8 @@ export interface GuardEvidence {
 export interface GuardedResult {
   readonly result: unknown;
   readonly evidence: GuardEvidence;
+  /** Content written by someone else that the agent was shown (for the "recently read" window). */
+  readonly exposure?: ReadSource;
 }
 
 export interface ResultGuard {
@@ -41,6 +44,8 @@ export interface ResultGuard {
 export interface ResultGuardDeps {
   /** The service's display name for a connector id (the catalogue name), for the result's source. */
   readonly serviceName?: (connectorId: string) => string | undefined;
+  /** The service's catalogue category ("email", "messaging", …), for reads that bring in others' messages. */
+  readonly category?: (connectorId: string) => string | undefined;
 }
 
 const COULD_NOT_CHECK_READ =
@@ -229,18 +234,73 @@ export function createResultGuard(deps: ResultGuardDeps = {}): ResultGuard {
     };
   }
 
+  // What the agent was shown that someone else wrote, if anything (read-side protection's
+  // "recently read" window). Mail the person sent or drafted, events they organised and the
+  // person's own tools don't count; Gmail search (ids only) doesn't either.
+  function exposureOf(call: AgentCall, guarded: GuardedResult): ReadSource | undefined {
+    if (!call.connector || guarded.evidence.outcome === "withheld") return undefined;
+    const service = deps.serviceName?.(call.connector) ?? call.connector;
+    const result = (guarded.result ?? {}) as Record<string, unknown>;
+    if (call.tool === GMAIL_READ) {
+      const message = (result.message ?? {}) as { labelIds?: unknown; from?: unknown };
+      const labels = Array.isArray(message.labelIds) ? message.labelIds : [];
+      if (labels.includes("SENT") || labels.includes("DRAFT")) return undefined;
+      return { service, kind: "email", ...senderOf(message.from) };
+    }
+    if (call.tool === OUTLOOK_READ) return { service, kind: "email", ...senderOf((result.message as { from?: unknown } | undefined)?.from) };
+    if (call.tool === OUTLOOK_SEARCH) {
+      const first = Array.isArray(result.messages) ? (result.messages[0] as { from?: unknown } | undefined) : undefined;
+      return first ? { service, kind: "email", ...senderOf(first.from) } : undefined;
+    }
+    if (call.tool === "google-calendar__list" || call.tool === "microsoft-outlook-calendar__list") {
+      let events: unknown[] = [];
+      try {
+        const body = JSON.parse(String(result.body)) as { items?: unknown; value?: unknown };
+        events = Array.isArray(body.items) ? body.items : Array.isArray(body.value) ? body.value : [];
+      } catch {
+        return undefined;
+      }
+      const foreign = events.find((event) => {
+        const e = (event ?? {}) as { organizer?: { self?: unknown }; isOrganizer?: unknown };
+        return e.organizer?.self !== true && e.isOrganizer !== true;
+      }) as { organizer?: { email?: unknown; emailAddress?: { address?: unknown } } } | undefined;
+      return foreign ? { service, kind: "event", ...senderOf(foreign.organizer?.email ?? foreign.organizer?.emailAddress?.address) } : undefined;
+    }
+    if (call.tool === "google-drive__read_text") return { service, kind: "file" };
+    if (call.requiresApproval) return { service, kind: "content" };
+    if (call.tool === `${call.connector}__request` && !call.makesChange) {
+      const category = deps.category?.(call.connector);
+      return category === "email" || category === "messaging" ? { service, kind: "message" } : undefined;
+    }
+    return undefined;
+  }
+
   return {
     review(call: AgentCall, result: unknown): GuardedResult {
-      const status = result && typeof result === "object" && typeof (result as { status?: unknown }).status === "number"
-        ? (result as { status: number }).status : undefined;
-      try {
-        if (isEnvelope(result)) return reviewEnvelope(call, result);
-        if (result && typeof result === "object" && !Array.isArray(result)) return reviewProvider(call, result as Record<string, unknown>);
-        const counts = emptyJsonCounts();
-        return { result: cleanJson(result, counts), evidence: { outcome: outcomeOf(counts, false), counts: nonZero(counts) } };
-      } catch {
-        return withheld(call, status);
-      }
+      const guarded = reviewResult(call, result);
+      const exposure = exposureOf(call, guarded);
+      return exposure ? { ...guarded, exposure } : guarded;
     },
   };
+
+  // The check itself: never throws (a result it can't check is withheld).
+  function reviewResult(call: AgentCall, result: unknown): GuardedResult {
+    const status = result && typeof result === "object" && typeof (result as { status?: unknown }).status === "number"
+      ? (result as { status: number }).status : undefined;
+    try {
+      if (isEnvelope(result)) return reviewEnvelope(call, result);
+      if (result && typeof result === "object" && !Array.isArray(result)) return reviewProvider(call, result as Record<string, unknown>);
+      const counts = emptyJsonCounts();
+      return { result: cleanJson(result, counts), evidence: { outcome: outcomeOf(counts, false), counts: nonZero(counts) } };
+    } catch {
+      return withheld(call, status);
+    }
+  }
+}
+
+// The address in a "Name <address>" header value, when there is one.
+function senderOf(value: unknown): { sender?: string } {
+  if (typeof value !== "string") return {};
+  const address = /<([^<>\s]+@[^<>\s]+)>/.exec(value)?.[1] ?? (/^[^\s<>]+@[^\s<>]+$/.test(value.trim()) ? value.trim() : undefined);
+  return address ? { sender: address.toLowerCase().slice(0, 254) } : {};
 }

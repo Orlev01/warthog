@@ -136,6 +136,43 @@ Every executed connector result passes `resultGuard.review(call, result)` in the
 - **Copy never says** "untrusted", "injection", "malicious", "token" or "taint", and never claims
   scam detection.
 
+## Recently read (the heads-up and narrow holds)
+
+**The window.** When the guard shows an agent content someone else wrote, Warthog opens a
+60-minute "recently read" window for that agent (migration 0114 `agent_read_exposures`).
+- **What it is keyed on:** one row per agent, never per run, because an agent can drop or restart
+  a run.
+- **What it holds:** the last three senders (service, kind, address), encrypted. It never holds a
+  subject or any text. The window is cleared once it has passed.
+- **What opens it:** Gmail and Outlook mail (not mail labelled SENT or DRAFT), Outlook search
+  previews, calendar events the person didn't organise, Drive file text, reads through an email
+  or messaging service's general request tool, and provider results.
+- **What doesn't:** Gmail search (ids only), and reads of the person's own tools (Todoist, Notion
+  and similar).
+
+**What it changes:**
+- **Every approval in the window** gets a Details line, "Claude recently read: an email from X,
+  3 min ago".
+- **A first email to an address** gets a combined heads-up: "You haven't emailed X before. Claude
+  read an email from Y 3 min ago. Worth a second look if you didn't ask for this". When X is the
+  sender it read: "…It's a reply to the email Claude read 3 min ago".
+- **An agent set to "allowed"** (changes without asking) is asked first, within the window, before:
+  - it sends an email to an address the person has never emailed, or one Warthog couldn't check
+    (exact Sent-mail match);
+  - it sends a calendar invitation with guests;
+  - it writes through an email or messaging service (including a GET to a `get_is_change`
+    service).
+
+**What it doesn't change:**
+- A draft, which reaches no one, is never held for this.
+- Never-allow rules and denials still win.
+- Approving the request satisfies the ask.
+- An agent that already asks first gets no new approvals, only the Details line.
+
+**How it's built:** a built-in protection in the pipeline after policy evaluation, not a rule
+condition, so the rule vocabulary is unchanged. It needs one indexed lookup, and only for calls
+that could change or send something.
+
 ## Write provenance (memories and tasks)
 
 Shared memories and tasks reach other agents, so one agent can pass text it read in an email on

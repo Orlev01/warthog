@@ -69,6 +69,7 @@ import type { Clock } from "../seams/clock";
 import { withTransaction, type Db } from "../db/index";
 import { cleanShortText } from "../../domain/content/untrusted";
 import { outgoingDetail } from "../../domain/approvals/outgoing";
+import type { ReadExposure, ReadSource } from "../db/read-exposures";
 
 // What the agent is asking to do. The policy-relevant fields are exactly the
 // engine's `PolicyCall`, plus the tool `params` (executed + recorded, redacted)
@@ -89,6 +90,9 @@ export interface AgentCall {
   readonly merchant?: string;
   readonly recipients?: string | readonly string[] | null;
   readonly messageChannel?: "email" | "chat" | "post";
+  // The call sends something to other people (an email, an invitation with guests, a message
+  // through a messaging service) — what the "recently read" check looks at.
+  readonly outbound?: boolean;
   // A high-tier request's field (e.g. "passport") and the agent's stated purpose,
   // shown to the person on the approval (brief "High-tier release").
   readonly field?: string;
@@ -141,6 +145,17 @@ export interface ResultGuardSeam {
 // (an address too unusual to search for safely), or throws when it couldn't check at all.
 export type RecipientHistorySeam = (call: AgentCall, connection: AgentConnection) => Promise<{ readonly fresh: readonly string[]; readonly unchecked: readonly string[] }>;
 
+// The "recently read" window per agent (docs/adr/read-side-protection.md): recorded when an
+// agent is shown content someone else wrote, read when it then wants to change something.
+// OPTIONAL: without it there is no window, as before.
+export interface ReadExposureSeam {
+  record(connection: AgentConnection, source: ReadSource): Promise<void>;
+  active(connection: AgentConnection): Promise<ReadExposure | null>;
+}
+
+// Why an agent the person lets act alone is asked first after reading someone else's content.
+const RECENT_READ_REASON = "This agent recently read something written by someone else, so Warthog checks with you before it sends this.";
+
 // How long the approval waits for the Sent-mail check before it is created without it, so the
 // person's notification is never held up.
 const RECIPIENT_CHECK_BUDGET_MS = 3000;
@@ -159,6 +174,7 @@ export interface PipelineDeps {
   readonly recordMetric?: RecordMetricSeam;
   readonly resultGuard?: ResultGuardSeam;
   readonly recipientHistory?: RecipientHistorySeam;
+  readonly readExposures?: ReadExposureSeam;
 }
 
 // The metric each checked connector result records: one count, tagged with how it was
@@ -339,6 +355,8 @@ function toApprovalDetail(
   context: AgentContext,
   rate: ReferenceRate | null,
   recipientCheck?: { readonly newRecipients?: readonly string[]; readonly uncheckedRecipients?: readonly string[]; readonly unchecked?: boolean },
+  exposure?: ReadExposure | null,
+  readCheck?: boolean,
 ): Record<string, unknown> {
   const converted = convertedAmount(call, context.accountCurrency, rate);
   // What would go out, built from the same input the tool runs with (approval-card truth).
@@ -365,6 +383,10 @@ function toApprovalDetail(
     ...(recipientCheck?.newRecipients?.length ? { newRecipients: recipientCheck.newRecipients } : {}),
     ...(recipientCheck?.uncheckedRecipients?.length ? { uncheckedRecipients: recipientCheck.uncheckedRecipients } : {}),
     ...(recipientCheck?.unchecked ? { recipientsUnchecked: true } : {}),
+    // What this agent recently read from someone else (who, not what), and whether that is
+    // why it is asking.
+    ...(exposure ? { recentRead: { at: exposure.lastReadAt.toISOString(), sources: exposure.sources } } : {}),
+    ...(readCheck ? { readCheck: true } : {}),
     ...(converted ? { converted } : {}),
   };
 }
@@ -450,9 +472,11 @@ export function createAgentCallPipeline(deps: PipelineDeps): AgentCallPipeline {
   // Check one executed connector result before the agent reads it (read-side protection),
   // recording the `agent.read_guard` metric. Core tools and a pipeline built without the
   // guard hand the result back unchanged.
-  async function guardResult(call: AgentCall, result: unknown): Promise<{ result: unknown; evidence?: unknown }> {
+  async function guardResult(call: AgentCall, result: unknown, connection: AgentConnection): Promise<{ result: unknown; evidence?: unknown }> {
     if (call.connector === null || !deps.resultGuard) return { result };
-    const guarded = deps.resultGuard.review(call, result);
+    const guarded = deps.resultGuard.review(call, result) as ReturnType<ResultGuardSeam["review"]> & { exposure?: ReadSource };
+    // Opening the "recently read" window happens before the agent is handed the content.
+    if (guarded.exposure && deps.readExposures) await deps.readExposures.record(connection, guarded.exposure);
     if (deps.recordMetric) {
       const dimensions: Record<string, unknown> = { outcome: guarded.evidence.outcome };
       if (/^[A-Za-z0-9][A-Za-z0-9_.-]{0,63}$/.test(call.connector)) dimensions.connectorId = call.connector;
@@ -557,14 +581,35 @@ export function createAgentCallPipeline(deps: PipelineDeps): AgentCallPipeline {
       if (call.audit) { call.audit.connectorAccountId = call.connectorAccountId; call.audit.connectorAccountLabel = call.connectorAccountLabel; }
     }
 
+    // The "recently read" window (docs/adr/read-side-protection.md): only for a call that could
+    // change or send something, so plain reads pay nothing.
+    const exposure = deps.readExposures && (call.makesChange || call.requiresApproval || call.request)
+      ? await deps.readExposures.active(connection) : null;
+    // An agent the person lets act alone is asked first, after reading someone else's content,
+    // before it sends an email to an address the person has never emailed, sends an invitation
+    // with guests, or writes through a messaging service. Drafts never are; never-allow rules and
+    // denials (above) still win; an ask is still an ask.
+    let recipientCheck: Awaited<ReturnType<typeof checkRecipients>>;
+    let readCheck = false;
+    if (decision.decision === "allow" && !call.requiresApproval && exposure && call.outbound && !call.tool.endsWith("__draft")) {
+      if (call.messageChannel === "email") {
+        recipientCheck = await checkRecipients(call, connection);
+        readCheck = !recipientCheck || recipientCheck.unchecked === true
+          || (recipientCheck.newRecipients?.length ?? 0) > 0 || (recipientCheck.uncheckedRecipients?.length ?? 0) > 0;
+      } else {
+        readCheck = true;
+      }
+    }
+
     // ASK — the person is needed. Warthog HOLDS the call: it parks the exact
     // agent call (its args DEK-encrypted) behind a fresh PENDING approval, records
     // one activity entry for the held call, and tells the agent `pending_approval`
     // WITHOUT executing the tool. The person decides it from their inbox; on
     // approval Warthog runs the held call exactly once.
-    if (decision.decision === "ask" || call.requiresApproval) {
+    if (decision.decision === "ask" || call.requiresApproval || readCheck) {
       const dek = await dataKeyFor(connection.userId);
-      const recipientCheck = await checkRecipients(call, connection);
+      if (recipientCheck === undefined) recipientCheck = await checkRecipients(call, connection);
+      if (readCheck && call.audit) call.audit.decision = { decision: "ask", reason: RECENT_READ_REASON };
       // The pending approval and the held call it guards are written together: a
       // failure part-way never leaves an approval in the inbox with nothing behind it.
       const approval = await withTransaction(db, async (tx) => {
@@ -580,7 +625,10 @@ export function createAgentCallPipeline(deps: PipelineDeps): AgentCallPipeline {
             expiryMinutes,
             // The same rate the engine checked, so the approval's converted amount and
             // the release's ledger amount match it.
-            detail: toApprovalDetail(call, call.requiresApproval && decision.decision === "allow" ? {reason:"Provider-hosted tools require approval because their effects are not verified by Warthog."} : decision, context, effectiveRate(context, rate), recipientCheck),
+            detail: toApprovalDetail(call,
+              call.requiresApproval && decision.decision === "allow" ? {reason:"Provider-hosted tools require approval because their effects are not verified by Warthog."}
+                : readCheck ? { reason: RECENT_READ_REASON } : decision,
+              context, effectiveRate(context, rate), recipientCheck, exposure, readCheck),
           },
           dek,
           clock,
@@ -630,7 +678,7 @@ export function createAgentCallPipeline(deps: PipelineDeps): AgentCallPipeline {
     }
     const observed = observeResult(result);
     // The evidence describes the service's own reply; the agent reads the checked one.
-    const guarded = observed.outcome === "executed" ? await guardResult(call, result) : { result };
+    const guarded = observed.outcome === "executed" ? await guardResult(call, result, connection) : { result };
     await record(connection, call, observed.outcome, result, recorder, true, guarded.evidence);
     if (observed.outcome === "failed" || observed.outcome === "unknown") {
       return { result: { status: observed.outcome, reason: "The service did not confirm success. Check the activity record before retrying a change." }, errorCategory: CATEGORY_TOOL_ERROR };
@@ -776,7 +824,7 @@ export function createAgentCallPipeline(deps: PipelineDeps): AgentCallPipeline {
           } else {
             // The stored outcome (what check_approval and the inbox hand back) is the
             // checked result; the evidence still describes the service's own reply.
-            const guarded = await guardResult(approvedCall, result);
+            const guarded = await guardResult(approvedCall, result, connection);
             guardEvidence = guarded.evidence;
             outcome = { status: "executed", result: guarded.result };
           }
