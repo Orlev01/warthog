@@ -67,6 +67,7 @@ import type { ActivityRecorder } from "../activity/recorder";
 import type { KeyWrapper } from "../crypto/key-wrapper";
 import type { Clock } from "../seams/clock";
 import { withTransaction, type Db } from "../db/index";
+import { cleanShortText } from "../../domain/content/untrusted";
 
 // What the agent is asking to do. The policy-relevant fields are exactly the
 // engine's `PolicyCall`, plus the tool `params` (executed + recorded, redacted)
@@ -125,6 +126,14 @@ export type RecordMetricSeam = (input: {
   readonly dimensions?: Record<string, unknown>;
 }) => Promise<void>;
 
+// The read-side check every executed connector result passes before the agent reads it
+// (docs/adr/read-side-protection.md). OPTIONAL: a pipeline built without it hands results
+// back unchanged, so every behaviour that predates it is intact; the production root wires
+// the real guard. It never throws, and its evidence is counts only.
+export interface ResultGuardSeam {
+  review(call: AgentCall, result: unknown): { result: unknown; evidence: { outcome: string; counts?: Record<string, number> } };
+}
+
 // The injected seams — no process.env (INV-103).
 export interface PipelineDeps {
   readonly db: Db;
@@ -137,7 +146,12 @@ export interface PipelineDeps {
   readonly rate?: ReferenceRate | null;
   readonly notifyApprovalCreated?: NotifyApprovalCreatedSeam;
   readonly recordMetric?: RecordMetricSeam;
+  readonly resultGuard?: ResultGuardSeam;
 }
+
+// The metric each checked connector result records: one count, tagged with how it was
+// handled (shown / masked / stubbed / withheld / fallback) and the connector id.
+const READ_GUARD_METRIC = "agent.read_guard";
 
 // A discriminated union on `status` (the repo idiom).
 export type AgentCallResult =
@@ -195,11 +209,12 @@ const HOLD_FAILED = "The approved request could not be completed.";
 // Whether a tool body's result is its own plain refusal (`{status:"refused", reason}`
 // — e.g. "This agent does not have permission to use memories."). Such a call did not
 // do anything, so it is recorded and returned as refused, never as executed.
+// A reason can come from a provider, so it is cleaned of hidden characters and capped.
 function asToolRefusal(result: unknown): { status: "refused"; reason: string } | null {
   if (typeof result !== "object" || result === null) return null;
   const { status, reason } = result as { status?: unknown; reason?: unknown };
   return ["refused", "not_available", "gone"].includes(String(status))
-    ? { status: "refused", reason: typeof reason === "string" ? reason : "The requested resource is unavailable." } : null;
+    ? { status: "refused", reason: typeof reason === "string" ? cleanShortText(reason, 300) : "The requested resource is unavailable." } : null;
 }
 
 export interface AgentCallPipeline {
@@ -351,6 +366,7 @@ export function createAgentCallPipeline(deps: PipelineDeps): AgentCallPipeline {
     result?: unknown,
     targetRecorder: ActivityRecorder = recorder,
     markTerminal = true,
+    guardEvidence?: unknown,
   ): Promise<void> {
     // The call's own run (an approved hold), else the request's: get_context starts a run
     // while it runs, so its own entry joins it.
@@ -369,7 +385,7 @@ export function createAgentCallPipeline(deps: PipelineDeps): AgentCallPipeline {
         connectorAccountLabel: call.connectorAccountLabel ?? call.audit?.connectorAccountLabel,
         requestId: call.audit?.requestId, attemptId: call.audit?.attemptId, policyFingerprint: call.audit?.policyFingerprint, reportedRunId: requestObservation.getStore()?.reportedRunId, parentRequestId: requestObservation.getStore()?.requestId, client: requestObservation.getStore()?.client, decision: call.audit?.decision, approvalId: call.audit?.approvalId,
         durationMs: call.audit ? Math.max(0, clock.now().getTime() - call.audit.startedAt) : undefined,
-        resultEvidence: result === undefined ? { outcome } : observeResult(result).evidence,
+        resultEvidence: result === undefined ? { outcome } : { ...observeResult(result).evidence, ...(guardEvidence ? { guard: guardEvidence } : {}) },
         ...(run ? { run } : {}),
         ...(call.via ? { via: call.via } : {}),
         ...(outcome === "executed" ? { reversal: calendarReversalFromResult(call.tool, result) } : {}),
@@ -388,6 +404,24 @@ export function createAgentCallPipeline(deps: PipelineDeps): AgentCallPipeline {
       throw new Error("handleAgentCall: no data key for this user");
     }
     return keyWrapper.unwrap(user.wrappedDek);
+  }
+
+  // Check one executed connector result before the agent reads it (read-side protection),
+  // recording the `agent.read_guard` metric. Core tools and a pipeline built without the
+  // guard hand the result back unchanged.
+  async function guardResult(call: AgentCall, result: unknown): Promise<{ result: unknown; evidence?: unknown }> {
+    if (call.connector === null || !deps.resultGuard) return { result };
+    const guarded = deps.resultGuard.review(call, result);
+    if (deps.recordMetric) {
+      const dimensions: Record<string, unknown> = { outcome: guarded.evidence.outcome };
+      if (/^[A-Za-z0-9][A-Za-z0-9_.-]{0,63}$/.test(call.connector)) dimensions.connectorId = call.connector;
+      // A metric is best-effort: it never changes what happened to the call.
+      try {
+        await deps.recordMetric({ name: READ_GUARD_METRIC, value: 1, dimensions });
+      } catch { /* the call's own record and result stand */ }
+    }
+    // Activity shows the check only when it hid something.
+    return { result: guarded.result, evidence: guarded.evidence.outcome === "shown" ? undefined : guarded.evidence };
   }
 
   // Record the two request metrics for one handled call (task E17-S03): a count increment
@@ -553,11 +587,13 @@ export function createAgentCallPipeline(deps: PipelineDeps): AgentCallPipeline {
       return { result: refusal, errorCategory: CATEGORY_TOOL_REFUSED };
     }
     const observed = observeResult(result);
-    await record(connection, call, observed.outcome, result);
+    // The evidence describes the service's own reply; the agent reads the checked one.
+    const guarded = observed.outcome === "executed" ? await guardResult(call, result) : { result };
+    await record(connection, call, observed.outcome, result, recorder, true, guarded.evidence);
     if (observed.outcome === "failed" || observed.outcome === "unknown") {
       return { result: { status: observed.outcome, reason: "The service did not confirm success. Check the activity record before retrying a change." }, errorCategory: CATEGORY_TOOL_ERROR };
     }
-    return { result: { status: "executed", result } };
+    return { result: { status: "executed", result: guarded.result } };
   }
 
   return {
@@ -664,14 +700,15 @@ export function createAgentCallPipeline(deps: PipelineDeps): AgentCallPipeline {
         active: true,
       };
       const approvedCall: AgentCall = { ...call, audit: { requestId: call.audit?.requestId ?? randomUUID(), attemptId: randomUUID(), startedAt: clock.now().getTime(), approvalId } };
-      async function finish(outcome: HeldOutcome, result?: unknown) {
+      async function finish(outcome: HeldOutcome, result?: unknown, guardEvidence?: unknown) {
         await withTransaction(db, async tx => {
-          await record(connection, approvedCall, outcome.status, result, recorder.forTransaction?.(tx, async () => dek) ?? recorder, false);
+          await record(connection, approvedCall, outcome.status, result, recorder.forTransaction?.(tx, async () => dek) ?? recorder, false, guardEvidence);
           await recordOutcome(tx, { userId, id: ran.id, outcome }, dek);
         });
         approvedCall.audit!.terminal = true;
       }
       let observedResult: unknown;
+      let guardEvidence: unknown;
       let outcome: HeldOutcome;
       try {
         const current = await loadAgentContext(connection, { db, keyWrapper, clock }, cardRequestOf(call));
@@ -690,9 +727,17 @@ export function createAgentCallPipeline(deps: PipelineDeps): AgentCallPipeline {
           observedResult = result;
           const refusal = asToolRefusal(result);
           const observed = observeResult(result);
-          outcome = refusal ?? (observed.outcome === "failed" || observed.outcome === "unknown"
-            ? { status: observed.outcome, reason: HOLD_FAILED }
-            : { status: "executed", result });
+          if (refusal) {
+            outcome = refusal;
+          } else if (observed.outcome === "failed" || observed.outcome === "unknown") {
+            outcome = { status: observed.outcome, reason: HOLD_FAILED };
+          } else {
+            // The stored outcome (what check_approval and the inbox hand back) is the
+            // checked result; the evidence still describes the service's own reply.
+            const guarded = await guardResult(approvedCall, result);
+            guardEvidence = guarded.evidence;
+            outcome = { status: "executed", result: guarded.result };
+          }
         }
       } catch (error) {
         // Keep the failure so a later ask is told the request could not be completed
@@ -701,7 +746,7 @@ export function createAgentCallPipeline(deps: PipelineDeps): AgentCallPipeline {
         await finish({ status, reason: HOLD_FAILED });
         throw error;
       }
-      await finish(outcome, observedResult);
+      await finish(outcome, observedResult, guardEvidence);
       return outcome;
     },
   };

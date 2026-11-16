@@ -84,6 +84,9 @@ export interface ConnectorToolDeclaration {
   readonly makesChange?: boolean;
   readonly messageChannel?: "email" | "chat" | "post";
   readonly recipients?: (body: string | undefined) => readonly string[];
+  // The general request tool of a service that can send a message on a GET: every request,
+  // GET included, is classified as a change (catalogue `get_is_change`).
+  readonly getIsChange?: boolean;
 }
 
 // Connector id → its (unqualified) tools, by bare name or full declaration. The resolver
@@ -408,7 +411,7 @@ function buildConnectorTool(
         connector: connectorId,
         tool: name,
         makesChange: isRequest
-          ? requestMakesChange(String(parsed.method))
+          ? declaration.getIsChange === true || requestMakesChange(String(parsed.method))
           : (declaration.makesChange ?? true),
         requiresApproval: declaration.requiresApproval,
         unknownSemantics: isRequest || declaration.requiresApproval,

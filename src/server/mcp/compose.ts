@@ -61,6 +61,7 @@ import { notifyApprovalCreated, type ApprovalPushSender } from "../notify/approv
 import { createWebPushSender } from "../notify/web-push";
 import { outbox } from "../notify/outbox";
 import { recordMetricEvent } from "../metrics/record";
+import { createResultGuard } from "../connectors/result-guard";
 
 import {
   createAgentCallPipeline,
@@ -73,7 +74,7 @@ import { createToolRegistry, type ToolDefinition } from "./tools/registry";
 import type { AgentConnection } from "./context";
 
 import { createRememberTool, createSearchMemoryTool } from "./tools/memory";
-import { createGetSkillTool } from "./tools/get-skill";
+import { createGetSkillTool, SERVER_INSTRUCTIONS } from "./tools/get-skill";
 import { createGetContextTool } from "./tools/get-context";
 import { createCheckApprovalTool } from "./tools/check-approval";
 import { createCollectReleaseTool } from "./tools/collect-release";
@@ -404,6 +405,7 @@ function buildAgentPipeline(deps: McpDispatchDeps): AgentCallPipeline {
   // registered device plus the scheduled SMS/email fallback, design §10), and every
   // handled call records the request count/latency metrics through the guarded recorder.
   const approvalPush = approvalPushSender(config);
+  const catalogue = deps.catalogue ?? getProcessCatalogue(config);
   pipeline = createAgentCallPipeline({
     db,
     keyWrapper,
@@ -411,6 +413,9 @@ function buildAgentPipeline(deps: McpDispatchDeps): AgentCallPipeline {
     rateLimiter,
     recorder,
     executeTool,
+    // Every executed connector result is checked before an agent reads it (sign-in codes and
+    // links, card numbers and hidden characters hidden; mail turned into a readable view).
+    resultGuard: createResultGuard({ serviceName: (id) => catalogue.get(id)?.name }),
     prepareCall: async (call, connection) => {
       if (call.connector === null) return call;
       const grants = await getConnectionPermissions(db, connection.userId, connection.connectionId);
@@ -494,7 +499,9 @@ export function createMcpDispatch(deps: McpDispatchDeps): McpDispatch {
   // for the verified connection (core tools + its permitted connector tools). Each handler
   // is bound to the resolved connection, so identity is taken ONLY from the verified bearer.
   async function buildServer(authInfo: AuthInfo | undefined): Promise<McpServer> {
-    const server = new McpServer({ name: MCP_SERVER_NAME, version: MCP_SERVER_VERSION });
+    // The instructions every client receives on connect, before any tool is called: how to
+    // treat content read through Warthog (docs/adr/read-side-protection.md).
+    const server = new McpServer({ name: MCP_SERVER_NAME, version: MCP_SERVER_VERSION }, { instructions: SERVER_INSTRUCTIONS });
 
     const connectionId = authInfo?.clientId;
     const connection = connectionId ? await resolveConnection(connectionId) : null;
