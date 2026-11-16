@@ -1,15 +1,21 @@
 version: 2
+# Monthly and grouped: every update PR runs the full checks, so a week of separate PRs cost
+# more than the updates were worth. Majors still arrive one per PR, to be reviewed alone.
+# Security updates are a separate repository setting (Dependabot security updates), not this file.
 updates:
   - package-ecosystem: npm
     directory: /
     schedule:
-      interval: weekly
+      interval: monthly
     open-pull-requests-limit: 5
     groups:
       tailwind:
         patterns:
           - tailwindcss
           - '@tailwindcss/*'
+      minor-and-patch:
+        patterns: ['*']
+        update-types: [minor, patch]
     ignore:
       # The application and delivery images run Node 22. Newer declarations can
       # allow APIs that do not exist in that runtime; upgrade them together.
@@ -18,10 +24,16 @@ updates:
   - package-ecosystem: github-actions
     directory: /
     schedule:
-      interval: weekly
+      interval: monthly
     open-pull-requests-limit: 3
+    groups:
+      actions:
+        patterns: ['*']
   - package-ecosystem: docker
     directory: /
     schedule:
-      interval: weekly
+      interval: monthly
     open-pull-requests-limit: 3
+    groups:
+      docker:
+        patterns: ['*']
