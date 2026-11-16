@@ -109,7 +109,47 @@ test("the still picture needs no animation: pulses carry no words and the page s
   const markup = renderToStaticMarkup(<Landing />);
   assert.match(markup, /data-motion="off"/);
   for (const pulse of markup.match(/<path[^>]*class="wh-diagram-pulse"[^>]*>/g) ?? []) {
-    assert.match(pulse, /pathLength="100"/);
+    assert.match(pulse, /--wh-pulse-end:-\d+\.\d/, "each pulse parks past the end of its own line");
   }
-  assert.equal((markup.match(/class="wh-diagram-pulse"/g) ?? []).length, 35, "one pulse per drawn line");
+  assert.equal((markup.match(/class="wh-diagram-pulse"/g) ?? []).length, 70, "a request and an answer on every drawn line");
+});
+
+// Founder, 17 November 2026: "its not just agents -> warthog -> service but agents -> warthog ->
+// services -> warthog -> agents ... I want to see packets go back toward the agents".
+type Pulse = { d: string; kind: string; delay: number };
+
+function pulses(figure: string): Pulse[] {
+  return (figure.match(/<path[^>]*class="wh-diagram-pulse"[^>]*>/g) ?? []).map((tag) => ({
+    d: tag.match(/\bd="([^"]+)"/)![1]!,
+    kind: tag.match(/data-pulse="([^"]+)"/)![1]!,
+    delay: Number(tag.match(/--wh-pulse-delay:\s*(-?[\d.]+)s/)![1]),
+  }));
+}
+
+test("every line carries a request out and, later, its answer back", () => {
+  for (const figure of figures(renderToStaticMarkup(<ConnectOnceDiagrams />))) {
+    const byLine = new Map<string, Pulse[]>();
+    for (const pulse of pulses(figure)) byLine.set(pulse.d, [...(byLine.get(pulse.d) ?? []), pulse]);
+    assert.equal(byLine.size, (figure.match(/data-wire=""/g) ?? []).length);
+    for (const [line, both] of byLine) {
+      const request = both.find((pulse) => pulse.kind === "request");
+      const answer = both.find((pulse) => pulse.kind === "answer");
+      assert.equal(both.length, 2, `${line} has one request and one answer`);
+      assert.ok(request && answer && answer.delay > request.delay, `${line} answers after it asks`);
+    }
+  }
+});
+
+test("with Warthog, the answer comes back through Warthog; without it, each line takes its own turn", () => {
+  const [without, withWarthog] = figures(renderToStaticMarkup(<ConnectOnceDiagrams />)).map(pulses);
+  const fromAgents = withWarthog!.filter((pulse) => pulse.d.startsWith("M98,"));
+  const toServices = withWarthog!.filter((pulse) => !pulse.d.startsWith("M98,"));
+  assert.equal(fromAgents.length, 10);
+  for (const asked of fromAgents.filter((pulse) => pulse.kind === "request")) {
+    const answered = fromAgents.find((pulse) => pulse.d === asked.d && pulse.kind === "answer")!;
+    const service = toServices.filter((pulse) => pulse.delay > asked.delay && pulse.delay < answered.delay);
+    assert.deepEqual(service.map((pulse) => pulse.kind), ["request", "answer"], "Warthog calls one service and hears back before answering the agent");
+  }
+  const turns = without!.filter((pulse) => pulse.kind === "request").map((pulse) => pulse.delay);
+  assert.equal(new Set(turns).size, 25, "one trip at a time per line, not all 25 at once");
 });
