@@ -473,8 +473,9 @@ function PendingItem({
       ) : null}
       {request.extras && request.extras.length ? (
         <details className="group text-sm">
-          <summary className="inline-flex min-h-11 cursor-pointer items-center gap-1.5 text-fg-muted">
+          <summary className="inline-flex min-h-11 cursor-pointer list-none items-center gap-1.5 text-fg-muted [&::-webkit-details-marker]:hidden">
             <span>Details</span>
+            <RequestContext request={request} />
             <ChevronDown aria-hidden={true} className="h-4 w-4 shrink-0 transition-transform group-open:rotate-180" />
           </summary>
           <dl className="mt-1 grid grid-cols-[auto_minmax(0,1fr)] gap-x-4 gap-y-1.5">

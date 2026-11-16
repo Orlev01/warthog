@@ -22,18 +22,26 @@ card readable at a glance.
 ### Warthog builds the email (`src/domain/content/compose-mail.ts`)
 
 Gmail and Outlook `draft`/`send` take plain fields:
-`{to[], cc[]?, bcc[]?, subject?, text, html?, reply?: {id}, reason}`.
+`{to[], cc[]?, bcc[]?, subject?, text, reply?: {id}, reason}`.
 - A hand-built `body` is refused with "Use to, subject and text: Warthog builds the email."
+- An `html` version is refused too. Warthog sends exactly the plain text the card shows, so no
+  second version can say something else, hide text or carry a tracking image.
 - **Recipients come from the fields**, so rules and checks see the real list. An address Warthog
   can't read is refused. A send needs at least one recipient.
 - **The message is built from the same input the card shows:**
-  - UTF-8 with RFC 2047 headers.
+  - Plain text, UTF-8, with RFC 2047 headers (also for any value that already looks like an
+    encoded word). Headers are folded to about 76 columns.
+  - Invisible and direction-changing characters are removed from the text, for both
+    services.
   - Line breaks are refused in any header, and there is no `from` field.
-  - Text and HTML go together as multipart/alternative.
+  - Quoted display names (`"Lee, Sam" <sam@…>`) are accepted, and the address's case is kept.
 - **A reply** looks up only the original's headers (Message-ID, References, Subject, thread). It is
   sent in that thread with "Re: …" when it has no subject of its own.
-- **Outlook** gets Graph's own message shape and reply actions (`createReply` for drafts, `reply`
-  for sends).
+- **Outlook** gets Graph's own message shape. A reply is made with `createReply`, so it is
+  threaded, then PATCHed to exactly the approved recipients, subject and text and checked.
+  - Graph's reply actions add the original sender or its Reply-To on their own. If the result
+    differs from the approved recipients, the draft is deleted and nothing is sent.
+  - A send then posts the draft.
 - **Recipients are listed explicitly.** The agent lists a reply's recipients itself (usually from
   the checked view's `replyTo` or `from`), so the full list is known before any rule runs.
 
@@ -60,16 +68,22 @@ A rule the person wrote stays up front. Everything else goes behind a native "De
 disclosure: which account, everyone it goes to, the link domains, "Why you're asked" (the default
 ask-first reason), and the conversation and app it came from.
 
-**At most one heads-up** (an info `Notice`, never red), only when something is unusual:
-- "This email has text the recipient won't see" (3 or more hidden characters or elements).
-- "You haven't emailed X before."
+**At most one heads-up** (an info `Notice`, never red), only when something is unusual: "You
+haven't emailed X before."
+
+Details also carries the whole message (up to 5,000 characters), To, Copy and Blind copy listed
+separately, and every first-time address.
 
 **The first-time check:**
 - **What runs:** a search of the person's own Sent mail (Gmail `in:sent {to: cc: bcc:}`, Outlook
   Sent Items), at hold time only.
 - **Limits:** at most 5 recipients, run in parallel. It runs outside the approval's transaction
   with a 3-second budget, so the notification is never held up.
-- **What goes into the search:** only plain addresses. Anything else counts as new.
+- **What goes into the search:** only plain addresses. Anything else, and any past the fifth, is
+  reported as "couldn't check", never as new.
+- **Exact matches only:** Gmail and Graph search match words, so each hit's To, Cc and Bcc are
+  compared with the exact address. A lookalike (john@acme.co for john@acme.co.uk) never counts
+  as "emailed before".
 - **On failure:** the card says in Details that it couldn't check.
 - **What is kept:** only the answer, inside the encrypted approval.
 
@@ -82,6 +96,13 @@ ask-first reason), and the conversation and app it came from.
   invitations.
 
 ## Consequences
+
+- **Existing rules now see invitation guests.** A recipient condition on an `any_change`,
+  `service_tool` or `specific_tool` rule, ask-first or never-allow, now matches calendar
+  invitations with those guests. That is intended, and it goes in the release notes.
+- **Held sends from before this change fail when approved.** Gmail and Outlook sends still held
+  at deploy carry the old `body`, so they fail on approval with a plain error. Approvals expire
+  within 24 hours.
 
 - **The old form is gone.** Agents that sent `raw` messages get a clear refusal and the new
   fields, which their tool list now describes.

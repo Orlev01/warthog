@@ -1180,8 +1180,9 @@ test("a held email shows who it goes to, its subject and opening words, with the
     assert.equal(view.rule, "", "the default ask-first reason isn't shown up front");
     assert.equal(view.headsUp, undefined, "nothing unusual, no heads-up");
     assert.equal(line(view, "Why you're asked"), "Changes with this connector need your approval first.");
-    assert.equal(line(view, "Goes to"), "accounts@payfast-au.co");
+    assert.equal(line(view, "To"), "accounts@payfast-au.co");
     assert.ok(view.details.every((detail) => detail.label !== "To"), "the recipient is in the sentence, not repeated up front");
+    assert.ok(view.extras!.some((detail) => detail.label === "To"), "everyone it goes to is in Details");
   } finally {
     await db.close();
   }
@@ -1192,12 +1193,12 @@ test("a first email to a new address gets one gentle heads-up; a failed check sa
   const keyWrapper = keyWrapperFor();
   try {
     const fresh = await arrangeHeld(db, keyWrapper, "card-new", { ...emailCall(), tool: "google-gmail__send", connector: "google-gmail" }, { grantedConnectors: ["google-gmail"] },
-      { recipientHistory: async () => ["accounts@payfast-au.co"] });
+      { recipientHistory: async () => ({ fresh: ["accounts@payfast-au.co"], unchecked: [] }) });
     const view = (await fresh.actions.load(await freshSession(db, fresh.userId))).pending[0]!;
     assert.equal(view.headsUp, "You haven't emailed accounts@payfast-au.co before.");
 
     const known = await arrangeHeld(db, keyWrapper, "card-known", { ...emailCall(), tool: "google-gmail__send", connector: "google-gmail" }, { grantedConnectors: ["google-gmail"] },
-      { recipientHistory: async () => [] });
+      { recipientHistory: async () => ({ fresh: [], unchecked: [] }) });
     assert.equal((await known.actions.load(await freshSession(db, known.userId))).pending[0]!.headsUp, undefined, "a known address shows nothing");
 
     const failed = await arrangeHeld(db, keyWrapper, "card-unchecked", { ...emailCall(), tool: "google-gmail__send", connector: "google-gmail" }, { grantedConnectors: ["google-gmail"] },
@@ -1210,15 +1211,17 @@ test("a first email to a new address gets one gentle heads-up; a failed check sa
   }
 });
 
-test("an email with text the recipient won't see is flagged, and an invitation names its event and guests", async () => {
+test("an invitation names its event and guests, and an email's roles and whole text are in Details", async () => {
   const db = await freshDb();
   const keyWrapper = keyWrapperFor();
   try {
-    const hidden = await arrangeHeld(db, keyWrapper, "card-hidden", {
-      ...emailCall(), tool: "google-gmail__send", connector: "google-gmail",
-      params: { to: ["sam@example.com"], subject: "Hi", text: "Hi", html: "<p>Hi</p><div style=\"display:none\">secret one</div><span style=\"font-size:0\">two</span><p hidden>three</p>" },
+    const roles = await arrangeHeld(db, keyWrapper, "card-roles", {
+      ...emailCall(), tool: "google-gmail__send", connector: "google-gmail", recipients: ["sam@example.com", "outsider@evil.example"],
+      params: { to: ["sam@example.com"], bcc: ["outsider@evil.example"], subject: "Hi", text: "Line one.\nLine two goes on and on." },
     }, { grantedConnectors: ["google-gmail"] });
-    assert.match((await hidden.actions.load(await freshSession(db, hidden.userId))).pending[0]!.headsUp ?? "", /text the recipient won't see/);
+    const email = (await roles.actions.load(await freshSession(db, roles.userId))).pending[0]!;
+    assert.equal(line(email, "Blind copy"), "outsider@evil.example", "a blind copy is named as one");
+    assert.equal(line(email, "Full message"), "Line one.\nLine two goes on and on.");
 
     const invite = await arrangeHeld(db, keyWrapper, "card-invite", {
       connector: "google-calendar", tool: "google-calendar__create", makesChange: true,
@@ -1227,8 +1230,9 @@ test("an email with text the recipient won't see is flagged, and an invitation n
     } as AgentCallArg);
     const view = (await invite.actions.load(await freshSession(db, invite.userId))).pending[0]!;
     assert.equal(view.sentence, "wants to add “Site visit” to your calendar");
-    assert.equal(line(view, "Sends an invite to"), "sarah@acme.com.au, tom@acme.com.au and 1 more");
-    assert.equal(line(view, "Guests"), "sarah@acme.com.au, tom@acme.com.au, jo@acme.com.au");
+    assert.equal(line(view, "Guests"), "sarah@acme.com.au, tom@acme.com.au and 1 more");
+    assert.equal(line(view, "All guests"), "sarah@acme.com.au, tom@acme.com.au, jo@acme.com.au");
+    assert.match(line(view, "When") ?? "", /20 Nov/, "a time a person reads, not an ISO string");
   } finally {
     await db.close();
   }

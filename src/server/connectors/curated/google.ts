@@ -343,11 +343,22 @@ async function sendComposedGmail(def: CuratedToolDef, input: CuratedToolCallInpu
   }, deps);
 }
 
-/** Whether the connected Gmail account has ever sent mail to `address` (one search, at most one id back). */
+/** Whether the connected Gmail account has ever sent mail to exactly `address` (Gmail's search matches words, so each hit is checked). */
 export async function gmailHasSentTo(input: Pick<CuratedToolCallInput, "entry" | "userId" | "connectionId" | "dek">, address: string, deps: CuratedToolDeps): Promise<boolean> {
   const q = `in:sent {to:${address} cc:${address} bcc:${address}}`;
-  const result = await sendConnectorRequest({ ...input, method: "GET", path: "/gmail/v1/users/me/messages", query: { q, maxResults: "1" } }, deps);
-  if (result.status < 200 || result.status >= 300) throw new Error("sent-mail lookup failed");
-  const parsed = JSON.parse(result.body) as { messages?: unknown };
-  return Array.isArray(parsed.messages) && parsed.messages.length > 0;
+  const list = await sendConnectorRequest({ ...input, method: "GET", path: "/gmail/v1/users/me/messages", query: { q, maxResults: "5" } }, deps);
+  if (list.status < 200 || list.status >= 300) throw new Error("sent-mail lookup failed");
+  const ids = ((JSON.parse(list.body) as { messages?: { id?: unknown }[] }).messages ?? [])
+    .map((m) => m.id).filter((id): id is string => typeof id === "string" && GMAIL_ID.test(id));
+  const wanted = address.toLowerCase();
+  const hits = await Promise.all(ids.map(async (id) => {
+    const got = await sendConnectorRequest({ ...input, method: "GET", path: `/gmail/v1/users/me/messages/${encodeURIComponent(id)}`, query: { format: "metadata" } }, deps);
+    if (got.status < 200 || got.status >= 300) return false;
+    const headers = (JSON.parse(got.body) as { payload?: { headers?: { name?: unknown; value?: unknown }[] } }).payload?.headers ?? [];
+    const recipients = headers
+      .filter((h) => typeof h.name === "string" && /^(?:to|cc|bcc)$/i.test(h.name) && typeof h.value === "string")
+      .map((h) => String(h.value).toLowerCase());
+    return recipients.some((value) => ((value.match(/[^\s<>,;"']+@[^\s<>,;"']+/g) ?? []) as string[]).includes(wanted));
+  }));
+  return hits.some(Boolean);
 }

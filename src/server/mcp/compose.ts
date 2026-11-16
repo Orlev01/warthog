@@ -427,19 +427,20 @@ function buildAgentPipeline(deps: McpDispatchDeps): AgentCallPipeline {
       const lookup = call.connector === "google-gmail" ? gmailHasSentTo : call.connector === "microsoft-outlook-mail" ? outlookHasSentTo : undefined;
       const entry = call.connector ? catalogue.get(call.connector) : undefined;
       if (!lookup || !entry || !call.connector) throw new Error("no sent-mail lookup for this service");
-      const grants = await getConnectionPermissions(db, connection.userId, connection.connectionId);
-      const selected = selectConnectorAccount(await listConnectionsForUser(db, connection.userId), call.connector, grants?.connectorAccounts?.[call.connector]);
-      if (!selected) throw new Error("no selected account");
+      // The account the held call was prepared with (prepareCall ran before the hold).
+      const connectionId = call.connectorAccountId;
+      if (!connectionId) throw new Error("no selected account");
       const dek = await dataKeyFor(connection.userId);
       const recipients = [...new Set((Array.isArray(call.recipients) ? call.recipients : [call.recipients]).filter((r): r is string => typeof r === "string").map((r) => r.toLowerCase()))];
       const transport = { db, fetch: deps.fetch ?? createGuardedFetch() };
-      // Only a plain address goes into a search; anything else, and any past the first five,
-      // counts as new (the safe answer).
-      const checked = await Promise.all(recipients.map((address, index) =>
-        index < 5 && SEARCHABLE_ADDRESS.test(address)
-          ? lookup({ entry, userId: connection.userId, connectionId: selected.id, dek }, address, transport)
-          : Promise.resolve(false)));
-      return recipients.filter((_, index) => !checked[index]);
+      // Only a plain address goes into a search, and at most five are searched; any other is
+      // reported as not checked (never as "new", which wouldn't be true either).
+      const searchable = recipients.filter((address) => SEARCHABLE_ADDRESS.test(address)).slice(0, 5);
+      const sent = await Promise.all(searchable.map((address) => lookup({ entry, userId: connection.userId, connectionId, dek }, address, transport)));
+      return {
+        fresh: searchable.filter((_, index) => !sent[index]),
+        unchecked: recipients.filter((address) => !searchable.includes(address)),
+      };
     },
     prepareCall: async (call, connection) => {
       if (call.connector === null) return call;

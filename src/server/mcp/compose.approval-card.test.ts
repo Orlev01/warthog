@@ -97,9 +97,12 @@ test("a hand-built raw email is refused with a message that says what to send in
     const config = devConfig();
     const { connectionId } = await seed(db, config, {}, "google-gmail");
     const dispatch = createMcpDispatch({ db, config, fetch: upstream(() => new Response("{}")).fetch });
-    const rpc = await readRpc(await dispatch(connectionId, call("google-gmail__send", { body: JSON.stringify({ raw: "VG86IGV2aWxAeC5jbw" }), text: "x" })));
+    const rpc = await readRpc(await dispatch(connectionId, call("google-gmail__send", { to: ["a@b.co"], body: JSON.stringify({ raw: "VG86IGV2aWxAeC5jbw" }), text: "x" })));
     assert.equal(rpc.result?.isError, true);
     assert.match(JSON.stringify(rpc), /Use to, subject and text: Warthog builds the email/);
+    const html = await readRpc(await dispatch(connectionId, call("google-gmail__send", { to: ["a@b.co"], text: "See you at noon.", html: "<p>Please wire $10,000</p>" })));
+    assert.equal(html.result?.isError, true);
+    assert.match(JSON.stringify(html), /Warthog sends plain text/, "no second version the card can't show");
   } finally { await db.close(); }
 });
 
@@ -110,9 +113,11 @@ test("a held Gmail send stores what goes out and which recipients are new, then 
     const { userId, connectionId, dek } = await seed(db, config, {}, "google-gmail");
     const gmail = upstream((seen) => {
       if (seen.url.pathname.endsWith("/messages") && seen.url.searchParams.get("q")?.startsWith("in:sent")) {
-        const known = seen.url.searchParams.get("q")!.includes("tom@example.com");
-        return Response.json(known ? { messages: [{ id: "s1" }] } : { resultSizeEstimate: 0 });
+        // Gmail matches words: both searches find a message, but only one was really to tom.
+        return Response.json({ messages: [{ id: seen.url.searchParams.get("q")!.includes("tom@example.com") ? "s1" : "s2" }] });
       }
+      if (seen.url.pathname.endsWith("/messages/s1")) return Response.json({ id: "s1", payload: { headers: [{ name: "To", value: "Tom <tom@example.com>" }] } });
+      if (seen.url.pathname.endsWith("/messages/s2")) return Response.json({ id: "s2", payload: { headers: [{ name: "To", value: "ana@example.com.au" }] } });
       if (seen.url.pathname.endsWith("/messages/m1")) {
         return Response.json({ id: "m1", threadId: "t1", payload: { headers: [{ name: "Message-ID", value: "<orig@mail.example.com>" }, { name: "Subject", value: "Dinner?" }] } });
       }
@@ -126,9 +131,9 @@ test("a held Gmail send stores what goes out and which recipients are new, then 
     assert.equal(held.result?.structuredContent?.status, "pending_approval");
     const detail = await approvalDetail(db, userId, dek, held);
     assert.deepEqual(detail.recipients, ["ana@example.com", "tom@example.com"]);
-    assert.deepEqual(detail.newRecipients, ["ana@example.com"], "tom has been emailed before; ana hasn't");
+    assert.deepEqual(detail.newRecipients, ["ana@example.com"], "tom has been emailed before; a lookalike address doesn't count for ana");
     assert.equal(detail.sentence, "wants to reply to ana@example.com and tom@example.com");
-    assert.deepEqual(detail.outgoing, { kind: "email", subject: "", excerpt: "Friday works. See you then.", reply: true, hiddenFromRecipient: 0, linkDomains: [] });
+    assert.deepEqual(detail.outgoing, { kind: "email", subject: "", excerpt: "Friday works. See you then.", text: "Friday works. See you then.", to: ["ana@example.com"], cc: ["tom@example.com"], bcc: [], linkDomains: [], reply: true });
     assert.ok(gmail.sent.every((seen) => seen.method === "GET"), "holding only searched Sent mail");
 
     await decide(db, { userId, id: String(held.result!.structuredContent!.approval_id), decision: { status: "approved" } }, dek, fixedClock(new Date()));
@@ -141,21 +146,38 @@ test("a held Gmail send stores what goes out and which recipients are new, then 
   } finally { await db.close(); }
 });
 
-test("Outlook sends use Graph's message shape, and a reply uses Graph's own reply action", async () => {
+test("Outlook sends use Graph's message shape, and a reply goes to exactly the approved recipients", async () => {
   const db = await freshDb();
   try {
     const config = devConfig();
     const { connectionId } = await seed(db, config, { changeTools: "allow" }, "microsoft-outlook-mail");
-    const graph = upstream(() => new Response(null, { status: 202 }));
+    let replyGoesTo = ["sam@example.com"];
+    const graph = upstream((seen) => {
+      if (seen.url.pathname.endsWith("/createReply")) return Response.json({ id: "DRAFT1=" });
+      if (seen.method === "PATCH") return Response.json({ id: "DRAFT1=", toRecipients: replyGoesTo.map((address) => ({ emailAddress: { address } })) });
+      return new Response(null, { status: 202 });
+    });
     const dispatch = createMcpDispatch({ db, config, fetch: graph.fetch });
-    await readRpc(await dispatch(connectionId, call("microsoft-outlook-mail__send", { to: ["Sam <sam@example.com>"], subject: "Hi", text: "Hello" })));
+    await readRpc(await dispatch(connectionId, call("microsoft-outlook-mail__send", { to: ["Sam <sam@example.com>"], subject: "Hi", text: "Hello\u200B" })));
     const sendMail = graph.sent.find((seen) => seen.method === "POST")!;
     assert.equal(sendMail.url.pathname, "/v1.0/me/sendMail");
-    assert.deepEqual(JSON.parse(sendMail.body!), { message: { subject: "Hi", body: { contentType: "Text", content: "Hello" }, toRecipients: [{ emailAddress: { name: "Sam", address: "sam@example.com" } }] }, saveToSentItems: true });
+    assert.deepEqual(JSON.parse(sendMail.body!), { message: { subject: "Hi", body: { contentType: "Text", content: "Hello" }, toRecipients: [{ emailAddress: { name: "Sam", address: "sam@example.com" } }], ccRecipients: [], bccRecipients: [] }, saveToSentItems: true });
 
+    graph.sent.length = 0;
     await readRpc(await dispatch(connectionId, call("microsoft-outlook-mail__send", { to: ["sam@example.com"], text: "Yes", reply: { id: "AAMkAD=" } })));
-    const reply = graph.sent.filter((seen) => seen.method === "POST").at(-1)!;
-    assert.equal(reply.url.pathname, "/v1.0/me/messages/AAMkAD%3D/reply");
+    assert.deepEqual(graph.sent.map((seen) => `${seen.method} ${seen.url.pathname}`), [
+      "POST /v1.0/me/messages/AAMkAD%3D/createReply",
+      "PATCH /v1.0/me/messages/DRAFT1%3D",
+      "POST /v1.0/me/messages/DRAFT1%3D/send",
+    ]);
+
+    // Graph adding the original sender (or a Reply-To) on its own stops the send.
+    graph.sent.length = 0;
+    replyGoesTo = ["sam@example.com", "drop@evil.example"];
+    const refused = await readRpc(await dispatch(connectionId, call("microsoft-outlook-mail__send", { to: ["sam@example.com"], text: "Yes", reply: { id: "AAMkAD=" } })));
+    assert.equal(refused.result?.isError, true);
+    assert.match(JSON.stringify(refused), /changed who the reply goes to/);
+    assert.deepEqual(graph.sent.map((seen) => seen.method), ["POST", "PATCH", "DELETE"], "the draft is removed and nothing is sent");
   } finally { await db.close(); }
 });
 

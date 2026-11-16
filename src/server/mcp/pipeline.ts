@@ -137,9 +137,9 @@ export interface ResultGuardSeam {
 
 // Whether each recipient of a held email is someone the person has emailed before, from their
 // own Sent mail (docs/adr/approval-card-truth.md). OPTIONAL: without it the card simply has
-// no first-time line. It resolves to the addresses that are new, or throws when it couldn't
-// check (the card then says so in its details).
-export type RecipientHistorySeam = (call: AgentCall, connection: AgentConnection) => Promise<readonly string[]>;
+// no first-time line. It resolves to the addresses that are new and the ones it couldn't check
+// (an address too unusual to search for safely), or throws when it couldn't check at all.
+export type RecipientHistorySeam = (call: AgentCall, connection: AgentConnection) => Promise<{ readonly fresh: readonly string[]; readonly unchecked: readonly string[] }>;
 
 // How long the approval waits for the Sent-mail check before it is created without it, so the
 // person's notification is never held up.
@@ -338,7 +338,7 @@ function toApprovalDetail(
   decision: { reason: string; ruleId?: string },
   context: AgentContext,
   rate: ReferenceRate | null,
-  recipientCheck?: { readonly newRecipients?: readonly string[]; readonly unchecked?: boolean },
+  recipientCheck?: { readonly newRecipients?: readonly string[]; readonly uncheckedRecipients?: readonly string[]; readonly unchecked?: boolean },
 ): Record<string, unknown> {
   const converted = convertedAmount(call, context.accountCurrency, rate);
   // What would go out, built from the same input the tool runs with (approval-card truth).
@@ -363,6 +363,7 @@ function toApprovalDetail(
     ruleSource: decision.ruleId === undefined ? "default" : "person",
     ...(outgoing ? { outgoing } : {}),
     ...(recipientCheck?.newRecipients?.length ? { newRecipients: recipientCheck.newRecipients } : {}),
+    ...(recipientCheck?.uncheckedRecipients?.length ? { uncheckedRecipients: recipientCheck.uncheckedRecipients } : {}),
     ...(recipientCheck?.unchecked ? { recipientsUnchecked: true } : {}),
     ...(converted ? { converted } : {}),
   };
@@ -429,16 +430,16 @@ export function createAgentCallPipeline(deps: PipelineDeps): AgentCallPipeline {
   // For a held email: which recipients the person has never emailed, from their own Sent mail.
   // Runs before the approval's transaction, within a fixed budget; a failure or a slow check
   // never blocks the approval, the card just says it couldn't check.
-  async function checkRecipients(call: AgentCall, connection: AgentConnection): Promise<{ newRecipients?: readonly string[]; unchecked?: boolean } | undefined> {
+  async function checkRecipients(call: AgentCall, connection: AgentConnection): Promise<{ newRecipients?: readonly string[]; uncheckedRecipients?: readonly string[]; unchecked?: boolean } | undefined> {
     const recipients = Array.isArray(call.recipients) ? call.recipients : typeof call.recipients === "string" ? [call.recipients] : [];
     if (!deps.recipientHistory || call.messageChannel !== "email" || recipients.length === 0) return undefined;
     let timer: ReturnType<typeof setTimeout> | undefined;
     try {
-      const newRecipients = await Promise.race([
+      const checked = await Promise.race([
         deps.recipientHistory(call, connection),
         new Promise<never>((_, reject) => { timer = setTimeout(() => reject(new Error("recipient check timed out")), RECIPIENT_CHECK_BUDGET_MS); }),
       ]);
-      return { newRecipients };
+      return { newRecipients: checked.fresh, uncheckedRecipients: checked.unchecked };
     } catch {
       return { unchecked: true };
     } finally {

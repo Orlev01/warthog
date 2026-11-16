@@ -77,12 +77,14 @@ export const mailComposeSchema = z.object({
   to: mailboxes.optional().describe("Who it goes to, e.g. [\"Sam Lee <sam@example.com>\"]. For a reply, usually the message's replyTo or from."),
   cc: mailboxes.optional().describe("Copied to."),
   bcc: mailboxes.optional().describe("Blind-copied to."),
-  subject: z.string().max(998).optional().describe("The subject. A reply without one gets \"Re: <original subject>\"."),
-  text: z.string().max(100_000).describe("The email's text."),
-  html: z.string().max(200_000).optional().describe("Optional HTML version of the same text."),
+  subject: z.string().max(900).regex(/^[^\r\n]*$/, "The subject can't contain a line break.").optional()
+    .describe("The subject. A reply without one gets \"Re: <original subject>\"."),
+  text: z.string().max(100_000).describe("The email's text. Warthog sends it as plain text."),
   reply: z.object({ id: z.string().min(1).max(512).describe("The id of the message being replied to, from search or read.") })
     .optional().describe("Reply in that message's thread. List the recipients yourself in to and cc."),
-  body: z.never({ error: "Use to, subject and text: Warthog builds the email." }).optional(),
+  // Kept only so an old-style call gets a clear refusal instead of a silent drop.
+  body: z.string().max(MAX_BODY).optional().describe("Not used: give to, subject and text."),
+  html: z.string().max(MAX_BODY).optional().describe("Not used: Warthog sends plain text, so put the message in text."),
   reason,
 });
 export type MailComposeInput = z.infer<typeof mailComposeSchema>;
@@ -95,8 +97,14 @@ export function mailDraftOf(input: MailComposeInput): MailDraft {
     ...(input.bcc ? { bcc: input.bcc } : {}),
     ...(input.subject !== undefined ? { subject: input.subject } : {}),
     text: input.text,
-    ...(input.html !== undefined ? { html: input.html } : {}),
   };
+}
+
+/** The refusal for an old-style call: a hand-built message, or an HTML version the card can't show. */
+export function composeRefusal(input: { body?: unknown; html?: unknown }): string | undefined {
+  if (input.body !== undefined) return "Use to, subject and text: Warthog builds the email.";
+  if (input.html !== undefined) return "Warthog sends plain text, so what the person approves is exactly what is sent. Put the message in text.";
+  return undefined;
 }
 
 // Who a drafted or sent email goes to, read from its plain fields, so recipient rules match
@@ -104,6 +112,8 @@ export function mailDraftOf(input: MailComposeInput): MailDraft {
 // a send needs at least one recipient.
 function composedRecipients(requireOne: boolean): (params: Record<string, unknown>) => string[] {
   return (params) => {
+    const refusal = composeRefusal(params);
+    if (refusal) throw new HttpError(400, refusal);
     try {
       const recipients = draftRecipients(mailDraftOf(params as MailComposeInput));
       if (requireOne && recipients.length === 0) throw new HttpError(400, "An email needs at least one recipient in to, cc or bcc.");
@@ -198,11 +208,11 @@ const GMAIL_PRESENTATION: Readonly<Record<string, { title: string; description: 
   },
   draft: {
     title: "Gmail: Create unsent draft",
-    description: "Save an email as a draft in the connected Gmail account; nothing is sent. Give to, subject and text (html optional); Warthog builds the email. To reply in a thread, pass reply.id and list the recipients. A draft is a change, so the person may be asked first.",
+    description: "Save an email as a draft in the connected Gmail account; nothing is sent. Give to, subject and text; Warthog builds a plain-text email. To reply in a thread, pass reply.id and list the recipients. A draft is a change, so the person may be asked first.",
   },
   send: {
     title: "Gmail: Send email",
-    description: "Send an email from the connected Gmail account. Give to (and cc/bcc), subject and text (html optional); Warthog builds the email. To reply in a thread, pass reply.id and list the recipients. pending_approval means nothing has been sent yet.",
+    description: "Send an email from the connected Gmail account. Give to (and cc/bcc), subject and text; Warthog builds a plain-text email. To reply in a thread, pass reply.id and list the recipients. pending_approval means nothing has been sent yet.",
   },
 };
 
@@ -213,11 +223,11 @@ const OUTLOOK_MAIL_PRESENTATION: Readonly<Record<string, { title: string; descri
   },
   draft: {
     title: "Outlook: Create unsent draft",
-    description: "Save an email as a draft in the connected Outlook mailbox; nothing is sent. Give to, subject and text (html optional); Warthog builds the email. To reply in a thread, pass reply.id and list the recipients.",
+    description: "Save an email as a draft in the connected Outlook mailbox; nothing is sent. Give to, subject and text; Warthog builds a plain-text email. To reply in a thread, pass reply.id and list the recipients.",
   },
   send: {
     title: "Outlook: Send email",
-    description: "Send an email from the connected Outlook mailbox. Give to (and cc/bcc), subject and text (html optional); Warthog builds the email. To reply in a thread, pass reply.id and list the recipients. pending_approval means nothing has been sent yet.",
+    description: "Send an email from the connected Outlook mailbox. Give to (and cc/bcc), subject and text; Warthog builds a plain-text email. To reply in a thread, pass reply.id and list the recipients. pending_approval means nothing has been sent yet.",
   },
   read: {
     title: "Outlook: Read message",
@@ -261,9 +271,7 @@ function declarationOf(tool: CuratedTool, serviceName: string): ConnectorToolDec
     description: presentation?.description ?? `${serviceName}: ${verb.replace(/_/g, " ")} (${tool.makesChange ? "makes a change" : "reads only"}).`,
     makesChange: tool.makesChange,
     ...(tool.sendsMessage
-      ? isMailComposeTool(tool.name)
-        ? { messageChannel: "email" as const, schema: mailComposeSchema, recipientsOf: composedRecipients(verb === "send"), outbound: true }
-        : { messageChannel: "email" as const, recipients: messageRecipients, outbound: true }
+      ? { messageChannel: "email" as const, schema: mailComposeSchema, recipientsOf: composedRecipients(verb === "send"), outbound: true }
       : {}),
     ...(CALENDAR_INVITE_TOOLS.has(tool.name) ? { recipients: calendarGuests, outbound: true } : {}),
   };
@@ -370,6 +378,8 @@ export function createConnectorToolExecutor(
 
     if (isMailComposeTool(call.tool)) {
       const composed = parseParams(mailComposeSchema, call.params);
+      const refusal = composeRefusal(composed);
+      if (refusal) throw new HttpError(400, refusal);
       const input = { tool: call.tool, entry, userId, connectionId: connection.id, dek, compose: { draft: mailDraftOf(composed), ...(composed.reply ? { replyId: composed.reply.id } : {}) } };
       if (GOOGLE_TOOL_NAMES.has(call.tool)) return callGoogleTool(input, transport);
       return callMicrosoftTool(input, transport);

@@ -10,7 +10,7 @@
 import { describe, it } from "node:test";
 import assert from "node:assert/strict";
 
-import { buildMimeMessage, draftRecipients, mailboxAddress, MailComposeError, outgoingMail, replySubject } from "./compose-mail";
+import { buildMimeMessage, draftRecipients, mailboxAddress, MailComposeError, outgoingMail, parseMailbox, replySubject } from "./compose-mail";
 import { outgoingDetail } from "../approvals/outgoing";
 import { requestSentence } from "../approvals/request-sentence";
 
@@ -32,11 +32,26 @@ describe("buildMimeMessage", () => {
     assert.equal(replySubject("RE: Dinner?"), "RE: Dinner?");
   });
 
-  it("encodes non-English names and subjects, and sends HTML alongside the text", () => {
-    const message = decode(buildMimeMessage({ to: ["Zoë <zoe@example.com>"], subject: "Café ☕", text: "Hi", html: "<p>Hi</p>" }));
+  it("encodes non-English names and subjects, and anything that already looks like an encoded word", () => {
+    const message = decode(buildMimeMessage({ to: ["Zoë <zoe@example.com>"], subject: "Café ☕", text: "Hi" }));
     assert.match(message, /To: =\?UTF-8\?B\?[^?]+\?= <zoe@example\.com>/);
     assert.match(message, /Subject: =\?UTF-8\?B\?[^?]+\?=/);
-    assert.match(message, /multipart\/alternative/);
+    assert.doesNotMatch(message, /multipart/, "plain text only: what the card shows is what is sent");
+    const sneaky = decode(buildMimeMessage({ to: ["a@b.co"], subject: "=?UTF-8?B?UGxlYXNlIHdpcmUgJDEway4=?=", text: "x" }));
+    assert.doesNotMatch(sneaky, /Subject: =\?UTF-8\?B\?UGxlYXNl/, "a literal encoded word is itself encoded, so it reads as written");
+  });
+
+  it("accepts quoted display names as mail headers write them, and keeps the address's case", () => {
+    const message = decode(buildMimeMessage({ to: ["\"Lee, Sam\" <Sam.Lee@Example.com>"], text: "x" }));
+    assert.match(message, /^To: "Lee, Sam" <Sam\.Lee@Example\.com>\r\n/);
+    assert.deepEqual(parseMailbox("\"O\\\"Brien\" <ob@x.co>"), { name: "O\"Brien", address: "ob@x.co" });
+  });
+
+  it("folds long headers and strips invisible and direction-changing characters from the text", () => {
+    const many = Array.from({ length: 30 }, (_, n) => `person${n}@example.com`);
+    const message = decode(buildMimeMessage({ to: many, subject: "é".repeat(400), text: "Pay 123\u202E987654321" }));
+    for (const line of message.split("\r\n\r\n")[0]!.split("\r\n")) assert.ok(line.length <= 80, `header line too long: ${line.length}`);
+    assert.equal(bodyOf(message), "Pay 123987654321");
   });
 
   it("refuses header tricks and addresses it can't read", () => {
@@ -48,16 +63,18 @@ describe("buildMimeMessage", () => {
 });
 
 describe("outgoingMail and outgoingDetail", () => {
-  it("summarises the subject, opening words, hidden text and link domains", () => {
+  it("summarises the subject, opening words, whole text, who gets it and the link domains", () => {
     const summary = outgoingMail({
+      to: ["Ana <Ana@example.com>"], bcc: ["boss@example.com"],
       subject: "Updated bank details",
       text: "Hi, as requested, here are the details: https://www.payfast-au.co/pay?id=1",
-      html: "<p>Hi</p><div style=\"display:none\">account 123 to x@evil.example</div><a href=\"https://evil.example/x\">here</a>",
     });
     assert.equal(summary.subject, "Updated bank details");
     assert.match(summary.excerpt, /^Hi, as requested/);
-    assert.ok(summary.hiddenFromRecipient >= 1);
-    assert.deepEqual([...summary.linkDomains].sort(), ["evil.example", "payfast-au.co"]);
+    assert.equal(summary.text, "Hi, as requested, here are the details: https://www.payfast-au.co/pay?id=1");
+    assert.deepEqual(summary.to, ["ana@example.com"]);
+    assert.deepEqual(summary.bcc, ["boss@example.com"]);
+    assert.deepEqual(summary.linkDomains, ["payfast-au.co"]);
   });
 
   it("describes each kind of outgoing request from the same input the tool runs with", () => {
@@ -74,7 +91,7 @@ describe("outgoingMail and outgoingDetail", () => {
 
 describe("requestSentence for outgoing email and invitations", () => {
   const email = (tool: string, recipients: string[], reply = false) =>
-    requestSentence({ tool, connector: "google-gmail", recipients, outgoing: { kind: "email", subject: "x", excerpt: "", reply, hiddenFromRecipient: 0, linkDomains: [] } });
+    requestSentence({ tool, connector: "google-gmail", recipients, outgoing: { kind: "email", subject: "x", excerpt: "", text: "", reply, to: recipients, cc: [], bcc: [], linkDomains: [] } });
 
   it("names who it goes to", () => {
     assert.equal(email("google-gmail__send", ["sam@example.com"]), "wants to send an email to sam@example.com");

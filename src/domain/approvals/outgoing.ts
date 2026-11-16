@@ -10,7 +10,7 @@ import { cleanShortText } from "../content/untrusted";
 
 /** What a held call would send or change, by kind. */
 export type OutgoingDetail =
-  | { kind: "email"; subject: string; excerpt: string; reply: boolean; hiddenFromRecipient: number; linkDomains: readonly string[] }
+  | { kind: "email"; subject: string; excerpt: string; text: string; reply: boolean; to: readonly string[]; cc: readonly string[]; bcc: readonly string[]; linkDomains: readonly string[] }
   | { kind: "invite"; title: string; start?: string; guests: readonly string[] }
   | { kind: "request"; method: string; path: string; queryKeys: readonly string[] }
   | { kind: "provider"; arguments: readonly { key: string; preview: string }[] };
@@ -46,11 +46,14 @@ export function outgoingDetail(call: OutgoingCall): OutgoingDetail | undefined {
       ...(strings(params.bcc) ? { bcc: strings(params.bcc) } : {}),
       ...(typeof params.subject === "string" ? { subject: params.subject } : {}),
       text: params.text,
-      ...(typeof params.html === "string" ? { html: params.html } : {}),
     };
     const reply = params.reply !== null && typeof params.reply === "object";
-    const summary = outgoingMail(draft);
-    return { kind: "email", ...summary, reply };
+    try {
+      return { kind: "email", ...outgoingMail(draft), reply };
+    } catch {
+      // A draft Warthog can't build is refused before it is held; never fail the hold here.
+      return undefined;
+    }
   }
   if (INVITE_TOOLS.test(call.tool)) {
     let event: Record<string, unknown> = {};
