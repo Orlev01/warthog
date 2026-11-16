@@ -91,3 +91,47 @@ provider, paid service, external message or deployment.
 Catalogue setup availability is distinct from live verification. The recorded
 Claude/Gmail search/read acceptance does not certify sending, all provider OAuth
 flows, refresh, revocation, device notifications or integrations without credentials.
+
+## Recent apps (amendment, 16 November 2026)
+
+Measured on 16 November ([agent runs](agent-runs.md)): a 2026-07-28 client sends its
+client information, capabilities and protocol version in `params._meta` on every request.
+Warthog had read the top-level `_meta`, so it recorded app details only for 2025 clients
+from their `initialize`. It now reads `params._meta`. A top-level `_meta` is still read
+when the params carry none. The agent's own run reference (`app.warthog/runId`) is read
+the same way.
+
+One connection is often used from several apps. The founder's claude.ai connector
+reported four: Claude Code, claude.ai chats (a Claude Code build), and two of claude.ai's
+own checks. Comparing each report with only the last one would have recorded an entry
+on every switch. So:
+- **The agent's record keeps its recent apps.** `agents.client_observation_ct` holds the
+  latest report at the top level (the shape earlier releases read) and `seen`, up to
+  eight distinct reports (name, version, protocol and capabilities), latest first. A
+  record from before this amendment counts as one seen app.
+- **Activity records news only.** "Client information reported" is recorded for an app
+  or version that is not in `seen`. A switch between known apps records nothing; an
+  update records once.
+  - Reports are compared after the same redaction the stored copy went through, including
+    the person's released-value matcher. So a report that redaction changes still matches
+    its stored copy.
+  - An app pushed out of `seen` by eight newer reports counts as new if it comes back.
+- **No cost per request.** Each dispatch remembers when it last wrote each agent's reports,
+  for up to eight reports per agent, so one agent varying its report can't push other
+  agents out. An unchanged report is written again at most every ten minutes. A repeat
+  needs no database write and no key unwrap, so "last seen" can be up to ten minutes
+  behind.
+  - Simultaneous requests with the same report share one write.
+  - A clock that steps back past the last write counts as due.
+- **Never fatal.** A failure to remember the app is logged (`client_observation_failed`),
+  retried a minute later rather than on every request, and never fails the agent's call.
+- **Per entry.** Each tool entry from a current client names the app it came through
+  ("Agent software (as it reported it)" in its technical details).
+
+The agent's Overview lists every recent app under Technical details. These are client
+claims, never identity. The column is unchanged, and there is no migration.
+
+**Rollback.** An earlier image reads the new shape (it ignores `seen`). If it handles a 2025
+`initialize` after a rollback, it records one extra "Client information reported" entry for
+that agent and rewrites the record without `seen`. This image then reads it as one app.
+An earlier image never records 2026-07-28 clients, because it reads the top-level `_meta`.

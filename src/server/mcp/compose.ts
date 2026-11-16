@@ -1,5 +1,5 @@
 import { randomUUID } from "node:crypto";
-import { envelopeClientName, requestObservation, clientObservation, rememberClient } from "./client-observation";
+import { requestObservation, clientObservation, createClientMemory, reportedRunId } from "./client-observation";
 import { parseBody } from "../http/validate";
 import { z } from "zod";
 import { findToolsSchema } from "./tools/registry";
@@ -547,6 +547,8 @@ export function createMcpDispatch(deps: McpDispatchDeps): McpDispatch {
   }
 
   const handler = createMcpHandler((ctx) => buildServer(ctx.authInfo), { legacy: "stateless" });
+  // Which app each agent's requests come through, remembered without a write per request.
+  const rememberClientOf = createClientMemory({ db, recorder, onError: (err) => logFailure("client_observation_failed", err) });
 
   return async function dispatch(connectionId: string, request: Request): Promise<Response> {
     // Hand the VERIFIED connection to the SDK as pass-through authInfo (clientId = the
@@ -560,12 +562,9 @@ export function createMcpDispatch(deps: McpDispatchDeps): McpDispatch {
       return Response.json({ jsonrpc: "2.0", id: null, error: { code: -32700, message: "Invalid request body" } }, { status: 400 });
     }
     const client = clientObservation(body, request.headers);
-    if (connection && client) await rememberClient(db, connection, client, clock.now().toISOString(), await dataKeyFor(connection.userId), recorder);
-    const meta = body && typeof body === "object" ? (body as { _meta?: Record<string, unknown> })._meta : undefined;
-    const run = meta?.["app.warthog/runId"];
-    const reportedRunId = typeof run === "string" && /^[A-Za-z0-9_.:-]{1,120}$/.test(run) ? run : undefined;
-    const via = clientSurface(request.headers.get(ANTHROPIC_CLIENT_HEADER), client?.name ?? envelopeClientName(body));
-    return requestObservation.run({ requestId: randomUUID(), body, client, reportedRunId, agentId: connection?.agentId, via }, async () => {
+    if (connection && client) await rememberClientOf(connection, client, clock.now(), () => dataKeyFor(connection.userId));
+    const via = clientSurface(request.headers.get(ANTHROPIC_CLIENT_HEADER), client?.name);
+    return requestObservation.run({ requestId: randomUUID(), body, client, reportedRunId: reportedRunId(body), agentId: connection?.agentId, via }, async () => {
       const response = await handler.fetch(request, {
         authInfo: { token: connectionId, clientId: connectionId, scopes: [MCP_SCOPE] },
       });

@@ -169,3 +169,27 @@ test("the Overview lists the agent's recent conversations, each linking to what 
   assert.match(text(renderToStaticMarkup(<RecentConversations data={workspaceData()} />)), /None yet/);
   assert.match(text(renderToStaticMarkup(<AgentOverview data={data} permissions={PERMISSIONS} lastActive={null} />)), /Recent conversations/, "the Overview includes it");
 });
+
+test("the Overview names every app the agent came through lately, each in the technical details", () => {
+  const app = (name: string, version: string, capabilities: string[], at: string) =>
+    ({ name, version, protocol: "2026-07-28", capabilities, source: "client_reported", observedAt: at, displayObservedAt: `shown ${at}` });
+  const seen = [
+    app("claude-code", "2.1.289", ["elicitation", "roots"], "2026-11-16T03:00:00.000Z"),
+    app("claude-code", "2.1.326-ccs.sha14b5cc04c8a4", ["elicitation", "extensions", "roots"], "2026-11-16T02:00:00.000Z"),
+    app("Anthropic/ClaudeAI", "1.0.0", ["extensions"], "2026-11-16T01:00:00.000Z"),
+  ];
+  const data = { ...workspaceData(), clientObservation: { ...seen[0], seen } } as unknown as AgentWorkspaceData;
+  const html = renderToStaticMarkup(<AgentOverview data={data} permissions={PERMISSIONS} lastActive={null} />);
+  assert.match(text(html), /The apps it has come through say they are claude-code 2\.1\.289, claude-code 2\.1\.326-ccs\.sha14b5cc04c8a4 and Anthropic\/ClaudeAI 1\.0\.0\. Warthog can’t verify that\./);
+  const details = /<details\b[^>]*>([\s\S]*?)<\/details>/.exec(html)![1]!;
+  assert.match(details, /<ul aria-label="Apps it came through, latest first"/);
+  assert.equal((details.match(/<li\b/g) ?? []).length, 3);
+  assert.match(text(details), /App claude-code · 2\.1\.289 Protocol 2026-07-28 Capabilities elicitation, roots Last seen shown 2026-11-16T03:00:00\.000Z/);
+  assert.match(text(details), /App Anthropic\/ClaudeAI · 1\.0\.0 Protocol 2026-07-28 Capabilities extensions/);
+
+  const one = { ...workspaceData(), clientObservation: { ...seen[0], seen: [seen[0]] } } as unknown as AgentWorkspaceData;
+  assert.match(text(renderToStaticMarkup(<AgentOverview data={one} permissions={PERMISSIONS} lastActive={null} />)), /The app says it is claude-code 2\.1\.289\. Warthog can’t verify that\./);
+  const many = { ...workspaceData(), clientObservation: { ...seen[0], seen: [...seen, app("a", "1", [], "x"), app("claude-code", "2.1.289", ["roots"], "x"), app("b", "1", [], "x")] } } as unknown as AgentWorkspaceData;
+  assert.match(text(renderToStaticMarkup(<AgentOverview data={many} permissions={PERMISSIONS} lastActive={null} />)), /say they are claude-code 2\.1\.289, claude-code 2\.1\.326-ccs\.sha14b5cc04c8a4, Anthropic\/ClaudeAI 1\.0\.0 and 2 others\./, "the same app and version is named once");
+  assert.match(text(renderToStaticMarkup(<AgentOverview data={workspaceData()} permissions={PERMISSIONS} lastActive={null} />)), /No details about the app have been recorded yet/);
+});
