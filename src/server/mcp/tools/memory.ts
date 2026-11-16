@@ -26,6 +26,7 @@
 // another person's or another agent's memories. The memory WRITE itself is recorded
 // by the pipeline that routes `remember` (Warthog writes the record, principle 14).
 
+import { savedByResolver, type SavedBy } from "../../agents/saved-by";
 import { z } from "zod";
 
 import { parseParams } from "../../http/validate";
@@ -98,6 +99,8 @@ export interface SearchedMemory {
   readonly content: string;
   readonly scope: MemoryScope;
   readonly sourceAgentId: string | null;
+  // Who saved it, as this agent reads it (write provenance).
+  readonly savedBy: SavedBy;
   readonly createdAt: Date;
 }
 
@@ -240,11 +243,13 @@ export function createSearchMemoryTool(deps: MemoryToolDeps): SearchMemoryTool {
           ? readable
           : readable.filter((m) => m.content.toLowerCase().includes(needle));
 
+      const savedBy = await savedByResolver(db, connection.userId, connection.agentId);
       const memories: SearchedMemory[] = matched.map((m) => ({
         id: m.id,
         content: m.content,
         scope: m.scope,
         sourceAgentId: m.sourceAgentId,
+        savedBy: savedBy(m.sourceAgentId),
         createdAt: m.createdAt,
       }));
 

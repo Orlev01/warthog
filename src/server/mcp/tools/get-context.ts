@@ -1,4 +1,5 @@
 import { getAgentById } from "../../db/agents";
+import { savedByResolver } from "../../agents/saved-by";
 import { listConnectionsForUser } from "../../db/connections";
 import { selectConnectorAccount } from "../../connectors/tool-routing";
 import { HOUSE_SKILL_BODY } from "./get-skill";
@@ -202,12 +203,16 @@ export function createGetContextTool(deps: GetContextDeps): {
           })
         : { items: [], nextCursor: null };
 
+      // Who saved each memory and task (write provenance): the person, this agent, or another
+      // agent by name — so a note another agent copied from content isn't read as the person's.
+      const savedBy = permissions.memoryRead || permissions.tasksAccess ? await savedByResolver(db, userId, agentId) : () => ({ kind: "person" as const });
       const memory = permissions.memoryRead
         ? memoryPage.items.map((m) => ({
             id: m.id,
             content: m.content,
             shared: m.scope === "shared",
             savedAt: iso(m.createdAt),
+            savedBy: savedBy(m.sourceAgentId),
           }))
         : [];
 
@@ -224,6 +229,7 @@ export function createGetContextTool(deps: GetContextDeps): {
                 task.assignee === agentId
                   ? ("you" as const)
                   : ("any agent" as const),
+              savedBy: savedBy(task.createdBy.kind === "agent" ? task.createdBy.agentId : null),
             }))
         : [];
 

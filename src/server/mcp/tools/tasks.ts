@@ -27,6 +27,7 @@
 // another person's tasks. The tool call itself is recorded by the pipeline that routes
 // these core tools (Warthog writes the record, principle 14).
 
+import { savedByResolver, type SavedBy, type SavedByResolver } from "../../agents/saved-by";
 import { z } from "zod";
 
 import { validTaskAssignee, changeTaskAsAgent } from "../../db/task-handoffs";
@@ -106,6 +107,7 @@ export interface TaskView {
   readonly status: TaskStatus;
   readonly notes: ReadonlyArray<TaskNote>;
   readonly createdBy: TaskActor;
+  readonly savedBy?: SavedBy;
   readonly claimedBy?: string;
   readonly claimExpiresAt?: string;
 }
@@ -157,14 +159,19 @@ const NO_PERMISSION_REASON = "This agent does not have permission to use tasks."
 
 // Map a decrypted store task to the view handed to the agent (the owning userId stays
 // out of the result).
-function toView(task: Task): TaskView {
+function toView(task: Task, savedBy?: SavedByResolver): TaskView {
   return {
     id: task.id,
     title: task.title,
     assignee: task.assignee,
     status: task.status,
-    notes: task.notes,
+    // Each note says who wrote it too: another agent can add a note to the person's own task.
+    notes: savedBy
+      ? task.notes.map((note) => ({ ...note, savedBy: savedBy(note.author.kind === "agent" ? note.author.agentId : null) }))
+      : task.notes,
     createdBy: task.createdBy,
+    // Who created it, as this agent reads it (write provenance).
+    ...(savedBy ? { savedBy: savedBy(task.createdBy.kind === "agent" ? task.createdBy.agentId : null) } : {}),
     ...(task.claimedBy ? {claimedBy:task.claimedBy,claimExpiresAt:task.claimExpiresAt} : {}),
   };
 }
@@ -220,7 +227,8 @@ export function createListTasksTool(deps: TasksToolDeps): ListTasksTool {
       const dek = await dataKeyFor(db, keyWrapper, connection.userId);
       const tasks = await tasksForAgent(db, connection.userId, connection.agentId, dek);
 
-      return { status: "ok", tasks: tasks.map(toView) };
+      const savedBy = await savedByResolver(db, connection.userId, connection.agentId);
+      return { status: "ok", tasks: tasks.map((task) => toView(task, savedBy)) };
     },
   };
 }
