@@ -1,5 +1,11 @@
 # Warthog comprehensive engineering audit
 
+**Agent conversations, 16 November:** main `aca2674` runs as `warthog--r43796560300a1`. PR #28
+lets one agent's conversations be told apart with no setup: `get_context` hands out a run, agents
+pass it back, and Activity, the Inbox and each agent's Overview group entries by conversation and
+say which product the request came through. Migration 0113 is additive. 6,131 tests pass. See the
+[release record](agent-runs-release-2026-11-16.md).
+
 **Website review fixes, 15 November:** main `c00f1e9` runs as `warthog--r43644774383a1`. A
 five-way review of PR #26 found nothing exploitable. PR #27 makes only the app host installable,
 gives the public pages canonical website URLs, sends a signed-in member's Sign up to Home, points

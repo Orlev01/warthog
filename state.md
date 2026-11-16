@@ -1,4 +1,21 @@
-# Delivery status — 15 November 2026 (website review fixes)
+# Delivery status — 16 November 2026 (agent conversations)
+
+**Live at [warthog.com.au](https://warthog.com.au) (the website) and
+[app.warthog.com.au](https://app.warthog.com.au) (the app).** Application source
+`aca26743ea7ac2a34b70a7e4f353859217f17ca6` runs as `warthog--r43796560300a1`, with one healthy
+replica, explicit 100% traffic and zero old replicas.
+
+PR #28 tells one agent's conversations apart, with nothing for people to set up beyond the connector:
+- `get_context` starts a run (a "conversation") from the agent's `working_on`, and every tool takes it
+  back as `run`, resolved only for the calling agent;
+- Activity rows, entry details, Inbox approval cards and each agent's Overview show the conversation
+  and the product the request came through ("via");
+- migration 0113 adds `agent_runs` (encrypted label) and `activity_entry_runs` (append-only links).
+
+The image suite passed 6,131 tests. See the
+[release record](docs/audit/agent-runs-release-2026-11-16.md).
+
+# Earlier delivery status — 15 November 2026 (website review fixes)
 
 **Live at [warthog.com.au](https://warthog.com.au) (the website) and
 [app.warthog.com.au](https://app.warthog.com.au) (the app).** Application source
