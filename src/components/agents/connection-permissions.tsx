@@ -72,7 +72,7 @@ export function ConnectionPermissions({ template, state, services = [], onTempla
           <p className="text-sm text-fg-muted">Selected services allow reads. Changes are set to <strong>Ask me first</strong>, and your rules still apply.</p>
           {services.length ? services.map(service => <div className="wh-permission-row" key={service.id}>
             <label className="wh-permission-label"><input type="checkbox" name="service" value={service.id} checked={state.services.includes(service.id)} onChange={e => onChange({ ...state, services: e.target.checked ? [...state.services.filter(id => id !== service.id), service.id] : state.services.filter(id => id !== service.id) })} /><span>Read from {service.name}</span></label>
-            <p>Read information using this service’s available tools. Changes: Ask me first.</p>
+            <p>Reads a checked copy, without sign-in codes or password links. Changes: Ask me first.</p>
           </div>) : <p className="wh-permission-empty">No services connected. You can connect a service and grant this agent access later.</p>}
           {services.length ? <PermissionHelp label="How service access works">For example, an email service may allow searching messages; sending or changing something asks you first. Available tools depend on the service. If you connected multiple accounts for a service, choose its account in the agent’s settings before it can be used.</PermissionHelp> : null}
         </fieldset>

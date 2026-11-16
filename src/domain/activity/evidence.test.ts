@@ -174,3 +174,10 @@ test("an entry names its agent conversation and the product it came through, as 
     assert.equal(activityEvidence({ ...addTask, payload: { ...addTask.payload, ...junk } }).conversation, undefined);
   }
 });
+
+test("what Warthog's read check kept from the agent reads in words, counts only", () => {
+  const read = { ...addTask, tool: "google-gmail__read", payload: { ...addTask.payload, resultEvidence: { outcome: "executed", status: 200, guard: { outcome: "masked", counts: { codes: 1, signInLinks: 2, hiddenCharacters: 3 } } } } };
+  assert.match(value(activityEvidence(read), "Result") ?? "", /Kept from the agent: 1 sign-in code, 2 sign-in links/);
+  const withheld = { ...read, payload: { ...read.payload, resultEvidence: { outcome: "executed", guard: { outcome: "withheld" } } } };
+  assert.match(value(activityEvidence(withheld), "Result") ?? "", /couldn't check this, so the agent wasn't shown it/);
+});

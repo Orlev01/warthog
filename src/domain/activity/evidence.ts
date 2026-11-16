@@ -248,6 +248,11 @@ function resultLine(value: unknown, ids: EvidenceLine[]): string | undefined {
       if (counts.length > 0) lines.push(`Found: ${counts.join(", ")}`);
       continue;
     }
+    if (key === "guard" && isRecord(item)) {
+      const kept = guardLine(item);
+      if (kept) lines.push(kept);
+      continue;
+    }
     if (key === "profileFields" && Array.isArray(item)) {
       lines.push(`Profile details shared: ${item.length > 0 ? item.map((field) => words(String(field)).toLowerCase()).join(", ") : "none"}`);
       continue;
@@ -256,6 +261,27 @@ function resultLine(value: unknown, ids: EvidenceLine[]): string | undefined {
     if (shown !== undefined) lines.push(`${words(key)}: ${shown}`);
   }
   return lines.length > 0 ? lines.join("\n") : undefined;
+}
+
+// What Warthog's read check kept from the agent (docs/adr/read-side-protection.md), in words:
+// "Kept from the agent: 1 sign-in code, 2 sign-in links". Counts only, never the values.
+const KEPT_WORDS: Readonly<Record<string, [string, string]>> = {
+  codes: ["sign-in code", "sign-in codes"],
+  signInLinks: ["sign-in link", "sign-in links"],
+  cards: ["card number", "card numbers"],
+  downloadLinks: ["download link", "download links"],
+  stubs: ["sign-in or password email", "sign-in or password emails"],
+};
+
+function guardLine(guard: Record<string, unknown>): string | undefined {
+  if (guard.outcome === "withheld") return "Warthog couldn't check this, so the agent wasn't shown it";
+  if (guard.outcome === "fallback") return "Too large for Warthog to check, so the agent was shown the headers only";
+  const counts = isRecord(guard.counts) ? guard.counts : {};
+  const kept = Object.entries(KEPT_WORDS).flatMap(([key, [one, many]]) => {
+    const n = typeof counts[key] === "number" ? (counts[key] as number) : 0;
+    return n > 0 ? [`${n} ${n === 1 ? one : many}`] : [];
+  });
+  return kept.length ? `Kept from the agent: ${kept.join(", ")}` : undefined;
 }
 
 function clientLine(value: unknown): string | undefined {

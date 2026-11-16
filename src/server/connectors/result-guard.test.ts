@@ -135,8 +135,14 @@ describe("createResultGuard", () => {
     assert.equal(spoof.exposure?.sender, "evil@x.co");
     // A cut-short event list was still shown, so it counts.
     assert.equal(guard2.review(call("google-calendar__list"), { status: 200, truncated: true, body: '{"items":[{"summary":"x' }).exposure?.kind, "event");
+    // A Gmail search shows previews: the first message someone else wrote counts, the person's own sent mail doesn't.
+    const meta = (id: string, from: string, labelIds: string[]) => ({ id, threadId: id, labelIds, snippet: "Hi", payload: { mimeType: "text/plain", headers: [{ name: "From", value: from }, { name: "Subject", value: "Hi" }] } });
+    const searched = guard2.review(call("google-gmail__search"), { status: 200, truncated: false, body: JSON.stringify({ summaries: true, messages: [meta("a", "Sam <sam@example.com>", ["SENT"]), meta("b", "Billing <billing@payfast-au.co>", ["INBOX"])] }) });
+    assert.equal(searched.exposure?.sender, "billing@payfast-au.co");
+    const ownOnly = guard2.review(call("google-gmail__search"), { status: 200, truncated: false, body: JSON.stringify({ summaries: true, messages: [meta("a", "Sam <sam@example.com>", ["SENT"])] }) });
+    assert.equal(ownOnly.exposure, undefined);
     // The person's own Outlook mail doesn't.
-    const own = guard2.review(call("microsoft-outlook-mail__read"), { status: 200, truncated: false, body: JSON.stringify({ id: "m", subject: "Re: hi", from: { emailAddress: { address: "sam@example.com" } }, body: { contentType: "text", content: "x" } }) });
+    const own =guard2.review(call("microsoft-outlook-mail__read"), { status: 200, truncated: false, body: JSON.stringify({ id: "m", subject: "Re: hi", from: { emailAddress: { address: "sam@example.com" } }, body: { contentType: "text", content: "x" } }) });
     assert.equal(own.exposure, undefined);
     // Reads (by method) through email, messaging and calendar services count; the person's own tools don't.
     const get = (tool: string) => call(tool, { params: { method: "GET", path: "/x" }, makesChange: tool.startsWith("ntfy") });

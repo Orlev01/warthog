@@ -77,6 +77,25 @@ export function Help({ connectorAddress, links = RELATIVE_LINKS }: { connectorAd
             Not every action for every service has been tried with a live account yet.
           </p>
         </PublicSection>
+        <PublicSection id="what-agents-see" title="What agents see in your email">
+          <p>
+            Agents get a clean, readable copy of each email, with no hidden text or tracking
+            images. Sign-in codes, password reset links and card numbers are kept out. When a
+            sign-in or password email arrives, your agent just tells you it’s there and links
+            you to it.
+          </p>
+          <p>
+            When an agent wants to send an email, the approval shows exactly what will go out and
+            whether you’ve emailed that address before. If the agent has just read an email from
+            someone else, the approval says so.
+          </p>
+          <p>
+            What Warthog can’t do: it recognises common patterns, not every email, and can’t tell
+            a scam from a real request. It only covers what agents do through Warthog, not mail
+            connected to an agent directly or the agent’s own web browsing. And once an agent has
+            read something, Warthog can’t make it forget it.
+          </p>
+        </PublicSection>
       </PublicPanel>
     </PublicPage>
   );

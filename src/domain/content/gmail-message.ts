@@ -14,6 +14,7 @@ import { base64Bytes, decodeBytes, decodeHeaderWords, previewOf, readableBody } 
 import { classifySecurityMail, withheldSentence, type SecurityMailKind } from "./security-mail";
 import { addCounts, cleanText, emptyCounts, type FilterCounts } from "./text-filters";
 import { stripInvisible } from "./untrusted";
+import { parseInvitation } from "./ics";
 
 interface GmailHeader {
   readonly name?: unknown;
@@ -69,6 +70,7 @@ function charsetOf(part: GmailPart): string | undefined {
 interface Walk {
   plain?: GmailPart;
   html?: GmailPart;
+  calendar?: GmailPart;
   attachments: { filename: string; mimeType?: string; size?: number }[];
   parts: number;
   capped: boolean;
@@ -81,6 +83,8 @@ function walk(part: GmailPart, depth: number, state: Walk): void {
   }
   state.parts += 1;
   const mime = typeof part.mimeType === "string" ? part.mimeType.toLowerCase() : "";
+  // An invitation's event, whether it comes as a body part or an .ics attachment.
+  if (mime === "text/calendar" && !state.calendar) state.calendar = part;
   if (typeof part.filename === "string" && part.filename !== "") {
     state.attachments.push({
       filename: stripInvisible(part.filename).text.slice(0, 300),
@@ -215,6 +219,11 @@ export function gmailMessageView(input: unknown, options: GmailViewOptions = {})
     } else if (!chosen) {
       view.bodyNote = "This email has no readable text.";
     }
+  }
+  const calendarData = state.calendar?.body?.data;
+  if (typeof calendarData === "string") {
+    const invitation = parseInvitation(decodeBytes(base64Bytes(calendarData), charsetOf(state.calendar!)), counts);
+    if (invitation) view.invitation = invitation;
   }
   if (state.capped) view.bodyNote = "Part of this email is too complex for Warthog to check, so some of it isn't shown.";
   return { message: view, counts, stubbed: false, fallback: false };

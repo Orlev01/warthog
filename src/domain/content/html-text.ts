@@ -99,12 +99,48 @@ const HIDING_STYLE = /(?:^|;)\s*(?:display\s*:\s*none|visibility\s*:\s*hidden|op
 const ZERO_FONT = /(?:^|;)\s*font-size\s*:\s*0(?:\.\d+)?(?:px|pt|em|rem|%)?\s*(?:;|$|!)/i;
 const INLINE_TEXT = new Set(["span", "font", "a", "b", "strong", "i", "em", "small", "u", "s", "sub", "sup", "label", "mark"]);
 
-function hidesContent(name: string, attrs: Map<string, string>): boolean {
+function hidesContent(name: string, attrs: Map<string, string>, hiddenClasses: ReadonlySet<string>): boolean {
   if (attrs.has("hidden")) return true;
   if (attrs.get("aria-hidden")?.toLowerCase() === "true" && !attrs.has("alt")) return true;
   const style = attrs.get("style");
-  if (style === undefined) return false;
-  return HIDING_STYLE.test(style) || (INLINE_TEXT.has(name) && ZERO_FONT.test(style));
+  if (style !== undefined && (HIDING_STYLE.test(style) || (INLINE_TEXT.has(name) && ZERO_FONT.test(style)))) return true;
+  if (hiddenClasses.size === 0) return false;
+  const classes = attrs.get("class");
+  return classes !== undefined && classes.split(/\s+/).some((name) => hiddenClasses.has(name));
+}
+
+// Class rules in a <style> block that hide what they style (".x{display:none}"). Only rules at
+// the top level count: a rule inside @media is how a responsive email swaps its mobile and
+// desktop copies, and dropping one of those would lose real content.
+function hidingClasses(css: string, into: Set<string>): void {
+  let depth = 0;
+  let top = "";
+  for (let i = 0; i < css.length && i < 200_000; i += 1) {
+    const ch = css[i];
+    if (ch === "@" && depth === 0) {
+      // Skip an at-rule block (@media, @supports …) whole.
+      const open = css.indexOf("{", i);
+      if (open < 0) break;
+      let nested = 0;
+      let j = open;
+      for (; j < css.length; j += 1) {
+        if (css[j] === "{") nested += 1;
+        else if (css[j] === "}" && --nested === 0) break;
+      }
+      i = j;
+      continue;
+    }
+    if (ch === "{") depth += 1;
+    if (ch === "}") depth = Math.max(0, depth - 1);
+    top += ch;
+  }
+  for (const match of top.matchAll(/([^{}]{1,500})\{([^{}]{0,2000})\}/g)) {
+    if (!HIDING_STYLE.test(match[2]!.trim())) continue;
+    for (const selector of match[1]!.split(",")) {
+      const simple = /^\s*(?:[a-z][a-z0-9]*)?\.([A-Za-z_][\w-]{0,60})\s*$/i.exec(selector);
+      if (simple) into.add(simple[1]!);
+    }
+  }
 }
 
 // Where a tag that starts at `start` ends (the index of its `>`), respecting quoted
@@ -150,6 +186,7 @@ export function htmlToText(html: string, options: HtmlTextOptions = {}): HtmlTex
   let hiddenLinks = 0;
   let hiddenElements = 0;
   let unlistedLinks = 0;
+  const hiddenClasses = new Set<string>();
   // The open anchor: its address and where its visible text starts in `parts`.
   let anchor: { href: string; from: number } | null = null;
   // While inside a hidden element: its name and how many same-named elements are open within it.
@@ -202,6 +239,15 @@ export function htmlToText(html: string, options: HtmlTextOptions = {}): HtmlTex
       const close = closingTag(lower, "head", i);
       const body = lower.indexOf("<body", i);
       const stop = close >= 0 && (body < 0 || close < body) ? close : body;
+      // Style blocks in the head still say which classes hide content.
+      for (let at = lower.indexOf("<style", i); at >= 0 && (stop < 0 || at < stop); at = lower.indexOf("<style", at + 6)) {
+        const open = html.indexOf(">", at);
+        const end = open < 0 ? -1 : closingTag(lower, "style", open);
+        if (open < 0) break;
+        hidingClasses(html.slice(open + 1, end < 0 ? html.length : end), hiddenClasses);
+        if (end < 0) break;
+        at = end;
+      }
       if (stop < 0) {
         i = html.length;
       } else {
@@ -212,6 +258,7 @@ export function htmlToText(html: string, options: HtmlTextOptions = {}): HtmlTex
     }
     if (!closing && SKIP_CONTENT.has(name) && !tag.endsWith("/>")) {
       const close = closingTag(lower, name, i);
+      if (name === "style") hidingClasses(html.slice(i, close < 0 ? html.length : close), hiddenClasses);
       if (close < 0) {
         i = html.length;
       } else {
@@ -234,7 +281,7 @@ export function htmlToText(html: string, options: HtmlTextOptions = {}): HtmlTex
       continue;
     }
 
-    if (!closing && !selfClosing && hidesContent(name, attributes(tag))) {
+    if (!closing && !selfClosing && hidesContent(name, attributes(tag), hiddenClasses)) {
       hidden = { name, depth: 1 };
       hiddenElements += 1;
       continue;
