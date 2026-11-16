@@ -244,6 +244,17 @@ export function RecentConversations({ data }: { data: AgentWorkspaceData }) {
   );
 }
 
+// An app as its report names it ("claude-code 2.1.289"); null when it gave no name.
+function appLabel(app: { name?: string; version?: string }): string | null {
+  return app.name ? [app.name, app.version].filter(Boolean).join(" ") : null;
+}
+
+// "A", "A and B", "A, B and C", then "A, B, C and 2 others".
+function listed(labels: readonly string[]): string {
+  const shown = labels.length > 4 ? [...labels.slice(0, 3), `${labels.length - 3} others`] : [...labels];
+  return shown.length === 1 ? shown[0]! : `${shown.slice(0, -1).join(", ")} and ${shown.at(-1)}`;
+}
+
 // "How it's going": the plain summary a member needs (when it last asked, how much it has
 // asked, what went wrong), with the connection's diagnostics kept — but folded away under
 // "Technical details" rather than leading the page (content-06).
@@ -261,9 +272,10 @@ function RecentRequests({
   const name = data.agent.displayName;
   const summary = data.auditSummary;
   const performance = data.performance;
-  const client = data.clientObservation;
+  const apps = data.clientObservation?.seen ?? [];
   const id = encodeURIComponent(data.agent.id);
-  const reported = client?.name ? [client.name, client.version].filter(Boolean).join(" ") : null;
+  // One label per app and version: reports that differ only in protocol or capabilities read alike.
+  const reported = [...new Set(apps.map(appLabel).filter((label): label is string => label !== null))];
   return (
     <WorkspacePanel
       title="How it’s going"
@@ -297,9 +309,13 @@ function RecentRequests({
             Review {attention === 1 ? "the entry" : `the ${attention} entries`} that need attention
           </a>
         ) : null}
-        {reported ? (
+        {reported.length === 1 ? (
           <p className="text-fg-muted">
-            The app says it is {reported}. Warthog can&rsquo;t verify that.
+            The app says it is {reported[0]}. Warthog can&rsquo;t verify that.
+          </p>
+        ) : reported.length > 1 ? (
+          <p className="text-fg-muted">
+            The apps it has come through say they are {listed(reported)}. Warthog can&rsquo;t verify that.
           </p>
         ) : null}
         <details className="group border-t border-line pt-2">
@@ -309,17 +325,23 @@ function RecentRequests({
           </summary>
           <div className="flex flex-col gap-3 pb-2 text-fg-muted">
             <p>Connected means this connection is authorised. It isn&rsquo;t a live check that the app is running.</p>
-            {client ? (
-              <dl className="grid gap-x-4 gap-y-1 sm:grid-cols-[auto_minmax(0,1fr)]">
-                <dt>App</dt>
-                <dd className="text-fg">{client.name ?? "Not reported"} · {client.version ?? "version not reported"}</dd>
-                <dt>Protocol</dt>
-                <dd className="text-fg">{client.protocol ?? "Not reported"}</dd>
-                <dt>Capabilities</dt>
-                <dd className="text-fg">{client.capabilities?.join(", ") || "Not reported"}</dd>
-                <dt>Last seen</dt>
-                <dd className="text-fg"><time dateTime={client.observedAt}>{client.displayObservedAt}</time></dd>
-              </dl>
+            {apps.length > 0 ? (
+              <ul aria-label="Apps it came through, latest first" className="flex flex-col gap-3">
+                {apps.map((app, index) => (
+                  <li key={index} className={index > 0 ? "border-t border-line pt-3" : undefined}>
+                    <dl className="grid gap-x-4 gap-y-1 sm:grid-cols-[auto_minmax(0,1fr)]">
+                      <dt>App</dt>
+                      <dd className="text-fg">{app.name ?? "Not reported"} · {app.version ?? "version not reported"}</dd>
+                      <dt>Protocol</dt>
+                      <dd className="text-fg">{app.protocol ?? "Not reported"}</dd>
+                      <dt>Capabilities</dt>
+                      <dd className="text-fg">{app.capabilities?.join(", ") || "Not reported"}</dd>
+                      <dt>Last seen</dt>
+                      <dd className="text-fg"><time dateTime={app.observedAt}>{app.displayObservedAt}</time></dd>
+                    </dl>
+                  </li>
+                ))}
+              </ul>
             ) : (
               <p>No details about the app have been recorded yet. Earlier history can&rsquo;t supply them.</p>
             )}

@@ -110,7 +110,7 @@ append-only. Account deletion cascades.
   Warthog can read it alongside the run. The protocol's run slot (`_meta["app.warthog/runId"]`)
   stays as an agent-reported reference.
 - **App details.** Found while measuring: Warthog's per-agent "app details" read the 2026-07-28
-  envelope from the top level of the request instead of `params._meta`. So they are never
-  recorded for current clients. This change reads the client name correctly for "via" only.
-  Fixing the per-agent record itself would log "Client information reported" each time one agent
-  is used from different apps, so it needs de-duplicating first (a follow-up).
+  envelope from the top level of the request instead of `params._meta`, so they were never
+  recorded for current clients. Fixed on 16 November with a de-duplicated list of each agent's
+  recent apps ([amendment](agent-evidence-and-controls.md#recent-apps-amendment-16-november-2026)).
+  "Via" now uses the same reading.

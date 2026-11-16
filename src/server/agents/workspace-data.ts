@@ -128,7 +128,11 @@ export async function agentWorkspaceData(
     accessKey,
     performance,
     agent,
-    clientObservation: clientObservation ? { ...clientObservation, displayObservedAt: formatAccountTime(clientObservation.observedAt, timeZone) } : null,
+    clientObservation: clientObservation ? {
+      ...clientObservation,
+      displayObservedAt: formatAccountTime(clientObservation.observedAt, timeZone),
+      seen: clientObservation.seen.map((app) => ({ ...app, displayObservedAt: formatAccountTime(app.observedAt, timeZone) })),
+    } : null,
     conversations,
     spending,
     memory,
