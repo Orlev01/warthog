@@ -84,6 +84,11 @@ export interface ConnectorToolDeclaration {
   readonly makesChange?: boolean;
   readonly messageChannel?: "email" | "chat" | "post";
   readonly recipients?: (body: string | undefined) => readonly string[];
+  // Recipients read from the validated input itself (structured email fields), when the tool
+  // has no raw body.
+  readonly recipientsOf?: (params: Record<string, unknown>) => readonly string[];
+  // The tool sends something to other people (an email, a calendar invitation).
+  readonly outbound?: boolean;
   // The general request tool of a service that can send a message on a GET: every request,
   // GET included, is classified as a change (catalogue `get_is_change`).
   readonly getIsChange?: boolean;
@@ -416,7 +421,7 @@ function buildConnectorTool(
         requiresApproval: declaration.requiresApproval,
         unknownSemantics: isRequest || declaration.requiresApproval,
         messageChannel: declaration.messageChannel,
-        recipients: declaration.recipients?.(parsed.body),
+        recipients: declaration.recipientsOf ? declaration.recipientsOf(parsed) : declaration.recipients?.(parsed.body),
         reason: parsed.reason as string | undefined,
         params: parsed,
       };

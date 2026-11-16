@@ -32,6 +32,7 @@ import type { CatalogueIndex } from "./catalogue";
 import { callGoogleTool, GOOGLE_CURATED_TOOLS, type CuratedTool } from "./curated/google";
 import { callMicrosoftTool, MICROSOFT_CURATED_TOOLS } from "./curated/microsoft";
 import { sendConnectorRequest } from "./request-tool";
+import { draftRecipients, MailComposeError, type MailDraft } from "../../domain/content/compose-mail";
 import type { ConnectorToolDeclaration, ConnectorToolset } from "../mcp/tools/registry";
 
 // The general request tool's verb: `<id>__request {method, path, query, body}`.
@@ -66,6 +67,70 @@ export const connectorRequestSchema = z.object({
 
 // A curated (or unknown) connector tool's input: its query and body plus the reason.
 export const connectorToolSchema = z.object({ query, body, reason });
+
+// Drafting and sending email (Gmail and Outlook): plain fields Warthog turns into the email
+// itself (docs/adr/approval-card-truth.md), so what the person approves is exactly what is
+// sent. A hand-built `body`/`raw` message is refused.
+const mailbox = z.string().min(3).max(400);
+const mailboxes = z.array(mailbox).max(50);
+export const mailComposeSchema = z.object({
+  to: mailboxes.optional().describe("Who it goes to, e.g. [\"Sam Lee <sam@example.com>\"]. For a reply, usually the message's replyTo or from."),
+  cc: mailboxes.optional().describe("Copied to."),
+  bcc: mailboxes.optional().describe("Blind-copied to."),
+  subject: z.string().max(900).regex(/^[^\r\n]*$/, "The subject can't contain a line break.").optional()
+    .describe("The subject. A reply without one gets \"Re: <original subject>\"."),
+  text: z.string().max(100_000).describe("The email's text. Warthog sends it as plain text."),
+  reply: z.object({ id: z.string().min(1).max(512).describe("The id of the message being replied to, from search or read.") })
+    .optional().describe("Reply in that message's thread. List the recipients yourself in to and cc."),
+  // Kept only so an old-style call gets a clear refusal instead of a silent drop.
+  body: z.string().max(MAX_BODY).optional().describe("Not used: give to, subject and text."),
+  html: z.string().max(MAX_BODY).optional().describe("Not used: Warthog sends plain text, so put the message in text."),
+  reason,
+});
+export type MailComposeInput = z.infer<typeof mailComposeSchema>;
+
+/** The draft an agent wrote, in the email builder's terms. */
+export function mailDraftOf(input: MailComposeInput): MailDraft {
+  return {
+    ...(input.to ? { to: input.to } : {}),
+    ...(input.cc ? { cc: input.cc } : {}),
+    ...(input.bcc ? { bcc: input.bcc } : {}),
+    ...(input.subject !== undefined ? { subject: input.subject } : {}),
+    text: input.text,
+  };
+}
+
+/** The refusal for an old-style call: a hand-built message, or an HTML version the card can't show. */
+export function composeRefusal(input: { body?: unknown; html?: unknown }): string | undefined {
+  if (input.body !== undefined) return "Use to, subject and text: Warthog builds the email.";
+  if (input.html !== undefined) return "Warthog sends plain text, so what the person approves is exactly what is sent. Put the message in text.";
+  return undefined;
+}
+
+// Who a drafted or sent email goes to, read from its plain fields, so recipient rules match
+// the real list. An address Warthog can't read is refused before anything else happens, and
+// a send needs at least one recipient.
+function composedRecipients(requireOne: boolean): (params: Record<string, unknown>) => string[] {
+  return (params) => {
+    const refusal = composeRefusal(params);
+    if (refusal) throw new HttpError(400, refusal);
+    try {
+      const recipients = draftRecipients(mailDraftOf(params as MailComposeInput));
+      if (requireOne && recipients.length === 0) throw new HttpError(400, "An email needs at least one recipient in to, cc or bcc.");
+      return recipients;
+    } catch (err) {
+      if (err instanceof MailComposeError) throw new HttpError(400, err.message);
+      throw err;
+    }
+  };
+}
+
+const MAIL_COMPOSE_TOOLS = new Set(["google-gmail__draft", "google-gmail__send", "microsoft-outlook-mail__draft", "microsoft-outlook-mail__send"]);
+
+/** Whether a tool drafts or sends email from plain fields. */
+export function isMailComposeTool(tool: string): boolean {
+  return MAIL_COMPOSE_TOOLS.has(tool);
+}
 
 // The curated tools of every provider that has them, by connector id.
 const CURATED_BY_CONNECTOR: ReadonlyMap<string, readonly CuratedTool[]> = groupByConnector([
@@ -143,11 +208,11 @@ const GMAIL_PRESENTATION: Readonly<Record<string, { title: string; description: 
   },
   draft: {
     title: "Gmail: Create unsent draft",
-    description: "Create a new draft in the connected Gmail account; this does not send an email. body is a JSON string containing message.raw: a base64url-encoded RFC 2822 message with recipients, subject and content. Creating the draft is a change subject to Warthog permissions and rules. Gmail API: https://developers.google.com/workspace/gmail/api/reference/rest/v1/users.drafts/create",
+    description: "Save an email as a draft in the connected Gmail account; nothing is sent. Give to, subject and text; Warthog builds a plain-text email. To reply in a thread, pass reply.id and list the recipients. A draft is a change, so the person may be asked first.",
   },
   send: {
     title: "Gmail: Send email",
-    description: "Sends an email from the connected Gmail account to its To, Cc and Bcc recipients. body is a JSON string containing raw: a base64url-encoded RFC 2822 message. This sends immediately only when Warthog permissions and rules allow it; pending_approval means nothing has been sent. Gmail API: https://developers.google.com/workspace/gmail/api/reference/rest/v1/users.messages/send",
+    description: "Send an email from the connected Gmail account. Give to (and cc/bcc), subject and text; Warthog builds a plain-text email. To reply in a thread, pass reply.id and list the recipients. pending_approval means nothing has been sent yet.",
   },
 };
 
@@ -156,11 +221,45 @@ const OUTLOOK_MAIL_PRESENTATION: Readonly<Record<string, { title: string; descri
     title: "Outlook: Search messages",
     description: "Search the connected Outlook mailbox. query.$search takes words, e.g. \"invoice\"; query.$filter, $orderby, $top (up to 25, default 10) and $skip page and sort. Returns who, subject, date and a preview for each message: read one by id for its text. Doesn't change mail.",
   },
+  draft: {
+    title: "Outlook: Create unsent draft",
+    description: "Save an email as a draft in the connected Outlook mailbox; nothing is sent. Give to, subject and text; Warthog builds a plain-text email. To reply in a thread, pass reply.id and list the recipients.",
+  },
+  send: {
+    title: "Outlook: Send email",
+    description: "Send an email from the connected Outlook mailbox. Give to (and cc/bcc), subject and text; Warthog builds a plain-text email. To reply in a thread, pass reply.id and list the recipients. pending_approval means nothing has been sent yet.",
+  },
   read: {
     title: "Outlook: Read message",
     description: "Read one Outlook message by query.id from search results. Returns Warthog's checked view: from, to, subject, date, a preview and the text with its links numbered. Sign-in code and password emails are withheld: tell the person to open those in Outlook. Doesn't change mail.",
   },
 };
+
+// Calendar tools that send invitations to the event's guests (docs/adr/approval-card-truth.md):
+// their guests are read from the event body so the approval card names them.
+const CALENDAR_INVITE_TOOLS = new Set([
+  "google-calendar__create", "google-calendar__update", "microsoft-outlook-calendar__create", "microsoft-outlook-calendar__update",
+]);
+
+/** The guest addresses in a Google or Outlook event body (`attendees[].email` / `attendees[].emailAddress.address`). */
+export function calendarGuests(rawBody: string | undefined): string[] {
+  if (rawBody === undefined) return [];
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(rawBody);
+  } catch {
+    return [];
+  }
+  const attendees = (parsed as { attendees?: unknown } | null)?.attendees;
+  if (!Array.isArray(attendees)) return [];
+  const out: string[] = [];
+  for (const attendee of attendees.slice(0, 200)) {
+    const record = (attendee ?? {}) as { email?: unknown; emailAddress?: { address?: unknown } };
+    const address = typeof record.email === "string" ? record.email : record.emailAddress?.address;
+    if (typeof address === "string" && address.includes("@")) out.push(address.trim().toLowerCase());
+  }
+  return [...new Set(out)];
+}
 
 function declarationOf(tool: CuratedTool, serviceName: string): ConnectorToolDeclaration {
   const verb = tool.name.slice(tool.connectorId.length + NAMESPACE.length);
@@ -171,7 +270,10 @@ function declarationOf(tool: CuratedTool, serviceName: string): ConnectorToolDec
     title: presentation?.title ?? `${serviceName}: ${verb.replace(/_/g, " ")}`,
     description: presentation?.description ?? `${serviceName}: ${verb.replace(/_/g, " ")} (${tool.makesChange ? "makes a change" : "reads only"}).`,
     makesChange: tool.makesChange,
-    ...(tool.sendsMessage ? { messageChannel: "email" as const, recipients: messageRecipients } : {}),
+    ...(tool.sendsMessage
+      ? { messageChannel: "email" as const, schema: mailComposeSchema, recipientsOf: composedRecipients(verb === "send"), outbound: true }
+      : {}),
+    ...(CALENDAR_INVITE_TOOLS.has(tool.name) ? { recipients: calendarGuests, outbound: true } : {}),
   };
 }
 
@@ -274,6 +376,14 @@ export function createConnectorToolExecutor(
       );
     }
 
+    if (isMailComposeTool(call.tool)) {
+      const composed = parseParams(mailComposeSchema, call.params);
+      const refusal = composeRefusal(composed);
+      if (refusal) throw new HttpError(400, refusal);
+      const input = { tool: call.tool, entry, userId, connectionId: connection.id, dek, compose: { draft: mailDraftOf(composed), ...(composed.reply ? { replyId: composed.reply.id } : {}) } };
+      if (GOOGLE_TOOL_NAMES.has(call.tool)) return callGoogleTool(input, transport);
+      return callMicrosoftTool(input, transport);
+    }
     const params = parseParams(connectorToolSchema, call.params);
     const input = {
       tool: call.tool,

@@ -33,6 +33,7 @@
 import { getConnectionById } from "../../db/connections";
 import { HttpError } from "../../http/validate";
 import { sendConnectorRequest } from "../request-tool";
+import { draftSubject, draftText, parseMailbox, MailComposeError, type MailDraft } from "../../../domain/content/compose-mail";
 import type {
   CuratedTool,
   CuratedToolCallInput,
@@ -233,6 +234,10 @@ export async function callMicrosoftTool(
     throw new HttpError(409, "connection needs reconnecting");
   }
 
+  if (input.compose && (def.name === "microsoft-outlook-mail__draft" || def.name === "microsoft-outlook-mail__send")) {
+    return sendComposedOutlook(def.name, input, input.compose, deps);
+  }
+
   const { path, query } = def.resolve(input);
   // Message reads and searches are checked whole before an agent sees them (read-side
   // protection), so they may read past the agent-facing cap.
@@ -254,4 +259,85 @@ export async function callMicrosoftTool(
   // Still too large to check whole: read the same message without its body.
   const headers = await sendConnectorRequest({ ...request, query: { ...query, $select: OUTLOOK_HEADERS_ONLY } }, deps);
   return { ...headers, tooLargeToCheck: true };
+}
+
+// One mailbox in Graph's shape ({ emailAddress: { name?, address } }).
+function graphRecipient(mailbox: string): { emailAddress: { name?: string; address: string } } {
+  const { name, address } = parseMailbox(mailbox);
+  return { emailAddress: { ...(name ? { name } : {}), address } };
+}
+
+// The addresses on a Graph message, lower-cased and sorted (for comparing).
+function graphAddresses(message: unknown): string[] {
+  const out: string[] = [];
+  for (const key of ["toRecipients", "ccRecipients", "bccRecipients"]) {
+    const list = (message as Record<string, unknown> | null)?.[key];
+    if (!Array.isArray(list)) continue;
+    for (const item of list) {
+      const address = (item as { emailAddress?: { address?: unknown } } | null)?.emailAddress?.address;
+      if (typeof address === "string") out.push(address.toLowerCase());
+    }
+  }
+  return [...new Set(out)].sort();
+}
+
+function ok(result: CuratedToolResult): boolean {
+  return result.status >= 200 && result.status < 300;
+}
+
+// Draft or send an email Warthog builds from the agent's plain fields. A reply is made with
+// Graph's createReply (so Outlook threads it), then set to EXACTLY the approved recipients,
+// subject and text, and checked before anything is sent: Graph's reply actions add the
+// original sender (or its Reply-To) on their own, and the person approved a specific list.
+async function sendComposedOutlook(tool: string, input: CuratedToolCallInput, compose: { draft: MailDraft; replyId?: string }, deps: CuratedToolDeps): Promise<CuratedToolResult> {
+  const { draft, replyId } = compose;
+  const send = tool === "microsoft-outlook-mail__send";
+  let message: Record<string, unknown>;
+  let approved: string[];
+  try {
+    const list = (mailboxes: readonly string[] | undefined) => (mailboxes ?? []).map(graphRecipient);
+    const subject = draftSubject(draft);
+    message = {
+      ...(subject ? { subject } : {}),
+      body: { contentType: "Text", content: draftText(draft) },
+      toRecipients: list(draft.to),
+      ccRecipients: list(draft.cc),
+      bccRecipients: list(draft.bcc),
+    };
+    approved = graphAddresses(message);
+  } catch (err) {
+    if (err instanceof MailComposeError) throw new HttpError(400, err.message);
+    throw err;
+  }
+  const request = (method: string, path: string, body?: unknown) => sendConnectorRequest({
+    entry: input.entry, userId: input.userId, connectionId: input.connectionId, dek: input.dek,
+    method, path, ...(body === undefined ? {} : { body: JSON.stringify(body), contentType: "application/json" as const }),
+  }, deps);
+
+  if (!replyId) {
+    return send ? request("POST", "/v1.0/me/sendMail", { message, saveToSentItems: true }) : request("POST", "/v1.0/me/messages", message);
+  }
+  if (!OUTLOOK_MESSAGE_ID.test(replyId)) throw new HttpError(400, "reply.id must be an Outlook message id from search or read.");
+  const created = await request("POST", `/v1.0/me/messages/${encodeURIComponent(replyId)}/createReply`, {});
+  if (!ok(created)) return created;
+  const draftId = (JSON.parse(created.body) as { id?: unknown }).id;
+  if (typeof draftId !== "string" || !OUTLOOK_MESSAGE_ID.test(draftId)) throw new HttpError(502, "Outlook didn't return the reply draft.");
+  const path = `/v1.0/me/messages/${encodeURIComponent(draftId)}`;
+  const updated = await request("PATCH", path, message);
+  if (!ok(updated) || graphAddresses(JSON.parse(updated.body)).join(",") !== approved.join(",")) {
+    await request("DELETE", path);
+    throw new HttpError(502, "Outlook changed who the reply goes to, so nothing was sent.");
+  }
+  return send ? request("POST", `${path}/send`) : updated;
+}
+
+/** Whether the connected Outlook mailbox has ever sent mail to exactly `address` (Sent Items, exact match). */
+export async function outlookHasSentTo(input: Pick<CuratedToolCallInput, "entry" | "userId" | "connectionId" | "dek">, address: string, deps: CuratedToolDeps): Promise<boolean> {
+  const result = await sendConnectorRequest({
+    ...input, method: "GET", path: "/v1.0/me/mailFolders/sentitems/messages",
+    query: { $search: `"recipients:${address}"`, $top: "5", $select: "toRecipients,ccRecipients,bccRecipients" },
+  }, deps);
+  if (!ok(result)) throw new Error("sent-mail lookup failed");
+  const parsed = JSON.parse(result.body) as { value?: unknown };
+  return Array.isArray(parsed.value) && parsed.value.some((message) => graphAddresses(message).includes(address.toLowerCase()));
 }

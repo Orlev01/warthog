@@ -18,7 +18,7 @@ import { ButtonLink } from "@/components/ui/button-link";
 import { TextareaField } from "@/components/ui/field";
 import { ActionForm, FormSubmit } from "@/components/ui/form-submit";
 import { EmptyState } from "@/components/ui/empty";
-import { PageNotice, type NoticeTone } from "@/components/ui/notice";
+import { Notice, PageNotice, type NoticeTone } from "@/components/ui/notice";
 import { ViewPanels } from "@/components/ui/view-tabs";
 import { ActiveFilters, FilterLinks, type AppliedFilter } from "@/components/ui/filter-links";
 import { LIST_ROW, ListGroup } from "@/components/ui/list-group";
@@ -91,7 +91,13 @@ export type PendingRequestView = {
   agent: string;
   agentPlatform?: string;
   sentence: string;
+  // An email's subject and opening words (approval-card truth), shown under the sentence.
+  preview?: { title: string; body?: string };
   details: readonly RequestDetail[];
+  // The rest, behind "Details": account, everyone it goes to, links, why it's asked, where it came from.
+  extras?: readonly RequestDetail[];
+  // At most one gentle heads-up when something is unusual (hidden text, a first-time address).
+  headsUp?: string;
   reason: string;
   rule: string;
   timeLeft: string;
@@ -422,31 +428,67 @@ function PendingItem({
         <InlineAgentMark platform={request.agentPlatform} name={request.agent} />
         <span className="font-semibold">{request.agent}</span> {request.sentence}
       </p>
-      <dl className="grid grid-cols-[auto_minmax(0,1fr)] gap-x-4 gap-y-1.5 text-sm">
-        {request.details.map((detail, index) => (
-          <React.Fragment key={`${request.id}-detail-${index}`}>
-            <dt className="text-fg-muted">{detail.label}</dt>
-            <dd className={`text-fg ${WRAP_ANYWHERE}`}>{detail.value}</dd>
-          </React.Fragment>
-        ))}
-        <dt className="text-fg-muted">Agent&apos;s reason</dt>
-        <dd className={request.reason ? `text-fg ${WRAP_ANYWHERE}` : "text-fg-muted"}>
-          {request.reason || "No reason given"}
-        </dd>
-        {request.rule ? (
+      {request.preview ? (
+        <div className="min-w-0 border-l-2 border-line pl-3 text-sm">
+          <p className={`font-medium text-fg ${WRAP_ANYWHERE}`}>{request.preview.title}</p>
+          {request.preview.body ? <p className={`line-clamp-2 text-fg-muted ${WRAP_ANYWHERE}`}>{request.preview.body}</p> : null}
+        </div>
+      ) : null}
+      {request.details.length || request.rule ? (
+        <dl className="grid grid-cols-[auto_minmax(0,1fr)] gap-x-4 gap-y-1.5 text-sm">
+          {request.details.map((detail, index) => (
+            <React.Fragment key={`${request.id}-detail-${index}`}>
+              <dt className="text-fg-muted">{detail.label}</dt>
+              <dd className={`text-fg ${WRAP_ANYWHERE}`}>{detail.value}</dd>
+            </React.Fragment>
+          ))}
+          {request.rule ? (
+            <>
+              <dt className="text-fg-muted">Your rule</dt>
+              <dd className={`text-fg ${WRAP_ANYWHERE}`}>{request.rule}</dd>
+            </>
+          ) : null}
+        </dl>
+      ) : null}
+      <p className={`text-sm text-fg-muted ${WRAP_ANYWHERE}`}>
+        {request.reason ? (
           <>
-            <dt className="text-fg-muted">Rule</dt>
-            <dd className={`text-fg ${WRAP_ANYWHERE}`}>{request.rule}</dd>
+            <span>{request.agent} says </span>
+            <span className="text-fg">“{request.reason}”</span>
           </>
-        ) : null}
-        <dt className="text-fg-muted">Time left</dt>
-        <dd className={`text-fg ${WRAP_ANYWHERE}`}>
-          <span className="inline-flex items-center gap-1.5">
-            <Clock aria-hidden={true} className="h-4 w-4 shrink-0 text-fg-muted" />
-            {request.timeLeft}
-          </span>
-        </dd>
-      </dl>
+        ) : (
+          <span>{request.agent} gave no reason</span>
+        )}
+        <span aria-hidden={true}> · </span>
+        <span className="inline-flex items-center gap-1.5 whitespace-nowrap">
+          <Clock aria-hidden={true} className="h-4 w-4 shrink-0" />
+          <span className="sr-only">Time left: </span>
+          {request.timeLeft}
+        </span>
+      </p>
+      {request.headsUp ? (
+        <Notice tone="info" announce={false}>
+          {request.headsUp}
+        </Notice>
+      ) : null}
+      {request.extras && request.extras.length ? (
+        <details className="group text-sm">
+          <summary className="inline-flex min-h-11 cursor-pointer list-none items-center gap-1.5 text-fg-muted [&::-webkit-details-marker]:hidden">
+            <span>Details</span>
+            <RequestContext request={request} />
+            <ChevronDown aria-hidden={true} className="h-4 w-4 shrink-0 transition-transform group-open:rotate-180" />
+          </summary>
+          <dl className="mt-1 grid grid-cols-[auto_minmax(0,1fr)] gap-x-4 gap-y-1.5">
+            {request.extras.map((detail, index) => (
+              <React.Fragment key={`${request.id}-extra-${index}`}>
+                <dt className="text-fg-muted">{detail.label}</dt>
+                {/* The full message keeps its line breaks, as it will be sent. */}
+                <dd className={`whitespace-pre-line text-fg ${WRAP_ANYWHERE}`}>{detail.value}</dd>
+              </React.Fragment>
+            ))}
+          </dl>
+        </details>
+      ) : null}
       {isRelease ? (
         <ReleaseApprove
           request={request}

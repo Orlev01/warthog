@@ -153,8 +153,12 @@ export function Privacy({ links = RELATIVE_LINKS }: { links?: PublicLinks } = {}
             Connecting a service lets Warthog and the agents you authorise access the
             email messages, calendar events or files covered by the permissions you
             grant. We use this access to carry out the requests allowed by your rules
-            and approvals. Results are returned to your requesting agent; review that
-            agent&apos;s data practices before connecting it. We store encrypted access
+            and approvals. Results are checked before they are returned to your
+            requesting agent: Warthog removes sign-in codes, password links and card
+            numbers and hands over a readable copy. When an agent asks to send or draft an email,
+            Warthog also searches your own Sent mail to tell you on the approval whether
+            you&apos;ve emailed that address before; only that answer is kept, inside the
+            approval. Review your agent&apos;s data practices before connecting it. We store encrypted access
             credentials, an account label and activity records so you can manage and
             review the connection. Disconnecting removes Warthog&apos;s stored connection
             credentials; you can also revoke access in your Google or Microsoft account.

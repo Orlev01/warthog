@@ -77,6 +77,7 @@ import { withTransaction } from "../../../../server/db/index";
 import { createRedactingRecorder } from "../../../../server/mcp/recorder";
 import { isReleaseRequest } from "../../../../domain/approvals/release-kind";
 import { formatMoney, highTierFieldLabel, requestSentence } from "../../../../domain/approvals/request-sentence";
+import type { OutgoingDetail } from "../../../../domain/approvals/outgoing";
 import type { Session } from "../../../../server/auth/session";
 import type { Clock } from "../../../../server/seams/clock";
 import type { KeyWrapper } from "../../../../server/crypto/key-wrapper";
@@ -255,15 +256,54 @@ function convertedText(detail: Record<string, unknown>): string {
   return date ? `${money} at the ${date} reference rate` : money;
 }
 
-// The exact lines under a request — recipients, amount (and its converted amount),
-// merchant, field and purpose — each present only when the decrypted detail carries
-// it (an omitted field drops out, exactly as it is stored).
-function detailLines(detail: Record<string, unknown>): RequestDetail[] {
-  const lines: RequestDetail[] = [];
-  const account = text(detail.account);
-  if (account) lines.push({ label: "Service account", value: account });
-  const recipients = recipientsText(detail);
-  if (recipients) lines.push({ label: "To", value: recipients });
+// The held call's outgoing summary (approval-card truth), when the detail carries one.
+function outgoingOf(detail: Record<string, unknown>): OutgoingDetail | undefined {
+  const outgoing = detail.outgoing as { kind?: unknown } | undefined;
+  return outgoing && typeof outgoing === "object" && typeof outgoing.kind === "string" ? (detail.outgoing as OutgoingDetail) : undefined;
+}
+
+function recipientArray(detail: Record<string, unknown>): string[] {
+  const recipients = detail.recipients ?? detail.recipient;
+  if (Array.isArray(recipients)) return recipients.map(text).filter(Boolean);
+  const one = text(recipients);
+  return one ? [one] : [];
+}
+
+// "sarah@acme.com.au, tom@acme.com.au and 1 more" (the full list is in the details).
+function guestText(guests: readonly string[]): string {
+  if (guests.length <= 2) return guests.join(" and ");
+  return `${guests.slice(0, 2).join(", ")} and ${guests.length - 2} more`;
+}
+
+// What goes out, up front (approval-card truth): the email's subject and opening words, the
+// invitation's guests, the request a service would receive, or a provider tool's main fields.
+function outgoingLines(outgoing: OutgoingDetail | undefined, timeZone?: string | null): RequestDetail[] {
+  if (!outgoing) return [];
+  switch (outgoing.kind) {
+    case "email":
+      // Shown as the card's preview block instead (subject, then the opening words).
+      return [];
+    case "invite":
+      return [
+        ...(outgoing.start ? [{ label: "When", value: /T/.test(outgoing.start) ? formatAccountTime(outgoing.start, timeZone) : outgoing.start }] : []),
+        ...(outgoing.guests.length ? [{ label: "Guests", value: guestText(outgoing.guests) }] : []),
+      ];
+    case "request":
+      return [{ label: "Request", value: `${outgoing.method} ${outgoing.path}${outgoing.queryKeys.length ? ` (with ${outgoing.queryKeys.join(", ")})` : ""}` }];
+    case "provider":
+      return outgoing.arguments.slice(0, 3).map((arg) => ({ label: arg.key, value: arg.preview }));
+  }
+}
+
+// The exact lines up front — what goes out, then amount (and its converted amount), merchant,
+// field and purpose — each present only when the decrypted detail carries it.
+function detailLines(detail: Record<string, unknown>, timeZone?: string | null): RequestDetail[] {
+  const lines: RequestDetail[] = [...outgoingLines(outgoingOf(detail), timeZone)];
+  // Recipients are in the sentence for an email; anything else with recipients lists them here.
+  if (!outgoingOf(detail)) {
+    const recipients = recipientsText(detail);
+    if (recipients) lines.push({ label: "To", value: recipients });
+  }
   const amount = amountText(detail);
   if (amount) lines.push({ label: "Amount", value: amount });
   const converted = convertedText(detail);
@@ -274,14 +314,62 @@ function detailLines(detail: Record<string, unknown>): RequestDetail[] {
   if (field) lines.push({ label: "Field", value: highTierFieldLabel(field) });
   const purpose = text(detail.purpose);
   if (purpose) lines.push({ label: "Purpose", value: purpose });
-  // Which of the agent's conversations is asking and the product it came through
-  // (docs/adr/agent-runs.md). Both are claims, so they follow what Warthog itself checked and
-  // say whose words they are.
+  return lines;
+}
+
+// The lines behind "Details": which account, everyone it goes to, link domains, the default
+// rule, and which conversation and app it came from (both claims, so they say whose words
+// they are — docs/adr/agent-runs.md).
+function extraLines(detail: Record<string, unknown>): RequestDetail[] {
+  const lines: RequestDetail[] = [];
+  const account = text(detail.account);
+  if (account) lines.push({ label: "Service account", value: account });
+  const outgoing = outgoingOf(detail);
+  if (outgoing) {
+    const recipients = recipientArray(detail);
+    if (outgoing.kind === "email") {
+      if (outgoing.to.length) lines.push({ label: "To", value: outgoing.to.join(", ") });
+      if (outgoing.cc.length) lines.push({ label: "Copy", value: outgoing.cc.join(", ") });
+      if (outgoing.bcc.length) lines.push({ label: "Blind copy", value: outgoing.bcc.join(", ") });
+      if (outgoing.linkDomains.length) lines.push({ label: "Links to", value: outgoing.linkDomains.join(", ") });
+      if (outgoing.text) lines.push({ label: "Full message", value: outgoing.text });
+    } else if (recipients.length) {
+      lines.push({ label: outgoing.kind === "invite" ? "All guests" : "Goes to", value: recipients.join(", ") });
+    }
+    if (outgoing.kind === "provider" && outgoing.arguments.length > 3) {
+      for (const arg of outgoing.arguments.slice(3)) lines.push({ label: arg.key, value: arg.preview });
+    }
+  }
+  const fresh = Array.isArray(detail.newRecipients) ? detail.newRecipients.map(text).filter(Boolean) : [];
+  if (fresh.length > 1) lines.push({ label: "First time emailing", value: fresh.join(", ") });
+  const unchecked = Array.isArray(detail.uncheckedRecipients) ? detail.uncheckedRecipients.map(text).filter(Boolean) : [];
+  if (detail.recipientsUnchecked === true) lines.push({ label: "Sent mail", value: "Warthog couldn't check whether you've emailed these addresses before." });
+  else if (unchecked.length) lines.push({ label: "Sent mail", value: `Warthog couldn't check whether you've emailed ${unchecked.join(", ")} before.` });
+  const rule = text(detail.rule);
+  if (rule && detail.ruleSource !== "person") lines.push({ label: "Why you're asked", value: rule });
   const run = detail.run !== null && typeof detail.run === "object" ? (detail.run as Record<string, unknown>) : undefined;
   if (run && typeof run.id === "string") lines.push({ label: "Conversation (as the agent described it)", value: text(run.label) || "Untitled conversation" });
   const via = text(detail.via);
   if (via) lines.push({ label: "Came through (as the app reported it)", value: via });
   return lines;
+}
+
+// An email's subject and opening words, shown as a two-line preview under the sentence.
+function emailPreview(detail: Record<string, unknown>): { title: string; body?: string } | undefined {
+  const outgoing = outgoingOf(detail);
+  if (outgoing?.kind !== "email") return undefined;
+  const title = outgoing.subject || (outgoing.reply ? "A reply in the same conversation" : "No subject");
+  return outgoing.excerpt ? { title, body: outgoing.excerpt } : { title };
+}
+
+// At most one gentle heads-up, only when something is unusual: the first email to an address.
+// (Warthog sends exactly the plain text the card shows, so nothing in an email is hidden from
+// its recipient.)
+function headsUpFor(detail: Record<string, unknown>): string | undefined {
+  const fresh = Array.isArray(detail.newRecipients) ? detail.newRecipients.map(text).filter(Boolean) : [];
+  if (fresh.length === 1) return `You haven't emailed ${fresh[0]} before.`;
+  if (fresh.length > 1) return `You haven't emailed ${fresh.length} of these addresses before.`;
+  return undefined;
 }
 
 // A decided status as plain-words outcome copy (the view adds the per-status icon). One
@@ -311,20 +399,27 @@ function sentenceFor(detail: Record<string, unknown>, serviceName: ServiceNamer)
     currency: text(detail.currency) || undefined,
     merchant: text(detail.merchant) || undefined,
     field: text(detail.field) || undefined,
+    recipients: recipientArray(detail),
+    outgoing: outgoingOf(detail),
   });
 }
 
 // One pending approval → the view's already-formatted pending row.
-function toPendingView(request: PendingApproval, serviceName: ServiceNamer): PendingRequestView {
+function toPendingView(request: PendingApproval, serviceName: ServiceNamer, timeZone?: string | null): PendingRequestView {
   return {
     id: request.id,
     agentId: request.agent.id,
     agent: request.agent.displayName,
     agentPlatform: request.agent.platform,
     sentence: sentenceFor(request.detail, serviceName),
-    details: detailLines(request.detail),
+    details: detailLines(request.detail, timeZone),
+    extras: extraLines(request.detail),
+    ...(emailPreview(request.detail) ? { preview: emailPreview(request.detail) } : {}),
+    ...(headsUpFor(request.detail) ? { headsUp: headsUpFor(request.detail) } : {}),
     reason: text(request.detail.reason),
-    rule: text(request.detail.rule),
+    // A rule the person wrote stays up front; the default "ask me first" (and any approval held
+    // before Warthog recorded which it was) sits in the details.
+    rule: request.detail.ruleSource === "person" ? text(request.detail.rule) : "",
     timeLeft: timeLeftLabel(request.timeLeftMs),
     release: releaseKind(request.detail),
   };
@@ -642,7 +737,7 @@ export function createInboxActions(deps: InboxActionsDeps): InboxActions {
       await markOpened(db, { id: request.id, userId: session.userId }, clock);
     }
 
-    let pending = inbox.pending.map((request) => toPendingView(request, serviceName));
+    let pending = inbox.pending.map((request) => toPendingView(request, serviceName, timeZone));
     // A high-tier release needs the person's saved detail to decrypt on their device.
     if (pending.some((request) => request.release === "high_tier")) {
       const fields = await loadHighTierFields(session.userId);

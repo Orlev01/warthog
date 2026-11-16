@@ -68,6 +68,7 @@ import type { KeyWrapper } from "../crypto/key-wrapper";
 import type { Clock } from "../seams/clock";
 import { withTransaction, type Db } from "../db/index";
 import { cleanShortText } from "../../domain/content/untrusted";
+import { outgoingDetail } from "../../domain/approvals/outgoing";
 
 // What the agent is asking to do. The policy-relevant fields are exactly the
 // engine's `PolicyCall`, plus the tool `params` (executed + recorded, redacted)
@@ -134,6 +135,16 @@ export interface ResultGuardSeam {
   review(call: AgentCall, result: unknown): { result: unknown; evidence: { outcome: string; counts?: Record<string, number> } };
 }
 
+// Whether each recipient of a held email is someone the person has emailed before, from their
+// own Sent mail (docs/adr/approval-card-truth.md). OPTIONAL: without it the card simply has
+// no first-time line. It resolves to the addresses that are new and the ones it couldn't check
+// (an address too unusual to search for safely), or throws when it couldn't check at all.
+export type RecipientHistorySeam = (call: AgentCall, connection: AgentConnection) => Promise<{ readonly fresh: readonly string[]; readonly unchecked: readonly string[] }>;
+
+// How long the approval waits for the Sent-mail check before it is created without it, so the
+// person's notification is never held up.
+const RECIPIENT_CHECK_BUDGET_MS = 3000;
+
 // The injected seams — no process.env (INV-103).
 export interface PipelineDeps {
   readonly db: Db;
@@ -147,6 +158,7 @@ export interface PipelineDeps {
   readonly notifyApprovalCreated?: NotifyApprovalCreatedSeam;
   readonly recordMetric?: RecordMetricSeam;
   readonly resultGuard?: ResultGuardSeam;
+  readonly recipientHistory?: RecipientHistorySeam;
 }
 
 // The metric each checked connector result records: one count, tagged with how it was
@@ -326,8 +338,11 @@ function toApprovalDetail(
   decision: { reason: string; ruleId?: string },
   context: AgentContext,
   rate: ReferenceRate | null,
+  recipientCheck?: { readonly newRecipients?: readonly string[]; readonly uncheckedRecipients?: readonly string[]; readonly unchecked?: boolean },
 ): Record<string, unknown> {
   const converted = convertedAmount(call, context.accountCurrency, rate);
+  // What would go out, built from the same input the tool runs with (approval-card truth).
+  const outgoing = outgoingDetail(call);
   return {
     tool: call.tool,
     connector: call.connector,
@@ -342,8 +357,14 @@ function toApprovalDetail(
     reason: call.reason,
     ...(call.run ? { run: call.run } : {}),
     ...(call.via ? { via: call.via } : {}),
-    sentence: requestSentence(call),
+    sentence: requestSentence({ ...call, ...(outgoing ? { outgoing } : {}) }),
     rule: triggeringRule(decision, context),
+    // A rule the person wrote is shown up front; the default "ask me first" sits in the details.
+    ruleSource: decision.ruleId === undefined ? "default" : "person",
+    ...(outgoing ? { outgoing } : {}),
+    ...(recipientCheck?.newRecipients?.length ? { newRecipients: recipientCheck.newRecipients } : {}),
+    ...(recipientCheck?.uncheckedRecipients?.length ? { uncheckedRecipients: recipientCheck.uncheckedRecipients } : {}),
+    ...(recipientCheck?.unchecked ? { recipientsUnchecked: true } : {}),
     ...(converted ? { converted } : {}),
   };
 }
@@ -404,6 +425,26 @@ export function createAgentCallPipeline(deps: PipelineDeps): AgentCallPipeline {
       throw new Error("handleAgentCall: no data key for this user");
     }
     return keyWrapper.unwrap(user.wrappedDek);
+  }
+
+  // For a held email: which recipients the person has never emailed, from their own Sent mail.
+  // Runs before the approval's transaction, within a fixed budget; a failure or a slow check
+  // never blocks the approval, the card just says it couldn't check.
+  async function checkRecipients(call: AgentCall, connection: AgentConnection): Promise<{ newRecipients?: readonly string[]; uncheckedRecipients?: readonly string[]; unchecked?: boolean } | undefined> {
+    const recipients = Array.isArray(call.recipients) ? call.recipients : typeof call.recipients === "string" ? [call.recipients] : [];
+    if (!deps.recipientHistory || call.messageChannel !== "email" || recipients.length === 0) return undefined;
+    let timer: ReturnType<typeof setTimeout> | undefined;
+    try {
+      const checked = await Promise.race([
+        deps.recipientHistory(call, connection),
+        new Promise<never>((_, reject) => { timer = setTimeout(() => reject(new Error("recipient check timed out")), RECIPIENT_CHECK_BUDGET_MS); }),
+      ]);
+      return { newRecipients: checked.fresh, uncheckedRecipients: checked.unchecked };
+    } catch {
+      return { unchecked: true };
+    } finally {
+      if (timer) clearTimeout(timer);
+    }
   }
 
   // Check one executed connector result before the agent reads it (read-side protection),
@@ -523,6 +564,7 @@ export function createAgentCallPipeline(deps: PipelineDeps): AgentCallPipeline {
     // approval Warthog runs the held call exactly once.
     if (decision.decision === "ask" || call.requiresApproval) {
       const dek = await dataKeyFor(connection.userId);
+      const recipientCheck = await checkRecipients(call, connection);
       // The pending approval and the held call it guards are written together: a
       // failure part-way never leaves an approval in the inbox with nothing behind it.
       const approval = await withTransaction(db, async (tx) => {
@@ -538,7 +580,7 @@ export function createAgentCallPipeline(deps: PipelineDeps): AgentCallPipeline {
             expiryMinutes,
             // The same rate the engine checked, so the approval's converted amount and
             // the release's ledger amount match it.
-            detail: toApprovalDetail(call, call.requiresApproval && decision.decision === "allow" ? {reason:"Provider-hosted tools require approval because their effects are not verified by Warthog."} : decision, context, effectiveRate(context, rate)),
+            detail: toApprovalDetail(call, call.requiresApproval && decision.decision === "allow" ? {reason:"Provider-hosted tools require approval because their effects are not verified by Warthog."} : decision, context, effectiveRate(context, rate), recipientCheck),
           },
           dek,
           clock,

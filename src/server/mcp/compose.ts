@@ -62,6 +62,8 @@ import { createWebPushSender } from "../notify/web-push";
 import { outbox } from "../notify/outbox";
 import { recordMetricEvent } from "../metrics/record";
 import { createResultGuard } from "../connectors/result-guard";
+import { gmailHasSentTo } from "../connectors/curated/google";
+import { outlookHasSentTo } from "../connectors/curated/microsoft";
 
 import {
   createAgentCallPipeline,
@@ -114,6 +116,9 @@ const MCP_SCOPE = "warthog";
 // The stateless MCP server's identity (design §6.2 — one handler per process).
 const MCP_SERVER_NAME = "warthog";
 const MCP_SERVER_VERSION = "0.1.0";
+
+// An address plain enough to put into a mail search without changing what the search means.
+const SEARCHABLE_ADDRESS = /^[a-z0-9._%+-]{1,64}@[a-z0-9-]+(?:\.[a-z0-9-]+)+$/;
 
 // A thrown tool call maps to a plain-English reason the agent sees; an internal failure is
 // never surfaced verbatim (only the input-boundary's own fixed 4xx messages are safe).
@@ -416,6 +421,27 @@ function buildAgentPipeline(deps: McpDispatchDeps): AgentCallPipeline {
     // Every executed connector result is checked before an agent reads it (sign-in codes and
     // links, card numbers and hidden characters hidden; mail turned into a readable view).
     resultGuard: createResultGuard({ serviceName: (id) => catalogue.get(id)?.name }),
+    // A held email's card says when the person has never emailed a recipient before, from a
+    // search of their own Sent mail (nothing is stored but the answer, inside the approval).
+    recipientHistory: async (call, connection) => {
+      const lookup = call.connector === "google-gmail" ? gmailHasSentTo : call.connector === "microsoft-outlook-mail" ? outlookHasSentTo : undefined;
+      const entry = call.connector ? catalogue.get(call.connector) : undefined;
+      if (!lookup || !entry || !call.connector) throw new Error("no sent-mail lookup for this service");
+      // The account the held call was prepared with (prepareCall ran before the hold).
+      const connectionId = call.connectorAccountId;
+      if (!connectionId) throw new Error("no selected account");
+      const dek = await dataKeyFor(connection.userId);
+      const recipients = [...new Set((Array.isArray(call.recipients) ? call.recipients : [call.recipients]).filter((r): r is string => typeof r === "string").map((r) => r.toLowerCase()))];
+      const transport = { db, fetch: deps.fetch ?? createGuardedFetch() };
+      // Only a plain address goes into a search, and at most five are searched; any other is
+      // reported as not checked (never as "new", which wouldn't be true either).
+      const searchable = recipients.filter((address) => SEARCHABLE_ADDRESS.test(address)).slice(0, 5);
+      const sent = await Promise.all(searchable.map((address) => lookup({ entry, userId: connection.userId, connectionId, dek }, address, transport)));
+      return {
+        fresh: searchable.filter((_, index) => !sent[index]),
+        unchecked: recipients.filter((address) => !searchable.includes(address)),
+      };
+    },
     prepareCall: async (call, connection) => {
       if (call.connector === null) return call;
       const grants = await getConnectionPermissions(db, connection.userId, connection.connectionId);

@@ -866,26 +866,30 @@ test("D5: curated Gmail tools are served (no general request tool) and message r
     assert.equal(listed.find(t => t.name === "google-gmail__send")?.annotations?.readOnlyHint, false);
     assert.equal(listed.find(t => t.name === "google-gmail__send")?.title, "Gmail: Send email");
 
-    const mime = (to: string) => JSON.stringify({ raw: Buffer.from(`To: ${to}\r\nSubject: hi\r\n\r\nhello`).toString("base64url") });
     const held = await readRpc(
       await dispatch(connectionId, mcpPost(callBody("google-gmail__send", {
-        body: mime("Bob <bob@example.com>"),
+        to: ["Bob <bob@example.com>"], subject: "hi", text: "hello",
         approved: true, // A client's claimed approval cannot override Warthog's rule.
         annotations: { readOnlyHint: true },
       }))),
     );
     assert.equal(held.result?.structuredContent?.status, "pending_approval", "a send to the ruled domain asks first");
-    assert.equal(upstream.sent.length, 0);
+    // Holding it only searched the person's Sent mail (for the card's first-time line); nothing was sent.
+    const sends = () => upstream.sent.filter((request) => request.url.endsWith("/messages/send"));
+    assert.equal(sends().length, 0);
+    assert.ok(upstream.sent.every((request) => (request.init.method ?? "GET") === "GET" && request.url.includes("in%3Asent")), "the only request is a Sent-mail search");
     const pending = await readRpc(await dispatch(connectionId, mcpPost(callBody("check_approval", {
       approval_id: held.result!.structuredContent!.approval_id, wait_seconds: 0,
     }))));
     assert.equal(JSON.parse(contentText(pending.result)).status, "pending");
-    assert.equal(upstream.sent.length, 0, "polling cannot approve a held send");
+    assert.equal(sends().length, 0, "polling cannot approve a held send");
 
-    const sent = await readRpc(await dispatch(connectionId, mcpPost(callBody("google-gmail__send", { body: mime("bob@other.org") }))));
+    const sent = await readRpc(await dispatch(connectionId, mcpPost(callBody("google-gmail__send", { to: ["bob@other.org"], subject: "hi", text: "hello" }))));
     assert.notEqual(sent.result?.isError, true, `a send elsewhere goes through, got: ${JSON.stringify(sent)}`);
-    assert.equal(upstream.sent.length, 1);
-    assert.equal(upstream.sent[0]!.url, "https://gmail.googleapis.com/gmail/v1/users/me/messages/send");
+    assert.equal(sends().length, 1);
+    assert.equal(sends()[0]!.url, "https://gmail.googleapis.com/gmail/v1/users/me/messages/send");
+    const raw = Buffer.from(JSON.parse(String(sends()[0]!.init.body)).raw, "base64url").toString("utf8");
+    assert.match(raw, /^To: bob@other\.org\r\nSubject: hi\r\n/, "Warthog built the email from the plain fields");
   } finally {
     await db.close();
   }

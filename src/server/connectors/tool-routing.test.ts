@@ -57,8 +57,8 @@ test("Gmail discovery explains search/read arguments and distinguishes an unsent
   assert.equal(get("search").title, "Gmail: Search messages");
   assert.match(get("search").description!, /query\.q/);
   assert.match(get("read").description!, /query\.id/);
-  assert.match(get("draft").description!, /does not send/i);
-  assert.match(get("draft").description!, /message\.raw/);
-  assert.match(get("send").description!, /sends an email/i);
-  assert.match(get("send").description!, /body/);
+  assert.match(get("draft").description!, /nothing is sent/i);
+  assert.match(get("draft").description!, /to, subject and text/);
+  assert.match(get("send").description!, /send an email/i);
+  assert.match(get("send").description!, /Warthog builds a plain-text email/);
 });
