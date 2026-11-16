@@ -482,7 +482,8 @@ function PendingItem({
             {request.extras.map((detail, index) => (
               <React.Fragment key={`${request.id}-extra-${index}`}>
                 <dt className="text-fg-muted">{detail.label}</dt>
-                <dd className={`text-fg ${WRAP_ANYWHERE}`}>{detail.value}</dd>
+                {/* The full message keeps its line breaks, as it will be sent. */}
+                <dd className={`whitespace-pre-line text-fg ${WRAP_ANYWHERE}`}>{detail.value}</dd>
               </React.Fragment>
             ))}
           </dl>

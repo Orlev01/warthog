@@ -1497,6 +1497,14 @@ test("the agent's reason is labelled as its words, and a missing one says so", (
   assert.doesNotMatch(text, /\bWhy\b/, "the old 'Why' label is gone");
 });
 
+test("the full message under Details keeps its line breaks, as it will be sent", () => {
+  const markup = render(base({ pending: [{ ...PENDING_HELD, extras: [{ label: "Full message", value: "Hi Priya,\n\nThe receipts are attached.\n\nSam" }] }], history: [] }));
+  const value = findAll(markup, "dd").find((dd) => decode(dd.inner).includes("The receipts are attached."));
+  assert.ok(value, "the message is shown under Details");
+  assert.match(attr(value!.attrs, "class") ?? "", /\bwhitespace-pre-line\b/);
+  assert.match(decode(value!.inner), /Hi Priya,\n\nThe receipts are attached\.\n\nSam/);
+});
+
 test("an unavailable control stays reachable and is described by its reason (a11y-18)", () => {
   const dead = render(base({ pending: [PENDING_HELD], history: [], denyAction: undefined }));
   const deny = buttonsMatching(dead, DENY_RE)[0]!;
