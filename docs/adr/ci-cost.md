@@ -5,6 +5,10 @@ GitHub Actions to 2-core runners billed against the GitHub Free allowance of 2,0
 month. The allowance ran out two days later and a release was refused. The founder asked why
 CI cost so much, and for the safe fixes.
 
+On 16 November the founder made the repository public again. Standard hosted runners are free
+for public repositories, with 4 cores. The decision still stands: a change runs the full checks
+once instead of three times, and each run is shorter, so changes reach production sooner.
+
 ## What it cost (measured, 16 November 2026)
 
 - **One change used about 300 runner-minutes.** The same full checks ran three times, about
@@ -75,11 +79,10 @@ CI cost so much, and for the safe fixes.
     write access could open a pull request from a branch at the merged head into a branch whose
     edited `ci.yml` names a passing job for main's tree. An image build of main would then skip
     its checks.
-  - **Not a new power:** main has no branch protection (GitHub Free can't enforce it on a private
-    repository), so the same person can already change main's checks directly. Only main's own
-    code can be published this way.
-  - **If branch protection becomes available,** accept only the push and image-build evidence on
-    main. That costs one more full run per change.
+  - **Not a new power:** main has no branch protection, so the same person can already change
+    main's checks directly. Only main's own code can be published this way.
+  - **If branch protection is turned on** (possible again now the repository is public), accept
+    only the push and image-build evidence on main. That costs one more full run per change.
 - **The PostgreSQL image is a tag** (`postgres:16-bookworm`), so a reused result may come from
   an earlier 16.x patch release than a fresh run would use. That was already true between shards.
 

@@ -80,6 +80,18 @@ the `Orlev01` reviewer rule from `azure-foundation-plan` and `azure-foundation-a
 - Hosted Actions minutes now count against the account's monthly allowance; the
   private Azure runners are not counted.
 
+On 16 November the founder made the repository public again, after the allowance ran out.
+A secret scan of every commit since it went private found nothing.
+- Hosted standard runners are free again, with 4 cores.
+- GitHub restored the `Orlev01` reviewer rule on `azure-foundation-plan` and
+  `azure-foundation-apply`.
+- The other environments and their `main`-only branch policies didn't change.
+- Workflows on pull requests from outside contributors wait for approval
+  (`all_external_contributors`).
+- Secret scanning and push protection are on.
+- The delivery runner still takes only the one release job it was leased for (its
+  `warthog-run-<run id>` label).
+
 Inspect eligible billing-profile credit availability before further paid stages.
 The founder selected estimate-based usage alerts after reviewing the lack of a
 custom cash cap; do not reopen that superseded decision. Keep account-specific
