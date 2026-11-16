@@ -206,11 +206,14 @@ export interface ReliabilityModel extends RangedPage {
   readonly sweeps: readonly SweepRow[];
 }
 
+// Requests, page loads, refusals, the breakdowns and today's hours count what people and agents
+// asked for. Azure's own probes of `/api/health` are counted on their own as `healthChecks`.
 export interface TrafficModel extends RangedPage {
   readonly requests: Measure;
   readonly documents: Measure;
   readonly limited: number;
-  readonly series: { readonly requests: readonly SeriesPoint[]; readonly documents: readonly SeriesPoint[] };
+  readonly healthChecks: Measure;
+  readonly series: { readonly requests: readonly SeriesPoint[]; readonly documents: readonly SeriesPoint[]; readonly healthChecks: readonly SeriesPoint[] };
   readonly byRoute: readonly BreakdownRow[];
   readonly byHost: readonly BreakdownRow[];
   readonly todayByHour: readonly SeriesPoint[];

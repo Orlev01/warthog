@@ -228,6 +228,11 @@ the UI shows absolute deltas and "n of m", never a percentage.
   last run against its interval.
 - **Traffic.** Requests and documents per day by route class and host; today's
   hourly profile; the admin host separately; a link to Azure ingress metrics.
+  Azure's own probes of `/api/health` (readiness every 5 s, liveness every 10 s,
+  about 1,080 an hour) are shown as a Health checks tile of their own. They are
+  left out of the requests, page loads, breakdowns and today's hours, which they
+  would otherwise outnumber by about ten to one. The probes reach the container
+  directly, so Azure's ingress metrics and request billing never see them.
 - **System.** Migration version, scheduler and sweep health, SMS enabled flag,
   households, accounts and tombstones awaiting purge, metric-store size.
 
