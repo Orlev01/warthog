@@ -165,7 +165,10 @@ function toView(task: Task, savedBy?: SavedByResolver): TaskView {
     title: task.title,
     assignee: task.assignee,
     status: task.status,
-    notes: task.notes,
+    // Each note says who wrote it too: another agent can add a note to the person's own task.
+    notes: savedBy
+      ? task.notes.map((note) => ({ ...note, savedBy: savedBy(note.author.kind === "agent" ? note.author.agentId : null) }))
+      : task.notes,
     createdBy: task.createdBy,
     // Who created it, as this agent reads it (write provenance).
     ...(savedBy ? { savedBy: savedBy(task.createdBy.kind === "agent" ? task.createdBy.agentId : null) } : {}),

@@ -229,7 +229,7 @@ export function createGetContextTool(deps: GetContextDeps): {
                 task.assignee === agentId
                   ? ("you" as const)
                   : ("any agent" as const),
-              createdBy: savedBy(task.createdBy.kind === "agent" ? task.createdBy.agentId : null),
+              savedBy: savedBy(task.createdBy.kind === "agent" ? task.createdBy.agentId : null),
             }))
         : [];
 
