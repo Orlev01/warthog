@@ -139,7 +139,8 @@ export const RELIABILITY_EMPTY: ReliabilityModel = {
 export const TRAFFIC: TrafficModel = {
   range: RANGE_7D, timeZone: TZ, generatedAt: NOW.toISOString(),
   requests: { value: 5200, previous: 4100 }, documents: { value: 900, previous: 850 }, limited: 3,
-  series: { requests: days([600, 700, 650, 800, 900, 750, 800]), documents: days([100, 120, 110, 150, 160, 130, 130]) },
+  healthChecks: { value: 60480, previous: 60480 },
+  series: { requests: days([600, 700, 650, 800, 900, 750, 800]), documents: days([100, 120, 110, 150, 160, 130, 130]), healthChecks: days([8640, 8640, 8640, 8640, 8640, 8640, 8640]) },
   byRoute: [{ key: "portal", label: "Signed-in app", value: 3000 }, { key: "mcp", label: "Agent connections", value: 1500 }, { key: "public", label: "Public pages", value: 400 }],
   byHost: [{ key: "app", label: "Member app", value: 5100 }, { key: "admin", label: "Admin portal", value: 100 }],
   todayByHour: Array.from({ length: 24 }, (_, h) => ({ at: `2026-11-12T${String(h).padStart(2, "0")}:00:00Z`, value: h * 3 })),
@@ -149,7 +150,8 @@ export const TRAFFIC: TrafficModel = {
 export const TRAFFIC_EMPTY: TrafficModel = {
   range: RANGE_7D, timeZone: TZ, generatedAt: NOW.toISOString(),
   requests: { value: 0, previous: null }, documents: { value: 0, previous: null }, limited: 0,
-  series: { requests: [], documents: [] }, byRoute: [], byHost: [], todayByHour: [], azureMetricsUrl: null,
+  healthChecks: { value: 0, previous: null },
+  series: { requests: [], documents: [], healthChecks: [] }, byRoute: [], byHost: [], todayByHour: [], azureMetricsUrl: null,
 };
 
 export const SYSTEM: SystemModel = {

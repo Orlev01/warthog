@@ -384,17 +384,25 @@ export async function loadReliability(deps: AdminPageDeps, key: RangeKey): Promi
 export async function loadTraffic(deps: AdminPageDeps, key: RangeKey): Promise<TrafficModel> {
   const { db, timeZone } = deps;
   const { now, range, generatedAt } = base(deps, key);
-  const rows = await reads.metricRows(db, HTTP_REQUESTS, range);
-  const previousRows = await reads.metricRows(db, HTTP_REQUESTS, previousOf(range));
   const parsed = (r: reads.MetricRow) => parseTrafficLabel(r.outcome);
+  // Azure probes /api/health every few seconds (readiness every 5 s, liveness every 10 s), far
+  // more often than anyone visits, so those count on their own and never in the requests.
+  const isHealth = (r: reads.MetricRow) => parsed(r)?.route === "health";
+  const counted = (window: Win) => reads.metricRows(db, HTTP_REQUESTS, window);
+  const all = await counted(range);
+  const previousAll = await counted(previousOf(range));
+  const rows = all.filter((r) => !isHealth(r));
+  const previousRows = previousAll.filter((r) => !isHealth(r));
+  const health = all.filter(isHealth);
   const documents = (list: readonly reads.MetricRow[]) => list.filter((r) => parsed(r)?.kind === "document");
-  const todayRows = await reads.metricRows(db, HTTP_REQUESTS, { from: hoursOfToday(now, timeZone).from, to: now.toISOString() });
+  const todayRows = (await counted({ from: hoursOfToday(now, timeZone).from, to: now.toISOString() })).filter((r) => !isHealth(r));
   return {
     range, timeZone, generatedAt,
     requests: measure(sum(rows), sum(previousRows)),
     documents: measure(sum(documents(rows)), sum(documents(previousRows))),
     limited: sum(rows.filter((r) => parsed(r)?.kind === "limited")),
-    series: { requests: series(range, timeZone, rows), documents: series(range, timeZone, documents(rows)) },
+    healthChecks: measure(sum(health), sum(previousAll.filter(isHealth))),
+    series: { requests: series(range, timeZone, rows), documents: series(range, timeZone, documents(rows)), healthChecks: series(range, timeZone, health) },
     byRoute: byDimension(rows, (r) => parsed(r)?.route ?? null, (route) => routeLabel(route as Parameters<typeof routeLabel>[0])),
     byHost: byDimension(rows, (r) => parsed(r)?.host ?? null, (host) => hostLabel(host as Parameters<typeof hostLabel>[0])),
     todayByHour: fillSeries(hoursOfToday(now, timeZone), timeZone, todayRows.map((r) => ({ at: r.recordedAt, value: r.value }))),

@@ -14,7 +14,8 @@ import { TrendList } from "./view-common";
 
 // TrafficView — requests and page loads by route class and host (docs/design/admin-portal.md §5).
 // Counted in the proxy by closed labels only, so there is never a path, address or user agent
-// here; response status codes live in Azure's ingress metrics, linked out.
+// here; response status codes live in Azure's ingress metrics, linked out. Azure's own health
+// checks are a tile of their own: they far outnumber visitors and would bury them.
 
 export function TrafficView({ model }: { model: TrafficModel }) {
   const { range } = model;
@@ -37,9 +38,10 @@ export function TrafficView({ model }: { model: TrafficModel }) {
       <StatTiles
         label="Traffic numbers"
         tiles={[
-          { key: "requests", label: "Requests", value: formatCount(model.requests.value), delta: { value: model.requests.value, previous: model.requests.previous, previousLabel: range.previousLabel }, sparkline: <Sparkline label={`Requests per ${range.bucket}`} points={model.series.requests} /> },
+          { key: "requests", label: "Requests", value: formatCount(model.requests.value), sub: "Not counting health checks", delta: { value: model.requests.value, previous: model.requests.previous, previousLabel: range.previousLabel }, sparkline: <Sparkline label={`Requests per ${range.bucket}`} points={model.series.requests} /> },
           { key: "documents", label: "Page loads", value: formatCount(model.documents.value), delta: { value: model.documents.value, previous: model.documents.previous, previousLabel: range.previousLabel }, sparkline: <Sparkline label={`Page loads per ${range.bucket}`} points={model.series.documents} /> },
           { key: "limited", label: "Rate-limited", value: formatCount(model.limited), sub: "sign-in or handoff attempts refused", tone: model.limited > 0 ? "warning" : "neutral" },
+          { key: "health", label: "Health checks", value: formatCount(model.healthChecks.value), sub: "Azure checking the app is running, not visitors", sparkline: <Sparkline label={`Health checks per ${range.bucket}`} points={model.series.healthChecks} /> },
         ]}
       />
       <div className="wh-dashboard-grid">
@@ -56,7 +58,7 @@ export function TrafficView({ model }: { model: TrafficModel }) {
           </WorkspacePanel>
         </div>
         <div className="wh-dashboard-column">
-          <WorkspacePanel title="By what was asked for" icon={Route} description="Public pages, sign-in, the signed-in app, agent connections, the admin portal and health probes.">
+          <WorkspacePanel title="By what was asked for" icon={Route} description="Public pages, sign-in, the signed-in app, agent connections and the admin portal. Health checks are counted on their own.">
             <BarList label="Requests by route" rows={model.byRoute} empty="No traffic counted yet. Counts appear a minute after the first request." />
           </WorkspacePanel>
           <WorkspacePanel title="By host" icon={Server} description="The member app against the admin portal.">

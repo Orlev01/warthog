@@ -202,3 +202,33 @@ test("no loader output ever carries an address, identity value, payload, credent
     await db.close();
   }
 });
+
+test("Traffic counts Azure's health checks on their own, outside the requests, page loads and breakdowns", async () => {
+  const db = await freshDb();
+  try {
+    const counted = (value: number, outcome: string, hoursAgo: number) =>
+      db.query(
+        "INSERT INTO metric_events (name, value, recorded_at, outcome) VALUES ('http.requests', $1, $2::timestamptz, $3)",
+        [value, new Date(NOW.getTime() - hoursAgo * 3_600_000).toISOString(), outcome],
+      );
+    // An hour of Azure's probes (readiness every 5 s, liveness every 10 s) beside a little real traffic.
+    await counted(1080, "app.health.fetch", 1);
+    await counted(4, "app.portal.document", 1);
+    await counted(6, "app.portal.fetch", 1);
+    await counted(2, "admin.admin.document", 1);
+    await counted(900, "app.health.fetch", 24 * 8);
+    await counted(5, "app.portal.fetch", 24 * 8);
+
+    const traffic = await loadTraffic(depsFor(db), "7d");
+    assert.deepEqual(traffic.requests, { value: 12, previous: 5 }, "requests are what people and agents asked for");
+    assert.deepEqual(traffic.healthChecks, { value: 1080, previous: 900 });
+    assert.equal(traffic.documents.value, 6);
+    assert.deepEqual(traffic.byRoute.map((r) => [r.label, r.value]), [["Member pages", 10], ["Admin portal", 2]]);
+    assert.deepEqual(traffic.byHost.map((r) => [r.label, r.value]), [["App", 10], ["Admin portal", 2]]);
+    assert.equal(traffic.series.requests.reduce((n, p) => n + p.value, 0), 12);
+    assert.equal(traffic.series.healthChecks.reduce((n, p) => n + p.value, 0), 1080);
+    assert.equal(traffic.todayByHour.reduce((n, p) => n + p.value, 0), 12, "today's hours count requests, not health checks");
+  } finally {
+    await db.close();
+  }
+});

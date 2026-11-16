@@ -166,6 +166,10 @@ test("Traffic: totals, trends, route and host breakdowns, and the Azure link onl
   assert.match(html, /Signed-in app/);
   assert.match(html, /Admin portal/);
   assert.match(html, /Today by hour/);
+  // Azure's health checks are their own tile, not part of the requests.
+  assert.match(html, /<span class="wh-stat-label">Requests<\/span><span class="wh-stat-value">5,200<\/span><span class="wh-stat-sub">Not counting health checks<\/span>/);
+  assert.match(html, /<span class="wh-stat-label">Health checks<\/span><span class="wh-stat-value">60,480<\/span><span class="wh-stat-sub">Azure checking the app is running, not visitors<\/span>/);
+  assert.doesNotMatch(html, /health probes/, "the route breakdown no longer carries the probes");
   const empty = renderToStaticMarkup(<TrafficView model={F.TRAFFIC_EMPTY} />);
   check(empty, "traffic-empty");
   assert.doesNotMatch(empty, /portal\.azure\.com/);

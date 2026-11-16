@@ -26,9 +26,9 @@ switches mean disabled.
 
 | Workflow | Trigger | Result |
 | --- | --- | --- |
-| `ci.yml` | Main pushes, pull requests, manual, reusable call | Delivery safety tests, Terraform schemas, clean Node 22/Linux/PG16 tests and build, non-root AMD64 runtime |
+| `ci.yml` | Main pushes, pull requests, manual, reusable call (not for documentation-only changes) | Delivery safety tests, Terraform schemas, clean Node 22/Linux/PG16 tests and build, non-root AMD64 runtime; a push or image build reuses an identical tree's passing result |
 | `azure-foundation.yml` | Manual `plan` or `apply` on main | Private saved Terraform plan, then a separately approved apply of its exact SHA-256 |
-| `azure-image.yml` | Manual on main | Full checks with a caller-reviewed immutable Node base, then build/push candidate to existing ACR and record registry digest |
+| `azure-image.yml` | Manual on main | Approval reference check, full checks with a caller-reviewed immutable Node base (or that tree's earlier pass on the same base), then build/push candidate to existing ACR and record registry digest |
 | `azure-release.yml` | Manual `inspect`, `create` or `update` on main | First app creation or image-only update with an intentional maintenance outage |
 | `azure-runner-cleanup.yml` | Hourly and manual on main | Independently remove expired private runner leases; no app/secret/provisioning permission |
 
@@ -44,7 +44,16 @@ Ubuntu jobs, and all four must pass. Each gets its own disposable PostgreSQL
 container and performs the real database checks. Local validation defaults to the
 complete unsharded suite. This avoids the much slower hosted database tests pushing
 one monolithic job towards its timeout; it does not skip tests or use larger paid
-runners. [Standard public-repository runner billing](https://docs.github.com/en/billing/concepts/product-billing/github-actions).
+runners. [Standard runner billing](https://docs.github.com/en/billing/concepts/product-billing/github-actions).
+
+Every shard checks with one pinned Node base: the image build's input, or the
+`node:22-bookworm-slim` tag resolved to its digest once per run. The checks run once
+per version of the source ([CI cost](adr/ci-cost.md)). Pull requests and manual runs
+always run them in full. A push to main or an image build skips them only when the
+identical git tree already passed them on the same pinned base. A pull request's
+tested merge has the same tree as the merge commit when main has not moved. The
+evidence is the final `Full checks passed for tree … on …` job of the run that
+passed. Anything uncertain runs the full checks.
 
 ## GitHub protection and Azure identity setup
 
@@ -70,6 +79,18 @@ the `Orlev01` reviewer rule from `azure-foundation-plan` and `azure-foundation-a
   the founder's explicit instruction, and review the plan before any apply.
 - Hosted Actions minutes now count against the account's monthly allowance; the
   private Azure runners are not counted.
+
+On 16 November the founder made the repository public again, after the allowance ran out.
+A secret scan of every commit since it went private found nothing.
+- Hosted standard runners are free again, with 4 cores.
+- GitHub restored the `Orlev01` reviewer rule on `azure-foundation-plan` and
+  `azure-foundation-apply`.
+- The other environments and their `main`-only branch policies didn't change.
+- Workflows on pull requests from outside contributors wait for approval
+  (`all_external_contributors`).
+- Secret scanning and push protection are on.
+- The delivery runner still takes only the one release job it was leased for (its
+  `warthog-run-<run id>` label).
 
 Inspect eligible billing-profile credit availability before further paid stages.
 The founder selected estimate-based usage alerts after reviewing the lack of a
@@ -259,8 +280,12 @@ grant recovery access or change the release sequence below.
    pipeline creates placeholders or opens the database publicly.
 6. Review OS-image advisories and the exact official Node base digest. Dispatch
    image publication with `node:22-bookworm-slim@sha256:<64-hex-digest>`. The reusable
-   CI runs against that same base; only after it passes and the image environment
-   is approved can the job publish a candidate. Record the returned
+   CI runs against that same base; only after it passes can the job publish a
+   candidate (the `azure-images` environment allows main only and, since 13 November,
+   has no required reviewers). The approval reference is checked
+   before the checks start. To reuse the pull request's checks rather than run
+   them again, dispatch with the base they passed on: the merged pull request's
+   `Full checks passed for tree … on …` job names it. Record the returned
    `<registry>.azurecr.io/warthog@sha256:<digest>`, source SHA and lock/runtime evidence.
    A new candidate does not resolve the existing OS advisory applicability gate.
 7. For an existing app, dispatch release `inspect`. Review its live settings and

@@ -23,6 +23,8 @@
 import { Pool } from "pg";
 import { mkdir, readFile, readdir } from "node:fs/promises";
 import { join } from "node:path";
+// Type only, erased at build: the production image never loads PGlite (see above).
+import type { PGlite } from "@electric-sql/pglite";
 
 // A single query result. Only the rows matter to callers; the driver-specific
 // metadata (row count, command tag, fields) is deliberately not surfaced.
@@ -132,6 +134,12 @@ async function createPgliteDb(target: string): Promise<Db> {
   const { PGlite } = await import("@electric-sql/pglite");
   const pglite = new PGlite(dataDir);
   await pglite.waitReady;
+  return pgliteDb(pglite);
+}
+
+// The `Db` over an open PGlite instance: what `createDb("pglite:…")` returns. Exported for the
+// test helper (`src/test/db.ts`), which opens copies of one migrated database.
+export function pgliteDb(pglite: PGlite): Db {
   return {
     async query(text, values) {
       if (values && values.length > 0) {

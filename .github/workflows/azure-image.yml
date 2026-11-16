@@ -33,8 +33,21 @@ jobs:
           test "$GITHUB_REF" = refs/heads/main
           test "$ENABLED" = true || { echo 'Azure image publication is disabled pending approved setup.'; exit 1; }
           [[ "$NODE_BASE_IMAGE" =~ ^node:22-bookworm-slim@sha256:[a-f0-9]{64}$ ]]
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      # The same approval check publish runs, before the long checks rather than after them.
+      - name: Require a valid approval reference
+        env:
+          AZURE_DELIVERY_ENABLED: ${{ vars.AZURE_IMAGE_ENABLED }}
+          APPROVAL_REFERENCE: ${{ inputs.approval_reference }}
+        run: PYTHONPATH=scripts/ci python3 -c 'from common import gate; gate()'
   checks:
     needs: gate
+    # Read-only: the checks look up an identical earlier result before running in full.
+    permissions:
+      actions: read
+      contents: read
     uses: ./.github/workflows/ci.yml
     with:
       node_base_image: ${{ inputs.node_base_image }}

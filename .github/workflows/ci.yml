@@ -1,15 +1,20 @@
 name: Warthog release checks
 
+# Documentation is not part of the build context, the image or any test, so changes to it alone
+# run nothing. An image build still checks the exact tree it publishes (see `plan`).
 on:
   pull_request:
+    paths-ignore: ['docs/**', '*.md']
   push:
     branches: [main]
+    paths-ignore: ['docs/**', '*.md']
   workflow_dispatch:
   workflow_call:
     inputs:
       node_base_image:
+        description: The reviewed node:22-bookworm-slim@sha256 digest an image build checks with
         type: string
-        default: node:22-bookworm-slim
+        default: ''
 
 permissions:
   contents: read
@@ -19,8 +24,34 @@ concurrency:
   cancel-in-progress: true
 
 jobs:
+  # Pull requests and manual runs check in full. A push to main or an image build skips the
+  # checks below only when this exact tree already passed them on the same pinned Node base
+  # (scripts/ci/reuse_checks.py); the `passed` job at the end is that evidence.
+  plan:
+    name: Reuse an identical passing result
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    permissions:
+      actions: read
+      contents: read
+    outputs:
+      reuse: ${{ steps.decide.outputs.reuse }}
+      tree: ${{ steps.decide.outputs.tree }}
+      base: ${{ steps.decide.outputs.base }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - id: decide
+        env:
+          GITHUB_TOKEN: ${{ github.token }}
+          NODE_BASE_INPUT: ${{ inputs.node_base_image }}
+        run: python3 scripts/ci/reuse_checks.py
+
   delivery-safety:
     name: Delivery approval and singleton guards
+    needs: plan
+    if: needs.plan.outputs.reuse != 'true'
     runs-on: ubuntu-24.04
     timeout-minutes: 5
     steps:
@@ -35,6 +66,8 @@ jobs:
 
   infrastructure-schema:
     name: Terraform syntax and provider schemas
+    needs: plan
+    if: needs.plan.outputs.reuse != 'true'
     runs-on: ubuntu-24.04
     timeout-minutes: 10
     steps:
@@ -69,6 +102,8 @@ jobs:
 
   linux-postgres:
     name: Node 22 Linux and PostgreSQL 16 (${{ matrix.shard }})
+    needs: plan
+    if: needs.plan.outputs.reuse != 'true'
     runs-on: ubuntu-24.04
     timeout-minutes: 45
     strategy:
@@ -77,7 +112,8 @@ jobs:
         shard: ["1/4", "2/4", "3/4", "4/4"]
     env:
       NEXT_TELEMETRY_DISABLED: "1"
-      NODE_BASE_IMAGE: ${{ inputs.node_base_image || 'node:22-bookworm-slim' }}
+      # One pinned base for every shard: the image build's, or the default tag resolved once.
+      NODE_BASE_IMAGE: ${{ needs.plan.outputs.base }}
       WARTHOG_TEST_SHARD: ${{ matrix.shard }}
     steps:
       - name: Check out the reviewed source
@@ -104,3 +140,14 @@ jobs:
           docker cp "$container_id:/app/release-manifest.json" /tmp/warthog-release-manifest.json
           cat /tmp/warthog-release-manifest.json
           # This image is neither pushed nor started with production credentials.
+
+  # Runs only when every check above passed. Its name records the tree and base they passed for,
+  # which is what a later push or image build looks for before skipping them.
+  passed:
+    name: Full checks passed for tree ${{ needs.plan.outputs.tree }} on ${{ needs.plan.outputs.base }}
+    needs: [plan, delivery-safety, infrastructure-schema, linux-postgres]
+    if: needs.plan.outputs.reuse != 'true'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 2
+    steps:
+      - run: echo "Every check passed for this tree on this Node base."

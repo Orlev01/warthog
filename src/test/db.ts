@@ -3,19 +3,38 @@
 // server and no Docker (design: database tests use PGlite with the real
 // migrations through this shared helper).
 //
-// freshDb() goes through the project's real driver seam (`createDb` with a
-// `pglite:memory` URL) and applies the migrations through the real runner
-// (`loadMigrations` + `runMigrations`) — the production code path with an
-// in-memory data source, never a re-implementation. Each call builds its own
-// `new PGlite("memory://")`, so two instances are separate in-memory databases
-// that never share state.
+// The migrations are applied once per test process, through the real runner
+// (`loadMigrations` + `runMigrations`) over the real driver adapter (`pgliteDb`, what
+// `createDb("pglite:memory")` returns), never a re-implementation. That migrated
+// database is dumped, and each freshDb() opens its own `new PGlite` from the dump: a
+// separate in-memory database that never shares state with another. Copying is about
+// five times faster than applying every migration again, and most of the suite's
+// time used to go on exactly that.
 
-import { createDb, loadMigrations, runMigrations, type Db } from "../server/db/index";
+import { PGlite } from "@electric-sql/pglite";
+import { loadMigrations, pgliteDb, runMigrations, type Db } from "../server/db/index";
+
+let migrated: Promise<Blob> | undefined;
+
+// The data directory of one database with every db/migrations file applied, built on first use.
+function migratedTemplate(): Promise<Blob> {
+  migrated ??= (async () => {
+    const pglite = new PGlite("memory://");
+    await pglite.waitReady;
+    try {
+      await runMigrations(pgliteDb(pglite), await loadMigrations());
+      return await pglite.dumpDataDir("none");
+    } finally {
+      await pglite.close();
+    }
+  })();
+  return migrated;
+}
 
 // An isolated in-process database with every db/migrations file already applied.
 // Close it when done (every caller does so in a `finally`) to release the handle.
 export async function freshDb(): Promise<Db> {
-  const db = await createDb("pglite:memory");
-  await runMigrations(db, await loadMigrations());
-  return db;
+  const pglite = new PGlite({ loadDataDir: await migratedTemplate() });
+  await pglite.waitReady;
+  return pgliteDb(pglite);
 }
