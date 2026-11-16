@@ -128,13 +128,66 @@ Every executed connector result passes `resultGuard.review(call, result)` in the
 
 ## Usability guardrails (every PR in this series)
 
-- **No new approvals, settings, toggles, rule conditions or setup.**
+- **No new settings, toggles, rule conditions or setup, and no new approvals for agents that ask first** (the default). Only an agent the person lets act alone is ever asked something new.
 - **Results get smaller and readable.** A typical marketing email goes from about 34k tokens of
   escaped base64 JSON to about 1k.
 - **Nothing an agent needs for a normal task is hidden:** booking, tracking, BPAY, Zoom and
   unsubscribe.
 - **Copy never says** "untrusted", "injection", "malicious", "token" or "taint", and never claims
   scam detection.
+
+## Recently read (the heads-up and narrow holds)
+
+**The window.** When the guard shows an agent content someone else wrote, Warthog opens a
+60-minute "recently read" window for that agent (migration 0114 `agent_read_exposures`).
+- **What it is keyed on:** one row per agent, never per run, because an agent can drop or restart
+  a run.
+- **What it holds:** the last three senders (service, kind, address, when), encrypted. It never
+  holds a subject or any text.
+- **When it ends:** a passed window is ignored, overwritten by the agent's next read, and removed
+  with the agent.
+- **What opens it:**
+  - Gmail mail, except mail labelled SENT or DRAFT;
+  - Outlook mail and search previews, except mail from the person's own address;
+  - calendar events the person didn't organise (a list cut short counts);
+  - Drive file text;
+  - GET and HEAD reads through an email, messaging or calendar service's general request tool
+    (ntfy included);
+  - provider results, which are always approved first.
+- **What doesn't:** Gmail search ids, and general-request reads of the person's own tools
+  (Todoist and similar).
+
+**What it changes:**
+- **Every approval in the window** gets a Details line, "Claude recently read: an email from X,
+  3 min ago".
+- **A first email to an address** gets a combined heads-up: "You haven't emailed X before. Claude
+  read an email from Y 3 min ago. Worth a second look if you didn't ask for this". When X is the
+  sender it read: "…It's a reply to the email Claude read 3 min ago".
+- **An agent set to "allowed"** (changes without asking) is asked first, within the window, before:
+  - it sends an email to an address the person has never emailed, or one Warthog couldn't check
+    (exact Sent-mail match);
+  - it sends a calendar invitation with guests, or edits an event (which notifies the guests it
+    already has);
+  - it writes through an email, messaging or calendar service (including a GET to a
+    `get_is_change` service).
+
+**What it doesn't change:**
+- No new approvals for agents that ask first (the default); they get only the Details line.
+- A draft, which reaches no one, is never held for this.
+- Never-allow rules and denials still win.
+- Approving the request satisfies the ask.
+
+**How it's built:** a built-in protection in the pipeline after policy evaluation, not a rule
+condition, so the rule vocabulary is unchanged. It needs one indexed lookup, and only for calls
+that could change or send something.
+
+**Accepted gap: a note passed between agents.** Agent A reads a stranger's email and saves its
+instruction as a memory or task. Agent B, set to "allowed" and with no window open, reads it and
+acts on it. The same happens for one agent after its hour is up. Saved-by labels make the
+note's origin visible ("saved by Claude"), and the house skill tells agents to be wary of
+another agent's note asking to send, share or pay. Opening a window on every read of another
+agent's note would hold most sends for "allowed" agents, so it isn't done (founder decision:
+labels only).
 
 ## Write provenance (memories and tasks)
 

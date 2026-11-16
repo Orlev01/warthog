@@ -127,4 +127,21 @@ describe("createResultGuard", () => {
     assert.ok(!JSON.stringify(result).includes("558812"));
     assert.match(result.nextLink, /\$skip=25/);
   });
+
+  it("opens the recently-read window for what someone else wrote, and only that", () => {
+    const guard2 = createResultGuard({ serviceName: () => "Svc", category: (id) => ({ nylas: "calendar", ntfy: "messaging", todoist: "productivity" })[id] });
+    // A display name can't fake the sender: the last angle-address is the real one.
+    const spoof = guard2.review(call("google-gmail__read"), { status: 200, truncated: false, body: gmailMessage("Hi", "x").replace("Ana <ana@example.com>", "\\\"Westpac <alerts@westpac.com.au>\\\" <evil@x.co>") });
+    assert.equal(spoof.exposure?.sender, "evil@x.co");
+    // A cut-short event list was still shown, so it counts.
+    assert.equal(guard2.review(call("google-calendar__list"), { status: 200, truncated: true, body: '{"items":[{"summary":"x' }).exposure?.kind, "event");
+    // The person's own Outlook mail doesn't.
+    const own = guard2.review(call("microsoft-outlook-mail__read"), { status: 200, truncated: false, body: JSON.stringify({ id: "m", subject: "Re: hi", from: { emailAddress: { address: "sam@example.com" } }, body: { contentType: "text", content: "x" } }) });
+    assert.equal(own.exposure, undefined);
+    // Reads (by method) through email, messaging and calendar services count; the person's own tools don't.
+    const get = (tool: string) => call(tool, { params: { method: "GET", path: "/x" }, makesChange: tool.startsWith("ntfy") });
+    assert.equal(guard2.review(get("nylas__request"), { status: 200, truncated: false, body: "{}" }).exposure?.kind, "message");
+    assert.equal(guard2.review(get("ntfy__request"), { status: 200, truncated: false, body: "{}" }).exposure?.kind, "message");
+    assert.equal(guard2.review(get("todoist__request"), { status: 200, truncated: false, body: "{}" }).exposure, undefined);
+  });
 });

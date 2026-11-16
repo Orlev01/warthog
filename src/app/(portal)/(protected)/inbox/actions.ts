@@ -346,7 +346,8 @@ function extraLines(detail: Record<string, unknown>): RequestDetail[] {
   if (detail.recipientsUnchecked === true) lines.push({ label: "Sent mail", value: "Warthog couldn't check whether you've emailed these addresses before." });
   else if (unchecked.length) lines.push({ label: "Sent mail", value: `Warthog couldn't check whether you've emailed ${unchecked.join(", ")} before.` });
   const rule = text(detail.rule);
-  if (rule && detail.ruleSource !== "person") lines.push({ label: "Why you're asked", value: rule });
+  // A card held because of what the agent just read already says so in its heads-up.
+  if (rule && detail.ruleSource !== "person" && detail.readCheck !== true) lines.push({ label: "Why you're asked", value: rule });
   const run = detail.run !== null && typeof detail.run === "object" ? (detail.run as Record<string, unknown>) : undefined;
   if (run && typeof run.id === "string") lines.push({ label: "Conversation (as the agent described it)", value: text(run.label) || "Untitled conversation" });
   const via = text(detail.via);
@@ -362,13 +363,66 @@ function emailPreview(detail: Record<string, unknown>): { title: string; body?: 
   return outgoing.excerpt ? { title, body: outgoing.excerpt } : { title };
 }
 
-// At most one gentle heads-up, only when something is unusual: the first email to an address.
-// (Warthog sends exactly the plain text the card shows, so nothing in an email is hidden from
-// its recipient.)
-function headsUpFor(detail: Record<string, unknown>): string | undefined {
+// What the agent recently read from someone else, from the approval's stored detail.
+interface RecentRead {
+  readonly at: Date;
+  readonly sources: readonly { service?: string; kind?: string; sender?: string }[];
+}
+
+function recentReadOf(detail: Record<string, unknown>): RecentRead | undefined {
+  const recent = detail.recentRead as { at?: unknown; sources?: unknown } | undefined;
+  if (!recent || typeof recent.at !== "string" || !Array.isArray(recent.sources)) return undefined;
+  const at = new Date(recent.at);
+  return Number.isFinite(at.getTime()) ? { at, sources: recent.sources as RecentRead["sources"] } : undefined;
+}
+
+// "an email from billing@x.co", "an event from sam@x.co", "a file in Google Drive".
+function sourceText(source: RecentRead["sources"][number]): string {
+  const from = source.sender ? ` from ${source.sender}` : source.service ? ` in ${source.service}` : "";
+  switch (source.kind) {
+    case "email": return `an email${from}`;
+    case "event": return `an event${from}`;
+    case "file": return `a file${from}`;
+    case "message": return `a message${from}`;
+    default: return `something${from}`;
+  }
+}
+
+function agoText(at: Date, now: Date): string {
+  const minutes = Math.round((now.getTime() - at.getTime()) / 60_000);
+  if (minutes < 1) return "just now";
+  if (minutes < 60) return minutes === 1 ? "1 min ago" : `${minutes} min ago`;
+  const hours = Math.round(minutes / 60);
+  return hours === 1 ? "1 hour ago" : `${hours} hours ago`;
+}
+
+// The Details line: what the agent read from others in the last hour, each with its own time.
+function recentReadLine(detail: Record<string, unknown>, agent: string, now: Date): RequestDetail | undefined {
+  const recent = recentReadOf(detail);
+  if (!recent || recent.sources.length === 0) return undefined;
+  const timed = recent.sources.map((source, index) => {
+    const at = typeof (source as { at?: unknown }).at === "string" ? new Date((source as { at: string }).at) : index === 0 ? recent.at : undefined;
+    return at && Number.isFinite(at.getTime()) ? `${sourceText(source)}, ${agoText(at, now)}` : sourceText(source);
+  });
+  return { label: `${agent} recently read`, value: timed.join("; ") };
+}
+
+// At most one gentle heads-up, only when something is unusual: the first email to an address
+// (with what the agent just read, when it read something from someone else), or a send held
+// because the agent just read someone else's content. (Warthog sends exactly the plain text
+// the card shows, so nothing in an email is hidden from its recipient.)
+function headsUpFor(detail: Record<string, unknown>, agent: string, now: Date): string | undefined {
   const fresh = Array.isArray(detail.newRecipients) ? detail.newRecipients.map(text).filter(Boolean) : [];
-  if (fresh.length === 1) return `You haven't emailed ${fresh[0]} before.`;
-  if (fresh.length > 1) return `You haven't emailed ${fresh.length} of these addresses before.`;
+  const recent = recentReadOf(detail);
+  const latest = recent?.sources[0];
+  const read = recent && latest ? `${agent} read ${sourceText(latest)} ${agoText(recent.at, now)}.` : "";
+  if (fresh.length) {
+    const first = fresh.length === 1 ? `You haven't emailed ${fresh[0]} before.` : `You haven't emailed ${fresh.length} of these addresses before.`;
+    if (!read) return first;
+    if (fresh.length === 1 && latest?.sender === fresh[0]) return `${first} They sent the email ${agent} read ${agoText(recent!.at, now)}. Worth a second look if you didn't ask for this.`;
+    return `${first} ${read} Worth a second look if you didn't ask for this.`;
+  }
+  if (detail.readCheck === true && read) return `${read} Warthog is checking with you before this goes out.`;
   return undefined;
 }
 
@@ -405,7 +459,9 @@ function sentenceFor(detail: Record<string, unknown>, serviceName: ServiceNamer)
 }
 
 // One pending approval → the view's already-formatted pending row.
-function toPendingView(request: PendingApproval, serviceName: ServiceNamer, timeZone?: string | null): PendingRequestView {
+function toPendingView(request: PendingApproval, serviceName: ServiceNamer, timeZone: string | null | undefined, now: Date): PendingRequestView {
+  const recent = recentReadLine(request.detail, request.agent.displayName, now);
+  const headsUp = headsUpFor(request.detail, request.agent.displayName, now);
   return {
     id: request.id,
     agentId: request.agent.id,
@@ -413,9 +469,9 @@ function toPendingView(request: PendingApproval, serviceName: ServiceNamer, time
     agentPlatform: request.agent.platform,
     sentence: sentenceFor(request.detail, serviceName),
     details: detailLines(request.detail, timeZone),
-    extras: extraLines(request.detail),
+    extras: [...extraLines(request.detail), ...(recent ? [recent] : [])],
     ...(emailPreview(request.detail) ? { preview: emailPreview(request.detail) } : {}),
-    ...(headsUpFor(request.detail) ? { headsUp: headsUpFor(request.detail) } : {}),
+    ...(headsUp ? { headsUp } : {}),
     reason: text(request.detail.reason),
     // A rule the person wrote stays up front; the default "ask me first" (and any approval held
     // before Warthog recorded which it was) sits in the details.
@@ -737,7 +793,8 @@ export function createInboxActions(deps: InboxActionsDeps): InboxActions {
       await markOpened(db, { id: request.id, userId: session.userId }, clock);
     }
 
-    let pending = inbox.pending.map((request) => toPendingView(request, serviceName, timeZone));
+    const now = clock.now();
+    let pending = inbox.pending.map((request) => toPendingView(request, serviceName, timeZone, now));
     // A high-tier release needs the person's saved detail to decrypt on their device.
     if (pending.some((request) => request.release === "high_tier")) {
       const fields = await loadHighTierFields(session.userId);
