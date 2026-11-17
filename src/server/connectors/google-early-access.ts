@@ -1,15 +1,16 @@
 // E09-S13 — Google early-access gating (brief "Google early access", design §7).
 //
-// Google admits only 100 unverified-mode testers, so the three Google connectors
-// (flagged `google_early_access: true`) are offered only to people whose email the
-// founder has placed on the early-access allowlist. Everyone else is funnelled to
-// "Early access — ask to join", which files a connector request and emails the
-// operator so they can add the person to the allowlist.
+// Until Google verifies Warthog, at most 100 people can ever connect a Google account to it
+// (a lifetime cap Google never resets), so the three Google connectors (flagged
+// `google_early_access: true`) are offered only to people whose email the founder has
+// placed on the early-access allowlist. Everyone else is funnelled to "Early access — ask
+// to join", which files a connector request and emails the operator so they can add the
+// person to the allowlist. The Google app itself is published (17 Nov 2026,
+// docs/adr/google-published-and-accounts.md), so connections no longer lapse after 7 days.
 //
 //   gateGoogleConnector (pure): decides what a person sees for a connector entry —
 //     an unflagged entry connects with no warning; a flagged entry whose email is on
-//     the INJECTED allowlist connects with the Google unverified-app + 7-day-reconnect
-//     warning; a flagged entry whose email is not on the allowlist is funnelled to
+//     the INJECTED allowlist connects with the Google unverified-app note; a flagged entry whose email is not on the allowlist is funnelled to
 //     ask-to-join. The allowlist is read from configuration (`config.googleEarlyAccess`)
 //     and passed in, never hard-coded (INV-103). Matching is case-insensitive.
 //
@@ -34,19 +35,13 @@ import { mapEmailText, OPERATOR_EMAIL_REASON } from "../notify/email";
 // The exact funnel label a non-allowlisted person sees (UI copy; do not drift).
 const ASK_TO_JOIN_LABEL = "Early access — ask to join";
 
-// Google requires reconnecting an unverified-mode tester every 7 days.
-const RECONNECT_EVERY_DAYS = 7;
-
-// The notice Google shows during sign-in for an app still in unverified mode.
+// What Google shows during sign-in while Warthog is unverified, and how to get past it.
 const UNVERIFIED_APP_NOTICE =
-  'Google will show an "unverified app" notice when you connect, and you will need to ' +
-  "reconnect every 7 days while the app is in early access.";
+  "Google will say it hasn't verified Warthog yet. To continue, choose Advanced, then Go to warthog.com.au.";
 
-// The warning an allowed Google connect carries: the unverified-app notice and the
-// 7-day reconnect cadence.
+// The note an allowed Google connect carries: Google's unverified-app screen.
 export interface GoogleConnectWarning {
   readonly unverifiedApp: string;
-  readonly reconnectEveryDays: number;
 }
 
 // What the gate decides: connect (with the Google warning for a flagged entry, or no
@@ -58,7 +53,7 @@ export type GoogleGateDecision =
 // Decide what a person sees for a connector entry. An entry not flagged for Google
 // early access is never gated (connect, no warning). A flagged entry connects only when
 // the person's email is on the injected allowlist (case-insensitive) and then carries
-// the unverified-app + 7-day-reconnect warning; otherwise it is funnelled to ask-to-join.
+// the unverified-app note; otherwise it is funnelled to ask-to-join.
 export function gateGoogleConnector(
   entry: { google_early_access?: boolean },
   email: string,
@@ -76,7 +71,7 @@ export function gateGoogleConnector(
 
   return {
     kind: "connect",
-    warning: { unverifiedApp: UNVERIFIED_APP_NOTICE, reconnectEveryDays: RECONNECT_EVERY_DAYS },
+    warning: { unverifiedApp: UNVERIFIED_APP_NOTICE },
   };
 }
 

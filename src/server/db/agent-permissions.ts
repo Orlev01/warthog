@@ -236,3 +236,26 @@ export async function upsertPermissions(
     recordsAccess: stored?.records_access as boolean,
   };
 }
+
+// Before the person adds ANOTHER account of a service they have exactly one account of,
+// keep every agent that uses the service on the account it uses today
+// (docs/adr/google-published-and-accounts.md). An agent with no account chosen uses the
+// only account; with two it would have to be told which, so without this a second Gmail
+// account would quietly stop every agent using Gmail. Only agents that are granted the
+// service and have no account chosen for it change. Member-scoped (user_id bound); the
+// connector and connection travel as bound values.
+export async function pinAgentsToSoleAccount(db: Db, userId: string, connectorId: string): Promise<void> {
+  const existing = await db.query(
+    "SELECT id FROM connections WHERE user_id = $1 AND connector_id = $2",
+    [userId, connectorId],
+  );
+  if (existing.rows.length !== 1) return;
+  await db.query(
+    `UPDATE agent_permissions
+        SET connector_accounts = COALESCE(connector_accounts, '{}'::jsonb) || jsonb_build_object($2::text, $3::text)
+      WHERE user_id = $1
+        AND granted_connectors @> jsonb_build_array($2::text)
+        AND (COALESCE(connector_accounts, '{}'::jsonb) ->> $2::text) IS NULL`,
+    [userId, connectorId, existing.rows[0]!.id as string],
+  );
+}

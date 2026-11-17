@@ -260,8 +260,13 @@ Redaction is a pure module with exhaustive unit tests; the activity writer and t
   draft, send), Google Calendar (list, create↔delete, update), Google Drive (search, read text,
   metadata), Outlook mail (search, read, draft, send), Outlook calendar, OneDrive (search, read), plus
   the provider-hosted servers' own tools (Notion, Linear, Todoist, Airtable, Dropbox, …).
-- **Google early access:** an allowlist of emails in config; Google connections expire 7 days after
-  consent (Testing mode) → reminder push 24 h before; status "Reconnect needed" after.
+- **Google early access:** an allowlist of emails in config (it protects Google's lifetime cap of 100
+  people for an unverified app). The Google app is published, so connections last until Google
+  refuses a renewal ([ADR](../adr/google-published-and-accounts.md)).
+- **Several accounts of one service:** the same Google or Microsoft account connected again renews
+  its connection in place; adding another account keeps agents on the account they use; other
+  accounts can be renamed; a card names the account when there are several
+  ([ADR](../adr/google-published-and-accounts.md)).
 - Launch target: ≥ 30 `provider_mcp` + ≥ 60 `api_key` entries + Google + Microsoft (+ any the founder
   registers: Slack, GitHub, Spotify, Strava, …) ≥ 100 connectable.
 

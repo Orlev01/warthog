@@ -69,6 +69,8 @@ export type CatalogueItem = {
   gate: "connect" | "ask_to_join";
   // The person already has at least one account of this service connected.
   connected?: boolean;
+  // One line under the tile, e.g. what Google's unverified-app screen will say.
+  note?: string;
 };
 
 // The catalogue entries of one category, grouped so the view can name each tile's group
@@ -96,6 +98,11 @@ export type ConnectionItem = {
   accountLabel: string;
   unavailableReason?: string;
   reconnectable?: boolean;
+  // "Reconnect" for a Google or Microsoft account; provider-hosted services also refresh tools.
+  reconnectLabel?: string;
+  // The person can give this account a name of their own (not Google or Microsoft, which
+  // are named by their address).
+  renameable?: boolean;
   status: StatusKey;
   connectedAt: string;
   tools: readonly ToolItem[];
@@ -132,6 +139,7 @@ export type ConnectorsViewProps = {
   connectAction?: (formData: FormData) => void | Promise<void>;
   disconnectAction?: (formData: FormData) => void | Promise<void>;
   reconnectAction?: (formData: FormData) => void | Promise<void>;
+  renameAction?: (formData: FormData) => void | Promise<void>;
   requestAction?: (formData: FormData) => void | Promise<void>;
 };
 
@@ -276,6 +284,7 @@ function CatalogueEntry({
           <ConnectControl item={item} connectAction={connectAction} state={state} />
         )}
       </div>
+      {item.note && item.gate === "connect" ? <p className="basis-full text-sm text-fg-muted">{item.note}</p> : null}
     </li>
   );
 }
@@ -347,6 +356,41 @@ function DisconnectControl({
   );
 }
 
+// Give one account a name of the person's own, so two accounts of one service can be told
+// apart (two Notion workspaces both arrive as "Notion"). Tucked behind "Rename" so the row
+// stays quiet until it's wanted.
+function RenameControl({
+  connection,
+  renameAction,
+}: {
+  connection: ConnectionItem;
+  renameAction: (formData: FormData) => void | Promise<void>;
+}) {
+  return (
+    <details>
+      <summary className={SUMMARY_LINK}>
+        Rename<span className="sr-only"> {connection.accountLabel}</span>
+      </summary>
+      <ActionForm action={renameAction} className="flex flex-wrap items-end gap-2 pt-1">
+        <input type="hidden" name="connectionId" value={connection.id} />
+        <ReturnState state={{ view: "connected" }} />
+        <Field
+          id={`rename-${connection.id}`}
+          name="name"
+          label="Name"
+          defaultValue={connection.accountLabel}
+          required
+          maxLength={60}
+          width="text"
+        />
+        <FormSubmit variant="secondary" size="sm" pendingLabel="Saving…">
+          Save name
+        </FormSubmit>
+      </ActionForm>
+    </details>
+  );
+}
+
 const SUMMARY_LINK =
   "inline-flex min-h-11 w-fit cursor-pointer list-none items-center gap-2 rounded-field text-sm font-medium text-fg underline-offset-4 hover:underline lg:pointer-fine:min-h-9 [&::-webkit-details-marker]:hidden";
 
@@ -355,10 +399,12 @@ function ConnectionRow({
   connection,
   reconnectAction,
   disconnectAction,
+  renameAction,
 }: {
   connection: ConnectionItem;
   disconnectAction?: (formData: FormData) => void | Promise<void>;
   reconnectAction?: (formData: FormData) => void | Promise<void>;
+  renameAction?: (formData: FormData) => void | Promise<void>;
 }) {
   return (
     <li className={`${LIST_ROW} gap-3 py-4`}>
@@ -412,12 +458,14 @@ function ConnectionRow({
             <input type="hidden" name="connectionId" value={connection.id} />
             <ReturnState state={{ view: "connected" }} />
             <FormSubmit variant="secondary" size="sm" pendingLabel="Reconnecting…">
-              Reconnect and refresh tools
+              {connection.reconnectLabel ?? "Reconnect"}
+              <span className="sr-only"> {connection.accountLabel}</span>
             </FormSubmit>
           </ActionForm>
         )}
         <DisconnectControl connection={connection} disconnectAction={disconnectAction} />
       </div>
+      {connection.renameable && renameAction ? <RenameControl connection={connection} renameAction={renameAction} /> : null}
     </li>
   );
 }
@@ -481,6 +529,7 @@ export function ConnectorsView({
   connectAction,
   reconnectAction,
   disconnectAction,
+  renameAction,
   requestAction,
 }: ConnectorsViewProps) {
   // The catalogue state every category link keeps (the tab, the search, the category).
@@ -546,6 +595,7 @@ export function ConnectorsView({
                         connection={connection}
                         reconnectAction={reconnectAction}
                         disconnectAction={disconnectAction}
+                        renameAction={renameAction}
                       />
                     ))}
                   </ListGroup>

@@ -26,6 +26,7 @@ import {
   type ConnectionStatus,
 } from "../db/connections";
 import type { Db } from "../db/index";
+import { pinAgentsToSoleAccount } from "../db/agent-permissions";
 import type { Clock } from "../seams/clock";
 
 // The injected seams: the parameterizing data access, the clock (connected-at, never
@@ -120,6 +121,8 @@ export async function saveApiKeyConnection(
     ? await verifyKey(input.entry, input.apiKey, deps.fetch)
     : { status: "connected" };
 
+  // Agents that use the service keep the account they use today (another account is added).
+  await pinAgentsToSoleAccount(deps.db, input.userId, input.entry.id);
   const connection = await createConnection(
     deps.db,
     {

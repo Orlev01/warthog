@@ -72,6 +72,7 @@ import {
 import { getCardCiphertext, listCards } from "../../../../server/db/cards";
 import { getHighTierCiphertext, listHighTierFields } from "../../../../server/db/high-tier-fields";
 import { getUserById } from "../../../../server/db/users";
+import { listConnectionsForUser } from "../../../../server/db/connections";
 import { listIdentityFields } from "../../../../server/db/identity-fields";
 import { withTransaction } from "../../../../server/db/index";
 import { createRedactingRecorder } from "../../../../server/mcp/recorder";
@@ -295,6 +296,11 @@ function outgoingLines(outgoing: OutgoingDetail | undefined, timeZone?: string |
   }
 }
 
+// The services the person has more than one account of: a card for one of them names its
+// account in its sentence, since "Gmail" alone no longer says which inbox it sends from
+// (docs/adr/google-published-and-accounts.md).
+export type SharedServices = ReadonlySet<string>;
+
 // The exact lines up front — what goes out, then amount (and its converted amount), merchant,
 // field and purpose — each present only when the decrypted detail carries it.
 function detailLines(detail: Record<string, unknown>, timeZone?: string | null): RequestDetail[] {
@@ -441,10 +447,12 @@ const OUTCOME: Record<DecidedStatus, string> = {
 // without the call's fields (an older shape) keeps its stored sentence.
 type ServiceNamer = (connectorId: string) => string | undefined;
 
-function sentenceFor(detail: Record<string, unknown>, serviceName: ServiceNamer): string {
+function sentenceFor(detail: Record<string, unknown>, serviceName: ServiceNamer, shared: SharedServices = new Set()): string {
   if (typeof detail.tool !== "string" || detail.tool === "") return text(detail.sentence);
   const connector = text(detail.connector) || undefined;
+  const account = connector && shared.has(connector) ? text(detail.account) : "";
   return requestSentence({
+    ...(account ? { account } : {}),
     tool: detail.tool,
     connector,
     service: connector ? serviceName(connector) : undefined,
@@ -459,7 +467,7 @@ function sentenceFor(detail: Record<string, unknown>, serviceName: ServiceNamer)
 }
 
 // One pending approval → the view's already-formatted pending row.
-function toPendingView(request: PendingApproval, serviceName: ServiceNamer, timeZone: string | null | undefined, now: Date): PendingRequestView {
+function toPendingView(request: PendingApproval, serviceName: ServiceNamer, timeZone: string | null | undefined, now: Date, shared: SharedServices = new Set()): PendingRequestView {
   const recent = recentReadLine(request.detail, request.agent.displayName, now);
   const headsUp = headsUpFor(request.detail, request.agent.displayName, now);
   return {
@@ -467,7 +475,7 @@ function toPendingView(request: PendingApproval, serviceName: ServiceNamer, time
     agentId: request.agent.id,
     agent: request.agent.displayName,
     agentPlatform: request.agent.platform,
-    sentence: sentenceFor(request.detail, serviceName),
+    sentence: sentenceFor(request.detail, serviceName, shared),
     details: detailLines(request.detail, timeZone),
     extras: [...extraLines(request.detail), ...(recent ? [recent] : [])],
     ...(emailPreview(request.detail) ? { preview: emailPreview(request.detail) } : {}),
@@ -783,18 +791,22 @@ export function createInboxActions(deps: InboxActionsDeps): InboxActions {
   async function load(session: Session, options: InboxLoadOptions = {}): Promise<InboxLoadData> {
     const dek = await dataKeyFor(session.userId);
     const timeZone = await timeZoneFor(db, session.userId, dek);
-    const [inbox, agents, counts] = await Promise.all([
+    const [inbox, agents, counts, connections] = await Promise.all([
       readInbox(db, session.userId, dek, clock),
       listAgentsForUser(db, session.userId),
       countDecidedForUser(db, session.userId),
+      listConnectionsForUser(db, session.userId),
     ]);
+    const perService = new Map<string, number>();
+    for (const connection of connections) perService.set(connection.connectorId, (perService.get(connection.connectorId) ?? 0) + 1);
+    const shared: SharedServices = new Set([...perService].filter(([, count]) => count > 1).map(([connectorId]) => connectorId));
 
     for (const request of inbox.pending) {
       await markOpened(db, { id: request.id, userId: session.userId }, clock);
     }
 
     const now = clock.now();
-    let pending = inbox.pending.map((request) => toPendingView(request, serviceName, timeZone, now));
+    let pending = inbox.pending.map((request) => toPendingView(request, serviceName, timeZone, now, shared));
     // A high-tier release needs the person's saved detail to decrypt on their device.
     if (pending.some((request) => request.release === "high_tier")) {
       const fields = await loadHighTierFields(session.userId);

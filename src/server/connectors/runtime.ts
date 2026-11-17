@@ -15,7 +15,7 @@ import { buildAuthorizeUrl, exchangeCodeForConnection, refreshConnectionTokens }
 import { createGuardedProviderFetch } from "./provider-mcp";
 import { pendingConnects, type PendingConnectFlow } from "./pending";
 import { gateGoogleConnector } from "./google-early-access";
-import { scheduleConnectionRefresh, scheduleGoogleLapse } from "./jobs";
+import { scheduleConnectionRefresh } from "./jobs";
 import { HttpError } from "../http/validate";
 import type { CatalogueEntry } from "../../domain/catalogue/schema";
 import { tryRecord, type MetricSeam } from "../metrics/seam";
@@ -88,7 +88,11 @@ export function createConnectorRuntime(deps: {
       if (catalogue.get(connectorId)?.auth_kind === "provider_mcp") return provider.begin(session,connectorId,reconnectId);
       const entry = entryFor(connectorId);
       await allowed(session.userId, entry);
-      const auth = await buildAuthorizeUrl({ entry, config: oauthClientFor(config, connectorId) });
+      // Reconnecting goes straight to the account being reconnected; signing in to a
+      // different account there adds it as another account instead.
+      const existing = reconnectId ? await getConnectionById(db, session.userId, reconnectId) : null;
+      if (reconnectId && (!existing || existing.connectorId !== connectorId)) throw new HttpError(404, "Service connection not found.");
+      const auth = await buildAuthorizeUrl({ entry, config: oauthClientFor(config, connectorId), ...(existing ? { loginHint: existing.accountLabel } : {}) });
       pendingConnects().put(session.userId, session.id, auth.state, { connectorId, accountLabel: entry.name, codeVerifier: auth.codeVerifier });
       return { url: auth.url };
     },
@@ -104,10 +108,9 @@ export function createConnectorRuntime(deps: {
           const connection = await exchangeCodeForConnection({ ...input, entry, config: oauthClientFor(config, entry.id), dek }, { db: tx, clock, fetch: request, accountLabelFor });
           stage = "schedule_refresh";
           await schedule(tx, input.userId, connection.id, dek);
-          if (entry.google_early_access) await scheduleGoogleLapse(tx, { userId: input.userId, connectionId: connection.id, connectedAt: clock.now() });
           stage = "record_activity";
           await createRedactingRecorder({ db: tx, clock, dekFor: async () => dek }).record({ userId: input.userId,
-            kind: "connection_change", source: "warthog", connectorId: entry.id, outcome: "connected", payload: { service: entry.name } });
+            kind: "connection_change", source: "warthog", connectorId: entry.id, outcome: connection.reused ? "reconnected" : "connected", payload: { service: entry.name } });
           return connection;
         });
         await tryRecord(recordMetric, { name: CONNECTOR_CONNECT, value: 1, dimensions: { connectorId: entry.id, outcome: CONNECT_OUTCOMES.ok } });
@@ -128,7 +131,6 @@ export function createConnectorRuntime(deps: {
       try {
         const entry = entryFor(connectorId);
         await allowed(target.userId, entry);
-        if (entry.google_early_access && new Date(connection.connectedAt).getTime() + 7 * 86_400_000 <= clock.now().getTime()) throw new Error("Google consent has expired");
         const dek = await keyFor(target.userId);
         try {
           await withTransaction(db, async (tx) => {

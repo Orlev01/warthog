@@ -161,11 +161,11 @@ features:
   - >-
     Google early access — Google connectors (Gmail, Google Calendar, Google Drive) are available only
     to people whose email the founder has placed on the early-access list in Warthog's configuration
-    (Google allows up to 100 while Warthog is unverified); everyone else sees them marked "Early
-    access — ask to join", which files a connector request; the connect screen warns that Google will
-    show an "unverified app" notice and that Google requires reconnecting every 7 days, and Warthog
-    sends a push reminder 24 hours before each connection lapses (and marks it "Reconnect needed"
-    when it does).
+    (Google allows up to 100 people in total while Warthog is unverified); everyone else sees them
+    marked "Early access — ask to join", which files a connector request; the connect screen warns
+    that Google will show an "unverified app" notice and says how to continue. (Amended 17 November
+    2026: the founder published the Google app, so connections no longer lapse every 7 days — see
+    docs/adr/google-published-and-accounts.md.)
   - >-
     Connector health — expired or failing connections are detected, shown on the connector and on
     Home as "Reconnect needed", and notified to the person; agents calling a broken connector get a
@@ -657,7 +657,7 @@ integrations: >-
   (registered at GoDaddy; its DNS may later move to Azure) for the portal, connector address and email
   sending. (8) A free official source of daily reference exchange rates for foreign-currency card
   requests. (9) Google and Microsoft developer registrations owned by the founder for their
-  connectors (Google in its unverified test mode for up to 100 early-access people). No payment processor or card issuer
+  connectors (Google published but unverified, for up to 100 early-access people). No payment processor or card issuer
   in V1: Warthog never charges cards itself; the agent uses the released card at the merchant.
 
 constraints:

@@ -96,7 +96,6 @@ export function buildDispatchTable(seams: JobSeams): Record<string, JobHandler> 
     clock: seams.clock,
     push: seams.push,
     refresh: seams.refresh,
-    recordMetric: seams.recordMetric,
   });
   return {
     [FALLBACK_JOB_TYPE]: (job) =>

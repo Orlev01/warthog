@@ -249,3 +249,45 @@ export async function updateConnectionCredentials(
   }
   return toConnection(row);
 }
+
+// The person's connection to this service for one provider account, when they already have
+// it (docs/adr/google-published-and-accounts.md). Provider addresses differ only in case
+// between sign-ins, so the label is compared case-insensitively. Connecting the same Google
+// or Microsoft account again then renews that connection in place: its id, and every agent's
+// choice of it, stay the same. Member-scoped (user_id bound); null when there is none.
+export async function findConnectionByAccount(
+  db: Db,
+  userId: string,
+  connectorId: string,
+  accountLabel: string,
+): Promise<Connection | null> {
+  const result = await db.query(
+    `SELECT ${COLUMNS} FROM connections
+      WHERE user_id = $1 AND connector_id = $2 AND lower(account_label) = lower($3)
+      ORDER BY connected_at, id LIMIT 1`,
+    [userId, connectorId, accountLabel],
+  );
+  const row = result.rows[0];
+  return row ? toConnection(row) : null;
+}
+
+// What renameConnection needs: the person (member scope), the connection and its new name.
+export interface RenameInput {
+  readonly userId: string;
+  readonly id: string;
+  readonly accountLabel: string;
+}
+
+// Give the owned connection a name the person chose, so two accounts of one service can be
+// told apart (two Notion workspaces both arrive as "Notion"). Leaves the credentials,
+// status and connected date untouched. Member-scoped (id AND user_id both bound); THROWS
+// when no connection with that id belongs to this user.
+export async function renameConnection(db: Db, { userId, id, accountLabel }: RenameInput): Promise<Connection> {
+  const result = await db.query(
+    `UPDATE connections SET account_label = $1 WHERE id = $2 AND user_id = $3 RETURNING ${COLUMNS}`,
+    [accountLabel, id, userId],
+  );
+  const row = result.rows[0];
+  if (!row) throw new Error(`renameConnection: no connection ${id} for this user`);
+  return toConnection(row);
+}

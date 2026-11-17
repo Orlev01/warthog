@@ -56,7 +56,7 @@ test("Microsoft completes and refreshes an owned connection using the returned a
   } finally { await db.close(); }
 });
 
-test("Google connector completes PKCE, stores encrypted tokens, schedules refresh/lapse and refreshes without losing its refresh token", async (t) => {
+test("Google connector completes PKCE, stores encrypted tokens, schedules refresh and refreshes without losing its refresh token", async (t) => {
   const diagnostic = t.mock.method(console, "error", () => {});
   const db = await createDb("pglite:memory");
   try {
@@ -91,7 +91,8 @@ test("Google connector completes PKCE, stores encrypted tokens, schedules refres
     assert.deepEqual(Object.keys(start), ["url"], "the browser receives no verifier or client secret");
     const url = new URL(start.url);
     assert.equal(url.searchParams.get("access_type"), "offline");
-    assert.equal(url.searchParams.get("prompt"), "consent");
+    assert.equal(url.searchParams.get("prompt"), "select_account consent", "a new account is chosen, never the browser's current one");
+    assert.equal(url.searchParams.get("login_hint"), null);
     assert.equal(url.searchParams.get("code_challenge_method"), "S256");
     assert.equal(url.searchParams.get("redirect_uri"), "https://app.example.test/connect/callback");
     const state = url.searchParams.get("state")!;
@@ -105,11 +106,34 @@ test("Google connector completes PKCE, stores encrypted tokens, schedules refres
     assert.ok(!JSON.stringify(raw).includes("first-access-token"));
     const jobs = await db.query("SELECT type FROM jobs");
     assert.ok(jobs.rows.some((r) => r.type === "connection.refresh"));
-    assert.ok(jobs.rows.some((r) => r.type === "connection.google_lapse"));
+    assert.ok(!jobs.rows.some((r) => String(r.type).startsWith("connection.google_")), "the published Google app lapses on Google's word, not a 7-day clock");
     await runtime.refresh({ userId: user.id, connectionId: connection.id });
     const credentials = await getConnectionCredentials(db, user.id, connection.id, dek);
     assert.equal(credentials?.access_token, "new-access-token");
     assert.equal(credentials?.refresh_token, "refresh-token");
+
+    // Eight days on, the connection still renews: Warthog no longer refuses after 7 days.
+    const later = createConnectorRuntime({ db, config, clock: { now: () => new Date(now.getTime() + 8 * 86_400_000) },
+      keyWrapper: { wrap: async () => "unused", unwrap: async () => dek.slice() }, fetch: async (target, init) => {
+        const refresh = String(init?.body).includes("grant_type=refresh_token");
+        assert.ok(refresh, String(target));
+        return Response.json({ access_token: "day-eight-token", token_type: "Bearer", expires_in: 3600, id_token: idToken() });
+      } });
+    await later.refresh({ userId: user.id, connectionId: connection.id });
+    assert.equal((await getConnectionCredentials(db, user.id, connection.id, dek))?.access_token, "day-eight-token");
+
+    // Reconnecting goes straight to the account, and the same account renews the SAME connection.
+    await db.query("UPDATE connections SET status = 'needs_reconnect' WHERE id = $1", [connection.id]);
+    const again = new URL((await runtime.begin(session, "google-gmail", connection.id)).url);
+    assert.equal(again.searchParams.get("login_hint"), "connected@gmail.test");
+    assert.equal(again.searchParams.get("prompt"), "consent");
+    await assert.rejects(runtime.begin(session, "google-drive", connection.id), /not found/i, "a reconnect names its own service");
+    const againState = again.searchParams.get("state")!;
+    const renewed = await runtime.complete({ ...runtime.take(session, againState)!, userId: user.id, state: againState, code: "second-code" });
+    assert.equal(renewed.id, connection.id, "same account, same connection");
+    assert.equal(renewed.status, "connected");
+    assert.equal((await db.query("SELECT id FROM connections WHERE user_id = $1", [user.id])).rows.length, 1, "no duplicate row");
+    assert.equal((await getConnectionCredentials(db, user.id, connection.id, dek))?.access_token, "first-access-token");
     await runtime.revoke({ userId: user.id, connectionId: connection.id, connectorId: "google-gmail", credentials: credentials! });
     assert.ok(requests.some((r) => r.url === "https://oauth2.googleapis.com/revoke"));
     for (const claim of ["iss", "aud"] as const) {

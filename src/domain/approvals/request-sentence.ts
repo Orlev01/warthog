@@ -27,6 +27,9 @@ export interface RequestSummary {
   // names the real recipient, the subject or the event, never just the tool.
   readonly recipients?: string | readonly string[] | null;
   readonly outgoing?: OutgoingDetail;
+  // Which of the person's accounts it uses, given only when they have more than one account
+  // of the service ("from sam@gmail.com"); one account needs no naming.
+  readonly account?: string;
 }
 
 // Australian English money, e.g. "$149.99" for AUD (brief: AUD by default).
@@ -83,14 +86,15 @@ export function requestSentence(call: RequestSummary): string {
       ? `wants to see your ${highTierFieldLabel(call.field)}`
       : "wants to see one of your protected details";
   }
+  const account = call.connector ? call.account?.trim() : undefined;
   const specific = outgoingSentence(call);
-  if (specific) return specific;
+  if (specific) return account ? `${specific}${call.outgoing?.kind === "email" ? ` from ${account}` : ` (${account})`}` : specific;
   const core = CORE_TOOL_WORDS[call.tool];
   if (core && !call.connector) return `wants to ${core}`;
   const tool = `“${toolLabel(call.tool)}”`;
   if (!call.connector) return `wants to use ${tool}`;
   const service = call.service?.trim() || humanise(call.connector);
-  return `wants to use ${tool} in ${service}`;
+  return `wants to use ${tool} in ${service}${account ? ` (${account})` : ""}`;
 }
 
 function recipientList(recipients: RequestSummary["recipients"]): string[] {

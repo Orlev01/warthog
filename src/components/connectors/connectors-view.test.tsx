@@ -756,3 +756,37 @@ test("uses design tokens, never a raw hex colour (every state)", () => {
     );
   }
 });
+
+// ===========================================================================
+// Several accounts of one service (docs/adr/google-published-and-accounts.md).
+// ===========================================================================
+
+test("a Google tile carries one line on Google's unverified-app screen; an ask-to-join tile does not", () => {
+  const note = "Google will say it hasn't verified Warthog yet. To continue, choose Advanced, then Go to warthog.com.au.";
+  const markup = render(base({
+    groups: [{ category: "Email", items: [{ ...FASTMAIL_CONNECT, id: "google-gmail", name: "Gmail", note }, { ...GMAIL_GATED, id: "google-drive", name: "Drive", note }] }],
+    connections: [],
+  }));
+  const text = visibleText(markup);
+  assert.equal(text.split("hasn't verified Warthog").length - 1, 1, "only the tile that connects shows it");
+});
+
+test("a renameable account offers Rename with its current name; a Google or Microsoft account does not", () => {
+  const markup = render(base({
+    connections: [{ ...CONN_A, renameable: true }, { ...CONN_C, renameable: false }],
+    renameAction: noopAction,
+  }));
+  const text = visibleText(markup);
+  assert.equal(text.split("Rename").length - 1, 1, "one Rename, on the renameable account");
+  assert.ok(markup.includes('value="robin mailbox"'), "the field starts from the current name");
+  assert.ok(markup.includes('maxLength="60"') || markup.includes('maxlength="60"'));
+});
+
+test("a lapsed Google or Microsoft account offers Reconnect, naming the account for screen readers", () => {
+  const markup = render(base({
+    connections: [{ ...CONN_B, reconnectable: true, reconnectLabel: "Reconnect" }],
+    reconnectAction: noopAction,
+  }));
+  assert.match(visibleText(markup), /Reconnect shared diary/);
+  assert.doesNotMatch(visibleText(markup), /refresh tools/);
+});

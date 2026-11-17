@@ -8,7 +8,7 @@
 //
 // These tests pin BEHAVIOUR (what the gate DECIDES and what the filing path DOES: the
 // connect-vs-ask-to-join decision, the "Early access — ask to join" funnel that records a
-// connector request and emails the operator, the unverified-app + 7-day reconnect warning
+// connector request and emails the operator, the unverified-app note
 // shown when a connection may start, what a handler rejects, that a probe is bound not
 // spliced, that the allowlist and operator address are injected config and no ambient env
 // secret leaks). They never assert the source text of the module — a later rename that
@@ -21,8 +21,8 @@
 // allowlist (`config.googleEarlyAccess`). Everyone else sees the connector marked
 // "Early access — ask to join"; filing that records a connector request (the E09-S14
 // store) and emails the operator so they can add the person to the allowlist. The connect
-// screen warns that Google shows an "unverified app" notice and requires reconnecting
-// every 7 days.
+// screen says Google will show its "unverified app" screen. (Reconnecting every 7 days
+// ended when the Google app was published: docs/adr/google-published-and-accounts.md.)
 //
 // ---------------------------------------------------------------------------
 // THE PINNED CONTRACT (chosen by the tester; the implementation conforms to it).
@@ -30,14 +30,14 @@
 //   // The GATE (pure): what a person sees for a connector entry.
 //   //   - A connector NOT flagged google_early_access is never gated → connect, no warning.
 //   //   - A flagged entry whose person's email is on the allowlist → connect, with the
-//   //     Google unverified-app + 7-day-reconnect warning.
+//   //     Google unverified-app note (no 7-day reconnect since the app was published).
 //   //   - A flagged entry whose email is NOT on the allowlist → ask_to_join (the funnel).
 //   // Allowlist matching is case-insensitive (config stores emails trimmed but verbatim).
 //   gateGoogleConnector(
 //     entry: { google_early_access?: boolean },
 //     email: string,
 //     allowlist: readonly string[],                 // from config.googleEarlyAccess (INJECTED)
-//   ): { kind: "connect"; warning: { unverifiedApp: string; reconnectEveryDays: number } | null }
+//   ): { kind: "connect"; warning: { unverifiedApp: string } | null }
 //    | { kind: "ask_to_join"; label: string }       // label === "Early access — ask to join"
 //
 //   // The FILING path: a non-allowlisted person asks to join early access for a Google
@@ -215,7 +215,7 @@ test("[gate] a connector NOT flagged for early access is never gated", () => {
   }
 });
 
-test("[gate] the allowed Google connect warns of the unverified-app notice and the 7-day reconnect", () => {
+test("[gate] the allowed Google connect says what Google's unverified-app screen will show, with no 7-day reconnect", () => {
   const decision = gateGoogleConnector(
     { google_early_access: true },
     "founder@warthog.com.au",
@@ -223,13 +223,11 @@ test("[gate] the allowed Google connect warns of the unverified-app notice and t
   );
   assert.equal(decision.kind, "connect");
   if (decision.kind === "connect") {
-    assert.notEqual(decision.warning, null, "an allowed Google connect carries a warning");
-    assert.equal(decision.warning!.reconnectEveryDays, 7, "it states the 7-day reconnect");
-    assert.match(
-      decision.warning!.unverifiedApp,
-      /unverified/i,
-      "and warns of Google's unverified-app notice",
-    );
+    assert.notEqual(decision.warning, null, "an allowed Google connect carries a note");
+    assert.match(decision.warning!.unverifiedApp, /hasn't verified Warthog/, "it names Google's unverified-app screen");
+    assert.match(decision.warning!.unverifiedApp, /Advanced/, "and how to get past it");
+    assert.doesNotMatch(decision.warning!.unverifiedApp, /7 days|reconnect/i, "the published app needs no weekly reconnect");
+    assert.deepEqual(Object.keys(decision.warning!), ["unverifiedApp"]);
   }
 });
 

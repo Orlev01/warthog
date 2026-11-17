@@ -105,7 +105,7 @@ This contract matches the approved local Twilio/Resend integration. It is not pe
 | `SMS_MONTHLY_SEGMENT_LIMIT`, `SMS_DAILY_SEGMENT_LIMIT`, `SMS_RECIPIENT_HOURLY_SEGMENT_LIMIT` | Mandatory positive integers, hourly ≤ daily ≤ monthly; UTC buckets; conservative reservations retained after ambiguity |
 | `SMS_RECIPIENT_DAILY_MESSAGE_LIMIT` | Mandatory positive integer, number of attempts per recipient per UTC day, not segments |
 | `SMS_MAX_SEGMENTS_PER_MESSAGE` | Mandatory positive integer ≤ recipient-hour cap, includes link/STOP text and conservative Unicode/GSM segmentation |
-| `GOOGLE_CLIENT_ID`, `GOOGLE_CLIENT_SECRET`, `GOOGLE_EARLY_ACCESS` | Web OAuth client and Warthog-account email allowlist. Google console separately allowlists actual Google accounts, which may differ |
+| `GOOGLE_CLIENT_ID`, `GOOGLE_CLIENT_SECRET`, `GOOGLE_EARLY_ACCESS` | Web OAuth client and Warthog-account email allowlist. The Google app is published but unverified (17 Nov 2026), so any Google account can connect behind Google's unverified-app screen, up to 100 people in the app's lifetime; the allowlist keeps others from using those places |
 | `MICROSOFT_CLIENT_ID`, `MICROSOFT_CLIENT_SECRET` | Web OAuth client for the agreed personal/multitenant audience |
 | `VAPID_SUBJECT`, `VAPID_PUBLIC_KEY`, `VAPID_PRIVATE_KEY` | Approved `mailto:` contact, matching uncompressed P-256 public key in base64url, serialized private P-256 JWK JSON |
 | `OPERATOR_EMAIL`, `EXCHANGE_RATE_BASE_URL` | Approved operator address and free official reference-rate endpoint |
