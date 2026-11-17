@@ -1,4 +1,17 @@
-# Delivery status — 17 November 2026 (landing diagrams, round trips)
+# Delivery status — 17 November 2026 (Google published; several accounts)
+
+**Live at [warthog.com.au](https://warthog.com.au) (the website) and
+[app.warthog.com.au](https://app.warthog.com.au) (the app).** Application source
+`407f2907611bf57b936a5296de710d20348e594d` runs as `warthog--r43992933196a1`, with one healthy
+replica, explicit 100% traffic and zero old replicas.
+
+PR #38: the Google app is published (unverified, up to 100 people), so Google connections no longer
+end after 7 days. The same Google or Microsoft account reconnects in place, a second account keeps
+agents on the account they use, Notion and key-based accounts can be renamed, and approval cards
+name the account when a person has several of one service. No migrations (still 85). See the
+[release record](docs/audit/google-accounts-release-2026-11-17.md).
+
+# Earlier delivery status — 17 November 2026 (landing diagrams, round trips)
 
 **Live at [warthog.com.au](https://warthog.com.au) (the website) and
 [app.warthog.com.au](https://app.warthog.com.au) (the app).** Application source

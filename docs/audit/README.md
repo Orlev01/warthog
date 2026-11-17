@@ -1,5 +1,11 @@
 # Warthog comprehensive engineering audit
 
+**Google published; several accounts, 17 November:** main `407f290` runs as
+`warthog--r43992933196a1`. PR #38 follows the founder publishing the Google app (unverified, up to
+100 people): no 7-day Google lapse, the same account reconnects in place, a second account keeps
+agents where they are, other accounts can be renamed, and cards name the account. See the
+[release record](google-accounts-release-2026-11-17.md).
+
 **Landing diagrams, round trips, 17 November:** main `75b433a` runs as
 `warthog--r43972166974a1`. PR #37 makes every request in the website's "why one home" diagrams a
 round trip, out to the service and its answer back to the agent, and lets the Without picture's
