@@ -1,4 +1,15 @@
-# Delivery status — 17 November 2026 (Google published; several accounts)
+# Delivery status — 17 November 2026 (Notion connects)
+
+**Live at [warthog.com.au](https://warthog.com.au) (the website) and
+[app.warthog.com.au](https://app.warthog.com.au) (the app).** Application source
+`2c306f7aee1099ebf02e41b8f6998d17b06ef7ec` runs as `warthog--r44003796746a1`, with one healthy
+replica, explicit 100% traffic and zero old replicas.
+
+PR #39: Warthog's client document now names it ("Warthog") and lists the authorization-code and
+refresh grants, so Notion's sign-in accepts it instead of answering "Invalid client_id". See the
+[release record](docs/audit/notion-client-name-release-2026-11-17.md).
+
+# Earlier delivery status — 17 November 2026 (Google published; several accounts)
 
 **Live at [warthog.com.au](https://warthog.com.au) (the website) and
 [app.warthog.com.au](https://app.warthog.com.au) (the app).** Application source

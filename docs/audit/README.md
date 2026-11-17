@@ -1,5 +1,9 @@
 # Warthog comprehensive engineering audit
 
+**Notion connects, 17 November:** main `2c306f7` runs as `warthog--r44003796746a1`. PR #39 names
+Warthog in its client document (with its grant types), which Notion's sign-in requires. See the
+[release record](notion-client-name-release-2026-11-17.md).
+
 **Google published; several accounts, 17 November:** main `407f290` runs as
 `warthog--r43992933196a1`. PR #38 follows the founder publishing the Google app (unverified, up to
 100 people): no 7-day Google lapse, the same account reconnects in place, a second account keeps
