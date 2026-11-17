@@ -5,7 +5,9 @@
 //   1. builds an authorize URL from a catalogue entry's URLs + scopes with a PKCE S256
 //      challenge and a CSRF state,
 //   2. exchanges an authorization code + PKCE verifier for tokens and stores them
-//      DEK-encrypted on a NEW connection (`../db/connections`, `../crypto/envelope`),
+//      DEK-encrypted on a NEW connection (`../db/connections`, `../crypto/envelope`), or,
+//      when the provider account is one the person already connected, renews that
+//      connection in place (docs/adr/google-published-and-accounts.md),
 //   3. refreshes the stored tokens, updating the stored credentials.
 //
 // The provider HOST is taken ONLY from the catalogue entry's authorize/token URLs — never
@@ -34,11 +36,15 @@ import {
 import type { CatalogueEntry } from "../../domain/catalogue/schema";
 import {
   createConnection,
+  findConnectionByAccount,
   getConnectionCredentials,
+  renewConnection,
   updateConnectionCredentials,
   type Connection,
   type ConnectionStatus,
 } from "../db/connections";
+import { pinAgentsToSoleAccount } from "../db/agent-permissions";
+import { REFRESH_TYPE } from "./jobs";
 import type { Db } from "../db/index";
 import type { Clock } from "../seams/clock";
 
@@ -80,6 +86,9 @@ export interface ExchangeCodeInput {
   readonly codeVerifier: string;
   readonly dek: Uint8Array;
   readonly status?: ConnectionStatus;
+  // The connection the person clicked Reconnect on, renewed when the provider returns that
+  // same account.
+  readonly reconnectId?: string;
 }
 
 // Refresh inputs: the owned connection to renew, member-scoped by the session's `userId`.
@@ -137,6 +146,9 @@ function toStoredCredentials(
 export async function buildAuthorizeUrl(params: {
   entry: CatalogueEntry;
   config: OAuthClientConfig;
+  // Reconnecting a Google or Microsoft account: its address, so the provider goes straight
+  // to that account instead of asking which one.
+  loginHint?: string;
 }): Promise<AuthorizeRequest> {
   const authorizeEndpoint = params.entry.auth.authorize_url;
   if (!authorizeEndpoint) {
@@ -155,21 +167,31 @@ export async function buildAuthorizeUrl(params: {
   url.searchParams.set("code_challenge", codeChallenge);
   url.searchParams.set("code_challenge_method", "S256");
   url.searchParams.set("state", state);
-  if (new URL(authorizeEndpoint).hostname === "accounts.google.com") {
+  // A new connection shows the provider's account chooser, so adding a second account is a
+  // choice and never whichever account the browser happens to be signed in to. A reconnect
+  // names its account instead.
+  const host = new URL(authorizeEndpoint).hostname;
+  if (host === "accounts.google.com") {
     url.searchParams.set("access_type", "offline");
-    url.searchParams.set("prompt", "consent");
+    url.searchParams.set("prompt", params.loginHint ? "consent" : "select_account consent");
+  } else if (host === "login.microsoftonline.com" && !params.loginHint) {
+    url.searchParams.set("prompt", "select_account");
+  }
+  if (params.loginHint && (host === "accounts.google.com" || host === "login.microsoftonline.com")) {
+    url.searchParams.set("login_hint", params.loginHint);
   }
 
   return { url: url.href, codeVerifier, state };
 }
 
 // Exchange the authorization code + PKCE verifier at the ENTRY's token endpoint and store
-// the resulting tokens DEK-encrypted on a NEW connection owned by `userId`. Returns the
-// created Connection — WITHOUT credentials (that shape is enforced by the store).
+// the resulting tokens DEK-encrypted on a NEW connection owned by `userId`, or on the
+// person's existing connection to the same provider account (`reused`). Returns the
+// Connection — WITHOUT credentials (that shape is enforced by the store).
 export async function exchangeCodeForConnection(
   input: ExchangeCodeInput,
   deps: OAuthClientDeps,
-): Promise<Connection> {
+): Promise<Connection & { readonly reused?: boolean }> {
   const as = authorizationServer(input.entry);
   const client: Client = { client_id: input.config.clientId };
   const clientAuth = ClientSecretPost(input.config.clientSecret);
@@ -191,16 +213,39 @@ export async function exchangeCodeForConnection(
     { [customFetch]: deps.fetch },
   );
   const tokens = await processAuthorizationCodeResponse(as, client, response);
+  const credentials = toStoredCredentials(tokens, deps.clock);
+  if (!deps.accountLabelFor) {
+    return createConnection(
+      deps.db,
+      { userId: input.userId, connectorId: input.entry.id, accountLabel: input.accountLabel, credentials, status: input.status },
+      input.dek,
+      deps.clock,
+    );
+  }
 
+  // The provider told us which account this is, so the same account connected again renews
+  // its connection in place: the id stays, and so does every agent's choice of it. One
+  // connect at a time per person and service, so two quick connects can't both add it. The
+  // locks are transaction-scoped: callers run this inside a transaction (runtime.complete).
+  const accountLabel = await deps.accountLabelFor(input.entry, tokens);
+  await deps.db.query("SELECT pg_advisory_xact_lock(hashtextextended($1, 0))", [`connector-account:${input.userId}:${input.entry.id}`]);
+  const existing = await findConnectionByAccount(deps.db, input.userId, input.entry.id, accountLabel, input.reconnectId);
+  if (existing) {
+    // Wait out a renewal already running on this row (it takes the same lock), so it can't
+    // overwrite the new tokens, and drop the row's queued renewal: the caller schedules a
+    // fresh one, so the row never ends up with two renewal chains.
+    await deps.db.query("SELECT pg_advisory_xact_lock(hashtextextended($1, 0))", [`connector-refresh:${existing.id}`]);
+    await deps.db.query(
+      `DELETE FROM jobs WHERE type = $1 AND status = 'pending' AND payload->>'connectionId' = $2 AND payload->>'userId' = $3`,
+      [REFRESH_TYPE, existing.id, input.userId],
+    );
+    const renewed = await renewConnection(deps.db, { userId: input.userId, id: existing.id, credentials, status: input.status ?? "connected" }, input.dek, deps.clock);
+    return { ...renewed, reused: true };
+  }
+  await pinAgentsToSoleAccount(deps.db, input.userId, input.entry.id);
   return createConnection(
     deps.db,
-    {
-      userId: input.userId,
-      connectorId: input.entry.id,
-      accountLabel: deps.accountLabelFor ? await deps.accountLabelFor(input.entry, tokens) : input.accountLabel,
-      credentials: toStoredCredentials(tokens, deps.clock),
-      status: input.status,
-    },
+    { userId: input.userId, connectorId: input.entry.id, accountLabel, credentials, status: input.status },
     input.dek,
     deps.clock,
   );

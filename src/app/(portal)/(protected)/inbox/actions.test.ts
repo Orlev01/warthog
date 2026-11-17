@@ -80,6 +80,7 @@ import { createRateLimiter } from "../../../../server/mcp/rate-limit";
 import { createInMemoryRecorder } from "../../../../server/activity/recorder";
 import { createUser } from "../../../../server/db/users";
 import { createAgent } from "../../../../server/db/agents";
+import { createConnection } from "../../../../server/db/connections";
 import { upsertPermissions } from "../../../../server/db/agent-permissions";
 import { createCheckApprovalTool } from "../../../../server/mcp/tools/check-approval";
 import { readActivity } from "../../../../server/activity/writer";
@@ -1260,6 +1261,28 @@ test("after reading a stranger's email, the card says so: a reply to that sender
     const quiet = (await known.actions.load(await freshSession(db, known.userId))).pending[0]!;
     assert.equal(quiet.headsUp, undefined, "a known address stays quiet up front");
     assert.ok(line(quiet, "Claude recently read"), "what it read is still in Details");
+  } finally {
+    await db.close();
+  }
+});
+
+// Several accounts of one service (docs/adr/google-published-and-accounts.md): with two Gmail
+// accounts connected, the card's sentence says which one it sends from; with one, it doesn't.
+test("a card names the account up front only when the person has more than one of that service", async () => {
+  const db = await freshDb();
+  const keyWrapper = keyWrapperFor();
+  try {
+    const call = { ...emailCall(), tool: "google-gmail__send", connector: "google-gmail", connectorAccountLabel: "work@gmail.test" } as AgentCallArg;
+    const a = await arrangeHeld(db, keyWrapper, "two-accounts", call, { grantedConnectors: ["google-gmail"] });
+    const clock = fixedClock(NOW);
+    await createConnection(db, { userId: a.userId, connectorId: "google-gmail", accountLabel: "work@gmail.test", credentials: { access_token: "a" } }, a.dek, clock);
+    const single = (await a.actions.load(await freshSession(db, a.userId))).pending[0]!;
+    assert.equal(single.sentence, "wants to send an email to accounts@payfast-au.co", "one account needs no naming");
+
+    await createConnection(db, { userId: a.userId, connectorId: "google-gmail", accountLabel: "home@gmail.test", credentials: { access_token: "b" } }, a.dek, clock);
+    const view = (await a.actions.load(await freshSession(db, a.userId))).pending[0]!;
+    assert.equal(view.sentence, "wants to send an email to accounts@payfast-au.co from work@gmail.test");
+    assert.equal(line(view, "Service account"), "work@gmail.test", "and it stays in Details");
   } finally {
     await db.close();
   }

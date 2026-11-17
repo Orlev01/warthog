@@ -18,6 +18,8 @@ const notices: Record<string, ConnectorNotice> = {
   "request-name-missing": { tone: "error", text: "Type the name of the service you'd like us to add, then send the request." },
   "key-needed": { tone: "info", text: "Enter your key to finish connecting this service." },
   "connect-problem": { tone: "error", text: "We couldn't start connecting that service. Please try again." },
+  renamed: { tone: "success", text: "Name saved." },
+  "rename-problem": { tone: "error", text: "We couldn't save that name. Use a few words, then try again." },
   "disconnect-problem": { tone: "error", text: "We couldn't disconnect that service. Refresh the page to check it's still listed, then try again." },
   "request-problem": { tone: "error", text: "We couldn't send that request. Please try again." },
   problem: { tone: "error", text: "We couldn't finish that just now. Please try again." },

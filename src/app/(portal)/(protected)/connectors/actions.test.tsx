@@ -117,6 +117,7 @@ import {
   createConnection,
   listConnectionsForUser,
   getConnectionById,
+  updateConnectionStatus,
   type Connection,
 } from "@/server/db/connections";
 import { createAgent } from "@/server/db/agents";
@@ -1156,5 +1157,70 @@ test("no ambient env secret leaks into the loaded connectors data or the mounted
     await db.close();
     if (prev === undefined) delete process.env.WARTHOG_DECOY_SECRET;
     else process.env.WARTHOG_DECOY_SECRET = prev;
+  }
+});
+
+// ===========================================================================
+// Several accounts of one service (docs/adr/google-published-and-accounts.md): a person can
+// name a Notion or key-based account, never a Google or Microsoft one (named by its address,
+// which is how a reconnect is recognised); a Google or Microsoft account that needs it offers
+// Reconnect in place.
+// ===========================================================================
+
+test("renameService names the person's own Notion or key-based account, cleaned and short", async () => {
+  const db = await freshDb();
+  try {
+    const { actions } = makeActions(db);
+    const userId = await makeUser(db, "renamer");
+    const grid = await seedConnection(db, userId, { connectorId: "data-grid", accountLabel: "Data Grid" });
+    const key = await seedConnection(db, userId, { connectorId: "acme-mail", accountLabel: "Acme Mail" });
+
+    assert.deepEqual(await actions.renameService(sessionFor(userId), { connectionId: grid.id, name: "  Family\u202E   workspace  " }), { ok: true });
+    assert.equal((await getConnectionById(db, userId, grid.id))?.accountLabel, "Family workspace", "invisible characters and extra spaces go");
+    assert.deepEqual(await actions.renameService(sessionFor(userId), { connectionId: key.id, name: "x".repeat(200) }), { ok: true });
+    assert.equal((await getConnectionById(db, userId, key.id))?.accountLabel.length, 60, "a long name is shortened");
+    await assertRejects4xx("an empty name", () => actions.renameService(sessionFor(userId), { connectionId: grid.id, name: "   " }));
+  } finally {
+    await db.close();
+  }
+});
+
+test("renameService never renames a Google or Microsoft account, or another person's", async () => {
+  const db = await freshDb();
+  try {
+    const { actions } = makeActions(db);
+    const userId = await makeUser(db, "owner");
+    const otherId = await makeUser(db, "other");
+    const oauth = await seedConnection(db, userId, { connectorId: "widget-sync", accountLabel: "sam@widget.test" });
+    const theirs = await seedConnection(db, otherId, { connectorId: "data-grid", accountLabel: "Data Grid" });
+
+    assert.deepEqual(await actions.renameService(sessionFor(userId), { connectionId: oauth.id, name: "Work" }), { ok: false });
+    assert.equal((await getConnectionById(db, userId, oauth.id))?.accountLabel, "sam@widget.test");
+    assert.deepEqual(await actions.renameService(sessionFor(userId), { connectionId: theirs.id, name: "Mine now" }), { ok: false });
+    assert.equal((await getConnectionById(db, otherId, theirs.id))?.accountLabel, "Data Grid");
+  } finally {
+    await db.close();
+  }
+});
+
+test("each account says whether it can be reconnected or renamed", async () => {
+  const db = await freshDb();
+  try {
+    const { actions } = makeActions(db);
+    const userId = await makeUser(db, "rows");
+    const oauthOk = await seedConnection(db, userId, { connectorId: "widget-sync", accountLabel: "ok@widget.test" });
+    const oauthLapsed = await seedConnection(db, userId, { connectorId: "widget-sync", accountLabel: "lapsed@widget.test" });
+    await updateConnectionStatus(db, { userId, id: oauthLapsed.id, status: "needs_reconnect" });
+    const key = await seedConnection(db, userId, { connectorId: "acme-mail", accountLabel: "Acme Mail" });
+
+    const rows = new Map((await actions.load(sessionFor(userId))).connections.map((c) => [c.id, c]));
+    assert.equal(rows.get(oauthOk.id)?.reconnectable, false, "a working sign-in account has nothing to reconnect");
+    assert.equal(rows.get(oauthOk.id)?.renameable, false, "a sign-in account keeps its address");
+    assert.equal(rows.get(oauthLapsed.id)?.reconnectable, true, "a lapsed sign-in account reconnects in place");
+    assert.equal(rows.get(oauthLapsed.id)?.reconnectLabel, "Reconnect");
+    assert.equal(rows.get(key.id)?.reconnectable, false);
+    assert.equal(rows.get(key.id)?.renameable, true);
+  } finally {
+    await db.close();
   }
 });

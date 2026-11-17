@@ -1,8 +1,10 @@
 // E09-S12 — Token-refresh and connector-health background jobs (design §7
 // "Connector engine": "a refresh job renews OAuth tokens before expiry; failures
-// mark the connection 'Reconnect needed' and notify" and "Google early access:
-// connections expire 7 days after consent → reminder push 24 h before; status
-// 'Reconnect needed' after").
+// mark the connection 'Reconnect needed' and notify"). Google connections no longer
+// lapse on Warthog's own 7-day clock: the founder published the Google app on 17 Nov
+// 2026 (docs/adr/google-published-and-accounts.md), so a Google connection lasts until
+// Google itself refuses a renewal, which the refresh job already turns into
+// 'Reconnect needed' and one notice.
 //
 // These jobs run in-process off the REAL background-jobs queue (`../db/jobs`:
 // enqueue/claim/run). Each schedule function enqueues a row whose `run_at` the
@@ -29,24 +31,21 @@
 
 import { redact } from "../../domain/redaction/redact";
 import { enqueue, type Job } from "../db/jobs";
-import { getConnectionById, updateConnectionStatus } from "../db/connections";
-import { tryRecord, type MetricSeam } from "../metrics/seam";
-import { CONNECTOR_REFRESH, REFRESH_OUTCOMES } from "../metrics/names";
+import { updateConnectionStatus } from "../db/connections";
 import type { Db } from "../db/index";
 import type { Clock } from "../seams/clock";
 import type { PushSender } from "../notify/senders";
 
 const MINUTE_MS = 60 * 1000;
-const HOUR_MS = 60 * MINUTE_MS;
-const DAY_MS = 24 * HOUR_MS;
-const SEVEN_DAYS_MS = 7 * DAY_MS;
 
 // How far BEFORE a token's expiry the renewal is scheduled, so it runs while the
 // token is still valid (renew before it lapses).
 const REFRESH_LEAD_MS = 5 * MINUTE_MS;
 
 // The job types this module owns. The handler dispatches on these; the schedule
-// functions stamp them.
+// function stamps the refresh type. The two Google types are no longer scheduled, but
+// rows queued before the Google app was published still arrive, so they stay
+// registered and finish without doing anything.
 export const REFRESH_TYPE = "connection.refresh";
 export const GOOGLE_REMINDER_TYPE = "connection.google_reminder";
 export const GOOGLE_LAPSE_TYPE = "connection.google_lapse";
@@ -57,9 +56,6 @@ export const GOOGLE_LAPSE_TYPE = "connection.google_lapse";
 const RECONNECT_BODY =
   "Reconnect needed. One of your connected services couldn't be renewed and has " +
   "stopped working. Open Warthog to sign in again and reconnect it.";
-const REMINDER_BODY =
-  "Reconnect needed soon. An early-access connection will stop working in about a " +
-  "day. Open Warthog to reconnect it before it lapses.";
 
 // The injected seam that renews one connection's provider OAuth tokens (production
 // wires it over the catalogue entry + operator client); it THROWS on a refresh
@@ -75,10 +71,6 @@ export interface ConnectorJobDeps {
   readonly clock: Clock;
   readonly push: PushSender;
   readonly refresh: RefreshConnection;
-  // Optional, best-effort: a Google early-access lapse is one `connector.refresh` event
-  // with outcome `lapsed` for its connector (docs/design/admin-portal.md §4). A failed
-  // renewal is recorded by the renewal itself, never twice.
-  readonly recordMetric?: MetricSeam;
 }
 
 // Every connector job carries the owning person and the connection it acts on. The
@@ -126,25 +118,6 @@ export async function scheduleConnectionRefresh(
   });
 }
 
-// Schedule the Google early-access timers for a connection that lapses 7 days after
-// consent: a REMINDER due 24 h before the lapse, and a LAPSE mark due at the lapse.
-export async function scheduleGoogleLapse(
-  db: Db,
-  { userId, connectionId, connectedAt }: { userId: string; connectionId: string; connectedAt: Date },
-): Promise<void> {
-  const lapseAt = connectedAt.getTime() + SEVEN_DAYS_MS;
-  await enqueue(db, {
-    type: GOOGLE_REMINDER_TYPE,
-    payload: { userId, connectionId },
-    runAt: new Date(lapseAt - DAY_MS),
-  });
-  await enqueue(db, {
-    type: GOOGLE_LAPSE_TYPE,
-    payload: { userId, connectionId },
-    runAt: new Date(lapseAt),
-  });
-}
-
 // A due refresh job: renew the token. On SUCCESS the connection stays connected
 // (nothing to do). On FAILURE the provider renewal throws — park the connection as
 // needs_reconnect and tell the person once. The failure is HANDLED (not re-thrown),
@@ -163,26 +136,6 @@ async function handleRefresh(deps: ConnectorJobDeps, target: ConnectionTarget): 
   }
 }
 
-// A due Google reminder (24 h before the lapse): push a reminder; the connection is
-// still connected and its status is untouched.
-async function handleGoogleReminder(deps: ConnectorJobDeps, target: ConnectionTarget): Promise<void> {
-  await notify(deps, target.userId, REMINDER_BODY);
-}
-
-// A due Google lapse (at the 7-day mark): the testing-mode connection has expired —
-// mark it needs_reconnect.
-async function handleGoogleLapse(deps: ConnectorJobDeps, target: ConnectionTarget): Promise<void> {
-  const connection = await getConnectionById(deps.db, target.userId, target.connectionId);
-  await updateConnectionStatus(deps.db, {
-    userId: target.userId,
-    id: target.connectionId,
-    status: "needs_reconnect",
-  });
-  if (connection) {
-    await tryRecord(deps.recordMetric, { name: CONNECTOR_REFRESH, value: 1, dimensions: { connectorId: connection.connectorId, outcome: REFRESH_OUTCOMES.lapsed } });
-  }
-}
-
 // The dispatcher handed to the queue runner (`run(db, clock, handler)`). It routes a
 // claimed job to its handler by type; an unrecognised type fails loudly rather than
 // silently doing nothing.
@@ -192,9 +145,9 @@ export function createConnectorJobHandler(deps: ConnectorJobDeps): (job: Job) =>
       case REFRESH_TYPE:
         return handleRefresh(deps, connectionTarget(job));
       case GOOGLE_REMINDER_TYPE:
-        return handleGoogleReminder(deps, connectionTarget(job));
       case GOOGLE_LAPSE_TYPE:
-        return handleGoogleLapse(deps, connectionTarget(job));
+        // Queued before the Google app was published: nothing to remind about or lapse.
+        return;
       default:
         throw new Error(`createConnectorJobHandler: unknown job type ${job.type}`);
     }

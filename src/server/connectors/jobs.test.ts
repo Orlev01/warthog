@@ -38,17 +38,13 @@
 //     • Enqueues a background refresh job due BEFORE `expiresAt` (near expiry, so the
 //       token is renewed before it lapses). Returns the enqueued job (run_at < expiresAt).
 //
-//   scheduleGoogleLapse(
-//     db, { userId, connectionId, connectedAt }): Promise<void>
-//     • Enqueues the Google early-access timers: a REMINDER due 24 h before the 7-day
-//       lapse (connectedAt + 7d − 24h) and a LAPSE-mark due at the lapse (connectedAt + 7d).
-//
 //   createConnectorJobHandler(deps): (job: Job) => Promise<void>
 //     • The dispatcher handed to the queue runner `run(db, clock, handler)`. For a refresh
 //       job it calls `deps.refresh`; on SUCCESS the connection stays connected, on FAILURE
 //       it marks the connection `needs_reconnect` and sends ONE notification — and the job
-//       is HANDLED (completes, never re-run). For a Google reminder it pushes a reminder;
-//       for a Google lapse it marks the connection `needs_reconnect`.
+//       is HANDLED (completes, never re-run). A Google reminder or lapse queued before the
+//       Google app was published (docs/adr/google-published-and-accounts.md) finishes and
+//       does nothing.
 //
 // Every member-scoped read/write binds the `userId` carried in the job payload (set from
 // the session when the job was scheduled), never a client value, so a job touches only its
@@ -66,10 +62,11 @@ import { z } from "zod";
 
 import {
   scheduleConnectionRefresh,
-  scheduleGoogleLapse,
   createConnectorJobHandler,
+  GOOGLE_LAPSE_TYPE,
+  GOOGLE_REMINDER_TYPE,
 } from "./jobs";
-import { run } from "../db/jobs";
+import { enqueue, run } from "../db/jobs";
 import { createConnection, getConnectionById } from "../db/connections";
 import { createUser } from "../db/users";
 import { freshDb } from "../../test/db";
@@ -85,7 +82,6 @@ const DEK_BYTES = 32; // a 256-bit per-person data key
 const MINUTE_MS = 60 * 1000;
 const HOUR_MS = 60 * MINUTE_MS;
 const DAY_MS = 24 * HOUR_MS;
-const SEVEN_DAYS_MS = 7 * DAY_MS;
 
 // A fixed origin instant; time only moves when a test advances/sets it. Deliberately in
 // the past relative to the wall clock, so any code that wrongly read Date.now() instead
@@ -366,19 +362,20 @@ test("a connection job acts only on its OWNER's connection (member-scoped by the
 });
 
 // ===========================================================================
-// AC2 — a Google early-access connection is reminded 24 h before its 7-day lapse and is
-// marked needs_reconnect after it. Idempotent across runs.
+// AC2 (revised 17 Nov 2026) — Google connections no longer lapse on Warthog's own 7-day
+// clock: the Google app is published. A reminder or lapse queued before that finishes
+// without a notice and leaves the connection connected; Google refusing a renewal is
+// still caught by the refresh job (AC1).
 // ===========================================================================
 
-test("a Google early-access connection is reminded 24h before the 7-day lapse, then marked needs_reconnect after it", async () => {
+test("a Google reminder or lapse queued before the app was published does nothing", async () => {
   const mc = mutableClock(T0);
   const db = await freshDb();
   try {
     const userId = await makeUser(db, "google-ea");
     const connectionId = await seedConnection(db, mc.clock, freshDek(), userId);
-
-    // Consent happened at T0; the testing-mode connection lapses 7 days later.
-    await scheduleGoogleLapse(db, { userId, connectionId, connectedAt: T0 });
+    await enqueue(db, { type: GOOGLE_REMINDER_TYPE, payload: { userId, connectionId }, runAt: new Date(T0.getTime() + 6 * DAY_MS) });
+    await enqueue(db, { type: GOOGLE_LAPSE_TYPE, payload: { userId, connectionId }, runAt: new Date(T0.getTime() + 7 * DAY_MS) });
 
     const push = recordingPush();
     const handler = createConnectorJobHandler({
@@ -388,49 +385,11 @@ test("a Google early-access connection is reminded 24h before the 7-day lapse, t
       refresh: recordingRefresh("ok").refresh,
     });
 
-    // Just before the 24h-before mark: nothing fires yet.
-    mc.set(new Date(T0.getTime() + SEVEN_DAYS_MS - DAY_MS - MINUTE_MS));
-    await drainAll(db, mc.clock, handler);
-    assert.equal(push.sent.length, 0, "no reminder before the 24h-before mark");
-    assert.equal((await getConnectionById(db, userId, connectionId))?.status, "connected");
-
-    // At exactly 24 h before the lapse: the reminder is pushed; the connection is still connected.
-    mc.set(new Date(T0.getTime() + SEVEN_DAYS_MS - DAY_MS));
-    await drainAll(db, mc.clock, handler);
-    assert.equal(push.sent.length, 1, "a reminder is pushed 24h before the 7-day lapse");
-    assert.equal(push.sent[0]?.recipient, userId, "the reminder is addressed to the owning person");
-    assert.equal(
-      (await getConnectionById(db, userId, connectionId))?.status,
-      "connected",
-      "the connection is still connected at the reminder",
-    );
-
-    // Between the reminder and the lapse: no further action.
-    mc.set(new Date(T0.getTime() + SEVEN_DAYS_MS - MINUTE_MS));
-    await drainAll(db, mc.clock, handler);
-    assert.equal(push.sent.length, 1, "no further action between the reminder and the lapse");
-    assert.equal((await getConnectionById(db, userId, connectionId))?.status, "connected");
-
-    // At the 7-day lapse: the connection is marked needs_reconnect.
-    mc.set(new Date(T0.getTime() + SEVEN_DAYS_MS));
-    await drainAll(db, mc.clock, handler);
-    assert.equal(
-      (await getConnectionById(db, userId, connectionId))?.status,
-      "needs_reconnect",
-      "the connection is marked needs_reconnect after the 7-day lapse",
-    );
-
-    // Idempotent: a later run changes nothing — no extra notification, status unchanged.
-    const afterLapse = push.sent.length;
-    mc.set(new Date(T0.getTime() + SEVEN_DAYS_MS + DAY_MS));
-    const again = await drainAll(db, mc.clock, handler);
-    assert.equal(again, 0, "no connector jobs remain due after the lapse");
-    assert.equal(push.sent.length, afterLapse, "a second run after the lapse sends nothing more");
-    assert.equal(
-      (await getConnectionById(db, userId, connectionId))?.status,
-      "needs_reconnect",
-      "the status stays needs_reconnect across runs",
-    );
+    mc.set(new Date(T0.getTime() + 8 * DAY_MS));
+    const ran = await drainAll(db, mc.clock, handler);
+    assert.equal(ran, 2, "both queued jobs ran to completion");
+    assert.equal(push.sent.length, 0, "no reminder is sent");
+    assert.equal((await getConnectionById(db, userId, connectionId))?.status, "connected", "the connection stays connected");
   } finally {
     await db.close();
   }

@@ -66,3 +66,27 @@ test("highTierFieldLabel turns a field code into words, and passes custom labels
   assert.equal(highTierFieldLabel("car_registration"), "car registration");
   assert.equal(highTierFieldLabel("Medicare card"), "Medicare card");
 });
+
+// Several accounts of one service (docs/adr/google-published-and-accounts.md): the sentence
+// names the account only when the caller passes one (the person has more than one).
+test("a person with several accounts of a service sees which one the request uses", () => {
+  const email = { kind: "email" as const, subject: "Friday", excerpt: "", text: "", reply: false, to: ["ana@example.com"], cc: [], bcc: [], linkDomains: [] };
+  assert.equal(
+    requestSentence({ tool: "google-gmail__send", connector: "google-gmail", service: "Gmail", recipients: ["ana@example.com"], outgoing: email, account: "work@gmail.test" }),
+    "wants to send an email to ana@example.com from work@gmail.test",
+  );
+  assert.equal(
+    requestSentence({ tool: "google-gmail__send", connector: "google-gmail", service: "Gmail", recipients: ["ana@example.com"], outgoing: email }),
+    "wants to send an email to ana@example.com",
+    "one account needs no naming",
+  );
+  assert.equal(
+    requestSentence({ tool: "google-calendar__create", connector: "google-calendar", outgoing: { kind: "invite", title: "Site visit", guests: [] }, account: "home@gmail.test" }),
+    "wants to add “Site visit” to your calendar (home@gmail.test)",
+  );
+  assert.equal(
+    requestSentence({ tool: "notion__create_page", connector: "notion", service: "Notion", account: "Family workspace" }),
+    "wants to use “Create page” in Notion (Family workspace)",
+  );
+  assert.equal(requestSentence({ tool: "remember", account: "ignored" }), "wants to save a memory", "Warthog's own tools have no account");
+});

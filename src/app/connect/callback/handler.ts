@@ -198,7 +198,8 @@ export function createConnectCallbackHandler(
       accountLabel: flow.accountLabel,
       code,
       codeVerifier: flow.codeVerifier,
-      ...(flow.providerState ? {providerState:flow.providerState,reconnectId:flow.reconnectId} : {}),
+      ...(flow.providerState ? {providerState:flow.providerState} : {}),
+      ...(flow.reconnectId ? {reconnectId:flow.reconnectId} : {}),
       ...(parsed.data.iss ? {iss:parsed.data.iss} : {}),
     };
     if (completeConnection) await completeConnection(input);

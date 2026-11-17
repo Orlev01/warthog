@@ -192,6 +192,32 @@ async function disconnectAction(formData: FormData): Promise<void> {
   redirect(backTo(formData, notice));
 }
 
+// Give one of the person's own accounts a name (two Notion workspaces both arrive as
+// "Notion"). A refusal is reported in plain words, never swallowed.
+async function renameAction(formData: FormData): Promise<void> {
+  "use server";
+  const db = await getServerDb();
+  const session = await resolveSession(db);
+  if (!session) {
+    redirect("/signin");
+  }
+  let notice = "renamed";
+  try {
+    const result = await buildActions(db, loadConfig()).renameService(session, {
+      connectionId: formValue(formData, "connectionId"),
+      name: formValue(formData, "name"),
+    });
+    if (!result.ok) notice = "rename-problem";
+  } catch (error) {
+    if (!(error instanceof HttpError)) {
+      throw error;
+    }
+    notice = "rename-problem";
+  }
+  revalidatePath("/connectors");
+  redirect(backTo(formData, notice));
+}
+
 // Request a connector not in the catalogue yet (recorded for the person, emailed to the
 // operator). A malformed / oversized name (a 4xx from the seam) is reported as a problem.
 async function requestAction(formData: FormData): Promise<void> {
@@ -253,6 +279,7 @@ export default async function ConnectorsPage({
       connectAction={connectAction}
       disconnectAction={disconnectAction}
       reconnectAction={reconnectAction}
+      renameAction={renameAction}
       requestAction={requestAction}
     />
   );

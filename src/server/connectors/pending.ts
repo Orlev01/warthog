@@ -3,7 +3,9 @@ import { processSingleton } from "../seams/process-singleton";
 import { systemClock } from "../seams/clock";
 import { HttpError } from "../http/validate";
 
-export interface PendingConnectFlow { readonly connectorId: string; readonly accountLabel: string; readonly codeVerifier: string }
+// `reconnectId`: the connection the person clicked Reconnect on, renewed when the provider
+// returns that same account (docs/adr/google-published-and-accounts.md).
+export interface PendingConnectFlow { readonly connectorId: string; readonly accountLabel: string; readonly codeVerifier: string; readonly reconnectId?: string }
 export function createPendingConnectStore(now: () => number, limits = { perUser: 5, total: 1000 }) {
   const flows = new Map<string, { userId: string; sessionId: string; expiry: number; flow: PendingConnectFlow }>();
   const key = (state: string) => createHash("sha256").update(state).digest("hex");

@@ -153,7 +153,7 @@ metrics failure never fails the user's action), names in
 | `signup.completed` | 1 | `outcome`: `ok`, `account_exists`; `platform`: `passkey` or `totp` |
 | `signin.attempt` | 1 | `outcome`: `ok`, `failed`, `throttled`; `platform`: `passkey`, `totp` (on `ok`); `errorCategory`: `passkey`, `email_code`, `totp` |
 | `connector.connect` | 1 | `connectorId`; `outcome`: `ok`, `failed`, `declined`; `errorCategory`: the failing stage |
-| `connector.refresh` | 1 | `connectorId`; `outcome`: `ok`, `failed`, `lapsed` |
+| `connector.refresh` | 1 | `connectorId`; `outcome`: `ok`, `failed`, `lapsed` (Google Testing-mode lapses, recorded only before 17 Nov 2026) |
 | `job.failure` | 1 | `outcome`: the sweep name or job type |
 | `account.deleted` | 1 | — |
 | `http.requests` | count per minute | `outcome`: `<host>.<route>.<kind>` from closed vocabularies (host `app`, `admin`, `site` for the website host (labelled "Website"), `other`; route `public`, `auth`, `portal`, `api`, `mcp`, `oauth`, `admin`, `health`, `other`; kind `document`, `fetch`, `limited`) |

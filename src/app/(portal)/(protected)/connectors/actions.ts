@@ -47,7 +47,8 @@ import type { Clock } from "@/server/seams/clock";
 import type { Session } from "@/server/auth/session";
 import type { EmailSender } from "@/server/notify/senders";
 import { getUserById } from "@/server/db/users";
-import { getConnectionById, getConnectionCredentials } from "@/server/db/connections";
+import { getConnectionById, getConnectionCredentials, renameConnection } from "@/server/db/connections";
+import { cleanShortText } from "@/domain/content/untrusted";
 import { createRedactingRecorder } from "@/server/mcp/recorder";
 import { listAgentsForUser } from "@/server/db/agents";
 import { getConnectionPermissions, upsertPermissions } from "@/server/db/agent-permissions";
@@ -134,7 +135,7 @@ export interface ConnectorsActionsDeps {
 // controls the page binds when it mounts the view.
 export type ConnectorsViewData = Omit<
   ConnectorsViewProps,
-  "connectAction" | "disconnectAction" | "requestAction"
+  "connectAction" | "disconnectAction" | "requestAction" | "renameAction"
 >;
 
 // The outcome of a disconnect: success, or a refusal naming its reason (the connection is
@@ -155,6 +156,7 @@ export interface ConnectorsActions {
     input: { connectorId: string; accountLabel: string },
   ): Promise<unknown>;
   disconnectService(session: Session, connectionId: string): Promise<DisconnectServiceResult>;
+  renameService(session: Session, input: { connectionId: string; name: string }): Promise<{ readonly ok: boolean }>;
   requestConnector(session: Session, input: { name: string }): Promise<unknown>;
   askToJoin(session: Session, input: { connectorId: string }): Promise<unknown>;
 }
@@ -180,6 +182,12 @@ const saveApiKeySchema = z.object({
 const connectProviderMcpSchema = z.object({
   connectorId: connectorIdSchema,
   accountLabel: z.string().min(1).max(LABEL_MAX),
+});
+// A name the person gives one of their accounts: trimmed, and short enough to read in a list.
+const RENAME_MAX = 60;
+const renameServiceSchema = z.object({
+  connectionId: connectionIdSchema,
+  name: z.string().trim().min(1).max(RENAME_MAX * 4),
 });
 // Trimmed first, so a name of only spaces is refused like an empty one (interaction-02).
 const requestConnectorSchema = z.object({
@@ -242,9 +250,34 @@ export function createConnectorsActions(deps: ConnectorsActionsDeps): Connectors
   // always "connect"; a Google early-access entry is "connect" only for an allowlisted
   // email, else "ask_to_join". `email` is the session user's own address.
   function gateFor(connectorId: string, email: string): CatalogueItem["gate"] {
+    return decisionFor(connectorId, email).kind;
+  }
+  // The one line a Google tile carries for an allowlisted person: what Google's
+  // unverified-app screen will say and how to get past it.
+  function noteFor(connectorId: string, email: string): Pick<CatalogueItem, "note"> {
+    const decision = decisionFor(connectorId, email);
+    return decision.kind === "connect" && decision.warning ? { note: decision.warning.unverifiedApp } : {};
+  }
+  function decisionFor(connectorId: string, email: string) {
     const entry = catalogue.get(connectorId);
-    if (!entry) return "connect";
-    return gateGoogleConnector(entry, email, googleEarlyAccess).kind;
+    if (!entry) return { kind: "connect" as const, warning: null };
+    return gateGoogleConnector(entry, email, googleEarlyAccess);
+  }
+
+  // How a connected account can be renewed and named (docs/adr/google-published-and-accounts.md).
+  // A provider-hosted service reconnects (refreshing its tools) at any time; a Google or
+  // Microsoft account reconnects in place once it needs it. Google and Microsoft accounts
+  // are named by their address; anything else can be given a name, since two Notion
+  // workspaces would otherwise both read "Notion".
+  function reconnectAndRename(connection: ConnectionForPage): Pick<ConnectionItem, "reconnectable" | "reconnectLabel" | "renameable"> {
+    const entry = catalogue.get(connection.connectorId);
+    if (entry?.auth_kind === "provider_mcp") {
+      return { reconnectable: deps.providerMcpAvailable === true, reconnectLabel: "Reconnect and refresh tools", renameable: true };
+    }
+    if (entry?.auth_kind === "oauth2") {
+      return { reconnectable: catalogue.isConnectable(entry.id) && connection.status !== "connected", reconnectLabel: "Reconnect", renameable: false };
+    }
+    return { reconnectable: false, renameable: entry !== undefined };
   }
 
   // Build one connected-service card from its page read, naming the connector (the catalogue
@@ -262,7 +295,7 @@ export function createConnectorsActions(deps: ConnectorsActionsDeps): Connectors
     const unavailable = deps.providerMcpAvailable === false && catalogue.get(connection.connectorId)?.auth_kind === "provider_mcp";
     return {
       ...(unavailable ? { unavailableReason: "This saved service account is unavailable until provider connection support is complete." } : {}),
-      reconnectable: deps.providerMcpAvailable === true && catalogue.get(connection.connectorId)?.auth_kind === "provider_mcp",
+      ...reconnectAndRename(connection),
       id: connection.id,
       connectorId: connection.connectorId,
       name: catalogue.get(connection.connectorId)?.name ?? connection.connectorId,
@@ -312,6 +345,7 @@ export function createConnectorsActions(deps: ConnectorsActionsDeps): Connectors
           category: catalogueGroupOf(entry.category),
           connectable: entry.connectable && !mcpUnavailable,
           gate: gateFor(entry.id, email),
+          ...noteFor(entry.id, email),
           ...(connectedConnectors.has(entry.id) ? { connected: true } : {}),
         };
       })
@@ -528,12 +562,27 @@ export function createConnectorsActions(deps: ConnectorsActionsDeps): Connectors
     );
   }
 
+  // Name one of the person's own accounts (docs/adr/google-published-and-accounts.md). Google
+  // and Microsoft accounts keep their address: Warthog recognises a reconnect by it. The name
+  // is cleaned of invisible characters and shortened; another person's id renames nothing.
+  async function renameService(session: Session, input: { connectionId: string; name: string }): Promise<{ readonly ok: boolean }> {
+    const parsed = parseParams(renameServiceSchema, input);
+    const name = cleanShortText(parsed.name.replace(/\s+/g, " "), RENAME_MAX).trim();
+    if (!name) return { ok: false };
+    const connection = await getConnectionById(db, session.userId, parsed.connectionId);
+    const entry = connection ? catalogue.get(connection.connectorId) : undefined;
+    if (!connection || !entry || entry.auth_kind === "oauth2") return { ok: false };
+    await renameConnection(db, { userId: session.userId, id: connection.id, accountLabel: name });
+    return { ok: true };
+  }
+
   return {
     load,
     connectProviderSignin,
     saveApiKeyConnection,
     connectProviderMcp,
     disconnectService,
+    renameService,
     requestConnector,
     askToJoin,
   };
