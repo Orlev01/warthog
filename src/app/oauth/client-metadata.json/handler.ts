@@ -40,6 +40,14 @@ export function createClientMetadataHandler({
     redirect_uris: [connectCallbackUrl(issuer)],
     // Warthog is a public client (PKCE, no client secret).
     token_endpoint_auth_method: "none",
+    // The name the provider's consent screen shows. Required in practice: Notion's
+    // authorization server refuses a document without it as "Invalid client_id"
+    // (17 Nov 2026), and the CIMD draft recommends it. Matches the metadata Warthog sends
+    // when it registers by DCR instead (src/server/connectors/provider-client.ts).
+    client_name: "Warthog",
+    // Without refresh_token a provider may refuse to renew the connection's access.
+    grant_types: ["authorization_code", "refresh_token"],
+    response_types: ["code"],
   };
   return () => Response.json(document);
 }

@@ -41,3 +41,12 @@ recorded for each real provider before declaring that integration verified.
 Sources: [MCP TypeScript client](https://ts.sdk.modelcontextprotocol.io/v2/api/index/@modelcontextprotocol/client/),
 [tool annotation trust](https://blog.modelcontextprotocol.io/posts/2026-03-16-tool-annotations/),
 [Notion MCP](https://developers.notion.com/guides/mcp/overview).
+
+## Amendment, 17 November 2026: the client document names Warthog
+
+Notion's authorization server advertises Client ID Metadata Document (CIMD) support. It
+nonetheless refused Warthog's connect with "Invalid client_id", because `/oauth/client-metadata.json`
+carried no `client_name`. Its library (Cloudflare's OAuth provider) requires a name, and it grants
+only the grant types a document lists. The document now carries `client_name: "Warthog"`,
+`grant_types: ["authorization_code", "refresh_token"]` and `response_types: ["code"]`. That matches
+the metadata Warthog already sends when it registers by Dynamic Client Registration (DCR).

@@ -39,6 +39,8 @@
 //       (configured) host — where a provider returns the authorization code.
 //     • `token_endpoint_auth_method` is exactly `"none"` (Warthog is a public client;
 //       PKCE, no client secret).
+//     • `client_name` is "Warthog", and `grant_types` / `response_types` match what
+//       Warthog registers by DCR (a provider such as Notion refuses a nameless document).
 //
 // The document is public: the handler takes only config (no session), so an
 // unauthenticated GET is served (INV-101: public routes stay usable with no auth).
@@ -162,4 +164,13 @@ test("redirect_uris flow from config (a different base URL yields different redi
     assert.ok(uri.startsWith("https://b.example"), `${uri} must be under base b.example`);
   }
   assert.notDeepEqual(a, b);
+});
+
+// Notion's authorization server (Cloudflare's OAuth provider library) refuses a document
+// without a client_name as "Invalid client_id", and grants only what the document lists.
+test("names Warthog and lists the authorization-code and refresh grants, as DCR registers", async () => {
+  const { body } = await fetchMetadata("https://warthog.example");
+  assert.equal(body.client_name, "Warthog");
+  assert.deepEqual(body.grant_types, ["authorization_code", "refresh_token"]);
+  assert.deepEqual(body.response_types, ["code"]);
 });
