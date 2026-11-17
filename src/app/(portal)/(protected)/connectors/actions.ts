@@ -570,7 +570,8 @@ export function createConnectorsActions(deps: ConnectorsActionsDeps): Connectors
     const name = cleanShortText(parsed.name.replace(/\s+/g, " "), RENAME_MAX).trim();
     if (!name) return { ok: false };
     const connection = await getConnectionById(db, session.userId, parsed.connectionId);
-    if (!connection || catalogue.get(connection.connectorId)?.auth_kind === "oauth2") return { ok: false };
+    const entry = connection ? catalogue.get(connection.connectorId) : undefined;
+    if (!connection || !entry || entry.auth_kind === "oauth2") return { ok: false };
     await renameConnection(db, { userId: session.userId, id: connection.id, accountLabel: name });
     return { ok: true };
   }

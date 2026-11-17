@@ -5,7 +5,8 @@ import { createConnectorRuntime } from "./runtime";
 import { loadConfig } from "../config";
 import { createDb, loadMigrations, runMigrations } from "../db/index";
 import { createUser } from "../db/users";
-import { getConnectionCredentials } from "../db/connections";
+import { createConnection, getConnectionById, getConnectionCredentials } from "../db/connections";
+import { scheduleConnectionRefresh } from "./jobs";
 
 const config = loadConfig({ NODE_ENV: "test", PUBLIC_BASE_URL: "https://app.example.test", WEBAUTHN_RP_ID: "example.test",
   DATABASE_URL: "pglite:memory", WARTHOG_HMAC_KEY: Buffer.alloc(32, 11).toString("base64"), WARTHOG_DEV_KEK: Buffer.alloc(32, 12).toString("base64"),
@@ -163,5 +164,51 @@ test("Google admission is enforced on start and callback; Microsoft works for th
     assert.ok(microsoft.pathname.includes("/common/"));
     assert.ok(microsoft.searchParams.get("scope")?.includes("offline_access"));
     await assert.rejects(runtime.revoke({ userId: user.id, connectionId: "id", connectorId: "microsoft-outlook-mail", credentials: {} }), /provider account/i);
+  } finally { await db.close(); }
+});
+
+test("with two rows for one Google account, Reconnect renews the row clicked, once, with one renewal queued", async () => {
+  const db = await createDb("pglite:memory");
+  try {
+    await runMigrations(db, await loadMigrations());
+    const user = await createUser(db, { email: "owner@example.test", wrappedDek: "test-wrapped-key" });
+    const session = { id: "dupes", userId: user.id, createdAt: now, lastSeenAt: now, steppedUpAt: now };
+    const dek = new Uint8Array(32).fill(8);
+    const { privateKey } = generateKeyPairSync("rsa", { modulusLength: 2048 });
+    const idToken = () => {
+      const issued = Math.floor(Date.now() / 1000);
+      const body = [{ alg: "RS256" }, { iss: "https://accounts.google.com", aud: "test-google", sub: "synthetic", iat: issued, exp: issued + 3600 }]
+        .map((value) => Buffer.from(JSON.stringify(value)).toString("base64url")).join(".");
+      return body + "." + sign("RSA-SHA256", Buffer.from(body), privateKey).toString("base64url");
+    };
+    let clockNow = now;
+    const runtime = createConnectorRuntime({ db, config, clock: { now: () => clockNow }, keyWrapper: { wrap: async () => "unused", unwrap: async () => dek.slice() },
+      fetch: async (url) => String(url).includes("userinfo")
+        ? Response.json({ email: "Same@Gmail.test" })
+        : Response.json({ access_token: "renewed-token", token_type: "Bearer", expires_in: 3600, id_token: idToken(), refresh_token: "renewed-refresh" }) });
+    const clock = { now: () => now };
+    const older = await createConnection(db, { userId: user.id, connectorId: "google-gmail", accountLabel: "same@gmail.test", credentials: { access_token: "old-a" }, status: "needs_reconnect" }, dek, clock);
+    const newer = await createConnection(db, { userId: user.id, connectorId: "google-gmail", accountLabel: "same@gmail.test", credentials: { access_token: "old-b" }, status: "needs_reconnect" }, dek, { now: () => new Date(now.getTime() + 60_000) });
+    await scheduleConnectionRefresh(db, { userId: user.id, connectionId: newer.id, expiresAt: new Date(now.getTime() + 3600_000) });
+
+    clockNow = new Date(now.getTime() + 86_400_000);
+    const start = new URL((await runtime.begin(session, "google-gmail", newer.id)).url);
+    const state = start.searchParams.get("state")!;
+    const flow = runtime.take(session, state)!;
+    assert.equal(flow.reconnectId, newer.id, "the clicked row travels with the sign-in");
+    const renewed = await runtime.complete({ ...flow, userId: user.id, state, code: "code" });
+    assert.equal(renewed.id, newer.id, "the clicked row is renewed, not the oldest");
+    assert.equal((await getConnectionById(db, user.id, newer.id))?.status, "connected");
+    assert.equal((await getConnectionById(db, user.id, older.id))?.status, "needs_reconnect");
+    assert.equal(new Date((await getConnectionById(db, user.id, newer.id))!.connectedAt).toISOString(), clockNow.toISOString(), "the row says when it was reconnected");
+    const queued = await db.query("SELECT payload FROM jobs WHERE type = 'connection.refresh' AND status = 'pending' AND payload->>'connectionId' = $1", [newer.id]);
+    assert.equal(queued.rows.length, 1, "one renewal chain per row");
+
+    // Without a clicked row, the copy that needs attention is renewed.
+    const plain = new URL((await runtime.begin(session, "google-gmail")).url);
+    const plainState = plain.searchParams.get("state")!;
+    const second = await runtime.complete({ ...runtime.take(session, plainState)!, userId: user.id, state: plainState, code: "code" });
+    assert.equal(second.id, older.id);
+    assert.equal((await db.query("SELECT id FROM connections WHERE user_id = $1", [user.id])).rows.length, 2, "no third row");
   } finally { await db.close(); }
 });

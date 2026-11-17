@@ -38,12 +38,13 @@ import {
   createConnection,
   findConnectionByAccount,
   getConnectionCredentials,
+  renewConnection,
   updateConnectionCredentials,
-  updateConnectionStatus,
   type Connection,
   type ConnectionStatus,
 } from "../db/connections";
 import { pinAgentsToSoleAccount } from "../db/agent-permissions";
+import { REFRESH_TYPE } from "./jobs";
 import type { Db } from "../db/index";
 import type { Clock } from "../seams/clock";
 
@@ -85,6 +86,9 @@ export interface ExchangeCodeInput {
   readonly codeVerifier: string;
   readonly dek: Uint8Array;
   readonly status?: ConnectionStatus;
+  // The connection the person clicked Reconnect on, renewed when the provider returns that
+  // same account.
+  readonly reconnectId?: string;
 }
 
 // Refresh inputs: the owned connection to renew, member-scoped by the session's `userId`.
@@ -221,13 +225,21 @@ export async function exchangeCodeForConnection(
 
   // The provider told us which account this is, so the same account connected again renews
   // its connection in place: the id stays, and so does every agent's choice of it. One
-  // connect at a time per person and service, so two quick connects can't both add it.
+  // connect at a time per person and service, so two quick connects can't both add it. The
+  // locks are transaction-scoped: callers run this inside a transaction (runtime.complete).
   const accountLabel = await deps.accountLabelFor(input.entry, tokens);
   await deps.db.query("SELECT pg_advisory_xact_lock(hashtextextended($1, 0))", [`connector-account:${input.userId}:${input.entry.id}`]);
-  const existing = await findConnectionByAccount(deps.db, input.userId, input.entry.id, accountLabel);
+  const existing = await findConnectionByAccount(deps.db, input.userId, input.entry.id, accountLabel, input.reconnectId);
   if (existing) {
-    await updateConnectionCredentials(deps.db, { userId: input.userId, id: existing.id, credentials }, input.dek);
-    const renewed = await updateConnectionStatus(deps.db, { userId: input.userId, id: existing.id, status: input.status ?? "connected" });
+    // Wait out a renewal already running on this row (it takes the same lock), so it can't
+    // overwrite the new tokens, and drop the row's queued renewal: the caller schedules a
+    // fresh one, so the row never ends up with two renewal chains.
+    await deps.db.query("SELECT pg_advisory_xact_lock(hashtextextended($1, 0))", [`connector-refresh:${existing.id}`]);
+    await deps.db.query(
+      `DELETE FROM jobs WHERE type = $1 AND status = 'pending' AND payload->>'connectionId' = $2 AND payload->>'userId' = $3`,
+      [REFRESH_TYPE, existing.id, input.userId],
+    );
+    const renewed = await renewConnection(deps.db, { userId: input.userId, id: existing.id, credentials, status: input.status ?? "connected" }, input.dek, deps.clock);
     return { ...renewed, reused: true };
   }
   await pinAgentsToSoleAccount(deps.db, input.userId, input.entry.id);

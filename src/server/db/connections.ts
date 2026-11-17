@@ -254,18 +254,22 @@ export async function updateConnectionCredentials(
 // it (docs/adr/google-published-and-accounts.md). Provider addresses differ only in case
 // between sign-ins, so the label is compared case-insensitively. Connecting the same Google
 // or Microsoft account again then renews that connection in place: its id, and every agent's
-// choice of it, stay the same. Member-scoped (user_id bound); null when there is none.
+// choice of it, stay the same. Older reconnects could leave two rows for one account, so the
+// row the person clicked Reconnect on (`preferId`) wins, then one that needs attention, then
+// the newest. Member-scoped (user_id bound); null when there is none.
 export async function findConnectionByAccount(
   db: Db,
   userId: string,
   connectorId: string,
   accountLabel: string,
+  preferId?: string,
 ): Promise<Connection | null> {
   const result = await db.query(
     `SELECT ${COLUMNS} FROM connections
       WHERE user_id = $1 AND connector_id = $2 AND lower(account_label) = lower($3)
-      ORDER BY connected_at, id LIMIT 1`,
-    [userId, connectorId, accountLabel],
+      ORDER BY (id = $4::uuid) DESC NULLS LAST, (status <> 'connected') DESC, connected_at DESC, id
+      LIMIT 1`,
+    [userId, connectorId, accountLabel, preferId ?? null],
   );
   const row = result.rows[0];
   return row ? toConnection(row) : null;
@@ -289,5 +293,31 @@ export async function renameConnection(db: Db, { userId, id, accountLabel }: Ren
   );
   const row = result.rows[0];
   if (!row) throw new Error(`renameConnection: no connection ${id} for this user`);
+  return toConnection(row);
+}
+
+// What renewConnection writes: the person (member scope), the connection, its fresh
+// credentials and its status.
+export interface RenewInput {
+  readonly userId: string;
+  readonly id: string;
+  readonly credentials: Record<string, unknown>;
+  readonly status: ConnectionStatus;
+}
+
+// Renew the owned connection in place after the person signed in to the same provider account
+// again: fresh DEK-encrypted credentials (re-bound to the same row id), its status, and the
+// connected date (so the row says when it was last connected). The id, connector and label
+// stay. Member-scoped (id AND user_id both bound); THROWS when no connection with that id
+// belongs to this user.
+export async function renewConnection(db: Db, input: RenewInput, dek: Uint8Array, clock: Clock): Promise<Connection> {
+  const envelope = await encrypt(dek, TABLE, CREDENTIALS_COLUMN, input.id, JSON.stringify(input.credentials));
+  const result = await db.query(
+    `UPDATE connections SET credentials = $1, status = $2, connected_at = $3::timestamptz
+      WHERE id = $4 AND user_id = $5 RETURNING ${COLUMNS}`,
+    [envelope, input.status, clock.now().toISOString(), input.id, input.userId],
+  );
+  const row = result.rows[0];
+  if (!row) throw new Error(`renewConnection: no connection ${input.id} for this user`);
   return toConnection(row);
 }

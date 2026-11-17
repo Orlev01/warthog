@@ -93,7 +93,7 @@ export function createConnectorRuntime(deps: {
       const existing = reconnectId ? await getConnectionById(db, session.userId, reconnectId) : null;
       if (reconnectId && (!existing || existing.connectorId !== connectorId)) throw new HttpError(404, "Service connection not found.");
       const auth = await buildAuthorizeUrl({ entry, config: oauthClientFor(config, connectorId), ...(existing ? { loginHint: existing.accountLabel } : {}) });
-      pendingConnects().put(session.userId, session.id, auth.state, { connectorId, accountLabel: entry.name, codeVerifier: auth.codeVerifier });
+      pendingConnects().put(session.userId, session.id, auth.state, { connectorId, accountLabel: entry.name, codeVerifier: auth.codeVerifier, ...(existing ? { reconnectId: existing.id } : {}) });
       return { url: auth.url };
     },
     take(session: Pick<Session, "userId" | "id">, state: string) { return pendingConnects().take(session.userId, session.id, state); },
