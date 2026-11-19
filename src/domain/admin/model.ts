@@ -176,6 +176,49 @@ export interface AccountsModel extends PageBase {
   readonly total: number;
 }
 
+// --- Requests (docs/adr/admin-portal.md, amendment of 20 November 2026) ------------------------
+// The one page that names a person: each request a person made of the operator in the app, with
+// the address and account facts of the person who asked, so the operator can answer them.
+
+export type RequestKind = "service" | "google_early_access";
+export type RequestFilter = "waiting" | "done" | "all";
+export const REQUEST_FILTERS: readonly RequestFilter[] = ["waiting", "done", "all"];
+
+// Why a request no longer waits: the service is in the catalogue now, the person is on the
+// Google early-access list, or the operator marked it done.
+export type RequestResolution =
+  | { readonly by: "catalogue"; readonly serviceName: string }
+  | { readonly by: "allowlist" }
+  | { readonly by: "operator"; readonly at: string };
+
+export interface RequestPerson extends AccountRow {
+  readonly email: string;
+  readonly agentRequests: number; // requests their agents have made through Warthog
+  readonly agentsByPlatform: readonly BreakdownRow[];
+  readonly connectionsByConnector: readonly BreakdownRow[];
+  readonly currency: string | null; // the account currency they chose (ISO 4217), if any
+  readonly requestsMade: number; // every request this person has made, this one included
+}
+
+export interface RequestItem {
+  readonly id: string;
+  readonly kind: RequestKind;
+  readonly serviceName: string; // cleaned and length-capped: the person's words, or the catalogue name
+  readonly askedAt: string;
+  readonly resolution: RequestResolution | null; // null while it waits
+  readonly person: RequestPerson;
+}
+
+export type RequestsNotice = "done" | "waiting" | "problem";
+
+export interface RequestsModel extends PageBase {
+  readonly filter: RequestFilter;
+  readonly counts: Readonly<Record<RequestFilter, number>>;
+  readonly requests: readonly RequestItem[]; // newest first, in the filter
+  readonly notice: RequestsNotice | null;
+  readonly capped: boolean; // only the newest requests were read, so older ones are missing
+}
+
 export interface ReliabilityModel extends RangedPage {
   readonly signins: {
     readonly byOutcome: readonly BreakdownRow[];

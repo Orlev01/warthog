@@ -90,6 +90,12 @@ export function Privacy({ links = RELATIVE_LINKS }: { links?: PublicLinks } = {}
 
         <PublicSection id="who-handles" title="Who handles your information">
           <p>Warthog is operated by {OPERATOR_NAME}. Contact <a href={`mailto:${SUPPORT_EMAIL}`}>{SUPPORT_EMAIL}</a> for privacy questions, access or correction requests, deletion help or complaints. Our <a href="/terms">Terms of use</a> explain the service and optional messaging program.</p>
+          <p>
+            When you ask us to add a service, or ask to join Google early access, we keep that
+            request with your account. We see it with your email address and how your account is
+            set up, such as which services and agents you&#39;ve connected, but never what they
+            hold, so we can follow up with you.
+          </p>
         </PublicSection>
 
         <PublicSection id="messaging" title="Email, SMS and overseas processing">

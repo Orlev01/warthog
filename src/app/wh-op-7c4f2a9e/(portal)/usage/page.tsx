@@ -4,6 +4,7 @@ import type { Metadata } from "next";
 import { UsageView } from "@/components/admin/usage-view";
 import { AdminPageError } from "@/components/admin/view-common";
 import { getAdminPageDeps } from "@/server/admin/compose";
+import { requireAdminPage } from "@/server/admin/page-guard";
 import { loadUsage } from "@/server/admin/page-data";
 import { parseRange } from "@/domain/admin/range";
 
@@ -21,6 +22,7 @@ export default async function Page({
   searchParams: Promise<Record<string, string | string[] | undefined>>;
 }) {
   const params = await searchParams;
+  await requireAdminPage();
   try {
     const deps = await getAdminPageDeps();
     const model = await loadUsage(deps, parseRange(params.range));

@@ -6,16 +6,15 @@
 // writes it. That absence IS the point of test-first; do NOT implement anything to make
 // these pass — the builder writes the service AFTERWARDS to turn them green.
 //
-// These tests pin BEHAVIOUR (what the two paths DO: the stored "Requested" row, the single
-// email to the configured operator, the Requested → matched transition and the person
-// notification on a catalogue match, that a non-matching entry changes nothing, what a
-// handler rejects, that the operator email is redacted and the operator address is
-// config-driven), never the source text of the module — a later rename that preserves
-// behaviour must not redden them.
+// These tests pin BEHAVIOUR (what the two paths DO: the stored "Requested" row, the
+// Requested → matched transition and the person notification on a catalogue match, that a
+// non-matching entry changes nothing, and what a handler rejects), never the source text of
+// the module — a later rename that preserves behaviour must not redden them.
 //
 // WHY this exists (task E09-S14; brief "Request a connector"; design §7): a person can
 // request a service that is not in the catalogue. The CREATE path records it "Requested"
-// for the person and emails the operator so they can consider adding it. When a catalogue
+// for the person; the operator reads it, with who asked, on the admin portal's Requests page
+// (docs/adr/admin-portal.md, amendment of 20 November 2026 — it is no longer emailed). When a catalogue
 // entry whose name OR aliases match a pending request is later added, the MATCH-NOTIFY path
 // marks the request "matched" and tells the person their service has arrived. Matching
 // ignores case and punctuation (via the shared `src/domain/catalogue/match` matcher);
@@ -24,15 +23,10 @@
 // ---------------------------------------------------------------------------
 // THE PINNED CONTRACT (chosen by the tester; the implementation conforms to it).
 //
-//   // The CREATE path: record a "Requested" item for the person and email the operator.
+//   // The CREATE path: record a "Requested" service request for the person.
 //   requestConnector(
 //     input: { userId: string; serviceName: string },   // userId is the SESSION's, never a client value
-//     deps: {
-//       db: Db;
-//       email: EmailSender;        // the operator is told by email
-//       operatorEmail: string;     // the operator ADDRESS, read from configuration (INV-103)
-//       clock: Clock;
-//     },
+//     deps: { db: Db; clock: Clock },
 //   ): Promise<ConnectorRequest>   // the recorded, Requested request
 //
 //   // The MATCH-NOTIFY path: run when a catalogue entry is added. Scan every pending
@@ -43,14 +37,13 @@
 //     deps: { db: Db; push: PushSender; clock: Clock },
 //   ): Promise<ConnectorRequest[]>
 //
-// The operator email body and the person notification both pass through the redaction module
-// (project hard rule: everything reaching an email or a notification is redacted first), so a
-// card number planted in the free-text service name is masked before it leaves Warthog.
+// The person notification passes through the redaction module (project hard rule: everything
+// reaching an email or a notification is redacted first). The admin portal redacts the name
+// when it shows it (src/server/admin/page-data.test.ts).
 //
 // Acceptance criteria → tests:
-//   AC "Creating a request records it Requested for the user and emails the operator address
-//        from configuration." — requestConnector stores a Requested row for the SESSION user
-//        and sends exactly one email, to the injected operatorEmail.
+//   AC "Creating a request records it Requested for the user." — requestConnector stores a
+//        Requested service request for the SESSION user.
 //   AC "Adding a catalogue entry whose name or alias matches a pending request (ignoring case
 //        and punctuation) marks it matched and notifies the person; a non-matching entry
 //        leaves requests Requested." — notifyMatchingRequests flips the matching person's
@@ -58,18 +51,15 @@
 //        entry marks nothing and notifies nobody.
 //   AC [obligation:validate-and-parameterize-input] (INV-102) — a handler on the
 //        `../http/validate` boundary rejects malformed / oversized / missing / mis-typed input
-//        with a 4xx before any query or email; a SQL-injection probe in the service name is
+//        with a 4xx before any query; a SQL-injection probe in the service name is
 //        stored as data (the table survives) and the user id comes from the session, never the
 //        body. The handler below is a test fixture (the intended usage), not an impl file.
-//   AC [obligation:secrets-from-env] (INV-103) — the operator address is the INJECTED config
-//        value (two configs route to two addresses — it is not baked in), and a decoy secret
-//        planted in the environment never lands in the email or the stored request.
-//   Security (redaction hard rule) — a card number planted in the service name is masked in
-//        the operator email.
+//   AC [obligation:secrets-from-env] (INV-103) — a decoy secret planted in the environment
+//        never lands in the stored request.
 //
 // Every db handle is closed in a `finally`; each real-db test uses its own `freshDb()` (an
-// isolated in-memory PGlite with the real migrations), so tests share no state. Each test
-// builds its own `createOutbox()` so the recorded messages belong to that test alone.
+// isolated in-memory PGlite with the real migrations), so tests share no state. Each push
+// test builds its own `createOutbox()` so the recorded messages belong to that test alone.
 
 import { test } from "node:test";
 import assert from "node:assert/strict";
@@ -85,12 +75,9 @@ import { freshDb } from "../../test/db";
 import type { Db } from "../db/index";
 import { fixedClock } from "../seams/clock";
 import { createOutbox, type Outbox, type SentMessage } from "../notify/outbox";
-import { OPERATOR_EMAIL_REASON } from "../notify/email";
 import { parseBody, HttpError } from "../http/validate";
 
 // --- fixtures ---------------------------------------------------------------------
-
-const OPERATOR = "ops@warthog.com.au";
 
 // Instants in the past relative to wall-clock, so a stray Date.now() would diverge.
 const T0 = new Date("2026-05-01T09:00:00.000Z");
@@ -110,9 +97,8 @@ async function makeUser(db: Db, who: string): Promise<string> {
   return user.id;
 }
 
-// The emails / pushes an outbox recorded, filtered per channel (the outbox is the real
+// The pushes an outbox recorded (the outbox is the real
 // dev/test sender that satisfies EmailSender and PushSender both).
-const emailsOf = (box: Outbox): SentMessage[] => box.list().filter((m) => m.channel === "email");
 const pushesOf = (box: Outbox): SentMessage[] => box.list().filter((m) => m.channel === "push");
 
 // A recording db that runs nothing and returns no rows, so a test can prove the handler
@@ -140,21 +126,23 @@ async function tableExists(db: Db, name: string): Promise<boolean> {
 }
 
 // ===========================================================================
-// The CREATE path — records a Requested item and emails the operator address.
+// The CREATE path — records a Requested service request.
 // ===========================================================================
 
 test("requestConnector records a Requested item for the person", async () => {
   const db = await freshDb();
   try {
     const userId = await makeUser(db, "create");
-    const box = createOutbox();
 
     const created = await requestConnector(
       { userId, serviceName: "Dropbox" },
-      { db, email: box, operatorEmail: OPERATOR, clock: fixedClock(T0) },
+      { db, clock: fixedClock(T0) },
     );
 
     assert.equal(created.userId, userId, "the request belongs to the person");
+    assert.equal(created.kind, "service", "it is a request for a new service");
+    assert.equal(created.connectorId, null, "naming no catalogue entry");
+    assert.equal(created.handledAt, null, "and the operator hasn't handled it");
     assert.equal(created.serviceName, "Dropbox", "the requested name is recorded");
     assert.equal(created.status, "requested", "it is recorded Requested");
     assert.equal(created.matchedConnectorId, null, "nothing has matched it yet");
@@ -169,52 +157,11 @@ test("requestConnector records a Requested item for the person", async () => {
   }
 });
 
-test("requestConnector emails exactly the configured operator address", async () => {
-  const db = await freshDb();
-  try {
-    const userId = await makeUser(db, "op-email");
-    const box = createOutbox();
-
-    await requestConnector(
-      { userId, serviceName: "Dropbox" },
-      { db, email: box, operatorEmail: OPERATOR, clock: fixedClock(T0) },
-    );
-
-    const emails = emailsOf(box);
-    assert.equal(emails.length, 1, "exactly one operator email is sent");
-    assert.equal(emails[0]!.recipient, OPERATOR, "it goes to the configured operator address");
-    assert.ok(!emails[0]!.body.includes("Dropbox"), "free-text requests stay out of provider mail");
-    assert.match(emails[0]!.body, /Review it in Warthog/);
-  } finally {
-    await db.close();
-  }
-});
-
 // ===========================================================================
 // The MATCH-NOTIFY path — a matching catalogue entry marks the request and
 // notifies the person; a non-matching entry leaves requests Requested.
 // ===========================================================================
 
-
-test("the connector-request operator email is branded and still leaves the free text out", async () => {
-  const db = await freshDb();
-  try {
-    const userId = await makeUser(db, "op-branded");
-    const box = createOutbox();
-    await requestConnector(
-      { userId, serviceName: "Dropbox" },
-      { db, email: box, operatorEmail: OPERATOR, clock: fixedClock(T0) },
-    );
-    const email = emailsOf(box)[0]!.email!;
-    assert.equal(email.subject, "New connector request");
-    assert.equal(email.heading, "Someone requested a connector");
-    assert.match(email.paragraphs.join(" "), /Review it in Warthog/);
-    assert.ok(!JSON.stringify(email).includes("Dropbox"), "free-text requests stay out of provider mail");
-    assert.equal(email.reason, OPERATOR_EMAIL_REASON);
-  } finally {
-    await db.close();
-  }
-});
 
 test("adding a matching entry marks the person's request matched and notifies them", async () => {
   const db = await freshDb();
@@ -392,13 +339,13 @@ test("running match-notify twice for the same entry notifies the person only onc
 
 // ===========================================================================
 // [obligation:validate-and-parameterize-input] — a handler on the validation
-// boundary rejects bad input before any query/email, binds probes, and takes the
+// boundary rejects bad input before any query, binds probes, and takes the
 // user id from the session. This handler is a TEST FIXTURE (the intended usage of
 // `parseBody` + `requestConnector`), not an implementation file.
 // ===========================================================================
 
 function requestConnectorHandler(
-  deps: { db: Db; email: Outbox; operatorEmail: string; clock: ReturnType<typeof fixedClock> },
+  deps: { db: Db; clock: ReturnType<typeof fixedClock> },
   sessionUserId: string,
 ): (req: Request) => Promise<Response> {
   // The body carries ONLY the service name; the user id comes from the session, never the
@@ -432,11 +379,10 @@ function jsonRequest(body: string): Request {
   });
 }
 
-test("the handler rejects malformed JSON with a 4xx and never reaches a query or an email", async () => {
+test("the handler rejects malformed JSON with a 4xx and never reaches a query", async () => {
   const db = recordingDb();
-  const box = createOutbox();
   const handler = requestConnectorHandler(
-    { db, email: box, operatorEmail: OPERATOR, clock: fixedClock(T0) },
+    { db, clock: fixedClock(T0) },
     "session-user",
   );
 
@@ -444,14 +390,12 @@ test("the handler rejects malformed JSON with a 4xx and never reaches a query or
 
   assert.ok(res.status >= 400 && res.status < 500, `expected a 4xx, got ${res.status}`);
   assert.equal(db.calls.length, 0, "malformed input must never reach a query");
-  assert.equal(box.list().length, 0, "and must never send an operator email");
 });
 
 test("the handler rejects an oversized body with a 4xx and never reaches a query", async () => {
   const db = recordingDb();
-  const box = createOutbox();
   const handler = requestConnectorHandler(
-    { db, email: box, operatorEmail: OPERATOR, clock: fixedClock(T0) },
+    { db, clock: fixedClock(T0) },
     "session-user",
   );
 
@@ -460,14 +404,12 @@ test("the handler rejects an oversized body with a 4xx and never reaches a query
 
   assert.ok(res.status >= 400 && res.status < 500, `expected a 4xx, got ${res.status}`);
   assert.equal(db.calls.length, 0, "an oversized body must never reach a query");
-  assert.equal(box.list().length, 0, "and must never send an operator email");
 });
 
 test("the handler rejects a body missing the service name with a 4xx", async () => {
   const db = recordingDb();
-  const box = createOutbox();
   const handler = requestConnectorHandler(
-    { db, email: box, operatorEmail: OPERATOR, clock: fixedClock(T0) },
+    { db, clock: fixedClock(T0) },
     "session-user",
   );
 
@@ -479,9 +421,8 @@ test("the handler rejects a body missing the service name with a 4xx", async () 
 
 test("the handler rejects an empty service name with a 4xx", async () => {
   const db = recordingDb();
-  const box = createOutbox();
   const handler = requestConnectorHandler(
-    { db, email: box, operatorEmail: OPERATOR, clock: fixedClock(T0) },
+    { db, clock: fixedClock(T0) },
     "session-user",
   );
 
@@ -493,9 +434,8 @@ test("the handler rejects an empty service name with a 4xx", async () => {
 
 test("the handler rejects a mis-typed service name with a 4xx", async () => {
   const db = recordingDb();
-  const box = createOutbox();
   const handler = requestConnectorHandler(
-    { db, email: box, operatorEmail: OPERATOR, clock: fixedClock(T0) },
+    { db, clock: fixedClock(T0) },
     "session-user",
   );
 
@@ -506,13 +446,12 @@ test("the handler rejects a mis-typed service name with a 4xx", async () => {
   assert.equal(db.calls.length, 0, "a mis-typed field must never reach a query");
 });
 
-test("the handler accepts a well-formed body: records the request for the SESSION user and emails the operator", async () => {
+test("the handler accepts a well-formed body: records the request for the SESSION user", async () => {
   const db = await freshDb();
   try {
     const userId = await makeUser(db, "handler-ok");
-    const box = createOutbox();
-    const handler = requestConnectorHandler(
-      { db, email: box, operatorEmail: OPERATOR, clock: fixedClock(T0) },
+      const handler = requestConnectorHandler(
+      { db, clock: fixedClock(T0) },
       userId,
     );
 
@@ -526,10 +465,6 @@ test("the handler accepts a well-formed body: records the request for the SESSIO
     assert.equal(stored!.id, id, "the stored request matches the returned id");
     assert.equal(stored!.serviceName, "Dropbox", "with the submitted service name");
     assert.equal(stored!.status, "requested", "and Requested status");
-
-    const emails = emailsOf(box);
-    assert.equal(emails.length, 1, "the operator is emailed once");
-    assert.equal(emails[0]!.recipient, OPERATOR, "at the configured operator address");
   } finally {
     await db.close();
   }
@@ -540,9 +475,8 @@ test("the handler takes the user id from the session, not the body", async () =>
   try {
     const sessionUser = await makeUser(db, "handler-session");
     const attacker = await makeUser(db, "handler-attacker");
-    const box = createOutbox();
-    const handler = requestConnectorHandler(
-      { db, email: box, operatorEmail: OPERATOR, clock: fixedClock(T0) },
+      const handler = requestConnectorHandler(
+      { db, clock: fixedClock(T0) },
       sessionUser,
     );
 
@@ -565,9 +499,8 @@ test("the handler cannot be SQL-injected: a probe service name is stored as data
   const db = await freshDb();
   try {
     const userId = await makeUser(db, "handler-probe");
-    const box = createOutbox();
-    const handler = requestConnectorHandler(
-      { db, email: box, operatorEmail: OPERATOR, clock: fixedClock(T0) },
+      const handler = requestConnectorHandler(
+      { db, clock: fixedClock(T0) },
       userId,
     );
     const probe = "Dropbox'); DROP TABLE connector_requests; --";
@@ -585,85 +518,27 @@ test("the handler cannot be SQL-injected: a probe service name is stored as data
 });
 
 // ===========================================================================
-// [obligation:secrets-from-env] — the operator address is config-driven (not baked in),
-// and no ambient env value leaks into the email or the stored request.
+// [obligation:secrets-from-env] — no ambient env value leaks into the stored request.
 // ===========================================================================
 
-test("the operator address is the injected config value: two configs route to two addresses", async () => {
-  const db = await freshDb();
-  try {
-    const userId = await makeUser(db, "op-config");
-
-    const boxA = createOutbox();
-    await requestConnector(
-      { userId, serviceName: "Dropbox" },
-      { db, email: boxA, operatorEmail: "ops-a@warthog.com.au", clock: fixedClock(T0) },
-    );
-
-    const boxB = createOutbox();
-    await requestConnector(
-      { userId, serviceName: "Notion" },
-      { db, email: boxB, operatorEmail: "ops-b@warthog.com.au", clock: fixedClock(T0) },
-    );
-
-    assert.equal(emailsOf(boxA)[0]!.recipient, "ops-a@warthog.com.au", "the first config's operator is used");
-    assert.equal(emailsOf(boxB)[0]!.recipient, "ops-b@warthog.com.au", "the second config's operator is used");
-  } finally {
-    await db.close();
-  }
-});
-
-test("a decoy secret in the environment never lands in the operator email or the stored request", async () => {
+test("a decoy secret in the environment never lands in the stored request", async () => {
   const DECOY = "sk_live_DECOY_must_never_appear_in_warthog";
   const prev = process.env.WARTHOG_DECOY_SECRET;
   process.env.WARTHOG_DECOY_SECRET = DECOY;
   const db = await freshDb();
   try {
     const userId = await makeUser(db, "op-env");
-    const box = createOutbox();
 
     const created = await requestConnector(
       { userId, serviceName: "Dropbox" },
-      { db, email: box, operatorEmail: OPERATOR, clock: fixedClock(T0) },
+      { db, clock: fixedClock(T0) },
     );
 
     assert.ok(!JSON.stringify(created).includes(DECOY), "no ambient env value is folded into the returned request");
-    for (const message of box.list()) {
-      assert.ok(!message.body.includes(DECOY), "no ambient env value is folded into an outgoing message");
-      assert.ok(!message.recipient.includes(DECOY), "no ambient env value is used as a recipient");
-    }
+    assert.ok(!JSON.stringify(await listConnectorRequestsForUser(db, userId)).includes(DECOY), "nor into the stored one");
   } finally {
     await db.close();
     if (prev === undefined) delete process.env.WARTHOG_DECOY_SECRET;
     else process.env.WARTHOG_DECOY_SECRET = prev;
-  }
-});
-
-// ===========================================================================
-// Security (redaction hard rule) — a card number planted in the free-text service
-// name is MASKED in the operator email (everything reaching an email is redacted).
-// ===========================================================================
-
-test("the operator email is redacted: a card number in the service name is masked", async () => {
-  const db = await freshDb();
-  try {
-    const userId = await makeUser(db, "redact");
-    const box = createOutbox();
-
-    // 4111 1111 1111 1111 is a Luhn-valid test PAN. The redaction module masks it to
-    // `[card ••••1111]`, revealing only the last four — so the full number must not appear
-    // in the operator email.
-    await requestConnector(
-      { userId, serviceName: "Acme 4111 1111 1111 1111 Bank" },
-      { db, email: box, operatorEmail: OPERATOR, clock: fixedClock(T0) },
-    );
-
-    const body = emailsOf(box)[0]!.body;
-    assert.ok(!body.includes("Acme"), "the free-text name is not sent overseas");
-    assert.ok(!body.includes("1111"), "even the card suffix stays out of email");
-    assert.ok(!body.includes("4111 1111 1111 1111"), "the full grouped card number must not appear");
-    assert.ok(!body.includes("4111111111111111"), "nor the full card number with its separators stripped");
-  } finally {
-    await db.close();
   }
 });

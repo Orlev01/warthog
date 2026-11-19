@@ -26,17 +26,25 @@ import type { Db, Row } from "./index";
 // The columns every read returns, kept in one place so the lookups and the mark
 // transition hand back the same shape.
 const COLUMNS =
-  "id, user_id, service_name, status, requested_at, matched_connector_id, matched_at";
+  "id, user_id, kind, service_name, connector_id, status, requested_at, matched_connector_id, matched_at, handled_at";
 
 // A request is still pending ('requested') or has been satisfied by a catalogue entry
 // ('matched') — the two status values the store knows.
 export type ConnectorRequestStatus = "requested" | "matched";
 
+// What a person asked the operator for (migration 0115): a service that isn't in the
+// catalogue, or Google early access for a gated Google service.
+export type ConnectorRequestKind = "service" | "google_early_access";
+
 // What createConnectorRequest records: the owner (the session's id, never a client
-// value) and the free-text service name the person requested.
+// value), the service name (the person's own words, or the catalogue's name for early
+// access), and for early access the catalogue entry asked about. The kind defaults to a
+// service request.
 export interface NewConnectorRequest {
   readonly userId: string;
   readonly serviceName: string;
+  readonly kind?: ConnectorRequestKind;
+  readonly connectorId?: string | null;
 }
 
 // A request as handed back. `serviceName` is the name the person typed, stored
@@ -44,11 +52,15 @@ export interface NewConnectorRequest {
 export interface ConnectorRequest {
   readonly id: string;
   readonly userId: string;
+  readonly kind: ConnectorRequestKind;
   readonly serviceName: string;
+  readonly connectorId: string | null;
   readonly status: ConnectorRequestStatus;
   readonly requestedAt: Date | string;
   readonly matchedConnectorId: string | null;
   readonly matchedAt: Date | string | null;
+  // When the operator marked it done in the admin portal; null while it waits.
+  readonly handledAt: Date | string | null;
 }
 
 // What markConnectorRequestMatched needs: the request id and the catalogue slug that
@@ -70,11 +82,14 @@ function toConnectorRequest(row: Row): ConnectorRequest {
   return {
     id: row.id as string,
     userId: row.user_id as string,
+    kind: row.kind as ConnectorRequestKind,
     serviceName: row.service_name as string,
+    connectorId: (row.connector_id as string | null) ?? null,
     status: row.status as ConnectorRequestStatus,
     requestedAt: toDate(row.requested_at) ?? new Date(NaN),
     matchedConnectorId: (row.matched_connector_id as string | null) ?? null,
     matchedAt: toDate(row.matched_at),
+    handledAt: toDate(row.handled_at),
   };
 }
 
@@ -89,21 +104,26 @@ export async function createConnectorRequest(
 ): Promise<ConnectorRequest> {
   const id = randomUUID();
   const requestedAt = clock.now();
+  const kind = input.kind ?? "service";
+  const connectorId = input.connectorId ?? null;
 
   await db.query(
-    `INSERT INTO connector_requests (id, user_id, service_name, status, requested_at)
-     VALUES ($1, $2, $3, 'requested', $4::timestamptz)`,
-    [id, input.userId, input.serviceName, requestedAt.toISOString()],
+    `INSERT INTO connector_requests (id, user_id, kind, service_name, connector_id, status, requested_at)
+     VALUES ($1, $2, $3, $4, $5, 'requested', $6::timestamptz)`,
+    [id, input.userId, kind, input.serviceName, connectorId, requestedAt.toISOString()],
   );
 
   return {
     id,
     userId: input.userId,
+    kind,
     serviceName: input.serviceName,
+    connectorId,
     status: "requested",
     requestedAt,
     matchedConnectorId: null,
     matchedAt: null,
+    handledAt: null,
   };
 }
 
@@ -120,12 +140,13 @@ export async function listConnectorRequestsForUser(
   return result.rows.map(toConnectorRequest);
 }
 
-// EVERY person's still-'requested' request, across all users — the system scan the
-// match-notify runs when a catalogue entry is added. NOT member-scoped (a system job,
-// not a session). A matched request is excluded.
+// EVERY person's still-'requested' service request, across all users — the system scan
+// the match-notify runs when a catalogue entry is added. NOT member-scoped (a system job,
+// not a session). A matched request is excluded, and so is early access: it names a
+// service that is already in the catalogue.
 export async function listPendingConnectorRequests(db: Db): Promise<ConnectorRequest[]> {
   const result = await db.query(
-    `SELECT ${COLUMNS} FROM connector_requests WHERE status = 'requested' ORDER BY requested_at`,
+    `SELECT ${COLUMNS} FROM connector_requests WHERE status = 'requested' AND kind = 'service' ORDER BY requested_at`,
   );
   return result.rows.map(toConnectorRequest);
 }

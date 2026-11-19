@@ -1,7 +1,7 @@
 // Hand-built view models for the admin views' render tests: one populated and one empty of
 // each page. Test-only; never imported by production code.
 import type {
-  AccountsModel, OverviewModel, RangeWindow, ReliabilityModel, SignupsModel, SystemModel, TrafficModel, UsageModel,
+  AccountsModel, OverviewModel, RangeWindow, ReliabilityModel, RequestItem, RequestsModel, SignupsModel, SystemModel, TrafficModel, UsageModel,
 } from "@/domain/admin/model";
 
 export const NOW = new Date("2026-11-13T05:00:00Z");
@@ -114,6 +114,35 @@ export const ACCOUNTS_EMPTY: AccountsModel = {
   timeZone: TZ, generatedAt: NOW.toISOString(),
   lookup: { searched: false, account: null }, filter: "all",
   counts: { all: 0, no_factor: 0, no_agent: 0, no_service: 0, no_request: 0, needs_reconnect: 0 }, accounts: [], total: 0,
+};
+
+const ASKER: RequestItem["person"] = {
+  reference: "a1b2c3d4", role: "member", createdAt: "2026-11-10T01:00:00Z", factors: ["passkey"], agents: 2, connections: 3, failingConnections: 1,
+  lastActiveAt: "2026-11-13T04:04:00Z", pendingApprovals: 0, household: "owner", email: "sam@example.test", agentRequests: 57, currency: "AUD", requestsMade: 2,
+  agentsByPlatform: [{ key: "claude", label: "Claude", value: 1, brand: "claude" }, { key: "chatgpt", label: "ChatGPT", value: 1, brand: "chatgpt" }],
+  connectionsByConnector: [{ key: "google-gmail", label: "Gmail", value: 2, brand: "google-gmail", tone: "warning" }, { key: "notion", label: "Notion", value: 1, brand: "notion" }],
+};
+const NEWCOMER: RequestItem["person"] = {
+  reference: "e5f6a7b8", role: "member", createdAt: "2026-11-12T01:00:00Z", factors: [], agents: 0, connections: 0, failingConnections: 0,
+  lastActiveAt: null, pendingApprovals: 0, household: null, email: "new@example.test", agentRequests: 0, currency: null, requestsMade: 1,
+  agentsByPlatform: [], connectionsByConnector: [],
+};
+
+export const REQUESTS: RequestsModel = {
+  timeZone: TZ, generatedAt: NOW.toISOString(), filter: "all", notice: "done", capped: false,
+  counts: { waiting: 2, done: 3, all: 5 },
+  requests: [
+    { id: "11111111-1111-4111-8111-111111111111", kind: "service", serviceName: "LinkedIn", askedAt: "2026-11-13T03:00:00Z", resolution: null, person: ASKER },
+    { id: "22222222-2222-4222-8222-222222222222", kind: "google_early_access", serviceName: "Gmail", askedAt: "2026-11-13T02:00:00Z", resolution: null, person: NEWCOMER },
+    { id: "33333333-3333-4333-8333-333333333333", kind: "service", serviceName: "Spotify", askedAt: "2026-11-12T02:00:00Z", resolution: { by: "catalogue", serviceName: "Spotify" }, person: ASKER },
+    { id: "44444444-4444-4444-8444-444444444444", kind: "google_early_access", serviceName: "Google Drive", askedAt: "2026-11-11T02:00:00Z", resolution: { by: "allowlist" }, person: NEWCOMER },
+    { id: "55555555-5555-4555-8555-555555555555", kind: "service", serviceName: "Fax Machine", askedAt: "2026-11-10T02:00:00Z", resolution: { by: "operator", at: "2026-11-11T02:00:00Z" }, person: NEWCOMER },
+  ],
+};
+
+export const REQUESTS_EMPTY: RequestsModel = {
+  timeZone: TZ, generatedAt: NOW.toISOString(), filter: "waiting", notice: null, capped: false,
+  counts: { waiting: 0, done: 0, all: 0 }, requests: [],
 };
 
 export const RELIABILITY: ReliabilityModel = {

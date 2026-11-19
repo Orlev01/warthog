@@ -4,8 +4,8 @@
 // (a lifetime cap Google never resets), so the three Google connectors (flagged
 // `google_early_access: true`) are offered only to people whose email the founder has
 // placed on the early-access allowlist. Everyone else is funnelled to "Early access — ask
-// to join", which files a connector request and emails the operator so they can add the
-// person to the allowlist. The Google app itself is published (17 Nov 2026,
+// to join", which files a request the operator reads on the admin portal's Requests page, with
+// the person's address, so they can add the person to the allowlist. The Google app itself is published (17 Nov 2026,
 // docs/adr/google-published-and-accounts.md), so connections no longer lapse after 7 days.
 //
 //   gateGoogleConnector (pure): decides what a person sees for a connector entry —
@@ -14,23 +14,17 @@
 //     ask-to-join. The allowlist is read from configuration (`config.googleEarlyAccess`)
 //     and passed in, never hard-coded (INV-103). Matching is case-insensitive.
 //
-//   askToJoinEarlyAccess (the filing path): records a 'requested' connector request
+//   askToJoinEarlyAccess (the filing path): records a 'requested' early-access request
 //     FOR THE SESSION USER (the userId is the session's, never a client value) naming
-//     the Google service, and emails the operator at the ADDRESS read from configuration
-//     and passed in (INV-103 — nothing baked in; this module reads no process.env).
+//     the Google service by its catalogue id and name. Nothing is emailed (docs/adr/
+//     admin-portal.md, amendment of 20 November 2026); this module reads no process.env.
 //
-// Project hard rule (a reviewer veto): everything reaching an email passes through
-// `src/domain/redaction` first, so a card number planted in the service name is masked
-// before it leaves Warthog. The service name itself is stored VERBATIM (free text the
-// person's connector carried), bound as a parameter through the db seam (INV-102), so a
-// value shaped like SQL is stored as data and cannot alter the query.
+// The service name is the catalogue's own, bound as a parameter through the db seam
+// (INV-102), so a value shaped like SQL is stored as data and cannot alter the query.
 
-import { redact } from "../../domain/redaction/redact";
 import { createConnectorRequest, type ConnectorRequest } from "../db/connector-requests";
 import type { Db } from "../db/index";
 import type { Clock } from "../seams/clock";
-import type { EmailSender } from "../notify/senders";
-import { mapEmailText, OPERATOR_EMAIL_REASON } from "../notify/email";
 
 // The exact funnel label a non-allowlisted person sees (UI copy; do not drift).
 const ASK_TO_JOIN_LABEL = "Early access — ask to join";
@@ -82,53 +76,22 @@ export interface AskToJoinInput {
   readonly connector: { readonly id: string; readonly name: string };
 }
 
-// The injected seams the filing path runs from (this module reads no process.env). The
-// operator ADDRESS comes from configuration (INV-103), passed in rather than read here.
+// The injected seams the filing path runs from (this module reads no process.env).
 export interface AskToJoinDeps {
   readonly db: Db;
-  readonly email: EmailSender;
-  readonly operatorEmail: string;
   readonly clock: Clock;
 }
 
-// Run a body through the redaction module before it reaches a sender (project hard
-// rule). There is no released value to match here, so the matcher reports false; the
-// card-masking and truncation rules still apply.
-function scrub(body: string): string {
-  return redact(body, () => false) as string;
-}
-
 // A non-allowlisted person asks to join early access for a Google connector. Record a
-// 'requested' connector request naming the service for the session user and email the
-// operator so they can add the person to the allowlist. Returns the recorded request.
+// 'requested' early-access request naming the service for the session user, for the
+// operator to read in the admin portal. Returns the recorded request.
 export async function askToJoinEarlyAccess(
   input: AskToJoinInput,
   deps: AskToJoinDeps,
 ): Promise<ConnectorRequest> {
-  const serviceName = `Google early access: ${input.connector.name}`;
-
-  const request = await createConnectorRequest(
+  return createConnectorRequest(
     deps.db,
-    { userId: input.userId, serviceName },
+    { userId: input.userId, serviceName: input.connector.name, kind: "google_early_access", connectorId: input.connector.id },
     deps.clock,
   );
-
-  await deps.email.sendEmail({
-    recipient: deps.operatorEmail,
-    body: scrub(
-      `Someone asked to join Google early access for "${input.connector.name}". ` +
-        "Add their email to the early-access allowlist in Warthog if it fits.",
-    ),
-    email: mapEmailText({
-      subject: "Google early access request",
-      heading: "Someone asked to join Google early access",
-      paragraphs: [
-        `Someone asked to join Google early access for "${input.connector.name}".`,
-        "Add their email to the early-access allowlist in Warthog if it fits.",
-      ],
-      reason: OPERATOR_EMAIL_REASON,
-    }, scrub),
-  });
-
-  return request;
 }

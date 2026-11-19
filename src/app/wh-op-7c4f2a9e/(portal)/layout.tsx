@@ -16,7 +16,8 @@ import "../portal.css";
 // requires a live `__Host-wh_admin` session verified on the server (which re-checks the
 // admin role and the app session on every request). Anyone else is sent to the admin
 // host's own sign-in page. Route handlers (the exchange and sign-out) are not wrapped by a
-// layout and guard themselves.
+// layout and guard themselves. Each page also calls `requireAdminPage` itself, because a
+// crafted client navigation can render a page without running this layout.
 //
 // Thin by design: this entry reads the cookie and the proxy's forwarded original path, and
 // delegates the admit/redirect decision to the tested `requireAdminSession` seam. The

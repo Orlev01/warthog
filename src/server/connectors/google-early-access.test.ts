@@ -41,11 +41,11 @@
 //    | { kind: "ask_to_join"; label: string }       // label === "Early access — ask to join"
 //
 //   // The FILING path: a non-allowlisted person asks to join early access for a Google
-//   // connector. It records a connector request FOR THE SESSION USER (never a client id)
-//   // naming the service, and emails the operator (both through the redaction pass).
+//   // connector. It records an early-access request FOR THE SESSION USER (never a client id)
+//   // naming the service; the operator reads it on the admin portal's Requests page.
 //   askToJoinEarlyAccess(
 //     input: { userId: string; connector: { id: string; name: string } },   // userId is the SESSION's
-//     deps: { db: Db; email: EmailSender; operatorEmail: string; clock: Clock },  // operatorEmail from config
+//     deps: { db: Db; clock: Clock },
 //   ): Promise<ConnectorRequest>                     // the recorded, Requested request
 //
 // Acceptance criteria → tests:
@@ -58,19 +58,15 @@
 //       allowlist admits nobody.
 //   AC [obligation:validate-and-parameterize-input] (INV-102) — a handler on the
 //       `../http/validate` boundary rejects malformed / oversized / missing / mis-typed input
-//       with a 4xx before any query or email; a probe travels as a bound value (never spliced
+//       with a 4xx before any query; a probe travels as a bound value (never spliced
 //       into the SQL text) and the table survives. The handler below is a TEST FIXTURE (the
 //       intended usage of `parseBody` + `askToJoinEarlyAccess`), not an implementation file.
-//   AC [obligation:secrets-from-env] (INV-103) — the operator address and the allowlist are
-//       INJECTED config values (two configs route two ways — nothing baked in), and a decoy
-//       secret planted in the environment never lands in the decision, the stored request or
-//       the operator email.
-//   Security (redaction hard rule) — a card number planted in the connector name is masked in
-//       the operator email (everything reaching an email is redacted first).
+//   AC [obligation:secrets-from-env] (INV-103) — the allowlist is an INJECTED config value, and
+//       a decoy secret planted in the environment never lands in the decision or the stored
+//       request.
 //
 // Every db handle is closed in a `finally`; each real-db test uses its own `freshDb()` (an
-// isolated in-memory PGlite with the real migrations), so tests share no state. Each test
-// builds its own `createOutbox()` so the recorded messages belong to that test alone.
+// isolated in-memory PGlite with the real migrations), so tests share no state.
 
 import { test } from "node:test";
 import assert from "node:assert/strict";
@@ -82,13 +78,10 @@ import { createUser } from "../db/users";
 import { freshDb } from "../../test/db";
 import type { Db } from "../db/index";
 import { fixedClock } from "../seams/clock";
-import { createOutbox, type Outbox, type SentMessage } from "../notify/outbox";
-import { OPERATOR_EMAIL_REASON } from "../notify/email";
 import { parseBody, HttpError } from "../http/validate";
 
 // --- fixtures ---------------------------------------------------------------------
 
-const OPERATOR = "ops@warthog.com.au";
 
 // An instant in the past relative to wall-clock, so a stray Date.now() would diverge.
 const T0 = new Date("2026-05-01T09:00:00.000Z");
@@ -105,7 +98,6 @@ async function makeUser(db: Db, who: string): Promise<string> {
   return user.id;
 }
 
-const emailsOf = (box: Outbox): SentMessage[] => box.list().filter((m) => m.channel === "email");
 
 // A recording db that runs nothing and returns no rows, so a test can prove the handler
 // never reached a query (the "4xx before any query" half of INV-102) and that a probe that
@@ -232,25 +224,26 @@ test("[gate] the allowed Google connect says what Google's unverified-app screen
 });
 
 // ===========================================================================
-// The FILING path — "ask to join" records a connector request for the SESSION
-// user and emails the operator (AC1 "filing it records a connector request").
+// The FILING path — "ask to join" records an early-access request for the SESSION
+// user (AC1 "filing it records a connector request").
 // ===========================================================================
 
 test("askToJoinEarlyAccess records a Requested connector request for the person", async () => {
   const db = await freshDb();
   try {
     const userId = await makeUser(db, "ask");
-    const box = createOutbox();
-
+  
     const created = await askToJoinEarlyAccess(
       { userId, connector: GMAIL },
-      { db, email: box, operatorEmail: OPERATOR, clock: fixedClock(T0) },
+      { db, clock: fixedClock(T0) },
     );
 
     assert.equal(created.userId, userId, "the request belongs to the person");
     assert.equal(created.status, "requested", "it is recorded Requested");
     assert.equal(created.matchedConnectorId, null, "nothing has matched it yet");
     assert.ok(created.serviceName.includes(GMAIL.name), "it names the Google service they asked to join");
+    assert.equal(created.kind, "google_early_access", "it is an early-access request");
+    assert.equal(created.connectorId, GMAIL.id, "for that catalogue entry");
 
     // It is persisted and visible to the person.
     const [stored] = await listConnectorRequestsForUser(db, userId);
@@ -262,59 +255,15 @@ test("askToJoinEarlyAccess records a Requested connector request for the person"
   }
 });
 
-test("askToJoinEarlyAccess emails exactly the configured operator address", async () => {
-  const db = await freshDb();
-  try {
-    const userId = await makeUser(db, "ask-email");
-    const box = createOutbox();
-
-    await askToJoinEarlyAccess(
-      { userId, connector: GMAIL },
-      { db, email: box, operatorEmail: OPERATOR, clock: fixedClock(T0) },
-    );
-
-    const emails = emailsOf(box);
-    assert.equal(emails.length, 1, "exactly one operator email is sent");
-    assert.equal(emails[0]!.recipient, OPERATOR, "it goes to the configured operator address");
-    assert.ok(emails[0]!.body.includes(GMAIL.name), "the email names the Google service");
-  } finally {
-    await db.close();
-  }
-});
-
-
-test("the early-access operator email is branded, names the service and is scrubbed like the body", async () => {
-  const db = await freshDb();
-  try {
-    const userId = await makeUser(db, "ask-branded");
-    const box = createOutbox();
-    await askToJoinEarlyAccess(
-      { userId, connector: { ...GMAIL, name: "Gmail 4111 1111 1111 1111" } },
-      { db, email: box, operatorEmail: OPERATOR, clock: fixedClock(T0) },
-    );
-    const email = emailsOf(box)[0]!.email!;
-    assert.equal(email.subject, "Google early access request");
-    assert.equal(email.heading, "Someone asked to join Google early access");
-    assert.ok(email.paragraphs.join(" ").includes('for "Gmail'), "it names the service");
-    assert.ok(!email.paragraphs.join(" ").includes("4111 1111 1111 1111"), "a card number is masked");
-    assert.match(email.paragraphs.join(" "), /early-access allowlist/);
-    assert.equal(email.reason, OPERATOR_EMAIL_REASON, "the footer says why the operator gets it");
-    assert.equal(email.action, undefined);
-  } finally {
-    await db.close();
-  }
-});
-
 test("askToJoinEarlyAccess records under the SESSION user; another person sees nothing", async () => {
   const db = await freshDb();
   try {
     const sessionUser = await makeUser(db, "owner");
     const other = await makeUser(db, "other");
-    const box = createOutbox();
-
+  
     await askToJoinEarlyAccess(
       { userId: sessionUser, connector: GMAIL },
-      { db, email: box, operatorEmail: OPERATOR, clock: fixedClock(T0) },
+      { db, clock: fixedClock(T0) },
     );
 
     assert.equal(
@@ -347,7 +296,7 @@ function catalogueOf(entries: { id: string; name: string }[]): (id: string) => {
 }
 
 function askToJoinHandler(
-  deps: { db: Db; email: Outbox; operatorEmail: string; clock: ReturnType<typeof fixedClock> },
+  deps: { db: Db; clock: ReturnType<typeof fixedClock> },
   sessionUserId: string,
   lookup: (id: string) => { id: string; name: string } | undefined,
 ): (req: Request) => Promise<Response> {
@@ -386,11 +335,10 @@ function jsonRequest(body: string): Request {
   });
 }
 
-test("[validate-and-parameterize-input] the handler rejects malformed JSON with a 4xx and never reaches a query or an email", async () => {
+test("[validate-and-parameterize-input] the handler rejects malformed JSON with a 4xx and never reaches a query", async () => {
   const db = recordingDb();
-  const box = createOutbox();
   const handler = askToJoinHandler(
-    { db, email: box, operatorEmail: OPERATOR, clock: fixedClock(T0) },
+    { db, clock: fixedClock(T0) },
     "session-user",
     catalogueOf([GMAIL]),
   );
@@ -399,14 +347,12 @@ test("[validate-and-parameterize-input] the handler rejects malformed JSON with 
 
   assert.ok(res.status >= 400 && res.status < 500, `expected a 4xx, got ${res.status}`);
   assert.equal(db.calls.length, 0, "malformed input must never reach a query");
-  assert.equal(box.list().length, 0, "and must never send an operator email");
 });
 
 test("[validate-and-parameterize-input] the handler rejects an oversized body with a 4xx and never reaches a query", async () => {
   const db = recordingDb();
-  const box = createOutbox();
   const handler = askToJoinHandler(
-    { db, email: box, operatorEmail: OPERATOR, clock: fixedClock(T0) },
+    { db, clock: fixedClock(T0) },
     "session-user",
     catalogueOf([GMAIL]),
   );
@@ -416,14 +362,12 @@ test("[validate-and-parameterize-input] the handler rejects an oversized body wi
 
   assert.ok(res.status >= 400 && res.status < 500, `expected a 4xx, got ${res.status}`);
   assert.equal(db.calls.length, 0, "an oversized body must never reach a query");
-  assert.equal(box.list().length, 0, "and must never send an operator email");
 });
 
 test("[validate-and-parameterize-input] the handler rejects a body missing the connector id with a 4xx", async () => {
   const db = recordingDb();
-  const box = createOutbox();
   const handler = askToJoinHandler(
-    { db, email: box, operatorEmail: OPERATOR, clock: fixedClock(T0) },
+    { db, clock: fixedClock(T0) },
     "session-user",
     catalogueOf([GMAIL]),
   );
@@ -436,9 +380,8 @@ test("[validate-and-parameterize-input] the handler rejects a body missing the c
 
 test("[validate-and-parameterize-input] the handler rejects an empty connector id with a 4xx", async () => {
   const db = recordingDb();
-  const box = createOutbox();
   const handler = askToJoinHandler(
-    { db, email: box, operatorEmail: OPERATOR, clock: fixedClock(T0) },
+    { db, clock: fixedClock(T0) },
     "session-user",
     catalogueOf([GMAIL]),
   );
@@ -451,9 +394,8 @@ test("[validate-and-parameterize-input] the handler rejects an empty connector i
 
 test("[validate-and-parameterize-input] the handler rejects a mis-typed connector id with a 4xx", async () => {
   const db = recordingDb();
-  const box = createOutbox();
   const handler = askToJoinHandler(
-    { db, email: box, operatorEmail: OPERATOR, clock: fixedClock(T0) },
+    { db, clock: fixedClock(T0) },
     "session-user",
     catalogueOf([GMAIL]),
   );
@@ -469,9 +411,8 @@ test("[validate-and-parameterize-input] a SQL-probe connector id in the input fi
   const db = await freshDb();
   try {
     const userId = await makeUser(db, "probe-id");
-    const box = createOutbox();
-    const handler = askToJoinHandler(
-      { db, email: box, operatorEmail: OPERATOR, clock: fixedClock(T0) },
+      const handler = askToJoinHandler(
+      { db, clock: fixedClock(T0) },
       userId,
       catalogueOf([GMAIL]),
     );
@@ -484,7 +425,6 @@ test("[validate-and-parameterize-input] a SQL-probe connector id in the input fi
     assert.ok(res.status >= 400 && res.status < 500, `expected a 4xx, got ${res.status}`);
     assert.equal(await tableExists(db, "connector_requests"), true, "the connector_requests table must still exist");
     assert.deepEqual(await listConnectorRequestsForUser(db, userId), [], "nothing is recorded for a probe id");
-    assert.equal(box.list().length, 0, "and no operator email is sent");
   } finally {
     await db.close();
   }
@@ -492,14 +432,13 @@ test("[validate-and-parameterize-input] a SQL-probe connector id in the input fi
 
 test("[validate-and-parameterize-input] the service name reaches the query bound, never spliced", async () => {
   const db = recordingDb();
-  const box = createOutbox();
   // A probe planted in the connector name is the value that DOES flow into the INSERT; it
   // must travel as a bound parameter, not be concatenated into the SQL text.
   const probe = "Gmail'); DROP TABLE connector_requests; --";
 
   await askToJoinEarlyAccess(
     { userId: "owner-1", connector: { id: "google-gmail", name: probe } },
-    { db, email: box, operatorEmail: OPERATOR, clock: fixedClock(T0) },
+    { db, clock: fixedClock(T0) },
   );
 
   assertBoundNotSpliced(db, probe);
@@ -509,12 +448,11 @@ test("[validate-and-parameterize-input] a SQL probe in the connector name is sto
   const db = await freshDb();
   try {
     const userId = await makeUser(db, "probe-name");
-    const box = createOutbox();
-    const probe = "Gmail'); DROP TABLE connector_requests; --";
+      const probe = "Gmail'); DROP TABLE connector_requests; --";
 
     await askToJoinEarlyAccess(
       { userId, connector: { id: "google-gmail", name: probe } },
-      { db, email: box, operatorEmail: OPERATOR, clock: fixedClock(T0) },
+      { db, clock: fixedClock(T0) },
     );
 
     assert.equal(await tableExists(db, "connector_requests"), true, "the connector_requests table must still exist");
@@ -526,13 +464,12 @@ test("[validate-and-parameterize-input] a SQL probe in the connector name is sto
   }
 });
 
-test("the handler accepts a well-formed body: files the ask-to-join for the SESSION user and emails the operator", async () => {
+test("the handler accepts a well-formed body: files the ask-to-join for the SESSION user", async () => {
   const db = await freshDb();
   try {
     const userId = await makeUser(db, "handler-ok");
-    const box = createOutbox();
-    const handler = askToJoinHandler(
-      { db, email: box, operatorEmail: OPERATOR, clock: fixedClock(T0) },
+      const handler = askToJoinHandler(
+      { db, clock: fixedClock(T0) },
       userId,
       catalogueOf([GMAIL]),
     );
@@ -547,10 +484,6 @@ test("the handler accepts a well-formed body: files the ask-to-join for the SESS
     assert.equal(stored!.id, id, "the stored request matches the returned id");
     assert.ok(stored!.serviceName.includes(GMAIL.name), "with the Google service named");
     assert.equal(stored!.status, "requested", "and Requested status");
-
-    const emails = emailsOf(box);
-    assert.equal(emails.length, 1, "the operator is emailed once");
-    assert.equal(emails[0]!.recipient, OPERATOR, "at the configured operator address");
   } finally {
     await db.close();
   }
@@ -561,9 +494,8 @@ test("the handler takes the user id from the session, not the body", async () =>
   try {
     const sessionUser = await makeUser(db, "handler-session");
     const attacker = await makeUser(db, "handler-attacker");
-    const box = createOutbox();
-    const handler = askToJoinHandler(
-      { db, email: box, operatorEmail: OPERATOR, clock: fixedClock(T0) },
+      const handler = askToJoinHandler(
+      { db, clock: fixedClock(T0) },
       sessionUser,
       catalogueOf([GMAIL]),
     );
@@ -588,33 +520,8 @@ test("the handler takes the user id from the session, not the body", async () =>
 });
 
 // ===========================================================================
-// [secrets-from-env] — the operator address is config-driven (not baked in),
-// and no ambient env value leaks into the decision, the stored request or the email.
+// [secrets-from-env] — no ambient env value leaks into the decision or the stored request.
 // ===========================================================================
-
-test("[secrets-from-env] the operator address is the injected config value: two configs route to two addresses", async () => {
-  const db = await freshDb();
-  try {
-    const userId = await makeUser(db, "op-config");
-
-    const boxA = createOutbox();
-    await askToJoinEarlyAccess(
-      { userId, connector: GMAIL },
-      { db, email: boxA, operatorEmail: "ops-a@warthog.com.au", clock: fixedClock(T0) },
-    );
-
-    const boxB = createOutbox();
-    await askToJoinEarlyAccess(
-      { userId, connector: { id: "google-drive", name: "Google Drive" } },
-      { db, email: boxB, operatorEmail: "ops-b@warthog.com.au", clock: fixedClock(T0) },
-    );
-
-    assert.equal(emailsOf(boxA)[0]!.recipient, "ops-a@warthog.com.au", "the first config's operator is used");
-    assert.equal(emailsOf(boxB)[0]!.recipient, "ops-b@warthog.com.au", "the second config's operator is used");
-  } finally {
-    await db.close();
-  }
-});
 
 test("[secrets-from-env] a decoy env secret never appears in the gate decision", () => {
   const DECOY = "sk_live_DECOY_must_never_appear_in_warthog";
@@ -635,18 +542,17 @@ test("[secrets-from-env] a decoy env secret never appears in the gate decision",
   }
 });
 
-test("[secrets-from-env] a decoy env secret never lands in the filed request, its stored cells, or the operator email", async () => {
+test("[secrets-from-env] a decoy env secret never lands in the filed request or its stored cells", async () => {
   const DECOY = "sk_live_DECOY_must_never_appear_in_warthog";
   const prev = process.env.WARTHOG_DECOY_SECRET;
   process.env.WARTHOG_DECOY_SECRET = DECOY;
   const db = await freshDb();
   try {
     const userId = await makeUser(db, "op-env");
-    const box = createOutbox();
-
+  
     const created = await askToJoinEarlyAccess(
       { userId, connector: GMAIL },
-      { db, email: box, operatorEmail: OPERATOR, clock: fixedClock(T0) },
+      { db, clock: fixedClock(T0) },
     );
 
     assert.ok(!JSON.stringify(created).includes(DECOY), "no ambient env value is folded into the returned request");
@@ -661,10 +567,6 @@ test("[secrets-from-env] a decoy env secret never lands in the filed request, it
       }
     }
 
-    for (const message of box.list()) {
-      assert.ok(!message.body.includes(DECOY), "no ambient env value is folded into an outgoing message");
-      assert.ok(!message.recipient.includes(DECOY), "no ambient env value is used as a recipient");
-    }
   } finally {
     await db.close();
     if (prev === undefined) delete process.env.WARTHOG_DECOY_SECRET;
@@ -672,31 +574,3 @@ test("[secrets-from-env] a decoy env secret never lands in the filed request, it
   }
 });
 
-// ===========================================================================
-// Security (redaction hard rule) — a card number planted in the connector name is
-// MASKED in the operator email (everything reaching an email is redacted).
-// ===========================================================================
-
-test("the operator email is redacted: a card number in the connector name is masked", async () => {
-  const db = await freshDb();
-  try {
-    const userId = await makeUser(db, "redact");
-    const box = createOutbox();
-
-    // 4111 1111 1111 1111 is a Luhn-valid test PAN. The redaction module masks it to
-    // `[card ••••1111]`, revealing only the last four — so the full number must not appear
-    // in the operator email.
-    await askToJoinEarlyAccess(
-      { userId, connector: { id: "google-gmail", name: "Acme 4111 1111 1111 1111 Mail" } },
-      { db, email: box, operatorEmail: OPERATOR, clock: fixedClock(T0) },
-    );
-
-    const body = emailsOf(box)[0]!.body;
-    assert.ok(body.includes("Acme"), "the service name is still referenced in the email");
-    assert.ok(body.includes("[card "), "the card number is masked (redaction ran)");
-    assert.ok(!body.includes("4111 1111 1111 1111"), "the full grouped card number must not appear");
-    assert.ok(!body.includes("4111111111111111"), "nor the full card number with its separators stripped");
-  } finally {
-    await db.close();
-  }
-});

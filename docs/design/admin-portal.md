@@ -96,7 +96,7 @@ proof minted by the app host.
    admin host's `/signed-out` page, whose "Sign in again" goes to its `/signin`.
 6. **Audit.** Metric events, never personal content: `admin.handoff`
    (`minted | step_up_required | not_admin`), `admin.session`
-   (`exchanged | rejected`), `admin.signout`, `admin.lookup` (`found | none`).
+   (`exchanged | rejected`), `admin.signout`, `admin.lookup` (`found | none`), `admin.request` (`done | waiting`).
 
 ## 3. What the portal may read
 
@@ -118,6 +118,15 @@ Allowed: `metric_events` (all columns); `users.id/role/created_at`;
 and the attempt tables as counts; `connector_requests.status/requested_at` as
 counts (the typed `service_name` is shown only as a length-capped label when a
 service was asked for at least twice).
+
+**Requests (amendment of 20 November 2026, docs/adr/admin-portal.md).** The
+one exception to "no addresses": `src/server/admin/requests.ts` lists each
+`connector_requests` row (`kind`, `service_name`, `connector_id`, `status`,
+`matched_connector_id`, `requested_at`, `handled_at`) from a live account with
+that account's `users.email`, the account facts above and its
+`account_currency.currency`. It has its own static guard (no account labels,
+agent names, mobile numbers, identity tables or key material). It holds the
+portal's one write, `handled_at`.
 
 Never selected: activity payloads, merchant/amount per account, connection
 credentials or account labels, wrapped keys, approval detail or question, held
@@ -157,7 +166,7 @@ metrics failure never fails the user's action), names in
 | `job.failure` | 1 | `outcome`: the sweep name or job type |
 | `account.deleted` | 1 | — |
 | `http.requests` | count per minute | `outcome`: `<host>.<route>.<kind>` from closed vocabularies (host `app`, `admin`, `site` for the website host (labelled "Website"), `other`; route `public`, `auth`, `portal`, `api`, `mcp`, `oauth`, `admin`, `health`, `other`; kind `document`, `fetch`, `limited`) |
-| `admin.handoff`, `admin.session`, `admin.signout`, `admin.lookup` | 1 | `outcome` as in §2 |
+| `admin.handoff`, `admin.session`, `admin.signout`, `admin.lookup`, `admin.request` | 1 | `outcome` as in §2 |
 
 Traffic is counted in the proxy into a process singleton keyed by those labels
 (never a path, query, IP, user agent or cookie) and flushed once a minute by
@@ -204,7 +213,7 @@ the UI shows absolute deltas and "n of m", never a percentage.
   (sub-line "n refused or failed"), Approvals decided (sub-line median reply),
   Needs attention (danger tone when > 0; first in markup on phones when > 0).
   Then a 1.6/1 grid: a **Needs attention** panel of named, linked problems
-  (connections needing reconnection, approval expiry rate, overdue sweeps,
+  (requests waiting for the operator, connections needing reconnection, approval expiry rate, overdue sweeps,
   failed jobs, a failed integrity check, sign-in lockouts) or "Nothing needs
   attention"; the **Activation funnel** (accounts → with a factor → with an agent
   → with a service → with a handled request → with a decided approval); a
@@ -222,6 +231,13 @@ the UI shows absolute deltas and "n of m", never a percentage.
 - **Accounts.** The exact-address lookup; a list of accounts (newest first)
   with sign-up date, factors, agents, connections, last active and attention
   badges ("Reconnect needed", "No factor"); filters for stalled steps.
+- **Requests.** Every request a person made of the operator (a new service, or
+  Google early access), newest first, filtered Waiting / Done / All. Each
+  shows the requester's address as a mail link, their account facts, and what
+  would settle it. A request settles itself when the catalogue has the service
+  or the person is on the Google list; otherwise "Mark done" (POST
+  `/requests/update`, admin Origin and session required) settles it, and it
+  can be moved back to waiting.
 - **Reliability.** Sign-in outcomes and lockouts; agent request failures by
   category, platform and connector; connector reconnects and refresh failures;
   integrity checks; job queue (pending, claimed, failed by type) and each sweep's

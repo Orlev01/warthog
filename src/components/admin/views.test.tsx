@@ -1,4 +1,4 @@
-// The seven admin views (src/components/admin/*-view.tsx; docs/design/admin-portal.md §5):
+// The eight admin views (src/components/admin/*-view.tsx; docs/design/admin-portal.md §5):
 // each renders a bounded page — heading band, range tabs where ranged, panels — from a
 // hand-built model, populated and empty, with plain words, en-AU numbers, no raw colour and
 // no text loose on the canvas.
@@ -11,6 +11,7 @@ import { OverviewView } from "./overview-view";
 import { SignupsView } from "./signups-view";
 import { UsageView } from "./usage-view";
 import { AccountsView } from "./accounts-view";
+import { RequestsView } from "./requests-view";
 import { ReliabilityView } from "./reliability-view";
 import { TrafficView } from "./traffic-view";
 import { SystemView } from "./system-view";
@@ -133,6 +134,53 @@ test("Accounts: an exact lookup form, the found account's facts, filters with co
   assert.doesNotMatch(empty, /No account has that address/, "no search, no result message");
   const miss = renderToStaticMarkup(<AccountsView model={{ ...F.ACCOUNTS_EMPTY, lookup: { searched: true, account: null } }} now={F.NOW} />);
   assert.match(miss, /No account has that address\./);
+});
+
+test("Requests: each request names who asked with their account facts, what would settle it, and a mark-done form", () => {
+  const html = renderToStaticMarkup(<RequestsView model={F.REQUESTS} now={F.NOW} />);
+  check(html, "requests");
+  assert.match(html, /<h1>Requests<\/h1>/);
+  assert.match(html, /only page that shows addresses/);
+  assert.match(html, /2 waiting · 5 requests in all/);
+  assert.match(html, /Marked done\./);
+  assert.match(html, /href="\/requests\?filter=all" aria-current="page"/);
+  assert.match(html, /href="\/requests"[^>]*>Waiting/);
+  assert.match(html, /href="mailto:sam@example.test\?subject=Your%20Warthog%20request%3A%20LinkedIn"/);
+  const sneaky = renderToStaticMarkup(<RequestsView model={{ ...F.REQUESTS, requests: [{ ...F.REQUESTS.requests[0]!, person: { ...F.REQUESTS.requests[0]!.person, email: "x?cc=me%40evil.test&body=hi@evil.test" } }] }} now={F.NOW} />);
+  assert.match(sneaky, /href="mailto:x%3Fcc%3Dme%2540evil.test%26body%3Dhi@evil.test\?subject=/, "an address can't add recipients or a body to the draft");
+  const capped = renderToStaticMarkup(<RequestsView model={{ ...F.REQUESTS, capped: true }} now={F.NOW} />);
+  assert.match(capped, /Only the newest 200 are read/);
+  assert.match(html, />sam@example.test<\/a>/);
+  assert.match(html, /Account <span class="tabular-nums">a1b2c3d4<\/span> · asked Today, 2:00 pm/);
+  assert.match(html, /2 agents \(Claude, ChatGPT\)/);
+  assert.match(html, /3 services \(Gmail ×2, Notion\)/);
+  assert.match(html, /1 connection to reconnect/);
+  assert.match(html, /57 agent requests/);
+  assert.match(html, /Currency AUD/);
+  assert.match(html, /2 requests from them/);
+  assert.match(html, /No agent yet/);
+  assert.match(html, /New service/);
+  assert.match(html, /Google early access/);
+  assert.match(html, /Not in the catalogue yet\./);
+  assert.match(html, /add their address to the Google early-access list/);
+  assert.match(html, /Spotify is in the catalogue now/);
+  assert.match(html, /on the Google early-access list, so they can connect it/);
+  assert.match(html, /You marked this done on 11 Nov 2026\./);
+  const forms = [...html.matchAll(/<form [^>]*action="\/requests\/update" method="post"[\s\S]*?<\/form>/g)].map((m) => m[0]);
+  assert.equal(forms.length, 3, "the two waiting requests and the one the operator marked done; settled ones have none");
+  assert.match(forms[0]!, /name="id" value="11111111-1111-4111-8111-111111111111"/);
+  assert.match(forms[0]!, /name="to" value="done"/);
+  assert.match(forms[0]!, /name="filter" value="all"/);
+  assert.match(forms[0]!, /Mark done/);
+  assert.match(forms[2]!, /name="to" value="waiting"/);
+  assert.match(forms[2]!, /Move back to waiting/);
+
+  const empty = renderToStaticMarkup(<RequestsView model={F.REQUESTS_EMPTY} now={F.NOW} />);
+  check(empty, "requests-empty");
+  assert.match(empty, /Nothing is waiting/);
+  assert.doesNotMatch(empty, /<form/);
+  const problem = renderToStaticMarkup(<RequestsView model={{ ...F.REQUESTS_EMPTY, notice: "problem" }} now={F.NOW} />);
+  assert.match(problem, /role="alert"[\s\S]*couldn&#x27;t be changed/);
 });
 
 test("Reliability: failure tiles, sign-in and request failures, connector trouble, integrity, jobs and the sweep table", () => {
