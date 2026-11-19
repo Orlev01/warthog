@@ -1,4 +1,6 @@
-// The admin portal's reads — the ONLY module with admin SQL (docs/design/admin-portal.md §3).
+// The admin portal's reads — the module with the portal's aggregate SQL (docs/design/admin-portal.md §3).
+// The Requests page's reads and its one write live apart, in ./requests.ts, because that is the
+// one page allowed to show an address (docs/adr/admin-portal.md, amendment of 20 November 2026).
 // Every statement names its columns, binds every value (INV-102), excludes crypto-shredded
 // tombstones from every account count, and returns aggregates plus the per-account
 // operational facts the design allows. It imports nothing that can decrypt or write content, so
@@ -294,7 +296,7 @@ const SERVICE_LABEL_MAX = 40;
 export async function connectorRequestCounts(db: Db, window: Window): Promise<{ readonly label: string; readonly value: number }[]> {
   const result = await db.query(
     `SELECT lower(trim(service_name)) AS service, count(*) AS n FROM connector_requests
-      WHERE requested_at >= $1::timestamptz AND requested_at < $2::timestamptz
+      WHERE kind = 'service' AND requested_at >= $1::timestamptz AND requested_at < $2::timestamptz
       GROUP BY lower(trim(service_name)) HAVING count(*) >= 2 ORDER BY n DESC, service ASC LIMIT 10`,
     [window.from, window.to],
   );
@@ -303,7 +305,7 @@ export async function connectorRequestCounts(db: Db, window: Window): Promise<{ 
 
 export async function connectorRequestTotal(db: Db, window: Window): Promise<number> {
   const result = await db.query(
-    `SELECT count(*) AS n FROM connector_requests WHERE requested_at >= $1::timestamptz AND requested_at < $2::timestamptz`,
+    `SELECT count(*) AS n FROM connector_requests WHERE kind = 'service' AND requested_at >= $1::timestamptz AND requested_at < $2::timestamptz`,
     [window.from, window.to],
   );
   return num(result.rows[0]?.n);
@@ -401,9 +403,10 @@ export async function lockoutAlerts(db: Db, window: Window): Promise<number> {
 // --- Accounts ------------------------------------------------------------------------------
 
 // The per-account operational facts the design allows (§3), computed in SQL from counts and
-// flags only. `reference` is the first eight characters of the id — never an address.
-const ACCOUNT_SELECT = `
-  SELECT u.id, u.role, u.created_at,
+// flags only. `reference` is the first eight characters of the id — never an address. The
+// Requests page (./requests.ts) shows the same facts beside each request.
+export const ACCOUNT_FACT_COLUMNS = `
+         u.id, u.role, u.created_at,
          EXISTS (SELECT 1 FROM passkeys p WHERE p.user_id = u.id) AS has_passkey,
          EXISTS (SELECT 1 FROM totp_secrets t WHERE t.user_id = u.id) AS has_totp,
          (SELECT count(*) FROM agents a WHERE a.user_id = u.id AND a.status = 'connected') AS agents,
@@ -412,8 +415,8 @@ const ACCOUNT_SELECT = `
          (SELECT max(s.last_seen_at) FROM sessions s WHERE s.user_id = u.id) AS last_active_at,
          (SELECT count(*) FROM approvals ap WHERE ap.user_id = u.id AND ap.status = 'pending') AS pending,
          (SELECT m.role FROM household_members m WHERE m.user_id = u.id ORDER BY m.role LIMIT 1) AS household,
-         (SELECT coalesce(sum(a.request_count), 0) FROM agents a WHERE a.user_id = u.id) AS requests
-    FROM users u`;
+         (SELECT coalesce(sum(a.request_count), 0) FROM agents a WHERE a.user_id = u.id) AS requests`;
+const ACCOUNT_SELECT = `SELECT ${ACCOUNT_FACT_COLUMNS} FROM users u`;
 
 // Fixed predicates per filter (never user input); every one keeps the tombstone exclusion.
 const FILTER_SQL: Readonly<Record<AccountFilter, string>> = {
@@ -425,7 +428,7 @@ const FILTER_SQL: Readonly<Record<AccountFilter, string>> = {
   needs_reconnect: " AND EXISTS (SELECT 1 FROM connections c WHERE c.user_id = u.id AND c.status IN ('needs_reconnect', 'error'))",
 };
 
-function toAccountRow(row: Row): AccountRow {
+export function toAccountRow(row: Row): AccountRow {
   const factors: ("passkey" | "totp")[] = [];
   if (row.has_passkey === true) factors.push("passkey");
   if (row.has_totp === true) factors.push("totp");

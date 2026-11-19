@@ -84,3 +84,63 @@ Limits:
 - A fresh sign-in replaces the browser's session cookie. The previous session in that
   browser stays listed under Security until it idles out (14 days), and can be signed out
   there.
+
+## Amendment, 20 November 2026: requests come to the portal, with who asked
+
+The founder asked that "any request you can make in the app is recorded with as much meaningful
+data about the person in the admin portal", instead of being emailed. This is the later decision
+that decision 5 left open ("showing addresses in the portal"). So:
+
+- **Two in-app requests reach the operator**, and both now land on a new **Requests** page
+  (Product group) instead of an email:
+  - "Request a service" (a service that isn't in the catalogue), and
+  - "Early access — ask to join" (a Google service gated by the early-access list).
+
+  Both keep writing `connector_requests`. Migration 0115 adds `kind` (`service` or
+  `google_early_access`), `connector_id` (the catalogue entry asked about) and `handled_at`, and
+  backfills the old `Google early access: <name>` rows. Nothing is emailed any more.
+  `OPERATOR_EMAIL` still decides who is the admin.
+- **The Requests page names the person.** Each request shows:
+  - the requester's address, as a mail link;
+  - the same operational facts the Accounts page shows: sign-up date, last active, second
+    factor, agents by platform, services by connector (failing ones counted), agent requests,
+    approvals waiting, household role;
+  - their chosen account currency, and how many requests they have made.
+
+  This is the only place the portal shows an address, and only beside that person's own
+  request: they asked the operator for something, and the operator needs to answer them. The
+  reads live in their own module (`src/server/admin/requests.ts`) with its own static guard.
+- **What stays unreadable.** Nothing else personal is selected: no account labels, agent
+  names, mobile numbers, identity details, memory or any encrypted content. The portal still
+  holds no data key, so a person's name and time zone (encrypted with their key) are not shown.
+  Requests from deleted accounts are left out.
+- **Requests settle themselves where they can.**
+  - A service request is done once a catalogue entry the person can connect matches its name
+    (a Google entry counts only once they're on the Google list).
+  - Early access is done once the person's address is on the Google list.
+  - Anything else, the operator marks done (and can move back to waiting). A request that
+    settled itself shows no button, whatever the operator marked.
+
+  Overview's Needs attention leads with "N requests are waiting for you".
+- **The portal's first write.** "Mark done" posts to `/requests/update` on the admin host. It
+  needs the admin Origin and a live admin session, accepts only a request id and one of two
+  states, and records an `admin.request` metric with only an outcome. The portal is otherwise
+  still read-only.
+- **The person's words are shown as data.** The typed service name is redacted (a card number
+  keeps only its last four digits), stripped of invisible characters and capped at 120
+  characters.
+- **Usage counts only service requests.** "Services people asked for" leaves early access out,
+  and its total links to Requests.
+- The privacy page says that a request is kept with the person's account and seen by the
+  operator.
+- **Every admin page checks the admin session itself.** A review of this change found that the
+  layout's check alone could be skipped: on a client navigation Next renders only the segments
+  below the first one the browser says it lacks (the `Next-Router-State-Tree` header, which the
+  client controls), so a crafted request could render any admin page with no session at all.
+  Measured locally before the fix, such a request returned the Requests page's addresses. Every
+  page now calls `requireAdminPage` (`src/server/admin/page-guard.ts`) before it reads anything,
+  and a test fails any admin page that doesn't. Member pages were never exposed this way: each
+  verifies the person's session itself, because it needs it to know whose data to load.
+- **Limits.** The page reads the newest 200 requests, and says so once there are more. During the
+  release itself, a request filed on the old revision is stored the old way (early access as a
+  "New service" named "Google early access: …") and emailed as before. Fix any such row by hand.

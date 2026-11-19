@@ -3,9 +3,9 @@
 //
 // requestConnector (the CREATE path): a person requests a service that is not yet in
 // the catalogue. Warthog records it 'requested' FOR THAT PERSON (the userId is the
-// session's, never a client value) and emails the operator so they can consider adding
-// it. The operator ADDRESS is read from configuration (INV-103 — injected, never baked
-// in), so no env value is read here.
+// session's, never a client value). The operator reads it, with who asked, on the admin
+// portal's Requests page (docs/adr/admin-portal.md, amendment of 20 November 2026); it is
+// no longer emailed.
 //
 // notifyMatchingRequests (the MATCH-NOTIFY path): run when a catalogue entry is added.
 // It scans EVERY person's pending request (the system "list all" pending scan, not a
@@ -16,11 +16,11 @@
 // non-matching entry marks nothing and notifies nobody; those requests stay 'requested'.
 //
 // Project hard rule (a reviewer veto): everything that reaches an email or a
-// notification passes through `src/domain/redaction` first. Both the operator email and
-// the person's push body are scrubbed, so a card number planted in the free-text
-// service name is masked to its last four digits before it leaves Warthog. There is no
-// released-value context here, so the redaction pass matches no released values; the
-// card-masking and truncation rules still apply.
+// notification passes through `src/domain/redaction` first. The person's push body is
+// scrubbed, so a card number planted in the free-text service name is masked to its last
+// four digits before it leaves Warthog. There is no released-value context here, so the
+// redaction pass matches no released values; the card-masking and truncation rules still
+// apply.
 
 import { redact } from "../../domain/redaction/redact";
 import { matchesRequest } from "../../domain/catalogue/match";
@@ -32,8 +32,7 @@ import {
 } from "../db/connector-requests";
 import type { Db } from "../db/index";
 import type { Clock } from "../seams/clock";
-import type { EmailSender, PushSender } from "../notify/senders";
-import { mapEmailText, OPERATOR_EMAIL_REASON } from "../notify/email";
+import type { PushSender } from "../notify/senders";
 
 // What the CREATE path records: the owner (the session's id, never a client value) and
 // the free-text service name the person requested.
@@ -42,12 +41,9 @@ export interface RequestConnectorInput {
   readonly serviceName: string;
 }
 
-// The injected seams the CREATE path runs from (this module reads no process.env). The
-// operator ADDRESS comes from configuration (INV-103), passed in rather than read here.
+// The injected seams the CREATE path runs from (this module reads no process.env).
 export interface RequestConnectorDeps {
   readonly db: Db;
-  readonly email: EmailSender;
-  readonly operatorEmail: string;
   readonly clock: Clock;
 }
 
@@ -73,36 +69,17 @@ function scrub(body: string): string {
   return redact(body, () => false) as string;
 }
 
-// Record a 'requested' item for the person and email the operator so they can consider
-// adding the service. Returns the recorded, Requested request.
+// Record a 'requested' service request for the person, for the operator to read in the
+// admin portal. Returns the recorded, Requested request.
 export async function requestConnector(
   input: RequestConnectorInput,
   deps: RequestConnectorDeps,
 ): Promise<ConnectorRequest> {
-  const request = await createConnectorRequest(
+  return createConnectorRequest(
     deps.db,
-    { userId: input.userId, serviceName: input.serviceName },
+    { userId: input.userId, serviceName: input.serviceName, kind: "service" },
     deps.clock,
   );
-
-  await deps.email.sendEmail({
-    recipient: deps.operatorEmail,
-    body: scrub(
-      "Someone requested a connector that is not in the catalogue yet. " +
-        "Review it in Warthog and add the service if it fits.",
-    ),
-    email: mapEmailText({
-      subject: "New connector request",
-      heading: "Someone requested a connector",
-      paragraphs: [
-        "Someone requested a connector that isn't in the catalogue yet.",
-        "Review it in Warthog and add the service if it fits.",
-      ],
-      reason: OPERATOR_EMAIL_REASON,
-    }, scrub),
-  });
-
-  return request;
 }
 
 // Run when a catalogue entry is added: scan every pending request, mark those the entry

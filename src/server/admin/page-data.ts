@@ -10,11 +10,14 @@ import type { Db } from "../db/index";
 import type { Clock } from "../seams/clock";
 import type { MetricSeam } from "../metrics/seam";
 import {
-  ACCOUNT_FILTERS,
+  ACCOUNT_FILTERS, REQUEST_FILTERS,
   type AccountFilter, type AccountsModel, type AttentionItem, type BreakdownRow, type FunnelStep, type Measure,
-  type MilestoneRow, type OverviewModel, type RangeKey, type RangeWindow, type ReliabilityModel, type SeriesPoint,
+  type MilestoneRow, type OverviewModel, type RangeKey, type RangeWindow, type ReliabilityModel, type RequestFilter,
+  type RequestItem, type RequestResolution, type RequestsModel, type RequestsNotice, type SeriesPoint,
   type SignupsModel, type SweepRow, type SystemModel, type TrafficModel, type UsageModel,
 } from "../../domain/admin/model";
+import { cleanShortText } from "../../domain/content/untrusted";
+import { redact } from "../../domain/redaction/redact";
 import { bucketStarts, fillSeries, hoursOfToday, measure, rangeWindow } from "../../domain/admin/range";
 import { SWEEP_INTERVALS, sweepOverdue } from "../../domain/admin/sweeps";
 import {
@@ -26,6 +29,7 @@ import {
 } from "../metrics/names";
 import { METRIC_RETENTION_DAYS } from "../metrics/retention";
 import * as reads from "./reads";
+import { listRequests, REQUEST_LIST_LIMIT, type RequestRecord } from "./requests";
 
 export interface AdminPageDeps {
   readonly db: Db;
@@ -36,6 +40,12 @@ export interface AdminPageDeps {
   readonly recordMetric?: MetricSeam;
   // A connector's catalogue name, for ids without a known brand mark (optional seam).
   readonly connectorName?: (id: string) => string | undefined;
+  // The name of a catalogue entry this person can connect now that a requested name matches
+  // (name or alias, ignoring case and punctuation), if any (optional seam). A Google entry
+  // counts only when the person is on the Google early-access list.
+  readonly catalogueMatch?: (requestedName: string, email: string) => string | undefined;
+  // Whether an address is on the Google early-access list (optional seam).
+  readonly onGoogleEarlyAccess?: (email: string) => boolean;
 }
 
 const HOUR_MS = 3_600_000;
@@ -163,6 +173,11 @@ async function approvalHealth(db: Db, window: RangeWindow, timeZone: string) {
 async function attention(deps: AdminPageDeps, window: RangeWindow, now: Date): Promise<AttentionItem[]> {
   const { db } = deps;
   const items: AttentionItem[] = [];
+  const waiting = (await requestItems(deps)).filter((r) => r.resolution === null).length;
+  if (waiting > 0) {
+    items.push({ id: "requests", tone: "warning", href: "/requests",
+      text: waiting === 1 ? "1 request is waiting for you." : `${waiting} requests are waiting for you.` });
+  }
   const connectors = await reads.connectionsByConnector(db);
   const failing = connectors.filter((c) => c.failing > 0);
   const failingTotal = sum(failing.map((c) => ({ value: c.failing })));
@@ -306,7 +321,7 @@ export async function loadUsage(deps: AdminPageDeps, key: RangeKey): Promise<Usa
     connections: sorted(connections.map((c) => ({ key: c.connectorId, label: connectorLabel(c.connectorId, deps.connectorName), value: c.total, brand: c.connectorId, failing: c.failing, tone: c.failing > 0 ? "warning" : "neutral" }))) as (BreakdownRow & { failing: number })[],
     servicesRequested: [
       ...(await reads.connectorRequestCounts(db, range)).map((r) => ({ key: r.label, label: r.label, value: r.value })),
-      ...(requestsTotal > 0 ? [{ key: "_total", label: "All requests for a service", value: requestsTotal }] : []),
+      ...(requestsTotal > 0 ? [{ key: "_total", label: "All requests for a service", value: requestsTotal, href: "/requests?filter=all" }] : []),
     ],
   };
 }
@@ -331,6 +346,66 @@ export async function loadAccounts(deps: AdminPageDeps, input: { email?: string 
     filter, counts,
     accounts: await reads.listAccounts(db, filter),
     total: counts.all,
+  };
+}
+
+// --- Requests ------------------------------------------------------------------------------------
+
+const REQUEST_NAME_MAX = 120;
+const REQUEST_NOTICES: readonly RequestsNotice[] = ["done", "waiting", "problem"];
+
+// Why a request no longer waits, or null. A service request is done once the person can
+// connect it from the catalogue, and early access once they're on the Google list; those
+// settle it whatever the operator marked, so "Move back to waiting" is only offered on a
+// request the operator settled. Otherwise the operator's mark settles it.
+function resolutionOf(record: RequestRecord, deps: AdminPageDeps): RequestResolution | null {
+  if (record.kind === "service") {
+    const matched = record.matchedConnectorId ? connectorLabel(record.matchedConnectorId, deps.connectorName) : undefined;
+    const name = matched ?? deps.catalogueMatch?.(record.serviceName, record.person.email);
+    if (name) return { by: "catalogue", serviceName: name };
+  } else if (deps.onGoogleEarlyAccess?.(record.person.email)) {
+    return { by: "allowlist" };
+  }
+  return record.handledAt ? { by: "operator", at: record.handledAt } : null;
+}
+
+// The person's words, scrubbed like anything else that leaves Warthog's stores (a card number
+// typed as a service name keeps only its last four digits), without invisible characters, short.
+function displayName(record: RequestRecord, deps: AdminPageDeps): string {
+  if (record.kind === "google_early_access" && record.connectorId) return connectorLabel(record.connectorId, deps.connectorName);
+  return cleanShortText(redact(record.serviceName, () => false) as string, REQUEST_NAME_MAX).trim() || "(no name)";
+}
+
+async function requestItems(deps: AdminPageDeps): Promise<RequestItem[]> {
+  const records = await listRequests(deps.db);
+  return records.map((record) => ({
+    id: record.id,
+    kind: record.kind,
+    serviceName: displayName(record, deps),
+    askedAt: record.requestedAt,
+    resolution: resolutionOf(record, deps),
+    person: {
+      ...record.person,
+      agentsByPlatform: record.person.agentsByPlatform.map((r) => ({ ...r, label: platformLabel(r.key) })),
+      connectionsByConnector: record.person.connectionsByConnector.map(({ failing, ...r }) => ({
+        ...r, label: connectorLabel(r.key, deps.connectorName), ...(failing > 0 ? { tone: "warning" as const } : {}),
+      })),
+    },
+  }));
+}
+
+export async function loadRequests(deps: AdminPageDeps, input: { filter?: string | null; notice?: string | null } = {}): Promise<RequestsModel> {
+  const generatedAt = deps.clock.now().toISOString();
+  const filter: RequestFilter = (REQUEST_FILTERS as readonly string[]).includes(input.filter ?? "") ? (input.filter as RequestFilter) : "waiting";
+  const notice = (REQUEST_NOTICES as readonly string[]).includes(input.notice ?? "") ? (input.notice as RequestsNotice) : null;
+  const items = await requestItems(deps);
+  const waiting = items.filter((r) => r.resolution === null);
+  const done = items.filter((r) => r.resolution !== null);
+  return {
+    timeZone: deps.timeZone, generatedAt,
+    filter, notice, capped: items.length >= REQUEST_LIST_LIMIT,
+    counts: { waiting: waiting.length, done: done.length, all: items.length },
+    requests: filter === "waiting" ? waiting : filter === "done" ? done : items,
   };
 }
 

@@ -35,8 +35,7 @@ import { timeZoneFor } from "@/server/spending/time-zone";
 //     as a failing cast (OBS-049) and a SQL-shaped value is bound as a parameter (data),
 //     never statement text.
 //   • This module reads no `process.env` and holds no secret (INV-103): the db, clock,
-//     catalogue, per-user DEK lookup, outbound fetch, email sender, operator address, the
-//     Google allowlist, the provider client configs and the provider-revocation seam are
+//     catalogue, per-user DEK lookup, outbound fetch, the Google allowlist, the provider client configs and the provider-revocation seam are
 //     all INJECTED, so no ambient env value can leak into the loaded screen.
 
 import { z } from "zod";
@@ -45,7 +44,6 @@ import { parseParams, HttpError } from "@/server/http/validate";
 import { withTransaction, type Db } from "@/server/db/index";
 import type { Clock } from "@/server/seams/clock";
 import type { Session } from "@/server/auth/session";
-import type { EmailSender } from "@/server/notify/senders";
 import { getUserById } from "@/server/db/users";
 import { getConnectionById, getConnectionCredentials, renameConnection } from "@/server/db/connections";
 import { cleanShortText } from "@/domain/content/untrusted";
@@ -115,10 +113,6 @@ export interface ConnectorsActionsDeps {
   readonly dekFor: (userId: string) => Promise<Uint8Array>;
   // The SSRF-guarded outbound fetch (api-key verify, oauth, provider mcp).
   readonly fetch: typeof fetch;
-  // The operator email sender (requestConnector).
-  readonly email: EmailSender;
-  // The operator address, injected from config (INV-103), never baked in.
-  readonly operatorEmail: string;
   // The Google early-access allowlist, injected from config.
   readonly googleEarlyAccess: readonly string[];
   // The operator-registered provider sign-in (oauth2) client, from config.
@@ -226,8 +220,6 @@ export function createConnectorsActions(deps: ConnectorsActionsDeps): Connectors
     catalogue,
     dekFor,
     fetch: fetchFn,
-    email,
-    operatorEmail,
     googleEarlyAccess,
     oauthClientConfigFor,
     providerMcpConfig,
@@ -534,20 +526,19 @@ export function createConnectorsActions(deps: ConnectorsActionsDeps): Connectors
     return { ok: true, providerRevoked };
   }
 
-  // Record a "Request a connector" for the session user (member-scoped) and email the
-  // operator at the injected address. The name is validated at the boundary; stored verbatim
+  // Record a "Request a connector" for the session user (member-scoped), for the operator
+  // to read in the admin portal. The name is validated at the boundary; stored verbatim
   // (bound as a parameter), so a SQL-shaped name is inert data.
   async function requestConnector(session: Session, input: { name: string }): Promise<unknown> {
     const { name } = parseParams(requestConnectorSchema, input);
     return requestConnectorService(
       { userId: session.userId, serviceName: name },
-      { db, email, operatorEmail, clock },
+      { db, clock },
     );
   }
 
   // "Early access — ask to join" on a gated Google entry (E09-S13): record the request for
-  // the session user and email the operator, naming the catalogue's own service name (never
-  // caller text). Only an entry that is gated FOR THIS PERSON can be asked for; an unknown
+  // the session user, naming the catalogue's own service (never caller text). Only an entry that is gated FOR THIS PERSON can be asked for; an unknown
   // id, or one they can already connect, is a 4xx before any write.
   async function askToJoin(session: Session, input: { connectorId: string }): Promise<unknown> {
     const connectorId = parseParams(connectorIdSchema, input.connectorId);
@@ -558,7 +549,7 @@ export function createConnectorsActions(deps: ConnectorsActionsDeps): Connectors
     }
     return askToJoinEarlyAccess(
       { userId: session.userId, connector: { id: entry.id, name: entry.name } },
-      { db, email, operatorEmail, clock },
+      { db, clock },
     );
   }
 

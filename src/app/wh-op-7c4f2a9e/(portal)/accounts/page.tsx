@@ -4,6 +4,7 @@ import type { Metadata } from "next";
 import { AccountsView } from "@/components/admin/accounts-view";
 import { AdminPageError } from "@/components/admin/view-common";
 import { getAdminPageDeps } from "@/server/admin/compose";
+import { requireAdminPage } from "@/server/admin/page-guard";
 import { loadAccounts } from "@/server/admin/page-data";
 
 const first = (value: string | string[] | undefined): string | null => (Array.isArray(value) ? value[0] ?? null : value ?? null);
@@ -22,6 +23,7 @@ export default async function Page({
   searchParams: Promise<Record<string, string | string[] | undefined>>;
 }) {
   const params = await searchParams;
+  await requireAdminPage();
   try {
     const deps = await getAdminPageDeps();
     const model = await loadAccounts(deps, { email: first(params.email), filter: first(params.filter) });

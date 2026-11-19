@@ -56,8 +56,6 @@ export interface RenderEmailOptions {
 
 export const DEFAULT_EMAIL_REASON = "You're getting this because it's about your Warthog account.";
 export const EMAIL_TAGLINE = "Warthog · your personal agent home";
-// The footer reason on emails to the operator (connector and early-access requests).
-export const OPERATOR_EMAIL_REASON = "You're getting this as the operator of this Warthog service.";
 // The small print on every security alert: why there's no button, and what to do instead.
 export const SECURITY_ALERT_FOOTNOTE =
   "There are no links in this alert, on purpose. To check your account, open Warthog yourself.";

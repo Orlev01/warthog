@@ -4,6 +4,7 @@ import type { Metadata } from "next";
 import { SystemView } from "@/components/admin/system-view";
 import { AdminPageError } from "@/components/admin/view-common";
 import { getAdminPageDeps } from "@/server/admin/compose";
+import { requireAdminPage } from "@/server/admin/page-guard";
 import { loadSystem } from "@/server/admin/page-data";
 
 // The System page of the admin portal (docs/design/admin-portal.md §5): a thin loader that
@@ -20,6 +21,7 @@ export default async function Page({
   searchParams: Promise<Record<string, string | string[] | undefined>>;
 }) {
   const params = await searchParams;
+  await requireAdminPage();
   try {
     const deps = await getAdminPageDeps();
     void params;

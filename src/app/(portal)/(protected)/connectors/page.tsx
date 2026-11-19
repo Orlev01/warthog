@@ -2,7 +2,6 @@ import { createProviderRuntime } from "@/server/connectors/provider-runtime";
 import { getProcessCatalogue } from "@/server/connectors/catalogue";
 import { createConnectorRuntime } from "@/server/connectors/runtime";
 import { oauthClientFor } from "@/server/connectors/client-config";
-import { notificationSenders } from "../../../../server/notify/production";
 import * as React from "react";
 import { join } from "node:path";
 import { cookies } from "next/headers";
@@ -91,8 +90,6 @@ function buildActions(db: Db, config: Config): ConnectorsActions {
     catalogue: getCatalogue(),
     dekFor,
     fetch: createGuardedProviderFetch(),
-    email: notificationSenders(config, db).email,
-    operatorEmail: config.operatorEmail ?? "",
     googleEarlyAccess: config.googleEarlyAccess,
     oauthClientConfigFor: (id) => oauthClientFor(config, id),
     providerMcpConfig: {
@@ -218,8 +215,8 @@ async function renameAction(formData: FormData): Promise<void> {
   redirect(backTo(formData, notice));
 }
 
-// Request a connector not in the catalogue yet (recorded for the person, emailed to the
-// operator). A malformed / oversized name (a 4xx from the seam) is reported as a problem.
+// Request a connector not in the catalogue yet, or Google early access (recorded for the
+// person; the operator reads it on the admin portal's Requests page). A malformed / oversized name (a 4xx from the seam) is reported as a problem.
 async function requestAction(formData: FormData): Promise<void> {
   "use server";
   const db = await getServerDb();

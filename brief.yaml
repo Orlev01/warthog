@@ -147,10 +147,11 @@ features:
     by the operator) without code changes; apart from the Google early-access entries described
     below, the catalogue shows only connectors a person can actually connect right now,
     and offers "Request a connector" for anything missing — the person names the service, the request
-    is recorded (and emailed to the operator address set in configuration), the person sees their
-    requests with a "Requested" status, and is notified when a catalogue entry is added whose name or
-    listed aliases match the requested service name (ignoring case and punctuation); unmatched
-    requests stay "Requested".
+    is recorded, the person sees their requests with a "Requested" status, and is notified when a
+    catalogue entry is added whose name or listed aliases match the requested service name (ignoring
+    case and punctuation); unmatched requests stay "Requested". (Amended 20 November 2026: requests
+    are no longer emailed to the operator; the operator reads them, with who asked, on the admin
+    portal's Requests page — see docs/adr/admin-portal.md.)
   - >-
     Connect a service once — connect through the provider's own sign-in page, an API-key form with
     plain instructions on where to find the key, or a provider-hosted connector; shows connected
@@ -162,7 +163,8 @@ features:
     Google early access — Google connectors (Gmail, Google Calendar, Google Drive) are available only
     to people whose email the founder has placed on the early-access list in Warthog's configuration
     (Google allows up to 100 people in total while Warthog is unverified); everyone else sees them
-    marked "Early access — ask to join", which files a connector request; the connect screen warns
+    marked "Early access — ask to join", which files a request the operator reads on the admin
+    portal's Requests page; the connect screen warns
     that Google will show an "unverified app" notice and says how to continue. (Amended 17 November
     2026: the founder published the Google app, so connections no longer lapse every 7 days — see
     docs/adr/google-published-and-accounts.md.)

@@ -4,7 +4,7 @@
 // section family's page measure. Every href is un-prefixed because on the admin host the
 // proxy rewrites `/usage` to `/admin/usage`; nothing here knows about that prefix.
 
-import { Activity, Globe, LayoutDashboard, Server, ShieldAlert, UserPlus, Users, type LucideIcon } from "lucide-react";
+import { Activity, Globe, Inbox, LayoutDashboard, Server, ShieldAlert, UserPlus, Users, type LucideIcon } from "lucide-react";
 import type { NavGroup, PageMeasure } from "@/components/shell/workspace-navigation";
 
 export const ADMIN_ICONS: Record<string, LucideIcon> = {
@@ -12,6 +12,7 @@ export const ADMIN_ICONS: Record<string, LucideIcon> = {
   signups: UserPlus,
   usage: Activity,
   accounts: Users,
+  requests: Inbox,
   reliability: ShieldAlert,
   traffic: Globe,
   system: Server,
@@ -25,6 +26,7 @@ export const ADMIN_NAV_GROUPS: readonly NavGroup[] = [
       { key: "signups", label: "Sign-ups", href: "/signups" },
       { key: "usage", label: "Usage", href: "/usage" },
       { key: "accounts", label: "Accounts", href: "/accounts" },
+      { key: "requests", label: "Requests", href: "/requests" },
     ],
   },
   {
@@ -46,6 +48,7 @@ const MEASURES: Readonly<Record<string, PageMeasure>> = {
   reliability: "wide",
   traffic: "wide",
   accounts: "reading",
+  requests: "reading",
   system: "reading",
 };
 

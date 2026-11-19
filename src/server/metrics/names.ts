@@ -29,6 +29,7 @@ export const ADMIN_HANDOFF = "admin.handoff";
 export const ADMIN_SESSION = "admin.session";
 export const ADMIN_SIGNOUT = "admin.signout";
 export const ADMIN_LOOKUP = "admin.lookup";
+export const ADMIN_REQUEST = "admin.request";
 
 // Dimension labels, grouped by the metric that carries them.
 export const SIGNUP_STEPS = {
@@ -49,6 +50,8 @@ export const REFRESH_OUTCOMES = { ok: "ok", failed: "failed", lapsed: "lapsed" }
 export const ADMIN_HANDOFF_OUTCOMES = { minted: "minted", stepUpRequired: "step_up_required", notAdmin: "not_admin" } as const;
 export const ADMIN_SESSION_OUTCOMES = { exchanged: "exchanged", rejected: "rejected" } as const;
 export const ADMIN_LOOKUP_OUTCOMES = { found: "found", none: "none" } as const;
+// The operator marked a request done, or put it back to waiting.
+export const ADMIN_REQUEST_OUTCOMES = { done: "done", waiting: "waiting" } as const;
 
 // Traffic labels: `<host>.<route>.<kind>` in the outcome dimension (closed vocabularies).
 export const HOST_CLASSES = ["app", "admin", "site", "other"] as const;

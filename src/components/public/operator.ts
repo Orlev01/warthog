@@ -5,4 +5,4 @@
 export const OPERATOR_NAME = "RPR Technologies Pty Ltd";
 export const SUPPORT_EMAIL = "oren@nava-co.com";
 // When the public policy pages last changed, shown under their titles (content-34).
-export const LAST_UPDATED = "12 November 2026";
+export const LAST_UPDATED = "20 November 2026";

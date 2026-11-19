@@ -66,8 +66,6 @@ function actionsFor(db: Db, entries: ReadonlyArray<{ id: string }> = ENTRIES) {
     fetch: (async () => {
       throw new Error("no fetch in these tests");
     }) as unknown as typeof fetch,
-    email: { async sendEmail() {} },
-    operatorEmail: "operator@warthog.com.au",
     googleEarlyAccess: [],
     oauthClientConfigFor: () => ({ clientId: "c", clientSecret: "s", redirectUri: "https://warthog.com.au/cb" }),
     providerMcpConfig: { clientMetadataUrl: "https://warthog.com.au/oauth/client-metadata.json" },

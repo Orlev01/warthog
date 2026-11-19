@@ -38,8 +38,6 @@
 //     catalogue: CatalogueIndex;                       // browse + resolve a connector entry by id
 //     dekFor: (userId) => Promise<Uint8Array>;         // the acting person's own DEK (credential envelopes)
 //     fetch: typeof fetch;                             // SSRF-guarded outbound (api-key verify, oauth, mcp)
-//     email: EmailSender;                              // requestConnector → operator email
-//     operatorEmail: string;                           // injected from config (INV-103), never baked in
 //     googleEarlyAccess: readonly string[];            // the gate allowlist (injected from config)
 //     oauthClientConfigFor: (connectorId) => OAuthClientConfig;   // provider sign-in client (from config)
 //     providerMcpConfig: ProviderMcpConfig;            // CIMD identity (from config)
@@ -132,7 +130,6 @@ import { createUser } from "@/server/db/users";
 import { loadCatalogue, type CatalogueIndex } from "@/server/connectors/catalogue";
 import { HttpError } from "@/server/http/validate";
 import { fixedClock } from "@/server/seams/clock";
-import type { EmailSender, OutgoingMessage } from "@/server/notify/senders";
 import type { OAuthClientConfig } from "@/server/connectors/oauth-client";
 import type { ProviderMcpConfig, ListProviderTools } from "@/server/connectors/provider-mcp";
 import { freshDb } from "@/test/db";
@@ -142,7 +139,6 @@ import type { Session } from "@/server/auth/session";
 // A frozen instant so seeded connections' connected-at is deterministic (the stores + the
 // loader take an injected clock, never SQL now()).
 const NOW = new Date("2026-06-01T00:00:00.000Z");
-const OPERATOR_EMAIL = "operator@warthog.com.au";
 
 // --- catalogue fixtures -------------------------------------------------------------
 //
@@ -239,20 +235,14 @@ const STUB_MCP_CONFIG: ProviderMcpConfig = {
 };
 const STUB_LIST_TOOLS: ListProviderTools = async () => [];
 
-// Build the connectors actions under test with the real seams plus recording doubles for
-// the external effects (the operator email and the provider-side revocation). Returns the
-// actions and the two recorders so a test can assert what left Warthog.
+// Build the connectors actions under test with the real seams plus a recording double for
+// the external effect (the provider-side revocation). Returns the actions and the recorder
+// so a test can assert what left Warthog.
 function makeActions(
   db: Db,
   catalogue: CatalogueIndex = fixtureIndex(),
   opts: { revoke?: (input: RevokeProviderAccessInput) => Promise<void> } = {},
 ) {
-  const emails: OutgoingMessage[] = [];
-  const email: EmailSender = {
-    async sendEmail(message) {
-      emails.push(message);
-    },
-  };
   const revokeCalls: Array<{ userId: string; connectionId: string }> = [];
   const actions = createConnectorsActions({
     db,
@@ -260,8 +250,6 @@ function makeActions(
     catalogue,
     dekFor,
     fetch: unusedFetch,
-    email,
-    operatorEmail: OPERATOR_EMAIL,
     googleEarlyAccess: [],
     oauthClientConfigFor: () => STUB_OAUTH_CONFIG,
     providerMcpConfig: STUB_MCP_CONFIG,
@@ -271,7 +259,7 @@ function makeActions(
       await opts.revoke?.(input);
     },
   });
-  return { actions, emails, revokeCalls };
+  return { actions, revokeCalls };
 }
 
 // --- types derived from the factory (so the tests don't hard-code a type NAME) ------
@@ -1013,16 +1001,16 @@ test("a SQL-injection probe in the api key is stored as data, not executed (para
 });
 
 // =====================================================================================
-// AC1 / AC4 — requestConnector records the request for the session user and emails the
-// operator, and refuses a malformed / oversized / SQL-shaped name.
+// AC1 / AC4 — requestConnector records the request for the session user (the operator reads
+// it on the admin portal's Requests page), and refuses a malformed / oversized / SQL-shaped name.
 // =====================================================================================
 
-test("requestConnector records a request for the SESSION user and emails the operator", async () => {
+test("requestConnector records a service request for the SESSION user", async () => {
   const db = await freshDb();
   try {
     const alice = await makeUser(db, "req-self");
     const bob = await makeUser(db, "req-other");
-    const { actions, emails } = makeActions(db);
+    const { actions } = makeActions(db);
 
     await actions.requestConnector(sessionFor(alice), { name: "Fancy Spreadsheets" });
 
@@ -1031,13 +1019,8 @@ test("requestConnector records a request for the SESSION user and emails the ope
     const aliceReqs = await listConnectorRequestsForUser(db, alice);
     assert.equal(aliceReqs.length, 1, "the request is recorded for the acting person");
     assert.equal(aliceReqs[0]!.serviceName, "Fancy Spreadsheets", "the request names the service the person asked for");
+    assert.equal(aliceReqs[0]!.kind, "service", "as a request for a new service");
     assert.equal((await listConnectorRequestsForUser(db, bob)).length, 0, "no request leaks to another person");
-
-    // The operator is emailed at the INJECTED address (config, never baked in).
-    assert.ok(
-      emails.some((m) => m.recipient === OPERATOR_EMAIL && m.body.includes("Review it in Warthog") && !m.body.includes("Fancy Spreadsheets")),
-      "the operator gets a generic notice without user-entered request text",
-    );
   } finally {
     await db.close();
   }
@@ -1066,13 +1049,12 @@ test("askToJoin files an early-access request for a gated Google service, naming
     } finally {
       rmSync(dir, { recursive: true, force: true });
     }
-    const { actions, emails } = makeActions(db, catalogue);
+    const { actions } = makeActions(db, catalogue);
     const session = sessionFor(userId);
 
     await actions.askToJoin(session, { connectorId: "google-gmail" });
     const requests = await listConnectorRequestsForUser(db, userId);
-    assert.deepEqual(requests.map((r) => r.serviceName), ["Google early access: Gmail"]);
-    assert.ok(emails.some((m) => m.recipient === OPERATOR_EMAIL && m.body.includes("Gmail")), "the operator is told which service");
+    assert.deepEqual(requests.map((r) => [r.kind, r.connectorId, r.serviceName]), [["google_early_access", "google-gmail", "Gmail"]]);
 
     // Only a service gated for this person can be asked for; nothing else is written.
     await assertRejects4xx("a service that isn't in early access", () => actions.askToJoin(session, { connectorId: "acme-mail" }));
