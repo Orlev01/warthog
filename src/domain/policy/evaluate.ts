@@ -55,6 +55,12 @@ export interface PolicyCall {
   currency?: string;
   merchant?: string;
   recipients?: string | readonly string[] | null;
+  /**
+   * The tool always asks the person first, whatever the agent may do alone (a LinkedIn post:
+   * docs/adr/linkedin-connector.md). Its effect is known, so rules match it as written; a
+   * denial or a never-allow rule still refuses it, and approving the ask lets it run.
+   */
+  alwaysAsk?: boolean;
 }
 
 /** The agent's permission for a connector tool (design §8 step 2). */
@@ -303,9 +309,13 @@ export function evaluate(call: PolicyCall, ctx: PolicyContext): PolicyResult {
   if (call.request === "high_tier") return ask("A high-tier identity request needs your approval.");
   if (call.request === "card") return ask("A card request needs your approval.");
 
-  // 6. a matching ask-first rule, or a change-tool class default of "ask me first".
+  // 6. a matching ask-first rule, a tool that always asks, or a change-tool class default of
+  //    "ask me first".
   const askRule = firstMatch(ctx.rules, "ask_first", ruleCall, ctx);
   if (askRule) return ask("A rule asks for your approval first.", askRule.id);
+  if (call.connector !== null && call.makesChange && call.alwaysAsk) {
+    return ask("Posts always need your approval first.");
+  }
   if (call.connector !== null && call.makesChange && perm.changes === "ask_first") {
     return ask("Changes with this connector need your approval first.");
   }

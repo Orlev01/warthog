@@ -79,6 +79,8 @@ export interface ConnectorToolDeclaration {
   readonly title?: string;
   readonly schema?: z.ZodType;
   readonly requiresApproval?: boolean;
+  // The person is always asked first, whatever the agent may do alone (a LinkedIn post).
+  readonly alwaysAsk?: boolean;
   readonly name: string;
   readonly description?: string;
   readonly makesChange?: boolean;
@@ -423,6 +425,7 @@ function buildConnectorTool(
         tool: name,
         makesChange,
         requiresApproval: declaration.requiresApproval,
+        ...(declaration.alwaysAsk ? { alwaysAsk: true } : {}),
         unknownSemantics: isRequest || declaration.requiresApproval,
         messageChannel: declaration.messageChannel,
         recipients,
