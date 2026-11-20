@@ -1,4 +1,16 @@
-# Delivery status — 20 November 2026 (requests in the admin portal)
+# Delivery status — 20 November 2026 (Contact us, your requests, LinkedIn switched off)
+
+**Live at [warthog.com.au](https://warthog.com.au) (the website) and
+[app.warthog.com.au](https://app.warthog.com.au) (the app).** Application source
+`70c2a9f4ed51393b34f56c01cb6208a5eb64c460` runs as `warthog--r44658921004a1`, with one healthy
+replica, explicit 100% traffic and zero old replicas.
+
+PR #42 adds Contact us in the app (messages reach the admin Requests page), shows people their own
+requests on Connectors, and emails them once when a requested service arrives. PR #41 adds the
+LinkedIn connector, switched off until the founder's LinkedIn app exists (docs/linkedin-launch.md).
+Migration 0116 makes 87. See the [release record](docs/audit/contact-linkedin-release-2026-11-20.md).
+
+# Earlier delivery status — 20 November 2026 (requests in the admin portal)
 
 **Live at [warthog.com.au](https://warthog.com.au) (the website) and
 [app.warthog.com.au](https://app.warthog.com.au) (the app).** Application source

@@ -1,5 +1,10 @@
 # Warthog comprehensive engineering audit
 
+**Contact us, your requests, LinkedIn switched off, 20 November:** main `70c2a9f` runs as
+`warthog--r44658921004a1`. PR #42 adds Contact us, "Your requests" on Connectors and an email when a
+request arrives. PR #41 adds the LinkedIn connector, off until its app is set up. Migration 0116
+makes 87. See the [release record](contact-linkedin-release-2026-11-20.md).
+
 **Requests in the admin portal, 20 November:** main `3f7a8f5` runs as `warthog--r44641742159a1`.
 PR #40 records in-app requests on the portal's Requests page with who asked, instead of emailing
 them, and makes every admin page check sign-in itself (closing a crafted-request gap that was
