@@ -18,6 +18,7 @@
 // nothing. No `process.env`, no ambient secret (INV-103).
 
 import { getConnectionById } from "../../db/connections";
+import { cleanShortText } from "../../../domain/content/untrusted";
 import { HttpError } from "../../http/validate";
 import { sendConnectorRequest, type ConnectorRequestInput } from "../request-tool";
 import {
@@ -62,6 +63,17 @@ async function userinfo(base: Pick<ConnectorRequestInput, "entry" | "userId" | "
 }
 
 const text = (value: unknown) => (typeof value === "string" ? value : undefined);
+
+/**
+ * How a LinkedIn connection is named: the member's email, or their name when LinkedIn gives no
+ * email (it's optional in the sign-in profile, e.g. for a member who signed up by phone).
+ */
+export function linkedInAccountLabel(profile: { email?: unknown; name?: unknown }): string {
+  const email = text(profile.email)?.trim();
+  if (email && email.includes("@") && email.length <= 256) return email;
+  const name = cleanShortText((text(profile.name) ?? "").replace(/\s+/g, " "), 120).trim();
+  return name || "LinkedIn account";
+}
 
 /** Call one curated LinkedIn tool through the person's LinkedIn connection. */
 export async function callLinkedInTool(input: CuratedToolCallInput, deps: CuratedToolDeps): Promise<CuratedToolResult> {

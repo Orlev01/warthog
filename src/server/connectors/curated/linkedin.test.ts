@@ -6,7 +6,7 @@ import { test } from "node:test";
 import assert from "node:assert/strict";
 import { randomBytes } from "node:crypto";
 
-import { LINKEDIN_CURATED_TOOLS, LINKEDIN_VERSION, callLinkedInTool } from "./linkedin";
+import { LINKEDIN_CURATED_TOOLS, LINKEDIN_VERSION, callLinkedInTool, linkedInAccountLabel } from "./linkedin";
 import { createUser } from "../../db/users";
 import { createConnection, type ConnectionStatus } from "../../db/connections";
 import { freshDb } from "../../../test/db";
@@ -159,4 +159,12 @@ test("a connection that needs reconnecting, someone else's, or an unknown tool s
     await assert.rejects(callLinkedInTool(call("linkedin__send_message"), { db, fetch: li.fetch }), (e: unknown) => e instanceof HttpError && e.status === 400);
     assert.equal(li.seen.length, 0);
   });
+});
+
+test("a LinkedIn account is named by its email, or by the member's name when LinkedIn gives no email", () => {
+  assert.equal(linkedInAccountLabel({ email: "sam@example.com", name: "Sam Lee" }), "sam@example.com");
+  assert.equal(linkedInAccountLabel({ name: "  Sam​ Lee " }), "Sam Lee");
+  assert.equal(linkedInAccountLabel({ email: "not-an-address", name: "Sam" }), "Sam");
+  assert.equal(linkedInAccountLabel({}), "LinkedIn account");
+  assert.equal(linkedInAccountLabel({ name: "x".repeat(500) }).length <= 120, true);
 });

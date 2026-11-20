@@ -95,8 +95,14 @@ keeps only LinkedIn's post id, checked against the share/ugcPost pattern, under 
   - When it runs, there is nothing to renew with, so the connection goes to "Reconnect needed" and
     the person gets the usual push.
   - The `connector.refresh` metric records this as `lapsed`, not `failed`.
-- LinkedIn offers apps no revoke call. Disconnecting removes Warthog's stored credentials, and the
-  person can remove Warthog under permitted services in their LinkedIn settings.
+- **Disconnecting.** LinkedIn documents no revoke call for apps outside its partner programmes.
+  An undocumented `POST https://www.linkedin.com/oauth/v2/revoke` appears to exist (it answers
+  with an OAuth-style error), but Warthog doesn't rely on it.
+  - Disconnecting removes Warthog's stored credentials, so Warthog can no longer use the access.
+  - The token itself stays valid at LinkedIn until it expires, at most 60 days later.
+  - The disconnect notice tells the person where to remove Warthog: Settings › Data privacy ›
+    Permitted services.
+  - If LinkedIn documents the revoke call, add it to the runtime's `revoke` beside Google's.
 
 **It ships dark.**
 

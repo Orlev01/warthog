@@ -9,7 +9,7 @@ type ConnectorNotice = { readonly tone: NoticeTone; readonly text: string };
 const notices: Record<string, ConnectorNotice> = {
   "key-saved": { tone: "success", text: "Service connected. Next, turn it on for the agents that should use it, on each agent's page. Some services can only check a key the first time it's used." },
   "verification-failed": { tone: "error", text: "We saved your key, but the service didn't accept it. Disconnect that account under Your services, then connect again with a different key." },
-  "provider-revoke-needed": { tone: "info", text: "Disconnected from Warthog. To remove the provider’s consent too, open your Google or Microsoft account’s app permissions and remove Warthog." },
+  "provider-revoke-needed": { tone: "info", text: "Disconnected from Warthog. To remove the provider’s consent too, open that account’s app permissions (on LinkedIn, Settings › Data privacy › Permitted services) and remove Warthog." },
   "connection-declined": { tone: "info", text: "That service was not connected. You can try again when you're ready." },
   disconnected: { tone: "success", text: "Service disconnected. No agent can use it now." },
   connected: { tone: "success", text: "Service connected." },

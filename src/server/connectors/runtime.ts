@@ -13,6 +13,7 @@ import { join } from "node:path";
 import { oauthClientFor, oauthClientConfigured, providerFor, renewable, withIdentityScope } from "./client-config";
 import { buildAuthorizeUrl, exchangeCodeForConnection, refreshConnectionTokens } from "./oauth-client";
 import { createGuardedProviderFetch } from "./provider-mcp";
+import { linkedInAccountLabel } from "./curated/linkedin";
 import { pendingConnects, type PendingConnectFlow } from "./pending";
 import { gateGoogleConnector } from "./google-early-access";
 import { scheduleConnectionRefresh } from "./jobs";
@@ -70,7 +71,9 @@ export function createConnectorRuntime(deps: {
       : "https://graph.microsoft.com/v1.0/me?$select=mail,userPrincipalName";
     const response = await request(endpoint, { headers: { authorization: `Bearer ${tokens.access_token}` }, redirect: "error" });
     if (!response.ok) throw new Error("Provider account could not be verified");
-    const profile = await response.json() as { email?: unknown; mail?: unknown; userPrincipalName?: unknown };
+    const profile = await response.json() as { email?: unknown; mail?: unknown; userPrincipalName?: unknown; name?: unknown };
+    // LinkedIn's email is optional, so a member without one is named by their name.
+    if (provider === "linkedin") return linkedInAccountLabel(profile);
     const label = profile.email ?? profile.mail ?? profile.userPrincipalName;
     if (typeof label !== "string" || label.length > 256 || !label.includes("@")) throw new Error("Provider account could not be verified");
     return label;
