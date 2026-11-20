@@ -120,6 +120,7 @@ function outgoingSentence(call: RequestSummary): string | undefined {
     if (outgoing.reply) return sending ? `wants to reply to ${who || "an email"}` : `wants to save a draft reply${who ? ` to ${who}` : ""}`;
     return sending ? `wants to send an email to ${who || "someone"}` : `wants to save a draft email${who ? ` to ${who}` : ""}`;
   }
+  if (outgoing.kind === "post_delete") return `wants to delete a post from ${call.service?.trim() || "LinkedIn"}`;
   if (outgoing.kind === "post") {
     return `wants to post on ${call.service?.trim() || "LinkedIn"} for ${outgoing.visibility === "PUBLIC" ? "anyone" : "your connections"} to see`;
   }

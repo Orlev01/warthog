@@ -8,6 +8,7 @@ import assert from "node:assert/strict";
 import {
   LinkedInPostError,
   buildLinkedInPost,
+  checkLinkedInPost,
   isLinkedInPostUrn,
   littleText,
   outgoingPost,
@@ -81,4 +82,19 @@ test("a post id is a share or ugcPost URN, and its link opens the post", () => {
   assert.ok(isLinkedInPostUrn("urn:li:ugcPost:68447855235931240"));
   for (const id of ["urn:li:person:1", "urn:li:share:", "urn:li:share:12/../x", "share:1", "urn:li:share:1 "]) assert.ok(!isLinkedInPostUrn(id), id);
   assert.equal(postUrl("urn:li:share:123"), "https://www.linkedin.com/feed/update/urn:li:share:123/");
+});
+
+test("a # inside a web address in the text stays part of the address, not a hashtag", () => {
+  assert.equal(littleText("See https://example.com/page#section and #hiring"), "See https://example.com/page\\#section and #hiring");
+});
+
+test("the escaped text must fit LinkedIn's limit too", () => {
+  assert.throws(() => buildLinkedInPost("abc", { text: "(".repeat(2000) + "x".repeat(999) }), LinkedInPostError);
+  assert.doesNotThrow(() => buildLinkedInPost("abc", { text: "x".repeat(3000) }));
+});
+
+test("checkLinkedInPost refuses what Warthog won't post, in words an agent can act on", () => {
+  assert.throws(() => checkLinkedInPost({ text: "Hi", link: { url: "http://example.com" } }), /https/);
+  assert.throws(() => checkLinkedInPost({ text: "​" }), /some text/);
+  assert.doesNotThrow(() => checkLinkedInPost({ text: "Hi", link: { url: "https://example.com", title: "A" } }));
 });

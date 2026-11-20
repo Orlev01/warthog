@@ -102,3 +102,11 @@ test("a LinkedIn post reads as a post, with who will see it", () => {
     "wants to post on LinkedIn for your connections to see (sam@example.com)",
   );
 });
+
+test("deleting a LinkedIn post reads as deleting a post", () => {
+  assert.equal(
+    requestSentence({ tool: "linkedin__delete_post", connector: "linkedin", service: "LinkedIn",
+      outgoing: { kind: "post_delete", url: "https://www.linkedin.com/feed/update/urn:li:share:1/" } }),
+    "wants to delete a post from LinkedIn",
+  );
+});

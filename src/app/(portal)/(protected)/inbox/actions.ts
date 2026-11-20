@@ -298,7 +298,10 @@ function outgoingLines(outgoing: OutgoingDetail | undefined, timeZone?: string |
       return [
         { label: "Post", value: outgoing.excerpt },
         ...(outgoing.linkDomain ? [{ label: "Links to", value: outgoing.linkDomain }] : []),
+        ...(outgoing.linkTitle ? [{ label: "Link title", value: outgoing.linkTitle }] : []),
       ];
+    case "post_delete":
+      return [{ label: "Post", value: outgoing.url }];
   }
 }
 
@@ -348,6 +351,7 @@ function extraLines(detail: Record<string, unknown>): RequestDetail[] {
     } else if (outgoing.kind === "post") {
       lines.push({ label: "Full post", value: outgoing.text });
       if (outgoing.link) lines.push({ label: "Link", value: outgoing.link });
+      if (outgoing.linkDescription) lines.push({ label: "Link description", value: outgoing.linkDescription });
     } else if (recipients.length) {
       lines.push({ label: outgoing.kind === "invite" ? "All guests" : "Goes to", value: recipients.join(", ") });
     }

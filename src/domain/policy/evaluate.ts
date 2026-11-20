@@ -314,7 +314,7 @@ export function evaluate(call: PolicyCall, ctx: PolicyContext): PolicyResult {
   const askRule = firstMatch(ctx.rules, "ask_first", ruleCall, ctx);
   if (askRule) return ask("A rule asks for your approval first.", askRule.id);
   if (call.connector !== null && call.makesChange && call.alwaysAsk) {
-    return ask("Posts always need your approval first.");
+    return ask("This always needs your approval first.");
   }
   if (call.connector !== null && call.makesChange && perm.changes === "ask_first") {
     return ask("Changes with this connector need your approval first.");

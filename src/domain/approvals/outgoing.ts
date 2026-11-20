@@ -6,7 +6,7 @@
 // from the SAME input the tool runs with, so the card shows exactly what will go out.
 
 import { outgoingMail, type MailDraft } from "../content/compose-mail";
-import { outgoingPost, type OutgoingPost, type PostVisibility } from "../content/linkedin-post";
+import { outgoingPost, outgoingPostDeletion, type OutgoingPost, type OutgoingPostDeletion, type PostVisibility } from "../content/linkedin-post";
 import { cleanShortText } from "../content/untrusted";
 
 /** What a held call would send or change, by kind. */
@@ -15,7 +15,8 @@ export type OutgoingDetail =
   | { kind: "invite"; title: string; start?: string; guests: readonly string[] }
   | { kind: "request"; method: string; path: string; queryKeys: readonly string[] }
   | { kind: "provider"; arguments: readonly { key: string; preview: string }[] }
-  | OutgoingPost;
+  | OutgoingPost
+  | OutgoingPostDeletion;
 
 /** The fields of a held call the summary is read from. */
 export interface OutgoingCall {
@@ -63,8 +64,18 @@ export function outgoingDetail(call: OutgoingCall): OutgoingDetail | undefined {
     return outgoingPost({
       text: params.text,
       ...(params.visibility === "PUBLIC" || params.visibility === "CONNECTIONS" ? { visibility: params.visibility as PostVisibility } : {}),
-      ...(typeof link?.url === "string" ? { link: { url: link.url } } : {}),
+      ...(typeof link?.url === "string"
+        ? { link: {
+          url: link.url,
+          ...(typeof link.title === "string" ? { title: link.title } : {}),
+          ...(typeof link.description === "string" ? { description: link.description } : {}),
+        } }
+        : {}),
     });
+  }
+  if (call.tool === "linkedin__delete_post") {
+    const query = params.query !== null && typeof params.query === "object" ? params.query as Record<string, unknown> : {};
+    return outgoingPostDeletion(query.id);
   }
   if (INVITE_TOOLS.test(call.tool)) {
     let event: Record<string, unknown> = {};

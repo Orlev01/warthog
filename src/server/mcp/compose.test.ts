@@ -1354,6 +1354,16 @@ async function linkedInPostRoundTrip(postId: string) {
     assert.equal(undone.status, "executed");
     assert.equal(sent.at(-1)!.url, `https://api.linkedin.com/rest/posts/${encodeURIComponent(postId)}`);
     assert.equal(sent.at(-1)!.init.method, "DELETE");
+
+    // An agent deleting a post itself is held for the person, even with changes allowed.
+    const before = sent.length;
+    const deleteHeld = await readRpc(await dispatch(connectionId, mcpPost(callBody("linkedin__delete_post", { query: { id: postId } }))));
+    assert.equal(deleteHeld.result?.structuredContent?.status, "pending_approval");
+    assert.equal(sent.length, before, "nothing is deleted before the person says yes");
+    // A post Warthog won't send is refused before anyone is asked.
+    const refused = await readRpc(await dispatch(connectionId, mcpPost(callBody("linkedin__create_post", { text: "Hi", link: { url: "http://example.com" } }))));
+    assert.equal(refused.result?.isError, true);
+    assert.notEqual(refused.result?.structuredContent?.status, "pending_approval");
   } finally { await db.close(); }
 }
 

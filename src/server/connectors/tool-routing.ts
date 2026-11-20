@@ -32,7 +32,7 @@ import type { CatalogueIndex } from "./catalogue";
 import { callGoogleTool, GOOGLE_CURATED_TOOLS, type CuratedTool } from "./curated/google";
 import { callMicrosoftTool, MICROSOFT_CURATED_TOOLS } from "./curated/microsoft";
 import { callLinkedInTool, LINKEDIN_CURATED_TOOLS } from "./curated/linkedin";
-import { MAX_POST_CHARS } from "../../domain/content/linkedin-post";
+import { checkLinkedInPost, LinkedInPostError, MAX_POST_CHARS } from "../../domain/content/linkedin-post";
 import { sendConnectorRequest } from "./request-tool";
 import { draftRecipients, MailComposeError, type MailDraft } from "../../domain/content/compose-mail";
 import type { ConnectorToolDeclaration, ConnectorToolset } from "../mcp/tools/registry";
@@ -103,6 +103,15 @@ export const linkedInPostSchema = z.object({
     description: z.string().max(300).optional().describe("A line about the link."),
   }).optional().describe("A link shown under the post."),
   reason,
+}).superRefine((post, ctx) => {
+  // Refused here, before it's held, so the agent can fix it rather than the person approving a
+  // post that then fails.
+  try {
+    checkLinkedInPost(post);
+  } catch (err) {
+    if (!(err instanceof LinkedInPostError)) throw err;
+    ctx.addIssue({ code: "custom", message: err.message });
+  }
 });
 export type LinkedInPostFields = z.infer<typeof linkedInPostSchema>;
 
@@ -159,6 +168,7 @@ const GOOGLE_TOOL_NAMES = new Set(GOOGLE_CURATED_TOOLS.map((tool) => tool.name))
 const MICROSOFT_TOOL_NAMES = new Set(MICROSOFT_CURATED_TOOLS.map((tool) => tool.name));
 const LINKEDIN_TOOL_NAMES = new Set(LINKEDIN_CURATED_TOOLS.map((tool) => tool.name));
 const LINKEDIN_POST = "linkedin__create_post";
+const LINKEDIN_DELETE = "linkedin__delete_post";
 
 function groupByConnector(tools: readonly CuratedTool[]): Map<string, CuratedTool[]> {
   const grouped = new Map<string, CuratedTool[]>();
@@ -266,7 +276,7 @@ const LINKEDIN_PRESENTATION: Readonly<Record<string, { title: string; descriptio
   },
   delete_post: {
     title: "LinkedIn: Delete post",
-    description: "Delete one of the person's LinkedIn posts by query.id, the id create_post returned (urn:li:share:…).",
+    description: "Delete one of the person's LinkedIn posts by query.id, the id create_post returned (urn:li:share:…). The person always approves a delete first.",
   },
 };
 
@@ -317,6 +327,9 @@ function declarationOf(tool: CuratedTool, serviceName: string): ConnectorToolDec
     ...(tool.name === LINKEDIN_POST
       ? { schema: linkedInPostSchema, messageChannel: "post" as const, outbound: true, alwaysOutbound: true, alwaysAsk: true }
       : {}),
+    // An agent's delete can't be taken back, so the person is asked first too. Undo of a post
+    // Warthog made is the person's own action and runs straight away (compose.ts runReversal).
+    ...(tool.name === LINKEDIN_DELETE ? { alwaysAsk: true } : {}),
   };
 }
 

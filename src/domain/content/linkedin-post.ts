@@ -33,10 +33,18 @@ export function postText(text: string): string {
   return stripInvisible(text).text.trim();
 }
 
+// A web address in the text: from its scheme to the next space.
+const WEB_ADDRESS = /https?:\/\/\S+/gi;
+
 /** The text in LinkedIn's "little" format: reserved characters escaped, hashtags kept. */
 export function littleText(text: string): string {
+  // A # inside a web address (…/page#section) is part of it, never a hashtag.
+  const inAddress = new Set<number>();
+  for (const match of text.matchAll(WEB_ADDRESS)) {
+    for (let at = match.index; at < match.index + match[0].length; at += 1) inAddress.add(at);
+  }
   return text.replace(/[\\|{}@[\]()<>#*_~]/g, (ch, at: number) =>
-    ch === "#" && /^\p{L}/u.test(text.slice(at + 1)) ? ch : `\\${ch}`);
+    ch === "#" && !inAddress.has(at) && /^\p{L}/u.test(text.slice(at + 1)) ? ch : `\\${ch}`);
 }
 
 // A link LinkedIn can show: https, a real public host name, no sign-in details in it.
@@ -64,12 +72,21 @@ function capped(text: string, max: number): string {
   return text.length > max ? `${text.slice(0, max - 1)}…` : text;
 }
 
-// The text, checked: it has words and fits LinkedIn's limit.
+// The text, checked: it has words and fits LinkedIn's limit, counted after escaping (whether
+// LinkedIn counts the escapes isn't documented, so the stricter count is used).
 function checkedText(text: string): string {
   const out = postText(text);
   if (!out) throw new LinkedInPostError("A post needs some text.");
-  if (out.length > MAX_POST_CHARS) throw new LinkedInPostError(`A LinkedIn post can be at most ${MAX_POST_CHARS} characters.`);
+  if (littleText(out).length > MAX_POST_CHARS) {
+    throw new LinkedInPostError(`A LinkedIn post can be at most ${MAX_POST_CHARS} characters, counting a backslash before each ( ) [ ] * _ ~ @ < > { } | and \\.`);
+  }
   return out;
+}
+
+/** Refuse a post Warthog won't send, before anyone is asked to approve it. */
+export function checkLinkedInPost(input: LinkedInPostInput): void {
+  checkedText(input.text);
+  if (input.link) checkedLink(input.link.url);
 }
 
 /** The Posts API body for a member's post (POST https://api.linkedin.com/rest/posts). */
@@ -99,7 +116,7 @@ export function buildLinkedInPost(memberId: string, input: LinkedInPostInput): R
   return body;
 }
 
-/** What the approval card shows for a post. */
+/** What the approval card shows for a post: everything that is published. */
 export interface OutgoingPost {
   readonly kind: "post";
   readonly excerpt: string;
@@ -107,6 +124,15 @@ export interface OutgoingPost {
   readonly visibility: PostVisibility;
   readonly link?: string;
   readonly linkDomain?: string;
+  // The link's title and description as they're published under the post.
+  readonly linkTitle?: string;
+  readonly linkDescription?: string;
+}
+
+/** What the approval card shows for deleting a post: which post. */
+export interface OutgoingPostDeletion {
+  readonly kind: "post_delete";
+  readonly url: string;
 }
 
 /** The card's summary of a post, from the same input the post is built from. */
@@ -119,13 +145,21 @@ export function outgoingPost(input: LinkedInPostInput): OutgoingPost {
   } catch {
     link = undefined;
   }
+  const title = link ? capped(postText(input.link!.title ?? "") || domainOf(link), MAX_TITLE_CHARS) : "";
+  const description = link ? capped(postText(input.link!.description ?? ""), MAX_DESCRIPTION_CHARS) : "";
   return {
     kind: "post",
     excerpt: capped(flat, EXCERPT_CHARS),
     text: capped(text, MAX_POST_CHARS),
     visibility: input.visibility ?? "CONNECTIONS",
-    ...(link ? { link: capped(input.link!.url, MAX_LINK_CHARS), linkDomain: domainOf(link) } : {}),
+    ...(link ? { link: capped(input.link!.url, MAX_LINK_CHARS), linkDomain: domainOf(link), linkTitle: title } : {}),
+    ...(description ? { linkDescription: description } : {}),
   };
+}
+
+/** The card's summary of deleting a post, or undefined for an id that isn't a post's. */
+export function outgoingPostDeletion(id: unknown): OutgoingPostDeletion | undefined {
+  return typeof id === "string" && isLinkedInPostUrn(id) ? { kind: "post_delete", url: postUrl(id) } : undefined;
 }
 
 /** A post's id as LinkedIn returns it (`x-restli-id`). */
