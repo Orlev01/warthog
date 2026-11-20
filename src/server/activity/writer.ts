@@ -40,6 +40,7 @@ import { decrypt, encrypt } from "../crypto/envelope";
 import { withTransaction, type Db, type Row } from "../db/index";
 import type { ActivityEntry, ActivityEntryInput, ActivityRecorder } from "./recorder";
 import { isRunId } from "../agents/runs";
+import { reversalTargetOf } from "./calendar-reversal";
 
 // The envelope's associated data binds each payload ciphertext to its exact
 // location, so a row lifted into another row/column/table fails to decrypt.
@@ -247,7 +248,15 @@ export function createDbRecorder(options: DbRecorderOptions): ActivityRecorder {
       // payload is stored as null (JSON has no `undefined`, so it could not be encrypted).
       const perUser = (token: string): boolean =>
         matchesReleased ? matchesReleased(userId, token) : false;
-      const payload = redact(input.payload ?? null, perUser);
+      const redacted = redact(input.payload ?? null, perUser);
+      // A Warthog tool call's Undo target is the provider's own id, validated against that
+      // service's id shape (calendar-reversal.ts), so it is kept as given: a 19-digit LinkedIn
+      // post id can pass the card-number check, and masking it would break Undo. Nothing else
+      // in the payload is exempt, and an agent's own report never is.
+      const target = input.source === "warthog" && input.kind === "tool_call" ? reversalTargetOf(input.tool, input.payload) : undefined;
+      const payload = target && redacted && typeof redacted === "object" && !Array.isArray(redacted)
+        ? { ...(redacted as Record<string, unknown>), reversal: target }
+        : redacted;
 
       // The plaintext columns an agent's text can reach — the kind (log_activity), the tool
       // name and the card merchant (request_card) — are stored readable for filtering and

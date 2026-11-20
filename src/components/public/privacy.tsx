@@ -180,6 +180,18 @@ export function Privacy({ links = RELATIVE_LINKS }: { links?: PublicLinks } = {}
             help accessing or deleting connected-service data held by Warthog.
           </p>
         </PublicSection>
+
+        <PublicSection id="linkedin" title="Your connected LinkedIn account">
+          <p>
+            If you connect LinkedIn, Warthog can read your LinkedIn name, email address and
+            profile photo, and publish a post as you. Every post waits for your approval in
+            Warthog first, showing its exact text and who will see it; nothing is posted
+            without you. Warthog can&apos;t read your feed, connections, messages or job history.
+            We store encrypted access credentials and an account label. LinkedIn ends the access
+            after 60 days, and you reconnect to continue. You can also remove Warthog in your
+            LinkedIn settings, under permitted services.
+          </p>
+        </PublicSection>
       </PublicPanel>
     </PublicPage>
   );

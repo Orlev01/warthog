@@ -44,8 +44,9 @@ export const FACTORS = { passkey: "passkey", totp: "totp" } as const;
 export const SIGNIN_OUTCOMES = { ok: "ok", failed: "failed", throttled: "throttled" } as const;
 export const SIGNIN_CATEGORIES = { passkey: "passkey", emailCode: "email_code", totp: "totp" } as const;
 export const CONNECT_OUTCOMES = { ok: "ok", failed: "failed", declined: "declined" } as const;
-// `lapsed` is no longer emitted (Google connections stopped lapsing on a 7-day clock on 17 Nov
-// 2026); it stays so earlier events keep their label.
+// `lapsed`: access ended as expected, with nothing to renew it (LinkedIn, after 60 days:
+// docs/adr/linkedin-connector.md). Google connections stopped lapsing on a 7-day clock on
+// 17 Nov 2026; their earlier events keep the label.
 export const REFRESH_OUTCOMES = { ok: "ok", failed: "failed", lapsed: "lapsed" } as const;
 export const ADMIN_HANDOFF_OUTCOMES = { minted: "minted", stepUpRequired: "step_up_required", notAdmin: "not_admin" } as const;
 export const ADMIN_SESSION_OUTCOMES = { exchanged: "exchanged", rejected: "rejected" } as const;

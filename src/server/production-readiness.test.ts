@@ -98,3 +98,15 @@ test("production validates the derived admin origin as its own https host, disti
   // A public base URL that already is the admin host would make the two coincide.
   assert.throws(() => assertProductionReleaseConfiguration(loadConfig({ ...base, PUBLIC_BASE_URL: "https://app.example.test" , ADMIN_BASE_URL: "https://app.example.test" })), /ADMIN_BASE_URL/);
 });
+
+test("LinkedIn is optional in production, but needs both its client id and secret when set", () => {
+  assert.doesNotThrow(() => assertProductionReleaseConfiguration(loadConfig(base)), "no LinkedIn client: LinkedIn just isn't offered");
+  assert.doesNotThrow(() => assertProductionReleaseConfiguration(loadConfig({ ...base, LINKEDIN_CLIENT_ID: "78abc", LINKEDIN_CLIENT_SECRET: "synthetic-linkedin-secret" })));
+  assert.throws(() => assertProductionReleaseConfiguration(loadConfig({ ...base, LINKEDIN_CLIENT_ID: "78abc" })), /LINKEDIN_CLIENT_SECRET/);
+  assert.throws(() => assertProductionReleaseConfiguration(loadConfig({ ...base, LINKEDIN_CLIENT_SECRET: "synthetic-linkedin-secret" })), (error: Error) => {
+    assert.match(error.message, /LINKEDIN_CLIENT_ID/);
+    assert.ok(!error.message.includes("synthetic-linkedin-secret"));
+    return true;
+  });
+  assert.throws(() => assertProductionReleaseConfiguration(loadConfig({ ...base, LINKEDIN_CLIENT_ID: "  ", LINKEDIN_CLIENT_SECRET: "x" })), /LINKEDIN_CLIENT_ID/);
+});

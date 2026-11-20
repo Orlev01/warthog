@@ -1,6 +1,6 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { calendarReversalFromResult, calendarReversalForEntry } from "./calendar-reversal";
+import { calendarReversalFromResult, calendarReversalForEntry, reversalQuery } from "./calendar-reversal";
 
 test("calendar reversal metadata retains only a bounded opaque id from successful provider responses", () => {
   for (const provider of ["google-calendar", "microsoft-outlook-calendar"]) {
@@ -31,4 +31,21 @@ test("old, agent-authored, failed and mismatched activity entries are unavailabl
     { tool: "microsoft-outlook-calendar__create" },
     { payload: { reversal: { tool: "google-calendar__delete", eventId: "[released value]" } } },
   ]) assert.equal(calendarReversalForEntry({ ...entry, ...changed }), undefined);
+});
+
+test("a LinkedIn post is undone by deleting it: only its post id is kept, and the delete names it as query.id", () => {
+  const target = calendarReversalFromResult("linkedin__create_post", { status: 201,
+    body: JSON.stringify({ id: "urn:li:share:7262000000000000001", url: "https://www.linkedin.com/feed/update/urn:li:share:7262000000000000001/", visibility: "PUBLIC" }),
+  });
+  assert.deepEqual(target, { tool: "linkedin__delete_post", eventId: "urn:li:share:7262000000000000001" });
+  assert.deepEqual(reversalQuery(target!), { id: "urn:li:share:7262000000000000001" });
+  assert.deepEqual(reversalQuery({ tool: "google-calendar__delete", eventId: "e1" }), { eventId: "e1" });
+  assert.deepEqual(calendarReversalForEntry({ source: "warthog", kind: "tool_call", outcome: "executed",
+    tool: "linkedin__create_post", payload: { reversal: target } }), target);
+  for (const id of ["urn:li:person:1", "opaque+event/id=", "https://evil.test"]) {
+    assert.equal(calendarReversalFromResult("linkedin__create_post", { status: 201, body: JSON.stringify({ id }) }), undefined, id);
+    assert.equal(calendarReversalForEntry({ source: "warthog", kind: "tool_call", outcome: "executed",
+      tool: "linkedin__create_post", payload: { reversal: { tool: "linkedin__delete_post", eventId: id } } }), undefined, id);
+  }
+  assert.equal(calendarReversalFromResult("linkedin__create_post", { status: 201, body: JSON.stringify({ posted: true }) }), undefined, "no id, no Undo");
 });

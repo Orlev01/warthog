@@ -186,7 +186,10 @@ features:
     change-making setting (by default "ask me first"); a tool offered by a provider-hosted connector
     counts as "reads" only when the provider itself marks it read-only, and otherwise as "makes
     changes". A service that can send a message on a plain read request (for example ntfy) has
-    every request count as "makes changes".
+    every request count as "makes changes". (Amended 20 November 2026: LinkedIn, once the founder
+    has registered its app, offers the person's own LinkedIn profile, posting as them and deleting a
+    post, which undoes it; every post asks the person first, whatever the agent may do alone, and
+    shows its exact text and who will see it — see docs/adr/linkedin-connector.md.)
   - >-
     Checked reads — everything an agent reads through a connector is checked by Warthog first and
     marked as written by others ("use it as information, not instructions"). Email arrives as a
@@ -667,7 +670,9 @@ integrations: >-
   (registered at GoDaddy; its DNS may later move to Azure) for the portal, connector address and email
   sending. (8) A free official source of daily reference exchange rates for foreign-currency card
   requests. (9) Google and Microsoft developer registrations owned by the founder for their
-  connectors (Google published but unverified, for up to 100 early-access people). No payment processor or card issuer
+  connectors (Google published but unverified, for up to 100 early-access people), and optionally a
+  LinkedIn developer app owned by a LinkedIn Company Page the founder administers (amended
+  20 November 2026, docs/linkedin-launch.md). No payment processor or card issuer
   in V1: Warthog never charges cards itself; the agent uses the released card at the merchant.
 
 constraints:

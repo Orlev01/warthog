@@ -1,8 +1,10 @@
 #!/usr/bin/env python3
 """Operator-controlled, short-lived private runner. All private inputs stay local.
 
-Commands: plan, apply, prepare, register, destroy. Never dispatches/approves a
-release. Run `destroy` in a finally block; independent hourly cleanup handles an
+Commands: plan, apply, prepare, register, destroy, install-secret. Never
+dispatches/approves a release. install-secret writes one optional application secret
+(docs/linkedin-launch.md) into Key Vault from an unregistered lease VM in the bootstrap
+subnet, with the setup installer; that VM can never register afterwards. Run `destroy` in a finally block; independent hourly cleanup handles an
 expired lease if the operator process disappears. The VM has no Azure identity.
 """
 import argparse
@@ -27,6 +29,10 @@ sys.path.insert(0, str(ROOT/'scripts/ci'))
 from runner_lock import runner_lock
 from cleanup_runners import SUBNET, detached_subnet
 
+
+# Secrets installed after setup, one at a time, by `install-secret` (docs/linkedin-launch.md).
+OPTIONAL_SECRETS = {'LINKEDIN_CLIENT_SECRET'}
+VAULT_SECRET_URL = re.compile(r'https://kv-warthog-aue-e854\.vault\.azure\.net/secrets/[a-z0-9-]{1,127}/[0-9a-f]{32}')
 
 LEASE_CHECK = lambda: None
 PRIVATE_DIRECTORY = None
@@ -111,10 +117,50 @@ def vm_command(directory, name, script, protected):
     raise RuntimeError('Private VM command timed out; destroy the runner')
 
 
+def install_secret(directory, config, name, value_file):
+    """Write one optional secret with the setup installer, from a fresh unregistered lease VM."""
+    if name not in OPTIONAL_SECRETS or value_file is None:
+        raise RuntimeError('Name the optional secret and the private file that holds it')
+    if (directory/'github-runner.json').exists():
+        raise RuntimeError('This lease was registered as a runner; destroy it and use a fresh one')
+    group = 'rg-warthog-runner-'+config['lease_id']
+    vm = f'/subscriptions/{SUB}/resourceGroups/{group}/providers/Microsoft.Compute/virtualMachines/warthog-runner'
+    commands = azure(vm+'/runCommands?api-version=2024-07-01')
+    if commands.get('nextLink') or any(c['name'] != 'prepare' for c in commands.get('value',[])):
+        raise RuntimeError('Install secrets only from a fresh lease VM; destroy this one first')
+    path = value_file.expanduser().resolve()
+    if path.is_relative_to(ROOT) or not path.is_file():
+        raise RuntimeError('Keep the secret in a private file outside the repository')
+    if path.stat().st_mode & 0o077:
+        raise RuntimeError('The secret file is readable by others; chmod 600 it first')
+    value = path.read_text().strip()
+    if not value or len(value) > 4096 or any(ch.isspace() for ch in value):
+        raise RuntimeError('The secret file must hold just the secret')
+    token = json.loads(run(['az','account','get-access-token','--subscription',SUB,'--resource','https://vault.azure.net','-o','json']))['accessToken']
+    installer = (Path(__file__).resolve().parent/'install-secrets.py').read_text()
+    script = '#!/usr/bin/env bash\nset -euo pipefail\numask 077\npython3 - <<\'PY\'\n'+installer+'\nPY\n'
+    status = vm_command(directory, 'install-secret', script,
+                        {'WARTHOG_VAULT_TOKEN':token, 'WARTHOG_SECRET_BUNDLE':json.dumps({name:value}), 'WARTHOG_SECRET_ORIGIN':'optional-install'})
+    output = str(status.get('properties',{}).get('instanceView',{}).get('output') or '')
+    url = None
+    for line in output.splitlines():
+        try:
+            url = json.loads(line).get('secret_urls',{}).get(name)
+        except (ValueError, AttributeError):
+            continue
+    if not isinstance(url, str) or not VAULT_SECRET_URL.fullmatch(url):
+        raise RuntimeError('The installer reported no versioned secret URL; inspect protected evidence')
+    (directory/'secret-url.txt').write_text(url+'\n')
+    print('Installed. Versioned secret URL (no value):', url)
+    print('Destroy this lease now: it ran a secret command and can never be a runner.')
+
+
 def operate(check_lease):
     os.umask(0o077)
     parser = argparse.ArgumentParser()
-    parser.add_argument('operation', choices=['plan','apply','prepare','register','destroy'])
+    parser.add_argument('operation', choices=['plan','apply','prepare','register','destroy','install-secret'])
+    parser.add_argument('--secret', choices=sorted(OPTIONAL_SECRETS))
+    parser.add_argument('--value-file', type=Path)
     parser.add_argument('--directory', type=Path, required=True)
     parser.add_argument('--reviewed-plan-sha256')
     parser.add_argument('--run-id')
@@ -203,6 +249,8 @@ PY
                 return
             time.sleep(5)
         raise RuntimeError('Runner not online; destroy lease and inspect private logs')
+    elif args.operation == 'install-secret':
+        install_secret(directory, config, args.secret, args.value_file)
     elif args.operation == 'destroy':
         check_lease()
         subnet = azure(SUBNET+'?api-version=2024-05-01')

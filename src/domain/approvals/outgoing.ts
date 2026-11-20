@@ -6,6 +6,7 @@
 // from the SAME input the tool runs with, so the card shows exactly what will go out.
 
 import { outgoingMail, type MailDraft } from "../content/compose-mail";
+import { outgoingPost, outgoingPostDeletion, type OutgoingPost, type OutgoingPostDeletion, type PostVisibility } from "../content/linkedin-post";
 import { cleanShortText } from "../content/untrusted";
 
 /** What a held call would send or change, by kind. */
@@ -13,7 +14,9 @@ export type OutgoingDetail =
   | { kind: "email"; subject: string; excerpt: string; text: string; reply: boolean; to: readonly string[]; cc: readonly string[]; bcc: readonly string[]; linkDomains: readonly string[] }
   | { kind: "invite"; title: string; start?: string; guests: readonly string[] }
   | { kind: "request"; method: string; path: string; queryKeys: readonly string[] }
-  | { kind: "provider"; arguments: readonly { key: string; preview: string }[] };
+  | { kind: "provider"; arguments: readonly { key: string; preview: string }[] }
+  | OutgoingPost
+  | OutgoingPostDeletion;
 
 /** The fields of a held call the summary is read from. */
 export interface OutgoingCall {
@@ -26,6 +29,7 @@ export interface OutgoingCall {
 
 const MAIL_TOOLS = /^(?:google-gmail|microsoft-outlook-mail)__(?:draft|send)$/;
 const INVITE_TOOLS = /^(?:google-calendar|microsoft-outlook-calendar)__(?:create|update)$/;
+const POST_TOOLS = new Set(["linkedin__create_post"]);
 
 function strings(value: unknown): string[] | undefined {
   return Array.isArray(value) ? value.filter((item): item is string => typeof item === "string") : undefined;
@@ -54,6 +58,24 @@ export function outgoingDetail(call: OutgoingCall): OutgoingDetail | undefined {
       // A draft Warthog can't build is refused before it is held; never fail the hold here.
       return undefined;
     }
+  }
+  if (POST_TOOLS.has(call.tool) && typeof params.text === "string") {
+    const link = params.link !== null && typeof params.link === "object" ? params.link as Record<string, unknown> : undefined;
+    return outgoingPost({
+      text: params.text,
+      ...(params.visibility === "PUBLIC" || params.visibility === "CONNECTIONS" ? { visibility: params.visibility as PostVisibility } : {}),
+      ...(typeof link?.url === "string"
+        ? { link: {
+          url: link.url,
+          ...(typeof link.title === "string" ? { title: link.title } : {}),
+          ...(typeof link.description === "string" ? { description: link.description } : {}),
+        } }
+        : {}),
+    });
+  }
+  if (call.tool === "linkedin__delete_post") {
+    const query = params.query !== null && typeof params.query === "object" ? params.query as Record<string, unknown> : {};
+    return outgoingPostDeletion(query.id);
   }
   if (INVITE_TOOLS.test(call.tool)) {
     let event: Record<string, unknown> = {};

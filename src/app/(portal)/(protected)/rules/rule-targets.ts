@@ -29,6 +29,7 @@ import { join } from "node:path";
 import { loadCatalogue, type CatalogueIndex } from "@/server/connectors/catalogue";
 import { GOOGLE_CURATED_TOOLS } from "@/server/connectors/curated/google";
 import { MICROSOFT_CURATED_TOOLS } from "@/server/connectors/curated/microsoft";
+import { LINKEDIN_CURATED_TOOLS } from "@/server/connectors/curated/linkedin";
 import { readProviderToolsets } from "@/server/connectors/provider-runtime";
 import { REQUEST_TOOL, connectorToolsetFor } from "@/server/connectors/tool-routing";
 import { listConnectionsForUser, type Connection } from "@/server/db/connections";
@@ -59,7 +60,7 @@ function warthogTools(): readonly { name: string; title: string }[] {
   return [...registry.coreTools.map((tool) => ({ name: tool.name, title: tool.title })), ...helpers];
 }
 
-const CURATED = [...GOOGLE_CURATED_TOOLS, ...MICROSOFT_CURATED_TOOLS];
+const CURATED = [...GOOGLE_CURATED_TOOLS, ...MICROSOFT_CURATED_TOOLS, ...LINKEDIN_CURATED_TOOLS];
 
 // Every tool name any catalogue service has that is known without a connection: curated
 // tools, or the general request tool for a service with none. Provider-MCP services list

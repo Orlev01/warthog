@@ -40,6 +40,12 @@ export function assertProductionReleaseConfiguration(config: Config): void {
     valid(`${prefix}_CLIENT_ID`, client?.clientId?.trim());
     valid(`${prefix}_CLIENT_SECRET`, client?.clientSecret?.trim());
   }
+  // LinkedIn is optional: offered only once its app exists (docs/linkedin-launch.md), then both halves.
+  const linkedin = config.connectorClients?.linkedin;
+  if (linkedin?.clientId !== undefined || linkedin?.clientSecret !== undefined) {
+    valid("LINKEDIN_CLIENT_ID", linkedin.clientId?.trim());
+    valid("LINKEDIN_CLIENT_SECRET", linkedin.clientSecret?.trim());
+  }
   valid("GOOGLE_EARLY_ACCESS", config.googleEarlyAccess.length > 0 && config.googleEarlyAccess.every(email));
   valid("VAPID_SUBJECT", config.vapid.subject?.startsWith("mailto:") && email(config.vapid.subject.slice(7)));
   valid("VAPID_PRIVATE_KEY", config.vapid.privateKey);

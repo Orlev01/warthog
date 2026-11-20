@@ -79,6 +79,9 @@ export interface AgentCall {
   readonly audit?: { requestId: string; attemptId?: string; policyFingerprint?: string; connectorAccountId?: string; connectorAccountLabel?: string; startedAt: number; attempted?: boolean; terminal?: boolean; decision?: unknown; approvalId?: string };
   readonly unknownSemantics?: boolean;
   readonly requiresApproval?: boolean;
+  // The tool always asks the person first, whatever the agent may do alone (a LinkedIn post).
+  // Unlike `requiresApproval`, its effect is known, so rules match it as written.
+  readonly alwaysAsk?: boolean;
   readonly connector: string | null;
   readonly connectorAccountId?: string;
   readonly connectorAccountLabel?: string;
@@ -312,6 +315,7 @@ function toPolicyCall(call: AgentCall): PolicyCall {
     currency: call.currency,
     merchant: call.merchant,
     recipients: call.recipients,
+    ...(call.alwaysAsk ? { alwaysAsk: true } : {}),
   };
 }
 

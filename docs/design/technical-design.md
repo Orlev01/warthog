@@ -269,6 +269,9 @@ Redaction is a pure module with exhaustive unit tests; the activity writer and t
   ([ADR](../adr/google-published-and-accounts.md)).
 - Launch target: ≥ 30 `provider_mcp` + ≥ 60 `api_key` entries + Google + Microsoft (+ any the founder
   registers: Slack, GitHub, Spotify, Strava, …) ≥ 100 connectable.
+- LinkedIn (20 Nov 2026, [ADR](../adr/linkedin-connector.md)): a founder-registered `oauth2` entry
+  with three curated tools (profile; create post, always asked; delete post, its reversal), offered
+  only once its client is configured.
 
 ## 8. Policy engine (pure TypeScript, `src/domain/policy/`)
 `evaluate(call, ctx) → { decision: "allow" | "ask" | "deny", reason, rule_id? }`, deterministic, in order:
@@ -279,7 +282,8 @@ Redaction is a pure module with exhaustive unit tests; the activity writer and t
    member limit + household budget (household currency); merchant allow/block lists; currency
    converted with the latest daily ECB reference rate (Frankfurter, free) — no rate → deny;
 5. for high-tier and card requests → **always ask** (CVV / device unlock needs the person);
-6. **ask-first** rules matching, or the tool class default "ask me first" → ask;
+6. **ask-first** rules matching, a tool declared to always ask (a LinkedIn post,
+   [ADR](../adr/linkedin-connector.md)), or the tool class default "ask me first" → ask;
 7. allow.
 Rule actions/conditions are exactly the brief's vocabulary. Each rule renders back to an English
 sentence by a pure function (`ruleSentence`).

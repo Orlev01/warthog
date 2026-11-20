@@ -1313,3 +1313,66 @@ test("client observations and SDK input refusals are recorded without retaining 
   assert.equal(rejected.length,2);
  } finally {await db.close();}
 });
+
+async function linkedInPostRoundTrip(postId: string) {
+  const { createAgentExecutors } = await import("./compose");
+  const { decide } = await import("../db/approvals");
+  const db = await freshDb();
+  try {
+    const config = devConfig({ LINKEDIN_CLIENT_ID: "li-client", LINKEDIN_CLIENT_SECRET: "li-secret" });
+    const { userId, connectionId, dek } = await seedConnection(db, config, { grantedConnectors: ["linkedin"], changeTools: "allow" });
+    await connectService(db, userId, dek, "linkedin", { access_token: "synthetic-linkedin-token" });
+    const sent: Array<{ url: string; init: RequestInit }> = [];
+    const fetch = (async (input: RequestInfo | URL, init?: RequestInit) => {
+      sent.push({ url: String(input), init: init ?? {} });
+      if (String(input) === "https://api.linkedin.com/v2/userinfo") return Response.json({ sub: "782bbtaQ", name: "Sam Lee", email: "sam@example.com" });
+      if (init?.method === "POST") return new Response(null, { status: 201, headers: { "x-restli-id": postId } });
+      return new Response(null, { status: 204 });
+    }) as typeof globalThis.fetch;
+    const dispatch = createMcpDispatch({ db, config, fetch });
+
+    const names = ((await readRpc(await dispatch(connectionId, mcpPost(LIST_BODY)))).result?.tools ?? []).map((t) => t.name);
+    for (const name of ["linkedin__profile", "linkedin__create_post", "linkedin__delete_post"]) assert.ok(names.includes(name), name);
+    assert.ok(!names.includes("linkedin__request"), "LinkedIn is reachable only through its curated tools");
+
+    const held = await readRpc(await dispatch(connectionId, mcpPost(callBody("linkedin__create_post", { text: "Hiring (two roles)", visibility: "PUBLIC" }))));
+    assert.equal(held.result?.structuredContent?.status, "pending_approval");
+    assert.equal(sent.length, 0, "nothing reaches LinkedIn before the person says yes");
+
+    const approvalId = String(held.result!.structuredContent!.approval_id);
+    await decide(db, { userId, id: approvalId, decision: { status: "approved" } }, dek, systemClock);
+    const executors = createAgentExecutors({ db, config, fetch });
+    assert.equal((await executors.executeApprovedHold(userId, approvalId)).status, "executed");
+    const posts = sent.filter((r) => r.url === "https://api.linkedin.com/rest/posts");
+    assert.equal(posts.length, 1, "posted exactly once");
+    assert.equal(JSON.parse(String(posts[0]!.init.body)).commentary, "Hiring \\(two roles\\)");
+
+    const entry = (await listActivity(db, userId, {}, dek)).find((e) => e.tool === "linkedin__create_post" && e.outcome === "executed")!;
+    assert.ok(entry, "the approved post is in Activity");
+    assert.ok(!JSON.stringify(entry.payload).includes("synthetic-linkedin-token"));
+    const undone = await executors.runReversal({ userId, originalSeq: entry.seq, reversalTool: "linkedin__delete_post" });
+    assert.equal(undone.status, "executed");
+    assert.equal(sent.at(-1)!.url, `https://api.linkedin.com/rest/posts/${encodeURIComponent(postId)}`);
+    assert.equal(sent.at(-1)!.init.method, "DELETE");
+
+    // An agent deleting a post itself is held for the person, even with changes allowed.
+    const before = sent.length;
+    const deleteHeld = await readRpc(await dispatch(connectionId, mcpPost(callBody("linkedin__delete_post", { query: { id: postId } }))));
+    assert.equal(deleteHeld.result?.structuredContent?.status, "pending_approval");
+    assert.equal(sent.length, before, "nothing is deleted before the person says yes");
+    // A post Warthog won't send is refused before anyone is asked.
+    const refused = await readRpc(await dispatch(connectionId, mcpPost(callBody("linkedin__create_post", { text: "Hi", link: { url: "http://example.com" } }))));
+    assert.equal(refused.result?.isError, true);
+    assert.notEqual(refused.result?.structuredContent?.status, "pending_approval");
+  } finally { await db.close(); }
+}
+
+test("a LinkedIn post over MCP waits for the person even when changes are allowed, posts once on approval, and Undo deletes it", async () => {
+  await linkedInPostRoundTrip("urn:li:share:7262000000000000001");
+});
+
+test("Undo still deletes a LinkedIn post whose id happens to pass the card-number checksum", async () => {
+  // About one LinkedIn post id in ten is a 19-digit number that passes the Luhn check; the
+  // activity writer must keep the validated Undo target rather than mask it as a card.
+  await linkedInPostRoundTrip("urn:li:share:7262000000000000009");
+});

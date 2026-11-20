@@ -90,3 +90,23 @@ test("a person with several accounts of a service sees which one the request use
   );
   assert.equal(requestSentence({ tool: "remember", account: "ignored" }), "wants to save a memory", "Warthog's own tools have no account");
 });
+
+test("a LinkedIn post reads as a post, with who will see it", () => {
+  const post = { kind: "post" as const, excerpt: "We're hiring", text: "We're hiring", visibility: "PUBLIC" as const };
+  assert.equal(
+    requestSentence({ tool: "linkedin__create_post", connector: "linkedin", service: "LinkedIn", outgoing: post }),
+    "wants to post on LinkedIn for anyone to see",
+  );
+  assert.equal(
+    requestSentence({ tool: "linkedin__create_post", connector: "linkedin", service: "LinkedIn", outgoing: { ...post, visibility: "CONNECTIONS" }, account: "sam@example.com" }),
+    "wants to post on LinkedIn for your connections to see (sam@example.com)",
+  );
+});
+
+test("deleting a LinkedIn post reads as deleting a post", () => {
+  assert.equal(
+    requestSentence({ tool: "linkedin__delete_post", connector: "linkedin", service: "LinkedIn",
+      outgoing: { kind: "post_delete", url: "https://www.linkedin.com/feed/update/urn:li:share:1/" } }),
+    "wants to delete a post from LinkedIn",
+  );
+});

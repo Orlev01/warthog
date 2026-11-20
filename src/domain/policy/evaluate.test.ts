@@ -690,3 +690,33 @@ test("evaluate does not mutate the injected clock instant", () => {
   evaluate(cardCall({ amount: 42 }), makeCtx({ card: makeCard({ releases: [{ amount: 180, at: march(5) }] }) }));
   assert.equal(NOW.getTime(), before, "the injected `now` is left untouched (pure, no side effects)");
 });
+
+// A tool that always asks (docs/adr/linkedin-connector.md: LinkedIn posts). The person is asked
+// even when the agent may make changes alone; anything that would refuse still refuses.
+test("a tool that always asks asks even when changes are allowed, and says why", () => {
+  const post = changeCall({ alwaysAsk: true, messageChannel: "post" });
+  const r = evaluate(post, makeCtx({ permission: makePermission({ changes: "allow" }) }));
+  assertShape(r);
+  assert.equal(r.decision, "ask");
+  assert.equal(r.ruleId, undefined, "it's the tool's own rule, not one the person wrote");
+  assert.match(r.reason, /always/i);
+  assert.equal(evaluate(post, makeCtx({ permission: makePermission({ changes: "ask_first" }) })).decision, "ask");
+});
+
+test("a tool that always asks is still refused by a denial or a never-allow rule, and a person's ask rule keeps its id", () => {
+  const post = changeCall({ alwaysAsk: true, messageChannel: "post" });
+  assert.equal(evaluate(post, makeCtx({ permission: makePermission({ changes: "off" }) })).decision, "deny");
+  assert.equal(evaluate(post, makeCtx({ permission: makePermission({ grantedTools: [] }) })).decision, "deny");
+  const neverPost: IdentifiedRule = { id: "np", kind: "never_allow", scope: { type: "any_agent" }, action: { type: "send_message", channel: "post" } };
+  assert.equal(evaluate(post, makeCtx({ rules: [neverPost] })).ruleId, "np");
+  assert.equal(evaluate(post, makeCtx({ rules: [neverPost] })).decision, "deny");
+  // A rule about email doesn't reach a post: the tool's semantics are known.
+  const neverEmail: IdentifiedRule = { id: "ne", kind: "never_allow", scope: { type: "any_agent" }, action: { type: "send_message", channel: "email" } };
+  assert.equal(evaluate(post, makeCtx({ rules: [neverEmail] })).decision, "ask");
+  const askPost: IdentifiedRule = { id: "ap", kind: "ask_first", scope: { type: "any_agent" }, action: { type: "send_message", channel: "post" } };
+  assert.equal(evaluate(post, makeCtx({ rules: [askPost] })).ruleId, "ap");
+});
+
+test("always-ask doesn't touch reads", () => {
+  assert.equal(evaluate(readCall({ alwaysAsk: true }), makeCtx()).decision, "allow");
+});

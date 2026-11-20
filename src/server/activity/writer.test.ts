@@ -1029,3 +1029,34 @@ test("an activity append rolled back with its transaction does not block or cont
     assert.deepEqual(await checkIntegrity(db, userId), { intact: true, checked: 1, brokenSeq: null });
   } finally { await db.close(); }
 });
+
+test("a Warthog tool call's validated Undo target is kept as stored, and nothing else escapes card masking", async () => {
+  const db = await freshDb();
+  try {
+    const userId = await makeUser(db, "undo-target");
+    const dek = freshDek();
+    const recorder = recorderFor(db, userId, dek);
+    // A real LinkedIn post id shape that passes the card checksum (docs/adr/linkedin-connector.md).
+    const post = "urn:li:share:7262000000000000009";
+    const reversal = { tool: "linkedin__delete_post", eventId: post };
+    await recorder.record({ userId, kind: "tool_call", source: "warthog", tool: "linkedin__create_post", outcome: "executed",
+      payload: { reversal, note: `card ${CARD}` } });
+    // The same shape from an agent's own report, or under a tool with no such reversal, is masked.
+    await recorder.record({ userId, kind: "tool_call", source: "agent_reported", tool: "linkedin__create_post", outcome: "executed",
+      payload: { reversal } });
+    await recorder.record({ userId, kind: "tool_call", source: "warthog", tool: "google-gmail__send", outcome: "executed",
+      payload: { reversal } });
+    // A target whose tool doesn't match the call's declared reversal is masked too.
+    await recorder.record({ userId, kind: "tool_call", source: "warthog", tool: "linkedin__create_post", outcome: "executed",
+      payload: { reversal: { tool: "google-calendar__delete", eventId: CARD } } });
+
+    const [kept, reported, other, mismatched] = await readActivity(db, userId, dek);
+    assert.deepEqual((kept!.payload as { reversal: unknown }).reversal, reversal);
+    assert.ok(!json(kept!.payload).includes(CARD), "the rest of the payload is still masked");
+    for (const entry of [reported, other, mismatched]) {
+      assert.ok(!json(entry!.payload).includes("7262000000000000009") && !json(entry!.payload).includes(CARD), json(entry!.payload));
+    }
+  } finally {
+    await db.close();
+  }
+});

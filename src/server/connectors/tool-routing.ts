@@ -7,7 +7,7 @@
 //   1. `connectorToolsetFor` — WHICH connector tools a connection is served: for every one
 //      of the person's CONNECTED services that this agent is granted and that the catalogue
 //      knows, either its curated tools (Gmail, Google Calendar/Drive, Outlook mail/calendar,
-//      OneDrive — each with its declared read/change class and sends-a-message flag) or, for
+//      OneDrive, LinkedIn — each with its declared read/change class and sends-a-message flag) or, for
 //      a service with no curated tools, the one general request tool `<id>__request`. A
 //      curated service gets NO general request tool, so an agent cannot reach it around the
 //      declarations the rules engine reads (e.g. send mail through a raw POST that no
@@ -31,6 +31,8 @@ import { HttpError, parseParams } from "../http/validate";
 import type { CatalogueIndex } from "./catalogue";
 import { callGoogleTool, GOOGLE_CURATED_TOOLS, type CuratedTool } from "./curated/google";
 import { callMicrosoftTool, MICROSOFT_CURATED_TOOLS } from "./curated/microsoft";
+import { callLinkedInTool, LINKEDIN_CURATED_TOOLS } from "./curated/linkedin";
+import { checkLinkedInPost, LinkedInPostError, MAX_POST_CHARS } from "../../domain/content/linkedin-post";
 import { sendConnectorRequest } from "./request-tool";
 import { draftRecipients, MailComposeError, type MailDraft } from "../../domain/content/compose-mail";
 import type { ConnectorToolDeclaration, ConnectorToolset } from "../mcp/tools/registry";
@@ -89,6 +91,30 @@ export const mailComposeSchema = z.object({
 });
 export type MailComposeInput = z.infer<typeof mailComposeSchema>;
 
+// A LinkedIn post: plain fields Warthog turns into the post itself
+// (docs/adr/linkedin-connector.md), so the card shows exactly what goes out.
+export const linkedInPostSchema = z.object({
+  text: z.string().min(1).max(MAX_POST_CHARS).describe("The post's text, as it should appear. Hashtags like #hiring work; @mentions don't."),
+  visibility: z.enum(["PUBLIC", "CONNECTIONS"]).optional()
+    .describe("Who can see it: CONNECTIONS (the default) or PUBLIC (anyone on LinkedIn)."),
+  link: z.object({
+    url: z.string().min(1).max(2000).describe("A public https address."),
+    title: z.string().max(200).optional().describe("The link's title. Defaults to the site's name."),
+    description: z.string().max(300).optional().describe("A line about the link."),
+  }).optional().describe("A link shown under the post."),
+  reason,
+}).superRefine((post, ctx) => {
+  // Refused here, before it's held, so the agent can fix it rather than the person approving a
+  // post that then fails.
+  try {
+    checkLinkedInPost(post);
+  } catch (err) {
+    if (!(err instanceof LinkedInPostError)) throw err;
+    ctx.addIssue({ code: "custom", message: err.message });
+  }
+});
+export type LinkedInPostFields = z.infer<typeof linkedInPostSchema>;
+
 /** The draft an agent wrote, in the email builder's terms. */
 export function mailDraftOf(input: MailComposeInput): MailDraft {
   return {
@@ -136,9 +162,13 @@ export function isMailComposeTool(tool: string): boolean {
 const CURATED_BY_CONNECTOR: ReadonlyMap<string, readonly CuratedTool[]> = groupByConnector([
   ...GOOGLE_CURATED_TOOLS,
   ...MICROSOFT_CURATED_TOOLS,
+  ...LINKEDIN_CURATED_TOOLS,
 ]);
 const GOOGLE_TOOL_NAMES = new Set(GOOGLE_CURATED_TOOLS.map((tool) => tool.name));
 const MICROSOFT_TOOL_NAMES = new Set(MICROSOFT_CURATED_TOOLS.map((tool) => tool.name));
+const LINKEDIN_TOOL_NAMES = new Set(LINKEDIN_CURATED_TOOLS.map((tool) => tool.name));
+const LINKEDIN_POST = "linkedin__create_post";
+const LINKEDIN_DELETE = "linkedin__delete_post";
 
 function groupByConnector(tools: readonly CuratedTool[]): Map<string, CuratedTool[]> {
   const grouped = new Map<string, CuratedTool[]>();
@@ -235,6 +265,21 @@ const OUTLOOK_MAIL_PRESENTATION: Readonly<Record<string, { title: string; descri
   },
 };
 
+const LINKEDIN_PRESENTATION: Readonly<Record<string, { title: string; description: string }>> = {
+  profile: {
+    title: "LinkedIn: Your profile",
+    description: "The person's LinkedIn name, email and photo. LinkedIn doesn't let Warthog read their feed, connections, messages or job history.",
+  },
+  create_post: {
+    title: "LinkedIn: Post",
+    description: "Post on the person's LinkedIn. Give text, and optionally visibility (CONNECTIONS by default, or PUBLIC) and a link. The person always approves a post first: pending_approval means nothing is posted yet. Returns the post's id and link.",
+  },
+  delete_post: {
+    title: "LinkedIn: Delete post",
+    description: "Delete one of the person's LinkedIn posts by query.id, the id create_post returned (urn:li:share:…). The person always approves a delete first.",
+  },
+};
+
 // Calendar tools that send invitations to the event's guests (docs/adr/approval-card-truth.md):
 // their guests are read from the event body so the approval card names them.
 const CALENDAR_INVITE_TOOLS = new Set([
@@ -264,7 +309,8 @@ export function calendarGuests(rawBody: string | undefined): string[] {
 function declarationOf(tool: CuratedTool, serviceName: string): ConnectorToolDeclaration {
   const verb = tool.name.slice(tool.connectorId.length + NAMESPACE.length);
   const presentation = tool.connectorId === "google-gmail" ? GMAIL_PRESENTATION[verb]
-    : tool.connectorId === "microsoft-outlook-mail" ? OUTLOOK_MAIL_PRESENTATION[verb] : undefined;
+    : tool.connectorId === "microsoft-outlook-mail" ? OUTLOOK_MAIL_PRESENTATION[verb]
+    : tool.connectorId === "linkedin" ? LINKEDIN_PRESENTATION[verb] : undefined;
   return {
     name: verb,
     title: presentation?.title ?? `${serviceName}: ${verb.replace(/_/g, " ")}`,
@@ -276,6 +322,14 @@ function declarationOf(tool: CuratedTool, serviceName: string): ConnectorToolDec
     ...(CALENDAR_INVITE_TOOLS.has(tool.name) ? { recipients: calendarGuests, outbound: true } : {}),
     // Editing an event notifies the guests it already has, even when the edit doesn't list them.
     ...(tool.name.endsWith("calendar__update") ? { alwaysOutbound: true } : {}),
+    // A post reaches other people, and LinkedIn's terms rule out posting without the member,
+    // so the person is always asked first (docs/adr/linkedin-connector.md).
+    ...(tool.name === LINKEDIN_POST
+      ? { schema: linkedInPostSchema, messageChannel: "post" as const, outbound: true, alwaysOutbound: true, alwaysAsk: true }
+      : {}),
+    // An agent's delete can't be taken back, so the person is asked first too. Undo of a post
+    // Warthog made is the person's own action and runs straight away (compose.ts runReversal).
+    ...(tool.name === LINKEDIN_DELETE ? { alwaysAsk: true } : {}),
   };
 }
 
@@ -391,6 +445,11 @@ export function createConnectorToolExecutor(
       if (GOOGLE_TOOL_NAMES.has(call.tool)) return callGoogleTool(input, transport);
       return callMicrosoftTool(input, transport);
     }
+    if (call.tool === LINKEDIN_POST) {
+      const { text, visibility, link } = parseParams(linkedInPostSchema, call.params);
+      return callLinkedInTool({ tool: call.tool, entry, userId, connectionId: connection.id, dek,
+        post: { text, ...(visibility ? { visibility } : {}), ...(link ? { link } : {}) } }, transport);
+    }
     const params = parseParams(connectorToolSchema, call.params);
     const input = {
       tool: call.tool,
@@ -403,6 +462,7 @@ export function createConnectorToolExecutor(
     };
     if (GOOGLE_TOOL_NAMES.has(call.tool)) return callGoogleTool(input, transport);
     if (MICROSOFT_TOOL_NAMES.has(call.tool)) return callMicrosoftTool(input, transport);
+    if (LINKEDIN_TOOL_NAMES.has(call.tool)) return callLinkedInTool(input, transport);
     throw new HttpError(400, "This service tool is not available.");
   };
 }

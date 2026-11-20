@@ -1287,3 +1287,44 @@ test("a card names the account up front only when the person has more than one o
     await db.close();
   }
 });
+
+test("a LinkedIn post is held even for an agent allowed to make changes, and its card shows the post", async () => {
+  const db = await freshDb();
+  const keyWrapper = keyWrapperFor();
+  try {
+    const held = await arrangeHeld(db, keyWrapper, "card-post", {
+      connector: "linkedin", tool: "linkedin__create_post", makesChange: true, alwaysAsk: true, messageChannel: "post", outbound: true,
+      params: { text: "We're hiring (two roles)!\nDetails below.", visibility: "PUBLIC",
+        link: { url: "https://www.example.com/jobs", title: "Two roles open", description: "Apply by Friday." } },
+    } as AgentCallArg, { grantedConnectors: ["linkedin"], changeTools: "allow" });
+    assert.equal(held.exec.calls.length, 0, "nothing is posted before the person says yes");
+    const view = (await held.actions.load(await freshSession(db, held.userId))).pending[0]!;
+    assert.equal(view.sentence, "wants to post on LinkedIn for anyone to see");
+    assert.equal(line(view, "Post"), "We're hiring (two roles)! Details below.");
+    assert.equal(line(view, "Links to"), "example.com");
+    assert.equal(line(view, "Link title"), "Two roles open", "the headline that's published is shown up front");
+    assert.equal(line(view, "Full post"), "We're hiring (two roles)!\nDetails below.");
+    assert.equal(line(view, "Link description"), "Apply by Friday.");
+    assert.equal(line(view, "Link"), "https://www.example.com/jobs");
+    assert.match(line(view, "Why you're asked") ?? "", /always/i);
+  } finally {
+    await db.close();
+  }
+});
+
+test("an agent deleting a LinkedIn post is held even when changes are allowed, and the card links the post", async () => {
+  const db = await freshDb();
+  const keyWrapper = keyWrapperFor();
+  try {
+    const held = await arrangeHeld(db, keyWrapper, "card-post-delete", {
+      connector: "linkedin", tool: "linkedin__delete_post", makesChange: true, alwaysAsk: true,
+      params: { query: { id: "urn:li:share:7262000000000000001" } },
+    } as AgentCallArg, { grantedConnectors: ["linkedin"], changeTools: "allow" });
+    assert.equal(held.exec.calls.length, 0, "nothing is deleted before the person says yes");
+    const view = (await held.actions.load(await freshSession(db, held.userId))).pending[0]!;
+    assert.equal(view.sentence, "wants to delete a post from LinkedIn");
+    assert.equal(line(view, "Post"), "https://www.linkedin.com/feed/update/urn:li:share:7262000000000000001/");
+  } finally {
+    await db.close();
+  }
+});

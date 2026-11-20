@@ -22,6 +22,13 @@ on:
         description: Separately approved first activation after immutable storage and writer grant are verified
         type: boolean
         default: false
+      activate_linkedin:
+        description: Separately approved one-time LinkedIn activation after the linkedin-client-secret Key Vault reference is added
+        type: boolean
+        default: false
+      linkedin_client_id:
+        description: LinkedIn activation only - the LinkedIn app's plain client ID (never its secret)
+        type: string
 
 permissions:
   contents: read
@@ -60,6 +67,8 @@ jobs:
       IMAGE_DIGEST: ${{ inputs.image_digest }}
       EXPECTED_CONFIG_SHA256: ${{ inputs.expected_config_sha256 }}
       ACTIVATE_DELETION_JOURNAL: ${{ inputs.activate_deletion_journal }}
+      ACTIVATE_LINKEDIN: ${{ inputs.activate_linkedin }}
+      LINKEDIN_CLIENT_ID: ${{ inputs.linkedin_client_id }}
       ACR_NAME: ${{ vars.ACR_NAME }}
       RESOURCE_GROUP: ${{ vars.RESOURCE_GROUP }}
       APP_NAME: ${{ vars.APP_NAME }}
