@@ -107,6 +107,7 @@ This contract matches the approved local Twilio/Resend integration. It is not pe
 | `SMS_MAX_SEGMENTS_PER_MESSAGE` | Mandatory positive integer ≤ recipient-hour cap, includes link/STOP text and conservative Unicode/GSM segmentation |
 | `GOOGLE_CLIENT_ID`, `GOOGLE_CLIENT_SECRET`, `GOOGLE_EARLY_ACCESS` | Web OAuth client and Warthog-account email allowlist. The Google app is published but unverified (17 Nov 2026), so any Google account can connect behind Google's unverified-app screen, up to 100 people in the app's lifetime; the allowlist keeps others from using those places |
 | `MICROSOFT_CLIENT_ID`, `MICROSOFT_CLIENT_SECRET` | Web OAuth client for the agreed personal/multitenant audience |
+| `LINKEDIN_CLIENT_ID`, `LINKEDIN_CLIENT_SECRET` | Optional (20 Nov 2026). The LinkedIn app's client ID (a plain value) and its secret (Key Vault secret `linkedin-client-secret`, referenced by the app secret of the same name). Both or neither; LinkedIn is offered only when both are set. Added to the live app by a one-time `activate_linkedin` release, never by hand: docs/linkedin-launch.md |
 | `VAPID_SUBJECT`, `VAPID_PUBLIC_KEY`, `VAPID_PRIVATE_KEY` | Approved `mailto:` contact, matching uncompressed P-256 public key in base64url, serialized private P-256 JWK JSON |
 | `OPERATOR_EMAIL`, `EXCHANGE_RATE_BASE_URL` | The operator's account address (promoted to admin hourly; nothing is emailed to it) and free official reference-rate endpoint |
 | Development settings | `WARTHOG_DEV_TOOLS` unset/0; `WARTHOG_DEV_KEK` absent; no PGlite or development outbox in production |

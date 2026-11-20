@@ -30,6 +30,8 @@ NAMES = {
     'GOOGLE_CLIENT_ID': 'google-client-id',
     'GOOGLE_CLIENT_SECRET': 'google-client-secret',
     'GOOGLE_EARLY_ACCESS': 'google-early-access',
+    # Optional, installed on its own when the founder registers the LinkedIn app (docs/linkedin-launch.md).
+    'LINKEDIN_CLIENT_SECRET': 'linkedin-client-secret',
     'DATABASE_URL': 'database-url',
     'MIGRATION_DATABASE_URL': 'migration-database-url',
     'PURGE_DATABASE_URL': 'purge-database-url',

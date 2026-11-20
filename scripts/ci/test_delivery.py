@@ -278,6 +278,37 @@ class SingletonTests(unittest.TestCase):
             with self.assertRaises(RuntimeError):
                 deploy_app.journal_activation(old, "update")
 
+    def test_linkedin_activation_is_explicit_and_needs_its_vault_secret_and_a_plain_client_id(self):
+        old = app_fixture()
+        old["properties"]["configuration"]["secrets"].append(
+            {"name": "linkedin-client-secret", "keyVaultUrl": "https://test.vault.azure.net/secrets/linkedin-client-secret/1"})
+        self.assertIsNone(deploy_app.linkedin_activation(old, "update"))
+        with patch.dict(os.environ, ACTIVATE_LINKEDIN="false", LINKEDIN_CLIENT_ID="78abcdEFG12345"):
+            self.assertIsNone(deploy_app.linkedin_activation(old, "update"))
+        with patch.dict(os.environ, ACTIVATE_LINKEDIN="true", LINKEDIN_CLIENT_ID="78abcdEFG12345"):
+            self.assertEqual(deploy_app.linkedin_activation(old, "update"), "78abcdEFG12345")
+            for operation in ["inspect", "create"]:
+                with self.assertRaises(RuntimeError):
+                    deploy_app.linkedin_activation(old, operation)
+            without_secret = app_fixture()
+            with self.assertRaisesRegex(RuntimeError, "linkedin-client-secret"):
+                deploy_app.linkedin_activation(without_secret, "update")
+            literal = copy.deepcopy(old)
+            literal["properties"]["configuration"]["secrets"][-1] = {"name": "linkedin-client-secret", "value": "pasted-secret"}
+            with self.assertRaisesRegex(RuntimeError, "linkedin-client-secret"):
+                deploy_app.linkedin_activation(literal, "update")
+            configured = copy.deepcopy(old)
+            configured["properties"]["template"]["containers"][0]["env"].append({"name": "LINKEDIN_CLIENT_ID", "value": "78abcdEFG12345"})
+            with self.assertRaisesRegex(RuntimeError, "already"):
+                deploy_app.linkedin_activation(configured, "update")
+        for client_id in ["", "short", "has space 1234", "78abc;rm -rf", "a" * 65, "78abc=LINKEDIN_CLIENT_SECRET"]:
+            with self.subTest(client_id=client_id), patch.dict(os.environ, ACTIVATE_LINKEDIN="true", LINKEDIN_CLIENT_ID=client_id):
+                with self.assertRaises(RuntimeError):
+                    deploy_app.linkedin_activation(old, "update")
+        with patch.dict(os.environ, ACTIVATE_LINKEDIN="yes"):
+            with self.assertRaises(RuntimeError):
+                deploy_app.linkedin_activation(old, "update")
+
     def platform(self):
         platform = Mock(spec=deploy_app.Platform)
         platform.app, platform.group = "warthog", "test-group"
@@ -462,6 +493,56 @@ class SingletonTests(unittest.TestCase):
             self.assertEqual(args[-2:], ("--set-env-vars", "DELETION_JOURNAL_CONTAINER=account-deletions"))
             self.assertNotIn("--replace-env-vars", args)
         self.assertEqual(len(old["properties"]["template"]["containers"][0]["env"]), 2)
+
+    def test_linkedin_activation_adds_only_its_two_settings_after_stop(self):
+        platform = self.platform()
+        old = app_fixture()
+        old["properties"]["configuration"]["secrets"].append(
+            {"name": "linkedin-client-secret", "keyVaultUrl": "https://test.vault.azure.net/secrets/linkedin-client-secret/1"})
+        live = copy.deepcopy(old)
+        live["properties"]["template"]["revisionSuffix"] = "new"
+        live["properties"]["template"]["containers"][0].update(image="new-digest")
+        live["properties"]["template"]["containers"][0]["env"].extend([
+            {"name": "LINKEDIN_CLIENT_ID", "value": "78abcdEFG12345"},
+            {"name": "LINKEDIN_CLIENT_SECRET", "secretRef": "linkedin-client-secret", "value": ""}])
+        live["properties"]["configuration"]["ingress"]["traffic"] = [{"revisionName": "warthog--new", "weight": 100}]
+        platform.current.side_effect = [old, old, live]
+        with patch.dict(os.environ, ACTIVATE_LINKEDIN="true", LINKEDIN_CLIENT_ID="78abcdEFG12345",
+                        EXPECTED_CONFIG_SHA256=deploy_app.fingerprint(old)), \
+             patch.object(deploy_app, "verify_image"), patch.object(deploy_app, "azure") as cloud, \
+             patch.object(deploy_app, "wait_ready"), patch.object(deploy_app, "summary"), \
+             patch.object(deploy_app.urllib.request, "urlopen") as health:
+            health.return_value.__enter__.return_value = Mock(status=200)
+            def azure_after_stop(*args):
+                platform.wait_stopped.assert_called_once()
+            cloud.side_effect = azure_after_stop
+            self.run_update(platform)
+            args = cloud.call_args_list[0].args
+            self.assertEqual(args[:3], ("containerapp", "revision", "copy"))
+            self.assertEqual(args[-3:], ("--set-env-vars", "LINKEDIN_CLIENT_ID=78abcdEFG12345",
+                                         "LINKEDIN_CLIENT_SECRET=secretref:linkedin-client-secret"))
+            self.assertNotIn("--replace-env-vars", args)
+        self.assertEqual(len(old["properties"]["template"]["containers"][0]["env"]), 2, "the live snapshot is untouched")
+
+    def test_linkedin_activation_refuses_a_live_app_that_changed_anything_else(self):
+        platform = self.platform()
+        old = app_fixture()
+        old["properties"]["configuration"]["secrets"].append(
+            {"name": "linkedin-client-secret", "keyVaultUrl": "https://test.vault.azure.net/secrets/linkedin-client-secret/1"})
+        live = copy.deepcopy(old)
+        live["properties"]["template"]["revisionSuffix"] = "new"
+        live["properties"]["template"]["containers"][0].update(image="new-digest")
+        live["properties"]["template"]["containers"][0]["env"].extend([
+            {"name": "LINKEDIN_CLIENT_ID", "value": "someone-elses-id-123"},
+            {"name": "LINKEDIN_CLIENT_SECRET", "secretRef": "linkedin-client-secret"}])
+        live["properties"]["configuration"]["ingress"]["traffic"] = [{"revisionName": "warthog--new", "weight": 100}]
+        platform.current.side_effect = [old, old, live]
+        with patch.dict(os.environ, ACTIVATE_LINKEDIN="true", LINKEDIN_CLIENT_ID="78abcdEFG12345",
+                        EXPECTED_CONFIG_SHA256=deploy_app.fingerprint(old)), \
+             patch.object(deploy_app, "verify_image"), patch.object(deploy_app, "azure"), \
+             patch.object(deploy_app, "wait_ready"), patch.object(deploy_app, "summary"):
+            with self.assertRaises(RuntimeError):
+                self.run_update(platform)
 
     def test_failed_start_stops_candidate_without_reactivating_old_revision(self):
         platform = self.platform()

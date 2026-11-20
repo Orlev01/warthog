@@ -1,4 +1,4 @@
-"""Approved singleton releases, with a separately reviewed journal activation."""
+"""Approved singleton releases, with separately reviewed journal and LinkedIn activations."""
 import copy
 import json
 import os
@@ -151,6 +151,32 @@ def journal_activation(previous, operation):
     return True
 
 
+LINKEDIN_SECRET = "linkedin-client-secret"
+
+
+def linkedin_activation(previous, operation):
+    """The LinkedIn app ID for a separately approved one-time connector activation, or None.
+
+    The client secret never passes through here: the operator first adds the app secret
+    `linkedin-client-secret` as a Key Vault reference (docs/linkedin-launch.md), so this
+    release adds only the plain app ID and a reference to that secret.
+    """
+    value = os.environ.get("ACTIVATE_LINKEDIN", "false")
+    require(value in ("true", "false", ""), "Invalid LinkedIn activation selection")
+    if value != "true":
+        return None
+    require(operation == "update" and previous is not None, "LinkedIn activation requires an existing app update")
+    client_id = os.environ.get("LINKEDIN_CLIENT_ID", "")
+    require(re.fullmatch(r"[A-Za-z0-9]{8,64}", client_id), "LinkedIn client ID must be the app's plain client ID")
+    env = previous["properties"]["template"]["containers"][0]["env"]
+    require(not any(item["name"].startswith("LINKEDIN_") for item in env),
+            "LinkedIn is already configured; inspect rather than replace it")
+    secrets = previous["properties"]["configuration"].get("secrets") or []
+    require(any(item["name"] == LINKEDIN_SECRET and item.get("keyVaultUrl") and not item.get("value") for item in secrets),
+            "Add the linkedin-client-secret Key Vault reference before activating LinkedIn")
+    return client_id
+
+
 def verify_image(image, *, require_journal=False):
     registry = setting("ACR_NAME", r"[a-z0-9]{5,50}")
     require(re.fullmatch(re.escape(registry) + r"\.azurecr\.io/warthog@sha256:[a-f0-9]{64}", image),
@@ -195,6 +221,7 @@ def wait_ready(platform, revision, image, timeout=720):
 def release(platform, operation, image, suffix, scratch):
     previous = platform.current()
     activate_journal = journal_activation(previous, operation)
+    linkedin_client = linkedin_activation(previous, operation)
     if operation == "inspect":
         require(previous is not None, "No app exists; use the separately approved create operation")
         validate_live(previous)
@@ -232,10 +259,13 @@ def release(platform, operation, image, suffix, scratch):
     try:
         started = True  # Azure requests can partially succeed before a CLI timeout.
         if previous:
-            journal_arguments = ["--set-env-vars", "DELETION_JOURNAL_CONTAINER=account-deletions"] if activate_journal else []
+            added = (["DELETION_JOURNAL_CONTAINER=account-deletions"] if activate_journal else []) + (
+                ["LINKEDIN_CLIENT_ID=" + linkedin_client, "LINKEDIN_CLIENT_SECRET=secretref:" + LINKEDIN_SECRET]
+                if linkedin_client else [])
+            env_arguments = ["--set-env-vars", *added] if added else []
             azure("containerapp", "revision", "copy", *platform.scope,
                   "--from-revision", previous["properties"]["latestRevisionName"],
-                  "--image", image, "--revision-suffix", suffix, "--container-name", "warthog", *journal_arguments)
+                  "--image", image, "--revision-suffix", suffix, "--container-name", "warthog", *env_arguments)
         else:
             azure("deployment", "group", "create", "--resource-group", platform.group,
                   "--name", "warthog-" + suffix, "--mode", "Incremental",
@@ -255,6 +285,10 @@ def release(platform, operation, image, suffix, scratch):
             if activate_journal:
                 expected["properties"]["template"]["containers"][0]["env"].append(
                     {"name": "DELETION_JOURNAL_CONTAINER", "value": "account-deletions"})
+            if linkedin_client:
+                expected["properties"]["template"]["containers"][0]["env"].extend([
+                    {"name": "LINKEDIN_CLIENT_ID", "value": linkedin_client},
+                    {"name": "LINKEDIN_CLIENT_SECRET", "secretRef": LINKEDIN_SECRET}])
             expected["properties"]["configuration"]["ingress"]["traffic"] = traffic
             require(fingerprint(live) == fingerprint(expected), "Release changed unapproved configuration")
         host = live["properties"]["configuration"]["ingress"]["fqdn"]
