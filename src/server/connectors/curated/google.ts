@@ -31,6 +31,7 @@ import type { Db } from "../../db/index";
 import { HttpError } from "../../http/validate";
 import { sendConnectorRequest } from "../request-tool";
 import { buildMimeMessage, MailComposeError, type MailDraft, type ReplyTarget } from "../../../domain/content/compose-mail";
+import type { LinkedInPostInput } from "../../../domain/content/linkedin-post";
 
 // One curated tool's declaration. The rules engine and the Undo flow read these.
 export interface CuratedTool {
@@ -68,6 +69,9 @@ export interface CuratedToolCallInput {
   // An email the agent drafted or is sending, from plain fields: Warthog builds the message
   // (docs/adr/approval-card-truth.md). `replyId` threads it under that message.
   readonly compose?: { readonly draft: MailDraft; readonly replyId?: string };
+  // A LinkedIn post the agent wrote, from plain fields: Warthog builds the post
+  // (docs/adr/linkedin-connector.md).
+  readonly post?: LinkedInPostInput;
 }
 
 // The upstream status and body (truncated to ~100 KB by the transport), passed back.

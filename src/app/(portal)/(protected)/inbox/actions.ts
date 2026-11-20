@@ -277,7 +277,8 @@ function guestText(guests: readonly string[]): string {
 }
 
 // What goes out, up front (approval-card truth): the email's subject and opening words, the
-// invitation's guests, the request a service would receive, or a provider tool's main fields.
+// invitation's guests, the post's opening words, the request a service would receive, or a
+// provider tool's main fields.
 function outgoingLines(outgoing: OutgoingDetail | undefined, timeZone?: string | null): RequestDetail[] {
   if (!outgoing) return [];
   switch (outgoing.kind) {
@@ -293,6 +294,11 @@ function outgoingLines(outgoing: OutgoingDetail | undefined, timeZone?: string |
       return [{ label: "Request", value: `${outgoing.method} ${outgoing.path}${outgoing.queryKeys.length ? ` (with ${outgoing.queryKeys.join(", ")})` : ""}` }];
     case "provider":
       return outgoing.arguments.slice(0, 3).map((arg) => ({ label: arg.key, value: arg.preview }));
+    case "post":
+      return [
+        { label: "Post", value: outgoing.excerpt },
+        ...(outgoing.linkDomain ? [{ label: "Links to", value: outgoing.linkDomain }] : []),
+      ];
   }
 }
 
@@ -339,6 +345,9 @@ function extraLines(detail: Record<string, unknown>): RequestDetail[] {
       if (outgoing.bcc.length) lines.push({ label: "Blind copy", value: outgoing.bcc.join(", ") });
       if (outgoing.linkDomains.length) lines.push({ label: "Links to", value: outgoing.linkDomains.join(", ") });
       if (outgoing.text) lines.push({ label: "Full message", value: outgoing.text });
+    } else if (outgoing.kind === "post") {
+      lines.push({ label: "Full post", value: outgoing.text });
+      if (outgoing.link) lines.push({ label: "Link", value: outgoing.link });
     } else if (recipients.length) {
       lines.push({ label: outgoing.kind === "invite" ? "All guests" : "Goes to", value: recipients.join(", ") });
     }

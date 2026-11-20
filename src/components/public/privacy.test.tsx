@@ -309,3 +309,12 @@ test("deletion policy distinguishes live access removal from backup retention", 
   assert.match(markup, /cuts off access and schedules removal from the live application/);
   assert.match(markup, /database backups may retain older data until their retention period ends/);
 });
+
+test("the LinkedIn section says what Warthog reads, that every post waits for approval, and what it can't see", () => {
+  const markup = renderToStaticMarkup(<Privacy />);
+  assert.match(markup, /id="linkedin"/);
+  assert.match(markup, /name, email address and\s+profile photo/);
+  assert.match(markup, /Every post waits for your approval/);
+  assert.match(markup, /can&#x27;t read your feed, connections, messages or job history/);
+  assert.match(markup, /60 days/);
+});

@@ -1,0 +1,22 @@
+{
+  "id": "linkedin",
+  "name": "LinkedIn",
+  "aliases": [
+    "linked in",
+    "linkedin profile",
+    "linkedin posts"
+  ],
+  "category": "social",
+  "auth_kind": "oauth2",
+  "base_url": "https://api.linkedin.com",
+  "auth": {
+    "authorize_url": "https://www.linkedin.com/oauth/v2/authorization",
+    "token_url": "https://www.linkedin.com/oauth/v2/accessToken",
+    "scopes": [
+      "openid",
+      "profile",
+      "email",
+      "w_member_social"
+    ]
+  }
+}

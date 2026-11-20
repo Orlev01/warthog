@@ -1,7 +1,7 @@
 // How the Connectors catalogue groups services for people (presentation only — the
 // operator's catalogue data keeps its own `category` per entry, unchanged).
 //
-// The data files carry 34 fine-grained categories, several of them near-duplicates
+// The data files carry 35 fine-grained categories, several of them near-duplicates
 // ("storage" and "file-storage", "flight" and "travel", "banking", "finance", "payments" and
 // "accounting"), and a dozen hold a single service. A member filtering for "files" or "travel"
 // would find half the services in a sibling chip. So the catalogue shows about fifteen plain
@@ -24,6 +24,7 @@ export const CATALOGUE_CATEGORY_GROUPS: readonly CatalogueCategoryGroup[] = [
   { key: "calendar", label: "Calendar", includes: ["calendar"] },
   { key: "files", label: "Files and storage", includes: ["storage", "file-storage"] },
   { key: "messaging", label: "Messaging", includes: ["messaging", "communications"] },
+  { key: "social", label: "Social", includes: ["social"] },
   // Nozbe and TickTick are task apps, filed under "notes" in the data.
   { key: "tasks", label: "Tasks and projects", includes: ["tasks", "project-management", "notes"] },
   { key: "docs", label: "Docs and notes", includes: ["productivity", "documentation"] },

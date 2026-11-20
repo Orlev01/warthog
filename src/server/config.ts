@@ -86,6 +86,8 @@ export interface Config {
   readonly connectorClients?: {
     readonly google: { readonly clientId?: string; readonly clientSecret?: string };
     readonly microsoft: { readonly clientId?: string; readonly clientSecret?: string };
+    // Optional: LinkedIn is offered only when both are set (docs/adr/linkedin-connector.md).
+    readonly linkedin?: { readonly clientId?: string; readonly clientSecret?: string };
   };
   readonly vapid: VapidConfig;
   readonly blob: BlobConfig;
@@ -312,6 +314,7 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): Config {
     connectorClients: {
       google: { clientId: env.GOOGLE_CLIENT_ID, clientSecret: env.GOOGLE_CLIENT_SECRET },
       microsoft: { clientId: env.MICROSOFT_CLIENT_ID, clientSecret: env.MICROSOFT_CLIENT_SECRET },
+      linkedin: { clientId: env.LINKEDIN_CLIENT_ID, clientSecret: env.LINKEDIN_CLIENT_SECRET },
     },
     vapid: {
       subject: env.VAPID_SUBJECT,

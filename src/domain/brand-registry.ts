@@ -47,6 +47,7 @@ export const BRAND_MARKS: Readonly<Record<string, { readonly title: string; read
   "ifttt": { title: "IFTTT", src: "/brands/ifttt.svg" },
   "intercom": { title: "Intercom", src: "/brands/intercom.svg" },
   "linear": { title: "Linear", src: "/brands/linear.svg" },
+  "linkedin": { title: "LinkedIn", src: "/brands/linkedin.svg" },
   "mailchimp": { title: "Mailchimp", src: "/brands/mailchimp.svg" },
   "mailgun": { title: "Mailgun", src: "/brands/mailgun.svg" },
   "microsoft-onedrive": { title: "OneDrive", src: "/brands/microsoft-onedrive.svg" },

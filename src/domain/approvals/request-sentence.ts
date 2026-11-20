@@ -110,7 +110,7 @@ function whoText(recipients: readonly string[]): string {
   return `${recipients[0]} and ${recipients.length - 1} others`;
 }
 
-// The sentence for an email or a calendar invitation, naming who it goes to or what it is.
+// The sentence for an email, a calendar invitation or a post, naming who it goes to or what it is.
 function outgoingSentence(call: RequestSummary): string | undefined {
   const outgoing = call.outgoing;
   if (!outgoing) return undefined;
@@ -119,6 +119,9 @@ function outgoingSentence(call: RequestSummary): string | undefined {
     const sending = call.tool.endsWith("__send");
     if (outgoing.reply) return sending ? `wants to reply to ${who || "an email"}` : `wants to save a draft reply${who ? ` to ${who}` : ""}`;
     return sending ? `wants to send an email to ${who || "someone"}` : `wants to save a draft email${who ? ` to ${who}` : ""}`;
+  }
+  if (outgoing.kind === "post") {
+    return `wants to post on ${call.service?.trim() || "LinkedIn"} for ${outgoing.visibility === "PUBLIC" ? "anyone" : "your connections"} to see`;
   }
   if (outgoing.kind === "invite" && outgoing.title) {
     return call.tool.endsWith("__update") ? `wants to change “${outgoing.title}” in your calendar` : `wants to add “${outgoing.title}” to your calendar`;

@@ -62,3 +62,31 @@ test("Gmail discovery explains search/read arguments and distinguishes an unsent
   assert.match(get("send").description!, /send an email/i);
   assert.match(get("send").description!, /Warthog builds a plain-text email/);
 });
+
+test("LinkedIn offers its profile, a post that always asks first, and deleting a post", () => {
+  const linkedIn = { get: () => ({ ...entry("linkedin"), name: "LinkedIn", category: "social" }) } as unknown as CatalogueIndex;
+  const tools = connectorToolsetFor([connection("linkedin")], ["linkedin"], linkedIn)["linkedin"]!;
+  const get = (name: string) => {
+    const tool = tools.find(t => typeof t !== "string" && t.name === name);
+    assert.ok(tool && typeof tool !== "string", name);
+    return tool;
+  };
+  assert.deepEqual(tools.map((t) => (typeof t === "string" ? t : t.name)), ["profile", "create_post", "delete_post"]);
+  assert.equal(get("profile").makesChange, false);
+  assert.equal(get("profile").alwaysAsk, undefined);
+  const post = get("create_post");
+  assert.equal(post.makesChange, true);
+  assert.equal(post.alwaysAsk, true, "a post always asks the person, whatever the agent may do alone");
+  assert.equal(post.messageChannel, "post", "a person's \"never post\" rule matches it");
+  assert.equal(post.outbound, true);
+  assert.equal(post.alwaysOutbound, true, "a post always reaches other people");
+  assert.match(post.description!, /approv/i);
+  assert.ok(post.schema!.safeParse({ text: "Hello", visibility: "PUBLIC", link: { url: "https://example.com" } }).success);
+  assert.ok(!post.schema!.safeParse({ text: "x".repeat(3001) }).success, "LinkedIn's limit is checked at the boundary");
+  assert.ok(!post.schema!.safeParse({ text: "Hi", visibility: "EVERYONE" }).success);
+  const extra = post.schema!.safeParse({ text: "Hi", author: "urn:li:person:someone-else" });
+  assert.ok(extra.success && !("author" in (extra.data as object)), "nothing else rides along");
+  assert.equal(get("delete_post").makesChange, true);
+  assert.equal(get("delete_post").alwaysAsk, undefined);
+  assert.match(get("delete_post").description!, /query\.id/);
+});

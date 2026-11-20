@@ -11,8 +11,9 @@
 import { CORE_READ_ONLY_TOOLS } from "../mcp/tools/metadata";
 import { GOOGLE_CURATED_TOOLS } from "../connectors/curated/google";
 import { MICROSOFT_CURATED_TOOLS } from "../connectors/curated/microsoft";
+import { LINKEDIN_CURATED_TOOLS } from "../connectors/curated/linkedin";
 
-const CURATED = [...GOOGLE_CURATED_TOOLS, ...MICROSOFT_CURATED_TOOLS];
+const CURATED = [...GOOGLE_CURATED_TOOLS, ...MICROSOFT_CURATED_TOOLS, ...LINKEDIN_CURATED_TOOLS];
 
 export const READ_ONLY_TOOLS: readonly string[] = [
   ...CORE_READ_ONLY_TOOLS,

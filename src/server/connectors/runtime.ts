@@ -10,7 +10,7 @@ import { createRedactingRecorder } from "../mcp/recorder";
 import { systemClock, type Clock } from "../seams/clock";
 import { loadCatalogue, type CatalogueIndex } from "./catalogue";
 import { join } from "node:path";
-import { oauthClientFor, oauthClientConfigured, providerFor, withIdentityScope } from "./client-config";
+import { oauthClientFor, oauthClientConfigured, providerFor, renewable, withIdentityScope } from "./client-config";
 import { buildAuthorizeUrl, exchangeCodeForConnection, refreshConnectionTokens } from "./oauth-client";
 import { createGuardedProviderFetch } from "./provider-mcp";
 import { pendingConnects, type PendingConnectFlow } from "./pending";
@@ -64,7 +64,9 @@ export function createConnectorRuntime(deps: {
     return wrapper.unwrap(user.wrappedDek);
   }
   async function accountLabelFor(entry: CatalogueEntry, tokens: TokenEndpointResponse): Promise<string> {
-    const endpoint = providerFor(entry.id) === "google" ? "https://www.googleapis.com/oauth2/v2/userinfo"
+    const provider = providerFor(entry.id);
+    const endpoint = provider === "google" ? "https://www.googleapis.com/oauth2/v2/userinfo"
+      : provider === "linkedin" ? "https://api.linkedin.com/v2/userinfo"
       : "https://graph.microsoft.com/v1.0/me?$select=mail,userPrincipalName";
     const response = await request(endpoint, { headers: { authorization: `Bearer ${tokens.access_token}` }, redirect: "error" });
     if (!response.ok) throw new Error("Provider account could not be verified");
@@ -73,9 +75,12 @@ export function createConnectorRuntime(deps: {
     if (typeof label !== "string" || label.length > 256 || !label.includes("@")) throw new Error("Provider account could not be verified");
     return label;
   }
-  async function schedule(tx: Db, userId: string, connectionId: string, dek: Uint8Array) {
+  async function schedule(tx: Db, userId: string, connectionId: string, dek: Uint8Array, connectorId: string) {
     const credentials = await getConnectionCredentials(tx, userId, connectionId, dek);
-    if (typeof credentials?.refresh_token !== "string" || typeof credentials.expires_at !== "string") throw new Error("Provider did not grant renewable access. Reconnect and consent again.");
+    if (typeof credentials?.expires_at !== "string") throw new Error("Provider did not say when access ends. Reconnect and consent again.");
+    // A provider with no renewal (LinkedIn) still gets the job: due at expiry, it finds nothing to
+    // renew with and the connection goes to "Reconnect needed".
+    if (renewable(providerFor(connectorId)) && typeof credentials.refresh_token !== "string") throw new Error("Provider did not grant renewable access. Reconnect and consent again.");
     const expiry = new Date(credentials.expires_at);
     if (!Number.isFinite(expiry.getTime()) || expiry.getTime() <= clock.now().getTime()) throw new Error("Provider returned expired access");
     // Avoid an immediate infinite refresh loop for providers issuing short tokens.
@@ -107,7 +112,7 @@ export function createConnectorRuntime(deps: {
         const connection = await withTransaction(db, async (tx) => {
           const connection = await exchangeCodeForConnection({ ...input, entry, config: oauthClientFor(config, entry.id), dek }, { db: tx, clock, fetch: request, accountLabelFor });
           stage = "schedule_refresh";
-          await schedule(tx, input.userId, connection.id, dek);
+          await schedule(tx, input.userId, connection.id, dek, entry.id);
           stage = "record_activity";
           await createRedactingRecorder({ db: tx, clock, dekFor: async () => dek }).record({ userId: input.userId,
             kind: "connection_change", source: "warthog", connectorId: entry.id, outcome: connection.reused ? "reconnected" : "connected", payload: { service: entry.name } });
@@ -128,6 +133,12 @@ export function createConnectorRuntime(deps: {
       const connectorId = connection.connectorId;
       // Every way this renewal can fail is one `connector.refresh` failure for its connector;
       // a renewal that goes through is one success.
+      if (!renewable(providerFor(connectorId))) {
+        // Access that can't be renewed has ended, as expected: the job handler marks the
+        // connection "Reconnect needed" and tells the person.
+        await tryRecord(recordMetric, { name: CONNECTOR_REFRESH, value: 1, dimensions: { connectorId, outcome: REFRESH_OUTCOMES.lapsed } });
+        throw new Error("Connector access ended");
+      }
       try {
         const entry = entryFor(connectorId);
         await allowed(target.userId, entry);
@@ -137,7 +148,7 @@ export function createConnectorRuntime(deps: {
             await tx.query("SELECT pg_advisory_xact_lock(hashtextextended($1, 0))", [`connector-refresh:${target.connectionId}`]);
             if (!(await getConnectionById(tx, target.userId, target.connectionId))) return;
             await refreshConnectionTokens({ ...target, entry, config: oauthClientFor(config, entry.id), dek }, { db: tx, clock, fetch: request });
-            await schedule(tx, target.userId, target.connectionId, dek);
+            await schedule(tx, target.userId, target.connectionId, dek, connectorId);
           });
         } catch { throw new Error("Connector refresh failed"); }
         finally { dek.fill(0); }

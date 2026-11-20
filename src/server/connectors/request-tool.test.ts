@@ -1074,3 +1074,27 @@ test("the connector deadline cancels a body stream even after headers arrive", a
   assert.equal(cancelled, true, "the timeout also cancels response reads");
   assert.equal(result[0]?.status, "rejected", "an incomplete timed-out body is not a success");
 });
+
+test("a curated tool's fixed headers ride along, can't replace the stored credential, and one response header can be read back", async () => {
+  const db = await freshDb();
+  try {
+    const userId = await makeUser(db, "fixed-headers");
+    const dek = freshDek();
+    const conn = await seedConnection(db, OAUTH2_ENTRY, userId,
+      { access_token: OAUTH_TOKEN, token_type: "Bearer", refresh_token: "r", expires_at: "2026-06-01T00:00:00.000Z" }, dek);
+    const f = recordingFetch(() => new Response(null, { status: 201, headers: { "x-restli-id": "urn:li:share:1" } }));
+    const result = await sendConnectorRequest(
+      { entry: OAUTH2_ENTRY, userId, connectionId: conn.id, dek, method: "POST", path: "/x", body: "{}", contentType: "application/json",
+        headers: { "LinkedIn-Version": "202611", authorization: "Bearer someone-else" }, readHeader: "x-restli-id" },
+      makeDeps(db, f.fetch),
+    );
+    const sent = f.requests[0]!.headers;
+    assert.equal(sent.get("linkedin-version"), "202611");
+    assert.equal(sent.get("authorization"), `Bearer ${OAUTH_TOKEN}`, "only the stored credential is presented");
+    assert.equal(result.header, "urn:li:share:1");
+    const plain = await sendConnectorRequest({ entry: OAUTH2_ENTRY, userId, connectionId: conn.id, dek, method: "GET", path: "/x" }, makeDeps(db, f.fetch));
+    assert.equal("header" in plain, false, "no header is read unless asked for");
+  } finally {
+    await db.close();
+  }
+});

@@ -55,6 +55,11 @@ export interface ConnectorRequestInput {
   // agent-facing cap (read-side protection: a whole email must be parsed to be checked).
   // Never a caller value.
   readonly maxBytes?: number;
+  // Fixed headers a curated tool's API needs (LinkedIn's version headers). Never a caller
+  // value, and never the credential: the stored credential is presented last.
+  readonly headers?: Readonly<Record<string, string>>;
+  // One response header a curated tool reads its result from (LinkedIn's new post id).
+  readonly readHeader?: string;
 }
 
 // The upstream status and body (truncated to ~100 KB), passed back to the agent.
@@ -62,6 +67,8 @@ export interface ConnectorRequestResult {
   readonly status: number;
   readonly body: string;
   readonly truncated: boolean;
+  // The value of the response header the request asked for (`readHeader`), when it was sent.
+  readonly header?: string;
 }
 
 // GET / HEAD (any case) are reads; ANYTHING ELSE makes a change — so an unknown verb gets
@@ -130,7 +137,11 @@ export async function sendConnectorRequest(
     throw new HttpError(404, "connection not found");
   }
 
-  const headers = presentCredentials(input.entry, credentials);
+  // A fixed header never stands in for the stored credential, in any spelling.
+  const credential = presentCredentials(input.entry, credentials);
+  const taken = new Set(Object.keys(credential).map((name) => name.toLowerCase()));
+  const fixed = Object.entries(input.headers ?? {}).filter(([name]) => !taken.has(name.toLowerCase()) && name.toLowerCase() !== "authorization");
+  const headers: Record<string, string> = { ...Object.fromEntries(fixed), ...credential };
 
   const controller = new AbortController();
   const timer = setTimeout(() => controller.abort(), TIMEOUT_MS);
@@ -143,7 +154,9 @@ export async function sendConnectorRequest(
     }
 
     const response = await deps.fetch(url.href, init);
-    return await readResponseCapped(response, controller.signal, input.maxBytes ?? MAX_RESPONSE_BYTES);
+    const result = await readResponseCapped(response, controller.signal, input.maxBytes ?? MAX_RESPONSE_BYTES);
+    const header = input.readHeader ? response.headers.get(input.readHeader) : null;
+    return header === null ? result : { ...result, header };
   } finally {
     clearTimeout(timer);
   }

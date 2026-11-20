@@ -16,10 +16,12 @@ test("a requested name matches a connectable entry by name or alias, and a Googl
   assert.equal(match("Google Mail", "allowed@example.test"), "Gmail", "an alias counts");
   assert.equal(match("Gmail", "ALLOWED@example.test"), "Gmail", "the list ignores case");
   assert.equal(match("Gmail", "stranger@example.test"), undefined, "not on the list, so they still can't connect it");
-  assert.equal(match("LinkedIn", "anyone@example.test"), undefined);
+  assert.equal(match("Fax machine", "anyone@example.test"), undefined);
+  assert.equal(match("LinkedIn", "anyone@example.test"), "LinkedIn", "LinkedIn settles requests once its app is configured");
 });
 
 test("an oauth2 entry without its client configured isn't offered, so it settles nothing", () => {
   const unconfigured = loadCatalogue({ dir: join(process.cwd(), "catalogue", "connectors"), isOAuthClientConfigured: () => false });
   assert.equal(catalogueMatchFor(unconfigured, ["allowed@example.test"])("Gmail", "allowed@example.test"), undefined);
+  assert.equal(catalogueMatchFor(unconfigured, [])("LinkedIn", "anyone@example.test"), undefined, "LinkedIn ships dark");
 });

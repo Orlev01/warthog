@@ -20,6 +20,7 @@
 import {
   ClientSecretPost,
   authorizationCodeGrantRequest,
+  nopkce,
   calculatePKCECodeChallenge,
   customFetch,
   generateRandomCodeVerifier,
@@ -54,6 +55,9 @@ export interface OAuthClientConfig {
   readonly clientId: string;
   readonly clientSecret: string;
   readonly redirectUri: string;
+  // false for a provider whose web sign-in takes no PKCE (LinkedIn): state and the client
+  // secret protect the exchange instead. Default true.
+  readonly pkce?: boolean;
 }
 
 // The injected seams: the parameterizing data access, the clock (expiry / connected-at,
@@ -112,8 +116,10 @@ function authorizationServer(entry: CatalogueEntry): AuthorizationServer {
     // Google publishes a distinct issuer and token endpoint origin. Identity
     // scopes can return an ID token, whose issuer must still be checked exactly.
     // https://accounts.google.com/.well-known/openid-configuration
-    issuer: tokenUrl === "https://oauth2.googleapis.com/token"
-      ? "https://accounts.google.com" : new URL(tokenUrl).origin,
+    // LinkedIn's, likewise: https://www.linkedin.com/oauth/.well-known/openid-configuration
+    issuer: tokenUrl === "https://oauth2.googleapis.com/token" ? "https://accounts.google.com"
+      : tokenUrl === "https://www.linkedin.com/oauth/v2/accessToken" ? "https://www.linkedin.com/oauth"
+      : new URL(tokenUrl).origin,
     authorization_endpoint: entry.auth.authorize_url,
     token_endpoint: tokenUrl,
   };
@@ -164,8 +170,10 @@ export async function buildAuthorizeUrl(params: {
   url.searchParams.set("client_id", params.config.clientId);
   url.searchParams.set("redirect_uri", params.config.redirectUri);
   url.searchParams.set("scope", (params.entry.auth.scopes ?? []).join(" "));
-  url.searchParams.set("code_challenge", codeChallenge);
-  url.searchParams.set("code_challenge_method", "S256");
+  if (params.config.pkce !== false) {
+    url.searchParams.set("code_challenge", codeChallenge);
+    url.searchParams.set("code_challenge_method", "S256");
+  }
   url.searchParams.set("state", state);
   // A new connection shows the provider's account chooser, so adding a second account is a
   // choice and never whichever account the browser happens to be signed in to. A reconnect
@@ -209,7 +217,7 @@ export async function exchangeCodeForConnection(
     clientAuth,
     callbackParameters,
     input.config.redirectUri,
-    input.codeVerifier,
+    input.config.pkce === false ? nopkce : input.codeVerifier,
     { [customFetch]: deps.fetch },
   );
   const tokens = await processAuthorizationCodeResponse(as, client, response);

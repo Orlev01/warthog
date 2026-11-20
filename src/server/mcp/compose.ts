@@ -45,7 +45,7 @@ import { resolveRun } from "../agents/runs";
 import { ANTHROPIC_CLIENT_HEADER, clientSurface } from "../../domain/agents/client-surface";
 import { toEntry } from "../activity/writer";
 import { type UndoReversalJob, type UndoReversalResult } from "../activity/undo";
-import { calendarReversalForEntry, successfulConnectorResult } from "../activity/calendar-reversal";
+import { calendarReversalForEntry, reversalQuery, successfulConnectorResult } from "../activity/calendar-reversal";
 import { getRateLimiter } from "./rate-limit";
 import { systemClock, type Clock } from "../seams/clock";
 import { getUserById } from "../db/users";
@@ -726,7 +726,7 @@ export function createAgentExecutors(deps: McpDispatchDeps): AgentExecutors {
             return { status: "refused", outcome: "This action cannot be undone automatically because its original event or service account is unavailable." };
           }
           const result = await pipeline.handleAgentCall(connection, { ...call, connectorAccountId: accountId,
-            params: { query: { eventId: target.eventId } },
+            params: { query: reversalQuery(target) },
           });
           return reversalOutcome(result);
         } finally { dek.fill(0); }

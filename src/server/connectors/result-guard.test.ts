@@ -12,6 +12,7 @@ import assert from "node:assert/strict";
 import { createResultGuard } from "./result-guard";
 import { GOOGLE_CURATED_TOOLS } from "./curated/google";
 import { MICROSOFT_CURATED_TOOLS } from "./curated/microsoft";
+import { LINKEDIN_CURATED_TOOLS } from "./curated/linkedin";
 import { successfulConnectorResult } from "../activity/calendar-reversal";
 import type { AgentCall } from "../mcp/pipeline";
 
@@ -30,7 +31,7 @@ function gmailMessage(subject: string, text: string): string {
 
 describe("createResultGuard", () => {
   it("checks and marks every curated tool's successful result (no tool is left unchecked)", () => {
-    for (const tool of [...GOOGLE_CURATED_TOOLS, ...MICROSOFT_CURATED_TOOLS]) {
+    for (const tool of [...GOOGLE_CURATED_TOOLS, ...MICROSOFT_CURATED_TOOLS, ...LINKEDIN_CURATED_TOOLS]) {
       const guarded = guard.review(call(tool.name, { makesChange: tool.makesChange }), { status: 200, body: "{}", truncated: false });
       const result = guarded.result as Record<string, unknown>;
       assert.match(String(result.notice), /^Checked by Warthog/, tool.name);

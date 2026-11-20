@@ -32,6 +32,7 @@ import type { Db } from "../db/index";
 import type { CatalogueIndex } from "./catalogue";
 import { GOOGLE_CURATED_TOOLS } from "./curated/google";
 import { MICROSOFT_CURATED_TOOLS } from "./curated/microsoft";
+import { LINKEDIN_CURATED_TOOLS } from "./curated/linkedin";
 
 // ---- catalogue browse -------------------------------------------------------------
 
@@ -137,7 +138,7 @@ export interface ConnectionForPage {
 // load from the project's curated modules.
 const CURATED_TOOLS_BY_CONNECTOR: ReadonlyMap<string, PageTool[]> = (() => {
   const map = new Map<string, PageTool[]>();
-  for (const tool of [...GOOGLE_CURATED_TOOLS, ...MICROSOFT_CURATED_TOOLS]) {
+  for (const tool of [...GOOGLE_CURATED_TOOLS, ...MICROSOFT_CURATED_TOOLS, ...LINKEDIN_CURATED_TOOLS]) {
     const bucket = map.get(tool.connectorId);
     const pageTool: PageTool = { name: tool.name, makesChange: tool.makesChange };
     if (bucket) bucket.push(pageTool);
