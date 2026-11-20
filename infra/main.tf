@@ -267,12 +267,17 @@ resource "azurerm_role_assignment" "receipt_data" {
 # The same vault holds operator-only bootstrap passwords. The application may
 # retrieve only its versioned runtime secrets, never the administrator password,
 # raw database passwords or the delivery ownership connection.
+#
+# linkedin-client-secret is optional (docs/linkedin-launch.md): plan and apply
+# this only AFTER `runner.py install-secret` has written it, because a grant
+# can't be scoped to a secret that doesn't exist yet.
 resource "azurerm_role_assignment" "secrets" {
   for_each = toset([
     "database-url", "migration-database-url", "purge-database-url",
     "warthog-hmac-key", "resend-api-key", "twilio-account-sid",
     "twilio-api-key-sid", "twilio-api-key-secret", "google-client-secret",
     "microsoft-client-secret", "google-early-access", "vapid-private-key",
+    "linkedin-client-secret",
   ])
   scope                = "${azurerm_key_vault.warthog.id}/secrets/${each.key}"
   role_definition_name = "Key Vault Secrets User"

@@ -12,11 +12,22 @@ import deploy_app
 import foundation
 
 
+APP_IDENTITY = "/subscriptions/test/resourceGroups/rg-test/providers/Microsoft.ManagedIdentity/userAssignedIdentities/id-test-app"
+VERSION = "0123456789abcdef0123456789abcdef"
+
+
+def linkedin_reference(**changes):
+    """The app secret that points at LinkedIn's client secret, the way the runbook adds it."""
+    return {"name": "linkedin-client-secret", "identity": APP_IDENTITY,
+            "keyVaultUrl": f"https://kv-test.vault.azure.net/secrets/linkedin-client-secret/{VERSION}", **changes}
+
+
 def app_fixture():
     return {"location": "australiaeast", "identity": {"type": "UserAssigned"}, "tags": {},
         "properties": {"latestRevisionName": "warthog--old", "environmentId": "test-environment",
             "workloadProfileName": "Consumption", "configuration": {
-                "activeRevisionsMode": "Multiple", "secrets": [{"name": "database-url", "keyVaultUrl": "test-reference"}],
+                "activeRevisionsMode": "Multiple", "secrets": [{"name": "database-url", "identity": APP_IDENTITY,
+                    "keyVaultUrl": f"https://kv-test.vault.azure.net/secrets/database-url/{VERSION}"}],
                 "ingress": {"external": True, "allowInsecure": False, "targetPort": 3000,
                     "fqdn": "test.australiaeast.azurecontainerapps.io", "customDomains": [{"name": "app.warthog.com.au"}],
                     "traffic": [{"revisionName": "warthog--old", "weight": 100}]}},
@@ -280,8 +291,7 @@ class SingletonTests(unittest.TestCase):
 
     def test_linkedin_activation_is_explicit_and_needs_its_vault_secret_and_a_plain_client_id(self):
         old = app_fixture()
-        old["properties"]["configuration"]["secrets"].append(
-            {"name": "linkedin-client-secret", "keyVaultUrl": "https://test.vault.azure.net/secrets/linkedin-client-secret/1"})
+        old["properties"]["configuration"]["secrets"].append(linkedin_reference())
         self.assertIsNone(deploy_app.linkedin_activation(old, "update"))
         with patch.dict(os.environ, ACTIVATE_LINKEDIN="false", LINKEDIN_CLIENT_ID="78abcdEFG12345"):
             self.assertIsNone(deploy_app.linkedin_activation(old, "update"))
@@ -308,6 +318,45 @@ class SingletonTests(unittest.TestCase):
         with patch.dict(os.environ, ACTIVATE_LINKEDIN="yes"):
             with self.assertRaises(RuntimeError):
                 deploy_app.linkedin_activation(old, "update")
+
+    def test_linkedin_activation_refuses_a_reference_the_app_cant_use_before_anything_stops(self):
+        # Checked before maintenance stops production: a reference to another vault, another
+        # secret, an unpinned version or another identity would leave the new revision unable to
+        # start, with no automatic rollback.
+        bad = {
+            "another vault": linkedin_reference(keyVaultUrl=f"https://kv-other.vault.azure.net/secrets/linkedin-client-secret/{VERSION}"),
+            "another secret": linkedin_reference(keyVaultUrl=f"https://kv-test.vault.azure.net/secrets/database-url/{VERSION}"),
+            "no version": linkedin_reference(keyVaultUrl="https://kv-test.vault.azure.net/secrets/linkedin-client-secret"),
+            "not https": linkedin_reference(keyVaultUrl=f"http://kv-test.vault.azure.net/secrets/linkedin-client-secret/{VERSION}"),
+            "no identity": {k: v for k, v in linkedin_reference().items() if k != "identity"},
+            "another identity": linkedin_reference(identity=APP_IDENTITY.replace("id-test-app", "id-someone-else")),
+            "system identity": linkedin_reference(identity="system"),
+        }
+        with patch.dict(os.environ, ACTIVATE_LINKEDIN="true", LINKEDIN_CLIENT_ID="78abcdEFG12345"):
+            for name, reference in bad.items():
+                with self.subTest(name):
+                    app = app_fixture()
+                    app["properties"]["configuration"]["secrets"].append(reference)
+                    with self.assertRaisesRegex(RuntimeError, "linkedin-client-secret"):
+                        deploy_app.linkedin_activation(app, "update")
+            same_identity_other_case = app_fixture()
+            same_identity_other_case["properties"]["configuration"]["secrets"].append(linkedin_reference(identity=APP_IDENTITY.lower()))
+            self.assertEqual(deploy_app.linkedin_activation(same_identity_other_case, "update"), "78abcdEFG12345",
+                             "Azure returns resource ids in either case")
+
+    def test_a_refused_linkedin_activation_stops_nothing(self):
+        platform = self.platform()
+        old = app_fixture()
+        old["properties"]["configuration"]["secrets"].append(linkedin_reference(identity=None))
+        platform.current.return_value = old
+        with patch.dict(os.environ, ACTIVATE_LINKEDIN="true", LINKEDIN_CLIENT_ID="78abcdEFG12345",
+                        EXPECTED_CONFIG_SHA256=deploy_app.fingerprint(old)), \
+             patch.object(deploy_app, "verify_image"), patch.object(deploy_app, "azure") as cloud, \
+             patch.object(deploy_app, "summary"):
+            with self.assertRaisesRegex(RuntimeError, "linkedin-client-secret"):
+                self.run_update(platform)
+        cloud.assert_not_called()
+        platform.wait_stopped.assert_not_called()
 
     def platform(self):
         platform = Mock(spec=deploy_app.Platform)
@@ -497,8 +546,7 @@ class SingletonTests(unittest.TestCase):
     def test_linkedin_activation_adds_only_its_two_settings_after_stop(self):
         platform = self.platform()
         old = app_fixture()
-        old["properties"]["configuration"]["secrets"].append(
-            {"name": "linkedin-client-secret", "keyVaultUrl": "https://test.vault.azure.net/secrets/linkedin-client-secret/1"})
+        old["properties"]["configuration"]["secrets"].append(linkedin_reference())
         live = copy.deepcopy(old)
         live["properties"]["template"]["revisionSuffix"] = "new"
         live["properties"]["template"]["containers"][0].update(image="new-digest")
@@ -527,8 +575,7 @@ class SingletonTests(unittest.TestCase):
     def test_linkedin_activation_refuses_a_live_app_that_changed_anything_else(self):
         platform = self.platform()
         old = app_fixture()
-        old["properties"]["configuration"]["secrets"].append(
-            {"name": "linkedin-client-secret", "keyVaultUrl": "https://test.vault.azure.net/secrets/linkedin-client-secret/1"})
+        old["properties"]["configuration"]["secrets"].append(linkedin_reference())
         live = copy.deepcopy(old)
         live["properties"]["template"]["revisionSuffix"] = "new"
         live["properties"]["template"]["containers"][0].update(image="new-digest")

@@ -121,12 +121,21 @@ journal's (`scripts/ci/deploy_app.py`):
 - The `azure-release.yml` inputs are `activate_linkedin` and `linkedin_client_id`, which is the
   plain client ID, never the secret.
 - The release requires the app secret `linkedin-client-secret` to already exist as a Key Vault
-  reference.
+  reference. Before maintenance stops production, it refuses a reference that isn't a pinned
+  version of that secret in the app's own vault, read with the app's identity. Otherwise the new
+  revision couldn't start, and there's no automatic rollback.
 - It adds exactly `LINKEDIN_CLIENT_ID` and `LINKEDIN_CLIENT_SECRET=secretref:linkedin-client-secret`
   and checks that nothing else changed.
-- The Key Vault secret itself goes in through the existing private installer
+- **The Key Vault secret** goes in through the existing private installer
   (`scripts/delivery/install-secrets.py`, which now knows `LINKEDIN_CLIENT_SECRET`), because the
   vault accepts only the app and bootstrap subnets.
+  - `runner.py install-secret` runs it, with protected Run Command parameters, on a fresh lease VM
+    that can't be registered afterwards.
+  - It keeps only the versioned URL.
+- **The app identity reads secrets one grant at a time**, so `infra/main.tf` lists
+  `linkedin-client-secret` too. That foundation change is planned and applied after the secret
+  exists. The release job can't list role assignments, so the operator checks the grant
+  (docs/linkedin-launch.md).
 - Adding the app secret changes the live configuration's fingerprint, so the activation release
   takes a fresh snapshot after it.
 - The workload template for a first `create` is unchanged. A fresh creation would need the

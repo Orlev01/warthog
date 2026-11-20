@@ -7,6 +7,7 @@ message, DNS update, database connection or app deployment occurs here.
 import base64
 import json
 import os
+import re
 import secrets
 import urllib.error
 import urllib.request
@@ -41,6 +42,10 @@ NAMES = {
 
 def main():
     token = os.environ.pop('WARTHOG_VAULT_TOKEN')
+    # Setup on 10 Nov tagged its secrets with that day; a later optional install says so instead.
+    origin = os.environ.pop('WARTHOG_SECRET_ORIGIN', 'authorized-setup-2026-11-10')
+    if not re.fullmatch(r'[a-z0-9-]{3,64}', origin):
+        raise RuntimeError('Unexpected origin tag')
     values = json.loads(os.environ.pop('WARTHOG_SECRET_BUNDLE'))
     if not values or not set(values).issubset(NAMES) or any(not isinstance(v,str) or not v for v in values.values()):
         raise RuntimeError('Unexpected or empty secret input')
@@ -65,7 +70,7 @@ def main():
                 raise RuntimeError('Existing secret differs; refusing implicit rotation')
             result = old
         else:
-            result = api(path, 'PUT', {'value':values[name], 'attributes':{'enabled':True}, 'tags':{'application':'warthog', 'stage':'prepared', 'origin':'authorized-setup-2026-11-10'}})
+            result = api(path, 'PUT', {'value':values[name], 'attributes':{'enabled':True}, 'tags':{'application':'warthog', 'stage':'prepared', 'origin':origin}})
         # Independent value readback, but emit only the immutable version URL.
         verified = api('/secrets/'+secret_name+'/'+result['id'].rsplit('/',1)[1])
         if not secrets.compare_digest(verified['value'],values[name]):

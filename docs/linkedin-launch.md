@@ -13,8 +13,9 @@ What people get:
 Warthog can't read their feed, connections or messages. LinkedIn asks them to reconnect every
 60 days.
 
-It costs nothing: LinkedIn's self-serve products are free. LinkedIn allows each member 150 posts
-a day through apps.
+It costs nothing: LinkedIn's self-serve products are free. LinkedIn allows each member about 150
+calls a day through an app. A post uses two (Warthog reads who the member is, then posts), so that
+is about 75 posts a day.
 
 ## 1. The founder (about 10 minutes, in a browser signed in to LinkedIn)
 
@@ -64,39 +65,83 @@ LinkedIn moves its portal around now and then, so a button may read slightly dif
 ## 2. The release operator
 
 The Key Vault accepts only Warthog's app and bootstrap subnets, so the secret can't be written from
-a laptop. A plain `update` release refuses new settings, so LinkedIn arrives through its one-time
-activation release.
+a laptop. The app's identity can read only the secrets granted to it one by one, so LinkedIn's
+needs its own grant. A plain `update` release refuses new settings, so LinkedIn arrives through
+its one-time activation release.
 
-1. **Put the secret in Key Vault**, with the private installer used at setup:
-   - Create a runner lease VM in the bootstrap subnet (`scripts/delivery/runner.py` plan, review,
-     apply) but **don't register it**.
-   - Run `scripts/delivery/install-secrets.py` on it through protected Azure Run Command parameters:
-     - `WARTHOG_VAULT_TOKEN`, from `az account get-access-token --resource https://vault.azure.net`;
-     - `WARTHOG_SECRET_BUNDLE`, set to `{"LINKEDIN_CLIENT_SECRET": "<the file's contents>"}`, read
-       from `~/.warthog/linkedin-client-secret` without printing it.
-   - Keep only the versioned secret URL it prints.
-   - Then `runner.py destroy` and `verify-cleanup`: a VM that ran a secret command must never become
-     a runner.
+Do these in order. Each step depends on the one before.
+
+```
+export AZURE_CONFIG_DIR=~/.azure-personal SUB=e854f594-274f-4051-841b-78df7655d73c
+VAULT_ID=$(az keyvault show -n kv-warthog-aue-e854 -g rg-warthog-prod-aue --subscription $SUB --query id -o tsv)
+```
+
+1. **Write the secret into Key Vault** from a fresh lease VM that never becomes a runner.
+   - Set up `.delivery/linkedin-secret/runner-<lease>/approved.tfvars.json` as for a release.
+     Any 10–14 digit lease id that no release will use works, for example today's date and time.
+   - Run `runner.py plan --directory <dir>`, review it with `review-runner-plan.py`, then
+     `runner.py apply --directory <dir> --reviewed-plan-sha256 <sha>`.
+   - Don't run `prepare` or `register`.
+   - Run:
+
+     ```
+     python3 scripts/delivery/runner.py install-secret --directory <dir> \
+       --secret LINKEDIN_CLIENT_SECRET --value-file ~/.warthog/linkedin-client-secret
+     ```
+
+   - **What it does:**
+     - It refuses a VM that has run anything but `prepare`, or that was registered.
+     - It refuses a secret file that others can read, or one inside the repository.
+     - It sends the value only as a protected Run Command parameter.
+     - It runs the setup installer, which never rotates an existing secret silently.
+   - **What it keeps:** only the versioned secret URL, in `<dir>/secret-url.txt`.
+   - Then run `runner.py destroy --directory <dir>` and the release scripts' cleanup check
+     (`verify-cleanup.py <lease>`). `register` refuses this VM for good.
    - Delete `~/.warthog/linkedin-client-secret`.
-2. **Reference it from the app.** This adds an app secret and changes no revision:
+2. **Let the app read it.** `infra/main.tf` lists `linkedin-client-secret` among the app identity's
+   "Key Vault Secrets User" grants. Run a foundation plan, review it (one new role assignment and
+   nothing else), and have the founder approve the apply, as for any foundation change.
+   - It must come after step 1: a grant can't be scoped to a secret that doesn't exist yet.
+   - **One-off alternative.** If a foundation run isn't practical, run this:
+
+     ```
+     PRINCIPAL=$(az identity show -n id-warthog-app-aue -g rg-warthog-prod-aue --subscription $SUB --query principalId -o tsv)
+     az role assignment create --assignee-object-id $PRINCIPAL --assignee-principal-type ServicePrincipal \
+       --role "Key Vault Secrets User" --scope "$VAULT_ID/secrets/linkedin-client-secret" --subscription $SUB
+     ```
+
+     The next foundation apply will then fail on "already exists" until that assignment is imported
+     into the foundation state, so record it in the release record.
+   - **Check either way.** This must list exactly one assignment:
+
+     ```
+     az role assignment list --scope "$VAULT_ID/secrets/linkedin-client-secret" \
+       --role "Key Vault Secrets User" --subscription $SUB --query "[].principalId" -o tsv
+     ```
+
+     It must show the app identity's principal id. The release job can't check this itself.
+3. **Reference it from the app.** This adds an app secret and creates no revision:
 
    ```
-   export AZURE_CONFIG_DIR=~/.azure-personal SUB=e854f594-274f-4051-841b-78df7655d73c
    IDENTITY=$(az containerapp show -n warthog -g rg-warthog-prod-aue --subscription $SUB \
-     --query "properties.configuration.secrets[?name=='google-client-secret'].identity | [0]" -o tsv)
+     --query "properties.configuration.secrets[?name=='database-url'].identity | [0]" -o tsv)
    az containerapp secret set -n warthog -g rg-warthog-prod-aue --subscription $SUB \
-     --secrets "linkedin-client-secret=keyvaultref:<versioned secret URL>,identityref:$IDENTITY"
+     --secrets "linkedin-client-secret=keyvaultref:$(cat <dir>/secret-url.txt),identityref:$IDENTITY"
    ```
-3. **Snapshot the configuration again.** The fingerprint changed in step 2, so take `live-before.json`
+
+   The activation release refuses a reference that isn't a pinned version of
+   `linkedin-client-secret` in the app's own vault, read with the app's identity. It refuses before
+   maintenance stops production.
+4. **Snapshot the configuration again.** Step 3 changed the fingerprint, so take `live-before.json`
    and `expected_config_sha256` after it.
-4. **Release.** Follow the usual recipe, adding
-   `-f activate_linkedin=true -f linkedin_client_id=<Client ID>` to the `azure-release.yml`
-   dispatch. It can ride with any image release. The release adds exactly `LINKEDIN_CLIENT_ID` and
-   `LINKEDIN_CLIENT_SECRET=secretref:linkedin-client-secret`, and refuses if anything else
-   changed.
-5. **Check it.**
+5. **Release.** Follow the usual recipe, adding `-f activate_linkedin=true -f linkedin_client_id=<Client ID>` to
+   the `azure-release.yml` dispatch. It can ride with any image release. The release adds exactly
+   `LINKEDIN_CLIENT_ID` and `LINKEDIN_CLIENT_SECRET=secretref:linkedin-client-secret`, and refuses
+   if anything else changed.
+6. **Check it.**
    - Connectors shows LinkedIn under Social.
-   - Connect the founder's LinkedIn: the account shows their email.
+   - Connect the founder's LinkedIn: the account shows their email, or their name if LinkedIn gives
+     no email.
    - Ask Claude to post "Testing Warthog" to connections. The approval card reads "wants to post on
      LinkedIn for your connections to see".
    - Approve it, and the post appears on LinkedIn.

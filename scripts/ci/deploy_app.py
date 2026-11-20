@@ -171,10 +171,29 @@ def linkedin_activation(previous, operation):
     env = previous["properties"]["template"]["containers"][0]["env"]
     require(not any(item["name"].startswith("LINKEDIN_") for item in env),
             "LinkedIn is already configured; inspect rather than replace it")
-    secrets = previous["properties"]["configuration"].get("secrets") or []
-    require(any(item["name"] == LINKEDIN_SECRET and item.get("keyVaultUrl") and not item.get("value") for item in secrets),
-            "Add the linkedin-client-secret Key Vault reference before activating LinkedIn")
+    linkedin_reference_usable(previous["properties"]["configuration"].get("secrets") or [])
     return client_id
+
+
+VERSIONED_SECRET = re.compile(r"https://([a-z0-9-]{3,24})\.vault\.azure\.net/secrets/([a-z0-9-]{1,127})/[0-9a-f]{32}")
+
+
+def linkedin_reference_usable(secrets):
+    """Refuse, before maintenance stops production, a LinkedIn secret reference the new revision
+    couldn't resolve: it must be a Key Vault reference (never a pasted value) to a pinned version
+    of `linkedin-client-secret` in the same vault, read with the same user-assigned identity, as
+    the app's own `database-url`. The identity's read grant on that secret is checked by the
+    operator beforehand (docs/linkedin-launch.md); this job's identity can't list role assignments.
+    """
+    by_name = {item.get("name"): item for item in secrets}
+    reference, anchor = by_name.get(LINKEDIN_SECRET), by_name.get("database-url") or {}
+    problem = "Add the linkedin-client-secret Key Vault reference (this app's vault, a pinned version, the app identity) before activating LinkedIn"
+    require(reference is not None and not reference.get("value"), problem)
+    ours = VERSIONED_SECRET.fullmatch(str(reference.get("keyVaultUrl") or ""))
+    theirs = VERSIONED_SECRET.fullmatch(str(anchor.get("keyVaultUrl") or ""))
+    require(ours is not None and theirs is not None and ours.group(2) == LINKEDIN_SECRET and ours.group(1) == theirs.group(1), problem)
+    identity, app_identity = str(reference.get("identity") or ""), str(anchor.get("identity") or "")
+    require(identity.startswith("/subscriptions/") and identity.lower() == app_identity.lower(), problem)
 
 
 def verify_image(image, *, require_journal=False):
