@@ -1,4 +1,17 @@
-# Delivery status — 17 November 2026 (Notion connects)
+# Delivery status — 20 November 2026 (requests in the admin portal)
+
+**Live at [warthog.com.au](https://warthog.com.au) (the website) and
+[app.warthog.com.au](https://app.warthog.com.au) (the app).** Application source
+`3f7a8f5149d16b30c9f92d079554f6d3b64d34a9` runs as `warthog--r44641742159a1`, with one healthy
+replica, explicit 100% traffic and zero old replicas.
+
+PR #40: requests people make in the app ("Request a service", Google early access) are recorded on
+the admin portal's new Requests page with the person's address and account facts, instead of being
+emailed. Every admin page now checks sign-in itself, which closes a gap where a crafted request
+could read admin pages without signing in. Migration 0115 makes 86. See the
+[release record](docs/audit/admin-requests-release-2026-11-20.md).
+
+# Earlier delivery status — 17 November 2026 (Notion connects)
 
 **Live at [warthog.com.au](https://warthog.com.au) (the website) and
 [app.warthog.com.au](https://app.warthog.com.au) (the app).** Application source

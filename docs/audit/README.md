@@ -1,5 +1,10 @@
 # Warthog comprehensive engineering audit
 
+**Requests in the admin portal, 20 November:** main `3f7a8f5` runs as `warthog--r44641742159a1`.
+PR #40 records in-app requests on the portal's Requests page with who asked, instead of emailing
+them, and makes every admin page check sign-in itself (closing a crafted-request gap that was
+live). Migration 0115 makes 86. See the [release record](admin-requests-release-2026-11-20.md).
+
 **Notion connects, 17 November:** main `2c306f7` runs as `warthog--r44003796746a1`. PR #39 names
 Warthog in its client document (with its grant types), which Notion's sign-in requires. See the
 [release record](notion-client-name-release-2026-11-17.md).
