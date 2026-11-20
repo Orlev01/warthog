@@ -22,7 +22,7 @@
 // The service name is the catalogue's own, bound as a parameter through the db seam
 // (INV-102), so a value shaped like SQL is stored as data and cannot alter the query.
 
-import { createConnectorRequest, type ConnectorRequest } from "../db/connector-requests";
+import { createConnectorRequest, listConnectorRequestsForUser, type ConnectorRequest } from "../db/connector-requests";
 import type { Db } from "../db/index";
 import type { Clock } from "../seams/clock";
 
@@ -84,11 +84,20 @@ export interface AskToJoinDeps {
 
 // A non-allowlisted person asks to join early access for a Google connector. Record a
 // 'requested' early-access request naming the service for the session user, for the
-// operator to read in the admin portal. Returns the recorded request.
+// operator to read in the admin portal, or hand back the ask already waiting for that
+// service (docs/adr/requests-for-members.md). Returns the request.
 export async function askToJoinEarlyAccess(
   input: AskToJoinInput,
   deps: AskToJoinDeps,
 ): Promise<ConnectorRequest> {
+  const waiting = (await listConnectorRequestsForUser(deps.db, input.userId)).find(
+    (request) =>
+      request.kind === "google_early_access" &&
+      request.connectorId === input.connector.id &&
+      request.status === "requested" &&
+      request.handledAt === null,
+  );
+  if (waiting) return waiting;
   return createConnectorRequest(
     deps.db,
     { userId: input.userId, serviceName: input.connector.name, kind: "google_early_access", connectorId: input.connector.id },

@@ -3,6 +3,7 @@ import {
   Brain,
   ClipboardList,
   HelpCircle,
+  MessageSquare,
   Lock,
   MoreHorizontal,
   Plug,
@@ -50,6 +51,7 @@ const ICONS: Record<string, LucideIcon> = {
   household: Users,
   settings: Settings,
   help: HelpCircle,
+  contact: MessageSquare,
 };
 
 // The "More" children straight from the IA.

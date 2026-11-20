@@ -35,7 +35,6 @@ import { ActiveFilters, FilterLinks, type AppliedFilter, type FilterLink } from 
 import { LIST_ROW, ListGroup } from "@/components/ui/list-group";
 import { ListToolbar } from "@/components/ui/list-toolbar";
 import { AgentMark, ServiceMark } from "@/components/ui/brand-mark";
-import { SUPPORT_EMAIL } from "@/components/public/operator";
 import type { IntegrityResult } from "@/server/activity/integrity";
 import type { ActivityCategory, OutcomeGroup } from "@/domain/activity/category";
 import type { EvidenceLine } from "@/domain/activity/evidence";
@@ -328,8 +327,8 @@ function IntegrityResultNotice({ result }: { result: IntegrityResult }) {
         ) : (
           "An entry doesn't match the record and may have been changed."
         )}{" "}
-        <a href="/settings/data" className="font-medium underline underline-offset-4">Export your activity</a>, then email{" "}
-        <a href={`mailto:${SUPPORT_EMAIL}`} className="font-medium underline underline-offset-4">{SUPPORT_EMAIL}</a>.
+        <a href="/settings/data" className="font-medium underline underline-offset-4">Export your activity</a>, then tell us through{" "}
+        <a href="/contact" className="font-medium underline underline-offset-4">Contact us</a>.
       </p>
     </PageNotice>
   );

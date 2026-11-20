@@ -1,38 +1,23 @@
-// E09-S14 — Connector-request create path and match-notify (brief "Request a
-// connector", design §7).
+// E09-S14 — Connector-request create path (brief "Request a connector", design §7).
 //
 // requestConnector (the CREATE path): a person requests a service that is not yet in
 // the catalogue. Warthog records it 'requested' FOR THAT PERSON (the userId is the
 // session's, never a client value). The operator reads it, with who asked, on the admin
 // portal's Requests page (docs/adr/admin-portal.md, amendment of 20 November 2026); it is
-// no longer emailed.
+// no longer emailed. Asking again for a service the person is already waiting on (the same
+// name, ignoring case and punctuation) records nothing new (docs/adr/requests-for-members.md).
 //
-// notifyMatchingRequests (the MATCH-NOTIFY path): run when a catalogue entry is added.
-// It scans EVERY person's pending request (the system "list all" pending scan, not a
-// member read), marks each request the entry matches — name OR alias, case- and
-// punctuation-insensitive via the shared `src/domain/catalogue/match` matcher — and
-// pushes the owner a notice that their service has arrived. A matched request drops out
-// of the pending scan, so running the match-notify twice notifies each person once. A
-// non-matching entry marks nothing and notifies nobody; those requests stay 'requested'.
-//
-// Project hard rule (a reviewer veto): everything that reaches an email or a
-// notification passes through `src/domain/redaction` first. The person's push body is
-// scrubbed, so a card number planted in the free-text service name is masked to its last
-// four digits before it leaves Warthog. There is no released-value context here, so the
-// redaction pass matches no released values; the card-masking and truncation rules still
-// apply.
+// Telling the person when their service arrives is the hourly arrivals sweep
+// (`./request-arrivals.ts`, docs/adr/requests-for-members.md).
 
-import { redact } from "../../domain/redaction/redact";
 import { matchesRequest } from "../../domain/catalogue/match";
 import {
   createConnectorRequest,
-  listPendingConnectorRequests,
-  markConnectorRequestMatched,
+  listConnectorRequestsForUser,
   type ConnectorRequest,
 } from "../db/connector-requests";
 import type { Db } from "../db/index";
 import type { Clock } from "../seams/clock";
-import type { PushSender } from "../notify/senders";
 
 // What the CREATE path records: the owner (the session's id, never a client value) and
 // the free-text service name the person requested.
@@ -47,73 +32,23 @@ export interface RequestConnectorDeps {
   readonly clock: Clock;
 }
 
-// The injected seams the MATCH-NOTIFY path runs from.
-export interface NotifyMatchingDeps {
-  readonly db: Db;
-  readonly push: PushSender;
-  readonly clock: Clock;
-}
-
-// A catalogue entry, structurally — just the id (slug), display name and aliases the
-// matcher compares against, so a full CatalogueEntry fits.
-export interface CatalogueEntryRef {
-  readonly id: string;
-  readonly name: string;
-  readonly aliases: string[];
-}
-
-// Run a body through the redaction module before it reaches a sender (project hard
-// rule). There is no released value to match here, so the matcher reports false; the
-// card-masking and truncation rules still apply.
-function scrub(body: string): string {
-  return redact(body, () => false) as string;
-}
-
 // Record a 'requested' service request for the person, for the operator to read in the
-// admin portal. Returns the recorded, Requested request.
+// admin portal, or hand back the one they are already waiting on for the same service.
 export async function requestConnector(
   input: RequestConnectorInput,
   deps: RequestConnectorDeps,
 ): Promise<ConnectorRequest> {
+  const waiting = (await listConnectorRequestsForUser(deps.db, input.userId)).find(
+    (request) =>
+      request.kind === "service" &&
+      request.status === "requested" &&
+      request.handledAt === null &&
+      matchesRequest(input.serviceName, { name: request.serviceName, aliases: [] }),
+  );
+  if (waiting) return waiting;
   return createConnectorRequest(
     deps.db,
     { userId: input.userId, serviceName: input.serviceName, kind: "service" },
     deps.clock,
   );
-}
-
-// Run when a catalogue entry is added: scan every pending request, mark those the entry
-// matches (name or alias, case- & punctuation-insensitive) and notify each owner.
-// Returns the requests newly marked matched. A non-matching entry returns an empty array
-// and notifies nobody.
-export async function notifyMatchingRequests(
-  entry: CatalogueEntryRef,
-  deps: NotifyMatchingDeps,
-): Promise<ConnectorRequest[]> {
-  const pending = await listPendingConnectorRequests(deps.db);
-
-  const matched: ConnectorRequest[] = [];
-  for (const request of pending) {
-    if (!matchesRequest(request.serviceName, { name: entry.name, aliases: entry.aliases })) {
-      continue;
-    }
-
-    const updated = await markConnectorRequestMatched(
-      deps.db,
-      { id: request.id, connectorId: entry.id },
-      deps.clock,
-    );
-
-    await deps.push.sendPush({
-      recipient: request.userId,
-      body: scrub(
-        `Good news — a service you asked for has arrived: ${entry.name}. ` +
-          "Open Warthog to connect it.",
-      ),
-    });
-
-    matched.push(updated);
-  }
-
-  return matched;
 }

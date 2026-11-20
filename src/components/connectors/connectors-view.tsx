@@ -71,6 +71,21 @@ export type CatalogueItem = {
   connected?: boolean;
   // One line under the tile, e.g. what Google's unverified-app screen will say.
   note?: string;
+  // A gated Google entry the person has already asked to join (and is still waiting on).
+  asked?: boolean;
+};
+
+// One of the person's own requests (docs/adr/requests-for-members.md): a service they asked us
+// to add, or Google early access. "ready" means they can connect it now (`findHref` searches
+// the catalogue for it); "reviewed" means the operator has closed it; "waiting" is the brief's
+// "Requested". `askedAt` is a pre-formatted date label.
+export type YourRequest = {
+  id: string;
+  name: string;
+  kind: "service" | "early_access";
+  askedAt: string;
+  status: "waiting" | "ready" | "reviewed";
+  findHref?: string;
 };
 
 // The catalogue entries of one category, grouped so the view can name each tile's group
@@ -131,6 +146,8 @@ export type ConnectorsViewProps = {
   connections: readonly ConnectionItem[];
   query: string | null; // the search term echoed back (prefill); null = no search
   canRequest: boolean; // a MISS → surface "Request a service"
+  // The person's own requests, newest first (empty or absent = no panel).
+  requests?: readonly YourRequest[];
   notice?: ConnectorsNotice | null;
   // Controls BOUND to server actions the page passes. OPTIONAL: when an action is NOT
   // supplied its control renders DISABLED with a one-line reason rather than a live button
@@ -232,6 +249,9 @@ function AskToJoinControl({
   requestAction?: (formData: FormData) => void | Promise<void>;
   state: QueryState;
 }) {
+  if (item.asked) {
+    return <Unavailable label="Asked to join" reason="We'll email you when you're in." service={item.name} />;
+  }
   if (!requestAction) {
     return <Unavailable label={EARLY_ACCESS_LABEL} reason="Early access isn't available just now." service={item.name} />;
   }
@@ -328,6 +348,42 @@ function RequestPanel({
       ) : (
         <Unavailable label={REQUEST_LABEL} reason="Requesting a service isn't available right now." />
       )}
+    </WorkspacePanel>
+  );
+}
+
+// The person's own requests: what they asked for, when, and what's become of it. Shown in the
+// catalogue, where requests are made, only when there are some.
+const REQUEST_STATUS: Record<YourRequest["status"], { label: string; tone: "neutral" | "success" | "info" }> = {
+  waiting: { label: "Requested", tone: "neutral" },
+  ready: { label: "Ready to connect", tone: "success" },
+  reviewed: { label: "Reviewed", tone: "info" },
+};
+function YourRequestsPanel({ requests }: { requests: readonly YourRequest[] }) {
+  return (
+    <WorkspacePanel title="Your requests" description="What you've asked us to add. We'll email you when one is ready.">
+      <ul role="list" className="flex min-w-0 flex-col divide-y divide-line">
+        {requests.map((request) => {
+          const status = REQUEST_STATUS[request.status];
+          const label = request.kind === "early_access" && request.status === "ready" ? "You're in" : status.label;
+          return (
+            <li key={request.id} className="flex min-w-0 flex-wrap items-center gap-x-3 gap-y-2 py-3 first:pt-0 last:pb-0">
+              <div className="flex min-w-40 flex-1 flex-col">
+                <span className="font-medium text-fg [overflow-wrap:anywhere]">{request.name}</span>
+                <span className="text-sm text-fg-muted">
+                  {request.kind === "early_access" ? "Google early access · " : ""}Asked {request.askedAt}
+                </span>
+              </div>
+              <Badge tone={status.tone}>{label}</Badge>
+              {request.findHref ? (
+                <ButtonLink href={request.findHref} variant="secondary" size="sm">
+                  Find it<span className="sr-only"> {request.name}</span>
+                </ButtonLink>
+              ) : null}
+            </li>
+          );
+        })}
+      </ul>
     </WorkspacePanel>
   );
 }
@@ -525,6 +581,7 @@ export function ConnectorsView({
   connections,
   query,
   canRequest,
+  requests = [],
   notice,
   connectAction,
   reconnectAction,
@@ -683,6 +740,8 @@ export function ConnectorsView({
                 {canRequest ? (
                   <RequestPanel query={query} requestAction={requestAction} state={catalogueState} />
                 ) : null}
+
+                {requests.length > 0 ? <YourRequestsPanel requests={requests} /> : null}
               </>
             ),
           },

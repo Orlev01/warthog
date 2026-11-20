@@ -22,29 +22,35 @@ import { randomUUID } from "node:crypto";
 
 import type { Clock } from "../seams/clock";
 import type { Db, Row } from "./index";
+import type { ContactTopic } from "../../domain/contact/topics";
 
 // The columns every read returns, kept in one place so the lookups and the mark
 // transition hand back the same shape.
 const COLUMNS =
-  "id, user_id, kind, service_name, connector_id, status, requested_at, matched_connector_id, matched_at, handled_at";
+  "id, user_id, kind, service_name, connector_id, topic, message, status, requested_at, matched_connector_id, matched_at, handled_at";
 
 // A request is still pending ('requested') or has been satisfied by a catalogue entry
 // ('matched') — the two status values the store knows.
 export type ConnectorRequestStatus = "requested" | "matched";
 
-// What a person asked the operator for (migration 0115): a service that isn't in the
-// catalogue, or Google early access for a gated Google service.
-export type ConnectorRequestKind = "service" | "google_early_access";
+// What a person asked the operator for (migrations 0115 and 0116): a service that isn't in the
+// catalogue, Google early access for a gated Google service, or a "Contact us" message.
+export type ConnectorRequestKind = "service" | "google_early_access" | "contact";
+
+// What a "Contact us" message is about (migration 0116; the list lives in the domain).
+export { CONTACT_TOPICS, type ContactTopic } from "../../domain/contact/topics";
 
 // What createConnectorRequest records: the owner (the session's id, never a client
 // value), the service name (the person's own words, or the catalogue's name for early
-// access), and for early access the catalogue entry asked about. The kind defaults to a
-// service request.
+// access, or the topic's label for a message), for early access the catalogue entry asked
+// about, and for a message its topic and text. The kind defaults to a service request.
 export interface NewConnectorRequest {
   readonly userId: string;
   readonly serviceName: string;
   readonly kind?: ConnectorRequestKind;
   readonly connectorId?: string | null;
+  readonly topic?: ContactTopic | null;
+  readonly message?: string | null;
 }
 
 // A request as handed back. `serviceName` is the name the person typed, stored
@@ -55,6 +61,9 @@ export interface ConnectorRequest {
   readonly kind: ConnectorRequestKind;
   readonly serviceName: string;
   readonly connectorId: string | null;
+  // A "Contact us" message's topic and (already cleaned) text; null for every other kind.
+  readonly topic: ContactTopic | null;
+  readonly message: string | null;
   readonly status: ConnectorRequestStatus;
   readonly requestedAt: Date | string;
   readonly matchedConnectorId: string | null;
@@ -85,6 +94,8 @@ function toConnectorRequest(row: Row): ConnectorRequest {
     kind: row.kind as ConnectorRequestKind,
     serviceName: row.service_name as string,
     connectorId: (row.connector_id as string | null) ?? null,
+    topic: (row.topic as ContactTopic | null) ?? null,
+    message: (row.message as string | null) ?? null,
     status: row.status as ConnectorRequestStatus,
     requestedAt: toDate(row.requested_at) ?? new Date(NaN),
     matchedConnectorId: (row.matched_connector_id as string | null) ?? null,
@@ -106,11 +117,13 @@ export async function createConnectorRequest(
   const requestedAt = clock.now();
   const kind = input.kind ?? "service";
   const connectorId = input.connectorId ?? null;
+  const topic = input.topic ?? null;
+  const message = input.message ?? null;
 
   await db.query(
-    `INSERT INTO connector_requests (id, user_id, kind, service_name, connector_id, status, requested_at)
-     VALUES ($1, $2, $3, $4, $5, 'requested', $6::timestamptz)`,
-    [id, input.userId, kind, input.serviceName, connectorId, requestedAt.toISOString()],
+    `INSERT INTO connector_requests (id, user_id, kind, service_name, connector_id, topic, message, status, requested_at)
+     VALUES ($1, $2, $3, $4, $5, $6, $7, 'requested', $8::timestamptz)`,
+    [id, input.userId, kind, input.serviceName, connectorId, topic, message, requestedAt.toISOString()],
   );
 
   return {
@@ -119,6 +132,8 @@ export async function createConnectorRequest(
     kind,
     serviceName: input.serviceName,
     connectorId,
+    topic,
+    message,
     status: "requested",
     requestedAt,
     matchedConnectorId: null,
@@ -149,6 +164,52 @@ export async function listPendingConnectorRequests(db: Db): Promise<ConnectorReq
     `SELECT ${COLUMNS} FROM connector_requests WHERE status = 'requested' AND kind = 'service' ORDER BY requested_at`,
   );
   return result.rows.map(toConnectorRequest);
+}
+
+// EVERY person's still-'requested' Google early-access request, across all users — the system
+// scan the arrivals sweep runs to tell people they're on the list. NOT member-scoped.
+export async function listPendingEarlyAccessRequests(db: Db): Promise<ConnectorRequest[]> {
+  const result = await db.query(
+    `SELECT ${COLUMNS} FROM connector_requests WHERE status = 'requested' AND kind = 'google_early_access' ORDER BY requested_at`,
+  );
+  return result.rows.map(toConnectorRequest);
+}
+
+// The address of each requester whose account still exists (a deleted account's key is gone),
+// for the arrivals sweep — a system read across users, not a member read.
+export async function listLiveRequesterEmails(db: Db, userIds: readonly string[]): Promise<Map<string, string>> {
+  if (userIds.length === 0) return new Map();
+  const result = await db.query("SELECT id, email FROM users WHERE id = ANY($1::uuid[]) AND wrapped_dek <> ''", [userIds]);
+  return new Map(result.rows.map((row) => [row.id as string, row.email as string]));
+}
+
+// How many "Contact us" messages `userId` has sent at or after `since` (member-scoped), so a
+// burst of messages can be turned away.
+export async function countContactMessagesSince(db: Db, userId: string, since: Date): Promise<number> {
+  const result = await db.query(
+    "SELECT count(*)::int AS n FROM connector_requests WHERE user_id = $1 AND kind = 'contact' AND requested_at >= $2::timestamptz",
+    [userId, since.toISOString()],
+  );
+  return Number(result.rows[0]?.n ?? 0);
+}
+
+// Claim a request for the arrivals sweep: mark it 'matched' by `connectorId` only if it is
+// still 'requested', so two sweeps (a rolling deploy runs two replicas) tell the person once.
+// Returns the claimed request, or null when another sweep claimed it first.
+export async function claimArrivedRequest(
+  db: Db,
+  { id, connectorId }: MatchConnectorRequestInput,
+  clock: Clock,
+): Promise<ConnectorRequest | null> {
+  const result = await db.query(
+    `UPDATE connector_requests
+        SET status = 'matched', matched_connector_id = $1, matched_at = $2::timestamptz
+      WHERE id = $3 AND status = 'requested' AND kind <> 'contact'
+      RETURNING ${COLUMNS}`,
+    [connectorId, clock.now().toISOString(), id],
+  );
+  const row = result.rows[0];
+  return row ? toConnectorRequest(row) : null;
 }
 
 // Transition the request with `id` from 'requested' to 'matched', recording

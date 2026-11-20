@@ -27,6 +27,8 @@ import { reconcileOperatorRole } from "../admin/role";
 import { pruneMetricEvents } from "../metrics/retention";
 import { runDailyIntegrityCheck } from "../activity/integrity-job";
 import { cleanupOAuth } from "../oauth/cleanup";
+import { runRequestArrivals } from "../connectors/request-arrivals";
+import type { ConnectableMatch } from "../connectors/request-match";
 import {
   createConnectorJobHandler,
   GOOGLE_LAPSE_TYPE,
@@ -76,6 +78,13 @@ export interface JobSeams {
   readonly operatorEmail?: string;
   // Optional, best-effort metrics for the connector jobs (docs/design/admin-portal.md §4).
   readonly recordMetric?: MetricSeam;
+  // What answers a waiting request (docs/adr/requests-for-members.md): the catalogue and the
+  // Google early-access list. Without it the arrivals sweep finds nothing to tell anyone.
+  readonly requestMatching?: {
+    readonly match: ConnectableMatch;
+    readonly onGoogleEarlyAccess: (email: string) => boolean;
+    readonly connectorName: (connectorId: string) => string | undefined;
+  };
 }
 
 // A payload that names one approval (approval.fallback rows carry it).
@@ -188,5 +197,22 @@ export function buildPeriodicSweeps(seams: JobSeams): readonly PeriodicSweep[] {
     { name: "traffic-flush", intervalMs: MINUTE_MS, run: async () => { await flushTraffic(seams.db, seams.clock); } },
     { name: "operator-role", intervalMs: HOUR_MS, run: async () => { await reconcileOperatorRole(seams.db, seams.operatorEmail); } },
     { name: "metrics-retention", intervalMs: DAY_MS, run: async () => { await pruneMetricEvents(seams.db, seams.clock); } },
+    // A requested service now in the catalogue, or early access now granted, is told to the
+    // person by email (the catalogue and the list change only with a release; the first tick
+    // after boot runs it).
+    {
+      name: "request-arrivals",
+      intervalMs: HOUR_MS,
+      run: async () => {
+        if (!seams.requestMatching) return;
+        await runRequestArrivals({
+          db: seams.db,
+          clock: seams.clock,
+          email: seams.senders.email,
+          publicBaseUrl: seams.publicBaseUrl,
+          ...seams.requestMatching,
+        });
+      },
+    },
   ];
 }

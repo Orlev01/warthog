@@ -629,9 +629,10 @@ test("shows an intact integrity result naming the number of entries checked", ()
   assert.match(text, /entr/i, `the intact result must mention entries, got: "${text}"`);
 });
 
-test("shows a failed integrity result with the advice to export and email Warthog support", () => {
+test("shows a failed integrity result with the advice to export and tell Warthog through Contact us", () => {
   // UI/UX pass (content-39/content-50): "contact the operator" named no one a member could
-  // reach; the advice now gives the support address, and links the entry that failed.
+  // reach; the advice now links Contact us in the app (docs/adr/requests-for-members.md), and
+  // the entry that failed.
   const broken: IntegrityResult = { intact: false, checked: 9, brokenSeq: 4 };
   const markup = render(base({ entries: [], integrity: broken }));
   const text = visibleText(markup);
@@ -641,7 +642,7 @@ test("shows a failed integrity result with the advice to export and email Wartho
     `a failed result must read as a failure, got: "${text}"`,
   );
   assert.match(text, /export/i, `a failed result must advise exporting the record, got: "${text}"`);
-  assert.match(markup, /href="mailto:[^"]+@[^"]+"/, `a failed result must give a support address to email, got: "${text}"`);
+  assert.match(markup, /href="\/contact"/, `a failed result must say where to tell us, got: "${text}"`);
   assert.match(markup, /href="\/activity\?entry=4#entry-4"/, "the entry that failed the check is one link away");
   assert.ok(!/operator/i.test(text), "no unreachable 'operator'");
 });

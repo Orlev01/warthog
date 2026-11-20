@@ -151,7 +151,7 @@ function moreChildren(): readonly NavNode[] {
   return children!;
 }
 
-test("the More section groups exactly its ten children, in order", () => {
+test("the More section groups exactly its eleven children, in order", () => {
   const children = moreChildren();
   assert.deepEqual(
     children.map((n) => n.key),
@@ -166,9 +166,10 @@ test("the More section groups exactly its ten children, in order", () => {
       "household",
       "settings",
       "help",
+      "contact",
     ],
     "the More group must contain exactly Vault, Connectors, Rules & budgets, Spending, " +
-      "Skills, Memory, Life admin, Household, Settings, Help (keyed as such, in order)",
+      "Skills, Memory, Life admin, Household, Settings, Help, Contact us (keyed as such, in order)",
   );
 });
 
@@ -185,6 +186,7 @@ test("each More-group child carries its documented label", () => {
     ["household", "Household"],
     ["settings", "Settings"],
     ["help", "Help"],
+    ["contact", "Contact us"],
   ];
   for (const [key, stem] of expected) {
     const node = children.find((n) => n.key === key);
@@ -208,6 +210,7 @@ test("each More-group child carries its real route", () => {
     ["life-admin", "/life-admin"],
     ["household", "/household"],
     ["help", "/help"],
+    ["contact", "/contact"],
   ];
   for (const [key, href] of routes) {
     const node = children.find((n) => n.key === key);
@@ -297,6 +300,7 @@ test("activeSectionForPath maps a More-group path (and its sub-paths) to that ch
     ["/household", "household"],
     ["/help", "help"],
     ["/help/compatibility", "help"],
+    ["/contact", "contact"],
   ];
   for (const [path, key] of cases) {
     assert.equal(active(path), key, `${path} must resolve to the "${key}" section`);

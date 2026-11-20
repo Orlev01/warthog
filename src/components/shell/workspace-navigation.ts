@@ -26,7 +26,7 @@ export const NAV_GROUPS: readonly NavGroup[] = [
   },
   { label: "Insights", items: ["activity", "spending"].map(item) },
   { label: "Manage", items: ["rules", "household", "settings"].map(item) },
-  { label: "Help", items: ["help"].map(item), hideLabel: true },
+  { label: "Help", items: ["help", "contact"].map(item) },
 ];
 
 // The group that owns a section key within any grouped IA (the member portal's NAV_GROUPS or
@@ -46,7 +46,7 @@ export function navGroupFor(section: string): NavGroup | undefined {
 // one left and right edge at every width.
 //   wide    1216px  dashboards, timelines and catalogues: Home, Activity, Spending, Connectors
 //   reading  896px  lists and detail pages: Agents (all), Inbox, Vault, Memory, Skills,
-//                   Life admin, Rules, Household, More, Connectors › API key
+//                   Life admin, Rules, Household, More, Contact us, Connectors › API key
 //   form     768px  focused settings forms: every Settings page
 export type PageMeasure = "wide" | "reading" | "form";
 const SECTION_MEASURE: Readonly<Record<string, PageMeasure>> = {
@@ -63,6 +63,7 @@ const SECTION_MEASURE: Readonly<Record<string, PageMeasure>> = {
   rules: "reading",
   household: "reading",
   more: "reading",
+  contact: "reading",
   settings: "form",
 };
 export function pageMeasureFor(pathname: string): PageMeasure | undefined {

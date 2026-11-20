@@ -27,6 +27,8 @@ import { createScheduler, type Scheduler } from "./scheduler";
 import type { Db } from "../db/index";
 import { createConnectorRuntime } from "../connectors/runtime";
 import { metricSeamFor } from "../metrics/seam";
+import { getProcessCatalogue } from "../connectors/catalogue";
+import { connectableMatchFor, onGoogleEarlyAccessFor } from "../connectors/request-match";
 
 const FRANKFURTER_BASE_URL = "https://api.frankfurter.app";
 
@@ -37,6 +39,7 @@ export async function composeJobSeams(
   const db = await (overrides.getDb ?? getServerDb)();
   const senders = notificationSenders(config, db);
   const recordMetric = metricSeamFor(db, systemClock);
+  const catalogue = getProcessCatalogue(config);
   return {
     db,
     getPurgeDb: config.nodeEnv === "production" ? getPurgeDb : async () => db,
@@ -60,6 +63,11 @@ export async function composeJobSeams(
     publicBaseUrl: config.publicBaseUrl,
     operatorEmail: config.operatorEmail,
     recordMetric,
+    requestMatching: {
+      match: connectableMatchFor(catalogue, config.googleEarlyAccess),
+      onGoogleEarlyAccess: onGoogleEarlyAccessFor(config.googleEarlyAccess),
+      connectorName: (id) => catalogue.get(id)?.name,
+    },
   };
 }
 
