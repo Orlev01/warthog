@@ -158,7 +158,7 @@ test("sign-ups, usage, reliability, traffic and system models carry labelled, ze
     assert.equal(system.adminSessions, 1);
     assert.equal(system.metricEvents.retentionDays, 400);
     assert.ok(system.schedulerLastTickAt);
-    assert.equal(system.sweeps.length, 10);
+    assert.equal(system.sweeps.length, 11);
   } finally {
     await db.close();
   }
