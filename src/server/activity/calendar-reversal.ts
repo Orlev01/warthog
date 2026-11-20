@@ -54,6 +54,20 @@ export function calendarReversalForEntry(entry: {
   return parsed.success && reversal?.tool === parsed.data.tool && reversal.id(parsed.data.eventId) ? parsed.data : undefined;
 }
 
+/**
+ * The Undo target a Warthog tool call carries, when it is exactly what `calendarReversalFromResult`
+ * produces for that tool: the reversing tool and an id of that service's own shape, read from the
+ * provider's response. The activity writer keeps it as stored (docs/adr/linkedin-connector.md):
+ * it is the provider's opaque id, never text from an agent or a person, and a 19-digit LinkedIn
+ * post id can pass the card-number check, so masking it would break Undo.
+ */
+export function reversalTargetOf(tool: string | undefined, payload: unknown): CalendarReversal | undefined {
+  const reversal = tool ? reversals[tool] : undefined;
+  if (!reversal || !payload || typeof payload !== "object") return undefined;
+  const parsed = targetSchema.safeParse((payload as { reversal?: unknown }).reversal);
+  return parsed.success && parsed.data.tool === reversal.tool && reversal.id(parsed.data.eventId) ? parsed.data : undefined;
+}
+
 /** The query the reversing tool is called with: the resource's id under that tool's key. */
 export function reversalQuery(target: CalendarReversal): Record<string, string> {
   const param = Object.values(reversals).find((reversal) => reversal.tool === target.tool)?.param ?? "eventId";

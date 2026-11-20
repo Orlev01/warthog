@@ -1314,7 +1314,7 @@ test("client observations and SDK input refusals are recorded without retaining 
  } finally {await db.close();}
 });
 
-test("a LinkedIn post over MCP waits for the person even when changes are allowed, posts once on approval, and Undo deletes it", async () => {
+async function linkedInPostRoundTrip(postId: string) {
   const { createAgentExecutors } = await import("./compose");
   const { decide } = await import("../db/approvals");
   const db = await freshDb();
@@ -1326,7 +1326,7 @@ test("a LinkedIn post over MCP waits for the person even when changes are allowe
     const fetch = (async (input: RequestInfo | URL, init?: RequestInit) => {
       sent.push({ url: String(input), init: init ?? {} });
       if (String(input) === "https://api.linkedin.com/v2/userinfo") return Response.json({ sub: "782bbtaQ", name: "Sam Lee", email: "sam@example.com" });
-      if (init?.method === "POST") return new Response(null, { status: 201, headers: { "x-restli-id": "urn:li:share:7262000000000000001" } });
+      if (init?.method === "POST") return new Response(null, { status: 201, headers: { "x-restli-id": postId } });
       return new Response(null, { status: 204 });
     }) as typeof globalThis.fetch;
     const dispatch = createMcpDispatch({ db, config, fetch });
@@ -1352,7 +1352,17 @@ test("a LinkedIn post over MCP waits for the person even when changes are allowe
     assert.ok(!JSON.stringify(entry.payload).includes("synthetic-linkedin-token"));
     const undone = await executors.runReversal({ userId, originalSeq: entry.seq, reversalTool: "linkedin__delete_post" });
     assert.equal(undone.status, "executed");
-    assert.equal(sent.at(-1)!.url, "https://api.linkedin.com/rest/posts/urn%3Ali%3Ashare%3A7262000000000000001");
+    assert.equal(sent.at(-1)!.url, `https://api.linkedin.com/rest/posts/${encodeURIComponent(postId)}`);
     assert.equal(sent.at(-1)!.init.method, "DELETE");
   } finally { await db.close(); }
+}
+
+test("a LinkedIn post over MCP waits for the person even when changes are allowed, posts once on approval, and Undo deletes it", async () => {
+  await linkedInPostRoundTrip("urn:li:share:7262000000000000001");
+});
+
+test("Undo still deletes a LinkedIn post whose id happens to pass the card-number checksum", async () => {
+  // About one LinkedIn post id in ten is a 19-digit number that passes the Luhn check; the
+  // activity writer must keep the validated Undo target rather than mask it as a card.
+  await linkedInPostRoundTrip("urn:li:share:7262000000000000009");
 });
