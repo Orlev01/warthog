@@ -47,8 +47,9 @@ Activity integrity advice now points to Contact us.
 
 ### Your requests
 
-Connectors' catalogue tab ends with "Your requests": the person's own service and early-access
-requests, newest first, at most 20. Each request has one of three statuses:
+Connectors' "Your services" tab ends with "Your requests": the person's own service and
+early-access requests, newest first, at most 20. It sits with their services, a short list, rather
+than below the whole catalogue, where nobody would find it. Each request has one of three statuses:
 - **Requested** while it waits.
 - **Ready to connect** once a catalogue entry this person can connect matches it, with a "Find it"
   link to the catalogue search. For early access the label is **You're in**, once they're on the

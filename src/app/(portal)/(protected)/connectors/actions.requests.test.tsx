@@ -123,7 +123,8 @@ test("Connectors lists the requests in their own panel, and an entry already ask
     assert.equal(gee.asked, true);
 
     const markup = renderToStaticMarkup(<ConnectorsView {...data} initialView="catalogue" connectAction={noop} requestAction={noop} />);
-    assert.match(markup, /Your requests/);
+    assert.match(markup, /Your requests/, "listed under Your services, a short list, not below the whole catalogue");
+    assert.ok(markup.indexOf("Your requests") < markup.indexOf("Find a service"), "on the Your services tab, before the catalogue");
     assert.match(markup, /Asked to join/);
     assert.match(markup, /We&#x27;ll email you when you&#x27;re in/);
     assert.ok(!/<form[^>]*>(?:(?!<\/form>).)*name="connectorId" value="gee-mail"/s.test(markup), "no second ask-to-join form");

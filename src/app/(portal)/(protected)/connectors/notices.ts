@@ -13,7 +13,7 @@ const notices: Record<string, ConnectorNotice> = {
   "connection-declined": { tone: "info", text: "That service was not connected. You can try again when you're ready." },
   disconnected: { tone: "success", text: "Service disconnected. No agent can use it now." },
   connected: { tone: "success", text: "Service connected." },
-  requested: { tone: "success", text: "Thanks — we've recorded your request. It's under Your requests, and we'll email you when it's ready to connect." },
+  requested: { tone: "success", text: "Thanks — we've recorded your request. You'll see it under Your services, and we'll email you when it's ready to connect." },
   "early-access-requested": { tone: "success", text: "Thanks — we've asked for you to join early access. We'll email you when you're in, and you can connect it here." },
   "request-name-missing": { tone: "error", text: "Type the name of the service you'd like us to add, then send the request." },
   "key-needed": { tone: "info", text: "Enter your key to finish connecting this service." },

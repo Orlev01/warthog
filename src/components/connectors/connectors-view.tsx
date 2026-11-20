@@ -352,8 +352,8 @@ function RequestPanel({
   );
 }
 
-// The person's own requests: what they asked for, when, and what's become of it. Shown in the
-// catalogue, where requests are made, only when there are some.
+// The person's own requests: what they asked for, when, and what's become of it. Shown under
+// their services (a short list, unlike the catalogue), only when there are some.
 const REQUEST_STATUS: Record<YourRequest["status"], { label: string; tone: "neutral" | "success" | "info" }> = {
   waiting: { label: "Requested", tone: "neutral" },
   ready: { label: "Ready to connect", tone: "success" },
@@ -657,6 +657,7 @@ export function ConnectorsView({
                     ))}
                   </ListGroup>
                 )}
+                {requests.length > 0 ? <YourRequestsPanel requests={requests} /> : null}
               </>
             ),
           },
@@ -740,8 +741,6 @@ export function ConnectorsView({
                 {canRequest ? (
                   <RequestPanel query={query} requestAction={requestAction} state={catalogueState} />
                 ) : null}
-
-                {requests.length > 0 ? <YourRequestsPanel requests={requests} /> : null}
               </>
             ),
           },
