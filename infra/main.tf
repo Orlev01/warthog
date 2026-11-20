@@ -268,17 +268,17 @@ resource "azurerm_role_assignment" "receipt_data" {
 # retrieve only its versioned runtime secrets, never the administrator password,
 # raw database passwords or the delivery ownership connection.
 #
-# linkedin-client-secret is optional (docs/linkedin-launch.md): plan and apply
-# this only AFTER `runner.py install-secret` has written it, because a grant
-# can't be scoped to a secret that doesn't exist yet.
+# linkedin-client-secret is optional (docs/linkedin-launch.md) and granted only
+# once `linkedin_secret_installed` is true, which is set after
+# `runner.py install-secret` has written it: a grant can't be scoped to a secret
+# that doesn't exist yet, so a fixed entry would fail every foundation run.
 resource "azurerm_role_assignment" "secrets" {
-  for_each = toset([
+  for_each = toset(concat([
     "database-url", "migration-database-url", "purge-database-url",
     "warthog-hmac-key", "resend-api-key", "twilio-account-sid",
     "twilio-api-key-sid", "twilio-api-key-secret", "google-client-secret",
     "microsoft-client-secret", "google-early-access", "vapid-private-key",
-    "linkedin-client-secret",
-  ])
+  ], var.linkedin_secret_installed ? ["linkedin-client-secret"] : []))
   scope                = "${azurerm_key_vault.warthog.id}/secrets/${each.key}"
   role_definition_name = "Key Vault Secrets User"
   principal_id         = data.azurerm_user_assigned_identity.app.principal_id

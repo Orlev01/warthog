@@ -98,9 +98,14 @@ VAULT_ID=$(az keyvault show -n kv-warthog-aue-e854 -g rg-warthog-prod-aue --subs
    - Then run `runner.py destroy --directory <dir>` and the release scripts' cleanup check
      (`verify-cleanup.py <lease>`). `register` refuses this VM for good.
    - Delete `~/.warthog/linkedin-client-secret`.
-2. **Let the app read it.** `infra/main.tf` lists `linkedin-client-secret` among the app identity's
-   "Key Vault Secrets User" grants. Run a foundation plan, review it (one new role assignment and
-   nothing else), and have the founder approve the apply, as for any foundation change.
+2. **Let the app read it.** `infra/main.tf` grants the app identity "Key Vault Secrets User" on
+   `linkedin-client-secret` only when the foundation variable `linkedin_secret_installed` is true.
+   It is false by default, so foundation runs keep working before the secret exists.
+   - Add `"linkedin_secret_installed": true` to the `FOUNDATION_TFVARS_JSON` repository secret
+     (the founder edits it in GitHub → Settings → Secrets, or `gh secret set FOUNDATION_TFVARS_JSON`
+     from a file that is then deleted).
+   - Run a foundation plan, review it (one new role assignment and nothing else), and have the
+     founder approve the apply, as for any foundation change.
    - It must come after step 1: a grant can't be scoped to a secret that doesn't exist yet.
    - **One-off alternative.** If a foundation run isn't practical, run this:
 
@@ -110,8 +115,9 @@ VAULT_ID=$(az keyvault show -n kv-warthog-aue-e854 -g rg-warthog-prod-aue --subs
        --role "Key Vault Secrets User" --scope "$VAULT_ID/secrets/linkedin-client-secret" --subscription $SUB
      ```
 
-     The next foundation apply will then fail on "already exists" until that assignment is imported
-     into the foundation state, so record it in the release record.
+     While `linkedin_secret_installed` stays false, foundation runs leave this assignment alone.
+     Before setting it true, import the assignment into the foundation state (or delete it), or the
+     apply fails on "already exists". Record it in the release record.
    - **Check either way.** This must list exactly one assignment:
 
      ```

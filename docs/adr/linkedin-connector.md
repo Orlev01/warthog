@@ -132,9 +132,10 @@ journal's (`scripts/ci/deploy_app.py`):
   - `runner.py install-secret` runs it, with protected Run Command parameters, on a fresh lease VM
     that can't be registered afterwards.
   - It keeps only the versioned URL.
-- **The app identity reads secrets one grant at a time**, so `infra/main.tf` lists
-  `linkedin-client-secret` too. That foundation change is planned and applied after the secret
-  exists. The release job can't list role assignments, so the operator checks the grant
+- **The app identity reads secrets one grant at a time**, so `infra/main.tf` grants
+  `linkedin-client-secret` too, but only when the foundation variable `linkedin_secret_installed`
+  is true (default false). A fixed entry would fail every foundation run until the secret exists,
+  so it is switched on and applied after the secret is written. The release job can't list role assignments, so the operator checks the grant
   (docs/linkedin-launch.md).
 - Adding the app secret changes the live configuration's fingerprint, so the activation release
   takes a fresh snapshot after it.

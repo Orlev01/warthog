@@ -98,6 +98,12 @@ variable "import_existing_budget" {
   description = "Adopt the existing same-name subscription alert in the reviewed plan instead of attempting duplicate creation."
 }
 
+variable "linkedin_secret_installed" {
+  type        = bool
+  default     = false
+  description = "Grant the app identity read access to linkedin-client-secret. Set true only after runner.py install-secret has written it (docs/linkedin-launch.md)."
+}
+
 variable "budget_end_date" {
   type        = string
   default     = null
