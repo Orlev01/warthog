@@ -136,6 +136,26 @@ test("Accounts: an exact lookup form, the found account's facts, filters with co
   assert.match(miss, /No account has that address\./);
 });
 
+test("Requests: a Contact us message shows its text as written, with a reply link and a mark-done form", () => {
+  const base = F.REQUESTS.requests[0]!;
+  const message = {
+    ...base,
+    kind: "contact" as const,
+    serviceName: "A privacy request",
+    topic: "A privacy request",
+    message: "Please delete my history.\n\n<script>alert(1)</script> Thanks",
+    resolution: null,
+  };
+  const html = renderToStaticMarkup(<RequestsView model={{ ...F.REQUESTS, requests: [message] }} now={F.NOW} />);
+  check(html, "requests-message");
+  assert.match(html, />Message</);
+  assert.match(html, /A privacy request/);
+  assert.match(html, /<p class="whitespace-pre-line[^"]*">Please delete my history\.\n\n&lt;script&gt;alert\(1\)&lt;\/script&gt; Thanks<\/p>/);
+  assert.match(html, /href="mailto:sam@example.test\?subject=Re%3A%20your%20message%20to%20Warthog"/);
+  assert.match(html, /Reply by email, then mark it done/);
+  assert.match(html, /name="to" value="done"/);
+});
+
 test("Requests: each request names who asked with their account facts, what would settle it, and a mark-done form", () => {
   const html = renderToStaticMarkup(<RequestsView model={F.REQUESTS} now={F.NOW} />);
   check(html, "requests");

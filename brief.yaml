@@ -151,7 +151,10 @@ features:
     catalogue entry is added whose name or listed aliases match the requested service name (ignoring
     case and punctuation); unmatched requests stay "Requested". (Amended 20 November 2026: requests
     are no longer emailed to the operator; the operator reads them, with who asked, on the admin
-    portal's Requests page — see docs/adr/admin-portal.md.)
+    portal's Requests page — see docs/adr/admin-portal.md. Further amended the same day: the person
+    sees their requests under "Your requests" on Connectors, asking again for one they're waiting
+    on records nothing new, and the notification is one email per person once the service can be
+    connected — see docs/adr/requests-for-members.md.)
   - >-
     Connect a service once — connect through the provider's own sign-in page, an API-key form with
     plain instructions on where to find the key, or a provider-hosted connector; shows connected
@@ -164,7 +167,8 @@ features:
     to people whose email the founder has placed on the early-access list in Warthog's configuration
     (Google allows up to 100 people in total while Warthog is unverified); everyone else sees them
     marked "Early access — ask to join", which files a request the operator reads on the admin
-    portal's Requests page; the connect screen warns
+    portal's Requests page (once asked, the entry says "Asked to join" and the person is emailed
+    when they're added — docs/adr/requests-for-members.md); the connect screen warns
     that Google will show an "unverified app" notice and says how to continue. (Amended 17 November
     2026: the founder published the Google app, so connections no longer lapse every 7 days — see
     docs/adr/google-published-and-accounts.md.)
@@ -375,7 +379,7 @@ features:
     <agent>" and are never counted as fact; filter by agent, service, kind, outcome and date range;
     search; open any entry for full detail; a "Check integrity" control re-verifies the person's
     whole record and shows either "All <n> entries intact" or the first entry that fails, with the
-    advice to export the record and contact the operator; the daily automatic check notifies the
+    advice to export the record and contact the operator (through Contact us in the app); the daily automatic check notifies the
     person (push and email) only if their record fails, and records the pass/fail count, without
     content, in the operational metrics.
   - >-
@@ -462,7 +466,11 @@ features:
     staff can read them while stored, that they pass through Warthog only for the single release the
     person approved and are discarded once collected or expired, that everything else is encrypted
     with a key specific to the person and no staff tool displays it,
-    and how to export or delete everything.
+    and how to export or delete everything. (Amended 20 November 2026: signed-in people can also
+    write to the operator from "Contact us" in the app — a question, a problem, a privacy request,
+    an idea or something else — and see what they've sent and whether it's been answered; the
+    operator reads it on the admin portal's Requests page and replies by email. The support address
+    stays for anyone who can't sign in. See docs/adr/requests-for-members.md.)
 
   # --- Operations readiness (no admin UI in V1) ---
   - >-

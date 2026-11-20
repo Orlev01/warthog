@@ -122,7 +122,8 @@ service was asked for at least twice).
 **Requests (amendment of 20 November 2026, docs/adr/admin-portal.md).** The
 one exception to "no addresses": `src/server/admin/requests.ts` lists each
 `connector_requests` row (`kind`, `service_name`, `connector_id`, `status`,
-`matched_connector_id`, `requested_at`, `handled_at`) from a live account with
+`matched_connector_id`, `requested_at`, `handled_at`, and for a "Contact us"
+message `topic` and `message`) from a live account with
 that account's `users.email`, the account facts above and its
 `account_currency.currency`. It has its own static guard (no account labels,
 agent names, mobile numbers, identity tables or key material). It holds the
@@ -231,8 +232,9 @@ the UI shows absolute deltas and "n of m", never a percentage.
 - **Accounts.** The exact-address lookup; a list of accounts (newest first)
   with sign-up date, factors, agents, connections, last active and attention
   badges ("Reconnect needed", "No factor"); filters for stalled steps.
-- **Requests.** Every request a person made of the operator (a new service, or
-  Google early access), newest first, filtered Waiting / Done / All. Each
+- **Requests.** Every request a person made of the operator (a new service,
+  Google early access, or a "Contact us" message with its topic and text),
+  newest first, filtered Waiting / Done / All. Each
   shows the requester's address as a mail link, their account facts, and what
   would settle it. A request settles itself when the catalogue has the service
   or the person is on the Google list; otherwise "Mark done" (POST

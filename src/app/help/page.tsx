@@ -2,6 +2,7 @@ import * as React from "react";
 import { ArrowRight } from "lucide-react";
 
 import { PublicPage, PublicPanel, PublicSection } from "@/components/public/public-page";
+import { SUPPORT_EMAIL } from "@/components/public/operator";
 import { publicLinksFromEnv } from "@/server/config";
 import { publicPageMetadata } from "@/app/site-metadata";
 
@@ -117,6 +118,17 @@ export default function HelpPage() {
           </p>
           <div className="wh-public-actions">
             <Action href={`${links.account}/reset`}>Reset your account</Action>
+          </div>
+        </PublicSection>
+
+        <PublicSection id="contact" title="Contact us">
+          <p>
+            Signed in? Use Contact us in Warthog to ask a question, tell us about a problem or make
+            a privacy request, and see what you&apos;ve sent. We reply by email. Can&apos;t sign in?
+            Email <a href={`mailto:${SUPPORT_EMAIL}`}>{SUPPORT_EMAIL}</a>.
+          </p>
+          <div className="wh-public-actions">
+            <Action href={`${links.account}/contact`}>Contact us</Action>
           </div>
         </PublicSection>
 

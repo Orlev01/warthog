@@ -37,6 +37,7 @@ const NOTICES: Readonly<Record<RequestsNotice, { tone: NoticeTone; text: string 
 const KIND_LABELS: Readonly<Record<RequestItem["kind"], string>> = {
   service: "New service",
   google_early_access: "Google early access",
+  contact: "Message",
 };
 
 const LISTED = 5;
@@ -80,6 +81,7 @@ function outcomeText(item: RequestItem, timeZone: string): string {
   if (resolution?.by === "catalogue") return `${resolution.serviceName} is in the catalogue now, so they can connect it.`;
   if (resolution?.by === "allowlist") return "They're on the Google early-access list, so they can connect it.";
   if (resolution?.by === "operator") return `You marked this done on ${formatDate(resolution.at, timeZone)}.`;
+  if (item.kind === "contact") return "Reply by email, then mark it done. They see it as answered.";
   return item.kind === "google_early_access"
     ? "To let them connect it, add their address to the Google early-access list."
     : "Not in the catalogue yet.";
@@ -111,7 +113,10 @@ function mailLink(email: string, subject: string): string | null {
 }
 
 function RequestRow({ item, filter, timeZone, now }: { item: RequestItem; filter: RequestFilter; timeZone: string; now: Date }) {
-  const href = mailLink(item.person.email, `Your Warthog request: ${item.serviceName}`);
+  const href = mailLink(
+    item.person.email,
+    item.kind === "contact" ? "Re: your message to Warthog" : `Your Warthog request: ${item.serviceName}`,
+  );
   return (
     <li className={LIST_ROW}>
       <span className="flex flex-wrap items-center gap-2">
@@ -123,6 +128,11 @@ function RequestRow({ item, filter, timeZone, now }: { item: RequestItem; filter
         {href ? <a className={EMAIL_LINK} href={href}>{item.person.email}</a> : <span className="font-medium text-fg">{item.person.email}</span>}
         <span className="text-fg-muted">Account <span className="tabular-nums">{item.person.reference}</span> · asked {formatWhen(item.askedAt, timeZone, now)}</span>
       </span>
+      {item.kind === "contact" && item.message ? (
+        <p className="whitespace-pre-line rounded-field border border-line bg-surface-muted p-3 text-sm text-fg [overflow-wrap:anywhere]">
+          {item.message}
+        </p>
+      ) : null}
       <PersonFacts person={item.person} timeZone={timeZone} now={now} />
       <span className="text-sm text-fg-muted">{outcomeText(item, timeZone)}</span>
       <UpdateControl item={item} filter={filter} />
@@ -131,9 +141,9 @@ function RequestRow({ item, filter, timeZone, now }: { item: RequestItem; filter
 }
 
 const EMPTY: Readonly<Record<RequestFilter, { heading: string; description: string }>> = {
-  waiting: { heading: "Nothing is waiting", description: "New requests for a service or for Google early access appear here." },
+  waiting: { heading: "Nothing is waiting", description: "New requests for a service or for Google early access, and Contact us messages, appear here." },
   done: { heading: "Nothing is done yet", description: "Requests move here once they're settled." },
-  all: { heading: "No requests yet", description: "When someone asks for a service that isn't in the catalogue, or for Google early access, it appears here." },
+  all: { heading: "No requests yet", description: "When someone asks for a service that isn't in the catalogue, asks for Google early access, or sends a Contact us message, it appears here." },
 };
 
 export function RequestsView({ model, now }: { model: RequestsModel; now: Date }) {

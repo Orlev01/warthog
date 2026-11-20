@@ -144,3 +144,6 @@ that decision 5 left open ("showing addresses in the portal"). So:
 - **Limits.** The page reads the newest 200 requests, and says so once there are more. During the
   release itself, a request filed on the old revision is stored the old way (early access as a
   "New service" named "Google early access: …") and emailed as before. Fix any such row by hand.
+- **Later the same day.** "Contact us" messages became a third kind of request, shown here with
+  their topic and text. People also see their own requests, and are emailed when one arrives. See
+  [requests-for-members.md](requests-for-members.md).

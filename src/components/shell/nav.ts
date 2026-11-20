@@ -38,6 +38,7 @@ const MORE_CHILDREN: readonly NavNode[] = [
   { key: "household", label: "Household", href: "/household" },
   { key: "settings", label: "Settings", href: "/settings", children: SETTINGS_CHILDREN },
   { key: "help", label: "Help", href: "/help" },
+  { key: "contact", label: "Contact us", href: "/contact" },
 ];
 
 // Stable portal route inventory, including the legacy /more destination.

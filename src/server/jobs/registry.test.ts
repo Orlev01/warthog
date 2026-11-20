@@ -99,6 +99,7 @@ const EXPECTED_SWEEP_NAMES = [
   "traffic-flush",
   "operator-role",
   "metrics-retention",
+  "request-arrivals",
 ] as const;
 
 // The two registry entries that matched no real enqueued job — removed by this task.
@@ -281,6 +282,39 @@ test("traffic-flush, operator-role and metrics-retention run on their intervals 
     await byName["metrics-retention"]!.run();
     const kept = await queryMetrics(db, { name: "users.total", from: "2000-01-01T00:00:00Z", to: "2030-01-01T00:00:00Z" });
     assert.deepEqual(kept.map((e) => e.value), [2]);
+  } finally {
+    await db.close();
+  }
+});
+
+// --- Telling people their request has arrived (docs/adr/requests-for-members.md) -------------
+import { createConnectorRequest } from "../db/connector-requests";
+import type { OutgoingMessage } from "../notify/senders";
+
+test("request-arrivals runs hourly and emails the person whose requested service is now connectable", async () => {
+  const db = await freshDb();
+  try {
+    const sent: OutgoingMessage[] = [];
+    const base = jobSeams(db);
+    const seams = {
+      ...base,
+      senders: { ...base.senders, email: { sendEmail: async (m: OutgoingMessage): Promise<void> => { sent.push(m); } } },
+      requestMatching: {
+        match: (name: string) => (name.toLowerCase() === "linkedin" ? { id: "linkedin", name: "LinkedIn" } : undefined),
+        onGoogleEarlyAccess: () => false,
+        connectorName: () => undefined,
+      },
+    };
+    const person = await createUser(db, { email: "asker@example.test", wrappedDek: "wrapped" });
+    await createConnectorRequest(db, { userId: person.id, serviceName: "LinkedIn" }, fixedClock(T0));
+    const sweep = buildPeriodicSweeps(seams).find((s) => s.name === "request-arrivals")!;
+    assert.equal(sweep.intervalMs, 60 * 60_000);
+    await sweep.run();
+    assert.deepEqual(sent.map((m) => [m.recipient, m.email?.subject]), [["asker@example.test", "LinkedIn is ready to connect"]]);
+
+    const without = buildPeriodicSweeps(jobSeams(db)).find((s) => s.name === "request-arrivals")!;
+    await without.run();
+    assert.equal(sent.length, 1, "with no catalogue wired, nothing arrives and nothing is sent");
   } finally {
     await db.close();
   }

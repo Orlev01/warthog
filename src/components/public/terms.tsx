@@ -22,7 +22,7 @@ export function Terms({ links = RELATIVE_LINKS }: { links?: PublicLinks } = {}) 
         </PublicSection>
         <PublicSection id="privacy-availability" title="Privacy, availability and help">
           <p>Our <a href="/privacy">Privacy policy</a> explains data handling, overseas messaging providers, account export and deletion. Google, Microsoft, email, SMS and push services have their own availability and account restrictions. Features and supported destinations can change; these terms do not promise worldwide messaging or uninterrupted service.</p>
-          <p>You can stop using Warthog, disconnect services or delete your account yourself in Settings. Contact <a href={`mailto:${SUPPORT_EMAIL}`}>{SUPPORT_EMAIL}</a> for support, privacy requests or concerns about these terms. Nothing in these terms excludes rights that applicable law does not allow us to exclude.</p>
+          <p>You can stop using Warthog, disconnect services or delete your account yourself in Settings. Contact <a href={`mailto:${SUPPORT_EMAIL}`}>{SUPPORT_EMAIL}</a>, or use <a href={`${links.account}/contact`}>Contact us</a> in the app, for support, privacy requests or concerns about these terms. Nothing in these terms excludes rights that applicable law does not allow us to exclude.</p>
         </PublicSection>
       </PublicPanel>
     </PublicPage>

@@ -128,3 +128,30 @@ test("Requests: the Overview says how many are waiting and links to them; Usage 
     await db.close();
   }
 });
+
+test("Requests: a Contact us message shows its topic and text, and only the operator settles it", async () => {
+  const db = await freshDb();
+  try {
+    const seeded = await seedAdminWorld(db);
+    await db.query(
+      "INSERT INTO connector_requests (user_id, kind, service_name, topic, message, status, requested_at) VALUES ($1, 'contact', 'A privacy request', 'privacy', $2, 'requested', $3::timestamptz)",
+      [seeded.fresh, "Please delete my imported history.​\n\nThanks!", hoursAgo(0.5)],
+    );
+    const deps = depsFor(db, {
+      catalogueMatch: () => "Anything",
+      onGoogleEarlyAccess: () => true,
+    });
+    const waiting = await loadRequests(deps);
+    const message = waiting.requests.find((r) => r.kind === "contact")!;
+    assert.equal(message.serviceName, "A privacy request");
+    assert.equal(message.topic, "A privacy request");
+    assert.equal(message.message, "Please delete my imported history.\n\nThanks!", "shown cleaned, line breaks kept");
+    assert.equal(message.resolution, null, "neither the catalogue nor the Google list answers a message");
+    assert.equal(message.person.email, "fresh@example.test");
+
+    const overview = await loadOverview(deps, "7d");
+    assert.match(overview.attention.find((a) => a.id === "requests")!.text, /waiting for you/);
+  } finally {
+    await db.close();
+  }
+});

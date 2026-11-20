@@ -58,6 +58,9 @@ import {
 import { askToJoinEarlyAccess, gateGoogleConnector } from "@/server/connectors/google-early-access";
 import { saveApiKeyConnection as saveApiKeyConnectionService } from "@/server/connectors/api-key";
 import { requestConnector as requestConnectorService } from "@/server/connectors/requests";
+import { connectableMatchFor } from "@/server/connectors/request-match";
+import { listConnectorRequestsForUser, type ConnectorRequest } from "@/server/db/connector-requests";
+import { redact } from "@/domain/redaction/redact";
 import {
   buildAuthorizeUrl,
   type OAuthClientConfig,
@@ -77,6 +80,7 @@ import type {
   CategoryCount,
   ConnectionItem,
   ToolItem,
+  YourRequest,
 } from "@/components/connectors/connectors-view";
 import {
   POPULAR_SERVICES,
@@ -189,6 +193,14 @@ const requestConnectorSchema = z.object({
 });
 
 // ---- presentation helpers ---------------------------------------------------------
+
+// The most of the person's own requests Connectors lists.
+const YOUR_REQUESTS_MAX = 20;
+
+// Where a ready request's service is found: the catalogue, searched for its name.
+function findHrefFor(name: string): string {
+  return `/connectors?${new URLSearchParams({ view: "catalogue", q: name })}`;
+}
 
 // The connection store's status vs. the <Status> primitive's StatusKey: the stored
 // 'needs_reconnect' reads as the UI's 'needs-reconnect' (CLAUDE.md "Reconnect needed").
@@ -327,6 +339,14 @@ export function createConnectorsActions(deps: ConnectorsActionsDeps): Connectors
     const browse = browseCatalogue(catalogue, { query: input?.query });
     const user = await getUserById(db, userId);
     const email = user?.email ?? "";
+    // The person's own service and early-access requests (member-scoped; "Contact us" messages
+    // are on the Contact page). A Google entry they've already asked to join says so.
+    const ownRequests = (await listConnectorRequestsForUser(db, userId)).filter((request) => request.kind !== "contact");
+    const askedToJoin = new Set(
+      ownRequests
+        .filter((request) => request.kind === "google_early_access" && request.status === "requested" && request.handledAt === null)
+        .map((request) => request.connectorId),
+    );
     const offered = browse.groups
       .flatMap((group) => group.entries)
       .map((entry): CatalogueItem => {
@@ -338,6 +358,7 @@ export function createConnectorsActions(deps: ConnectorsActionsDeps): Connectors
           connectable: entry.connectable && !mcpUnavailable,
           gate: gateFor(entry.id, email),
           ...noteFor(entry.id, email),
+          ...(gateFor(entry.id, email) === "ask_to_join" && askedToJoin.has(entry.id) ? { asked: true } : {}),
           ...(connectedConnectors.has(entry.id) ? { connected: true } : {}),
         };
       })
@@ -393,7 +414,43 @@ export function createConnectorsActions(deps: ConnectorsActionsDeps): Connectors
       // A miss is judged on what can be offered: a term that only matched a service that
       // can't be connected yet is a request for it, not "nothing to show".
       canRequest: offered.length === 0,
+      requests: [...ownRequests]
+        .sort((a, b) => new Date(b.requestedAt).getTime() - new Date(a.requestedAt).getTime())
+        .slice(0, YOUR_REQUESTS_MAX)
+        .map((request) => yourRequest(request, email, timeZone)),
     };
+  }
+
+  // One of the person's requests as Connectors lists it (docs/adr/requests-for-members.md):
+  // ready once the service is in the catalogue for them (or they're on the Google list),
+  // reviewed once the operator has closed it, otherwise still requested. A name the person
+  // typed is redacted, cleaned and shortened; a ready service is named by the catalogue.
+  const matchFor = connectableMatchFor(catalogue, googleEarlyAccess);
+  function yourRequest(request: ConnectorRequest, email: string, timeZone: string): YourRequest {
+    const askedAt = formatAccountTime(request.requestedAt, timeZone, { dateOnly: true });
+    const typed = cleanShortText(redact(request.serviceName, () => false) as string, 80).trim() || "A service";
+    if (request.kind === "google_early_access") {
+      const entry = request.connectorId ? catalogue.get(request.connectorId) : undefined;
+      const name = entry?.name ?? typed;
+      const ready = entry !== undefined && catalogue.isConnectable(entry.id) && gateFor(entry.id, email) === "connect";
+      return {
+        id: request.id,
+        name,
+        kind: "early_access",
+        askedAt,
+        status: ready ? "ready" : request.handledAt ? "reviewed" : "waiting",
+        ...(ready ? { findHref: findHrefFor(name) } : {}),
+      };
+    }
+    const matched = request.matchedConnectorId ? catalogue.get(request.matchedConnectorId) : undefined;
+    const found =
+      matched && catalogue.isConnectable(matched.id) && gateFor(matched.id, email) === "connect"
+        ? { name: matched.name }
+        : matchFor(request.serviceName, email);
+    if (found) {
+      return { id: request.id, name: found.name, kind: "service", askedAt, status: "ready", findHref: findHrefFor(found.name) };
+    }
+    return { id: request.id, name: typed, kind: "service", askedAt, status: request.handledAt ? "reviewed" : "waiting" };
   }
 
   // Start a provider sign-in (oauth2) connection: shape-guard the connector id, resolve the

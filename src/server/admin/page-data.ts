@@ -18,6 +18,7 @@ import {
 } from "../../domain/admin/model";
 import { cleanShortText } from "../../domain/content/untrusted";
 import { redact } from "../../domain/redaction/redact";
+import { CONTACT_MESSAGE_MAX, CONTACT_TOPIC_LABELS, isContactTopic } from "../../domain/contact/topics";
 import { bucketStarts, fillSeries, hoursOfToday, measure, rangeWindow } from "../../domain/admin/range";
 import { SWEEP_INTERVALS, sweepOverdue } from "../../domain/admin/sweeps";
 import {
@@ -359,7 +360,9 @@ const REQUEST_NOTICES: readonly RequestsNotice[] = ["done", "waiting", "problem"
 // settle it whatever the operator marked, so "Move back to waiting" is only offered on a
 // request the operator settled. Otherwise the operator's mark settles it.
 function resolutionOf(record: RequestRecord, deps: AdminPageDeps): RequestResolution | null {
-  if (record.kind === "service") {
+  if (record.kind === "contact") {
+    // Only the operator answers a message.
+  } else if (record.kind === "service") {
     const matched = record.matchedConnectorId ? connectorLabel(record.matchedConnectorId, deps.connectorName) : undefined;
     const name = matched ?? deps.catalogueMatch?.(record.serviceName, record.person.email);
     if (name) return { by: "catalogue", serviceName: name };
@@ -376,12 +379,24 @@ function displayName(record: RequestRecord, deps: AdminPageDeps): string {
   return cleanShortText(redact(record.serviceName, () => false) as string, REQUEST_NAME_MAX).trim() || "(no name)";
 }
 
+// A "Contact us" message as the operator reads it: cleaned again on the way out (invisible
+// characters, card numbers), line breaks kept, capped.
+function displayMessage(text: string): string {
+  return cleanShortText(redact(text, () => false) as string, CONTACT_MESSAGE_MAX + 20).trim();
+}
+
 async function requestItems(deps: AdminPageDeps): Promise<RequestItem[]> {
   const records = await listRequests(deps.db);
   return records.map((record) => ({
     id: record.id,
     kind: record.kind,
     serviceName: displayName(record, deps),
+    ...(record.kind === "contact"
+      ? {
+          topic: isContactTopic(record.topic) ? CONTACT_TOPIC_LABELS[record.topic] : displayName(record, deps),
+          message: displayMessage(record.message ?? ""),
+        }
+      : {}),
     askedAt: record.requestedAt,
     resolution: resolutionOf(record, deps),
     person: {

@@ -45,8 +45,7 @@ export async function getAdminDeps(overrides: AdminComposeOverrides = {}): Promi
 // shows every instant in the operator's established default zone and reads no data key.
 import { DEFAULT_TIME_ZONE } from "../../domain/time-zone";
 import { getProcessCatalogue } from "../connectors/catalogue";
-import { gateGoogleConnector } from "../connectors/google-early-access";
-import { matchesRequest } from "../../domain/catalogue/match";
+import { connectableMatchFor, onGoogleEarlyAccessFor } from "../connectors/request-match";
 import type { AdminPageDeps } from "./page-data";
 import type { CatalogueIndex } from "../connectors/catalogue";
 
@@ -57,9 +56,8 @@ export const AZURE_CONTAINER_APPS_URL = "https://portal.azure.com/#view/HubsExte
 // The catalogue name a requested service now has for this person: a connectable entry whose
 // name or alias matches, and for a Google entry only when they are on the early-access list.
 export function catalogueMatchFor(catalogue: CatalogueIndex, googleEarlyAccess: readonly string[]): NonNullable<AdminPageDeps["catalogueMatch"]> {
-  return (name, email) =>
-    catalogue.connectable()
-      .find((entry) => matchesRequest(name, entry) && gateGoogleConnector(entry, email, googleEarlyAccess).kind === "connect")?.name;
+  const match = connectableMatchFor(catalogue, googleEarlyAccess);
+  return (name, email) => match(name, email)?.name;
 }
 
 export async function getAdminPageDeps(overrides: AdminComposeOverrides = {}): Promise<AdminPageDeps> {
@@ -74,6 +72,6 @@ export async function getAdminPageDeps(overrides: AdminComposeOverrides = {}): P
     recordMetric: metricSeamFor(db, systemClock),
     connectorName: (id) => getProcessCatalogue(config).get(id)?.name,
     catalogueMatch: catalogueMatchFor(getProcessCatalogue(config), config.googleEarlyAccess),
-    onGoogleEarlyAccess: (email) => gateGoogleConnector({ google_early_access: true }, email, config.googleEarlyAccess).kind === "connect",
+    onGoogleEarlyAccess: onGoogleEarlyAccessFor(config.googleEarlyAccess),
   };
 }

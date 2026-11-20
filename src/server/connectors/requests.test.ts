@@ -58,30 +58,26 @@
 //        never lands in the stored request.
 //
 // Every db handle is closed in a `finally`; each real-db test uses its own `freshDb()` (an
-// isolated in-memory PGlite with the real migrations), so tests share no state. Each push
-// test builds its own `createOutbox()` so the recorded messages belong to that test alone.
+// isolated in-memory PGlite with the real migrations), so tests share no state.
 
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import { z } from "zod";
 
-import { requestConnector, notifyMatchingRequests } from "./requests";
+import { requestConnector } from "./requests";
 import {
-  createConnectorRequest,
   listConnectorRequestsForUser,
 } from "../db/connector-requests";
 import { createUser } from "../db/users";
 import { freshDb } from "../../test/db";
 import type { Db } from "../db/index";
 import { fixedClock } from "../seams/clock";
-import { createOutbox, type Outbox, type SentMessage } from "../notify/outbox";
 import { parseBody, HttpError } from "../http/validate";
 
 // --- fixtures ---------------------------------------------------------------------
 
 // Instants in the past relative to wall-clock, so a stray Date.now() would diverge.
 const T0 = new Date("2026-05-01T09:00:00.000Z");
-const T1 = new Date("2026-05-08T14:30:00.000Z");
 
 const ms = (value: Date | string | number): number => new Date(value as never).getTime();
 
@@ -96,10 +92,6 @@ async function makeUser(db: Db, who: string): Promise<string> {
   });
   return user.id;
 }
-
-// The pushes an outbox recorded (the outbox is the real
-// dev/test sender that satisfies EmailSender and PushSender both).
-const pushesOf = (box: Outbox): SentMessage[] => box.list().filter((m) => m.channel === "push");
 
 // A recording db that runs nothing and returns no rows, so a test can prove the handler
 // never reached a query (the "4xx before any query" half of INV-102).
@@ -157,185 +149,27 @@ test("requestConnector records a Requested item for the person", async () => {
   }
 });
 
-// ===========================================================================
-// The MATCH-NOTIFY path — a matching catalogue entry marks the request and
-// notifies the person; a non-matching entry leaves requests Requested.
-// ===========================================================================
-
-
-test("adding a matching entry marks the person's request matched and notifies them", async () => {
+test("asking again for a service the person is already waiting on records nothing new", async () => {
   const db = await freshDb();
   try {
-    const alice = await makeUser(db, "match-alice");
-    const bob = await makeUser(db, "match-bob");
-    await createConnectorRequest(db, { userId: alice, serviceName: "Dropbox" }, fixedClock(T0));
-    await createConnectorRequest(db, { userId: bob, serviceName: "Notion" }, fixedClock(T0));
-
-    const box = createOutbox();
-    const matched = await notifyMatchingRequests(
-      { id: "dropbox", name: "Dropbox", aliases: [] },
-      { db, push: box, clock: fixedClock(T1) },
-    );
-
-    // Alice's request is the one that matched.
-    assert.equal(matched.length, 1, "exactly the matching request is returned");
-    assert.equal(matched[0]!.userId, alice, "it is Alice's request");
-    assert.equal(matched[0]!.status, "matched", "it is now matched");
-    assert.equal(matched[0]!.matchedConnectorId, "dropbox", "the connector that satisfied it is recorded");
-    assert.equal(ms(matched[0]!.matchedAt!), ms(T1), "matchedAt is the injected clock instant");
-
-    // Alice is notified; the push goes to her (recipient is her user id).
-    const pushes = pushesOf(box);
-    assert.equal(pushes.length, 1, "exactly one person is notified");
-    assert.equal(pushes[0]!.recipient, alice, "Alice is the one notified");
-
-    // Alice's stored request shows matched; Bob's is untouched and Bob is NOT notified.
-    const aliceReqs = await listConnectorRequestsForUser(db, alice);
-    assert.equal(aliceReqs[0]!.status, "matched", "Alice's request is persisted as matched");
-    const bobReqs = await listConnectorRequestsForUser(db, bob);
-    assert.equal(bobReqs[0]!.status, "requested", "Bob's unrelated request stays Requested");
-    assert.ok(!pushes.some((p) => p.recipient === bob), "Bob is not notified");
+    const userId = await makeUser(db, "again");
+    const first = await requestConnector({ userId, serviceName: "Dropbox" }, { db, clock: fixedClock(T0) });
+    const again = await requestConnector({ userId, serviceName: " dropbox! " }, { db, clock: fixedClock(T0) });
+    assert.equal(again.id, first.id, "the waiting request is handed back");
+    await db.query("UPDATE connector_requests SET handled_at = $2::timestamptz WHERE id = $1", [first.id, T0.toISOString()]);
+    const afterDone = await requestConnector({ userId, serviceName: "Dropbox" }, { db, clock: fixedClock(T0) });
+    assert.notEqual(afterDone.id, first.id, "once the operator has closed it, asking again is a new request");
+    const other = await makeUser(db, "other");
+    const theirs = await requestConnector({ userId: other, serviceName: "Dropbox" }, { db, clock: fixedClock(T0) });
+    assert.notEqual(theirs.id, first.id, "another person's request is their own");
+    assert.equal((await listConnectorRequestsForUser(db, userId)).length, 2);
   } finally {
     await db.close();
   }
 });
 
-test("matching ignores case and punctuation (entry NAME)", async () => {
-  const db = await freshDb();
-  try {
-    const userId = await makeUser(db, "match-name");
-    // The person typed a messy form; the entry's display name is clean. They must still match.
-    await createConnectorRequest(db, { userId, serviceName: "google-drive!" }, fixedClock(T0));
+// The match-notify path is now the hourly arrivals sweep, tested in request-arrivals.test.ts.
 
-    const box = createOutbox();
-    const matched = await notifyMatchingRequests(
-      { id: "google-drive", name: "Google Drive", aliases: [] },
-      { db, push: box, clock: fixedClock(T1) },
-    );
-
-    assert.equal(matched.length, 1, "the messy request matches the clean entry name");
-    assert.equal(matched[0]!.matchedConnectorId, "google-drive", "the connector is recorded");
-    assert.equal(pushesOf(box).length, 1, "the person is notified");
-  } finally {
-    await db.close();
-  }
-});
-
-test("matching scans the entry's ALIASES, not only its name", async () => {
-  const db = await freshDb();
-  try {
-    const userId = await makeUser(db, "match-alias");
-    // "GDrive" is not the display name — only an alias of the Google Drive entry.
-    await createConnectorRequest(db, { userId, serviceName: "GDrive" }, fixedClock(T0));
-
-    const box = createOutbox();
-    const matched = await notifyMatchingRequests(
-      { id: "google-drive", name: "Google Drive", aliases: ["gdrive", "drive"] },
-      { db, push: box, clock: fixedClock(T1) },
-    );
-
-    assert.equal(matched.length, 1, "a request that matches only an alias is still matched");
-    assert.equal(matched[0]!.userId, userId, "it is this person's request");
-    assert.equal(pushesOf(box).length, 1, "the person is notified");
-  } finally {
-    await db.close();
-  }
-});
-
-test("a non-matching entry marks nothing and notifies nobody; requests stay Requested", async () => {
-  const db = await freshDb();
-  try {
-    const alice = await makeUser(db, "nomatch-alice");
-    const bob = await makeUser(db, "nomatch-bob");
-    await createConnectorRequest(db, { userId: alice, serviceName: "Dropbox" }, fixedClock(T0));
-    await createConnectorRequest(db, { userId: bob, serviceName: "Notion" }, fixedClock(T0));
-
-    const box = createOutbox();
-    const matched = await notifyMatchingRequests(
-      { id: "slack", name: "Slack", aliases: [] },
-      { db, push: box, clock: fixedClock(T1) },
-    );
-
-    assert.deepEqual(matched, [], "an unrelated entry matches no pending request");
-    assert.equal(pushesOf(box).length, 0, "nobody is notified");
-
-    // Both requests remain Requested.
-    assert.equal((await listConnectorRequestsForUser(db, alice))[0]!.status, "requested", "Alice's request stays Requested");
-    assert.equal((await listConnectorRequestsForUser(db, bob))[0]!.status, "requested", "Bob's request stays Requested");
-  } finally {
-    await db.close();
-  }
-});
-
-test("a word shared with a different multi-word service does not match", async () => {
-  const db = await freshDb();
-  try {
-    const userId = await makeUser(db, "near-miss");
-    await createConnectorRequest(db, { userId, serviceName: "Google Calendar" }, fixedClock(T0));
-
-    const box = createOutbox();
-    // "Google Drive" shares the word "Google" but is a different service — no match.
-    const matched = await notifyMatchingRequests(
-      { id: "google-drive", name: "Google Drive", aliases: ["gdrive"] },
-      { db, push: box, clock: fixedClock(T1) },
-    );
-
-    assert.deepEqual(matched, [], "sharing one word is not a match");
-    assert.equal(pushesOf(box).length, 0, "the person is not notified");
-    assert.equal((await listConnectorRequestsForUser(db, userId))[0]!.status, "requested", "the request stays Requested");
-  } finally {
-    await db.close();
-  }
-});
-
-test("every person who requested the same service is matched and notified", async () => {
-  const db = await freshDb();
-  try {
-    const alice = await makeUser(db, "many-alice");
-    const carol = await makeUser(db, "many-carol");
-    const bob = await makeUser(db, "many-bob");
-    await createConnectorRequest(db, { userId: alice, serviceName: "Dropbox" }, fixedClock(T0));
-    await createConnectorRequest(db, { userId: carol, serviceName: "dropbox" }, fixedClock(T0));
-    await createConnectorRequest(db, { userId: bob, serviceName: "Notion" }, fixedClock(T0));
-
-    const box = createOutbox();
-    const matched = await notifyMatchingRequests(
-      { id: "dropbox", name: "Dropbox", aliases: [] },
-      { db, push: box, clock: fixedClock(T1) },
-    );
-
-    assert.equal(matched.length, 2, "both people who wanted Dropbox are matched");
-    const matchedOwners = new Set(matched.map((r) => r.userId));
-    assert.ok(matchedOwners.has(alice) && matchedOwners.has(carol), "Alice and Carol both matched");
-
-    const pushRecipients = new Set(pushesOf(box).map((p) => p.recipient));
-    assert.ok(pushRecipients.has(alice) && pushRecipients.has(carol), "both are notified");
-    assert.ok(!pushRecipients.has(bob), "Bob (who wanted Notion) is not notified");
-  } finally {
-    await db.close();
-  }
-});
-
-test("running match-notify twice for the same entry notifies the person only once", async () => {
-  const db = await freshDb();
-  try {
-    const alice = await makeUser(db, "idem");
-    await createConnectorRequest(db, { userId: alice, serviceName: "Dropbox" }, fixedClock(T0));
-
-    const box = createOutbox();
-    const entry = { id: "dropbox", name: "Dropbox", aliases: [] };
-
-    const first = await notifyMatchingRequests(entry, { db, push: box, clock: fixedClock(T1) });
-    assert.equal(first.length, 1, "the first run matches the pending request");
-
-    const second = await notifyMatchingRequests(entry, { db, push: box, clock: fixedClock(T1) });
-    assert.deepEqual(second, [], "the second run finds nothing still pending to match");
-
-    assert.equal(pushesOf(box).length, 1, "the person is notified exactly once across both runs");
-  } finally {
-    await db.close();
-  }
-});
 
 // ===========================================================================
 // [obligation:validate-and-parameterize-input] — a handler on the validation

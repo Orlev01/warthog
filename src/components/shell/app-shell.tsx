@@ -7,6 +7,7 @@ import {
   ClipboardList,
   Home,
   HelpCircle,
+  MessageSquare,
   Inbox,
   Lock,
   Menu,
@@ -39,6 +40,7 @@ const ICONS: Record<string, LucideIcon> = {
   household: Users,
   settings: Settings,
   help: HelpCircle,
+  contact: MessageSquare,
 };
 // What makes a shell the member portal's or the admin portal's (docs/design/admin-portal.md §5):
 // its grouped destinations and their icons, where the wordmark leads, the workspace label

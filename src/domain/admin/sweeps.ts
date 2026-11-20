@@ -18,6 +18,7 @@ export const SWEEP_INTERVALS: Readonly<Record<string, number>> = {
   "traffic-flush": MINUTE_MS,
   "operator-role": HOUR_MS,
   "metrics-retention": DAY_MS,
+  "request-arrivals": HOUR_MS,
 };
 
 /** A sweep is overdue once its last run is older than twice its interval (or it has never run

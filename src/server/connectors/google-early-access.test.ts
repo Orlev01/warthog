@@ -574,3 +574,18 @@ test("[secrets-from-env] a decoy env secret never lands in the filed request or 
   }
 });
 
+
+test("asking again to join early access for the same service records nothing new while the first ask waits", async () => {
+  const db = await freshDb();
+  try {
+    const userId = await makeUser(db, "asks-twice");
+    const first = await askToJoinEarlyAccess({ userId, connector: GMAIL }, { db, clock: fixedClock(T0) });
+    const again = await askToJoinEarlyAccess({ userId, connector: GMAIL }, { db, clock: fixedClock(T0) });
+    assert.equal(again.id, first.id);
+    const drive = await askToJoinEarlyAccess({ userId, connector: { id: "google-drive", name: "Google Drive" } }, { db, clock: fixedClock(T0) });
+    assert.notEqual(drive.id, first.id, "another service is its own ask");
+    assert.equal((await listConnectorRequestsForUser(db, userId)).length, 2);
+  } finally {
+    await db.close();
+  }
+});

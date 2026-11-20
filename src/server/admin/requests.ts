@@ -1,5 +1,6 @@
 // The admin portal's Requests (docs/adr/admin-portal.md, amendment of 20 November 2026): every
-// request a person made of the operator in the app, newest first, with the person who asked.
+// request a person made of the operator in the app, newest first, with the person who asked —
+// a service, Google early access, or a "Contact us" message (docs/adr/requests-for-members.md).
 // This is the one admin module that selects an address, and only beside that person's own
 // request: they asked the operator for something, and the operator needs to answer them. It
 // selects nothing else personal (no account labels, agent names, mobile numbers or encrypted
@@ -21,6 +22,8 @@ export interface RequestRecord {
   readonly kind: RequestKind;
   readonly serviceName: string; // stored verbatim; the loader cleans it for display
   readonly connectorId: string | null;
+  readonly topic: string | null; // a "Contact us" message's topic key
+  readonly message: string | null; // a "Contact us" message, cleaned when it was sent
   readonly matchedConnectorId: string | null;
   readonly requestedAt: string;
   readonly handledAt: string | null;
@@ -78,9 +81,11 @@ function toRecord(row: Row, breakdowns: Awaited<ReturnType<typeof breakdownsByPe
   const userId = row.id as string;
   return {
     id: row.request_id as string,
-    kind: row.kind === "google_early_access" ? "google_early_access" : "service",
+    kind: row.kind === "google_early_access" ? "google_early_access" : row.kind === "contact" ? "contact" : "service",
     serviceName: String(row.service_name ?? ""),
     connectorId: (row.connector_id ?? null) as string | null,
+    topic: (row.topic ?? null) as string | null,
+    message: (row.message ?? null) as string | null,
     matchedConnectorId: row.status === "matched" ? ((row.matched_connector_id ?? null) as string | null) : null,
     requestedAt: iso(row.requested_at),
     handledAt: row.handled_at == null ? null : iso(row.handled_at),
@@ -99,7 +104,7 @@ function toRecord(row: Row, breakdowns: Awaited<ReturnType<typeof breakdownsByPe
 /** Requests from live accounts, newest first, capped, each with the person who asked. */
 export async function listRequests(db: Db, limit: number = REQUEST_LIST_LIMIT): Promise<RequestRecord[]> {
   const result = await db.query(
-    `SELECT r.id AS request_id, r.kind, r.service_name, r.connector_id, r.status, r.matched_connector_id,
+    `SELECT r.id AS request_id, r.kind, r.service_name, r.connector_id, r.topic, r.message, r.status, r.matched_connector_id,
             r.requested_at, r.handled_at, u.email,
             (SELECT ac.currency FROM account_currency ac WHERE ac.user_id = u.id) AS currency,
             (SELECT count(*) FROM connector_requests o WHERE o.user_id = u.id) AS requests_made,

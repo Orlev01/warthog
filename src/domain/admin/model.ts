@@ -180,7 +180,7 @@ export interface AccountsModel extends PageBase {
 // The one page that names a person: each request a person made of the operator in the app, with
 // the address and account facts of the person who asked, so the operator can answer them.
 
-export type RequestKind = "service" | "google_early_access";
+export type RequestKind = "service" | "google_early_access" | "contact";
 export type RequestFilter = "waiting" | "done" | "all";
 export const REQUEST_FILTERS: readonly RequestFilter[] = ["waiting", "done", "all"];
 
@@ -203,8 +203,10 @@ export interface RequestPerson extends AccountRow {
 export interface RequestItem {
   readonly id: string;
   readonly kind: RequestKind;
-  readonly serviceName: string; // cleaned and length-capped: the person's words, or the catalogue name
+  readonly serviceName: string; // cleaned and length-capped: the person's words, the catalogue name, or a message's topic
   readonly askedAt: string;
+  readonly topic?: string; // a "Contact us" message's topic, as the person picked it
+  readonly message?: string; // a "Contact us" message's text, cleaned (line breaks kept)
   readonly resolution: RequestResolution | null; // null while it waits
   readonly person: RequestPerson;
 }
