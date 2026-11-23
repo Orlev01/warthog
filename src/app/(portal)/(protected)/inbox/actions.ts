@@ -303,7 +303,8 @@ function outgoingLines(outgoing: OutgoingDetail | undefined, timeZone?: string |
     case "post_delete":
       return [{ label: "Post", value: outgoing.url }];
     case "core":
-      return outgoing.lines.slice(0, 4).map((line) => ({ label: line.key, value: line.preview }));
+      // Every line, so a change's due date or status is never cut off (code review).
+      return outgoing.lines.slice(0, 8).map((line) => ({ label: line.key, value: line.preview }));
   }
 }
 

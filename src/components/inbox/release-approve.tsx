@@ -142,6 +142,8 @@ export interface ReleaseApproveController {
   // was refused for a lapsed step-up. It never releases on its own: the person approves
   // and releases again (the unlock and the security code need their own fresh tap).
   confirmed(): void;
+  // The person is done reading what the finished release left on screen (W-02).
+  finish(): void;
 }
 
 // Plain-English failure copy for a unlock the device could not gather — a real sentence a
@@ -222,7 +224,7 @@ export function createReleaseApproveFlow(deps: ReleaseApproveFlowDeps): ReleaseA
       return;
     }
     pendingPhraseSave = null;
-    set({ newPhrase: null, phraseSaved: false, phraseError: undefined, notice: PHRASE_SAVED_NOTICE, settled: state.status === "released" });
+    set({ newPhrase: null, phraseSaved: false, phraseError: undefined, notice: PHRASE_SAVED_NOTICE });
   }
 
   // The stored ciphertext this release decrypts: a card release decrypts the CHOSEN saved
@@ -288,6 +290,8 @@ export function createReleaseApproveFlow(deps: ReleaseApproveFlowDeps): ReleaseA
       set({
         status: "released",
         error: undefined,
+        // An earlier note ("confirmed, approve and release again") no longer applies.
+        notice: undefined,
         passphrase: "",
         recoveryPhrase: "",
         securityCode: "",
@@ -295,7 +299,9 @@ export function createReleaseApproveFlow(deps: ReleaseApproveFlowDeps): ReleaseA
       });
       deps.onReleased?.();
       await followUp(unlockRequest);
-      if (state.newPhrase === null) set({ settled: true });
+      // Move on by itself only when there's nothing left to read or save; otherwise the
+      // finished release shows it with a Done button (code review: notes were wiped).
+      if (state.newPhrase === null && !state.notice) set({ settled: true });
     } else {
       // A lapsed step-up is resolved right here ("Confirm it's you"), not by signing out.
       set({
@@ -325,6 +331,9 @@ export function createReleaseApproveFlow(deps: ReleaseApproveFlowDeps): ReleaseA
     setSecurityCode: (value) => set({ securityCode: value }),
     submit,
     confirmed,
+    finish: () => {
+      if (state.status === "released" && state.newPhrase === null) set({ settled: true });
+    },
   };
 }
 
@@ -596,6 +605,10 @@ export function ReleaseApprove(props: ReleaseApproveProps): React.ReactElement {
             error={state.phraseError}
             continueLabel="Save my vault recovery phrase"
           />
+        ) : !state.settled ? (
+          <Button type="button" variant="secondary" onClick={() => flow.finish()}>
+            Done
+          </Button>
         ) : null}
       </div>
     );

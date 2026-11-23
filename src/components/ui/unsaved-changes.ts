@@ -18,6 +18,10 @@ export interface ControlState {
   readonly type: string;
   readonly checked: boolean;
   readonly value: string;
+  // What the page rendered the control with (defaultValue / defaultChecked; for a select, the
+  // value of its default option).
+  readonly defaultValue?: string;
+  readonly defaultChecked?: boolean;
   readonly ignore?: boolean;
 }
 
@@ -31,14 +35,14 @@ export function controlSignature(controls: readonly ControlState[]): string {
     .join("\u0001");
 }
 
-/** The groups whose signature differs from the baseline. A group that went away isn't an edit. */
-export function changedGroups(baseline: ReadonlyMap<string, string>, current: ReadonlyMap<string, string>): string[] {
-  const changed: string[] = [];
-  for (const [key, signature] of current) {
-    const before = baseline.get(key);
-    if (before !== undefined && before !== signature) changed.push(key);
-  }
-  return changed;
+/**
+ * Whether a server-rendered form differs from what the page rendered it with. Comparing with
+ * the defaults (not a snapshot) means a save that re-renders the page with new values leaves
+ * nothing stale behind, whether or not the form remounts.
+ */
+export function formChanged(controls: readonly ControlState[]): boolean {
+  const defaults = controls.map((c) => ({ ...c, checked: c.defaultChecked ?? c.checked, value: c.defaultValue ?? c.value }));
+  return controlSignature(controls) !== controlSignature(defaults);
 }
 
 export interface LinkClick {
@@ -108,20 +112,40 @@ function controlsOf(group: Group): ControlState[] {
       type: c instanceof HTMLInputElement ? c.type : c.tagName.toLowerCase(),
       checked: c instanceof HTMLInputElement ? c.checked : false,
       value: c.value,
+      defaultValue: c instanceof HTMLSelectElement ? defaultOption(c) : c.defaultValue,
+      defaultChecked: c instanceof HTMLInputElement ? c.defaultChecked : false,
       ignore: c.closest("[data-unsaved-ignore]") !== null,
     }));
 }
 
-function signatures(root: HTMLElement): { map: Map<string, string>; labels: Map<string, string>; forms: Map<string, Element> } {
-  const map = new Map<string, string>();
+// A select's rendered value: its default-selected option, else its first.
+function defaultOption(select: HTMLSelectElement): string {
+  const options = Array.from(select.options);
+  return (options.find((o) => o.defaultSelected) ?? options[0])?.value ?? "";
+}
+
+// The client-driven controls outside any form, as one signature (compared with a snapshot).
+function pageSignature(root: HTMLElement): string | undefined {
+  const page = groupsIn(root).find((group) => group.key === "page");
+  return page ? controlSignature(controlsOf(page)) : undefined;
+}
+
+// Which groups have unsaved edits right now: a form when it differs from what the page rendered
+// it with; the client-driven controls when they differ from the last snapshot.
+function changedNow(root: HTMLElement, baseline: string | undefined): { keys: string[]; labels: Map<string, string>; forms: Map<string, Element> } {
+  const keys: string[] = [];
   const labels = new Map<string, string>();
   const forms = new Map<string, Element>();
   for (const group of groupsIn(root)) {
-    map.set(group.key, controlSignature(controlsOf(group)));
     labels.set(group.key, group.label);
     forms.set(group.key, group.element);
+    const controls = controlsOf(group);
+    const changed = group.key === "page"
+      ? baseline !== undefined && controlSignature(controls) !== baseline
+      : formChanged(controls);
+    if (changed) keys.push(group.key);
   }
-  return { map, labels, forms };
+  return { keys, labels, forms };
 }
 
 export interface UnsavedChanges {
@@ -138,7 +162,8 @@ export interface UnsavedChanges {
 
 export function useUnsavedChanges(rootRef: React.RefObject<HTMLElement | null>, options: { readonly ready?: boolean } = {}): UnsavedChanges {
   const ready = options.ready ?? true;
-  const baseline = React.useRef<Map<string, string> | null>(null);
+  // The client-driven controls' values when the page was ready or last saved.
+  const baseline = React.useRef<string | undefined | null>(null);
   const [dirty, setDirty] = React.useState(false);
   const [pending, setPending] = React.useState<UnsavedChanges["pending"]>(null);
   const proceed = React.useRef<(() => void) | null>(null);
@@ -146,16 +171,15 @@ export function useUnsavedChanges(rootRef: React.RefObject<HTMLElement | null>, 
 
   const changed = React.useCallback((): { keys: string[]; labels: Map<string, string>; forms: Map<string, Element> } => {
     const root = rootRef.current;
-    if (!root || !baseline.current) return { keys: [], labels: new Map(), forms: new Map() };
-    const now = signatures(root);
-    return { keys: changedGroups(baseline.current, now.map), labels: now.labels, forms: now.forms };
+    if (!root || baseline.current === null) return { keys: [], labels: new Map(), forms: new Map() };
+    return changedNow(root, baseline.current);
   }, [rootRef]);
 
   const markSaved = React.useCallback(() => {
     const root = rootRef.current;
     if (!root) return;
-    baseline.current = signatures(root).map;
-    setDirty(false);
+    baseline.current = pageSignature(root);
+    setDirty(changedNow(root, baseline.current).keys.length > 0);
   }, [rootRef]);
 
   // Remember the values once the page is ready (after hydration).

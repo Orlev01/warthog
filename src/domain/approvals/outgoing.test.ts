@@ -64,8 +64,20 @@ test("Warthog's own tools show what they would add or change", () => {
     { kind: "core", count: 4, lines: [{ key: "Records", preview: "Netflix, Spotify, Gym and 1 more" }] },
   );
   assert.deepEqual(
-    outgoingDetail({ tool: "update_record", connector: null, params: { id: "a4d7eeec-0000-4000-8000-000000000000", fields: { amount: "950" }, status: "done", dueDate: "2026-12-20" } }),
+    outgoingDetail({ tool: "update_record", connector: null, params: { id: "a4d7eeec-0000-4000-8000-000000000000", set: { amount: "950" }, status: "done", dueDate: "2026-12-20" } }),
     { kind: "core", lines: [{ key: "Amount", preview: "950" }, { key: "Status", preview: "done" }, { key: "Due", preview: "2026-12-20" }] },
+  );
+  assert.deepEqual(
+    outgoingDetail({ tool: "update_record", connector: null, params: { id: "x", set: { reference: null, amount: "950" }, dueDate: null } }),
+    { kind: "core", lines: [{ key: "Reference", preview: "Removed" }, { key: "Amount", preview: "950" }, { key: "Due", preview: "Removed" }] },
+    "a field or date set to null is removed, and says so",
+  );
+  assert.deepEqual(
+    outgoingDetail({ tool: "update_record", connector: null, params: { id: "x", fields: { name: "Car rego", amount: "950" } } })?.kind === "core"
+      ? (outgoingDetail({ tool: "update_record", connector: null, params: { id: "x", fields: { name: "Car rego", amount: "950" } } }) as { lines: unknown[] }).lines[0]
+      : undefined,
+    { key: "Replaces", preview: "All of its details" },
+    "the older form replaces every field, and the card says so first",
   );
   assert.deepEqual(
     outgoingDetail({ tool: "update_task", connector: null, params: { id: "x", status: "done", note: "Paid online" } }),

@@ -104,9 +104,17 @@ function coreDetail(tool: string, params: Record<string, unknown>): OutgoingDeta
       return { kind: "core", ...(title ? { title } : {}), lines: recordFieldLines(fields) };
     }
     case "update_record": {
-      lines.push(...recordFieldLines({ ...fieldsOf(params.set), ...fieldsOf(params.fields) }));
+      // `fields` (the older form) replaces every field; `set` changes some, and null removes one.
+      const replacing = params.fields !== undefined && params.fields !== null;
+      if (replacing) lines.push({ key: "Replaces", preview: "All of its details" });
+      const changes = { ...fieldsOf(params.fields), ...fieldsOf(params.set) };
+      for (const [key, value] of Object.entries(changes)) {
+        if (value === null) lines.push({ key: fieldLabel(cleanShortText(key, 60)), preview: "Removed" });
+      }
+      lines.push(...recordFieldLines(Object.fromEntries(Object.entries(changes).filter(([, value]) => value !== null))));
       push("Status", params.status);
-      push("Due", params.dueDate);
+      if (params.dueDate === null) lines.push({ key: "Due", preview: "Removed" });
+      else push("Due", params.dueDate);
       return lines.length ? { kind: "core", lines } : undefined;
     }
     case "update_task":

@@ -933,15 +933,44 @@ test("W-02 — a release is settled once it's handed over and nothing is left to
   assert.equal(ctx.flow.getState().settled, true, "released with no follow-up to show: settled");
 });
 
-test("W-02 — a release that offers a new recovery phrase settles only once the phrase is saved", async () => {
+test("W-02 — a release that offers a new recovery phrase waits for it to be saved, then for Done", async () => {
   const ctx = setupRecoveryFlow({
     request: PENDING_HIGH,
     afterRelease: async () => ({ phrase: { value: "ABCD-EFGH-IJKL-MNOP-QRST-UVWX-YZ23-4567", save: async () => {} } }),
   });
   await ctx.flow.submit();
   assert.equal(ctx.flow.getState().settled, false, "the phrase still has to be saved; leaving now would lose it");
+  ctx.flow.finish();
+  assert.equal(ctx.flow.getState().settled, false, "Done can't skip saving the phrase");
   ctx.flow.setPhraseSaved(true);
   await ctx.flow.confirmRecoveryPhrase();
+  assert.ok(ctx.flow.getState().notice, "the 'phrase saved' note is shown");
+  assert.equal(ctx.flow.getState().settled, false, "the note stays on screen until the person is done");
+  ctx.flow.finish();
+  assert.equal(ctx.flow.getState().settled, true);
+});
+
+// Code review: a follow-up note (e.g. "This device's passkey can now unlock your vault") was
+// wiped by the immediate reload. A release with something to read waits for Done.
+test("W-02 — a release with a follow-up note keeps it on screen until Done", async () => {
+  const ctx = setupRecoveryFlow({
+    request: PENDING_HIGH,
+    afterRelease: async () => ({ notice: "This device's passkey can now unlock your vault." }),
+  });
+  ctx.flow.setMethod("recovery");
+  ctx.flow.setRecoveryPhrase("abcd");
+  await ctx.flow.submit();
+  assert.match(String(ctx.flow.getState().notice), /passkey/);
+  assert.equal(ctx.flow.getState().settled, false);
+  ctx.flow.finish();
+  assert.equal(ctx.flow.getState().settled, true);
+});
+
+test("W-02 — an earlier note (e.g. 'confirmed, approve again') doesn't hold up a finished release", async () => {
+  const ctx = setupRecoveryFlow({ request: PENDING_HIGH });
+  ctx.flow.confirmed();
+  await ctx.flow.submit();
+  assert.equal(ctx.flow.getState().status, "released");
   assert.equal(ctx.flow.getState().settled, true);
 });
 
