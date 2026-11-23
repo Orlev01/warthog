@@ -97,6 +97,37 @@ test("saving the same thing again updates it; a booking matches before and after
   });
 });
 
+test("an agent moving a confirmed older record into its kind waits, and accepting it moves the kind, link and state", async () => {
+  const t = await setup();
+  await closing(t.db, async () => {
+    const bike = created(await saveTypedRecord(t.ctx(), person, { type: type("vehicles.vehicle"), fields: { name: "Mondial HPS 300", plate: "HLC32" } }));
+    const rego = await createRecord(t.db, { userId: t.userId, kind: "renewal_appointment", fields: { name: "Registration renewal", type: "vehicles.registration", plate: "HLC32" }, dueDate: "2026-11-24", status: "needs renewal", source: person }, t.dek);
+    const proposed = await changeRecord(t.ctx(), rego, t.instinct, {
+      type: type("vehicles.registration"), set: { name: "Motorcycle registration", plate: "HLC32", state: "NSW" }, replace: true, parentId: bike.record.id,
+    });
+    assert.equal(proposed.action, "proposed");
+    let stored = await getRecordForUser(t.db, t.userId, rego.id, t.dek);
+    assert.equal(stored?.type ?? null, null, "nothing changes until the person accepts");
+    assert.equal(stored?.pending?.type, "vehicles.registration", "the pending change carries the kind it moves the record to");
+    assert.equal(stored?.pending?.parentId, bike.record.id, "and the thing it links the record to");
+    await acceptPendingChange(t.ctx(), rego.id);
+    stored = await getRecordForUser(t.db, t.userId, rego.id, t.dek);
+    assert.equal(stored?.type, "vehicles.registration");
+    assert.equal(stored?.parentId, bike.record.id);
+    assert.equal(stored?.fields.type, undefined);
+    assert.equal(stored?.dueDate, "2026-11-24");
+    assert.equal(stored?.pending, null);
+
+    const dinner = await createRecord(t.db, { userId: t.userId, kind: "renewal_appointment", fields: { name: "Hans Zimmer Live", starts_at: "2026-12-29T19:30[Australia/Sydney]" }, dueDate: "2026-12-29", status: "active", source: person }, t.dek);
+    const moved = await changeRecord(t.ctx(), dinner, t.instinct, { type: type("outings.event"), set: { name: "Hans Zimmer Live", provider: "Ticketek", starts_at: "2026-12-29T19:30[Australia/Sydney]" }, replace: true, status: "pending" });
+    assert.equal(moved.action, "proposed");
+    await acceptPendingChange(t.ctx(), dinner.id);
+    stored = await getRecordForUser(t.db, t.userId, dinner.id, t.dek);
+    assert.equal(stored?.type, "outings.event");
+    assert.equal(stored?.state, "pending", "a booking's detailed state comes with the accepted change");
+  });
+});
+
 test("an agent's change to a confirmed record waits; accepting or declining is journaled", async () => {
   const t = await setup();
   await closing(t.db, async () => {

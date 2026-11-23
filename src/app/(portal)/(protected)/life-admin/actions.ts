@@ -430,7 +430,7 @@ function pendingView(pending: PendingChange | null, names: ReadonlyMap<string, s
   if (!pending) return null;
   const set: Record<string, string> = {};
   for (const [key, value] of Object.entries(pending.set ?? {})) set[key] = value == null ? "" : String(value);
-  const type = (pending as PendingChange & { readonly type?: unknown }).type;
+  const { type } = pending;
   return {
     byName: agentName(names, pending.byAgentId),
     ...(typeof type === "string" && KIND_ID.test(type) ? { type } : {}),
