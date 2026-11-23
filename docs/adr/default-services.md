@@ -41,7 +41,7 @@ connected in Warthog. It reached none of them, for two reasons:
 
 ## Consequences
 
-- **Data:** migration 0117 adds `connections.default_for_agents` with a partial unique index of one
+- **Data:** migration 0119 adds `connections.default_for_agents` with a partial unique index of one
   per person and service. There are no new runtime settings.
 - **Brief:** the Agent consent screen requirement is amended (services on for new agents start
   ticked).
