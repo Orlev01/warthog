@@ -1,4 +1,15 @@
-# Delivery status — 23 November 2026 (life admin: typed profile, life areas, bookings, hand-over journal)
+# Delivery status — 23 November 2026 (OAuth consent bound to the request on screen)
+
+**Live at [warthog.com.au](https://warthog.com.au) (the website) and
+[app.warthog.com.au](https://app.warthog.com.au) (the app).** Application source
+`e3a6015f382b697288019093b191e7361ba3198f` runs as `warthog--r45118618704a1`, with one healthy
+replica, explicit 100% traffic and zero old replicas.
+
+PR #45 fixes the review's High OAuth consent swap: the consent form is bound to the request it
+shows, and Approve asks the person to confirm it's them. No migrations (still 89). See the
+[release record](docs/audit/consent-binding-release-2026-11-23.md).
+
+# Earlier delivery status — 23 November 2026 (life admin: typed profile, life areas, bookings, hand-over journal)
 
 **Live at [warthog.com.au](https://warthog.com.au) (the website) and
 [app.warthog.com.au](https://app.warthog.com.au) (the app).** Application source

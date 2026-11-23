@@ -1,12 +1,18 @@
 # Warthog comprehensive engineering audit
 
+**OAuth consent bound to the request on screen, 23 November:** main `e3a6015` runs as
+`warthog--r45118618704a1`. PR #45 fixes the review's High consent swap: the consent form carries a
+tag of the request it shows, Approve and Deny act only on that request, and Approve asks the person
+to confirm it's them. No migrations (still 89). See the
+[release record](consent-binding-release-2026-11-23.md).
+
 **Life admin: typed profile, life areas, bookings and hand-over journal, 23 November:** main
 `9edf3ec` runs as `warthog--r45106611024a1`. PR #44 makes life admin a typed profile the person's own
 agent fills in from email, filed by what it's about in a per-person catalogue (built-ins hidden until
 used; agent-suggested categories), with bookings and cases (live/finished), generic anchors, an
 Upcoming and a Bookings view, and a journal on every item with agent hand-over. Migrations 0117 and
 0118 make 89. See the [release record](life-admin-release-2026-11-23.md), the
-[review](life-admin-profile-review-2026-11-23.md) (one High still open: the OAuth consent swap) and
+[review](life-admin-profile-review-2026-11-23.md) (its consent-swap High is fixed by PR #45) and
 the [profile](../adr/life-admin-profile.md) and [journal](../adr/life-admin-journal.md) decisions.
 
 **Contact us, your requests, LinkedIn switched off, 20 November:** main `70c2a9f` runs as
