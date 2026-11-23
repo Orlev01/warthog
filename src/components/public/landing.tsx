@@ -4,18 +4,32 @@ import {
   ArrowRight,
   Bot,
   BookOpen,
+  CalendarClock,
   CalendarDays,
+  Car,
   Check,
   ChevronDown,
   CircleHelp,
   Clock3,
-  FileText,
+  CreditCard,
+  Download,
   Fingerprint,
+  HeartPulse,
   Link2,
   ListChecks,
+  ListTodo,
   LockKeyhole,
+  MailCheck,
+  MailSearch,
+  Plane,
+  Receipt,
+  Repeat,
   ShieldCheck,
   SlidersHorizontal,
+  Truck,
+  Tv,
+  Users,
+  Wallet,
 } from "lucide-react";
 
 import { RELATIVE_LINKS, type PublicLinks } from "@/server/http/public-links";
@@ -43,6 +57,10 @@ const STEPS = [
   },
 ] as const;
 
+// A few of the services people connect most, as plain names (never logos). The catalogue
+// holds more than 100 (catalogue/connectors); Google's are in early access.
+const SERVICES = ["Gmail", "Outlook", "Google Calendar", "Google Drive", "OneDrive", "Notion", "Todoist", "GitHub"] as const;
+
 const CONTROLS = [
   {
     icon: SlidersHorizontal,
@@ -52,12 +70,35 @@ const CONTROLS = [
   {
     icon: ShieldCheck,
     title: "Your say before the next step",
-    body: "Set approval rules and spending limits for requests through Warthog. Review sensitive requests before they go ahead.",
+    body: "Set approval rules and spending limits for requests through Warthog. Review sensitive requests before they go ahead, with exactly what will go out in front of you.",
+  },
+  {
+    icon: MailCheck,
+    title: "Checked before your agents read it",
+    body: "Emails, events and files reach your agents marked as written by someone else, with sign-in codes and password-reset links held back. An approval flags the first email to someone you’ve never written to.",
   },
   {
     icon: ListChecks,
     title: "A clearer picture of what happened",
-    body: "See requests, decisions and outcomes together. Change permissions or disconnect an agent when its job is done.",
+    body: "See requests, decisions and outcomes together, conversation by conversation. Undo an action that can be undone, like an event an agent added, and disconnect an agent when its job is done.",
+  },
+] as const;
+
+const SPENDING = [
+  {
+    icon: CreditCard,
+    title: "One card, one purchase",
+    body: "The agent says what it’s buying, from whom and for how much. You confirm it’s you, enter the security code, and the agent collects the card once. The security code is never kept.",
+  },
+  {
+    icon: Wallet,
+    title: "Budgets checked first",
+    body: "Give each agent a budget, a limit per purchase and the shops it may or may not use. A request outside them is refused before it reaches you.",
+  },
+  {
+    icon: Users,
+    title: "A budget for the household",
+    body: "Share a monthly household budget, with a limit for each member. Everyone sees the totals; no one sees each other’s purchases or cards.",
   },
 ] as const;
 
@@ -70,12 +111,40 @@ const RESOURCES = [
   {
     icon: LockKeyhole,
     title: "A personal vault",
-    body: "Store private details with access controls and approval for sensitive information.",
+    body: "Keep your address, preferences and documents in one place. Passport, licence and card details are locked on your own device and released only when you approve.",
   },
   {
-    icon: FileText,
-    title: "Everyday life admin",
-    body: "Keep receipts, reminders and household records organised, alongside the agents you choose to help.",
+    icon: ListTodo,
+    title: "Tasks to hand over",
+    body: "Share a task list with your agents. Hand a job to one agent, or any of them, and let one agent’s findings become another’s next step.",
+  },
+  {
+    icon: Download,
+    title: "Yours to take with you",
+    body: "Your memory, skills and preferences don’t belong to any one AI provider. Export everything in an open format, with skills as plain text other tools can use.",
+  },
+] as const;
+
+const LIFE_ADMIN = [
+  {
+    icon: MailSearch,
+    title: "Filled in from your email",
+    body: "Your own agent searches your email through Warthog and saves what it finds. It waits for you to confirm it, and Warthog won’t keep tax file numbers, passwords, card or account numbers, or medical details.",
+  },
+  {
+    icon: CalendarClock,
+    title: "What’s active, first",
+    body: "Vehicles, home, health, travel, money and more, with what needs you soonest at the top. Reminders come before renewals and expiry dates, and bookings move to their history once they’re over.",
+  },
+  {
+    icon: Repeat,
+    title: "Any agent can carry it on",
+    body: "Each item keeps a short log of decisions and next steps, so another agent, from any provider, can pick up where the last one stopped.",
+  },
+  {
+    icon: Truck,
+    title: "Moving house, handled",
+    body: "Add your new address with a moving date, and Warthog lists the places that still have the old one. Tick them off, or hand one to an agent.",
   },
 ] as const;
 
@@ -95,6 +164,11 @@ const FAQS = [
         services, including Google connections, may require early access.
       </>
     ),
+  },
+  {
+    question: "Is there an app for my phone?",
+    answer:
+      "Add Warthog to your phone’s home screen from the browser, on iPhone or Android, and turn on notifications. A request that needs you arrives as a notification within seconds and opens straight onto it. If you haven’t opened it after a few minutes, an email follows. You always decide inside Warthog, never by replying to a message.",
   },
   {
     question: "Can I change my mind about access?",
@@ -277,6 +351,47 @@ function WorkspacePreview() {
   );
 }
 
+// The Records list in Life admin, as a static example: made-up items in the shape the app shows
+// them (what's active first, the kind and when it's due, where it stands). No account data,
+// no controls and no links.
+const EXAMPLE_RECORDS = [
+  { icon: Car, name: "Car registration", detail: "Vehicles · Expires in 9 days", status: "Due soon" },
+  { icon: Plane, name: "Flight to Melbourne", detail: "Trips and travel · Fri 12 Dec, 7:30 am", status: "Upcoming" },
+  { icon: HeartPulse, name: "Health insurance", detail: "Health · Renews 1 Mar", status: "Current" },
+  { icon: Tv, name: "Streaming subscription", detail: "Found in your email by your agent", status: "To check" },
+] as const;
+
+function LifeAdminPreview() {
+  return (
+    <figure className="wh-landing-preview wh-landing-life-preview" aria-labelledby="life-admin-caption" data-motion-reveal>
+      <div className="wh-landing-preview-bar">
+        <span>
+          <Receipt size={16} aria-hidden="true" /> Life admin
+        </span>
+        <span className="wh-landing-eyebrow">Example</span>
+      </div>
+      <div className="wh-landing-preview-body">
+        <p className="wh-landing-preview-label">Active</p>
+        <ul className="wh-landing-agent-list">
+          {EXAMPLE_RECORDS.map(({ icon: Icon, name, detail, status }) => (
+            <li key={name}>
+              <span className="wh-landing-icon">
+                <Icon size={18} aria-hidden="true" />
+              </span>
+              <div>
+                <strong>{name}</strong>
+                <span>{detail}</span>
+              </div>
+              <span className="wh-landing-badge">{status}</span>
+            </li>
+          ))}
+        </ul>
+      </div>
+      <figcaption id="life-admin-caption">Illustrative records · example items</figcaption>
+    </figure>
+  );
+}
+
 // `links` points the brand and account links at the website and the app when the front door
 // has its own host (docs/adr/website-root-domain.md); without one they stay relative.
 export function Landing({ links = RELATIVE_LINKS }: { links?: PublicLinks } = {}) {
@@ -304,6 +419,7 @@ export function Landing({ links = RELATIVE_LINKS }: { links?: PublicLinks } = {}
       </header>
       <nav aria-label="Explore Warthog" className="wh-landing-nav">
         <a href="#your-control">Control</a>
+        <a href="#life-admin">Life admin</a>
         <a href="#how-it-works">How it works</a>
         <a href="#questions">Questions</a>
       </nav>
@@ -396,6 +512,27 @@ export function Landing({ links = RELATIVE_LINKS }: { links?: PublicLinks } = {}
         </section>
 
         <section
+          id="services"
+          className="wh-landing-compatibility"
+          aria-labelledby="services-title"
+        >
+          <div>
+            <h2 id="services-title">Connect the services you already use.</h2>
+            <p>
+              More than 100 services: email, calendar, files, notes and tasks, messaging,
+              travel, finance and developer tools. Some, including Google, are in early
+              access. Can’t see yours? Ask for it in Warthog, and we’ll email you when you
+              can connect it.
+            </p>
+          </div>
+          <ul aria-label="Some of the services you can connect">
+            {SERVICES.map((service) => (
+              <li key={service}>{service}</li>
+            ))}
+          </ul>
+        </section>
+
+        <section
           id="your-control"
           className="wh-landing-section wh-landing-controls"
           aria-labelledby="control-title"
@@ -440,6 +577,41 @@ export function Landing({ links = RELATIVE_LINKS }: { links?: PublicLinks } = {}
         </section>
 
         <section
+          id="spending"
+          className="wh-landing-section"
+          aria-labelledby="spending-title"
+        >
+          <div className="wh-landing-section-intro" data-motion-reveal>
+            <p className="wh-landing-eyebrow">Spending, within your limits</p>
+            <h2 id="spending-title">
+              Let an agent pay.
+              <br />
+              Only on your say{"\u2011"}so.
+            </h2>
+            <p>
+              Save your cards once. When an agent needs one for a purchase, Warthog
+              checks your limits, asks you, and hands over the card for that purchase
+              alone.
+            </p>
+          </div>
+          <div className="wh-landing-resource-grid">
+            {SPENDING.map(({ icon: Icon, title, body }) => (
+              <article key={title} data-motion-reveal>
+                <Icon size={25} strokeWidth={1.5} aria-hidden="true" />
+                <h3>{title}</h3>
+                <p>{body}</p>
+              </article>
+            ))}
+          </div>
+          <p className="wh-landing-scope wh-landing-scope-spaced">
+            <Wallet size={16} aria-hidden="true" /> What you approve shows on your
+            Spending page against each budget. These limits apply to card requests
+            through Warthog; card details you’ve given an agent directly stay outside
+            them.
+          </p>
+        </section>
+
+        <section
           id="your-context"
           className="wh-landing-resources wh-landing-section"
           aria-labelledby="resources-title"
@@ -452,7 +624,7 @@ export function Landing({ links = RELATIVE_LINKS }: { links?: PublicLinks } = {}
               what helps, with the agents you choose.
             </p>
           </div>
-          <div className="wh-landing-resource-grid">
+          <div className="wh-landing-resource-grid wh-landing-resource-grid-pairs">
             {RESOURCES.map(({ icon: Icon, title, body }) => (
               <article key={title} data-motion-reveal>
                 <Icon size={25} strokeWidth={1.5} aria-hidden="true" />
@@ -462,6 +634,47 @@ export function Landing({ links = RELATIVE_LINKS }: { links?: PublicLinks } = {}
             ))}
           </div>
           <SharedMemoryFlow />
+        </section>
+
+        <section
+          id="life-admin"
+          className="wh-landing-section wh-landing-controls"
+          aria-labelledby="life-admin-title"
+        >
+          <div className="wh-landing-life-intro">
+            <div className="wh-landing-section-intro" data-motion-reveal>
+              <p className="wh-landing-eyebrow">Life admin</p>
+              <h2 id="life-admin-title">
+                Renewals and bookings.
+                <br />
+                Kept up to date for you.
+              </h2>
+              <p>
+                Ask your agent to go through your email. It saves your rego, insurance,
+                bills, subscriptions and bookings to Life admin for you to check, and
+                Warthog reminds you before anything’s due.
+              </p>
+            </div>
+            <LifeAdminPreview />
+          </div>
+          <div className="wh-landing-control-list">
+            {LIFE_ADMIN.map(({ icon: Icon, title, body }) => (
+              <article key={title} data-motion-reveal>
+                <span className="wh-landing-icon">
+                  <Icon size={21} aria-hidden="true" />
+                </span>
+                <div>
+                  <h3>{title}</h3>
+                  <p>{body}</p>
+                </div>
+              </article>
+            ))}
+          </div>
+          <p className="wh-landing-scope">
+            <MailSearch size={16} aria-hidden="true" /> Warthog doesn’t read your email
+            itself. Your agent does, through Warthog, when you ask and only where
+            you’ve allowed it.
+          </p>
         </section>
 
         <section
