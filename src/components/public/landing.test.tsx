@@ -287,3 +287,75 @@ test("the landing shows no protocol or security jargon", () => {
     );
   }
 });
+
+// === The front door covers what Warthog does (founder, 23 November 2026) ========
+//
+// "Since building Warthog we've introduced a whole bunch more features and I want to make sure
+// that the marketing website reflects the set of features." Each feature has its own section or
+// card in the page's existing patterns, and every claim stays within what the code does.
+
+function section(markup: string, id: string): string {
+  const open = markup.search(new RegExp(`<section\\b[^>]*id="${id}"`));
+  assert.ok(open >= 0, `a section with id "${id}" is present`);
+  // The section runs to the next top-level section (or the end of <main>).
+  const rest = markup.slice(open + 1);
+  const next = rest.search(/<section\b[^>]*class="wh-landing-(?:section|compatibility|closing|resources)/);
+  return markup.slice(open, next >= 0 ? open + 1 + next : undefined);
+}
+
+test("the services you can connect have their own band: over 100, by kind, with early access and requests", () => {
+  const text = visibleText(section(render(), "services"));
+  assert.match(text, /more than 100 services/i);
+  for (const kind of [/email/i, /calendar/i, /files/i, /notes/i, /messaging/i]) assert.match(text, kind);
+  assert.match(text, /early access/i, "Google's early access is stated where Google is named");
+  assert.match(text, /ask for/i, "a missing service can be asked for");
+});
+
+test("controls cover what agents read and undoing what they did", () => {
+  const text = visibleText(section(render(), "your-control"));
+  assert.match(text, /written by someone else/i);
+  assert.match(text, /sign-in codes/i);
+  assert.match(text, /\bundo\b/i);
+});
+
+test("spending has its own section: a card for one purchase, budgets checked first, households", () => {
+  const markup = section(render(), "spending");
+  const text = visibleText(markup);
+  assert.match(text, /security code/i);
+  assert.match(text, /\bonce\b/i);
+  assert.match(text, /budget/i);
+  assert.match(text, /household/i);
+  assert.match(text, /through Warthog/i, "the limits are scoped to requests through Warthog");
+});
+
+test("your context covers tasks between agents and taking everything with you", () => {
+  const text = visibleText(section(render(), "your-context"));
+  assert.match(text, /\btasks?\b/i);
+  assert.match(text, /export/i);
+});
+
+test("life admin has its own section: filled in by your agent from email, reminders, bookings, hand-over, moving", () => {
+  const markup = section(render(), "life-admin");
+  const text = visibleText(markup);
+  for (const point of [/email/i, /remind/i, /booking/i, /another agent|any agent/i, /moving/i, /confirm/i]) assert.match(text, point);
+  assert.match(text, /doesn.t read your email itself/i, "Warthog's own part is stated plainly");
+  const example = markup.match(/<figure\b[\s\S]*?<\/figure>/)?.[0];
+  assert.ok(example, "an example of the records list");
+  assert.match(visibleText(example), /example/i);
+  assert.ok(!/<(?:button|a)\b/.test(example), "the example has no pretend controls or links");
+  assert.ok(anchors(render()).some((link) => link.href === "#life-admin"), "the section links reach it");
+});
+
+test("questions say how approvals reach your phone", () => {
+  const group = section(render(), "questions-using");
+  assert.match(visibleText(group), /phone/i);
+  assert.match(visibleText(group), /notification/i);
+});
+
+// Text-message fallback is switched off in production, and Warthog's own limits apply only to
+// requests through Warthog, so the front door never promises either more broadly.
+test("the front door doesn't promise text messages or control beyond Warthog", () => {
+  const text = visibleText(render());
+  assert.doesNotMatch(text, /\bSMS\b|text message/i);
+  assert.doesNotMatch(text, /every (?:purchase|payment) (?:an|your) agents? makes?/i);
+});

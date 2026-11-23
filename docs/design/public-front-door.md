@@ -33,8 +33,9 @@ redirects to those flows.
 - The hero pairs a concise product promise and real signup action with a static
   workspace illustration. The illustration must say it is an example and must
   not present fake buttons, customer data, live metrics or endorsements.
-- Follow with compatibility, why one home, agent controls, owned resources, setup
-  steps, native FAQ disclosures and a closing action. Every section is a bounded band,
+- Follow with compatibility, why one home, the services you can connect, agent controls,
+  spending, owned resources, life admin, setup steps, native FAQ disclosures and a closing
+  action. Every section is a bounded band,
   panel or card on a tinted page canvas; no copy sits loose on the background
   ([contained text](../adr/contained-text.md)). Inside a section, prefer aligned
   rows and dividers to a border around every paragraph.
@@ -50,6 +51,28 @@ redirects to those flows.
   independent audit, that all data stays in Australia, that staff can never reach
   anything beyond the device-encrypted tier, a tamper-proof record, or deletion of
   everything in a set time.
+- The features shipped after launch each have their own section or card, added on
+  23 November 2026 because the founder wanted the front door to "reflect the set of
+  features", in the page's existing patterns:
+  - **Services** (a band like compatibility): "more than 100" (the catalogue holds 107,
+    one of them switched off), named as plain text. It says Google is in early access and
+    that a missing service can be asked for.
+  - **Controls** gain a row for what agents read (marked as written by someone else,
+    sign-in codes and reset links held back, a flag on the first email to a new address),
+    and the activity row mentions conversations and Undo.
+  - **Spending** (its own section of cards): a card released for one purchase with the
+    security code never kept, budgets checked before the person is asked, and a household
+    budget. The scope note says the limits cover card requests through Warthog only.
+  - **Your context** has four cards in pairs: memory and skills, the vault, tasks handed
+    between agents, and export.
+  - **Life admin** (its own section, in the controls layout with a static example of the
+    Records list): filled in by the person's own agent from email, active first with
+    reminders, a log any agent can continue, and the moving checklist. The scope note says
+    Warthog doesn't read email itself. The example uses made-up items, says "Example", and
+    has no controls or links.
+  - **A phone question** in Using Warthog: install from the browser, notifications, and an
+    email if one isn't opened. Text-message fallback is switched off in production, so the
+    page never mentions it.
 - Compatibility varies by platform and plan; link the actual guide. Permissions,
   spending rules and activity records apply to requests through Warthog. Never
   imply control of other providers' direct tools, billing or private memory.

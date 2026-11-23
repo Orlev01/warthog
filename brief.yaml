@@ -99,7 +99,10 @@ features:
   - >-
     Public landing page with the positioning line, a plain three-step explanation (connect your
     services once; connect your agents; approve and see everything), the agent compatibility list,
-    and Sign up / Sign in.
+    and Sign up / Sign in. (Amended 23 November 2026, founder: the page "reflects the set of
+    features" — each feature shipped since launch has its own section or card: the services you can
+    connect, what agents read, undo, spending with cards and budgets, tasks, export, life admin and
+    the phone app; see docs/design/public-front-door.md.)
   - >-
     Sign-up and sign-in — email with a one-time code, mandatory passkey (or authenticator-app code
     as the fallback), a one-time recovery code shown once and confirmed as saved; security settings
