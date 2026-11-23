@@ -1328,3 +1328,70 @@ test("an agent deleting a LinkedIn post is held even when changes are allowed, a
     await db.close();
   }
 });
+
+// =====================================================================================
+// UI/UX audit 2026-11-23 W-01 — a rule that holds Warthog's own tools ("Ask me before Claude
+// makes any change") used to give the person three identical "wants to add a task" cards for
+// three different tasks. Each held call now says what it would add, pending and decided.
+// =====================================================================================
+
+test("held calls to Warthog's own tools each say what they would add, pending and decided", async () => {
+  const db = await freshDb();
+  const keyWrapper = keyWrapperFor();
+  try {
+    const clock: Clock = fixedClock(NOW);
+    const { userId, dek } = await makePerson(db, "w01-core", keyWrapper);
+    await upsertPermissions(db, baseGrants(userId, CONN, { changeTools: "allow" }));
+    // The rule the reviewer set: "Ask me before any agent makes any change".
+    await createRule(db, { userId, kind: "ask_first", scope: { type: "any_agent" }, action: { type: "any_change" } }, dek);
+    const agent = await createAgent(db, { userId, connectionId: CONN, displayName: "Claude", platform: "claude" }, clock);
+    const pipeline = createAgentCallPipeline({
+      db,
+      keyWrapper,
+      clock,
+      rateLimiter: createRateLimiter(clock),
+      recorder: createInMemoryRecorder({ clock }),
+      executeTool: spyExecutor().fn,
+    });
+    const connection = connectionFor(userId, agent.id);
+    const task = (title: string) => nonReleaseCall({ connector: null, tool: "create_task", params: { title, assignee: "any" } });
+    const first = expectPending(await pipeline.handleAgentCall(connection, task("Book the car service")));
+    expectPending(await pipeline.handleAgentCall(connection, task("Renew the passport")));
+    expectPending(await pipeline.handleAgentCall(connection, task("Order school uniforms")));
+    const actions = createInboxActions({ db, clock, keyWrapper, executeApprovedHold: pipeline.executeApprovedHold });
+    const session = await freshSession(db, userId);
+    const loaded = await actions.load(session);
+    const sentences = loaded.pending.map((p) => p.sentence).sort();
+    assert.deepEqual(sentences, [
+      "wants to add the task “Book the car service”",
+      "wants to add the task “Order school uniforms”",
+      "wants to add the task “Renew the passport”",
+    ], "three different tasks read as three different requests");
+    for (const view of loaded.pending) {
+      assert.ok(view.details.some((d) => d.label === "For" && d.value === "Any agent"), "who the task is for is shown up front");
+    }
+    expectOk(await actions.denyApproval(session, first.approval_id), "deny");
+    const after = await actions.load(session);
+    assert.equal(after.history[0]!.sentence, "wants to add the task “Book the car service”", "the history says which task it was");
+  } finally {
+    await db.close();
+  }
+});
+
+// UI/UX audit 2026-11-23 W-02 — "time left" was a string frozen at page load, so an expired
+// request still read "3 minutes left". The view now also carries when the request expires,
+// so the page can keep the countdown live.
+test("each pending request carries when it expires, so its countdown can stay live", async () => {
+  const db = await freshDb();
+  const keyWrapper = keyWrapperFor();
+  try {
+    const a = await arrangeHeld(db, keyWrapper, "w02-expiry", nonReleaseCall());
+    const loaded = await a.actions.load(await freshSession(db, a.userId));
+    const view = loaded.pending[0]!;
+    assert.equal(typeof view.expiresAtMs, "number");
+    assert.equal(view.expiresAtMs! - NOW.getTime(), 15 * 60 * 1000, "the default 15-minute window, from the same clock as the label");
+    assert.equal(view.timeLeft, "15 minutes left");
+  } finally {
+    await db.close();
+  }
+});

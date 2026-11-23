@@ -84,3 +84,11 @@ test("the icon set covers the home-screen install sizes (192 and 512)", () => {
     "an icon of size 512x512 is declared",
   );
 });
+
+// UI/UX audit 2026-11-23 W-19: the manifest still carried the retired indigo (#4338ca) as the
+// installed app's theme colour. It now matches the light theme colour the pages declare.
+test("the installed app's theme colour is the current light theme colour, not the retired indigo", () => {
+  const manifest = JSON.parse(readManifestText());
+  assert.equal(manifest.theme_color, "#ffffff");
+  assert.notEqual(String(manifest.theme_color).toLowerCase(), "#4338ca");
+});

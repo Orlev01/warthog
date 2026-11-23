@@ -921,3 +921,71 @@ test("the explainer says what approving does, for this agent", () => {
   assert.doesNotMatch(text, /This is a sensitive step|take a moment/, "no generic opener");
   assert.match(text, /Use your vault recovery phrase/, "the vault recovery phrase by its full name");
 });
+
+// UI/UX audit 2026-11-23 W-02 — a completed release used to leave the request looking
+// undecided: Approve, Deny and Ask stayed live and the Inbox never moved on. The flow now says
+// when the release is fully done (any new recovery phrase saved), so the Inbox can move on.
+test("W-02 — a release is settled once it's handed over and nothing is left to show", async () => {
+  const ctx = setupRecoveryFlow({ request: PENDING_HIGH });
+  assert.equal(ctx.flow.getState().settled, false, "not settled before anything happens");
+  await ctx.flow.submit();
+  assert.equal(ctx.flow.getState().status, "released");
+  assert.equal(ctx.flow.getState().settled, true, "released with no follow-up to show: settled");
+});
+
+test("W-02 — a release that offers a new recovery phrase waits for it to be saved, then for Done", async () => {
+  const ctx = setupRecoveryFlow({
+    request: PENDING_HIGH,
+    afterRelease: async () => ({ phrase: { value: "ABCD-EFGH-IJKL-MNOP-QRST-UVWX-YZ23-4567", save: async () => {} } }),
+  });
+  await ctx.flow.submit();
+  assert.equal(ctx.flow.getState().settled, false, "the phrase still has to be saved; leaving now would lose it");
+  ctx.flow.finish();
+  assert.equal(ctx.flow.getState().settled, false, "Done can't skip saving the phrase");
+  ctx.flow.setPhraseSaved(true);
+  await ctx.flow.confirmRecoveryPhrase();
+  assert.ok(ctx.flow.getState().notice, "the 'phrase saved' note is shown");
+  assert.equal(ctx.flow.getState().settled, false, "the note stays on screen until the person is done");
+  ctx.flow.finish();
+  assert.equal(ctx.flow.getState().settled, true);
+});
+
+// Code review: a follow-up note (e.g. "This device's passkey can now unlock your vault") was
+// wiped by the immediate reload. A release with something to read waits for Done.
+test("W-02 — a release with a follow-up note keeps it on screen until Done", async () => {
+  const ctx = setupRecoveryFlow({
+    request: PENDING_HIGH,
+    afterRelease: async () => ({ notice: "This device's passkey can now unlock your vault." }),
+  });
+  ctx.flow.setMethod("recovery");
+  ctx.flow.setRecoveryPhrase("abcd");
+  await ctx.flow.submit();
+  assert.match(String(ctx.flow.getState().notice), /passkey/);
+  assert.equal(ctx.flow.getState().settled, false);
+  ctx.flow.finish();
+  assert.equal(ctx.flow.getState().settled, true);
+});
+
+test("W-02 — an earlier note (e.g. 'confirmed, approve again') doesn't hold up a finished release", async () => {
+  const ctx = setupRecoveryFlow({ request: PENDING_HIGH });
+  ctx.flow.confirmed();
+  await ctx.flow.submit();
+  assert.equal(ctx.flow.getState().status, "released");
+  assert.equal(ctx.flow.getState().settled, true);
+});
+
+test("W-02 — a refused release never settles", async () => {
+  const flow = createReleaseApproveFlow({
+    request: PENDING_HIGH,
+    releaseFlow: {
+      async release(): Promise<ReleaseResult> {
+        return { ok: false, error: "That didn't work." };
+      },
+    },
+    unlockByPassphrase: async (p) => passphraseUnlock(p),
+    unlockByPasskey: async () => PASSKEY_UNLOCK,
+  });
+  await flow.submit();
+  assert.equal(flow.getState().status, "error");
+  assert.equal(flow.getState().settled, false);
+});

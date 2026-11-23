@@ -165,6 +165,8 @@ async function moreDetailAction(formData: FormData): Promise<void> {
 const NOTICES: Record<string, InboxNotice> = {
   approved: { tone: "success", text: "Approved. The agent can go ahead." },
   denied: { tone: "success", text: "Denied. The agent won't go ahead." },
+  // A card or protected detail handed over on this device (UI/UX audit W-02).
+  released: { tone: "success", text: "Handed over. The agent can collect it once, and the request is now under History." },
   asked: { tone: "success", text: "We've asked the agent for more detail." },
   question_required: {
     tone: "error",

@@ -2,7 +2,7 @@
 
 import * as React from "react";
 import type { PublicKeyCredentialRequestOptionsJSON } from "@simplewebauthn/browser";
-import { ShieldAlert } from "lucide-react";
+import { CheckCircle2, ShieldAlert } from "lucide-react";
 
 import { Button } from "@/components/ui/button";
 import { ButtonLink } from "@/components/ui/button-link";
@@ -95,6 +95,9 @@ export interface ReleaseApproveState {
   confirmRequired: boolean;
   // A plain, non-error note (e.g. "confirmed — approve and release again").
   notice?: string;
+  // The release is handed over AND nothing is left on screen for the person (a new recovery
+  // phrase has been saved, or none was offered): the Inbox can now move on (UI/UX audit W-02).
+  settled: boolean;
 }
 
 export interface ReleaseApproveFlowDeps {
@@ -139,6 +142,8 @@ export interface ReleaseApproveController {
   // was refused for a lapsed step-up. It never releases on its own: the person approves
   // and releases again (the unlock and the security code need their own fresh tap).
   confirmed(): void;
+  // The person is done reading what the finished release left on screen (W-02).
+  finish(): void;
 }
 
 // Plain-English failure copy for a unlock the device could not gather — a real sentence a
@@ -170,6 +175,7 @@ export function createReleaseApproveFlow(deps: ReleaseApproveFlowDeps): ReleaseA
     securityCode: "",
     status: "idle",
     confirmRequired: false,
+    settled: false,
   };
 
   function set(patch: Partial<ReleaseApproveState>): void {
@@ -284,6 +290,8 @@ export function createReleaseApproveFlow(deps: ReleaseApproveFlowDeps): ReleaseA
       set({
         status: "released",
         error: undefined,
+        // An earlier note ("confirmed, approve and release again") no longer applies.
+        notice: undefined,
         passphrase: "",
         recoveryPhrase: "",
         securityCode: "",
@@ -291,6 +299,9 @@ export function createReleaseApproveFlow(deps: ReleaseApproveFlowDeps): ReleaseA
       });
       deps.onReleased?.();
       await followUp(unlockRequest);
+      // Move on by itself only when there's nothing left to read or save; otherwise the
+      // finished release shows it with a Done button (code review: notes were wiped).
+      if (state.newPhrase === null && !state.notice) set({ settled: true });
     } else {
       // A lapsed step-up is resolved right here ("Confirm it's you"), not by signing out.
       set({
@@ -320,6 +331,9 @@ export function createReleaseApproveFlow(deps: ReleaseApproveFlowDeps): ReleaseA
     setSecurityCode: (value) => set({ securityCode: value }),
     submit,
     confirmed,
+    finish: () => {
+      if (state.status === "released" && state.newPhrase === null) set({ settled: true });
+    },
   };
 }
 
@@ -494,6 +508,9 @@ export interface ReleaseApproveProps {
   unlockByRecoveryPhrase?: (phrase: string) => Promise<UnlockRequest>;
   afterRelease?: (unlockRequest: UnlockRequest) => Promise<AfterRelease>;
   onReleased?: () => void;
+  // Called once when the release is handed over and nothing is left to show (W-02): the Inbox
+  // moves the request out of "Waiting on you".
+  onSettled?: () => void;
   // The request's other decisions (Deny, Ask for more detail), shown in the same action row
   // as "Approve and release" so every decision sits together.
   secondaryActions?: React.ReactNode;
@@ -525,6 +542,19 @@ export function ReleaseApprove(props: ReleaseApproveProps): React.ReactElement {
   }
   const flow = flowRef.current;
   const state = flow.getState();
+  const onSettled = props.onSettled;
+  const settledSignalled = React.useRef(false);
+  React.useEffect(() => {
+    if (state.settled && !settledSignalled.current) {
+      settledSignalled.current = true;
+      onSettled?.();
+    }
+  }, [state.settled, onSettled]);
+  // A finished release takes focus, so the person (and a screen reader) knows it's done.
+  const doneRef = React.useRef<HTMLDivElement>(null);
+  React.useEffect(() => {
+    if (state.status === "released") doneRef.current?.focus();
+  }, [state.status]);
 
   const isCard = request.release === "card";
   const cards = savedCards ?? [];
@@ -549,6 +579,41 @@ export function ReleaseApprove(props: ReleaseApproveProps): React.ReactElement {
 
   const reasonId = React.useId();
   const working = state.status === "working";
+  // Handed over: the request is decided. Nothing on it is live any more — no Approve, Deny or
+  // Ask, no fields — only what happened and, the first time, the new recovery phrase to save
+  // (UI/UX audit W-02).
+  if (state.status === "released") {
+    return (
+      <div className="flex min-w-0 flex-col items-start gap-3">
+        <div ref={doneRef} tabIndex={-1} role="status" className="flex items-start gap-2 text-sm text-fg">
+          <CheckCircle2 aria-hidden={true} className="mt-0.5 h-5 w-5 shrink-0 text-success" />
+          <p>Handed over. {request.agent || "The agent"} can collect it once.</p>
+        </div>
+        {state.notice ? (
+          <p role="status" className="text-sm text-fg">
+            {state.notice}
+          </p>
+        ) : null}
+        {state.newPhrase !== null ? (
+          <RecoveryPhraseReveal
+            phrase={state.newPhrase}
+            saved={state.phraseSaved}
+            onSavedChange={(saved) => flow.setPhraseSaved(saved)}
+            onContinue={() => {
+              void flow.confirmRecoveryPhrase();
+            }}
+            error={state.phraseError}
+            continueLabel="Save my vault recovery phrase"
+          />
+        ) : !state.settled ? (
+          <Button type="button" variant="secondary" onClick={() => flow.finish()}>
+            Done
+          </Button>
+        ) : null}
+      </div>
+    );
+  }
+
   // Nothing to hand over: say so with a way to fix it, and skip the picker and unlock
   // choices that could only lead to a refusal.
   if (unavailableReason !== null && !state.confirmRequired) {
@@ -693,11 +758,6 @@ export function ReleaseApprove(props: ReleaseApproveProps): React.ReactElement {
       {state.notice ? (
         <p role="status" className="text-sm text-fg">
           {state.notice}
-        </p>
-      ) : null}
-      {state.status === "released" ? (
-        <p role="status" className="text-sm text-success">
-          Handed over. The agent can collect it once.
         </p>
       ) : null}
       {state.newPhrase !== null ? (

@@ -3,6 +3,8 @@
 import * as React from "react";
 import { useRouter } from "next/navigation";
 import { Notice as InlineNotice } from "@/components/ui/notice";
+import { ConfirmDialog } from "@/components/ui/confirm-dialog";
+import { useUnsavedChanges } from "@/components/ui/unsaved-changes";
 
 import {
   PermissionsView,
@@ -42,6 +44,12 @@ type Notice = { readonly tone: "done" | "problem"; readonly text: string };
 const SAVED: Notice = {
   tone: "done",
   text: "Saved. The change takes effect on this agent's next request.",
+};
+
+// Save pressed with nothing changed: say so, rather than claiming a save (UI/UX audit W-03).
+const NOTHING_CHANGED: Notice = {
+  tone: "done",
+  text: "Nothing to save: you haven't changed anything on this page.",
 };
 
 // A refused save, in plain Australian English (never a raw machine code or protocol
@@ -118,6 +126,9 @@ export function PermissionsForm({
   );
   const containerRef = React.useRef<HTMLDivElement | null>(null);
   const pendingRef = React.useRef(false);
+  // Edits here are lost if the person follows another tab or link before saving: ask first
+  // (UI/UX audit W-03 — unticking card access and opening Rules used to silently keep it on).
+  const unsaved = useUnsavedChanges(containerRef, { ready });
 
   // Use the stored period as the initial value. The save reads the edited select.
   // Mirror the amount into state so card access can require a valid budget.
@@ -144,6 +155,10 @@ export function PermissionsForm({
     if (pendingRef.current) return;
     const root = containerRef.current;
     if (!root) return;
+    if (!unsaved.dirty) {
+      setNotice(NOTHING_CHANGED);
+      return;
+    }
 
     // Every control on the screen is carried with its explicit on/off state; a control the
     // form cannot find refuses the save rather than silently dropping that edit.
@@ -180,6 +195,7 @@ export function PermissionsForm({
       const result = await save(input);
       if (result.ok) {
         setNotice(SAVED);
+        unsaved.markSaved();
         // Re-run the loader so the screen reflects the persisted grants.
         router.refresh();
       } else {
@@ -221,10 +237,20 @@ export function PermissionsForm({
         <PermissionsView
           {...initial}
           saving={saving}
+          unsaved={unsaved.dirty}
           cardAccess={cardOn}
           budget={budget}
         />
       </fieldset>
+      <ConfirmDialog
+        open={unsaved.pending !== null}
+        title={unsaved.pending?.title ?? ""}
+        description={unsaved.pending?.description ?? ""}
+        confirmLabel={unsaved.pending?.confirmLabel ?? ""}
+        cancelLabel="Keep editing"
+        onConfirm={unsaved.confirm}
+        onCancel={unsaved.cancel}
+      />
       {/* The outcome sits under the Save bar it answers, where the person's attention is
           after a long section, rather than off-screen at the top. */}
       {notice ? <NoticeBanner notice={notice} /> : null}
