@@ -33,11 +33,11 @@ The bug-bash fixes from 11 November hold.
 - a form that couldn't capture the brief's own fields;
 - reminders that misfired.
 
-## Findings outside life admin (still open)
+## Findings outside life admin
 
 | Sev | Finding | Where | Fix |
 |---|---|---|---|
-| **High** | **OAuth consent swap.** Approve applies to whichever pending request the `__Host-wh_consent` cookie names when it is submitted, not to the request the person was looking at. An attacker page can show Claude's real consent in a popup, then load its own `/oauth/authorize` at the top level, which overwrites the cookie. The victim's Approve then issues a code to the attacker's DCR client. Approve also needs no step-up. | `src/app/oauth/authorize/handler.ts:108-114`, `src/app/oauth/consent/page.tsx:97-105`, `src/components/agents/consent-view.tsx` | Carry the pending handle (or an HMAC of it) in the form and require it to match the cookie. Require step-up on Approve. |
+| **High** (fixed 23 Nov, `claude/consent-binding`) | **OAuth consent swap.** Approve applies to whichever pending request the `__Host-wh_consent` cookie names when it is submitted, not to the request the person was looking at. An attacker page can show Claude's real consent in a popup, then load its own `/oauth/authorize` at the top level, which overwrites the cookie. The victim's Approve then issues a code to the attacker's DCR client. Approve also needs no step-up. | `src/app/oauth/authorize/handler.ts:108-114`, `src/app/oauth/consent/page.tsx:97-105`, `src/components/agents/consent-view.tsx` | Carry the pending handle (or an HMAC of it) in the form and require it to match the cookie. Require step-up on Approve. |
 | High | **Expensive work happens before rate limiting.** Every MCP request, `tools/list` included, unwraps the DEK through Key Vault before `rateLimiter.allow`, and unwraps aren't cached. A looping agent can exhaust the shared Key Vault quota for everyone. | `compose.ts:559`, `pipeline.ts:529-550`, `crypto/key-wrapper.ts:87-97` | Rate-limit in `dispatch` before `buildServer`, and add a short DEK cache (the design allows 5 minutes). |
 | High | **Email addresses outlive account deletion.** The email-code tables and household invites keep plaintext addresses that the purge never touches. | `auth/email-code.ts`, `account/purge-job.ts:73-87` | Delete these rows by address in `purgeAccount`, and add a TTL sweep. |
 | Medium | **Per-account storage is unbounded.** Imports can reach 100k parts of 12 MiB; tasks, rules and receipts have no caps; Postgres auto-grow is off. | `import/parts.ts`, `infra/main.tf:130` | Add caps and auto-grow or a disk alert. Records are now capped (see the fixes below). |
@@ -91,4 +91,7 @@ For the full comparison, see the ADR.
    reading, but existing users will see a review list the first time.
 3. **Health and money records are visible to every agent with records access.** A per-category
    grant is a follow-up.
-4. **The OAuth consent swap should be fixed on its own branch soon.**
+4. **The OAuth consent swap is fixed on its own branch** (`claude/consent-binding`). The consent
+   form carries a tag of the request it shows, and Approve or Deny acts only while the cookie
+   still names that request. Approving also asks the person to confirm it's them, as making an
+   access key does.

@@ -41,7 +41,8 @@ import { getAccountCurrency, isKnownCurrency } from "@/server/db/account-currenc
 
 import { authorize, validatedRedirectUri } from "../../../server/oauth/authorize";
 import type { ClientResolver } from "../../../server/oauth/clients";
-import { consumePendingAuthorization } from "../../../server/oauth/pending";
+import { consumePendingAuthorization, isConsentRequestTag } from "../../../server/oauth/pending";
+import { requireStepUp } from "../../../server/auth/step-up";
 import { createAgent } from "../../../server/db/agents";
 import { listConnectionsForUser } from "../../../server/db/connections";
 import {
@@ -97,6 +98,9 @@ export interface ConsentApproval {
 
 // The outcome of a decision: a redirect back to the client (carrying the issued code
 // on approval, or none on refusal), or a rejection naming the OAuth error.
+// `request_changed`: the form was for a different request than the one the handle cookie now
+// names (nothing is consumed; the person reviews the current one). `step_up_required`: the
+// person must confirm it's them first (nothing is consumed; they can approve straight after).
 export type DecisionResult =
   | { readonly ok: true; readonly redirectTo: string }
   | { readonly ok: false; readonly error: string };
@@ -122,9 +126,14 @@ export interface AuthorizeActionsDeps {
 // resolves and CONSUMES it through the pending store, never trusting the OAuth query
 // from a form/URL field. A tampered (unknown) or replayed (already-consumed) handle
 // resolves to nothing, so the decision creates nothing.
+//
+// Review 2026-11-23 (the consent swap): each also takes `requestTag`, the tag of the handle
+// the screen was rendered for (`consentRequestTag`), and decides only when the cookie's handle
+// is still that request. Approving also needs a fresh "confirm it's you" (step-up), as
+// making an access key does: either way the agent gets lasting access.
 export interface AuthorizeActions {
-  approve(session: Session, handle: string, approval: ConsentApproval): Promise<DecisionResult>;
-  refuse(session: Session, handle: string): Promise<DecisionResult>;
+  approve(session: Session, handle: string, approval: ConsentApproval, requestTag: string): Promise<DecisionResult>;
+  refuse(session: Session, handle: string, requestTag: string): Promise<DecisionResult>;
 }
 
 // A card spending budget on the approval, validated to the brief's three periods.
@@ -189,8 +198,14 @@ export function createAuthorizeActions(deps: AuthorizeActionsDeps): AuthorizeAct
     session: Session,
     handle: string,
     approval: ConsentApproval,
+    requestTag: string,
   ): Promise<DecisionResult> {
     const valid = parseParams(approvalSchema, approval);
+
+    // The screen the person approved on must be for the request the cookie names now; and a
+    // connection needs a fresh confirmation. Neither refusal consumes the request.
+    if (!isConsentRequestTag(handle, requestTag)) return { ok: false, error: "request_changed" };
+    if (!requireStepUp(session, { clock })) return { ok: false, error: "step_up_required" };
 
     // Only the person who started the request can decide it: another signed-in person's
     // handle resolves to nothing (and is left for its owner).
@@ -258,7 +273,8 @@ export function createAuthorizeActions(deps: AuthorizeActionsDeps): AuthorizeAct
   // redirect that fails is never followed, so Refuse can't be turned into an open
   // redirect or a `javascript:` navigation. Redirect back to the client with
   // `access_denied` (the echoed state and the configured issuer), carrying no code.
-  async function refuse(session: Session, handle: string): Promise<DecisionResult> {
+  async function refuse(session: Session, handle: string, requestTag: string): Promise<DecisionResult> {
+    if (!isConsentRequestTag(handle, requestTag)) return { ok: false, error: "request_changed" };
     const pending = consumePendingAuthorization(handle, session.userId);
     if (pending == null) return { ok: false, error: "invalid_request" };
 

@@ -21,6 +21,7 @@
 // takes the viewing person's id: a different person resolves nothing (and consumes
 // nothing, so the request stays usable for its owner).
 
+import { createHash, timingSafeEqual } from "node:crypto";
 import { processSingleton } from "../seams/process-singleton";
 import type { Random } from "../seams/random";
 
@@ -140,4 +141,20 @@ export function consumePendingAuthorization(
 // How many requests are waiting (for the store's bound to be observable in tests).
 export function pendingAuthorizationCount(): number {
   return pending.size;
+}
+
+// The consent form's binding to the request the person is looking at (review 2026-11-23, the
+// "consent swap"): the page renders this tag of the handle it showed, and the decision acts
+// only when the handle cookie still names that same request. Without it, a second
+// `/oauth/authorize` loaded in the same browser (by another site, at the top level) replaced
+// the cookie, and the person's Approve on the first screen approved the second request. A
+// domain-separated SHA-256 of an unguessable handle: it reveals nothing about the handle.
+export function consentRequestTag(handle: string): string {
+  return createHash("sha256").update("warthog-consent-request\n").update(handle).digest("hex");
+}
+
+// True when `tag` (from the submitted form) is the tag of `handle` (from the cookie).
+export function isConsentRequestTag(handle: string, tag: unknown): boolean {
+  if (typeof tag !== "string" || !/^[0-9a-f]{64}$/.test(tag) || handle.length === 0) return false;
+  return timingSafeEqual(Buffer.from(consentRequestTag(handle), "hex"), Buffer.from(tag, "hex"));
 }

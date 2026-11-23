@@ -21,7 +21,7 @@
 // page shows an expired-request message rather than crashing.
 
 import { getAgentDefaults } from "@/server/db/agent-defaults";
-import { getPendingAuthorization } from "../../../server/oauth/pending";
+import { consentRequestTag, getPendingAuthorization } from "../../../server/oauth/pending";
 import { isAllowedRedirectUri } from "../../../server/oauth/clients";
 import { listConnectionsForUser } from "../../../server/db/connections";
 import type { ConsentViewProps, ConsentViewService } from "../../../components/agents/consent-view";
@@ -94,6 +94,9 @@ export async function loadConsentView(
     requestedScopes: REQUESTED_SCOPES,
     template: services ? (await getAgentDefaults(services.db, userId)).template : DEFAULT_TEMPLATE,
     redirect: { host: url.host, verified },
+    // The form's binding to THIS request (review 2026-11-23, the consent swap): the decision
+    // acts only while the handle cookie still names the request this screen shows.
+    requestTag: consentRequestTag(handle),
     ...(services ? { services: await connectedServices(services, userId) } : {}),
   };
 }

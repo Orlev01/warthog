@@ -36,6 +36,7 @@ import { randomBytes } from "node:crypto";
 
 import { createAuthorizeActions, type ConsentApproval } from "./actions";
 import { beginAuthorization } from "../../../server/oauth/authorize";
+import { consentRequestTag } from "../../../server/oauth/pending";
 
 import { loadConfig, type Config } from "../../../server/config";
 import { localAesKeyWrapper } from "../../../server/crypto/key-wrapper";
@@ -113,7 +114,8 @@ function sessionFor(userId: string): Session {
     userId,
     createdAt: new Date(NOW.getTime() - 60_000),
     lastSeenAt: new Date(NOW.getTime() - 60_000),
-    steppedUpAt: null,
+    // Approving a connection needs a fresh "confirm it's you"; this person confirmed a minute ago.
+    steppedUpAt: new Date(NOW.getTime() - 60_000),
   };
 }
 
@@ -229,7 +231,7 @@ test("AC1: an approved OAuth agent exchanges its code for a token and calls get_
 
     // 2. The person APPROVES: the decision reads the pending request server-side (by handle),
     //    names the agent, creates its connection + permissions, and issues the code.
-    const decided = await createAuthorizeActions(deps(db, config)).approve(session, begun.handle, approval());
+    const decided = await createAuthorizeActions(deps(db, config)).approve(session, begun.handle, approval(), consentRequestTag(begun.handle));
     assert.ok(decided.ok, "approving the consent succeeds");
     if (!decided.ok) throw new Error("unreachable: approve was not ok");
 
@@ -305,6 +307,7 @@ test("AC3: the approved agent appears on /agents with the chosen name and permis
       session,
       begun.handle,
       approval({ name: "Research buddy", platform: "claude", template: "standard" }),
+      consentRequestTag(begun.handle),
     );
     assert.ok(decided.ok);
     if (!decided.ok) throw new Error("unreachable");
@@ -340,7 +343,7 @@ test("AC2: refusing consent redirects with access_denied and creates nothing", a
     assert.ok(begun.ok);
     if (!begun.ok) throw new Error("unreachable");
 
-    const decided = await createAuthorizeActions(deps(db, config)).refuse(session, begun.handle);
+    const decided = await createAuthorizeActions(deps(db, config)).refuse(session, begun.handle, consentRequestTag(begun.handle));
     assert.ok(decided.ok, "refusing is a handled outcome, not an error");
     if (!decided.ok) throw new Error("unreachable");
 
@@ -380,7 +383,7 @@ async function connectWith(
   const session = sessionFor(userId);
   const begun = await beginAuthorization({ params: authorizeParams(), session }, deps(db, config));
   if (!begun.ok) throw new Error(`begin failed: ${begun.error}`);
-  const decided = await createAuthorizeActions(deps(db, config)).approve(session, begun.handle, approval(overrides));
+  const decided = await createAuthorizeActions(deps(db, config)).approve(session, begun.handle, approval(overrides), consentRequestTag(begun.handle));
   if (!decided.ok) throw new Error(`approve failed: ${decided.error}`);
   const exchanged = await exchangeToken({ params: tokenParams(codeIn(decided.redirectTo)!) }, deps(db, config));
   if (!exchanged.ok) throw new Error(`exchange failed: ${exchanged.error}`);
@@ -480,6 +483,7 @@ test("A2: a ticked service is granted only when the person has connected it", as
       session,
       begun.handle,
       approval({ template: "standard", tickedServices: ["gmail", "not-connected-service"] }),
+      consentRequestTag(begun.handle),
     );
     assert.ok(decided.ok);
     const agents = await listAgentsForUser(db, userId);

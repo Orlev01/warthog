@@ -211,6 +211,11 @@ Redaction is a pure module with exhaustive unit tests; the activity writer and t
   must be https, or `http://localhost` / `http://127.0.0.1` (any port) for local clients.
 - Known platform callbacks get a "Verified platform" badge on the consent screen (claude.ai,
   claude.com, chatgpt.com, Google's oauth-redirect); any other redirect host is shown prominently.
+- The pending request rides in the host-locked `__Host-wh_consent` cookie, and the consent form
+  carries a tag of the request it shows (a domain-separated SHA-256 of the handle). Approve and
+  Deny act only while the cookie still names that request, so a second `/oauth/authorize` loaded in
+  the same browser can't take over the person's Approve. Approving needs a step-up within 5 minutes,
+  as creating an access key does; a refusal for either reason consumes nothing.
 - Tokens are **opaque** random 256-bit values stored as SHA-256 hashes, bound to one agent
   connection: access token 1 hour; refresh token 30 days, rotated on every use, reuse of an old
   refresh token revokes the connection's tokens (`invalid_grant`).
