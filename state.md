@@ -1,4 +1,15 @@
-# Delivery status — 23 November 2026 (Life admin: receipts and subscriptions belong to what they were for, and what you pay a month)
+# Delivery status — 23 November 2026 (Life admin display fixes)
+
+**Live at [warthog.com.au](https://warthog.com.au) (the website) and
+[app.warthog.com.au](https://app.warthog.com.au) (the app).** Application source
+`8ed9c61c2208c9391a1f3e8b53dc94d5757e7f41` runs as `warthog--r45143920020a1`, with one healthy
+replica, explicit 100% traffic and zero old replicas.
+
+PR #51 shows a change of link in Life admin's To check, gives agents a past trip as finished, and
+drops stray "Type/Source → removed" lines. No migrations (still 91). See the
+[release record](docs/audit/life-admin-display-release-2026-11-23.md).
+
+# Earlier delivery status — 23 November 2026 (Life admin: receipts and subscriptions belong to what they were for, and what you pay a month)
 
 **Live at [warthog.com.au](https://warthog.com.au) (the website) and
 [app.warthog.com.au](https://app.warthog.com.au) (the app).** Application source

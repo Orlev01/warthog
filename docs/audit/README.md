@@ -1,5 +1,10 @@
 # Warthog comprehensive engineering audit
 
+**Life admin display fixes, 23 November:** main `8ed9c61` runs as `warthog--r45143920020a1`. PR #51
+shows a change of link in To check, gives agents a past trip as finished (one shared
+`recordPhases`), and drops stray "Type/Source → removed" lines. See the
+[release record](life-admin-display-release-2026-11-23.md).
+
 **Life admin: receipts and subscriptions belong to what they were for, and what you pay a month,
 23 November:** main `d57f625` runs as `warthog--r45136369712a1`. After agents filled Life admin from
 real inboxes, the founder asked whether to file by document type instead. Records stay filed by what
