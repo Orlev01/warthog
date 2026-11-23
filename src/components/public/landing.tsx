@@ -142,7 +142,7 @@ const SECURITY_FAQS = [
   {
     question: "Can Warthog’s staff see my information?",
     answer:
-      "Our admin tools show only account-level facts, such as when you signed up and how many agents and services you’ve connected. No staff tool displays your details, memory, records, emails or activity. Your passport, licence and card details are locked on your own device, so our staff can’t unlock them. If you write to us, we read your message so we can reply.",
+      "We only see account-level facts, such as when you signed up and how many agents and services you’ve connected. No staff tool displays your details, memory, records, emails or activity. Your passport, licence and card details are locked on your own device, so our staff can’t unlock them.",
   },
   {
     question: "Does Warthog read my email?",
@@ -150,9 +150,17 @@ const SECURITY_FAQS = [
       "Not on its own. Warthog fetches an email only when an agent you’ve allowed asks for it, and passes on a cleaned-up copy with sign-in codes, password reset links and card numbers taken out. It doesn’t keep a copy of your mailbox. The access you give Warthog to each service is stored encrypted, and you can disconnect a service at any time.",
   },
   {
-    question: "Is my information used to train AI or show me ads?",
-    answer:
-      "No. Warthog doesn’t run an AI model, so it isn’t training one on your information, and there are no ads or third-party trackers in Warthog. Your information goes only to the agents you connect, when they ask and within the permissions you set. Once an agent has it, the agent’s own provider handles it under its terms, so it’s worth checking those too.",
+    question: "Does Warthog sell my information or use it to train AI?",
+    answer: (
+      <>
+        No. We never sell any of your information, and there are no ads or third-party
+        trackers in Warthog. Warthog doesn’t run an AI model, so it isn’t training one on
+        your information. Your information goes only to the agents you connect, when they
+        ask and within the permissions you set. Once an agent has it, the agent’s own
+        provider handles it under its terms, so it’s worth checking those too. The{" "}
+        <a href="/privacy#never-sold">privacy policy</a> sets out our commitment.
+      </>
+    ),
   },
   {
     question: "Is there a password someone could steal?",

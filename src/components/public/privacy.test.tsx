@@ -284,6 +284,17 @@ test("explains how to export everything and how to delete the account", () => {
   );
 });
 
+// === We never sell any data (founder, 23 November 2026) ========================
+//
+// A promise about all of a person's information, not only the narrower Google and SMS
+// statements further down, so the front door's FAQ can say it plainly.
+
+test("states that Warthog never sells any of your information", () => {
+  const text = faceText(render());
+  assert.match(text, /\bnever sell any of your information\b/i);
+  assert.match(text, /\badvertisers\b/i);
+});
+
 // === Design system — colour comes from tokens, never a raw hex literal =========
 
 test("the privacy page uses design tokens, never a raw hex colour", () => {

@@ -139,7 +139,7 @@ test("questions include a security and privacy group that doesn't overclaim", ()
   assert.match(visibleText(group), /^Security and privacy\b/);
   assert.ok((group.match(/<summary\b/g) ?? []).length >= 8, "the group covers the common concerns");
   const text = visibleText(group);
-  for (const concern of [/\bstored\b/i, /\bAustralia\b/, /\bencrypted\b/i, /\bstaff\b/i, /\bdelete\b/i]) {
+  for (const concern of [/\bstored\b/i, /\bAustralia\b/, /\bencrypted\b/i, /\bstaff\b/i, /\bnever sell\b/i, /\bdelete\b/i]) {
     assert.match(text, concern);
   }
   assert.ok(anchors(group).some((link) => link.href === "/privacy"));
