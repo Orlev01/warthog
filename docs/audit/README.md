@@ -1,5 +1,12 @@
 # Warthog comprehensive engineering audit
 
+**Services on for new agents, 23 November:** main `742d881` runs as `warthog--r45121816498a1`.
+PR #43 adds "On for new agents" to each account under Connectors › Your services, so every agent
+connected afterwards starts with that service ticked and set to that account. It also keeps reads on
+and changes "ask me first" when an agent's first service is granted on its page. Migration 0119 makes
+90. See the [release record](default-services-release-2026-11-23.md) and the
+[decision](../adr/default-services.md).
+
 **OAuth consent bound to the request on screen, 23 November:** main `e3a6015` runs as
 `warthog--r45118618704a1`. PR #45 fixes the review's High consent swap: the consent form carries a
 tag of the request it shows, Approve and Deny act only on that request, and Approve asks the person

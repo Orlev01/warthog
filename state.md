@@ -1,4 +1,16 @@
-# Delivery status — 23 November 2026 (OAuth consent bound to the request on screen)
+# Delivery status — 23 November 2026 (services on for new agents)
+
+**Live at [warthog.com.au](https://warthog.com.au) (the website) and
+[app.warthog.com.au](https://app.warthog.com.au) (the app).** Application source
+`742d8811b479fda75b766f62b143bd1e83dd6c78` runs as `warthog--r45121816498a1`, with one healthy
+replica, explicit 100% traffic and zero old replicas.
+
+PR #43 adds "On for new agents" to each account under Connectors › Your services, and keeps reads on
+and changes "ask me first" when an agent's first service is granted on its page. Migration 0119 makes
+90. See the [release record](docs/audit/default-services-release-2026-11-23.md). PR #46 (landing FAQ
+and privacy copy) is merged on main after this source and not yet released.
+
+# Earlier delivery status — 23 November 2026 (OAuth consent bound to the request on screen)
 
 **Live at [warthog.com.au](https://warthog.com.au) (the website) and
 [app.warthog.com.au](https://app.warthog.com.au) (the app).** Application source
