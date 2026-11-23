@@ -95,6 +95,7 @@ import {
   createListTasksTool,
   createUpdateTaskTool,
 } from "./tools/tasks";
+import { liftOlderClientCall } from "./tools/older-clients";
 import { releaseStore } from "../crypto/release-store";
 
 // The two inputs a composition root is handed (design §6.1 addendum): the process-wide
@@ -666,6 +667,15 @@ export function createMcpDispatch(deps: McpDispatchDeps): McpDispatch {
     // being unwrapped, its tools resolved or its app remembered (the next call within the
     // limit does that). Other requests (tools/list, the handshake) are not counted, as before.
     const admitted = connection?.active && isToolCall(body) ? await pipeline.admitCall(connection) : undefined;
+    // A record tool call in an older client's shape is lifted into today's before the SDK
+    // checks it (./tools/older-clients.ts).
+    const lifted = liftOlderClientCall(body);
+    if (lifted !== body) {
+      body = lifted;
+      const headers = new Headers(request.headers);
+      headers.delete("content-length");
+      request = new Request(request.url, { method: request.method, headers, body: JSON.stringify(lifted) });
+    }
     const client = clientObservation(body, request.headers);
     if (connection && client && admitted !== false) await rememberClientOf(connection, client, clock.now(), () => dataKeyFor(connection.userId));
     const via = clientSurface(request.headers.get(ANTHROPIC_CLIENT_HEADER), client?.name);

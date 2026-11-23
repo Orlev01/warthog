@@ -75,6 +75,7 @@ import { systemClock, type Clock } from "../../seams/clock";
 import { requestObservation } from "../client-observation";
 import type { AgentConnection } from "../context";
 import type { Db } from "../../db/index";
+import { liftOlderClientInput } from "./older-clients";
 
 const MAX_STATUS = 200;
 const MAX_ID = 200;
@@ -476,7 +477,7 @@ export function createListRecordsTool(deps: RecordsToolDeps): ListRecordsTool {
     inputSchema: listRecordsSchema,
 
     async handle(input: unknown, connection: AgentConnection): Promise<ListRecordsResult> {
-      const parsed = parseParams(listRecordsSchema, input);
+      const parsed = parseParams(listRecordsSchema, liftOlderClientInput(input));
       const after = parsed.cursor ? decodeCursor(parsed.cursor) : null;
       if (parsed.cursor && after === null) return { status: "refused", reason: "Invalid page cursor. Start from the first page." };
 
@@ -611,7 +612,7 @@ export function createSaveRecordTool(deps: RecordsToolDeps): SaveRecordTool {
     inputSchema: saveRecordSchema,
 
     async handle(input: unknown, connection: AgentConnection): Promise<SaveRecordResult> {
-      const parsed = parseParams(saveRecordSchema, input);
+      const parsed = parseParams(saveRecordSchema, liftOlderClientInput(input));
 
       const permissions = await recordsPermission(db, connection, "change");
       if (!permissions) return { status: "refused", reason: NO_PERMISSION_REASON };
@@ -727,7 +728,7 @@ export function createUpdateRecordTool(deps: RecordsToolDeps): UpdateRecordTool 
     inputSchema: updateRecordSchema,
 
     async handle(input: unknown, connection: AgentConnection): Promise<UpdateRecordResult> {
-      const parsed = parseParams(updateRecordSchema, input);
+      const parsed = parseParams(updateRecordSchema, liftOlderClientInput(input));
 
       const permissions = await recordsPermission(db, connection, "change");
       if (!permissions) return { status: "refused", reason: NO_PERMISSION_REASON };
