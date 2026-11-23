@@ -675,3 +675,27 @@ test("the confirmation offers only the ways this person can confirm", () => {
   const both = renderToStaticMarkup(<AccessKeyFlow create={noopCreate} defaultName="My Grok" defaultPlatform="grok" initialConfirmRequired passkey authenticator />);
   assert.match(both, /Authenticator app code/);
 });
+
+// docs/adr/default-services.md — a service the person turned on for new agents arrives ticked,
+// as on the consent screen: it starts selected, a Standard key grants it, Minimal drops it, and
+// going back to Standard selects it again.
+test("a service on for new agents starts ticked and is carried into the key's grants", async () => {
+  const create = makeCreate();
+  const flow = createAccessKeyFlow({
+    create: create.fn,
+    defaultName: "My Grok",
+    defaultPlatform: "grok",
+    services: [
+      { id: "google-gmail", name: "Gmail", ticked: true },
+      { id: "notion", name: "Notion", ticked: false },
+    ],
+  });
+  assert.deepEqual(flow.getState().choices.services, ["google-gmail"]);
+  flow.setTemplate("minimal");
+  assert.deepEqual(flow.getState().choices.services, []);
+  flow.setTemplate("standard");
+  assert.deepEqual(flow.getState().choices.services, ["google-gmail"]);
+
+  await flow.submit();
+  assert.deepEqual(create.inputs[0]?.tickedServices, ["google-gmail"]);
+});

@@ -50,3 +50,12 @@ test("an action returns to the tab, search and category it came from, with its n
   assert.equal(connectorsReturnUrl(form({}), "requested"), "/connectors?notice=requested");
   assert.ok(connectorsReturnUrl(form({ return_view: "catalogue", return_q: "z".repeat(5000) }), "requested").length < 300, "bounded");
 });
+
+test("turning an account on or off for new agents says what changes and what doesn't", () => {
+  for (const key of ["default-on", "default-off"]) {
+    const notice = connectorNotice(key);
+    assert.equal(notice?.tone, "success", key);
+    assert.match(notice!.text, /Agents already connected don't change/, key);
+  }
+  assert.equal(connectorNotice("default-problem")?.tone, "error");
+});

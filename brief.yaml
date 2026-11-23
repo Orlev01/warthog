@@ -219,7 +219,10 @@ features:
     read tools of the services the person ticks on the consent screen, with those services'
     change-making tools set to "ask me first"; no high-tier requests and no card requests. Custom:
     starts from Standard with every setting open to change. High-tier requests, card requests and
-    sharing what it learns are always opt-in.
+    sharing what it learns are always opt-in. (Amended 23 November 2026: on Connectors the person
+    can turn one account of each service "On for new agents"; that service then starts ticked on
+    every later consent and access-key screen, and approving grants it set to that account. Agents
+    already connected don't change. See docs/adr/default-services.md.)
   - >-
     Per-agent permissions page — for each agent: which connected services and which of their tools
     it may use (read tools and change-making tools listed separately; change-making tools default to

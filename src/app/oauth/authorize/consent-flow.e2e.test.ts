@@ -49,7 +49,7 @@ import { listActivity } from "../../../server/activity/list";
 import { createUser } from "../../../server/db/users";
 import { listAgentsForUser } from "../../../server/db/agents";
 import { getConnectionPermissions } from "../../../server/db/agent-permissions";
-import { createConnection } from "../../../server/db/connections";
+import { createConnection, setDefaultForAgents } from "../../../server/db/connections";
 import { fixedClock } from "../../../server/seams/clock";
 import { systemRandom } from "../../../server/seams/random";
 import { freshDb } from "../../../test/db";
@@ -491,6 +491,40 @@ test("A2: a ticked service is granted only when the person has connected it", as
     assert.deepEqual(grants!.grantedConnectors, ["gmail"], "only the person's own connected service is granted");
     assert.equal(grants!.readTools, true, "its read tools are on");
     assert.equal(grants!.changeTools, "ask_first", "its changes ask first");
+  } finally {
+    await db.close();
+  }
+});
+
+// docs/adr/default-services.md — a service the person turned on for new agents arrives ticked;
+// approving grants it set to that account, so the agent can use it straight away.
+test("a ticked service with an account on for new agents is set to that account", async () => {
+  const db = await freshDb();
+  try {
+    const config = devConfig();
+    await createClient(db, { clientId: CLIENT_ID, registration: "cimd", redirectUris: [REDIRECT_URI] });
+    const { userId, dek } = await makePerson(db, config);
+    const connect = async (accountLabel: string) =>
+      (await createConnection(db, { userId, connectorId: "gmail", accountLabel, credentials: { token: "x" } }, dek, fixedClock(NOW))).id;
+    await connect("home@example.com");
+    const work = await connect("work@example.com");
+    await setDefaultForAgents(db, { userId, id: work, on: true });
+
+    const session = sessionFor(userId);
+    const begun = await beginAuthorization({ params: authorizeParams(), session }, deps(db, config));
+    if (!begun.ok) throw new Error("unreachable");
+    const decided = await createAuthorizeActions(deps(db, config)).approve(
+      session,
+      begun.handle,
+      approval({ template: "standard", tickedServices: ["gmail"] }),
+      consentRequestTag(begun.handle),
+    );
+    assert.ok(decided.ok);
+    const agents = await listAgentsForUser(db, userId);
+    const grants = await getConnectionPermissions(db, userId, agents[0]!.connectionId);
+    assert.deepEqual(grants!.grantedConnectors, ["gmail"]);
+    assert.deepEqual(grants!.connectorAccounts, { gmail: work }, "set to the account that is on for new agents");
+    assert.equal(grants!.readTools, true);
   } finally {
     await db.close();
   }

@@ -215,6 +215,34 @@ async function renameAction(formData: FormData): Promise<void> {
   redirect(backTo(formData, notice));
 }
 
+// Turn "On for new agents" on or off for one of the person's own accounts
+// (docs/adr/default-services.md). The switch sends `on` only when it is ticked. A refusal is
+// reported in plain words, never swallowed.
+async function defaultForAgentsAction(formData: FormData): Promise<void> {
+  "use server";
+  const db = await getServerDb();
+  const session = await resolveSession(db);
+  if (!session) {
+    redirect("/signin");
+  }
+  const on = formData.get("on") != null;
+  let notice = on ? "default-on" : "default-off";
+  try {
+    const result = await buildActions(db, loadConfig()).setDefaultForAgents(session, {
+      connectionId: formValue(formData, "connectionId"),
+      on,
+    });
+    if (!result.ok) notice = "default-problem";
+  } catch (error) {
+    if (!(error instanceof HttpError)) {
+      throw error;
+    }
+    notice = "default-problem";
+  }
+  revalidatePath("/connectors");
+  redirect(backTo(formData, notice));
+}
+
 // Request a connector not in the catalogue yet, or Google early access (recorded for the
 // person; the operator reads it on the admin portal's Requests page). A malformed / oversized name (a 4xx from the seam) is reported as a problem.
 async function requestAction(formData: FormData): Promise<void> {
@@ -278,6 +306,7 @@ export default async function ConnectorsPage({
       reconnectAction={reconnectAction}
       renameAction={renameAction}
       requestAction={requestAction}
+      defaultForAgentsAction={defaultForAgentsAction}
     />
   );
 }

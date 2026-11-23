@@ -297,6 +297,29 @@ function mergeConnectors(
   };
 }
 
+// The agent-wide reading and changes defaults after an edit. The Connectors section always
+// sends them as shown, and an agent connected with no services stores them off, so on the
+// FIRST grant (no connected service granted before, at least one now) a default the person
+// left as it was must not switch the new grant's tools off: it takes what consent gives
+// instead. A default the person changed in the same save, and every save once a service is
+// granted, keeps the submitted value.
+function mergeToolClasses(
+  stored: ConnectionPermissions,
+  merged: Pick<PermissionGrants, "grantedConnectors" | "readTools" | "changeTools">,
+  input: PermissionsSaveInput,
+  connected: ReadonlySet<string>,
+): Pick<PermissionGrants, "readTools" | "changeTools"> {
+  const firstGrant =
+    !stored.grantedConnectors.some((id) => connected.has(id)) &&
+    merged.grantedConnectors.some((id) => connected.has(id));
+  const chosen = <T,>(submitted: T | undefined, before: T, after: T): T =>
+    submitted === undefined || (firstGrant && submitted === before) ? after : submitted;
+  return {
+    readTools: chosen(input.readTools, stored.readTools, merged.readTools),
+    changeTools: chosen(input.changeTools, stored.changeTools, merged.changeTools),
+  };
+}
+
 // Apply the partial edit to the stored grants: a field the input touches is overwritten,
 // every other field keeps its stored value — including the card budget, which is RETAINED
 // when card access is toggled off (so it survives a later re-enable, OBS-022). The acting
@@ -308,13 +331,11 @@ function mergeGrants(
   connectionId: string,
   connected: ReadonlySet<string>,
 ): PermissionGrants {
+  const connectors = mergeConnectors(stored, input.connectors, connected);
   return {
     ...stored,
-    ...mergeConnectors(stored, input.connectors, connected),
-    ...(input.readTools !== undefined ? { readTools: input.readTools } : {}),
-    ...(input.changeTools !== undefined
-      ? { changeTools: input.changeTools }
-      : {}),
+    ...connectors,
+    ...mergeToolClasses(stored, connectors, input, connected),
     userId,
     connectionId,
     connectorAccounts: input.connectorAccounts ?? stored.connectorAccounts,

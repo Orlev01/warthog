@@ -44,7 +44,7 @@ import type { ClientResolver } from "../../../server/oauth/clients";
 import { consumePendingAuthorization, isConsentRequestTag } from "../../../server/oauth/pending";
 import { requireStepUp } from "../../../server/auth/step-up";
 import { createAgent } from "../../../server/db/agents";
-import { listConnectionsForUser } from "../../../server/db/connections";
+import { defaultAccountsForAgents, listConnectionsForUser } from "../../../server/db/connections";
 import {
   upsertPermissions,
   type PermissionGrants,
@@ -242,8 +242,11 @@ export function createAuthorizeActions(deps: AuthorizeActionsDeps): AuthorizeAct
       const connected = new Set(
         (await listConnectionsForUser(tx, session.userId)).map((c) => c.connectorId),
       );
+      // A ticked service with an account on for new agents is set to that account
+      // (docs/adr/default-services.md).
+      const defaultAccounts = await defaultAccountsForAgents(tx, session.userId);
       const grants = await upsertPermissions(tx, {
-        ...initialGrants(session.userId, connectionId, valid, [...new Set(valid.tickedServices ?? [])].filter(id => connected.has(id))),
+        ...initialGrants(session.userId, connectionId, valid, [...new Set(valid.tickedServices ?? [])].filter(id => connected.has(id)), defaultAccounts),
         rateLimit: (await getAgentDefaults(tx, session.userId)).rateLimit,
       });
 

@@ -296,6 +296,11 @@ Redaction is a pure module with exhaustive unit tests; the activity writer and t
   its connection in place; adding another account keeps agents on the account they use; other
   accounts can be renamed; a card names the account when there are several
   ([ADR](../adr/google-published-and-accounts.md)).
+- **On for new agents:** one account of each service can be marked on Connectors
+  (`connections.default_for_agents`); later consent and access-key screens tick that service, and
+  approval pins the agent to that account. An agent's first grant on its page keeps reads on and
+  changes "ask me first" unless the person changed those defaults in the same save
+  ([ADR](../adr/default-services.md)).
 - Launch target: ≥ 30 `provider_mcp` + ≥ 60 `api_key` entries + Google + Microsoft (+ any the founder
   registers: Slack, GitHub, Spotify, Strava, …) ≥ 100 connectable.
 - LinkedIn (20 Nov 2026, [ADR](../adr/linkedin-connector.md)): a founder-registered `oauth2` entry

@@ -321,3 +321,40 @@ export async function renewConnection(db: Db, input: RenewInput, dek: Uint8Array
   if (!row) throw new Error(`renewConnection: no connection ${input.id} for this user`);
   return toConnection(row);
 }
+
+// What setDefaultForAgents needs: the person (member scope), the connection, and whether it
+// should be on for new agents.
+export interface DefaultForAgentsInput {
+  readonly userId: string;
+  readonly id: string;
+  readonly on: boolean;
+}
+
+// Turn "On for new agents" on or off for one of the person's own accounts
+// (docs/adr/default-services.md). An agent uses one account of each service, so turning one
+// account on first turns off any other account of the same service. Member-scoped (id AND
+// user_id both bound); returns false, changing nothing, when no connection with that id
+// belongs to this user. Callers run it inside a transaction so the two updates land together.
+export async function setDefaultForAgents(db: Db, { userId, id, on }: DefaultForAgentsInput): Promise<boolean> {
+  const owned = await db.query("SELECT connector_id FROM connections WHERE id = $1 AND user_id = $2", [id, userId]);
+  const connectorId = owned.rows[0]?.connector_id as string | undefined;
+  if (connectorId === undefined) return false;
+  if (on) {
+    await db.query(
+      "UPDATE connections SET default_for_agents = false WHERE user_id = $1 AND connector_id = $2 AND id <> $3 AND default_for_agents",
+      [userId, connectorId, id],
+    );
+  }
+  await db.query("UPDATE connections SET default_for_agents = $1 WHERE id = $2 AND user_id = $3", [on, id, userId]);
+  return true;
+}
+
+// The person's accounts that are on for new agents, as { service: account id }. Member-scoped
+// by the user id the caller passes (the session's id, never a client value).
+export async function defaultAccountsForAgents(db: Db, userId: string): Promise<Record<string, string>> {
+  const result = await db.query(
+    "SELECT id, connector_id FROM connections WHERE user_id = $1 AND default_for_agents ORDER BY connector_id",
+    [userId],
+  );
+  return Object.fromEntries(result.rows.map((row) => [row.connector_id as string, row.id as string]));
+}

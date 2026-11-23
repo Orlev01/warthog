@@ -20,6 +20,7 @@ import { PageNotice, type NoticeTone } from "@/components/ui/notice";
 import { hrefWith, type QueryState } from "@/lib/href";
 import { catalogueGroupLabel } from "./catalogue-groups";
 import { RevealOnFocus } from "./reveal-on-focus";
+import { DefaultForAgentsSwitch } from "./default-for-agents-switch";
 
 // E09-S16 — Connectors view component (src/components/connectors/connectors-view.tsx).
 //
@@ -53,7 +54,8 @@ import { RevealOnFocus } from "./reveal-on-focus";
 // (one submission per click) that tells the page which tab, search and category to return
 // to. Connected services are rows in one list group, with the tool summary ("n tools · n
 // make changes") and the full list (each tool still marked "Reads" or "Makes changes")
-// behind "Show tools". Disconnect stays one click (brief: "disconnect in one click").
+// behind "Show tools", and an "On for new agents" switch per account
+// (docs/adr/default-services.md). Disconnect stays one click (brief: "disconnect in one click").
 
 // One catalogue entry as the view renders it. `connectable` is the index's own
 // connectability truth (E09-S15). `gate` is the per-person decision (E09-S13): "connect"
@@ -122,6 +124,9 @@ export type ConnectionItem = {
   connectedAt: string;
   tools: readonly ToolItem[];
   agents: readonly string[];
+  // Every agent connected from now on starts with this service, using this account
+  // (docs/adr/default-services.md). At most one account of a service.
+  defaultForAgents?: boolean;
 };
 
 // One catalogue category the filter links offer, with how many entries it holds that
@@ -158,6 +163,7 @@ export type ConnectorsViewProps = {
   reconnectAction?: (formData: FormData) => void | Promise<void>;
   renameAction?: (formData: FormData) => void | Promise<void>;
   requestAction?: (formData: FormData) => void | Promise<void>;
+  defaultForAgentsAction?: (formData: FormData) => void | Promise<void>;
 };
 
 // E09-S13's ASK_TO_JOIN funnel copy and the miss affordance copy — UI copy, do not drift
@@ -450,17 +456,22 @@ function RenameControl({
 const SUMMARY_LINK =
   "inline-flex min-h-11 w-fit cursor-pointer list-none items-center gap-2 rounded-field text-sm font-medium text-fg underline-offset-4 hover:underline lg:pointer-fine:min-h-9 [&::-webkit-details-marker]:hidden";
 
-// One connected service, as a divider row in the "Your services" group.
+// One connected service, as a divider row in the "Your services" group. `otherDefault` is
+// another account of the same service that is on for new agents, if any.
 function ConnectionRow({
   connection,
+  otherDefault,
   reconnectAction,
   disconnectAction,
   renameAction,
+  defaultForAgentsAction,
 }: {
   connection: ConnectionItem;
+  otherDefault?: string;
   disconnectAction?: (formData: FormData) => void | Promise<void>;
   reconnectAction?: (formData: FormData) => void | Promise<void>;
   renameAction?: (formData: FormData) => void | Promise<void>;
+  defaultForAgentsAction?: (formData: FormData) => void | Promise<void>;
 }) {
   return (
     <li className={`${LIST_ROW} gap-3 py-4`}>
@@ -485,6 +496,14 @@ function ConnectionRow({
       {connection.unavailableReason ? (
         <p className="text-sm text-warning">{connection.unavailableReason}</p>
       ) : null}
+      <DefaultForAgentsSwitch
+        connectionId={connection.id}
+        accountLabel={connection.accountLabel}
+        service={connection.name}
+        on={connection.defaultForAgents === true}
+        otherAccount={otherDefault}
+        action={connection.unavailableReason ? undefined : defaultForAgentsAction}
+      />
 
       {connection.tools.length === 0 ? (
         <p className="text-sm text-fg-muted">No tools yet.</p>
@@ -588,6 +607,7 @@ export function ConnectorsView({
   disconnectAction,
   renameAction,
   requestAction,
+  defaultForAgentsAction,
 }: ConnectorsViewProps) {
   // The catalogue state every category link keeps (the tab, the search, the category).
   const catalogueState: QueryState = {
@@ -596,6 +616,10 @@ export function ConnectorsView({
     category: category ?? undefined,
   };
   const filtered = Boolean(query) || category !== null;
+  // Which account of each service is on for new agents, so its other accounts can say so.
+  const defaultAccount = new Map(
+    connections.filter((c) => c.defaultForAgents).map((c) => [c.connectorId ?? c.name, c.accountLabel]),
+  );
   const entries = groups.flatMap((group) =>
     group.items.map((item) => ({ ...item, category: item.category ?? group.category })),
   );
@@ -644,15 +668,17 @@ export function ConnectorsView({
                     id="your-services"
                     title="Your services"
                     count={connections.length}
-                    summary="An agent can use a service only after you turn it on for that agent."
+                    summary="An agent can use a service only after you turn it on for that agent, or turn an account on for new agents here."
                   >
                     {connections.map((connection) => (
                       <ConnectionRow
                         key={connection.id}
                         connection={connection}
+                        otherDefault={connection.defaultForAgents ? undefined : defaultAccount.get(connection.connectorId ?? connection.name)}
                         reconnectAction={reconnectAction}
                         disconnectAction={disconnectAction}
                         renameAction={renameAction}
+                        defaultForAgentsAction={defaultForAgentsAction}
                       />
                     ))}
                   </ListGroup>
@@ -730,7 +756,7 @@ export function ConnectorsView({
                 ) : (
                   <WorkspacePanel
                     title={category ? categoryLabel(category) : "All services"}
-                    description="Connecting a service gives no agent access yet. You choose that on each agent's page."
+                    description="Connecting a service gives no agent access yet. You choose that on each agent's page, or for all new agents under Your services."
                   >
                     <ul role="list" className={TILE_GRID}>
                       {entries.map(tile)}
