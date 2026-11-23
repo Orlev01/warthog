@@ -607,17 +607,20 @@ export function pendingChangeView(
   },
   zone = "UTC",
 ): ChangeLine[] {
+  // A line that reads the same before and after (a start time saved with its offset spelled
+  // out, a status word that maps to the same status) changes nothing the person can see.
+  const visible = (lines: ChangeLine[]) => lines.filter((line) => line.from === null || line.to === null || line.from !== line.to);
   const from = catalogue.typeOfRecord(current.kind, current.type ?? null);
   const to = pending.type ? catalogue.type(pending.type) : undefined;
-  if (!to || to.id === from.id) return pendingChangeLines(from, current, pending, zone);
+  if (!to || to.id === from.id) return visible(pendingChangeLines(from, current, pending, zone));
   const gained = pendingChangeLines(to, current, { set: pending.set, remove: [], dueDate: pending.dueDate, status: pending.status }, zone);
   const setCount = Object.keys(pending.set).length;
   const removed = pendingChangeLines(from, current, { set: {}, remove: pending.remove.filter((key) => key !== "type" && key !== "source") }, zone);
   const category = catalogue.category(to.category)?.label;
-  return [
+  return visible([
     { key: "kind", label: "Kind", from: from.label, to: category ? `${to.label} (${category})` : to.label },
     ...gained.slice(0, setCount),
     ...removed,
     ...gained.slice(setCount),
-  ];
+  ]);
 }

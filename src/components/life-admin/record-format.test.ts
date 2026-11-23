@@ -307,3 +307,12 @@ test("days from today in words", () => {
   assert.equal(daysText(9), "in 9 days");
   assert.equal(daysText(-1), "yesterday");
 });
+
+test("a suggested change hides lines that read the same before and after", () => {
+  const legacy = { kind: "renewal_appointment" as const, type: null, fields: { name: "Hans Zimmer Live", starts_at: "2026-12-29T19:30[Australia/Sydney]" }, dueDate: "2026-12-29", status: "active" };
+  const lines = pendingChangeView(BUILT_IN, legacy, { type: "outings.event", set: { name: "Hans Zimmer Live", provider: "Ticketek", starts_at: "2026-12-29T19:30+11:00[Australia/Sydney]" }, remove: [], status: "active" }, "Australia/Sydney");
+  assert.equal(lines[0]!.key, "kind");
+  assert.ok(lines.some((line) => line.to === "Ticketek"));
+  assert.ok(lines.every((line) => line.from === null || line.to === null || line.from !== line.to), JSON.stringify(lines));
+  assert.ok(!lines.some((line) => /^Start/.test(line.label)), "the same start, spelled with its offset, isn't a change");
+});
