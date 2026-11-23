@@ -34,6 +34,21 @@ test("purge role can remove an account and OAuth credentials but cannot rewrite 
   } finally { await db.query("RESET ROLE"); await db.close(); }
 });
 
+// 23 Nov — the sign-in code tables and household invites are keyed by an address, outside the
+// account cascade, so the purge deletes them by the person's address (review 2026-11-23, High).
+// The purge role may find and delete those rows, and nothing more.
+test("purge role can delete sign-in code and invite rows by address but cannot write them", async () => {
+  const db = await freshDb();
+  try {
+    await db.query("SET ROLE warthog_purge");
+    for (const table of ["email_codes", "email_code_attempts", "email_code_alerts", "household_invites"]) {
+      await db.query(`DELETE FROM ${table} WHERE lower(btrim(email)) = lower(btrim($1))`, ["someone@example.com"]);
+      await assert.rejects(db.query(`UPDATE ${table} SET email = email WHERE false`), /permission denied/, `${table}: no update`);
+      await assert.rejects(db.query(`SELECT * FROM ${table} LIMIT 0`), /permission denied/, `${table}: only the address column is readable`);
+    }
+  } finally { await db.query("RESET ROLE"); await db.close(); }
+});
+
 // 13 Nov — the single-shot undo guard. The runtime role claims an entry's undo and releases
 // it again (INSERT, SELECT, DELETE) and may record the approval a held undo waits on
 // (UPDATE of approval_id only), but can never rewrite who or what a claim is for, or when it

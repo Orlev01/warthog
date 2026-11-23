@@ -21,8 +21,8 @@
 // changes nothing and reports nothing. The job only ever touches accounts PRESENT on
 // the queue — an account never enqueued is left wholly intact.
 //
-// Two things a person owns live outside that cascade, so the job removes them itself
-// (review fix W3.2):
+// Three things a person owns live outside that cascade, so the job removes them itself
+// (review fix W3.2; review 2026-11-23):
 //   • Receipt files keep their ciphertext in blob storage under `receipt_files.blob_key`.
 //     Every such blob is deleted BEFORE the rows, so the key is never lost while its blob
 //     still exists: a blob delete that fails leaves the account (and its queue entry) for
@@ -31,6 +31,11 @@
 //   • The person's agents' OAuth tokens, authorization codes and access keys are keyed by
 //     the agent's connection id with no foreign key to users, so they are deleted, by the
 //     person's own agents, in the same transaction as the account row.
+//   • Their email address in the sign-in code tables and in household invites sent to them,
+//     which are keyed by the address (the code flow runs before an account may exist; an
+//     invite is bound to the address it went to). The address is read from the account row,
+//     which deletion leaves in place for this job, and those rows are deleted by it in the
+//     same transaction — so once the account is gone, no table still holds the address.
 // Each account is its own unit: a failure is collected and the sweep carries on with the
 // rest, then reports every failure together (one bad account never blocks the others).
 //
@@ -43,6 +48,8 @@ import { deleteAccountJobs, listPendingPurges } from "../db/account-purge";
 import { withTransaction, type Db } from "../db/index";
 import type { BlobStore } from "../storage/blob";
 import { lockUserOAuthConnections } from "../oauth/connection-lock";
+import { deleteEmailCodeRecords } from "../auth/email-code";
+import { deleteInvitesTo } from "../db/household-invites";
 import type { DeletionJournal } from "./deletion-journal";
 
 // The account ids purged on this run (empty when the queue was empty / already clear).
@@ -56,10 +63,11 @@ export interface PurgeDeps {
   readonly journal?: DeletionJournal;
 }
 
-// Purge one account: its receipt blobs, then (in one transaction) its agents' credentials
-// and its `users` row, whose cascade carries away every personal row (including the
-// append-only activity entries and disputes) and its own queue entry. Idempotent: an
-// account whose rows are already partly or wholly gone simply deletes what remains.
+// Purge one account: its receipt blobs, then (in one transaction) its agents' credentials,
+// the rows holding its address and its `users` row, whose cascade carries away every
+// personal row (including the append-only activity entries and disputes) and its own queue
+// entry. Idempotent: an account whose rows are already partly or wholly gone simply deletes
+// what remains.
 async function purgeAccount(db: Db, userId: string, deps: PurgeDeps): Promise<void> {
   if (deps?.journal) {
     const person = await db.query("SELECT wrapped_dek FROM users WHERE id = $1", [userId]);
@@ -76,12 +84,17 @@ async function purgeAccount(db: Db, userId: string, deps: PurgeDeps): Promise<vo
   }
   await withTransaction(db, async (tx) => {
     // Match deletion's user -> OAuth-connection -> agent lock order.
-    await tx.query("SELECT id FROM users WHERE id = $1 FOR NO KEY UPDATE", [userId]);
+    const person = await tx.query("SELECT email FROM users WHERE id = $1 FOR NO KEY UPDATE", [userId]);
     await lockUserOAuthConnections(tx, userId);
     const agents = "SELECT connection_id FROM agents WHERE user_id = $1";
     await tx.query(`DELETE FROM oauth_tokens WHERE connection_id IN (${agents})`, [userId]);
     await tx.query(`DELETE FROM oauth_auth_codes WHERE connection_id IN (${agents})`, [userId]);
     await tx.query(`DELETE FROM oauth_access_keys WHERE connection_id IN (${agents})`, [userId]);
+    const email = person.rows[0]?.email;
+    if (typeof email === "string" && email !== "") {
+      await deleteEmailCodeRecords(tx, email);
+      await deleteInvitesTo(tx, email);
+    }
     await deleteAccountJobs(tx, userId);
     await tx.query("DELETE FROM users WHERE id = $1", [userId]);
   });

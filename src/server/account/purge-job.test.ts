@@ -714,3 +714,75 @@ test("an account whose row delete fails does not stop the others", async () => {
     await real.close();
   }
 });
+
+// ===========================================================================
+// Review 2026-11-23 (High) — "email addresses outlive account deletion". The sign-in code
+// tables and household invites are keyed by the ADDRESS, outside the account's cascade, so the
+// purge deletes them by the person's address (read from their row before it goes). It runs as
+// the purge role, like production, and afterwards no text column anywhere in the schema still
+// holds the address.
+// ===========================================================================
+
+// Every text-like column in the public schema, read from the catalog, so a table added later
+// that stores the address is caught too.
+async function textColumns(db: Db): Promise<{ table: string; column: string }[]> {
+  const result = await db.query(
+    `SELECT c.table_name, c.column_name FROM information_schema.columns c
+       JOIN information_schema.tables t ON t.table_schema = c.table_schema AND t.table_name = c.table_name
+      WHERE c.table_schema = 'public' AND t.table_type = 'BASE TABLE'
+        AND c.data_type IN ('text', 'character varying', 'json', 'jsonb')
+      ORDER BY 1, 2`,
+  );
+  return result.rows.map((row) => ({ table: String(row.table_name), column: String(row.column_name) }));
+}
+
+async function seedAddressRows(db: Db, email: string, householdId: string): Promise<void> {
+  await db.query(
+    `INSERT INTO email_codes (email, code_hmac, created_at, expires_at, purpose)
+     VALUES ($1, 'hmac', now(), now() + interval '10 minutes', 'signup')`,
+    [email],
+  );
+  await db.query("INSERT INTO email_code_attempts (email, attempted_at) VALUES ($1, now())", [email]);
+  await db.query("INSERT INTO email_code_alerts (email, sent_at) VALUES ($1, now())", [email]);
+  await db.query(
+    `INSERT INTO household_invites (token_hash, household_id, email, created_at, expires_at)
+     VALUES ($1, $2, $3, now(), now() + interval '7 days')`,
+    [randomUUID(), householdId, email],
+  );
+}
+
+test("the purge deletes every sign-in code, attempt, alert and invite still holding the person's address", async () => {
+  const db = await freshDb();
+  try {
+    const leaving = await makeUser(db, "address-leaving");
+    const staying = await makeUser(db, "address-staying");
+    const owner = await makeUser(db, "address-household-owner");
+    const household = await db.query("INSERT INTO households (id, owner_id, currency) VALUES (gen_random_uuid(), $1, 'AUD') RETURNING id", [owner]);
+    const householdId = String(household.rows[0]!.id);
+    await seedAddressRows(db, "address-leaving@warthog.com.au", householdId);
+    // A row written before addresses were stored lower-cased still belongs to the person.
+    await db.query("INSERT INTO email_code_attempts (email, attempted_at) VALUES (' Address-Leaving@Warthog.com.au', now())");
+    await seedAddressRows(db, "address-staying@warthog.com.au", householdId);
+    await enqueueAccountPurge(db, leaving);
+
+    await db.query("SET ROLE warthog_purge");
+    try {
+      const result = await runAccountPurge(db, { blobStore: createInMemoryBlobStore() });
+      assert.deepEqual(result.purged, [leaving]);
+    } finally {
+      await db.query("RESET ROLE");
+    }
+
+    for (const { table, column } of await textColumns(db)) {
+      const found = await db.query(`SELECT count(*)::int AS n FROM "${table}" WHERE "${column}"::text ILIKE $1`, ["%address-leaving@warthog.com.au%"]);
+      assert.equal(Number(found.rows[0]?.n), 0, `${table}.${column} no longer holds the purged person's address`);
+    }
+    for (const table of ["email_codes", "email_code_attempts", "email_code_alerts", "household_invites"]) {
+      const kept = await db.query(`SELECT count(*)::int AS n FROM ${table} WHERE email = $1`, ["address-staying@warthog.com.au"]);
+      assert.equal(Number(kept.rows[0]?.n), 1, `${table}: another person's row is untouched`);
+    }
+    assert.equal(await usersRowExists(db, staying), true);
+  } finally {
+    await db.close();
+  }
+});

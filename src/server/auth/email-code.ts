@@ -27,6 +27,12 @@
 // injected Clock, never SQL now(), so they are deterministic and testable. Every
 // statement is parameterized (INV-102): the email and the recomputed digest reach the
 // query layer only as bound values, never woven in.
+//
+// These tables are keyed by the address, outside any account's cascade, so they are
+// cleared two ways (review 2026-11-23, High): the account purge deletes every row for the
+// deleted person's address (`deleteEmailCodeRecords`), and the hourly retention sweep
+// (`pruneEmailCodes`) deletes codes and attempts a day after they were made and throttle
+// alerts after 90 days.
 
 import { hmac, verifyHmac } from "../crypto/hmac";
 import { normaliseEmail } from "../db/users";
@@ -47,6 +53,11 @@ const MAX_FAILURES = 5; // failures in the window before attempts back off
 const ISSUE_INTERVAL_MS = MINUTE_MS; // at most one code a minute to one address
 const ISSUE_WINDOW_MS = 60 * MINUTE_MS; // ... and at most MAX_ISSUES_PER_WINDOW an hour
 const MAX_ISSUES_PER_WINDOW = 5;
+// How long a row is kept. Every window that reads codes and attempts is an hour or less, so
+// a day is ample. An alert also feeds the admin portal's lockout count, whose longest range
+// is 90 days.
+const CODE_RETENTION_MS = 24 * 60 * MINUTE_MS;
+const ALERT_RETENTION_MS = 90 * 24 * 60 * MINUTE_MS;
 
 // What verify reports back — a discriminated union on `ok`. A correct, unexpired,
 // un-throttled code is accepted; every other outcome names its reason, and a
@@ -324,4 +335,24 @@ async function alertHolderOnce(
       footnote: SECURITY_ALERT_FOOTNOTE,
     },
   });
+}
+
+// Delete every code, attempt and alert for one address, whatever its case or spacing (rows
+// written before addresses were normalised included). The account purge runs this with the
+// deleted person's address.
+export async function deleteEmailCodeRecords(db: Db, email: string): Promise<void> {
+  await db.query(`DELETE FROM email_codes WHERE lower(btrim(email)) = lower(btrim($1))`, [email]);
+  await db.query(`DELETE FROM email_code_attempts WHERE lower(btrim(email)) = lower(btrim($1))`, [email]);
+  await db.query(`DELETE FROM email_code_alerts WHERE lower(btrim(email)) = lower(btrim($1))`, [email]);
+}
+
+// The retention sweep: codes and attempts go a day after they were made, alerts 90 days
+// after they were sent.
+export async function pruneEmailCodes(db: Db, now: Date): Promise<void> {
+  const codeCutoff = new Date(now.getTime() - CODE_RETENTION_MS).toISOString();
+  await db.query(`DELETE FROM email_codes WHERE created_at < $1::timestamptz`, [codeCutoff]);
+  await db.query(`DELETE FROM email_code_attempts WHERE attempted_at < $1::timestamptz`, [codeCutoff]);
+  await db.query(`DELETE FROM email_code_alerts WHERE sent_at < $1::timestamptz`, [
+    new Date(now.getTime() - ALERT_RETENTION_MS).toISOString(),
+  ]);
 }

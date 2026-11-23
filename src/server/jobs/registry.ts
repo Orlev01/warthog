@@ -2,7 +2,8 @@
 //
 //   1. PERIODIC SWEEPS the scheduler runs directly on their interval — no job rows: the
 //      approvals expire-due sweep, life-admin reminders, exchange rates, account purge,
-//      metrics snapshot and the daily integrity check.
+//      metrics snapshot, the daily integrity check and the retention of rows keyed by an
+//      email address.
 //   2. A DISPATCH TABLE for payload-driven queue rows, keyed on the EXACT type strings
 //      production code enqueues, imported from the modules that enqueue them (never
 //      retyped): approval.fallback, connection.refresh / google_reminder / google_lapse,
@@ -27,6 +28,8 @@ import { reconcileOperatorRole } from "../admin/role";
 import { pruneMetricEvents } from "../metrics/retention";
 import { runDailyIntegrityCheck } from "../activity/integrity-job";
 import { cleanupOAuth } from "../oauth/cleanup";
+import { pruneEmailCodes } from "../auth/email-code";
+import { pruneInvites } from "../db/household-invites";
 import { runRequestArrivals } from "../connectors/request-arrivals";
 import type { ConnectableMatch } from "../connectors/request-match";
 import {
@@ -197,6 +200,17 @@ export function buildPeriodicSweeps(seams: JobSeams): readonly PeriodicSweep[] {
     { name: "traffic-flush", intervalMs: MINUTE_MS, run: async () => { await flushTraffic(seams.db, seams.clock); } },
     { name: "operator-role", intervalMs: HOUR_MS, run: async () => { await reconcileOperatorRole(seams.db, seams.operatorEmail); } },
     { name: "metrics-retention", intervalMs: DAY_MS, run: async () => { await pruneMetricEvents(seams.db, seams.clock); } },
+    // Sign-in codes and household invites are keyed by an email address, outside any account
+    // (review 2026-11-23): codes and attempts go after a day, throttle alerts after 90 days,
+    // and invites 30 days after they were used or lapsed.
+    {
+      name: "email-address-retention",
+      intervalMs: HOUR_MS,
+      run: async () => {
+        await pruneEmailCodes(seams.db, seams.clock.now());
+        await pruneInvites(seams.db, seams.clock.now());
+      },
+    },
     // A requested service now in the catalogue, or early access now granted, is told to the
     // person by email (the catalogue and the list change only with a release; the first tick
     // after boot runs it).

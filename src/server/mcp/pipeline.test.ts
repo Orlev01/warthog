@@ -470,6 +470,36 @@ test("a burst over the rate limit is each refused (never executed) and recorded 
   }
 });
 
+// Review 2026-11-23 (High) — the rate limit comes first (design §6.2: connection active → rate
+// limit → permission check). An over-limit call must not unwrap the person's data key (in
+// production a Key Vault operation on a quota everyone shares) or load the policy context.
+test("an over-limit call is refused before the person's data key is unwrapped", async () => {
+  const db = await freshDb();
+  const inner = keyWrapperFor();
+  let unwraps = 0;
+  const keyWrapper: KeyWrapper = { wrap: (dek) => inner.wrap(dek), unwrap: async (wrapped) => { unwraps += 1; return inner.unwrap(wrapped); } };
+  try {
+    const { userId } = await makePerson(db, "limit-before-key", keyWrapper);
+    await upsertPermissions(db, baseGrants(userId, CONN, { rateLimit: 1 }));
+    const rec = spyRecorder(fixedClock(NOW));
+    const pipeline = buildPipeline(db, keyWrapper, {
+      clock: fixedClock(NOW),
+      rateLimiter: createRateLimiter(fixedClock(NOW)),
+      recorder: rec.recorder,
+      executeTool: spyExecutor().fn,
+    });
+    const conn = connectionFor(userId);
+
+    expectExecuted(await pipeline.handleAgentCall(conn, callFor()));
+    const before = unwraps;
+    for (let i = 0; i < 3; i += 1) expectRefused(await pipeline.handleAgentCall(conn, callFor()));
+    assert.equal(unwraps, before, "no over-limit call unwrapped the data key");
+    assert.equal(rec.entries.filter((e) => e.outcome === "rate_limited").length, 1, "the burst is still summarised once");
+  } finally {
+    await db.close();
+  }
+});
+
 // ===========================================================================
 // AC4 — a denied call is refused without executing the tool and is recorded.
 // ===========================================================================

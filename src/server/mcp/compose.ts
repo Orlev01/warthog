@@ -72,6 +72,7 @@ import {
   type AgentCall,
   type AgentCallResult,
   type AgentCallPipeline,
+  type AgentRateGate,
   type ApprovedHoldResult,
 } from "./pipeline";
 import { createToolRegistry, type ToolDefinition } from "./tools/registry";
@@ -98,13 +99,15 @@ import { releaseStore } from "../crypto/release-store";
 
 // The two inputs a composition root is handed (design §6.1 addendum): the process-wide
 // migrated db and the parsed runtime config. Everything else is built from these here. The
-// outbound fetch connector calls ride on (default: the SSRF-guarded fetch) and the
-// connector catalogue (default: the process-wide index) may be supplied by a test.
+// outbound fetch connector calls ride on (default: the SSRF-guarded fetch), the
+// connector catalogue (default: the process-wide index) and the KeyWrapper (default: the one
+// config selects, cached in production) may be supplied by a test.
 export interface McpDispatchDeps {
   readonly db: Db;
   readonly config: Config;
   readonly fetch?: typeof fetch;
   readonly catalogue?: CatalogueIndex;
+  readonly keyWrapper?: KeyWrapper;
 }
 
 // The dispatch the `/mcp` route seam drives after the bearer is verified: the VERIFIED
@@ -118,6 +121,11 @@ const MCP_SCOPE = "warthog";
 // The stateless MCP server's identity (design §6.2 — one handler per process).
 const MCP_SERVER_NAME = "warthog";
 const MCP_SERVER_VERSION = "0.1.0";
+
+// A tool name the SDK accepts (its own pattern), so an over-limit call can be answered by name.
+const TOOL_NAME = /^[A-Za-z0-9._-]{1,128}$/;
+// The tool name an over-limit call is recorded under when it named none Warthog offers.
+const UNKNOWN_TOOL = "tools/call";
 
 // An address plain enough to put into a mail search without changing what the search means.
 const SEARCHABLE_ADDRESS = /^[a-z0-9._%+-]{1,64}@[a-z0-9-]+(?:\.[a-z0-9-]+)+$/;
@@ -231,6 +239,11 @@ function errorResult(reason: string): {
   return { content: [{ type: "text", text: reason }], isError: true };
 }
 
+// Whether a request body is one JSON-RPC tools/call (what the request limit counts).
+function isToolCall(body: unknown): boolean {
+  return body !== null && typeof body === "object" && !Array.isArray(body) && (body as { method?: unknown }).method === "tools/call";
+}
+
 // The push channel approval notifications go out on, chosen by config like every other
 // sender (`selectSenders`): with dev tooling on, the process-wide dev outbox records a push
 // carrying only the approval's inbox link; otherwise the real VAPID Web Push sender over
@@ -274,14 +287,15 @@ function logSideEffectFailure(event: string, err: unknown): void {
 // the pipeline is assembled (constitution: one source of truth), shared by the MCP dispatch
 // and the inbox/activity executors — so an approved hold and an undo reversal run through
 // exactly the gate every live agent call passes.
-function buildAgentPipeline(deps: McpDispatchDeps): AgentCallPipeline {
+function buildAgentPipeline(deps: McpDispatchDeps): AgentCallPipeline & AgentRateGate {
   const { db, config } = deps;
 
   // --- the pipeline's real dependencies, built from config + db ---------------
 
-  // The KeyWrapper selected from config (local AES in dev/test, Key Vault in production);
-  // it unwraps the person's DEK so personal content is encrypted/decrypted member-scoped.
-  const keyWrapper: KeyWrapper = selectKeyWrapper({
+  // The KeyWrapper selected from config (local AES in dev/test, Key Vault in production,
+  // through the process-wide DEK cache); it unwraps the person's DEK so personal content is
+  // encrypted/decrypted member-scoped.
+  const keyWrapper: KeyWrapper = deps.keyWrapper ?? selectKeyWrapper({
     nodeEnv: config.nodeEnv,
     localKek: config.devKek,
   });
@@ -319,7 +333,7 @@ function buildAgentPipeline(deps: McpDispatchDeps): AgentCallPipeline {
   // The pipeline is referenced LATE by the tool executor (check_approval runs an approved
   // hold through it), so it is declared here and assigned below; every tool call happens at
   // request time, after the assignment.
-  let pipeline: AgentCallPipeline;
+  let pipeline: AgentCallPipeline & AgentRateGate;
 
   const rememberTool = createRememberTool({ db, keyWrapper, clock });
   const searchMemoryTool = createSearchMemoryTool({ db, keyWrapper, clock });
@@ -494,7 +508,7 @@ export function createMcpDispatch(deps: McpDispatchDeps): McpDispatch {
   // resolved over it; both are reused for every request this dispatch serves.
   const pipeline = buildAgentPipeline(deps);
   const registry = createToolRegistry({ pipeline });
-  const wrapper=selectKeyWrapper({nodeEnv:config.nodeEnv,localKek:config.devKek});
+  const wrapper=deps.keyWrapper ?? selectKeyWrapper({nodeEnv:config.nodeEnv,localKek:config.devKek});
   const clock = systemClock;
   const dataKeyFor = async (userId: string) => {
     const user = await getUserById(db, userId);
@@ -597,7 +611,42 @@ export function createMcpDispatch(deps: McpDispatchDeps): McpDispatch {
     return server;
   }
 
-  const handler = createMcpHandler((ctx) => buildServer(ctx.authInfo), { legacy: "stateless" });
+  // The call an over-limit request is recorded as: the tool it named when that is one of
+  // Warthog's own or a catalogue service's, and never its arguments, which were not validated
+  // (reading the agent's real tool list is the per-request work the limit saves).
+  function overLimitCall(name: string): AgentCall {
+    const separator = name.indexOf("__");
+    const connector = separator > 0 ? name.slice(0, separator) : null;
+    if (connector === null) return { connector: null, tool: registry.get(name) ? name : UNKNOWN_TOOL, makesChange: false };
+    return catalogue.get(connector)
+      ? { connector, tool: name, makesChange: false }
+      : { connector: null, tool: UNKNOWN_TOOL, makesChange: false };
+  }
+
+  // The per-request server for a tool call over its agent's request limit: it answers that one
+  // call with the limit's refusal and does nothing else — no tool list is resolved, no key is
+  // unwrapped and no service is read (review 2026-11-23, High). A name the SDK would refuse
+  // anyway gets the SDK's own answer.
+  function overLimitServer(connection: AgentConnection): McpServer {
+    const server = new McpServer({ name: MCP_SERVER_NAME, version: MCP_SERVER_VERSION }, { instructions: SERVER_INSTRUCTIONS });
+    const name = (requestObservation.getStore()?.body as { params?: { name?: unknown } } | undefined)?.params?.name;
+    if (typeof name !== "string" || !TOOL_NAME.test(name)) return server;
+    server.registerTool(name, {}, async () => {
+      try {
+        const outcome = await pipeline.refuseOverLimit(connection, overLimitCall(name));
+        return { ...toToolResult(outcome), _meta: { "app.warthog/requestId": requestObservation.getStore()?.requestId } };
+      } catch (err) {
+        logFailure("tool_call_failed", err, { tool: "rate_limited" });
+        return errorResult(TOOL_FAILED_REASON);
+      }
+    });
+    return server;
+  }
+
+  const handler = createMcpHandler((ctx) => {
+    const overLimit = requestObservation.getStore()?.overLimit;
+    return overLimit ? overLimitServer(overLimit) : buildServer(ctx.authInfo);
+  }, { legacy: "stateless" });
   // Which app each agent's requests come through, remembered without a write per request.
   const rememberClientOf = createClientMemory({ db, recorder, onError: (err) => logFailure("client_observation_failed", err) });
 
@@ -612,10 +661,16 @@ export function createMcpDispatch(deps: McpDispatchDeps): McpDispatch {
       if (connection) await recorder.record({ userId: connection.userId, agentId: connection.agentId, kind: "protocol_rejected", source: "warthog", outcome: "refused", payload: { reason: "Malformed or oversized request", requestId: randomUUID() } });
       return Response.json({ jsonrpc: "2.0", id: null, error: { code: -32700, message: "Invalid request body" } }, { status: 400 });
     }
+    // The agent's request limit comes before anything else this request would do (design
+    // §6.2): a tool call is counted here, and one over the limit is refused without its key
+    // being unwrapped, its tools resolved or its app remembered (the next call within the
+    // limit does that). Other requests (tools/list, the handshake) are not counted, as before.
+    const admitted = connection?.active && isToolCall(body) ? await pipeline.admitCall(connection) : undefined;
     const client = clientObservation(body, request.headers);
-    if (connection && client) await rememberClientOf(connection, client, clock.now(), () => dataKeyFor(connection.userId));
+    if (connection && client && admitted !== false) await rememberClientOf(connection, client, clock.now(), () => dataKeyFor(connection.userId));
     const via = clientSurface(request.headers.get(ANTHROPIC_CLIENT_HEADER), client?.name);
-    return requestObservation.run({ requestId: randomUUID(), body, client, reportedRunId: reportedRunId(body), agentId: connection?.agentId, via }, async () => {
+    return requestObservation.run({ requestId: randomUUID(), body, client, reportedRunId: reportedRunId(body), agentId: connection?.agentId, via,
+      ...(admitted === true ? { rateCounted: true } : {}), ...(admitted === false && connection ? { overLimit: connection } : {}) }, async () => {
       const response = await handler.fetch(request, {
         authInfo: { token: connectionId, clientId: connectionId, scopes: [MCP_SCOPE] },
       });
@@ -716,7 +771,7 @@ export function createAgentExecutors(deps: McpDispatchDeps): AgentExecutors {
       if (call.connector) {
         const user = await getUserById(db, job.userId);
         if (!user) return { status: "refused", outcome: REVERSAL_NO_ROUTE };
-        const wrapper = selectKeyWrapper({ nodeEnv: deps.config.nodeEnv, localKek: deps.config.devKek });
+        const wrapper = deps.keyWrapper ?? selectKeyWrapper({ nodeEnv: deps.config.nodeEnv, localKek: deps.config.devKek });
         const dek = await wrapper.unwrap(user.wrappedDek);
         try {
           const entry = await toEntry(row, dek);

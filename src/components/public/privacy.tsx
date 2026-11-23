@@ -100,7 +100,11 @@ export function Privacy({ links = RELATIVE_LINKS }: { links?: PublicLinks } = {}
           <p>
             You can export everything Warthog holds about you whenever you like, and you
             can delete your account yourself, at any time, from your settings. Deletion
-            cuts off access and schedules removal from the live application. Provider
+            cuts off access and schedules removal from the live application, including the
+            sign-in codes we&#39;ve emailed you, any record of paused sign-in attempts and
+            any household invitation sent to your address. Without deletion, we delete
+            sign-in codes a day after sending them, records of paused attempts after 90
+            days, and invitations 30 days after they&#39;re used or expire. Provider
             records, delivered messages in your inbox or on your phone, and backups
             follow their own retention schedules; deleting Warthog does not recall
             messages or delete data in your Google or Microsoft account. Application

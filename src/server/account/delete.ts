@@ -33,6 +33,7 @@
 import { deleteAccountJobs, enqueueAccountPurge } from "../db/account-purge";
 import { withTransaction, type Db } from "../db/index";
 import { releaseStore, type ReleaseStore } from "../crypto/release-store";
+import { processDekCache, type DekCache } from "../crypto/dek-cache";
 import type { Senders } from "../notify/senders";
 import type { EmailContent } from "../notify/email";
 import type { DeletionJournal } from "./deletion-journal";
@@ -56,6 +57,8 @@ export interface DeleteAccountDeps {
   readonly revoker: DeletionExecutor;
   readonly senders: Senders;
   readonly releases?: Pick<ReleaseStore, "discardScope">;
+  // The in-memory DEK cache (default: the process-wide one) the deleted key is dropped from.
+  readonly dekCache?: Pick<DekCache, "forget">;
   readonly journal?: DeletionJournal;
   // Optional, best-effort: a committed deletion is one `account.deleted` event with no
   // dimensions (docs/design/admin-portal.md §4).
@@ -105,7 +108,7 @@ export async function deleteAccount(
   const outcome = await withTransaction(db, async (tx) => {
     // A key-share FK check in an in-flight release must remain compatible here:
     // the account id is not changed, and the agent row serializes its revocation.
-    const person = await tx.query("SELECT id FROM users WHERE id = $1 FOR NO KEY UPDATE", [userId]);
+    const person = await tx.query("SELECT id, wrapped_dek FROM users WHERE id = $1 FOR NO KEY UPDATE", [userId]);
     if (!person.rows[0]) throw new Error("deleteAccount: no account for the session user");
     const owned = await tx.query("SELECT 1 FROM households WHERE owner_id = $1", [userId]);
     if (owned.rows.length > 0) return { ok: false as const, reason: OWNS_HOUSEHOLD_REASON };
@@ -121,14 +124,16 @@ export async function deleteAccount(
       "UPDATE users SET wrapped_dek = '' WHERE id = $1 RETURNING email", [userId],
     );
     await enqueueAccountPurge(tx, userId);
-    return { ok: true as const, email: shredded.rows[0]!.email as string };
+    return { ok: true as const, email: shredded.rows[0]!.email as string, wrappedDek: String(person.rows[0].wrapped_dek) };
   });
   if (!outcome.ok) return outcome;
 
   // Release keys start with the exact `userId:` namespace, then connection and
   // approval IDs. In-memory effects follow commit so rollback never loses a live
-  // release. DEKs are resolved per request; there is no persistent DEK cache.
+  // release. The unwrapped DEK may be cached for up to 5 minutes (design §4.1); it is
+  // dropped now rather than when its window ends.
   (deps.releases ?? releaseStore).discardScope(`${userId}:`);
+  (deps.dekCache ?? processDekCache()).forget(outcome.wrappedDek);
   await tryRecord(deps.recordMetric, { name: ACCOUNT_DELETED, value: 1 });
 
   try {

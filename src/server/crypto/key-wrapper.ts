@@ -13,9 +13,15 @@
 // `kv1:<base64url(key id)>:<base64(wrapped bytes)>` — and is unwrapped by a client bound to
 // that version, so rotating the vault key never strands existing DEKs. A legacy value (plain
 // base64, no key id) unwraps through the default client.
+//
+// The production wrapper's unwraps go through the process-wide DEK cache (`./dek-cache`;
+// design §4.1, at most 5 minutes), so a person's busy agent costs one Key Vault operation per
+// five minutes rather than one per request. The local AES wrapper costs nothing to unwrap and
+// is not cached.
 
 import { createCipheriv, createDecipheriv, randomBytes } from "node:crypto";
 
+import { cachedKeyWrapper, processDekCache, type DekCache } from "./dek-cache";
 import { defaultKeyVaultClients } from "./key-vault-client";
 
 export interface KeyWrapper {
@@ -110,6 +116,9 @@ export interface SelectKeyWrapperOptions {
   // per-version client when the default client is used, else the injected client itself).
   keyVaultClient?: KeyVaultCryptoClient;
   keyVaultClientFor?: (keyId: string) => KeyVaultCryptoClient;
+  // Production: the cache unwrapped DEKs are held in. The default wrapper uses the
+  // process-wide cache; a wrapper over an injected client is uncached unless one is given.
+  dekCache?: DekCache;
 }
 
 // Selection is driven by nodeEnv: production uses Key Vault; every other env
@@ -119,12 +128,13 @@ export function selectKeyWrapper(options: SelectKeyWrapperOptions): KeyWrapper {
   if (options.nodeEnv === "production") {
     const injected = options.keyVaultClient;
     if (injected) {
-      return keyVaultKeyWrapper({
+      const wrapper = keyVaultKeyWrapper({
         client: injected,
         clientFor: options.keyVaultClientFor ?? (() => injected),
       });
+      return options.dekCache ? cachedKeyWrapper(wrapper, options.dekCache) : wrapper;
     }
-    return keyVaultKeyWrapper(defaultKeyVaultClients());
+    return cachedKeyWrapper(keyVaultKeyWrapper(defaultKeyVaultClients()), options.dekCache ?? processDekCache());
   }
   if (!options.localKek) {
     throw new Error("local KeyWrapper requires a local AES KEK");
