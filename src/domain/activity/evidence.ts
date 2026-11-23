@@ -342,6 +342,17 @@ function guardLine(guard: Record<string, unknown>): string | undefined {
   return kept.length ? `Kept from the agent: ${kept.join(", ")}` : undefined;
 }
 
+// "levyoren1@gmail.com, booking@example.com (needs reconnecting)".
+function accountSetLine(value: unknown): string | undefined {
+  if (!Array.isArray(value)) return undefined;
+  const accounts = value.flatMap((item) => {
+    if (!isRecord(item) || typeof item.label !== "string" || item.label === "") return [];
+    const outcome = typeof item.outcome === "string" && item.outcome !== "searched" ? ` (${item.outcome})` : "";
+    return [`${item.label}${outcome}`];
+  });
+  return accounts.length > 0 ? accounts.join(", ") : undefined;
+}
+
 function clientLine(value: unknown): string | undefined {
   if (!isRecord(value)) return undefined;
   const name = [value.name, value.version].filter((part) => typeof part === "string" && part.length > 0).join(" ");
@@ -410,7 +421,9 @@ export function activityEvidence(entry: EvidenceEntry): ActivityEvidence {
     if (typeof payload.reversalTool === "string") fact("How it was undone", toolLabel(payload.reversalTool));
   }
 
-  // Where and who.
+  // Where and who. A search across inboxes names each one, and how it went when it wasn't
+  // searched (docs/adr/several-accounts-per-agent.md); never their ids.
+  fact("Service accounts", accountSetLine(payload.connectorAccountSet));
   if (text("connectorAccountLabel")) fact("Service account", text("connectorAccountLabel"));
   else if (text("connectorAccountId") && !isIdentifier(text("connectorAccountId"))) fact("Service account", text("connectorAccountId"));
   else if (text("connectorAccountId")) ids.push({ label: "Service account ID", value: text("connectorAccountId") });

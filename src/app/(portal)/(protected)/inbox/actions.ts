@@ -388,7 +388,7 @@ function emailPreview(detail: Record<string, unknown>): { title: string; body?: 
 // What the agent recently read from someone else, from the approval's stored detail.
 interface RecentRead {
   readonly at: Date;
-  readonly sources: readonly { service?: string; kind?: string; sender?: string }[];
+  readonly sources: readonly { service?: string; kind?: string; sender?: string; account?: string }[];
 }
 
 function recentReadOf(detail: Record<string, unknown>): RecentRead | undefined {
@@ -398,9 +398,11 @@ function recentReadOf(detail: Record<string, unknown>): RecentRead | undefined {
   return Number.isFinite(at.getTime()) ? { at, sources: recent.sources as RecentRead["sources"] } : undefined;
 }
 
-// "an email from billing@x.co", "an event from sam@x.co", "a file in Google Drive".
+// "an email from billing@x.co", "an email from billing@x.co in levyoren1@gmail.com" (the inbox
+// it was read in), "an event from sam@x.co", "a file in Google Drive".
 function sourceText(source: RecentRead["sources"][number]): string {
-  const from = source.sender ? ` from ${source.sender}` : source.service ? ` in ${source.service}` : "";
+  const from = source.sender ? ` from ${source.sender}${source.account ? ` in ${source.account}` : ""}`
+    : source.service ? ` in ${source.service}` : "";
   switch (source.kind) {
     case "email": return `an email${from}`;
     case "event": return `an event${from}`;

@@ -10,7 +10,9 @@ import {
   accountPolicy,
   bindAccount,
   grantedAccounts,
+  tagId,
   toolPermitted,
+  untagId,
   type AccountGrant,
   type ServiceAccount,
 } from "./account-access";
@@ -90,7 +92,7 @@ test("with several accounts and none named, the one the tool is allowed on is us
 
 test("with several accounts allowed and none named, the agent is asked to say which", () => {
   const result = bind({ granted: granted([HOME], [WORK], [SPARE, { readTools: false }]) });
-  assert.deepEqual(result, { kind: "refused", reason: "This agent can use 2 Gmail accounts for this: home@gmail.com, Work@Gmail.com. Say which one in account." });
+  assert.deepEqual(result, { kind: "refused", reason: "This agent can use 2 Gmail accounts for this: home@gmail.com, Work@Gmail.com. Say which one in account."+" If your tool has no account field, ask the person to refresh Warthog in your app's connector settings." });
 });
 
 test("with several accounts and none allowed, the call is refused without picking one", () => {
@@ -129,4 +131,79 @@ test("two granted accounts with the same name must be named by handle", () => {
   assert.equal(result.kind, "refused");
   assert.equal(result.kind === "refused" && result.reason, `Two of this agent's Notion accounts are called “Notion”. Name one by its handle: ${[NOTION, twin].map((a) => accountHandle(a.id)).sort().join(", ")}.`);
   assert.equal(bind({ serviceName: "Notion", granted: granted([NOTION], [twin]), named: accountHandle(twin.id), tool: { name: "notion__search", makesChange: true } }).kind, "bound");
+});
+
+// Mail across inboxes (docs/adr/several-accounts-per-agent.md, decision 5).
+
+test("an id carries its account's handle, and only a tagged id can be split back", () => {
+  const handle = accountHandle(HOME.id);
+  assert.equal(tagId(handle, "18c2f0a9"), `${handle}.18c2f0a9`);
+  assert.deepEqual(untagId(`${handle}.18c2f0a9`), { handle, id: "18c2f0a9" });
+  // Outlook ids end in "=" and carry "-" and "_"; the native part is kept exactly.
+  assert.deepEqual(untagId(`${handle}.AAMkAD-x_y=`), { handle, id: "AAMkAD-x_y=" });
+  for (const bare of ["18c2f0a9", "AAMkAD-x_y=", "ABCDEF.x", "abc.x", "abcdefg.x", `${handle}.`, "", "abcde1.x"]) {
+    assert.equal(untagId(bare), null, bare);
+  }
+  // A native Gmail or Outlook id never has a ".", so a tagged id can't reach either service whole.
+  assert.doesNotMatch(tagId(handle, "18c2f0a9"), /^[A-Za-z0-9_-]{1,64}$/);
+  assert.doesNotMatch(tagId(handle, "AAMk="), /^[A-Za-z0-9=_+-]{1,512}$/);
+});
+
+test("an id's account decides; an id from an account the agent wasn't given reads like an unknown account", () => {
+  const bound = bind({ granted: granted([HOME], [WORK]), idHandle: accountHandle(WORK.id), tool: { name: "google-gmail__read", makesChange: false } });
+  assert.equal(bound.kind === "bound" && bound.account.id, WORK.id);
+  const ungranted = bind({ granted: granted([HOME], [WORK]), idHandle: accountHandle(SPARE.id) });
+  const unknownName = bind({ granted: granted([HOME], [WORK]), named: "nobody@gmail.com" });
+  assert.deepEqual(ungranted, unknownName);
+  assert.deepEqual(bind({ granted: granted([HOME], [WORK]), idHandle: "zzzzzz" }), unknownName);
+});
+
+test("a named account that disagrees with the id's account is refused, never overridden", () => {
+  const result = bind({ granted: granted([HOME], [WORK]), idHandle: accountHandle(WORK.id), named: HOME.label, tool: SEND });
+  assert.deepEqual(result, { kind: "refused", reason: "That email is in Work@Gmail.com, not home@gmail.com. Leave out account, or name Work@Gmail.com." });
+  // Naming the same account the id is in is fine, by address or handle.
+  assert.equal(bind({ granted: granted([HOME], [WORK]), idHandle: accountHandle(WORK.id), named: "work@gmail.com", tool: SEND }).kind, "bound");
+  // A named account the agent wasn't given gets the usual refusal, whatever the id says.
+  assert.deepEqual(bind({ granted: granted([HOME], [WORK]), idHandle: accountHandle(WORK.id), named: SPARE.label }),
+    bind({ granted: granted([HOME], [WORK]), named: SPARE.label }));
+});
+
+test("an id that disagrees with the account Warthog bound earlier is refused", () => {
+  const changed = { kind: "refused", reason: "The service account changed or is unavailable. Submit a new request." };
+  assert.deepEqual(bind({ granted: granted([HOME], [WORK]), presetId: HOME.id, idHandle: accountHandle(WORK.id) }), changed);
+  assert.equal(bind({ granted: granted([HOME], [WORK]), presetId: WORK.id, idHandle: accountHandle(WORK.id) }).kind, "bound");
+});
+
+test("a search with no account named covers every inbox the agent may read", () => {
+  const stale = { ...SPARE, connected: false };
+  const result = bind({ granted: granted([HOME], [WORK], [stale]), fanOut: true });
+  assert.equal(result.kind, "several");
+  // In the same order grantedAccounts lists them, including one that needs reconnecting so the
+  // result can say so.
+  assert.deepEqual(result.kind === "several" && result.accounts.map((a) => a.label), ["home@gmail.com", "spare@gmail.com", "Work@Gmail.com"]);
+  assert.equal(result.kind === "several" && result.note, undefined);
+});
+
+test("an inbox the agent may not read is listed too, so the result can name it", () => {
+  const result = bind({ granted: granted([HOME], [WORK], [SPARE, { readTools: false }]), fanOut: true });
+  assert.equal(result.kind === "several" && result.accounts.length, 3);
+});
+
+test("a search covers at most five inboxes and names the ones left out", () => {
+  const many = Array.from({ length: 7 }, (_, i): ServiceAccount => ({ id: `7777777${i}-7777-4777-8777-777777777777`, connectorId: "google-gmail", label: `inbox${i}@gmail.com`, connected: true }));
+  const result = bind({ granted: granted(...many.map((a): [ServiceAccount] => [a])), fanOut: true });
+  assert.equal(result.kind, "several");
+  assert.deepEqual(result.kind === "several" && result.accounts.map((a) => a.label), ["inbox0@gmail.com", "inbox1@gmail.com", "inbox2@gmail.com", "inbox3@gmail.com", "inbox4@gmail.com"]);
+  assert.equal(result.kind === "several" && result.note, "Warthog searches at most 5 inboxes at once. Not searched: inbox5@gmail.com, inbox6@gmail.com: search one by naming it in account.");
+});
+
+test("a search fans out only when more than one inbox may be read, and never for a change, an id or a page", () => {
+  assert.equal(bind({ granted: granted([HOME]), fanOut: true }).kind, "bound");
+  assert.equal(bind({ granted: granted([HOME], [WORK, { readTools: false }]), fanOut: true }).kind, "bound", "only one may be read");
+  assert.equal(bind({ granted: granted([HOME], [WORK]), fanOut: true, tool: SEND }).kind, "refused");
+  assert.equal(bind({ granted: granted([HOME], [WORK]), fanOut: true, idHandle: accountHandle(HOME.id) }).kind, "bound");
+  assert.equal(bind({ granted: granted([HOME], [WORK]), fanOut: true, named: HOME.label }).kind, "bound");
+  assert.deepEqual(bind({ granted: granted([HOME], [WORK]), fanOut: true, paging: "pageToken" }),
+    { kind: "refused", reason: "A page of results belongs to one inbox: pass account with pageToken." });
+  assert.equal(bind({ granted: granted([HOME]), fanOut: true, paging: "pageToken" }).kind, "bound", "one inbox pages as it is");
 });

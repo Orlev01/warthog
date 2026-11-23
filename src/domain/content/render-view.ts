@@ -108,13 +108,28 @@ function messageLines(message: View): string[] {
 }
 
 function summaryLine(message: View, index: number): string {
+  // In a search across inboxes, each line starts with the inbox the email is in.
+  const inbox = str(message.account) ? `In ${str(message.account)} · ` : "";
   if (message.withheld === true) {
-    return `${index + 1}. Withheld ${str(message.kind) ?? "message"} from ${str(message.from) ?? "a sender"}${str(message.date) ? ` · ${str(message.date)}` : ""} — ${str(message.tellThePerson) ?? str(message.note) ?? ""}${idsOf(message) ? ` (${idsOf(message)})` : ""}`;
+    return `${index + 1}. ${inbox}Withheld ${str(message.kind) ?? "message"} from ${str(message.from) ?? "a sender"}${str(message.date) ? ` · ${str(message.date)}` : ""} — ${str(message.tellThePerson) ?? str(message.note) ?? ""}${idsOf(message) ? ` (${idsOf(message)})` : ""}`;
   }
   const head = [str(message.date) ?? str(message.receivedDateTime), str(message.from), str(message.subject) ? `“${str(message.subject)}”` : ""].filter(Boolean).join(" · ");
   const preview = str(message.preview) ? ` — ${str(message.preview)}` : str(message.note) ? ` — ${str(message.note)}` : "";
   const flags = flagsOf(message);
-  return `${index + 1}. ${head || "Message"}${flags.length ? ` [${flags.join(", ")}]` : ""}${preview} (${idsOf(message) || "id ?"})`;
+  return `${index + 1}. ${inbox}${head || "Message"}${flags.length ? ` [${flags.join(", ")}]` : ""}${preview} (${idsOf(message) || "id ?"})`;
+}
+
+// Each inbox's next page in a search across inboxes: a page belongs to one inbox, so the hint
+// names it.
+function morePages(accounts: unknown): string[] {
+  if (!Array.isArray(accounts)) return [];
+  return (accounts as View[]).flatMap((entry) => {
+    const account = str(entry.account);
+    if (!account) return [];
+    if (str(entry.nextPageToken)) return [`More from ${account}: search again with account ${account}, the same query.q and query.pageToken=${str(entry.nextPageToken)}`];
+    if (str(entry.nextSkip)) return [`More from ${account}: search again with account ${account}, the same query and query.$skip=${str(entry.nextSkip)}`];
+    return [];
+  });
 }
 
 /** The readable text of a checked mail view (one message, a search, or a single link), or null for anything else. */
@@ -138,10 +153,13 @@ export function renderCheckedView(result: unknown): string | null {
   }
   if (Array.isArray(view.messages)) {
     const messages = view.messages as View[];
+    // Which inboxes a search across inboxes covered, and why any weren't searched.
+    if (str(view.coverage)) lines.push(str(view.coverage)!);
     if (!messages.length) lines.push("No messages found.");
     messages.forEach((message, index) => lines.push(summaryLine(message, index)));
-    if (str(view.nextPageToken)) lines.push(`More results: search again with the same query.q and query.pageToken=${str(view.nextPageToken)}`);
+    if (str(view.nextPageToken)) lines.push(`More results: search again with the same account, query.q and query.pageToken=${str(view.nextPageToken)}`);
     if (str(view.nextLink)) lines.push(`More results: ${str(view.nextLink)}`);
+    lines.push(...morePages(view.accounts));
     if (str(view.note) && messages.length) lines.push(str(view.note)!);
     return lines.join("\n");
   }

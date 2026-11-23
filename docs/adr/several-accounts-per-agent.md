@@ -49,10 +49,14 @@ agents with no account chosen, and left stale choices behind.
    agent, and `permissions.servicePolicies` is folded into these entries.
 5. **Mail searches every inbox at once.** A Gmail or Outlook search with no account named covers
    every inbox the agent may read:
-   - at most 5 inboxes, one shared limit of 6 requests at a time, and one overall deadline;
-   - each inbox's result is checked by the result guard with its own account, then merged newest
-     first;
-   - the result says which inbox each email is in, and which inboxes were searched or skipped;
+   - at most 5 inboxes. The page size is split between them (at least 3 each), so a search fetches
+     about as many previews as a one-inbox search. Each inbox keeps its usual limit of requests at
+     a time and its usual timeouts;
+   - each inbox is checked by the policy with its own settings, and its result by the result guard
+     with its own account, then the results are merged newest first;
+   - the result says which inbox each email is in, and which inboxes were searched or skipped
+     (not allowed, asks first, needs reconnecting, failed). A further page belongs to one inbox,
+     so paging needs `account`;
    - message and thread ids carry their inbox (`<handle>.<id>`), so reading and replying go to the
      right inbox even from a client that can't add fields;
    - a reply is sent from the inbox that holds the email, and a different `account` is refused;

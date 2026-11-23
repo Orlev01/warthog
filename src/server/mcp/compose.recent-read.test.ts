@@ -117,7 +117,7 @@ test("after reading a stranger's email, an 'allowed' agent's send to a new addre
     assert.equal(detail.readCheck, true);
     assert.deepEqual(detail.newRecipients, ["billing@payfast-au.co"]);
     const sources = (detail.recentRead as { sources: { at?: string }[] }).sources;
-    assert.deepEqual(sources.map(({ at, ...rest }) => (assert.ok(at), rest)), [{ service: "Gmail", kind: "email", sender: "billing@payfast-au.co" }]);
+    assert.deepEqual(sources.map(({ at, ...rest }) => (assert.ok(at), rest)), [{ service: "Gmail", kind: "email", sender: "billing@payfast-au.co", account: "sam@example.com" }], "who wrote it and the inbox it was read in, never what it said");
 
     const known = await rpc(dispatch, connectionId, "google-gmail__send", send("accountant@example.com"));
     assert.notEqual(known.result?.structuredContent?.status, "pending_approval", "a known address goes ahead");

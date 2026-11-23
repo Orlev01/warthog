@@ -347,6 +347,8 @@ export function createResultGuard(deps: ResultGuardDeps = {}): ResultGuard {
     review(call: AgentCall, result: unknown): GuardedResult {
       const guarded = reviewResult(call, result);
       const exposure = exposureOf(call, guarded);
+      // Which of the person's accounts it was read in, so the card can name the inbox.
+      if (exposure && call.connectorAccountLabel) return { ...guarded, exposure: { ...exposure, account: call.connectorAccountLabel } };
       return exposure ? { ...guarded, exposure } : guarded;
     },
   };

@@ -1267,6 +1267,24 @@ test("after reading a stranger's email, the card says so: a reply to that sender
   }
 });
 
+// Several accounts of one service (docs/adr/several-accounts-per-agent.md): the card says which
+// inbox the agent read the email in.
+test("what the agent recently read names the inbox it was in", async () => {
+  const db = await freshDb();
+  const keyWrapper = keyWrapperFor();
+  try {
+    const recentRead = { lastReadAt: new Date(NOW.getTime() - 3 * 60_000), untilAt: new Date(NOW.getTime() + 57 * 60_000),
+      sources: [{ service: "Gmail", kind: "email" as const, sender: "billing@payfast-au.co", account: "levyoren1@gmail.com" }] };
+    const held = await arrangeHeld(db, keyWrapper, "read-inbox", { ...emailCall(), tool: "google-gmail__send", connector: "google-gmail" }, { grantedConnectors: ["google-gmail"] },
+      { recipientHistory: async () => ({ fresh: ["accounts@payfast-au.co"], unchecked: [] }), readExposures: { record: async () => {}, active: async () => recentRead } });
+    const card = (await held.actions.load(await freshSession(db, held.userId))).pending[0]!;
+    assert.equal(line(card, "Claude recently read"), "an email from billing@payfast-au.co in levyoren1@gmail.com, 3 min ago");
+    assert.match(card.headsUp ?? "", /Claude read an email from billing@payfast-au\.co in levyoren1@gmail\.com 3 min ago\./);
+  } finally {
+    await db.close();
+  }
+});
+
 // Several accounts of one service (docs/adr/google-published-and-accounts.md): with two Gmail
 // accounts connected, the card's sentence says which one it sends from; with one, it doesn't.
 test("a card names the account up front only when the person has more than one of that service", async () => {

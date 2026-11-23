@@ -29,7 +29,8 @@ import type {
 } from "../pipeline";
 import type { AgentConnection } from "../context";
 import type { ConnectionPermissions } from "../../db/agent-permissions";
-import { accountPolicy, toolPermitted } from "../../../domain/permissions/account-access";
+import { accountPolicy, toolPermitted, untagId } from "../../../domain/permissions/account-access";
+import { MAIL_CONNECTOR_IDS } from "../../../domain/content/mail-connectors";
 import { rememberSchema, searchMemorySchema } from "./memory";
 import { getSkillSchema } from "./get-skill";
 import { inputSchema as checkApprovalSchema } from "./check-approval";
@@ -398,6 +399,25 @@ export function withAccountField(schema: z.ZodType): z.ZodType {
   return schema.safeExtend({ account: ACCOUNT_FIELD });
 }
 
+// A mail message id from search or read carries its inbox (`<handle>.<id>`): a read's query.id,
+// or the reply.id of a draft or send. The service's own id replaces it in the params, and the
+// handle is returned for binding. A bare id is left as it is.
+function liftTaggedId(parsed: Record<string, unknown>): string | undefined {
+  const query = parsed.query as Record<string, string> | undefined;
+  const fromQuery = query && typeof query === "object" && typeof query.id === "string" ? untagId(query.id) : null;
+  if (fromQuery) {
+    parsed.query = { ...query, id: fromQuery.id };
+    return fromQuery.handle;
+  }
+  const reply = parsed.reply as { id?: unknown } | undefined;
+  const fromReply = reply && typeof reply === "object" && typeof reply.id === "string" ? untagId(reply.id) : null;
+  if (fromReply) {
+    parsed.reply = { ...reply, id: fromReply.id };
+    return fromReply.handle;
+  }
+  return undefined;
+}
+
 // Build a permitted connector tool, namespaced `<connector>__<tool>`, from the connector
 // engine's declaration. The general `request` tool takes {method, path, query, body} and
 // is a read for GET/HEAD and a change otherwise; any other tool takes {query, body} and
@@ -444,6 +464,8 @@ function buildConnectorTool(
         requestedAccount ??= fromQuery;
         parsed.query = rest;
       }
+      // The inbox a mail message id says it's in (docs/adr/several-accounts-per-agent.md).
+      const idHandle = MAIL_CONNECTOR_IDS.has(connectorId) ? liftTaggedId(parsed) : undefined;
       const makesChange = isRequest
         ? declaration.getIsChange === true || requestMakesChange(String(parsed.method))
         : (declaration.makesChange ?? true);
@@ -464,6 +486,7 @@ function buildConnectorTool(
         reason: parsed.reason as string | undefined,
         params: parsed,
         ...(requestedAccount ? { requestedAccount } : {}),
+        ...(idHandle ? { idHandle } : {}),
       };
       return pipeline.handleAgentCall(connection, call);
     },

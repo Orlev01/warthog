@@ -140,6 +140,9 @@ describe("createResultGuard", () => {
     const meta = (id: string, from: string, labelIds: string[]) => ({ id, threadId: id, labelIds, snippet: "Hi", payload: { mimeType: "text/plain", headers: [{ name: "From", value: from }, { name: "Subject", value: "Hi" }] } });
     const searched = guard2.review(call("google-gmail__search"), { status: 200, truncated: false, body: JSON.stringify({ summaries: true, messages: [meta("a", "Sam <sam@example.com>", ["SENT"]), meta("b", "Billing <billing@payfast-au.co>", ["INBOX"])] }) });
     assert.equal(searched.exposure?.sender, "billing@payfast-au.co");
+    // It says which of the person's inboxes it was read in.
+    const inInbox = guard2.review(call("google-gmail__search", { connectorAccountLabel: "levyoren1@gmail.com" }), { status: 200, truncated: false, body: JSON.stringify({ summaries: true, messages: [meta("b", "Billing <billing@payfast-au.co>", ["INBOX"])] }) });
+    assert.deepEqual(inInbox.exposure, { service: "Svc", kind: "email", sender: "billing@payfast-au.co", account: "levyoren1@gmail.com" });
     const ownOnly = guard2.review(call("google-gmail__search"), { status: 200, truncated: false, body: JSON.stringify({ summaries: true, messages: [meta("a", "Sam <sam@example.com>", ["SENT"])] }) });
     assert.equal(ownOnly.exposure, undefined);
     // A Drive file Warthog couldn't read, or one link asked for again, shows nothing new.

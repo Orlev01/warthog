@@ -132,6 +132,18 @@ const UNKNOWN_TOOL = "tools/call";
 // An address plain enough to put into a mail search without changing what the search means.
 const SEARCHABLE_ADDRESS = /^[a-z0-9._%+-]{1,64}@[a-z0-9-]+(?:\.[a-z0-9-]+)+$/;
 
+// The mail searches that cover every inbox the agent may read when no account is named
+// (docs/adr/several-accounts-per-agent.md, decision 5).
+const MAIL_SEARCH_TOOLS = new Set(["google-gmail__search", "microsoft-outlook-mail__search"]);
+
+// The field a mail search pages with, when it asks for a further page: a page belongs to one
+// inbox (Gmail's pageToken; Outlook's $skip, with or without the "$", in any case).
+function pagingField(call: AgentCall): string | undefined {
+  const query = (call.params as { query?: Record<string, unknown> } | undefined)?.query ?? {};
+  if (call.tool === "google-gmail__search") return query.pageToken !== undefined ? "pageToken" : undefined;
+  return Object.keys(query).some((key) => key.replace(/^\$/, "").toLowerCase() === "skip") ? "$skip" : undefined;
+}
+
 // A thrown tool call maps to a plain-English reason the agent sees; an internal failure is
 // never surfaced verbatim (only the input-boundary's own fixed 4xx messages are safe).
 const TOOL_FAILED_REASON = "The tool call could not be completed. A change may have occurred; inspect Activity and the service before retrying.";
@@ -490,10 +502,14 @@ function buildAgentPipeline(deps: McpDispatchDeps): AgentCallPipeline & AgentRat
       };
     },
     // One of the agent's granted accounts for each connector call: the one it named, the one an
-    // approved hold or an Undo was bound to, or the only one that fits. Never a fallback.
+    // approved hold or an Undo was bound to, the inbox a message id says it's in, or the only one
+    // that fits. Never a fallback. A mail search with nothing of the kind covers every inbox the
+    // agent may read, one bound call each.
     bindAccount: async (call, connection, permissions) => {
       if (call.connector === null) return call;
       const accounts = (await listConnectionsForUser(db, connection.userId)).map(serviceAccount);
+      const fanOut = MAIL_SEARCH_TOOLS.has(call.tool) && !call.requestedAccount && !call.idHandle && !call.connectorAccountId;
+      const paging = fanOut ? pagingField(call) : undefined;
       const binding = bindAccount({
         serviceName: catalogue.get(call.connector)?.name ?? call.connector,
         granted: grantedAccounts(permissions.accounts, accounts, call.connector),
@@ -501,8 +517,18 @@ function buildAgentPipeline(deps: McpDispatchDeps): AgentCallPipeline & AgentRat
         tool: { name: call.tool, makesChange: call.makesChange },
         ...(call.requestedAccount ? { named: call.requestedAccount } : {}),
         ...(call.connectorAccountId ? { presetId: call.connectorAccountId } : {}),
+        ...(call.idHandle ? { idHandle: call.idHandle } : {}),
+        ...(fanOut ? { fanOut: true } : {}),
+        ...(paging ? { paging } : {}),
       });
       if (binding.kind === "refused") return { refused: binding.reason };
+      if (binding.kind === "several") {
+        return {
+          several: binding.accounts.map((account) => ({ ...call, connectorAccountId: account.id, connectorAccountLabel: account.label })),
+          needsReconnecting: binding.accounts.filter((account) => !account.connected).map((account) => account.id),
+          ...(binding.note ? { note: binding.note } : {}),
+        };
+      }
       return { ...call, connectorAccountId: binding.account.id, connectorAccountLabel: binding.account.label };
     },
     notifyApprovalCreated: async (input) => {

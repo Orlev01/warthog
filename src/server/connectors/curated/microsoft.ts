@@ -73,8 +73,8 @@ function byId(prefix: string, key: string): CuratedToolDef["resolve"] {
 // the subject the sign-in check reads, and no `$expand` can inline attachment contents). An
 // id that is really a sub-path (`/$value` is the raw message source) is refused.
 const OUTLOOK_MESSAGE_ID = /^[A-Za-z0-9=_+-]{1,512}$/;
-const MAX_OUTLOOK_TOP = 25;
-const DEFAULT_OUTLOOK_TOP = 10;
+export const MAX_OUTLOOK_TOP = 25;
+export const DEFAULT_OUTLOOK_TOP = 10;
 // A whole message (or a page of them) is read so it can be checked; agents see ~100 KB at most.
 const MESSAGE_READ_BYTES = 2 * 1024 * 1024;
 // The message fields a search returns: who, what, when and a preview. Read one by id for its text.

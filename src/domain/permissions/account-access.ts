@@ -7,6 +7,10 @@
 // name the account (its address or label, or its handle); Warthog never falls back to a
 // different account, and a refusal never reveals an account the agent wasn't given.
 //
+// Mail is the one exception to "exactly one": a search with no account named covers every
+// inbox the agent may read, one bound call per inbox. Message ids carry their inbox's handle
+// (`<handle>.<id>`), so a read or a reply by id goes to the inbox that holds the email.
+//
 // Pure: no I/O. The same predicate decides what tools/list offers, which account a call
 // can use and what get_context says, so the three always agree.
 
@@ -58,6 +62,10 @@ export interface GrantedAccount {
 
 export type AccountBinding =
   | { readonly kind: "bound"; readonly account: ServiceAccount }
+  // A mail search across inboxes: one call per account (docs/adr/several-accounts-per-agent.md,
+  // decision 5). It lists every granted account, so the result can name the ones that weren't
+  // searched, and says which were left out over the limit.
+  | { readonly kind: "several"; readonly accounts: readonly ServiceAccount[]; readonly note?: string }
   | { readonly kind: "refused"; readonly reason: string };
 
 export interface BindRequest {
@@ -71,10 +79,26 @@ export interface BindRequest {
   readonly named?: string;
   // The account Warthog bound earlier (an approved request, an Undo). Server-owned.
   readonly presetId?: string;
+  // The handle an account-tagged message id carried (`<handle>.<id>`). Untrusted like `named`:
+  // it can only pick among `granted`, and the inbox that holds the email wins over no name.
+  readonly idHandle?: string;
+  // The call is a mail search with no account, id or earlier binding, so it may cover every
+  // inbox the agent can read. Set by the caller; a change never fans out.
+  readonly fanOut?: boolean;
+  // The search asks for a further page (Gmail's pageToken, Outlook's $skip), which belongs to
+  // one inbox: the name of that field, for the refusal.
+  readonly paging?: string;
 }
 
 const CHANGED = "The service account changed or is unavailable. Submit a new request.";
 const HANDLE_ALPHABET = "abcdefghijkmnpqrstuvwxyz23456789";
+// For an agent whose app still has the tool list from before `account` existed.
+const REFRESH_HINT = " If your tool has no account field, ask the person to refresh Warthog in your app's connector settings.";
+
+// The most inboxes one search covers.
+const MAX_FAN_OUT = 5;
+// An account-tagged id: a handle, a dot, then the service's own id.
+const TAGGED_ID = /^([a-z2-9]{6})\.(.+)$/;
 
 export function accountPolicy(grant: AccountGrant | undefined, defaults: AgentDefaults): AccountPolicy {
   return {
@@ -100,6 +124,23 @@ export function accountHandle(accountId: string): string {
   return handle;
 }
 
+// A message id that says which inbox it's in: `<handle>.<id>`. Neither Gmail's nor Outlook's
+// own ids contain a ".", so a tagged id can never reach either service whole.
+export function tagId(handle: string, nativeId: string): string {
+  return `${handle}.${nativeId}`;
+}
+
+// The handle and the service's own id in a tagged id, or null for any other value.
+export function untagId(value: string): { handle: string; id: string } | null {
+  const match = TAGGED_ID.exec(value);
+  return match ? { handle: match[1]!, id: match[2]! } : null;
+}
+
+// Accounts in the order people see them: by name (any case), then by id.
+function byName(a: ServiceAccount, b: ServiceAccount): number {
+  return a.label.localeCompare(b.label, "en", { sensitivity: "base" }) || a.id.localeCompare(b.id);
+}
+
 // The agent's granted accounts of one service that the person still has, by name.
 export function grantedAccounts(
   grants: readonly AccountGrant[],
@@ -112,7 +153,7 @@ export function grantedAccounts(
     const account = grant.connectorId === connectorId ? byId.get(grant.accountId) : undefined;
     if (account && !found.some((g) => g.account.id === account.id)) found.push({ grant, account });
   }
-  return found.sort((a, b) => a.account.label.localeCompare(b.account.label, "en", { sensitivity: "base" }) || a.account.id.localeCompare(b.account.id));
+  return found.sort((a, b) => byName(a.account, b.account));
 }
 
 const names = (granted: readonly GrantedAccount[]) => granted.map((g) => g.account.label).join(", ");
@@ -128,7 +169,12 @@ function resolveNamed(named: string, granted: readonly GrantedAccount[], service
     const handles = byLabel.map((g) => accountHandle(g.account.id)).sort().join(", ");
     return { kind: "refused", reason: `Two of this agent's ${serviceName} accounts are called “${byLabel[0]!.account.label}”. Name one by its handle: ${handles}.` };
   }
-  // The same words whether or not the account exists, so naming accounts can't probe for them.
+  return notGranted(granted, serviceName);
+}
+
+// The same words whether or not the account exists, so naming accounts (or passing ids) can't
+// probe for them.
+function notGranted(granted: readonly GrantedAccount[], serviceName: string): AccountBinding {
   return {
     kind: "refused",
     reason: granted.length > 0
@@ -137,11 +183,34 @@ function resolveNamed(named: string, granted: readonly GrantedAccount[], service
   };
 }
 
+// The granted account an id's handle names; an unknown handle is refused exactly as an unknown
+// name is.
+function resolveIdHandle(handle: string, granted: readonly GrantedAccount[], serviceName: string): AccountBinding {
+  const holder = granted.find((g) => accountHandle(g.account.id) === handle);
+  return holder ? { kind: "bound", account: holder.account } : notGranted(granted, serviceName);
+}
+
+// A search across every inbox the agent may read: the ones whose settings allow it (at most
+// five, the rest named in a note), and the ones that don't, so the result can say so.
+function fanOut(granted: readonly GrantedAccount[], allowed: readonly GrantedAccount[]): AccountBinding {
+  const ordered = [...granted].sort((a, b) => byName(a.account, b.account));
+  const permitted = ordered.filter((g) => allowed.includes(g));
+  const searched = new Set(permitted.slice(0, MAX_FAN_OUT));
+  const accounts = ordered.filter((g) => searched.has(g) || !allowed.includes(g)).map((g) => g.account);
+  const left = permitted.slice(MAX_FAN_OUT);
+  return {
+    kind: "several",
+    accounts,
+    ...(left.length > 0 ? { note: `Warthog searches at most ${MAX_FAN_OUT} inboxes at once. Not searched: ${names(left)}: search one by naming it in account.` } : {}),
+  };
+}
+
 // Bind a call to one granted account, or refuse it. Never picks an account the agent wasn't
 // given, and never swaps an unavailable account for another.
 export function bindAccount(request: BindRequest): AccountBinding {
   const { granted, serviceName } = request;
   const named = request.named?.trim() ? request.named : undefined;
+  const idHandle = request.idHandle?.trim() ? request.idHandle.trim().toLowerCase() : undefined;
   let binding: AccountBinding;
   if (request.presetId !== undefined) {
     const preset = granted.find((g) => g.account.id === request.presetId);
@@ -150,7 +219,19 @@ export function bindAccount(request: BindRequest): AccountBinding {
       const asked = resolveNamed(named, granted, serviceName);
       if (asked.kind !== "bound" || asked.account.id !== preset.account.id) return { kind: "refused", reason: CHANGED };
     }
+    if (idHandle !== undefined && accountHandle(preset.account.id) !== idHandle) return { kind: "refused", reason: CHANGED };
     binding = { kind: "bound", account: preset.account };
+  } else if (idHandle !== undefined) {
+    // The inbox that holds the email decides; an account named as well must be the same one.
+    binding = resolveIdHandle(idHandle, granted, serviceName);
+    if (binding.kind === "bound" && named) {
+      const asked = resolveNamed(named, granted, serviceName);
+      if (asked.kind !== "bound") return asked;
+      if (asked.account.id !== binding.account.id) {
+        const held = binding.account.label;
+        return { kind: "refused", reason: `That email is in ${held}, not ${asked.account.label}. Leave out account, or name ${held}.` };
+      }
+    }
   } else if (named) {
     binding = resolveNamed(named, granted, serviceName);
   } else if (granted.length === 0) {
@@ -162,8 +243,13 @@ export function bindAccount(request: BindRequest): AccountBinding {
     // happen to be working.
     const allowed = granted.filter((g) => toolPermitted(accountPolicy(g.grant, request.defaults), request.tool));
     if (allowed.length === 0) return { kind: "refused", reason: `This agent isn't allowed to do that with any of its ${serviceName} accounts.` };
+    if (allowed.length > 1 && request.fanOut && !request.tool.makesChange) {
+      // A page of results is one inbox's: there is no merged cursor.
+      if (request.paging) return { kind: "refused", reason: `A page of results belongs to one inbox: pass account with ${request.paging}.` };
+      return fanOut(granted, allowed);
+    }
     if (allowed.length > 1) {
-      return { kind: "refused", reason: `This agent can use ${allowed.length} ${serviceName} accounts for this: ${names(allowed)}. Say which one in account.` };
+      return { kind: "refused", reason: `This agent can use ${allowed.length} ${serviceName} accounts for this: ${names(allowed)}. Say which one in account.${REFRESH_HINT}` };
     }
     binding = { kind: "bound", account: allowed[0]!.account };
   }

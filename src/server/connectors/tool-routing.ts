@@ -231,7 +231,7 @@ function mimeRecipients(raw: string): string[] {
 const GMAIL_PRESENTATION: Readonly<Record<string, { title: string; description: string }>> = {
   search: {
     title: "Gmail: Search messages",
-    description: "Search the connected Gmail account. query.q uses Gmail search syntax, e.g. from:qantas newer_than:30d; query.maxResults (up to 25, default 10) and query.pageToken page through results. Returns who, subject, date, a preview and whether it's unread for each message: read one by id for its full text. Doesn't change mail.",
+    description: "Search the Gmail accounts this agent can use: with no account, one search covers all of them and each result names its inbox; account picks one. query.q uses Gmail search syntax, e.g. from:qantas newer_than:30d; query.maxResults (up to 25, default 10) sets the page, and query.pageToken (with account) gets the next. Returns who, subject, date, a preview and whether it's unread for each message: read one by id for its full text. Doesn't change mail.",
   },
   read: {
     title: "Gmail: Read message",
@@ -250,7 +250,7 @@ const GMAIL_PRESENTATION: Readonly<Record<string, { title: string; description: 
 const OUTLOOK_MAIL_PRESENTATION: Readonly<Record<string, { title: string; description: string }>> = {
   search: {
     title: "Outlook: Search messages",
-    description: "Search the connected Outlook mailbox. query.$search takes words, e.g. \"invoice\"; query.$filter, $orderby, $top (up to 25, default 10) and $skip page and sort. Returns who, subject, date and a preview for each message: read one by id for its text. Doesn't change mail.",
+    description: "Search the Outlook mailboxes this agent can use: with no account, one search covers all of them and each result names its mailbox; account picks one. query.$search takes words, e.g. \"invoice\"; query.$filter, $orderby and $top (up to 25, default 10) sort and size the page, and $skip (with account) gets the next. Returns who, subject, date and a preview for each message: read one by id for its text. Doesn't change mail.",
   },
   draft: {
     title: "Outlook: Create unsent draft",

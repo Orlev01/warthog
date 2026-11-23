@@ -16,6 +16,7 @@ import { freshDb } from "../../test/db";
 import type { Db } from "../db/index";
 
 import { adoptStandIn, grantServices } from "../../test/grants";
+import { accountHandle } from "../../domain/permissions/account-access";
 const NOW = new Date("2026-11-16T00:00:00.000Z");
 
 function devConfig(): Config {
@@ -60,7 +61,7 @@ async function seed(db: Db, config: Config, grants: Partial<PermissionGrants>, c
   });
   const created = await createConnection(db, { userId: user.id, connectorId, accountLabel, credentials }, dek, fixedClock(NOW));
   await adoptStandIn(db, user.id, connectorId, created.id);
-  return { connectionId };
+  return { connectionId, handle: accountHandle(created.id) };
 }
 
 const b64url = (text: string) => Buffer.from(text, "utf8").toString("base64url");
@@ -86,7 +87,7 @@ test("a Gmail search returns a readable summary of each result in one call", asy
   const db = await freshDb();
   try {
     const config = devConfig();
-    const { connectionId } = await seed(db, config, {}, "google-gmail", { access_token: "ya29" });
+    const { connectionId, handle } = await seed(db, config, {}, "google-gmail", { access_token: "ya29" });
     const g = google((url) => {
       if (url.pathname.endsWith("/messages")) return Response.json({ messages: [{ id: "a1" }, { id: "b2" }, { id: "c3" }, { id: "d4" }], nextPageToken: "p2" });
       if (url.pathname.endsWith("/messages/a1")) return Response.json(meta("a1", "Qantas <q@qantas.com>", "Your booking", "Booking reference ABC123"));
@@ -102,10 +103,11 @@ test("a Gmail search returns a readable summary of each result in one call", asy
     assert.equal(g.sent[0]!.searchParams.get("maxResults"), "25", "at most 25 a page");
     assert.ok(g.sent.slice(1).every((url) => url.searchParams.get("format") === "metadata"), "headers and previews only, never bodies");
     const text = rpc.result!.content![0]!.text!;
-    assert.match(text, /1\. .*Qantas <q@qantas\.com> · “Your booking” \[unread\] — Booking reference ABC123 \(id a1 · thread t-a1\)/);
+    // Ids carry the inbox they're in (docs/adr/several-accounts-per-agent.md), even with one inbox.
+    assert.match(text, new RegExp(`1\\. .*Qantas <q@qantas\\.com> · “Your booking” \\[unread\\] — Booking reference ABC123 \\(id ${handle}\\.a1 · thread ${handle}\\.t-a1\\)`));
     assert.match(text, /2\. Withheld sign-in code from Google/);
     assert.ok(!text.includes("123456"), "a code in a search preview is withheld too");
-    assert.match(text, /\n3\. Message — Couldn't load this preview\. Read the message by its id\. \(id c3\)/, "a result that couldn't be fetched says so");
+    assert.match(text, new RegExp(`\\n3\\. Message — Couldn't load this preview\\. Read the message by its id\\. \\(id ${handle}\\.c3\\)`), "a result that couldn't be fetched says so");
     assert.equal(text.split("\n").filter((line) => /^\d+\. /.test(line)).length, 4, "one line per result, however a subject is written");
     assert.match(text, /query\.pageToken=p2/);
   } finally { await db.close(); }
@@ -115,7 +117,7 @@ test("a long link can be read back by its number; a hidden sign-in link can't", 
   const db = await freshDb();
   try {
     const config = devConfig();
-    const { connectionId } = await seed(db, config, {}, "google-gmail", { access_token: "ya29" });
+    const { connectionId, handle } = await seed(db, config, {}, "google-gmail", { access_token: "ya29" });
     const long = `https://click.example.com/track?u=${"a".repeat(400)}`;
     const html = `<p><a href="${long}">Track</a> <a href="https://x.example.com/reset-password?token=0123456789ab">Reset password</a></p>`;
     const g = google((url) => url.pathname.endsWith("/messages/m1")
@@ -125,7 +127,7 @@ test("a long link can be read back by its number; a hidden sign-in link can't", 
     const first = await readRpc(await dispatch(connectionId, call("google-gmail__read", { query: { id: "m1" } })));
     assert.match(first.result!.content![0]!.text!, /\[1\] click\.example\.com\/… \(a long link/);
     const link = await readRpc(await dispatch(connectionId, call("google-gmail__read", { query: { id: "m1", link: "1" } })));
-    assert.match(link.result!.content![0]!.text!, new RegExp(`Link 1 of message m1: ${long.replace(/[.?]/g, "\\$&")}`));
+    assert.match(link.result!.content![0]!.text!, new RegExp(`Link 1 of message ${handle}\\.m1: ${long.replace(/[.?]/g, "\\$&")}`));
     const none = await readRpc(await dispatch(connectionId, call("google-gmail__read", { query: { id: "m1", link: "2" } })));
     assert.ok(!JSON.stringify(none).includes("reset-password"), "the hidden sign-in link was never numbered");
   } finally { await db.close(); }

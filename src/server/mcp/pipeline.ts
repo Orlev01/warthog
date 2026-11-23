@@ -67,7 +67,11 @@ import {
 } from "../db/held-requests";
 import { countAgentRequest, getAgentById } from "../db/agents";
 import { getConnectionPermissions, type ConnectionPermissions } from "../db/agent-permissions";
-import { accountPolicy } from "../../domain/permissions/account-access";
+import { accountHandle, accountPolicy } from "../../domain/permissions/account-access";
+import { coverageOf, mergeMailSearch, splitSearchSize, tagMailIds, type InboxSearch, type InboxStatus } from "../../domain/content/merge-mail";
+import { MAIL_CONNECTOR_IDS } from "../../domain/content/mail-connectors";
+import { DEFAULT_SEARCH_RESULTS, MAX_SEARCH_RESULTS } from "../connectors/curated/google";
+import { DEFAULT_OUTLOOK_TOP, MAX_OUTLOOK_TOP } from "../connectors/curated/microsoft";
 import { getUserById } from "../db/users";
 import { isReleaseRequest } from "../../domain/approvals/release-kind";
 import type { RateLimiter } from "./rate-limit";
@@ -97,6 +101,13 @@ export interface AgentCall {
   readonly connectorAccountLabel?: string;
   // The account the agent named, untrusted: binding can only pick it among the agent's own.
   readonly requestedAccount?: string;
+  // The handle an account-tagged message id carried (`<handle>.<id>`, from a mail search or
+  // read), untrusted like `requestedAccount`: binding can only pick it among the agent's own,
+  // and the id in `params` is the service's own.
+  readonly idHandle?: string;
+  // A search across inboxes: each inbox it covered and how it went, counts only. Server-owned:
+  // set by the pipeline for the call's one activity entry.
+  readonly connectorAccountSet?: readonly AccountOutcome[];
   readonly tool: string;
   readonly makesChange: boolean;
   readonly request?: "card" | "high_tier";
@@ -120,6 +131,24 @@ export interface AgentCall {
   // approved execution joins the same run.
   readonly run?: RunRef;
   readonly via?: string;
+}
+
+// One inbox of a search across inboxes, as its activity entry keeps it: no content, a count.
+export interface AccountOutcome {
+  readonly id: string;
+  readonly label: string;
+  readonly outcome: InboxStatus;
+  readonly count: number;
+}
+
+// A mail search across inboxes (docs/adr/several-accounts-per-agent.md, decision 5): one call
+// per inbox, each bound to its account.
+export interface AccountFanOut {
+  readonly several: readonly AgentCall[];
+  // The accounts among them that need reconnecting: named in the result, never searched.
+  readonly needsReconnecting?: readonly string[];
+  // The inboxes left out over the limit, in words.
+  readonly note?: string;
 }
 
 // The side effect fired on approval creation (E12-S07): a push to every registered
@@ -183,8 +212,9 @@ export interface PipelineDeps {
   readonly rateLimiter: RateLimiter;
   readonly recorder: ActivityRecorder;
   // Binds a connector call to one of the agent's granted accounts before the policy runs, or
-  // refuses it with words the agent can act on (docs/adr/several-accounts-per-agent.md).
-  readonly bindAccount?: (call: AgentCall, connection: AgentConnection, permissions: ConnectionPermissions) => Promise<AgentCall | { readonly refused: string }>;
+  // refuses it with words the agent can act on (docs/adr/several-accounts-per-agent.md). A mail
+  // search with no account named is bound to every inbox the agent may read instead.
+  readonly bindAccount?: (call: AgentCall, connection: AgentConnection, permissions: ConnectionPermissions) => Promise<AgentCall | { readonly refused: string } | AccountFanOut>;
   readonly executeTool: (call: AgentCall, connection: AgentConnection) => Promise<unknown>;
   readonly rate?: ReferenceRate | null;
   readonly notifyApprovalCreated?: NotifyApprovalCreatedSeam;
@@ -280,6 +310,37 @@ export interface AgentRateGate {
 
 // The plain reason an over-limit call is refused with.
 const RATE_LIMITED_REASON = "This agent is going too fast — its request rate limit was reached.";
+
+const GMAIL_SEARCH = "google-gmail__search";
+
+// The most severe thing the guard did to any inbox's result, with the counts added up, for a
+// search across inboxes' one entry.
+const GUARD_RANK = ["shown", "masked", "stubbed", "fallback", "withheld"];
+function combinedGuard(evidence: readonly unknown[]): unknown {
+  const list = evidence.filter((e): e is { outcome: string; counts?: Record<string, number> } => e !== undefined && e !== null);
+  if (list.length === 0) return undefined;
+  const counts: Record<string, number> = {};
+  for (const e of list) for (const [key, n] of Object.entries(e.counts ?? {})) counts[key] = (counts[key] ?? 0) + n;
+  const outcome = list.map((e) => e.outcome).reduce((a, b) => (GUARD_RANK.indexOf(b) > GUARD_RANK.indexOf(a) ? b : a));
+  return { outcome, ...(Object.keys(counts).length > 0 ? { counts } : {}) };
+}
+
+// One inbox's share of a search across `inboxes`, so the search returns about one page in all
+// (Gmail's maxResults, Outlook's $top, each with its own default and limit).
+function withPageShare(call: AgentCall, inboxes: number): AgentCall {
+  const params = (call.params ?? {}) as { query?: Record<string, string> };
+  const query = { ...(params.query ?? {}) };
+  if (call.tool === GMAIL_SEARCH) {
+    query.maxResults = String(splitSearchSize(query.maxResults, inboxes, { default: DEFAULT_SEARCH_RESULTS, max: MAX_SEARCH_RESULTS }));
+  } else {
+    // Outlook takes its options with or without the "$", in any case.
+    const tops = Object.keys(query).filter((key) => key.replace(/^\$/, "").toLowerCase() === "top");
+    const asked = tops.length > 0 ? query[tops[0]!] : undefined;
+    for (const key of tops) delete query[key];
+    query.$top = String(splitSearchSize(asked, inboxes, { default: DEFAULT_OUTLOOK_TOP, max: MAX_OUTLOOK_TOP }));
+  }
+  return { ...call, params: { ...params, query } };
+}
 
 // Permission checks combine the service grant, read/change class and optional
 // exact tool allowlist. An absent allowlist preserves all current and future tools;
@@ -487,6 +548,7 @@ export function createAgentCallPipeline(deps: PipelineDeps): AgentCallPipeline &
       merchant: call.merchant,
       payload: { params: call.params, reason: call.reason, connectorAccountId: call.connectorAccountId ?? call.audit?.connectorAccountId,
         connectorAccountLabel: call.connectorAccountLabel ?? call.audit?.connectorAccountLabel,
+        ...(call.connectorAccountSet ? { connectorAccountSet: call.connectorAccountSet } : {}),
         requestId: call.audit?.requestId, attemptId: call.audit?.attemptId, policyFingerprint: call.audit?.policyFingerprint, reportedRunId: requestObservation.getStore()?.reportedRunId, parentRequestId: requestObservation.getStore()?.requestId, client: requestObservation.getStore()?.client, decision: call.audit?.decision, approvalId: call.audit?.approvalId,
         durationMs: call.audit ? Math.max(0, clock.now().getTime() - call.audit.startedAt) : undefined,
         resultEvidence: result === undefined ? { outcome } : { ...observeResult(result).evidence, ...(guardEvidence ? { guard: guardEvidence } : {}) },
@@ -546,8 +608,92 @@ export function createAgentCallPipeline(deps: PipelineDeps): AgentCallPipeline &
         await deps.recordMetric({ name: READ_GUARD_METRIC, value: 1, dimensions });
       } catch { /* the call's own record and result stand */ }
     }
+    // Mail ids carry the inbox they're in (`<handle>.<id>`), so a read or a reply by id goes back
+    // to that inbox (docs/adr/several-accounts-per-agent.md). Done here, once, for every checked
+    // mail view, whether or not the agent has more than one inbox.
+    const shown = MAIL_CONNECTOR_IDS.has(call.connector) && call.connectorAccountId !== undefined
+      ? tagMailIds(guarded.result, accountHandle(call.connectorAccountId)) : guarded.result;
     // Activity shows the check only when it hid something.
-    return { result: guarded.result, evidence: guarded.evidence.outcome === "shown" ? undefined : guarded.evidence };
+    return { result: shown, evidence: guarded.evidence.outcome === "shown" ? undefined : guarded.evidence };
+  }
+
+  // A mail search across inboxes (docs/adr/several-accounts-per-agent.md, decision 5). Each
+  // inbox's call is checked by the policy with that inbox's own settings, and only the ones it
+  // allows run: a search never waits for approval, so an inbox that asks first, isn't allowed or
+  // needs reconnecting is left out and named. The rest run together; each result is checked by
+  // the guard with its own account (its Gmail link, the Outlook own-mail check, the "recently
+  // read" window), then merged. The call is ONE activity entry, with each inbox's outcome and
+  // count, and counts once against the agent's request limit.
+  async function searchAcross(connection: AgentConnection, context: AgentContext, call: AgentCall, fan: AccountFanOut): Promise<DecidedCall> {
+    const now = clock.now();
+    const reconnect = new Set(fan.needsReconnecting ?? []);
+    const planned = fan.several.map((sub) => {
+      const decision = evaluate(toPolicyCall(sub), toPolicyContext(connection, context, sub, now, rate));
+      const skipped: InboxStatus | undefined = decision.decision === "deny" ? "not allowed"
+        : decision.decision === "ask" || sub.requiresApproval ? "asks first"
+        : reconnect.has(String(sub.connectorAccountId)) ? "needs reconnecting" : undefined;
+      return { sub, decision, skipped };
+    });
+    const runnable = planned.filter((plan) => plan.skipped === undefined);
+    if (call.audit) {
+      call.audit.decision = (runnable[0] ?? planned[0])?.decision;
+      call.audit.policyFingerprint = createHash("sha256").update(JSON.stringify({ grants: context.permissions, rules: context.rules })).digest("hex");
+    }
+    const outcomes = (inboxes: readonly InboxSearch[]): AccountOutcome[] => planned.map((plan, i) => ({
+      id: String(plan.sub.connectorAccountId), label: String(plan.sub.connectorAccountLabel), outcome: inboxes[i]!.status,
+      count: Array.isArray(inboxes[i]!.view?.messages) ? (inboxes[i]!.view!.messages as unknown[]).length : 0,
+    }));
+    const label = (plan: (typeof planned)[number]) => String(plan.sub.connectorAccountLabel);
+
+    if (runnable.length === 0) {
+      const inboxes = planned.map((plan) => ({ account: label(plan), status: plan.skipped! }));
+      // Every inbox refused by the policy reads as the policy's own reason, as one inbox would.
+      const denied = planned.every((plan) => plan.decision.decision === "deny");
+      await record(connection, { ...call, connectorAccountSet: outcomes(inboxes) }, denied ? "denied" : "refused");
+      return { result: { status: "refused", reason: denied ? planned[0]!.decision.reason : coverageOf(inboxes, fan.note) }, errorCategory: CATEGORY_DENIED };
+    }
+
+    if (call.audit) call.audit.attempted = true;
+    // One inbox failing never fails the others.
+    const ran = new Map(await Promise.all(runnable.map(async (plan) => {
+      const shared = withPageShare(plan.sub, runnable.length);
+      try {
+        return [plan, { call: shared, result: await executeTool(shared, connection) }] as const;
+      } catch {
+        return [plan, { call: shared, result: undefined }] as const;
+      }
+    })));
+    // Checked one inbox at a time, in account order, so the "recently read" window is written in
+    // a fixed order.
+    const inboxes: InboxSearch[] = [];
+    const evidence: unknown[] = [];
+    for (const plan of planned) {
+      const done = ran.get(plan);
+      if (!done) {
+        inboxes.push({ account: label(plan), status: plan.skipped! });
+        continue;
+      }
+      if (done.result === undefined || asToolRefusal(done.result) || observeResult(done.result).outcome !== "executed") {
+        inboxes.push({ account: label(plan), status: "failed" });
+        continue;
+      }
+      const guarded = await guardResult(done.call, done.result, connection);
+      const view = guarded.result as Record<string, unknown> | null;
+      if (!view || typeof view !== "object" || !Array.isArray(view.messages)) {
+        inboxes.push({ account: label(plan), status: "failed" });
+        continue;
+      }
+      evidence.push(guarded.evidence);
+      inboxes.push({ account: label(plan), status: "searched", view });
+    }
+    const recorded: AgentCall = { ...call, connectorAccountSet: outcomes(inboxes) };
+    if (!inboxes.some((inbox) => inbox.status === "searched")) {
+      await record(connection, recorded, "failed");
+      return { result: { status: "failed", reason: coverageOf(inboxes, fan.note) }, errorCategory: CATEGORY_TOOL_ERROR };
+    }
+    const merged = mergeMailSearch(inboxes, { note: fan.note });
+    await record(connection, recorded, "executed", merged, recorder, true, combinedGuard(evidence));
+    return { result: { status: "executed", result: merged } };
   }
 
   // Record the two request metrics for one handled call (task E17-S03): a count increment
@@ -624,6 +770,7 @@ export function createAgentCallPipeline(deps: PipelineDeps): AgentCallPipeline &
         await record(connection, call, "refused");
         return { result: { status: "refused", reason: bound.refused }, errorCategory: CATEGORY_DENIED };
       }
+      if ("several" in bound) return searchAcross(connection, context, call, bound);
       call = bound;
       if (call.audit) { call.audit.connectorAccountId = call.connectorAccountId; call.audit.connectorAccountLabel = call.connectorAccountLabel; }
     }

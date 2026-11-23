@@ -262,3 +262,21 @@ test("a life-admin save reads as what it did, counted, never what it saved", asy
   assert.ok(!readable(evidence).includes("travel.flight"));
   assert.equal(value(evidence, "Results ids", "technical"), [REFERENCE, ATTEMPT, REQUEST].join(", "), "the saved records' ids are technical details");
 });
+
+test("a search across inboxes names each inbox, and which weren't searched, never their ids", () => {
+  const home = "5b3c51a2-4b6c-4b55-9f7b-1d4d1c2e9a01";
+  const booking = "5b3c51a2-4b6c-4b55-9f7b-1d4d1c2e9a02";
+  const evidence = activityEvidence({
+    kind: "tool_call", tool: "google-gmail__search", outcome: "executed", connectorId: "google-gmail",
+    payload: {
+      params: { query: { q: "from:hostplus" } },
+      connectorAccountSet: [
+        { id: home, label: "levyoren1@gmail.com", outcome: "searched", count: 7 },
+        { id: booking, label: "booking@example.com", outcome: "needs reconnecting", count: 0 },
+      ],
+      resultEvidence: { outcome: "executed", counts: { messages: 7 } },
+    },
+  });
+  assert.equal(value(evidence, "Service accounts"), "levyoren1@gmail.com, booking@example.com (needs reconnecting)");
+  assert.ok(!JSON.stringify(evidence).includes(home) && !JSON.stringify(evidence).includes(booking), "no account id is shown, even as a technical detail");
+});

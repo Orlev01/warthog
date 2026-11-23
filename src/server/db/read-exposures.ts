@@ -22,6 +22,8 @@ export interface ReadSource {
   readonly service: string;
   readonly kind: "email" | "event" | "file" | "message" | "content";
   readonly sender?: string;
+  /** The person's account it was read in, by its label (docs/adr/several-accounts-per-agent.md). */
+  readonly account?: string;
   /** When it was read (set when it is recorded). */
   readonly at?: string;
 }
@@ -57,7 +59,7 @@ export async function recordReadExposure(
   const row = existing.rows[0] as Record<string, unknown> | undefined;
   const open = row && new Date(String(row.until_at)).getTime() > input.at.getTime();
   const previous = row && open ? await sourcesOf(row, dek, input.agentId) : [];
-  const same = (a: ReadSource, b: ReadSource) => a.service === b.service && a.kind === b.kind && a.sender === b.sender;
+  const same = (a: ReadSource, b: ReadSource) => a.service === b.service && a.kind === b.kind && a.sender === b.sender && a.account === b.account;
   const sources = [{ ...input.source, at: input.at.toISOString() }, ...previous.filter((s) => !same(s, input.source))].slice(0, MAX_SOURCES);
   const detail = await encrypt(dek, TABLE, COLUMN, rowId(input.agentId), JSON.stringify(sources));
   const until = new Date(input.at.getTime() + READ_WINDOW_MS);
