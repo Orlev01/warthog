@@ -302,6 +302,8 @@ function outgoingLines(outgoing: OutgoingDetail | undefined, timeZone?: string |
       ];
     case "post_delete":
       return [{ label: "Post", value: outgoing.url }];
+    case "core":
+      return outgoing.lines.slice(0, 4).map((line) => ({ label: line.key, value: line.preview }));
   }
 }
 
@@ -498,6 +500,7 @@ function toPendingView(request: PendingApproval, serviceName: ServiceNamer, time
     // before Warthog recorded which it was) sits in the details.
     rule: request.detail.ruleSource === "person" ? text(request.detail.rule) : "",
     timeLeft: timeLeftLabel(request.timeLeftMs),
+    expiresAtMs: now.getTime() + request.timeLeftMs,
     release: releaseKind(request.detail),
   };
 }

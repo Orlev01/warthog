@@ -110,10 +110,21 @@ function whoText(recipients: readonly string[]): string {
   return `${recipients[0]} and ${recipients.length - 1} others`;
 }
 
+// Warthog's own tools that add one named thing, in words that take the thing's name.
+const CORE_OBJECT_WORDS: Record<string, string> = {
+  create_task: "add the task",
+  save_record: "save the record",
+};
+
 // The sentence for an email, a calendar invitation or a post, naming who it goes to or what it is.
 function outgoingSentence(call: RequestSummary): string | undefined {
   const outgoing = call.outgoing;
   if (!outgoing) return undefined;
+  if (outgoing.kind === "core") {
+    if (call.tool === "save_record" && outgoing.count && outgoing.count > 1) return `wants to save ${outgoing.count} records`;
+    const words = CORE_OBJECT_WORDS[call.tool];
+    return words && outgoing.title ? `wants to ${words} “${outgoing.title}”` : undefined;
+  }
   const who = whoText(recipientList(call.recipients));
   if (outgoing.kind === "email") {
     const sending = call.tool.endsWith("__send");

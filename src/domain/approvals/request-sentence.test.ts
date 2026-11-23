@@ -110,3 +110,21 @@ test("deleting a LinkedIn post reads as deleting a post", () => {
     "wants to delete a post from LinkedIn",
   );
 });
+
+// UI/UX audit 2026-11-23 W-01: the object of a held call to Warthog's own tools is in the sentence.
+test("a held change to Warthog's own tools names what it would add", () => {
+  assert.equal(
+    requestSentence({ tool: "create_task", outgoing: { kind: "core", title: "Book the car service", lines: [] } }),
+    "wants to add the task “Book the car service”",
+  );
+  assert.equal(
+    requestSentence({ tool: "save_record", outgoing: { kind: "core", title: "Car registration", lines: [] } }),
+    "wants to save the record “Car registration”",
+  );
+  assert.equal(requestSentence({ tool: "save_record", outgoing: { kind: "core", count: 4, lines: [] } }), "wants to save 4 records");
+  assert.equal(
+    requestSentence({ tool: "remember", outgoing: { kind: "core", lines: [{ key: "Memory", preview: "x" }] } }),
+    "wants to save a memory",
+    "a memory's text is a detail line, not squeezed into the sentence",
+  );
+});

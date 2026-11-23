@@ -16,7 +16,10 @@ export type OutgoingDetail =
   | { kind: "request"; method: string; path: string; queryKeys: readonly string[] }
   | { kind: "provider"; arguments: readonly { key: string; preview: string }[] }
   | OutgoingPost
-  | OutgoingPostDeletion;
+  | OutgoingPostDeletion
+  // One of Warthog's own tools (a task, a record, a memory, an activity note): what it would
+  // add or change. `title` names the one thing it adds; `count` how many records a batch saves.
+  | { kind: "core"; title?: string; count?: number; lines: readonly { key: string; preview: string }[] };
 
 /** The fields of a held call the summary is read from. */
 export interface OutgoingCall {
@@ -40,9 +43,89 @@ function guestsOf(recipients: OutgoingCall["recipients"]): string[] {
   return typeof recipients === "string" && recipients ? [recipients] : [];
 }
 
+// A field name as a person reads it ("due_date" → "Due date").
+function fieldLabel(key: string): string {
+  const words = key.replace(/[_-]+/g, " ").trim();
+  return words ? words[0]!.toUpperCase() + words.slice(1) : key;
+}
+
+function shortText(value: unknown, max = 200): string {
+  if (typeof value === "string") return cleanShortText(value, max);
+  if (typeof value === "number" || typeof value === "boolean") return String(value);
+  return "";
+}
+
+function fieldsOf(value: unknown): Record<string, unknown> {
+  return value !== null && typeof value === "object" && !Array.isArray(value) ? value as Record<string, unknown> : {};
+}
+
+// Up to three of a record's fields beyond its name (and the currency, which reads with the amount).
+function recordFieldLines(fields: Record<string, unknown>): { key: string; preview: string }[] {
+  return Object.entries(fields)
+    .filter(([key]) => key !== "name" && key !== "currency")
+    .map(([key, value]) => ({ key: fieldLabel(cleanShortText(key, 60)), preview: shortText(value, 120) }))
+    .filter((line) => line.preview !== "")
+    .slice(0, 3);
+}
+
+function namesText(names: readonly string[]): string {
+  const shown = names.slice(0, 3).join(", ");
+  return names.length > 3 ? `${shown} and ${names.length - 3} more` : shown;
+}
+
+// UI/UX audit 2026-11-23 W-01: a held call to Warthog's own tools says what it would add or
+// change, read from the same arguments the tool runs with.
+function coreDetail(tool: string, params: Record<string, unknown>): OutgoingDetail | undefined {
+  const lines: { key: string; preview: string }[] = [];
+  const push = (key: string, value: unknown, max?: number) => {
+    const preview = shortText(value, max);
+    if (preview) lines.push({ key, preview });
+  };
+  switch (tool) {
+    case "create_task": {
+      const title = shortText(params.title);
+      if (params.assignee === "any") lines.push({ key: "For", preview: "Any agent" });
+      return title ? { kind: "core", title, lines } : undefined;
+    }
+    case "remember":
+      push("Memory", params.content, 300);
+      return lines.length ? { kind: "core", lines } : undefined;
+    case "save_record": {
+      if (Array.isArray(params.records) && params.records.length) {
+        const names = params.records.map((r) => shortText(fieldsOf(fieldsOf(r).fields).name, 80)).filter(Boolean);
+        if (params.records.length === 1 && names[0]) {
+          return { kind: "core", title: names[0], lines: recordFieldLines(fieldsOf(fieldsOf(params.records[0]).fields)) };
+        }
+        return { kind: "core", count: params.records.length, lines: names.length ? [{ key: "Records", preview: namesText(names) }] : [] };
+      }
+      const fields = fieldsOf(params.fields);
+      const title = shortText(fields.name);
+      if (!title && !Object.keys(fields).length) return undefined;
+      return { kind: "core", ...(title ? { title } : {}), lines: recordFieldLines(fields) };
+    }
+    case "update_record": {
+      lines.push(...recordFieldLines({ ...fieldsOf(params.set), ...fieldsOf(params.fields) }));
+      push("Status", params.status);
+      push("Due", params.dueDate);
+      return lines.length ? { kind: "core", lines } : undefined;
+    }
+    case "update_task":
+      push("Status", params.status);
+      push("Note", params.note, 300);
+      return lines.length ? { kind: "core", lines } : undefined;
+    case "log_activity":
+      push("Note", params.reason, 300);
+      if (typeof params.amount === "number") lines.push({ key: "Amount", preview: `${params.amount}${typeof params.currency === "string" ? ` ${cleanShortText(params.currency, 10)}` : ""}` });
+      return lines.length ? { kind: "core", lines } : undefined;
+    default:
+      return undefined;
+  }
+}
+
 /** The approval card's summary of what a held call would send or change, or undefined when there is nothing to show. */
 export function outgoingDetail(call: OutgoingCall): OutgoingDetail | undefined {
   const params = (call.params ?? {}) as Record<string, unknown>;
+  if (!call.connector) return coreDetail(call.tool, params);
   if (MAIL_TOOLS.test(call.tool) && typeof params.text === "string") {
     const draft: MailDraft = {
       ...(strings(params.to) ? { to: strings(params.to) } : {}),
