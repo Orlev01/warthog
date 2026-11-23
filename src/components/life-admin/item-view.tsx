@@ -23,7 +23,7 @@ import { EmptyState } from "@/components/ui/empty";
 import { Field, SelectField, TextareaField } from "@/components/ui/field";
 import { JOURNAL_TEXT_MAX } from "@/domain/life-admin/journal-text";
 import { shortDate } from "@/domain/life-admin/journal";
-import { phaseOfView } from "./record-groups";
+import { listStatusOf, phaseOfView, recordsHref } from "./record-groups";
 import { PhaseBadge } from "./phase-badge";
 import { DisabledControl, HINT_CLASS, summaryClass } from "./record-forms";
 import { RecordFacts, kindLine, recordProvenance } from "./record-row";
@@ -134,8 +134,8 @@ export function LifeAdminItemView({
         <EmptyState
           icon={SearchX}
           heading="This item isn't in your Life admin."
-          description="It may have been deleted or marked as not yours. Everything you keep is in Your things."
-          action={<ButtonLink href="/life-admin?view=life&tab=things" variant="primary">Back to Life admin</ButtonLink>}
+          description="It may have been deleted or marked as not yours. Everything you keep is under Records."
+          action={<ButtonLink href="/life-admin?view=life&tab=records" variant="primary">Back to Life admin</ButtonLink>}
         />
       </>
     );
@@ -143,6 +143,9 @@ export function LifeAdminItemView({
   const { record, type, zone } = data;
   const phase = phaseOfView(record);
   const currentYear = data.today.slice(0, 4);
+  // Back to its row in Records: one that isn't active needs its status shown too.
+  const status = listStatusOf(record);
+  const backHref = `${recordsHref({ categories: [], statuses: status === "active" ? ["active"] : ["active", status] })}#record-${encodeURIComponent(record.id)}`;
   const historyCount = data.history.reduce((sum, day) => sum + day.groups.reduce((n, group) => n + group.lines.length, 0), 0);
   return (
     <>
@@ -152,7 +155,7 @@ export function LifeAdminItemView({
         description={`${data.kindLabel} · ${data.categoryLabel}`}
         meta={<PhaseBadge phase={phase.phase} label={phase.label} />}
       >
-        <ButtonLink href={`/life-admin?view=life&tab=things#record-${encodeURIComponent(record.id)}`} variant="secondary">
+        <ButtonLink href={backHref} variant="secondary">
           <ArrowLeft aria-hidden={true} className="h-4 w-4 shrink-0" />
           Back to Life admin
         </ButtonLink>

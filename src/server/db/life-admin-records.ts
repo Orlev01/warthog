@@ -81,6 +81,11 @@ export interface PendingChange {
   readonly remove: readonly string[];
   readonly dueDate?: string | null;
   readonly status?: string;
+  // A booking's or case's detailed state, the kind the record moves to (an older record given
+  // its kind), and the thing it is linked to (null unlinks), when the change sets them.
+  readonly state?: string | null;
+  readonly type?: string;
+  readonly parentId?: string | null;
   readonly byAgentId: string;
   readonly at: string;
   readonly foundIn?: RecordFoundIn;

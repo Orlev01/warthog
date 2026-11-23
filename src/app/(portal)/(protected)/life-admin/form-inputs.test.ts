@@ -1,6 +1,6 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { bookingFilters, combineDateTime, itemPath, journalInput, noticeField, recordDate, recordFields, recordIds, recordOffsets, recordParent, recordReturnPath, recordStatus, recordTab, recordTypeId, taskReturnPath } from "./form-inputs";
+import { bookingFilters, combineDateTime, itemPath, journalInput, noticeField, recordDate, recordFields, recordFilters, recordIds, recordOffsets, recordParent, recordReturnPath, recordStatus, recordTab, recordTypeId, taskReturnPath } from "./form-inputs";
 
 test("record form keeps personal fields separate from metadata and action internals", () => {
   const form = new FormData();
@@ -14,8 +14,8 @@ test("record form keeps personal fields separate from metadata and action intern
   form.set("field:dueDate", "A personal field, not scheduling metadata");
   assert.deepEqual(recordFields(form), { title: "Licence renewal", dueDate: "A personal field, not scheduling metadata" });
   assert.equal(recordDate(form), "2027-02-28");
-  // A form left open from before typed records still lands on "Your things".
-  assert.equal(recordReturnPath(form), "/life-admin?view=life&tab=things");
+  // A form left open from before typed records still lands on Records.
+  assert.equal(recordReturnPath(form), "/life-admin?view=life&tab=records");
 });
 
 test("date can be cleared without turning an omitted date into a destructive edit", () => {
@@ -27,19 +27,49 @@ test("date can be cleared without turning an omitted date into a destructive edi
 });
 
 test("record return location accepts known views only", () => {
-  for (const value of ["https://example.test", "receipts&notice=saved", "__proto__", "things", "subscriptions"]) {
+  for (const value of ["https://example.test", "receipts&notice=saved", "__proto__", "things", "subscriptions", "records"]) {
     const form = new FormData(); form.set("returnTab", value);
-    assert.equal(recordReturnPath(form), "/life-admin?view=life&tab=things");
+    assert.equal(recordReturnPath(form), "/life-admin?view=life&tab=records");
   }
   const form = new FormData(); form.set("returnTab", "checklist");
   assert.equal(recordReturnPath(form), "/life-admin?view=life&tab=checklist");
 });
 
-test("the older tabs in reminder links (subscriptions, receipts, renewals) open Your things", () => {
-  for (const legacy of ["subscriptions", "receipts", "renewals", "things", undefined, "", "nonsense"]) {
-    assert.equal(recordTab(legacy), "things", String(legacy));
+test("an action on the Records tab returns to the filters it was submitted under, well-formed values only", () => {
+  const form = new FormData();
+  form.set("returnTab", "records");
+  for (const value of ["vehicles", "x_7kq2mz", "Vehicles'; --", "https://evil.test", "vehicles"]) form.append("returnCategory", value);
+  for (const value of ["finished", "active", "everything", "finished"]) form.append("returnStatus", value);
+  assert.equal(recordReturnPath(form), "/life-admin?view=life&tab=records&category=vehicles&category=x_7kq2mz&status=active&status=finished");
+  const only = new FormData();
+  only.set("returnTab", "records");
+  only.append("returnStatus", "active");
+  assert.equal(recordReturnPath(only), "/life-admin?view=life&tab=records", "the default status is left out");
+  const checklist = new FormData();
+  checklist.set("returnTab", "checklist");
+  checklist.append("returnCategory", "vehicles");
+  assert.equal(recordReturnPath(checklist), "/life-admin?view=life&tab=checklist", "other tabs carry no record filters");
+});
+
+test("the older tabs (things, and subscriptions, receipts, renewals in reminder links) open Records", () => {
+  for (const legacy of ["subscriptions", "receipts", "renewals", "things", "records", undefined, "", "nonsense"]) {
+    assert.equal(recordTab(legacy), "records", String(legacy));
   }
   assert.equal(recordTab("checklist"), "checklist");
+});
+
+test("the Records filters: repeated categories and statuses, unknown ones dropped, Active when no status is left", () => {
+  const ids = ["home", "vehicles", "health", "x_7kq2mz", "other"];
+  assert.deepEqual(recordFilters({}, ids), { categories: [], statuses: ["active"] }, "no filter: every category, what's active");
+  assert.deepEqual(
+    recordFilters({ category: ["health", "vehicles", "pets", "health", "Vehicles"], status: ["finished", "active", "finished", "everything"] }, ids),
+    { categories: ["vehicles", "health"], statuses: ["active", "finished"] },
+    "in catalogue and list order, once each; unknown and unshaped ones dropped",
+  );
+  assert.deepEqual(recordFilters({ category: "x_7kq2mz", status: "cancelled" }, ids), { categories: ["x_7kq2mz"], statuses: ["cancelled"] }, "a single value, a category of the person's own");
+  assert.deepEqual(recordFilters({ status: ["bogus", ""] }, ids).statuses, ["active"], "only unknown statuses: back to Active");
+  assert.deepEqual(recordFilters({ status: ["on_hold", "finished", "cancelled", "active"] }, ids).statuses, ["active", "on_hold", "finished", "cancelled"]);
+  assert.deepEqual(recordFilters({ category: Array.from({ length: 200 }, () => "vehicles") }, ids).categories, ["vehicles"], "a flood of values is bounded");
 });
 
 test("the add and edit forms' type, parent and id inputs", () => {
@@ -101,9 +131,9 @@ test("a task action returns to the Tasks view, keeping a well-formed assignee fi
   }
 });
 
-test("the new tabs open by name; anything else opens Your things", () => {
-  for (const tab of ["upcoming", "bookings", "checklist", "things"] as const) assert.equal(recordTab(tab), tab);
-  assert.equal(recordTab("bookings&x=1"), "things");
+test("the new tabs open by name; anything else opens Records", () => {
+  for (const tab of ["upcoming", "bookings", "checklist", "records"] as const) assert.equal(recordTab(tab), tab);
+  assert.equal(recordTab("bookings&x=1"), "records");
 });
 
 test("a date-time picker's wall time and zone combine on the server into the canonical stored value", () => {
@@ -130,7 +160,7 @@ test("a date-time picker's wall time and zone combine on the server into the can
 
 test("the item page's inputs: its address, and the journal form", () => {
   assert.equal(itemPath("0F8A4B2C-1D3E-4F5A-8B9C-0D1E2F3A4B5C"), "/life-admin/items/0f8a4b2c-1d3e-4f5a-8b9c-0d1e2f3a4b5c");
-  for (const bad of ["../activity", "1", "", null, "https://example.test"]) assert.equal(itemPath(bad), "/life-admin?view=life&tab=things", String(bad));
+  for (const bad of ["../activity", "1", "", null, "https://example.test"]) assert.equal(itemPath(bad), "/life-admin?view=life&tab=records", String(bad));
   const form = new FormData();
   form.set("recordId", "r1");
   form.set("entryKind", "next");
@@ -141,9 +171,15 @@ test("the item page's inputs: its address, and the journal form", () => {
   assert.equal(journalInput(form).due, null, "only a next step takes a due date");
 });
 
-test("the Bookings filters keep only well-formed values", () => {
-  assert.deepEqual(bookingFilters({ category: "travel", for_whom: " Mum ", state: "upcoming", page: "2" }), { category: "travel", forWhom: "Mum", state: "upcoming", page: 2 });
-  assert.deepEqual(bookingFilters({ category: "x_7kq2mz" }), { category: "x_7kq2mz" }, "a category of the person's own");
+test("the Bookings filters keep only well-formed values, each repeatable", () => {
+  assert.deepEqual(bookingFilters({ category: "travel", for_whom: " Mum ", state: "upcoming", page: "2" }), { categories: ["travel"], forWhom: ["Mum"], states: ["upcoming"], page: 2 });
+  assert.deepEqual(bookingFilters({ category: "x_7kq2mz" }), { categories: ["x_7kq2mz"] }, "a category of the person's own");
+  assert.deepEqual(
+    bookingFilters({ category: ["travel", "outings", "travel"], for_whom: ["Mum", "mum", "Sam"], state: ["completed", "upcoming", "booked"] }),
+    { categories: ["travel", "outings"], forWhom: ["Mum", "Sam"], states: ["upcoming", "completed"] },
+    "several of each, once each, states in their usual order",
+  );
   assert.deepEqual(bookingFilters({ category: "Travel'; --", state: "booked", page: "0", for_whom: "x".repeat(61) }), {});
   assert.deepEqual(bookingFilters({ page: "-1" }), {});
+  assert.deepEqual(bookingFilters({ page: ["3", "9"] }), { page: 3 }, "a repeated page takes its first value");
 });

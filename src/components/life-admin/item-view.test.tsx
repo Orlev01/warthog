@@ -83,7 +83,7 @@ test("the heading names the item, its kind and category, and where it stands in 
   const heading = /<header class="wh-page-heading">([\s\S]*?)<\/header>/.exec(markup)![1]!;
   assert.match(text(heading), /^Life admin Ester Restaurant · Going out Completed Back to Life admin$/);
   assert.match(heading, /<svg[^>]*aria-hidden="true"[\s\S]*?<\/svg>Completed/);
-  assert.match(heading, new RegExp(`href="/life-admin\\?view=life&amp;tab=things#record-${ID}"`));
+  assert.match(heading, new RegExp(`href="/life-admin\\?view=life&amp;tab=records&amp;status=active&amp;status=finished#record-${ID}"`), "back to its row, with its status shown");
 });
 
 test("Where it stands is the agents' one-line summary, with the item's facts, provenance and the anchor it belongs to", () => {
@@ -177,7 +177,7 @@ test("an item that isn't the person's (or no longer exists) says so, with a way 
   const markup = text(render(null));
   assert.match(markup, /Item not found/);
   assert.match(markup, /This item isn't in your Life admin\. It may have been deleted or marked as not yours\./);
-  assert.match(render(null), /href="\/life-admin\?view=life&amp;tab=things"[^>]*>Back to Life admin/);
+  assert.match(render(null), /href="\/life-admin\?view=life&amp;tab=records"[^>]*>Back to Life admin/);
 });
 
 test("the item page uses tokens, never raw hex", () => {

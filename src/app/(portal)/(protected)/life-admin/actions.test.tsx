@@ -393,7 +393,7 @@ test("the loader returns the session user's records, checklist and tasks and mou
     );
 
     // "mounts LifeAdminView": feeding the loader's records + checklist straight into the
-    // already-render-tested view renders the owner's screen: every kind on "Your things".
+    // already-render-tested view renders the owner's screen: every kind on Records.
     assert.equal(data.records.length, 3, "every record kind is loaded");
     const thingsText = strip(
       renderToStaticMarkup(<LifeAdminView today={data.today} records={data.records} checklist={data.checklist} />),

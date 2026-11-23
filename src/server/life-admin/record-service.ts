@@ -362,12 +362,15 @@ async function applyChange(
   if (statusChanged) fieldsChanged.push({ key: "status", label: "Status", from: existing.state ?? existing.status, to: choice.state ?? choice.status });
   if (dueChanged) fieldsChanged.push({ key: "due_date", label: type.due?.label ?? "Due", ...(existing.dueDate ? { from: dateText(existing.dueDate)! } : {}), ...(dueDate ? { to: dueDate } : {}) });
 
+  const retyped = change.retype || (!existing.type && !change.keepUntyped);
   if (actor.kind === "agent" && existing.reviewState === "confirmed") {
     const pending: PendingChange = {
       set: setFields,
       remove: removed,
       ...(dueChanged ? { dueDate } : {}),
-      ...(statusChanged ? { status: choice.status } : {}),
+      ...(statusChanged ? { status: choice.status, state: choice.state ?? null } : {}),
+      ...(retyped ? { type: type.id } : {}),
+      ...(parentChanged ? { parentId: change.parentId } : {}),
       byAgentId: actor.agentId,
       at: ctx.now.toISOString(),
       ...(change.foundIn ? { foundIn: change.foundIn } : {}),
@@ -388,7 +391,7 @@ async function applyChange(
       status: choice.status,
       state: choice.state,
       remindUntil: change.keepUntyped ? undefined : remindUntilOf(type, choice.status, choice.state, dueDate !== undefined ? dueDate : existing.dueDate),
-      ...(change.retype || (!existing.type && !change.keepUntyped) ? { type: type.id } : {}),
+      ...(retyped ? { type: type.id } : {}),
       ...(change.foundIn !== undefined ? { foundIn: change.foundIn } : {}),
       ...(change.parentId !== undefined ? { parentId: change.parentId } : {}),
       matchKeys: matchKeysOf(ctx, type, next, parentId),
@@ -519,11 +522,16 @@ export async function acceptPendingChange(ctx: ServiceContext, id: string): Prom
     const record = await getRecordForUser(tx, ctx.userId, id, ctx.dek);
     if (!record?.pending) return null;
     const { pending } = record;
-    const type = typeOf(ctx.catalogue, record);
+    // A change that moves an older record into its kind (or a record into another kind) is
+    // applied as that kind, provided the person's catalogue still has it.
+    const movedTo = pending.type !== undefined ? ctx.catalogue.type(pending.type) : undefined;
+    const type = movedTo ?? typeOf(ctx.catalogue, record);
     const fields: Record<string, unknown> = { ...record.fields, ...pending.set };
     for (const key of pending.remove) delete fields[key];
     const dueDate = pending.dueDate !== undefined ? pending.dueDate : record.dueDate;
     const status = pending.status ?? record.status;
+    const state = pending.state !== undefined ? pending.state : record.state;
+    const parentId = pending.parentId !== undefined ? pending.parentId : record.parentId;
     const updated = await updateRecord(
       tx,
       {
@@ -532,9 +540,12 @@ export async function acceptPendingChange(ctx: ServiceContext, id: string): Prom
         fields,
         ...(pending.dueDate !== undefined ? { dueDate: pending.dueDate } : {}),
         status,
-        remindUntil: remindUntilOf(type, status, record.state, dueDate),
+        ...(pending.state !== undefined ? { state: pending.state } : {}),
+        ...(movedTo ? { type: movedTo.id } : {}),
+        ...(pending.parentId !== undefined ? { parentId: pending.parentId } : {}),
+        remindUntil: remindUntilOf(type, status, state, dueDate),
         ...(pending.foundIn ? { foundIn: pending.foundIn } : {}),
-        matchKeys: matchKeysOf(ctx, type, fields, record.parentId),
+        matchKeys: matchKeysOf(ctx, type, fields, parentId),
         reviewState: "confirmed",
         changedBy: { kind: "person" },
         clearPending: true,

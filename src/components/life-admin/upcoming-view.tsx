@@ -11,7 +11,7 @@ import { shortDate } from "@/domain/life-admin/journal";
 import { phaseOfView, upcomingSections } from "./record-groups";
 import { daysText, formatCalendarDate, recordName, whenLine, whenText } from "./record-format";
 import { PhaseBadge, phaseIcon } from "./phase-badge";
-import { NotCheckedTag, handlingText } from "./record-row";
+import { NotCheckedTag, handlingText, itemHref } from "./record-row";
 import type { LifeAdminRecordView, NextStepView } from "./record-view-types";
 
 // Upcoming (docs/adr/life-admin-profile.md): what needs the person soon, across every
@@ -19,7 +19,7 @@ import type { LifeAdminRecordView, NextStepView } from "./record-view-types";
 // 60 days) — and the next steps anyone recorded with a due date. Where each record stands comes
 // from the one lifecycle module, via the loader; every line links to the item's own page.
 
-export const itemHref = (id: string) => `/life-admin/items/${encodeURIComponent(id)}`;
+export { itemHref };
 
 function UpcomingRow({ record, catalogue, today, zone }: { record: LifeAdminRecordView; catalogue: Catalogue; today: string; zone: string }) {
   const type = catalogue.typeOfRecord(record.kind, record.type ?? null);
@@ -71,7 +71,7 @@ export function UpcomingView({
   ].filter((group) => group.rows.length > 0);
   return (
     <>
-      <WorkspacePanel title="Coming up" description="What's happening now, overdue, and due or booked in the next 60 days, across all your things." icon={CalendarClock}>
+      <WorkspacePanel title="Coming up" description="What's happening now, overdue, and due or booked in the next 60 days, across all your records." icon={CalendarClock}>
         {groups.length === 0 ? (
           <EmptyState variant="inline" icon={CalendarCheck} heading="Nothing due in the next 60 days." description="Renewals, expiry dates and bookings show here as they come up." />
         ) : (

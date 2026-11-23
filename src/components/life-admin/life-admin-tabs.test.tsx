@@ -1,5 +1,5 @@
-// Review fix G10 — the Life admin section switcher is a real tab list (now four tabs: Your
-// things, Upcoming, Bookings and the Moving checklist, docs/adr/life-admin-profile.md).
+// Review fix G10 — the Life admin section switcher is a real tab list (now four tabs: Records,
+// Upcoming, Bookings and the Moving checklist, docs/adr/life-admin-profile.md).
 //
 // The four section buttons carried aria-selected on plain role=button elements (which
 // assistive technology does not announce), with no tablist/tabpanel relationship, and the
@@ -16,7 +16,7 @@ import { readFileSync } from "node:fs";
 
 import { LifeAdminView, nextTabIndex } from "./life-admin-view";
 
-function render(initialTab?: "things" | "upcoming" | "bookings" | "checklist"): string {
+function render(initialTab?: "records" | "upcoming" | "bookings" | "checklist"): string {
   return renderToStaticMarkup(<LifeAdminView today="2026-11-12" records={[]} checklist={[]} initialTab={initialTab} />);
 }
 
@@ -41,7 +41,7 @@ test("the section buttons are tabs in a labelled tablist, exactly one selected, 
   }));
   assert.deepEqual(
     tabs.map((t) => t.text),
-    ["Your things (0)", "Upcoming (0)", "Bookings (0)", "Moving checklist (0)"],
+    ["Records (0)", "Upcoming (0)", "Bookings (0)", "Moving checklist (0)"],
   );
   const selected = tabs.filter(
     (t) => attr(t.attrs, "aria-selected") === "true",
@@ -70,7 +70,7 @@ test("the section buttons are tabs in a labelled tablist, exactly one selected, 
 });
 
 test("the selected tab is marked by more than colour", () => {
-  const markup = render("things");
+  const markup = render("records");
   const selected = /<button\b([^>]*aria-selected="true"[^>]*)>/.exec(
     markup,
   )![1]!;
@@ -92,8 +92,8 @@ test("arrow keys, Home and End move between tabs, wrapping at the ends", () => {
   assert.equal(nextTabIndex(1, "a", 4), null, "other keys are left alone");
 });
 
-test("every panel stays mounted with only the selected panel visible; Your things opens by default", () => {
-  for (const [initialTab, shownIndex] of [[undefined, 0], ["things", 0], ["upcoming", 1], ["bookings", 2], ["checklist", 3]] as const) {
+test("every panel stays mounted with only the selected panel visible; Records opens by default", () => {
+  for (const [initialTab, shownIndex] of [[undefined, 0], ["records", 0], ["upcoming", 1], ["bookings", 2], ["checklist", 3]] as const) {
     const panels = [
       ...render(initialTab).matchAll(/<div\b([^>]*role="tabpanel"[^>]*)>/g),
     ].map((match) => match[1]!);

@@ -31,10 +31,31 @@ export function hrefWith(
   return query ? `${path}?${query}` : path;
 }
 
+/**
+ * `path` with `state`, where a value may be a list (`?state=upcoming&state=completed`): keys in a
+ * stable order, a list's values in turn, empty values left out.
+ */
+export function hrefWithLists(path: string, state: Readonly<Record<string, string | readonly string[] | undefined>>): string {
+  const query = new URLSearchParams();
+  for (const key of Object.keys(state).sort((a, b) => a.localeCompare(b))) {
+    const value = state[key];
+    for (const one of typeof value === "string" ? [value] : value ?? []) if (one !== "") query.append(key, one);
+  }
+  const text = query.toString();
+  return text ? `${path}?${text}` : path;
+}
+
 // The first non-empty value of a GET parameter (a repeated key takes its first entry).
 export function firstParam(raw: string | string[] | undefined): string | undefined {
   const value = Array.isArray(raw) ? raw[0] : raw;
   return value !== undefined && value.length > 0 ? value : undefined;
+}
+
+// Every non-empty value of a repeatable GET parameter (`?category=a&category=b`), each once and in
+// order, at most `max` of them so a crafted address can't make a page do unbounded work.
+export function allParams(raw: string | readonly string[] | undefined, max = 40): string[] {
+  const values = raw === undefined ? [] : typeof raw === "string" ? [raw] : raw;
+  return [...new Set(values.filter((value) => value.length > 0))].slice(0, max);
 }
 
 // A view or mode parameter validated against its known keys, else the fallback.

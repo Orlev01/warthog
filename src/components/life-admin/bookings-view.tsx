@@ -7,12 +7,11 @@ import { WorkspacePanel } from "@/components/shell/workspace-surfaces";
 import { ListGroup, LIST_ROW } from "@/components/ui/list-group";
 import { ListToolbar } from "@/components/ui/list-toolbar";
 import { ActiveFilters, type AppliedFilter } from "@/components/ui/filter-links";
-import { SelectField } from "@/components/ui/field";
-import { Button } from "@/components/ui/button";
+import { FilterForm, MultiSelectFilter } from "@/components/ui/multi-select-filter";
 import { ButtonLink } from "@/components/ui/button-link";
 import { EmptyState } from "@/components/ui/empty";
 import type { Catalogue } from "@/domain/life-admin/catalogue";
-import { hrefWith } from "@/lib/href";
+import { hrefWithLists } from "@/lib/href";
 import { bookingsView, phaseOfView, type BookingRow } from "./record-groups";
 import { recordName, whenLine } from "./record-format";
 import { PhaseBadge } from "./phase-badge";
@@ -23,23 +22,29 @@ import type { BookingFilters, LifeAdminRecordView } from "./record-view-types";
 // Bookings (docs/adr/life-admin-profile.md): every booking from every category — flights,
 // stays, restaurants, appointments, a category of the person's own — in two parts: live
 // (waiting to be confirmed, upcoming, happening now; soonest first) and past (completed,
-// cancelled, missed, lapsed; newest first, by month, a page at a time). Plain GET filters
-// narrow both by category, who it's for and state, so Back/Forward and links keep them. Each row
-// says where it stands in words and an icon, its category, the anchor it belongs to (a trip, a
-// vehicle) and who is handling it, and links to the item's page with its whole journal.
+// cancelled, missed, lapsed; newest first, by month, a page at a time). The same multiple-choice
+// filters as the Records tab, in a plain GET form, narrow both by category (the one the Records
+// tab uses), who it's for and state, so Back/Forward and links keep them. Each row says where it
+// stands in words and an icon, its category, the anchor it belongs to (a trip, a vehicle) and who
+// is handling it, and links to the item's page with its whole journal.
 
 const BASE = "/life-admin";
 
-function filterState(filters: BookingFilters): Record<string, string | undefined> {
-  return {
+// The Bookings tab with these filters, each chosen value repeated; a filter change starts again
+// from the first page.
+function bookingsHref(filters: BookingFilters, patch: Partial<BookingFilters> = {}): string {
+  const next = { ...filters, ...patch };
+  return hrefWithLists(BASE, {
     view: "life",
     tab: "bookings",
-    category: filters.category,
-    for_whom: filters.forWhom,
-    state: filters.state,
-    ...(filters.page && filters.page > 1 ? { page: String(filters.page) } : {}),
-  };
+    category: next.categories,
+    for_whom: next.forWhom,
+    state: next.states,
+    page: next.page && next.page > 1 ? String(next.page) : undefined,
+  });
 }
+
+const without = (list: readonly string[] | undefined, value: string) => (list ?? []).filter((other) => other !== value);
 
 function BookingItem({ row, catalogue, zone, currentYear }: { row: BookingRow<LifeAdminRecordView>; catalogue: Catalogue; zone: string; currentYear: string }) {
   const { record, type, category, anchor } = row;
@@ -93,17 +98,20 @@ export function BookingsView({
 }) {
   const view = bookingsView(records, catalogue, filters, zone);
   const currentYear = today.slice(0, 4);
-  const state = filterState({ ...filters, page: view.page });
-  const ids = React.useId();
+  const current: BookingFilters = { ...filters, page: view.page };
+  const removing: BookingFilters = { ...filters, page: undefined };
   const applied: AppliedFilter[] = [];
-  const categoryLabel = filters.category ? catalogue.category(filters.category)?.label ?? filters.category : null;
-  if (categoryLabel) applied.push({ label: `Category: ${categoryLabel}`, removeHref: hrefWith(BASE, state, { category: undefined }, ["page"]) });
-  if (filters.forWhom) applied.push({ label: `For: ${filters.forWhom}`, removeHref: hrefWith(BASE, state, { for_whom: undefined }, ["page"]) });
-  if (filters.state) {
-    const label = view.options.states.find((option) => option.phase === filters.state)?.label ?? filters.state;
-    applied.push({ label: `State: ${label}`, removeHref: hrefWith(BASE, state, { state: undefined }, ["page"]) });
+  for (const id of filters.categories ?? []) {
+    applied.push({ label: `Category: ${catalogue.category(id)?.label ?? id}`, removeHref: bookingsHref(removing, { categories: without(filters.categories, id) }) });
   }
-  const clearHref = hrefWith(BASE, { view: "life", tab: "bookings" });
+  for (const who of filters.forWhom ?? []) {
+    applied.push({ label: `For: ${who}`, removeHref: bookingsHref(removing, { forWhom: without(filters.forWhom, who) }) });
+  }
+  for (const state of filters.states ?? []) {
+    const label = view.options.states.find((option) => option.phase === state)?.label ?? state;
+    applied.push({ label: `State: ${label}`, removeHref: bookingsHref(removing, { states: without(filters.states, state) }) });
+  }
+  const clearHref = bookingsHref({});
   const filtered = applied.length > 0;
 
   if (view.total === 0) {
@@ -113,8 +121,8 @@ export function BookingsView({
           variant="inline"
           icon={CalendarDays}
           heading="No bookings yet."
-          description="Ask your agent to look for booking confirmations in your email, or add one yourself under Your things."
-          action={<ButtonLink href="/life-admin?view=life&tab=things#new-record" size="sm">Add a booking</ButtonLink>}
+          description="Ask your agent to look for booking confirmations in your email, or add one yourself under Records."
+          action={<ButtonLink href="/life-admin?view=life&tab=records#new-record" size="sm">Add a booking</ButtonLink>}
         />
       </WorkspacePanel>
     );
@@ -125,31 +133,33 @@ export function BookingsView({
       <ListToolbar
         label="Filter bookings"
         search={
-          <form method="get" action={BASE} className="flex min-w-0 flex-col gap-3 sm:flex-row sm:flex-wrap sm:items-end">
-            <input type="hidden" name="view" value="life" />
-            <input type="hidden" name="tab" value="bookings" />
-            <SelectField label="Category" id={`${ids}-category`} name="category" defaultValue={filters.category ?? ""} width="text">
-              <option value="">Any category</option>
-              {view.options.categories.map((category) => (
-                <option key={category.id} value={category.id}>{category.label}</option>
-              ))}
-            </SelectField>
+          <FilterForm action={BASE} label="Filter bookings" hidden={{ view: "life", tab: "bookings" }}>
+            <MultiSelectFilter
+              label="Category"
+              name="category"
+              options={view.options.categories.map((category) => ({ value: category.id, label: category.label, count: view.counts.categories[category.id] ?? 0 }))}
+              selected={filters.categories ?? []}
+              hint="None ticked shows every category."
+            />
             {view.options.forWhom.length ? (
-              <SelectField label="For" id={`${ids}-for`} name="for_whom" defaultValue={filters.forWhom ?? ""} width="text">
-                <option value="">Anyone</option>
-                {view.options.forWhom.map((who) => (
-                  <option key={who} value={who}>{who}</option>
-                ))}
-              </SelectField>
+              <MultiSelectFilter
+                label="For"
+                name="for_whom"
+                noneLabel="Anyone"
+                options={view.options.forWhom.map((who) => ({ value: who, label: who, count: view.counts.forWhom[who] ?? 0 }))}
+                selected={view.options.forWhom.filter((who) => (filters.forWhom ?? []).some((chosen) => chosen.toLowerCase() === who.toLowerCase()))}
+                hint="None ticked shows everyone's."
+              />
             ) : null}
-            <SelectField label="State" id={`${ids}-state`} name="state" defaultValue={filters.state ?? ""} width="text">
-              <option value="">Any state</option>
-              {view.options.states.map((option) => (
-                <option key={option.phase} value={option.phase}>{option.label}</option>
-              ))}
-            </SelectField>
-            <Button type="submit" variant="secondary">Apply filters</Button>
-          </form>
+            <MultiSelectFilter
+              label="State"
+              name="state"
+              noneLabel="Any"
+              options={view.options.states.map((option) => ({ value: option.phase, label: option.label, count: view.counts.states[option.phase] ?? 0 }))}
+              selected={filters.states ?? []}
+              hint="None ticked shows every state."
+            />
+          </FilterForm>
         }
         applied={<ActiveFilters filters={applied} clearHref={clearHref} />}
         status={`${view.live.length} live · ${view.pastTotal} past${filtered ? " (filtered)" : ""}`}
@@ -173,11 +183,11 @@ export function BookingsView({
           view.pages > 1 ? (
             <nav aria-label="Past bookings pages" className="flex min-w-0 flex-wrap items-center gap-3">
               {view.page > 1 ? (
-                <ButtonLink href={hrefWith(BASE, state, { page: view.page - 1 > 1 ? String(view.page - 1) : undefined })} size="sm">Newer</ButtonLink>
+                <ButtonLink href={bookingsHref(current, { page: view.page - 1 })} size="sm">Newer</ButtonLink>
               ) : null}
               <span className="text-sm text-fg-muted">Page {view.page} of {view.pages}</span>
               {view.page < view.pages ? (
-                <ButtonLink href={hrefWith(BASE, state, { page: String(view.page + 1) })} size="sm">Older</ButtonLink>
+                <ButtonLink href={bookingsHref(current, { page: view.page + 1 })} size="sm">Older</ButtonLink>
               ) : null}
             </nav>
           ) : undefined

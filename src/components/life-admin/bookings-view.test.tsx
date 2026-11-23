@@ -1,9 +1,9 @@
 // The Bookings tab (docs/adr/life-admin-profile.md): every booking from every category, built-in
 // or the person's own, live (waiting to be confirmed, upcoming, happening now; soonest first)
 // and past (completed, cancelled, missed, lapsed; newest first, by month, 30 to a page). Plain
-// GET filters by category, who it's for and state. Each row says where it stands in words and
-// an icon, its category, the anchor it belongs to and who is handling it, and links to the
-// item's page.
+// GET filters by category, who it's for and state, each multiple-choice (the same filter the
+// Records tab uses). Each row says where it stands in words and an icon, its category, the
+// anchor it belongs to and who is handling it, and links to the item's page.
 
 import * as React from "react";
 import { test } from "node:test";
@@ -61,12 +61,24 @@ test("live bookings soonest first (waiting, upcoming, happening now); past ones 
 });
 
 test("filters narrow both parts by category, who it's for and state; a value that matches nothing shows nothing", () => {
-  assert.deepEqual(bookingsView(ALL, BUILT_IN, { category: "outings" }, ZONE).live.map((row) => row.record.id), ["hold"]);
-  const mum = bookingsView(ALL, BUILT_IN, { forWhom: "mum" }, ZONE);
+  assert.deepEqual(bookingsView(ALL, BUILT_IN, { categories: ["outings"] }, ZONE).live.map((row) => row.record.id), ["hold"]);
+  const mum = bookingsView(ALL, BUILT_IN, { forWhom: ["mum"] }, ZONE);
   assert.deepEqual([mum.live.map((row) => row.record.id), mum.past.flatMap((month) => month.rows.map((row) => row.record.id))], [["hold"], ["missed"]]);
-  const cancelled = bookingsView(ALL, BUILT_IN, { state: "cancelled" }, ZONE);
+  const cancelled = bookingsView(ALL, BUILT_IN, { states: ["cancelled"] }, ZONE);
   assert.deepEqual([cancelled.live.length, cancelled.pastTotal], [0, 1]);
-  assert.deepEqual(bookingsView(ALL, BUILT_IN, { category: "pets" }, ZONE).total, ALL.length - 1, "the total is every booking; the lists are what matches");
+  assert.deepEqual(bookingsView(ALL, BUILT_IN, { categories: ["pets"] }, ZONE).total, ALL.length - 1, "the total is every booking; the lists are what matches");
+});
+
+test("each filter takes several values, and offers what's chosen even when nothing matches it, with counts", () => {
+  const several = bookingsView(ALL, BUILT_IN, { categories: ["outings", "health"], states: ["pending", "cancelled", "missed"] }, ZONE);
+  assert.deepEqual([several.live.map((row) => row.record.id), several.past.flatMap((month) => month.rows.map((row) => row.record.id))], [["hold"], ["cancelled", "missed"]]);
+  const pets = bookingsView(ALL, BUILT_IN, { categories: ["pets"], forWhom: ["Sam"], states: ["lapsed"] }, ZONE);
+  assert.ok(pets.options.categories.some((category) => category.id === "pets"), "a chosen category can be unticked");
+  assert.ok(pets.options.forWhom.includes("Sam"));
+  assert.ok(pets.options.states.some((state) => state.phase === "lapsed"));
+  const counted = bookingsView(ALL, BUILT_IN, { states: ["upcoming"] }, ZONE);
+  assert.deepEqual([counted.counts.categories.travel, counted.counts.categories.outings], [2, 0], "categories count what the other filters leave");
+  assert.deepEqual([counted.counts.states.upcoming, counted.counts.states.completed], [2, 1], "states count across every state");
 });
 
 test("past bookings are paged 30 at a time", () => {
@@ -99,27 +111,33 @@ test("each row: its state in words and an icon, its name linking to the item, ki
   assert.doesNotMatch(text(panel), /BX12AB/, "a standing item isn't a booking");
 });
 
-test("the filters are a plain GET form that keeps the tab, with removable chips and live counts", () => {
-  const panel = bookingsPanel(render({ bookingFilters: { category: "outings", forWhom: "Mum" } }));
-  const form = /<form\b[^>]*method="get"[^>]*>([\s\S]*?)<\/form>/.exec(panel)!;
+test("the filters are the same multiple-choice filters as Records, in a plain GET form that keeps the tab, with removable chips and live counts", () => {
+  const panel = bookingsPanel(render({ bookingFilters: { categories: ["outings"], forWhom: ["Mum"] } }));
+  const form = /<form\b[^>]*aria-label="Filter bookings"[^>]*>([\s\S]*?)<\/form>/.exec(panel)!;
   assert.ok(form, "a GET form, so it works without JavaScript and Back/Forward keep it");
+  assert.doesNotMatch(form[0], /method="post"/i);
   assert.match(form[1]!, /<input type="hidden" name="view" value="life"\/><input type="hidden" name="tab" value="bookings"\/>/);
-  assert.match(form[1]!, /<select[^>]*name="category"[\s\S]*?<option value="outings" selected="">Going out<\/option>/);
-  assert.match(form[1]!, /<select[^>]*name="for_whom"[\s\S]*?<option value="Mum" selected="">Mum<\/option>/);
-  assert.match(form[1]!, /<select[^>]*name="state"/);
+  const summaries = [...form[1]!.matchAll(/<summary\b[^>]*>([\s\S]*?)<\/summary>/g)].map((m) => text(m[1]!));
+  assert.deepEqual(summaries, ["Category: Going out", "For: Mum", "State: Any"]);
+  const boxes = [...form[1]!.matchAll(/<input type="checkbox"[^>]*>/g)].map((m) => m[0]).map((box) => [/name="([^"]+)"/.exec(box)![1], /value="([^"]+)"/.exec(box)![1], /\bchecked=""/.test(box)]);
+  assert.deepEqual(boxes.filter(([, , checked]) => checked), [["category", "outings", true], ["for_whom", "Mum", true]], "the chosen values are ticked");
+  assert.ok(boxes.some(([name, value]) => name === "state" && value === "upcoming"), "every state there is can be chosen");
+  assert.match(form[1]!, /type="submit"[^>]*>Apply</, "Apply, for when there's no JavaScript");
   assert.match(panel, /href="\/life-admin\?for_whom=Mum&amp;tab=bookings&amp;view=life"[^>]*>[\s\S]*?Category: Going out/, "removing one filter keeps the other");
   assert.match(text(panel), /1 live · 1 past \(filtered\)/);
 });
 
 test("past bookings page with Newer and Older links that keep the filters", () => {
   const many = Array.from({ length: 35 }, (_, index) => booking(`b${index}`, "outings.restaurant", { provider: `Place ${index}`, starts_at: `2026-10-${String((index % 28) + 1).padStart(2, "0")}T19:00+11:00[Australia/Sydney]` }));
-  const first = bookingsPanel(render({ records: many, bookingFilters: { category: "outings" } }));
+  const first = bookingsPanel(render({ records: many, bookingFilters: { categories: ["outings"] } }));
   assert.match(first, /href="\/life-admin\?category=outings&amp;page=2&amp;tab=bookings&amp;view=life"[^>]*>Older/);
   assert.match(text(first), /Page 1 of 2/);
-  const second = bookingsPanel(render({ records: many, bookingFilters: { category: "outings", page: 2 } }));
+  const second = bookingsPanel(render({ records: many, bookingFilters: { categories: ["outings"], page: 2 } }));
   assert.match(second, /href="\/life-admin\?category=outings&amp;tab=bookings&amp;view=life"[^>]*>Newer/);
 });
 
-test("no bookings yet says how to add one", () => {
-  assert.match(text(bookingsPanel(render({ records: [STANDING] }))), /No bookings yet\. Ask your agent to look for booking confirmations in your email, or add one yourself under Your things\./);
+test("no bookings yet says how to add one, under Records", () => {
+  const panel = bookingsPanel(render({ records: [STANDING] }));
+  assert.match(text(panel), /No bookings yet\. Ask your agent to look for booking confirmations in your email, or add one yourself under Records\./);
+  assert.match(panel, /href="\/life-admin\?view=life&amp;tab=records#new-record"[^>]*>Add a booking/);
 });

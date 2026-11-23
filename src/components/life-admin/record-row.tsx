@@ -1,35 +1,39 @@
 "use client";
 
 import * as React from "react";
-import { ArrowRight, Bell, BellOff, ChevronDown, CircleDashed, GitCompare, Link2, Settings2, Trash2, UserCheck } from "lucide-react";
+import { Bell, BellOff, ChevronDown, CircleDashed, GitCompare, Link2, Trash2, UserCheck } from "lucide-react";
 
 import { LIST_ROW } from "@/components/ui/list-group";
 import { ActionForm, FormSubmit, PendingFormFields } from "@/components/ui/form-submit";
 import { Field, Label } from "@/components/ui/field";
 import { CONTROL_TEXT } from "@/components/ui/input";
 import { Badge } from "@/components/ui/badge";
-import { ButtonLink } from "@/components/ui/button-link";
 import type { Catalogue } from "@/domain/life-admin/catalogue";
 import { shortDate } from "@/domain/life-admin/journal";
 import type { RecordTypeDef } from "@/domain/life-admin/record-types";
 import { receiptUploadError } from "@/lib/receipt-upload";
 import { phaseOfView, reminderSummary } from "./record-groups";
-import { provenanceLine, recordName, typedFacts, whenLine } from "./record-format";
-import { DisabledControl, EditRecordForm, HINT_CLASS, parentOptions, summaryClass } from "./record-forms";
+import { provenanceLine, recordName, rowSummary, typedFacts, whenLine } from "./record-format";
+import { DisabledControl, EditRecordForm, HINT_CLASS, ReturnFields, parentOptions, summaryClass } from "./record-forms";
 import { PhaseBadge } from "./phase-badge";
 import type { AssetOption, LifeAdminAction, LifeAdminRecordView, RecordActions, RecordHandlingView } from "./record-view-types";
 
-// One record as a divider row (docs/adr/life-admin-profile.md): its name, then its kind, when
-// it happens or is due in the kind's words ("Registration · Expires 14 Dec 2026", "Flight ·
-// Starts Thu 3 Dec, 7:30 pm AEDT") and where it stands as words and an icon ("Due soon"), a
-// "Not checked yet" tag while it is an agent's suggestion, its facts labelled and formatted the
-// kind's way, who is handling it and its next step, its reminder setting in words, who added it
-// (and where an agent says it found it), its downloads (receipts), "Open" (the item page, with
-// its journal) and one "Manage" disclosure holding reminders, attach, edit and delete. Every
-// value is text: nothing an agent read from email, or wrote in a journal, ever becomes a link.
+// One record as a compact divider row (docs/adr/life-admin-profile.md), so a long list scans: its
+// name (a link to the item's own page, with its journal), where it stands as words and an icon
+// ("Due soon"), a "Not checked yet" tag while it is an agent's suggestion, then one muted line —
+// its kind, when it's due, renews or starts in the kind's words, its cost and cycle, and its
+// provider ("Expires 14 Dec 2026 · AUD 412.50 a year · Transport for NSW") — and who is handling
+// it with its next step. Everything else is one click away in its "Details" disclosure: its facts
+// labelled and formatted the kind's way, its reminder setting in words, who added it (and where an
+// agent says it found it), its downloads (receipts), and its controls (reminders, attach, edit,
+// delete). Every value is text: nothing an agent read from email, or wrote in a journal, ever
+// becomes a link.
 //
 // The row keeps the `record-<id>` anchor (focusable, clear of the sticky header) that
 // reminder notifications, Home and the Coming up list link to.
+
+/** An item's own page, with where it stands and its whole journal. */
+export const itemHref = (id: string) => `/life-admin/items/${encodeURIComponent(id)}`;
 
 // The native file picker, on the field tokens: 16px text on touch screens, the picker
 // button as a quiet pill.
@@ -58,7 +62,7 @@ function ReminderSetting({ record, editRecordAction }: { record: LifeAdminRecord
     <ActionForm action={editRecordAction} className="flex flex-col gap-3">
       <PendingFormFields>
         <input type="hidden" name="recordId" value={record.id} />
-        <input type="hidden" name="returnTab" value="things" />
+        <ReturnFields />
         <input type="hidden" name="setting" value="reminder" />
         <Field
           label="Remind me (days before)"
@@ -96,7 +100,7 @@ function AttachControl({ record, attachFileAction }: { record: LifeAdminRecordVi
     <ActionForm action={attachFileAction} className="flex flex-col gap-3">
       <PendingFormFields>
         <input type="hidden" name="recordId" value={record.id} />
-        <input type="hidden" name="returnTab" value="things" />
+        <ReturnFields />
         <div className="flex min-w-0 flex-col gap-2">
           <Label htmlFor={fieldId}>Attach a file</Label>
           <p id={`${fieldId}-help`} className={`-mt-1 ${HINT_CLASS}`}>
@@ -171,7 +175,7 @@ function DeleteControl({ record, name, deleteRecordAction }: { record: LifeAdmin
         <p className="text-sm text-fg">Delete this record and all its attached files? This can&apos;t be undone.</p>
         <ActionForm action={deleteRecordAction}>
           <input type="hidden" name="recordId" value={record.id} />
-          <input type="hidden" name="returnTab" value="things" />
+          <ReturnFields />
           <FormSubmit variant="danger-solid" pendingLabel="Deleting…">Delete record and files</FormSubmit>
         </ActionForm>
       </div>
@@ -179,8 +183,7 @@ function DeleteControl({ record, name, deleteRecordAction }: { record: LifeAdmin
   );
 }
 
-// ONE disclosure holding every per-record control, so a long list reads as names and dates,
-// not a stack of forms. Its summary is named for the record.
+// The row's controls, after its facts in Details: reminders, attach (a receipt), edit and delete.
 function ManageControls({
   record,
   type,
@@ -197,23 +200,22 @@ function ManageControls({
   actions: RecordActions;
 }) {
   return (
-    <details className="group/manage min-w-0 open:basis-full">
-      <summary className={summaryClass("ghost", "sm")}>
-        <Settings2 aria-hidden={true} className="h-4 w-4 shrink-0 text-fg-muted" />
-        Manage<span className="sr-only"> {name}</span>
-        <ChevronDown aria-hidden={true} className="h-4 w-4 shrink-0 text-fg-muted transition-transform group-open/manage:rotate-180" />
-      </summary>
-      <div className="mt-2 flex min-w-0 flex-col gap-5 border-s-2 border-line ps-4">
-        <ReminderSetting record={record} editRecordAction={actions.editRecordAction} />
-        {record.kind === "receipt_warranty" ? <AttachControl record={record} attachFileAction={actions.attachFileAction} /> : null}
-        <div className="flex min-w-0 flex-wrap items-start gap-2 border-t border-line pt-4">
-          <EditControl record={record} type={type} name={name} parents={parents} zone={zone} editRecordAction={actions.editRecordAction} />
-          {actions.deleteRecordAction ? <DeleteControl record={record} name={name} deleteRecordAction={actions.deleteRecordAction} /> : null}
-        </div>
+    <div className="flex min-w-0 flex-col gap-5 border-t border-line pt-4">
+      <ReminderSetting record={record} editRecordAction={actions.editRecordAction} />
+      {record.kind === "receipt_warranty" ? <AttachControl record={record} attachFileAction={actions.attachFileAction} /> : null}
+      <div className="flex min-w-0 flex-wrap items-start gap-2">
+        <EditControl record={record} type={type} name={name} parents={parents} zone={zone} editRecordAction={actions.editRecordAction} />
+        {actions.deleteRecordAction ? <DeleteControl record={record} name={name} deleteRecordAction={actions.deleteRecordAction} /> : null}
       </div>
-    </details>
+    </div>
   );
 }
+
+// Where the browser supports it, the Details disclosure's summary sits at the end of the row and
+// its opened panel spans the row's full width under it; elsewhere the opened disclosure takes the
+// row's width.
+const ROW_DISCLOSURE =
+  "group/details min-w-0 open:basis-full supports-[selector(::details-content)]:contents details-content:basis-full details-content:order-last not-open:details-content:hidden";
 
 // A file size in megabytes, for the download links.
 function megabytes(bytes: number): string {
@@ -287,22 +289,13 @@ export function kindLine(type: RecordTypeDef, record: LifeAdminRecordView, zone:
   return [type.label, whenLine(type, record, zone, currentYear)].filter(Boolean).join(" · ");
 }
 
-/** "Open": the item's own page, with where it stands and its whole journal. */
-export function OpenLink({ recordId, name }: { recordId: string; name: string }) {
-  return (
-    <ButtonLink href={`/life-admin/items/${encodeURIComponent(recordId)}`} variant="secondary" size="sm">
-      Open<span className="sr-only"> {name}</span>
-      <ArrowRight aria-hidden={true} className="h-4 w-4 shrink-0" />
-    </ButtonLink>
-  );
-}
-
 export function RecordRow({
   record,
   type,
   catalogue,
   lead,
   partOf,
+  category,
   assets,
   zone = "UTC",
   currentYear,
@@ -316,6 +309,8 @@ export function RecordRow({
   lead?: string;
   // The anchor it belongs to, when the row isn't listed under it.
   partOf?: string | null;
+  // Its category, when the list runs across categories (Finished, Cancelled).
+  category?: string;
   assets: readonly AssetOption[];
   zone?: string;
   currentYear?: string;
@@ -327,12 +322,20 @@ export function RecordRow({
   const suggested = record.reviewState === "suggested";
   const phase = phaseOfView(record);
   const handling = handlingText(record.handling, zone);
+  const summary = rowSummary(type, record, { name, titleKey, lead: Boolean(lead), category, zone, currentYear });
   return (
     <li id={`record-${record.id}`} tabIndex={-1} className={`${LIST_ROW} scroll-mt-32`}>
-      <div className="flex min-w-0 flex-col gap-3">
-        <div className="flex min-w-0 flex-col gap-1">
+      <div className="flex min-w-0 flex-wrap items-start gap-x-3 gap-y-1">
+        <div className="flex min-w-0 flex-[1_1_16rem] flex-col gap-0.5">
           <div className="flex min-w-0 flex-wrap items-center gap-x-2 gap-y-1">
-            <p className="min-w-0 font-medium text-fg [overflow-wrap:anywhere]">{lead ?? name}</p>
+            <a
+              href={itemHref(record.id)}
+              className="inline-flex min-h-11 min-w-0 items-center font-medium text-fg underline-offset-4 hover:underline lg:pointer-fine:min-h-7 [overflow-wrap:anywhere]"
+            >
+              {lead ?? name}
+              {lead ? <span className="sr-only">: {name}</span> : null}
+            </a>
+            <PhaseBadge phase={phase.phase} label={phase.label} />
             {suggested ? <NotCheckedTag /> : null}
             {record.pending ? (
               <Badge tone="info" icon={GitCompare}>
@@ -340,55 +343,57 @@ export function RecordRow({
               </Badge>
             ) : null}
           </div>
-          <div className="flex min-w-0 flex-wrap items-center gap-x-2 gap-y-1">
-            <p className="min-w-0 text-sm text-fg-muted [overflow-wrap:anywhere]">{kindLine(type, record, zone, currentYear)}</p>
-            <PhaseBadge phase={phase.phase} label={phase.label} />
+          {summary ? <p className="min-w-0 text-sm text-fg-muted [overflow-wrap:anywhere]">{summary}</p> : null}
+          {partOf ? (
+            <p className="inline-flex min-w-0 items-center gap-1.5 text-sm text-fg-muted [overflow-wrap:anywhere]">
+              <Link2 aria-hidden={true} className="h-4 w-4 shrink-0" />
+              Part of {partOf}
+            </p>
+          ) : null}
+          {handling ? (
+            <p className="inline-flex min-w-0 items-start gap-1.5 text-sm text-fg [overflow-wrap:anywhere]">
+              <UserCheck aria-hidden={true} className="mt-0.5 h-4 w-4 shrink-0 text-fg-muted" />
+              <span className="min-w-0">{handling}</span>
+            </p>
+          ) : null}
+        </div>
+
+        <details className={ROW_DISCLOSURE}>
+          {/* Pulled back by its own padding, so on a phone (where it wraps under the row) its
+              label lines up with the row's text. */}
+          <summary className={`${summaryClass("ghost", "sm")} -ms-3`}>
+            Details<span className="sr-only"> {name}</span>
+            <ChevronDown aria-hidden={true} className="h-4 w-4 shrink-0 text-fg-muted transition-transform group-open/details:rotate-180" />
+          </summary>
+          <div className="mt-2 flex min-w-0 flex-col gap-3 border-s-2 border-line ps-4">
+            <RecordFacts record={record} type={type} titleKey={lead ? null : titleKey} zone={zone} currentYear={currentYear} />
+
+            <p className="inline-flex items-center gap-1.5 text-sm text-fg-muted">
+              <ReminderIcon aria-hidden={true} className="h-4 w-4 shrink-0" />
+              {reminders.text}
+            </p>
+
+            <p className="text-sm text-fg-muted [overflow-wrap:anywhere]">{recordProvenance(record)}</p>
+
+            {record.files?.length ? (
+              <ul className="flex flex-col">
+                {record.files.map((file, index) => (
+                  <li key={file.id}>
+                    <a
+                      href={`/api/receipts/${file.id}`}
+                      className="inline-flex min-h-11 items-center text-sm font-medium text-fg underline underline-offset-4"
+                    >
+                      Download attachment {index + 1} ({megabytes(file.size)})
+                      <span className="sr-only"> for {name}</span>
+                    </a>
+                  </li>
+                ))}
+              </ul>
+            ) : null}
+
+            <ManageControls record={record} type={type} name={name} parents={parentOptions(type, assets, catalogue, record.id)} zone={zone} actions={actions} />
           </div>
-        </div>
-
-        {partOf ? (
-          <p className="inline-flex min-w-0 items-center gap-1.5 text-sm text-fg-muted [overflow-wrap:anywhere]">
-            <Link2 aria-hidden={true} className="h-4 w-4 shrink-0" />
-            Part of {partOf}
-          </p>
-        ) : null}
-
-        <RecordFacts record={record} type={type} titleKey={lead ? null : titleKey} zone={zone} currentYear={currentYear} />
-
-        {handling ? (
-          <p className="inline-flex min-w-0 items-start gap-1.5 text-sm text-fg [overflow-wrap:anywhere]">
-            <UserCheck aria-hidden={true} className="mt-0.5 h-4 w-4 shrink-0 text-fg-muted" />
-            <span className="min-w-0">{handling}</span>
-          </p>
-        ) : null}
-
-        <p className="inline-flex items-center gap-1.5 text-sm text-fg-muted">
-          <ReminderIcon aria-hidden={true} className="h-4 w-4 shrink-0" />
-          {reminders.text}
-        </p>
-
-        <p className="text-sm text-fg-muted [overflow-wrap:anywhere]">{recordProvenance(record)}</p>
-
-        {record.files?.length ? (
-          <ul className="flex flex-col">
-            {record.files.map((file, index) => (
-              <li key={file.id}>
-                <a
-                  href={`/api/receipts/${file.id}`}
-                  className="inline-flex min-h-11 items-center text-sm font-medium text-fg underline underline-offset-4"
-                >
-                  Download attachment {index + 1} ({megabytes(file.size)})
-                  <span className="sr-only"> for {name}</span>
-                </a>
-              </li>
-            ))}
-          </ul>
-        ) : null}
-
-        <div className="flex min-w-0 flex-wrap items-start gap-x-3 gap-y-2">
-          <OpenLink recordId={record.id} name={name} />
-          <ManageControls record={record} type={type} name={name} parents={parentOptions(type, assets, catalogue, record.id)} zone={zone} actions={actions} />
-        </div>
+        </details>
       </div>
     </li>
   );

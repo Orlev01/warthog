@@ -155,6 +155,7 @@ export function lifeAdminSkillText(catalogue: Catalogue, options: SkillOptions =
     "- details: up to 20 {label, value} for anything that has no field of its own.",
     "- Saving the same thing again updates it (the \"same record when\" fields below), so a later scan is safe. If the result says proposed, the person had already checked that record: tell them what changed.",
     "- Everything you save is a suggestion until the person confirms it in Life admin. Tell them what you saved and that it is waiting there.",
+    "- If your save_record has no type parameter, your app has an older copy of Warthog's tools: put type, source, details, journal and parentId inside fields and Warthog files the record as that kind; tell the person once that refreshing or reconnecting Warthog in their app gives you the current tools.",
     "- Never save: tax file numbers; passwords, PINs, security answers or codes; card numbers; BSB and account numbers (keep the bank and the last 4 only); passport, licence, Medicare, visa grant or Centrelink numbers (the person keeps those in their Vault); payment links, biller codes or BPAY references from an email; medical conditions, results or medicines; other people's personal details. Warthog refuses most of these anyway.",
     "",
     "Working on an item over time",

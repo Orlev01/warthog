@@ -144,10 +144,10 @@ test("each reminder links to its record in Life admin, says what its date means,
     const lapsed = await createRecord(db, { userId: owner.userId, kind: "item", type: "health.insurance", fields: { provider: "Medibank" }, dueDate: "2026-11-02", status: "active", source: { kind: "agent", agentId: "agent-1" } }, owner.dek);
     const view = await makeActions(db).load(owner.session);
     assert.deepEqual(view.reminders, [
-      { id: lapsed.id, title: "Medibank", due: "2 Nov 2026", dueLabel: "Renews or extras reset", overdue: true, href: `/life-admin?view=life&tab=things#record-${lapsed.id}` },
-      { id: rego.id, title: "Transport for NSW", due: "14 Dec 2026", dueLabel: "Expires", href: `/life-admin?view=life&tab=things#record-${rego.id}` },
+      { id: lapsed.id, title: "Medibank", due: "2 Nov 2026", dueLabel: "Renews or extras reset", overdue: true, href: `/life-admin?view=life&tab=records#record-${lapsed.id}` },
+      { id: rego.id, title: "Transport for NSW", due: "14 Dec 2026", dueLabel: "Expires", href: `/life-admin?view=life&tab=records#record-${rego.id}` },
     ]);
-    assert.deepEqual(view.toCheck, { count: 1, href: "/life-admin?view=life&tab=things" }, "the agent's record waits to be checked");
+    assert.deepEqual(view.toCheck, { count: 1, href: "/life-admin?view=life&tab=records" }, "the agent's record waits to be checked");
   } finally {
     await db.close();
   }

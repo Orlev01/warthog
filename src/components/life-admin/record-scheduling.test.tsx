@@ -17,5 +17,5 @@ test("record forms expose scheduling metadata and preserve personal field names"
   assert.match(html,/<option value="upcoming" selected="">Upcoming<\/option>/);
   assert.match(html,/name="field:dueDate"[^>]*value="Personal text"/);
   assert.match(html,/id="record-00000000-0000-4000-8000-000000000001"/);
-  assert.match(html,/name="returnTab"[^>]*value="things"/);
+  assert.match(html,/name="returnTab"[^>]*value="records"/);
 });

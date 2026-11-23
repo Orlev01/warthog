@@ -4,7 +4,7 @@
 //
 // WHY this component exists (brief "Life admin" + "Moving-house helper"; design §4.1): the
 // Life Admin screen is where a person sees and maintains the records they and their agents
-// keep — now a typed "Your things" profile (vehicles and their rego, home, utilities, health
+// keep — now a typed "Records" profile (vehicles and their rego, home, utilities, health
 // insurance, super, ID expiry dates, subscriptions, pets, receipts …) — alongside the MOVING
 // CHECKLIST. Every record shows its (already-decrypted) fields with edit controls and a
 // per-record reminder-offset setting; a receipt also carries an attach-file control; each
@@ -18,8 +18,9 @@
 // accessible controls, and the DISABLED / live state of each) — never the source text. We
 // render with `react-dom/server` (no DOM) and read the emitted markup.
 //
-// The organisation of "Your things" (Coming up, category panels, assets) is pinned in
-// record-organisation.test.tsx; the To check panel and the forms in things-review.test.tsx.
+// The organisation of the Records tab (category panels, assets, statuses, filters) is pinned in
+// record-organisation.test.tsx and record-status.test.ts; the To check panel and the forms in
+// records-review.test.tsx.
 
 import * as React from "react";
 import { test } from "node:test";
@@ -121,7 +122,7 @@ function render(props: LifeAdminViewProps): string {
   return renderToStaticMarkup(<LifeAdminView {...props} />);
 }
 
-// One record (or none) on "Your things", with no checklist, so a control assertion can only
+// One record (or none) on Records, with no checklist, so a control assertion can only
 // be satisfied by that record.
 function renderThings(records: ReadonlyArray<LifeAdminRecordView>, overrides: Partial<LifeAdminViewProps> = {}): string {
   return render(base({ records, checklist: [], ...overrides }));
@@ -292,7 +293,7 @@ function reasonSurface(markup: string): string {
 
 // --- control vocabularies (accessible-name matchers; generous over plain wordings) --
 
-const THINGS_TAB_RE = /your things/i;
+const RECORDS_TAB_RE = /^records\b/i;
 const CHECKLIST_TAB_RE = /checklist|moving/i;
 
 const ADD_RE = /\badd\b/i;
@@ -341,15 +342,18 @@ function attachControls(markup: string): El[] {
 }
 
 // ════════════════════════════════════════════════════════════════════════════════
-// The two tabs — Your things and the Moving checklist — are named and navigable.
+// The two tabs — Records and the Moving checklist — are named and navigable.
 // ════════════════════════════════════════════════════════════════════════════════
 
-test("names both tabs — Your things and Moving checklist — as navigable controls, Your things first", () => {
+test("names both tabs — Records and Moving checklist — as navigable controls, Records first", () => {
   const markup = render(base());
-  assert.ok(hasTab(markup, THINGS_TAB_RE), "the Your things tab must be a navigable control");
+  assert.ok(hasTab(markup, RECORDS_TAB_RE), "the Records tab must be a navigable control");
   assert.ok(hasTab(markup, CHECKLIST_TAB_RE), "the Moving checklist tab must be a navigable control");
+  assert.doesNotMatch(visibleText(markup), /Your things/, "the tab's old name is gone");
   const selected = /<button\b[^>]*aria-selected="true"[^>]*>([\s\S]*?)<\/button>/.exec(markup)!;
-  assert.match(visibleText(selected[1]!), /^Your things \(4\)$/, "Your things opens first and counts the records");
+  assert.match(visibleText(selected[1]!), /^Records \(4\)$/, "Records opens first and counts what's active");
+  const finished = render(base({ records: [...RECORDS, { ...SUB_A, id: "sub-done", status: "cancelled", phase: { phase: "ended", bucket: "finished", live: false, label: "Ended", comingUp: false } }] }));
+  assert.match(visibleText(/<button\b[^>]*aria-selected="true"[^>]*>([\s\S]*?)<\/button>/.exec(finished)![1]!), /^Records \(4\)$/, "a cancelled record isn't counted");
 });
 
 // ════════════════════════════════════════════════════════════════════════════════
@@ -386,7 +390,7 @@ test("a value an agent read from email is shown as text, never as a link", () =>
 // AC1 — add / edit controls, and a per-record reminder-offset setting.
 // ════════════════════════════════════════════════════════════════════════════════
 
-test("Your things offers a live Add control, even with no records at all", () => {
+test("Records offers a live Add control, even with no records at all", () => {
   assert.ok(hasSelectable(renderThings(RECORDS, { addType: "subscriptions.service" }), ADD_RE));
   assert.ok(hasSelectable(renderThings([], { addType: "subscriptions.service" }), ADD_RE), "a person with no records can still add");
   const text = visibleText(renderThings([]));

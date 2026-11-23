@@ -23,6 +23,8 @@ export type RecordFoundInView = ProvenanceFoundIn;
 // An agent's proposed change to a record the person confirmed, waiting for them to decide.
 export type PendingChangeView = {
   byName: string;
+  // Present only when the change gives the record another kind ("vehicles.vehicle").
+  type?: string;
   set: Record<string, string>;
   remove: string[];
   // Present only when the change moves the due date (null clears it).
@@ -93,9 +95,21 @@ export type ChecklistItemView = {
   linkedTaskId: string | null;
 };
 
-// The records view's in-page tabs (`?tab=`). The page maps the older tab values
-// (subscriptions, receipts, renewals) to "things".
-export type LifeAdminTab = "things" | "upcoming" | "bookings" | "checklist";
+// The records view's in-page tabs (`?tab=`). The page maps the older tab values ("things", and
+// subscriptions, receipts, renewals in older reminder links) to "records".
+export type LifeAdminTab = "records" | "upcoming" | "bookings" | "checklist";
+
+// Where a record stands on the Records tab, worked out from its phase (`listStatusOf`):
+// active (live), on hold (paused), finished (ended, completed, resolved) or cancelled
+// (cancelled, missed, lapsed, or a standing item whose status is cancelled).
+export type RecordListStatus = "active" | "on_hold" | "finished" | "cancelled";
+
+// The Records tab's filters (`?category=…&status=…`, each repeatable), validated by the page:
+// no category ⇒ every category; the statuses are never empty (the page defaults to active).
+export type RecordFilter = {
+  categories: readonly string[];
+  statuses: readonly RecordListStatus[];
+};
 
 // A control bound to a server action the page passes.
 export type LifeAdminAction = (formData: FormData) => void | Promise<void>;
@@ -112,6 +126,8 @@ export type RecordActions = {
   confirmAllAction?: LifeAdminAction;
   dismissRecordAction?: LifeAdminAction;
   acceptPendingAction?: LifeAdminAction;
+  // Accepts every waiting change at once ("Accept all n changes"), one `recordId` per change.
+  acceptAllPendingAction?: LifeAdminAction;
   declinePendingAction?: LifeAdminAction;
   keepCategoryAction?: LifeAdminAction;
   declineCategoryAction?: LifeAdminAction;
@@ -121,8 +137,8 @@ export type RecordActions = {
 // An anchor a record can belong to, for the "Belongs to" choice.
 export type AssetOption = { id: string; name: string; typeId: string; typeLabel: string };
 
-// A category's place on the page: shown (it has records, the person chose Show, or it is one
-// of their own), available (built-in and empty) or not for me (the person hid it).
+// A category's state: shown (it has records, the person chose to show it, or it is one of their
+// own), available (built-in and empty) or not for me (the person hid it, and its records too).
 export type CategoryStateView = {
   id: string;
   visibility: "shown" | "available" | "not_for_me";
@@ -151,11 +167,12 @@ export type NextStepView = {
   due: string;
 };
 
-// The Bookings tab's GET filters (validated by the page) and page number (1-based).
+// The Bookings tab's GET filters (validated by the page), each repeatable, and the page number
+// (1-based). An empty or absent list doesn't narrow.
 export type BookingFilters = {
-  category?: string;
-  forWhom?: string;
-  state?: string;
+  categories?: readonly string[];
+  forWhom?: readonly string[];
+  states?: readonly string[];
   page?: number;
 };
 

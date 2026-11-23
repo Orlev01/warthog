@@ -11,6 +11,7 @@ import {
   noticeField,
   recordDate,
   recordFields,
+  recordFilters,
   recordIds,
   recordOffsets,
   recordParent,
@@ -35,9 +36,12 @@ import { buildActions, resolveSession, run, type Outcome } from "./wiring";
 // client value for identity), takes its input from the submitted form, persists
 // member-scoped through the seam, and redirects back with a `?notice=` the page renders
 // in plain words — a refusal (another person's id, a foreign agent) or a 4xx from the
-// boundary is reported as a plain problem, never swallowed (no dead controls). The Tasks
-// view's `?assignee=` filter is validated against the person's own agents here (anything
-// else shows every task), and task actions return to the filter they were submitted under.
+// boundary is reported as a plain problem, never swallowed (no dead controls). The Records tab's
+// `?category=…&status=…` filters (each repeatable) are validated against the person's own
+// catalogue and the known statuses here (unknown values are dropped; no status means Active), and
+// record actions return to the tab and filters they were submitted under. The Tasks view's
+// `?assignee=` filter is validated against the person's own agents here (anything else shows
+// every task), and task actions return to the filter they were submitted under.
 //
 // Thin by design (the server-composition-roots addendum): per-request data (the search
 // params) is read BEFORE `getServerDb()` so `next build` marks the page dynamic and
@@ -52,8 +56,6 @@ function str(formData: FormData, name: string): string {
   const raw = formData.get(name);
   return typeof raw === "string" ? raw : "";
 }
-
-const THINGS = "/life-admin?view=life&tab=things";
 
 // A save lands on the record it saved, unless something was left out: then the notice at the
 // top says what to check.
@@ -72,7 +74,8 @@ function updatedOutcome(result: Extract<ActionResult, { ok: true }>): Outcome {
 async function addRecordAction(formData: FormData): Promise<void> {
   "use server";
   const type = recordTypeId(formData);
-  if (!type) redirect(`${THINGS}&notice=record_type_missing#new-record`);
+  const back = recordReturnPath(formData);
+  if (!type) redirect(`${back}&notice=record_type_missing#new-record`);
   await run(savedOutcome, (actions, session) =>
     actions.saveRecord(session, {
       type,
@@ -81,9 +84,9 @@ async function addRecordAction(formData: FormData): Promise<void> {
       status: recordStatus(formData),
       parentId: recordParent(formData),
     }),
-    THINGS,
+    back,
     "invalid_input",
-    `${THINGS}&add=${encodeURIComponent(type)}`,
+    `${back}&add=${encodeURIComponent(type)}`,
   );
 }
 
@@ -129,39 +132,44 @@ async function deleteRecordAction(formData: FormData): Promise<void> {
 
 async function confirmRecordAction(formData: FormData): Promise<void> {
   "use server";
-  await run("confirmed", (actions, session) => actions.confirmRecord(session, { id: str(formData, "recordId") }), THINGS);
+  await run("confirmed", (actions, session) => actions.confirmRecord(session, { id: str(formData, "recordId") }), recordReturnPath(formData));
 }
 
 async function confirmAllAction(formData: FormData): Promise<void> {
   "use server";
-  await run("confirmed_all", (actions, session) => actions.confirmAll(session, { ids: recordIds(formData) }), THINGS);
+  await run("confirmed_all", (actions, session) => actions.confirmAll(session, { ids: recordIds(formData) }), recordReturnPath(formData));
 }
 
 async function dismissRecordAction(formData: FormData): Promise<void> {
   "use server";
-  await run("dismissed", (actions, session) => actions.dismissRecord(session, { id: str(formData, "recordId") }), THINGS);
+  await run("dismissed", (actions, session) => actions.dismissRecord(session, { id: str(formData, "recordId") }), recordReturnPath(formData));
 }
 
 async function acceptPendingAction(formData: FormData): Promise<void> {
   "use server";
   const recordId = str(formData, "recordId");
-  await run(() => ({ notice: "accepted", recordId }), (actions, session) => actions.acceptPending(session, { id: recordId }), THINGS);
+  await run(() => ({ notice: "accepted", recordId }), (actions, session) => actions.acceptPending(session, { id: recordId }), recordReturnPath(formData));
+}
+
+async function acceptAllPendingAction(formData: FormData): Promise<void> {
+  "use server";
+  await run("accepted_all", (actions, session) => actions.acceptAllPending(session, { ids: recordIds(formData) }), recordReturnPath(formData));
 }
 
 async function declinePendingAction(formData: FormData): Promise<void> {
   "use server";
   const recordId = str(formData, "recordId");
-  await run(() => ({ notice: "declined", recordId }), (actions, session) => actions.declinePending(session, { id: recordId }), THINGS);
+  await run(() => ({ notice: "declined", recordId }), (actions, session) => actions.declinePending(session, { id: recordId }), recordReturnPath(formData));
 }
 
 async function keepCategoryAction(formData: FormData): Promise<void> {
   "use server";
-  await run("category_kept", (actions, session) => actions.keepCategory(session, { slug: str(formData, "slug") }), THINGS);
+  await run("category_kept", (actions, session) => actions.keepCategory(session, { slug: str(formData, "slug") }), recordReturnPath(formData));
 }
 
 async function declineCategoryAction(formData: FormData): Promise<void> {
   "use server";
-  await run("category_declined", (actions, session) => actions.declineCategory(session, { slug: str(formData, "slug") }), THINGS);
+  await run("category_declined", (actions, session) => actions.declineCategory(session, { slug: str(formData, "slug") }), recordReturnPath(formData));
 }
 
 const VISIBILITY_NOTICES: Readonly<Record<string, Notice>> = { shown: "category_shown", hidden: "category_hidden", cleared: "category_cleared" };
@@ -171,7 +179,7 @@ async function setCategoryVisibilityAction(formData: FormData): Promise<void> {
   await run(
     (result) => ({ notice: VISIBILITY_NOTICES[result.outcome ?? ""] ?? "updated" }),
     (actions, session) => actions.setCategoryVisibility(session, { category: str(formData, "category"), setting: str(formData, "setting") }),
-    THINGS,
+    recordReturnPath(formData),
   );
 }
 
@@ -235,12 +243,7 @@ export default async function LifeAdminPage({
   // `next build` never prerenders it (and never opens the database at build time).
   const params = await searchParams;
   const notice = toNotice(params.notice);
-  const filters = bookingFilters({
-    category: firstParam(params.category),
-    for_whom: firstParam(params.for_whom),
-    state: firstParam(params.state),
-    page: firstParam(params.page),
-  });
+  const bookings = bookingFilters({ for_whom: params.for_whom, state: params.state, page: params.page });
   const active: LifeAdminTab = params.view === "tasks" ? "tasks" : "life";
   const db = await getServerDb();
   const session = await resolveSession(db);
@@ -256,6 +259,9 @@ export default async function LifeAdminPage({
   const actions = buildActions(db);
   await actions.refreshMovingChecklist(session);
   const data = await actions.load(session);
+  // The Records filters, checked against the person's own catalogue; Bookings filters by the same
+  // categories.
+  const recordFilter = recordFilters({ category: params.category, status: params.status }, data.catalogue.categories.map((category) => category.id));
 
   // Both views are rendered (and stay mounted); `active` only picks the one shown first.
   return (
@@ -270,8 +276,10 @@ export default async function LifeAdminPage({
           categories: data.categories,
           suggestedCategories: data.suggestedCategories,
           nextSteps: data.nextSteps,
-          bookingFilters: filters,
-          // The older tabs (subscriptions, receipts, renewals) in reminder links open "Your things".
+          recordFilter,
+          bookingFilters: { ...bookings, ...(recordFilter.categories.length ? { categories: recordFilter.categories } : {}) },
+          // The tab's old name ("things") and the older tabs in reminder links (subscriptions,
+          // receipts, renewals) open Records.
           initialTab: recordTab(firstParam(params.tab)),
           // A kind from the person's own catalogue (their categories included), else none.
           addType: data.catalogue.types.some((type) => type.id === firstParam(params.add)) ? firstParam(params.add) : null,
@@ -285,6 +293,7 @@ export default async function LifeAdminPage({
           confirmAllAction,
           dismissRecordAction,
           acceptPendingAction,
+          acceptAllPendingAction,
           declinePendingAction,
           keepCategoryAction,
           declineCategoryAction,
