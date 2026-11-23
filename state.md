@@ -1,4 +1,15 @@
-# Delivery status — 23 November 2026 (rate limit before any key, addresses purged, Records tab)
+# Delivery status — 23 November 2026 (the front door covers every feature shipped since launch)
+
+**Live at [warthog.com.au](https://warthog.com.au) (the website) and
+[app.warthog.com.au](https://app.warthog.com.au) (the app).** Application source
+`fd4f7b426c2467ad516c75a10bad9dbc5142dae0` runs as `warthog--r45133098951a1`, with one healthy
+replica, explicit 100% traffic and zero old replicas.
+
+PR #50 gives the front door a section or card for every feature shipped since launch: services,
+what agents read and Undo, spending, tasks and export, life admin, and the phone app. No migrations
+(still 91). See the [release record](docs/audit/front-door-features-release-2026-11-23.md).
+
+# Earlier delivery status — 23 November 2026 (rate limit before any key, addresses purged, Records tab)
 
 **Live at [warthog.com.au](https://warthog.com.au) (the website) and
 [app.warthog.com.au](https://app.warthog.com.au) (the app).** Application source

@@ -1,5 +1,11 @@
 # Warthog comprehensive engineering audit
 
+**The front door covers every feature shipped since launch, 23 November:** main `fd4f7b4` runs as
+`warthog--r45133098951a1`. PR #50 gives warthog.com.au a section or card for each feature added
+since launch: the services you can connect, what agents read and Undo, spending with cards and
+budgets, tasks and export, life admin with an example of the Records list, and the phone app. No
+migrations (still 91). See the [release record](front-door-features-release-2026-11-23.md).
+
 **Rate limit before any key, addresses purged on deletion, and a readable Life admin, 23 November:**
 main `fadcc53` runs as `warthog--r45127308436a1`. PR #47 fixes the review's last two Highs: the MCP
 rate limit now comes before any key unwrap, DEKs are cached for 5 minutes, and the purge plus an
