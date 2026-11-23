@@ -74,14 +74,22 @@ export function linkLeavesPage(click: LinkClick, currentHref: string): boolean {
 
 type Group = { key: string; label: string; element: Element };
 
+// A form's name as the person sees it: its aria-label, or the name of the labelled panel it
+// wraps or sits in ("Shared address").
+function formLabel(form: HTMLFormElement): string {
+  const own = form.getAttribute("aria-label");
+  if (own) return own;
+  const labelled = form.querySelector("[aria-labelledby]") ?? form.closest("[aria-labelledby]");
+  const id = labelled?.getAttribute("aria-labelledby")?.split(/\s+/)[0];
+  const name = id ? form.ownerDocument.getElementById(id)?.textContent?.trim() : undefined;
+  return name ? `“${name}”` : "another section";
+}
+
 function groupsIn(root: HTMLElement): Group[] {
   const forms = Array.from(root.querySelectorAll("form"));
   const groups: Group[] = forms.map((form, i) => ({
     key: `form-${i}`,
-    label:
-      form.getAttribute("aria-label") ??
-      form.closest("section")?.querySelector("h2, h3")?.textContent?.trim() ??
-      "this form",
+    label: formLabel(form),
     element: form,
   }));
   // Controls outside any form (a client-driven form such as an agent's access) are one group.
