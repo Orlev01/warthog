@@ -36,15 +36,27 @@
 import { z } from "zod";
 
 import { parseParams } from "@/server/http/validate";
-import type { Db } from "@/server/db/index";
+import { withTransaction, type Db } from "@/server/db/index";
 import { getUserById } from "@/server/db/users";
 import { listIdentityFields } from "@/server/db/identity-fields";
 import {
   addCard as addCardRow,
   listCards,
   removeCard as removeCardRow,
+  setCardBilling,
   type CardMetadata,
 } from "@/server/db/cards";
+import { deleteCardBillingAddressIfUnused } from "@/server/db/card-billing-addresses";
+import {
+  applyBillingSelection,
+  listBillingChoices,
+  lockCardBilling,
+  resolveCardBilling,
+  type BillingChoice,
+  type BillingSelection,
+  type ResolvedBilling,
+} from "@/server/vault/card-billing";
+import { systemClock, type Clock } from "@/server/seams/clock";
 import { createVaultUnlockActions } from "@/server/vault/unlock";
 import { systemRandom } from "@/server/seams/random";
 import type { KeyWrapper } from "@/server/crypto/key-wrapper";
@@ -56,21 +68,24 @@ import type { Session } from "@/server/auth/session";
 export interface CardsActionsDeps {
   readonly db: Db;
   readonly keyWrapper: KeyWrapper;
+  // Decides which postal addresses are still upcoming moves (never offered as a default).
+  readonly clock?: Clock;
 }
 
-// A billing-address choice the add-card picker offers — a postal-address low-tier
-// field, decrypted ({ id, value }), exactly the <CardsView/> `VaultAddress` shape.
-export interface BillingAddress {
-  readonly id: string;
-  readonly value: string;
-}
+// A billing-address choice the card screens offer: one of the person's About you postal
+// addresses or one of their card-only addresses (docs/adr/card-billing-addresses.md).
+export type BillingAddress = BillingChoice;
+
+// A saved card as the page shows it: its metadata plus the billing address it resolves to (or
+// null when it has none yet).
+export type CardView = CardMetadata & { readonly billing: ResolvedBilling | null };
 
 // What `load` returns — the owner's cards as METADATA ONLY plus their billing-address
 // choices, the props <CardsView/> is mounted over, and the person's saved name from About
 // you, which pre-fills the add form's "Name on card" ("" when they have not saved one —
 // review fix W6).
 export interface CardsViewData {
-  readonly cards: CardMetadata[];
+  readonly cards: CardView[];
   readonly billingAddresses: BillingAddress[];
   readonly defaultCardholderName: string;
 }
@@ -91,7 +106,11 @@ export interface AddCardInput {
   readonly nickname: string;
   // The name on the card: printed on it, so plaintext metadata like the expiry (W6).
   readonly cardholderName: string;
-  readonly billingAddressId: string;
+  // The card's billing address: one of the person's postal addresses, one of their card-only
+  // addresses, or a new address typed for their cards. `billingAddressId` is the older form (a
+  // postal address id) still accepted from a page loaded before this change.
+  readonly billing?: BillingSelection;
+  readonly billingAddressId?: string;
   readonly numberCiphertext: string;
 }
 
@@ -100,10 +119,17 @@ export interface RemoveCardInput {
   readonly cardId: string;
 }
 
+// Give one of the session person's saved cards a different billing address.
+export interface ChangeBillingInput {
+  readonly cardId: string;
+  readonly billing: BillingSelection;
+}
+
 export interface CardsActions {
   load(session: Session): Promise<CardsViewData>;
   addCard(session: Session, input: AddCardInput): Promise<ActionResult>;
   removeCard(session: Session, input: RemoveCardInput): Promise<ActionResult>;
+  changeBillingAddress(session: Session, input: ChangeBillingInput): Promise<ActionResult>;
 }
 
 // ---- boundary validation shapes (INV-102) -----------------------------------------
@@ -120,6 +146,14 @@ const BRAND_MAX = 256;
 const NICKNAME_MAX = 256;
 const CARDHOLDER_NAME_MAX = 256;
 const CIPHERTEXT_MAX = 64 * 1024;
+// The same bound as an About you postal address, so a release always fits its size cap.
+export const BILLING_ADDRESS_MAX = 4096;
+
+const billingSchema = z.discriminatedUnion("source", [
+  z.object({ source: z.literal("postal"), id: z.uuid() }),
+  z.object({ source: z.literal("billing"), id: z.uuid() }),
+  z.object({ source: z.literal("new"), value: z.string().trim().min(1).max(BILLING_ADDRESS_MAX) }),
+]);
 
 const addCardSchema = z.object({
   brand: z.string().min(1).max(BRAND_MAX),
@@ -129,16 +163,27 @@ const addCardSchema = z.object({
   expiryYear: z.number().int(),
   nickname: z.string().min(1).max(NICKNAME_MAX),
   cardholderName: z.string().trim().min(1).max(CARDHOLDER_NAME_MAX),
-  billingAddressId: z.uuid(),
+  billing: billingSchema.optional(),
+  billingAddressId: z.uuid().optional(),
   // A sealed device envelope (`v1:` …), never a plaintext number stored as "ciphertext".
   numberCiphertext: z.string().min(1).max(CIPHERTEXT_MAX).regex(/^v1:/),
+}).refine((value) => (value.billing === undefined) !== (value.billingAddressId === undefined), {
+  message: "Give exactly one billing address",
 });
 const removeCardSchema = z.object({
   cardId: z.uuid(),
 });
+const changeBillingSchema = z.object({
+  cardId: z.uuid(),
+  billing: billingSchema,
+});
+
+// A billing reference that isn't the person's own address (or is no longer saved).
+const BILLING_NOT_FOUND = { ok: false, reason: "billing_address_not_found" } as const;
 
 export function createCardsActions(deps: CardsActionsDeps): CardsActions {
   const { db, keyWrapper } = deps;
+  const clock = deps.clock ?? systemClock;
 
   // Reuse the vault unlock gate (one source of truth for the policy): a card save is
   // allowed only when the person has a PRF-passkey or a passphrase — a recovery code
@@ -165,11 +210,14 @@ export function createCardsActions(deps: CardsActionsDeps): CardsActions {
     const cards = await listCards(db, session.userId);
     const dek = await dataKeyFor(session.userId);
     const fields = await listIdentityFields(db, session.userId, dek);
-    const billingAddresses = fields
-      .filter((field) => field.kind === "postal_address")
-      .map((field) => ({ id: field.id, value: field.value }));
+    const resolved = await resolveCardBilling(db, session.userId, cards, dek, { identityFields: fields });
+    const billingAddresses = await listBillingChoices(db, session.userId, dek, clock.now(), cards, { identityFields: fields });
     const defaultCardholderName = fields.find((field) => field.kind === "name")?.value ?? "";
-    return { cards, billingAddresses, defaultCardholderName };
+    return {
+      cards: cards.map((card) => ({ ...card, billing: resolved.get(card.id) ?? null })),
+      billingAddresses,
+      defaultCardholderName,
+    };
   }
 
   // Store a NEW card for the session person — ONLY the device ciphertext plus the
@@ -181,18 +229,53 @@ export function createCardsActions(deps: CardsActionsDeps): CardsActions {
     const valid = parseParams(addCardSchema, input);
     const gate = await vaultGate.assertVaultUnlockable(session.userId, { action: "save_protected" });
     if (!gate.ok) return gate;
-    await addCardRow(db, {
-      userId: session.userId,
-      brand: valid.brand,
-      lastFour: valid.lastFour,
-      expiryMonth: valid.expiryMonth,
-      expiryYear: valid.expiryYear,
-      nickname: valid.nickname,
-      cardholderName: valid.cardholderName,
-      billingAddressId: valid.billingAddressId,
-      numberCiphertext: valid.numberCiphertext,
+    const selection: BillingSelection = valid.billing ?? { source: "postal", id: valid.billingAddressId! };
+    // The data key is needed only to keep a new card-only address; unwrap it before the
+    // transaction (an unwrap can be slow).
+    const dek = selection.source === "new" ? await dataKeyFor(session.userId) : new Uint8Array();
+    return withTransaction(db, async (tx) => {
+      await lockCardBilling(tx, session.userId);
+      // Only the person's own address of the right kind (or a new one) can be a card's billing
+      // address; anything else saves nothing.
+      const ref = await applyBillingSelection(tx, session.userId, selection, dek);
+      if (!ref) return BILLING_NOT_FOUND;
+      await addCardRow(tx, {
+        userId: session.userId,
+        brand: valid.brand,
+        lastFour: valid.lastFour,
+        expiryMonth: valid.expiryMonth,
+        expiryYear: valid.expiryYear,
+        nickname: valid.nickname,
+        cardholderName: valid.cardholderName,
+        billingAddressId: ref.billingAddressId,
+        billingEntryId: ref.billingEntryId,
+        numberCiphertext: valid.numberCiphertext,
+      });
+      return { ok: true } as const;
     });
-    return { ok: true };
+  }
+
+  // Give one of the session person's cards a different billing address. The card number is
+  // not involved, so no vault unlock is needed (the same as editing a postal address). A
+  // card-only address the card no longer uses is deleted if no other card uses it.
+  async function changeBillingAddress(session: Session, input: ChangeBillingInput): Promise<ActionResult> {
+    const valid = parseParams(changeBillingSchema, input);
+    const selection = valid.billing as BillingSelection;
+    const dek = selection.source === "new" ? await dataKeyFor(session.userId) : new Uint8Array();
+    return withTransaction(db, async (tx) => {
+      await lockCardBilling(tx, session.userId);
+      // The card must be this person's before anything is created for it.
+      const owned = await tx.query(`SELECT 1 FROM cards WHERE id = $1 AND user_id = $2`, [valid.cardId, session.userId]);
+      if (owned.rows.length === 0) return { ok: false, reason: "not_found" } as const;
+      const ref = await applyBillingSelection(tx, session.userId, selection, dek);
+      if (!ref) return BILLING_NOT_FOUND;
+      const changed = await setCardBilling(tx, session.userId, valid.cardId, ref);
+      if (!changed) return { ok: false, reason: "not_found" } as const;
+      if (changed.previousEntryId && changed.previousEntryId !== ref.billingEntryId) {
+        await deleteCardBillingAddressIfUnused(tx, session.userId, changed.previousEntryId);
+      }
+      return { ok: true } as const;
+    });
   }
 
   // Remove ONE of the session person's own cards by id. Validate at the boundary (a
@@ -201,9 +284,17 @@ export function createCardsActions(deps: CardsActionsDeps): CardsActions {
   // ({ ok: false }).
   async function removeCard(session: Session, input: RemoveCardInput): Promise<ActionResult> {
     const valid = parseParams(removeCardSchema, input);
-    const removed = await removeCardRow(db, session.userId, valid.cardId);
-    return removed ? { ok: true } : { ok: false, reason: "not_found" };
+    return withTransaction(db, async (tx) => {
+      await lockCardBilling(tx, session.userId);
+      const before = await tx.query(`SELECT billing_entry_id FROM cards WHERE id = $1 AND user_id = $2`, [valid.cardId, session.userId]);
+      const removed = await removeCardRow(tx, session.userId, valid.cardId);
+      if (!removed) return { ok: false, reason: "not_found" } as const;
+      // A card-only billing address exists only while a card uses it.
+      const entryId = (before.rows[0]?.billing_entry_id as string | null | undefined) ?? null;
+      if (entryId) await deleteCardBillingAddressIfUnused(tx, session.userId, entryId);
+      return { ok: true } as const;
+    });
   }
 
-  return { load, addCard, removeCard };
+  return { load, addCard, removeCard, changeBillingAddress };
 }

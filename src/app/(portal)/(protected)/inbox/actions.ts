@@ -74,6 +74,7 @@ import { getHighTierCiphertext, listHighTierFields } from "../../../../server/db
 import { getUserById } from "../../../../server/db/users";
 import { listConnectionsForUser } from "../../../../server/db/connections";
 import { listIdentityFields } from "../../../../server/db/identity-fields";
+import { resolveCardBilling } from "../../../../server/vault/card-billing";
 import { withTransaction } from "../../../../server/db/index";
 import { createRedactingRecorder } from "../../../../server/mcp/recorder";
 import { isReleaseRequest } from "../../../../domain/approvals/release-kind";
@@ -742,18 +743,17 @@ export function createInboxActions(deps: InboxActionsDeps): InboxActions {
   // the release hands over with the number and security code (the inbox never shows them):
   // the expiry, the name on the card (falling back to the person's saved name for a card
   // saved before names were kept) and the billing address text. The address is resolved
-  // HERE, from the card's billing reference, through the person's OWN low-tier postal
-  // addresses only (listIdentityFields binds the session user id and decrypts under their
-  // DEK) — so a reference to someone else's field, to a non-address field or to nothing
-  // resolves to null, never to another person's data.
+  // HERE, from the card's billing reference, through the person's OWN postal addresses or
+  // their own card-only addresses (resolveCardBilling binds the session user id and decrypts
+  // under their DEK; docs/adr/card-billing-addresses.md) — so a reference to someone else's
+  // address, to a non-address field or to nothing resolves to null, never to another
+  // person's data.
   async function loadSavedCards(userId: string, dek: Uint8Array): Promise<SavedCardView[]> {
     const cards = await listCards(db, userId);
     if (cards.length === 0) return [];
     const fields = await listIdentityFields(db, userId, dek);
     const savedName = fields.find((field) => field.kind === "name")?.value ?? null;
-    const addressById = new Map(
-      fields.filter((field) => field.kind === "postal_address").map((field) => [field.id, field.value]),
-    );
+    const billing = await resolveCardBilling(db, userId, cards, dek, { identityFields: fields });
     const views: SavedCardView[] = [];
     for (const card of cards) {
       const ciphertext = await getCardCiphertext(db, userId, card.id);
@@ -765,7 +765,7 @@ export function createInboxActions(deps: InboxActionsDeps): InboxActions {
         expiryMonth: card.expiryMonth,
         expiryYear: card.expiryYear,
         cardholderName: card.cardholderName ?? savedName,
-        billingAddress: addressById.get(card.billingAddressId) ?? null,
+        billingAddress: billing.get(card.id)?.text ?? null,
       });
     }
     return views;

@@ -35,6 +35,7 @@ import { z } from "zod";
 
 import { parseParams } from "@/server/http/validate";
 import { withTransaction, type Db } from "@/server/db/index";
+import { lockCardBilling } from "@/server/vault/card-billing";
 import { getUserById } from "@/server/db/users";
 import {
   saveIdentityField,
@@ -282,12 +283,24 @@ export function createIdentityActions(deps: IdentityActionsDeps): IdentityAction
     if (!gate.ok) return gate;
 
     return withTransaction(db, async (tx) => {
+      // Serialised with card billing changes, so a card can't be pointed at this address
+      // while it is being removed (docs/adr/card-billing-addresses.md).
+      await lockCardBilling(tx, session.userId);
       const owned = await tx.query(
         `SELECT id FROM identity_fields WHERE id = $1 AND user_id = $2`,
         [valid.fieldId, session.userId],
       );
       if (owned.rows.length === 0) {
         return { ok: false, reason: "not_found" };
+      }
+      // Making it protected removes it from About you; a card that uses it as its billing
+      // address would be left with none, so the person changes the card's address first.
+      const inUse = await tx.query(
+        `SELECT 1 FROM cards WHERE user_id = $1 AND billing_address_id = $2 LIMIT 1`,
+        [session.userId, valid.fieldId],
+      );
+      if (inUse.rows.length > 0) {
+        return { ok: false, reason: "billing_address_in_use" };
       }
       await saveHighTierFieldRow(tx, {
         userId: session.userId,
