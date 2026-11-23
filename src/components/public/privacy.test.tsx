@@ -321,6 +321,14 @@ test("deletion policy distinguishes live access removal from backup retention", 
   assert.match(markup, /database backups may retain older data until their retention period ends/);
 });
 
+// Review 2026-11-23 — sign-in codes and household invites are kept by address, outside the
+// account, so the policy says deletion removes them too and how long they're kept otherwise.
+test("deletion policy covers sign-in codes and invitations sent to the address, and their retention", () => {
+  const text = renderToStaticMarkup(<Privacy />).replace(/\s+/g, " ");
+  assert.match(text, /including the sign-in codes we&#x27;ve emailed you, any record of paused sign-in attempts and any household invitation sent to your address/);
+  assert.match(text, /sign-in codes a day after sending them, records of paused attempts after 90 days, and invitations 30 days after they&#x27;re used or expire/);
+});
+
 test("the LinkedIn section says what Warthog reads, that every post waits for approval, and what it can't see", () => {
   const markup = renderToStaticMarkup(<Privacy />);
   assert.match(markup, /id="linkedin"/);

@@ -110,6 +110,8 @@ import { createOutbox, type Outbox } from "../notify/outbox";
 import { freshDb } from "../../test/db";
 import { type Db } from "../db/index";
 import { parseBody, HttpError } from "../http/validate";
+import { createDekCache } from "../crypto/dek-cache";
+import { systemClock } from "../seams/clock";
 
 // --- fixtures ---------------------------------------------------------------------
 
@@ -234,6 +236,30 @@ test("deleting an account crypto-shreds the wrapped DEK — the original is gone
       !after.wrappedDek.includes(original),
       "no fragment of the original wrapped DEK survives in the column",
     );
+  } finally {
+    await db.close();
+  }
+});
+
+// Review 2026-11-23 — unwrapped DEKs are cached in memory for up to 5 minutes (design §4.1); a
+// deleted account's key leaves the cache at once rather than when its window ends, and a
+// refused deletion leaves it alone.
+test("deleting an account drops its data key from the in-memory DEK cache", async () => {
+  const db = await freshDb();
+  const outbox = createOutbox();
+  const { revoker } = makeRevokerSpy();
+  try {
+    const person = await makeUser(db, "forget-dek");
+    const bystander = await makeUser(db, "keep-dek");
+    const cache = createDekCache({ clock: systemClock, schedule: () => () => {} });
+    for (const wrapped of [person.wrappedDek, bystander.wrappedDek]) await cache.unwrap(wrapped, async () => new Uint8Array(32).fill(7));
+
+    const result = await deleteAccount({ ...makeDeps(db, revoker, outbox), dekCache: cache }, { userId: person.id });
+    assert.ok(result.ok, JSON.stringify(result));
+    assert.equal(cache.size(), 1, "only the deleted person's key left memory");
+    let unwrapped = false;
+    await cache.unwrap(bystander.wrappedDek, async () => { unwrapped = true; return new Uint8Array(32); });
+    assert.equal(unwrapped, false, "the other person's key is still cached");
   } finally {
     await db.close();
   }

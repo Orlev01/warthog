@@ -10,8 +10,9 @@ import { calendarReversalFromResult } from "../activity/calendar-reversal";
 //
 // `handleAgentCall` is the one gate every agent tool call passes through. In
 // order (design §6.1): it refuses a call on a disconnected/revoked connection;
-// applies the per-connection rate limit (a burst over the limit is refused and
-// recorded as ONE summarising entry, not one per refused call); loads the
+// applies the per-connection rate limit, before anything unwraps the person's key
+// (a burst over the limit is refused and recorded as ONE summarising entry, not
+// one per refused call); loads the
 // member-scoped policy context (E07-S09); evaluates the pure policy engine
 // (E03-S13); and then — on ALLOW executes the tool and records the activity
 // entry BEFORE the result returns; on DENY refuses and records; on ASK HOLDS the
@@ -30,6 +31,11 @@ import { calendarReversalFromResult } from "../activity/calendar-reversal";
 // must know a refusal continues the current over-limit streak rather than
 // starting a fresh one. The factory closes over that per-connection burst state;
 // the production root memoizes one pipeline per process.
+//
+// The MCP dispatch applies the same limit earlier still, before it builds anything for
+// a request (review 2026-11-23, High): `admitCall` counts a tools/call against it, and
+// `refuseOverLimit` answers one that is over it, so neither the person's key nor their
+// tools are touched. A call the dispatch counted is not counted again here.
 
 import {
   evaluate,
@@ -60,6 +66,7 @@ import {
   type StoredHeldRequest,
 } from "../db/held-requests";
 import { countAgentRequest, getAgentById } from "../db/agents";
+import { getConnectionPermissions } from "../db/agent-permissions";
 import { getUserById } from "../db/users";
 import { isReleaseRequest } from "../../domain/approvals/release-kind";
 import type { RateLimiter } from "./rate-limit";
@@ -253,6 +260,20 @@ export interface AgentCallPipeline {
   executeApprovedHold(userId: string, approvalId: string): Promise<ApprovedHoldResult>;
 }
 
+// The agent's request limit as the MCP dispatch applies it, before any per-request work.
+export interface AgentRateGate {
+  // Count one tool call against the connection's limit (its grants are read; no key is
+  // unwrapped). True when it is within the limit.
+  admitCall(connection: AgentConnection): Promise<boolean>;
+  // Answer a call `admitCall` turned away: counted on the agent card, part of the burst's ONE
+  // summarising entry and measured, like any other refusal. It never reaches the policy
+  // engine or a tool.
+  refuseOverLimit(connection: AgentConnection, call: AgentCall): Promise<AgentCallResult>;
+}
+
+// The plain reason an over-limit call is refused with.
+const RATE_LIMITED_REASON = "This agent is going too fast — its request rate limit was reached.";
+
 // Permission checks combine the service grant, read/change class and optional
 // exact tool allowlist. An absent allowlist preserves all current and future tools;
 // an explicit empty list grants none. Discovery uses the same stored policy.
@@ -395,7 +416,7 @@ function toApprovalDetail(
   };
 }
 
-export function createAgentCallPipeline(deps: PipelineDeps): AgentCallPipeline {
+export function createAgentCallPipeline(deps: PipelineDeps): AgentCallPipeline & AgentRateGate {
   const { db, keyWrapper, clock, rateLimiter, recorder, executeTool } = deps;
   const rate = deps.rate ?? null;
 
@@ -403,6 +424,27 @@ export function createAgentCallPipeline(deps: PipelineDeps): AgentCallPipeline {
   // summarised with one activity entry. A call allowed through the limiter ends
   // the streak, so a later burst records a fresh entry.
   const burstSummarised = new Map<string, boolean>();
+
+  // Count one call against the connection's limit (the person's per-agent setting, or the
+  // default when it has no grants row). Reading the grants needs no key.
+  async function admitCall(connection: AgentConnection): Promise<boolean> {
+    const grants = await getConnectionPermissions(db, connection.userId, connection.connectionId);
+    const allowed = rateLimiter.allow(connection.connectionId, grants?.rateLimit);
+    // Allowed through the limiter: the current over-limit streak (if any) is over.
+    if (allowed) burstSummarised.set(connection.connectionId, false);
+    return allowed;
+  }
+
+  // Whether this call is within the limit. A call on a request the MCP dispatch already
+  // counted is not counted twice (the flag is spent, so a second call is).
+  async function withinLimit(connection: AgentConnection): Promise<boolean> {
+    const observed = requestObservation.getStore();
+    if (observed?.rateCounted) {
+      observed.rateCounted = false;
+      return true;
+    }
+    return admitCall(connection);
+  }
 
   // Record one activity entry FOR the call. Warthog writes it itself (`source:
   // "warthog"`); the recorder runs the payload through redaction before storing.
@@ -520,6 +562,16 @@ export function createAgentCallPipeline(deps: PipelineDeps): AgentCallPipeline {
     await deps.recordMetric({ name: REQUEST_LATENCY_METRIC, value: latency, dimensions });
   }
 
+  // Refuse an over-limit call: the first refusal of a streak is recorded, the rest of the
+  // streak is not.
+  async function refuseRateLimited(connection: AgentConnection, call: AgentCall): Promise<DecidedCall> {
+    if (!burstSummarised.get(connection.connectionId)) {
+      await record(connection, call, "rate_limited");
+      burstSummarised.set(connection.connectionId, true);
+    }
+    return { result: { status: "refused", reason: RATE_LIMITED_REASON }, errorCategory: CATEGORY_RATE_LIMITED };
+  }
+
   // The gatekeeping decision for one agent call (design §6.1), returning the public result
   // plus — on a refusal — the short error-category label the request metrics carry. Every
   // side effect (activity entries, held request, approval, the notifier) is exactly as
@@ -538,27 +590,18 @@ export function createAgentCallPipeline(deps: PipelineDeps): AgentCallPipeline {
       return { result: { status: "refused", reason }, errorCategory: CATEGORY_DISCONNECTED };
     }
 
-    // The member-scoped policy context (binds the ids as parameters). Carries the
-    // person's configured per-connection rate limit, used next.
+    // Gate 2 — the per-connection rate limit, before anything unwraps the person's key
+    // or loads their policy context. A burst over the limit is refused and recorded as
+    // ONE summarising entry for the streak, not one per call.
+    if (!(await withinLimit(connection))) return refuseRateLimited(connection, call);
+
+    // The member-scoped policy context (binds the ids as parameters).
     // A card request also loads its household + currency context (design §8 step 4).
     const context = await loadAgentContext(connection, { db, keyWrapper, clock }, cardRequestOf(call));
     if(call.request === "high_tier" && !(await highTierRequestAllowed(db,connection.userId,context.permissions,call.field))) {
       await record(connection,call,"denied");
       return {result:{status:"refused",reason:"This agent cannot request that vault field."},errorCategory:CATEGORY_DENIED};
     }
-
-    // Gate 2 — the per-connection rate limit. A burst over the limit is refused
-    // and recorded as ONE summarising entry for the streak, not one per call.
-    if (!rateLimiter.allow(connection.connectionId, context.permissions.rateLimit)) {
-      const reason = "This agent is going too fast — its request rate limit was reached.";
-      if (!burstSummarised.get(connection.connectionId)) {
-        await record(connection, call, "rate_limited");
-        burstSummarised.set(connection.connectionId, true);
-      }
-      return { result: { status: "refused", reason }, errorCategory: CATEGORY_RATE_LIMITED };
-    }
-    // Allowed through the limiter: the current over-limit streak (if any) is over.
-    burstSummarised.set(connection.connectionId, false);
 
     // Gates 3 & 4 — the permission check and the policy engine, in design §8 order.
     const decision = evaluate(
@@ -692,30 +735,48 @@ export function createAgentCallPipeline(deps: PipelineDeps): AgentCallPipeline {
     return { result: { status: "executed", result: guarded.result } };
   }
 
-  return {
-    async handleAgentCall(connection: AgentConnection, call: AgentCall): Promise<AgentCallResult> {
-      // The pipeline is the one place that sees every agent call, its outcome and its
-      // timing, so it measures the request-count and request-latency metrics here (task
-      // E17-S03). Start the timer before the gates run.
-      const startedAt = clock.now().getTime();
-      const observed = requestObservation.getStore();
-      call = { ...call, run: call.run ?? observed?.run, via: call.via ?? observed?.via, audit: { requestId: observed?.requestId ?? randomUUID(), attemptId: randomUUID(), startedAt } };
-      let decided: DecidedCall;
-      try {
-        decided = await decide(connection, call);
-      } catch (err) {
-        // The tool executor (or a downstream step) threw: measure the operational failure
-        // first so error rates capture it, then let the error propagate — the pipeline
-        // never swallows a tool failure.
-        if (!call.audit?.terminal) {
-          await record(connection, call, call.audit?.attempted && call.makesChange ? "unknown" : "failed");
-        }
-        await emitRequestMetrics(startedAt, EXECUTOR_FAILURE_OUTCOME, CATEGORY_TOOL_ERROR, call, connection);
-        throw err;
+  // Handle one agent call through `gate` (the full decision, or an over-limit refusal).
+  async function handle(
+    connection: AgentConnection,
+    call: AgentCall,
+    gate: (connection: AgentConnection, call: AgentCall) => Promise<DecidedCall>,
+  ): Promise<AgentCallResult> {
+    // The pipeline is the one place that sees every agent call, its outcome and its
+    // timing, so it measures the request-count and request-latency metrics here (task
+    // E17-S03). Start the timer before the gates run.
+    const startedAt = clock.now().getTime();
+    const observed = requestObservation.getStore();
+    call = { ...call, run: call.run ?? observed?.run, via: call.via ?? observed?.via, audit: { requestId: observed?.requestId ?? randomUUID(), attemptId: randomUUID(), startedAt } };
+    let decided: DecidedCall;
+    try {
+      decided = await gate(connection, call);
+    } catch (err) {
+      // The tool executor (or a downstream step) threw: measure the operational failure
+      // first so error rates capture it, then let the error propagate — the pipeline
+      // never swallows a tool failure.
+      if (!call.audit?.terminal) {
+        await record(connection, call, call.audit?.attempted && call.makesChange ? "unknown" : "failed");
       }
-      await emitRequestMetrics(startedAt, decided.result.status, decided.errorCategory, call, connection);
-      return decided.result;
-    },
+      await emitRequestMetrics(startedAt, EXECUTOR_FAILURE_OUTCOME, CATEGORY_TOOL_ERROR, call, connection);
+      throw err;
+    }
+    await emitRequestMetrics(startedAt, decided.result.status, decided.errorCategory, call, connection);
+    return decided.result;
+  }
+
+  return {
+    handleAgentCall: (connection: AgentConnection, call: AgentCall): Promise<AgentCallResult> =>
+      handle(connection, call, decide),
+
+    admitCall,
+
+    // An over-limit call counts on the agent card like every call that reaches the
+    // pipeline, then joins the burst's summary.
+    refuseOverLimit: (connection: AgentConnection, call: AgentCall): Promise<AgentCallResult> =>
+      handle(connection, call, async (conn, refused) => {
+        await countAgentRequest(db, { userId: conn.userId, id: conn.agentId }, clock);
+        return refuseRateLimited(conn, refused);
+      }),
 
     // Run the held call behind an APPROVED approval exactly once (design §6.2;
     // reached by the inbox approve action or `check_approval`). `userId` is the

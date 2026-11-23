@@ -26,7 +26,11 @@ export interface StoredClientObservation extends SeenClient { seen: SeenClient[]
 // product the request came through, as the client reported it (`clientSurface`). `run` is
 // set once the call names a run Warthog issued to that agent, or when get_context starts
 // one (docs/adr/agent-runs.md); entries recorded during the request are linked to it.
-export interface RequestObservation { requestId: string; body: unknown; client?: ClientObservation; reportedRunId?: string; boundaryRecorded?: boolean; agentId?: string; via?: string; run?: RunRef }
+// The dispatch checks a tool call against its agent's request limit before anything else:
+// `rateCounted` says it was counted and is within the limit (the pipeline doesn't count it
+// again), and `overLimit` names the connection whose call is over it (the per-request server
+// then only refuses it).
+export interface RequestObservation { requestId: string; body: unknown; client?: ClientObservation; reportedRunId?: string; boundaryRecorded?: boolean; agentId?: string; via?: string; run?: RunRef; rateCounted?: boolean; overLimit?: AgentConnection }
 export const requestObservation = new AsyncLocalStorage<RequestObservation>();
 const object = (v: unknown): Record<string, unknown> => v && typeof v === "object" && !Array.isArray(v) ? v as Record<string, unknown> : {};
 const bounded = (v: unknown, max = 120): string | undefined => typeof v === "string" && v.length <= max ? v.replace(/[\u0000-\u001f]/g, "") : undefined;

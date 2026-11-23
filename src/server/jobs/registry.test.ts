@@ -100,6 +100,7 @@ const EXPECTED_SWEEP_NAMES = [
   "operator-role",
   "metrics-retention",
   "request-arrivals",
+  "email-address-retention",
 ] as const;
 
 // The two registry entries that matched no real enqueued job — removed by this task.
@@ -315,6 +316,43 @@ test("request-arrivals runs hourly and emails the person whose requested service
     const without = buildPeriodicSweeps(jobSeams(db)).find((s) => s.name === "request-arrivals")!;
     await without.run();
     assert.equal(sent.length, 1, "with no catalogue wired, nothing arrives and nothing is sent");
+  } finally {
+    await db.close();
+  }
+});
+
+// --- Email addresses outside the account cascade (review 2026-11-23, High) ------------------
+
+test("email-address-retention runs hourly and deletes old sign-in codes and spent invites", async () => {
+  const db = await freshDb();
+  try {
+    const seams = jobSeams(db); // the clock reads T0
+    const sweep = buildPeriodicSweeps(seams).find((s) => s.name === "email-address-retention");
+    assert.ok(sweep, "the retention sweep is registered");
+    assert.equal(sweep.intervalMs, 60 * 60_000);
+
+    const owner = await createUser(db, { email: "retention-owner@example.test", wrappedDek: "wrapped" });
+    await db.query("INSERT INTO households (id, owner_id, currency) VALUES (gen_random_uuid(), $1, 'AUD')", [owner.id]);
+    const day = 24 * 60 * 60_000;
+    const at = (ms: number) => new Date(T0.getTime() - ms).toISOString();
+    for (const [email, age] of [["old@example.test", 2 * day], ["new@example.test", 60_000]] as const) {
+      await db.query(
+        `INSERT INTO email_codes (email, code_hmac, created_at, expires_at, purpose) VALUES ($1, 'h', $2::timestamptz, $2::timestamptz, 'signup')`,
+        [email, at(age)],
+      );
+      await db.query("INSERT INTO email_code_attempts (email, attempted_at) VALUES ($1, $2::timestamptz)", [email, at(age)]);
+    }
+    await db.query(
+      `INSERT INTO household_invites (token_hash, household_id, email, created_at, expires_at)
+       SELECT 'spent', id, 'invited@example.test', $1::timestamptz, $2::timestamptz FROM households`,
+      [at(45 * day), at(38 * day)],
+    );
+
+    await sweep.run();
+
+    const codes = await db.query("SELECT email FROM email_codes UNION ALL SELECT email FROM email_code_attempts");
+    assert.deepEqual(codes.rows.map((r) => r.email), ["new@example.test", "new@example.test"], "only the recent code and attempt are left");
+    assert.equal((await db.query("SELECT 1 FROM household_invites")).rows.length, 0, "an invite lapsed over 30 days ago is gone");
   } finally {
     await db.close();
   }

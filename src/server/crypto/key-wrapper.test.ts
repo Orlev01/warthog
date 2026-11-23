@@ -29,6 +29,8 @@ import assert from "node:assert/strict";
 import { randomBytes } from "node:crypto";
 
 import { localAesKeyWrapper, selectKeyWrapper, type KeyWrapper } from "./key-wrapper";
+import { createDekCache } from "./dek-cache";
+import { fixedClock } from "../seams/clock";
 
 const KEK_BYTES = 32; // AES-256 key-encryption key
 const DEK_BYTES = 32; // a 256-bit per-person data key
@@ -265,4 +267,24 @@ test("a malformed versioned envelope is refused rather than sent to Key Vault", 
   await assert.rejects(wrapper.unwrap("kv1:not valid!:AAAA"));
   await assert.rejects(wrapper.unwrap("kv1::AAAA"));
   assert.equal(client.calls.unwrap, 0, "nothing malformed reaches Key Vault");
+});
+
+// ===========================================================================
+// Review 2026-11-23 (High) — unwrapped DEKs are cached for at most 5 minutes (design §4.1), so
+// a busy agent no longer costs a Key Vault operation per request. The production wrapper goes
+// through the process-wide cache; a test hands it its own.
+// ===========================================================================
+
+test("the production wrapper unwraps a DEK through Key Vault once while its cache holds it", async () => {
+  const client = fakeKeyVaultClient();
+  const wrapper = selectKeyWrapper({
+    nodeEnv: "production",
+    keyVaultClient: client,
+    dekCache: createDekCache({ clock: fixedClock(new Date("2026-11-23T00:00:00.000Z")), schedule: () => () => {} }),
+  });
+  const dek = freshDek();
+  const wrapped = await wrapper.wrap(dek);
+
+  for (let i = 0; i < 3; i += 1) assert.deepEqual([...(await wrapper.unwrap(wrapped))], [...dek]);
+  assert.equal(client.calls.unwrap, 1, "three unwraps of one wrapped key reach Key Vault once");
 });

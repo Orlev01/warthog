@@ -28,6 +28,12 @@
 // and the insert are one statement, run under the household row lock addMember also takes,
 // so parallel invites (or an invite racing a join) can never overshoot either limit.
 //
+// An invite is keyed by its token and bound to the address it was sent to, not to an account,
+// so it is cleared two ways (review 2026-11-23, High): the account purge deletes every invite
+// sent to the deleted person's address (`deleteInvitesTo`), and the hourly retention sweep
+// (`pruneInvites`) deletes an invite 30 days after it was used or lapsed — until then a lapsed
+// link still reads as expired rather than unknown.
+//
 // Every statement is parameterized through the `Db` seam (INV-102): the ids and the email
 // travel as BOUND values, never concatenated into the SQL text, so a value shaped like SQL
 // is stored as data and cannot alter the query — and the raw token is hashed before it is
@@ -48,6 +54,7 @@ const DAY_MS = 24 * 60 * 60 * 1000;
 const INVITE_TTL_MS = 7 * DAY_MS; // an invite link lapses seven days after issue (brief)
 const TOKEN_ENTROPY_BYTES = 32; // 256 bits of entropy (design §4.1)
 const HOUR_MS = 60 * 60 * 1000;
+const INVITE_RETENTION_MS = 30 * DAY_MS; // kept this long after it was used or lapsed
 
 // How many invites one household may send in any rolling hour (resends included). Enough to
 // invite everyone at once (at most seven places) and resend a couple; not enough to use the
@@ -360,4 +367,17 @@ export async function redeemInvite(
 
     return { ok: true, householdId };
   });
+}
+
+// Delete every invite sent to one address, in any household, whatever its case or spacing.
+// The account purge runs this with the deleted person's address.
+export async function deleteInvitesTo(db: Db, email: string): Promise<void> {
+  await db.query("DELETE FROM household_invites WHERE lower(btrim(email)) = lower(btrim($1))", [email]);
+}
+
+// The retention sweep: an invite that can no longer be redeemed goes 30 days after it was used
+// or lapsed, whichever came first.
+export async function pruneInvites(db: Db, now: Date): Promise<void> {
+  const cutoff = new Date(now.getTime() - INVITE_RETENTION_MS).toISOString();
+  await db.query("DELETE FROM household_invites WHERE used_at < $1::timestamptz OR expires_at < $1::timestamptz", [cutoff]);
 }

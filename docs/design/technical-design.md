@@ -114,7 +114,13 @@ it does not approve an unquoted paid plan or change Warthog's own authentication
 
 ### 4.1 Per-person data key (server side)
 - Each person has a random 256-bit **data key (DEK)**. It is stored only **wrapped** by the Key Vault
-  KEK (`RSA-OAEP-256`). Unwrapped DEKs are cached in process memory for at most 5 minutes.
+  KEK (`RSA-OAEP-256`). Unwrapped DEKs are cached in process memory for at most 5 minutes
+  (`src/server/crypto/dek-cache.ts`, in front of the production KeyWrapper's unwrap): an entry is
+  keyed by a SHA-256 of the wrapped value, so a new or re-wrapped key is always a fresh unwrap;
+  the 5 minutes count from the unwrap and are never extended by use; at most 1,000 keys are held,
+  oldest out first; each caller gets its own copy, a dropped entry is zeroed, and a failed unwrap
+  is never cached. Account deletion drops the person's key at once. The local AES wrapper (dev and
+  test) is not cached.
 - Encrypted with the DEK (AES-256-GCM, random 96-bit nonce, `v1:` versioned envelope, the row id and
   column name as associated data): every personal-content column — low-tier vault fields, preferences,
   skills, memories, tasks, life-admin records, connector credentials (OAuth tokens, API keys), activity
@@ -132,7 +138,9 @@ it does not approve an unquoted paid plan or change Warthog's own authentication
   journal (`life_admin_journal`, append-only, encrypted text; plain kind/actor/time) follow the same
   rule ([life-admin profile](../adr/life-admin-profile.md), [journal](../adr/life-admin-journal.md)).
 - **Account deletion:** clear the live wrapped DEK and revoke access before confirmation;
-  a job purges live rows within 24 hours. Retained backups can contain the older
+  a job purges live rows within 24 hours. The purge also deletes, by the person's address, the
+  rows keyed by an email address outside the account's cascade: sign-in codes, code attempts
+  and throttle alerts, and household invites sent to them. Retained backups can contain the older
   wrapped DEK and are not cryptographically erased by that update. The independent
   [deletion journal and recovery procedure](../adr/deletion-recovery-journal.md)
   reconcile later deletions before a restored database can be considered for use.
@@ -172,6 +180,10 @@ Redaction is a pure module with exhaustive unit tests; the activity writer and t
 
 ## 5. People: sign-in and sessions
 - Email one-time codes: 6 digits, 10-minute expiry, stored as HMAC, max 5 attempts, then backoff.
+  The code tables are keyed by the address (the flow runs before an account may exist), so the
+  hourly `email-address-retention` sweep deletes codes and attempts a day after they were made
+  and throttle alerts after 90 days (the admin portal's longest range counts them). Household
+  invites, bound to the invited address, go 30 days after they were used or lapsed.
 - Passkeys via SimpleWebAuthn, RP ID `app.warthog.com.au` (from config), `residentKey: required`,
   `userVerification: required`, PRF requested on create and get.
 - Authenticator app fallback: RFC 6238 TOTP implemented with `node:crypto` (30 s, 6 digits, ±1 step).
@@ -255,6 +267,16 @@ Redaction is a pure module with exhaustive unit tests; the activity writer and t
   connection active → rate limit (in-memory sliding window, default 120/min) → permission check →
   policy engine (§8) → `allow` | `ask` | `deny` → execute | hold | refuse → **activity entry written
   before the response** (§9).
+- **The rate limit comes before any per-request work.** The MCP dispatch counts each `tools/call`
+  against its agent's limit (a read of the agent's grants; no key) before it builds the
+  per-request server, and the pipeline does not count that call again. A call over the limit is
+  answered by a server that registers only the requested name and returns the same refusal
+  (`isError`, "This agent is going too fast…"): nothing unwraps the person's key, resolves their
+  tools or reads a service. It still counts on the agent card, is measured, and joins the burst's
+  one summarising entry, which names the tool when it is a Warthog or catalogue tool and never
+  carries the refused call's arguments (they were not validated). `tools/list` and the handshake
+  are not counted. The pipeline applies the same limit, ahead of the policy context, for callers
+  outside MCP (an undo's reversal).
 - **Ask** = the call is held (`held_requests`, encrypted args), an approval is created, the agent gets
   `{status:"pending_approval", approval_id, expires_at, message}`. On approval Warthog executes the
   held call exactly once and the result is returned by `check_approval`. Denied / expired → refusal.

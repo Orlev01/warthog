@@ -38,7 +38,7 @@ export interface ReleaseStore {
 // inject a scheduler they fire by hand.
 export type ScheduleEviction = (evict: () => void, delayMs: number) => () => void;
 
-const timerEviction: ScheduleEviction = (evict, delayMs) => {
+export const timerEviction: ScheduleEviction = (evict, delayMs) => {
   const timer = setTimeout(evict, delayMs);
   timer.unref?.();
   return () => clearTimeout(timer);
