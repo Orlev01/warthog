@@ -1,0 +1,68 @@
+<!doctype html>
+<html lang="en-AU"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Wireframe — Life admin and More (phone, proposed)</title><link rel="stylesheet" href="mockup.css">
+<style>
+  body { display: flex; gap: 40px; padding: 24px; background: #e9eaec; align-items: flex-start; }
+  .phone { box-shadow: 0 0 0 1px #d0d0d0, 0 20px 40px -20px rgb(0 0 0 / 25%); border-radius: 28px; overflow: hidden; }
+  .tabbar { position: absolute; }
+  .caption { font: 600 13px/18px Inter; color: #555; margin: 0 0 10px 4px; }
+  .scroller { display: flex; gap: 6px; overflow: hidden; margin: 0 0 12px; }
+  .chip { height: 32px; padding: 0 12px; border-radius: 16px; border: 1px solid var(--line-strong); display: inline-flex; align-items: center; font: 500 13px Inter; background: var(--surface); white-space: nowrap; }
+  .chip.on { background: var(--accent); color: #fff; border-color: var(--accent); }
+  .r { display: flex; align-items: center; gap: 12px; padding: 12px 16px; border-top: 1px solid var(--line); }
+  .r:first-child { border-top: 0; }
+  .r .ic2 { width: 32px; height: 32px; border-radius: 8px; background: var(--surface-muted); flex: none; }
+  .grp { padding: 12px 16px 4px; }
+  .menu a { display: flex; align-items: center; gap: 12px; padding: 13px 16px; border-top: 1px solid var(--line); font: var(--t-body-strong); }
+  .menu a:first-child { border-top: 0; }
+  .menu a .ic { width: 18px; height: 18px; border-radius: 5px; border: 1.6px solid #8a8a8a; }
+  .menu a .meta { margin-left: auto; }
+</style></head>
+<body>
+<div>
+  <p class="caption">3 · Life admin: one tab row (PR #52), agent finds as one queue, compact rows</p>
+  <div class="phone">
+    <div class="ptop"><span>Life admin</span><span class="meta">+ Add</span></div>
+    <div class="pbody">
+      <nav class="tabs" style="margin-bottom:12px"><a class="on">Records</a><a>Upcoming</a><a>History</a><a>Tasks</a></nav>
+      <section class="panel annot" data-note="Was 25 full cards (~9,000px)" style="padding:14px 16px;margin-bottom:12px">
+        <div style="display:flex;align-items:center;gap:12px"><div class="grow"><h3>25 records found by your agents</h3><p class="meta">Mostly from your email this week</p></div><a class="btn sm primary">Check</a></div>
+      </section>
+      <div class="scroller annot" data-note="Filters as chips + one sheet"><span class="chip on">All 25</span><span class="chip">Car 5</span><span class="chip">Travel 4</span><span class="chip">Subscriptions 4</span><span class="chip">Filter</span></div>
+      <section class="panel" style="margin-bottom:12px">
+        <div class="grp label">Due soon</div>
+        <div class="r"><span class="ic2"></span><div class="grow"><h3>Car registration</h3><p class="meta">Service NSW · due Fri 11 Dec</p></div><span class="badge warn">18 days</span></div>
+        <div class="r"><span class="ic2"></span><div class="grow"><h3>Comprehensive car insurance</h3><p class="meta">AAMI · renews 18 Dec · $1,250.50/yr</p></div><span class="badge">25 days</span></div>
+        <div class="r"><span class="ic2"></span><div class="grow"><h3>Parking fine — Bondi Rd</h3><p class="meta">Waverley Council · pay by 5 Dec</p></div><span class="badge danger">Act</span></div>
+      </section>
+      <section class="panel">
+        <div class="grp label">Car · Mazda CX-5</div>
+        <div class="r"><span class="ic2"></span><div class="grow"><h3>Logbook service</h3><p class="meta">Mazda Parramatta · 48,200 km</p></div></div>
+        <div class="r"><span class="ic2"></span><div class="grow"><h3>Cracked windscreen claim</h3><p class="meta">AAMI · assessing</p></div><span class="badge tint">Open</span></div>
+      </section>
+    </div>
+    <nav class="tabbar"><a><span class="ic"></span>Home</a><a><span class="ic"></span>Inbox<span class="pip">4</span></a><a><span class="ic"></span>Activity</a><a><span class="ic"></span>Agents</a><a class="on"><span class="ic"></span>More</a></nav>
+  </div>
+</div>
+
+<div>
+  <p class="caption">4 · More: everything else in two taps, grouped in plain words</p>
+  <div class="phone">
+    <div class="ptop"><span>More</span></div>
+    <div class="pbody">
+      <section class="panel" style="margin-bottom:12px"><div class="menu"><a><span class="avatar">AN</span><span>Alexandra Nguyen<br><span class="meta" style="margin:0">Nguyen household</span></span></a></div></section>
+      <p class="label" style="margin:0 4px 6px">What agents can use</p>
+      <section class="panel menu" style="margin-bottom:12px">
+        <a><span class="ic"></span>Services<span class="meta">Gmail, Calendar</span></a>
+        <a><span class="ic"></span>Vault<span class="meta">details and cards</span></a>
+        <a><span class="ic"></span>Life admin<span class="meta">3 due soon</span></a>
+        <a><span class="ic"></span>Memory</a><a><span class="ic"></span>Skills</a>
+      </section>
+      <p class="label" style="margin:0 4px 6px">Spending &amp; rules</p>
+      <section class="panel menu" style="margin-bottom:12px"><a><span class="ic"></span>Spending<span class="meta">$0 this month</span></a><a><span class="ic"></span>Rules<span class="meta">2 active</span></a></section>
+      <section class="panel menu"><a><span class="ic"></span>Household</a><a><span class="ic"></span>Settings</a><a><span class="ic"></span>Help &amp; support</a><a><span class="ic"></span>Sign out</a></section>
+    </div>
+    <nav class="tabbar annot" data-note="Replaces the hamburger drawer"><a><span class="ic"></span>Home</a><a><span class="ic"></span>Inbox<span class="pip">4</span></a><a><span class="ic"></span>Activity</a><a><span class="ic"></span>Agents</a><a class="on"><span class="ic"></span>More</a></nav>
+  </div>
+</div>
+</body></html>

@@ -1,0 +1,336 @@
+{
+  "lens": "accessibility",
+  "summary": "Warthog's mechanical accessibility is strong: axe-core is clean on 251 captures, every sampled route has one h1, no skipped heading levels and labelled landmarks, and every traced Tab stop shows a visible focus ring. Nothing reflows into page-level horizontal scroll at 320px or at 200%, WCAG text spacing clips nothing, and the sticky phone header never hides focus. The real barriers come after a person acts. Server-detected errors are generic page banners that never name the field, and no member-app field uses the Field error/aria-invalid wiring. Focus falls to <body> after Approve/Deny, after an agent-permission save and after adding a record. Outcome notices are inserted together with their text, so screen readers may not announce them. Dense pages (Life admin on a phone: 16,859px, 139 Tab stops, 'Confirm all 25' 11 screens down) are the main cognitive-accessibility risk. One criterion fails outright (3.3.1). 2.4.3, 3.3.3, 3.3.7, 1.4.10 and 1.4.11 are partial, and 4.1.3 needs assistive-technology confirmation. Method: WCAG-EM-style sample of 33 routes plus states in the typical account (read-only), with saving and decision flows exercised only in the worst account.",
+  "scores": {
+    "scope": "WCAG 2.2 AA, signed-in member app, typical account read-only + worst account for saving flows; Chromium via Playwright at 320, 390, 640x400 (1280@200%), 1280, 1440; light and dark. Evidence classes: verified (deterministic, reproducible) / needs human confirmation / human-only.",
+    "1.3.1 Info and Relationships": "pass, verified. 1 h1 and no skipped levels on 23 routes at 1440; labelled navs and regions; lists use ul/li. Minor: agent sub-pages expose 4 nav landmarks, one labelled only 'Agent section' (A11Y-13)",
+    "1.4.1 Use of Color": "pass, needs human confirmation. Status badges carry icon + text; 0 colour-only inline links or dots found on 16 pages",
+    "1.4.3 Contrast (Minimum)": "pass, verified. axe colour-contrast: 0 violations across 251 captures incl. dark-1440",
+    "1.4.4 Resize Text": "pass, needs human confirmation. 1280@200% emulated as a 640x400 viewport: 0 page-level horizontal scroll and 0 clipped text on 27 routes (true browser zoom not exercised)",
+    "1.4.10 Reflow": "partial, needs human confirmation. 0 page-level horizontal scroll at 320 on 27 routes; filter chips with long agent names (429px chip in a 262px track) cannot be read without horizontal scrolling (A11Y-06)",
+    "1.4.11 Non-text Contrast": "partial, needs human confirmation. Field borders 4.54:1 light / 4.68:1 dark; focus ring 5.4:1 / 4.4:1; selected filter-chip and view-pill states only 1.1-2.9:1 plus bold (A11Y-07). Dark container edges (~1.46:1) are decorative; no control or required boundary depends on them (buttons are identified by text, fields use --wh-line-input)",
+    "1.4.12 Text Spacing": "pass, needs human confirmation. WCAG spacing override on Inbox, Activity, Life admin, Tasks and Home at 390: 0 clipped elements, 0 overflow",
+    "2.1.1 Keyboard / 2.1.2 No Keyboard Trap": "pass for the sampled widgets, verified. Drawer, Disconnect, Remove passkey and package-editor dialogs, ViewPanels tabs (arrows/Home/End), details disclosures and filters all operate by keyboard; Escape closes every modal and focus returns to the trigger",
+    "2.4.1 Bypass Blocks": "pass, verified. Skip link is the first stop; 20-26 stops to reach main without it",
+    "2.4.2 Page Titled": "pass, verified. Minor: Life admin item pages are all titled 'Life admin item', with no suffix; the dark checklist axe hit was a transient dev-server 500 (A11Y-15)",
+    "2.4.3 Focus Order": "partial (focus loss verified; impact needs human confirmation). Order inside pages, the drawer and dialogs is logical, but focus drops to <body> after Deny/Approve, permission Save and record add (A11Y-02); phone dialogs tab bottom-to-top (A11Y-12); filter links reset focus to the top (A11Y-05)",
+    "2.4.4 Link Purpose (In Context) / 2.4.6 Headings and Labels": "pass, needs human confirmation. Context is added to most repeated controls; naming is inconsistent and very long on the Inbox (A11Y-10)",
+    "2.4.7 Focus Visible": "pass, verified. 0 of 15 traced pages had a stop without a visible focus style; 2px #0169cc / #0285ff outline; inset ring on tabs",
+    "2.4.11 Focus Not Obscured (Minimum)": "pass, verified. About 2,900 Tab/Shift+Tab stops on 8 long pages at 390x844 and 3 pages at 1280x720: 0 stops covered by the sticky header (scroll-padding-top 68px). The package-editor dialog's sticky header partly covers two buttons (25 of 44px): passes AA, fails AAA 2.4.12 (A11Y-14). Dev-only Next.js badge excluded",
+    "2.5.3 Label in Name": "pass, verified. Every accessible name starts with the visible label (Chrome AX tree, 12 pages)",
+    "2.5.8 Target Size (Minimum)": "pass, verified. 33 routes at 1280x800: 0 failing targets once hidden content is excluded; desktop controls 32-40px. Home's 23px 'n entries / n need attention' links sit in a line of text, so the inline exception applies (needs human confirmation)",
+    "3.2.3 / 3.2.4 Consistent Navigation and Identification": "pass, needs human confirmation",
+    "3.2.6 Consistent Help": "pass, verified. The '?' help link is in the top bar of every page, and Help/Contact us sit at the same place in the nav. The Help page itself leaves the shell (A11Y-11, cognitive)",
+    "3.3.1 Error Identification": "FAIL, verified. Server-detected errors do not identify the field: agent card currency 'ZZ' gives a generic alert, and a Life admin partial save gives 'some details were left out'. 0 member-app forms use Field error or aria-invalid (A11Y-01)",
+    "3.3.2 Labels or Instructions": "pass, verified. Minor: 'Card budget per month (AUD)' label stays AUD while a separate Currency field can be changed (A11Y-01)",
+    "3.3.3 Error Suggestion": "partial, needs human confirmation. Life admin format hints and the forbidden_* notices (which name the field) help; 'that request wasn't valid' and 'Finish the steps above' do not (A11Y-01, A11Y-04)",
+    "3.3.7 Redundant Entry": "partial, needs human confirmation. A rejected service key needs disconnect + full re-entry; a partial record save drops the typed values (A11Y-16, A11Y-01)",
+    "3.3.8 Accessible Authentication (Minimum)": "pass, needs human confirmation. Step-up offers a passkey (no cognitive test); the TOTP field allows paste; vault passphrase autocomplete='off' and the 6-character TOTP limit weaken the assistive routes (A11Y-15)",
+    "4.1.2 Name, Role, Value": "pass, verified. 0 unnamed interactive AX nodes on 12 pages; tabs and disclosures expose selected/expanded state",
+    "4.1.3 Status Messages": "undetermined (code fact verified; whether it is announced is human-only). Notices are inserted with their text already present; only the copy toast keeps a pre-mounted live region (A11Y-03)",
+    "2.3.3 Animation from Interactions (AAA, informational)": "pass, needs human confirmation. The reduce rule freezes spinners and pulses (sampled: constant transform); no smooth scrolling",
+    "not exercised": "2.2.1 (approval expiry and the 5-minute step-up window are system timers), 1.3.4, 1.3.5, 1.4.13, forced colours (covered 12 Nov), 1.2.x (no media); real screen-reader and voice-control output is human-only",
+    "ledger": "Pass (verified): 1.3.1, 1.4.3, 2.1.1, 2.1.2, 2.4.1, 2.4.2, 2.4.7, 2.4.11, 2.5.3, 2.5.8, 3.2.6, 3.3.2, 4.1.2. Fail (verified): 3.3.1. Partial/undetermined: 1.4.10, 1.4.11, 2.4.3, 3.3.3, 3.3.7, 4.1.3. Pass needing confirmation: 1.4.1, 1.4.4, 1.4.12, 2.4.4, 2.4.6, 3.2.3, 3.2.4, 3.3.8",
+    "cognitive accessibility (COGA, beyond WCAG)": "needs work, needs human confirmation; human testing required. Life admin on a phone: 16,859px, 1,997 words, 139 Tab stops in main, 25 fully expanded agent suggestions before the person's own records (A11Y-08); Inbox control names up to 142 characters (A11Y-10); Help drops the workspace (A11Y-11)",
+    "human-only handoff": "NVDA + Chrome and VoiceOver iOS + Safari: Deny/Approve, agent Save and record add in the worst account; confirm whether the notice is announced and where focus lands (A11Y-02/03). Voice Control iOS: 'tap Approve' with 4 pending requests (A11Y-10). Moderated session with people with memory or attention impairments on the Life admin review queue (A11Y-08). 400% zoom on a real phone with agent filters (A11Y-06)"
+  },
+  "strengths": [
+    "Semantic baseline: exactly one h1 and no skipped heading levels on all 23 sampled routes; labelled nav and region landmarks; a skip link as the first stop; group labels are role=group rather than headings (app-shell.tsx:93-150).",
+    "Focus visibility and the sticky header: one global 2px :focus-visible outline (5.4:1 light, 4.4:1 dark; globals.css:124) with 0 invisible stops in 15 traces, and html scroll-padding-top (surfaces.css:70) means the sticky phone header covered 0 of about 2,900 focused stops.",
+    "Native <dialog>s and the drawer behave correctly: focus starts on the safe action ('Keep connected', 'Close'), Escape closes and focus returns to the trigger, and the drawer moves focus to the current sidebar link when the viewport grows (app-shell.tsx:209-223).",
+    "ViewPanels follow the APG tabs pattern (roving tabindex, arrows/Home/End, panels stay mounted so drafts survive, view-tabs.tsx:130-191). The Field primitive already associates label, hint, error, role=alert and aria-invalid correctly (field.tsx:44-93), which makes A11Y-01 cheap to fix.",
+    "Responsive robustness: 0 page-level horizontal scroll at 320px and at 200%, 0 clipped text under WCAG text spacing, and desktop targets of 32-40px that all clear 24px. The Inbox focuses the request opened from a push notification and the Toast keeps its live region mounted: good patterns to reuse."
+  ],
+  "findings": [
+    {
+      "id": "A11Y-01",
+      "title": "Server-detected form errors never identify the field and often discard what was typed",
+      "location": "/agents/[id]?section=spending: app/(portal)/(protected)/agents/[id]/permissions-form.tsx:49-52,90-92,230 + components/agents/permissions-view.tsx:344-362; /life-admin add/edit: app/(portal)/(protected)/life-admin/notices.tsx:76-78,107 + life-admin/page.tsx:63,69; all server-action forms",
+      "problem": "Tested in the worst account. With card access on, a 50 budget and Currency 'ZZ', Save shows 'Nothing was changed: that request wasn't valid. Please check and try again.' below the Save panel (below the fold at 1280x900). The Currency field gets no aria-invalid and no message, and focus drops to <body>. Adding a home-insurance record with Premium 'about 300 bucks' and Currency 'dollars' saved the record without those values and showed 'Saved, but some details were left out: use the date picker…' without saying which details. The typed values are gone, and the server already knows which fields failed (result.problems is ignored at life-admin/page.tsx:63). Across the member app, the Field `error` prop is used 0 times and aria-invalid appears 0 times outside the auth screens and the release phrase. The Currency field has no pattern. The label 'Card budget per month (AUD)' stays AUD even when Currency is edited.",
+      "why": "WCAG 3.3.1 Error Identification: once an error is detected automatically, the item in error must be identified in text (fail). 3.3.3 Error Suggestion is only partly met. 3.3.7 Redundant Entry: dropped values must be typed again.",
+      "impact": "Anyone setting a budget or adding a record has to guess what went wrong. Screen-reader and low-vision users get an alert detached from the field, often off-screen, with focus lost. This sits on 'control spending', a core job in the brief.",
+      "severity": "high",
+      "recommendation": "Make server actions return per-field errors, e.g. `{ ok:false, fields:{ cardBudgetCurrency:'Use a three-letter code such as AUD' } }` via useActionState in ActionForm, and pass them to Field `error` (the wiring already exists in field.tsx:44-93). Repopulate defaultValue from the submitted FormData. Move focus to the first [aria-invalid] (copy auth-screen.tsx:33). Add pattern='[A-Za-z]{3}' and a title to the currency Fields. Map result.problems to field labels in saved_partly/updated_partly ('Premium and Currency weren't saved…') and reopen the record's Edit form with those fields marked. Make the budget label 'Card budget per month' and let the Currency field carry the code.",
+      "effort": "M",
+      "type": "functional",
+      "evidence": [
+        "<review-scratch>/accessibility/worst-perms-bad_currency.png",
+        "<review-scratch>/accessibility/worst-perms.json (alert text, invalid:[], active:BODY)",
+        "<review-scratch>/accessibility/worst-add-record.png",
+        "grep: Field error= used 0x in member app; aria-invalid 0x outside src/components/auth + field.tsx"
+      ],
+      "related_pages": ["/connectors/key", "/household", "/rules?view=new", "/life-admin/items/[id]", "/settings/notifications", "/vault"]
+    },
+    {
+      "id": "A11Y-02",
+      "title": "Keyboard focus falls to <body> after Approve/Deny, agent permission saves and record adds",
+      "location": "/inbox: components/inbox/inbox-view.tsx:251-280 (ActionForm per decision) + components/ui/form-focus.ts (restores only when the same form re-renders); /agents/[id]: permissions-form.tsx:175-195; /life-admin add record",
+      "problem": "Tested in the worst account at 390: focusing 'Deny: Claude wants to use your card for $12.00…' and pressing Enter removes the request. document.activeElement is BODY and the next Tab lands on the 'Waiting on you (0)' tab. The agent Save changes button drops focus to BODY on both success and error. Life admin 'Add to Life admin' returns to /life-admin?view=life&tab=records with focus on BODY, and the #new-record anchor is lost. rememberSubmitFocus/restoreSubmitFocus only work when the same form, with the same hidden ids, exists after the save, so they can never cover a decided request.",
+      "why": "WCAG 2.4.3 Focus Order (focus must move in a way that preserves meaning and operability); the loss of focus is verified, its impact needs human confirmation. The 12 Nov pass fixed this for forms that persist, not for forms that disappear.",
+      "impact": "A keyboard, switch or screen-reader user working through 4 pending approvals on a phone loses their place after every decision and starts again from the top of the page or the tab row. Approving on the go is the brief's main mobile job.",
+      "severity": "high",
+      "recommendation": "Give PageNotice/Notice a `focusOnMount` mode (tabIndex=-1, focus once when it renders a fresh ?notice=). Use it for decision, save and add outcomes, so focus lands on the result ('Denied. The agent won't go ahead.'). When more requests remain, follow the notice with a 'Next request' link or move focus to the next pending li. In PermissionsForm, keep Save focusable while saving (aria-disabled + aria-busy, as FormSubmit already does) and focus the InlineNotice. After a record add, redirect to #record-<id> and focus that row; record-row.tsx:327 already makes it focusable.",
+      "effort": "M",
+      "type": "functional",
+      "evidence": [
+        "<review-scratch>/accessibility/worst-deny.json (active: BODY)",
+        "<review-scratch>/accessibility/worst-after-deny-390.png",
+        "src/components/ui/form-focus.ts:76-93 (signature must match)"
+      ],
+      "related_pages": ["/home (Inbox card)", "/life-admin (Confirm / Not mine remove the row)", "/agents (Disconnect)", "/memory (Delete)", "/rules (Delete)"]
+    },
+    {
+      "id": "A11Y-03",
+      "title": "Outcome notices are inserted with their text already present, so screen readers may not announce them",
+      "location": "components/ui/notice.tsx:25 (role=status/alert on a newly mounted node), :40-56 PageNotice; 37 conditional role=status/alert sites (e.g. release-approve.tsx:689-700, cards-view.tsx:219, data-transfer.tsx:166-167, permissions-form.tsx:230)",
+      "problem": "A MutationObserver on the worst-account Inbox recorded the result of Deny as one insertion: a role=status node whose text was already 'Denied. The agent won't go ahead.' when it entered the DOM. No region existed before that and none changed afterwards. Every PageNotice, Notice and InlineNotice outcome follows this pattern. Only CopyButton uses the Toast, whose role=status announcer stays mounted (toast.tsx:47). The component's own comment explains why that matters.",
+      "why": "WCAG 4.1.3 Status Messages. The node carries role=status (verified), but NVDA, JAWS and VoiceOver often skip live regions inserted together with their content (actual announcement is human-only). Combined with A11Y-02, a blind user gets neither focus nor speech confirming that a decision or save worked.",
+      "impact": "Screen-reader users cannot tell whether Approve, Deny, Save or Disconnect happened, and they may act again or abandon the page. This hits the trust-critical paths.",
+      "severity": "medium",
+      "recommendation": "Add one persistent announcer to AppShell: two empty sr-only regions, polite and assertive, plus an `announce(text, tone)` context in components/ui. Have Notice and PageNotice call it from an effect after mount instead of carrying the role themselves (keep role=alert only for inline field errors). Fixing A11Y-02 by focusing the notice also makes it read reliably. Then add a test asserting that the announcer exists before submit.",
+      "effort": "S",
+      "type": "functional",
+      "evidence": [
+        "<review-scratch>/accessibility/worst-deny.json (live: inserted, textOnInsert)",
+        "src/components/ui/toast.tsx:17-19,47 (correct pattern, used only by copy-button.tsx)"
+      ],
+      "related_pages": ["/agents/[id] (Save changes)", "/vault/cards", "/settings/data", "/life-admin", "/household", "/rules"]
+    },
+    {
+      "id": "A11Y-04",
+      "title": "Disabled submit buttons hide the problem: 'Add rule' and the card-budget Save give no field-level reason",
+      "location": "/rules?view=new: components/rules/rules-view.tsx:711-714; /agents/[id]?section=spending: permissions-view.tsx:344-354 + permissions-form.tsx:113-138",
+      "problem": "Tested in the worst account. In the rules builder, choosing 'Request a card' with condition 'amount over' and Amount −5 leaves 'Add rule' natively disabled, so it is removed from the Tab order. Its only description is 'Finish the steps above to add this rule.', the preview says 'Complete the action and condition details…', and no field is marked invalid. 'Use a specific tool' with no tool chosen behaves the same way. On the agent page, a budget of −5 or an empty budget silently disables Save changes, with no text explaining why.",
+      "why": "WCAG 3.3.1/3.3.3 (needs human confirmation): the form has detected the error (it refuses to submit) but neither names the field nor suggests a fix. A natively disabled button is also skipped by Tab, so keyboard and screen-reader users may not find the action at all.",
+      "impact": "People building rules or budgets, the brief's 'control spending' job, get stuck on a greyed-out button with no reason. This is a particular trap for cognitive and screen-reader users.",
+      "severity": "medium",
+      "recommendation": "Keep 'Add rule' and 'Save changes' enabled (or aria-disabled but focusable). On activation, validate and mark the specific Step or Field with an error through Field `error` ('Enter an amount of 0 or more'; 'Choose a tool'), then focus it. Replace the generic hint with the names of the unfinished steps ('Still needed: Tool, Amount').",
+      "effort": "S",
+      "type": "functional",
+      "evidence": [
+        "<review-scratch>/accessibility/worst-rules.mjs output: amount -5 → addDisabled:true, desc 'Finish the steps above to add this rule.', invalid:[]",
+        "worst-perms3.mjs output: 'negative save disabled? true', no status/alert"
+      ],
+      "related_pages": ["/rules?view=budgets", "/household (budget, limits)", "/skills?view=add"]
+    },
+    {
+      "id": "A11Y-05",
+      "title": "Every filter chip reloads the page and sends keyboard focus back to the top",
+      "location": "components/ui/filter-links.tsx:51 (plain <a href>), used on /activity quick filters, /memory, /inbox?view=history, /rules, /life-admin tasks, /connectors categories",
+      "problem": "Activating a filter does a full navigation, and focus restarts at <body>. It then takes 28 Tab presses to get back to the chip on /activity ('Needs attention'), 26 on /memory ('Shared') and 22 on /inbox?view=history ('Denied') at 1440. Nothing announces the new result count.",
+      "why": "Focus order stays technically valid (2.4.3 not failed), but this is a keyboard-efficiency and orientation problem (needs human confirmation). Filtering is the main way to read Activity, the brief's 'review activity' job.",
+      "impact": "Keyboard, switch and screen-reader users pay about 25 key presses per filter change. Comparing 'Needs attention' with 'Changes' becomes tedious.",
+      "severity": "medium",
+      "recommendation": "On a page whose URL carries a filter param, focus the active chip (aria-current=page) on load, or the results heading with tabIndex=-1. Alternatively render the chips as next/link with scroll={false} and keep focus. Let ListToolbar's existing role=status announce the count ('12 entries').",
+      "effort": "S",
+      "type": "functional",
+      "evidence": [
+        "<review-scratch>/accessibility/filterfocus.mjs output: focus after: BODY; tabs back to chip 28 / 26 / 22"
+      ],
+      "related_pages": ["/activity", "/memory", "/inbox?view=history", "/rules", "/life-admin?view=tasks", "/connectors?view=catalogue"]
+    },
+    {
+      "id": "A11Y-06",
+      "title": "Agent filter chips wider than the screen cannot be read at 320px or 400% zoom",
+      "location": "/memory 'Filter by who saved it', /inbox?view=history 'Filter decisions by agent': filter-links.tsx:51 (variant 'scroll' → whitespace-nowrap shrink-0)",
+      "problem": "At 320 CSS px the Gemini chip ('Gemini — family travel and household research assistant 3') is 429px wide inside a 262px scroll track. Both ends of the label are cut off even while focused, so the label can never be seen whole. Focus at 390 flagged the same chip as partly outside the viewport. Worst-account agent names are longer still.",
+      "why": "WCAG 1.4.10 Reflow (needs human confirmation): a single line of control text needs horizontal scrolling to read. A row of chips that scrolls is acceptable; a chip whose own text is wider than the viewport is not.",
+      "impact": "Low-vision users at 400% zoom, and anyone with a long agent name on a small phone, cannot tell which agent a filter selects.",
+      "severity": "medium",
+      "recommendation": "For the 'scroll' variant, let a chip wrap within its own box (`max-w-[calc(100vw-3rem)] whitespace-normal text-left`), or show the agent's short label (the first segment before ' — ') with the full name in an sr-only span. Below 480px, switch agent filters to a SelectField, as the Activity Filters panel already does.",
+      "effort": "S",
+      "type": "visual",
+      "evidence": [
+        "<review-scratch>/accessibility/chip-320-memory.png",
+        "<review-scratch>/accessibility/reflow-320.json (widestChild 429 vs cw 262)"
+      ],
+      "related_pages": ["/inbox?view=history", "/activity (agent select is fine)"]
+    },
+    {
+      "id": "A11Y-07",
+      "title": "Selected filter chips and view pills rely on bold text plus a 1.1-2.9:1 fill or border",
+      "location": "/activity 'Quick filters' and 'Activity views', /memory, /connectors categories, agent sub-nav pills: CHIP_LINK in components/ui/filter-links.tsx; .wh-subtab[aria-current] in globals.css:333-338",
+      "problem": "Measured in light mode: the selected chip ('All activity') fill is 1.11:1 against the panel and its border (#cdcdcd) 1.59:1; the selected view pill ('Timeline') has a tint border of 2.9:1. In dark mode the chip border is 2.3:1 and the fill 1.13:1. Apart from those, only font-weight 600 against 400 distinguishes selected from unselected. Tabs are fine (2px tint underline).",
+      "why": "WCAG 1.4.11 Non-text Contrast for state indicators (needs human confirmation; the bold weight may be judged sufficient). Distinguishing 'which filter is on' should not depend on perceiving a 1.1:1 tint.",
+      "impact": "Low-vision and older users may misread which Activity or Memory filter is active, and therefore what the list is showing.",
+      "severity": "low",
+      "recommendation": "Give the selected chip a --wh-line-input border (4.54:1 light, 4.68:1 dark) or a full-strength --wh-tint border (#4f46e5 is 6.3:1 on white). Add a leading Check icon (aria-hidden; aria-current already carries the semantics). Use the same treatment on .wh-subtab[aria-current].",
+      "effort": "S",
+      "type": "visual",
+      "evidence": [
+        "<review-scratch>/accessibility/nontext.mjs output (light: bgVsParent 1.11, borderVsParent 1.59; Timeline 2.9; dark: 1.13 / 2.3)",
+        "<capture-run>/typical/shots/light-1440/activity.s1.jpg"
+      ],
+      "related_pages": ["/memory", "/connectors", "/inbox?view=history", "/agents/[id] sub-nav"]
+    },
+    {
+      "id": "A11Y-08",
+      "title": "Life admin on a phone overloads attention and memory: 25 fully expanded suggestions sit before everything else",
+      "location": "/life-admin: components/life-admin/records-view.tsx:124-160 (suggestion rows), :274-304 ('Confirm all n' after the list)",
+      "problem": "At 390 the page is 16,859px tall (about 20 screens) with 1,997 words and 139 Tab stops in main. Each of the 25 agent-found records is expanded (every field plus Confirm, Not mine and Edit), and their titles are paragraphs, not headings. 'Confirm all 25' is at y=9,232, after the whole list, and the person's own records start at y=9,524. Two stacked tab rows (Records & reminders | Tasks, then Records | Upcoming | Bookings | Moving checklist) add to the load. Activity shows the same pattern: 61 entries under 'Yesterday', 11,154px tall on a phone.",
+      "why": "Cognitive accessibility (W3C COGA 'Making Content Usable': help users focus, avoid too much content; needs human confirmation, human testing required). The brief promises 'calm, quick' phone use and one clear primary action per screen, but there are 25 'Confirm' buttons.",
+      "impact": "People with attention, memory or fatigue-related disabilities, and every phone user, must scroll 11 screens to find the bulk action or their own records. Screen-reader users cannot jump from suggestion to suggestion by heading.",
+      "severity": "medium",
+      "recommendation": "Collapse 'To check' into a summary card ('25 found by your agents — Review') with 'Confirm all 25' at the top. Show each suggestion as its one-line summary (title, kindLine, provenance) with the fields inside a Details disclosure, as record-row.tsx already does for confirmed records. Make each suggestion title an h4 (or aria-labelledby on the li). Offer an optional one-at-a-time review step (Confirm / Not mine / Skip, 'n of 25') on phones. Add jump links to categories under the heading band.",
+      "effort": "M",
+      "type": "structural",
+      "evidence": [
+        "life-admin light-390: 16,859px, 1,997 words, 139 tab stops in main (la-count.mjs), Confirm all at y=9,232 (la-pos.mjs)",
+        "<capture-run>/typical/shots/light-390/life-admin.s1.jpg",
+        "<capture-run>/typical/shots/light-390/life-admin.s3.jpg"
+      ],
+      "related_pages": ["/activity (61 entries/day, 11,154px at 390)", "/connectors?view=catalogue (10,051px)"]
+    },
+    {
+      "id": "A11Y-09",
+      "title": "Disconnecting an agent shows 'Disconnecting…' behind the confirm dialog before the person has confirmed",
+      "location": "/agents: app/(portal)/(protected)/agents/disconnect-confirm.tsx:91-110 (confirm awaited inside the form action)",
+      "problem": "Pressing 'Disconnect <agent>' starts the form action and opens the dialog from inside it, so the trigger behind the backdrop already reads 'Disconnecting…' (aria-busy=true, aria-disabled=true) while the dialog asks 'Disconnect Gemini…?'. Escape restores it.",
+      "why": "A contradictory status (cognitive; needs human confirmation) at the moment of a destructive decision undermines the 'say plainly what happens next' rule in the brief and the 3.3.4-style safeguard the dialog exists to provide.",
+      "impact": "People may think the disconnect has already begun and that 'Keep connected' is too late, or press Escape and wonder whether it happened.",
+      "severity": "low",
+      "recommendation": "Open the dialog from a plain type=button onClick, and only on 'Disconnect agent' call form.requestSubmit() so the pending label appears after confirmation. Remove-passkey and delete-skill already follow this pattern.",
+      "effort": "S",
+      "type": "functional",
+      "evidence": [
+        "<review-scratch>/accessibility/disconnect-dialog-390.png",
+        "disc.mjs output: 'Disconnecting… aria-busy=true' while dialogOpen:true"
+      ],
+      "related_pages": ["/agents/[id]?section=settings (Disconnect)"]
+    },
+    {
+      "id": "A11Y-10",
+      "title": "Control names are inconsistent: Inbox buttons repeat a 142-character sentence; Memory repeats bare 'Edit/Delete' ×10",
+      "location": "components/inbox/inbox-view.tsx:211 (sr-only ': {context}'), :465; components/agents/agent-list-view.tsx:139,197-204; components/activity/activity-view.tsx:503,668; components/memory/memory-view.tsx:223,243,250,267",
+      "problem": "Chrome AX names on /inbox: 'Approve and release : Gemini — family travel and household research assistant wants to use your card for NZD 180.00 at Coronet Peak Snow School' (142 characters). The same sentence is repeated on Details, Deny and Ask for more detail, so each request reads it 5 times, and 'Time left: 23 hours 28 minutes left' doubles 'left'. The ': ' sr-only spans yield ' : ' (a space before the colon). Context patterns differ by page: 'Disconnect Claude', 'Manage agent : Claude', 'Manage agent Claude', 'View details for …, time'. On /memory, 'Manage agent access', 'Share with my agents', 'Edit' and 'Delete' are each repeated 10 times with identical names (Edit/Delete only get an aria-describedby). On /activity, 18 'View details for Add a task, 23 Nov 2026, 11:41 pm' names are identical.",
+      "why": "2.4.4/2.4.6 pass in context (needs human confirmation). Excessive verbosity and ambiguity cost screen-reader time, and voice-control users saying 'tap Approve' with 4 requests get numbered overlays.",
+      "impact": "Screen-reader users on the Inbox, the most-used phone screen, hear the request sentence 5 times per request. Memory users browsing by control list cannot tell which memory 'Delete' belongs to.",
+      "severity": "low",
+      "recommendation": "Add a small `ForContext` helper in components/ui that renders `<span className=\"sr-only\">, {short}</span>`, and give each item a short label ('NZD 180 card, Coronet Peak'; the memory's first 40 characters). Label each Inbox li with aria-labelledby on its sentence and keep the button names short ('Approve and release, NZD 180 card'). Replace 'Time left: … left' with 'Time left: 23 hours 28 minutes'. Add the entry number or seconds to duplicate Activity names.",
+      "effort": "S",
+      "type": "functional",
+      "evidence": [
+        "<review-scratch>/accessibility/names.json",
+        "inboxstruct.mjs ARIA snapshot (Approve name length 142)"
+      ],
+      "related_pages": ["/agents", "/activity", "/memory", "/home"]
+    },
+    {
+      "id": "A11Y-11",
+      "title": "Help takes signed-in members out of the workspace to a page offering 'Sign in / Sign up' with no way back",
+      "location": "Top-bar '?' (components/shell/app-shell.tsx:303-311) and sidebar Help → /help (public layout)",
+      "problem": "For a signed-in member, /help shows the public top bar (Help, Sign in, Sign up). The logo goes to '/' (the landing page), and no link returns to /home or to the page the person came from. Contact us, by contrast, stays in the shell.",
+      "why": "3.2.6 Consistent Help passes, because the mechanism sits in the same place on every page. The cognitive accessibility problem (needs human confirmation; COGA 'help users understand what things are and how to use them') is that 'Sign in' suggests the person has been logged out, at exactly the moment they need help.",
+      "impact": "Confused or anxious users, the people who open Help, lose their place and may sign in again or abandon the task. This is worst on phones, where the drawer has to be reopened.",
+      "severity": "medium",
+      "recommendation": "Render help inside AppShell for signed-in members (a (portal) /help route reusing the same content component), or have the public /help read the session and swap 'Sign in / Sign up' for 'Back to your workspace'. Open Help with the current path in ?from= so the back link returns to it.",
+      "effort": "S",
+      "type": "structural",
+      "evidence": [
+        "<capture-run>/typical/shots/light-390/help.s1.jpg",
+        "help.mjs output: links 'Warthog home -> /', 'Sign in -> /signin', 'Sign up -> /signup'; no /home link"
+      ],
+      "related_pages": ["every signed-in page (header '?')"]
+    },
+    {
+      "id": "A11Y-12",
+      "title": "Phone confirm dialogs tab bottom-to-top because the buttons use flex-col-reverse",
+      "location": "disconnect-confirm.tsx:127; remove-passkey.tsx:163,170; remove-authenticator.tsx:117,124; delete-skill.tsx:117; access-key-panel.tsx:174; sign-in-request-decision.tsx:195,220",
+      "problem": "Below 640px the DOM order is 'Keep connected' then 'Disconnect agent', but the visual order is reversed. Focus starts on 'Keep connected' (y=514) and Tab moves up to 'Disconnect agent' (y=458), then out of the dialog.",
+      "why": "WCAG 2.4.3 / 1.3.2 (needs human confirmation): focus order should follow the visual reading order. The mismatch is small, but it occurs in every destructive dialog.",
+      "impact": "Sighted keyboard and switch users see focus jump upward to the dangerous action. Screen-magnifier users may miss it.",
+      "severity": "low",
+      "recommendation": "Use `flex flex-col gap-3 sm:flex-row-reverse sm:justify-start` with the DOM order [danger, safe] and autoFocus on safe, or keep the DOM order [safe, danger] with plain `flex-col sm:flex-row sm:justify-end`. In both cases, visual order equals Tab order on phones. Extract a shared ConfirmDialog footer (the app map already notes the missing Dialog primitive).",
+      "effort": "S",
+      "type": "visual",
+      "evidence": [
+        "<review-scratch>/accessibility/dialogs-390.json (disconnect stops: Keep y514 → Disconnect y458)",
+        "<review-scratch>/accessibility/disconnect-dialog-390.png"
+      ],
+      "related_pages": ["/settings/security", "/skills", "/agents/[id]?section=settings", "/settings/security/sign-in-requests"]
+    },
+    {
+      "id": "A11Y-13",
+      "title": "Agent sub-pages expose four nav landmarks, one vaguely labelled, with link names that clash with the sidebar",
+      "location": "/agents/[id]?section=…: components/agents/agent-workspace.tsx:74 (NavigationTabs label='Agent section'); app/(portal)/(protected)/agents/[id]/page.tsx:298",
+      "problem": "On /agents/[id]?section=settings the AX tree has Primary, Breadcrumb, 'Manage this agent' and 'Agent section' navigation landmarks. 'Settings', 'Spending' and 'Activity' each appear twice: once in the sidebar (account level) and once in the agent sub-nav (agent level), with identical names and different destinations. 'Agent section' does not say whether it holds Resources or Controls.",
+      "why": "1.3.1 and 2.4.4 pass (the context is programmatic), but landmark and link lists become ambiguous (needs human confirmation; 2.4.6 descriptive labels).",
+      "impact": "Screen-reader users choosing 'Settings' from a links list can land on account settings instead of agent settings. This compounds the account-versus-agent confusion the IA reviewers will raise.",
+      "severity": "low",
+      "recommendation": "Label the second row after its parent ('Resources for ChatGPT', 'Controls for ChatGPT'). Add sr-only ' for {agent}' to the agent sub-nav links. If the IA restructure merges the two rows, use a single nav with aria-current.",
+      "effort": "S",
+      "type": "structural",
+      "evidence": [
+        "<review-scratch>/accessibility/names.json (/agents/[id]?section=settings: navigation:4; dup link Settings/Spending/Activity ×2)",
+        "<review-scratch>/accessibility/dialogs-390.json (agentNavs)"
+      ],
+      "related_pages": ["/agents/[id] (all sections)"]
+    },
+    {
+      "id": "A11Y-14",
+      "title": "Package editor dialog: the sticky header partly covers focused buttons, and the view toggle group is unnamed",
+      "location": "/skills (Preview new skill → PackageModal): components/skills/package-editor.tsx:109 (sticky header), :156 (sticky footer), :129 (div aria-label='Package views'), :184 (dialog, no scroll-padding)",
+      "problem": "At 390x700, Tab cycling inside the dialog leaves the focused 'Preview' and 'Edit files' buttons at top=101 under a sticky header whose bottom edge is at 126: 25 of 44px is covered. The footer covers the bottom 77px of the focusable file preview <pre>. The aria-label on the plain div holding the aria-pressed view buttons is ignored because the div has no role.",
+      "why": "WCAG 2.4.11 (AA) passes because the controls are not entirely hidden (verified), but 2.4.12 (AAA) does not. 4.1.2 hygiene for the unnamed group.",
+      "impact": "Keyboard users on phones see half-hidden focus while editing skills.",
+      "severity": "low",
+      "recommendation": "Add `scroll-pt-32 scroll-pb-28` (sized to the header and footer heights) to the <dialog> className so focus scrolls clear of both, and give the toggle container role='group'.",
+      "effort": "S",
+      "type": "visual",
+      "evidence": [
+        "<review-scratch>/accessibility/pkg-dialog-390.png",
+        "pkg.mjs output: Preview top 101, h 44, hdrBottom 126, coveredTop 25"
+      ],
+      "related_pages": ["/skills?view=add"]
+    },
+    {
+      "id": "A11Y-15",
+      "title": "Assistive routes for step-up and vault unlock are weakened (autocomplete='off', a 6-character TOTP limit)",
+      "location": "components/inbox/release-approve.tsx:602,667,679; components/vault/add-card-flow.tsx:448,465,526; components/ui/confirm-its-you.tsx:252-253",
+      "problem": "The vault passphrase and recovery-phrase fields set autoComplete='off', discouraging password managers. The step-up TOTP field has maxLength=6 and pattern [0-9]{6} with no title, so a pasted '123 456' (the format many authenticator apps copy) is cut to '123 45' and fails with the browser's generic 'match the requested format'.",
+      "why": "WCAG 3.3.8 Accessible Authentication (Minimum) passes (needs human confirmation) because a passkey is offered and paste is not blocked, but the fallbacks lean on memory and transcription.",
+      "impact": "People with memory or dyslexia-related difficulties who cannot use the passkey route have to retype long phrases or six-digit codes exactly.",
+      "severity": "low",
+      "recommendation": "Use autoComplete='current-password' on the unlock passphrase fields ('new-password' where one is created). Strip whitespace from TOTP input in onChange, raise maxLength to 7, and add title='Enter the 6-digit code from your authenticator app'.",
+      "effort": "S",
+      "type": "functional",
+      "evidence": ["src/components/ui/confirm-its-you.tsx:252-253", "src/components/inbox/release-approve.tsx:667"],
+      "related_pages": ["/inbox (release flow)", "/vault/cards", "/settings/security"]
+    },
+    {
+      "id": "A11Y-16",
+      "title": "A rejected service key sends you to another page and makes you disconnect and re-enter everything",
+      "location": "/connectors/key: app/(portal)/(protected)/connectors/key/page.tsx:97-99; connectors/notices.ts:11",
+      "problem": "On verification failure the action saves the failed connection and redirects to /connectors with 'We saved your key, but the service didn't accept it. Disconnect that account under Your services, then connect again with a different key.' The error appears away from the Key field. The person must find and disconnect the account, find the service in the 100+ catalogue again, and retype the account name and key. Server-side 'missing' also returns with empty fields and no field marked.",
+      "why": "WCAG 3.3.1 (the error is not at the item in error) and 3.3.7 Redundant Entry (the account name must be retyped in the same process); both need human confirmation.",
+      "impact": "Setup on a laptop, a key journey in the brief, becomes a 5-step recovery. Users with cognitive disabilities are likely to give up.",
+      "severity": "medium",
+      "recommendation": "On failure, redirect back to /connectors/key?connector=…&error=rejected. Keep accountLabel as the defaultValue, show Field error on the key field ('<Service> didn't accept this key. Check it was copied in full and has read access'), and do not persist a failed connection (or replace it on resubmit).",
+      "effort": "M",
+      "type": "functional",
+      "evidence": ["src/app/(portal)/(protected)/connectors/key/page.tsx:61-64,97-99", "src/app/(portal)/(protected)/connectors/notices.ts:11"],
+      "related_pages": ["/connectors?view=connected"]
+    },
+    {
+      "id": "A11Y-17",
+      "title": "Page-title gaps: identical 'Life admin item' titles, an error page with no <title>; the axe hit was a transient 500",
+      "location": "app/(portal)/(protected)/life-admin/items/[id]/page.tsx:24; app/global-error.tsx:21-27",
+      "problem": "Every Life admin item is titled 'Life admin item', with no ' · Warthog' suffix and no distinguishing detail, so several open items look identical in tabs and history. The only axe violations in the whole run (document-title and html-has-lang on dark-1440 life-admin?tab=checklist) came from a dev-server 500 ('Unexpected end of JSON input'); the page now returns 200 with 'Life admin · Warthog' and lang='en-AU'. In production, though, global-error.tsx renders its own <html lang> with no <title>.",
+      "why": "WCAG 2.4.2 Page Titled (passes, but weak). Keeping personal content out of titles is a sound privacy choice, so use a non-personal discriminator.",
+      "impact": "Screen-reader and tab-switching users cannot tell item pages apart; a root error shows as an untitled tab.",
+      "severity": "low",
+      "recommendation": "Use generateMetadata to set '<Category> item · Life admin · Warthog' (the category label is not personal), and add <title>Something went wrong · Warthog</title> inside global-error.tsx's <head>.",
+      "effort": "S",
+      "type": "functional",
+      "evidence": [
+        "<capture-run>/typical/metrics/dark-1440__life-admin__tab-checklist.json (status 500, title '', consoleErrors)",
+        "checklist.mjs re-run: 200 'Life admin · Warthog' en-AU"
+      ],
+      "related_pages": ["/life-admin/items/[id]"]
+    }
+  ],
+  "notes": {
+    "worst-account changes made for testing (allowed by the brief)": "Turned on card access for worst/Claude with a budget of AUD 100/month; raised and denied one AUD 12 card request ('A11y Test Cafe'); added a Life admin home-insurance record 'A11y test policy'; confirm-then-cancel dialogs only in typical. No typical data was changed.",
+    "scripts": "<review-scratch>/accessibility/*.mjs (structure, obscured, dialogs, targets, reflow, nontext, colour, names, worst-*)"
+  }
+}

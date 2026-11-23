@@ -1,0 +1,101 @@
+{
+ "agentIds": [],
+ "urls": [
+  {
+   "key": "home",
+   "url": "/home",
+   "signedIn": true,
+   "from": "manual"
+  },
+  {
+   "key": "inbox",
+   "url": "/inbox",
+   "signedIn": true,
+   "from": "manual"
+  },
+  {
+   "key": "activity",
+   "url": "/activity",
+   "signedIn": true,
+   "from": "manual"
+  },
+  {
+   "key": "agents",
+   "url": "/agents",
+   "signedIn": true,
+   "from": "manual"
+  },
+  {
+   "key": "connectors",
+   "url": "/connectors",
+   "signedIn": true,
+   "from": "manual"
+  },
+  {
+   "key": "vault",
+   "url": "/vault",
+   "signedIn": true,
+   "from": "manual"
+  },
+  {
+   "key": "vault_cards",
+   "url": "/vault/cards",
+   "signedIn": true,
+   "from": "manual"
+  },
+  {
+   "key": "skills",
+   "url": "/skills",
+   "signedIn": true,
+   "from": "manual"
+  },
+  {
+   "key": "memory",
+   "url": "/memory",
+   "signedIn": true,
+   "from": "manual"
+  },
+  {
+   "key": "life-admin",
+   "url": "/life-admin",
+   "signedIn": true,
+   "from": "manual"
+  },
+  {
+   "key": "life-admin__view-tasks",
+   "url": "/life-admin?view=tasks",
+   "signedIn": true,
+   "from": "manual"
+  },
+  {
+   "key": "rules",
+   "url": "/rules",
+   "signedIn": true,
+   "from": "manual"
+  },
+  {
+   "key": "rules__view-budgets",
+   "url": "/rules?view=budgets",
+   "signedIn": true,
+   "from": "manual"
+  },
+  {
+   "key": "spending",
+   "url": "/spending",
+   "signedIn": true,
+   "from": "manual"
+  },
+  {
+   "key": "household",
+   "url": "/household",
+   "signedIn": true,
+   "from": "manual"
+  },
+  {
+   "key": "settings",
+   "url": "/settings",
+   "signedIn": true,
+   "from": "manual"
+  }
+ ]
+}

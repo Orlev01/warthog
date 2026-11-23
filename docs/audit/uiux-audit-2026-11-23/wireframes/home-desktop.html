@@ -1,0 +1,102 @@
+<!doctype html>
+<html lang="en-AU"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Wireframe — Home (desktop, proposed)</title><link rel="stylesheet" href="mockup.css"></head>
+<body>
+<div class="shell">
+  <aside class="side" aria-label="Main navigation (proposed)">
+    <div class="brand"><span class="brand-mark"></span>WARTHOG</div>
+    <a class="nav-link active"><span class="ic"></span>Home</a>
+    <a class="nav-link annot" data-note="Badge: pending count"><span class="ic"></span>Inbox<span class="count">4</span></a>
+    <a class="nav-link"><span class="ic"></span>Activity</a>
+    <a class="nav-link"><span class="ic"></span>Agents</a>
+    <div class="nav-group"><span class="label">What agents can use</span>
+      <a class="nav-link"><span class="ic"></span>Services</a>
+      <a class="nav-link"><span class="ic"></span>Vault</a>
+      <a class="nav-link"><span class="ic"></span>Life admin</a>
+      <a class="nav-link"><span class="ic"></span>Memory</a>
+      <a class="nav-link"><span class="ic"></span>Skills</a>
+    </div>
+    <div class="nav-group"><span class="label">Spending &amp; rules</span>
+      <a class="nav-link"><span class="ic"></span>Spending</a>
+      <a class="nav-link"><span class="ic"></span>Rules</a>
+    </div>
+    <div class="side-foot">
+      <a class="nav-link"><span class="ic"></span>Household</a>
+      <a class="nav-link"><span class="ic"></span>Settings</a>
+      <a class="nav-link"><span class="ic"></span>Help &amp; support</a>
+      <a class="me annot right" data-note="Pinned footer: never scrolls away"><span class="avatar">AN</span><span><b style="font:var(--t-body-strong)">Alexandra Nguyen</b><br><span class="meta">Sign out</span></span></a>
+    </div>
+  </aside>
+  <main class="main">
+    <div class="page">
+      <div class="page-head annot" data-note="No greeting card: a plain heading region">
+        <div><h1>Good evening, Alexandra</h1><p class="muted">4 requests need you · 3 things due in the next 2 weeks</p></div>
+        <a class="btn">Connect an agent</a>
+      </div>
+
+      <div class="grid-2">
+        <div class="stack">
+          <section class="panel annot" data-note="Decide here; no trip to Inbox for simple requests">
+            <div class="panel-head"><h2>Needs you</h2><a class="link">Open Inbox</a></div>
+            <div class="row">
+              <span class="agent-mark am-claude">C</span>
+              <div class="grow"><h3>Pay $240.00 to Mazda Parramatta</h3><p class="meta">Claude · “Balance for the 48,000 km logbook service” · 23 h left</p></div>
+              <a class="btn sm">Deny</a><a class="btn sm primary">Review</a>
+            </div>
+            <div class="row">
+              <span class="agent-mark am-gem">G</span>
+              <div class="grow"><h3>Pay NZD 180.00 (≈ $148.62) to Coronet Peak Snow School</h3><p class="meta">Gemini · “Two half-day ski lessons for Mia and Leo” · 23 h left</p></div>
+              <a class="btn sm">Deny</a><a class="btn sm primary">Review</a>
+            </div>
+            <div class="row">
+              <span class="agent-mark am-gem">G</span>
+              <div class="grow"><h3>See your passport</h3><p class="meta">Gemini · for the Qantas booking check-in · 23 h left</p></div>
+              <a class="btn sm">Deny</a><a class="btn sm primary">Review</a>
+            </div>
+            <div class="row"><span class="meta">+1 more from Claude</span></div>
+          </section>
+
+          <section class="panel">
+            <div class="panel-head"><h2>What your agents did today</h2><a class="link">All activity</a></div>
+            <div class="row annot" data-note="Grouped by conversation, not raw tool calls">
+              <span class="agent-mark am-claude">C</span>
+              <div class="grow"><h3>Sorting out the car registration and insurance</h3><p class="meta">Claude · 9 actions · filed 4 records · asked to use a card · 11:43 pm</p></div>
+              <span class="badge warn">2 waiting</span>
+            </div>
+            <div class="row">
+              <span class="agent-mark am-gem">G</span>
+              <div class="grow"><h3>Planning the Queenstown trip in January</h3><p class="meta">Gemini · 12 actions · booked car hire NZD 412.50 · 11:41 pm</p></div>
+              <span class="badge warn">2 waiting</span>
+            </div>
+            <div class="row">
+              <span class="agent-mark am-gpt">G</span>
+              <div class="grow"><h3>Weekly household admin</h3><p class="meta">ChatGPT · 14 actions · added 6 subscriptions · 11:40 pm</p></div>
+              <span class="badge ok">Done</span>
+            </div>
+          </section>
+        </div>
+
+        <div class="stack">
+          <section class="panel">
+            <div class="panel-head"><h2>Coming up</h2><a class="link">Life admin</a></div>
+            <div class="row"><div class="grow"><h3>Firedoor dinner</h3><p class="meta">Thu 26 Nov, 7:30 pm · Surry Hills</p></div></div>
+            <div class="row"><div class="grow"><h3>Paramount+ trial ends</h3><p class="meta">Sat 28 Nov · $9.99 a month after</p></div><span class="badge warn">Decide</span></div>
+            <div class="row"><div class="grow"><h3>Car registration due</h3><p class="meta">Fri 11 Dec · $912.00 · Service NSW</p></div></div>
+            <div class="row annot" data-note="Confirm agent-found records in bulk"><div class="grow"><h3>25 records found by your agents</h3><p class="meta">Check them in one go</p></div><a class="btn sm">Check</a></div>
+          </section>
+          <section class="panel">
+            <div class="panel-head"><h2>Agents</h2><a class="link">Manage</a></div>
+            <div class="row"><span class="agent-mark am-claude">C</span><div class="grow"><h3>Claude</h3><p class="meta">Active 11:43 pm · $0 of $300 this month</p></div><span class="badge ok">Connected</span></div>
+            <div class="row"><span class="agent-mark am-gem">G</span><div class="grow"><h3>Gemini</h3><p class="meta">Active 11:57 pm · $0 of $300 this month</p></div><span class="badge ok">Connected</span></div>
+            <div class="row"><span class="agent-mark am-gpt">G</span><div class="grow"><h3>ChatGPT</h3><p class="meta">Active 11:41 pm · no card access</p></div><span class="badge ok">Connected</span></div>
+          </section>
+          <section class="panel annot" data-note="Set-up shrinks to one compact panel">
+            <div class="panel-head"><h2>Finish setting up</h2><span class="meta">1 of 5</span></div>
+            <div class="panel-body"><div class="row" style="padding:10px 0;border:0"><div class="grow"><h3>Next: connect a service</h3><p class="meta">So agents can read your email and calendar</p></div><a class="btn sm primary">Connect</a></div></div>
+          </section>
+        </div>
+      </div>
+    </div>
+  </main>
+</div>
+</body></html>

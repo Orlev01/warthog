@@ -1,0 +1,478 @@
+{
+  "lens": "responsive",
+  "summary": "Warthog doesn't break at any size I tested. There is no horizontal overflow from 320 to 1920, in 844x390 landscape or at 200% zoom, and long names wrap. But it adapts by stretching rather than by re-prioritising for each size. The phone experience, which the brief calls primary, is a desktop admin console poured into one column: navigation is a top-left hamburger with no Inbox badge; on every page the header and heading card take 37–66% of a 320 screen and 49–81% in landscape; Home leads with a setup checklist and only a count of waiting requests; Inbox cards are about 460px with Approve at the fold. Pages run very long on a 390 phone: Activity 13 screens, Life admin 20, Connectors 12. Tablets (768) get the phone layout stretched, and 1440/1920 keep long single-column pages next to empty canvas. For a member who finds dense interfaces hard, the cost is repetition (agent name 3 times per Inbox card, record type 3 times per Life admin card), 26 identical primary buttons on one page, 119 'View details' disclosures, and 50–110 words of explanation before the first action on daily pages.",
+  "scores": {
+    "scale": "0 = broken, 4 = excellent (fit of the layout to the context)",
+    "phone_390": 2,
+    "small_phone_320": 1.5,
+    "landscape_844x390": 1,
+    "tablet_768": 1.5,
+    "desktop_1440": 2.5,
+    "wide_1920": 2,
+    "zoom_200pct_640x450": 1,
+    "dense_interface_persona": 1.5,
+    "screen_heights_at_390x844": {
+      "home": 3.8,
+      "inbox": 2.8,
+      "activity": 13.2,
+      "agent_overview": 2.5,
+      "agent_settings": 3.8,
+      "life_admin": 20.0,
+      "connectors_catalogue": 11.9,
+      "household": 3.1
+    },
+    "screen_heights_at_320x568": {
+      "home": 6.1,
+      "inbox": 4.9,
+      "activity": 24.9,
+      "agent_overview": 4.6,
+      "life_admin": 33.5,
+      "connectors_catalogue": 26.8,
+      "household": 5.0
+    },
+    "first_approve_button_y": {
+      "390x844": 803,
+      "320x568": 867,
+      "844x390": 640,
+      "640x450 (200% zoom)": 663,
+      "1920x1080": 636
+    },
+    "home_waiting_link_y": {
+      "390x844": 675,
+      "320x568": 717,
+      "844x390": 610,
+      "640x450": 708
+    }
+  },
+  "strengths": [
+    "No document-level horizontal overflow at any tested size (320x568, 390x844, 844x390, 640x450, 768, 1024x768, 1440, 1920), in light or dark. Long names wrap instead of clipping, and dark-390 geometry matches light-390.",
+    "The push deep link /inbox?approval=<id> scrolls the request to the centre and leaves its decision buttons on screen: Approve at y=573 of 844 (390), 343 of 390 (landscape), 431 of 568 (320). Keep this as the main phone path.",
+    "Sticky chrome is minimal: only the 53px top bar sticks, and route tabs scroll away. That is the right choice for short screens.",
+    "Touch targets stay 44px on phones, and the drawer is a real modal dialog with focus return, Escape and backdrop close, its own scrolling, and close on resize.",
+    "Some components adapt well: Home's dashboard becomes 2 columns from 768, the agent access map becomes 2 columns from 640, Life admin facts become 2-column label/value at 768, and the 896px reading measure gives Inbox a comfortable line length at 1440/1920."
+  ],
+  "findings": [
+    {
+      "id": "RWD-01",
+      "title": "Phones get a top-left hamburger with no Inbox badge instead of a bottom tab bar",
+      "location": "All member pages below 1024px. Menu trigger in src/components/shell/app-shell.tsx:289-301. Drawer list in app-shell.tsx:244-285 and workspace-navigation.ts NAV_GROUPS. Nav items carry no counts.",
+      "problem": "Below 1024px the only navigation is an icon button in the top-left corner, measured at x=4,y=4 at 390 and 320 wide. It opens a 300px drawer of 15 items. Inbox is the third item, at y=212. Neither the menu button nor the Inbox item shows how many requests are waiting. Help and Contact sit below the fold of the drawer at 390x844 (list 896px tall, 699px visible). In 844x390 landscape only 245px of the list shows, which is about 5 items. Reaching Inbox from any page takes two taps, both in the top band of the screen that is hardest to reach with a thumb, and nothing tells you that you need to go there.",
+      "why": "The brief's design_ux says everything should be reachable in two taps from a mobile bottom navigation (Home, Inbox, Activity, Agents, More). Users 'use Warthog mostly from their phone (approving requests on the go)'. Nielsen's 'visibility of system status' applies: nothing in the app chrome shows that decisions are waiting. On thumb reach, the top-left corner is the hardest target to reach one-handed on a 6-inch phone.",
+      "impact": "Every phone member, on the product's most frequent job. If they arrive without a push (for example after dismissing it), nothing on Activity, Agents or Life admin tells them requests are waiting. Older or easily overloaded members also have to read a 15-item grouped menu just to switch between the 4 places they actually use.",
+      "severity": "high",
+      "recommendation": "Below 1024px, add a fixed bottom tab bar to AppShell with Home, Inbox, Activity, Agents and More. Reuse the NAV_GROUPS items and their lucide icons. 'More' opens the existing drawer dialog, so drawer focus handling stays as it is. The bar should be at least 56px tall plus env(safe-area-inset-bottom), with padding-bottom on .wh-content. Add an optional `badges` prop to AppShell ({inbox: pendingCount}) and render the count as a Badge on the Inbox item in the bottom bar, the sidebar and the drawer. Give it an aria-label such as 'Inbox, 4 waiting'. Keep the header menu button for ≥768 if a rail is not adopted (see RWD-08). Propose a brief amendment that restores design_ux's bottom navigation and makes the grouped drawer the 'More' sheet.",
+      "effort": "M",
+      "type": "structural",
+      "evidence": [
+        "<review-scratch>/responsive/shots/drawer__390x844.png",
+        "<review-scratch>/responsive/shots/drawer__844x390.png",
+        "<capture-run>/typical/shots/light-390/home.s1.jpg",
+        "src/components/shell/app-shell.tsx:289-301",
+        "brief.yaml:546-552 (bottom navigation)",
+        "docs/adr/admin-console-design.md:5 (superseded bottom nav)",
+        "live: menu button at (4,4); Inbox link y=212; drawer list 896px tall, visible 699px (390x844) and 245px (844x390)"
+      ],
+      "related_pages": [
+        "/home",
+        "/inbox",
+        "/activity",
+        "/agents",
+        "/life-admin"
+      ]
+    },
+    {
+      "id": "RWD-02",
+      "title": "On phones, Home puts the setup checklist above decisions and shows only a count of waiting requests",
+      "location": "/home: src/components/home/dashboard-view.tsx:566-588 (order: heading, SetupPanel, then Inbox), InboxPanel :261-279, ActivityPanel timeline links :318-326",
+      "problem": "At 390x844 a phone user sees the greeting band, a 5-row 'Finish setting up' card (still open at 1 of 5 for a member with 3 connected agents), and then the Inbox panel's one link, '4 requests are waiting for your approval', at y=675. None of the requests themselves appear. The link is off the first screen at 320x568 (y=717), in 844x390 landscape (y=610) and at 200% zoom on a 1280x900 laptop (640x450 CSS, y=708). The four 'Waiting for you' items do appear further down in Recent activity, but they link to /activity?entry=118 and similar, not to the Inbox. Tapping one of them never reaches the Approve button.",
+      "why": "design_ux says 'one clear primary action per screen'. For a member with agents, the primary job on Home is deciding on waiting requests (brief key flow 5). Visual hierarchy should follow task frequency. A finished-onboarding checklist that stays above urgent items inverts that. A link that looks like the thing to act on but leads somewhere you can't act breaks match with the user's expectation.",
+      "impact": "Phone members, especially at 320, in landscape or at 200% zoom, have to scroll before they learn anything is waiting. Members who tap a 'Waiting for you' item land on a read-only log and have to find the Inbox themselves. This doubles the path to a decision.",
+      "severity": "high",
+      "recommendation": "In DashboardView, render the Inbox panel first when pendingApprovals > 0. Inside it, list up to 3 pending requests as compact rows: the sentence (with a short agent name), amount or field, and time left. Each row links to /inbox?approval=<id>, which already centres the request with its buttons in view. Add 'See all 4' below the rows. Once hasAgents is true, collapse SetupPanel to a single row ('Finish setting up · 1 of 5 · Continue ›') and expand it on tap. In ActivityPanel, give entries whose outcome is 'Waiting for you' an href of /inbox?approval=<id> instead of the activity permalink. The dashboard loader needs the pending request ids and sentences, which InboxView's PendingRequestView already models.",
+      "effort": "M",
+      "type": "structural",
+      "evidence": [
+        "<capture-run>/typical/shots/light-390/home.s1.jpg",
+        "<capture-run>/typical/shots/light-390/home.s2.jpg",
+        "<review-scratch>/responsive/shots/typical__320x568__home.png",
+        "<review-scratch>/responsive/shots/typical__640x450__home.png",
+        "src/components/home/dashboard-view.tsx:566-588",
+        "live: waiting link y=675 (390x844), 717 (320x568), 610 (844x390), 708 (640x450)",
+        "live: Home timeline 'Ask to use a card · Waiting for you' href=/activity?entry=118#entry-118",
+        "home light-390: 443 words, 35 controls, 3,234px = 3.8 screens"
+      ],
+      "related_pages": [
+        "/inbox"
+      ]
+    },
+    {
+      "id": "RWD-03",
+      "title": "The heading band and duplicated page title fill 37–81% of the first screen on short viewports",
+      "location": "Every member page: WorkspaceHeading (src/components/shell/workspace-surfaces.tsx:27-70; styles src/app/surfaces.css:210-241) under the 53px sticky top bar (surfaces.css:70-95), with the phone breadcrumb repeating the section name (surfaces.css:108-114)",
+      "problem": "On phones the top bar already shows the page name at 18px ('Inbox'). Below it, a bordered card repeats it as a 24px h1, adds a 1–3 line description, and on most pages adds tabs or scope disclosures inside the card. Measured bottom edge of top bar plus heading band: Home 208/568 (37%) at 320, Inbox 249/568 (44%), Life admin 294/568 (52%), Activity 313/568 (55%) and Connectors catalogue 377/568 (66%). In 844x390 landscape the figures are Inbox 58%, Life admin 64% and catalogue 81%. At 200% zoom (640x450) they are Inbox 56% and catalogue 70%. There is no max-height rule for the band. The only short-screen rules in surfaces.css target the agent heading (:478) and the desktop sidebar (:135-145).",
+      "why": "Content should come first on small screens (adapt reference: 'prioritize primary content'). WCAG 1.4.10 Reflow is technically met, but the page's actual content starts below the fold. The repeated title is also redundant: the same name shows twice within 50px.",
+      "impact": "Phone, landscape and zoom users see chrome and an introduction instead of content on every page. On Inbox this pushes the first Approve button to y=803 at 390, y=867 at 320 and y=640 in landscape.",
+      "severity": "high",
+      "recommendation": "Add a compact mode to .wh-page-heading under @media (max-width: 639px), (max-height: 500px): drop the border, shadow and padding so the heading sits flat on the canvas, and set h1 to 20px. Clamp .wh-page-description to 2 lines with -webkit-line-clamp, and on pages people revisit daily (Home, Inbox, Activity) show it only on the empty state. Move 'How access works / Manage for one agent' (resource-scope.tsx) out of the band on phones into one 'About this page' disclosure. On phones, stop rendering the crumb text in .wh-crumb-section, or keep it and visually hide the h1 (sr-only), so the title shows only once.",
+      "effort": "S",
+      "type": "visual",
+      "evidence": [
+        "<review-scratch>/responsive/shots/typical__844x390__inbox.png",
+        "<review-scratch>/responsive/shots/typical__320x568__inbox.png",
+        "<review-scratch>/responsive/shots/typical__640x450__catalogue.png",
+        "<capture-run>/typical/shots/light-390/connectors.s1.jpg",
+        "src/app/surfaces.css:210-241",
+        "src/app/surfaces.css:108-114",
+        "live heading-band bottom as % of viewport: 320x568 Inbox 44%, catalogue 66%; 844x390 Inbox 58%, catalogue 81%; 640x450 Inbox 56%"
+      ],
+      "related_pages": [
+        "/home",
+        "/inbox",
+        "/activity",
+        "/life-admin",
+        "/connectors",
+        "/household",
+        "/memory",
+        "/vault"
+      ]
+    },
+    {
+      "id": "RWD-04",
+      "title": "Inbox cards are 460–560px tall on phones, repeat the sentence and agent name, and put Approve below the fold",
+      "location": "/inbox: PendingItem in src/components/inbox/inbox-view.tsx:419-500, group headings :571-588",
+      "problem": "Each pending request on a phone stacks: a per-agent group heading, the sentence (with the agent name again), a facts list that repeats the sentence ('Amount NZD 180.00' and 'Merchant Coronet Peak Snow School' for 'wants to use your card for NZD 180.00 at Coronet Peak Snow School'; 'Field passport' for 'wants to see your passport'), '<agent> says “…”' (the name a third time), a 'Details' disclosure, a notice, then 2 rows of buttons and the 'Ask for more detail' disclosure. With the long Gemini name the agent text takes 6 wrapped lines per card. Each card is 459px at 390, 555px at 320 and 349px in landscape. 4 requests take 2,388px (2.8 screens) at 390 and 2,808px (4.9 screens) at 320. There are 113 words before the first Approve, at y=803 (fold 844). Deny is at y=855, below the fold.",
+      "why": "design_ux: 'Approvals read as one sentence a person can decide on in a glance'. Saying the same fact twice adds reading without adding information (Nielsen, aesthetic and minimalist design). For the dense-interface persona, saying a thing again feels like being told something new, so they reread it.",
+      "impact": "Every approval on a phone needs scrolling within the card. An overloaded or low-vision member reads the agent's name 3–4 times and the amount and merchant twice before reaching a button.",
+      "severity": "high",
+      "recommendation": "Restructure PendingItem for <640px. Line 1: sentence with a short agent name (see RWD-11). Line 2: the agent's quote and the time left. Then one row of 2 equal-width buttons (Approve / Deny, or the release variant). Drop request.details rows whose value already appears in the sentence (Amount, Merchant, Field) and keep only facts the sentence doesn't state, such as 'Converted' or 'Your rule'. Move 'Ask for more detail' and extras into the single 'Details' disclosure. When grouped by agent (groups.length ≥ 2), leave the agent name out of the sentence, or drop the per-agent ListGroup titles and order by time instead. Target ≤ 300px per card at 390 so 2 requests fit on the first screen.",
+      "effort": "M",
+      "type": "structural",
+      "evidence": [
+        "<capture-run>/typical/shots/light-390/inbox.s1.jpg",
+        "<capture-run>/typical/shots/light-390/inbox.s2.jpg",
+        "<capture-run>/typical/shots/dark-390/inbox.s1.jpg",
+        "<review-scratch>/responsive/shots/typical__320x568__inbox.png",
+        "src/components/inbox/inbox-view.tsx:427-470",
+        "live: first Approve y=803 (390x844), 867 (320x568), 640 (844x390), 663 (640x450); first Deny y=855 at 390",
+        "inbox light-390: 516 words, 30 controls, 8 disclosures, 2,388px = 2.8 screens"
+      ],
+      "related_pages": [
+        "/home (Inbox panel, see RWD-02)"
+      ]
+    },
+    {
+      "id": "RWD-05",
+      "title": "Life admin 'To check' is a 20-screen wall with 26 black Confirm buttons, and 'Confirm all' is at the very bottom",
+      "location": "/life-admin: ToCheckPanel and SuggestionItem in src/components/life-admin/records-view.tsx:120-160 and :300-340",
+      "problem": "Life admin at 390 is 16,859px (20 screens), with 1,997 words, 697 controls and 26 primary-styled buttons. It is 19,053px (33.5 screens) at 320. Every agent-found record is a full card: a title prefixed with its type, a kind line repeating the type, up to 4 label/value facts, provenance, then Confirm (primary, black), Not mine and Edit. The type appears three times in a row ('Restaurant: Dinner at Firedoor', then 'Restaurant · Starts…', then 'Restaurant: Firedoor'). The 'Confirm all 25' bulk action is in the panel footer at y=9,232, which is 10.9 screens down, after all 25 cards. The 31-word panel description has a double negative ('Agents are told they aren't checked yet until you confirm them, and an agent never changes what you've confirmed without asking you here'). PR #52 replaces the tab rows but says 'To check stays at the top', so none of this changes there.",
+      "why": "design_ux asks for one clear primary action per screen; here there are 26. Bulk actions belong at the top of the set they act on. Chunking: 25 equally heavy cards give no scanning structure.",
+      "impact": "Persona: an easily overloaded member faces a column of identical black buttons and has to scroll 11 screens to learn there is a 'Confirm all'. Every phone user pays the scroll cost on the page that holds their life admin.",
+      "severity": "high",
+      "recommendation": "Put the 'Confirm all N' AllForm in the ToCheckPanel header (WorkspacePanel `action`) as the single primary button, and keep a copy in the footer. Make each row's Confirm `variant=\"secondary\"`. Render suggestions as compact rows: name, one kind line, and a 'Show details' disclosure holding RecordFacts and provenance. Drop the `type.label:` prefix whenever kindLine already starts with the type. Show the first 5 suggestions plus 'Show 20 more'. Rewrite the description as 'Your agents found these. Nothing is used until you confirm it.' Coordinate with PR #52, which keeps To check at the top of Records.",
+      "effort": "M",
+      "type": "structural",
+      "evidence": [
+        "<capture-run>/typical/shots/light-390/life-admin.s1.jpg",
+        "<capture-run>/typical/shots/light-390/life-admin.s2.jpg",
+        "<capture-run>/typical/shots/light-768/life-admin.s1.jpg",
+        "src/components/life-admin/records-view.tsx:126-160",
+        "src/components/life-admin/records-view.tsx:300-317",
+        "life-admin light-390: 16,859px = 20.0 screens, 1,997 words, 697 controls, 26 primary buttons, 27 disclosures",
+        "live: 'Confirm all' at y=9,232 at 390x844; 33.5 screens at 320x568"
+      ],
+      "related_pages": [
+        "/home (Reminders 'to check')"
+      ]
+    },
+    {
+      "id": "RWD-06",
+      "title": "The Activity feed is 13 screens on a phone, and desktop stretches each row to 1,150px",
+      "location": "/activity: entry rows src/components/activity/activity-view.tsx:466-520, toolbar :896-904 (ListToolbar + FilterLinks variant=\"scroll\")",
+      "problem": "Phone: 11,154px (13.2 screens) at 390 and 14,136px (24.9 screens) at 320, with 1,982 words, 369 controls and 119 disclosures. Every row is about 150px and ends in its own 'View details' line. Reads such as 'List tasks' and repeated 'Add a task · Keeping track' get the same weight as approvals. The toolbar has two horizontally scrolling rows: views (Timeline, By agent, By type, By service), where 'By service' is clipped at 390, and quick filters, where only 'All activity' and 'Needs attention' are visible at 390 (chips run off to x=437 at 320). Desktop: Activity uses the 1,216px 'wide' measure for a one-column list, so at 1440 and 1920 the time sits about 1,000px from the title and only 4 entries fit per 1080px screen. 'Waiting for you' rows have no link to the Inbox.",
+      "why": "The brief's main phone use is 'glancing at the activity feed'. A feed you can only scroll through, not scan, defeats that. Long eye travel between title and time hurts scanning, especially at zoom. Options hidden in horizontal scroll rows are easy to miss for low-vision users, because the edge fade is the only cue.",
+      "impact": "Phone members can't get the gist of 'what did my agents do today' without scrolling 13 screens. Low-vision members miss filters that are off-screen. Desktop users scroll 8–10 screens through sparse rows.",
+      "severity": "high",
+      "recommendation": "(1) Make the row itself the disclosure. Move the title, badge and time into the <summary> and delete the separate 'View details' line. This saves about 45px and one control per row. (2) Group consecutive entries with the same agent, action and outcome into one row ('ChatGPT added 4 tasks · 11:41 pm') that expands to show them. (3) Below 640px, swap the two scroll rows for one 'Show' <Select> (All / Needs attention / Reads / Changes / Approvals / Agent reports) next to Filters, and keep the views as a 4-segment tab row that fits at 320. (4) For 'Waiting for you' rows, add an 'Open in Inbox' link to /inbox?approval=<id>. (5) At ≥1200px either cap the timeline to the 896px reading measure with the time next to the badge, or use the wide measure for a two-pane layout: list on the left, the selected entry's details in a sticky right pane, with the ?entry= permalink driving the selection.",
+      "effort": "L",
+      "type": "structural",
+      "evidence": [
+        "<capture-run>/typical/shots/light-390/activity.s1.jpg",
+        "<capture-run>/typical/shots/light-390/activity.s2.jpg",
+        "<capture-run>/typical/shots/light-1440/activity.s1.jpg",
+        "<review-scratch>/responsive/shots/typical__1920x1080__activity.png",
+        "src/components/activity/activity-view.tsx:499-505",
+        "src/components/activity/activity-view.tsx:899-902",
+        "activity light-390: 11,154px = 13.2 screens; 1,982 words, 369 controls, 119 disclosures",
+        "live: 320x568 = 24.9 screens; chip overflow right edge 437px at 320"
+      ],
+      "related_pages": [
+        "/agents/[id]?section=activity",
+        "/home Recent activity"
+      ]
+    },
+    {
+      "id": "RWD-07",
+      "title": "Agent Controls › Settings is a 3,200px checklist at every width, with Save only at the end",
+      "location": "/agents/[id]?section=settings: src/components/agents/permissions-view.tsx:415-445 (Toggle per record), :526-543 (ActionBar Save); ActionBar src/components/shell/workspace-surfaces.tsx:120-135",
+      "problem": "The page is 3,225px at 390 and 3,209px at 1440, so desktop gains no density. Each of the 25 life-admin records is a full-width bordered checkbox card about 84px tall. At 1440 these are 790px-wide boxes holding labels like 'Gym membership'. All 25 toggles render even when 'Which records it can see' is set to 'All my records, including new ones', where they do nothing. 'Save changes' is at y=3,188 at 390 (3.8 screens down) and isn't sticky, so a change at the top has no visible save. Before the save button come 193 words and 40 controls.",
+      "why": "Progressive disclosure: controls that have no effect in the current mode shouldn't be shown. A form's commit action should stay reachable. On desktop, a list of short options should flow into columns rather than repeat full-width cards.",
+      "impact": "Members adjusting what an agent can do (a core 'control' job) scroll 4 screens on a phone and may leave without saving. The dense-interface persona sees 25 ticked boxes and assumes they have to review each one.",
+      "severity": "medium",
+      "recommendation": "Render the record toggles only when recordScope === 'chosen' (lift the Select into client state, as the form already uses a client `saving` state). Lay them out as a plain checklist with no card per item, in `grid gap-x-6 [grid-template-columns:repeat(auto-fill,minmax(14rem,1fr))]` so 1440 shows 3 columns. Add a `sticky` option to ActionBar (`position: sticky; bottom: env(safe-area-inset-bottom); background: var(--wh-surface); border-top`) that shows when the form is dirty. Use it here and on other long forms such as Household and Rules › New rule.",
+      "effort": "M",
+      "type": "structural",
+      "evidence": [
+        "<capture-run>/typical/shots/light-390/agents_ID__section-settings.s1.jpg",
+        "<capture-run>/typical/shots/light-390/agents_ID__section-settings.s4.jpg",
+        "<capture-run>/typical/shots/light-1440/agents_ID__section-settings.s2.jpg",
+        "src/components/agents/permissions-view.tsx:436-443",
+        "live: 'Save changes' y=3,188 at 390x844; 193 words / 40 controls before it",
+        "agents_ID__section-settings: 3,225px @390 vs 3,209px @1440"
+      ],
+      "related_pages": [
+        "/agents/[id]?section=memory (one toggle per memory)",
+        "/household",
+        "/rules?view=new"
+      ]
+    },
+    {
+      "id": "RWD-08",
+      "title": "Tablets get the phone layout stretched, and iPad landscape gets desktop-sized touch targets",
+      "location": "Shell breakpoints in src/app/globals.css:411-451 (sidebar and compact rows only from 1024px) and surfaces.css:135-145 (32px rows at max-height 860); page layouts per section",
+      "problem": "From 768 to 1023px (iPad portrait, small laptops at 125–150% zoom) navigation is still the hamburger drawer, and Inbox, Activity, Life admin, Household and Agent settings stay single-column. Their page heights at 768 nearly match desktop: Home 1,919 vs 1,764, Life admin 11,809 vs 11,133, Agent settings 3,217 vs 3,209. So tablet users get long desktop pages without a sidebar. Only Home's dashboard grid and the agent access map go 2-column. At 1024x768 (iPad landscape, a touch device) the sidebar appears, but the CSS shrinks sidebar rows to 32px (min-height 36px, then 32px under max-height 860px), tabs to 40px and sub-tabs to 32–40px, based on width alone. Other components already use `lg:pointer-fine:` to compact only for mouse pointers (activity-view.tsx:501, connectors-view.tsx:457).",
+      "why": "The adapt reference says tablets should get 2-column or master-detail layouts and touch targets of 44px. design_ux and the mobile skill require 44px touch targets. WCAG 2.5.8 (24px) is met, so this is about quality rather than compliance.",
+      "impact": "iPad users, a likely home device for households, get a phone app on a large screen, or desktop-sized tap targets in landscape.",
+      "severity": "medium",
+      "recommendation": "From 768 to 1023px, either use the bottom bar from RWD-01 or show a 72px icon rail (SidebarNavigation with a `compact` prop: icon over a 12px label, Inbox badge) in place of the hamburger. Use the width in Inbox: lay out the request facts and actions in 2 columns at ≥768 (`sm:grid sm:grid-cols-[minmax(0,1fr)_auto]`). Wrap the ≥1024 compaction rules (globals.css:440-451, surfaces.css:135-145, 184-186) in `and (pointer: fine)` so touch tablets keep 44px rows.",
+      "effort": "M",
+      "type": "structural",
+      "evidence": [
+        "<capture-run>/typical/shots/light-768/home.s1.jpg",
+        "<capture-run>/typical/shots/light-768/inbox.s1.jpg",
+        "<capture-run>/typical/shots/light-768/life-admin.s1.jpg",
+        "<review-scratch>/responsive/shots/typical__1024x768__home.png",
+        "src/app/globals.css:423-451",
+        "src/app/surfaces.css:135-145",
+        "page heights 768 vs 1440: home 1,919/1,764; life-admin 11,809/11,133; agent settings 3,217/3,209"
+      ],
+      "related_pages": [
+        "/inbox",
+        "/activity",
+        "/life-admin",
+        "/household"
+      ]
+    },
+    {
+      "id": "RWD-09",
+      "title": "Wide desktops leave empty canvas while long pages stay one column, and the aside slot goes unused",
+      "location": "Page measures in src/components/shell/workspace-navigation.ts:47-67; PageContainer aside src/components/shell/page-container.tsx with surfaces.css:63-67; /household src/components/household/household-view.tsx; /home InboxPanel dashboard-view.tsx:261-279",
+      "problem": "At 1920 the 896px reading measure leaves about 380px of empty canvas on each side of Inbox, Agents, Household and Life admin. Yet Household (9 stacked panels with 5 separate Save buttons, 2,367px) and Agent settings (3,209px) stay one long column. PageContainer has an opt-in `aside` column for ≥1600px (surfaces.css:63-67), but no member page uses it. On Home at 1440 and 1920, the Inbox panel is about 690px wide and holds one sentence ('4 requests are waiting for your approval'), while the actual requests sit in the narrower Recent activity list below. The 896px measure is right for Inbox reading. The problem is pages with several independent forms or panels that never use the extra width.",
+      "why": "The desktop skill says extra columns should support comparison or adjacent tasks. Household's panels are independent tasks (members, address, budget, invite), which suits that well. Empty canvas with a 2.6-screen scroll wastes the viewport.",
+      "impact": "Desktop set-up sessions (the brief's laptop use) involve extra scrolling and lose context. On a 1920 monitor, Household needs 2.2 screens and Life admin 10.3.",
+      "severity": "medium",
+      "recommendation": "Household at ≥1200px: switch the page to the wide measure with a 2-column grid. Left column: Members and Invite. Right column: Shared address, Your postal address and Budget. Each panel keeps its own ActionBar. Home: replace the count-only Inbox panel with the request rows from RWD-02, which fill the panel's width. Inbox at ≥1600: use the existing `aside` for 'What happens when you approve' and the applicable rules, so the main column stays 896px. Activity: see RWD-06.",
+      "effort": "M",
+      "type": "structural",
+      "evidence": [
+        "<review-scratch>/responsive/shots/typical__1920x1080__inbox.png",
+        "<review-scratch>/responsive/shots/typical__1920x1080__home.png",
+        "<capture-run>/typical/shots/light-1440/household.s1.jpg",
+        "src/app/surfaces.css:63-67",
+        "grep: no member page passes `aside` to PageContainer",
+        "live 1920x1080: household 2.2 screens, life-admin 10.3, activity 8.4"
+      ],
+      "related_pages": [
+        "/agents/[id]?section=settings",
+        "/life-admin",
+        "/rules"
+      ]
+    },
+    {
+      "id": "RWD-10",
+      "title": "The top bar and page edge jump sideways when moving between sections on desktop",
+      "location": "src/app/surfaces.css:70-95 (.wh-workspace-header-inner max-width follows --wh-measure), :41-54; workspace-navigation.ts:52-67",
+      "problem": "The breadcrumb, help icon and page card take their left edge from each section's measure. Going from Home (wide) to Inbox (reading) moves the breadcrumb from x=292 to x=434 at 1440, a 142px jump, and from x=514 to x=674 at 1920, a 160px jump. The help icon moves by a similar amount (1398 to 1256 at 1440). Settings (form, 768px) jumps again. The page title and top bar visibly move under a sidebar that stays still.",
+      "why": "Consistency and spatial stability (Gestalt common region, Nielsen consistency). Persistent chrome shouldn't move when navigating. For low-vision users at magnification, a moving anchor means searching for the title again on every page.",
+      "impact": "Desktop users, and especially screen-magnifier users, have to find the title and help icon again on every section change.",
+      "severity": "low",
+      "recommendation": "Let .wh-workspace-header-inner and .wh-section-navigation > .wh-tabs always use the wide measure (calc(1216px - 2*gutter)), whatever data-measure says. For the page body, left-align narrower measures to the wide measure's left edge rather than centring them: `.wh-main[data-measure] .wh-page { margin-inline: max(0px, calc((100% - 1216px)/2)) auto; }`. The title then stays at one x position and narrow pages leave their spare width on the right.",
+      "effort": "S",
+      "type": "visual",
+      "evidence": [
+        "<capture-run>/typical/shots/light-1440/home.s1.jpg",
+        "<capture-run>/typical/shots/light-1440/inbox.s1.jpg",
+        "<review-scratch>/responsive/shots/typical__1920x1080__home.png",
+        "<review-scratch>/responsive/shots/typical__1920x1080__inbox.png",
+        "src/app/surfaces.css:70-95"
+      ],
+      "related_pages": [
+        "/settings",
+        "/agents",
+        "/household"
+      ]
+    },
+    {
+      "id": "RWD-11",
+      "title": "Long agent names fill the phone screen and repeat across every list",
+      "location": "Agent heading src/components/agents/agent-workspace.tsx:34-60 (h1 at :56, .wh-agent-heading, surfaces.css:478-482); Inbox sentence/groups inbox-view.tsx:427-457, 583; Home timeline meta dashboard-view.tsx:333-336; agents list agent-list-view.tsx",
+      "problem": "With the worst-case name ('Gemini — Konstantinopoulou-Fitzgerald family travel, household research, school-holiday logistics and long-running life-admin assistant'), the agent page h1 at 320 is 9 lines and 270px tall. The first screen shows only the name (23 words visible), and the 4th tab ('Activity') sits beyond the right edge behind a fade (tab right edge 350 at 320). On /agents the name takes 5 underlined lines per card. Even the typical 'Gemini — family travel and household research assistant' wraps to 2–3 lines and appears 3 times per Inbox card, plus in every 12px meta line on Home and Activity. No document overflow occurs: wrapping works.",
+      "why": "Ellipsis or short forms in compact contexts keep the content scannable. The name is identity, not content, and repeating it adds no new information.",
+      "impact": "Members who give agents descriptive names (the product encourages naming at consent) see pages dominated by the name. On a phone the decision content moves down a full screen.",
+      "severity": "medium",
+      "recommendation": "Add a `shortAgentName(name)` helper: the text before ' — ' or ' - ', else the first 24 characters plus an ellipsis. Use it in the Inbox sentence and group titles, timeline meta, activity meta, Home agent rows and the scope chips. Keep the full name as the agent page h1 on ≥640px. Below 640px, clamp the h1 to 2 lines (`line-clamp-2`) and repeat the full name in a muted <p> under the status line. Let `.wh-agent-heading .wh-tabs` wrap to a 2×2 grid under 360px so all four sections stay visible.",
+      "effort": "S",
+      "type": "visual",
+      "evidence": [
+        "<review-scratch>/responsive/shots/worst__320x568__agent.png",
+        "<capture-run>/worst/shots/light-390/agents.s1.jpg",
+        "<capture-run>/worst/shots/light-390/home.s3.jpg",
+        "<capture-run>/typical/shots/light-390/inbox.s1.jpg",
+        "live worst 320x568: agent h1 height 270px; first-screen words 23; tab overflow right=350"
+      ],
+      "related_pages": [
+        "/inbox",
+        "/home",
+        "/activity",
+        "/agents"
+      ]
+    },
+    {
+      "id": "RWD-12",
+      "title": "Catalogue tiles switch layout on a viewport breakpoint inside a container-sized grid, making 200% zoom 34 screens long",
+      "location": "/connectors?view=catalogue: src/components/connectors/connectors-view.tsx:291 (tile), :306 (`sm:basis-full sm:ps-11` button row), :320 (TILE_GRID auto-fill minmax(17rem,1fr))",
+      "problem": "The tile grid's column count depends on container width (auto-fill, 17rem), but the button's position depends on the viewport (`sm:` = 640px). Between 640px and about 700px, which covers a 1280px laptop at 200% zoom and small tablets in split view, the grid is still 1 column yet the 'Connect' button wraps under the name. Every tile is then about 50% taller. The catalogue measured 15,356px (34 screens) at 640x450, against 10,051px at 390. At 768 the 2-column tiles also stack the button (8,284px). On phones the 103-service catalogue is 11.9 screens even with inline buttons, and the category chips scroll off to the right after 'Calendar'.",
+      "why": "Layout choices inside a reusable grid should follow the container, not the viewport. Otherwise reflow (WCAG 1.4.10) at zoom produces the worst possible shape.",
+      "impact": "Low-vision members using browser zoom, and tablet users, scroll the longest page in the app to find a service.",
+      "severity": "medium",
+      "recommendation": "Make the tile grid a container (`@container` on the TILE_GRID <ul>, native in Tailwind 4) and replace `sm:ms-0 sm:basis-full sm:ps-11` with `@max-[20rem]:basis-full @max-[20rem]:ps-11 @max-[20rem]:ms-0`, so the button drops under the name only when the tile itself is narrow. On phones, render 'All services' as category ListGroups that start collapsed, with counts ('Email 8 ›'), below Popular and the search, instead of a flat 103-tile list.",
+      "effort": "S",
+      "type": "structural",
+      "evidence": [
+        "<review-scratch>/responsive/shots/typical__640x450__catalogue.png",
+        "<capture-run>/typical/shots/light-390/connectors.s3.jpg",
+        "<capture-run>/typical/shots/light-768/connectors.s2.jpg",
+        "src/components/connectors/connectors-view.tsx:304-306",
+        "live: catalogue 15,356px @640x450 (34.1 screens) vs 10,051 @390 (11.9) vs 8,284 @768"
+      ],
+      "related_pages": [
+        "/agents/[id]?section=connectors"
+      ]
+    },
+    {
+      "id": "RWD-13",
+      "title": "Admin-console type sizes (14px body, 12px who and when) are small for a phone-first, low-vision-friendly product",
+      "location": "src/app/workspace.css:122 (.wh-timeline-meta 12px), :147 (.wh-access-node small 12px), :152 (.wh-evidence-facts dt 11px); surfaces.css header comment 'UI text 14px'; text-sm utilities throughout",
+      "problem": "Measured on phones at 390: Home has 109 of 359 visible words (30%) at 12px. These are the who and when of each event (agent name, time) and the agents panel stats ('$0.00 of $300.00 this month'). The agent overview has 85 of 328 words at 12–13px. Most other reading text is 14px (Inbox 366/430 words, Activity 5,004 at 14px). Only the Inbox sentence is 16px. Phone native body text is 16–17px.",
+      "why": "design_ux asks for 'crisp typography' on a phone-first product, and the persona includes older members. WCAG 1.4.4 is met through browser zoom, but phones rarely get zoomed, so the default size matters. Time and agent are the key facts in a log, not decoration.",
+      "impact": "Older and low-vision members struggle to read who did what and when on Home and Activity without zooming, and zooming triggers the reflow problems in RWD-03 and RWD-12.",
+      "severity": "medium",
+      "recommendation": "Add type tokens (for example --wh-text-meta and --wh-text-body) in surfaces.css. Below 640px set body/UI text to 15px and meta to 13px minimum, and from 640px keep 14/12. Apply them to .wh-timeline-meta, .wh-access-node small, the activity meta <p className=\"text-sm\"> and the agents panel stats. Raise .wh-evidence-facts dt from 11px to 12px. This refines the existing scale without changing the visual language.",
+      "effort": "S",
+      "type": "visual",
+      "evidence": [
+        "<capture-run>/typical/shots/light-390/home.s2.jpg",
+        "<capture-run>/typical/shots/light-390/agents_ID__section-overview.s2.jpg",
+        "src/app/workspace.css:122,147,152",
+        "live font-size word counts @390: home 12px=109/359; agent overview 12–13px=85/328; activity 14px=5,004 words"
+      ],
+      "related_pages": [
+        "/home",
+        "/activity",
+        "/agents/[id]"
+      ]
+    },
+    {
+      "id": "RWD-14",
+      "title": "On the agent page, phones get two stacked tab rows plus an 8-card map that repeats them",
+      "location": "/agents/[id]: src/components/agents/agent-workspace.tsx (main tabs Overview · Resources · Controls · Activity, sub-tabs), access map .wh-access-map workspace.css:132-148",
+      "problem": "At 390 the agent page shows the heading card, then the main tab row, then (on Resources or Controls) a second pill row. Content starts at about y=358 on Controls › Settings. The Overview tab adds a 'This agent's access' map of 8 bordered cards (Connectors, Vault, Skills, Memory, Spending, Rules, Settings, Activity) that link to the same destinations as the two tab rows. The page wraps this in two explanatory paragraphs ('Your account owns these resources. These settings decide what ChatGPT can use through Warthog, and your rules for all agents still apply.' / 'Warthog controls only what ChatGPT does through Warthog, not its own tools or chats.'). So a phone user has 3 ways to reach the same 8 places. Disconnect isn't on this page at all; it is only on the /agents list.",
+      "why": "Recognition over recall works better with a single navigation model. Stacked tab rows on phones cost vertical space and are a common source of 'where am I?' confusion. Plain language: the scope paragraphs describe the system, not what the person can do.",
+      "impact": "Dense-interface persona: the agent page asks the member to understand a two-level tab hierarchy plus a map before changing anything. Phone users lose about 340px to navigation chrome.",
+      "severity": "medium",
+      "recommendation": "Below 640px, make Overview the hub. Keep the access map rows, styled as list rows rather than 8 bordered cards, as the navigation. Hide both tab rows on sub-sections and show a '‹ ChatGPT' back link plus the section title instead (list → detail). Keep the tab rows from 640px up. Replace the two paragraphs with one sentence: 'Choose what ChatGPT can use. Your rules for all agents still apply.' Add 'Disconnect ChatGPT' (reusing the DisconnectControl from agent-list-view.tsx) at the end of Overview.",
+      "effort": "M",
+      "type": "structural",
+      "evidence": [
+        "<capture-run>/typical/shots/light-390/agents_ID__section-overview.s1.jpg",
+        "<capture-run>/typical/shots/light-390/agents_ID__section-overview.s2.jpg",
+        "<capture-run>/typical/shots/light-390/agents_ID__section-settings.s1.jpg",
+        "agents_ID__section-overview light-390: 169 words, 19 controls, 2,114px = 2.5 screens",
+        "live: no 'Disconnect' control on /agents/[id] (overview or settings)"
+      ],
+      "related_pages": [
+        "/agents"
+      ]
+    },
+    {
+      "id": "RWD-15",
+      "title": "Pages ask members to read a lot, with competing emphasis, before the first action",
+      "location": "Page descriptions (WorkspaceHeading description on every page), scope disclosures (src/components/agents/resource-scope.tsx 'How access works' / 'Manage for one agent'), Activity heading action 'Check integrity', inbox notices, Life admin To check copy",
+      "problem": "Persona walk at 390: Home has 52 words and 5 controls before the Inbox link. Inbox has 113 words before the first Approve, including the agent name 3 times. Activity has 79 words and 22 controls (4 views, 6 quick filters, search, Filters, 'Check integrity') before the first entry's details. The agent overview has 51 words before its first link. Account resource pages open with a description and two disclosures ('How access works', 'Manage for one agent'): the Connectors heading is 308px at 320. Wording assumes system knowledge, for example 'Approve and release', 'Approvals & releases', 'Check integrity', 'Reads' / 'Changes', 'at the 2026-11-20 reference rate', 'Agent's reason:' and 'To check'. The only heading action on Activity is 'Check integrity', a technical verification, which competes with the feed itself.",
+      "why": "Plain-language guidance and the brief: 'will abandon a set-up step that does not say plainly what happens next', 'Never show… jargon on primary screens'. Cognitive load: explanations people have already read become noise on daily pages.",
+      "impact": "Easily overloaded or older members spend their attention reading before they can act, and may not act at all.",
+      "severity": "medium",
+      "recommendation": "Limit WorkspaceHeading descriptions to 12 words or fewer on daily pages (Home, Inbox, Activity) and show the longer explanation only in empty states. Merge 'How access works' and 'Manage for one agent' into one 'About access' disclosure placed after the content on phones. Plain-language pass: 'Approve and release' → 'Approve and share'; 'Approvals & releases' → 'Approvals'; 'Reads' / 'Changes' → 'Looked at' / 'Changed'; 'Converted … reference rate' → 'About $148.62 in AUD'; drop the 'Agent's reason:' prefix in favour of the brief's 'Claude says “…”'. Move 'Check integrity' into the Activity Filters menu or the page footer.",
+      "effort": "M",
+      "type": "functional",
+      "evidence": [
+        "<capture-run>/typical/shots/light-390/activity.s1.jpg",
+        "<capture-run>/typical/shots/light-390/connectors.s1.jpg",
+        "<capture-run>/typical/shots/light-390/inbox.s1.jpg",
+        "live words/controls before first action @390: home 52/5, inbox 113/3, activity 79/22, agent overview 51/5",
+        "brief.yaml:564-573 (copy)"
+      ],
+      "related_pages": [
+        "/connectors",
+        "/vault",
+        "/skills",
+        "/memory",
+        "/life-admin"
+      ]
+    },
+    {
+      "id": "RWD-16",
+      "title": "Horizontally scrolling tab and chip rows hide choices at 320–390",
+      "location": "FilterLinks variant=\"scroll\" (src/components/ui/filter-links.tsx), .wh-subtabs nowrap under 640px (surfaces.css:179-183), .wh-tabs overflow-x (globals.css:282-289); used on Activity, Life admin, agent tabs, Connectors categories",
+      "problem": "At 320 the following run off-screen behind a 40px fade: the Activity view row ('By service' clipped at 390 too) and quick filters (right edge 437px); Life admin's inner tabs (right edge 514px, hiding 'Bookings' and 'Moving checklist'); the agent page's 4th tab ('Activity', right edge 350px); and Connectors categories (only All, Email and Calendar of 18 visible at 390). Some pages stack two scrolling rows (Activity, Life admin). The skill allows this ('Main tabs can scroll in their own track'), but for primary filters the fade is the only cue.",
+      "why": "Options you can't see are easy to miss, and this is worse at zoom or with low vision (Nielsen, recognition rather than recall). Two scrolling rows in a row compound the problem.",
+      "impact": "Phone and zoom users miss views and filters, for example never discovering 'Needs attention', 'Approvals' or 'Bookings'.",
+      "severity": "low",
+      "recommendation": "Allow at most one scrolling row per screen. On <640px, convert secondary filter rows to a <Select> (Activity quick filters, Connectors categories). Let 4-item tab rows wrap into a 2×2 grid at <360px. PR #52's single Life admin row (Records | Upcoming | History | Tasks) already removes the double row there, but at 320 it should still be checked for clipping.",
+      "effort": "S",
+      "type": "visual",
+      "evidence": [
+        "<capture-run>/typical/shots/light-390/activity.s1.jpg",
+        "<capture-run>/typical/shots/light-390/connectors.s1.jpg",
+        "<capture-run>/typical/shots/light-390/life-admin.s1.jpg",
+        "live 320x568 overflowing tracks: activity chips r=437, life-admin tab r=514, agent tab r=350"
+      ],
+      "related_pages": [
+        "/activity",
+        "/life-admin",
+        "/agents/[id]",
+        "/connectors"
+      ]
+    },
+    {
+      "id": "RWD-17",
+      "title": "On short screens the drawer and sidebar show only a few destinations",
+      "location": "Drawer .wh-nav-dialog/.wh-drawer-content globals.css:383-403, brand block :175-183, pinned footer; sidebar surfaces.css:135-145",
+      "problem": "In 844x390 landscape the drawer gives about 100px to the wordmark, 56px to the pinned Sign out row, and 245px to a 896px navigation list, so only Home, Agents and Inbox are fully visible. At 390x844, Help and Contact us are below the drawer fold. On a 1440x900 desktop the sidebar's Help group is cut off by the fade above Sign out. The short-screen compaction exists only for the desktop sidebar (min-width 1024 and max-height 860), not for the phone drawer.",
+      "why": "The mobile skill says the drawer 'must scroll and keep sign-out reachable on short screens'. It does, but showing 3 destinations per screen is poor for wayfinding.",
+      "impact": "Landscape phone users scroll the menu to reach most sections.",
+      "severity": "low",
+      "recommendation": "Under @media (max-height: 500px), reduce .wh-nav-dialog .wh-sidebar-brand to 52px with a small wordmark, use 40px rows and hide group labels except as dividers, and let Sign out scroll with the list instead of being pinned. With RWD-01's bottom bar, the drawer only holds the 'More' items, which removes most of this problem.",
+      "effort": "S",
+      "type": "visual",
+      "evidence": [
+        "<review-scratch>/responsive/shots/drawer__844x390.png",
+        "<review-scratch>/responsive/shots/drawer__390x844.png",
+        "<capture-run>/typical/shots/light-1440/home.s1.jpg",
+        "live: drawer nav clientHeight 245 of 896 (844x390), 699 of 896 (390x844)"
+      ],
+      "related_pages": [
+        "all"
+      ]
+    }
+  ]
+}

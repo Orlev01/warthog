@@ -1,0 +1,342 @@
+[
+  {
+    "rule": "Forms: submit/outcome state (button must reflect the finished request)",
+    "file": "src/components/inbox/release-approve.tsx",
+    "line": 698,
+    "problem": "After a successful card or protected-detail release the status reads 'Handed over…', but the primary 'Approve and release' button (line 725) becomes active again, and Deny and Ask for more detail stay live under it. InboxView mounts <ReleaseApprove> without onReleased (inbox-view.tsx:493), and nothing refreshes the page, so the request stays in 'Waiting on you' until a reload. A member can tap Approve again (server answers 'already released') or Deny a request whose value has already been handed over.",
+    "fix": "When status is 'released', replace the action row with the success line and a 'See it in History' link (drop secondaryActions), and move focus to the status. Wire onReleased in InboxView to router.refresh() (next/navigation is already in the app) so the row moves to History.",
+    "severity": "high",
+    "count": 1,
+    "examples": ["src/components/inbox/release-approve.tsx:698", "src/components/inbox/release-approve.tsx:725", "src/components/inbox/inbox-view.tsx:493"]
+  },
+  {
+    "rule": "Forms: correct type and inputmode",
+    "file": "src/components/life-admin/record-row.tsx",
+    "line": 72,
+    "problem": "The 'Remind me (days before)' field asks for 'whole days … separated by commas (for example, 14, 1)' but sets inputMode=\"numeric\". On iPhone that opens the digits-only keypad, which has no comma, so a member can't enter more than one reminder on a phone.",
+    "fix": "Remove inputMode so the default keyboard opens (or use inputMode=\"text\"), and keep the hint. Better still, offer one small number field per reminder with an 'Add another' button.",
+    "severity": "high",
+    "count": 1,
+    "examples": ["src/components/life-admin/record-row.tsx:72"]
+  },
+  {
+    "rule": "Animation: honour prefers-reduced-motion (stop infinite loops)",
+    "file": "src/app/globals.css",
+    "line": 152,
+    "problem": "The reduced-motion reset only sets animation-duration: 0.01ms. It doesn't set animation-iteration-count, so the infinite animate-spin and animate-pulse loops keep running at 0.01ms per cycle and can jitter or flicker instead of stopping. The same reset is duplicated in document-shell.tsx:35 (MOTION_OFF).",
+    "fix": "Add 'animation-iteration-count: 1 !important; scroll-behavior: auto !important;' to both reset blocks, or switch the loops to motion-safe:animate-spin and motion-safe:animate-pulse.",
+    "severity": "medium",
+    "count": 5,
+    "examples": ["src/components/ui/form-submit.tsx:217", "src/components/ui/skeleton.tsx:16", "src/components/shell/status-screens.tsx:198", "src/components/settings/data-transfer.tsx:195", "src/components/shell/document-shell.tsx:35"]
+  },
+  {
+    "rule": "Accessibility: async updates need aria-live (region must exist before the message)",
+    "file": "src/components/ui/notice.tsx",
+    "line": 25,
+    "problem": "Live regions are created together with their message: role=status/alert is added in the same render as its text. Screen readers often don't announce a region that arrives with its content already in it. PageNotice is the outcome channel for nearly every save, delete and decision after a redirect, so 'Saved.' and similar outcomes may go unannounced. toast.tsx:47 already uses the correct pattern: an announcer that is always mounted.",
+    "fix": "Reuse the Toast approach: keep one empty polite region and one assertive region mounted in AppShell, and have PageNotice and the local status lines write their text into them after mount. Alternatively, give PageNotice tabIndex=-1 and focus it once after a redirect.",
+    "severity": "medium",
+    "count": 8,
+    "examples": ["src/components/ui/notice.tsx:25", "src/components/inbox/release-approve.tsx:693", "src/components/skills/package-editor.tsx:70", "src/components/ui/form-submit.tsx:148", "src/components/auth/factor-controls.tsx:346", "src/components/skills/package-import.tsx:80"]
+  },
+  {
+    "rule": "Forms: errors inline next to fields (and keep what was typed)",
+    "file": "src/app/(portal)/(protected)/rules/page.tsx",
+    "line": 94,
+    "problem": "Server-action failures redirect with ?notice= and re-render the form empty. When a rule is refused, the code sends the member back to New rule 'so the person can correct it' (rules/actions.ts:184), but RulesView resets the builder to DEFAULT_DRAFT (rules-view.tsx:697), so there's nothing left to correct. On Contact, a 'problem' or 'too-many' result (contact/page.tsx:58) clears the message textarea, which has no defaultValue (contact-view.tsx:42). In both cases the error appears at the top of the page, not next to the field.",
+    "fix": "Return the outcome with useActionState instead of redirecting on failure, and re-render the fields with their submitted values and a Field error={…} (the pattern settings/agents/page.tsx:132 already uses). For the rule builder, pass the submitted draft back through its existing `draft` prop.",
+    "severity": "medium",
+    "count": 2,
+    "examples": ["src/app/(portal)/(protected)/rules/page.tsx:94", "src/components/rules/rules-view.tsx:697", "src/app/(portal)/(protected)/contact/page.tsx:58", "src/components/contact/contact-view.tsx:42"]
+  },
+  {
+    "rule": "Locale: numbers and currency use Intl.NumberFormat",
+    "file": "src/components/spending/spending-view.tsx",
+    "line": 143,
+    "problem": "Five local money helpers build `${currency} ${amount.toFixed(2)}`, so amounts show with no digit grouping ('AUD 12500.00'), with a breakable space between code and figure, and always with 2 decimals (wrong for JPY and similar). Meanwhile Home, the agent workspace, connection permissions and Inbox use the shared Intl-based formatMoney (domain/approvals/request-sentence.ts:43). The same budget reads '$200.00' on Home and 'AUD 200.00' on Spending.",
+    "fix": "Use the shared formatMoney everywhere. If ISO codes are wanted for multi-currency views, add a currencyDisplay: 'code' option to it; Intl then adds grouping and a non-breaking space.",
+    "severity": "medium",
+    "count": 5,
+    "examples": ["src/components/spending/spending-view.tsx:143", "src/components/household/household-view.tsx:271", "src/components/life-admin/record-format.ts:189", "src/components/life-admin/record-format.ts:215", "src/components/life-admin/records-view.tsx:389"]
+  },
+  {
+    "rule": "Navigation & State: URL reflects filters and pagination",
+    "file": "src/components/skills/skills-view.tsx",
+    "line": 382,
+    "problem": "Skills library search, Type, Availability and page are React state (lines 382–385). A reload, Back from an opened package, or a shared link loses them. Activity, Memory, Connectors and Records all keep their list filters in the URL, and SKILL.md says 'Preserve URL filters and Back/Forward selection'.",
+    "fix": "Mirror the four values to query parameters with replaceState for typing and pushState for selects and paging, as useQueryView in ui/view-tabs.tsx already does, and read them back on popstate. Or turn the toolbar into a GET form like Memory's.",
+    "severity": "medium",
+    "count": 1,
+    "examples": ["src/components/skills/skills-view.tsx:382", "src/components/skills/skills-view.tsx:491", "src/components/skills/skills-view.tsx:520"]
+  },
+  {
+    "rule": "Forms: warn before navigation with unsaved changes",
+    "file": "src/components/rules/rules-view.tsx",
+    "line": 697,
+    "problem": "Nothing in src registers a beforeunload or link guard. Long drafts (the four-step rule builder, a new skill's full instructions, a Contact message, record forms) are lost silently when the member taps a sidebar link or reloads. ViewPanels keeps drafts across in-page tabs but not across navigation. The only dirty check is inside the package editor dialog.",
+    "fix": "Add a small in-repo hook (for example ui/use-unsaved-guard.ts): mark a form dirty on input, clear it on submit, and register beforeunload while dirty. Sidebar links are plain <a>, so the same hook can intercept their clicks and confirm before leaving.",
+    "severity": "medium",
+    "count": 4,
+    "examples": ["src/components/rules/rules-view.tsx:697", "src/components/skills/skills-view.tsx:176", "src/components/contact/contact-view.tsx:42", "src/components/life-admin/record-forms.tsx:181"]
+  },
+  {
+    "rule": "Content handling / async updates: pending approvals and time left go stale",
+    "file": "src/components/inbox/inbox-view.tsx",
+    "line": 466,
+    "problem": "'Time left' is a server-formatted string and the Inbox never refreshes. Only a notification tap navigates (public/sw.js:111). An open Inbox keeps showing a live Approve button after a request has expired, and new requests don't appear until a reload.",
+    "fix": "Add a small client component that calls router.refresh() on visibilitychange or focus, and every ~60 s while there are pending requests. Render time left from the expiry instant inside a <time> that updates each minute. Announce changes in the count through the always-mounted polite region.",
+    "severity": "medium",
+    "count": 1,
+    "examples": ["src/components/inbox/inbox-view.tsx:466", "src/components/inbox/inbox-view.tsx:848"]
+  },
+  {
+    "rule": "Forms: inputs need autocomplete and meaningful name",
+    "file": "src/components/vault/add-card-flow.tsx",
+    "line": 448,
+    "problem": "The Add a card fields set autoComplete=\"off\" (card number, name on card) or nothing (expiry), and none has a name attribute, so browser and password-manager card autofill can't help. Members must type 16 digits by hand on a phone. The value is encrypted on the device, so autofill doesn't weaken the vault model.",
+    "fix": "Use autoComplete=\"cc-number\" / \"cc-name\" / \"cc-exp-month\" / \"cc-exp-year\" with matching name attributes, and keep autoComplete=\"off\" on the card nickname. If the founder doesn't want the browser offering to save the card, record that choice in a comment.",
+    "severity": "medium",
+    "count": 4,
+    "examples": ["src/components/vault/add-card-flow.tsx:448", "src/components/vault/add-card-flow.tsx:465", "src/components/vault/add-card-flow.tsx:478", "src/components/vault/add-card-flow.tsx:488"]
+  },
+  {
+    "rule": "Forms: submit button stays enabled until request starts",
+    "file": "src/components/rules/rules-view.tsx",
+    "line": 711,
+    "problem": "Primary submits are natively disabled until the form is valid: Add rule (disabled={!complete}), Delete my account and Send test notification. A disabled button leaves the Tab order, so keyboard and screen-reader users never reach it or its aria-describedby reason. Pressing it can't point to the step that's missing. Inbox's DisabledControl and ReleaseApprove already use aria-disabled with a described reason instead.",
+    "fix": "Use aria-disabled plus aria-describedby (FormSubmit already blocks clicks when aria-disabled). When Add rule is pressed early, focus the first incomplete Step and show an inline error there.",
+    "severity": "medium",
+    "count": 3,
+    "examples": ["src/components/rules/rules-view.tsx:711", "src/components/settings/data-view.tsx:169", "src/components/settings/notifications-view.tsx:218"]
+  },
+  {
+    "rule": "Navigation & State: destructive actions need confirmation or undo",
+    "file": "src/components/connectors/connectors-view.tsx",
+    "line": 414,
+    "problem": "Disconnecting a service revokes it in one click with no undo. Every agent loses that service, and getting it back means a fresh OAuth connect. The brief asks for 'disconnect in one click', so a confirmation step would break it, but nothing offers a way back either. Removing a push device (notifications-view.tsx:250) is also one click with no undo.",
+    "fix": "Keep the single click but add an undo window: keep the connection soft-disconnected for ~10 s and show 'Gmail disconnected. Undo' in the PageNotice, then revoke. If that's not feasible, say in the notice what reconnecting takes.",
+    "severity": "medium",
+    "count": 2,
+    "examples": ["src/components/connectors/connectors-view.tsx:414", "src/components/settings/notifications-view.tsx:250"]
+  },
+  {
+    "rule": "Performance: large lists (virtualise or content-visibility)",
+    "file": "src/components/activity/activity-view.tsx",
+    "line": 591,
+    "problem": "Activity renders 100 entries, or up to 500 when searching (activity/actions.ts:133–134), and each row mounts a Dispute form with a textarea inside its closed <details>. Memory renders up to 200 rows (memory/actions.ts:291), each with a mounted edit textarea pre-filled with up to 20,000 characters. The catalogue renders all ~107 tiles, each a form. That's a heavy DOM on phones.",
+    "fix": "In surfaces.css, add 'content-visibility: auto; contain-intrinsic-size: auto 120px' to list-group rows (no dependency needed). Mount the Dispute and Edit forms only when their <details> opens (onToggle).",
+    "severity": "medium",
+    "count": 3,
+    "examples": ["src/components/activity/activity-view.tsx:591", "src/components/memory/memory-view.tsx:258", "src/components/connectors/connectors-view.tsx:761"]
+  },
+  {
+    "rule": "Locale: hard-coded number in copy",
+    "file": "src/components/agents/permissions-view.tsx",
+    "line": 372,
+    "problem": "'Defaults to {currency}' and '{DEFAULT_CARD_BUDGET.amount} per {period}.' sit on separate JSX lines. JSX drops the line break between them, so the page reads 'Defaults to AUD200 per month.' with no space and no money formatting.",
+    "fix": "Write it as `Defaults to {formatMoney(DEFAULT_CARD_BUDGET.amount, currency)} a {DEFAULT_CARD_BUDGET.period}.`",
+    "severity": "low",
+    "count": 1,
+    "examples": ["src/components/agents/permissions-view.tsx:372"]
+  },
+  {
+    "rule": "Forms: correct type (avoid type=number for codes)",
+    "file": "src/components/vault/add-card-flow.tsx",
+    "line": 478,
+    "problem": "Expiry month and year use type=\"number\" with no min, max or maxLength. The mouse wheel and arrow keys change the value, 'e' and '-' are accepted, and 13 or 1999 pass until the server rejects them.",
+    "fix": "Use type=\"text\" inputMode=\"numeric\" with pattern=\"[0-9]{2}\" maxLength={2} for the month and pattern=\"[0-9]{4}\" maxLength={4} for the year, or a 01–12 <select> for the month.",
+    "severity": "low",
+    "count": 2,
+    "examples": ["src/components/vault/add-card-flow.tsx:478", "src/components/vault/add-card-flow.tsx:488"]
+  },
+  {
+    "rule": "Forms: correct type and constraints",
+    "file": "src/components/inbox/release-approve.tsx",
+    "line": 597,
+    "problem": "The release flow's Security code field has inputMode=numeric but no maxLength or pattern, so a mistyped or pasted value only fails after the unlock ceremony has run.",
+    "fix": "Add maxLength={4}, pattern=\"[0-9]{3,4}\" and a hint ('3 or 4 digits on the back').",
+    "severity": "low",
+    "count": 1,
+    "examples": ["src/components/inbox/release-approve.tsx:597"]
+  },
+  {
+    "rule": "Design-system drift: one 'unavailable control' pattern",
+    "file": "src/components/connectors/connectors-view.tsx",
+    "line": 205,
+    "problem": "At least 6 local copies of the 'control isn't available just now' fallback exist. Most use a native `disabled` button and a reason <p> that isn't linked to it, so the button is skipped by Tab and its reason is never announced. Inbox's DisabledControl (inbox-view.tsx:217) does it correctly with aria-disabled and aria-describedby.",
+    "fix": "Promote inbox's DisabledControl to ui/unavailable-control.tsx and replace the local copies (connectors Unavailable, activity Undo and Dispute fallbacks, agent-list, contact, household).",
+    "severity": "low",
+    "count": 8,
+    "examples": ["src/components/connectors/connectors-view.tsx:208", "src/components/activity/activity-view.tsx:344", "src/components/agents/agent-list-view.tsx:126", "src/components/contact/contact-view.tsx:93", "src/components/household/household-view.tsx:240"]
+  },
+  {
+    "rule": "Navigation & State: destructive actions need undo",
+    "file": "src/components/skills/package-editor.tsx",
+    "line": 149,
+    "problem": "'Remove file' drops the file from the draft at once. The only way back is 'Discard changes', which also throws away every other edit.",
+    "fix": "Show 'Removed references/guide.md. Undo' in place (keep the removed file in state until Save), or ask first as Delete package does.",
+    "severity": "low",
+    "count": 1,
+    "examples": ["src/components/skills/package-editor.tsx:149"]
+  },
+  {
+    "rule": "Touch: overscroll-behavior: contain in modals",
+    "file": "src/components/skills/package-editor.tsx",
+    "line": 184,
+    "problem": "The package editor <dialog> is the app's main scrolling modal (overflow-y-auto) but has no overscroll containment, so on phones scrolling past its end chains to the page behind it. Only .wh-nav-dialog gets overscroll-behavior: contain and the html lock (surfaces.css:146–147).",
+    "fix": "Add Tailwind's overscroll-contain to the dialog, and widen the surfaces.css lock to html:has(dialog[open]).",
+    "severity": "low",
+    "count": 1,
+    "examples": ["src/components/skills/package-editor.tsx:184", "src/app/surfaces.css:146"]
+  },
+  {
+    "rule": "Focus: sticky header/footer must not cover the focused element",
+    "file": "src/components/skills/package-editor.tsx",
+    "line": 109,
+    "problem": "The editor dialog pins a sticky header (line 109) and footer (line 156) inside its own scroller, which has no scroll-padding. When tabbing through files and fields, a focused control can end up hidden under either bar. The page itself sets scroll-padding-top for its sticky header (surfaces.css:70), but the dialog doesn't.",
+    "fix": "Add scroll padding to the dialog (for example scroll-pt-28 scroll-pb-24, or scroll-padding-block in CSS) sized to the two bars.",
+    "severity": "low",
+    "count": 2,
+    "examples": ["src/components/skills/package-editor.tsx:109", "src/components/skills/package-editor.tsx:156"]
+  },
+  {
+    "rule": "Design-system drift: in-page views use ViewPanels (ARIA tabs)",
+    "file": "src/components/skills/package-editor.tsx",
+    "line": 129,
+    "problem": "Preview / Edit files / Agent access are aria-pressed toggle buttons in a <div aria-label> with no role, so the label is ignored. SKILL.md says to use ViewPanels with the full tab pattern for in-page state.",
+    "fix": "Use ViewPanels (or at minimum role=\"tablist\" with tab and tabpanel semantics). If toggles are kept, add role=\"group\" so the aria-label applies.",
+    "severity": "low",
+    "count": 1,
+    "examples": ["src/components/skills/package-editor.tsx:129"]
+  },
+  {
+    "rule": "Forms: autocomplete=\"off\" on non-auth fields",
+    "file": "src/components/connectors/connectors-view.tsx",
+    "line": 439,
+    "problem": "Fields named name=\"name\" (rename a connection, request a service, name an agent or access key, account label) have no autoComplete. Chrome and Safari treat name=\"name\" as the member's personal name and offer their full name or address.",
+    "fix": "Add autoComplete=\"off\" to these fields; renaming name to label or serviceName also stops the heuristic.",
+    "severity": "low",
+    "count": 5,
+    "examples": ["src/components/connectors/connectors-view.tsx:439", "src/components/connectors/connectors-view.tsx:339", "src/components/agents/consent-view.tsx:120", "src/components/agents/access-key-flow.tsx:312", "src/app/(portal)/(protected)/connectors/key/page.tsx:147"]
+  },
+  {
+    "rule": "Forms: spellCheck={false} on emails, codes, identifiers",
+    "file": "src/components/household/household-view.tsx",
+    "line": 481,
+    "problem": "The household invite email, the three-letter budget currency code (which also needs autoCapitalize), the package 'New file path' and the record email field all keep spellcheck, so phones underline or autocorrect addresses, codes and paths.",
+    "fix": "Add spellCheck={false} and autoCapitalize=\"none\" (use autoCapitalize=\"characters\" for the currency code), as data-view.tsx:209 and release-approve.tsx:681 already do.",
+    "severity": "low",
+    "count": 4,
+    "examples": ["src/components/household/household-view.tsx:481", "src/components/agents/permissions-view.tsx:355", "src/components/skills/package-editor.tsx:142", "src/components/life-admin/record-forms.tsx:246"]
+  },
+  {
+    "rule": "Forms: placeholders show an example pattern and end with …",
+    "file": "src/components/activity/activity-view.tsx",
+    "line": 742,
+    "problem": "About 30 placeholders mix instructions ('Name this skill', 'Describe the task', 'Type the detail to protect', 'Which service?', 'Search'), example styles ('e.g. …' in skills and package-import vs 'For example, …' elsewhere) and endings. Only the two search fields and the recovery-phrase format end with '…'. Instruction placeholders disappear as soon as the member starts typing.",
+    "fix": "Move instructions into hint and keep placeholders as examples in one style: 'For example, Dropbox…'. Replace 'e.g.' with 'For example' so copy stays plain Australian English.",
+    "severity": "low",
+    "count": 25,
+    "examples": ["src/components/activity/activity-view.tsx:742", "src/components/connectors/connectors-view.tsx:344", "src/components/skills/skills-view.tsx:189", "src/components/life-admin/tasks-view.tsx:430", "src/components/vault/add-card-flow.tsx:450"]
+  },
+  {
+    "rule": "Hover & interactive states: links need hover feedback",
+    "file": "src/components/ui/filter-links.tsx",
+    "line": 93,
+    "problem": "37 underlined text links in the workspace have no hover state (only 8 do). Their class strings are also copied by hand as LINK_CLASS, ACTION_LINK, ROW_LINK, SUMMARY_LINK and BACK_LINK, with different hover and minimum-height rules.",
+    "fix": "Add a textLinkClasses() helper next to buttonClasses() in ui/button.tsx (for example hover:decoration-2 or a text-fg-muted to text-fg change), or one surfaces.css rule for .wh-workspace a.underline:hover, and replace the local constants.",
+    "severity": "low",
+    "count": 37,
+    "examples": ["src/components/ui/filter-links.tsx:93", "src/components/activity/activity-view.tsx:544", "src/components/rules/rules-view.tsx:326", "src/components/home/dashboard-view.tsx:174", "src/components/connectors/connectors-view.tsx:456"]
+  },
+  {
+    "rule": "Focus states: one focus treatment (design-system drift)",
+    "file": "src/components/home/dashboard-view.tsx",
+    "line": 508,
+    "problem": "Seven class strings still add focus-visible:outline-none, outline-hidden or ring-2 classes. controls.css:13 blanks the ring and the unlayered global :focus-visible outline wins, so these do nothing. They contradict the single-outline rule, and a later CSS refactor could leave these links with no focus indicator.",
+    "fix": "Delete the focus-visible:outline-* and ring classes and rely on the global outline, as button.tsx and input.tsx document.",
+    "severity": "low",
+    "count": 7,
+    "examples": ["src/components/home/dashboard-view.tsx:508", "src/components/ui/filter-links.tsx:29", "src/components/settings/remove-passkey.tsx:155", "src/components/settings/remove-authenticator.tsx:110", "src/components/inbox/inbox-view.tsx:342"]
+  },
+  {
+    "rule": "Touch & interaction: touch-action and tap highlight",
+    "file": "src/app/globals.css",
+    "line": 111,
+    "problem": "No stylesheet sets touch-action: manipulation or -webkit-tap-highlight-color, so iOS paints its default grey tap flash over the app's own hover and pressed states. There's also no overscroll-behavior rule for fine pointers.",
+    "fix": "In globals.css add: html { -webkit-tap-highlight-color: transparent; } and :where(a, button, summary, label, [role=tab]) { touch-action: manipulation; }. Optionally add @media (pointer: fine) { html { overscroll-behavior: none; } }.",
+    "severity": "low",
+    "count": 1,
+    "examples": ["src/app/globals.css:111"]
+  },
+  {
+    "rule": "Locale & i18n: translate=\"no\" on brand names, secrets and code",
+    "file": "src/components/vault/vault-key-step.tsx",
+    "line": 293,
+    "problem": "translate=\"no\" is never used. Browser auto-translate rewrites the brand ('Warthog' becomes 'Phacochère' or 'Warzenschwein') and can alter or re-flow values members must copy exactly: the vault recovery phrase, access keys, the authenticator setup key and MCP URLs.",
+    "fix": "Add translate=\"no\" to the recovery phrase, IssuedKey <code>, the setup key, connect-guide code blocks, and the brand's text and sr-only spans.",
+    "severity": "low",
+    "count": 5,
+    "examples": ["src/components/vault/vault-key-step.tsx:293", "src/components/agents/issued-key.tsx:20", "src/components/settings/add-authenticator.tsx:263", "src/components/agents/connect-guide.tsx:139"]
+  },
+  {
+    "rule": "Locale: counts and sizes via Intl, non-breaking space before units",
+    "file": "src/components/ui/badge.tsx",
+    "line": 43,
+    "problem": "CountBadge, the 'n entries' and 'n requests' helpers and the integrity notice print raw numbers, so a long activity history reads '12483 entries'. File sizes use toFixed with a breakable space ('1.4 MB' can wrap between number and unit).",
+    "fix": "Add a shared formatCount using new Intl.NumberFormat('en-AU') and use it in CountBadge and the plural helpers. Use Intl unit formatting, or \\u00a0 before 'MB'.",
+    "severity": "low",
+    "count": 5,
+    "examples": ["src/components/ui/badge.tsx:43", "src/components/activity/activity-view.tsx:308", "src/components/activity/activity-view.tsx:639", "src/components/agents/agent-workspace.tsx:63", "src/components/life-admin/record-row.tsx:223"]
+  },
+  {
+    "rule": "Typography: tabular-nums for number comparisons",
+    "file": "src/components/home/dashboard-view.tsx",
+    "line": 213,
+    "problem": "Spend comparisons ('$120.00 of $200.00 this month') on Home, Agents, Household and the Records cost line use proportional figures, so the numbers shift as they update. Spending and the agent workspace already use tabular-nums.",
+    "fix": "Wrap the amounts in a span with tabular-nums, or add font-variant-numeric to the shared money output's container.",
+    "severity": "low",
+    "count": 4,
+    "examples": ["src/components/home/dashboard-view.tsx:213", "src/components/agents/agent-list-view.tsx:145", "src/components/household/household-view.tsx:279", "src/components/life-admin/records-view.tsx:389"]
+  },
+  {
+    "rule": "Accessibility: semantic headings for repeated items",
+    "file": "src/components/inbox/inbox-view.tsx",
+    "line": 427,
+    "problem": "Each pending request starts with a <p> sentence, so screen-reader users can't jump from request to request by heading. Activity entries use an <h3> per entry (activity-view.tsx:475).",
+    "fix": "Make the request sentence an <h3> with the same text-base classes, keeping the agent mark inside it.",
+    "severity": "low",
+    "count": 1,
+    "examples": ["src/components/inbox/inbox-view.tsx:427"]
+  },
+  {
+    "rule": "Content handling: flex children need min-w-0 / wrapping",
+    "file": "src/components/agents/permissions-view.tsx",
+    "line": 129,
+    "problem": "Toggle (used for every service, skill and capability on an agent) wraps its text in a flex column with no min-w-0 or overflow-wrap, so a long unbroken skill name (up to 200 characters) can push past the card. It also has no hover or checked styling. The rules Choice card (rules-view.tsx:296) handles all of these.",
+    "fix": "Copy the Choice classes: min-w-0 [overflow-wrap:anywhere] on the text span, plus hover:bg-surface-muted and has-[:checked]:border-line-strong on the label.",
+    "severity": "low",
+    "count": 1,
+    "examples": ["src/components/agents/permissions-view.tsx:129"]
+  },
+  {
+    "rule": "Navigation & State: links use <a>/<Link>",
+    "file": "src/components/ui/button-link.tsx",
+    "line": 20,
+    "problem": "Every in-app link (sidebar, ButtonLink, FilterLinks, row links) is a plain <a>, and next/link is imported nowhere. Cmd-click works, but every tap is a full document load: the shell repaints, the sidebar scroll position resets and the page flashes on slow phones. No ADR records the choice.",
+    "fix": "Use next/link (it ships with Next, so no new dependency) in ButtonLink, the sidebar (app-shell.tsx:135) and FilterLinks. If full loads are intentional (for example to re-check the session or CSP), record that in docs/adr.",
+    "severity": "low",
+    "count": 1,
+    "examples": ["src/components/ui/button-link.tsx:20", "src/components/shell/app-shell.tsx:135", "src/components/ui/filter-links.tsx:51"]
+  },
+  {
+    "rule": "Content & copy: numerals and plurals, no '(s)'",
+    "file": "src/components/skills/package-editor.tsx",
+    "line": 124,
+    "problem": "'{n} system or binary file(s) were excluded.' uses '(s)', where the rest of the app uses proper plurals.",
+    "fix": "Use the plural helper: '2 system or binary files were left out. The saved package has only the files below.'",
+    "severity": "low",
+    "count": 1,
+    "examples": ["src/components/skills/package-editor.tsx:124"]
+  }
+]

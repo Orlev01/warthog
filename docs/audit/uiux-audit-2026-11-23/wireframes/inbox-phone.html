@@ -1,0 +1,77 @@
+<!doctype html>
+<html lang="en-AU"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Wireframe — Inbox and request (phone, proposed)</title><link rel="stylesheet" href="mockup.css">
+<style>
+  body { display: flex; gap: 40px; padding: 24px; background: #e9eaec; align-items: flex-start; }
+  .phone { box-shadow: 0 0 0 1px #d0d0d0, 0 20px 40px -20px rgb(0 0 0 / 25%); border-radius: 28px; overflow: hidden; }
+  .tabbar { position: absolute; }
+  .req { display: flex; gap: 12px; padding: 14px 16px; border-top: 1px solid var(--line); }
+  .req:first-child { border-top: 0; }
+  .req h3 { font: 500 15px/20px Inter; }
+  .actions { display: flex; gap: 8px; margin-top: 10px; }
+  .caption { font: 600 13px/18px Inter; color: #555; margin: 0 0 10px 4px; }
+  .sheet-amt { font: 600 32px/38px Inter; letter-spacing: -0.02em; }
+  .steps { display: grid; gap: 10px; counter-reset: s; }
+  .steps li { list-style: none; display: flex; gap: 10px; font: var(--t-body); }
+  .steps li::before { counter-increment: s; content: counter(s); width: 22px; height: 22px; border-radius: 50%; background: var(--surface-muted); display: grid; place-items: center; font: 600 12px Inter; flex: none; }
+  .bar { position: absolute; left: 0; right: 0; bottom: 0; padding: 12px 16px 28px; background: var(--surface); border-top: 1px solid var(--line); display: grid; grid-template-columns: 1fr 2fr; gap: 10px; }
+</style></head>
+<body>
+<div>
+  <p class="caption">1 · Inbox: one line per decision, Inbox badge in the bottom bar</p>
+  <div class="phone">
+    <div class="ptop"><span>Inbox</span><span class="meta">History</span></div>
+    <div class="pbody">
+      <p class="meta" style="margin:0 4px 10px">4 waiting · nothing happens until you decide</p>
+      <section class="panel">
+        <div class="req"><span class="agent-mark am-claude">C</span><div class="grow">
+          <h3>Pay <b>$240.00</b> to Mazda Parramatta</h3>
+          <p class="meta">Claude · logbook service · 23 h left</p>
+          <div class="actions"><a class="btn">Deny</a><a class="btn primary">Review and pay</a></div></div></div>
+        <div class="req"><span class="agent-mark am-claude">C</span><div class="grow">
+          <h3>See your <b>driver licence</b></h3>
+          <p class="meta">Claude · Service NSW rego renewal · 23 h left</p>
+          <div class="inset annot" data-note="Missing data: one clear next step" style="margin-top:10px;font:var(--t-meta)">You haven't saved a driver licence yet. Add it, then share it once.</div>
+          <div class="actions"><a class="btn">Deny</a><a class="btn primary">Add licence</a></div></div></div>
+        <div class="req"><span class="agent-mark am-gem">G</span><div class="grow">
+          <h3>Pay <b>NZD 180.00</b> <span class="muted">(≈ $148.62)</span> to Coronet Peak Snow School</h3>
+          <p class="meta">Gemini · ski lessons for Mia and Leo · 23 h left</p>
+          <div class="actions"><a class="btn">Deny</a><a class="btn primary">Review and pay</a></div></div></div>
+        <div class="req"><span class="agent-mark am-gem">G</span><div class="grow">
+          <h3>See your <b>passport</b></h3>
+          <p class="meta">Gemini · Qantas check-in · 23 h left</p>
+          <div class="actions"><a class="btn">Deny</a><a class="btn primary">Review</a></div></div></div>
+      </section>
+    </div>
+    <nav class="tabbar annot" data-note="Bottom bar (brief's original spec)">
+      <a><span class="ic"></span>Home</a>
+      <a class="on"><span class="ic"></span>Inbox<span class="pip">4</span></a>
+      <a><span class="ic"></span>Activity</a>
+      <a><span class="ic"></span>Agents</a>
+      <a><span class="ic"></span>More</a>
+    </nav>
+  </div>
+</div>
+
+<div>
+  <p class="caption">2 · Review a card request: amount first, one primary action, why it's safe</p>
+  <div class="phone">
+    <div class="ptop"><span>‹ Inbox</span><span class="meta">1 of 4</span></div>
+    <div class="pbody stack">
+      <section class="panel" style="padding:20px">
+        <p class="meta">Claude wants to pay</p>
+        <p class="sheet-amt">$240.00</p>
+        <p style="font:var(--t-body-strong);margin-top:2px">Mazda Parramatta</p>
+        <div class="inset" style="margin-top:14px"><p class="meta">Claude says</p><p>“Balance for the 48,000 km logbook service.”</p></div>
+        <dl class="kv" style="margin-top:14px"><dt>Card budget</dt><dd>$240 of $300 left this month</dd><dt>Expires</dt><dd>In 23 hours, then it's denied</dd><dt>Conversation</dt><dd><a class="link">Car registration and insurance</a></dd></dl>
+      </section>
+      <section class="panel" style="padding:16px 20px">
+        <h2 style="margin-bottom:10px">What happens when you approve</h2>
+        <ol class="steps"><li>Confirm it's you with your passkey</li><li>Choose a card (Visa ·· 4821)</li><li>The card is released to Claude for this payment only</li></ol>
+      </section>
+      <details class="panel" style="padding:14px 20px"><summary class="meta">Technical details</summary></details>
+    </div>
+    <div class="bar"><a class="btn lg">Deny</a><a class="btn lg primary">Approve $240.00</a></div>
+  </div>
+</div>
+</body></html>

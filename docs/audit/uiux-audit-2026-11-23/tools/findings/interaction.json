@@ -1,0 +1,548 @@
+{
+ "lens": "interaction",
+ "summary": "Warthog's interaction foundation is strong: every form guards against double submission and shows pending labels, the ARIA tabs are complete, native dialogs and the drawer handle focus correctly, and error copy is plain. Above that layer the interactions don't hold together. Five ways of confirming destructive actions, about 40 expandable sections in 7+ styles and four tab mechanisms that look alike all behave differently, and confirmation isn't matched to risk: permanent 'Not mine' and Pause rule take one tap while deleting a memory gets a reveal. The decision paths are the weakest point. Requests held for Warthog's own tools give no detail, so they're approved blind. After every decision or row action the page jumps to the top with focus on the body and a generic notice, and the card release keeps live controls after handing over and doesn't validate the one-shot security code. Edits are lost silently across agent sections and household forms, and reviewing 25+ found records or filtering Activity costs many reloads. Most fixes reuse existing pieces: promote the Agents disconnect dialog to a ConfirmDialog, add Disclosure and dirty-form primitives, and generalise the inbox's focus-on-approval helper into post-action focus.",
+ "scores": {
+  "method": "Nielsen heuristics scored 0–4 through the interaction lens (4 = no issues)",
+  "visibility_of_system_status": 2,
+  "match_with_real_world": 3,
+  "user_control_and_freedom": 1,
+  "consistency_and_standards": 1,
+  "error_prevention": 2,
+  "recognition_rather_than_recall": 2,
+  "flexibility_and_efficiency": 1,
+  "aesthetic_and_minimalist": 2,
+  "error_recovery": 3,
+  "help_and_documentation": 3,
+  "keyboard": "skip link first; 20–26 Tab stops of sidebar before main; 0 stops without visible focus in 15 traces; life-admin 97 Tabs to 'Confirm all', activity 149 Tabs to 'Older entries'"
+ },
+ "strengths": [
+  "Double-submit protection and honest pending labels everywhere (ActionForm/FormSubmit: 'Approving…', 'Disconnecting…', 'Deleting rule…'), plus plain-language refusals that say nothing was changed.",
+  "The Agents disconnect dialog is the model to copy: the title names the agent, the consequence is stated, 'Keep connected' is first and autofocused, the confirm is danger-solid, and Escape restores focus to the trigger (tested). The phone drawer also moves focus in and returns it to the hamburger on Escape.",
+  "ViewPanels implement the full ARIA tab pattern (roving tabindex, arrows/Home/End) and keep panels mounted, so a half-typed 'Ask for more detail' question survives a tab switch.",
+  "Push-notification landing (/inbox?approval=<id>) scrolls to and focuses the request, marks it 'From your notification', and explains decided or expired requests. This focus helper should be reused after every action.",
+  "The rules builder's radio-card templates with a live sentence preview ('Ask me before Claude makes any change') make a complex policy legible before it's added."
+ ],
+ "findings": [
+  {
+   "id": "IXD-01",
+   "title": "Requests held by a rule for Warthog's own tools give no detail, so several requests look identical and you approve without knowing what you're approving",
+   "location": "/inbox — PendingItem, src/components/inbox/inbox-view.tsx:404-512; detail lines built in src/app/(portal)/(protected)/inbox/actions.ts:315-375 (detailLines / extraLines); sentence map src/domain/approvals/request-sentence.ts:68",
+   "problem": "In the worst account I added the rule 'Ask me before Claude makes any change'. Then, through local MCP, I had Claude ask for three create_task calls with different titles ('book the car service', 'renew the passport', 'order school uniforms'). The Inbox showed three identical cards: 'Claude wants to add a task · Your rule: Ask me before Claude makes any change · Claude gave no reason · 15 minutes left · Approve / Deny / Ask for more detail'. No card has a title, a Details disclosure or any other way to tell them apart. detailLines() builds rows only for outgoing messages, amount, merchant, protected field and purpose, and extraLines() shows arguments only for third-party provider tools. Warthog's own tools (create_task, update_task, save_record, update_record, remember) therefore reach the decision with no object. History repeats the problem: three 'Claude wants to add a task' rows. The approve notice is equally generic ('Approved. The agent can go ahead.').",
+   "why": "Informed consent is the whole point of an approval (brief: 'what it wants to do in plain words, the exact details'). This breaks recognition over recall and error prevention (Nielsen 6, 5). A person can't make a safe decision about a change they can't see.",
+   "impact": "Every member who uses 'Ask me first' or 'Make any change' rules, the most protective setup, has to approve blind or deny everything. This hits phone users hardest: they decide straight from a push notification with no other context.",
+   "severity": "critical",
+   "recommendation": "Give every native tool its own detail lines in detailLines(): create_task → Title, Assigned to; update_task → Task, Change (status/note); save_record → Type, Name and the first 3 fields; update_record → Record, then each changed field as 'Field: old → new'; remember → the memory text and who can read it. As a fallback for any tool without a mapping, reuse the provider path in extraLines() (actions.ts:358-360), which already turns tool arguments into labelled previews, and show the first 3 arguments inline rather than behind Details. Put the object into the sentence too ('Claude wants to add the task “Book the car service”') and into the decision notice. Add a render test with 3 same-tool requests that asserts the cards differ.",
+   "effort": "M",
+   "type": "functional",
+   "evidence": [
+    "<review-scratch>/interaction/shots/worst-inbox-3held.png",
+    "<review-scratch>/interaction/shots/worst-inbox-after-approve.png",
+    "src/app/(portal)/(protected)/inbox/actions.ts:315-333",
+    "src/app/(portal)/(protected)/inbox/actions.ts:358-360",
+    "live test (worst): 3 create_task holds → 3 identical cards, History shows 3 identical 'Claude wants to add a task' rows"
+   ],
+   "related_pages": [
+    "/inbox?view=history",
+    "/home (Inbox summary)",
+    "/activity (approval entries)"
+   ]
+  },
+  {
+   "id": "IXD-02",
+   "title": "After every list action the page reloads, jumps to the top and drops focus, and the notice doesn't say which item was affected",
+   "location": "/inbox decisions (src/app/(portal)/(protected)/inbox/page.tsx:96-157 redirect('/inbox?notice=…')); same ?notice= redirect pattern in /life-admin, /memory, /rules, /agents; PageNotice src/components/ui/notice.tsx:35-56",
+   "problem": "Live tests at 390px. Approve / Deny / Ask on an Inbox request: URL becomes /inbox?notice=…, scrollY goes back to 0, document.activeElement becomes <body>, and a generic banner appears at the top ('Approved. The agent can go ahead.' / 'Denied. The agent won't go ahead.'). Life admin Confirm: scrollY went from 884 to 0 and focus went to body. Not mine: 1004 to 0, focus to body. Memory Delete: 991 to 0, focus to body. Adding a rule and disconnecting an agent also leave focus on body. The notice never names the request, record or memory acted on, and none of these actions offers Undo. In the worst account History then listed the asked-for-more-detail decision with no timestamp.",
+   "why": "WCAG 2.4.3 Focus Order: after a control is removed, focus should move somewhere predictable, not to the document start. Nielsen 1 (visibility of system status) and 3 (user control and freedom): no confirmation of which item changed, and no undo. Keyboard and screen-reader users have to tab through the 20+ sidebar links again. This is the same family as the 12 Nov 'interaction-01' fix but was never solved for focus or scroll after the action finishes.",
+   "impact": "Working through a queue on a phone (approvals, 25+ found records, memories) means scrolling back down after every tap and checking each time that the right row disappeared. Combined with IXD-01 there is no confirmation at all of what was approved.",
+   "severity": "high",
+   "recommendation": "Build one shared pattern for row actions. (1) Before redirecting, read the id of the next row (or the list heading when none is left) and pass it as ?focus=<id>. Generalise focusApprovalElement() (inbox-view.tsx:362) into a ui/focus-target.ts helper that scrolls that row to the centre and focuses it. (2) Put the item into the notice: 'Approved: Claude adds the task “Book the car service”.' (3) For reversible actions (Not mine, Pause, Make private, Deny within the hold window if the server allows), add an 'Undo' link inside the PageNotice. (4) For Life admin and Memory, let the client component remove the row optimistically with useOptimistic and skip the full reload.",
+   "effort": "M",
+   "type": "functional",
+   "evidence": [
+    "<review-scratch>/interaction/shots/worst-inbox-after-approve.png",
+    "<review-scratch>/interaction/shots/worst-la-after-confirm.png",
+    "<review-scratch>/interaction/shots/worst-la-after-notmine.png",
+    "live: inbox approve/deny/ask focus=BODY, scrollY→0; life-admin confirm 884→0, not mine 1004→0; memory delete 991→0",
+    "src/app/(portal)/(protected)/inbox/page.tsx:110,128,157"
+   ],
+   "related_pages": [
+    "/life-admin",
+    "/memory",
+    "/rules",
+    "/agents",
+    "/connectors"
+   ]
+  },
+  {
+   "id": "IXD-03",
+   "title": "After a card or protected detail is handed over, the request stays in 'Waiting on you' with Approve and release, Deny and Ask still active",
+   "location": "/inbox — ReleaseApprove, src/components/inbox/release-approve.tsx:698-740; mounted without onReleased in src/components/inbox/inbox-view.tsx:492-502",
+   "problem": "When status becomes 'released', the control adds one green line ('Handed over. The agent can collect it once.') but still renders the full action row: 'Approve and release' (enabled), Deny and Ask for more detail. The explainer, card picker and unlock radios also stay. InboxView never passes onReleased and nothing calls router.refresh(), so the row stays under 'Waiting on you (n)' with a stale count until a manual reload. A second tap re-runs the passkey unlock only to be refused with 'already_released'. Tapping Deny lands on 'That request was already decided'. (UX-01 covers the copy side; this finding covers the state machine.)",
+   "why": "The interface must reflect system state (Nielsen 1). Leaving live controls on a finished one-time action invites duplicate or contradictory actions, which goes against the feedback skill rule 'do not announce success before the operation completes' in reverse: the UI never registers that it did complete.",
+   "impact": "This is the most sensitive moment in the product, handing over a card or passport. The person can't tell whether it worked, may try again (another biometric prompt), or may tap Deny on something already handed over.",
+   "severity": "high",
+   "recommendation": "Treat 'released' as a terminal state in ReleaseApprove. Replace the explainer, fields and action row with a success block (CheckCircle2 icon, 'Handed over to Claude. It can collect it once.', and a 'See it in History' link), and move focus to that block (tabIndex=-1, as ConfirmItsYou does at confirm-its-you.tsx:193-198). Pass onReleased from InboxView and call router.refresh() so the row moves to History and the tab count updates. Add a test that asserts no Approve, Deny or Ask control exists after release.",
+   "effort": "S",
+   "type": "functional",
+   "evidence": [
+    "src/components/inbox/release-approve.tsx:698-702 (status line)",
+    "src/components/inbox/release-approve.tsx:716-740 (action row rendered regardless of status)",
+    "src/components/inbox/inbox-view.tsx:493-502 (no onReleased)"
+   ],
+   "related_pages": [
+    "/inbox?approval=<id> (push notification landing)"
+   ]
+  },
+  {
+   "id": "IXD-04",
+   "title": "The release form doesn't check the security code, Enter does nothing, and identity is checked only after the vault unlock, so the passkey can be asked for three times",
+   "location": "/inbox — ReleaseApprove, src/components/inbox/release-approve.tsx:254-305 (submit order), 580-606 (card fields), 722-740 (button, no <form>); server src/app/api/approvals/[id]/release/handler.ts:96-99",
+   "problem": "(a) The Security code field has no required, pattern or length check. The body schema only checks that the whole JSON value is non-empty, so an empty or mistyped code goes out in a release that 'can't be collected again'. (b) The card picker, code, passphrase and recovery-phrase fields are not inside a <form>, and the button is type=button with onClick, so Enter in any field does nothing. (c) submit() unlocks the vault first (passkey prompt 1) and only then posts. If the 5-minute step-up has lapsed, which is normal when approving from a notification, the post is refused, the code and passphrase are wiped, and ConfirmItsYou appears (passkey prompt 2). The person then has to retype the code and press 'Approve and release' again (passkey prompt 3). (UX-03 notes the double effort; this finding covers the validation and form mechanics.)",
+   "why": "Error prevention (Nielsen 5) and WCAG 3.3.1/3.3.3 (errors identified and corrected before submission). Form controls should submit with Enter. A one-shot hand-over must validate before it's spent.",
+   "impact": "Card requests are the money path. A wasted one-shot release forces the agent to start again. Three biometric prompts and typing the code twice, on a phone, is the opposite of 'approve on the go'.",
+   "severity": "high",
+   "recommendation": "Wrap ReleaseApprove's fields in <form onSubmit> with the button as type=submit. Make Security code required with pattern '[0-9]{3,4}', inputMode numeric and an inline Field error shown before any prompt. Then reorder submit(): check step-up freshness first. Either add a cheap GET /api/auth/step-up/status, or call /begin and show ConfirmItsYou up front. Run the vault unlock only after a fresh confirmation, so the entered code never has to be cleared and retyped. The flow becomes at most one confirmation plus one unlock, in that order. Keep the rule that secrets are cleared after any failed post.",
+   "effort": "M",
+   "type": "functional",
+   "evidence": [
+    "src/components/inbox/release-approve.tsx:596-605 (no required/pattern)",
+    "src/components/inbox/release-approve.tsx:262-304 (unlock before post; clears code on step_up)",
+    "src/components/inbox/release-approve.tsx:445-446 ('approve and release again')",
+    "src/app/api/approvals/[id]/release/handler.ts:96-99 (value min(1) only)"
+   ],
+   "related_pages": [
+    "/inbox?approval=<id>"
+   ]
+  },
+  {
+   "id": "IXD-05",
+   "title": "When nothing can be released, a greyed-out 'Approve and release' is the main button, and 'Add a card' leads to the vault with no way back to the request",
+   "location": "/inbox — ReleaseApprove unavailable branch, src/components/inbox/release-approve.tsx:554-571; vault add flows src/components/vault/add-card-flow.tsx, high-tier-flow.tsx (no return parameter)",
+   "problem": "All four pending requests in the typical account are in this state. Each card shows a 50%-opacity primary 'Approve and release' (aria-disabled), then a secondary 'Add a card' or 'Open your vault', then Deny, which wraps to a second line at 390px, then the 'Ask for more detail' disclosure. The only usable next step is styled as secondary. The link goes to /vault/cards or /vault with no ?return=. After adding the card, nothing brings the person back to /inbox?approval=<id>, so they have to find Inbox in the drawer and the request again. (UX-02 covers the chain of prerequisites; this finding covers control hierarchy and the missing return path.)",
+   "why": "One clear primary action per screen (brief design_ux). A disabled primary steals visual priority from the action that's actually available (Nielsen 8). A broken round trip breaks the task (Nielsen 3).",
+   "impact": "On a first card or passport request, a phone user sees a dead primary button, has to work out the detour, and loses their place.",
+   "severity": "medium",
+   "recommendation": "In the unavailable branch, render the fix as the primary ButtonLink ('Add a card to approve') with href /vault/cards?return=/inbox?approval=<id>. Replace the disabled Approve button with one muted line ('Approve and release appears once a card is saved'). Keep the row order as [primary fix] [Deny] [Ask for more detail]. In add-card-flow and high-tier-flow, accept a validated return path (only /inbox?approval=<uuid>) and on success show 'Card saved. Back to Claude's request' as the primary action.",
+   "effort": "M",
+   "type": "structural",
+   "evidence": [
+    "<capture-run>/typical/shots/light-390/inbox.s1.jpg",
+    "<capture-run>/typical/shots/light-390/inbox.s2.jpg",
+    "<review-scratch>/interaction/shots/inbox-ask-open-390.png",
+    "src/components/inbox/release-approve.tsx:562-567",
+    "grep: no returnTo/next handling in src/components/vault or /vault routes"
+   ],
+   "related_pages": [
+    "/vault/cards",
+    "/vault"
+   ]
+  },
+  {
+   "id": "IXD-06",
+   "title": "Pausing a rule takes one tap and can't be reversed: there is no Resume, and after pausing, focus lands on Delete",
+   "location": "/rules — RuleRow, src/components/rules/rules-view.tsx:367-395; src/app/(portal)/(protected)/rules/actions.ts:114-115",
+   "problem": "Live test in the worst account. I added 'Ask me before Claude makes any change', then pressed Pause. The notice read 'Rule paused — Warthog won't enforce it for now.' The row now shows 'Ask me first · Paused' and a single Delete control. Pause only renders while the rule is active, and the code comment confirms 'the Rules screen offers no Resume control'. Rules can't be edited either. A paused protective rule can only be deleted and rebuilt in New rule. Focus after pausing landed on the Delete summary, so a second Enter opens the delete confirmation.",
+   "why": "'Pause' and 'for now' promise reversibility (clarify.md: labels describe what will happen; prefer undo over confirmation when recovery is safe). Nielsen 3 (user control and freedom). One-tap disabling of a safety control, with no recovery, endangers the 'control spending / approvals' core job.",
+   "impact": "A member who pauses 'Ask me before any agent sends email' to let one email through can't switch it back on. They have to rebuild it from templates and may get it wrong, leaving agents unsupervised meanwhile.",
+   "severity": "high",
+   "recommendation": "Add a resume primitive to the rules store (status → active) and a 'Resume' button in the same slot as Pause on paused rows, plus an 'Undo' link in the 'Rule paused' notice. After either action, keep focus on the toggled button. Until Resume ships, rename Pause to 'Turn off' and put it behind the shared ConfirmDialog with the consequence spelled out. Longer term, let rules be edited: open New rule pre-filled ('Edit rule') instead of delete-and-recreate.",
+   "effort": "M",
+   "type": "functional",
+   "evidence": [
+    "<review-scratch>/interaction/shots/worst-rule-paused.png",
+    "live (worst): pause → no Resume; focus = SUMMARY 'Delete'",
+    "src/components/rules/rules-view.tsx:367-377",
+    "src/app/(portal)/(protected)/rules/actions.ts:114-115"
+   ],
+   "related_pages": [
+    "/agents/[id]?section=rules",
+    "/rules?status=paused"
+   ]
+  },
+  {
+   "id": "IXD-07",
+   "title": "Unsaved edits are thrown away without warning, separate forms on one page wipe each other, and Save reports success when nothing changed",
+   "location": "/agents/[id]?section=* — src/app/(portal)/(protected)/agents/[id]/permissions-form.tsx:103-233, src/components/agents/permissions-view.tsx:520-545; /household — src/components/household/household-view.tsx:155-213, 503-578",
+   "problem": "Live tests. (1) Agent › Controls › Spending: I ticked 'Let it ask to use a card' and typed 150, then tapped the Rules sub-tab and pressed Back. Card access was off again and the field was gone, with no warning or beforeunload. Each of the 7 ?section= link tabs and every sidebar link silently discards edits. (2) Household (worst): I typed a new shared address without saving, then saved the budget. The address field came back empty. Six independent forms (Save address, Save choice, Send invite, Save budget, Save limit, Save currency) share one scroll, and a full reload after any one of them clears the other five. (3) 'Save changes' on agent sections is enabled with no edits. Pressing it in the worst account reported 'Saved. The change takes effect on this agent's next request.' (4) Each page edits differently: Vault always-editable fields with per-field Save, Memory and Life admin Edit disclosures, Household always-open panels with footer saves, agent sections with one page Save, and Rules that can't be edited at all. (UX-14 reports the agent-tab loss; this finding covers the shared cause and the household data loss.)",
+   "why": "Nielsen 5 (error prevention) and 3 (user control). Silent data loss falls under the 'causes data loss' clause of the severity scale, but recovery is retyping, so I rate it high. A false 'Saved' undermines trust in every later 'Saved' (Nielsen 1).",
+   "impact": "Laptop set-up sessions are exactly where members make many edits across tabs and panels. They lose work and can't tell what's actually saved, especially for spending and access changes.",
+   "severity": "high",
+   "recommendation": "Add a small shared hook in src/components/ui (e.g. use-dirty-form.ts) that compares named controls with their defaultValue/defaultChecked. Use it to: (a) disable Save until something changes and show 'Unsaved changes' in the ActionBar note; (b) intercept clicks on NavigationTabs, the agent sub-tabs and sidebar links with the shared ConfirmDialog (IXD-09), offering 'Discard changes' or 'Keep editing'; (c) add a beforeunload guard. On Household, combine address and the follow choice into one form, and budget, limit and currency into one form with a single Save. When the server re-renders after a save, keep untouched forms' drafts by giving each form a key that only changes when its own action succeeds. Decide on one edit model per resource type (always-editable for settings, disclosure-edit for list items) and write it into the warthog-design-system skill.",
+   "effort": "M",
+   "type": "structural",
+   "evidence": [
+    "<review-scratch>/interaction/shots/perm-card-on.png",
+    "<review-scratch>/interaction/shots/worst-household-after-budget.png",
+    "<review-scratch>/interaction/shots/worst-perm-nochange-save.png",
+    "live (typical): card on + budget → Rules tab → Back: card off, no dialog",
+    "live (worst): address typed, Save budget → address ''",
+    "live (worst): no-change save → 'Saved…'"
+   ],
+   "related_pages": [
+    "/household",
+    "/settings/*",
+    "/vault",
+    "/skills?view=preferences"
+   ]
+  },
+  {
+   "id": "IXD-08",
+   "title": "Card access says it 'Defaults to AUD200 per month' but won't save until you type a budget, and the disabled Save never says why",
+   "location": "/agents/[id]?section=spending — src/components/agents/permissions-view.tsx:333-374 (budget fields), 520-545 (ActionBar)",
+   "problem": "Ticking 'Let it ask to use a card' reveals an empty 'Card budget per month (AUD)' field. Its placeholder '200' reads like an entered value, and the hint below says 'Defaults to AUD200 per month.' Save changes becomes natively disabled, with a warning line 'Add a budget before you can save card access.' The button has no aria-describedby, and because it's natively disabled it drops out of the Tab order, so keyboard and screen-reader users never meet the reason. The field label doesn't change when the period select changes (it's computed from the stored period). Currency is a free-text field ('A three-letter code, such as AUD') beside a select for period. Pressing Enter in the budget field does nothing. (UX-13 covers the copy; this finding covers the control behaviour.)",
+   "why": "The copy contradicts the behaviour (Nielsen 4 consistency, 5 error prevention). The placeholder-as-value pattern is a known misreading (clarify.md: 'placeholders are examples, not labels'). A disabled control's reason should be programmatically tied to it (WCAG 1.3.1, as the Inbox already does with aria-disabled and aria-describedby).",
+   "impact": "Every member giving an agent card access, which is the 'control spending' job, hits a disabled Save with no clear fix.",
+   "severity": "medium",
+   "recommendation": "When card access is switched on with no stored budget, prefill the field with DEFAULT_CARD_BUDGET.amount (a real value, not a placeholder) so the default is honest and Save stays enabled. Or keep it empty, change the hint to 'Suggested: AUD 200 a month', and add a 'Use AUD 200' button. Switch Save to aria-disabled with aria-describedby pointing at the note, like the Inbox's DisabledControl. Make Currency a Select fed from the same currency list as Household. Derive the label period from the live select value.",
+   "effort": "S",
+   "type": "functional",
+   "evidence": [
+    "<review-scratch>/interaction/shots/perm-card-on.png",
+    "<review-scratch>/interaction/shots/perm-card-on-390.png",
+    "src/components/agents/permissions-view.tsx:353 (placeholder)",
+    "src/components/agents/permissions-view.tsx:371-373 ('Defaults to')",
+    "src/components/agents/permissions-view.tsx:536-541 (native disabled, no describedby)",
+    "live: card on → Save disabled, aria-describedby=null"
+   ],
+   "related_pages": [
+    "/rules?view=budgets",
+    "/settings/agents"
+   ]
+  },
+  {
+   "id": "IXD-09",
+   "title": "Five different ways of confirming destructive actions, not matched to risk: some permanent actions take one tap while a low-risk delete gets a confirmation",
+   "location": "Dialog: src/app/(portal)/(protected)/agents/disconnect-confirm.tsx, settings/remove-passkey.tsx, remove-authenticator.tsx, skills/delete-skill.tsx, agents/access-key-panel.tsx. Inline <details> reveal: memory-view.tsx:266-284, rules-view.tsx:379-395, life-admin/record-row.tsx:165-182, household-view.tsx:215-268. Client confirm state: vault/cards-view.tsx:270-285 ('Keep it'), skills/package-editor.tsx:121,160. One-tap: life-admin/records-view.tsx:142-146 (Not mine), connectors-view.tsx:397-418 (Disconnect service), rules-view.tsx:367 (Pause). Typed phrase: settings/data-view.tsx:160-185",
+   "problem": "The confirmation a person gets depends on which page they're on, not on how bad the consequence is. 'Not mine' on a found record is one tap next to Confirm, yet it is permanent: dismissRecordWithFiles deletes the attached files' blobs (src/server/storage/receipt-files.ts:255-266), and the notice says 'it won't be added back'. Disconnecting a service is one tap (the brief asks for one click there). Pausing a rule is one tap and can't be undone (IXD-06). Deleting a single rule or memory, by contrast, needs a two-step inline reveal. The inline reveals have no Cancel, Escape doesn't close them, and the summary keeps its red danger look while open. Agent disconnect uses a proper modal, but the row's Disconnect button already shows 'Disconnecting…' while the dialog is still open, before the person has confirmed.",
+   "why": "Nielsen 4 (consistency) and 5 (error prevention). clarify.md: 'Prefer undo over confirmation when recovery is safe; when confirmation is necessary, name the action on both the message and button'. A pending label shown before the decision misreports system state.",
+   "impact": "Members can't build a reliable sense of what is safe to tap. Agent-found receipts with attachments can be deleted for good by one mis-tap on a phone list of 25 near-identical rows.",
+   "severity": "high",
+   "recommendation": "Turn AgentsScreen's dialog (named title, plain consequence, safe button first and autofocused, danger-solid confirm, Escape and Cancel returning focus to the trigger) into src/components/ui/confirm-dialog.tsx, which also replaces the 7 copies of the ~300-character dialog class string. Apply one rule across the app: an irreversible action that loses data or access uses ConfirmDialog (Not mine when the record has files, delete record, delete memory, close or leave household, remove member, delete rule); a reversible action is one tap with an Undo link in the notice (Pause, Make private, Not mine without files); Delete account keeps the typed phrase. Retire the inline <details> reveal for destructive steps. Fix the pending leak: run the confirm before entering the form transition (open the dialog from onClick and call requestSubmit() on confirm), so FormSubmit only shows 'Disconnecting…' after a yes.",
+   "effort": "M",
+   "type": "structural",
+   "evidence": [
+    "<review-scratch>/interaction/shots/worst-disconnect-dialog.png (row shows 'Disconnecting…' behind the open dialog)",
+    "<review-scratch>/interaction/shots/worst-memory-edit-delete-open.png",
+    "<review-scratch>/interaction/shots/worst-la-after-notmine.png",
+    "src/server/storage/receipt-files.ts:255-266 (Not mine deletes file blobs)",
+    "app-map: 7 hand-built <dialog>s"
+   ],
+   "related_pages": [
+    "/life-admin",
+    "/memory",
+    "/rules",
+    "/household",
+    "/connectors",
+    "/vault/cards",
+    "/skills",
+    "/settings/security",
+    "/settings/data",
+    "/agents"
+   ]
+  },
+  {
+   "id": "IXD-10",
+   "title": "Expandable sections (<details>, about 40 of them) come in at least 7 styles; many look exactly like buttons, can't be closed with Escape and have no Cancel",
+   "location": "Button-styled: memory-view.tsx:250,267 (no chevron), life-admin/record-row.tsx:156,170, records-view.tsx:253,611, rules-view.tsx:381, household-view.tsx:249, skills-view.tsx:266, multi-select-filter.tsx:93, activity-view.tsx:753, inbox-view.tsx:303. Underlined link-style: activity-view.tsx:502, resource-scope.tsx:79-87 ('How access works', 'Manage for one agent'). Muted text with chevron: inbox-view.tsx:476. Panel header: memory-view.tsx:406, list-group.tsx:55. Unstyled native: connection-permissions.tsx:17,59, auth-views.tsx:80. ROW_DISCLOSURE defined 3 times (memory-view.tsx:178, skills-view.tsx:222, record-row.tsx:217).",
+   "problem": "The same element (a disclosure) appears as a secondary pill (Edit, Ask for more detail, Filters), a red danger pill (Delete, Close household, Remove), an underlined link with a chevron (How access works, View details), muted text with a chevron (Inbox Details), a panel header (Add a memory) and unstyled native markup. Some pills have a chevron (Life admin Edit, Ask for more detail) and some don't (Memory Edit and Delete). A summary styled as a pill can't be told apart from a submit button, so 'Edit' looks like an action that saves. Revealed forms have no Cancel; the only way to close is the same summary, and Escape does nothing. Several can be open at once: Memory's Edit and Delete panels open stacked under one row. Disclosures nest three deep: Life admin record → Details → Edit or Delete. Activity has 119 disclosures on one page and Life admin 27 (metrics).",
+   "why": "Nielsen 4 (consistency) and 6 (recognition). The button-skill rule 'one visual = one behaviour' is broken. Keyboard users expect Escape to dismiss revealed UI, and an affordance should say whether it acts or reveals.",
+   "impact": "Members can't predict whether tapping a pill will change data or just reveal something. Long rows grow unpredictably on phones, adding to the 16,859px Life admin and 11,154px Activity pages.",
+   "severity": "medium",
+   "recommendation": "Add src/components/ui/disclosure.tsx with two variants. (1) variant='more' for reading more: text plus ChevronDown, no underline, no pill. Use it for Details, View details, Technical details, How access works and Advanced. (2) variant='edit' for revealing a form: secondary pill that always shows a ChevronDown which rotates. Both close on Escape (keydown handler on the details element, return focus to the summary). Revealed forms get a ghost 'Cancel' button that closes the details. Only one 'edit' disclosure is open per row (give siblings the same name attribute — supported in Chromium/Safari — or a small onToggle). Destructive reveals move to ConfirmDialog (IXD-09). Delete the 3 copies of ROW_DISCLOSURE.",
+   "effort": "M",
+   "type": "structural",
+   "evidence": [
+    "<review-scratch>/interaction/shots/worst-memory-edit-delete-open.png",
+    "<capture-run>/typical/shots/light-390/activity.s1.jpg",
+    "<capture-run>/typical/shots/light-390/rules.s1.jpg",
+    "metrics: activity 119 disclosures, life-admin 27",
+    "live: Escape on open 'Ask for more detail' leaves it open"
+   ],
+   "related_pages": [
+    "/inbox",
+    "/memory",
+    "/life-admin",
+    "/activity",
+    "/rules",
+    "/household",
+    "/skills",
+    "/connectors",
+    "/agents/[id]"
+   ]
+  },
+  {
+   "id": "IXD-11",
+   "title": "Checking 25+ found records is one tap and one full reload per record, 25 Confirm buttons all compete as primary, and 'Confirm all' sits at the very bottom",
+   "location": "/life-admin › Records › To check — src/components/life-admin/records-view.tsx:120-160 (SuggestionItem), 274-320 (AllForm in the panel footer)",
+   "problem": "Each suggestion has a primary Confirm, a secondary Not mine and an Edit disclosure. Metrics count 26 primary-styled buttons on one page (life-admin light-390: 697 controls, 16,859px). Live test in the worst account at 390px: Confirm and Not mine each trigger a full redirect that resets the scroll to 0 and focus to body (IXD-02). 'Confirm all 23' is the only bulk action. It's a secondary button in the panel footer at y≈8,530px on a phone, and 97 Tab presses away on desktop (typical, 25 records). You can't select some rows, confirm everything from one agent, or confirm by type, and Not mine has no undo. PR #52 reorganises the tabs (Records | Upcoming | History | Tasks) but doesn't change these per-row actions or the footer placement. (UX-16 and IA-06 note the length; this finding covers the interaction model.)",
+   "why": "Nielsen 7 (flexibility and efficiency): no accelerator for the repetitive case. Using 'primary' 25 times breaks the brief's 'one clear primary action per screen'.",
+   "impact": "Typical members get 25 suggestions after connecting email. Reviewing them on a phone takes 25 reload-and-scroll cycles or a hunt for the button at the bottom, so suggestions pile up unchecked. That matters because unchecked records are what agents get told are 'not checked yet'.",
+   "severity": "high",
+   "recommendation": "Move 'Confirm all n' into the To check panel header, using WorkspacePanel's action slot, as the single primary button. Make each row's Confirm secondary. Add a checkbox per row and a sticky ActionBar ('3 selected · Confirm · Not mine') so people can act on a chosen set, and add a 'Confirm all from ChatGPT' option when suggestions come from more than one agent. Handle row actions in place with an optimistic remove and focus on the next row's title, and add Undo to Not mine via the notice. Pass these as notes to the PR #52 author.",
+   "effort": "M",
+   "type": "structural",
+   "evidence": [
+    "<capture-run>/typical/shots/light-390/life-admin.s1.jpg",
+    "<capture-run>/typical/shots/light-390/life-admin.s2.jpg",
+    "<review-scratch>/interaction/shots/worst-la-after-confirm.png",
+    "metrics: life-admin light-390 697 controls, 26 primary-styled buttons, 16,859px",
+    "live (typical desktop): 97 Tab stops to 'Confirm all 25'; (worst 390) Confirm all at y=8,530"
+   ],
+   "related_pages": [
+    "/life-admin?tab=upcoming",
+    "/life-admin/items/[id]"
+   ]
+  },
+  {
+   "id": "IXD-12",
+   "title": "Answering 'what did Claude change today?' takes 7 interactions and 2 page loads across three overlapping filter systems, and search only covers one page",
+   "location": "/activity — src/components/activity/activity-view.tsx:731-771 (search + Filters details), 806-809 (search status), ListToolbar quick filters",
+   "problem": "Live count on typical at 390px: tap the 'Changes' chip (page load), open Filters, pick Agent → Claude (2 steps), set From to today (2), then tap 'Apply filters' (page load). That's 7 interactions, ending at URL ?type=change&q=&agent=…&service=&kind=&outcome=&from=… with empty parameters. There is no 'Today' filter even though the list is grouped under 'Today'. Three taxonomies overlap: Type chips (Reads, Changes, Approvals & releases, Agent reports), an 'Event' select (Agent request, Agent report, Approval decision, Change started, Permission change, Rule created…) and an 'Outcome' select ('Done (agent requests)', 'Done (your changes)', 'Not confirmed', 'Waiting for you', 'Blocked'). 'Agent report' appears as both a Type and an Event. 'Apply filters' is a secondary button. The search box only searches 'the newest matching entries on this page'. The only one-tap agent filter is the underlined agent name inside each row's metadata ('Show activity by Claude'), which few people will discover. (UX-06 asks for period views; this finding covers the cost of filtering.)",
+   "why": "Nielsen 7 (efficiency), 4 (consistency of terms) and 2 (match with real-world categories). A search scoped to one page breaks the mental model of search.",
+   "impact": "Reviewing what agents did is a core brief job ('glancing at the activity feed' on the phone). Today it needs the desktop-style Filters panel and a date picker.",
+   "severity": "high",
+   "recommendation": "Add two chip rows with FilterLinks (variant='scroll'): Agents (All, then one chip per agent, from filterOptions.agents) and When (Today, Last 7 days, All time, which set from and to on the server). Keep the Filters disclosure for service and outcome only. Fold Event into Type and rename the Outcome values to plain words (Done, Blocked, Waiting for you, Denied). Make search query the whole record server-side; if that isn't possible, label the box 'Search this page'. Drop empty parameters from GET submits (disable empty fields before submit, or strip them in the page). Make 'Apply filters' primary inside the panel, or auto-submit on select change with a no-JS fallback.",
+   "effort": "M",
+   "type": "structural",
+   "evidence": [
+    "<review-scratch>/interaction/shots/activity-filters-open-390.png",
+    "<review-scratch>/interaction/shots/activity-filtered-390.png",
+    "<capture-run>/typical/shots/light-390/activity.s1.jpg",
+    "live: 7 interactions / 2 loads to Claude+Changes+today",
+    "live: Event options vs Type chips vs Outcome options (see problem)",
+    "src/components/activity/activity-view.tsx:807"
+   ],
+   "related_pages": [
+    "/agents/[id]?section=activity",
+    "/home (Recent activity)"
+   ]
+  },
+  {
+   "id": "IXD-13",
+   "title": "Undo and Dispute are hidden inside each activity entry's 'View details', and the list doesn't show which entries can be undone",
+   "location": "/activity — ActivityEntryItem, src/components/activity/activity-view.tsx:500-547; UndoControl 339-358; DisputeControl 378-399",
+   "problem": "Undo, the brief's demo moment ('filters to Claude, opens the calendar entry and taps Undo'), only renders inside the collapsed 'View details' panel, and no row shows an 'Undo available' marker. Every expanded entry also renders a full Dispute form (label, textarea, button), so with all 59 'Today' entries expanded there would be 59 dispute textareas. On desktop it takes 149 Tab presses to reach 'Older entries'. Rows also repeat the same title ('Add a task' ×6) without the object, so each must be expanded to find the right one (UX-05 covers the missing object).",
+   "why": "Nielsen 6 (recognition rather than recall) and 7 (efficiency). Primary recovery actions shouldn't need hunting.",
+   "impact": "A member who spots a wrong change has to open entries one by one to find out whether it can be undone.",
+   "severity": "medium",
+   "recommendation": "When entry.canUndo is true, add an 'Undo available' badge (Undo2 icon) to the row's meta line and a compact 'Undo' secondary button in the row header, outside the disclosure. Put Dispute behind its own small 'edit' Disclosure (IXD-10) inside details, so the textarea renders only on request. Add 'Can be undone' as a quick filter chip.",
+   "effort": "S",
+   "type": "structural",
+   "evidence": [
+    "<capture-run>/typical/shots/light-390/activity.s2.jpg",
+    "src/components/activity/activity-view.tsx:536-542",
+    "live (typical desktop): 149 Tab stops to 'Older entries'",
+    "metrics: activity light-390 369 controls, 119 disclosures"
+   ],
+   "related_pages": [
+    "/activity?entry=<seq>",
+    "/agents/[id]?section=activity"
+   ]
+  },
+  {
+   "id": "IXD-14",
+   "title": "Four tab mechanisms that look alike but behave differently: arrow keys or Tab, drafts kept or lost, URL pushed or page reloaded",
+   "location": "Route tabs: src/components/shell/section-navigation.tsx:9-40 (NavigationTabs: Settings, Vault, Memory|Skills, Activity|Spending, Agents). Agent ?section=: src/components/agents/agent-workspace.tsx (wh-tabs + wh-subtabs). ViewPanels: src/components/ui/view-tabs.tsx:84-190 (Inbox, Rules, Connectors, Skills, Life admin outer and inner). FilterLinks as views: activity-view.tsx:850 ('Activity views')",
+   "problem": "Underline tabs appear in two places with two behaviours. Route tabs are an underlined strip above the heading card (Activity|Spending, Vault). ViewPanels are underlined tabs inside the heading card (Inbox, Rules) and are ARIA tabs (roving tabindex, arrow keys, Home and End, pushState, panels stay mounted so drafts survive). Agent pages stack an underline row (Overview/Resources/Controls/Activity) on top of a pill row (Spending/Rules/Settings with an outlined selected pill). Both are plain links that reload and lose drafts (IXD-07). Life admin nests two ViewPanels rows, one inside the heading and one in a separate card. Activity's views (Timeline/By agent/By type/By service) are FilterLinks chips with an outlined selected state, right above quick-filter chips with a filled selected state. So the same look means different keyboard models (the keyboard traces show inbox 'button:tab' versus activity and agent 'a'), and the same function (switching view) has three looks.",
+   "why": "Nielsen 4 (consistency). The design-system skill itself says 'Use NavigationTabs for routes and ViewPanels for in-page state', and the visuals should follow that split. Inconsistent keyboard models are a WCAG 2.1.1 usability burden, though not a failure.",
+   "impact": "Members can't predict whether switching a tab will keep their edits, or whether Back goes to the previous tab. Keyboard users must guess whether to press Tab or the arrow keys.",
+   "severity": "medium",
+   "recommendation": "Assign one visual per mechanism and document it in .agents/skills/warthog-design-system/SKILL.md. Page-level route tabs always sit in the heading band, like ViewPanels (move NavigationTabs inside WorkspaceHeading for Activity|Spending, Vault and Settings). Second-level navigation uses wh-subtabs as a smaller underline, not an outlined pill, on agent pages too. Chips are only ever filters. Convert Activity's Timeline/By agent/By type/By service into a NavigationTabs row in the heading, with ?view= kept as the route. Where an IA change merges levels (IA-02), fold the agent sub-tabs into a single row.",
+   "effort": "M",
+   "type": "structural",
+   "evidence": [
+    "<capture-run>/typical/shots/light-390/activity.s1.jpg",
+    "<review-scratch>/interaction/shots/perm-card-on.png",
+    "<capture-run>/typical/shots/light-390/life-admin.s1.jpg",
+    "<capture-run>/typical/keyboard/inbox.json",
+    "<capture-run>/typical/keyboard/activity.json",
+    "<capture-run>/typical/keyboard/agents_ID__section-connectors.json"
+   ],
+   "related_pages": [
+    "/inbox",
+    "/rules",
+    "/connectors",
+    "/skills",
+    "/life-admin",
+    "/agents/[id]",
+    "/settings",
+    "/vault",
+    "/activity",
+    "/spending"
+   ]
+  },
+  {
+   "id": "IXD-15",
+   "title": "Save confirmations appear far from the button that was pressed: off-screen at the top on Household, below the Save bar on agent pages",
+   "location": "PageNotice src/components/ui/notice.tsx:35-56 (always under WorkspaceHeading); /household household-view.tsx (FormPanel footers); permissions-form.tsx:228-230 (notice below ActionBar); release-approve.tsx:688-702 (inline role=status); Toast only in copy-button.tsx",
+   "problem": "Live test on Household in the worst account at 390px: after 'Save budget', focus stays on the button low on the page and 'The household budget is saved.' renders at the top, out of view. Sighted phone users see nothing change. Agent permission sections put the outcome under the Save bar, so the two pages follow opposite conventions. Inbox, Life admin and Memory redirect to the top instead (IXD-02). Notices never dismiss. On agent pages the 'Saved.' banner stays while the person makes new, unsaved edits. Toast is used only by CopyButton.",
+   "why": "Nielsen 1 (visibility of system status). The feedback skill asks for 'a brief nearby status … after confirmed success' for simple actions.",
+   "impact": "Members press Save again, or leave unsure whether a budget, address or limit was saved. That's money and address data shared with the household.",
+   "severity": "medium",
+   "recommendation": "Set one rule. Outcomes of in-place saves render in the footer of the form that was submitted: extend FormPanel/ActionBar with a `status` slot (role=status) holding 'Saved just now'. PageNotice is only for actions that remove or replace the control (deletes, decisions, navigation). In permissions-form, clear the notice on the next onChange. Optionally reuse Toast for routine saves on long pages, since it's mounted, polite, and never steals focus.",
+   "effort": "S",
+   "type": "functional",
+   "evidence": [
+    "<review-scratch>/interaction/shots/worst-household-after-budget.png",
+    "live (worst): Save budget → focus stays on button, notice at page top off-screen",
+    "src/app/(portal)/(protected)/agents/[id]/permissions-form.tsx:228-230",
+    "grep: <Toast used only in src/components/ui/copy-button.tsx"
+   ],
+   "related_pages": [
+    "/household",
+    "/agents/[id]?section=*",
+    "/settings/notifications",
+    "/settings/agents",
+    "/vault",
+    "/spending (currency form)",
+    "/rules (approval expiry)"
+   ]
+  },
+  {
+   "id": "IXD-16",
+   "title": "'Confirm it's you' appears in a different place and works differently in each flow; it offers authenticator codes to people who have no authenticator and doesn't always resume the action",
+   "location": "src/components/ui/confirm-its-you.tsx:189-191 (offers both factors by default); mounts without factor flags: src/components/auth/factor-controls.tsx:349, src/components/inbox/release-approve.tsx:449, src/components/settings/data-transfer.tsx:250; /settings/security",
+   "problem": "On /settings/security in typical (authenticator 'Not set up'), pressing 'Generate a new recovery code' inserts a warning notice and a ConfirmItsYou panel above 'Add a passkey'. Both say roughly the same thing. The panel includes an 'Authenticator app code' field and a 'Confirm with authenticator app' button the person can't use. Focus stays on the Generate button, which has moved further down. Resume behaviour also differs: Settings factor controls resume after confirming (resumeAfterConfirmation) and consent says 'You'll connect straight after', but the release flow says 'approve and release again' and data transfer says 'choose the transfer again'.",
+   "why": "Nielsen 4 (consistency) and 5 (error prevention). Offering an unavailable path is a dead end. Help should sit next to the decision (feedback skill).",
+   "impact": "Every sensitive action (card release, connecting an agent, export, security changes) uses this step. Inconsistency adds hesitation at exactly the moments the brief wants to feel calm.",
+   "severity": "medium",
+   "recommendation": "Pass passkey and authenticator flags from the account's real factors at every mount (the security view already has hasPasskey and view.authenticatorEnabled; thread them into FactorControls, ReleaseStepUp and DataTransferControls). Render ConfirmItsYou directly under the control that triggered it, or as the shared ConfirmDialog, and move focus into it. Standardise on resuming automatically: each controller already holds the pending intent, so call it again in onConfirmed, as factor-controls does, for release (after IXD-04's reorder) and data transfer. Remove the duplicate pre-notice.",
+   "effort": "M",
+   "type": "functional",
+   "evidence": [
+    "<review-scratch>/interaction/shots/settings-recovery.png",
+    "src/components/ui/confirm-its-you.tsx:189-191",
+    "src/components/auth/factor-controls.tsx:349-351",
+    "src/components/settings/data-transfer.tsx:250"
+   ],
+   "related_pages": [
+    "/inbox (release)",
+    "/settings/data",
+    "/agents/access-key",
+    "/connect consent"
+   ]
+  },
+  {
+   "id": "IXD-17",
+   "title": "On an agent's Settings page, the per-record checkboxes stay active even when 'All my records' is chosen, and the 'needs X on' switches aren't tied to their parent switch",
+   "location": "/agents/[id]?section=settings — src/components/agents/permissions-view.tsx:420-443",
+   "problem": "'Which records it can see: All my records, including new ones' sits above 25 always-enabled, all-ticked record checkboxes (115 in the worst account) with no select all or none and no filter. Unticking one while 'All' is selected is ambiguous. 'Let it add and update tasks' and 'Let it save and update records' carry the text 'Needs “Your tasks” on', but stay enabled when the parent is off. The same pattern applies to per-memory toggles under 'Read shared memory'. (IA-15 notes the length; this finding covers the conflicting state.)",
+   "why": "Nielsen 5 (error prevention). Controls that contradict each other create states the person can't predict. Dependencies should be enforced, not just described.",
+   "impact": "Members think they've limited an agent's records, or switched on writing, when the effective state is different. These are access-control mistakes.",
+   "severity": "medium",
+   "recommendation": "Show the record checklist only when 'Only records I tick' is selected, using a client state mirror like permissions-form already does for card and budget. Add 'Select all / Clear' and a filter field above lists longer than 10. When a parent switch is off, render dependent switches as aria-disabled with the 'Needs … on' text as their aria-describedby, and send them as off.",
+   "effort": "S",
+   "type": "functional",
+   "evidence": [
+    "<capture-run>/typical/shots/light-390/agents_ID__section-settings.s2.jpg",
+    "metrics: agents_ID__section-settings 41 controls, 3,209px desktop",
+    "src/components/agents/permissions-view.tsx:428-443"
+   ],
+   "related_pages": [
+    "/agents/[id]?section=memory",
+    "/agents/[id]?section=vault"
+   ]
+  },
+  {
+   "id": "IXD-18",
+   "title": "Household invites can't be resent or cancelled, and the member-limit form doesn't show the chosen member's current limit",
+   "location": "/household — src/components/household/household-view.tsx:488-500 (Waiting to join), 534-557 (Limit for)",
+   "problem": "Pending invites are listed inside the Invite form as '<email> · Invite sent', and the 'Send invite' submit sits right below them, so the button looks like it acts on the pending row. Live test in the worst account: after inviting ixd-test@warthog.test there was no Resend, Cancel or Revoke control (0 matches). A mistyped address can't be withdrawn, and the invite link stays live for 7 days. The 'Limit for' select (You or a member) leaves 'Monthly limit' blank whenever there are other members, so the owner can't see the current limit before overwriting it.",
+   "why": "Nielsen 3 (user control: undo a send) and 6 (recognition: show the current value you're editing).",
+   "impact": "Owners can't fix a wrong invite, which matters because household members see the shared address. They also set limits blind.",
+   "severity": "medium",
+   "recommendation": "Move 'Waiting to join' into the Members panel as rows with 'Resend' (secondary) and 'Cancel invite' (danger, with ConfirmDialog), backed by a revoke action. Mirror the 'Limit for' select into state and prefill the limit field with that member's current limit, with a hint showing 'Current: AUD x'.",
+   "effort": "M",
+   "type": "functional",
+   "evidence": [
+    "<capture-run>/typical/shots/light-390/household.s2.jpg",
+    "<capture-run>/typical/shots/light-390/household.s3.jpg",
+    "live (worst): invite sent → cancel/resend controls: 0",
+    "src/components/household/household-view.tsx:555 (defaultValue '' when members exist)"
+   ],
+   "related_pages": [
+    "/household"
+   ]
+  },
+  {
+   "id": "IXD-19",
+   "title": "Buttons give no tap feedback, and disabled buttons are handled three different ways, two of which hide the reason",
+   "location": "src/components/ui/button.tsx:42-56; DisabledControl in inbox-view.tsx:217-236 versus permissions-view.tsx:536-541 versus agent-list-view.tsx:123-133 and household-view.tsx:176-183",
+   "problem": "buttonClasses defines hover states but no :active/pressed state, so phones show nothing on tap until a pending label appears. Native disabled and aria-disabled both render at 50% opacity, so a disabled primary still dominates its row (Inbox 'Approve and release'). The disabled state is built three ways: the Inbox uses aria-disabled plus aria-describedby to a reason (focusable and announced); permissions Save is natively disabled with no link to its reason; agent list and household are natively disabled with a loose paragraph.",
+   "why": "Nielsen 1 (feedback on touch). WCAG 1.3.1 and 4.1.2 for the reason relationship. Consistency.",
+   "impact": "Taps can feel ignored on slow networks. Keyboard and screen-reader users skip past disabled Saves without ever hearing why.",
+   "severity": "low",
+   "recommendation": "Add active:translate-y-px plus an active background token to every buttonClasses variant. Promote the Inbox DisabledControl to src/components/ui (aria-disabled, describedby reason, stays focusable) and use it everywhere. Render a disabled primary in the secondary style so it never outranks the available action.",
+   "effort": "S",
+   "type": "visual",
+   "evidence": [
+    "src/components/ui/button.tsx:42-56",
+    "<capture-run>/typical/shots/light-390/inbox.s1.jpg",
+    "live: permissions Save aria-describedby=null"
+   ],
+   "related_pages": [
+    "/inbox",
+    "/agents/[id]",
+    "/household",
+    "/agents"
+   ]
+  },
+  {
+   "id": "IXD-20",
+   "title": "Underlines and pill shapes don't reliably tell you whether something is a link, a button, a filter or an expandable section",
+   "location": "Underlined disclosures: resource-scope.tsx:79-87, activity-view.tsx:502. Underlined filter links in metadata: activity-view.tsx (agent name → '?agent='). Pill ButtonLinks that navigate: agent-list-view.tsx ('Manage agent', 'View activity'). Duplicate destinations: agent name link plus 'Manage agent'",
+   "problem": "Underline is used for navigation links ('Manage agent access', 'Open in Claude's workspace', 'Card budgets'), for disclosures ('How access works ⌄', 'View details ⌄') and for in-place filters (the agent name in an Activity row filters the list; it doesn't open the agent). The pill shape is used for submit buttons, navigation ButtonLinks, disclosure summaries and filter chips. On /agents the underlined agent name and the 'Manage agent' pill go to the same place, as two adjacent tab stops per agent.",
+   "why": "Nielsen 4 (consistency). Affordance should predict the outcome (navigate, act, reveal or filter).",
+   "impact": "People hesitate before tapping and get surprised, for example tapping an agent name in Activity and losing their filters, or expecting a page and getting an expanded section.",
+   "severity": "low",
+   "recommendation": "Use underline only for navigation links. Disclosures use the 'more' Disclosure variant (text plus chevron, no underline; IXD-10). Turn in-row filter shortcuts into the agent chip row (IXD-12) and make the agent name link to /agents/[id]. On /agents, make the whole name a link and drop the duplicate 'Manage agent' pill, or the reverse.",
+   "effort": "S",
+   "type": "visual",
+   "evidence": [
+    "<capture-run>/typical/shots/light-390/rules.s1.jpg",
+    "<capture-run>/typical/shots/light-390/activity.s1.jpg",
+    "<capture-run>/typical/keyboard/agents.json (name link + 'Manage agent' per agent)"
+   ],
+   "related_pages": [
+    "/activity",
+    "/agents",
+    "/memory",
+    "/spending",
+    "every page with the access-scope row"
+   ]
+  },
+  {
+   "id": "IXD-21",
+   "title": "Catalogue search reloads the page on submit and sits below 18 scrolling category chips, even though all 103 services are already on the page",
+   "location": "/connectors?view=catalogue — src/components/connectors/connectors-view.tsx:548-620",
+   "problem": "The catalogue renders all 103 tiles (5,516px desktop, 10,051px phone; 131 controls), but 'Search services' is a GET form with a full-width Search button, so every query is a page load. On a 390px screen the category FilterLinks row shows about 2.5 of 18 chips before scrolling. Search and category combine through the URL, with a separate count line ('103 services.').",
+   "why": "Nielsen 7 (efficiency). Data that's already loaded should filter instantly.",
+   "impact": "Finding a service during set-up (laptop and phone) is slower than it needs to be. This is a minor friction on a once-per-service path.",
+   "severity": "low",
+   "recommendation": "Progressively enhance the existing GET form. A client component filters the rendered tiles as the person types (name and category match), updates the count line through role=status, and keeps the URL in sync with replaceState. The server GET stays as the no-JS fallback. On phones, use a Select for category instead of the 18-chip scroller.",
+   "effort": "S",
+   "type": "functional",
+   "evidence": [
+    "<capture-run>/typical/shots/light-390/connectors.s1.jpg",
+    "metrics: connectors light-390 10,051px, 131 controls"
+   ],
+   "related_pages": [
+    "/memory (search is also submit-and-reload)"
+   ]
+  }
+ ],
+ "live_test_log": {
+  "accounts": "typical: read-only (opened and cancelled dialogs, switched tabs, typed without saving). worst: saving and destructive flows.",
+  "worst_changes_made": [
+   "Added rule 'Ask me before Claude makes any change', paused it, then deleted it (worst rules back to 0)",
+   "Raised 3 create_task holds for Claude via local MCP (localhost:3241/mcp), then approved 1, denied 1, asked for more detail on 1 (worst Inbox history now 3)",
+   "Life admin: confirmed 'The Teskey Brothers', dismissed 'Comprehensive car insurance' as Not mine",
+   "Memory: deleted 1 memory (10 → 9)",
+   "Disconnected ChatGPT (worst agents: 1 disconnected)",
+   "Created a household (was 'Start a household'), invited ixd-test@warthog.test, set household budget AUD 500",
+   "Saved the Gemini agent Settings section with no changes"
+  ],
+  "scripts": "<review-scratch>/interaction/*.mjs",
+  "screenshots": "<review-scratch>/interaction/shots/"
+ }
+}
