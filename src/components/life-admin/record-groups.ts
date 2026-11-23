@@ -17,6 +17,7 @@ import { PHASE_LABELS, statusFor, WINDOWS, type Phase } from "@/domain/life-admi
 import type { CategoryDef, RecordTypeDef, StoredKind } from "@/domain/life-admin/record-types";
 import { recordName } from "./record-format";
 import type { BookingFilters, CategoryStateView, RecordFilter, RecordListStatus, RecordPhaseView } from "./record-view-types";
+import { monthlyCost, type MonthlyCost } from "@/domain/life-admin/costs";
 
 // A calendar date `days` after `isoDate` (both YYYY-MM-DD), computed on the calendar in
 // UTC so no local offset or daylight-saving change can shift it.
@@ -198,6 +199,8 @@ export type RecordsView<T> = {
   readonly others: StatusSection<T>[];
   // How many records the chosen filters show.
   readonly shown: number;
+  // What the active, recurring records in the chosen categories cost a month, per currency.
+  readonly monthly: MonthlyCost[];
 };
 
 /**
@@ -262,7 +265,9 @@ export function recordsView<T extends Recordish & { readonly status: string }>(
     }))
     .filter((section) => section.rows.length > 0);
 
-  return { categoryOptions, statusOptions, active, others, shown: shownRecords.length };
+  // What the person pays is what's active, whichever statuses they chose to show.
+  const monthly = monthlyCost(records.filter((record) => inCategory(record) && statusOf.get(record.id) === "active"));
+  return { categoryOptions, statusOptions, active, others, shown: shownRecords.length, monthly };
 }
 
 /** The Records tab with these filters: each chosen value repeated, the default status left out. */

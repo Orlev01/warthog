@@ -192,3 +192,18 @@ test("a filter's link repeats each chosen value and leaves the default status ou
   );
   assert.equal(recordsHref({ categories: ["vehicles"], statuses: ["finished"] }), "/life-admin?view=life&tab=records&category=vehicles&status=finished");
 });
+
+test("the Records tab's monthly figure counts what's active and recurring in the chosen categories", () => {
+  const priced = [
+    rec("prime", "subscriptions.service", { provider: "Amazon", amount: "12.99", currency: "AUD", cycle: "monthly" }, { dueDate: "2026-12-25" }),
+    rec("fund", "health.insurance", { provider: "Medibank", amount: "148.25", currency: "AUD", cycle: "monthly" }, { dueDate: "2027-03-01" }),
+    rec("github", "subscriptions.service", { provider: "GitHub", amount: "16", currency: "USD", cycle: "monthly" }, { dueDate: "2026-12-15" }),
+    rec("gone", "subscriptions.service", { provider: "Paramount+", amount: "12.99", currency: "AUD", cycle: "monthly" }, { status: "cancelled", dueDate: "2026-10-29" }),
+    rec("paused", "subscriptions.membership", { provider: "Gym", amount: "60", currency: "AUD", cycle: "monthly" }, { status: "paused", dueDate: "2027-01-01" }),
+  ];
+  const everything = recordsView(priced, BUILT_IN, { categories: [], statuses: ["active", "cancelled", "on_hold"] });
+  assert.deepEqual(everything.monthly, [{ currency: "AUD", amount: 161.24, records: 2 }, { currency: "USD", amount: 16, records: 1 }], "only active records count, whatever statuses are shown");
+  const subscriptions = recordsView(priced, BUILT_IN, { categories: ["subscriptions"], statuses: ["active"] });
+  assert.deepEqual(subscriptions.monthly, [{ currency: "AUD", amount: 12.99, records: 1 }, { currency: "USD", amount: 16, records: 1 }], "the category filter narrows it");
+  assert.deepEqual(recordsView(priced, BUILT_IN, { categories: ["vehicles"], statuses: ["active"] }).monthly, []);
+});

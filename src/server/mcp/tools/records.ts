@@ -29,8 +29,6 @@ import { recordDueDateSchema } from "../../../domain/life-admin/record-metadata"
 import {
   BUILT_IN_TYPES,
   LEGACY_KIND_TYPES,
-  MONTHS_PER_CYCLE,
-  type Cycle,
   type RecordTypeDef,
 } from "../../../domain/life-admin/record-types";
 import { buildCatalogue, type Catalogue } from "../../../domain/life-admin/catalogue";
@@ -76,6 +74,7 @@ import { requestObservation } from "../client-observation";
 import type { AgentConnection } from "../context";
 import type { Db } from "../../db/index";
 import { liftOlderClientInput } from "./older-clients";
+import { monthlyCost } from "../../../domain/life-admin/costs";
 
 const MAX_STATUS = 200;
 const MAX_ID = 200;
@@ -437,22 +436,6 @@ function decodeCursor(value: string): string | null {
   } catch {
     return null;
   }
-}
-
-// Recurring costs as a monthly figure, per currency, worked out here rather than by the agent.
-function monthlyCost(records: readonly LifeAdminRecord[]): { currency: string; amount: number; records: number }[] {
-  const totals = new Map<string, { amount: number; records: number }>();
-  for (const record of records) {
-    const amount = Number(record.fields.amount);
-    const cycle = record.fields.cycle as Cycle | undefined;
-    if (!Number.isFinite(amount) || !cycle || cycle === "one_off" || !(cycle in MONTHS_PER_CYCLE)) continue;
-    const currency = typeof record.fields.currency === "string" && record.fields.currency ? record.fields.currency : "AUD";
-    const total = totals.get(currency) ?? { amount: 0, records: 0 };
-    total.amount += amount / MONTHS_PER_CYCLE[cycle as Exclude<Cycle, "one_off">];
-    total.records += 1;
-    totals.set(currency, total);
-  }
-  return [...totals].map(([currency, total]) => ({ currency, amount: Math.round(total.amount * 100) / 100, records: total.records }));
 }
 
 async function connectedAgents(db: Db, userId: string): Promise<Set<string>> {

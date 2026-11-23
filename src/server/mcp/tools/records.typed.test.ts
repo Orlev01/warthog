@@ -71,6 +71,29 @@ test("a batch saves a vehicle with its rego and insurance, linked by ref, as sug
   });
 });
 
+test("a receipt bought for a trip and a business's subscription are saved under them, and list_records finds them by parent", async () => {
+  const t = await setup();
+  await closing(t.db, async () => {
+    const result = await t.save.handle({
+      records: [
+        { ref: "qt", type: "travel.trip", fields: { name: "Queenstown, Aug 2026", destination: "Queenstown" } },
+        { parentRef: "qt", type: "belongings.receipt", fields: { provider: "Airalo", item: "New Zealand 3 GB, 7 days", order_number: "97207280", amount: "14.50", currency: "AUD" } },
+        { ref: "nava", type: "business.entity", fields: { name: "NAVA" } },
+        { parentRef: "nava", type: "subscriptions.service", fields: { name: "GitHub Team", provider: "GitHub", amount: "16", currency: "USD", cycle: "monthly" } },
+      ],
+    }, t.connection);
+    assert.equal(result.status, "ok");
+    if (result.status !== "ok") return;
+    assert.deepEqual(result.results.map((item) => item.problems ?? []), [[], [], [], []], "nothing refused the links");
+    const [trip, , business] = result.results.map((item) => item.id!);
+    const underTrip = await t.list.handle({ parentId: trip }, t.connection);
+    assert.equal(underTrip.status, "ok");
+    if (underTrip.status === "ok" && "records" in underTrip) assert.deepEqual(underTrip.records.map((record) => record.type).sort(), ["belongings.receipt", "travel.trip"]);
+    const underBusiness = await t.list.handle({ parentId: business }, t.connection);
+    if (underBusiness.status === "ok" && "records" in underBusiness) assert.deepEqual(underBusiness.records.map((record) => record.type).sort(), ["business.entity", "subscriptions.service"]);
+  });
+});
+
 test("values that must never be kept are refused at the schema, naming the field but not the value", () => {
   for (const fields of [{ tfn: "123456782" }, { notes: "My TFN is 123 456 782" }, { notes: "Medicare 2123 45670 1" }, { passport_number: "PA1234567" }, { bsb: "062-000" }, { notes: "password: hunter2" }]) {
     const parsed = saveRecordSchema.safeParse({ type: "other.item", fields });
