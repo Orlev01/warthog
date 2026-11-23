@@ -1,4 +1,17 @@
-# Delivery status — 23 November 2026 (security and privacy answers on the front door)
+# Delivery status — 23 November 2026 (rate limit before any key, addresses purged, Records tab)
+
+**Live at [warthog.com.au](https://warthog.com.au) (the website) and
+[app.warthog.com.au](https://app.warthog.com.au) (the app).** Application source
+`fadcc53bed447c08f3e6e5ecafa2f0e8716cba8a` runs as `warthog--r45127308436a1`, with one healthy
+replica, explicit 100% traffic and zero old replicas.
+
+PR #47 fixes the review's last two Highs (rate limiting before any key unwrap, with a 5-minute DEK
+cache; email addresses purged on deletion and swept on a schedule; migration 0120 makes 91). PR #48
+gives Life admin a Records tab that shows what's active first, with multiple-choice category and
+status filters, and files records from agents with an older copy of the tools as the kind they
+meant. See the [release record](docs/audit/security-and-records-release-2026-11-23.md).
+
+# Earlier delivery status — 23 November 2026 (security and privacy answers on the front door)
 
 **Live at [warthog.com.au](https://warthog.com.au) (the website) and
 [app.warthog.com.au](https://app.warthog.com.au) (the app).** Application source

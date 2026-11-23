@@ -1,5 +1,14 @@
 # Warthog comprehensive engineering audit
 
+**Rate limit before any key, addresses purged on deletion, and a readable Life admin, 23 November:**
+main `fadcc53` runs as `warthog--r45127308436a1`. PR #47 fixes the review's last two Highs: the MCP
+rate limit now comes before any key unwrap, DEKs are cached for 5 minutes, and the purge plus an
+hourly sweep remove email addresses from the sign-in code and invite tables (migration 0120 makes
+91). PR #48 gives Life admin a Records tab that shows what's active first, filtered by category and
+status, files records from agents with an older copy of the tools as the kind they meant, and makes
+an accepted change move a record's kind. See the
+[release record](security-and-records-release-2026-11-23.md).
+
 **Security and privacy answers on the front door, 23 November:** main `e8261f3` runs as
 `warthog--r45124440998a1`. PR #46 adds twelve Security and privacy questions to the landing FAQ, and
 a "We never sell your information" section to the privacy policy (the founder: "We never sell any
