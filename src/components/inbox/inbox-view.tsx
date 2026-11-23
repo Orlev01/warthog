@@ -30,6 +30,7 @@ import { hrefWith } from "@/lib/href";
 import type { UnlockRequest } from "@/client/vault/unlock";
 import { ReleaseRejectedError } from "@/client/vault/release";
 import { ReleaseApprove } from "./release-approve";
+import { LiveTimeLeft } from "./live-time-left";
 
 // E12-S12 — Approval inbox view component (brief "Approval inbox" / "Agents wait
 // safely"; design §6; constitution 17 "no readable card numbers or security codes on
@@ -101,6 +102,8 @@ export type PendingRequestView = {
   reason: string;
   rule: string;
   timeLeft: string;
+  // When the request expires (ms since the epoch), so the countdown stays live in the browser.
+  expiresAtMs?: number;
   release: ReleaseKind | null;
   highTierFields?: readonly HighTierFieldView[];
 };
@@ -384,6 +387,9 @@ function openedStateOf(
 
 // Plain words for an opened approval that can no longer be decided. A decided one opens
 // the History tab, where it is marked.
+// Where the Inbox goes once a release is handed over: the list, with the outcome said in words.
+const RELEASED_HREF = "/inbox?notice=released";
+
 const OPENED_NOTICE: Record<Exclude<OpenedState, "pending">, string> = {
   decided: "That request has already been decided. You'll find it marked in History.",
   expired: "That request expired before it was decided. You'll find it marked in History.",
@@ -463,7 +469,7 @@ function PendingItem({
         <span className="inline-flex items-center gap-1.5 whitespace-nowrap">
           <Clock aria-hidden={true} className="h-4 w-4 shrink-0" />
           <span className="sr-only">Time left: </span>
-          {request.timeLeft}
+          <LiveTimeLeft initial={request.timeLeft} expiresAtMs={request.expiresAtMs} />
         </span>
       </p>
       {request.headsUp ? (
@@ -493,6 +499,9 @@ function PendingItem({
         <ReleaseApprove
           request={request}
           savedCards={savedCards}
+          // Once handed over (and any new recovery phrase saved), the request is decided: reload
+          // the Inbox so it leaves "Waiting on you" and the counts change (UI/UX audit W-02).
+          onSettled={() => window.location.assign(RELEASED_HREF)}
           secondaryActions={
             <>
               <DenyControl request={request} denyAction={denyAction} />

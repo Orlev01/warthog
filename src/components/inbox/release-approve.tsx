@@ -2,7 +2,7 @@
 
 import * as React from "react";
 import type { PublicKeyCredentialRequestOptionsJSON } from "@simplewebauthn/browser";
-import { ShieldAlert } from "lucide-react";
+import { CheckCircle2, ShieldAlert } from "lucide-react";
 
 import { Button } from "@/components/ui/button";
 import { ButtonLink } from "@/components/ui/button-link";
@@ -95,6 +95,9 @@ export interface ReleaseApproveState {
   confirmRequired: boolean;
   // A plain, non-error note (e.g. "confirmed — approve and release again").
   notice?: string;
+  // The release is handed over AND nothing is left on screen for the person (a new recovery
+  // phrase has been saved, or none was offered): the Inbox can now move on (UI/UX audit W-02).
+  settled: boolean;
 }
 
 export interface ReleaseApproveFlowDeps {
@@ -170,6 +173,7 @@ export function createReleaseApproveFlow(deps: ReleaseApproveFlowDeps): ReleaseA
     securityCode: "",
     status: "idle",
     confirmRequired: false,
+    settled: false,
   };
 
   function set(patch: Partial<ReleaseApproveState>): void {
@@ -218,7 +222,7 @@ export function createReleaseApproveFlow(deps: ReleaseApproveFlowDeps): ReleaseA
       return;
     }
     pendingPhraseSave = null;
-    set({ newPhrase: null, phraseSaved: false, phraseError: undefined, notice: PHRASE_SAVED_NOTICE });
+    set({ newPhrase: null, phraseSaved: false, phraseError: undefined, notice: PHRASE_SAVED_NOTICE, settled: state.status === "released" });
   }
 
   // The stored ciphertext this release decrypts: a card release decrypts the CHOSEN saved
@@ -291,6 +295,7 @@ export function createReleaseApproveFlow(deps: ReleaseApproveFlowDeps): ReleaseA
       });
       deps.onReleased?.();
       await followUp(unlockRequest);
+      if (state.newPhrase === null) set({ settled: true });
     } else {
       // A lapsed step-up is resolved right here ("Confirm it's you"), not by signing out.
       set({
@@ -494,6 +499,9 @@ export interface ReleaseApproveProps {
   unlockByRecoveryPhrase?: (phrase: string) => Promise<UnlockRequest>;
   afterRelease?: (unlockRequest: UnlockRequest) => Promise<AfterRelease>;
   onReleased?: () => void;
+  // Called once when the release is handed over and nothing is left to show (W-02): the Inbox
+  // moves the request out of "Waiting on you".
+  onSettled?: () => void;
   // The request's other decisions (Deny, Ask for more detail), shown in the same action row
   // as "Approve and release" so every decision sits together.
   secondaryActions?: React.ReactNode;
@@ -525,6 +533,19 @@ export function ReleaseApprove(props: ReleaseApproveProps): React.ReactElement {
   }
   const flow = flowRef.current;
   const state = flow.getState();
+  const onSettled = props.onSettled;
+  const settledSignalled = React.useRef(false);
+  React.useEffect(() => {
+    if (state.settled && !settledSignalled.current) {
+      settledSignalled.current = true;
+      onSettled?.();
+    }
+  }, [state.settled, onSettled]);
+  // A finished release takes focus, so the person (and a screen reader) knows it's done.
+  const doneRef = React.useRef<HTMLDivElement>(null);
+  React.useEffect(() => {
+    if (state.status === "released") doneRef.current?.focus();
+  }, [state.status]);
 
   const isCard = request.release === "card";
   const cards = savedCards ?? [];
@@ -549,6 +570,37 @@ export function ReleaseApprove(props: ReleaseApproveProps): React.ReactElement {
 
   const reasonId = React.useId();
   const working = state.status === "working";
+  // Handed over: the request is decided. Nothing on it is live any more — no Approve, Deny or
+  // Ask, no fields — only what happened and, the first time, the new recovery phrase to save
+  // (UI/UX audit W-02).
+  if (state.status === "released") {
+    return (
+      <div className="flex min-w-0 flex-col items-start gap-3">
+        <div ref={doneRef} tabIndex={-1} role="status" className="flex items-start gap-2 text-sm text-fg">
+          <CheckCircle2 aria-hidden={true} className="mt-0.5 h-5 w-5 shrink-0 text-success" />
+          <p>Handed over. {request.agent || "The agent"} can collect it once.</p>
+        </div>
+        {state.notice ? (
+          <p role="status" className="text-sm text-fg">
+            {state.notice}
+          </p>
+        ) : null}
+        {state.newPhrase !== null ? (
+          <RecoveryPhraseReveal
+            phrase={state.newPhrase}
+            saved={state.phraseSaved}
+            onSavedChange={(saved) => flow.setPhraseSaved(saved)}
+            onContinue={() => {
+              void flow.confirmRecoveryPhrase();
+            }}
+            error={state.phraseError}
+            continueLabel="Save my vault recovery phrase"
+          />
+        ) : null}
+      </div>
+    );
+  }
+
   // Nothing to hand over: say so with a way to fix it, and skip the picker and unlock
   // choices that could only lead to a refusal.
   if (unavailableReason !== null && !state.confirmRequired) {
