@@ -391,3 +391,12 @@ test("record anchors keep working: the row is focusable, clears the sticky heade
 test("the organised view uses tokens, never raw hex", () => {
   assert.doesNotMatch(render(), /#[0-9a-fA-F]{3,8}\b/);
 });
+
+test("the toolbar says what the active, recurring records cost a month, and says nothing when none has a price", () => {
+  const github = phased({ id: "github", kind: "subscription", type: "subscriptions.service", fields: { name: "GitHub Team", amount: "16", currency: "USD", cycle: "monthly" }, dueDate: TODAY, status: "active", reminderOffsets: [] });
+  const priced = text(toolbarOf(render({ records: [github, LEGACY_SUB] })));
+  assert.match(priced, /You pay about AUD 25\.99 and USD 16\.00 a month for 2 recurring records\./, "the larger figure leads, whichever was saved first");
+  const one = text(toolbarOf(render({ records: [LEGACY_SUB] })));
+  assert.match(one, /You pay about AUD 25\.99 a month for 1 recurring record\./);
+  assert.doesNotMatch(text(toolbarOf(render({ records: [LOOSE_INSURANCE] }))), /You pay/);
+});

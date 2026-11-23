@@ -380,6 +380,22 @@ function StatusLine({ view, filter }: { view: RecordsViewModel<LifeAdminRecordVi
   );
 }
 
+// "You pay about AUD 284.79 and USD 16.00 a month for 9 recurring records." What's active and
+// repeating in the chosen categories, worked out by Warthog (costs.ts); "about" because weekly,
+// quarterly and yearly amounts are spread over months. Nothing when no active record has a price.
+function CostLine({ monthly }: { monthly: RecordsViewModel<LifeAdminRecordView>["monthly"] }) {
+  if (monthly.length === 0) return null;
+  // The currency most of them are in leads.
+  const amounts = [...monthly].sort((a, b) => b.records - a.records || b.amount - a.amount).map((cost) => `${cost.currency} ${cost.amount.toFixed(2)}`);
+  const amountWords = amounts.length === 1 ? amounts[0] : `${amounts.slice(0, -1).join(", ")} and ${amounts.at(-1)}`;
+  const records = monthly.reduce((sum, cost) => sum + cost.records, 0);
+  return (
+    <p className="wh-toolbar-status text-fg">
+      You pay about {amountWords} a month for {plural(records, "recurring record")}.
+    </p>
+  );
+}
+
 function RecordsToolbar({ view, filter }: { view: RecordsViewModel<LifeAdminRecordView>; filter: RecordFilter }) {
   const applied: AppliedFilter[] = [];
   for (const id of filter.categories) {
@@ -417,7 +433,9 @@ function RecordsToolbar({ view, filter }: { view: RecordsViewModel<LifeAdminReco
       }
       applied={<ActiveFilters filters={applied} clearHref={recordsHref(DEFAULT_FILTER)} />}
       status={<StatusLine view={view} filter={filter} />}
-    />
+    >
+      <CostLine monthly={view.monthly} />
+    </ListToolbar>
   );
 }
 

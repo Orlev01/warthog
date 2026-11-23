@@ -46,6 +46,34 @@ home, health), not by what kind of paperwork they are. People's questions are ab
 record then has one obvious home. "What do I pay for" and "all my insurance" are views calculated
 across categories (monthly totals, `*.insurance`), not filing places.
 
+**Checked against real data (amended 23 November 2026).** The founder asked whether, after agents
+had filled Life admin from two real inboxes, filing by document type would be better.
+
+- **The answer stays "what it's about".** Filing has three separate jobs:
+  - **What it's about** decides where a record is filed.
+  - **Where it stands** (active, on hold, finished or cancelled) decides how the Records tab reads.
+  - **Where it came from** (the email that showed it) is why it's believed.
+- **Many documents describe one thing:**
+  - the motorcycle's rego appears in three emails (a renewal notice, last year's receipt and the
+    CTP purchase);
+  - a Queenstown trip appears in seven (flight, stay, receipt, an extra charge, a sauna booking
+    and an eSIM);
+  - AGL sends a new bill every month.
+
+  Filed by document type, these become many unconnected records. Matching instead of duplicating,
+  anchors, live versus finished, and the journal would all be lost.
+- **Agents file by subject reliably.** ChatGPT chose the right subject kind for all 19 records that
+  an older tool schema had filed under Other.
+- **Document type already has its job:** agents search by it ("renewal notice", "booking
+  confirmation"), and it becomes the record's provenance.
+- **What made the page hard to read was status, not subject.** The Records tab fixes that.
+- **Two refinements came out of the data:**
+  - Receipts, subscriptions and memberships can belong to any thing, as insurance and domains
+    already can. An eSIM is filed under the trip it was for, and a software plan under the business
+    that pays it.
+  - The Records tab shows what the active, recurring records in the chosen categories cost a month
+    (`src/domain/life-admin/costs.ts`, which `list_records`' `monthlyCost` also uses).
+
 **The catalogue.** `src/domain/life-admin/record-types.ts` holds 20 built-in categories (19 plus
 Other) in 8 life areas. They come from the research and from a sample of the founder's own inbox.
 - **Home:** home; utilities.

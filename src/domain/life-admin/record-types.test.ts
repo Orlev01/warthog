@@ -66,6 +66,18 @@ test("identity names the kind's fields, the parent or the title", () => {
   }
 });
 
+test("a receipt, a subscription or a membership can belong to whatever it was for", () => {
+  const trip = BUILT_IN.type("travel.trip")!;
+  const business = BUILT_IN.type("business.entity")!;
+  const valuable = BUILT_IN.type("belongings.valuable")!;
+  assert.equal(BUILT_IN.canBelongTo(BUILT_IN.type("belongings.receipt")!, trip), true, "an eSIM bought for a trip");
+  assert.equal(BUILT_IN.canBelongTo(BUILT_IN.type("belongings.receipt")!, valuable), true, "the receipt for a valuable");
+  assert.equal(BUILT_IN.canBelongTo(BUILT_IN.type("subscriptions.service")!, business), true, "a business's software plan");
+  assert.equal(BUILT_IN.canBelongTo(BUILT_IN.type("subscriptions.membership")!, business), true);
+  assert.equal(BUILT_IN.canBelongTo(BUILT_IN.type("subscriptions.loyalty")!, trip), false, "a loyalty programme is the person's own");
+  assert.equal(BUILT_IN.canBelongTo(BUILT_IN.type("belongings.valuable")!, trip), false, "an anchor still never belongs");
+});
+
 test("relationships are one rule: anchors take what may belong to them, and never belong themselves", () => {
   const bike = BUILT_IN.type("vehicles.vehicle")!;
   const trip = BUILT_IN.type("travel.trip")!;
