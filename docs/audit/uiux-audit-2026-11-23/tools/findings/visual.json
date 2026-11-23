@@ -1,0 +1,617 @@
+{
+  "lens": "visual",
+  "summary": "The foundation is sound: neutral tokens, a black/white pill primary, contrast-checked colours, 44px targets and a coherent dark theme. But the current build reads as a competent admin console, not a calm, premium security product. The main causes are structural, not colour: every page opens with a tall floating header card that repeats the title (heading bands of 244–313px on phones, with the first memory at y=916); every container, including toolbars and tab strips, is the same raised card stacked 24px apart; underlines (174 on Activity), chevrons, badges, panel icon tiles and repeated primary or red buttons (26 primaries on Life admin) raise the noise floor; and the type scale collapses into four roles at 16px with weight 500 everywhere, while money and pending approvals, the things that matter most, are styled like meta text. All fixes stay inside the founder's direction: a flat full-bleed header region (still contained text), one raised panel style with rows inside, quiet-by-default status, three link roles, a role-based type and figure scale, one cool grey ramp and a fixed page frame. Dark mode tracks light closely; its specific defects are the gradient haze, glaring white brand tiles, muddy soft fills and a disabled primary that looks enabled.",
+  "scores": {
+    "scale": "0–4 (4 = best-in-class calm, premium security product)",
+    "typography_hierarchy": 2,
+    "visual_hierarchy_primary_task_prominence": 1.5,
+    "spacing_and_rhythm": 2,
+    "alignment_and_frame_stability": 2,
+    "colour_and_contrast": 3,
+    "surfaces_borders_depth": 1.5,
+    "density_and_clutter": 1.5,
+    "cross_page_consistency": 2,
+    "dark_mode_parity": 2.5,
+    "nielsen_4_consistency": 2,
+    "nielsen_8_aesthetic_minimalist": 2,
+    "overall_calm_premium_feel": 2,
+    "visual_principles": [
+      "Say the page title once: a flat header region carries the h1; chrome (top bar, tabs) never repeats it.",
+      "Chrome is flat, content is raised: top bar + page header + one tab row form a single surface band; only content groups are panels.",
+      "One container per job: a list's tabs, filters, search and rows live in one panel; never stack a tab card, a toolbar card and a list card.",
+      "Rows, not cards: inside a panel, items and options are divider rows; insets are fills for supporting facts, never bordered boxes.",
+      "Proximity before boxes: 8px within a group, 16px between related blocks, 24px between panels, 32px before a new section.",
+      "Hierarchy by size, then weight, then colour: 28 title / 18 heading / 16 row / 14 body / 13 meta / 12 label; 600 for headings, 500 only for row titles, buttons and labels.",
+      "Colour is the exception: neutral by default; indigo tint only for 'where am I / what's selected'; semantic colour only for states that need attention; success is quiet.",
+      "Links look like links only in prose: rows and panel actions are recognised by position, hover and a single muted chevron; no underline-plus-arrow.",
+      "One loud thing per screen: at most one filled primary in the first viewport; repeated row actions are secondary or ghost; red appears at the moment of risk, not on every row.",
+      "Numbers are first-class: money, counts and time left use tabular figures and a figure size, never a muted meta sentence.",
+      "Names are clamped, not wrapped: titles at most 2 lines, chips/meta/crumbs 1 line with ellipsis, full name in the accessible name and on the object's own page.",
+      "Same frame, same edge: one page measure; the left edge, header and tabs never move between sections.",
+      "Design dark, don't invert it: no decorative gradients, toned brand tiles, soft fills checked for mud, one chrome value."
+    ],
+    "token_sketch": {
+      "type": "--text-title 28/34 600 -0.02em (phone 24/30); --text-heading 18/24 600; --text-subheading 16/24 600; --text-row 16/24 500; --text-body 14/20 400; --text-meta 13/18 400 muted tabular; --text-label 12/16 500; --text-figure 24/32 600 tabular",
+      "space": "4, 8, 12, 16, 20, 24, 32, 48 — within-group 8, related 16, panels 24, sections 32; panel padding 20 (16 phone)",
+      "radius": "panel 12, control/inset 8, tile-sm 6, pill 9999",
+      "elevation": "panel: 0 1px 2px rgb(16 24 40/6%) light, none dark; overlay: 0 12px 32px -12px rgb(0 0 0/25%)",
+      "neutrals": "one cool ramp gray-0…900; canvas = sidebar = gray-50; surface/header = gray-0; inset = gray-25/100; divider gray-200; edge gray-300; input gray-500",
+      "accent": "--wh-tint for current nav, active tab, checked/selected controls and selected option borders only"
+    }
+  },
+  "strengths": [
+    "Accessible, contrast-checked neutral base: 0 axe violations recorded, no low-contrast nodes, 44px targets, a single focus outline, forced-colours support. Keep all of it while restyling.",
+    "The black/white pill primary and neutral palette already give a calm baseline; the dark theme's tokens are coherent and readable (dark-1440 activity, agents).",
+    "WorkspacePanel's header/body/footer anatomy gives forms a clear end (Settings › Security, Notifications, Household). Keep the footer action bar.",
+    "Real brand marks (Gmail, Claude, ChatGPT) add recognisable colour without a rainbow; unknown services get neutral initials rather than guessed logos.",
+    "Empty states are calm and specific, with one next action (Connectors › Your services, Skills, Cards), and the agent access map communicates topology clearly."
+  ],
+  "findings": [
+    {
+      "id": "VIS-01",
+      "title": "The page heading is a floating card that repeats the title and pushes content below the fold",
+      "location": "Every workspace page: WorkspaceHeading at src/components/shell/workspace-surfaces.tsx:27-65; .wh-page-heading at src/app/surfaces.css:210-239; breadcrumb current-page crumb at src/components/shell/app-shell.tsx:170-186 and surfaces.css:105,113; SectionNavigation route tabs at globals.css:277-283",
+      "problem": "Each page opens with a 14px-radius raised card holding the h1, a 72ch description, an optional meta line, the scope disclosures and a tab row. The same page name is already in the top bar at 18px, and on phones it appears three times: top bar 'Activity', route tab 'Activity' and h1 'Activity'. Measured heading-card heights at 390px are Skills 313px, Spending 310, Rules 285, Connectors 285, Memory 267, Vault 244 and Cards 244. On a 390×844 phone the first real content row starts at y=916 on Memory (below the fold), 809 on Life admin › Tasks, 763 on Connectors, 585 on Activity and 574 on Spending. At 1440×900 the first memory starts at y=826 and the first catalogue tile at y=768. As the biggest and highest box on every page, the header card carries the least information.",
+      "why": "Visual hierarchy: the most prominent surface should hold the most important content, and the page title should be stated once. Best-in-class security and banking portals keep the title in flat page chrome and use raised surfaces for content. Nielsen #8 (aesthetic and minimalist design). The brief's design_ux.feel asks for 'compact header' and 'calm, quick'.",
+      "impact": "Phone-first members (approving on the go, glancing at activity) scroll past 300–500px of chrome on every visit. The repeated title and the card-on-card stack make the app read as a busy admin console rather than a calm consumer product.",
+      "severity": "high",
+      "recommendation": "Turn WorkspaceHeading into a full-bleed 'page header region' that joins the top bar and route tabs into one flat chrome band. It keeps --wh-surface as its background, so the contained-text ADR still holds (its background differs from the canvas). Rules: no radius, no shadow, a 1px --wh-line bottom border, and it spans the whole .wh-main width with the content measure inside. Padding is 24px 32px 0 on desktop and 16px 16px 0 on phones. h1 is 28/34 weight 600, letter-spacing -0.02em (24/30 on phones). Description is 14/20 --wh-fg-muted, max-width 60ch, limited to 2 lines on phones. Meta is inline 13/18. Actions sit right-aligned on the title row. The single tab row sits flush on the bottom border: route tabs move from SectionNavigation into the header's nav slot, so a page never has two tab rows. The top-bar breadcrumb shows ancestors only; drop the aria-current crumb whenever the page renders an h1, and on phones show the Warthog mark rather than the page name. Height budgets: 120px or less on desktop without tabs, 164px or less with tabs, 150px or less on phones. The first panel starts 24px below the header.",
+      "effort": "M",
+      "type": "structural",
+      "evidence": [
+        "<capture-run>/typical/shots/light-390/activity.s1.jpg",
+        "<capture-run>/typical/shots/light-390/home.s1.jpg",
+        "<capture-run>/typical/shots/light-1440/memory.s1.jpg",
+        "<capture-run>/typical/shots/light-1440/skills.s1.jpg",
+        "<capture-run>/typical/shots/light-1440/connectors.s1.jpg",
+        "<review-scratch>/visual/measure.json (headingH, firstRowY per page/width)",
+        "light-390: Memory first row y=916, Tasks 809, Connectors 763, Activity 585; heading band 244–313px on 7 resource pages"
+      ],
+      "related_pages": [
+        "/home",
+        "/inbox",
+        "/activity",
+        "/agents",
+        "/connectors",
+        "/vault",
+        "/vault/cards",
+        "/skills",
+        "/memory",
+        "/life-admin",
+        "/rules",
+        "/spending",
+        "/household",
+        "/settings/*"
+      ]
+    },
+    {
+      "id": "VIS-02",
+      "title": "'Box soup': every container is the same raised card, stacked 24px apart, so toolbars and tabs float away from the lists they control",
+      "location": ".wh-tabstrip surfaces.css:188-195, .wh-toolbar surfaces.css:391-401, .wh-list-group surfaces.css:353-361, .wh-form-actions surfaces.css:334-344, .wh-panel/.wh-surface/.wh-card workspace.css:87-95 (--wh-panel-shadow workspace.css:13); stacks on /memory, /rules, /life-admin, /life-admin?view=tasks, /activity, /connectors",
+      "problem": "The heading band, tabstrip, toolbar, list group, panel, action bar and empty state all share one treatment: a --wh-edge border, 14px radius, a two-layer shadow and an inset highlight. Every gap between them is the same 24px (measured on 13 pages). A list's own filters and tabs therefore render as separate floating cards, as if they were unrelated content. Examples: Memory stacks header card, 'Add a memory' card, filter toolbar card and list card, four boxes before the first memory. Rules puts a 72px-tall toolbar card around three chips (All 2 · Active 2 · Paused 0) above two list cards. Life admin › Tasks stacks header card, create-task card, chip toolbar card and list card. Life admin › Records puts a tabstrip card between the header card and the panel.",
+      "why": "Gestalt proximity and common region: controls that act on a list belong to that list's region. With one surface style for every role there is no container hierarchy, which the workspace-depth doc itself warns against ('a group boundary around a coherent task rather than a border around every paragraph'). Repeating one spacing value everywhere gives a monotone rhythm with no grouping signal.",
+      "impact": "Pages look heavy and repetitive, and people have to work out which filter belongs to which list. It is the main reason the UI feels 'boxy' rather than premium.",
+      "severity": "high",
+      "recommendation": "Adopt a four-step container ladder. (1) Chrome: top bar, page header and tabs are flat (VIS-01). (2) Panel: the only raised surface, with 1px --wh-edge, radius 12px and the single shadow 0 1px 2px var(--wh-elevation); drop the 24px-blur layer and the inset highlight. (3) Section inside a panel: a 1px --wh-line divider and a 16/24 heading, no box. (4) Inset: --wh-surface-muted fill, no border, radius 8. Render ListToolbar inside the ListGroup it filters, as its first row: .wh-list-group > .wh-toolbar { border:0; border-radius:0; box-shadow:none; border-bottom:1px solid var(--wh-line); padding:12px 20px }. ViewPanels' on-page tabstrip moves into the page header's nav slot or onto the panel's top edge. 'Add a memory' and 'Create a task' become a secondary button in the header actions that reveals the form at the top of the list panel, not a panel of their own. Spacing scale: 8px within a group, 16px between related blocks, 24px between panels, 32px before a new section.",
+      "effort": "M",
+      "type": "structural",
+      "evidence": [
+        "<capture-run>/typical/shots/light-1440/memory.s1.jpg",
+        "<capture-run>/typical/shots/light-1440/rules.s1.jpg",
+        "<capture-run>/typical/shots/light-1440/life-admin__view-tasks.s1.jpg",
+        "<capture-run>/typical/shots/light-1440/life-admin.s1.jpg",
+        "<review-scratch>/visual/measure2.json (topLevelBoxes, gaps=[24] on every page)",
+        "Memory 1440: 4 stacked bordered boxes before the first row (heading, add-memory, toolbar, list)"
+      ],
+      "related_pages": [
+        "/memory",
+        "/rules",
+        "/life-admin",
+        "/activity",
+        "/connectors",
+        "/skills",
+        "/household"
+      ]
+    },
+    {
+      "id": "VIS-03",
+      "title": "The decision that matters most (pending approvals) is the least emphasised thing on Home and inside each Inbox request",
+      "location": "/home: src/components/home/dashboard-view.tsx:263-279 (Inbox panel), 565-590 (order: heading → setup → grid); /inbox: src/components/inbox/inbox-view.tsx:404-498 (PendingItem; sentence 427-430, details dl 437-450, reason/time 451-466)",
+      "problem": "On Home the 'Finish setting up' checklist (five underlined rows, two columns) sits above the Inbox panel. '4 requests are waiting for your approval' is an 18px line in a generic panel at y≈641 at 1440 and y≈690 on a 390 phone, the same weight as 'Recent activity'. Inside an Inbox request, the amount (NZD 180.00) is 14px regular in a definition list, no bigger than 'Merchant'. The 46-character agent name appears three times per card: group header, bold sentence lead and '… says'. The time-left chip wraps onto its own line starting with an orphaned '·' (inbox.s1 at 1440). The blocked 'Approve and release' renders as a 50%-opacity grey pill that looks broken.",
+      "why": "Squint test and the 'one primary element, 2–3 secondary' rule from the critique rubric. Approving on the phone is key flow 5 and the product's core job. The brief says approvals should 'read as one sentence a person can decide on in a glance', and banking portals make the amount the dominant glyph.",
+      "impact": "Members miss or delay approvals. The money figure, the thing they are deciding on, is the hardest part of the card to scan, which costs trust exactly when a card or passport is about to be released.",
+      "severity": "high",
+      "recommendation": "Home: when pendingApprovals > 0, render the Inbox panel first, directly under the header, as the page's single emphasised panel. Show the count as a figure (32/40, weight 600, tabular-nums), a 16/24 sentence and the page's only primary button, 'Review requests'. Collapse the setup checklist into a one-line progress row below it ('1 of 5 set up · Continue'). Inbox row anatomy: (a) header line with AgentMark sm, the agent name on one line with ellipsis (14/20, weight 500) and the time-left chip right-aligned (13/18 muted, clock icon), mirroring Activity's time column; (b) the sentence at 16/24; (c) a key-figure line for releases, with the amount at 24/32 weight 600 tabular and the merchant at 14/20 muted beside it; (d) the agent's reason as an inset quote (--wh-surface-muted, 14/20, 'Gemini says “…”'); (e) an action row of primary Approve, secondary Deny and ghost 'Ask for more detail'. When approval is blocked, make the unblocking action ('Add a card' / 'Open your vault') the primary and show Approve as a disabled neutral button (see VIS-18). Move the separator inside the nowrap span, or render meta as a flex row with gap, so '·' never starts a line.",
+      "effort": "M",
+      "type": "visual",
+      "evidence": [
+        "<capture-run>/typical/shots/light-1440/home.s1.jpg",
+        "<capture-run>/typical/shots/light-390/home.s1.jpg",
+        "<capture-run>/typical/shots/light-1440/inbox.s1.jpg",
+        "<capture-run>/typical/shots/light-390/inbox.s1.jpg",
+        "<capture-run>/typical/shots/dark-1440/inbox.s1.jpg"
+      ],
+      "related_pages": [
+        "/home",
+        "/inbox",
+        "/agents/[id]?section=overview"
+      ]
+    },
+    {
+      "id": "VIS-04",
+      "title": "Primary and destructive buttons repeat down whole lists, so nothing reads as 'the' action",
+      "location": "/life-admin records 'To check': src/components/life-admin/records-view.tsx:135-137 (variant=\"primary\" per row); /agents: src/components/agents/agent-list-view.tsx:161-205 (3 pills per agent incl. danger Disconnect at 138); /rules: src/components/rules/rules-view.tsx:381 (danger Delete summary per rule); Inbox 4 primaries",
+      "problem": "Life admin renders 26 filled black primary buttons on one page: 25 'Confirm' pills, each followed by 'Not mine' and 'Edit ▾'. Agents shows nine equal-weight 44px pills for three agents, including three red-outlined 'Disconnect'. Every rule carries a red-outlined 'Delete' beside 'Pause'. Settings › Security has two primaries. Repeating black and red pills makes a striped, alarming page.",
+      "why": "The brief requires 'one clear primary action per screen', and button.tsx:8 says 'exactly one primary per task'. Danger styling should mark the moment of risk, not every row. A security product should feel calm, and red on every row signals emergency.",
+      "impact": "Visual noise. The real primary action on each page (connect an agent, add a rule) loses its pull, and people learn to ignore red.",
+      "severity": "high",
+      "recommendation": "Repeated per-row actions use size=\"sm\" (36px on fine-pointer desktop, 44px on touch) at secondary or ghost weight. Life-admin suggestions: Confirm becomes secondary sm with a Check icon, and 'Not mine' and Edit become ghost sm. Agents list: the row title links to Manage (no separate 'Manage agent' pill), 'View activity' is ghost sm, and Disconnect is a new ghost-danger variant (text-danger, transparent border, hover bg-danger/10), still one click per E10-S09. Rules: 'Delete' is ghost-danger sm; the danger-solid button appears only inside the confirmation. Add the variant to button.tsx:44-57 ('ghost-danger': 'border-transparent bg-transparent text-danger hover:bg-danger/10'). Page rule: at most one filled primary inside the first viewport. PR #52 restructures the life-admin tabs; check whether it keeps the per-row primary.",
+      "effort": "S",
+      "type": "visual",
+      "evidence": [
+        "<capture-run>/typical/shots/light-1440/life-admin.s1.jpg",
+        "<capture-run>/typical/shots/light-1440/life-admin.s2.jpg",
+        "<capture-run>/typical/shots/light-1440/agents.s1.jpg",
+        "<capture-run>/typical/shots/dark-1440/agents.s1.jpg",
+        "<capture-run>/typical/shots/light-1440/rules.s1.jpg",
+        "metrics: life-admin light-1440 primaryButtons=26; inbox 4; settings/security 2"
+      ],
+      "related_pages": [
+        "/life-admin",
+        "/agents",
+        "/rules",
+        "/inbox",
+        "/settings/security",
+        "/household"
+      ]
+    },
+    {
+      "id": "VIS-05",
+      "title": "Underlined links everywhere, often with a chevron or arrow as well: the strongest 'developer console/doc site' signal",
+      "location": "152 `underline` class uses in 34 component files, e.g. .wh-panel-action a workspace.css:107; scope disclosure surfaces.css:251-261; activity 'View details' activity-view.tsx:502 and agent links 433-438; agent names agent-list-view.tsx:168-171, dashboard-view.tsx:373,379,389; setup checklist dashboard-view.tsx:172-202; budgets rows on /rules?view=budgets",
+      "problem": "Navigation row titles (agent names, checklist steps, memory sources), panel actions ('All agents', 'View all activity', 'View all 14 in Upcoming'), disclosure toggles ('View details', 'How access works', 'Manage for one agent') and meta links are all underlined. Many also carry a trailing chevron or arrow, so an item gets two or three affordances ('Connect an agent ✓ Done ›'; 'Set ChatGPT's budget →'). Activity renders 174 underlined elements and 123 chevrons on one page; Home has 21 underlines.",
+      "why": "WCAG 1.4.1 requires underlines for links inside running text only. Standalone navigation is identified by position, hover and an icon. Blanket underlines turn every row into a hyperlink soup and add a hairline under most text, the opposite of 'crisp typography'. Redundant affordances raise the noise floor (critique rubric: Visual Noise Floor).",
+      "impact": "Pages look busy and technical, and the eye has no anchor because everything is equally 'clickable-looking'.",
+      "severity": "high",
+      "recommendation": "Define three link roles in controls.css and replace the ad-hoc class strings. (1) .wh-link, for links inside prose: underline, text-decoration-color var(--wh-line-strong), underline-offset 3px; on hover, decoration currentColor. (2) .wh-row-link, for row titles and named objects: no underline, weight 500, --wh-fg; the whole row gets a hover background via a stretched ::after (inset:0); a single 16px --wh-fg-muted ChevronRight appears only when the row navigates. (3) Panel and header actions become Button variant=\"ghost\" size=\"sm\" with a 14px ArrowRight, no underline. Disclosures ('View details', 'Details') become row-level summaries with a muted chevron and no underline (VIS-11). Remove text-decoration from .wh-panel-action a (workspace.css:107) and from .wh-scope-disclosure > summary (surfaces.css:258).",
+      "effort": "M",
+      "type": "visual",
+      "evidence": [
+        "<capture-run>/typical/shots/light-1440/home.s1.jpg",
+        "<capture-run>/typical/shots/light-1440/activity.s2.jpg",
+        "<capture-run>/typical/shots/light-1440/rules__view-budgets.s1.jpg",
+        "<capture-run>/worst/shots/light-390/agents.s1.jpg",
+        "<review-scratch>/visual/measure.json: activity underlined=174 chevrons=123; home underlined=21"
+      ],
+      "related_pages": [
+        "/home",
+        "/activity",
+        "/agents",
+        "/rules?view=budgets",
+        "/connectors",
+        "/vault",
+        "/skills",
+        "/memory",
+        "/spending"
+      ]
+    },
+    {
+      "id": "VIS-06",
+      "title": "The typography ladder collapses in the middle: four roles at 16px, weight 500 everywhere, and an over-long description measure",
+      "location": "surfaces.css:236-239 (h1 28px, -0.035em), 225 (.wh-page-description 72ch), 279 (panel titles 16/24, overriding workspace.css:103's 15px), 280 (panel description 72ch), 317-318, 364; activity-view.tsx:478 (row title, inherits 16), 497 (summary 16 fg); inbox-view.tsx:427 (sentence text-base); 173 `font-medium` vs 19 `font-semibold` in TSX",
+      "problem": "Rendered sizes are 28 (h1), then 16 for panel titles (600), row titles (500), approval sentences (400) and row summaries ('Agent's reason: Keeping track', 400, full --wh-fg), then 14 and 12. Hierarchy rests on weight alone, and weight 500 covers 678 text nodes on Activity and 955 on Life admin, so it stops signalling. Panel titles at 16/24 depart from the measured reference's 'smaller heading 18px/24–28px, 600'. The h1 is tracked at -0.035em (-0.98px at 28px), tighter than Inter's optical spacing at that size, which looks pinched. Descriptions are capped at 72ch, about 90–95 characters per line at 14px (e.g. the Connectors and Life admin 'To check' descriptions). There are no type tokens; CSS hard-codes 18 sizes.",
+      "why": "Typeset: adjacent roles need contrast in size as well as weight, and repeated roles must be identical. The 45–75 character reading measure. The design skill promises 'crisp typography' and 14px interface text.",
+      "impact": "Rows scan poorly because a title, its summary and the panel title compete. Pages look evenly grey-and-medium instead of having a clear first, second and third read.",
+      "severity": "medium",
+      "recommendation": "Add role tokens to globals.css @theme and use them everywhere: --text-title 28px/34px weight 600, tracking -0.02em (phones 24/30); --text-heading 18px/24px 600, -0.01em, for top-level panel and list-group titles, per the reference; --text-subheading 16px/24px 600 for groups inside a panel; --text-row 16px/24px 500 for row titles only; --text-body 14px/20px 400 for row summaries, descriptions and dd; --text-meta 13px/18px 400 --wh-fg-muted with tabular-nums for times and counts; --text-label 12px/16px 500 for badges and counts; --text-figure 24px/32px 600 tabular-nums for money and key numbers. Row summaries drop from 16 to --text-body. Weight 500 is reserved for row titles, buttons and labels, and weight 600 for headings. Set .wh-page-description and .wh-panel-description to max-width 60ch. Delete the dead 15px rule at workspace.css:103 and the duplicate .wh-panel-header block.",
+      "effort": "M",
+      "type": "visual",
+      "evidence": [
+        "<capture-run>/typical/shots/light-1440/activity.s2.jpg",
+        "<capture-run>/typical/shots/light-1440/connectors.s1.jpg",
+        "<capture-run>/typical/shots/light-1440/life-admin.s1.jpg",
+        "<review-scratch>/visual/measure2.json fontSizes/fontWeights per page (activity: 16px×117, 14px×1666, 500-weight×678)",
+        "h1 computed 28px/33.6px 600 letter-spacing -0.98px"
+      ],
+      "related_pages": [
+        "all workspace pages"
+      ]
+    },
+    {
+      "id": "VIS-07",
+      "title": "Content's left edge and width jump between sibling pages",
+      "location": "Page measure families: surfaces.css:34-42 (.wh-main[data-measure] 1216/896/768), 54, 93, 116, 245; src/components/shell/workspace-navigation.ts pageMeasureFor",
+      "problem": "At 1440 the .wh-page left edge is 260px on Home, Activity, Connectors and Spending; 402px on Inbox, Agents, Vault, Skills, Memory, Life admin, Rules and Household; and 466px on Settings. The breadcrumb follows (x = 292 / 434 / 498), as do the route tabs and the h1. Moving down the sidebar, Home → Agents → Inbox → Connectors → Vault, the whole page jumps sideways by 142–206px.",
+      "why": "Spatial consistency: a stable frame is a large part of what makes a product feel engineered and calm. Width should constrain content (fields, prose), not move the frame.",
+      "impact": "Every sidebar click causes a visible lurch. It undermines the 'polished, quick' feel, most noticeably on the laptop set-up sessions where people move between many pages.",
+      "severity": "medium",
+      "recommendation": "Use one frame measure for every workspace page: max-width 1120px including gutters, centred, so the top bar, header region, tabs and panels share one left edge everywhere. Constrain inside panels instead: form fields max-width 560px (.wh-field-measure), prose max 60–65ch, two-column dashboards only where the grid needs it. Remove the reading and form families from pageMeasureFor, or keep them only as inner-content hints.",
+      "effort": "S",
+      "type": "visual",
+      "evidence": [
+        "<capture-run>/typical/shots/light-1440/home.s1.jpg",
+        "<capture-run>/typical/shots/light-1440/inbox.s1.jpg",
+        "<capture-run>/typical/shots/light-1440/settings.s1.jpg",
+        "<review-scratch>/visual/measure.json pageLeft/crumbLeft: 260/402/466 and 292/434/498"
+      ],
+      "related_pages": [
+        "all workspace pages"
+      ]
+    },
+    {
+      "id": "VIS-08",
+      "title": "Panel-header icon tiles and tinted type tiles spend the single accent as decoration",
+      "location": "WorkspacePanel icon prop workspace-surfaces.tsx:98-102 (70 of 107 WorkspacePanel uses pass an icon); .wh-panel-icon tint workspace.css:31,105; activity type tiles activity-view.tsx:470-472; neutral .wh-object-icon on settings cards (settings.s1); no icons on Vault/Rules/Household panels",
+      "problem": "Most panel headers start with a 36px tinted indigo tile (Home has five; Life admin, Agent overview and Connect also use them). Activity rows add a coloured 24px tile in four tones. Settings cards use neutral grey tiles, and Vault, Rules, Household and Spending panels have none. The result is both noisy (a purple square on every header) and inconsistent (three treatments of the same element). The brand-marks ADR allowed 'a sensible amount for helping with lines and icons'; in practice the accent shows up on nearly every surface.",
+      "why": "Colour as signal: the founder's direction is 'a single indigo tint for wayfinding'. Panel icons repeat the title and carry no state. Quieter: remove decorative elements that do not serve a purpose.",
+      "impact": "The accent no longer marks 'where you are' and 'what is selected', and headers look template-like.",
+      "severity": "medium",
+      "recommendation": "Drop the icon from WorkspacePanel headers by default and keep the prop only for settings-link cards and empty states, rendered neutral as a 20px --wh-fg-muted glyph with no tile. Activity type marker: a 16px --wh-fg-muted glyph with no tile; colour only for warning or danger categories. Limit --wh-tint to (1) the current sidebar item, (2) the active tab underline, (3) checked or selected controls and the selected option card border, and (4) focus-adjacent emphasis. Remove it from timeline dots (workspace.css:32), panel icons (31) and 'tint' badges. Amend docs/adr/brand-marks-and-accent.md's list to match.",
+      "effort": "S",
+      "type": "visual",
+      "evidence": [
+        "<capture-run>/typical/shots/light-1440/home.s1.jpg",
+        "<capture-run>/typical/shots/light-1440/agents_connect.s1.jpg",
+        "<capture-run>/typical/shots/light-1440/settings.s1.jpg",
+        "<capture-run>/typical/shots/light-1440/activity.s1.jpg",
+        "70/107 WorkspacePanel uses pass icon= (grep)"
+      ],
+      "related_pages": [
+        "/home",
+        "/agents/connect",
+        "/life-admin",
+        "/life-admin/items/[id]",
+        "/agents/[id]",
+        "/activity"
+      ]
+    },
+    {
+      "id": "VIS-09",
+      "title": "Status colour on every row turns badges into wallpaper; dark-mode soft tones go muddy",
+      "location": "OutcomeBadge activity-view.tsx:240-248 (rendered at 479); .wh-tone-badge workspace.css:54 and soft mixes 17-21; life-admin Upcoming rows (two badges each); Status 'Connected' on every agent (agent-list-view.tsx:175); home timeline badges dashboard-view.tsx:335",
+      "problem": "Activity shows 55 badges, almost all a green 'Done'. Life admin › Upcoming puts two pills on every row: a blue 'Upcoming' (redundant inside a panel called 'Coming up') and an amber 'Not checked yet'. Every agent shows a green 'Connected'. The rare states that matter (Denied, Waiting for you, Disputed, Failed) are styled with the same weight as the routine ones. In dark mode the 14% warning and 12% success mixes over #252628 read as olive and bottle-green slabs (dark-1440 life-admin upcoming, dark-390 home).",
+      "why": "The brief: semantic colours 'used sparingly' and 'key status highlights'. Quieter: colour as the 10% exception. Pre-attentive processing only works when the signal is rare.",
+      "impact": "A dispute or denial in Activity, or an approval waiting, does not stand out, so members scanning their feed on a phone miss exceptions.",
+      "severity": "medium",
+      "recommendation": "Adopt a 'quiet success' rule. Expected or routine states (Done, Connected, Active, Current, Upcoming) render as --text-meta muted text with a 14px icon, or are omitted. Done is implied for a completed log entry, and Connected can be the absence of a warning. Pills (.wh-tone-badge) are only for states that need attention or carry risk: Waiting for you, Denied, Failed, Disputed, Expires soon, Not checked yet, Never allow. Maximum one pill per row. Dark mode: mix soft fills at 18% against --wh-surface and add a tone-coloured inset ring at 35%, so pills read as tinted glass rather than olive blocks; re-check --wh-warning (#ffd24a) soft fill against the neutral text.",
+      "effort": "S",
+      "type": "visual",
+      "evidence": [
+        "<capture-run>/typical/shots/light-1440/activity.s2.jpg",
+        "<capture-run>/typical/shots/dark-1440/life-admin__tab-upcoming.s1.jpg",
+        "<capture-run>/typical/shots/dark-390/home.s2.jpg",
+        "<capture-run>/typical/shots/light-1440/agents.s1.jpg",
+        "metrics: activity 55 badges, life-admin 50 badges at 1440"
+      ],
+      "related_pages": [
+        "/activity",
+        "/home",
+        "/life-admin",
+        "/agents",
+        "/rules"
+      ]
+    },
+    {
+      "id": "VIS-10",
+      "title": "Card-in-card: options and nodes are bordered boxes inside panels, and selected options barely differ from unselected ones",
+      "location": "Agent › Controls › Settings: Toggle at src/components/agents/permissions-view.tsx:129 (`rounded-card border border-line bg-surface p-3`); access-map nodes workspace.css:142; Rules › New rule template/radio cards (rules__view-new); agent Connectors defaults (default-for-agents-switch.tsx:32 inside an inset inside a panel); catalogue entries connectors-view.tsx:291 (.wh-card turned into grey insets)",
+      "problem": "On an agent's Settings, each of 4 toggles and 25 record checkboxes is its own 12px-radius bordered card inside the panel (84px per option, about 2,400px of boxes, 25 saturated indigo checkboxes). Rules › New rule shows radio options as bordered cards whose selected state is a grey fill and grey border, nearly identical to hover. Agent Connectors nests a bordered checkbox box inside a grey inset inside a panel, three levels deep. The contained-text ADR explicitly says 'never card-in-card'.",
+      "why": "Depth model canvas → panel → inset, with divider rows inside panels (workspace-depth.md, contained-text ADR). Selection must be unmistakable (WCAG 1.4.11 for the state indicator, and 'selection has an underline or shape cue as well as colour').",
+      "impact": "Long, heavy forms on the pages where people set an agent's access, a sensitive set-up task. The selected rule template is easy to misread.",
+      "severity": "medium",
+      "recommendation": "Introduce .wh-option-row for checkboxes and radios inside panels: min-height 56px, padding 12px 0, border-bottom 1px var(--wh-line), an 18px control aligned to the first line, a 15/22 label and a 13/18 muted hint. No box. Keep option cards only for mutually exclusive presets, styled like the consent flow's .wh-permission-presets[data-selected] (globals.css): selected gets a 1.5px --wh-tint border plus --wh-tint-soft fill, unselected a 1px --wh-line-input border. Record lists of 8 or more get a 'Select all / none' row and two columns from 1024px. Access-map nodes become rows separated by dividers within each branch.",
+      "effort": "M",
+      "type": "visual",
+      "evidence": [
+        "<capture-run>/typical/shots/light-1440/agents_ID__section-settings.s1.jpg",
+        "<capture-run>/typical/shots/light-1440/agents_ID__section-settings.s2.jpg",
+        "<capture-run>/typical/shots/light-1440/rules__view-new.s1.jpg",
+        "<capture-run>/worst/shots/light-1440/agents_ID__section-connectors.s1.jpg",
+        "<capture-run>/typical/shots/light-1440/agents_ID__section-overview.s1.jpg"
+      ],
+      "related_pages": [
+        "/agents/[id]?section=settings",
+        "/agents/[id]?section=connectors",
+        "/rules?view=new",
+        "/settings/agents",
+        "/agents/[id]?section=overview"
+      ]
+    },
+    {
+      "id": "VIS-11",
+      "title": "Activity rows are tall and noisy (109–137px each, 59 per day)",
+      "location": "/activity — ActivityRow src/components/activity/activity-view.tsx:467-505 (type tile 470, title 478, OutcomeBadge 479, underlined agent link 433-438, summary at 16px 497, 'View details' underlined summary 502)",
+      "problem": "Every entry stacks a coloured type tile, a 16/500 title, a green 'Done' pill, a meta line with an underlined agent name, a full-strength 16px summary ('Agent's reason: Keeping track') as loud as the title, and an underlined 'View details' with a chevron. The result is 109px per row without a reason and 137px with one, an 8,789px page at 1440 and 11,154px on phones. In the worst account the agent name wraps over four underlined lines per row.",
+      "why": "The brief's key job is 'glancing at the activity feed' on a phone. A tamper-evident log reads best as a calm ledger, as in banking transaction lists. The density and noise do not match the glance task.",
+      "impact": "Scanning a day of activity means about 12 phone screens. Exceptions (denied, disputed) are lost among identical rows.",
+      "severity": "medium",
+      "recommendation": "Compact ledger row. Line 1: 16px muted glyph, row title (--text-row), and the time right-aligned (--text-meta, tabular). Line 2: --text-meta muted (agent name with single-line ellipsis · category · conversation) with no underlines; the agent filter stays a link, styled as .wh-row-link on hover. Optional line 3: the reason in --text-body muted, limited to one line. The whole row is the <summary> of the details disclosure, with a 16px muted ChevronDown at the far right; 'View details' text stays sr-only. Pills only for non-routine outcomes (VIS-09). Targets: 72px or less collapsed at desktop, 96px or less on phones, about 2.5 times more entries per screen. Home's 'Recent activity' timeline reuses the same row.",
+      "effort": "M",
+      "type": "visual",
+      "evidence": [
+        "<capture-run>/typical/shots/light-1440/activity.s1.jpg",
+        "<capture-run>/typical/shots/light-1440/activity.s2.jpg",
+        "<capture-run>/worst/shots/light-390/activity.s2.jpg",
+        "metrics: activity light-1440 page 8,789px, 369 controls, 119 disclosures; light-390 11,154px"
+      ],
+      "related_pages": [
+        "/activity",
+        "/home",
+        "/agents/[id]?section=activity"
+      ]
+    },
+    {
+      "id": "VIS-12",
+      "title": "Sidebar chrome is busier than the content: a decorative workspace card, ruled group labels, and an active state that looks like a button",
+      "location": ".wh-workspace-label workspace.css:68-81 and app-shell.tsx:233-236; .wh-nav-label::after hairline workspace.css:83; active item workspace.css:26 (3px tint bar) overridden by :84 (ring + shadow); globals.css:236-247 (dot)",
+      "problem": "Below the logo sits a gradient, shadowed 'W · Personal workspace' card that looks like an account switcher but is not interactive. It costs about 70px, so at 1440×900 the Help group is pushed below the fold (its label fades out above Sign out). Each group label carries a trailing hairline. The active item stacks five cues: a 1px --wh-line-strong ring, a drop shadow, bold weight, a tinted icon and a trailing dot. In dark mode the ring is a bright outline (dark-1440 shots). The intended 3px tint bar never shows, because workspace.css:84 overrides :26 at equal specificity.",
+      "why": "Quieter: remove decoration that does not serve a purpose, and avoid false affordances. The reference: 'Active sidebar destinations carry weight and a dot' on a soft-emphasis fill, not an outlined button.",
+      "impact": "The frame competes with the page, and the fake switcher invites a click that does nothing.",
+      "severity": "medium",
+      "recommendation": "Remove .wh-workspace-label from the sidebar and show the account name (avatar initial plus name, 14/20) in the footer row beside Sign out. Delete the hairline (workspace.css:83). Active item: `background: var(--wh-tint-soft); box-shadow: none; font-weight: 600;` with the icon in --wh-tint. Delete both box-shadow rules (workspace.css:26 and :84) and the ::after dot (fill, weight and icon already give three cues, so it does not rely on colour alone). Hover stays --wh-surface-muted.",
+      "effort": "S",
+      "type": "visual",
+      "evidence": [
+        "<capture-run>/typical/shots/light-1440/home.s1.jpg",
+        "<capture-run>/typical/shots/dark-1440/agents.s1.jpg",
+        "workspace.css:26 vs :84 (same selector, later wins)"
+      ],
+      "related_pages": [
+        "all workspace pages",
+        "phone drawer"
+      ]
+    },
+    {
+      "id": "VIS-13",
+      "title": "Two grey families and too many near-whites make the frame two-toned; a decorative gradient hazes the dark canvas",
+      "location": "Neutral greys in globals.css:8-37 (sidebar #f9f9f9, line #e7e7e7, line-strong #cdcdcd, accent-soft #ededed; dark sidebar #181818, line #3c3c3c) vs cool greys in workspace.css:6-10 and surfaces.css:25 (canvas #f5f6f7, surface-muted #f1f3f4, edge #d5d8dc; dark #191a1c/#252628/#2d2f31); radial gradient workspace.css:61-63; color-mix fills surfaces.css:244, 293, workspace.css:85,100",
+      "problem": "The light frame uses three different near-whites: top bar #ffffff, sidebar #f9f9f9 (lighter than the canvas it borders) and canvas #f5f6f7. On top of these come three 55–65% color-mix tints for the scope strip, panel footer and empty state. Panel edges are cool (#d5d8dc) while the dividers inside them are neutral (#e7e7e7). In dark mode the top bar (#252628) is lighter than the sidebar (#181818), so the L-shaped chrome reads as two pieces. A radial gradient on .wh-main shows as a grey haze top-right in dark-1440 (inbox, agents).",
+      "why": "The brief: 'near-black, white and cool greys'. One temperature, few steps. Quieter: remove gradients that serve no purpose; dark mode must be designed, not just inverted.",
+      "impact": "A slightly 'dirty', unresolved look that is hard to name but keeps the UI from feeling premium.",
+      "severity": "medium",
+      "recommendation": "Define one cool-neutral ramp in globals.css (light: --wh-gray-0 #ffffff, 25 #f7f8f9, 50 #f3f4f6, 100 #eceef1, 200 #e2e5e9, 300 #d3d7dc, 500 #6f747b (4.7:1 on white, 4.3:1 on gray-50, so valid for 3:1 input borders), 600 #5b6068 (muted text: 6.3:1 on white, 5.8:1 on gray-50), 900 #1c1f23; dark mirrored and re-checked) and map all role tokens to it: canvas = 50, sidebar = canvas (one plane, divided by a 1px line), surface/top bar/header region = 0, inset = 25/100, divider = 200, edge = 300, input border = 500, muted text = 600. In dark: canvas, sidebar and header use one value (#1b1c1e) and panels use #232427. Delete the radial gradient (workspace.css:61-63) and replace the 55/65% color-mix fills with the inset token.",
+      "effort": "S",
+      "type": "visual",
+      "evidence": [
+        "<capture-run>/typical/shots/dark-1440/inbox.s1.jpg",
+        "<capture-run>/typical/shots/dark-1440/agents.s1.jpg",
+        "<capture-run>/typical/shots/light-1440/agents.s1.jpg",
+        "<capture-run>/typical/shots/dark-1440/home.s1.jpg"
+      ],
+      "related_pages": [
+        "all workspace pages (both themes)"
+      ]
+    },
+    {
+      "id": "VIS-14",
+      "title": "Long names wrap into paragraphs and break every layout they touch",
+      "location": "Agent names: agent-list-view.tsx:166-171 (full name by design), agent h1 (agent-workspace), activity meta activity-view.tsx:433-438, inbox group header and sentence inbox-view.tsx:427-430,451-454; Memory 'Saved by' chip track (memory toolbar)",
+      "problem": "With the worst-case 102-character agent name: the Agents list title wraps to five underlined lines on a phone; the agent page h1 runs three lines of 28px bold at 1440; each Activity row's meta wraps to four lines; Inbox repeats it three times per request; and the Memory 'Saved by' chip runs off the toolbar, its count cut off with no ellipsis (worst light-1440 memory.s1). Even the typical 46-character 'Gemini — family travel…' name wraps in Home's agent list and the Rules list headers.",
+      "why": "Robust typography under stress (typeset: long headings, narrow containers). Names identify objects; they are not content to read in full at every mention.",
+      "impact": "Pages lose their rhythm as soon as a member gives an agent a descriptive name, which the product encourages.",
+      "severity": "medium",
+      "recommendation": "Add two utilities. .wh-clamp-2 (display:-webkit-box; -webkit-line-clamp:2; overflow:hidden) for the h1 and row titles. .wh-truncate (single line, text-overflow: ellipsis, max-width 28ch) for chips, meta lines, breadcrumbs, group headers and running sentences. The full name stays in the accessible name and in a title attribute. Keep the code comment's concern ('two agents can share a long prefix') by always showing the AgentMark and platform beside a truncated name, and by showing the full name as an 'Agent name' fact on the agent Overview. Chips get max-width:24ch, and the count badge never shrinks (flex-shrink:0).",
+      "effort": "S",
+      "type": "visual",
+      "evidence": [
+        "<capture-run>/worst/shots/light-390/agents.s1.jpg",
+        "<capture-run>/worst/shots/light-1440/agents_ID__section-connectors.s1.jpg",
+        "<capture-run>/worst/shots/light-390/activity.s2.jpg",
+        "<capture-run>/worst/shots/light-1440/memory.s1.jpg",
+        "<capture-run>/typical/shots/light-390/inbox.s1.jpg"
+      ],
+      "related_pages": [
+        "/agents",
+        "/agents/[id]",
+        "/activity",
+        "/inbox",
+        "/memory",
+        "/rules",
+        "/home",
+        "/life-admin?view=tasks"
+      ]
+    },
+    {
+      "id": "VIS-15",
+      "title": "Two tab rows and pill sub-tabs inflate headers; view switches and filters look alike",
+      "location": "/agents/[id]: underline tabs plus pill sub-tabs inside the heading (.wh-subtabs globals.css:315-339, workspace.css:30,86); /life-admin: outer tabs in the heading plus an inner .wh-tabstrip card; /activity: FilterLinks view pills (activity-view.tsx:900) above quick-filter chips in the same toolbar",
+      "problem": "The agent page header carries the agent identity, four underline tabs and then a second row of pill sub-tabs. The selected pill has a tint border, white fill and shadow, and the header grows to 250–330px. Life admin stacks two tab rows (route tabs in the header plus a tabstrip card). Activity places the 'Timeline / By agent / By type / By service' view switch and the 'All activity / Needs attention / Reads…' filter chips as two near-identical pill rows, with two different 'selected' looks (white with tint ring vs grey fill with bold).",
+      "why": "Consistency and standards (Nielsen #4): one control shape per job. Tabs switch views, chips filter, and a segmented control picks a sub-section. Each nesting level should cost as little chrome as possible.",
+      "impact": "It is harder to tell 'where am I' from 'what am I filtering', and each header grows taller (VIS-01).",
+      "severity": "medium",
+      "recommendation": "One underline tab row per page, in the header region. A second level, when it must exist, is a compact segmented control (new SegmentedControl primitive: 32px tall on desktop and 44px on touch, a --wh-surface-muted track, the selected segment on --wh-surface with a 1px edge) placed at the top of the content panel, not in the page header. Activity: views become the header tab row and the quick filters remain chips inside the list panel (VIS-02). Life admin: PR #52's single row (Records | Upcoming | History | Tasks) already fixes the double row; apply the same rule to the agent workspace.",
+      "effort": "M",
+      "type": "structural",
+      "evidence": [
+        "<capture-run>/typical/shots/light-1440/agents_ID__section-settings.s1.jpg",
+        "<capture-run>/worst/shots/light-1440/agents_ID__section-connectors.s1.jpg",
+        "<capture-run>/typical/shots/light-1440/life-admin.s1.jpg",
+        "<capture-run>/typical/shots/light-1440/activity.s1.jpg",
+        "<capture-run>/typical/shots/light-390/activity.s1.jpg"
+      ],
+      "related_pages": [
+        "/agents/[id]",
+        "/life-admin",
+        "/activity",
+        "/skills"
+      ]
+    },
+    {
+      "id": "VIS-16",
+      "title": "The resource-scope disclosures add an underlined, ruled row to seven page headers",
+      "location": "HeadingScope via WorkspaceHeading (workspace-surfaces.tsx:61); .wh-heading-scope / .wh-scope-disclosure surfaces.css:242-271",
+      "problem": "Connectors, Vault, Cards, Skills, Memory, Rules and Spending all show a hairline and then two underlined disclosure triggers with chevrons ('How access works ▾', 'Manage for one agent ▾'). That is about 64px of header height and two more underlined elements at the top of every resource page. On phones they stack into two rows (connectors light-390).",
+      "why": "Progressive disclosure should cost almost nothing when closed. Secondary help belongs with the page's actions, not as a body row.",
+      "impact": "It adds to header height (VIS-01) and link noise (VIS-05) on the pages people visit while setting up.",
+      "severity": "low",
+      "recommendation": "Render both triggers in the header's actions slot: a ghost sm button with an Info icon, 'How access works', that opens a disclosure panel just under the header (an inset with --wh-surface-muted at 60ch); and a secondary sm menu button, 'Manage for one agent ▾', that lists agents. Remove the .wh-heading-scope border-top row.",
+      "effort": "S",
+      "type": "visual",
+      "evidence": [
+        "<capture-run>/typical/shots/light-1440/vault_cards.s1.jpg",
+        "<capture-run>/typical/shots/light-390/connectors.s1.jpg",
+        "<capture-run>/typical/shots/light-1440/spending.s1.jpg"
+      ],
+      "related_pages": [
+        "/connectors",
+        "/vault",
+        "/vault/cards",
+        "/skills",
+        "/memory",
+        "/rules",
+        "/spending"
+      ]
+    },
+    {
+      "id": "VIS-17",
+      "title": "Money and key numbers have no figure style, so Spending looks like a list of sentences",
+      "location": "/spending src/components/spending/spending-view.tsx (agent rows; currency SelectField in the heading at 280-307); inbox amount dl inbox-view.tsx:437-450; agent overview 'How it's going' .wh-evidence-facts workspace.css:151-153; household budget rows",
+      "problem": "Spending shows each agent as a 16px name over 'AUD 0.00 of AUD 300.00 this month' in 14px muted text, with no figure, meter or alignment, and the account-currency select and 'Save currency' button sit in the page header. Household's two budget rows style parallel values differently ('No budget set yet' bold vs 'No limit set yet' muted). The Inbox amount is no larger than its labels (VIS-03).",
+      "why": "Banking and identity portals, the founder's reference, make amounts the dominant, tabular, right-aligned element. The brief: 'Money always with currency'. The page's one form control should not live in the identity header.",
+      "impact": "A household cannot see at a glance how much its agents have spent, which is the core of 'control spending'.",
+      "severity": "medium",
+      "recommendation": "Add a .wh-figure role (--text-figure 24/32, weight 600, tabular-nums, and 32/40 for a page-level total) plus a .wh-meter (4px track in --wh-line, fill --wh-fg, warning fill above 80% of the budget, danger at 100%; label in words). Spending rows: name and status on the left; on the right the spent figure, a 13/18 muted 'of AUD 300.00 this month' and the meter. Move the currency control to a 'Currency' row at the foot of the panel (or Settings, per the brief). Household budget rows: both values at --text-body, with muted styling for 'not set'.",
+      "effort": "M",
+      "type": "visual",
+      "evidence": [
+        "<capture-run>/typical/shots/light-1440/spending.s1.jpg",
+        "<capture-run>/typical/shots/light-1440/household.s2.jpg",
+        "<capture-run>/typical/shots/light-1440/inbox.s1.jpg",
+        "<capture-run>/typical/shots/light-1440/agents_ID__section-overview.s2.jpg"
+      ],
+      "related_pages": [
+        "/spending",
+        "/household",
+        "/inbox",
+        "/agents/[id]?section=spending",
+        "/agents"
+      ]
+    },
+    {
+      "id": "VIS-18",
+      "title": "Disabled primary buttons look broken in light mode and enabled in dark mode",
+      "location": "src/components/ui/button.tsx:42 (`disabled:opacity-50 … aria-disabled:opacity-50` on every variant); Inbox 'Approve and release'; Settings › Notifications 'Send a test notification'",
+      "problem": "At 50% opacity, the black primary becomes a mid-grey pill with white text (light), which looks like a loading or broken state. In dark mode the #f3f3f3 primary becomes a light-grey pill with dark text that reads as an active button (dark-1440 inbox).",
+      "why": "State should be unambiguous in both themes. Opacity on a high-contrast fill gives unpredictable results against different backgrounds.",
+      "impact": "People tap an apparently active 'Approve' in dark mode, or think the page is stuck in light mode.",
+      "severity": "low",
+      "recommendation": "Replace opacity with a token style for every variant: disabled and aria-disabled get `background: var(--wh-surface-muted); color: var(--wh-fg-muted); border-color: transparent; opacity: 1`. Keep the reason text beside it (already present). Wherever a blocking prerequisite exists, the enabling action is the primary (VIS-03).",
+      "effort": "S",
+      "type": "visual",
+      "evidence": [
+        "<capture-run>/typical/shots/light-1440/inbox.s1.jpg",
+        "<capture-run>/typical/shots/dark-1440/inbox.s1.jpg",
+        "<capture-run>/typical/shots/light-1440/settings_notifications.s1.jpg"
+      ],
+      "related_pages": [
+        "/inbox",
+        "/settings/notifications",
+        "any page with a gated action"
+      ]
+    },
+    {
+      "id": "VIS-19",
+      "title": "The Vault reads as a form, not a vault",
+      "location": "/vault About you: src/components/vault/identity-view.tsx with low-tier-detail-flow.tsx:213-215 (edit-mode action row: Save + Make protected per detail); /vault/cards cards-view.tsx",
+      "problem": "Every saved detail shows as an always-open text input with 'Save' and 'Make protected' buttons, followed by a primary 'Add a detail'. Protected details and cards appear as plain empty-state lines. Nothing looks stored, secured or masked: no read-only values, no lock affordance on protected rows, no card-like rows with last four digits and expiry. Of all pages, this is the one the brief singles out ('care a lot about where card/passport details go').",
+      "why": "Password managers and banking portals, the stated reference, present stored secrets as read-only, masked rows with edit on demand. This lowers the risk of accidental edits and signals safekeeping.",
+      "impact": "Lower trust on the most sensitive page, plus accidental edits and confusing Save buttons on data that has not changed.",
+      "severity": "medium",
+      "recommendation": "Present details as a DescriptionList-style ListGroup (new DescriptionList primitive; app-map lists 13 ad-hoc <dl>). Each row has a label column (160px on desktop, stacked on phones, --text-meta muted), the value (--text-row, weight 400), and a trailing ghost sm 'Edit' that swaps the row into the existing edit form with Save/Cancel. Protected rows show a 14px lock glyph, '•••• Ask each time' in muted text and a ghost 'Reveal…'. Cards are rows with the brand mark, '•••• 4242' and the expiry in tabular figures. 'Add a detail' becomes secondary in the panel header. Existing handlers are unchanged.",
+      "effort": "M",
+      "type": "visual",
+      "evidence": [
+        "<capture-run>/typical/shots/light-1440/vault.s1.jpg",
+        "<capture-run>/typical/shots/light-1440/vault_cards.s1.jpg"
+      ],
+      "related_pages": [
+        "/vault",
+        "/vault/cards",
+        "/agents/[id]?section=vault"
+      ]
+    },
+    {
+      "id": "VIS-20",
+      "title": "Connectors catalogue: a three-row chip wall and 103 grey tiles of equal weight",
+      "location": "/connectors?view=catalogue: FilterLinks at connectors-view.tsx:563; CatalogueEntry connectors-view.tsx:279-300 (.wh-card per entry turned into grey insets by surfaces.css:321-326)",
+      "problem": "Nineteen category chips with counts wrap to three rows, followed by a 'Search services' label, a full-width input, a separate Search button and a '103 services.' line, about 300px of toolbar. Below that, 103 entries in a three-column grid of --wh-surface-muted tiles, each with a mark, a name, a category and a stacked pill. The grey fill on every tile makes the panel heavy, and the long 'Early access — ask to join' pills visually outrank 'Connect'.",
+      "why": "Density should match the task (scan and pick). Card-in-panel produces grey-on-white tiles, and the chip wall is a 'wall of options' (critique rubric).",
+      "impact": "Slow scanning while setting up, and a store-like look rather than a calm settings surface.",
+      "severity": "low",
+      "recommendation": "Categories as a single-line scrolling chip track at every width (as on phones), or at 1024px and above as a 200px category rail in the panel's left column. Search input with a leading Search icon and the submit as a trailing icon button inside the field. Entries as white rows in a two-column ListGroup (mark sm, name --text-row, category --text-meta, trailing 'Connect' secondary sm). 'Early access' becomes a muted meta label plus a ghost 'Ask to join'.",
+      "effort": "M",
+      "type": "visual",
+      "evidence": [
+        "<capture-run>/typical/shots/light-1440/connectors.s1.jpg",
+        "<capture-run>/typical/shots/light-1440/connectors.s3.jpg",
+        "<capture-run>/typical/shots/light-390/connectors.s1.jpg",
+        "metrics: connectors light-1440 110 surfaces, page 5,516px; light-390 10,051px"
+      ],
+      "related_pages": [
+        "/connectors"
+      ]
+    },
+    {
+      "id": "VIS-21",
+      "title": "Radius and shadow tokens drift: seven radii on one page, three-layer shadows on every container",
+      "location": "Tokens globals.css:31-36 (card 12, field 8, inset 10, panel 14); .wh-card forced to 14 in surfaces.css:276 while rounded-card stays 12; --wh-panel-shadow workspace.css:13 plus inset highlight; brand tiles 5/7/10/12 (workspace.css:36-42)",
+      "problem": "Inbox renders seven corner radii (5, 6, 8, 10, 12, 14 and pill). Rules and Household mix 12px and 14px siblings. Every container has a 1px shadow, a 24px-blur shadow and an inset white highlight. In dark mode the shadow is invisible, so light and dark depth differ.",
+      "why": "Premium UIs use a small, strict shape vocabulary. The reference specifies 12px corners for cards and dialogs and 8px for controls.",
+      "impact": "Small misalignments of corners and shadows, a 'not quite finished' feel.",
+      "severity": "low",
+      "recommendation": "Three radius tokens: --wh-radius-panel 12px (panels, dialogs, toasts), --wh-radius-control 8px (fields, insets, icon tiles, brand tile md/lg; sm tiles 6px) and pill (buttons, chips, badges). Set --wh-radius-inset to 8 and alias --wh-radius to the panel value. One elevation token: light `0 1px 2px rgb(16 24 40 / 6%)`; dark `none`, relying on --wh-edge. Delete the inset highlight. Dialogs and toasts alone get `0 12px 32px -12px rgb(0 0 0 / 25%)`.",
+      "effort": "S",
+      "type": "visual",
+      "evidence": [
+        "<review-scratch>/visual/measure2.json radii per page (inbox: 5,6,8,10,12,14,9999px)",
+        "<capture-run>/typical/shots/light-1440/rules.s1.jpg",
+        "<capture-run>/typical/shots/light-1440/household.s1.jpg"
+      ],
+      "related_pages": [
+        "all workspace pages"
+      ]
+    },
+    {
+      "id": "VIS-22",
+      "title": "Brand tiles glare in dark mode",
+      "location": ".wh-brand-tile workspace.css:36-44 (fixed #ffffff per brand-marks ADR); md/lg sizes in agent lists and headers",
+      "problem": "Fixed pure-white 36–44px tiles are the brightest objects on dark pages (dark-1440 agents, home). Three bright squares pull the eye before the agent names do.",
+      "why": "Dark-mode luminance balance: the brightest element should be the most important one.",
+      "impact": "Dark-mode pages look spotty and less refined.",
+      "severity": "low",
+      "recommendation": "Keep the ADR's light tile but tone it in dark mode: `background: light-dark(#ffffff, #e6e7e9); border-color: light-dark(var(--wh-line), transparent);`. Use size sm (24px) in rows and meta and md only in headers. Drop the inset highlight on tiles.",
+      "effort": "S",
+      "type": "visual",
+      "evidence": [
+        "<capture-run>/typical/shots/dark-1440/agents.s1.jpg",
+        "<capture-run>/typical/shots/dark-1440/home.s1.jpg"
+      ],
+      "related_pages": [
+        "/agents",
+        "/home",
+        "/connectors",
+        "/agents/[id]"
+      ]
+    },
+    {
+      "id": "VIS-23",
+      "title": "One-off heading patterns: an uppercase eyebrow, a Back pill and a breadcrumb all on one detail page",
+      "location": "/life-admin/items/[id] src/components/life-admin/item-view.tsx:132,153 (eyebrow=\"Life admin\"); .wh-eyebrow surfaces.css:223; Back pill in heading actions",
+      "problem": "The record page alone shows an uppercase, letter-spaced 'LIFE ADMIN' eyebrow over the title, a 'Back to Life admin' pill top right and the breadcrumb 'Account resources › Life admin', three wayfinding cues for one parent. Agent pages use a chevron link, 'All agents'. Every other page has no eyebrow.",
+      "why": "Consistency: detail pages should share one header pattern.",
+      "impact": "A small inconsistency, but it adds to the 'stitched together' feel.",
+      "severity": "low",
+      "recommendation": "One detail-page pattern: the top bar shows ancestors as links ('Life admin ›'), and the header shows the title with its status inline at --text-meta. No eyebrow and no Back pill. Remove .wh-eyebrow from the system, or reserve it for status screens.",
+      "effort": "S",
+      "type": "visual",
+      "evidence": [
+        "<capture-run>/typical/shots/light-1440/life-admin_items_ID.s1.jpg",
+        "<capture-run>/typical/shots/light-1440/agents_ID__section-overview.s1.jpg"
+      ],
+      "related_pages": [
+        "/life-admin/items/[id]",
+        "/agents/[id]"
+      ]
+    }
+  ]
+}

@@ -1,0 +1,95 @@
+/* PROPOSED src/app/tokens.css for Warthog (23 Nov 2026 UI/UX audit, redesign.md §6).
+ * Not wired into the app. Values map onto the existing --wh-* names: refine, don't replace.
+ * Source: design-system reviewer proposal (tools/findings/design-system.json → proposal.tokens). */
+:root {
+  color-scheme: light dark;
+  /* Neutral ramp: one cool-grey family (brief design_ux.feel). Values reuse what the workspace already renders. */
+  --wh-canvas: light-dark(#f5f6f7, #191a1c);          /* was --wh-workspace-canvas + --wh-page-canvas */
+  --wh-sidebar: light-dark(#fafbfb, #1f2022);         /* was #f9f9f9/#181818; now canvas < sidebar < surface in both themes */
+  --wh-surface: light-dark(#ffffff, #252628);         /* panel; was declared 3x */
+  --wh-surface-muted: light-dark(#f1f3f4, #2d2f31);   /* inset */
+  --wh-surface-raised: light-dark(#ffffff, #2b2c2f);  /* dialogs, toast, drawer */
+  --wh-bg: light-dark(#ffffff, #212121);              /* legacy page background (public); workspace code uses --wh-canvas */
+  --wh-fg: light-dark(#282828, #dcdcdc);              /* unchanged */
+  --wh-fg-muted: light-dark(#5d5d5d, #afafaf);        /* unchanged; 5.9:1 on #f1f3f4 */
+  --wh-line: light-dark(#e6e8eb, #34363a);            /* divider inside a surface (was #e7e7e7/#3c3c3c) */
+  --wh-edge: light-dark(#d5d8dc, #3e4145);            /* container boundary (dark was identical to --wh-line) */
+  --wh-line-strong: light-dark(#c9cdd2, #5a5d62);     /* hover/selected boundary (was #cdcdcd/#5d5d5d) */
+  --wh-line-input: light-dark(#767676, #8f8f8f);      /* form-control boundary >=3:1, unchanged */
+  /* Primary action (neutral) */
+  --wh-accent: light-dark(#181818, #f3f3f3);
+  --wh-accent-hover: light-dark(#303030, #dcdcdc);
+  --wh-accent-fg: light-dark(#ffffff, #0d0d0d);
+  --wh-accent-soft: light-dark(#eceef0, #36383c);     /* selected neutral fill */
+  --wh-action: var(--wh-accent); --wh-action-hover: var(--wh-accent-hover); --wh-on-action: var(--wh-accent-fg); /* role aliases */
+  /* Wayfinding accent: the single indigo tint (founder decision) */
+  --wh-tint: light-dark(#4f46e5, #a5a1ff);
+  /* Semantic tones (unchanged values; info shifted away from focus blue, DS-18) */
+  --wh-success: light-dark(#008635, #04b84c);
+  --wh-warning: light-dark(#916f00, #ffd24a);
+  --wh-danger: light-dark(#b91c1c, #ff8583);
+  --wh-info: light-dark(#0e7490, #5ccfe6);
+  --wh-on-danger: var(--wh-accent-fg);
+  /* Soft fills move from .wh-workspace to :root so dialogs, toasts and public pages share them */
+  --wh-tint-soft: color-mix(in srgb, var(--wh-tint) 11%, var(--wh-surface));
+  --wh-info-soft: color-mix(in srgb, var(--wh-info) 12%, var(--wh-surface));
+  --wh-success-soft: color-mix(in srgb, var(--wh-success) 12%, var(--wh-surface));
+  --wh-warning-soft: color-mix(in srgb, var(--wh-warning) 14%, var(--wh-surface));
+  --wh-danger-soft: color-mix(in srgb, var(--wh-danger) 11%, var(--wh-surface));
+  --wh-focus: light-dark(#0169cc, #0285ff);
+  --wh-overlay: rgb(0 0 0 / 40%);
+  --wh-logo: light-dark(#0a1b30, #eef2f8);
+
+  /* Type: one family, named roles (font shorthand) */
+  --wh-font-sans: var(--font-inter), ui-sans-serif, system-ui, sans-serif;
+  --wh-text-caption: 400 13px/18px var(--wh-font-sans);        /* timestamps, helper meta, fact terms (13 not 12: phone-first, low vision; RWD-13) */
+  --wh-text-label-sm: 500 12px/16px var(--wh-font-sans);       /* badges, counts, eyebrow (+ uppercase .08em) */
+  --wh-text-body: 400 14px/20px var(--wh-font-sans);           /* UI text, rows; 500 for labels, buttons, tabs */
+  --wh-text-body-long: 400 14px/22px var(--wh-font-sans);      /* descriptions, notices, prose <= 72ch */
+  --wh-text-title-item: 500 16px/24px var(--wh-font-sans);     /* row titles: activity entry, record, rule */
+  --wh-text-title-group: 600 16px/24px var(--wh-font-sans);    /* panel, list group, card titles (-0.01em) */
+  --wh-text-title-section: 600 18px/28px var(--wh-font-sans);  /* section titles, dialog titles, page-empty heading (-0.015em) */
+  --wh-text-title-page: 600 24px/30px var(--wh-font-sans);     /* h1 phone (-0.03em); 28px/34px from 640px (-0.035em) */
+  --wh-text-figure: 600 20px/28px var(--wh-font-sans);         /* totals, evidence facts; font-variant-numeric: tabular-nums */
+  --wh-text-figure-lg: 600 32px/38px var(--wh-font-sans);      /* the amount on a request review; tabular-nums, -0.02em */
+  --wh-text-input: 16px;                                         /* 14px only at (min-width:1024px) and (pointer:fine) */
+
+  /* Spacing: 4px base */
+  --wh-space-1: 4px; --wh-space-2: 8px; --wh-space-3: 12px; --wh-space-4: 16px; --wh-space-5: 20px;
+  --wh-space-6: 24px; --wh-space-8: 32px; --wh-space-10: 40px; --wh-space-12: 48px;
+  --wh-pad-band: var(--wh-space-4);        /* page heading, status panel; 24px from 640px */
+  --wh-pad-panel: var(--wh-space-4);       /* panel header/body/footer, list group, toolbar; 20px from 640px */
+  --wh-pad-inset: var(--wh-space-4);       /* insets, disclosure panels; 12px when dense */
+  --wh-row-pad-block: var(--wh-space-3);   /* divider rows (LIST_ROW py-3) */
+  --wh-gap-section: var(--wh-space-4);     /* between panels; 24px from 640px */
+  --wh-gap-stack: var(--wh-space-3);       /* inside a panel body */
+  --wh-gap-inline: var(--wh-space-2);      /* button groups, icon + label */
+  --wh-gutter: 16px;                       /* 32px from 640px (existing) */
+
+  /* Radius */
+  --wh-radius-xs: 6px;        /* tiles <= 24px, breadcrumb/scope summary focus shapes */
+  --wh-radius-field: 8px;     /* inputs, selects, icon buttons (unchanged) */
+  --wh-radius-inset: 8px;     /* insets, nested cards, sidebar links, tiles 36-48px (was 10; reconciled with the visual review: one radius per level) */
+  --wh-radius-panel: 12px;    /* panels, dialogs, toasts, notices, empty states (was 14; 12 matches the measured admin-console reference and removes the 12/14 drift) */
+  --wh-radius-pill: 9999px;   /* buttons, badges, chips, sub-tabs, counts */
+  --wh-radius: var(--wh-radius-panel);  /* legacy 'card' alias */
+
+  /* Elevation */
+  --wh-elevation: light-dark(rgb(26 35 45 / 5%), rgb(0 0 0 / 20%));
+  --wh-elevation-strong: light-dark(rgb(26 35 45 / 14%), rgb(0 0 0 / 48%));
+  --wh-highlight: light-dark(rgb(255 255 255 / 90%), rgb(255 255 255 / 4%));
+  --wh-shadow-0: none;                                                                                   /* insets, nested, selected */
+  --wh-shadow-1: 0 1px 2px var(--wh-elevation);                                                         /* raised panel: one quiet layer (visual review VIS-02 drops the 24px blur and inset highlight) */
+  --wh-shadow-2: 0 2px 4px var(--wh-elevation), 0 12px 28px -12px var(--wh-elevation-strong);          /* toast, popover */
+  --wh-shadow-3: 0 4px 8px var(--wh-elevation), 0 24px 56px -20px var(--wh-elevation-strong);          /* dialog, drawer */
+  --wh-panel-shadow: var(--wh-shadow-1);  /* legacy alias */
+
+  /* Borders, icons, motion */
+  --wh-border-container: 1px solid var(--wh-edge);
+  --wh-border-divider: 1px solid var(--wh-line);
+  --wh-icon-sm: 12px; --wh-icon-md: 16px; --wh-icon-lg: 18px;   /* stroke 2 at <=16px, 1.75 at 18px */
+  --wh-duration-fast: 160ms; --wh-ease: cubic-bezier(.2, 0, 0, 1);
+}
+@media (min-width: 640px) { :root { --wh-pad-band: var(--wh-space-6); --wh-pad-panel: var(--wh-space-5); --wh-gap-section: var(--wh-space-6); --wh-gutter: 32px; } }
+:root[data-theme="light"] { color-scheme: light; }
+:root[data-theme="dark"] { color-scheme: dark; }

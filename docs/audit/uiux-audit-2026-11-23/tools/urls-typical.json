@@ -1,0 +1,399 @@
+{
+ "agentIds": [
+  "bc90026d-bbf1-4b98-a5b2-07a612c991a7",
+  "a2b5fea2-c5e4-4ef3-98c3-6d2ed22c6edf",
+  "b64192db-d48f-434c-a212-3c2ab02d126b"
+ ],
+ "urls": [
+  {
+   "key": "help",
+   "url": "/help",
+   "signedIn": false,
+   "from": "seed"
+  },
+  {
+   "key": "home",
+   "url": "/home",
+   "signedIn": true,
+   "from": "seed"
+  },
+  {
+   "key": "inbox",
+   "url": "/inbox",
+   "signedIn": true,
+   "from": "seed"
+  },
+  {
+   "key": "activity",
+   "url": "/activity",
+   "signedIn": true,
+   "from": "seed"
+  },
+  {
+   "key": "agents",
+   "url": "/agents",
+   "signedIn": true,
+   "from": "seed"
+  },
+  {
+   "key": "agents_connect",
+   "url": "/agents/connect",
+   "signedIn": true,
+   "from": "seed"
+  },
+  {
+   "key": "agents_access-key",
+   "url": "/agents/access-key",
+   "signedIn": true,
+   "from": "seed"
+  },
+  {
+   "key": "connectors",
+   "url": "/connectors",
+   "signedIn": true,
+   "from": "seed"
+  },
+  {
+   "key": "connectors_key",
+   "url": "/connectors/key",
+   "signedIn": true,
+   "from": "seed"
+  },
+  {
+   "key": "household",
+   "url": "/household",
+   "signedIn": true,
+   "from": "seed"
+  },
+  {
+   "key": "life-admin",
+   "url": "/life-admin",
+   "signedIn": true,
+   "from": "seed"
+  },
+  {
+   "key": "memory",
+   "url": "/memory",
+   "signedIn": true,
+   "from": "seed"
+  },
+  {
+   "key": "more",
+   "url": "/more",
+   "signedIn": true,
+   "from": "seed"
+  },
+  {
+   "key": "rules",
+   "url": "/rules",
+   "signedIn": true,
+   "from": "seed"
+  },
+  {
+   "key": "skills",
+   "url": "/skills",
+   "signedIn": true,
+   "from": "seed"
+  },
+  {
+   "key": "spending",
+   "url": "/spending",
+   "signedIn": true,
+   "from": "seed"
+  },
+  {
+   "key": "vault",
+   "url": "/vault",
+   "signedIn": true,
+   "from": "seed"
+  },
+  {
+   "key": "vault_cards",
+   "url": "/vault/cards",
+   "signedIn": true,
+   "from": "seed"
+  },
+  {
+   "key": "settings",
+   "url": "/settings",
+   "signedIn": true,
+   "from": "seed"
+  },
+  {
+   "key": "settings_agents",
+   "url": "/settings/agents",
+   "signedIn": true,
+   "from": "seed"
+  },
+  {
+   "key": "settings_data",
+   "url": "/settings/data",
+   "signedIn": true,
+   "from": "seed"
+  },
+  {
+   "key": "settings_notifications",
+   "url": "/settings/notifications",
+   "signedIn": true,
+   "from": "seed"
+  },
+  {
+   "key": "settings_security",
+   "url": "/settings/security",
+   "signedIn": true,
+   "from": "seed"
+  },
+  {
+   "key": "settings_security_sign-in-requests",
+   "url": "/settings/security/sign-in-requests",
+   "signedIn": true,
+   "from": "seed"
+  },
+  {
+   "key": "contact",
+   "url": "/contact",
+   "signedIn": true,
+   "from": "seed"
+  },
+  {
+   "key": "agents_ID__section-overview",
+   "url": "/agents/bc90026d-bbf1-4b98-a5b2-07a612c991a7?section=overview",
+   "signedIn": true,
+   "from": "agent"
+  },
+  {
+   "key": "agents_ID__section-connectors",
+   "url": "/agents/bc90026d-bbf1-4b98-a5b2-07a612c991a7?section=connectors",
+   "signedIn": true,
+   "from": "agent"
+  },
+  {
+   "key": "agents_ID__section-vault",
+   "url": "/agents/bc90026d-bbf1-4b98-a5b2-07a612c991a7?section=vault",
+   "signedIn": true,
+   "from": "agent"
+  },
+  {
+   "key": "agents_ID__section-skills",
+   "url": "/agents/bc90026d-bbf1-4b98-a5b2-07a612c991a7?section=skills",
+   "signedIn": true,
+   "from": "agent"
+  },
+  {
+   "key": "agents_ID__section-memory",
+   "url": "/agents/bc90026d-bbf1-4b98-a5b2-07a612c991a7?section=memory",
+   "signedIn": true,
+   "from": "agent"
+  },
+  {
+   "key": "agents_ID__section-spending",
+   "url": "/agents/bc90026d-bbf1-4b98-a5b2-07a612c991a7?section=spending",
+   "signedIn": true,
+   "from": "agent"
+  },
+  {
+   "key": "agents_ID__section-rules",
+   "url": "/agents/bc90026d-bbf1-4b98-a5b2-07a612c991a7?section=rules",
+   "signedIn": true,
+   "from": "agent"
+  },
+  {
+   "key": "agents_ID__section-activity",
+   "url": "/agents/bc90026d-bbf1-4b98-a5b2-07a612c991a7?section=activity",
+   "signedIn": true,
+   "from": "agent"
+  },
+  {
+   "key": "agents_ID__section-settings",
+   "url": "/agents/bc90026d-bbf1-4b98-a5b2-07a612c991a7?section=settings",
+   "signedIn": true,
+   "from": "agent"
+  },
+  {
+   "key": "inbox__view-history",
+   "url": "/inbox?view=history",
+   "signedIn": true,
+   "from": "inbox"
+  },
+  {
+   "key": "inbox__outcome-denied_view-history",
+   "url": "/inbox?outcome=denied&view=history",
+   "signedIn": true,
+   "from": "inbox"
+  },
+  {
+   "key": "activity__view-agents",
+   "url": "/activity?view=agents",
+   "signedIn": true,
+   "from": "activity"
+  },
+  {
+   "key": "activity__view-types",
+   "url": "/activity?view=types",
+   "signedIn": true,
+   "from": "activity"
+  },
+  {
+   "key": "activity__view-services",
+   "url": "/activity?view=services",
+   "signedIn": true,
+   "from": "activity"
+  },
+  {
+   "key": "activity__attention-1",
+   "url": "/activity?attention=1",
+   "signedIn": true,
+   "from": "activity"
+  },
+  {
+   "key": "activity__type-read",
+   "url": "/activity?type=read",
+   "signedIn": true,
+   "from": "activity"
+  },
+  {
+   "key": "activity__type-change",
+   "url": "/activity?type=change",
+   "signedIn": true,
+   "from": "activity"
+  },
+  {
+   "key": "activity__type-approval",
+   "url": "/activity?type=approval",
+   "signedIn": true,
+   "from": "activity"
+  },
+  {
+   "key": "activity__type-report",
+   "url": "/activity?type=report",
+   "signedIn": true,
+   "from": "activity"
+  },
+  {
+   "key": "activity__agent-a2b5fea2_c5e4_4ef3_98c3_6d2ed22c6edf",
+   "url": "/activity?agent=a2b5fea2-c5e4-4ef3-98c3-6d2ed22c6edf",
+   "signedIn": true,
+   "from": "activity"
+  },
+  {
+   "key": "activity__entry-113",
+   "url": "/activity?entry=113",
+   "signedIn": true,
+   "from": "activity"
+  },
+  {
+   "key": "activity__run-cb9bcc78_f022_4dbf_bfd2_294cad1c5a36",
+   "url": "/activity?run=cb9bcc78-f022-4dbf-bfd2-294cad1c5a36",
+   "signedIn": true,
+   "from": "activity"
+  },
+  {
+   "key": "activity__before-14",
+   "url": "/activity?before=14",
+   "signedIn": true,
+   "from": "activity"
+  },
+  {
+   "key": "connectors__view-catalogue",
+   "url": "/connectors?view=catalogue",
+   "signedIn": true,
+   "from": "connectors"
+  },
+  {
+   "key": "connectors__category-email_view-catalogue",
+   "url": "/connectors?category=email&view=catalogue",
+   "signedIn": true,
+   "from": "connectors"
+  },
+  {
+   "key": "connectors__view-connected",
+   "url": "/connectors?view=connected",
+   "signedIn": true,
+   "from": "connectors:tab"
+  },
+  {
+   "key": "life-admin__view-tasks",
+   "url": "/life-admin?view=tasks",
+   "signedIn": true,
+   "from": "life-admin"
+  },
+  {
+   "key": "life-admin__assignee-any_view-tasks",
+   "url": "/life-admin?assignee=any&view=tasks",
+   "signedIn": true,
+   "from": "life-admin"
+  },
+  {
+   "key": "life-admin_items_ID",
+   "url": "/life-admin/items/11ab9662-2fd4-4dad-9739-918a197a386c",
+   "signedIn": true,
+   "from": "life-admin"
+  },
+  {
+   "key": "memory__scope-shared",
+   "url": "/memory?scope=shared",
+   "signedIn": true,
+   "from": "memory"
+  },
+  {
+   "key": "memory__source-you",
+   "url": "/memory?source=you",
+   "signedIn": true,
+   "from": "memory"
+  },
+  {
+   "key": "rules__status-active",
+   "url": "/rules?status=active",
+   "signedIn": true,
+   "from": "rules"
+  },
+  {
+   "key": "rules__status-paused",
+   "url": "/rules?status=paused",
+   "signedIn": true,
+   "from": "rules"
+  },
+  {
+   "key": "rules__view-new",
+   "url": "/rules?view=new",
+   "signedIn": true,
+   "from": "rules:tab"
+  },
+  {
+   "key": "rules__view-budgets",
+   "url": "/rules?view=budgets",
+   "signedIn": true,
+   "from": "rules:tab"
+  },
+  {
+   "key": "skills__view-add",
+   "url": "/skills?view=add",
+   "signedIn": true,
+   "from": "skills"
+  },
+  {
+   "key": "skills__view-preferences",
+   "url": "/skills?view=preferences",
+   "signedIn": true,
+   "from": "skills:tab"
+  },
+  {
+   "key": "life-admin__tab-upcoming",
+   "url": "/life-admin?tab=upcoming",
+   "signedIn": true,
+   "from": "manual"
+  },
+  {
+   "key": "life-admin__tab-bookings",
+   "url": "/life-admin?tab=bookings",
+   "signedIn": true,
+   "from": "manual"
+  },
+  {
+   "key": "life-admin__tab-checklist",
+   "url": "/life-admin?tab=checklist",
+   "signedIn": true,
+   "from": "manual"
+  }
+ ]
+}

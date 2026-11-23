@@ -1,5 +1,13 @@
 # Warthog comprehensive engineering audit
 
+**Member-app UI/UX audit and redesign proposal, 23 November (no code changed):** seven specialist
+reviewers (usability, information architecture, visual, interaction, design system, responsive,
+accessibility) plus a code-rules pass, over 381 captures of three seeded accounts with axe-core and
+density metrics. 178 findings consolidate into 55 issues (3 critical, 17 high). The audit also has
+a reorganised navigation with a phone bottom bar, page-by-page redesigns, a refined design system,
+wireframes and a phased roadmap, plus an evaluation of external UI/UX skills. See the
+[audit](uiux-audit-2026-11-23/README.md).
+
 **Life admin display fixes, 23 November:** main `8ed9c61` runs as `warthog--r45143920020a1`. PR #51
 shows a change of link in To check, gives agents a past trip as finished (one shared
 `recordPhases`), and drops stray "Type/Source → removed" lines. See the

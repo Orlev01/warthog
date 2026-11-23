@@ -1,0 +1,1368 @@
+{
+  "lens": "information-architecture",
+  "summary": "The IA follows the data model rather than what members are trying to do. On the phone, where members mostly use Warthog, a 15-item, 5-group sidebar sits behind a hamburger. It has no Inbox count, and Help and Contact fall below the fold on a phone and on a 1440×900 laptop. The groups are labelled in admin-console terms ('Workspace', 'Account resources', 'Insights', 'Manage'). The agent-first model is right, but it shows up as a three-level agent page (4 tabs × 3–4 sub-tabs, 7 separately saved forms, no Disconnect) plus a generic 'How access works / Manage for one agent' row on six pages. Settings that apply to the whole account or cut across pages are scattered: budgets in 4 places joined by signpost links; time zone and language in Skills › Preferences and again as Vault details; currency on Spending and Household; approval expiry in Rules while its partner setting is in Notifications. Life admin (16,859px on a phone), Activity (11,154px) and the Connectors catalogue (10,051px) show everything at once. A four-group sidebar, the brief's original five-tab phone bar (reusing the orphaned /more menu), a one-row agent page (Overview · Access · Limits · Activity) and a Settings › General tab would fix most of this without changing the data model.",
+  "scores": {
+    "scale": "0 (poor) – 4 (excellent)",
+    "findability": 2,
+    "labelling": 2,
+    "grouping": 2,
+    "navigation_depth_and_efficiency": 2,
+    "progressive_disclosure": 1,
+    "consistency_of_structure": 2,
+    "phone_navigation": 1,
+    "agent_first_model_surfacing": 2
+  },
+  "strengths": [
+    "The agent Overview already works as a hub: one summary line per resource ('0 services allowed', 'Reads your everyday details', 'Reading on · saving on', '1 rule applies'). It's the right basis for a single Access tab with disclosures.",
+    "The Inbox groups waiting requests by agent, writes each as one decision sentence with the agent's reason, and keeps History in its own tab.",
+    "Home's 'Your agents' card gives useful per-agent shortcuts (entries in the last 24 hours, needs attention, 'Set a budget'). Keep these when Home is reordered.",
+    "The IA is data-driven (nav.ts / workspace-navigation.ts NAV_GROUPS, sectionNavigation, AGENT_GROUPS), and the cross-links use real URLs (/agents/[id]?section=…), so a regroup is cheap and deep links can be kept as aliases.",
+    "Connected services already show 'Used by …', and the Settings index gives each destination a plain one-line description. Both are good patterns to reuse."
+  ],
+  "findings": [
+    {
+      "id": "IA-01",
+      "title": "On the phone, the everyday jobs are hidden: there is no bottom bar, no Inbox count, and the 15-item drawer runs past the screen. The desktop sidebar also runs past the screen and hides Help.",
+      "location": "All signed-in pages — src/components/shell/app-shell.tsx:223-283 (sidebar + drawer dialog), :233 (decorative workspace box); src/components/shell/workspace-navigation.ts:21-30 (NAV_GROUPS); src/components/shell/nav.ts:44-51 (/more)",
+      "problem": "Below 1024px every destination sits behind a hamburger: a modal drawer with 15 items in 5 groups. Inbox is 3rd and Activity is 9th, under 'Insights' after five resource pages. The chrome has no pending-count badge anywhere. The only sign that '4 requests are waiting' is a card on Home. Measured live at 390×844: the drawer list is 896px tall in a 699px area, so Household, Settings, Help and Contact us sit under the Sign out footer (Settings bottom 840, Help 932, Contact 976). The desktop sidebar also overflows at common laptop sizes: 776 vs 681px at 1440×900 and 670 vs 609px at 1280×800. Help and Contact us are hidden in both, partly because the large wordmark and the decorative 'W · Personal workspace' box take about 150px. The legacy /more page is a grouped menu that already has a phone Sign out, but nothing links to it.",
+      "why": "The brief says users are on their phone 'approving requests on the go, glancing at the activity feed'. Its design_ux.feel asks for 'everything reachable in two taps from the mobile bottom navigation (Home, Inbox, Activity, Agents, More)'. Navigation hidden in a drawer is used less (NN/g hamburger studies). Visibility of system status (Nielsen #1) also fails: the chrome never shows that approvals are waiting.",
+      "impact": "The primary persona (a phone user) needs 2 taps plus scrolling to reach Inbox or Activity and gets no persistent cue that something waits for them. Desktop users never see Help or Contact us without scrolling the sidebar.",
+      "severity": "high",
+      "recommendation": "Below 1024px, add a fixed bottom tab bar to AppShell: Home · Inbox · Activity · Agents · More. Give it 44px+ targets, aria-current and safe-area padding. Inbox shows the waiting count as a <Badge>. Load the count once in src/app/(portal)/(protected)/layout.tsx next to listAgentsForUser and pass it through PortalChrome. 'More' goes to the existing /more page, with MoreMenu regrouped as in proposed_ia. MoreMenu already groups items and carries the phone Sign out. Retire the drawer. On desktop, reorder the top group to Home, Inbox, Activity, Agents and show the same Inbox badge. Delete the decorative workspace box at app-shell.tsx:233. Pin an 'Account' footer group (Household, Settings, Help & support) so it is never below the fold. Amend brief design_ux.feel and docs/adr/admin-console-design.md, which replaced the bottom nav with the drawer.",
+      "effort": "M",
+      "type": "structural",
+      "evidence": [
+        "<review-scratch>/ia/phone-drawer.png",
+        "<capture-run>/typical/shots/light-1440/home.s1.jpg",
+        "<capture-run>/typical/shots/light-390/home.s1.jpg",
+        "live Playwright (review/ia/drawer.mjs, drawer2.mjs): sidebar nav 1440×900 scrollHeight 776 / clientHeight 681, hidden ['Help','Contact us']; 1280×800 670/609; 1024×768 670/577; phone drawer 896/699",
+        "src/components/shell/workspace-navigation.ts:21-30",
+        "src/components/shell/nav.ts:44-51 (/more referenced only by src/server/http/traffic.ts:28)"
+      ],
+      "related_pages": [
+        "every (protected) route",
+        "/more"
+      ]
+    },
+    {
+      "id": "IA-02",
+      "title": "The agent page has three levels of navigation: two tab rows and seven sub-pages, each saved separately, with labels that don't match the account pages",
+      "location": "/agents/[id] — src/components/shell/workspace-navigation.ts:133-161 (AGENT_GROUPS/agentNavigation); src/app/(portal)/(protected)/agents/[id]/page.tsx:265-300; src/components/agents/permissions-view.tsx:416-445",
+      "problem": "An agent's access is split into Overview · Resources (Connectors · Vault · Skills · Memory) · Controls (Spending · Rules · Settings) · Activity. Each sub-tab is a full page load with its own Save and no unsaved-changes guard. Reviewing or changing one agent's whole access therefore takes 7 visits and up to 7 saves, and switching sub-tab silently drops unsaved toggles. On a 390px phone, the agent header and the two tab rows push the first control down to y≈418 (Settings) and y≈875 (Memory). The mirror of the account pages isn't exact. The agent's 'Vault' covers identity only, and card access sits under the agent's 'Spending', while the account Vault holds About you and Cards. Life admin is an account resource, but the agent's Tasks & records access hides under Controls › 'Settings', with the request limit under Advanced. 'Resources' and 'Controls' are abstract nouns.",
+      "why": "A sidebar section with two stacked tab rows under it is 4 levels of hierarchy for about 30 controls. It breaks Consistency & standards (Nielsen #4): Vault and Settings mean different things at account and agent level. agent-first-management.md makes the agent the management unit, which works best with one place to see and change everything an agent can do.",
+      "impact": "This affects every member setting up or auditing an agent (key flows 4 and 10). It is the most tab-heavy screen on the phone, and unsaved changes are lost without warning.",
+      "severity": "high",
+      "recommendation": "Flatten to one tab row: Overview · Access · Limits · Activity. Access renders the existing PermissionsForm with section 'all' (PermissionsSection already allows it) as stacked <details> groups: Services, About you, Skills, Memory, Tasks & records. Each group's summary is the line Overview already computes (agent-workspace.tsx:112-146, e.g. '0 services allowed', 'Reading on · saving on'), and the tab has one Save bar. Limits holds card access and budget, this agent's rules, and the request limit. Disconnect and the access key move to the header and an Overview 'Connection' panel (IA-03). Keep the old ?section= values as aliases that open Access or Limits with the matching group expanded, so existing deep links still work ('Manage for one agent', Home 'Set a budget', Rules 'Set X's budget').",
+      "effort": "L",
+      "type": "structural",
+      "evidence": [
+        "<capture-run>/typical/shots/light-390/agents_ID__section-connectors.s1.jpg",
+        "<capture-run>/typical/shots/light-390/agents_ID__section-vault.s1.jpg",
+        "<capture-run>/typical/shots/light-390/agents_ID__section-spending.s1.jpg",
+        "<capture-run>/typical/shots/light-1440/agents_ID__section-settings.s1.jpg",
+        "<capture-run>/typical/shots/light-1440/agents_ID__section-overview.s1.jpg",
+        "live typical 390×844: first form starts at y=418 (settings), y=875 (memory)",
+        "metrics agents_ID__section-settings light-390: 3,225px; 9 sections in AGENT_SECTIONS (src/domain/permissions/workspace.ts:1-11)",
+        "no beforeunload/dirty guard in permissions-form.tsx / permissions-view.tsx (grep)"
+      ],
+      "related_pages": [
+        "/agents/[id]?section=overview|connectors|vault|skills|memory|spending|rules|settings|activity"
+      ]
+    },
+    {
+      "id": "IA-03",
+      "title": "The agent's own page has no Disconnect button",
+      "location": "/agents/[id] — src/components/agents/agent-workspace.tsx:34-90 (AgentWorkspaceHeader) vs src/components/agents/agent-list-view.tsx:116-140,207",
+      "problem": "The one-switch kill only exists as a button on each /agents list card. Brief key flow 10 is 'AGENTS — open ChatGPT, tap Disconnect, confirm'. The agent's own page (header, Overview, Controls › Settings) has no Disconnect. The only nearby control is 'Revoke' in the access-key panel, which only key-based agents have. Someone who opens the agent to stop it hits a dead end and has to go back to the list.",
+      "why": "People expect the action on the object they opened (match between system and real world). One-switch revocation is the core safety promise in the brief.",
+      "impact": "Anyone urgently cutting off a misbehaving agent loses time and second-guesses themselves at a stressful moment.",
+      "severity": "high",
+      "recommendation": "Render the existing DisconnectControl (same server action, same confirmation) in AgentWorkspaceHeader as a danger secondary button. Repeat it at the bottom of Overview in a 'Connection' panel that says what happens: access ends, its waiting requests are denied, uncollected releases are cancelled. Keep the list button.",
+      "effort": "S",
+      "type": "functional",
+      "evidence": [
+        "<capture-run>/typical/shots/light-1440/agents_ID__section-overview.s1.jpg",
+        "<capture-run>/typical/shots/light-1440/agents_ID__section-overview.s2.jpg",
+        "<capture-run>/typical/shots/light-1440/agents_ID__section-settings.s4.jpg",
+        "<capture-run>/typical/shots/light-390/agents.s1.jpg",
+        "grep: 'Disconnect' appears in agent-list-view.tsx only; none in agent-workspace.tsx or agents/[id]/page.tsx"
+      ],
+      "related_pages": [
+        "/agents"
+      ]
+    },
+    {
+      "id": "IA-04",
+      "title": "Time zone, language and currency are split across Skills, Vault, Spending and Household, and Settings has none of them",
+      "location": "/skills?view=preferences — src/components/skills/skills-view.tsx:141,703-710; /vault Add a detail — src/components/vault/low-tier-detail-flow.tsx:86-87, identity-view.tsx:155-175; /spending — spending-view.tsx:278-286; /household — household-view.tsx:506; /settings — settings-index.tsx:42-49; src/server/spending/time-zone.ts:29",
+      "problem": "The account time zone sets budget periods and every time shown ('Times are Sydney time' on Activity). It is a free-text field under Skills › Preferences, next to tone and length, and that form won't save until all six fields are filled ('Fill in all six to save them'). Vault › Add a detail separately offers 'Language' and 'Time zone' as everyday details, stored somewhere else. Setting the time zone there changes nothing, because timeZoneFor reads only the preferences profile. Account currency is a select in the Spending page heading, and household currency is a third control on Household. Settings has only a link card that leaves for Skills.",
+      "why": "The brief puts Preferences under Settings ('Settings with Security and Preferences') and says 'Money always with currency (default AUD, configurable)'. People look for time zone, currency and language in Settings almost everywhere. Two fields with the same name and different effects break consistency and trust.",
+      "impact": "This hits every member, and members outside Sydney most: budgets reset at the wrong time and they can't find where to fix it. The Vault field looks like the fix but does nothing.",
+      "severity": "high",
+      "recommendation": "Add Settings › General as the first tab, replacing the Overview index. It holds Time zone (a select of IANA zones defaulted from the browser), Language, Units and Account currency, each saved on its own. Replace the currency form in the Spending heading with 'Amounts in AUD · Change', linking to General. Remove 'Language' and 'Time zone' from the Vault Add-a-detail kinds (agents get them from get_context) and migrate existing values. Keep tone, length and briefing in Skills as 'How agents write for you' and drop the all-six rule. Household currency stays on Household, labelled 'shared with your household'.",
+      "effort": "M",
+      "type": "structural",
+      "evidence": [
+        "<capture-run>/typical/shots/light-1440/skills__view-preferences.s1.jpg",
+        "<capture-run>/typical/shots/light-390/settings.s1.jpg",
+        "<capture-run>/typical/shots/light-1440/spending.s1.jpg",
+        "<capture-run>/typical/shots/light-1440/household.s3.jpg",
+        "<capture-run>/typical/shots/light-1440/activity.s1.jpg",
+        "src/server/spending/time-zone.ts:1-31 (time zone read only from preferences profile)",
+        "low-tier-detail-flow.tsx:86-87 ['language','Language'],['time_zone','Time zone']"
+      ],
+      "related_pages": [
+        "/skills",
+        "/vault",
+        "/spending",
+        "/household",
+        "/settings"
+      ]
+    },
+    {
+      "id": "IA-05",
+      "title": "Spending, budgets and limits are spread over four places joined by signpost links, and there is no monthly total",
+      "location": "/spending — src/components/spending/spending-view.tsx:394-427; /rules?view=budgets — src/components/rules/rules-view.tsx:577-620,897; /agents/[id]?section=spending; /household — household-view.tsx:449,506",
+      "problem": "Setting Claude's monthly budget from Spending takes two page hops. 'Card budgets' goes to Rules & budgets › Budgets, a tab of links only ('Set Claude's budget'), which then goes to the agent's Controls › Spending. Household budget and member limits are on Household: shown read-only in a 'Budget' panel and edited in a separate 'Budget, limits and currency' panel two panels further down. Per-purchase caps are 'a Never allow rule in New rule'. 'Rules & budgets' promises budgets but holds none. Spending lists each agent's approved amount and a household total, but never 'your agents' total this month'.",
+      "why": "Content should sit where the task happens (task-based IA). Signpost-only pages are a sign that the IA is fragmented. Brief flow: 'SPENDING — Claude's $42 against its $200 monthly budget'.",
+      "impact": "Controlling spending is a core job. Capping an agent takes 4–6 taps and two page hops, and answering 'how much did my agents spend this month?' takes mental arithmetic.",
+      "severity": "high",
+      "recommendation": "Make Spending the hub for money. 1) A top summary: 'This month: AUD 42.00 approved across 3 agents', per currency. 2) Per-agent rows showing 'spent of budget · Set budget / Change', linking straight to that agent's Limits (per-agent budgets still live on the agent page, so agent-first holds) and skipping the Rules hop. 3) A Household card with budget and limit and a 'Change' link to Household's single budget panel. Delete the Rules 'Budgets' tab and rename the nav item to 'Rules'. Add a 'Per-purchase limit' template to New rule. On Household, merge the read-only Budget panel into the edit panel.",
+      "effort": "M",
+      "type": "structural",
+      "evidence": [
+        "<capture-run>/typical/shots/light-1440/spending.s1.jpg",
+        "<capture-run>/typical/shots/light-1440/spending.s2.jpg",
+        "<capture-run>/typical/shots/light-1440/rules__view-budgets.s1.jpg",
+        "<capture-run>/typical/shots/light-1440/household.s2.jpg",
+        "<capture-run>/typical/shots/light-1440/household.s3.jpg",
+        "<capture-run>/typical/shots/light-390/agents_ID__section-spending.s1.jpg",
+        "spending-view.tsx:394-398 budgetsLink → /rules?view=budgets"
+      ],
+      "related_pages": [
+        "/rules",
+        "/household",
+        "/agents/[id]?section=spending",
+        "/home (Your agents 'Set a budget')"
+      ]
+    },
+    {
+      "id": "IA-06",
+      "title": "Life admin shows all 25 agent-found records fully expanded with three buttons each: 16,859px on a phone. PR #52 fixes the tabs but not this.",
+      "location": "/life-admin — src/components/life-admin/records-view.tsx:118-340 (To check / Found by your agents), life-admin-screen.tsx, life-admin-view.tsx",
+      "problem": "The default Records tab opens with 'To check · Found by your agents (25)'. Each card shows every field (amount, issuer, notice number…), 'Added by', and Confirm / Not mine / Edit. One page carries 26 primary-styled buttons, 697 controls and 1,997 words. Nested tabs add two more rows (Records & reminders | Tasks, then Records | Upcoming | Bookings | Moving checklist). PR #52 collapses those tabs to Records | Upcoming | History | Tasks, but its body says 'To check stays at the top' of Records, so this wall stays.",
+      "why": "It needs progressive disclosure, and it breaks the brief's 'one clear primary action per screen' (design_ux.feel). Hick's law: 25 identical black buttons slow every decision.",
+      "impact": "Confirming agent-found records is a recurring life-admin job, and it means scrolling about 10,000px past 25 identical buttons. Phone users can't tell how many are left.",
+      "severity": "high",
+      "recommendation": "Turn To check into a compact queue. Each record is one row (type · title · key date · 'Added by ChatGPT') with Confirm and a 'Details' disclosure holding fields, Not mine and Edit. Show the first 5, then 'Review all 25', which opens a one-at-a-time review (?review=1, with Confirm / Not mine / Skip and 'n of 25'). Add per-agent bulk actions ('Confirm all 9 from ChatGPT'). Show the To check count on the Records tab, and keep Home's 'things to check' link pointing at it. Build this on #52's four tabs.",
+      "effort": "M",
+      "type": "structural",
+      "evidence": [
+        "<capture-run>/typical/shots/light-1440/life-admin.s1.jpg",
+        "<capture-run>/typical/shots/light-1440/life-admin.s2.jpg",
+        "metrics life-admin light-390: 16,859px, 1,997 words, 697 controls, 26 primary buttons, 27 disclosures (worst light-390: 16,939px)",
+        "gh pr view 52: 'To check stays at the top'"
+      ],
+      "related_pages": [
+        "/home (Reminders '25 things to check')"
+      ]
+    },
+    {
+      "id": "IA-07",
+      "title": "Activity is a flat list of every tool call: 59 entries for 'Today', 119 disclosures and duplicated report entries",
+      "location": "/activity — src/components/activity/activity-view.tsx:870-917",
+      "problem": "The default Timeline shows every entry for the day at full size, each with its own 'View details' disclosure: 11,154px on a phone and 369 controls. Repeated calls stay separate: 'Add a task · Keeping track' appears 12 times in a row. Each agent report appears twice, once as the 'Add a note to activity' tool call and once as the 'Agent report' with the same text. Waiting approvals also show here, repeating the Inbox. The header's only action is 'Check integrity', a rarely needed check. The data already groups by conversation (the ?run= filter, agent Overview 'Recent conversations'), but the timeline doesn't use it.",
+      "why": "The brief says phone users 'glance at the activity feed', and a glance needs aggregation, not raw events. The repeats and duplicates drown the entries that matter (signal-to-noise).",
+      "impact": "'What did Claude do today?' can't be answered at a glance, and changes and blocked attempts are buried among reads and repeats.",
+      "severity": "high",
+      "recommendation": "Group the default Timeline by conversation (run) within each day. Each run is one collapsed row ('ChatGPT · Weekly household admin · 14 actions · 2 changes · 1 blocked') that expands to its entries. Collapse consecutive identical tool calls from one agent into '12 × Add a task'. Hide the 'Add a note to activity' call when its Agent report is shown. Cap the first page at about 25 rows (the 'Older entries' link already exists). Move 'Check integrity' to a 'Record integrity' panel at the foot of the page. Keep the views and filter chips.",
+      "effort": "M",
+      "type": "structural",
+      "evidence": [
+        "<capture-run>/typical/shots/light-390/activity.s1.jpg",
+        "<capture-run>/typical/shots/light-390/activity.s2.jpg",
+        "<capture-run>/typical/shots/light-390/activity.s6.jpg",
+        "<capture-run>/typical/shots/light-1440/activity.s1.jpg",
+        "metrics activity light-390: 11,154px, 1,982 words, 369 controls, 119 disclosures; worst light-390: 9,774px",
+        "run/typical/metrics/light-390__activity.json headings: 'Add a task' ×12 consecutive; 'Add a note to activity'/'Agent report' pairs"
+      ],
+      "related_pages": [
+        "/agents/[id]?section=activity",
+        "/home (Recent activity)"
+      ]
+    },
+    {
+      "id": "IA-08",
+      "title": "Home buries the decision and then repeats it: Inbox is a single count line, and the same waiting requests come back in Recent activity",
+      "location": "/home — src/components/home/dashboard-view.tsx:219-300 (checklist, Inbox, Recent activity), :362 (Your agents), :417-440 (Reminders), :557",
+      "problem": "On a phone the order is: greeting card; 'Finish setting up' (5 rows, still at the top at 1 of 5 for an active user with 4 waiting approvals); Inbox, which is one sentence ('4 requests are waiting for your approval'); Recent activity, whose first 4 rows are those same requests marked 'Waiting for you'; Your agents (screen 3); and Reminders (screen 4), which mixes '25 things to check' with upcoming dates. The page is 3,234px tall.",
+      "why": "The brief defines Home as 'what needs your decision, what your agents have done and what's coming up'. The layout should follow that order, and Distill says 'if it's said elsewhere, don't repeat it here'.",
+      "impact": "Phone users scroll 2–3 screens to reach their agents or reminders, and read the same requests twice.",
+      "severity": "medium",
+      "recommendation": "Reorder Home. 1) Inbox: the top 3 waiting requests as one-line rows (the approval sentence plus 'Review'), then 'All 4'. 2) Today: merge Your agents and Recent activity into one row per agent ('Claude · 12 actions · 2 changes · AUD 42 of 300' → its filtered Activity), leaving out waiting items. 3) Coming up: reminders and due tasks, with 'To check: 25' as a single link row. 4) Once an agent is connected, shrink the setup checklist to a dismissible one-line progress row ('1 of 5 set up · Continue'). Drop the greeting card on phones.",
+      "effort": "M",
+      "type": "structural",
+      "evidence": [
+        "<capture-run>/typical/shots/light-390/home.s1.jpg",
+        "<capture-run>/typical/shots/light-390/home.s2.jpg",
+        "<capture-run>/typical/shots/light-390/home.s4.jpg",
+        "<capture-run>/typical/shots/light-1440/home.s2.jpg",
+        "metrics home light-390: 3,234px (worst 3,585px)"
+      ],
+      "related_pages": [
+        "/inbox",
+        "/activity"
+      ]
+    },
+    {
+      "id": "IA-09",
+      "title": "Group and section labels use system jargon: 'Account resources', 'Insights', 'Manage', 'Workspace', 'Connectors'",
+      "location": "src/components/shell/workspace-navigation.ts:21-30; src/components/shell/app-shell.tsx:233 (Personal workspace), :172 (breadcrumb root); src/components/agents/connect-guide.tsx:147,173",
+      "problem": "'Workspace' and the 'W · Personal workspace' box borrow multi-workspace admin-console wording for a one-person app. 'Account resources' names a data-ownership idea, not what's inside (services, details, memory, skills, paperwork). 'Insights' and 'Manage' are generic buckets: 'Manage' holds Rules, Household and Settings, which have nothing in common. 'Connectors' clashes with the agent set-up guide, where Warthog itself is the 'custom connector' added to Claude ('Can't add a connector?'). The Connectors page meanwhile says 'Your services', and Home says 'Connect a service'. 'Rules & budgets' holds no budgets (IA-05).",
+      "why": "Match between system and real world (Nielsen #2). The brief's copy rules ask for plain words and 'never a developer console'.",
+      "impact": "New members, who aren't developers, can't predict where things are from the menu. The double meaning of 'connector' lands on the most fragile step: connecting an agent.",
+      "severity": "medium",
+      "recommendation": "Rename Connectors to Services (the /connectors route can stay). Regroup as: an unlabelled top group (Home, Inbox, Activity, Agents); 'What agents can use' (Services, Vault, Life admin, Memory, Skills); 'Spending & rules' (Spending, Rules); and a pinned 'Account' footer (Household, Settings, Help & support). Remove the 'Personal workspace' box and the 'Workspace' breadcrumb root. Keep Vault, Memory, Skills and Life admin, which fit the jobs ('life admin' is familiar in Australian English). Make the agent page use the same nouns (Access › Services).",
+      "effort": "S",
+      "type": "structural",
+      "evidence": [
+        "<capture-run>/typical/shots/light-1440/home.s1.jpg",
+        "<capture-run>/typical/shots/light-390/connectors.s1.jpg",
+        "connect-guide.tsx:147 'where your agent adds a custom connector', :173 'Can't add a connector?'",
+        "connectors-view.tsx:652 'Your services'"
+      ],
+      "related_pages": [
+        "sidebar/drawer",
+        "/agents/connect",
+        "/connectors"
+      ]
+    },
+    {
+      "id": "IA-10",
+      "title": "Activity|Spending and Memory|Skills are route tabs of each other and also separate sidebar items, adding a third navigation layer",
+      "location": "src/components/shell/workspace-navigation.ts:101-112 (sectionNavigation)",
+      "problem": "Memory and Skills each carry 'Memory | Skills' route tabs, in the opposite order to the sidebar (Skills, Memory). Activity and Spending carry 'Activity | Spending'. These repeat the sidebar and suggest pairings nothing else follows (Services, Vault and Life admin have no siblings). On Skills they stack a third row on a phone: menu → Memory|Skills → Library | Import & create | Preferences, plus the scope disclosure, pushing content down to about 430px.",
+      "why": "Route tabs should be sub-pages of one thing. Duplicate navigation adds choices without reaching anything new.",
+      "impact": "Every visit pays for extra rows, and it's unclear what Skills belongs to.",
+      "severity": "medium",
+      "recommendation": "Delete the two sibling-pair branches in sectionNavigation (lines 101-112). Keep route tabs only for real sub-pages: Settings, Vault (About you · Cards) and Agents (Your agents · Defaults for new agents).",
+      "effort": "S",
+      "type": "structural",
+      "evidence": [
+        "<capture-run>/typical/shots/light-390/skills.s1.jpg",
+        "<capture-run>/typical/shots/light-1440/memory.s1.jpg",
+        "<capture-run>/typical/shots/light-1440/spending.s1.jpg",
+        "<capture-run>/typical/shots/light-390/activity.s1.jpg"
+      ],
+      "related_pages": [
+        "/memory",
+        "/skills",
+        "/activity",
+        "/spending"
+      ]
+    },
+    {
+      "id": "IA-11",
+      "title": "The 'How access works / Manage for one agent' row repeats the page description on six pages",
+      "location": "src/components/agents/resource-scope.tsx:18-113 (on /connectors, /vault, /skills, /memory, /spending, /rules)",
+      "problem": "Every account-resource page has the same two disclosures. 'How access works' restates the heading's own description. Memory's heading says 'Shared memories can be read by every agent you let read memory; private ones stay with the agent that saved them', and the disclosure says 'Shared memories are readable by permitted agents; private memories stay with their source agent'. Connectors and Rules repeat the same way. On phones the two disclosures stack on separate lines (about 90px). 'Manage for one agent' opens a generic agent list that lands on that agent's matching sub-tab, not on the item the person is looking at.",
+      "why": "Say it once (Distill). Controls tied to the item in view work better than generic ones.",
+      "impact": "Every resource visit carries this noise, and the useful agent link is easy to miss because it looks like help text.",
+      "severity": "medium",
+      "recommendation": "Remove 'How access works' and keep the description sentence. Replace 'Manage for one agent' with a compact plain-link row under the description: 'Agent access: Claude · ChatGPT · Gemini' (same hrefs). Where an item has per-agent state, show it on the item: Connectors already shows 'Used by …'; add the same to skills and shared memories (see IA-18).",
+      "effort": "S",
+      "type": "structural",
+      "evidence": [
+        "<capture-run>/typical/shots/light-390/connectors.s1.jpg",
+        "<capture-run>/typical/shots/light-1440/memory.s1.jpg",
+        "<capture-run>/typical/shots/light-1440/rules.s1.jpg",
+        "<capture-run>/typical/shots/light-1440/vault.s1.jpg",
+        "resource-scope.tsx:37-54 vs page descriptions"
+      ],
+      "related_pages": [
+        "/connectors",
+        "/vault",
+        "/skills",
+        "/memory",
+        "/spending",
+        "/rules"
+      ]
+    },
+    {
+      "id": "IA-12",
+      "title": "Settings mixes agent policy with account settings: agent defaults are set in three places and approval expiry sits in Rules",
+      "location": "/settings — src/components/settings/settings-index.tsx, src/components/shell/nav.ts:19-26; /settings/agents; /connectors 'On for new agents' (connectors-view.tsx:619-671); /rules approval expiry (rules-view.tsx:516-546); /settings/notifications 'If you miss an alert' (notifications-view.tsx:341)",
+      "problem": "Settings is an Overview index plus Agent defaults · Security · Notifications · Data & privacy, with a 'Preferences' card that leaves for Skills. 'Agent defaults' is policy about agents, and it's incomplete: which service accounts a new agent gets is set per account on Connectors ('On for new agents'), and a skill's default audience is set on Skills. Agents also has its own 'Agent defaults' button. 'How long requests wait' (approval expiry) is a panel at the bottom of Rules, while the related 'If you miss an alert' delay is in Settings › Notifications. The Rules copy even says 'after the delay set in Settings'. On a 390 phone the 5 route tabs run off the screen ('Notificati…').",
+      "why": "Group by what the person is trying to do: 'how I get asked' is one topic, and 'what a new agent starts with' is another.",
+      "impact": "Members tuning approvals or setting up a second agent bounce between 3 pages.",
+      "severity": "medium",
+      "recommendation": "Make Settings four tabs: General (IA-04) · Security · Notifications & approvals (push, texts, 'If you miss an alert', and approval expiry moved from Rules) · Data & privacy. Drop the Overview index and land on General. Move Agent defaults to Agents as a 'Defaults for new agents' route tab that shows the permission template, the services that are 'on for new agents' (read-only, linking to Services), and the skills shared with all agents.",
+      "effort": "M",
+      "type": "structural",
+      "evidence": [
+        "<capture-run>/typical/shots/light-390/settings.s1.jpg",
+        "<capture-run>/typical/shots/light-1440/settings_agents.s1.jpg",
+        "<capture-run>/typical/shots/light-1440/settings_agents.s2.jpg",
+        "<capture-run>/typical/shots/light-390/rules.s2.jpg",
+        "<capture-run>/typical/shots/light-390/agents.s1.jpg"
+      ],
+      "related_pages": [
+        "/settings/*",
+        "/rules",
+        "/connectors",
+        "/agents"
+      ]
+    },
+    {
+      "id": "IA-13",
+      "title": "Household is one long scroll of up to nine panels, in an order that separates related things",
+      "location": "/household — src/components/household/household-view.tsx:332-650",
+      "problem": "The order is: Members → Shared address → Your postal address (a personal Vault choice) → Budget (read-only) → Invite a member (with 'Waiting to join' inside it rather than under Members) → Budget, limits and currency (the edit form for the panel two above) → Transfer ownership → Close the household / Leave. It's 2,654px on a phone, and pending invitees aren't listed with members.",
+      "why": "Related items belong together, and each object should live in one place.",
+      "impact": "Owners inviting a partner or setting a budget (key flow 9) scroll past unrelated panels. Splitting the budget's view from its edit form leaves people asking 'where do I change this?'.",
+      "severity": "medium",
+      "recommendation": "Reorder into: Members (members, pending invites, and an 'Invite someone' button that reveals the email field) → Shared address → Budget & limits (one panel: totals first, then the edit fields and household currency) → an 'Ownership and leaving' disclosure holding Transfer, Close and Leave. Move 'Use the household address' to Vault › About you, next to Postal address.",
+      "effort": "M",
+      "type": "structural",
+      "evidence": [
+        "<capture-run>/typical/shots/light-1440/household.s1.jpg",
+        "<capture-run>/typical/shots/light-1440/household.s2.jpg",
+        "<capture-run>/typical/shots/light-1440/household.s3.jpg",
+        "metrics household light-390: 2,654px, 9 surfaces"
+      ],
+      "related_pages": [
+        "/vault",
+        "/spending"
+      ]
+    },
+    {
+      "id": "IA-14",
+      "title": "The same real-world document lives in two places that don't link to each other (passport, licence, rego, address)",
+      "location": "/vault protected details (src/components/vault/identity-view.tsx:170-175) vs /life-admin ID and vehicle records (src/domain/life-admin/record-types.ts:212,346); /household 'Your postal address'",
+      "problem": "A passport's number belongs in Vault › Protected details, and its expiry reminder belongs in a Life admin 'Passport' record (the copy says 'The numbers stay in your Vault'). Neither page links to the other. Adding a passport in the Vault sets no reminder, and the Life admin record 'Alexandra's passport' doesn't say whether the number is stored. Car registration is the same: a Vault protected type (car_registration) and a Life admin 'Registration' record. Postal address is edited in both Vault and Household.",
+      "why": "People think in objects ('my passport'), not storage tiers. The brief stresses that members care where passport details go.",
+      "impact": "Duplicate, unlinked entries erode trust and lead to missed renewals.",
+      "severity": "medium",
+      "recommendation": "Link both ways. Life admin ID and vehicle records show 'Number: kept in your Vault · Add / View' (link to /vault). After a passport, licence or rego is saved in the Vault, offer 'Remind me before it expires', which opens the Life admin add-record form pre-filled with that type. For the address, see IA-13.",
+      "effort": "M",
+      "type": "structural",
+      "evidence": [
+        "<capture-run>/typical/shots/light-1440/vault.s1.jpg",
+        "<capture-run>/typical/shots/light-1440/vault.s2.jpg",
+        "<capture-run>/typical/shots/light-1440/agents_ID__section-settings.s3.jpg (records list shows 'Alexandra's passport', 'Driver licence')",
+        "grep: no /vault link in life-admin components except the moving checklist that PR #52 removes"
+      ],
+      "related_pages": [
+        "/vault",
+        "/life-admin",
+        "/life-admin/items/[id]",
+        "/household"
+      ]
+    },
+    {
+      "id": "IA-15",
+      "title": "Agent › Settings lists every record as a checkbox, even when 'All my records' is selected",
+      "location": "/agents/[id]?section=settings — src/components/agents/permissions-view.tsx:436-441",
+      "problem": "Under 'Which records it can see' (default 'All my records, including new ones'), the form always shows one checkbox card per record, 25 in the typical account, and they do nothing in that mode. The page is 3,285px on a phone and Save is at the very end. The Memory section does the same, with one toggle per memory.",
+      "why": "Progressive disclosure: show dependent controls only when the choice above them makes them relevant.",
+      "impact": "Owners adjusting an agent's life-admin access scroll about 2,500px of checkboxes that have no effect.",
+      "severity": "medium",
+      "recommendation": "Show the record checklist only when 'Only records I tick' is chosen, using a CSS :has() rule on the selected option or small client state. Put it inside a 'Choose records (25)' disclosure with search. Do the same for per-memory toggles behind 'Choose memories'.",
+      "effort": "S",
+      "type": "structural",
+      "evidence": [
+        "<capture-run>/typical/shots/light-1440/agents_ID__section-settings.s1.jpg",
+        "<capture-run>/typical/shots/light-1440/agents_ID__section-settings.s3.jpg",
+        "<capture-run>/typical/shots/light-1440/agents_ID__section-settings.s4.jpg",
+        "live typical 390×844: 3,285px, 29 checkboxes"
+      ],
+      "related_pages": [
+        "/agents/[id]?section=memory"
+      ]
+    },
+    {
+      "id": "IA-16",
+      "title": "Connectors opens on the full 103-service catalogue",
+      "location": "/connectors (Catalogue view) — src/components/connectors/connectors-view.tsx:640-760",
+      "problem": "With no services connected (first run, and the typical account), Connectors lands on Catalogue. It shows 'Popular' and then all 103 services as cards: 10,051px on a phone, 110 surfaces, 131 controls.",
+      "why": "It needs progressive disclosure, and Hick's law applies. The brief's flow is 'search the catalogue'.",
+      "impact": "First-run members (key flow 3) scroll a wall of logos. Search is faster but sits above an endless list.",
+      "severity": "medium",
+      "recommendation": "By default, show search, category chips and 'Popular' (6–8). Show the other categories as collapsed groups with counts ('Email (8)', 'Calendar (5)'), or add a 'Browse all 103' link that reveals the full list. Keep the category filter URLs.",
+      "effort": "S",
+      "type": "structural",
+      "evidence": [
+        "<capture-run>/typical/shots/light-390/connectors.s1.jpg",
+        "metrics connectors light-390: 10,051px, 736 words, 131 controls, 110 surfaces (firstrun 10,007px)"
+      ],
+      "related_pages": [
+        "/connectors?view=catalogue"
+      ]
+    },
+    {
+      "id": "IA-17",
+      "title": "Help takes you out of the app, and Help and Contact are two separate, hidden destinations",
+      "location": "src/components/shell/app-shell.tsx:302-310 ('?' icon); NAV_GROUPS 'Help' → public /help (src/app/help/page.tsx:124-131); /contact",
+      "problem": "The top-bar '?' and the sidebar Help open the public page with the marketing header (Help · Sign in). A signed-in member looks signed out and has no link back into the app. Contact us is a separate sidebar item, hidden below the fold on desktop and in the phone drawer (IA-01). Help itself says 'Signed in? Use Contact us in Warthog'.",
+      "why": "Keep people in context (user control and freedom, consistency).",
+      "impact": "Members who need help mid-task lose their place, and support is hard to find.",
+      "severity": "medium",
+      "recommendation": "Add an in-app help route inside the (protected) group that renders the same help sections inside AppShell (extract the PublicSection content into a shared component), with the Contact form at the bottom. Make it one nav item, 'Help & support', and point the '?' icon at it. Keep the public /help for signed-out people.",
+      "effort": "M",
+      "type": "structural",
+      "evidence": [
+        "<capture-run>/typical/shots/light-390/help.s1.jpg",
+        "<capture-run>/typical/shots/light-390/contact.s1.jpg",
+        "metrics help is a public page (no shell); app-shell.tsx:302-310"
+      ],
+      "related_pages": [
+        "/help",
+        "/contact"
+      ]
+    },
+    {
+      "id": "IA-18",
+      "title": "Letting only Claude use Gmail means visiting every agent's page",
+      "location": "/connectors Your services rows (src/components/connectors/connectors-view.tsx:459-494 'Used by …') vs /agents/[id]?section=connectors",
+      "problem": "A connected-service row shows 'Used by ChatGPT, Claude' but can't change it. Access can only be changed one agent at a time: menu → Agents → agent → Resources → toggle → Save, repeated for 3 agents, about 18 taps on a phone. Skills (audience) and shared memories work the same way.",
+      "why": "Agent-first is the right default, but some tasks start from the service. The same grant should be editable from both ends.",
+      "impact": "Members tightening access to a sensitive service (email) right after connecting it.",
+      "severity": "medium",
+      "recommendation": "Add an 'Agents' disclosure to each connected service row. It lists every connected agent with Off / Read / Ask first / Allow for that service and saves through the existing per-agent savePermissions action, one call per changed agent (the merge-only save already exists). Writes stay per-agent grants, so the agent-first model holds. Give skills and shared memories the same 'Used by · Change'.",
+      "effort": "M",
+      "type": "functional",
+      "evidence": [
+        "<capture-run>/typical/shots/light-390/agents_ID__section-connectors.s1.jpg",
+        "connectors-view.tsx:492-494, :647 'choose which agents can use each one, on that agent's page'"
+      ],
+      "related_pages": [
+        "/skills",
+        "/memory",
+        "/agents/[id]?section=connectors"
+      ]
+    },
+    {
+      "id": "IA-19",
+      "title": "Tasks handed to an agent don't appear on that agent's page or on Home",
+      "location": "/agents/[id] Overview (src/components/agents/agent-workspace.tsx:98-210); /home (src/components/home/dashboard-view.tsx); /life-admin?view=tasks",
+      "problem": "Tasks handed to Claude are listed only under Life admin › Tasks. The agent Overview shows access, request counts and recent conversations, but not 'Tasks for Claude', and Home shows no tasks at all.",
+      "why": "In the agent-first model, the agent page should answer 'what is this agent doing for me?'. Brief flow 8: hand tasks to Claude and see its notes.",
+      "impact": "Members can't check an agent's open work from the page where they manage it.",
+      "severity": "medium",
+      "recommendation": "Add a 'Tasks' panel to agent Overview: open and done counts plus the 3 latest with status, linking to /life-admin?view=tasks&assignee=<id> (the assignee filter exists). Include due tasks in Home's 'Coming up'.",
+      "effort": "S",
+      "type": "structural",
+      "evidence": [
+        "<capture-run>/typical/shots/light-1440/agents_ID__section-overview.s1.jpg",
+        "<capture-run>/typical/shots/light-1440/agents_ID__section-overview.s2.jpg",
+        "<capture-run>/typical/shots/light-1440/life-admin__assignee-any_view-tasks.s1.jpg",
+        "grep: no task list in agent-workspace.tsx (only the 'Can use your tasks' summary at :112-119)"
+      ],
+      "related_pages": [
+        "/home",
+        "/life-admin"
+      ]
+    },
+    {
+      "id": "IA-20",
+      "title": "Actions are presented as tabs ('New rule', 'Import & create', 'Connect an agent')",
+      "location": "src/components/rules/rules-view.tsx:896; src/components/skills/skills-view.tsx:684; src/components/shell/workspace-navigation.ts:113-118",
+      "problem": "Rules has the tabs Your rules | New rule | Budgets, and Skills has Library | Import & create | Preferences. Agents has a 'Connect an agent' route tab and also a primary 'Connect an agent' button on the same page.",
+      "why": "Tabs should switch between views of the same content, not start tasks (WAI-ARIA tab pattern; consistency).",
+      "impact": "Tab rows get longer, and the primary action shows up twice.",
+      "severity": "low",
+      "recommendation": "Use buttons instead. 'New rule' reveals the form at the top of Your rules (keep ?view=new as a deep link without a tab). Skills gets a 'New skill' button. Remove the Agents route tab, whose slot goes to 'Defaults for new agents' (IA-12).",
+      "effort": "S",
+      "type": "structural",
+      "evidence": [
+        "<capture-run>/typical/shots/light-1440/rules.s1.jpg",
+        "<capture-run>/typical/shots/light-390/skills.s1.jpg",
+        "<capture-run>/typical/shots/light-390/agents.s1.jpg"
+      ],
+      "related_pages": [
+        "/rules",
+        "/skills",
+        "/agents"
+      ]
+    },
+    {
+      "id": "IA-21",
+      "title": "Breadcrumbs start with group names you can't click and leave out the agent",
+      "location": "src/components/shell/app-shell.tsx:150-190 (Breadcrumb)",
+      "problem": "Desktop breadcrumbs start with group labels that aren't pages ('Account resources ›', 'Manage ›', 'Insights ›'). The agent page reads 'Workspace › Agents', with no agent name or tab. Phones show only the section name.",
+      "why": "Breadcrumbs should show where you are and offer a way back up.",
+      "impact": "There is no quick way back from an agent's sub-tab to the agent list on a phone, and the trail is noisy on desktop.",
+      "severity": "low",
+      "recommendation": "Drop the group crumb and show Section › Item › Tab (Agents › ChatGPT › Access), with the first two as links. On phones, show a back link to the parent ('‹ Agents').",
+      "effort": "S",
+      "type": "structural",
+      "evidence": [
+        "<capture-run>/typical/shots/light-1440/agents_ID__section-overview.s1.jpg",
+        "<capture-run>/typical/shots/light-1440/rules.s1.jpg"
+      ],
+      "related_pages": [
+        "all"
+      ]
+    }
+  ],
+  "task_paths": [
+    {
+      "task": "Approve a card request",
+      "user_expects": "The push notification, or Inbox",
+      "actual_location": "Inbox › Waiting on you (Home's Inbox card links there too); card release needs a card in Vault ('Add a card' button inline)",
+      "taps_phone": "1 from Home card / 2 via menu → Inbox, then Approve and release + step-up",
+      "clicks_desktop": "1 (sidebar Inbox)",
+      "split_across": [
+        "Inbox",
+        "Home Inbox card",
+        "Home Recent activity",
+        "Activity (Waiting for you entries)"
+      ],
+      "verdict": "Works, but there is no Inbox badge anywhere except the Home card (IA-01)"
+    },
+    {
+      "task": "See what Claude did today",
+      "user_expects": "Activity filtered to Claude, or Claude's page",
+      "actual_location": "Home › Your agents › 'N entries in the last 24 hours'; Activity › By agent › Claude; Agent › Activity",
+      "taps_phone": "Home: scroll to screen 3 + 1; or menu → Activity → By agent → Claude = 4",
+      "clicks_desktop": "2–3",
+      "split_across": [
+        "Home agent card",
+        "Activity By agent",
+        "?agent= filter",
+        "Agent › Activity"
+      ],
+      "verdict": "Findable; the answer is a flat list of tool calls, not a summary (IA-07)"
+    },
+    {
+      "task": "Stop an agent using cards",
+      "user_expects": "The agent's page, or Vault › Cards",
+      "actual_location": "Agent › Controls › Spending › 'Let it ask to use a card' off › Save (not agent › Vault)",
+      "taps_phone": "menu → Agents → Manage agent → Controls → toggle → Save = 6",
+      "clicks_desktop": "5",
+      "split_across": [
+        "agent Spending (card access)",
+        "Rules (Never allow 'Request a card')"
+      ],
+      "verdict": "Too deep; card access is filed under 'Spending' while the agent's 'Vault' tab covers identity only (IA-02)"
+    },
+    {
+      "task": "Cap an agent's monthly spend",
+      "user_expects": "Rules & budgets › Budgets, or Spending",
+      "actual_location": "Agent › Controls › Spending budget fields; Rules › Budgets and Spending only link there",
+      "taps_phone": "via Rules: menu → Rules & budgets → Budgets → Set X's budget → edit → Save = 6; via Home agent card 'Set a budget' = 1 + scroll + 2",
+      "clicks_desktop": "4–5",
+      "split_across": [
+        "Rules › Budgets (links)",
+        "Spending ('Card budgets' link)",
+        "Agent › Spending",
+        "Home agent card"
+      ],
+      "verdict": "Signpost loop (IA-05)"
+    },
+    {
+      "task": "Set the household budget",
+      "user_expects": "Spending, Rules & budgets › Budgets, or Household",
+      "actual_location": "Household › 'Budget, limits and currency' (6th panel)",
+      "taps_phone": "menu (scroll drawer) → Household → scroll ~1,800px → type → Save budget = 3 + long scroll",
+      "clicks_desktop": "2 + scroll",
+      "split_across": [
+        "Household Budget (read-only)",
+        "Household Budget, limits and currency (edit)",
+        "Rules › Budgets (link)",
+        "Spending Household ('Manage household')"
+      ],
+      "verdict": "Read and edit are split on one page (IA-13, IA-05)"
+    },
+    {
+      "task": "Change currency",
+      "user_expects": "Settings",
+      "actual_location": "Spending page heading 'Account currency'; Household currency separately; per-agent budget currency on agent › Spending",
+      "taps_phone": "menu → Spending → select → Save currency = 4",
+      "clicks_desktop": "3",
+      "split_across": [
+        "Spending",
+        "Household",
+        "Agent › Spending"
+      ],
+      "verdict": "Wrong home; not in Settings (IA-04)"
+    },
+    {
+      "task": "Change time zone",
+      "user_expects": "Settings",
+      "actual_location": "Skills › Preferences (free text; all six fields must be filled to save). Vault 'Time zone' detail is a decoy with no effect",
+      "taps_phone": "menu → Skills → Preferences = 3 (+ fill 5 other fields); or menu → Settings → scroll → Preferences card = 3",
+      "clicks_desktop": "3",
+      "split_across": [
+        "Skills › Preferences",
+        "Vault › Add a detail › Time zone",
+        "Settings (link card only)"
+      ],
+      "verdict": "Hidden and duplicated (IA-04)"
+    },
+    {
+      "task": "Set reply tone",
+      "user_expects": "Settings › Preferences or Skills",
+      "actual_location": "Skills › Preferences",
+      "taps_phone": "3",
+      "clicks_desktop": "2–3",
+      "split_across": [
+        "Skills › Preferences",
+        "Settings link card"
+      ],
+      "verdict": "Acceptable once found; the all-six rule blocks saving tone alone (IA-04)"
+    },
+    {
+      "task": "Add a passport",
+      "user_expects": "Vault",
+      "actual_location": "Vault › Protected details › Add a protected detail (number); expiry reminder needs a separate Life admin › Passport record",
+      "taps_phone": "menu → Vault → scroll → Add a protected detail = 3 (+3 more for the Life admin record)",
+      "clicks_desktop": "2 (+2)",
+      "split_across": [
+        "Vault (number)",
+        "Life admin (expiry)"
+      ],
+      "verdict": "Split with no cross-link (IA-14)"
+    },
+    {
+      "task": "Check the rego due date",
+      "user_expects": "Life admin or Home reminders",
+      "actual_location": "Life admin › Upcoming; Home › Reminders",
+      "taps_phone": "Home scroll to screen 4 = 0; or menu → Life admin → Upcoming = 3",
+      "clicks_desktop": "1 + scroll, or 2",
+      "split_across": [
+        "Home Reminders",
+        "Life admin Upcoming",
+        "Life admin Records"
+      ],
+      "verdict": "OK; PR #52 simplifies tabs"
+    },
+    {
+      "task": "Confirm records agents found",
+      "user_expects": "Life admin, or Home '25 things to check'",
+      "actual_location": "Life admin › Records › To check (25 fully expanded cards)",
+      "taps_phone": "menu → Life admin = 2, then 25 Confirm taps across ~10,000px",
+      "clicks_desktop": "1 + 25 clicks",
+      "split_across": [
+        "Life admin To check",
+        "Home link"
+      ],
+      "verdict": "Overloaded, with no bulk or step-through (IA-06)"
+    },
+    {
+      "task": "Connect Gmail",
+      "user_expects": "Connectors / Services catalogue",
+      "actual_location": "Connectors › Catalogue › Popular › Gmail › Connect",
+      "taps_phone": "menu → Connectors → Connect = 3 (+ Google sign-in)",
+      "clicks_desktop": "2",
+      "split_across": [
+        "Connectors",
+        "Home checklist 'Connect a service'"
+      ],
+      "verdict": "Works; 'Connectors' vs 'service' naming (IA-09); full catalogue wall (IA-16)"
+    },
+    {
+      "task": "Let only Claude read Gmail",
+      "user_expects": "Connectors › Gmail › choose agents",
+      "actual_location": "Each agent › Resources › Connectors › Gmail toggles",
+      "taps_phone": "≈6 per agent × 3 agents ≈ 18",
+      "clicks_desktop": "≈5 per agent ≈ 15",
+      "split_across": [
+        "Agent › Connectors (per agent)",
+        "Connectors 'Used by' (read-only)",
+        "Connectors 'On for new agents'"
+      ],
+      "verdict": "No service-first control (IA-18)"
+    },
+    {
+      "task": "Write a skill",
+      "user_expects": "Skills",
+      "actual_location": "Skills › Import & create (or empty-state button)",
+      "taps_phone": "3",
+      "clicks_desktop": "2",
+      "split_across": [
+        "Skills"
+      ],
+      "verdict": "OK; action presented as a tab (IA-20)"
+    },
+    {
+      "task": "See shared memory",
+      "user_expects": "Memory",
+      "actual_location": "Memory › Sharing: Shared",
+      "taps_phone": "3",
+      "clicks_desktop": "2",
+      "split_across": [
+        "Memory",
+        "Agent › Memory"
+      ],
+      "verdict": "OK"
+    },
+    {
+      "task": "Invite a partner",
+      "user_expects": "Household",
+      "actual_location": "Household › Invite a member (5th panel)",
+      "taps_phone": "menu (scroll drawer) → Household → scroll ~1,300px → type → Send = 3 + scroll",
+      "clicks_desktop": "2 + scroll",
+      "split_across": [
+        "Household"
+      ],
+      "verdict": "Buried mid-page; pending invites not shown under Members (IA-13)"
+    },
+    {
+      "task": "Export my data",
+      "user_expects": "Settings",
+      "actual_location": "Settings › Data & privacy",
+      "taps_phone": "menu (scroll drawer) → Settings → Data & privacy = 3",
+      "clicks_desktop": "3",
+      "split_across": [
+        "Settings"
+      ],
+      "verdict": "OK"
+    },
+    {
+      "task": "Turn on notifications",
+      "user_expects": "Settings › Notifications, or the setup checklist",
+      "actual_location": "Settings › Notifications; Home 'Get notified'",
+      "taps_phone": "1 from Home checklist; 3 via Settings",
+      "clicks_desktop": "1–3",
+      "split_across": [
+        "Settings › Notifications",
+        "Home checklist"
+      ],
+      "verdict": "OK"
+    },
+    {
+      "task": "Add a passkey",
+      "user_expects": "Settings › Security",
+      "actual_location": "Settings › Security",
+      "taps_phone": "3",
+      "clicks_desktop": "3",
+      "split_across": [
+        "Settings › Security"
+      ],
+      "verdict": "OK"
+    },
+    {
+      "task": "Disconnect an agent",
+      "user_expects": "The agent's page",
+      "actual_location": "Only on the /agents list card",
+      "taps_phone": "menu → Agents → Disconnect → confirm = 4; opening the agent first is a dead end (+2 back)",
+      "clicks_desktop": "3",
+      "split_across": [
+        "Agents list only"
+      ],
+      "verdict": "Missing where people look (IA-03)"
+    },
+    {
+      "task": "Find help",
+      "user_expects": "'?' icon or Help in the menu",
+      "actual_location": "Public /help page outside the app (shows 'Sign in')",
+      "taps_phone": "1 ('?') but you leave the app; drawer Help is below the fold",
+      "clicks_desktop": "1 ('?'); sidebar Help hidden below the fold at 1440×900",
+      "split_across": [
+        "'?' icon",
+        "Sidebar Help",
+        "Public help"
+      ],
+      "verdict": "Leaves the shell (IA-17)"
+    },
+    {
+      "task": "Contact support",
+      "user_expects": "Help",
+      "actual_location": "Contact us (separate item) or Help › Contact us",
+      "taps_phone": "menu → scroll → Contact us = 2 + scroll",
+      "clicks_desktop": "sidebar scroll + 1",
+      "split_across": [
+        "Contact us item",
+        "Help page section"
+      ],
+      "verdict": "Hidden below the fold (IA-01, IA-17)"
+    },
+    {
+      "task": "See total spend this month",
+      "user_expects": "Top of Spending",
+      "actual_location": "Not available; per-agent rows plus the household total only",
+      "taps_phone": "menu → Spending = 2, then add it up yourself",
+      "clicks_desktop": "1 + mental sum",
+      "split_across": [
+        "Spending",
+        "Home agent cards"
+      ],
+      "verdict": "Missing (IA-05)"
+    },
+    {
+      "task": "See an agent's conversations",
+      "user_expects": "The agent's page",
+      "actual_location": "Agent › Overview › Recent conversations (bottom); Activity ?run=",
+      "taps_phone": "menu → Agents → Manage agent → scroll = 3 + scroll",
+      "clicks_desktop": "2 + scroll",
+      "split_across": [
+        "Agent Overview",
+        "Activity run filter"
+      ],
+      "verdict": "OK, but the main Activity timeline ignores runs (IA-07)"
+    },
+    {
+      "task": "Review or undo a change",
+      "user_expects": "Activity",
+      "actual_location": "Activity › Changes chip › View details › Undo",
+      "taps_phone": "menu → Activity → Changes → View details → Undo = 5",
+      "clicks_desktop": "4",
+      "split_across": [
+        "Activity",
+        "Agent › Activity"
+      ],
+      "verdict": "Acceptable"
+    },
+    {
+      "task": "Change how long requests wait",
+      "user_expects": "Settings › Notifications, or Inbox",
+      "actual_location": "Rules & budgets › Your rules › Approval expiry (bottom panel)",
+      "taps_phone": "menu → Rules & budgets → scroll → select → Save = 4 + scroll",
+      "clicks_desktop": "2 + scroll",
+      "split_across": [
+        "Rules (expiry)",
+        "Settings › Notifications (fallback delay)"
+      ],
+      "verdict": "Wrong home, split from its partner setting (IA-12)"
+    },
+    {
+      "task": "See tasks I've handed to Claude",
+      "user_expects": "Claude's page, or Life admin › Tasks",
+      "actual_location": "Life admin › Tasks (filter by assignee)",
+      "taps_phone": "menu → Life admin → Tasks → filter = 4",
+      "clicks_desktop": "3",
+      "split_across": [
+        "Life admin Tasks"
+      ],
+      "verdict": "Not visible on the agent page or Home (IA-19)"
+    },
+    {
+      "task": "Change what new agents start with",
+      "user_expects": "Agents",
+      "actual_location": "Settings › Agent defaults (template); Connectors › 'On for new agents' (services); Skills default audience",
+      "taps_phone": "3 each",
+      "clicks_desktop": "2–3 each",
+      "split_across": [
+        "Settings › Agent defaults",
+        "Agents 'Agent defaults' button",
+        "Connectors",
+        "Skills"
+      ],
+      "verdict": "Spread over 3 pages (IA-12)"
+    },
+    {
+      "task": "Ask before any agent emails my manager",
+      "user_expects": "Rules",
+      "actual_location": "Rules & budgets › New rule",
+      "taps_phone": "3",
+      "clicks_desktop": "2",
+      "split_across": [
+        "Rules",
+        "Agent › Rules"
+      ],
+      "verdict": "OK; action presented as a tab (IA-20)"
+    }
+  ],
+  "proposed_ia": {
+    "principles": [
+      "Daily jobs first (Home, Inbox, Activity, Agents), one tap on the phone, the same order on desktop.",
+      "Agent-first is kept: per-agent access stays on the agent page (one row: Overview · Access · Limits · Activity). Account pages show who uses each item and link to the agent, never a second copy of the controls.",
+      "One home per setting: account-wide settings in Settings › General, money in Spending, how you get asked in Settings › Notifications & approvals, new-agent defaults in Agents.",
+      "Pages show a summary first and the rest on demand (queues, catalogues, timelines)."
+    ],
+    "desktop_sidebar": [
+      {
+        "group": "(unlabelled — daily)",
+        "rationale": "The four places phone users visit every day; the same order as the phone bottom bar.",
+        "items": [
+          {
+            "label": "Home",
+            "route": "/home",
+            "rationale": "What needs you, today per agent, what's coming up (IA-08)."
+          },
+          {
+            "label": "Inbox",
+            "route": "/inbox",
+            "badge": "waiting count",
+            "tabs": [
+              "Waiting on you",
+              "History"
+            ],
+            "rationale": "The core phone job; the badge makes waiting requests visible from every page."
+          },
+          {
+            "label": "Activity",
+            "route": "/activity",
+            "tabs": [
+              "Timeline (grouped by conversation)",
+              "By agent",
+              "By type",
+              "By service"
+            ],
+            "rationale": "Promoted out of 'Insights'; the trust record people glance at."
+          },
+          {
+            "label": "Agents",
+            "route": "/agents",
+            "route_tabs": [
+              "Your agents",
+              "Defaults for new agents"
+            ],
+            "rationale": "Agents are the management unit; new-agent defaults belong with them, not in Settings.",
+            "children": [
+              {
+                "label": "<agent>",
+                "route": "/agents/[id]",
+                "tabs": [
+                  "Overview",
+                  "Access",
+                  "Limits",
+                  "Activity"
+                ],
+                "header_actions": [
+                  "Disconnect"
+                ],
+                "rationale": "One tab row. Access = services, about you, skills, memory, tasks & records in one form with disclosures. Limits = card access & budget, this agent's rules, request limit."
+              }
+            ]
+          }
+        ]
+      },
+      {
+        "group": "What agents can use",
+        "rationale": "Things the person keeps that agents may use with permission; replaces 'Account resources'.",
+        "items": [
+          {
+            "label": "Services",
+            "route": "/connectors",
+            "tabs": [
+              "Your services",
+              "Catalogue"
+            ],
+            "rationale": "Renamed from Connectors to avoid clashing with 'custom connector'; each service row can change which agents use it (IA-18)."
+          },
+          {
+            "label": "Vault",
+            "route": "/vault",
+            "route_tabs": [
+              "About you",
+              "Cards"
+            ],
+            "rationale": "Identity and cards; links to Life admin for expiry reminders (IA-14)."
+          },
+          {
+            "label": "Life admin",
+            "route": "/life-admin",
+            "tabs": [
+              "Records",
+              "Upcoming",
+              "History",
+              "Tasks"
+            ],
+            "rationale": "PR #52's four tabs; To check becomes a compact queue (IA-06)."
+          },
+          {
+            "label": "Memory",
+            "route": "/memory",
+            "rationale": "Unchanged; no Memory|Skills route tabs."
+          },
+          {
+            "label": "Skills",
+            "route": "/skills",
+            "tabs": [
+              "Library",
+              "How agents write for you"
+            ],
+            "actions": [
+              "New skill"
+            ],
+            "rationale": "Time zone, language, units and currency leave for Settings › General."
+          }
+        ]
+      },
+      {
+        "group": "Spending & rules",
+        "rationale": "Money and limits for all agents in one place; per-agent edits deep-link to the agent's Limits tab.",
+        "items": [
+          {
+            "label": "Spending",
+            "route": "/spending",
+            "sections": [
+              "This month total",
+              "Per agent: spent of budget · Set budget",
+              "Household budget & limits"
+            ],
+            "rationale": "Replaces Rules › Budgets and the 'Card budgets' signpost (IA-05)."
+          },
+          {
+            "label": "Rules",
+            "route": "/rules",
+            "actions": [
+              "New rule"
+            ],
+            "rationale": "Renamed from 'Rules & budgets'; approval expiry moves to Settings."
+          }
+        ]
+      },
+      {
+        "group": "Account (pinned footer)",
+        "rationale": "Set-once areas, always visible without scrolling the sidebar.",
+        "items": [
+          {
+            "label": "Household",
+            "route": "/household",
+            "sections": [
+              "Members (+ pending, Invite)",
+              "Shared address",
+              "Budget & limits",
+              "Ownership and leaving (disclosure)"
+            ],
+            "rationale": "Reordered single page (IA-13)."
+          },
+          {
+            "label": "Settings",
+            "route": "/settings",
+            "route_tabs": [
+              "General",
+              "Security",
+              "Notifications & approvals",
+              "Data & privacy"
+            ],
+            "rationale": "General holds currency, time zone, language, units; approvals timing joins notifications (IA-04, IA-12)."
+          },
+          {
+            "label": "Help & support",
+            "route": "/support (in-app)",
+            "rationale": "In-app help with the Contact form at the bottom; the public /help stays for signed-out people (IA-17)."
+          },
+          {
+            "label": "Sign out",
+            "route": "(control)",
+            "rationale": "Stays in the footer."
+          }
+        ]
+      }
+    ],
+    "phone_navigation": {
+      "bottom_bar": [
+        {
+          "label": "Home",
+          "route": "/home",
+          "rationale": "Landing and glance."
+        },
+        {
+          "label": "Inbox",
+          "route": "/inbox",
+          "badge": "waiting count",
+          "rationale": "Approve on the go in 1 tap."
+        },
+        {
+          "label": "Activity",
+          "route": "/activity",
+          "rationale": "Glance at what agents did in 1 tap."
+        },
+        {
+          "label": "Agents",
+          "route": "/agents",
+          "rationale": "Manage or disconnect an agent in 1–2 taps."
+        },
+        {
+          "label": "More",
+          "route": "/more",
+          "rationale": "Reuses the existing MoreMenu (already grouped and already has a phone Sign out); everything else is 2 taps."
+        }
+      ],
+      "more_page": [
+        {
+          "group": "What agents can use",
+          "items": [
+            "Services",
+            "Vault",
+            "Life admin",
+            "Memory",
+            "Skills"
+          ]
+        },
+        {
+          "group": "Spending & rules",
+          "items": [
+            "Spending",
+            "Rules"
+          ]
+        },
+        {
+          "group": "Account",
+          "items": [
+            "Household",
+            "Settings",
+            "Help & support"
+          ]
+        },
+        {
+          "group": "This device",
+          "items": [
+            "Sign out"
+          ]
+        }
+      ],
+      "rationale": "Brings back the brief's original two-tap spec (design_ux.feel); the drawer is retired."
+    },
+    "moves": [
+      {
+        "from": "Sidebar 'Insights' › Activity",
+        "to": "Top group, 3rd (phone bottom bar)",
+        "why": "A daily glance destination, not an analytics page."
+      },
+      {
+        "from": "Sidebar 'Workspace' › Inbox (3rd, no badge)",
+        "to": "Top group, 2nd, with waiting-count badge",
+        "why": "The core phone job needs status visible everywhere."
+      },
+      {
+        "from": "Connectors (label)",
+        "to": "Services",
+        "why": "'Connector' already means Warthog itself in agent set-up; the page says 'services'."
+      },
+      {
+        "from": "Activity | Spending and Memory | Skills route tabs",
+        "to": "Removed",
+        "why": "Duplicate the sidebar and add a third nav layer."
+      },
+      {
+        "from": "Agent page Resources/Controls two-row tabs (9 sections)",
+        "to": "Overview · Access · Limits · Activity",
+        "why": "One tab row, one Save per tab, labels match the account pages."
+      },
+      {
+        "from": "Agent › Controls › Settings › Tasks and records",
+        "to": "Agent › Access › Tasks & records",
+        "why": "It's a resource (Life admin), not a setting."
+      },
+      {
+        "from": "Agent › Spending (card access)",
+        "to": "Agent › Limits › Card access & budget",
+        "why": "Groups all money limits for the agent."
+      },
+      {
+        "from": "Disconnect on the /agents list only",
+        "to": "Also in the agent header and Overview 'Connection' panel",
+        "why": "People open the agent to stop it."
+      },
+      {
+        "from": "Skills › Preferences (time zone, language, units)",
+        "to": "Settings › General",
+        "why": "Account-wide settings that drive budgets and all displayed times."
+      },
+      {
+        "from": "Skills › Preferences (tone, length, briefing)",
+        "to": "Skills › 'How agents write for you' (no all-six rule)",
+        "why": "These are instructions to agents, like a style skill."
+      },
+      {
+        "from": "Spending heading 'Account currency'",
+        "to": "Settings › General",
+        "why": "Brief: currency configurable in Settings; one place for account settings."
+      },
+      {
+        "from": "Vault › Add a detail › Language / Time zone",
+        "to": "Removed (read from Settings › General)",
+        "why": "Same-named fields with no effect on the account."
+      },
+      {
+        "from": "Rules › Budgets tab",
+        "to": "Spending (per-agent rows with Set budget → agent Limits)",
+        "why": "Removes the signpost hop; budgets sit next to what was spent."
+      },
+      {
+        "from": "'Rules & budgets' label",
+        "to": "'Rules'",
+        "why": "It no longer holds budgets."
+      },
+      {
+        "from": "Rules › Approval expiry panel",
+        "to": "Settings › Notifications & approvals",
+        "why": "It sits beside the 'If you miss an alert' delay it depends on."
+      },
+      {
+        "from": "Settings › Agent defaults (+ Agents 'Agent defaults' button)",
+        "to": "Agents › Defaults for new agents (also summarises services 'on for new agents' and skills for all agents)",
+        "why": "Policy about agents, currently spread over 3 pages."
+      },
+      {
+        "from": "Agents › 'Connect an agent' route tab",
+        "to": "Primary button only",
+        "why": "An action, not a view; it frees the tab for defaults."
+      },
+      {
+        "from": "Rules › 'New rule' tab; Skills › 'Import & create' tab",
+        "to": "'New rule' / 'New skill' buttons",
+        "why": "Actions aren't tabs."
+      },
+      {
+        "from": "Settings › Overview index",
+        "to": "Settings › General (landing)",
+        "why": "One less page; the index only repeated the tabs."
+      },
+      {
+        "from": "Household › 'Your postal address: Use the household address'",
+        "to": "Vault › About you › Postal address",
+        "why": "It's a personal address choice."
+      },
+      {
+        "from": "Household Budget (read) + Budget, limits and currency (edit)",
+        "to": "One 'Budget & limits' panel",
+        "why": "View and edit together."
+      },
+      {
+        "from": "Household › Invite panel 'Waiting to join'",
+        "to": "Household › Members (pending)",
+        "why": "People expect invitees in the member list."
+      },
+      {
+        "from": "Help (public page) + Contact us (separate item)",
+        "to": "In-app 'Help & support'",
+        "why": "Keeps signed-in people in the app; one destination."
+      },
+      {
+        "from": "/more (orphaned legacy route)",
+        "to": "Phone bottom-bar 'More'",
+        "why": "Reuses built, tested UI."
+      },
+      {
+        "from": "'W · Personal workspace' box and 'Workspace' breadcrumb root",
+        "to": "Removed",
+        "why": "Admin-console vocabulary; it pushes Help below the fold."
+      },
+      {
+        "from": "Life admin To check (25 expanded cards)",
+        "to": "Compact queue + 'Review all' step-through + per-agent bulk confirm",
+        "why": "16,859px phone page."
+      },
+      {
+        "from": "Activity flat timeline",
+        "to": "Timeline grouped by conversation, repeated calls collapsed, 'Check integrity' to the footer",
+        "why": "11,154px phone page; glanceability."
+      },
+      {
+        "from": "Tasks only in Life admin › Tasks",
+        "to": "Also an agent Overview 'Tasks' panel and Home 'Coming up'",
+        "why": "In an agent-first app, the agent page shows its work."
+      },
+      {
+        "from": "'How access works / Manage for one agent' strip on 6 pages",
+        "to": "One-line 'Agent access: Claude · ChatGPT · Gemini' link row + per-item 'Used by'",
+        "why": "Removes repeated copy; the agent link becomes visible."
+      }
+    ],
+    "brief_amendment": "design_ux.feel — replace the navigation sentence with: 'Everything reachable in two taps from the mobile bottom navigation (Home, Inbox with a waiting count, Activity, Agents, More — where More holds Services, Vault, Life admin with its Tasks tab, Memory, Skills, Spending, Rules, Household, Settings (General — currency, time zone, language, units — Security, Notifications & approvals, Data & privacy) and Help & support); desktop uses a left sidebar with the same destinations in four groups: daily, What agents can use, Spending & rules, and a pinned Account footer. An agent's page has one row of tabs: Overview, Access, Limits, Activity, with Disconnect in its header.' Also amend docs/adr/admin-console-design.md (the bottom nav returns on phones; the drawer is retired) and docs/adr/agent-first-management.md (the agent workspace sections become Overview · Access · Limits · Activity; new-agent defaults live under Agents).",
+    "current_inventory": {
+      "sidebar_and_drawer": [
+        "Workspace: Home, Agents, Inbox",
+        "Account resources: Connectors, Vault, Skills, Memory, Life admin",
+        "Insights: Activity, Spending",
+        "Manage: Rules & budgets, Household, Settings",
+        "Help: Help (public page), Contact us"
+      ],
+      "route_tabs": [
+        "Settings: Overview · Agent defaults · Security · Notifications · Data & privacy (+ Sign-in requests, linked from Security)",
+        "Vault: About you · Cards",
+        "Memory | Skills (both pages)",
+        "Activity | Spending (both pages)",
+        "Agents: Your agents · Connect an agent (+ Access key flow)"
+      ],
+      "in_page_tabs": [
+        "Inbox: Waiting on you | History",
+        "Connectors: Your services | Catalogue (+ category chips)",
+        "Rules: Your rules | New rule | Budgets (+ All/Active/Paused chips)",
+        "Skills: Library | Import & create | Preferences",
+        "Life admin: Records & reminders | Tasks › Records | Upcoming | Bookings | Moving checklist (PR #52: Records | Upcoming | History | Tasks)",
+        "Activity: Timeline | By agent | By type | By service × 6 quick filters + Filters + search",
+        "Memory: Sharing chips × Saved-by chips + search"
+      ],
+      "agent_page": [
+        "Overview",
+        "Resources › Connectors · Vault · Skills · Memory",
+        "Controls › Spending · Rules · Settings (Tasks & records, Advanced request limit, Access key)",
+        "Activity"
+      ],
+      "long_pages_panels": [
+        "Home: greeting, setup checklist, Inbox, Recent activity, Your agents, Reminders",
+        "Household: up to 9 panels",
+        "Vault About you: Everyday details, Protected details, Vault recovery phrase",
+        "Spending: heading+currency, Your agents, Household",
+        "Rules Your rules: filter chips, All agents rules, per-agent rules, Approval expiry"
+      ],
+      "features_in_more_than_one_place": {
+        "budgets": [
+          "Rules › Budgets (links only)",
+          "Spending ('Card budgets' link, per-agent spent/budget)",
+          "Agent › Controls › Spending (edit)",
+          "Household (read panel + edit panel)",
+          "Home agent card ('Set a budget')"
+        ],
+        "currency": [
+          "Spending heading (account)",
+          "Household (household)",
+          "Agent › Spending (budget currency)"
+        ],
+        "time_zone_language": [
+          "Skills › Preferences (effective)",
+          "Vault › Add a detail (no account effect)",
+          "Settings (link card only)"
+        ],
+        "address": [
+          "Vault › About you › Postal address",
+          "Household › Shared address",
+          "Household › 'Your postal address: use household address'"
+        ],
+        "passport_licence_rego": [
+          "Vault › Protected details (numbers)",
+          "Life admin ID & vehicle records (expiry)"
+        ],
+        "new_agent_defaults": [
+          "Settings › Agent defaults",
+          "Agents 'Agent defaults' button",
+          "Connectors 'On for new agents'",
+          "Skills default audience"
+        ],
+        "waiting_approvals": [
+          "Inbox",
+          "Home Inbox card",
+          "Home Recent activity",
+          "Activity ('Waiting for you' entries / Approvals & releases)"
+        ],
+        "per_agent_activity": [
+          "Activity By agent",
+          "Activity ?agent=",
+          "Agent › Activity",
+          "Home Your agents"
+        ],
+        "approval_timing": [
+          "Rules › Approval expiry",
+          "Settings › Notifications › If you miss an alert"
+        ],
+        "connect_an_agent": [
+          "Agents route tab",
+          "Agents primary button",
+          "Home checklist"
+        ],
+        "help": [
+          "'?' top-bar icon (public)",
+          "Sidebar Help (public)",
+          "Contact us (in app)"
+        ],
+        "rules": [
+          "Rules page",
+          "Agent › Controls › Rules",
+          "Settings › Agent defaults 'Controls for all agents' (links)"
+        ],
+        "agent_access_per_resource": [
+          "Account pages 'Manage for one agent'",
+          "Agent page sections",
+          "Agent Overview summary cards"
+        ]
+      }
+    }
+  }
+}

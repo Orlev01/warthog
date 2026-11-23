@@ -1,0 +1,77 @@
+{
+ "agentIds": [],
+ "urls": [
+  {
+   "key": "home",
+   "url": "/home",
+   "signedIn": true,
+   "from": "manual"
+  },
+  {
+   "key": "inbox",
+   "url": "/inbox",
+   "signedIn": true,
+   "from": "manual"
+  },
+  {
+   "key": "activity",
+   "url": "/activity",
+   "signedIn": true,
+   "from": "manual"
+  },
+  {
+   "key": "agents",
+   "url": "/agents",
+   "signedIn": true,
+   "from": "manual"
+  },
+  {
+   "key": "agents_ID__section-overview",
+   "url": "/agents/6a979457-849c-4418-adb3-1a51e9287b3d?section=overview",
+   "signedIn": true,
+   "from": "manual"
+  },
+  {
+   "key": "agents_ID__section-connectors",
+   "url": "/agents/6a979457-849c-4418-adb3-1a51e9287b3d?section=connectors",
+   "signedIn": true,
+   "from": "manual"
+  },
+  {
+   "key": "life-admin",
+   "url": "/life-admin",
+   "signedIn": true,
+   "from": "manual"
+  },
+  {
+   "key": "life-admin__tab-upcoming",
+   "url": "/life-admin?tab=upcoming",
+   "signedIn": true,
+   "from": "manual"
+  },
+  {
+   "key": "life-admin__view-tasks",
+   "url": "/life-admin?view=tasks",
+   "signedIn": true,
+   "from": "manual"
+  },
+  {
+   "key": "memory",
+   "url": "/memory",
+   "signedIn": true,
+   "from": "manual"
+  },
+  {
+   "key": "spending",
+   "url": "/spending",
+   "signedIn": true,
+   "from": "manual"
+  },
+  {
+   "key": "rules",
+   "url": "/rules",
+   "signedIn": true,
+   "from": "manual"
+  }
+ ]
+}

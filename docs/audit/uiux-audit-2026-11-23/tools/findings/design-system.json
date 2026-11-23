@@ -1,0 +1,927 @@
+{
+ "lens": "design-system",
+ "summary": "Warthog has a design system at the level of its primitives, but not at the level of its foundations. Button, Badge (all 117 badges measured render at an identical 20px/12px), Field/Input/Select and the containment primitives (WorkspaceHeading, WorkspacePanel, ListGroup, ListToolbar) are well specified and widely used. Underneath, tokens are declared in five stylesheets with two theming mechanisms and two grey ramps. About 20 selectors are redefined across files with conflicting values, which already hides the active-sidebar accent bar on every page. Unlayered CSS silently overrides the Tailwind utilities written in components. About a dozen recurring patterns have no primitive and have drifted visibly: state labels, dialogs and confirmations, disclosures, description lists, checkboxes and switches, tabs and view switches, pagination, insets. The same 'Done' appears three ways and insets render at 8, 10 or 12px. The direction is sound and should be refined, not replaced. Consolidate tokens into one light-dark() file mapped to the existing --wh-* names, introduce cascade layers behind the existing wh-* class hooks, add the missing primitives one per PR, and fix the contributor skills, which contradict each other and the code.",
+ "scores": {
+  "theming_0_4": 2,
+  "implementation_integrity_0_4": 2,
+  "token_coverage_0_4": 2,
+  "component_coverage_0_4": 2,
+  "css_architecture_0_4": 1,
+  "documentation_accuracy_0_4": 2,
+  "cross_page_visual_consistency_0_4": 2,
+  "notes": "Scores use impeccable audit.md theming and integrity scales: 2 = tokens and primitives exist but are used inconsistently, with several verified issues. System dark mode works; the explicit theme does not."
+ },
+ "strengths": [
+  "Primitives that worked: Badge/CountBadge render at an identical 20px/12px on all 23 routes measured (117 badges, 67 counts). Button's documented variant intents (one primary, danger vs danger-solid) and sizes, and Field/Input/Select with 16px touch input text and a ≥3:1 input-border token. This proves the one-primitive-per-pattern approach works here.",
+  "The containment model (canvas → panel → inset, WorkspaceHeading/WorkspacePanel/ListGroup/ListToolbar/PageNotice/EmptyState) is coherent, documented in code comments, and gives the app its calm, bounded look in both themes.",
+  "Semantic, consistently prefixed tokens (--wh-*) with a Tailwind bridge. Tone helpers derive soft fills with color-mix so text stays neutral. Brand marks sit on fixed light tiles, legible in dark mode.",
+  "A strong accessibility baseline is built into the primitives: native <dialog>s with safe-choice-first focus, full ARIA tabs with roving focus, forced-colours rules for every surface, reduced motion, and 44px targets. A refactor must keep all of these.",
+  "The repo's tests already read CSS (form-contrast, wordmark, life-admin-tabs), so design guardrails can be added as ordinary node:test files with no new dependency."
+ ],
+ "findings": [
+  {
+   "id": "DS-01",
+   "title": "Tokens are defined in five places, with two ways of theming and two grey ramps. The Tailwind bridge exposes only half of them",
+   "location": "All signed-in pages. src/app/globals.css:8-109, src/app/workspace.css:6-21, src/app/surfaces.css:22-26, src/app/public.css:14-28",
+   "problem": "There is no single source for tokens. --wh-surface and --wh-surface-muted are declared three times with different values. globals.css:10-11 sets #fff/#f3f3f3 (dark #212121/#303030). workspace.css:9-10 overrides them inside .wh-workspace with light-dark(#fff,#252628)/(#f1f3f4,#2d2f31). public.css:20-24 copies the workspace values. The canvas #f5f6f7/#191a1c is declared twice under two names (workspace.css:6 --wh-workspace-canvas, public.css:14 --wh-page-canvas), and --wh-edge lives in surfaces.css:25. The dark palette is copied word for word into two blocks (globals.css:41-62 and :64-83). Meanwhile --wh-tint, --wh-info, --wh-logo and --wh-edge use light-dark() instead. The palette mixes two ramps. Pure greys come from the admin-console reference (--wh-line #e7e7e7, --wh-line-strong #cdcdcd, --wh-sidebar #f9f9f9, dark #181818/#3c3c3c). Cool greys come from workspace depth (canvas #f5f6f7, inset #f1f3f4, edge #d5d8dc, dark #191a1c/#252628). So one panel has a cool #d5d8dc outer edge and a pure #e7e7e7 header divider. `@theme inline` (globals.css:85-109) has no canvas, edge, inset radius, pill radius, soft tones, shadows or type sizes. Components therefore fall back to rounded-[var(--wh-radius-inset)] (5 uses), style={{background:'var(--wh-tone-soft)'}} (activity-view.tsx:469, :611) and Tailwind's own shadow-lg. bg-bg, the class the design-system skill prescribes for the canvas, paints white (#fff), not the workspace canvas.",
+   "why": "Implementation integrity / theming (impeccable audit §3: inconsistent tokens, mixing token types). When a value has several sources, any change has to be repeated by hand. The brief asks for one neutral family: 'near-black, white and cool greys'.",
+   "impact": "Contributors cannot tell which value is live. A token change in globals.css does not reach the workspace. The form-contrast test (src/components/ui/form-contrast.test.tsx:24-60) parses the globals.css blocks, so it checks #f3f3f3/#303030, which no signed-in page renders. It does not check the real insets (#f1f3f4/#2d2f31), so it gives false assurance.",
+   "severity": "high",
+   "recommendation": "Create src/app/tokens.css as the only file allowed to declare --wh-* (proposal.tokens). It should hold one cool-grey ramp written with light-dark(), `color-scheme: light dark` on :root, and data-theme overriding only color-scheme. Move the *-soft tones from .wh-workspace up to :root. Delete the copies in workspace.css, public.css and surfaces.css, and the duplicated dark block. Extend @theme inline with canvas, edge, radius-inset/pill, shadow-1..3 and the text roles. Rewrite form-contrast.test.tsx to read tokens.css, resolve light-dark() pairs, and check the values the workspace actually renders plus the tone text pairs.",
+   "effort": "M",
+   "type": "structural",
+   "evidence": [
+    "src/app/globals.css:8-109",
+    "src/app/workspace.css:6-21",
+    "src/app/public.css:14-28",
+    "src/app/surfaces.css:25",
+    "src/components/ui/form-contrast.test.tsx:24-60 (parses ':root {' blocks in globals.css only)",
+    "grep: 5x rounded-[var(--wh-radius-inset)], 2x var(--wh-tone-soft) inline style",
+    "<capture-run>/typical/shots/light-1440/home.s1.jpg (cool edge vs pure-grey divider in the same panel)",
+    "<capture-run>/typical/shots/dark-1440/rules.s1.jpg (dark sidebar #181818 vs cool canvas #191a1c vs surface #252628)"
+   ],
+   "related_pages": [
+    "every signed-in route",
+    "public/auth/consent (public.css re-declares the workspace surfaces)"
+   ]
+  },
+  {
+   "id": "DS-02",
+   "title": "About 20 selectors are redefined across globals, workspace and surfaces CSS with conflicting values. One clash ships a visible bug: the active sidebar accent bar never renders",
+   "location": "Sidebar on every page. src/app/workspace.css:26 vs :84, plus the pairs listed",
+   "problem": "Rules with the same selector are declared in several files, and load order picks the winner. Confirmed clashes: .wh-workspace .wh-sidebar-link[aria-current] (workspace.css:26 with an inset 3px tint bar, then workspace.css:84 without it). The live computed box-shadow on /home and /inbox has no tint bar, so the wayfinding cue from the brand-marks ADR never appears. .wh-page (globals.css:345-351/412-414 vs surfaces.css:47-61). .wh-tabpanel gap (globals.css:339 vs surfaces.css:57). .wh-subtab desktop min-height 32 vs 40 (globals.css:448 vs surfaces.css:184). .wh-panel-header padding 18/20 vs 16/20, title 15px/1.5 vs 16/24, action 12 vs 14px (workspace.css:102-107 vs surfaces.css:277-283). .wh-workspace .wh-empty background (workspace.css:100 vs surfaces.css:413). .wh-workspace .wh-resource-scope background, three values (globals.css:362, workspace.css:85, surfaces.css:244). .wh-nav-group spacing 20 vs 16 (globals.css:211 vs surfaces.css:119). .wh-sidebar-footer 8 vs 6 (globals.css:248 vs surfaces.css:121). .wh-workspace-header padding (globals.css:258/420 vs surfaces.css:75). .wh-panel-empty line-height. .wh-agent-row-actions max-width. The :hover rules for settings links and access nodes. Separately, globals.css:460-789 still holds about 330 lines of landing/auth/connection CSS that public.css:6-7 says it overrides 'at equal or higher specificity'. Most of these duplicates are masked, because the later file wins and the computed panel headers are a uniform 16px/20px. That makes the stale rules misleading rather than visible, except for the sidebar.",
+   "why": "Implementation integrity: dead and contradictory rules. A file-order-dependent cascade makes every edit a regression risk.",
+   "impact": "Every member loses the tinted active-item cue in the sidebar and drawer, the main 'where am I' signal. A contributor who edits workspace.css .wh-panel-header (the file the depth doc names) sees no effect.",
+   "severity": "high",
+   "recommendation": "PR 1 (S): delete workspace.css:84, which restores the bar, or fold the intended shadow into :26. PR 2 (S/M): delete every superseded declaration, keeping the value that renders today (surfaces.css). Then move globals.css:460-789 into public.css and remove the override pairs. Verify with a before/after computed-style snapshot of the 23 routes × light/dark (review/design-system/measure.mjs). The diff must be empty apart from the sidebar bar. Add a node:test that fails when one selector is declared in two stylesheets with different values (see proposal.css_architecture).",
+   "effort": "M",
+   "type": "structural",
+   "evidence": [
+    "src/app/workspace.css:26",
+    "src/app/workspace.css:84",
+    "live computed box-shadow of .wh-sidebar-link[aria-current] on /home: 'rgb(205,205,205) 0 0 0 1px inset, rgba(26,35,45,.05) 0 1px 2px' (no 3px tint) — <review-scratch>/design-system/measure-light.json",
+    "<capture-run>/typical/shots/light-1440/home.s1.jpg (Home active row: grey fill + dot, no accent bar)",
+    "src/app/public.css:6-7",
+    "src/app/globals.css:460-789"
+   ],
+   "related_pages": [
+    "all signed-in routes",
+    "phone drawer"
+   ]
+  },
+  {
+   "id": "DS-03",
+   "title": "Unlayered .wh-* rules beat Tailwind utilities, so utilities written in components are silently ignored and some component props do nothing",
+   "location": "src/app/workspace.css, surfaces.css, controls.css (unlayered) vs utilities in src/components/**",
+   "problem": "Tailwind's utilities sit in @layer utilities. Almost all .wh-* CSS and the global :focus-visible rule are unlayered, so they win whatever the specificity. Examples of utilities written in markup that never apply: Card's `rounded-card` (12px) is forced to 14px by `.wh-workspace .wh-card` (card.tsx:13 vs workspace.css:87-93). permissions-view.tsx:193 `<h1 className=\"text-xl\">` renders at 28px because of surfaces.css:236. 26 focus-ring utilities in 6 files (e.g. filter-links.tsx:29, :84) are emptied by controls.css:13-16. `accent-accent` on checkboxes (permissions-view.tsx:134, default-for-agents-switch.tsx:41) is overridden by the workspace.css:33 tint. PageContainer's `size` prop cannot work inside AppShell, because `.wh-main[data-measure] .wh-page` (surfaces.css:54, specificity 0,3,0) outranks `.wh-page--reading`. In practice no page passes `size`, and all 8 PageContainer uses are bare. Layering is already used piecemeal: @layer utilities in globals.css:136, @layer components/base in controls.css:29-44, @layer base in surfaces.css:15. The desktop skill (warthog-desktop-design/SKILL.md:22-23) tells contributors to work around the trap rather than removing it.",
+   "why": "A predictable cascade is a precondition for a design system: what the component code says should be what renders.",
+   "impact": "Contributors write styles that silently do nothing, then add more specific selectors to win. That is how the duplicate rules in DS-02 accumulated.",
+   "severity": "medium",
+   "recommendation": "Declare one layer order before the Tailwind import (proposal.css_architecture.layers), with tokens and primitives below utilities and the forced-colours fixes last. Before moving each file into its layer, remove the contradicting utilities listed above with a codemod. Otherwise the flip will change visuals: Card, Notice, EmptyState, Skeleton and Toast 'rounded-card'; the text-xl h1; the ring utilities; accent-accent. Write context rules (nested inset, list group in panel) with :where() so their specificity stays at one class.",
+   "effort": "M",
+   "type": "structural",
+   "evidence": [
+    "src/components/ui/card.tsx:13",
+    "src/app/workspace.css:87-93",
+    "src/components/agents/permissions-view.tsx:193",
+    "src/app/surfaces.css:236",
+    "src/app/controls.css:13-16",
+    "grep: 26 focus(-visible):ring-* utilities in 6 files",
+    "src/app/surfaces.css:54",
+    "src/components/shell/page-container.tsx:24-31",
+    ".agents/skills/warthog-desktop-design/SKILL.md:22-23"
+   ],
+   "related_pages": [
+    "/agents/[id]?section=connectors",
+    "/agents/[id]?section=settings",
+    "every page using FilterLinks"
+   ]
+  },
+  {
+   "id": "DS-04",
+   "title": "State is shown five different ways. The same word 'Done' renders as green text, a tinted pill, and neutral text with a green icon",
+   "location": "/home setup-checklist.tsx:58; /activity activity-view.tsx:240; /life-admin?view=tasks tasks-view.tsx:155-170; /rules rule-badges.tsx:27-39; ui/status.tsx:30-48; inbox-view.tsx:344; connector-module.tsx:99",
+   "problem": "There is no state registry. Five renderers coexist. (1) Status (ui/status.tsx:31-35) and its clone ChecklistState (setup-checklist.tsx:58) colour the text itself: 'Done' and 'Connected' render in #008635. (2) Badge (a 20px tinted pill, 12px text, coloured icon) is used for OutcomeBadge 'Done/Denied', PhaseBadge, RuleKindBadge and NotCheckedTag. (3) TaskStatusBadge (tasks-view.tsx:162) and RuleStatusLabel (rule-badges.tsx:27) use 14px neutral text with a coloured icon and no pill. (4) OpenedTag (inbox-view.tsx:344) uses 12px text in the accent colour. (5) connector-module.tsx:99 uses `wh-tone-badge` without `wh-badge`, so it skips the 20px height contract. On /rules, the pill 'Ask me first' (12px) sits next to 'Active' (14px, no pill) in the same row. 'To do' is muted text on Home but full-strength text in Tasks. The brand-marks ADR says 'Text stays neutral … badges keep neutral text'. Status breaks that rule, while the feedback skill prescribes Status.",
+   "why": "Consistency and standards (Nielsen #4). State is the main signal on the 'see what agents did' and 'approve' jobs, and the brief requires words and icons, consistently applied.",
+   "impact": "Members scanning Home, Activity, Tasks and Rules have to relearn what a state looks like on each page. Equal states look unequal: green text reads as more emphatic than a pill.",
+   "severity": "high",
+   "recommendation": "Add src/components/ui/state.ts, a single map from state key to {label, icon, tone}, plus <StatusBadge state variant='pill'|'inline'>. Both variants use neutral text and a tone-coloured icon; the pill uses the .wh-badge hooks. Re-implement Status, ChecklistState, TaskStatusBadge, RuleStatusLabel, PhaseBadge, OutcomeBadge, NotCheckedTag and OpenedTag as thin wrappers over it, then inline them. Rule: pill for outcomes and kinds inside dense rows, inline for lifecycle state next to a title. Never colour the text.",
+   "effort": "M",
+   "type": "visual",
+   "evidence": [
+    "<capture-run>/typical/shots/light-1440/home.s1.jpg ('Done' green text, 'To do' muted)",
+    "<capture-run>/typical/shots/light-1440/activity.s2.jpg ('Done' tinted pill)",
+    "<capture-run>/typical/shots/light-1440/life-admin__view-tasks.s1.jpg ('To do' neutral text + muted icon)",
+    "<capture-run>/typical/shots/light-1440/rules.s1.jpg ('Ask me first' pill beside 'Active' 14px inline)",
+    "src/components/ui/status.tsx:30-48",
+    "src/components/home/setup-checklist.tsx:58-67",
+    "src/components/life-admin/tasks-view.tsx:155-170",
+    "src/components/rules/rule-badges.tsx:27-39",
+    "src/components/inbox/inbox-view.tsx:344-351",
+    "src/components/agents/connector-module.tsx:99",
+    "docs/adr/brand-marks-and-accent.md:12-18"
+   ],
+   "related_pages": [
+    "/agents",
+    "/agents/[id]",
+    "/connectors",
+    "/life-admin"
+   ]
+  },
+  {
+   "id": "DS-05",
+   "title": "Confirming a destructive action follows four patterns. Seven dialogs copy one 300-character class string, and Disconnect shows 'Disconnecting…' while still asking whether to keep the agent",
+   "location": "/agents disconnect-confirm.tsx:93-115; /settings/security remove-passkey.tsx:134, remove-authenticator.tsx:93; sign-in-request-decision.tsx:103; access-key-panel.tsx:145-180; delete-skill.tsx:109; package-editor.tsx:184; inline reveals in rules-view.tsx:381, memory-view.tsx:267, record-row.tsx:170, household-view.tsx:249",
+   "problem": "There is no Dialog primitive. Seven member dialogs paste the same safe-area class string with `rounded-panel … border-line … shadow-lg`. The border uses the divider token rather than the --wh-edge that panels use, and the shadow is Tailwind's black default rather than the elevation token. access-key-panel.tsx:148 even defines a private ConfirmDialog that nothing else can import. The same irreversible 'delete' job uses a modal for skills (delete-skill.tsx) but an inline <details> reveal for rules, memories, records and household members. The inline reveal has no Cancel control: you close it by clicking the Delete summary again. It also reflows the row, and its final button size differs (sm in household-view.tsx:257, md elsewhere). Disconnect opens its dialog from inside the form action (disconnect-confirm.tsx:95, by design: 'React form actions run in a transition'). As a result the trigger already reads 'Disconnecting…' behind the open 'Keep connected / Disconnect agent' question.",
+   "why": "Consistency (Nielsen #4) and system status (#1). Destructive confirmations should use one predictable pattern: safe choice first and focused, explicit cancel, and a pending state only after confirmation.",
+   "impact": "Disconnect is a core job. Seeing 'Disconnecting…' before confirming undermines trust that 'Keep connected' is safe. Members meet a modal on one delete and an inline expander on the next.",
+   "severity": "high",
+   "recommendation": "Add ui/dialog.tsx with <Dialog> and <ConfirmDialog trigger title description confirmLabel cancelLabel tone='danger' action pendingLabel>. The trigger is type=button and opens the dialog; the dialog holds the real <form> and FormSubmit (the remove-passkey pattern), so pending appears only after confirmation. Move the class string into a .wh-dialog rule (radius-panel, --wh-edge, --wh-shadow-3, safe-area sizing). Migrate the 7 dialogs and the 4 irreversible inline reveals. Keep inline reveals only for reversible edits. Rewrite Disconnect on ConfirmDialog. Its tests assert <dialog> structure and copy, not classes, so they survive.",
+   "effort": "M",
+   "type": "functional",
+   "evidence": [
+    "<review-scratch>/design-system/dialog-disconnect.jpg (trigger reads 'Disconnecting…' behind the open confirm)",
+    "<review-scratch>/design-system/inline-delete-rules.jpg (inline reveal, no Cancel, row reflows)",
+    "<review-scratch>/design-system/dialogs.json (dialog radius 14, Tailwind shadow-lg, border #e7e7e7 vs panel edge)",
+    "src/app/(portal)/(protected)/agents/disconnect-confirm.tsx:93-115",
+    "src/components/agents/access-key-panel.tsx:145-180",
+    "src/components/rules/rules-view.tsx:381",
+    "src/components/memory/memory-view.tsx:267",
+    "src/components/life-admin/record-row.tsx:166-185",
+    "src/components/household/household-view.tsx:248-262"
+   ],
+   "related_pages": [
+    "/settings/security",
+    "/skills",
+    "/memory",
+    "/life-admin",
+    "/household",
+    "/agents/[id]?section=settings"
+   ]
+  },
+  {
+   "id": "DS-06",
+   "title": "Radius scale: insets render at 8, 10 or 12px depending on how they were built, and some children have a larger radius than their parent",
+   "location": "/agents/[id]?section=connectors permissions-view.tsx:215 + :129; /connectors; /memory; /rules; /life-admin; /household",
+   "problem": "The token set has field 8, card 12, inset 10 and panel 14, but Tailwind gets no `rounded-inset` utility. Insets are therefore hand-built four ways. `rounded-card bg-surface-muted` gives 12px (22 uses). `rounded-field bg-surface-muted` gives 8px (14 uses). `rounded-[var(--wh-radius-inset)]` gives 10px (5 uses). The automatic nested .wh-card gives 10px (surfaces.css:321-326). On the agent Connectors section, an 8px inset ('Defaults for every service') contains a 12px bordered card. In the workspace, the 12px 'card' radius now survives only on ad-hoc elements: Notice 12 vs PageNotice 14, Skeleton 12, Toast 12. Hard-coded radii add more: brand tiles 5/7/10/12px (workspace.css:36-42), activity category marks `rounded-md` 6px and `rounded-card` 12px (activity-view.tsx:469, :611), breadcrumb and scope summary 6px, icon button 8px. The live survey of 23 routes found surfaces at 8, 10, 12, 14 and pill.",
+   "why": "Visual consistency: nested corners should step down (outer ≥ inner). Three inset radii read as three kinds of surface.",
+   "impact": "The workspace looks slightly assembled rather than designed, especially on agent settings and permissions, which are set-up pages members use on a laptop.",
+   "severity": "medium",
+   "recommendation": "Adopt the five-step scale in proposal.tokens.radius (xs 6, field 8, inset 10, panel 14, pill) and expose rounded-inset/rounded-pill/rounded-xs. Add an <Inset> primitive and codemod the 36 hand-built insets to it. Then alias --wh-radius (12px) to the panel value and retire 12 entirely. Map brand tiles to xs (≤24px) or inset (≥36px).",
+   "effort": "S",
+   "type": "visual",
+   "evidence": [
+    "<capture-run>/typical/shots/light-1440/agents_ID__section-connectors.s1.jpg (8px inset holding a 12px card)",
+    "<capture-run>/typical/shots/light-1440/connectors.s1.jpg (10px nested cards)",
+    "<review-scratch>/design-system/measure-light.json (radii per route: /agents/[id]?section=settings 29x12px inside 14px panel; /connectors 106x10px)",
+    "src/app/globals.css:33-36",
+    "src/app/globals.css:105-107 (@theme has no --radius-inset)",
+    "src/components/activity/activity-view.tsx:469, :611",
+    "src/app/workspace.css:36-42"
+   ],
+   "related_pages": [
+    "/inbox",
+    "/memory",
+    "/rules",
+    "/life-admin",
+    "/household",
+    "/settings/data"
+   ]
+  },
+  {
+   "id": "DS-07",
+   "title": "Cards are nested inside panels wherever a box was hand-built: 29 bordered cards on one agent settings page, and 8 bordered access nodes in the Overview panel",
+   "location": "/agents/[id]?section=settings permissions-view.tsx:117-140 (Toggle); /agents/[id] workspace.css:142 (.wh-access-node); /rules?view=new rules-view.tsx:296; pwa/install-prompt.tsx:278-310",
+   "problem": "The 'nested surfaces become insets' rule (surfaces.css:321) only matches the .wh-card and .wh-surface classes. Ad-hoc `rounded-card border border-line bg-surface p-3` boxes escape it. The agent Settings section renders one bordered card per record checkbox: 29 cards at 12px inside a 14px panel. The Overview access map puts 8 bordered white nodes (.wh-access-node) inside a raised panel. Rules' radio choices are bordered cards. That gives canvas → panel → card, and on Connectors canvas → panel → inset → card.",
+   "why": "This contradicts the project's own rule ('Lists and settings use aligned rows and dividers … avoid nested cards', design-system SKILL.md:60-61; workspace-depth.md 'never deeper'). Too many boxes add visual noise and length.",
+   "impact": "The agent Settings page is a long wall of boxes. Members setting up what an agent may touch find it hard to scan, and the page reads 'developer console'.",
+   "severity": "medium",
+   "recommendation": "Use the ChoiceGroup primitive (DS-12) with variant='list' (divider rows inside the panel, 44px rows) for checkbox and radio lists. Keep 'cards' only for 2-3 preset choices such as consent presets. Restyle .wh-access-node as divider rows, or as borderless insets with a hover fill. Make the nesting rule class-agnostic by targeting the Inset primitive instead of .wh-card.",
+   "effort": "S",
+   "type": "visual",
+   "evidence": [
+    "<capture-run>/typical/shots/light-1440/agents_ID__section-settings.s2.jpg (card per checkbox)",
+    "<capture-run>/typical/shots/light-1440/agents_ID__section-overview.s1.jpg (bordered nodes inside panel)",
+    "src/components/agents/permissions-view.tsx:117-140",
+    "src/components/rules/rules-view.tsx:296",
+    "src/app/workspace.css:142",
+    ".agents/skills/warthog-design-system/SKILL.md:60-61"
+   ],
+   "related_pages": [
+    "/rules?view=new",
+    "/settings (install prompt)",
+    "/agents/connect"
+   ]
+  },
+  {
+   "id": "DS-08",
+   "title": "Disclosures: 40 <summary> elements use about a dozen recipes. ROW_DISCLOSURE is defined three times and the summary-as-button helper twice",
+   "location": "memory-view.tsx:178, skills-view.tsx:222, record-row.tsx:217 (ROW_DISCLOSURE); rules-view.tsx:331 + record-forms.tsx:38 (summaryClass); tasks-view.tsx:112; connectors-view.tsx:456 + dev/outbox-view.tsx:33 (SUMMARY_LINK); activity-view.tsx:502/526; inbox-view.tsx:476; settings/agents/page.tsx:117; permissions-view.tsx:498; agent-workspace.tsx:322; connect-guide.tsx:74; spending-view.tsx:321",
+   "problem": "Disclosures come in four families with no primitive. (a) Summary-as-button: buttonClasses plus 'list-none [&::-webkit-details-marker]:hidden', inlined 8 times plus three helpers. (b) Summary-as-link: underlined in Activity 'View details', muted with no underline in Inbox 'Details', underline on hover in SUMMARY_LINK. (c) Summary-as-section-header: five recipes that differ in weight (medium vs semibold), size (text-sm vs inherit) and shape (rounded-field py-2 or none). (d) CSS-class disclosures: .wh-scope-disclosure, .wh-permission-editor, .wh-permission-help, .wh-connector-summary, .wh-list-group[data-collapsible], and memory-view.tsx:406, which reuses wh-panel-header. Chevrons rotate through four different mechanisms, and the open panel is 8, 10 or 12px.",
+   "why": "Consistency (Nielsen #4). Similar affordances that look different get read as different things.",
+   "impact": "'Details', 'View details' and 'How access works' sit on core pages (Inbox, Activity, every resource page) and each looks different. Every new disclosure copies one of the recipes.",
+   "severity": "medium",
+   "recommendation": "Add ui/disclosure.tsx: <Disclosure summary variant='link'|'button'|'section'|'row' buttonVariant chevron='end'|'none' defaultOpen panel='inset'|'plain'>. The 'row' variant owns ROW_DISCLOSURE, and the chevron rotation lives in one CSS rule. Keep .wh-scope-disclosure and .wh-connector-summary as named variants. Migrate one feature folder per commit, then delete the three ROW_DISCLOSURE copies and the two summaryClass helpers.",
+   "effort": "M",
+   "type": "structural",
+   "evidence": [
+    "<capture-run>/typical/shots/light-1440/inbox.s1.jpg ('Details ⌄' muted, no underline)",
+    "<capture-run>/typical/shots/light-1440/activity.s1.jpg ('View details ⌄' underlined)",
+    "<capture-run>/typical/shots/light-1440/rules.s1.jpg ('How access works ⌄' underlined muted)",
+    "grep: 40 <summary> in member components, ROW_DISCLOSURE x3, summaryClass x2, SUMMARY_LINK x2"
+   ],
+   "related_pages": [
+    "/inbox",
+    "/activity",
+    "/memory",
+    "/skills",
+    "/life-admin",
+    "/settings/agents",
+    "/spending",
+    "/agents/connect"
+   ]
+  },
+  {
+   "id": "DS-09",
+   "title": "Tabs and view switches use five visual treatments in three placements, and counts appear both as '(4)' text and as count pills",
+   "location": "/agents, /settings, /vault, /activity|/spending (section strip, app-shell sectionNavigation); /inbox, /rules, /connectors, /life-admin (tabs inside WorkspaceHeading); /agents/[id] (custom heading + pill sub-tabs); /activity view switch (FilterLinks 'tabs' pills above chips); package-editor.tsx:130 (aria-pressed buttons)",
+   "problem": "The same job, choosing which view of this page to see, renders as: underline route tabs in a full-width strip under the top bar (spending.s1, dialog-disconnect.jpg on /agents); underline tabs inside the heading band (rules.s1, inbox.s1); underline tabs inside a bespoke agent heading followed by pill sub-tabs (agents_ID…connectors.s1); a pill row (Activity Timeline / By agent / …) stacked right above a chip row with a different selected style, a white pill with tint border versus a grey fill; and aria-pressed Buttons in the skill editor. Counts are part of the tab label in ViewPanels ('Waiting on you (4)', 'Your rules (2)', 'Your services (0)' at inbox-view.tsx:848, rules-view.tsx:881, connectors-view.tsx:652), but FilterLinks and ListGroup use CountBadge. Rules shows both styles stacked.",
+   "why": "Consistency and recognition (Nielsen #4, #6). One control should have one look and one place.",
+   "impact": "Members cannot predict whether a row of words changes the page, the list, or a filter. On Activity's mobile view the two pill rows are almost indistinguishable (light-390 activity.s1).",
+   "severity": "medium",
+   "recommendation": "Use one Tabs visual (.wh-tab underline) for page-level views, route or in-page, always placed in WorkspaceHeading's `nav` slot. Add a `count` prop that renders CountBadge, replacing '(n)'. Use SegmentedControl (proposal.components) for list view switches and keep FilterLinks chips for filters only, documenting the two selected styles. Agent sub-sections use the same SegmentedControl. Coordinate with the IA reviewer on which sections keep tabs at all.",
+   "effort": "M",
+   "type": "structural",
+   "evidence": [
+    "<capture-run>/typical/shots/light-1440/rules.s1.jpg (tab '(2)' above CountBadge chips)",
+    "<capture-run>/typical/shots/light-1440/spending.s1.jpg (route tabs in strip above band)",
+    "<capture-run>/typical/shots/light-1440/activity.s1.jpg (two pill rows, different selected styles)",
+    "<capture-run>/typical/shots/light-390/activity.s1.jpg",
+    "<capture-run>/typical/shots/light-1440/agents_ID__section-connectors.s1.jpg (agent tabs + pill sub-tabs)",
+    "src/components/inbox/inbox-view.tsx:848,865",
+    "src/components/rules/rules-view.tsx:881",
+    "src/components/connectors/connectors-view.tsx:652",
+    "src/components/ui/filter-links.tsx:28-56"
+   ],
+   "related_pages": [
+    "/inbox",
+    "/rules",
+    "/connectors",
+    "/life-admin",
+    "/activity",
+    "/spending",
+    "/settings/*",
+    "/vault/*",
+    "/agents/[id]"
+   ]
+  },
+  {
+   "id": "DS-10",
+   "title": "Typography has no tokens or named roles, so the same role renders with different sizes, line-heights and weights",
+   "location": "src/app/globals.css, workspace.css, surfaces.css (px values) and 343 text-sm / 31 text-xs utilities",
+   "problem": "The signed-in CSS alone uses 11 font sizes (10, 11, 12, 13, 14, 15, 16, 18, 20, 24, 28px), 10 line-height values mixing px and unitless (20px, 24px, 16px, 28px, 1.6, 1.7, 1.5, 1.25, 1.2, 1.65) and 6 letter-spacings. The live survey of 23 routes found 14px body text at four line-heights (20, 21, 22.4, 22.75px) and 12px meta at five (16, 18, 19.2, 19.5, 20px). Item titles are 16/24 at weight 500 (Activity rows, ×61) while group titles are 16/24 at 600. Section titles are 18/27 in one place and 18/28 elsewhere. The page description is 14/22.4, the panel description 14/20. A plain <p> in a panel header is 12px (workspace.css:104) while .wh-panel-description is 14px (surfaces.css:280). The design-system skill names only three sizes (24/28 titles, 14 UI).",
+   "why": "A type scale with named roles keeps hierarchy legible and lets contributors pick a role instead of a number.",
+   "impact": "Rhythm differs slightly between pages, and hierarchy is ambiguous: an item title and a group title differ only in weight. Every new screen re-chooses sizes.",
+   "severity": "medium",
+   "recommendation": "Adopt proposal.tokens.type: 9 roles (caption, label-sm, body, body-long, title-item, title-group, title-section, title-page, figure). Expose them as Tailwind `text-*` utilities with built-in line-height and weight. Remap the existing .wh-* rules to role tokens behind unchanged class hooks. Retire 10, 11, 13 and 15px in the workspace. Codemod text-sm/text-xs to body/caption where they carry a role.",
+   "effort": "M",
+   "type": "visual",
+   "evidence": [
+    "<review-scratch>/design-system/measure-light.json (fonts tally: 14px/20, /21, /22.4, /22.75; 12px/16, /18, /19.2, /19.5, /20)",
+    "src/app/workspace.css:103-104",
+    "src/app/surfaces.css:223-238, :279-280, :317-318",
+    ".agents/skills/warthog-design-system/SKILL.md:58"
+   ],
+   "related_pages": [
+    "all signed-in routes"
+   ]
+  },
+  {
+   "id": "DS-11",
+   "title": "There is no DescriptionList or DataList: 13 hand-built <dl> elements use 9 layouts, approval facts misalign between Inbox cards, and Spending shows comparisons as prose",
+   "location": "/inbox inbox-view.tsx:438, :481; /life-admin record-row.tsx:267, records-view.tsx:234, record-forms.tsx:417; /activity activity-view.tsx:406; /household household-view.tsx:452; /agents/[id] agent-workspace.tsx:287, :332; /settings/agents page.tsx:112; .wh-evidence-facts; /spending spending-view.tsx",
+   "problem": "Key/value facts use auto label columns in Inbox, so each card's values start at a different x: the label column was 55, 63, 69 and 118px wide in one session. Life admin uses a fixed minmax(7rem,11rem). Activity and Household use flex columns, the agent workspace a 3-column grid, Settings a 2-column grid, and evidence facts an 11px dt over a 20px dd. Term styling varies between 12, 14 and 16px and between muted and full-strength colour. The member app has no <table> at all. Spending's per-agent totals are sentences ('AUD 0.00 of AUD 300.00 this month') rather than aligned, tabular-figure columns. The media skill says 'Key/value details usually reflow better as a definition list' but provides no primitive.",
+   "why": "Aligned label/value pairs and tabular numbers are how people check amounts quickly. Money is a 'control spending' core job.",
+   "impact": "On Inbox, the Amount, Merchant and Purpose facts in a stack of approvals don't line up, so comparing requests on the go is slower. Spending totals can't be compared at a glance.",
+   "severity": "medium",
+   "recommendation": "Add <DescriptionList items layout='columns'|'stacked'|'facts' labelWidth='fixed'|'auto'>. The default is a fixed minmax(7rem,11rem) column that stacks below 640px, with muted 14px terms and full-strength values. Add <DataList columns rows caption>, rendered as a semantic <table> from 640px (numeric columns right-aligned with tabular-nums) and as stacked rows on phones. Use it for Spending per agent, household totals and budgets. Migrate all 13 <dl>s.",
+   "effort": "M",
+   "type": "structural",
+   "evidence": [
+    "<capture-run>/typical/shots/light-1440/inbox.s1.jpg (Amount/Converted/Merchant vs Field/Purpose value columns start at different x)",
+    "<capture-run>/typical/shots/light-1440/spending.s1.jpg (totals as sentences)",
+    "<review-scratch>/design-system/measure-light.json (dls: 9 distinct layouts)",
+    "grep: 13 <dl> in member components"
+   ],
+   "related_pages": [
+    "/inbox",
+    "/life-admin",
+    "/activity",
+    "/household",
+    "/agents/[id]",
+    "/settings/agents",
+    "/spending",
+    "/rules?view=budgets"
+   ]
+  },
+  {
+   "id": "DS-12",
+   "title": "Binary settings have no Switch, Checkbox or Radio primitive. A 'Toggle' is a checkbox in a card, role='switch' looks like a checkbox, and on/off is expressed five ways",
+   "location": "permissions-view.tsx:117-140 (Toggle); connectors/default-for-agents-switch.tsx:32-45; connector-module.tsx:170-177; skills-view.tsx:257; rules Pause/Resume; globals.css:741 (.wh-permission-presets input)",
+   "problem": "The component called Toggle renders a 16px native checkbox inside a bordered card. default-for-agents-switch puts role='switch' on a native checkbox, which still looks like a checkbox and auto-submits on change. Elsewhere 'off' is a <select> option ('Off / Ask me first / Allow'), a Button plus an 'Off' badge (skills), or Pause/Resume buttons (rules). Checkbox sizes are mostly 16px (h-4/size-4), 18px (consent .wh-permission-presets) and native 13px elsewhere. All 26 checkbox, radio and switch inputs are composed by hand, and their `accent-accent` utilities are overridden by the workspace tint.",
+   "why": "Consistency, and affordance matching behaviour: a control that saves immediately should look like a switch, and one that is part of a form should look like a checkbox.",
+   "impact": "Members can't tell which toggles save immediately (default-for-agents) and which wait for Save changes (agent settings). That matters for 'connect/disconnect an agent' and access grants.",
+   "severity": "medium",
+   "recommendation": "Add ui/choice.tsx with: <Checkbox name label description>; <Switch name label description autoSubmit>, a native checkbox role='switch' with a CSS track/thumb drawn by ::before and ::after on a sibling span, 44px row, no dependency; <ChoiceGroup legend options type='checkbox'|'radio' variant='list'|'cards'>. Rule: Switch only for settings that save immediately, Checkbox inside forms with a Save. Replace Toggle, the rules radio cards and the consent preset inputs.",
+   "effort": "M",
+   "type": "functional",
+   "evidence": [
+    "<capture-run>/typical/shots/light-1440/agents_ID__section-connectors.s1.jpg (checkbox 'Allow reading' in a card beside an Off/Ask/Allow select)",
+    "<capture-run>/typical/shots/light-1440/agents_ID__section-settings.s2.jpg",
+    "src/components/agents/permissions-view.tsx:117-140",
+    "src/components/connectors/default-for-agents-switch.tsx:32-45",
+    "src/app/globals.css:741"
+   ],
+   "related_pages": [
+    "/connectors",
+    "/skills",
+    "/rules",
+    "/settings/notifications",
+    "/agents/connect"
+   ]
+  },
+  {
+   "id": "DS-13",
+   "title": "Layout and panel primitives are bypassed: raw className='wh-page' appears 35 times, panel headers come in three treatments, and the agent page has its own header",
+   "location": "33 files with className=\"wh-page\" vs 8 PageContainer; permissions-view.tsx:207-216 (.wh-permission-group + wh-group-title); agent-workspace.tsx:56 (custom h1 header); permissions-view.tsx:193 (hand h1)",
+   "problem": "PageContainer exists but 33 files write `<div className=\"wh-page\">` by hand. Panel headers appear as: WorkspacePanel (header band, divider, optional tinted 36px icon; home.s1); ListGroup (header band, divider, no icon, count; spending.s1); and .wh-permission-group with a bare wh-group-title, no band and no divider ('Connected services' on agents_ID…connectors.s1). The same concept even uses different headers: 'Your agents' is a WorkspacePanel with an icon on Home and a ListGroup without one on Spending. Panel icons are tinted .wh-panel-icon in WorkspacePanel but neutral .wh-object-icon on the agent Overview 'This agent's access' (agent-workspace.tsx:167). The agent page builds its own heading (.wh-agent-heading) with tabs instead of WorkspaceHeading, and permissions-view.tsx:193 has a hand-written h1.",
+   "why": "Primitives only produce consistency when they are the only route. Bypasses are where drift starts.",
+   "impact": "Headers of the same importance look different from page to page. Fixes made in a primitive don't reach the bypassing pages.",
+   "severity": "medium",
+   "recommendation": "Make PageContainer (renamed Page) the only width owner. Drop the dead `size` prop, codemod the 35 raw sites, and add a lint test that rejects className=\"wh-page\" outside it. Give WorkspacePanel `variant='plain'` for headerless groups and make it the only way to title a group: ListGroup's header reuses the same .wh-panel-header markup and gains an optional icon. Retire .wh-object-icon in favour of IconTile. Extend WorkspaceHeading with `leading` (agent mark), `status` and `back` slots and use it on /agents/[id].",
+   "effort": "M",
+   "type": "structural",
+   "evidence": [
+    "<capture-run>/typical/shots/light-1440/home.s1.jpg (WorkspacePanel 'Your agents' with tinted icon)",
+    "<capture-run>/typical/shots/light-1440/spending.s1.jpg (ListGroup 'Your agents', no icon)",
+    "<capture-run>/typical/shots/light-1440/agents_ID__section-connectors.s1.jpg ('Connected services': no header band)",
+    "<capture-run>/typical/shots/light-1440/agents_ID__section-overview.s1.jpg (neutral object icon)",
+    "grep: 35 className=\"wh-page\" in 33 files; 8 <PageContainer>",
+    "src/components/agents/agent-workspace.tsx:56, :167"
+   ],
+   "related_pages": [
+    "/agents/[id]",
+    "/spending",
+    "/home",
+    "/settings/*"
+   ]
+  },
+  {
+   "id": "DS-14",
+   "title": "Explicit theme support is dead code, and the `dark:` variant is a trap: it can never fire for the only dark-mode users, who rely on the OS setting",
+   "location": "src/components/shell/document-shell.tsx (unused); src/app/layout.tsx:24; src/app/globals.css:6, :64-83; public/manifest.webmanifest:9",
+   "problem": "Only DocumentShell sets data-theme, and app/layout.tsx never renders it (it outputs a bare <html lang>). Settings has no theme control. So :root[data-theme=\"dark\"] (globals.css:64-83) never applies. `@custom-variant dark` (globals.css:6) is keyed only on [data-theme=\"dark\"], so any `dark:` utility a contributor adds would do nothing for OS-dark members (0 are used today). The docs claim support for explicit and system themes: workspace-depth.md:18-19, mobile skill:41, technical-design.md:394, and DocumentShell's own comments. The PWA manifest theme_color is still the retired indigo #4338ca, while site-metadata.ts:69-70 uses #fff/#252628.",
+   "why": "Theming integrity (impeccable audit §3: theme switching issues). Code that looks supported but isn't wired misleads contributors.",
+   "impact": "No member impact today, because system dark mode works through light-dark() and the media query. The risk is the next contributor's `dark:` fix shipping as a no-op, and an installed PWA showing an off-brand indigo title bar.",
+   "severity": "medium",
+   "recommendation": "Decide once. Either wire DocumentShell into layout.tsx with a Settings › Notifications/Appearance control, or delete DocumentShell, its test and the [data-theme] block. In both cases, drive themes only through `color-scheme` and light-dark() tokens (proposal.tokens), delete the @custom-variant, and add a lint test that bans `dark:` utilities. Set manifest theme_color to the canvas (#f5f6f7) or surface.",
+   "effort": "S",
+   "type": "structural",
+   "evidence": [
+    "src/app/layout.tsx:22-28",
+    "src/components/shell/document-shell.tsx:38-46",
+    "src/app/globals.css:6",
+    "src/app/globals.css:64-83",
+    "public/manifest.webmanifest:9",
+    "src/app/site-metadata.ts:68-71",
+    "grep: 0 'dark:' utilities; no theme setting in src/components/settings"
+   ],
+   "related_pages": [
+    "all"
+   ]
+  },
+  {
+   "id": "DS-15",
+   "title": "Elevation has one token. Dialogs, the toast and the skill editor use Tailwind's default black shadows and the divider border instead",
+   "location": "workspace.css:11-13 (--wh-panel-shadow); dialogs ×6 shadow-lg; toast.tsx:58 shadow-lg; package-editor.tsx:184 shadow-xl",
+   "problem": "Raised panels use the tokenised, cool-tinted --wh-panel-shadow, with a dark variant through --wh-elevation and an inset highlight. Every overlay uses Tailwind's shadow-lg or shadow-xl instead: rgba(0,0,0,.1), not theme-aware, and a different hue from the panels. The active sidebar item and selected sub-tab reuse the panel shadow as a 'selected' cue, so 'raised' and 'selected' share one effect. Dialogs use border-line, panels --wh-edge.",
+   "why": "Depth should communicate layer (canvas, panel, overlay) consistently in both themes.",
+   "impact": "Small. Overlays look slightly foreign in dark mode, and contributors have no token to reach for.",
+   "severity": "low",
+   "recommendation": "Define --wh-shadow-0..3 (proposal.tokens.elevation), with --wh-panel-shadow as an alias of shadow-1. Use shadow-2 for toasts and popover panels such as the Filters disclosure, and shadow-3 for dialogs and the drawer. Express 'selected' with a border or fill only. Ban shadow-lg/xl via lint.",
+   "effort": "S",
+   "type": "visual",
+   "evidence": [
+    "<review-scratch>/design-system/dialogs.json",
+    "<review-scratch>/design-system/dialog-disconnect.jpg",
+    "src/app/workspace.css:11-13, :26, :84, :86",
+    "src/components/ui/toast.tsx:58"
+   ],
+   "related_pages": [
+    "/agents",
+    "/settings/security",
+    "/skills"
+   ]
+  },
+  {
+   "id": "DS-16",
+   "title": "Icons and icon-only controls: two sizing APIs, five sizes, mixed stroke widths in one header, and three shapes of icon button",
+   "location": "app-shell.tsx:139, :300, :309; workspace-surfaces.tsx:100; activity-view.tsx:469, :611, :745; toast.tsx:62; globals.css:261-274 (.wh-icon-button)",
+   "problem": "Icons are sized with size={n} (71 sites across src) or with h-*/w-* classes (about 184 sites). Rendered sizes are 16px ×434, 12px ×115, 14px ×85, 18px ×40 and 20px ×5. 18px icons use stroke 1.7 and everything else the default 2, so a panel header pairs an 18/1.7 tile icon with 16/2 arrows. The phone top bar pairs Menu at 20px/2 with Help at 18px/1.7. Icon tiles vary: tinted .wh-panel-icon vs neutral .wh-object-icon for the same role, 24px and 36px activity category squares at 6px and 12px radius, .wh-empty-icon, .wh-status-icon. Icon-only buttons come in three shapes: .wh-icon-button (8px, hover fill; header and drawer), the bordered pill Search button on phones (activity-view.tsx:745) and the round ghost toast dismiss (toast.tsx:62). There is no IconButton component.",
+   "why": "The feedback skill says '16px inline … 18px navigation … keep stroke/style consistent'. Consistent glyph weight is a big part of 'crisp'.",
+   "impact": "Mostly polish. Icon-only controls with different shapes are less recognisable as buttons on phones.",
+   "severity": "low",
+   "recommendation": "Add <Icon icon size='sm'|'md'|'lg'> with sizes 12 (badges only), 16 (inline) and 18 (nav and tiles), and one strokeWidth per size (2 at ≤16, 1.75 at 18). Add <IconTile icon tone size> for panel, object, empty, status and activity tiles. Add <IconButton label icon variant='ghost'|'secondary' size>, built on .wh-icon-button with radius-field, for every icon-only control. Codemod size={n} to the Icon component.",
+   "effort": "S",
+   "type": "visual",
+   "evidence": [
+    "<capture-run>/typical/shots/light-1440/agents_ID__section-overview.s1.jpg (neutral object icon) vs <capture-run>/typical/shots/light-1440/home.s1.jpg (tinted panel icons)",
+    "<capture-run>/typical/shots/light-390/activity.s1.jpg (round bordered Search icon button beside 8px header icon buttons)",
+    "<capture-run>/typical/shots/light-1440/activity.s2.jpg (6px category marks)",
+    "<review-scratch>/design-system/measure-light.json (svgs tally)"
+   ],
+   "related_pages": [
+    "/home",
+    "/activity",
+    "/agents/[id]",
+    "/settings"
+   ]
+  },
+  {
+   "id": "DS-17",
+   "title": "The spacing has no tokens, and the claimed 8px rhythm uses off-grid values with padding chosen surface by surface",
+   "location": "src/app/globals.css, workspace.css, surfaces.css (padding/gap/margin)",
+   "problem": "The signed-in CSS uses 18 distinct spacing values, including off-grid 3, 6, 10, 13, 14, 18 and 22px, though the design-system skill (SKILL.md:58) and surfaces.css:10 claim an '8px rhythm' while padding panels at 20px. Padding per surface is undocumented and varies: page band 24, panel header and body 16/20, toolbar 16/20, settings link 24, access node 14, connector summary 14/16, tool group 10/12/4, Card p-4/p-5, EmptyState p-6/p-8, insets p-3 or p-4.",
+   "why": "A spacing scale makes density predictable and lets primitives own padding.",
+   "impact": "Minor visual unevenness, and each new surface invents its own padding.",
+   "severity": "low",
+   "recommendation": "Adopt a 4px-based scale (proposal.tokens.spacing) with semantic aliases: pad-band, pad-panel, pad-inset, row-pad-block, gap-section, gap-stack and gap-inline. Primitives own padding and pages own only gaps. Snap 6→8, 10→8/12, 14→12/16, 18→16/20 and 22→24. Correct the docs to say '4px grid; 8px rhythm between components'.",
+   "effort": "S",
+   "type": "visual",
+   "evidence": [
+    "CSS tally: 2px×5 3px×1 4px×22 6px×7 8px×44 10px×8 12px×41 13px×1 14px×4 16px×53 18px×1 20px×17 22px×1 24px×23 32px×7 40px×3 48px×3",
+    "src/app/surfaces.css:10",
+    "src/app/workspace.css:142, :191, :196"
+   ],
+   "related_pages": [
+    "all"
+   ]
+  },
+  {
+   "id": "DS-18",
+   "title": "Colour roles overlap: the info blue is almost identical to the focus blue next to the indigo tint, and the sidebar is lighter than the canvas in light mode but darker in dark mode",
+   "location": "src/app/globals.css:12, :25-29, :46, :58-59",
+   "problem": "The UI has four blue or indigo hues with different jobs: --wh-tint #4f46e5 (wayfinding), --wh-info #0b6bcb ('Reads' tone), --wh-focus #0169cc (focus ring), and the manifest's retired #4338ca. Info and focus are nearly the same colour, so the blue eye mark on 'Reads' activity rows looks like a focus or selection cue. Separately, the sidebar is lighter than the canvas in light mode (#f9f9f9 > #f5f6f7) and darker in dark mode (#181818 < #191a1c). The chrome's relationship to the content flips with the theme.",
+   "why": "The brief asks for one accent used sparingly and semantic colours that carry meaning. Hues that carry different meanings should be distinguishable.",
+   "impact": "Small, but it erodes the 'calm, one accent' feel and the reliability of colour as a secondary cue.",
+   "severity": "low",
+   "recommendation": "Keep focus blue (a recognisable accessibility affordance). Shift info to a cyan family (proposal: light-dark(#0e7490,#5ccfe6)), or render 'Reads' with the neutral tone. Order surfaces canvas < sidebar < surface in both themes (sidebar light-dark(#fafbfb,#1f2022)).",
+   "effort": "S",
+   "type": "visual",
+   "evidence": [
+    "<capture-run>/typical/shots/light-1440/activity.s2.jpg (blue 'Reads' eye mark vs indigo marks)",
+    "<capture-run>/typical/shots/dark-1440/home.s1.jpg",
+    "src/app/globals.css:12, :25-29, :46, :58-59"
+   ],
+   "related_pages": [
+    "/activity",
+    "/agents/[id]?section=connectors"
+   ]
+  },
+  {
+   "id": "DS-19",
+   "title": "Pagination is built four ways with four vocabularies",
+   "location": "memory-view.tsx:528; activity-view.tsx:915; skills-view.tsx:651; life-admin/bookings-view.tsx:184",
+   "problem": "Memory uses 'First page' and 'Older memories' (sm, .wh-form-actions nav). Activity uses 'Older entries' and 'Newest entries' (md, ActionBar). The skills library uses 'Previous page' and 'Next page', client-side and disabled at the ends. Bookings uses 'Newer · Page X of Y · Older' in a panel footer. Each is wrapped differently and sits in a different place.",
+   "why": "Consistency (Nielsen #4).",
+   "impact": "Low frequency, but every long list behaves differently.",
+   "severity": "low",
+   "recommendation": "Add <Pagination label newer={{href,label?}} older={{href,label?}} position?> that renders in the owning ListGroup or WorkspacePanel footer. Use 'Newer' and 'Older' for time-ordered lists and 'Previous' and 'Next' otherwise, as links with buttons only for client lists. Migrate all four.",
+   "effort": "S",
+   "type": "structural",
+   "evidence": [
+    "src/components/memory/memory-view.tsx:527-545",
+    "src/components/activity/activity-view.tsx:914-921",
+    "src/components/skills/skills-view.tsx:650-670",
+    "src/components/life-admin/bookings-view.tsx:183-192"
+   ],
+   "related_pages": [
+    "/memory",
+    "/activity",
+    "/skills",
+    "/life-admin?tab=bookings"
+   ]
+  },
+  {
+   "id": "DS-20",
+   "title": "The contributor design skills and ADRs contradict each other and the code, so agents following them reintroduce drift",
+   "location": ".agents/skills/warthog-design-system/SKILL.md, warthog-desktop-design/SKILL.md, warthog-feedback/SKILL.md, warthog-mobile-design/SKILL.md; docs/design/admin-console-reference.md; docs/adr/brand-marks-and-accent.md; docs/adr/contained-text.md; docs/design/workspace-depth.md",
+   "problem": "Agents build this UI from these documents, and they disagree with each other and with the code. The full list is in proposal.contradictions. Key ones: the design-system skill says 'Do not restore an indigo palette' while the brand-marks ADR added the indigo --wh-tint. It prescribes `bg-bg` for the canvas, which paints white in the workspace, and `rounded-card (12px)`, which no workspace surface uses any more. The desktop skill and the reference say PageContainer's size sets the width, but AppShell's data-measure does. The reference specifies 12px dialogs with minimal depth; the code has 14px with shadow-lg. The ADRs give three specs for the active sidebar item: weight + dot, accent, and a 3px tint bar. The brand ADR says tokens live in workspace.css, but they are spread over five files. contained-text.md assigns public styles to public.css while about 330 lines remain in globals.css. Several docs claim explicit themes that aren't wired.",
+   "why": "In an agent-built codebase, the docs are the design system. Contradictions there produce exactly the drift catalogued in DS-01 to DS-13.",
+   "impact": "Every future contribution has a coin-flip chance of following the stale rule.",
+   "severity": "medium",
+   "recommendation": "In the same PR series as the token work, rewrite warthog-design-system/SKILL.md around proposal.tokens and the component list as one table of role, token, utility and primitive. Mark admin-console-reference.md's measured table as 'reference input, superseded by tokens.css'. Merge the active-sidebar spec into one sentence. Update the desktop skill's width section to describe data-measure. Fix contained-text.md's file ownership after the CSS move. Add a docs test that checks the token names and primitive names cited in SKILL.md exist in code.",
+   "effort": "S",
+   "type": "structural",
+   "evidence": [
+    ".agents/skills/warthog-design-system/SKILL.md:11, :26, :32, :35, :58",
+    ".agents/skills/warthog-desktop-design/SKILL.md:19-23",
+    "docs/design/admin-console-reference.md:53-54, :90-93, :112",
+    "docs/adr/brand-marks-and-accent.md:12-19",
+    "docs/adr/contained-text.md:24-26",
+    "docs/design/workspace-depth.md:18-19"
+   ],
+   "related_pages": [
+    "n/a (contributor docs)"
+   ]
+  },
+  {
+   "id": "DS-21",
+   "title": "One generic loading skeleton serves every signed-in route, whatever the page's shape",
+   "location": "app/(portal)/(protected)/loading.tsx → status-screens.tsx:191-204; ui/skeleton.tsx",
+   "problem": "Every protected route shows the same placeholder while loading: a heading band and two empty 160px panels. It doesn't match Inbox's card stack, Activity's toolbar and list, or Home's two-column dashboard, so the layout jumps when content arrives. Skeleton is used only here, and its radius (rounded-card, 12px) differs from the panels it imitates (14px).",
+   "why": "Loading states should preview the structure to reduce perceived latency and layout shift.",
+   "impact": "A small jolt on the most-used phone pages (Inbox, Activity) on slow connections.",
+   "severity": "low",
+   "recommendation": "Add Skeleton patterns, <Skeleton.Band/>, <Skeleton.Panel rows/> and <Skeleton.Rows count/>, built from the panel and row tokens. Add route-level loading.tsx files for /inbox, /activity, /home and /life-admin that compose them in each page's shape.",
+   "effort": "S",
+   "type": "visual",
+   "evidence": [
+    "src/components/shell/status-screens.tsx:191-204",
+    "src/app/surfaces.css:469-475",
+    "src/components/ui/skeleton.tsx:16"
+   ],
+   "related_pages": [
+    "/inbox",
+    "/activity",
+    "/home",
+    "/life-admin"
+   ]
+  }
+ ],
+ "proposal": {
+  "verdict": "Warthog has a real design system in its primitives (Button, Badge, Field/Input/Select, WorkspaceHeading/WorkspacePanel/ListGroup/ListToolbar, EmptyState, Notice), but not in its foundations. Tokens, type, spacing, radius and elevation are spread across five stylesheets with duplicated, conflicting rules, and about a dozen recurring patterns (dialog, disclosure, state label, description list, choice, tabs, pagination) have no primitive. Refine the system without replacing it: keep every --wh-* name and wh-* class hook, consolidate values behind them, and add the missing primitives one per PR.",
+  "tokens": {
+   "file": "src/app/tokens.css (imported first in app/layout.tsx; the ONLY file allowed to declare --wh-*; tone helpers --wh-tone/--wh-tone-soft excepted)",
+   "theming": "One mechanism: `:root { color-scheme: light dark }` plus light-dark() for every colour token; `:root[data-theme=light|dark] { color-scheme: light|dark }` if an explicit preference is ever wired (DS-14). This deletes globals.css:41-83 (two duplicated dark blocks) and the surface redefinitions in workspace.css:9-14 and public.css:18-28.",
+   "css": ":root {\n  color-scheme: light dark;\n  /* Neutral ramp: one cool-grey family (brief design_ux.feel). Values reuse what the workspace already renders. */\n  --wh-canvas: light-dark(#f5f6f7, #191a1c);          /* was --wh-workspace-canvas + --wh-page-canvas */\n  --wh-sidebar: light-dark(#fafbfb, #1f2022);         /* was #f9f9f9/#181818; now canvas < sidebar < surface in both themes */\n  --wh-surface: light-dark(#ffffff, #252628);         /* panel; was declared 3x */\n  --wh-surface-muted: light-dark(#f1f3f4, #2d2f31);   /* inset */\n  --wh-surface-raised: light-dark(#ffffff, #2b2c2f);  /* dialogs, toast, drawer */\n  --wh-bg: light-dark(#ffffff, #212121);              /* legacy page background (public); workspace code uses --wh-canvas */\n  --wh-fg: light-dark(#282828, #dcdcdc);              /* unchanged */\n  --wh-fg-muted: light-dark(#5d5d5d, #afafaf);        /* unchanged; 5.9:1 on #f1f3f4 */\n  --wh-line: light-dark(#e6e8eb, #34363a);            /* divider inside a surface (was #e7e7e7/#3c3c3c) */\n  --wh-edge: light-dark(#d5d8dc, #3e4145);            /* container boundary (dark was identical to --wh-line) */\n  --wh-line-strong: light-dark(#c9cdd2, #5a5d62);     /* hover/selected boundary (was #cdcdcd/#5d5d5d) */\n  --wh-line-input: light-dark(#767676, #8f8f8f);      /* form-control boundary >=3:1, unchanged */\n  /* Primary action (neutral) */\n  --wh-accent: light-dark(#181818, #f3f3f3);\n  --wh-accent-hover: light-dark(#303030, #dcdcdc);\n  --wh-accent-fg: light-dark(#ffffff, #0d0d0d);\n  --wh-accent-soft: light-dark(#eceef0, #36383c);     /* selected neutral fill */\n  --wh-action: var(--wh-accent); --wh-action-hover: var(--wh-accent-hover); --wh-on-action: var(--wh-accent-fg); /* role aliases */\n  /* Wayfinding accent: the single indigo tint (founder decision) */\n  --wh-tint: light-dark(#4f46e5, #a5a1ff);\n  /* Semantic tones (unchanged values; info shifted away from focus blue, DS-18) */\n  --wh-success: light-dark(#008635, #04b84c);\n  --wh-warning: light-dark(#916f00, #ffd24a);\n  --wh-danger: light-dark(#b91c1c, #ff8583);\n  --wh-info: light-dark(#0e7490, #5ccfe6);\n  --wh-on-danger: var(--wh-accent-fg);\n  /* Soft fills move from .wh-workspace to :root so dialogs, toasts and public pages share them */\n  --wh-tint-soft: color-mix(in srgb, var(--wh-tint) 11%, var(--wh-surface));\n  --wh-info-soft: color-mix(in srgb, var(--wh-info) 12%, var(--wh-surface));\n  --wh-success-soft: color-mix(in srgb, var(--wh-success) 12%, var(--wh-surface));\n  --wh-warning-soft: color-mix(in srgb, var(--wh-warning) 14%, var(--wh-surface));\n  --wh-danger-soft: color-mix(in srgb, var(--wh-danger) 11%, var(--wh-surface));\n  --wh-focus: light-dark(#0169cc, #0285ff);\n  --wh-overlay: rgb(0 0 0 / 40%);\n  --wh-logo: light-dark(#0a1b30, #eef2f8);\n\n  /* Type: one family, named roles (font shorthand) */\n  --wh-font-sans: var(--font-inter), ui-sans-serif, system-ui, sans-serif;\n  --wh-text-caption: 400 12px/18px var(--wh-font-sans);        /* timestamps, helper meta, fact terms */\n  --wh-text-label-sm: 500 12px/16px var(--wh-font-sans);       /* badges, counts, eyebrow (+ uppercase .08em) */\n  --wh-text-body: 400 14px/20px var(--wh-font-sans);           /* UI text, rows; 500 for labels, buttons, tabs */\n  --wh-text-body-long: 400 14px/22px var(--wh-font-sans);      /* descriptions, notices, prose <= 72ch */\n  --wh-text-title-item: 500 16px/24px var(--wh-font-sans);     /* row titles: activity entry, record, rule */\n  --wh-text-title-group: 600 16px/24px var(--wh-font-sans);    /* panel, list group, card titles (-0.01em) */\n  --wh-text-title-section: 600 18px/28px var(--wh-font-sans);  /* section titles, dialog titles, page-empty heading (-0.015em) */\n  --wh-text-title-page: 600 24px/30px var(--wh-font-sans);     /* h1 phone (-0.03em); 28px/34px from 640px (-0.035em) */\n  --wh-text-figure: 600 20px/28px var(--wh-font-sans);         /* totals, evidence facts; font-variant-numeric: tabular-nums */\n  --wh-text-input: 16px;                                         /* 14px only at (min-width:1024px) and (pointer:fine) */\n\n  /* Spacing: 4px base */\n  --wh-space-1: 4px; --wh-space-2: 8px; --wh-space-3: 12px; --wh-space-4: 16px; --wh-space-5: 20px;\n  --wh-space-6: 24px; --wh-space-8: 32px; --wh-space-10: 40px; --wh-space-12: 48px;\n  --wh-pad-band: var(--wh-space-4);        /* page heading, status panel; 24px from 640px */\n  --wh-pad-panel: var(--wh-space-4);       /* panel header/body/footer, list group, toolbar; 20px from 640px */\n  --wh-pad-inset: var(--wh-space-4);       /* insets, disclosure panels; 12px when dense */\n  --wh-row-pad-block: var(--wh-space-3);   /* divider rows (LIST_ROW py-3) */\n  --wh-gap-section: var(--wh-space-4);     /* between panels; 24px from 640px */\n  --wh-gap-stack: var(--wh-space-3);       /* inside a panel body */\n  --wh-gap-inline: var(--wh-space-2);      /* button groups, icon + label */\n  --wh-gutter: 16px;                       /* 32px from 640px (existing) */\n\n  /* Radius */\n  --wh-radius-xs: 6px;        /* tiles <= 24px, breadcrumb/scope summary focus shapes */\n  --wh-radius-field: 8px;     /* inputs, selects, icon buttons (unchanged) */\n  --wh-radius-inset: 10px;    /* insets, nested cards, sidebar links, tiles 36-48px (unchanged) */\n  --wh-radius-panel: 14px;    /* panels, bands, toolbars, dialogs, toasts, notices, empty states (unchanged) */\n  --wh-radius-pill: 9999px;   /* buttons, badges, chips, sub-tabs, counts */\n  --wh-radius: var(--wh-radius-panel);  /* legacy 'card' alias: 12px retired once insets use rounded-inset */\n\n  /* Elevation */\n  --wh-elevation: light-dark(rgb(26 35 45 / 5%), rgb(0 0 0 / 20%));\n  --wh-elevation-strong: light-dark(rgb(26 35 45 / 14%), rgb(0 0 0 / 48%));\n  --wh-highlight: light-dark(rgb(255 255 255 / 90%), rgb(255 255 255 / 4%));\n  --wh-shadow-0: none;                                                                                   /* insets, nested, selected */\n  --wh-shadow-1: 0 1px 2px var(--wh-elevation), 0 8px 24px -16px var(--wh-elevation), inset 0 1px 0 var(--wh-highlight); /* raised panel */\n  --wh-shadow-2: 0 2px 4px var(--wh-elevation), 0 12px 28px -12px var(--wh-elevation-strong);          /* toast, popover */\n  --wh-shadow-3: 0 4px 8px var(--wh-elevation), 0 24px 56px -20px var(--wh-elevation-strong);          /* dialog, drawer */\n  --wh-panel-shadow: var(--wh-shadow-1);  /* legacy alias */\n\n  /* Borders, icons, motion */\n  --wh-border-container: 1px solid var(--wh-edge);\n  --wh-border-divider: 1px solid var(--wh-line);\n  --wh-icon-sm: 12px; --wh-icon-md: 16px; --wh-icon-lg: 18px;   /* stroke 2 at <=16px, 1.75 at 18px */\n  --wh-duration-fast: 160ms; --wh-ease: cubic-bezier(.2, 0, 0, 1);\n}\n@media (min-width: 640px) { :root { --wh-pad-band: var(--wh-space-6); --wh-pad-panel: var(--wh-space-5); --wh-gap-section: var(--wh-space-6); --wh-gutter: 32px; } }\n:root[data-theme=\"light\"] { color-scheme: light; }\n:root[data-theme=\"dark\"] { color-scheme: dark; }",
+   "tailwind_bridge": "@theme inline additions: --color-canvas: var(--wh-canvas); --color-edge: var(--wh-edge); --color-surface-raised; --color-{tint,info,success,warning,danger}-soft; --radius-xs/-inset/-pill; --shadow-1/-2/-3: var(--wh-shadow-*); --text-caption: 12px; --text-caption--line-height: 18px; --text-body: 14px; --text-body--line-height: 20px; --text-body-long: 14px; --text-body-long--line-height: 22px; --text-title-item: 16px (--line-height 24px, --font-weight 500); --text-title-group (16/24/600); --text-title-section (18/28/600); --text-title-page (24/30/600); --text-figure (20/28/600). This removes the need for rounded-[var(..)], inline style tokens and shadow-lg.",
+   "type_scale_table": [
+    {
+     "role": "caption",
+     "size": "12px",
+     "line_height": "18px",
+     "weight": 400,
+     "replaces": "12px with 1.6/19.2, 19.5, 20 line-heights; 11px evidence dt; 10px brand initial xs"
+    },
+    {
+     "role": "label-sm",
+     "size": "12px",
+     "line_height": "16px",
+     "weight": 500,
+     "replaces": ".wh-badge, .wh-count, .wh-eyebrow (600 uppercase)"
+    },
+    {
+     "role": "body",
+     "size": "14px",
+     "line_height": "20px",
+     "weight": "400/500",
+     "replaces": "text-sm (343 uses), 13px helper text"
+    },
+    {
+     "role": "body-long",
+     "size": "14px",
+     "line_height": "22px",
+     "weight": 400,
+     "replaces": "14px at 21, 22.4, 22.75px; .wh-page-description 1.6; notice copy"
+    },
+    {
+     "role": "title-item",
+     "size": "16px",
+     "line_height": "24px",
+     "weight": 500,
+     "replaces": "activity/record/rule row titles (h3 16/24/500)"
+    },
+    {
+     "role": "title-group",
+     "size": "16px",
+     "line_height": "24px",
+     "weight": 600,
+     "replaces": ".wh-panel-header h2 (15px in workspace.css), .wh-list-group-title, .wh-group-title, 15px legends"
+    },
+    {
+     "role": "title-section",
+     "size": "18px",
+     "line_height": "28px",
+     "weight": 600,
+     "replaces": ".wh-section-title, .wh-access-map-intro h2 (no line-height), EmptyState text-lg, dialog titles, breadcrumb current (400)"
+    },
+    {
+     "role": "title-page",
+     "size": "24px → 28px ≥640",
+     "line_height": "30px → 34px",
+     "weight": 600,
+     "replaces": ".wh-workspace main h1, .wh-status-panel h1, .wh-standalone-title"
+    },
+    {
+     "role": "figure",
+     "size": "20px",
+     "line_height": "28px",
+     "weight": 600,
+     "replaces": ".wh-evidence-facts dd, spending totals (tabular-nums)"
+    }
+   ],
+   "dark_mode_notes": "Depth in dark comes from surface lightness (canvas #191a1c < sidebar #1f2022 < surface #252628 < raised #2b2c2f < inset #2d2f31), not shadow. Insets are lighter than panels in dark, as today. --wh-edge (#3e4145) becomes distinct from --wh-line (#34363a) so panels stay bounded. Brand tiles keep the fixed light tile (ADR)."
+  },
+  "components": [
+   {
+    "name": "Dialog / ConfirmDialog",
+    "file": "src/components/ui/dialog.tsx",
+    "api": "<Dialog ref title description? size='sm'|'md'|'lg' onClose initialFocus='cancel'|'title'>{body}<Dialog.Actions>{buttons}</Dialog.Actions></Dialog>; <ConfirmDialog trigger={<Button variant='danger'>Remove</Button>} title description confirmLabel cancelLabel='Keep …' tone='danger'|'neutral' action={serverAction} hidden={{name:value}} pendingLabel />",
+    "behaviour": "Native showModal(), safe choice first and autofocused, Escape and backdrop cancel, focus returns to the trigger, the real <form> lives inside the dialog so pending shows only after confirmation. Styles in a .wh-dialog class (radius-panel, edge border, shadow-3, safe-area sizing).",
+    "replaces": "disconnect-confirm.tsx:113-130, remove-passkey.tsx:130, remove-authenticator.tsx:89, sign-in-request-decision.tsx:103/174/212, access-key-panel.tsx:145-180 (private ConfirmDialog), delete-skill.tsx:105, package-editor.tsx:184 (size='lg'); irreversible inline reveals in rules-view.tsx:381, memory-view.tsx:267, record-row.tsx:170, household-view.tsx:249"
+   },
+   {
+    "name": "Disclosure",
+    "file": "src/components/ui/disclosure.tsx",
+    "api": "<Disclosure summary variant='link'|'button'|'section'|'row' buttonVariant? icon? chevron='end'|'none' defaultOpen panel='inset'|'plain' describedBy?>",
+    "behaviour": "Native <details>, one chevron rule, 44px summary on touch, and 'row' owns the ::details-content full-width layout (ROW_DISCLOSURE).",
+    "replaces": "ROW_DISCLOSURE x3, summaryClass x2, MANAGE_SUMMARY_CLASS, SUMMARY_LINK x2, DISCLOSURE_PANEL, 5 section-header summary recipes, inbox 'Details', activity 'View details'"
+   },
+   {
+    "name": "Checkbox / Radio / Switch / ChoiceGroup",
+    "file": "src/components/ui/choice.tsx",
+    "api": "<Checkbox name label description? defaultChecked/>; <Switch name label description? defaultChecked autoSubmit? pendingLabel?/>; <ChoiceGroup legend name type='checkbox'|'radio' variant='list'|'cards' options={[{value,label,description}]}/>",
+    "behaviour": "Native inputs, an 18px control with the tint accent, and 44px label rows. Switch is checkbox role=switch with a CSS track and is used only for settings that save immediately. 'list' uses divider rows; 'cards' is allowed only for 2-3 presets.",
+    "replaces": "permissions-view.tsx:117 Toggle, default-for-agents-switch.tsx, rules-view.tsx:296 radio cards, .wh-permission-presets/.wh-permission-label inputs, 26 hand-built inputs"
+   },
+   {
+    "name": "IconButton",
+    "file": "src/components/ui/icon-button.tsx",
+    "api": "<IconButton label icon={X} variant='ghost'|'secondary' size='md'|'sm' {...buttonProps}/> and IconButtonLink",
+    "behaviour": "Required accessible name, 44px target (36px desktop with a fine pointer for sm), radius-field, built on .wh-icon-button.",
+    "replaces": "app-shell.tsx menu/close/help, toast.tsx:62 dismiss, activity-view.tsx:745 phone Search"
+   },
+   {
+    "name": "SegmentedControl (view switch)",
+    "file": "src/components/ui/segmented-control.tsx",
+    "api": "<SegmentedControl label items={[{key,label,count?,href?}]} value onChange?/>; links when href is given (server), radios/tabs otherwise",
+    "behaviour": "One look for 'switch this list's view', distinct from filter chips. count renders CountBadge.",
+    "replaces": "FilterLinks variant='tabs' (Activity views), agent resource/control sub-tabs (.wh-subtabs), package-editor.tsx:130 aria-pressed buttons"
+   },
+   {
+    "name": "Tabs (consolidated)",
+    "file": "src/components/ui/view-tabs.tsx + shell/section-navigation.tsx",
+    "api": "Add `count?: number` to ViewTab and NavigationTabs items; tabs always render in WorkspaceHeading `nav`",
+    "behaviour": "Underline, tint indicator, bold reserve (existing). Route and in-page tabs keep their distinct semantics but share one visual and one placement.",
+    "replaces": "'(n)' label suffixes at inbox-view.tsx:848/865, rules-view.tsx:881, connectors-view.tsx:652; the section strip above the band"
+   },
+   {
+    "name": "DataList (table)",
+    "file": "src/components/ui/data-list.tsx",
+    "api": "<DataList caption columns={[{key,label,align?,numeric?}]} rows={[{id, cells}]} empty={<EmptyState variant='row'/>}/>",
+    "behaviour": "A semantic <table> from 640px (tabular-nums, right-aligned numbers) and stacked label/value rows on phones, with no horizontal page scroll.",
+    "replaces": "Spending per-agent and household totals (prose lines), budgets list, Activity grouped counts"
+   },
+   {
+    "name": "DescriptionList",
+    "file": "src/components/ui/description-list.tsx",
+    "api": "<DescriptionList items={[{term, value, wide?}]} layout='columns'|'stacked'|'facts' labelWidth='fixed'|'auto' density='compact'|'normal'/>",
+    "behaviour": "The default label column is minmax(7rem,11rem) so values align across cards. Stacks below 640px. Terms use muted body, values full-strength body; 'facts' uses caption over figure.",
+    "replaces": "13 <dl>: inbox-view.tsx:438,481; record-row.tsx:267; records-view.tsx:234; record-forms.tsx:417; activity-view.tsx:406; household-view.tsx:452; agent-workspace.tsx:287,332; settings/agents/page.tsx:112; .wh-evidence-facts"
+   },
+   {
+    "name": "Pagination",
+    "file": "src/components/ui/pagination.tsx",
+    "api": "<Pagination label newer={{href,label?}} older={{href,label?}} position?='Page 2 of 5' mode='time'|'index'/>",
+    "behaviour": "Renders in the owning panel or list-group footer. Vocabulary is Newer/Older (time) or Previous/Next (index).",
+    "replaces": "memory-view.tsx:528, activity-view.tsx:915, skills-view.tsx:651, bookings-view.tsx:184"
+   },
+   {
+    "name": "StatusBadge / StatusLabel + state registry",
+    "file": "src/components/ui/state.ts + status-badge.tsx",
+    "api": "STATES: Record<StateKey,{label,icon,tone}>; <StatusBadge state variant='pill'|'inline' label?/>",
+    "behaviour": "Neutral text with a tone-coloured icon. The pill uses .wh-badge (20px). Words plus icon, never colour alone.",
+    "replaces": "ui/status.tsx Status, setup-checklist ChecklistState, tasks-view TaskStatusBadge, rule-badges RuleStatusLabel/RuleKindBadge, phase-badge PhaseBadge, activity OutcomeBadge, record-row NotCheckedTag, inbox OpenedTag, connector-module raw wh-tone-badge"
+   },
+   {
+    "name": "Icon / IconTile / AgentMark / ServiceMark (Avatar)",
+    "file": "src/components/ui/icon.tsx, icon-tile.tsx, brand-mark.tsx",
+    "api": "<Icon icon size='sm'|'md'|'lg'/>; <IconTile icon tone='neutral'|'tint'|'info'|'success'|'warning'|'danger' size='xs'|'sm'|'md'|'lg'/>; <AgentMark agent size/> and <ServiceMark service size/> over the existing BrandMark",
+    "behaviour": "Sizes 18/24/36/44. Radius xs (≤24px) or inset (≥36px). One stroke per size.",
+    "replaces": ".wh-panel-icon/.wh-object-icon split, .wh-empty-icon, .wh-status-icon, activity-view.tsx:469/611 category tiles, .wh-workspace-avatar, connect-guide step number, brand-tile radius 5/7/10/12"
+   },
+   {
+    "name": "PageHeader (WorkspaceHeading)",
+    "file": "src/components/shell/workspace-surfaces.tsx",
+    "api": "Add leading? (IconTile/AgentMark), status? (StatusBadge inline), back? ({href,label}) to the existing props; nav stays the only tab slot",
+    "behaviour": "The single h1 owner on every signed-in page.",
+    "replaces": "agent-workspace.tsx:56 .wh-agent-heading, permissions-view.tsx:193 hand h1"
+   },
+   {
+    "name": "Page (PageContainer)",
+    "file": "src/components/shell/page-container.tsx",
+    "api": "<Page aside? asideLabel?> (drop the unused, overridden `size` prop)",
+    "behaviour": "The only .wh-page owner; width comes from AppShell data-measure.",
+    "replaces": "35 raw className=\"wh-page\" in 33 files"
+   },
+   {
+    "name": "Section / Panel / Inset",
+    "file": "workspace-surfaces.tsx + src/components/ui/inset.tsx",
+    "api": "<WorkspacePanel variant='panel'|'plain' icon? .../>; ListGroup header shares .wh-panel-header markup with an optional icon; <Inset dense? tone?>",
+    "behaviour": "Canvas → panel → inset, never deeper. Inset = radius-inset, surface-muted, pad-inset.",
+    "replaces": ".wh-permission-group + wh-group-title hand composition, 22x 'rounded-card bg-surface-muted p-4', 14x 'rounded-field bg-surface-muted p-3', 5x rounded-[var(--wh-radius-inset)], DISCLOSURE_PANEL"
+   },
+   {
+    "name": "EmptyState variants",
+    "file": "src/components/ui/empty.tsx",
+    "api": "variant='page'|'inline'|'row'|'filtered' (filtered takes clearHref)",
+    "behaviour": "'row' is a single muted line inside a list or table row; 'filtered' always offers 'Clear filters'.",
+    "replaces": ".wh-permission-empty, spending-view 'No approved releases this period.' lines, bookings filtered empties"
+   },
+   {
+    "name": "Skeleton patterns",
+    "file": "src/components/ui/skeleton.tsx",
+    "api": "<Skeleton.Band/>, <Skeleton.Panel rows={n}/>, <Skeleton.Rows count/>",
+    "behaviour": "Radius and padding from panel/row tokens. One role=status per page.",
+    "replaces": "status-screens.tsx LoadingScreen as the only loader; adds loading.tsx for /inbox, /activity, /home, /life-admin"
+   }
+  ],
+  "migration": {
+   "principles": [
+    "Keep class hooks stable. Each new primitive emits the wh-* classes that existing tests assert (wh-panel ×13, wh-page-heading ×13, wh-page ×7, wh-list-group ×6, wh-badge ×6, wh-confirm-its-you ×6, wh-tab ×5, wh-page-notice ×5, wh-toolbar ×4, wh-card ×4 …; 49 .test.tsx files reference wh-* and ~1,670 assert.match/doesNotMatch calls exist). Change the CSS behind the hooks, not the markup contract.",
+    "Keep copy and ARIA identical during migration. The regex assertions are mostly about text, roles and aria-*. Dialog tests assert <dialog> structure and contents (e.g. /<dialog\\b[\\s\\S]*?<\\// patterns), not class strings.",
+    "One primitive per PR. Each PR adds the primitive with its own render tests, migrates call sites one feature folder per commit while that folder's existing tests stay green, then deletes the old helper (summaryClass, ROW_DISCLOSURE, DIALOG constants) in the same PR.",
+    "When a test asserts a utility the primitive removes (rounded-card ×6, text-danger ×3, sm:max-w-md ×1), change that regex to the primitive's hook in the same commit, never in a later cleanup.",
+    "Verify visually, not only with markup tests. Run the computed-style snapshot (review/design-system/measure.mjs, or the 12 Nov audit kit) on 23 routes × light/dark × 390/1440 before and after. CSS-only PRs must produce an empty diff except for the intended change."
+   ],
+   "phases": [
+    {
+     "phase": "0 — Bug fixes, no markup change (S)",
+     "steps": [
+      "Delete workspace.css:84 so the active sidebar tint bar renders.",
+      "Delete every superseded declaration in globals.css/workspace.css that surfaces.css overrides (DS-02 list).",
+      "Move globals.css:460-789 into public.css and drop the override pairs.",
+      "Set manifest theme_color."
+     ],
+     "tests": "life-admin-tabs.test.tsx and wordmark.test.tsx read surfaces.css/globals.css. Update the paths they read if rules move."
+    },
+    {
+     "phase": "1 — Tokens (M)",
+     "steps": [
+      "Add tokens.css (proposal.tokens.css) and import it before globals.css.",
+      "Remove token declarations from globals/workspace/surfaces/public.",
+      "Extend @theme inline (tailwind_bridge).",
+      "Decide on the explicit theme (DS-14): wire or delete."
+     ],
+     "tests": "Rewrite form-contrast.test.tsx. It currently regexes ':root {', ':root:not([data-theme=\"light\"]) {' and ':root[data-theme=\"dark\"] {' in globals.css and reads #hex only. Make it parse tokens.css, resolve light-dark(a,b) into light and dark maps, and assert input borders ≥3:1 and fg/fg-muted/tone text ≥4.5:1 against canvas, surface and inset in both themes."
+    },
+    {
+     "phase": "2 — Cascade layers (M)",
+     "steps": [
+      "Codemod away the utilities that currently lose to unlayered CSS: rounded-card on Card/Notice/EmptyState/Skeleton/Toast → rounded-panel or remove; permissions-view h1 text-xl; 26 focus-ring utilities; accent-accent ×3.",
+      "Declare the layer order.",
+      "Move one stylesheet per commit into its layer (shell → primitives → features), checking each with the computed-style diff."
+     ],
+     "tests": "Add design-lint.test.ts (see css_architecture.guardrails)."
+    },
+    {
+     "phase": "3 — Primitives, one per PR (L overall)",
+     "order": [
+      "StatusBadge + state registry (high-visibility, low-risk)",
+      "Dialog/ConfirmDialog (fixes the Disconnect pending state)",
+      "Inset + DescriptionList",
+      "Disclosure",
+      "Choice (Checkbox/Switch/ChoiceGroup)",
+      "Tabs count + SegmentedControl",
+      "Pagination",
+      "Icon/IconTile/IconButton",
+      "Page/PageHeader codemod",
+      "DataList (Spending)",
+      "Skeleton patterns + route loading.tsx"
+     ]
+    },
+    {
+     "phase": "4 — Docs (S, alongside phase 1)",
+     "steps": [
+      "Rewrite warthog-design-system/SKILL.md as a role → token → utility → primitive table.",
+      "Fix the contradictions listed below.",
+      "Add a docs test that the token and primitive names cited in SKILL.md exist."
+     ]
+    }
+   ]
+  },
+  "css_architecture": {
+   "layers": "Declare once at the top of globals.css, before @import \"tailwindcss\": `@layer theme, base, wh-base, components, wh-shell, wh-primitives, wh-features, utilities, wh-a11y;`. tokens.css stays unlayered and declares only custom properties, so nothing can collide with it. wh-base: element defaults, :focus-visible, reduced motion. wh-shell: AppShell chrome (sidebar, header, breadcrumb, drawer, section nav). wh-primitives: panel, band, list group, toolbar, inset, badge, dialog, disclosure, choice, empty, notice, toast, tabs. wh-features: agent heading, access map, timeline, connector module, evidence, settings links. Utilities then override primitives deliberately. wh-a11y (forced-colors, prefers-reduced-motion) comes last so accessibility fixes always win.",
+   "file_ownership": [
+    "tokens.css: every --wh-* value (light-dark), nothing else",
+    "globals.css: layer order, Tailwind import, @theme bridge, wh-base",
+    "shell.css (new, from globals.css:161-458 + surfaces.css:69-207): wh-shell",
+    "primitives.css (from surfaces.css, controls.css, workspace.css:25-60/:87-110): wh-primitives, one block per primitive and named after its component file",
+    "features.css (from workspace.css:112-200): wh-features",
+    "public.css: landing, auth, consent, help (absorbs globals.css:460-789; no override pairs)"
+   ],
+   "rules": [
+    "A selector is declared in exactly one file and one layer. Variants use [data-variant]/[data-tone]/[data-size] attributes rather than new compound selectors.",
+    "Context adaptation uses :where() so specificity stays at one class (e.g. `:where(.wh-panel, .wh-list-group, .wh-toolbar) .wh-inset`).",
+    "No component file contains a raw hex value, `shadow-lg/xl`, `rounded-md`, `rounded-[…]`, inline style={{…var(--wh…)}}, or a `dark:` utility.",
+    "Only primitives may render <dialog> (plus the AppShell drawer), <summary> (plus public/auth), <dl>, and the .wh-page class."
+   ],
+   "guardrails": "design-lint.test.ts (node:test, matching the repo's existing CSS-reading tests). (1) Parse all stylesheets and fail when the same selector + media context is declared in two places with different values. (2) Fail on --wh-* declarations outside tokens.css. (3) Grep src/components for the banned patterns above, with an allowlist for public/auth/admin. (4) Fail when a .wh-* class is styled in a file other than its owner. Each rule starts with its current offenders listed as known exceptions, and the list may only shrink.",
+   "duplicates_to_remove": [
+    "globals.css:168-172 .wh-main (merged into surfaces.css:34-40)",
+    "globals.css:211, :248 (nav group/footer spacing)",
+    "globals.css:253-260 + :419-421 .wh-workspace-header padding",
+    "globals.css:275-278 + :415-418 .wh-section-navigation padding",
+    "globals.css:339-344 .wh-tabpanel",
+    "globals.css:345-351 + :412-414 .wh-page",
+    "globals.css:358-372 .wh-resource-scope(-inner)",
+    "globals.css:448-451 .wh-subtab desktop",
+    "workspace.css:84 (sidebar active, the bug)",
+    "workspace.css:85, :100 (resource scope, empty backgrounds)",
+    "workspace.css:102-111 (panel header/action/body/empty; surfaces.css wins)",
+    "workspace.css:148, :158 (hover rules duplicated in surfaces.css:305-306)",
+    "workspace.css:167 .wh-agent-row-actions max-width",
+    "globals.css:460-789 vs public.css overrides"
+   ]
+  },
+  "contradictions": [
+   {
+    "where": "warthog-design-system/SKILL.md:11 and :35 vs docs/adr/brand-marks-and-accent.md:12-19",
+    "conflict": "The skill says the founder replaced the indigo direction and 'Do not restore an indigo palette'. The 12 Nov ADR adds the indigo --wh-tint for wayfinding, and the founder decision for this audit is 'neutral + single indigo tint'.",
+    "fix": "The skill should name --wh-tint as the one wayfinding accent, never used for text or primary buttons."
+   },
+   {
+    "where": "warthog-design-system/SKILL.md:26",
+    "conflict": "Canvas is listed as `bg-bg`, but in the workspace the canvas is --wh-canvas (#f5f6f7/#191a1c) and bg-bg paints #fff/#212121.",
+    "fix": "Add bg-canvas to the Tailwind bridge and reference it."
+   },
+   {
+    "where": "warthog-design-system/SKILL.md:32",
+    "conflict": "'rounded-card (12px; raised workspace groups 14px), rounded-field (8px)' — no workspace surface renders at 12px any more (.wh-card is forced to 14 and nested cards to 10), and there is no rounded-inset utility for insets.",
+    "fix": "Use the five-step radius scale with named utilities."
+   },
+   {
+    "where": "warthog-design-system/SKILL.md:58 and surfaces.css:10",
+    "conflict": "Both claim an '8px spacing rhythm', yet panels pad 20px and the CSS uses 6/10/14/18/22px.",
+    "fix": "'4px grid; spacing tokens'."
+   },
+   {
+    "where": "warthog-design-system/SKILL.md:30-31 + warthog-feedback/SKILL.md:20 vs brand-marks ADR:15-18",
+    "conflict": "The feedback skill prescribes 'Existing Status text and icon' for state, but Status colours its text. The ADR says text stays neutral and only the icon carries colour.",
+    "fix": "Make the StatusBadge rule (neutral text, tone icon) the only one."
+   },
+   {
+    "where": "warthog-desktop-design/SKILL.md:19-21 and admin-console-reference.md:90-93",
+    "conflict": "Both say 'PageContainer defaults to the 896px reading width; size=form 768; size=wide …'. In reality AppShell's data-measure (workspace-navigation.ts pageMeasureFor + surfaces.css:54) sets the width and overrides size. No page passes size.",
+    "fix": "Document section-family measures and drop the prop."
+   },
+   {
+    "where": "warthog-desktop-design/SKILL.md:22-23",
+    "conflict": "'Do not override these unlayered workspace CSS classes with contradictory Tailwind width/padding utilities' documents the cascade trap instead of removing it, and still conflicts with Button/Card APIs that accept className.",
+    "fix": "Replace with the layer order rule."
+   },
+   {
+    "where": "admin-console-reference.md:53-54",
+    "conflict": "'Cards and dialogs: 12px corners, subtle border, minimal depth'. The code has 14px panels and 14px dialogs with Tailwind shadow-lg; workspace-depth.md supersedes minimal depth, but the table was never updated.",
+    "fix": "Mark the measured table as reference input superseded by tokens.css."
+   },
+   {
+    "where": "admin-console-reference.md:112 vs brand-marks ADR:13 vs workspace.css:26/:84",
+    "conflict": "Three specs for the active sidebar item: 'weight and a dot', 'the active sidebar item … in the accent', and a 3px tint bar that is overridden and never renders.",
+    "fix": "One spec: weight + tinted icon + 3px tint bar; drop the dot or keep it and drop the bar."
+   },
+   {
+    "where": "brand-marks ADR:19",
+    "conflict": "'Tokens live in workspace.css with light-dark() values'. Tokens are spread across globals.css (most of them, with duplicated @media blocks), workspace.css, surfaces.css (--wh-edge), controls.css and public.css.",
+    "fix": "'Tokens live in tokens.css'."
+   },
+   {
+    "where": "docs/adr/contained-text.md:24-26 vs globals.css:460-789 and public.css:6-7",
+    "conflict": "The ADR says public and entry styles live in public.css. About 330 lines remain in globals.css and public.css overrides them.",
+    "fix": "Update after the CSS move."
+   },
+   {
+    "where": "workspace-depth.md:18-19, warthog-mobile-design/SKILL.md:41, technical-design.md:394, document-shell.tsx comments",
+    "conflict": "They claim explicit plus system colour schemes, but data-theme is never set (DocumentShell is unused).",
+    "fix": "Wire it or delete it, and say which."
+   },
+   {
+    "where": "warthog-design-system/SKILL.md:39-40 and :44 vs code",
+    "conflict": "The skill says to use the shared primitives 'rather than hand-rolled wrappers' and lists PageContainer, yet 35 raw wh-page divs, the agent page's custom header and .wh-permission-group panels bypass them. The skill has no rule for dialogs, disclosures, description lists or state labels, the exact areas that drifted.",
+    "fix": "Add those primitives to the skill table."
+   },
+   {
+    "where": "warthog-feedback/SKILL.md:30-31",
+    "conflict": "'16px inline … 18px desktop navigation … keep stroke/style consistent', while badges use 12px icons (×115), 14px icons are common (×85), and stroke is 1.7 for 18px but 2 elsewhere.",
+    "fix": "Document 12/16/18 and one stroke per size, enforced by an <Icon> wrapper."
+   },
+   {
+    "where": "warthog-media/SKILL.md:52-55",
+    "conflict": "Prescribes tables and definition lists for comparisons and key/value data, but the repo has no primitive for either and no member-app <table>.",
+    "fix": "Point to DataList and DescriptionList once they exist."
+   }
+  ]
+ },
+ "method": "Read the 5 contributor skills, the 4 design ADRs/docs, all 6 stylesheets and every ui/ and shell/ primitive. Verified app-map survey claims at file:line (corrections: 8 member <dialog>s, counting package-editor; 4 member pagination implementations, not 5; 49 .test.tsx and 52 .test.ts(x) files reference wh-*; ~1,670 assert.match calls). Ran a read-only computed-style survey of 23 routes at 1440 light (review/design-system/measure.mjs → measure-light.json). Opened and cancelled the Disconnect and Remove-factor dialogs and opened the Rules inline delete in the typical account (dialogs.mjs; nothing confirmed or saved). Screenshots read: home, inbox, rules, life-admin tasks, agents overview/connectors/settings, connectors, activity s1/s2, spending (light-1440), rules + home (dark-1440), activity (light-390)."
+}

@@ -1,0 +1,94 @@
+<!doctype html>
+<html lang="en-AU"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Wireframe — Agent › Access (desktop, proposed)</title><link rel="stylesheet" href="mockup.css">
+<style>
+  .access { display: grid; grid-template-columns: 200px minmax(0, 1fr); gap: 24px; align-items: start; }
+  .toc { position: sticky; top: 20px; display: grid; gap: 2px; }
+  .toc a { padding: 6px 10px; border-radius: var(--r-control); font: var(--t-body); color: var(--fg-muted); display: flex; justify-content: space-between; }
+  .toc a.on { background: var(--surface); color: var(--fg); box-shadow: 0 0 0 1px var(--line) inset; font: var(--t-body-strong); }
+  .sw { width: 36px; height: 20px; border-radius: 10px; background: var(--line-strong); position: relative; flex: none; }
+  .sw::after { content: ""; position: absolute; top: 2px; left: 2px; width: 16px; height: 16px; border-radius: 50%; background: #fff; }
+  .sw.on { background: var(--accent); } .sw.on::after { left: 18px; }
+  .seg3 { display: inline-flex; border: 1px solid var(--line-strong); border-radius: var(--r-pill); padding: 2px; }
+  .seg3 span { padding: 4px 10px; border-radius: var(--r-pill); font: 500 12px/16px Inter; color: var(--fg-muted); }
+  .seg3 span.on { background: var(--accent); color: #fff; }
+  .sumline { display: flex; flex-wrap: wrap; gap: 6px; margin-top: 8px; }
+  .savebar { position: sticky; bottom: 16px; margin-top: 16px; display: flex; align-items: center; justify-content: space-between; padding: 12px 16px 12px 20px; }
+</style></head>
+<body>
+<div class="shell">
+  <aside class="side">
+    <div class="brand"><span class="brand-mark"></span>WARTHOG</div>
+    <a class="nav-link"><span class="ic"></span>Home</a>
+    <a class="nav-link"><span class="ic"></span>Inbox<span class="count">4</span></a>
+    <a class="nav-link"><span class="ic"></span>Activity</a>
+    <a class="nav-link active"><span class="ic"></span>Agents</a>
+    <div class="nav-group"><span class="label">What agents can use</span>
+      <a class="nav-link"><span class="ic"></span>Services</a>
+      <a class="nav-link"><span class="ic"></span>Vault</a>
+      <a class="nav-link"><span class="ic"></span>Life admin</a>
+      <a class="nav-link"><span class="ic"></span>Memory</a>
+      <a class="nav-link"><span class="ic"></span>Skills</a>
+    </div>
+    <div class="nav-group"><span class="label">Spending &amp; rules</span>
+      <a class="nav-link"><span class="ic"></span>Spending</a>
+      <a class="nav-link"><span class="ic"></span>Rules</a>
+    </div>
+    <div class="side-foot">
+      <a class="nav-link"><span class="ic"></span>Household</a>
+      <a class="nav-link"><span class="ic"></span>Settings</a>
+      <a class="nav-link"><span class="ic"></span>Help &amp; support</a>
+      <a class="me annot right" data-note="Pinned footer: never scrolls away"><span class="avatar">AN</span><span><b style="font:var(--t-body-strong)">Alexandra Nguyen</b><br><span class="meta">Sign out</span></span></a>
+    </div>
+  </aside>
+  <main class="main">
+    <div class="topbar meta">Agents › Claude</div>
+    <div class="page">
+      <div class="page-head" style="align-items:center">
+        <div style="display:flex;gap:14px;align-items:center"><span class="agent-mark am-claude" style="width:44px;height:44px;border-radius:12px;font-size:18px">C</span>
+          <div><h1>Claude</h1><p class="meta"><span class="badge ok">Connected</span> · since 23 Nov · active 11:43 pm · 17 requests</p></div></div>
+        <div style="display:flex;gap:8px"><a class="btn" style="color:var(--danger)">Disconnect</a></div>
+      </div>
+      <nav class="tabs annot" data-note="One tab row (was 2 rows, 9 sections); card access &amp; budget move to Limits"><a>Overview</a><a class="on">Access</a><a>Limits</a><a>Activity</a></nav>
+
+      <div class="access">
+        <nav class="toc annot" data-note="Section index, one page">
+          <a class="on">Services <span class="meta">0</span></a><a>Your details <span class="meta">All</span></a>
+          <a>Life admin and tasks <span class="meta">On</span></a><a>Memory <span class="meta">Read</span></a><a>Skills <span class="meta">1</span></a><a>Advanced</a>
+        </nav>
+        <div class="stack">
+          <section class="panel inset annot" data-note="Plain-language summary first" style="padding:16px 20px;background:var(--surface)">
+            <h2>What Claude can do through Warthog</h2>
+            <div class="sumline"><span class="badge">Reads your everyday details</span><span class="badge">Can ask for protected details</span><span class="badge">Can ask to use a card · up to $300 a month</span><span class="badge">Reads and saves its own memories</span><span class="badge">Manages records and tasks</span><span class="badge warn">No services yet</span></div>
+            <p class="meta" style="margin-top:10px">Your rules for all agents still apply. Warthog only controls what Claude does through Warthog.</p>
+          </section>
+
+          <section class="panel">
+            <div class="panel-head"><div><h2>Services</h2><p class="meta">Which of your connected accounts Claude may use</p></div><a class="btn sm">Connect a service</a></div>
+            <div class="row"><span class="agent-mark" style="background:#ea4335">M</span><div class="grow"><h3>Gmail · alexandra@…</h3><p class="meta">Read mail · Draft replies</p></div>
+              <div class="seg3" title="Reading"><span>Off</span><span class="on">Allow</span></div>
+              <div class="seg3" title="Changes"><span>Off</span><span class="on">Ask me</span><span>Allow</span></div></div>
+            <div class="row"><span class="agent-mark" style="background:#4285f4">C</span><div class="grow"><h3>Google Calendar · alexandra@…</h3><p class="meta">Read events · Add events</p></div>
+              <div class="seg3"><span class="on">Off</span><span>Allow</span></div>
+              <div class="seg3"><span class="on">Off</span><span>Ask me</span><span>Allow</span></div></div>
+          </section>
+
+          <section class="panel">
+            <div class="panel-head"><div><h2>Your details</h2><p class="meta">From About you</p></div></div>
+            <div class="row"><div class="grow"><h3>Read everyday details</h3><p class="meta">Name, email, phone, address — without asking each time</p></div><span class="sw on"></span></div>
+            <div class="row"><div class="grow"><h3>Ask for protected details</h3><p class="meta">Passport, licence, date of birth — you approve each release</p></div><span class="sw on"></span></div>
+          </section>
+
+          <section class="panel">
+            <div class="panel-head"><div><h2>Life admin and tasks</h2><p class="meta">Records, bookings, reminders and tasks</p></div></div>
+            <div class="row"><div class="grow"><h3>Read and update your records</h3><p class="meta">Agents file new records as suggestions for you to check</p></div><span class="sw on"></span></div>
+            <div class="row"><div class="grow"><h3>Work on tasks</h3><p class="meta">Tasks assigned to Claude or to any agent</p></div><span class="sw on"></span></div>
+          </section>
+
+          <div class="panel savebar annot" data-note="One save for the page; appears when something changed"><span class="meta">2 unsaved changes</span><span style="display:flex;gap:8px"><a class="btn">Discard</a><a class="btn primary">Save changes</a></span></div>
+        </div>
+      </div>
+    </div>
+  </main>
+</div>
+</body></html>

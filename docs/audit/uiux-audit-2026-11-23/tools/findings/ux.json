@@ -1,0 +1,484 @@
+{
+  "lens": "ux",
+  "summary": "Warthog's individual moments are often well made: a push notification opens the exact request, already scrolled into view and focused. Destructive dialogs explain the consequences in plain words. Disabled controls always say why. Empty states lead with a single action. The journeys between those moments are where it fails. The highest-stakes job, approving a card or passport request on the phone, can turn into a chain of prerequisites the person only finds one at a time, with no way back to the request. It can also ask for the passkey twice and the security code again. Once the release succeeds, the request still shows live Approve and Deny buttons. Three of the persona journeys need the person to remember a step the UI doesn't show: turning a connected service on for each agent, finding card access under Controls › Spending rather than Vault, and saving an agent section before switching tabs. Activity and Life admin are hard to scan. Activity rows lead with the tool name and the agent's reason while hiding what was actually done. Life admin shows 25 fully expanded suggestions, reloads to the top after every Confirm, and buries its working 'Confirm all 25' button about 9,200px down. Heuristic total: 23/40 (Acceptable). Error recovery, copy and destructive-action safety are solid; efficiency, consistency, recognition and minimalism are the weak areas.",
+  "scores": {
+    "nielsen": {
+      "1_visibility_of_system_status": { "score": 3, "key_issue": "Good pending labels ('Approving…', 'Confirming…'), countdowns, the 'From your notification' tag and outcome notices. Gaps: nav has no Inbox count; a successful card release leaves the request looking undecided; notices don't name the item they refer to ('Approved. The agent can go ahead.', 'Confirmed.')." },
+      "2_match_system_real_world": { "score": 3, "key_issue": "Mostly plain Australian English. Leaks at key moments: 'How would you like to unlock your vault?' with passkey, vault passphrase and vault recovery phrase in the middle of a payment; 'Check integrity'; outcome filter 'Done (agent requests)' / 'Not confirmed'; 'handled by no one'; budget currency typed as 'a three-letter code'." },
+      "3_user_control_freedom": { "score": 2, "key_issue": "Agent-section edits are silently lost on tab switch (verified). Detours from a request (Add a card, Open your vault) have no route back. Disconnect is the only full stop and can't be reversed (reconnecting creates a new agent). The setup checklist can't be dismissed. '?' leaves the app." },
+      "4_consistency_standards": { "score": 2, "key_issue": "Card access sits under agent › Controls › Spending while cards live in Vault, and Vault's 'Manage for one agent' link goes to a section with no card setting. Budgets appear in 4 places. Money formats differ ($240.00 / NZD 180.00 / AUD 0.00 / AUD200 / A$). Disconnect is on the list page only. Bulk actions appear in different places." },
+      "5_error_prevention": { "score": 2, "key_issue": "Confirmation dialogs guard destructive actions well. But card-release prerequisites (card, then postal address) surface only after the person commits. The default approval expiry is 15 minutes. Budget currency is free text. Import warns 'importing the same file twice adds everything twice' instead of preventing it. Dirty forms aren't guarded." },
+      "6_recognition_over_recall": { "score": 2, "key_issue": "Activity rows hide the object (the task title is only under 'View details'). Home's Inbox panel shows only a count. After connecting a service, the person has to remember to enable it on each agent's page. Agent settings span 2 tab rows and 7 sub-sections." },
+      "7_flexibility_efficiency": { "score": 2, "key_issue": "Deep links, permalinks and URL filters are good accelerators. But there's no time-range quick filter in Activity, 'Confirm all' is buried, there are no bulk actions in Inbox, and service grants are one agent at a time." },
+      "8_aesthetic_minimalist": { "score": 2, "key_issue": "Life admin at 390px wide: 16,859px tall, 697 controls, 26 primary buttons. Activity: 11,154px, 369 controls, 119 disclosures. The agent name appears 3 times per Inbox card. Every panel opens with an explanatory paragraph." },
+      "9_error_recovery": { "score": 3, "key_issue": "Errors are specific and say what to do next ('Add a postal address in About you, then come back to add your card', 'That request expired before you decided…'). But they rarely link to the fix or return the person to where they were." },
+      "10_help_documentation": { "score": 2, "key_issue": "'How access works' disclosures provide inline help. But the top-bar '?' leaves the signed-in app for the public /help page, which shows 'Sign in · Sign up'. Help isn't contextual or searchable." },
+      "total": "23/40",
+      "band": "Acceptable (significant improvements needed before users are happy)"
+    },
+    "cognitive_load": {
+      "home": { "failed_items": ["single focus (setup checklist above a pending Inbox; waiting requests shown twice)", "visual hierarchy (typical Home has 0 primary-styled actions)", "minimal choices (5 equal checklist rows, no recommended step)", "working memory (Inbox panel gives only '4 requests are waiting')"], "failures": 4, "rating": "high", "decision_points_over_4": ["Setup checklist: 5 equal 'To do' rows", "Your agents panel: 3 agents × 3–4 links each (name, entries, need attention, Set a budget)"] },
+      "inbox": { "failed_items": ["minimal choices (5–8 controls per request)", "working memory (card/vault/address prerequisites learned one at a time)", "progressive disclosure (3 unlock methods always shown)"], "failures": 3, "rating": "moderate", "decision_points_over_4": ["Card release with a saved card: Which card, Security code, 3 unlock radios, Approve and release, Deny, Ask for more detail = 8", "Card release without a card: Approve (disabled), Add a card, Deny, Ask for more detail, Details = 5"] },
+      "activity": { "failed_items": ["single focus ('Check integrity' is the only heading action)", "chunking (59 entries under 'Today')", "visual hierarchy (rows lead with tool name)", "minimal choices (4 views + 6 quick filters + search + 4 selects + 2 dates)", "progressive disclosure (the object is hidden; the agent's reason is shown)"], "failures": 5, "rating": "high", "decision_points_over_4": ["Find controls: 4 view tabs + 6 quick filters + search + Filters (Agent, Service, Event, Outcome selects; From, To) = 17", "Outcome select: 7 options incl. 'Done (agent requests)' vs 'Done (your changes)'"] },
+      "agent_page": { "failed_items": ["grouping (card access under Controls › Spending, records under Controls › Settings, identity under Resources › Vault)", "working memory (2 tab rows; Save per section; unsaved edits lost)", "minimal choices (4 tabs + 3–4 sub-tabs; Overview 8 tiles + 4 links)"], "failures": 3, "rating": "moderate", "decision_points_over_4": ["Overview: 8 resource/control tiles", "Controls › Settings: 4 toggles + 25 record checkboxes + Advanced + Save"] },
+      "life_admin": { "failed_items": ["single focus", "chunking (25 suggestions fully expanded)", "visual hierarchy (26 primary buttons)", "one thing at a time", "minimal choices (2 tab rows: 2 + 4)", "progressive disclosure (every field of every record shown)"], "failures": 6, "rating": "high", "decision_points_over_4": ["Tabs: Records & reminders | Tasks, then Records | Upcoming | Bookings | Moving checklist (PR #52 reduces this to one row of 4)", "Each of 25 suggestions: Confirm, Not mine, Edit (3 × 25 = 75 actions on one screen)"] }
+    },
+    "emotional_journey": {
+      "card_release": "Peak anxiety. Start: 'Claude wants to use your card for $240.00 at Mazda Parramatta' plus Claude's own words and the time left, which is good and calm. Valley 1: with no saved card, the button is greyed out and 'Add a card' starts a detour that hits a second wall (no postal address) and never returns to the request. Valley 2: with a card, the person picks the card, types the security code and chooses from 3 vault-unlock methods (jargon at the worst moment). After they press Approve, a lapsed step-up can refuse the release, clear the security code and ask them to confirm, retype and approve again. End: one small green line, 'Handed over. The agent can collect it once.', while Approve, Deny and Ask stay live and the count still says 4. The peak–end rule says this ending is what they'll remember, and it reads as 'did it work?'",
+      "protected_detail": "The explainer 'Approving hands this to Gemini once, and it can't be collected again' sounds like a safety guarantee but doesn't say the agent keeps the value for good. 'Field: passport' is a raw lowercase key, and nothing shows which value (masked) will go. The reassurance is aimed at the wrong worry.",
+      "disconnect": "Strong peak. The dialog names the agent, lists the consequences, focuses 'Keep connected' first and gives 'Disconnect agent' danger styling, and a success notice follows. Valleys: Disconnect isn't on the agent's own page, where the person is when they decide; there's no gentler 'stop card and protected access' option; and 'connect it from the start' (a new agent) makes it feel final."
+    },
+    "persona_walks": {
+      "A_first_time_phone_just_connected_claude": "Home: 'Finish setting up · 1 of 5' with 4 identical 'To do' rows, no primary action and no reason to pick one. Nothing says what Claude can do now (with no service connected, very little). Tapping 'Connect a service' opens a 103-service catalogue whose 'Popular' trio (Gmail, Google Calendar, Google Drive) are all 'Early access — ask to join'. The first connectable email services are Brevo and Mailgun. Connecting one still gives Claude nothing until they find Agents › Claude › Resources › Connectors. Red flags: no clear next step, the expected services are gated, and a hidden second step.",
+      "B_push_pay_240_mazda": "Tapping the notification lands on the request, focused and tagged 'From your notification' (verified, 1 tap). From Home: Inbox panel → Inbox → scroll past 3 fully expanded requests (Mazda is last, near the bottom of a 2,388px page). With a card: 4–5 actions plus the OS passkey sheet; if the step-up has lapsed, 8 actions and 2 passkey prompts. Without a card: 15+ steps across Vault › Cards → About you (postal address) → Cards → Inbox, with no return link and a 15-minute default expiry. Afterwards the request still looks pending.",
+      "C_activity_week_and_dispute": "Activity opens on 'Today · 59'. No 'this week' option: Filters → From → To → Apply (5 steps). Rows read 'Add a task · Done · Changes · ChatGPT · Agent's reason: Keeping track'. 'Find a dog sitter for Biscuit while we're away' only appears under View details. Dispute: View details → scroll → type in 'tell us what's wrong' → Dispute → reload with 'Your dispute has been recorded against that activity.' The person isn't told who sees it or what happens next.",
+      "D_stop_card_and_cap_100": "Stop card: drawer → Agents → agent → Controls → (Spending) → untick 'Let it ask to use a card' → scroll → Save changes = 6–7 taps. Natural guesses fail: Vault › Cards › 'Manage for one agent' opens agent › Vault, which has no card setting. Cap: the same page, but the budget form has free-text Currency and a hint that reads 'Defaults to AUD200 per month' beside a saved 300. Via Rules & budgets › Budgets: 'Set Claude's budget' shows no current amount. Via Spending: Card budgets → Rules › Budgets → agent › Spending (3 hops). Switching to the Rules sub-tab before Save silently discards the change (verified).",
+      "E_rego_due_and_confirm_records": "Home › Reminders shows 'Car registration · Expires 11 Dec 2026' at a glance (good). Confirming the 25 agent-found records: each Confirm reloads to the top of a 16,859px page (scrollY 1063 → 0, verified), and the notice doesn't name the record. 'Confirm all 25' exists but sits in the panel footer at y≈9,231px. Upcoming shows 'Not checked yet' on rows with no Confirm action."
+    },
+    "key_flows_in_app": {
+      "2_identity_and_card": "Vault › About you › Add a detail; Vault › Cards › Add a card is refused until a postal address is saved (the person learns this inside the card form). Card form: 6 fields + vault unlock (3 methods) + a first-time recovery-phrase reveal.",
+      "3_connect_service": "Checklist → /connectors (Catalogue) → find a connectable service (Popular are early-access only) → Connect → provider → back with a notice saying 'turn it on for the agents … on each agent's page' → Agents → agent → Resources → Connectors → tick → Save, repeated per agent. About 5 + 5N taps.",
+      "4_connect_claude_access_key": "/agents/connect is clear (copy address, per-platform steps). There's no live 'waiting for Claude…' confirmation in-app. The access-key flow uses a different step idiom (01/02/03) and pre-fills the name 'My agent'.",
+      "5_approval": "Push deep link works well. Release decision has 8 controls; possible double step-up; no decided state afterwards.",
+      "6_activity_dispute_undo": "Dispute takes 4 steps and gives no next step. Undo can route to the Inbox for approval of your own undo ('Undo is waiting for your approval').",
+      "8_address_moving": "Address is edited in Vault › About you, Household › Shared address and Household › Your postal address. PR #52 removes the moving checklist, leaving no guided 'I'm moving' journey (brief key flow 8 needs amending).",
+      "9_household": "One long scroll. The budget is shown read-only in 'Budget' and edited in a separate owner panel ('Budget, limits and currency') further down.",
+      "10_disconnect": "/agents → Disconnect → dialog → Disconnect agent = 3 taps. Not offered on /agents/[id].",
+      "11_export_delete": "Settings › Data & privacy opens with a pre-emptive 'Confirm it's you' primary button before any action is chosen. Delete uses a typed phrase and a clear timeline (good)."
+    }
+  },
+  "strengths": [
+    "Push notifications land on the exact request at /inbox?approval=<id>: scrolled into view, focused, ringed and tagged 'From your notification' (verified live at 390px). Already-decided or expired requests get a plain notice. Keep this as the model for every 'take me to the thing' link.",
+    "Approval sentences match the brief: one decidable sentence, the agent's own words in quotes and the time left ('Claude wants to use your card for $240.00 at Mazda Parramatta · Claude says “Balance for the 48,000 km logbook service” · 23 hours 52 minutes left').",
+    "Destructive moments are handled carefully. The Disconnect dialog names the agent, lists the consequences, focuses 'Keep connected' first and offers the gentler 'replace the key' option. Delete account needs a typed phrase and states a timeline. Rule Delete asks first.",
+    "Unavailable controls never just sit dead: each says why and links to the fix (Approve and release + 'Add a card in your vault first…'; 'Choose a file first.'). Error copy is specific and names the next step.",
+    "First-run empty states teach through one action. Inbox and Home lead with 'Connect your first agent'. Life admin offers a copyable 'Ask your agent' prompt plus 'Add something yourself'. Home › Reminders gives a date-at-a-glance answer ('Car registration · Expires 11 Dec 2026')."
+  ],
+  "findings": [
+    {
+      "id": "UX-01",
+      "title": "After a successful card or passport release, the request still looks undecided",
+      "location": "/inbox — src/components/inbox/inbox-view.tsx:493-502 (ReleaseApprove mounted without onReleased); src/components/inbox/release-approve.tsx:698-701, 716-740",
+      "problem": "When a release completes, ReleaseApprove sets status 'released' and shows one small line, 'Handed over. The agent can collect it once.' The action row below still renders a live 'Approve and release' button, plus Deny and 'Ask for more detail'. InboxView never passes onReleased, so the row isn't marked as decided, the 'Waiting on you (4)' count doesn't change, and the request stays in the list until a reload. Pressing Approve again returns 'This has already been handed over to the agent.' (inbox-view.tsx:946).",
+      "why": "Nielsen #1 (visibility of system status) and the peak–end rule. The most sensitive action in the product ends without a clear decided state. Live Deny and Approve buttons on something already handed over invite contradictory input.",
+      "impact": "Phone-first member (persona B) approving a $240 payment in seconds can't tell whether it worked. They may tap again, or tap Deny believing it will stop the payment. This erodes trust exactly where the brief says it matters most.",
+      "severity": "high",
+      "recommendation": "In InboxView, pass onReleased to ReleaseApprove. On success, swap the row for a decided summary using the existing Badge and Status primitives: 'Released to Claude · Visa ··4242 · $240.00 at Mazda Parramatta · just now', with a 'View in Activity' link. Remove the action row when state.status === 'released', then call router.refresh() so the tab count and Home update. Reuse the decided-row markup from the History tab.",
+      "effort": "S",
+      "type": "functional",
+      "evidence": [
+        "src/components/inbox/release-approve.tsx:698-701 ('Handed over…' rendered above the still-live action row at 716-740)",
+        "src/components/inbox/inbox-view.tsx:493-502 (no onReleased prop)",
+        "src/components/inbox/inbox-view.tsx:946 (already_released copy reached by a second press)"
+      ],
+      "related_pages": ["/home (Inbox panel count)"]
+    },
+    {
+      "id": "UX-02",
+      "title": "Approving a first card request becomes an undiscoverable chain of prerequisites with no way back",
+      "location": "/inbox → /vault/cards → /vault — src/components/inbox/release-approve.tsx:504-566; src/components/vault/add-card-flow.tsx (postal-address refusal); src/components/rules/rules-view.tsx (Approval expiry, default 15 minutes)",
+      "problem": "A card request with no saved card shows a greyed 'Approve and release' and an 'Add a card' link to /vault/cards. On Vault › Cards, 'Add a card' then refuses: 'A card needs a billing address, and you haven't saved a postal address yet. Add a postal address in About you, then come back to add your card.' The person then has to go to About you, add an address, return to Cards, fill 6 fields, unlock the vault (3 methods), save the first-time recovery phrase, open the drawer, go to Inbox, scroll to the request and release it. Nothing carries the request through this path: there's no returnTo and no 'Back to Claude's request' link, and the default approval expiry is 15 minutes. Protected details follow the same pattern ('Open your vault').",
+      "why": "Nielsen #5 (error prevention: the prerequisites appear only after the person commits) and #3 (no route back). The working-memory rule also applies: the person has to keep the original request in mind through about 15 steps.",
+      "impact": "Persona B, and any member whose agent asks for a card before the optional 'Add a card' step is done. The request is likely to expire before they finish, so the agent's task fails and the member concludes Warthog is the obstacle.",
+      "severity": "high",
+      "recommendation": "(1) Make 'Add a card' / 'Open your vault' links carry ?returnTo=/inbox?approval=<id>. Have cards-view and identity-view show a PageNotice after saving: 'Card saved. Back to Claude's request: $240.00 at Mazda Parramatta' (ButtonLink). (2) In add-card-flow, show the billing-address fields inline when no postal address exists, saving them as the postal address, instead of refusing. (3) In the Inbox reason box, show the time left next to the fix ('Add a card first — 12 minutes left'). (4) Prevent it upstream: when 'Let it ask to use a card' is turned on in agent › Spending and no card is saved, show a Notice with 'Add a card now'.",
+      "effort": "M",
+      "type": "structural",
+      "evidence": [
+        "run/typical/shots/light-390/inbox.s1.jpg, inbox.s3.jpg (greyed Approve + 'Add a card')",
+        "review/ux/walk7.mjs output: /vault/cards Add a card → 'A card needs a billing address, and you haven't saved a postal address yet…'",
+        "run/typical/shots/light-390/rules.s2.jpg ('15 minutes (default)')",
+        "grep: no returnTo/return path in src/components/vault or src/components/inbox"
+      ],
+      "related_pages": ["/vault (protected details: 'Save this detail in your vault first')", "/agents/[id]?section=spending"]
+    },
+    {
+      "id": "UX-03",
+      "title": "The release step asks for too much at the peak moment and can make the person do it all twice",
+      "location": "/inbox card or protected release — src/components/inbox/release-approve.tsx:253-306 (submit/step-up), 626-660 (3 unlock radios), 440-447 (ReleaseStepUp)",
+      "problem": "Every release shows Which card, Security code, and a fieldset 'How would you like to unlock your vault?' with 3 radios (passkey, vault passphrase, vault recovery phrase). If the session's step-up has lapsed, the release is refused after the person presses Approve. Submit clears the security code (and passphrase) and shows 'Confirm it's you'. After confirming, the person must retype the security code and press 'Approve and release' again. That means two passkey prompts plus re-entering data for one decision.",
+      "why": "Cognitive-load rule of ≤4 options at a decision point (here 8). Nielsen #2 (vault and recovery-phrase jargon during a payment, against the brief's 'no security jargon on primary screens'). Nielsen #7 (a predictable step-up isn't checked up front).",
+      "impact": "Persona B, deciding in seconds on a phone. A refusal at the moment of commitment feels like failure, and the re-entry doubles the time to pay.",
+      "severity": "high",
+      "recommendation": "Check step-up freshness when the release controls mount, or run the ConfirmItsYou ceremony automatically inside the same tap before gatherUnlock, so a lapse never surfaces as an error. Keep securityCode in state across a step-up refusal: clear it only on success or cancel, never because of a lapsed confirmation. Default to the passkey and move 'vault passphrase' and 'recovery phrase' into a 'Other ways to unlock' <details> under the button. Rename the legend to 'Confirm with your passkey'.",
+      "effort": "M",
+      "type": "functional",
+      "evidence": [
+        "src/components/inbox/release-approve.tsx:296-306 (refusal clears securityCode, sets confirmRequired)",
+        "src/components/inbox/release-approve.tsx:151 ('Thanks, that's confirmed. Approve and release again to hand it over.')",
+        "src/components/inbox/release-approve.tsx:626-660 (3 unlock radios always visible)"
+      ],
+      "related_pages": ["/vault/cards (add-card uses the same 3-method unlock)"]
+    },
+    {
+      "id": "UX-04",
+      "title": "Connecting a service gives no agent access, and the required second step is hidden on each agent's page",
+      "location": "/connectors — src/app/(portal)/(protected)/connectors/notices.ts:15; src/components/connectors/connectors-view.tsx:647, 728; /agents/[id]?section=connectors",
+      "problem": "After connecting a service, the notice says 'Service connected. Next, turn it on for the agents that should use it, on each agent's page.' No controls are offered there. The person has to open Agents → each agent → Resources → Connectors → tick → Save, once per agent. Agent overviews keep showing '0 services allowed'. In a new account, the 'Popular' panel at the top of the catalogue lists only Gmail, Google Calendar and Google Drive, all 'Early access — ask to join'. The first connectable rows are developer email APIs (Brevo, Mailgun, Mailjet).",
+      "why": "Recognition over recall (Nielsen #6): the next step is described but not offered. The checklist marks 'Connect a service' done when nothing can use it yet, so status is misleading (Nielsen #1). And the first services shown to a newcomer can't be connected.",
+      "impact": "Persona A, the first-time member who just connected Claude. They connect a service, ask Claude to use it, Claude can't, and they don't know why. About 5 extra taps per agent, which is brief key flows 3 and 4.",
+      "severity": "high",
+      "recommendation": "Under the 'connected' notice, and on each row in 'Your services', render a 'Which agents can use <service>?' checklist of connected agents with one Save. Post to the same grant action the agent › Connectors section uses (permission-edits). Count the checklist step 'Connect a service' as done only when at least one agent is allowed. In the catalogue, put connectable services first under 'Popular', or label the early-access trio as such and add connectable alternatives beside them.",
+      "effort": "M",
+      "type": "structural",
+      "evidence": [
+        "run/firstrun/shots/light-390/connectors.s1.jpg, connectors.s2.jpg ('Early access — ask to join' ×3 under Popular; 'Connecting a service gives no agent access yet')",
+        "src/app/(portal)/(protected)/connectors/notices.ts:15",
+        "run/typical/shots/light-390/agents_ID__section-overview.s1.jpg ('Connectors · 0 services allowed')",
+        "src/domain/home/checklist.ts (serviceConnected marks the step done)"
+      ],
+      "related_pages": ["/home (setup checklist)", "/agents/[id]?section=connectors"]
+    },
+    {
+      "id": "UX-05",
+      "title": "Activity rows show the tool name and the agent's excuse, and hide what was actually done",
+      "location": "/activity — src/domain/activity/evidence.ts:353-361 (summary fallback); src/components/activity/activity-view.tsx:501-503",
+      "problem": "A row reads 'Add a task · Done · Changes · ChatGPT · Agent's reason: Keeping track'. The fact that answers 'what did it do', 'Title: Find a dog sitter for Biscuit while we're away', only appears after opening 'View details' (verified live). The summary prefers 'Agent's reason: …' over the request parameters, so dozens of rows read 'Add a task / Keeping track' and look identical. One day holds 59 entries.",
+      "why": "Visual hierarchy and progressive disclosure work backwards here: the least useful fact is shown and the most useful one is hidden. Recognition over recall (Nielsen #6). This is the brief's key flow 6 and its trust promise.",
+      "impact": "Persona C, reviewing 'what did my agents do this week'. They have to open each of dozens of disclosures to learn anything, so the tamper-evident record isn't really reviewable on a phone (activity light-390: 11,154px, 369 controls, 119 disclosures).",
+      "severity": "high",
+      "recommendation": "In evidence.ts, build the summary from the request's primary parameter before falling back to the reason, for example 'Added task: Find a dog sitter for Biscuit while we're away', 'Read 3 emails from Qantas', 'Saved record: Car registration'. Use a per-tool 'headline field' map (title, subject, merchant, record name). Show 'Agent's reason' as a second muted line or in details, still prefixed as the agent's claim.",
+      "effort": "M",
+      "type": "functional",
+      "evidence": [
+        "run/typical/shots/light-390/activity.s2.jpg (rows of 'Add a task / Agent's reason: Keeping track')",
+        "review/ux/walk2.mjs output: expanded entry shows 'What it asked for | Title: Find a dog sitter for Biscuit while we're away'",
+        "metric: activity light-390 11,154px, 1,982 words, 369 controls, 119 disclosures"
+      ],
+      "related_pages": ["/home (Recent activity)", "/agents/[id]?section=activity"]
+    },
+    {
+      "id": "UX-06",
+      "title": "There's no quick way to see 'this week', and Activity doesn't summarise a period",
+      "location": "/activity — src/app/(portal)/(protected)/activity/organise.ts:162-176 (quickLinks); activity-view.tsx:899-901 (ListToolbar)",
+      "problem": "The quick filters are All activity, Needs attention, Reads, Changes, Approvals and Reports. There's no time range. To see one week, the person opens Filters (4 selects + From + To) and types two dates. The 'By agent' view's counts 'cover your whole record'. Nothing summarises a period ('this week: 70 actions by 3 agents, 4 blocked, $0 released').",
+      "why": "Nielsen #7 (flexibility and efficiency): the most common review question takes 5 steps and manual date entry. It also fails the chunking check (17 find controls before any content).",
+      "impact": "Persona C, and anyone doing a weekly review on a phone (a core brief behaviour, 'glancing at the activity feed').",
+      "severity": "medium",
+      "recommendation": "Add period links (Today · 7 days · 30 days · All time) as a FilterLinks row that sets from/to through activityHref, and default the 'By agent' and 'By type' views to 7 days. Above the timeline, show a one-line summary for the active period built from the existing group counts.",
+      "effort": "S",
+      "type": "functional",
+      "evidence": [
+        "review/ux/shots/activity-filters-390.png",
+        "src/app/(portal)/(protected)/activity/organise.ts:162-176",
+        "run/typical/shots/light-390/activity__view-agents.s1.jpg ('Counts cover your whole record')"
+      ],
+      "related_pages": ["/spending (period totals live there instead)"]
+    },
+    {
+      "id": "UX-07",
+      "title": "Dispute is a dead end: unclear audience, no outcome, no next step",
+      "location": "/activity entry details — src/components/activity/activity-view.tsx:378-400; src/app/(portal)/(protected)/activity/notices.ts:46",
+      "problem": "Every expanded entry has a permanently visible textarea, 'Dispute this entry: tell us what's wrong'. It doesn't say who 'us' is (Warthog support? the agent?) or what a dispute does. After submitting, the page reloads with 'Your dispute has been recorded against that activity.' and nothing else. The person isn't offered the actions that would actually stop it happening again: Undo (when available), change this agent's access, or add a rule.",
+      "why": "Nielsen #1 and #9 (the person doesn't know what happened or what to do next). Match with the real world: 'dispute' implies someone will investigate.",
+      "impact": "Persona C, who disputes an entry because an agent did something unwanted. They're left unsure whether anyone will act, and the agent can do it again.",
+      "severity": "medium",
+      "recommendation": "Rename the action to 'Report a problem with this entry' and add a one-line hint: 'Your note stays on this record. Warthog doesn't contact the agent.' (adjust to the real behaviour). Put the textarea behind a secondary button so it isn't open in every entry. Make the success notice an ActivityPageNotice with actions: 'Undo' (when canUndo), 'Change <agent>'s access' (/agents/<id>?section=overview) and 'Add a rule' (/rules?view=new&agent=<id>).",
+      "effort": "S",
+      "type": "functional",
+      "evidence": [
+        "run/typical/shots/light-390/activity__entry-113.s2.jpg",
+        "src/app/(portal)/(protected)/activity/notices.ts:46"
+      ],
+      "related_pages": []
+    },
+    {
+      "id": "UX-08",
+      "title": "'Needs attention' counts things that need no action, which raises false alarms",
+      "location": "/home Recent activity + Your agents; /activity quick filter — src/domain/activity/category.ts:158, 239; src/components/home/dashboard-view.tsx (attention banner)",
+      "problem": "ATTENTION_OUTCOMES = denied, refused, rate_limited, expired and failed (plus disputes). So the person's own denials, expired requests and rule blocks working as intended all 'need attention'. Home shows a warning banner, '16 entries need attention from the last 24 hours', and each agent shows '5 need attention'. The agent Overview calls the same thing 'Blocked or failed 4'.",
+      "why": "The label promises that action is required (Nielsen #2). Using a warning icon on resolved outcomes wears down the signal, and the same concept has two names.",
+      "impact": "Every member on Home, every day. Persona A sees an alarm the day they connect an agent with a 'Never allow' rule. Real failures get lost among expected blocks.",
+      "severity": "medium",
+      "recommendation": "Rename the count to 'Blocked or failed' everywhere (as the agent Overview already does), with neutral styling. Keep the warning style and a 'Needs your attention' label only for failures the person can act on and for open disputes. Exclude outcomes the person caused (denied by you, expired). Pending approvals stay in the Inbox.",
+      "effort": "S",
+      "type": "functional",
+      "evidence": [
+        "run/typical/shots/light-390/home.s2.jpg ('16 entries need attention…')",
+        "run/typical/shots/light-390/agents_ID__section-overview.s2.jpg ('Blocked or failed 4')",
+        "src/domain/activity/category.ts:158,239"
+      ],
+      "related_pages": ["/agents", "/activity?attention=1"]
+    },
+    {
+      "id": "UX-09",
+      "title": "After the first agent, Home gives no next step, and the setup checklist can't be dismissed and pushes the Inbox down",
+      "location": "/home — src/components/home/dashboard-view.tsx:218-256, 566-575; src/domain/home/checklist.ts",
+      "problem": "Before an agent is connected, Home has one clear primary action ('Connect your first agent'). Afterwards it becomes 'Finish setting up · 1 of 5', four identical 'To do' rows with no reason, no recommended step and no primary button (typical Home has 0 primary-styled actions). Nothing tells the person what their new agent can do or that it needs a service. The panel always renders above the Inbox, even with 4 requests waiting, and it can't be hidden, although 'Add a card' is described in code as optional.",
+      "why": "The brief asks for 'one clear primary action per screen' and says members 'abandon a step that doesn't say plainly what happens next'. Cognitive-load checks fail on single focus, minimal choices and hierarchy.",
+      "impact": "Persona A, the first-time member who just connected Claude, doesn't know what to do next. Long-term members who never add a card see a permanent 'Finish setting up' above their approvals.",
+      "severity": "high",
+      "recommendation": "Have computeSetupChecklist return a 'next' item and render it as one primary ButtonLink with a one-line why ('Next: connect your email or calendar so Claude has something to work with'). Collapse the rest into a 'Remaining steps (3)' disclosure. Add a 'Hide for now' action that stores a dismissal. Render SetupPanel after the Inbox panel whenever pendingApprovals > 0.",
+      "effort": "S",
+      "type": "structural",
+      "evidence": [
+        "run/typical/shots/light-390/home.s1.jpg (Finish setting up, 4 equal To-dos above Inbox)",
+        "run/firstrun/shots/light-390/home.s1.jpg (the good pre-agent state)",
+        "metric: home typical light-390 primary-styled buttons 0"
+      ],
+      "related_pages": []
+    },
+    {
+      "id": "UX-10",
+      "title": "Home shows pending requests twice, and neither place lets you act",
+      "location": "/home — src/components/home/dashboard-view.tsx:261-279 (InboxPanel), ActivityPanel entries",
+      "problem": "The Inbox panel shows only '4 requests are waiting for your approval': no agent, amount or merchant. The Recent activity panel lists the same requests ('Ask to use a card · Agent's reason: Balance for the 48,000 km logbook service · Waiting for you'), but they link to /activity?entry=118 rather than to the decision.",
+      "why": "Recognition over recall (the person has to open the Inbox to learn what's waiting) and consistency (a 'Waiting for you' item leads somewhere it can't be decided).",
+      "impact": "Persona B on Home: tapping the most specific item takes them to a read-only Activity entry, so it costs an extra round trip.",
+      "severity": "medium",
+      "recommendation": "Have InboxPanel list up to 3 waiting requests as their one-sentence summaries (reuse the request sentence and time left), each linking to /inbox?approval=<id>, with 'See all 4'. In ActivityPanel, link entries whose outcome is 'waiting' to /inbox?approval=<id>, or leave them out because the Inbox panel covers them.",
+      "effort": "S",
+      "type": "functional",
+      "evidence": [
+        "run/typical/shots/light-390/home.s1.jpg, home.s2.jpg",
+        "review/ux/walk6.mjs output: 'Ask to use a card' href = /activity?entry=118#entry-118"
+      ],
+      "related_pages": []
+    },
+    {
+      "id": "UX-11",
+      "title": "On phones the Inbox is item 3 of 15 in a hamburger drawer with no pending count",
+      "location": "phone shell — src/components/shell/app-shell.tsx, workspace-navigation.ts, nav.ts",
+      "problem": "Below 1024px, navigation is a hamburger drawer of 15 items in 5 groups. Nowhere in the nav (drawer or sidebar) shows the number of waiting requests. The brief specifies a bottom bar (Home, Inbox, Activity, Agents, More) with 'everything in two taps'. Today any agent sub-section takes 4–5 taps (drawer → Agents → agent → Controls → sub-tab).",
+      "why": "Visibility of system status (Nielsen #1): the most urgent state in the product isn't shown in global chrome. It also departs from the brief's phone-first navigation.",
+      "impact": "Persona B, and every phone-first member who opens the app outside a notification. They can't see that anything is waiting without opening Home or the Inbox.",
+      "severity": "high",
+      "recommendation": "Add a fixed bottom tab bar for <1024px built from nav.ts: Home, Inbox with a count Badge, Activity, Agents, and More (opens the existing drawer). Also add the count Badge to the sidebar Inbox item. Read the count from the same loader as Home's pendingApprovals.",
+      "effort": "M",
+      "type": "structural",
+      "evidence": [
+        "review/ux/shots/drawer-390.png (15-item drawer, Inbox without count)",
+        "brief.yaml design_ux.feel (bottom navigation spec)"
+      ],
+      "related_pages": ["all signed-in routes"]
+    },
+    {
+      "id": "UX-12",
+      "title": "Card access and budgets are hard to find: the obvious places lead to pages without the setting",
+      "location": "/vault/cards 'Manage for one agent' → /agents/[id]?section=vault (src/components/agents/resource-scope.tsx:25-30, 89-96); /rules?view=budgets (src/components/rules/rules-view.tsx:579-600); /spending; /agents/[id]?section=spending",
+      "problem": "Card access per agent lives only under agent › Controls › Spending. On Vault › Cards, 'Manage for one agent' links to ?section=vault, whose description promises 'separate identity and card request permissions', but that page has only identity settings. Rules & budgets › Budgets lists 'Set Claude's budget' without the current amount (Claude already has $300/month). Spending's 'Card budgets' link goes to Rules › Budgets, which links again to the agent page (3 hops). Household's budget is shown in one panel and edited in another further down.",
+      "why": "Consistency and match with the real world: cards live in the Vault, so people look for card permissions there. Nielsen #6: hub pages that list 'Set X's budget' without values force a visit to every agent.",
+      "impact": "Persona D, who wants to stop one agent's card use and cap another at $100. They try 2–3 wrong pages first, and from Rules › Budgets can't even see which agents already have a budget.",
+      "severity": "high",
+      "recommendation": "(1) On /vault/cards, point 'Manage for one agent' at ?section=spending (set section per pathname in resourceScopeFor, not per first segment). (2) On each Vault › Cards card, add a 'Agents that can ask to use cards' list with each agent's on/off state, linking to its Spending section. (3) Make Rules › Budgets rows show '$0 of $300 this month · Change' (data already used by Home's Your agents panel). (4) On the agent Overview, make the Spending tile a direct toggle summary ('Card requests: on · $300/month · Change'). (5) In Household, put the owner's budget inputs inside the 'Budget' panel.",
+      "effort": "M",
+      "type": "structural",
+      "evidence": [
+        "run/typical/shots/light-390/agents_ID__section-vault.s1.jpg (no card setting)",
+        "run/typical/shots/light-390/vault_cards.s1.jpg",
+        "run/typical/shots/light-390/rules__view-budgets.s1.jpg ('Set Claude's budget', no amount)",
+        "run/typical/shots/light-390/spending.s1.jpg",
+        "run/typical/shots/light-390/household.s2.jpg"
+      ],
+      "related_pages": ["/spending", "/household", "/rules?view=budgets"]
+    },
+    {
+      "id": "UX-13",
+      "title": "The budget form invites mistakes: free-text currency, a duplicated period and a misleading default hint",
+      "location": "/agents/[id]?section=spending — src/components/agents/permissions-view.tsx:~360-375; src/app/(portal)/(protected)/agents/[id]/permissions-form.tsx:162",
+      "problem": "To cap an agent the person edits 'Card budget per month (AUD)' (300), a free-text 'Currency: A three-letter code, such as AUD' (AUD) and a 'Budget period' select (Month). Below them, 'Defaults to AUD200 per month.' sits beside a saved 300. The label repeats the period and currency, so changing the select to Week leaves the label saying 'per month'. 'A$' is the internal default while other pages print 'AUD' or '$'.",
+      "why": "Nielsen #5: free text where a constrained choice exists, and labels that contradict the input. #4: the same money shown three ways.",
+      "impact": "Persona D setting a $100/month cap. They might type 'aud', '$' or 'AU$', or wonder whether the cap is 200 or 300.",
+      "severity": "medium",
+      "recommendation": "Replace the currency input with the same SelectField of supported currencies Spending uses. Put amount + currency + period on one row labelled 'Card budget'. Add a live read-back sentence under it ('Claude can ask for up to AUD 100.00 a month. You still approve each one.'). Show the default hint only when no budget is saved.",
+      "effort": "S",
+      "type": "functional",
+      "evidence": [
+        "review/ux/shots/claude-spending-390.png",
+        "review/ux/walk3.mjs output ('Card budget per month (AUD) | Currency | A three-letter code, such as AUD. | … | Defaults to AUD200 per month.')"
+      ],
+      "related_pages": ["/household (Budget, limits and currency)"]
+    },
+    {
+      "id": "UX-14",
+      "title": "Edits on agent sections are silently lost when the person switches tab",
+      "location": "/agents/[id]?section=spending|vault|settings|connectors|skills|memory — src/app/(portal)/(protected)/agents/[id]/permissions-form.tsx; tab links in src/components/agents/agent-workspace.tsx",
+      "problem": "Each agent section is a separate form with 'Save changes' at the bottom, which on Settings comes after 4 toggles and 25 record checkboxes. The section and sub-tabs are plain links. I unticked 'Let it ask to use a card' on Claude › Spending and tapped the 'Rules' sub-tab: no warning appeared, and on return the box was ticked again (verified live, nothing saved). No section has a dirty-state guard; only package-editor has one.",
+      "why": "Nielsen #3 and #5: work is lost without warning, and the person believes they have changed a security setting.",
+      "impact": "Persona D believes the agent can no longer use the card when it still can. This is a direct risk to the 'control spending' core job.",
+      "severity": "high",
+      "recommendation": "Track dirty state in permissions-form. While dirty, show a sticky ActionBar at the bottom of the viewport ('Unsaved changes · Discard · Save changes'), and intercept clicks on section and sub-tab links with the native confirm dialog pattern package-editor already uses ('Discard your unsaved changes?'). Add a beforeunload handler too.",
+      "effort": "S",
+      "type": "functional",
+      "evidence": [
+        "review/ux/walk3.mjs output: 'after click: false … url now …?section=rules dialog seen: false … checkbox after return: true'",
+        "run/typical/shots/light-390/agents_ID__section-settings.s4.jpg (Save after the 25-item list)",
+        "grep beforeunload|isDirty|unsaved: only src/components/skills/package-editor.tsx"
+      ],
+      "related_pages": ["/settings/agents (Agent defaults)", "/household (several separate Save buttons)"]
+    },
+    {
+      "id": "UX-15",
+      "title": "Disconnect isn't on the agent's own page, and it's the only way to stop an agent",
+      "location": "/agents/[id] — src/components/agents/agent-workspace.tsx (no Disconnect); /agents — src/app/(portal)/(protected)/agents/disconnect-confirm.tsx:37-38",
+      "problem": "The person decides to cut off an agent while looking at its page (Overview, Activity), but Disconnect exists only on the /agents list cards. The dialog explains that disconnecting is final ('To use it again, you'll need to connect it from the start'; reconnecting creates a new agent with new settings and split history). There's no gentler option offered at that moment, such as turning off cards and protected details.",
+      "why": "Discoverability (the control isn't where the decision is made) and user control (the only stop is irreversible). Brief key flow 10 expects one-click disconnect from the agent context.",
+      "impact": "A member reacting to a bad Activity entry has to go back to the list to find Disconnect, or disconnects when they only wanted to stop spending.",
+      "severity": "medium",
+      "recommendation": "Mount the same AgentsScreen dialog and Disconnect FormSubmit (danger) in the agent page header next to Status, and at the end of Overview. In the dialog, add a hint like the access-key one: 'Only want to stop payments? Turn off card and protected-detail requests instead' linking to ?section=spending.",
+      "effort": "S",
+      "type": "structural",
+      "evidence": [
+        "run/typical/shots/light-390/agents_ID__section-overview.s1-s3.jpg (no Disconnect)",
+        "run/typical/shots/light-390/agents.s1.jpg (Disconnect on list)",
+        "src/app/(portal)/(protected)/agents/disconnect-confirm.tsx:37-49"
+      ],
+      "related_pages": ["/agents"]
+    },
+    {
+      "id": "UX-16",
+      "title": "Confirming agent-found records takes one tap and a reload to the top per record, and 'Confirm all' is ~9,200px down",
+      "location": "/life-admin Records › To check — src/components/life-admin/records-view.tsx:298-330 (ToCheckPanel footer), 120-170 (SuggestionItem); src/app/(portal)/(protected)/life-admin/form-inputs.ts:84-93 (recordReturnPath)",
+      "problem": "The To check panel lists 25 suggestions, each fully expanded with every field and Confirm, Not mine and Edit (26 primary buttons, 697 controls, 16,859px at 390px wide). Each Confirm redirects to /life-admin?view=life&tab=records with no anchor, so the page jumps to the top (scrollY 1063 → 0, verified in the worst account). The notice 'Confirmed. Your agents can't change it now…' doesn't say which record. A working 'Confirm all 25' button exists, but it's in the panel footer at y≈9,231px, in secondary style. PR #52 keeps To check at the top and doesn't change this.",
+      "why": "Nielsen #7 (no visible bulk path), #8 (a wall of equal-weight primary buttons), #1 (the notice doesn't name the item). The cognitive-load checklist fails 6 of 8 items.",
+      "impact": "Persona E confirming 25 records: 25 confirmations, each followed by scrolling back down to find their place. Most will give up, leaving agents working from 'not checked yet' data.",
+      "severity": "high",
+      "recommendation": "Move 'Confirm all N' into the To check panel header (WorkspacePanel action) next to the count, as secondary. Collapse each suggestion to one line (category: name · key date · 'Added by Claude') with Confirm and Not mine visible and the fields behind a row disclosure. Make recordReturnPath append #record-<next suggestion id> and have the notice name the record ('Confirmed Car registration.').",
+      "effort": "M",
+      "type": "structural",
+      "evidence": [
+        "review/ux/walk6.mjs output: 'Confirm all 25' at y=9231 of docH 16859 (light-390)",
+        "review/ux/walk5.mjs output (worst account): scrollY 1063 → 0 after Confirm; notice without the record name",
+        "run/typical/shots/light-390/life-admin.s1-s6.jpg",
+        "metric: life-admin light-390 16,859px, 1,997 words, 697 controls, 26 primary buttons"
+      ],
+      "related_pages": ["/home (Reminders '25 things to check')"]
+    },
+    {
+      "id": "UX-17",
+      "title": "Upcoming flags 'Not checked yet' but gives no way to check, and repeats its own tab name",
+      "location": "/life-admin?tab=upcoming — src/components/life-admin/life-admin-view.tsx (upcoming rows)",
+      "problem": "Each row in Upcoming shows an 'Upcoming' badge (inside the Upcoming tab) and a 'Not checked yet' badge, but has no Confirm action. The person has to switch to Records and hunt for the item in the 25-item list.",
+      "why": "Visibility without action (Nielsen #3 and #7) and redundant labelling (#8).",
+      "impact": "Persona E looks at what's due (Dinner, Dentist, Car registration) and sees each is unchecked but can't fix it there.",
+      "severity": "medium",
+      "recommendation": "Drop the 'Upcoming' badge inside the Upcoming tab. For unconfirmed rows, render the same Confirm / Not mine ActionForms used in To check (with returnTab=upcoming), or link 'Check it' to the item page. PR #52 folds Bookings into Upcoming, so apply this to that merged list.",
+      "effort": "S",
+      "type": "functional",
+      "evidence": ["run/typical/shots/light-390/life-admin__tab-upcoming.s1.jpg"],
+      "related_pages": ["/home Reminders"]
+    },
+    {
+      "id": "UX-18",
+      "title": "The '?' help button takes a signed-in member out of the app to a page that says 'Sign in'",
+      "location": "top bar '?' → /help — src/components/shell/app-shell.tsx (help link); public help page header",
+      "problem": "From any app page, '?' opens the public /help page. Its header shows 'Warthog home → /', 'Help', 'Sign in' and 'Sign up' (verified while signed in). There's no link back to the app, and the content is general rather than about the page the person came from.",
+      "why": "Nielsen #10 (help isn't contextual) and #3 (it leaves the app). The 'Sign in' prompt suggests the person was signed out.",
+      "impact": "Any member who asks for help mid-task (for example in the release step) loses their place, and may tap 'Sign in' and start over.",
+      "severity": "medium",
+      "recommendation": "When a session exists, render /help inside AppShell (or add a signed-in /help route under (protected) that reuses the help content) with 'Back to <previous page>'. Point '?' at a section anchor matching the current route (/inbox → #approvals, /vault → #your-details, /activity → #activity).",
+      "effort": "S",
+      "type": "structural",
+      "evidence": [
+        "run/typical/shots/light-390/help.s1.jpg",
+        "review/ux/walk7.mjs output: help header links (signed in) = Warthog home → /, Help, Sign in → /signin, Sign up → /signup"
+      ],
+      "related_pages": ["all signed-in routes"]
+    },
+    {
+      "id": "UX-19",
+      "title": "Inbox request cards are long and repetitive on a phone, and 'Ask for more detail' quietly closes the request",
+      "location": "/inbox — src/components/inbox/inbox-view.tsx:410-510 (pending rows, agent group header), 287-325 (AskControl)",
+      "problem": "Requests are grouped under an agent header, and each card repeats the agent name in the sentence and again in '<agent> says'. For 'Gemini — family travel and household research assistant' that's about 150 characters × 3 per card. Every card is fully expanded with 4–5 controls, so the 4th request (Mazda) sits near the bottom of a 2,388px page. Groups are ordered by agent rather than by time left. 'Ask for more detail' records a 'more_detail' decision that moves the request to History, but the copy ('The agent sees your question and can send the request again') and notice ('We've asked the agent for more detail.') don't say the current request has ended.",
+      "why": "Minimalism (#8) and recognition (#6). A decision is ended without telling the person (#1).",
+      "impact": "Persona B scrolling on a phone. A member who asks for detail expects to approve the same request later and can't find it.",
+      "severity": "medium",
+      "recommendation": "Drop the per-agent group header (the sentence already names the agent) and sort by time left. Keep '<agent> says' per the brief. Show 'Ask for more detail' as a ghost text button after Deny. Change its hint to 'This closes the request. The agent sees your question and can ask again.', and change the notice to 'Asked Claude for more detail. This request is closed; a new one will appear here.'",
+      "effort": "S",
+      "type": "visual",
+      "evidence": [
+        "run/typical/shots/light-390/inbox.s1.jpg, inbox.s2.jpg, inbox.s3.jpg",
+        "metric: inbox light-390 2,388px, 30 controls",
+        "src/server/db/approvals.ts:212 (more_detail is a decided status)"
+      ],
+      "related_pages": []
+    },
+    {
+      "id": "UX-20",
+      "title": "Money is written several ways, including in approval sentences",
+      "location": "/inbox ('$240.00', 'NZD 180.00', 'Converted $148.62'); /spending ('AUD 0.00 of AUD 300.00'); /home and /agents ('$0.00 of $300.00'); agent Spending ('AUD200'); permissions-form.tsx:162 ('A$')",
+      "problem": "The account currency is printed as '$' in Inbox and Home, 'AUD' on Spending and Life admin, 'AUD200' (no space) in a hint, and 'A$' as the internal default. A foreign charge shows 'NZD 180.00' right above an AUD amount shown only as '$'.",
+      "why": "Brief copy rule: 'Money always with currency'. Nielsen #4 (consistency). On a payment approval, '$' next to 'NZD' is ambiguous.",
+      "impact": "Persona B decides on an amount whose currency isn't stated, so the most important number on the screen is ambiguous.",
+      "severity": "medium",
+      "recommendation": "Route every amount through one formatMoney that always includes the ISO code (or always 'A$' for the account currency), and use it in inbox-view, dashboard-view, agent-list-view, spending-view and permissions-view. Remove the hard-coded 'AUD200' and 'A$'.",
+      "effort": "S",
+      "type": "visual",
+      "evidence": [
+        "run/typical/shots/light-390/inbox.s1.jpg, inbox.s3.jpg",
+        "run/typical/shots/light-390/spending.s1.jpg",
+        "run/typical/shots/light-390/home.s3.jpg",
+        "review/ux/shots/claude-spending-390.png"
+      ],
+      "related_pages": ["/household", "/life-admin"]
+    },
+    {
+      "id": "UX-21",
+      "title": "The protected-detail release reassures about the wrong thing and doesn't show what will be handed over",
+      "location": "/inbox high-tier release — src/components/inbox/release-approve.tsx:474-477 (releaseExplainer), 605-622 ('Which detail'); inbox-view.tsx ('Field' row)",
+      "problem": "The explainer reads 'Check the details. Approving hands this to Gemini once, and it can't be collected again.' The real consequence is that Gemini (and its provider) keeps the passport number and Warthog can't take it back, which the consent screen does say ('information it has already received can't be recalled'). The card shows 'Field: passport' as a raw lowercase key. No masked preview (for example 'Passport ·· 4821') confirms which value will go.",
+      "why": "The brief says sensitive moments should 'slow down slightly with a short, plain explanation of what will happen', and that members 'care a lot about where their passport details go'. Error prevention: no preview of the value.",
+      "impact": "Persona B and any member approving a passport or licence request. They make a less informed decision and may later feel misled.",
+      "severity": "medium",
+      "recommendation": "Change the explainer to '<Agent> will receive your <detail label> once. After that, Warthog can't take it back, so only approve if you trust this request.' Show the label and a masked last 3–4 characters from the stored field metadata (the vault already shows last four for cards). Use the vault's display label instead of the raw field key.",
+      "effort": "S",
+      "type": "functional",
+      "evidence": [
+        "run/typical/shots/light-390/inbox.s2.jpg ('Field passport')",
+        "src/components/inbox/release-approve.tsx:474-477",
+        "src/components/agents/access-key-flow.tsx:319 (consent copy: 'information it has already received can't be recalled')"
+      ],
+      "related_pages": ["/vault"]
+    },
+    {
+      "id": "UX-22",
+      "title": "Activity's heading puts a technical audit action ahead of everything else",
+      "location": "/activity — src/components/activity/activity-view.tsx:877 (Check integrity in WorkspaceHeading)",
+      "problem": "The only action in the Activity heading is 'Check integrity', a hash-chain audit that a non-technical member can't interpret. On phones it takes the first tappable slot above the views and filters.",
+      "why": "Hierarchy and minimalism (#8). The brief says 'never a developer console'.",
+      "impact": "Persona C, and first-time members who tap it out of curiosity or worry that something is wrong.",
+      "severity": "low",
+      "recommendation": "Move 'Check integrity' into a closing panel ('Is this record complete? Check integrity') under the pagination, or into a 'More' disclosure. Use the heading slot for the period selector from UX-06.",
+      "effort": "S",
+      "type": "visual",
+      "evidence": ["run/typical/shots/light-390/activity.s1.jpg"],
+      "related_pages": []
+    },
+    {
+      "id": "UX-23",
+      "title": "Data & privacy asks 'Confirm it's you' before any action is chosen, and warns about duplicate imports instead of preventing them",
+      "location": "/settings/data — settings data view (step-up notice at top; Import panel)",
+      "problem": "The page's first and only primary button is 'Confirm it's you', shown before the person has chosen Export, Import or Delete. The Import panel says 'Importing the same file twice adds everything twice.' instead of preventing it.",
+      "why": "Nielsen #5 (prevent rather than warn) and hierarchy: the primary action should be the task, not a gate.",
+      "impact": "Members exporting or deleting (key flow 11) are asked to authenticate up front. A double import doubles their records.",
+      "severity": "low",
+      "recommendation": "Trigger the step-up from the Export, Import and Delete buttons themselves, using the clickWithStepUp / ConfirmItsYou inline pattern other pages use. Store the export's id when importing and refuse or skip a file that was already imported ('This export was already imported on 12 Nov').",
+      "effort": "M",
+      "type": "functional",
+      "evidence": [
+        "run/typical/shots/light-390/settings_data.s1.jpg",
+        "run/typical/shots/light-390/settings_data.s2.jpg"
+      ],
+      "related_pages": []
+    },
+    {
+      "id": "UX-24",
+      "title": "The Life admin empty state's only per-category action is negative, and its best action is at the bottom",
+      "location": "/life-admin (firstrun) — src/components/life-admin/life-admin-view.tsx (Fill in your life admin)",
+      "problem": "In a new account, each category (Vehicles, Health, Super and investing, Home, Utilities, ID and residency) offers only 'Not for me'. The useful actions, the copyable 'Ask your agent' prompt and 'Add something yourself', sit below all six categories (about 1,500px down at 390px wide).",
+      "why": "Empty states should teach the first positive action. Here the visible choice per row is to dismiss.",
+      "impact": "Persona A opening Life admin for the first time, who has to scroll past six 'Not for me' buttons to find out how to start.",
+      "severity": "low",
+      "recommendation": "Put the 'Ask your agent' card (with Copy) first. Give each category row an 'Add' link that opens 'Add something yourself' with that category's type preselected, keeping 'Not for me' as a ghost button after it.",
+      "effort": "S",
+      "type": "visual",
+      "evidence": [
+        "run/firstrun/shots/light-390/life-admin.s1.jpg",
+        "run/firstrun/shots/light-390/life-admin.s2.jpg",
+        "run/firstrun/shots/light-390/life-admin.s3.jpg"
+      ],
+      "related_pages": []
+    }
+  ],
+  "notes": "Live checks ran against localhost:3241 with throwaway scripts in review/ux/ (walk1–walk7). The typical account was used read-only: I ticked a checkbox without saving and opened menus and disclosures. In the WORST account I pressed Confirm on two To check suggestions in Life admin ('Parking fine — Bondi Rd' and the next one, likely 'Car registration') to measure the reload behaviour, so worst now has 23 unchecked suggestions instead of 25. The release flow with a saved card wasn't exercised live (no seeded account has a card); its findings come from release-approve.tsx and inbox-view.tsx."
+}
