@@ -1,4 +1,17 @@
-# Delivery status — 20 November 2026 (Contact us, your requests, LinkedIn switched off)
+# Delivery status — 23 November 2026 (life admin: typed profile, life areas, bookings, hand-over journal)
+
+**Live at [warthog.com.au](https://warthog.com.au) (the website) and
+[app.warthog.com.au](https://app.warthog.com.au) (the app).** Application source
+`9edf3ec623daeac144881df66f37a0eaa5dd609b` runs as `warthog--r45106611024a1`, with one healthy
+replica, explicit 100% traffic and zero old replicas.
+
+PR #44 makes life admin a typed profile the person's own agent fills in from email: filed by what
+it's about (20 built-in categories, hidden until used, plus categories agents suggest), bookings and
+cases with live and finished, things other records belong to, Upcoming and Bookings views, and an
+append-only journal on every item so any agent can take over live work. Migrations 0117 and 0118
+make 89. See the [release record](docs/audit/life-admin-release-2026-11-23.md).
+
+# Earlier delivery status — 20 November 2026 (Contact us, your requests, LinkedIn switched off)
 
 **Live at [warthog.com.au](https://warthog.com.au) (the website) and
 [app.warthog.com.au](https://app.warthog.com.au) (the app).** Application source

@@ -1,17 +1,13 @@
 # Warthog comprehensive engineering audit
 
-**Life areas, bookings and the hand-over journal, 23 November (branch `claude/life-admin-areas`,
-stacked on `claude/life-admin-profile`, not yet released):** life admin filed by what it's about in a
-per-person catalogue (built-ins hidden until used; agent-suggested categories), bookings and cases
-with live/finished, generic anchors, and a journal on every item with agent hand-over. Migrations
-0117 (amended) and 0118 make 89. See the [profile](../adr/life-admin-profile.md) and
-[journal](../adr/life-admin-journal.md) decisions.
-
-**Review and the life-admin profile, 23 November (branch `claude/life-admin-profile`, not yet
-released):** a six-perspective review of main `1aaa546` (one High still open: the OAuth consent
-swap) and typed life-admin records that the person's own agent fills in from email. Migration 0117
-makes 88. See the [review](life-admin-profile-review-2026-11-23.md) and the
-[decision](../adr/life-admin-profile.md).
+**Life admin: typed profile, life areas, bookings and hand-over journal, 23 November:** main
+`9edf3ec` runs as `warthog--r45106611024a1`. PR #44 makes life admin a typed profile the person's own
+agent fills in from email, filed by what it's about in a per-person catalogue (built-ins hidden until
+used; agent-suggested categories), with bookings and cases (live/finished), generic anchors, an
+Upcoming and a Bookings view, and a journal on every item with agent hand-over. Migrations 0117 and
+0118 make 89. See the [release record](life-admin-release-2026-11-23.md), the
+[review](life-admin-profile-review-2026-11-23.md) (one High still open: the OAuth consent swap) and
+the [profile](../adr/life-admin-profile.md) and [journal](../adr/life-admin-journal.md) decisions.
 
 **Contact us, your requests, LinkedIn switched off, 20 November:** main `70c2a9f` runs as
 `warthog--r44658921004a1`. PR #42 adds Contact us, "Your requests" on Connectors and an email when a
