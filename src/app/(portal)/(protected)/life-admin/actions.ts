@@ -438,6 +438,7 @@ function pendingView(pending: PendingChange | null, names: ReadonlyMap<string, s
     remove: [...(pending.remove ?? [])],
     ...(pending.dueDate !== undefined ? { dueDate: pending.dueDate } : {}),
     ...(pending.status !== undefined ? { status: pending.status } : {}),
+    ...(pending.parentId !== undefined ? { parentId: pending.parentId } : {}),
     foundIn: foundInView(pending.foundIn),
   };
 }

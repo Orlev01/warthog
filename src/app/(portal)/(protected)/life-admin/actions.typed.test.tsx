@@ -358,6 +358,8 @@ test("the loader passes on a waiting change's new kind, and only a kind", async 
     assert.equal((await ctx.actions.load(me.session)).records.find((r) => r.id === saved.recordId)!.pending!.type, "vehicles.vehicle");
     await setPendingChange(ctx.db, me.userId, saved.recordId, change({ id: "vehicles.vehicle" }), me.dek);
     assert.equal("type" in (await ctx.actions.load(me.session)).records.find((r) => r.id === saved.recordId)!.pending!, false, "anything but a kind's id is left out");
+    await setPendingChange(ctx.db, me.userId, saved.recordId, { ...change("vehicles.vehicle"), parentId: "a3b1c2d4-0000-4000-8000-000000000001" } as PendingChange, me.dek);
+    assert.equal((await ctx.actions.load(me.session)).records.find((r) => r.id === saved.recordId)!.pending!.parentId, "a3b1c2d4-0000-4000-8000-000000000001", "and the thing it links the record to");
   });
 });
 

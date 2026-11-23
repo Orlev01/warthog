@@ -46,7 +46,8 @@ import {
 } from "../../../domain/life-admin/custom-category";
 import { findForbidden, findingMessage, siteName } from "../../../domain/life-admin/identifiers";
 import { findForbiddenText, JOURNAL_TEXT_LIMIT } from "../../../domain/life-admin/journal-text";
-import { phaseOf, localDate, type Phase } from "../../../domain/life-admin/lifecycle";
+import { phaseOf, localDate, type Phase, type PhaseView } from "../../../domain/life-admin/lifecycle";
+import { recordPhases } from "../../../domain/life-admin/phases";
 import { calendarDate, storedRecordName } from "../../../domain/life-admin/normalise";
 
 import { parseParams } from "../../http/validate";
@@ -366,11 +367,10 @@ function dateOnly(value: string | Date | null): string | null {
   return typeof value === "string" ? value.slice(0, 10) : value.toISOString().slice(0, 10);
 }
 
-function toView(record: LifeAdminRecord, catalogue: Catalogue, now: Date, zone: string, today: string, savedBy: SavedByResolver, connected: ReadonlySet<string>, journal?: JournalSummary): RecordView {
+function toView(record: LifeAdminRecord, catalogue: Catalogue, phase: PhaseView, today: string, savedBy: SavedByResolver, connected: ReadonlySet<string>, journal?: JournalSummary): RecordView {
   const type = typeOf(catalogue, record);
   const category = catalogue.category(type.category);
   const date = dateOnly(record.dueDate);
-  const phase = phaseOf(record, type, now, zone);
   const labels: Record<string, string> = {};
   for (const key of Object.keys(record.fields)) {
     const label = type.fields.find((field) => field.key === key)?.label;
@@ -494,10 +494,12 @@ export function createListRecordsTool(deps: RecordsToolDeps): ListRecordsTool {
       const query = parsed.query?.toLowerCase().split(/\s+/).filter(Boolean) ?? [];
       const forWhom = parsed.forWhom?.trim().toLowerCase();
       const visible = (await listRecordsForUser(db, connection.userId, dek)).filter(visibleTo(permissions, connection.agentId));
+      // Worked out together, so a trip takes its dates from its bookings (a past trip is finished).
+      const phases = recordPhases(visible, catalogue, now, zone);
       const matching = visible
         .map((record) => {
           const type = typeOf(catalogue, record);
-          return { record, type, phase: phaseOf(record, type, now, zone) };
+          return { record, type, phase: phases.get(record.id) ?? phaseOf(record, type, now, zone) };
         })
         .filter(({ record, type, phase }) => {
           if (parsed.id) return record.id === parsed.id;
@@ -547,7 +549,7 @@ export function createListRecordsTool(deps: RecordsToolDeps): ListRecordsTool {
       return {
         status: "ok",
         today,
-        records: page.map((item) => toView(item.record, catalogue, now, zone, today, savedBy, connected, parsed.journal === "none" ? undefined : summaries.get(item.record.id))),
+        records: page.map((item) => toView(item.record, catalogue, item.phase, today, savedBy, connected, parsed.journal === "none" ? undefined : summaries.get(item.record.id))),
         nextCursor: more ? encodeCursor(page[page.length - 1]!.key) : null,
         ...(totals.length > 0 ? { monthlyCost: totals } : {}),
         ...(fullJournal ? { journal: fullJournal } : {}),

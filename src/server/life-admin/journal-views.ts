@@ -17,7 +17,8 @@ import {
   type JournalActor,
   type JournalEntryView,
 } from "../../domain/life-admin/journal";
-import { phaseOf, PHASE_LABELS } from "../../domain/life-admin/lifecycle";
+import { phaseOf, PHASE_LABELS, type PhaseView } from "../../domain/life-admin/lifecycle";
+import { recordPhases } from "../../domain/life-admin/phases";
 import { storedRecordName } from "../../domain/life-admin/normalise";
 import type { HandoverItem } from "../../domain/life-admin/summary";
 import type { SavedByResolver } from "../agents/saved-by";
@@ -108,9 +109,9 @@ export function stewardOf(record: LifeAdminRecord, savedBy: SavedByResolver, con
 }
 
 /** Where an item stands, in words for a hand-over line ("renews 1 Dec, in 9 days", "Happening now"). */
-export function stateWords(record: LifeAdminRecord, catalogue: Catalogue, now: Date, zone: string): string {
+export function stateWords(record: LifeAdminRecord, catalogue: Catalogue, now: Date, zone: string, known?: PhaseView): string {
   const type = catalogue.typeOfRecord(record.kind, record.type);
-  const phase = phaseOf(record, type, now, zone);
+  const phase = known ?? phaseOf(record, type, now, zone);
   const when = phase.starts ? phase.starts.toISOString() : typeof record.dueDate === "string" ? record.dueDate.slice(0, 10) : null;
   // A finished item says how it ended ("Completed (20 Nov)", "Cancelled"), not how long ago it was due.
   if (phase.bucket === "finished") return when ? `${PHASE_LABELS[phase.phase]} (${shortDate(when, zone)})` : PHASE_LABELS[phase.phase];
@@ -137,7 +138,9 @@ export async function handoverItems(
   now: Date,
   zone: string,
 ): Promise<{ items: HandoverItem[]; more: number }> {
-  const live = records.filter((record) => phaseOf(record, catalogue.typeOfRecord(record.kind, record.type), now, zone).live);
+  // Worked out together, so a trip takes its dates from its bookings.
+  const phases = recordPhases(records, catalogue, now, zone);
+  const live = records.filter((record) => phases.get(record.id)?.live);
   const open = await recordsWithOpenSteps(db, userId, live.map((record) => record.id));
   const candidates = live.filter((record) => open.has(record.id));
   if (candidates.length === 0) return { items: [], more: 0 };
@@ -161,7 +164,7 @@ export async function handoverItems(
       id: record.id,
       line: handoverLine({
         name: storedRecordName(type, record.fields, Boolean(record.type)),
-        state: stateWords(record, catalogue, now, zone),
+        state: stateWords(record, catalogue, now, zone, phases.get(record.id)),
         decision: decision ? { id: decision.id, at: decision.at, kind: "decision", by: decision.by, reported: true, text: decision.text } : null,
         next: { id: next.id, at: now.toISOString(), kind: "next", by: next.by, reported: true, text: next.text, ...(next.due ? { due: next.due } : {}) },
         steward: steward ? (steward.kind === "you" ? "you (an earlier conversation)" : actorName(steward)) : null,

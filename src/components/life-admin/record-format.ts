@@ -597,6 +597,7 @@ export function pendingChangeView(
     readonly heldFields?: Readonly<Record<string, string>>;
     readonly dueDate: string | null;
     readonly status: string;
+    readonly parentId?: string | null;
   },
   pending: {
     readonly type?: string;
@@ -604,21 +605,33 @@ export function pendingChangeView(
     readonly remove: readonly string[];
     readonly dueDate?: string | null;
     readonly status?: string;
+    // Present only when the change links the record to a thing (null unlinks it).
+    readonly parentId?: string | null;
   },
   zone = "UTC",
+  // The person's records by id, to name the thing a change links a record to.
+  names: ReadonlyMap<string, string> = new Map(),
 ): ChangeLine[] {
   // A line that reads the same before and after (a start time saved with its offset spelled
   // out, a status word that maps to the same status) changes nothing the person can see.
   const visible = (lines: ChangeLine[]) => lines.filter((line) => line.from === null || line.to === null || line.from !== line.to);
+  const linkName = (id: string | null | undefined) => (id ? names.get(id) ?? "another record" : "not linked");
+  const link: ChangeLine[] = pending.parentId !== undefined
+    ? [{ key: "parent", label: "Belongs to", from: linkName(current.parentId), to: linkName(pending.parentId) }]
+    : [];
+  // Moving an older record into its kind drops the `type` and `source` an older agent kept
+  // as fields: that is the move itself, not a change to read.
   const from = catalogue.typeOfRecord(current.kind, current.type ?? null);
   const to = pending.type ? catalogue.type(pending.type) : undefined;
-  if (!to || to.id === from.id) return visible(pendingChangeLines(from, current, pending, zone));
+  const remove = to && to.id !== current.type ? pending.remove.filter((key) => key !== "type" && key !== "source") : pending.remove;
+  if (!to || to.id === from.id) return visible([...link, ...pendingChangeLines(from, current, { ...pending, remove }, zone)]);
   const gained = pendingChangeLines(to, current, { set: pending.set, remove: [], dueDate: pending.dueDate, status: pending.status }, zone);
   const setCount = Object.keys(pending.set).length;
-  const removed = pendingChangeLines(from, current, { set: {}, remove: pending.remove.filter((key) => key !== "type" && key !== "source") }, zone);
+  const removed = pendingChangeLines(from, current, { set: {}, remove }, zone);
   const category = catalogue.category(to.category)?.label;
   return visible([
     { key: "kind", label: "Kind", from: from.label, to: category ? `${to.label} (${category})` : to.label },
+    ...link,
     ...gained.slice(0, setCount),
     ...removed,
     ...gained.slice(setCount),

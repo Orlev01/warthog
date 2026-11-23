@@ -10,6 +10,7 @@
 import type { Catalogue, CategorySetting } from "./catalogue";
 import type { JournalActor } from "./journal";
 import { phaseOf, type Phase } from "./lifecycle";
+import { recordPhases } from "./phases";
 import { storedRecordName } from "./normalise";
 import type { StoredKind } from "./record-types";
 import { LIFE_ADMIN_SKILL } from "./skill";
@@ -24,6 +25,8 @@ export interface SummaryRecord {
   readonly state?: string | null;
   readonly reviewState: string;
   readonly pending: unknown;
+  // The thing it belongs to: a trip takes its dates from its bookings.
+  readonly parentId?: string | null;
 }
 
 export interface HandoverItem {
@@ -91,11 +94,12 @@ export function summariseLifeAdmin(
   let openCases = 0;
   let upcomingBookings = 0;
   let bookings = 0;
+  const phases = recordPhases(records, catalogue, now, zone);
   for (const record of records) {
     const type = catalogue.typeOfRecord(record.kind, record.type);
     byCategory[type.category] = (byCategory[type.category] ?? 0) + 1;
     if (record.reviewState === "suggested" || record.pending) waitingForPerson += 1;
-    const phase = phaseOf(record, type, now, zone);
+    const phase = phases.get(record.id) ?? phaseOf(record, type, now, zone);
     if (type.lifecycle === "booking") bookings += 1;
     if (type.lifecycle === "case" && phase.live) openCases += 1;
     if (type.lifecycle === "booking" && (phase.phase === "upcoming" || phase.phase === "pending" || phase.phase === "in_progress")) upcomingBookings += 1;

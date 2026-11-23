@@ -55,3 +55,12 @@ test("the skill lists every record type and the things never to save", () => {
   assert.ok(own.includes('"Rowing club" (x_bcdfgh, suggested'), "a person's own category is quoted");
   assert.ok(!own.includes("- pets.pet "), "not-for-me categories are left out");
 });
+
+test("a past trip with past bookings isn't an upcoming booking for agents", () => {
+  const summary = summariseLifeAdmin([
+    record("trip", { kind: "item", type: "travel.trip", fields: { name: "Queenstown" }, dueDate: null, status: "active" }),
+    record("stay", { kind: "item", type: "travel.stay", fields: { provider: "Goodstays", starts_at: "2026-08-27[Pacific/Auckland]", ends_at: "2026-08-31[Pacific/Auckland]" }, dueDate: "2026-08-27", status: "active", parentId: "trip" }),
+  ], BUILT_IN, NOW, "Australia/Sydney", { mayOffer: false });
+  assert.equal(summary.upcomingBookings, 0);
+  assert.equal(summary.dueSoon.length, 0);
+});

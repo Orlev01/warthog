@@ -163,7 +163,7 @@ function PendingItem({ item, ctx }: { item: Typed; ctx: Context }) {
   const { record, type, name } = item;
   const { actions } = ctx;
   const pending = record.pending!;
-  const lines = pendingChangeView(ctx.catalogue, record, pending, ctx.zone);
+  const lines = pendingChangeView(ctx.catalogue, record, pending, ctx.zone, ctx.names);
   // The record's own row when the filters show it, else its page.
   const href = ctx.visible.has(record.id) ? `#record-${record.id}` : itemHref(record.id);
   return (
