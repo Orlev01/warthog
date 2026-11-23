@@ -27,7 +27,7 @@
 //
 // THE CONTRACT the builder implements (test-first spec):
 //
-//   ConsentView({ platform, defaultName?, requestedScopes, services?, template,
+//   ConsentView({ platform, defaultName?, requestedScopes, accounts?, template,
 //                 redirect }):
 //     • platform        — the connecting agent's platform (e.g. "Claude"), named
 //                          on the screen so the person knows what is connecting.
@@ -35,10 +35,11 @@
 //                          accessibly-labelled "name" text field the person edits.
 //     • requestedScopes  — what the agent asked for, each a plain-words string
 //                          shown verbatim (no protocol jargon).
-//     • services         — the person's connectable services, each { id, name,
-//                          ticked? }; the ticked ones' READ tools are granted under
-//                          Standard/Custom with their change-making tools set to
-//                          "Ask me first".
+//     • accounts         — the person's connected accounts, each { id, connectorId,
+//                          serviceName, label, ticked? }, one checkbox each
+//                          (docs/adr/several-accounts-per-agent.md); the ticked ones'
+//                          READ tools are granted under Standard/Custom with their
+//                          change-making tools set to "Ask me first".
 //     • template         — the selected starting set ("minimal" | "standard" |
 //                          "custom"); it drives which permission toggles render ON.
 //     • redirect         — { host, verified }: a KNOWN platform callback
@@ -66,32 +67,36 @@ import {
 
 // --- the prop shape this task introduces (described here as the contract) -------
 
-type ConsentViewService = { id: string; name: string; ticked?: boolean };
+type ConsentViewAccount = { id: string; connectorId: string; serviceName: string; label: string; ticked?: boolean };
 
 type ConsentViewProps = {
   platform: string;
   defaultName?: string;
   requestedScopes: ReadonlyArray<string>;
-  services?: ReadonlyArray<ConsentViewService>;
+  accounts?: ReadonlyArray<ConsentViewAccount>;
   template: PermissionTemplate;
   redirect: { host: string; verified: boolean };
 };
 
 // --- fixtures -------------------------------------------------------------------
 //
-// Service names and scope phrases are chosen so they do NOT contain any of the
-// capability keywords below (profile / skills / preferences / activity / memory /
+// Service and account names and scope phrases are chosen so they do NOT contain any of
+// the capability keywords below (profile / skills / preferences / activity / memory /
 // tasks / life-admin / high-tier / card / learns). That keeps the grant assertions
 // honest: a capability keyword landing in the "granted" text can only come from a
-// permission toggle, never from a service name or a requested-scope line.
+// permission toggle, never from an account name or a requested-scope line. Two Gmail
+// accounts are both on for new agents (they arrive ticked); the list is deliberately out of
+// order, and the screen shows it by service and then account.
 
-const SERVICES: ConsentViewService[] = [
-  { id: "gcal", name: "Google Calendar", ticked: true },
-  { id: "gmail", name: "Gmail", ticked: true },
-  { id: "dropbox", name: "Dropbox", ticked: false },
+const ACCOUNTS: ConsentViewAccount[] = [
+  { id: "acct-gcal", connectorId: "google-calendar", serviceName: "Google Calendar", label: "home@example.test", ticked: true },
+  { id: "acct-gmail-home", connectorId: "google-gmail", serviceName: "Gmail", label: "home@example.test", ticked: true },
+  { id: "acct-gmail-billing", connectorId: "google-gmail", serviceName: "Gmail", label: "billing@example.test", ticked: true },
+  { id: "acct-dropbox", connectorId: "dropbox", serviceName: "Dropbox", label: "Family files", ticked: false },
 ];
+const named = (account: ConsentViewAccount) => `${account.serviceName} · ${account.label}`;
 
-const TICKED_IDS = SERVICES.filter((s) => s.ticked).map((s) => s.id);
+const TICKED_IDS = ACCOUNTS.filter((s) => s.ticked).map((s) => s.id);
 
 const SCOPES = ["See your calendar", "Help with your inbox", "Look things up for you"];
 
@@ -100,7 +105,7 @@ function base(overrides: Partial<ConsentViewProps> = {}): ConsentViewProps {
     platform: "Claude",
     defaultName: "Research buddy",
     requestedScopes: SCOPES,
-    services: SERVICES,
+    accounts: ACCOUNTS,
     template: "standard",
     redirect: { host: "claude.ai", verified: true },
     ...overrides,
@@ -349,16 +354,16 @@ test("Minimal grants ONLY low-tier profile, skills, preferences and activity log
   assertGrantsMatchTemplate("minimal");
 });
 
-test("Minimal grants none of the ticked services (no service read-grants)", () => {
-  // Minimal ignores the ticked services entirely (permissionTemplate returns
-  // services: []). A ticked service's read-grant toggle is therefore NOT on, so its
+test("Minimal grants none of the ticked accounts (no service read-grants)", () => {
+  // Minimal ignores the ticked accounts entirely (permissionTemplate returns
+  // services: []). A ticked account's read-grant toggle is therefore NOT on, so its
   // name is absent from the GRANTED surface (this is scoped to the on-toggle text —
-  // the service may still be LISTED elsewhere as an un-granted option).
+  // the account may still be LISTED elsewhere as an un-granted option).
   const granted = grantedText(render(base({ template: "minimal" })));
-  for (const s of SERVICES) {
+  for (const s of ACCOUNTS) {
     assert.ok(
-      !granted.includes(s.name.toLowerCase()),
-      `Minimal must not grant "${s.name}"'s read tools; granted="${granted}"`,
+      !granted.includes(named(s).toLowerCase()),
+      `Minimal must not grant "${named(s)}"'s read tools; granted="${granted}"`,
     );
   }
 });
@@ -371,23 +376,23 @@ test("Standard adds shared-memory read, own memories, tasks and life-admin (on t
   assertGrantsMatchTemplate("standard");
 });
 
-test("Standard grants the TICKED services' read tools, with their changes set to Ask me first", () => {
+test("Standard grants the TICKED accounts' read tools, with their changes set to Ask me first", () => {
   const markup = render(base({ template: "standard" }));
   const granted = grantedText(markup);
   const text = visibleText(markup);
 
-  // Ticked services' read tools are granted (their toggles are on).
-  for (const s of SERVICES.filter((s) => s.ticked)) {
+  // Ticked accounts' read tools are granted (their toggles are on) — both Gmail accounts.
+  for (const s of ACCOUNTS.filter((s) => s.ticked)) {
     assert.ok(
-      granted.includes(s.name.toLowerCase()),
-      `Standard must grant the ticked service "${s.name}"'s read tools; granted="${granted}"`,
+      granted.includes(named(s).toLowerCase()),
+      `Standard must grant the ticked account "${named(s)}"'s read tools; granted="${granted}"`,
     );
   }
-  // An un-ticked service is NOT granted.
-  for (const s of SERVICES.filter((s) => !s.ticked)) {
+  // An un-ticked account is NOT granted.
+  for (const s of ACCOUNTS.filter((s) => !s.ticked)) {
     assert.ok(
-      !granted.includes(s.name.toLowerCase()),
-      `Standard must not grant the un-ticked service "${s.name}"; granted="${granted}"`,
+      !granted.includes(named(s).toLowerCase()),
+      `Standard must not grant the un-ticked account "${named(s)}"; granted="${granted}"`,
     );
   }
   // Those services' change-making tools default to "Ask me first" (brief UI copy /
@@ -543,7 +548,7 @@ function namedControls(markup: string) {
 
 test("A2: every adjustable toggle on the live form has a name the decision reads", () => {
   const names = new Set(namedControls(liveRender()).filter((c) => c.type === "checkbox").map((c) => c.name));
-  for (const name of ["identity", "memoryRead", "memoryWrite", "tasks", "records", "highTier", "card", "learningSharing", "service"]) {
+  for (const name of ["identity", "memoryRead", "memoryWrite", "tasks", "records", "highTier", "card", "learningSharing", "account"]) {
     assert.ok(names.has(name), `the live form submits "${name}"; got ${[...names].join(", ")}`);
   }
 });
@@ -560,12 +565,35 @@ test("included connection behavior is explained without pretend permission switc
   assert.equal(memoryWrite?.disabled, false);
 });
 
-test("A2: ticked services submit their ids; un-ticked ones are present but unchecked", () => {
-  const services = namedControls(liveRender()).filter((c) => c.name === "service");
+// docs/adr/several-accounts-per-agent.md — one checkbox per connected account, by service and
+// then account: the accounts on for new agents (two of them Gmail) submit their ids ticked.
+test("A2: each account submits its own id; ticked ones are checked, un-ticked ones present but unchecked", () => {
+  const accounts = namedControls(liveRender()).filter((c) => c.name === "account");
   assert.deepEqual(
-    services.map((s) => [s.value, s.checked]),
-    [["gcal", true], ["gmail", true], ["dropbox", false]],
+    accounts.map((s) => [s.value, s.checked]),
+    [["acct-dropbox", false], ["acct-gmail-billing", true], ["acct-gmail-home", true], ["acct-gcal", true]],
   );
+  assert.equal(namedControls(liveRender()).filter((c) => c.name === "service").length, 0, "no service-wide checkbox is left");
+});
+
+test("each account is labelled with its service and account, by service and then account", () => {
+  const labels = toggleControls(liveRender()).map((c) => c.name).filter((name) => name.includes(" · "));
+  assert.deepEqual(labels, ["Dropbox · Family files", "Gmail · billing@example.test", "Gmail · home@example.test", "Google Calendar · home@example.test"]);
+});
+
+test("the help says each account is separate, and no longer that several accounts are chosen later", () => {
+  const text = visibleText(liveRender());
+  assert.match(text, /Each account is separate\. You can change these later in the agent.s settings\./);
+  assert.doesNotMatch(text, /multiple accounts|choose its account/i);
+});
+
+test("the review lists each ticked account, and says when none is ticked", () => {
+  const summary = (markup: string) => visibleText(markup.slice(markup.indexOf('class="wh-permission-summary"')));
+  const ticked = summary(liveRender());
+  assert.match(ticked, /Read from Gmail · billing@example\.test; changes ask you first/);
+  assert.match(ticked, /Read from Gmail · home@example\.test; changes ask you first/);
+  assert.doesNotMatch(ticked, /Dropbox/);
+  assert.match(summary(liveRender({ accounts: ACCOUNTS.map((a) => ({ ...a, ticked: false })) })), /Connected accounts: none selected/);
 });
 
 test("A2: turning on card requests shows a budget defaulting to A$200 a month", () => {
@@ -591,18 +619,18 @@ test("A2: turning on card requests shows a budget defaulting to A$200 a month", 
 });
 
 test("A2: switching the starting set re-seeds the toggles (Standard → Minimal unticks shared memory, tasks, services)", () => {
-  const standard = consentToggleState("standard", ["gmail"]);
+  const standard = consentToggleState("standard", ["acct-gmail-home", "acct-gmail-billing"]);
   assert.equal(standard.memoryRead, true);
   assert.equal(standard.tasks, true);
   assert.equal(standard.records, true);
-  assert.deepEqual(standard.services, ["gmail"]);
+  assert.deepEqual(standard.accounts, ["acct-gmail-home", "acct-gmail-billing"]);
 
-  const minimal = consentToggleState("minimal", ["gmail"]);
+  const minimal = consentToggleState("minimal", ["acct-gmail-home", "acct-gmail-billing"]);
   assert.equal(minimal.identity, true, "the basic profile stays on");
   assert.equal(minimal.memoryRead, false);
   assert.equal(minimal.tasks, false);
   assert.equal(minimal.records, false);
-  assert.deepEqual(minimal.services, []);
+  assert.deepEqual(minimal.accounts, []);
   for (const optIn of ["highTier", "card", "learningSharing"] as const) {
     assert.equal(standard[optIn], false);
     assert.equal(minimal[optIn], false);
@@ -624,8 +652,8 @@ test("Custom opens the editor and review accurately describes an explicit denial
 
 // Read-side protection (docs/adr/read-side-protection.md): an email service's row says agents
 // read a checked copy without sign-in codes; other services keep their plain wording.
-test("an email service's row says it reads a checked copy; other services don't claim that", () => {
-  const text = visibleText(render(base({ services: [{ id: "google-gmail", name: "Gmail", ticked: true }, { id: "google-calendar", name: "Google Calendar", ticked: true }] })));
-  assert.match(text, /Read from Gmail Reads a checked copy of your email, without sign-in codes or password links\. Changes: Ask me first\./);
-  assert.match(text, /Read from Google Calendar Read information using this service’s available tools\. Changes: Ask me first\./);
+test("an email account's row says it reads a checked copy; other services don't claim that", () => {
+  const text = visibleText(render(base({ accounts: [ACCOUNTS[1]!, ACCOUNTS[0]!] })));
+  assert.match(text, /Gmail · home@example\.test Reads a checked copy of your email, without sign-in codes or password links\. Changes: Ask me first\./);
+  assert.match(text, /Google Calendar · home@example\.test Read information using this service’s available tools\. Changes: Ask me first\./);
 });

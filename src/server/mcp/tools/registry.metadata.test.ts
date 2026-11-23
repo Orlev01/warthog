@@ -10,7 +10,7 @@ const pipeline: AgentCallPipeline = {
 };
 const registry = createToolRegistry({ pipeline });
 const permissions = {
-  grantedConnectors: ["gmail"], readTools: true, changeTools: "ask_first",
+  grantedConnectors: ["gmail"], accounts: [], readTools: true, changeTools: "ask_first",
 } as ConnectionPermissions;
 
 test("core discovery declares titles and accurate effect hints, including approval side effects", () => {

@@ -16,7 +16,7 @@ import {
   type PeriodKind,
 } from "@/domain/budget/budget";
 import type { PermissionsSaveInput, SaveResult } from "./actions";
-import { collectEdits } from "./permission-edits";
+import { collectEdits, type CollectResult } from "./permission-edits";
 
 // E10-S08 — the LIVE per-agent permissions form (the client leg that wires the shaping
 // screen to the tested save action).
@@ -36,7 +36,7 @@ import { collectEdits } from "./permission-edits";
 // the budget field appears when card access is switched on and the save control enables
 // once a budget is entered. The server still resolves the agent member-scoped and enforces
 // the card-needs-budget invariant (and validates every field, and grants only the person's
-// own connected services), so this client mirror is convenience, never the authority.
+// own connected accounts), so this client mirror is convenience, never the authority.
 
 // The plain-words outcome of the last save — words plus an icon, never colour alone.
 type Notice = { readonly tone: "done" | "problem"; readonly text: string };
@@ -81,6 +81,24 @@ const PROBLEM: Record<string, Notice> = {
 
 function problemNotice(reason: string): Notice {
   return PROBLEM[reason] ?? INVALID;
+}
+
+// What pressing Save does, decided without a DOM so the unsaved-changes promises are tested:
+// nothing changed says so and sends nothing; a screen it can't fully read refuses; otherwise
+// the gathered edits are sent. `collect` runs only when there is something to save.
+export function planSave(
+  dirty: boolean,
+  collect: () => CollectResult,
+): { readonly notice: Notice } | { readonly input: PermissionsSaveInput } {
+  if (!dirty) return { notice: NOTHING_CHANGED };
+  const collected = collect();
+  return collected.ok ? { input: collected.input } : { notice: problemNotice(collected.reason) };
+}
+
+// What a save's answer means for the screen: its notice, and whether the current values are
+// now the saved ones (only after a save that worked, so a refused edit still counts as unsaved).
+export function saveOutcome(result: SaveResult): { readonly notice: Notice; readonly saved: boolean } {
+  return result.ok ? { notice: SAVED, saved: true } : { notice: problemNotice(result.reason), saved: false };
 }
 
 // The accessible name of a control — the text of its associated <label>, or its
@@ -155,51 +173,48 @@ export function PermissionsForm({
     if (pendingRef.current) return;
     const root = containerRef.current;
     if (!root) return;
-    if (!unsaved.dirty) {
-      setNotice(NOTHING_CHANGED);
-      return;
-    }
 
     // Every control on the screen is carried with its explicit on/off state; a control the
     // form cannot find refuses the save rather than silently dropping that edit.
-    const snapshot = Array.from(
-      root.querySelectorAll<HTMLInputElement | HTMLSelectElement>(
-        "input, select",
+    const plan = planSave(unsaved.dirty, () =>
+      collectEdits(
+        Array.from(
+          root.querySelectorAll<HTMLInputElement | HTMLSelectElement>(
+            "input, select",
+          ),
+        ).map((i) => ({
+          type: i.type,
+          name: i.name,
+          label: i instanceof HTMLInputElement ? labelText(i) : "",
+          checked: i instanceof HTMLInputElement ? i.checked : false,
+          value: i.value,
+        })),
+        {
+          currency: initial.currency ?? "A$",
+          period,
+          // Every connected account the screen shows carries a row the save must find.
+          accounts: initial.accounts.map((account) => account.id),
+          skills: initial.skills.map((skill) => skill.id),
+          memories: initial.memories?.map((m) => m.id),
+          vaultFields: initial.vaultFields?.map((f) => f.id),
+          section: initial.section ?? "all",
+        },
       ),
-    ).map((i) => ({
-      type: i.type,
-      name: i.name,
-      label: i instanceof HTMLInputElement ? labelText(i) : "",
-      checked: i instanceof HTMLInputElement ? i.checked : false,
-      value: i.value,
-    }));
-    const collected = collectEdits(snapshot, {
-      currency: initial.currency ?? "A$",
-      period,
-      // Every connected service the screen shows carries a toggle the save must find.
-      connectors: initial.connectors.map((connector) => connector.id),
-      skills: initial.skills.map((skill) => skill.id),
-      memories: initial.memories?.map((m) => m.id),
-      vaultFields: initial.vaultFields?.map((f) => f.id),
-      section: initial.section ?? "all",
-    });
-    if (!collected.ok) {
-      setNotice(problemNotice(collected.reason));
+    );
+    if ("notice" in plan) {
+      setNotice(plan.notice);
       return;
     }
-    const input: PermissionsSaveInput = collected.input;
 
     pendingRef.current = true;
     setSaving(true);
     try {
-      const result = await save(input);
-      if (result.ok) {
-        setNotice(SAVED);
+      const outcome = saveOutcome(await save(plan.input));
+      setNotice(outcome.notice);
+      if (outcome.saved) {
         unsaved.markSaved();
         // Re-run the loader so the screen reflects the persisted grants.
         router.refresh();
-      } else {
-        setNotice(problemNotice(result.reason));
       }
     } catch {
       // A boundary 4xx (or any transport fault) is reported, never swallowed.

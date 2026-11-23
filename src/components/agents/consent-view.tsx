@@ -8,10 +8,11 @@ import { Notice } from "@/components/ui/notice";
 import { createFormSubmissionGuard } from "@/components/ui/form-submit";
 import { ConfirmItsYou } from "@/components/ui/confirm-its-you";
 import type { PermissionTemplate } from "@/domain/permissions/templates";
-import { connectionChoices, type ConnectionChoices, type ConnectionService } from "@/domain/permissions/connection-choices";
+import { connectionChoices, type ConnectionAccount, type ConnectionChoices } from "@/domain/permissions/connection-choices";
 import { ConnectionPermissions, ConnectionAccessSummary, PermissionHelp } from "./connection-permissions";
 
-export type ConsentViewService = ConnectionService;
+// One of the person's connected accounts, one checkbox each (docs/adr/several-accounts-per-agent.md).
+export type ConsentViewAccount = ConnectionAccount;
 export type ConsentToggleState = ConnectionChoices;
 export const consentToggleState = connectionChoices;
 // An Approve can come back asking the person to confirm it's them first (a connection is
@@ -21,7 +22,7 @@ export type ConsentViewProps = {
   platform: string;
   defaultName?: string;
   requestedScopes: readonly string[];
-  services?: readonly ConsentViewService[];
+  accounts?: readonly ConsentViewAccount[];
   template: PermissionTemplate;
   redirect: { host: string; verified: boolean };
   // The tag of the request this screen shows; submitted so the decision can check it's still
@@ -46,9 +47,11 @@ function ConsentButtons({ live, canRefuse, pending, ready, decision }: { live: b
   </div>;
 }
 
-export function ConsentView({ platform, defaultName, requestedScopes, services = [], template, redirect, requestTag, confirm, approveAction, refuseAction, currency = "AUD", initialState }: ConsentViewProps) {
+export function ConsentView({ platform, defaultName, requestedScopes, accounts = [], template, redirect, requestTag, confirm, approveAction, refuseAction, currency = "AUD", initialState }: ConsentViewProps) {
+  // Accounts on for new agents start ticked (docs/adr/default-services.md).
+  const tickedAccounts = accounts.filter(account => account.ticked).map(account => account.id);
   const [startingSet, setStartingSet] = React.useState<PermissionTemplate>(initialState ? "custom" : template);
-  const [state, setState] = React.useState(() => initialState ?? connectionChoices(template, services.filter(s => s.ticked).map(s => s.id)));
+  const [state, setState] = React.useState(() => initialState ?? connectionChoices(template, tickedAccounts));
   const [pending, startTransition] = React.useTransition();
   const [ready, setReady] = React.useState(false);
   const [decision, setDecision] = React.useState<"approve" | "refuse">("approve");
@@ -63,7 +66,7 @@ export function ConsentView({ platform, defaultName, requestedScopes, services =
   const edit = (next: ConnectionChoices) => { setState(next); setStartingSet("custom"); };
   const choose = (next: PermissionTemplate) => {
     setStartingSet(next);
-    if (next !== "custom") setState(connectionChoices(next, services.filter(s => s.ticked).map(s => s.id)));
+    if (next !== "custom") setState(connectionChoices(next, tickedAccounts));
   };
   function submit(event: React.FormEvent<HTMLFormElement>) {
     event.preventDefault();
@@ -121,10 +124,10 @@ export function ConsentView({ platform, defaultName, requestedScopes, services =
         <p id={`${id}-name-help`} className="wh-connection-name-help">This name appears in your agent list, approval requests and activity. It does not rename your account on {named ? platform : "that platform"}.</p>
         <PermissionHelp label={named ? `What ${platform} is asking for` : "What this agent is asking for"}><ul className="list-disc pl-5">{requestedScopes.map((scope, i) => <li key={i}>{scope}</li>)}</ul><p className="mt-2">The choices below apply to this connection. They do not connect other agents or give it access to everything in your account.</p></PermissionHelp>
       </section>
-      <ConnectionPermissions template={startingSet} state={state} services={services} onTemplate={choose} onChange={edit} currency={currency} />
+      <ConnectionPermissions template={startingSet} state={state} accounts={accounts} onTemplate={choose} onChange={edit} currency={currency} />
       <section className="wh-connection-section wh-connection-review" aria-labelledby={`${id}-review`}>
         <div className="wh-connection-section-heading"><span>03</span><div><h2 id={`${id}-review`}>Review before you connect</h2><p>Your current choices — {startingSet === "custom" ? "Custom" : startingSet === "minimal" ? "Minimal" : "Standard"}.</p></div></div>
-        <ConnectionAccessSummary state={state} services={services} currency={currency} />
+        <ConnectionAccessSummary state={state} accounts={accounts} currency={currency} />
         <p className="wh-connection-boundary">Your rules for all agents still apply. Warthog controls only what an agent does through Warthog, not its own tools or chats.</p>
         <PermissionHelp label="What happens after I approve?">Warthog creates a separate agent connection and returns you to {redirect.host} to finish setup. You can change its permissions or disconnect it in Agents. Disconnecting stops future Warthog access; it cannot recall information already received. Denying creates no connection.</PermissionHelp>
       </section>

@@ -29,6 +29,7 @@ import type {
 } from "../pipeline";
 import type { AgentConnection } from "../context";
 import type { ConnectionPermissions } from "../../db/agent-permissions";
+import { accountPolicy, toolPermitted } from "../../../domain/permissions/account-access";
 import { rememberSchema, searchMemorySchema } from "./memory";
 import { getSkillSchema } from "./get-skill";
 import { inputSchema as checkApprovalSchema } from "./check-approval";
@@ -382,6 +383,21 @@ function buildCoreTool(
   };
 }
 
+// The optional account every connector tool takes (docs/adr/several-accounts-per-agent.md):
+// which of the person's accounts of the service the call uses, when the agent may use more
+// than one. It is only a name; the pipeline binds it among the agent's own accounts.
+export const ACCOUNT_FIELD = z
+  .string()
+  .max(320)
+  .optional()
+  .catch(undefined)
+  .describe("Which account of this service to use: its address (or handle) from get_context serviceAccounts. Only needed when you can use more than one.");
+
+export function withAccountField(schema: z.ZodType): z.ZodType {
+  if (!(schema instanceof z.ZodObject) || "account" in schema.shape) return schema;
+  return schema.safeExtend({ account: ACCOUNT_FIELD });
+}
+
 // Build a permitted connector tool, namespaced `<connector>__<tool>`, from the connector
 // engine's declaration. The general `request` tool takes {method, path, query, body} and
 // is a read for GET/HEAD and a change otherwise; any other tool takes {query, body} and
@@ -396,9 +412,10 @@ function buildConnectorTool(
     typeof tool === "string" ? { name: tool } : tool;
   const name = `${connectorId}${NAMESPACE}${declaration.name}`;
   const isRequest = declaration.name === REQUEST_TOOL;
-  const schema =
+  const schema = withAccountField(
     declaration.schema ??
-    (isRequest ? connectorRequestSchema : connectorToolSchema);
+    (isRequest ? connectorRequestSchema : connectorToolSchema),
+  );
   return {
     name,
     ...connectorToolMetadata(
@@ -413,9 +430,20 @@ function buildConnectorTool(
       input: unknown,
       connection: AgentConnection,
     ): Promise<AgentCallResult> {
-      const parsed = parseParams(schema, input) as Record<string, unknown> & {
+      const { account, ...parsed } = parseParams(schema, input) as Record<string, unknown> & {
         body?: string;
+        account?: string;
       };
+      // The account the agent named. An agent whose client still has the older tool list can
+      // name it inside `query` instead; never for the request tool, whose query goes to the
+      // service as it is.
+      let requestedAccount = account;
+      const query = parsed.query as Record<string, string> | undefined;
+      if (!isRequest && query && typeof query === "object" && typeof query.account === "string") {
+        const { account: fromQuery, ...rest } = query;
+        requestedAccount ??= fromQuery;
+        parsed.query = rest;
+      }
       const makesChange = isRequest
         ? declaration.getIsChange === true || requestMakesChange(String(parsed.method))
         : (declaration.makesChange ?? true);
@@ -435,6 +463,7 @@ function buildConnectorTool(
           && (isRequest || declaration.alwaysOutbound === true || declaration.messageChannel !== undefined || (recipients?.length ?? 0) > 0),
         reason: parsed.reason as string | undefined,
         params: parsed,
+        ...(requestedAccount ? { requestedAccount } : {}),
       };
       return pipeline.handleAgentCall(connection, call);
     },
@@ -494,24 +523,23 @@ export function createToolRegistry(deps: ToolRegistryDeps): ToolRegistry {
     ): readonly ToolDefinition[] {
       // Namespace each PERMITTED connector's tools; a connector that is not granted
       // contributes nothing.
+      // A service's tools are offered once however many of its accounts the agent has; a tool is
+      // offered when any of those accounts' settings allow it, and each call is then bound to one
+      // account whose settings the policy checks (docs/adr/several-accounts-per-agent.md).
       const connectorDefs: ToolDefinition[] = [];
       for (const connectorId of permissions.grantedConnectors) {
         const tools = connectorTools[connectorId];
         if (!tools) continue;
-        const policy = permissions.connectorPolicies?.[connectorId];
-        const reads = policy?.readTools ?? permissions.readTools,
-          changes = policy?.changeTools ?? permissions.changeTools;
+        const accounts = permissions.accounts.filter((account) => account.connectorId === connectorId);
+        const policies = (accounts.length > 0 ? accounts : [undefined]).map((account) => accountPolicy(account, permissions));
         for (const tool of tools) {
           const declaration = typeof tool === "string" ? { name: tool } : tool;
-          if (policy?.allowedTools && !policy.allowedTools.includes(`${connectorId}${NAMESPACE}${declaration.name}`)) continue;
-          if (
-            declaration.name === REQUEST_TOOL
-              ? !reads && changes === "off"
-              : (declaration.makesChange ?? true)
-                ? changes === "off"
-                : !reads
-          )
-            continue;
+          const use = {
+            name: `${connectorId}${NAMESPACE}${declaration.name}`,
+            makesChange: declaration.makesChange ?? true,
+            request: declaration.name === REQUEST_TOOL,
+          };
+          if (!policies.some((policy) => toolPermitted(policy, use))) continue;
           connectorDefs.push(buildConnectorTool(connectorId, tool, pipeline));
         }
       }

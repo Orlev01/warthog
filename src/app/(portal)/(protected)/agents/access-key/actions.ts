@@ -42,7 +42,7 @@ import type { KeyWrapper } from "@/server/crypto/key-wrapper";
 //     it's you in the last five minutes, and each emails the person (security audit
 //     2026-11-13). `revoke` needs neither: shutting an agent out stays one step.
 
-import { defaultAccountsForAgents, listConnectionsForUser } from "@/server/db/connections";
+import { choseServicesNotAccounts } from "@/domain/permissions/connection-choices";
 import { getAgentDefaults } from "@/server/db/agent-defaults";
 import { randomUUID } from "node:crypto";
 
@@ -59,7 +59,7 @@ import {
   type PermissionGrants,
 } from "../../../../../server/db/agent-permissions";
 import { parseParams } from "../../../../../server/http/validate";
-import { initialGrants } from "../../../../../server/agents/initial-grants";
+import { initialGrants, tickedOwnAccounts } from "../../../../../server/agents/initial-grants";
 import type { Clock } from "../../../../../server/seams/clock";
 import type { Random } from "../../../../../server/seams/random";
 import type { Db } from "../../../../../server/db/index";
@@ -76,24 +76,31 @@ import {
 // permissions page lets the person change it later (brief "Per-agent permissions page").
 
 // Bounds that keep a malformed or oversized create out of the database. A name must be
-// present and reasonably short; the platform label and ticked-service ids are likewise
-// bounded so a grossly oversized field is rejected at the boundary.
+// present and reasonably short; the platform label is likewise bounded, ticked accounts are
+// account ids (uuids), at most 100 of them, and an older screen's ticked-service ids are
+// bounded too, so a grossly oversized field is rejected at the boundary.
 const MAX_NAME_LENGTH = 200;
 const MAX_PLATFORM_LENGTH = 100;
+const MAX_ACCOUNTS = 100;
 const MAX_SERVICE_LENGTH = 200;
 const MAX_SERVICES = 100;
 
 // The access-key create input, as the access-key screen submits it — the SAME shape
 // the consent screen submits ("set permissions on the same screen as the consent
 // screen"). `template` is the chosen starting set (validated to one of the three names
-// below); `tickedServices` are the service ids whose read tools Standard/Custom grant.
-// High-tier, card and learning-sharing are ALWAYS opt-in — absent/false means off.
+// below); `accounts` are the ids of the connected accounts whose read tools Standard/Custom
+// grant (kept only when the account is the person's own; docs/adr/several-accounts-per-agent.md).
+// `tickedServices` is what a screen loaded before accounts were listed one by one sends
+// instead: it is never granted, and a create carrying it without accounts makes nothing
+// (`accounts_changed`). High-tier, card and learning-sharing are ALWAYS opt-in — absent/false
+// means off.
 // `card` needs a budget when on. `template` is typed as a plain string here (the
 // untrusted form value); the validation boundary narrows it.
 export interface AccessKeyInput {
   readonly name: string;
   readonly platform: string;
   readonly template: string;
+  readonly accounts?: readonly string[];
   readonly tickedServices?: readonly string[];
   readonly identity?: boolean;
   readonly memoryRead?: boolean;
@@ -108,7 +115,8 @@ export interface AccessKeyInput {
 
 // The outcome of a create: the created agent's id and the RAW key shown ONCE, or a
 // refusal naming its reason (`step_up_required` when the session needs a fresh
-// confirmation first). Never a silent success.
+// confirmation first; `accounts_changed` when the screen listed services, not accounts).
+// Never a silent success.
 export type CreateResult =
   | { readonly ok: true; readonly agentId: string; readonly key: string }
   | { readonly ok: false; readonly reason: string };
@@ -158,6 +166,7 @@ const inputSchema = z
     name: z.string().min(1).max(MAX_NAME_LENGTH),
     platform: z.string().min(1).max(MAX_PLATFORM_LENGTH),
     template: z.enum(["minimal", "standard", "custom"]),
+    accounts: z.array(z.uuid().transform((id) => id.toLowerCase())).max(MAX_ACCOUNTS).optional(),
     tickedServices: z.array(z.string().max(MAX_SERVICE_LENGTH)).max(MAX_SERVICES).optional(),
     identity: z.boolean().optional(),
     memoryRead: z.boolean().optional(),
@@ -191,10 +200,14 @@ export function createAccessKeyActions(deps: AccessKeyActionsDeps): AccessKeyAct
   // its hash is stored.
   async function create(session: Session, input: AccessKeyInput): Promise<CreateResult> {
     const valid = parseParams(inputSchema, input);
+    // A screen that ticked services rather than accounts would grant nothing the person saw
+    // ticked: make nothing, before asking them to confirm it's them.
+    if (choseServicesNotAccounts(valid)) return { ok: false, reason: "accounts_changed" };
     if (!requireStepUp(session, { clock })) return { ok: false, reason: "step_up_required" };
     const result = await auditedOwnerChange(deps, session.userId, async (tx, record) => {
-      const connected = new Set((await listConnectionsForUser(tx, session.userId)).map(c => c.connectorId));
-      valid.tickedServices = valid.tickedServices?.filter(id => connected.has(id));
+      // The ticked accounts that are the person's own (member-scoped by the session's user
+      // id), each with its service: the only accounts a tick can grant.
+      const tickedAccounts = await tickedOwnAccounts(tx, session.userId, valid.accounts ?? []);
       const connectionId = randomUUID();
 
       const agent = await createAgent(
@@ -209,11 +222,8 @@ export function createAccessKeyActions(deps: AccessKeyActionsDeps): AccessKeyAct
         clock,
       );
 
-      // A ticked service with an account on for new agents is set to that account
-      // (docs/adr/default-services.md).
-      const defaultAccounts = await defaultAccountsForAgents(tx, session.userId);
       const grants = await upsertPermissions(tx, {
-        ...initialGrants(session.userId, connectionId, valid, undefined, defaultAccounts),
+        ...initialGrants(session.userId, connectionId, { ...valid, tickedAccounts }),
         rateLimit: (await getAgentDefaults(tx, session.userId)).rateLimit,
       });
 

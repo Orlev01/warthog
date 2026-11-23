@@ -111,7 +111,7 @@ test("rule currency follows the owner account independently of the agent budget"
   try {
     const { userId } = await makePerson(db, "audit-rule-currency", keyWrapper);
     await setAccountCurrency(db, { userId, currency: "NZD" });
-    await upsertPermissions(db, baseGrants(userId, CONN, { cardAccess: true, cardBudget: { amount: 300, currency: "USD", period: "month" } }));
+    await grantServices(db, baseGrants(userId, CONN, { cardAccess: true, cardBudget: { amount: 300, currency: "USD", period: "month" } }));
     await upsertRate(db, { rateDate: DAY_NOW, baseCurrency: "USD", quoteCurrency: "NZD", rate: 1.6 });
     const ctx = await loadAgentContext(connectionFor(userId), depsFor(db, keyWrapper), { amount: 80, currency: "USD" });
     assert.equal(ctx.cardChecks?.ruleCurrency, "NZD");
@@ -132,6 +132,7 @@ import { parseBody, HttpError } from "../http/validate";
 import { localAesKeyWrapper, type KeyWrapper } from "../crypto/key-wrapper";
 import { fixedClock } from "../seams/clock";
 
+import { grantServices } from "../../test/grants";
 // --- the pinned shapes, taken from the stores' own signatures so a later type rename
 // that preserves behaviour does not redden these tests. -----------------------------
 type Grants = Parameters<typeof upsertPermissions>[1];
@@ -291,7 +292,7 @@ test("returns exactly the connection's granted permissions (what getConnectionPe
   const keyWrapper = keyWrapperFor();
   try {
     const { userId } = await makePerson(db, "ac1-perms", keyWrapper);
-    await upsertPermissions(
+    await grantServices(
       db,
       baseGrants(userId, CONN, {
         grantedConnectors: ["gmail", "notion", "linear"],
@@ -308,7 +309,7 @@ test("returns exactly the connection's granted permissions (what getConnectionPe
       stored,
       "the context's permissions are exactly the connection's stored grants",
     );
-    assert.deepEqual(ctx.permissions.grantedConnectors, ["gmail", "notion", "linear"]);
+    assert.deepEqual(ctx.permissions.grantedConnectors, ["gmail", "linear", "notion"]);
     assert.equal(ctx.permissions.changeTools, "allow");
     assert.equal(ctx.permissions.rateLimit, 90);
   } finally {
@@ -321,7 +322,7 @@ test("returns the ACTIVE rules applicable to this connection (any_agent + this a
   const keyWrapper = keyWrapperFor();
   try {
     const { userId, dek } = await makePerson(db, "ac1-rules", keyWrapper);
-    await upsertPermissions(db, baseGrants(userId, CONN));
+    await grantServices(db, baseGrants(userId, CONN));
 
     // R1: any_agent, send email — applicable.
     const r1 = await createRule(db, { userId, kind: "ask_first", scope: ANY_AGENT, action: SEND_EMAIL } as NewRule, dek);
@@ -362,7 +363,7 @@ test("`spend` totals this connection's approved releases for the current MONTH, 
   const keyWrapper = keyWrapperFor();
   try {
     const { userId } = await makePerson(db, "ac1-spend-month", keyWrapper);
-    await upsertPermissions(
+    await grantServices(
       db,
       baseGrants(userId, CONN, { cardAccess: true, cardBudget: { amount: 200, currency: "AUD", period: "month" } }),
     );
@@ -386,7 +387,7 @@ test("the budget's PERIOD drives which bucket `spend` sums (a day budget sums on
   const keyWrapper = keyWrapperFor();
   try {
     const { userId } = await makePerson(db, "ac1-spend-day", keyWrapper);
-    await upsertPermissions(
+    await grantServices(
       db,
       baseGrants(userId, CONN, { cardAccess: true, cardBudget: { amount: 50, currency: "AUD", period: "day" } }),
     );
@@ -407,7 +408,7 @@ test("`spend` is 0 (not undefined/NaN) when the connection has no releases this 
   const keyWrapper = keyWrapperFor();
   try {
     const { userId } = await makePerson(db, "ac1-spend-zero", keyWrapper);
-    await upsertPermissions(
+    await grantServices(
       db,
       baseGrants(userId, CONN, { cardAccess: true, cardBudget: { amount: 200, currency: "AUD", period: "month" } }),
     );
@@ -432,7 +433,7 @@ test("two people sharing one connection id: the loader returns only the owner's 
     const bob = await makePerson(db, "ac2-bob", keyWrapper);
 
     // Both hold a row for the SAME connection id, with DIFFERENT grants/currency.
-    await upsertPermissions(
+    await grantServices(
       db,
       baseGrants(alice.userId, CONN, {
         grantedConnectors: ["gmail"],
@@ -440,7 +441,7 @@ test("two people sharing one connection id: the loader returns only the owner's 
         cardBudget: { amount: 200, currency: "AUD", period: "month" },
       }),
     );
-    await upsertPermissions(
+    await grantServices(
       db,
       baseGrants(bob.userId, CONN, {
         grantedConnectors: ["slack"],
@@ -478,7 +479,7 @@ test("no card budget → accountCurrency defaults to AUD", async () => {
   const keyWrapper = keyWrapperFor();
   try {
     const { userId } = await makePerson(db, "ac3-default", keyWrapper);
-    await upsertPermissions(db, baseGrants(userId, CONN, { cardAccess: false, cardBudget: null }));
+    await grantServices(db, baseGrants(userId, CONN, { cardAccess: false, cardBudget: null }));
 
     const ctx = await loadAgentContext(connectionFor(userId), depsFor(db, keyWrapper));
     assert.equal(ctx.accountCurrency, "AUD", "with no budget currency set, amounts default to AUD");
@@ -492,7 +493,7 @@ test("a budget in another currency sets accountCurrency to that currency (the de
   const keyWrapper = keyWrapperFor();
   try {
     const { userId } = await makePerson(db, "ac3-usd", keyWrapper);
-    await upsertPermissions(
+    await grantServices(
       db,
       baseGrants(userId, CONN, { cardAccess: true, cardBudget: { amount: 300, currency: "USD", period: "month" } }),
     );
@@ -626,7 +627,7 @@ test("the handler accepts a well-formed body and loads the SESSION user's contex
     const alice = await makePerson(db, "handler-alice", keyWrapper);
     const bob = await makePerson(db, "handler-bob", keyWrapper);
 
-    await upsertPermissions(
+    await grantServices(
       db,
       baseGrants(alice.userId, CONN, {
         grantedConnectors: ["gmail"],
@@ -634,7 +635,7 @@ test("the handler accepts a well-formed body and loads the SESSION user's contex
         cardBudget: { amount: 200, currency: "AUD", period: "month" },
       }),
     );
-    await upsertPermissions(
+    await grantServices(
       db,
       baseGrants(bob.userId, CONN, {
         grantedConnectors: ["slack", "notion", "linear"],
@@ -674,7 +675,7 @@ test("the loader reads no process.env: a decoy secret in the environment never a
   const keyWrapper = keyWrapperFor();
   try {
     const { userId } = await makePerson(db, "ac5-env", keyWrapper);
-    await upsertPermissions(
+    await grantServices(
       db,
       baseGrants(userId, CONN, { cardAccess: true, cardBudget: { amount: 200, currency: "AUD", period: "month" } }),
     );
@@ -718,7 +719,7 @@ test("E15-S07: a card request makes the loader carry the resolved household + cu
   const keyWrapper = keyWrapperFor();
   try {
     const { userId } = await makePerson(db, "e15s07-wire", keyWrapper);
-    await upsertPermissions(
+    await grantServices(
       db,
       baseGrants(userId, CONN, { cardAccess: true, cardBudget: { amount: 200, currency: "AUD", period: "month" } }),
     );
@@ -748,7 +749,7 @@ test("E15-S07: with no card request the loader carries no card-request context (
   const keyWrapper = keyWrapperFor();
   try {
     const { userId } = await makePerson(db, "e15s07-nocard", keyWrapper);
-    await upsertPermissions(db, baseGrants(userId, CONN));
+    await grantServices(db, baseGrants(userId, CONN));
 
     const ctx = await loadAgentContext(connectionFor(userId), depsFor(db, keyWrapper));
     assert.equal(ctx.cardRequest, undefined, "no card request → no card-request context on the loader");
@@ -766,7 +767,7 @@ test("D3: the card checks carry only the household legs that are set, plus the p
   const keyWrapper = keyWrapperFor();
   try {
     const { userId } = await makePerson(db, "d3-legs", keyWrapper);
-    await upsertPermissions(
+    await grantServices(
       db,
       baseGrants(userId, CONN, { cardAccess: true, cardBudget: { amount: 300, currency: "AUD", period: "month" } }),
     );
@@ -797,7 +798,7 @@ test("D3: a foreign request gets a household rate and a budget-currency rate", a
   const keyWrapper = keyWrapperFor();
   try {
     const { userId } = await makePerson(db, "d3-rates", keyWrapper);
-    await upsertPermissions(
+    await grantServices(
       db,
       baseGrants(userId, CONN, { cardAccess: true, cardBudget: { amount: 300, currency: "AUD", period: "month" } }),
     );
@@ -837,7 +838,7 @@ test("W4.3: the agent's spend this period is read in the person's own time zone"
     const keyWrapper = keyWrapperFor();
     const { userId, dek } = await makePerson(db, "tz-agent", keyWrapper);
     await saveTimeZone(db, userId, dek, "America/Los_Angeles");
-    await upsertPermissions(
+    await grantServices(
       db,
       baseGrants(userId, CONN, { cardAccess: true, cardBudget: { amount: 300, currency: "AUD", period: "month" } }),
     );
@@ -856,7 +857,7 @@ test("AUD-012: personal November spending is separate from the household's curre
     const keyWrapper = keyWrapperFor();
     const { userId, dek } = await makePerson(db, "tz-household", keyWrapper);
     await saveTimeZone(db, userId, dek, "America/Los_Angeles");
-    await upsertPermissions(
+    await grantServices(
       db,
       baseGrants(userId, CONN, { cardAccess: true, cardBudget: { amount: 300, currency: "AUD", period: "month" } }),
     );

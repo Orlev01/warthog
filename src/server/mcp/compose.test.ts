@@ -97,6 +97,7 @@ import { createMcpRouteHandler } from "../../app/mcp/handler";
 import { freshDb } from "../../test/db";
 import type { Db } from "../db/index";
 
+import { adoptStandIn, grantServices } from "../../test/grants";
 // --- fixtures -----------------------------------------------------------------------
 
 // The frozen instant the agent/token fixtures are stamped at (the dispatch itself reads
@@ -225,7 +226,7 @@ async function seedConnection(
     fixedClock(NOW),
   );
 
-  await upsertPermissions(db, {
+  await grantServices(db, {
     userId: user.id,
     connectionId,
     grantedConnectors: [],
@@ -768,7 +769,8 @@ async function connectService(
   connectorId: string,
   credentials: Record<string, unknown>,
 ): Promise<void> {
-  await createConnection(db, { userId, connectorId, accountLabel: "me", credentials }, dek, fixedClock(NOW));
+  const created = await createConnection(db, { userId, connectorId, accountLabel: "me", credentials }, dek, fixedClock(NOW));
+  await adoptStandIn(db, userId, connectorId, created.id);
 }
 
 test("D5: tools/list serves the granted connector's request tool and nothing for an ungranted one", async () => {
@@ -1189,7 +1191,7 @@ test("calendar Undo uses the created event id and reports permission, account an
     const account = await createConnection(db, { userId, connectorId: "google-calendar", accountLabel: "Personal",
       credentials: { access_token: "synthetic-calendar-token" } }, dek, systemClock);
     const stored = (await getConnectionPermissions(db, userId, connectionId))!;
-    await upsertPermissions(db, { ...stored, connectorAccounts: { "google-calendar": account.id } });
+    await grantServices(db, { ...stored, connectorAccounts: { "google-calendar": account.id } });
     let responseStatus = 204;
     let throwOnDelete = false;
     const sent: string[] = [];
@@ -1219,9 +1221,9 @@ test("calendar Undo uses the created event id and reports permission, account an
     throwOnDelete = false;
     responseStatus = 204;
     const sentBeforePolicy = sent.length;
-    await upsertPermissions(db, { ...stored, changeTools: "off", connectorAccounts: { "google-calendar": account.id } });
+    await grantServices(db, { ...stored, changeTools: "off", connectorAccounts: { "google-calendar": account.id } });
     assert.equal((await executors.runReversal(job)).status, "refused");
-    await upsertPermissions(db, { ...stored, changeTools: "ask_first", connectorAccounts: { "google-calendar": account.id } });
+    await grantServices(db, { ...stored, changeTools: "ask_first", connectorAccounts: { "google-calendar": account.id } });
     const heldReversal = await executors.runReversal(job);
     assert.equal(heldReversal.status, "pending_approval");
     // The held reversal names the approval it waits on, so the undo claim can follow it.
@@ -1231,11 +1233,11 @@ test("calendar Undo uses the created event id and reports permission, account an
     assert.equal(sent.length, sentBeforePolicy, "denied and pending reversals send nothing");
     const other = await createConnection(db, { userId, connectorId: "google-calendar", accountLabel: "Work",
       credentials: { access_token: "synthetic-other-token" } }, dek, systemClock);
-    await upsertPermissions(db, { ...stored, connectorAccounts: { "google-calendar": other.id } });
+    await grantServices(db, { ...stored, connectorAccounts: { "google-calendar": other.id } });
     assert.equal((await executors.runReversal(job)).status, "refused");
     assert.equal(sent.length, sentBeforePolicy, "a changed account never receives the deletion");
 
-    await upsertPermissions(db, { ...stored, changeTools: "ask_first", connectorAccounts: { "google-calendar": account.id } });
+    await grantServices(db, { ...stored, changeTools: "ask_first", connectorAccounts: { "google-calendar": account.id } });
     const held = await readRpc(await dispatch(connectionId, mcpPost(callBody("google-calendar__create", { body: "{}" }))));
     const approvalId = String(held.result?.structuredContent?.approval_id);
     const { decide } = await import("../db/approvals");
@@ -1244,7 +1246,7 @@ test("calendar Undo uses the created event id and reports permission, account an
     const approvedCreate = (await listActivity(db, userId, {}, dek))
       .find(entry => entry.tool === "google-calendar__create" && entry.outcome === "executed" && entry.seq !== original.seq)!;
     assert.ok(approvedCreate, "approved creates also capture their bounded reversal target");
-    await upsertPermissions(db, { ...stored, connectorAccounts: { "google-calendar": account.id } });
+    await grantServices(db, { ...stored, connectorAccounts: { "google-calendar": account.id } });
     assert.equal((await executors.runReversal({ ...job, originalSeq: approvedCreate.seq })).status, "executed");
   } finally { await db.close(); }
 });
@@ -1260,7 +1262,7 @@ test("an approved connector hold cannot switch to a different service account", 
     const first = await createConnection(db, { userId, connectorId: "amadeus", accountLabel: "Personal", credentials: { api_key: "fixture-personal" } }, dek, systemClock);
     const second = await createConnection(db, { userId, connectorId: "amadeus", accountLabel: "Work", credentials: { api_key: "fixture-work" } }, dek, systemClock);
     const stored = (await getConnectionPermissions(db, userId, connectionId))!;
-    await upsertPermissions(db, { ...stored, connectorAccounts: { amadeus: first.id } });
+    await grantServices(db, { ...stored, connectorAccounts: { amadeus: first.id } });
     const upstream = recordingFetch();
     const dispatch = createMcpDispatch({ db, config, fetch: upstream.fetch });
     const rpc = await readRpc(await dispatch(connectionId, mcpPost(callBody("amadeus__request", { method: "POST", path: "/v1/orders", body: "{}" }))));
@@ -1268,7 +1270,7 @@ test("an approved connector hold cannot switch to a different service account", 
     const approvalId = String(rpc.result?.structuredContent?.approval_id);
     const approved = await decide(db, { userId, id: approvalId, decision: { status: "approved" } }, dek, systemClock);
     assert.equal(approved.detail.account, "Personal");
-    await upsertPermissions(db, { ...stored, connectorAccounts: { amadeus: second.id } });
+    await grantServices(db, { ...stored, connectorAccounts: { amadeus: second.id } });
     const result = await createAgentExecutors({ db, config, fetch: upstream.fetch }).executeApprovedHold(userId, approvalId);
     assert.equal(result.status, "refused");
     assert.equal(upstream.sent.length, 0);
@@ -1281,7 +1283,8 @@ test("large provider inventories support discovery, pagination and policy-gated 
   const {createConnection}=await import("../db/connections");
   const config=devConfig(),{userId,connectionId,dek}=await seedConnection(db,config,{grantedConnectors:["notion"]});
   const tools=Array.from({length:90},(_,i)=>({name:`tool_${i}`,description:`Tool ${i}`,inputSchema:{type:"object",properties:{}},annotations:{readOnlyHint:true,destructiveHint:false}}));
-  await createConnection(db,{userId,connectorId:"notion",accountLabel:"Fixture",credentials:{providerMcp:{tools,tokens:{access_token:"synthetic",token_type:"Bearer"}}}},dek,fixedClock(NOW));
+  const notion=await createConnection(db,{userId,connectorId:"notion",accountLabel:"Fixture",credentials:{providerMcp:{tools,tokens:{access_token:"synthetic",token_type:"Bearer"}}}},dek,fixedClock(NOW));
+  await adoptStandIn(db,userId,"notion",notion.id);
   const dispatch=createMcpDispatch({db,config});
   const listed=await readRpc(await dispatch(connectionId,mcpPost(LIST_BODY)));
   assert.ok(listed.result?.tools?.some(t=>t.name==="find_tools"));

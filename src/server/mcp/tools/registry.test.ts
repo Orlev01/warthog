@@ -102,6 +102,7 @@ function permsWith(
     userId: "user-1",
     connectionId: CONN,
     grantedConnectors,
+    accounts: [],
     readTools: true,
     changeTools: "ask_first",
     identityAccess: true,

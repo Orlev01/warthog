@@ -25,6 +25,7 @@ import { decide, getApproval } from "../db/approvals";
 import { freshDb } from "../../test/db";
 import type { Db } from "../db/index";
 
+import { adoptStandIn, grantServices } from "../../test/grants";
 const NOW = new Date("2026-11-16T00:00:00.000Z");
 
 function devConfig(): Config {
@@ -65,11 +66,12 @@ async function seed(db: Db, config: Config, grants: Partial<PermissionGrants>, c
   const user = await createUser(db, { email: `person-${randomUUID()}@warthog.com.au`, wrappedDek: await keyWrapper.wrap(dek) });
   const connectionId = randomUUID();
   await createAgent(db, { userId: user.id, connectionId, displayName: "Claude", platform: "claude" }, fixedClock(NOW));
-  await upsertPermissions(db, {
+  await grantServices(db, {
     userId: user.id, connectionId, grantedConnectors: [connectorId], readTools: true, changeTools: "ask_first", identityAccess: true,
     highTierAccess: false, cardAccess: false, cardBudget: null, skillsScope: [], memoryRead: true, sharing: false, rulesScope: [], rateLimit: 120, ...grants,
   });
-  await createConnection(db, { userId: user.id, connectorId, accountLabel: "sam@example.com", credentials: { access_token: "tok" } }, dek, fixedClock(NOW));
+  const created = await createConnection(db, { userId: user.id, connectorId, accountLabel: "sam@example.com", credentials: { access_token: "tok" } }, dek, fixedClock(NOW));
+  await adoptStandIn(db, user.id, connectorId, created.id);
   return { userId: user.id, connectionId, dek };
 }
 

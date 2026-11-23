@@ -1,8 +1,8 @@
 // "On for new agents" on the Connectors page (docs/adr/default-services.md): each of the
 // person's accounts under Your services has a switch. Turning it on means every agent connected
-// afterwards starts with that service, set to that account; agents already connected don't
-// change. An agent uses one account of each service, so turning on a second account of a
-// service moves the switch to it.
+// afterwards starts with that account ticked; agents already connected don't change. An agent
+// can use several accounts of a service (docs/adr/several-accounts-per-agent.md), so each
+// account's switch is its own: turning one on never turns another off.
 //
 // Drives the real factory over a real catalogue index and an isolated PGlite with the real
 // migrations, rendered through the real <ConnectorsView>, as `actions.organise.test.tsx` does.
@@ -131,20 +131,27 @@ test("turning an account on for new agents marks it on the page and records the 
   }
 });
 
-test("turning on a second account of a service moves the switch; turning it off clears it", async () => {
+test("two accounts of a service can both be on for new agents; turning one off leaves the other", async () => {
   const db = await freshDb();
   try {
-    const userId = await makeUser(db, "default-move");
+    const userId = await makeUser(db, "default-both");
     const home = await connect(db, userId, "acme-mail", "home@acme.test");
     const work = await connect(db, userId, "acme-mail", "work@acme.test");
     const actions = actionsFor(db);
 
     await actions.setDefaultForAgents(sessionFor(userId), { connectionId: home, on: true });
     await actions.setDefaultForAgents(sessionFor(userId), { connectionId: work, on: true });
-    assert.deepEqual(await defaultAccountsForAgents(db, userId), { "acme-mail": work });
+    assert.deepEqual([...(await defaultAccountsForAgents(db, userId))].sort(), [home, work].sort(), "both are on");
+    const byId = new Map((await actions.load(sessionFor(userId))).connections.map((c) => [c.id, c]));
+    assert.equal(byId.get(home)?.defaultForAgents, true);
+    assert.equal(byId.get(work)?.defaultForAgents, true);
 
     await actions.setDefaultForAgents(sessionFor(userId), { connectionId: work, on: false });
-    assert.deepEqual(await defaultAccountsForAgents(db, userId), {});
+    assert.deepEqual(await defaultAccountsForAgents(db, userId), [home]);
+
+    // Each change is its own entry, naming the account and what it was before.
+    const entries = await readActivity(db, userId, await dekFor(userId));
+    assert.equal(entries.filter((entry) => entry.kind === "agent_defaults_change").length, 3);
   } finally {
     await db.close();
   }
@@ -158,7 +165,7 @@ test("another person's account cannot be turned on or off", async () => {
     const theirs = await connect(db, other, "acme-mail", "them@acme.test");
 
     assert.deepEqual(await actionsFor(db).setDefaultForAgents(sessionFor(me), { connectionId: theirs, on: true }), { ok: false });
-    assert.deepEqual(await defaultAccountsForAgents(db, other), {});
+    assert.deepEqual(await defaultAccountsForAgents(db, other), []);
     assert.equal((await readActivity(db, me, await dekFor(me))).length, 0, "nothing is recorded");
   } finally {
     await db.close();
@@ -182,23 +189,26 @@ test("each account under Your services has an On for new agents switch, bound to
   const db = await freshDb();
   try {
     const userId = await makeUser(db, "default-view");
-    await connect(db, userId, "acme-mail", "home@acme.test");
+    const home = await connect(db, userId, "acme-mail", "home@acme.test");
     const work = await connect(db, userId, "acme-mail", "work@acme.test");
+    await connect(db, userId, "acme-mail", "billing@acme.test");
     await connect(db, userId, "grid-db", "Grid DB");
     const actions = actionsFor(db);
+    await actions.setDefaultForAgents(sessionFor(userId), { connectionId: home, on: true });
     await actions.setDefaultForAgents(sessionFor(userId), { connectionId: work, on: true });
 
     const markup = renderToStaticMarkup(
       <ConnectorsView {...(await actions.load(sessionFor(userId)))} initialView="connected" defaultForAgentsAction={fakeAction} />,
     );
     const switches = [...markup.matchAll(/<input[^>]*role="switch"[^>]*>/g)].map((m) => m[0]);
-    assert.equal(switches.length, 3, "one switch per account");
-    assert.equal(switches.filter((s) => /checked=""/.test(s)).length, 1, "only the account that is on is checked");
+    assert.equal(switches.length, 4, "one switch per account");
+    assert.equal(switches.filter((s) => /checked=""/.test(s)).length, 2, "both accounts that are on are checked");
     assert.match(markup, new RegExp(`<input[^>]*name="connectionId"[^>]*value="${work}"`));
 
     const words = text(markup);
     assert.match(words, /On for new agents/);
-    assert.match(words, /New agents use work@acme\.test for Acme Mail/, "the other account says which one new agents use");
+    assert.match(words, /Every agent you connect from now on starts with this Acme Mail account/);
+    assert.doesNotMatch(words, /New agents use|instead/, "turning one on never claims to move it from another account");
     assert.match(words, /Agents already connected don't change/);
   } finally {
     await db.close();

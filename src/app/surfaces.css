@@ -271,7 +271,7 @@ html:has(.wh-nav-dialog[open]) { overflow: hidden; }
 .wh-scope-agents svg { flex-shrink: 0; color: var(--wh-fg-muted); }
 
 /* ---------- Panels (WorkspacePanel), cards and the light-mode edge ---------- */
-.wh-workspace :is(.wh-panel, .wh-surface, .wh-card, .wh-connector-module),
+.wh-workspace :is(.wh-panel, .wh-surface, .wh-card),
 .wh-workspace .wh-permissions > .wh-permission-group { border-color: var(--wh-edge); }
 .wh-workspace :is(.wh-panel, .wh-surface, .wh-card) { border-radius: var(--wh-radius-panel); }
 .wh-panel-header { gap: 12px; padding: 16px 20px; }

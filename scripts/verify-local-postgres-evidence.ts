@@ -15,9 +15,9 @@ export async function verifyPostgresEvidence(runtime: Db, purge: Db) {
   const user = await createUser(runtime, { email: `pg-evidence-${randomUUID()}@example.test`, wrappedDek: "synthetic" });
   try {
     const agent = await createAgent(runtime, { userId: user.id, connectionId: randomUUID(), displayName: "Evidence", platform: "other" }, clock);
-    await upsertPermissions(runtime, { ...initialGrants(user.id, agent.connectionId, { template: "standard" }), connectorPolicies: { "google-gmail": { allowedTools: ["google-gmail__search"] } }, resourceControls: { tasksWrite: false, recordsWrite: false, recordIds: [] } });
+    await upsertPermissions(runtime, { ...initialGrants(user.id, agent.connectionId, { template: "standard" }), resourceControls: { tasksWrite: false, recordsWrite: false, recordIds: [] } });
     const grants = await getConnectionPermissions(runtime, user.id, agent.connectionId);
-    assert.deepEqual(grants?.connectorPolicies?.["google-gmail"]?.allowedTools, ["google-gmail__search"]);
+    assert.deepEqual(grants?.accounts, []);
     assert.deepEqual(grants?.resourceControls, { tasksWrite: false, recordsWrite: false, recordIds: [] });
     await rememberClient(runtime, { userId: user.id, agentId: agent.id, connectionId: agent.connectionId, active: true }, { name: "Synthetic client", source: "client_reported" }, clock.now().toISOString(), dek, createRedactingRecorder({ db: runtime, clock, dekFor: async () => dek }));
     assert.equal((await readClientObservation(runtime, user.id, agent.id, dek))?.name, "Synthetic client");

@@ -6,28 +6,25 @@ import { ActionForm, PendingFormFields } from "@/components/ui/form-submit";
 // "On for new agents" for one account under Your services (docs/adr/default-services.md). A
 // native checkbox with the switch role: flipping it saves straight away (the same guarded,
 // one-submission form as every other control on the page), and the page comes back with the
-// outcome. Without an action it is shown disabled with its reason, never live over nothing.
+// outcome. Each account's switch is its own: several accounts of a service can be on
+// (docs/adr/several-accounts-per-agent.md). Without an action it is shown disabled with its
+// reason, never live over nothing.
 export function DefaultForAgentsSwitch({
   connectionId,
   accountLabel,
   service,
   on,
-  otherAccount,
   action,
 }: {
   connectionId: string;
   accountLabel: string;
   service: string;
   on: boolean;
-  // Another account of this service that new agents use today, if any.
-  otherAccount?: string;
   action?: (formData: FormData) => void | Promise<void>;
 }) {
   const description = on
-    ? `Every agent you connect from now on starts with ${service}, using this account.`
-    : otherAccount
-      ? `New agents use ${otherAccount} for ${service}. Turn this on to use this account instead.`
-      : `Turn on to start every agent you connect from now on with ${service}, using this account.`;
+    ? `Every agent you connect from now on starts with this ${service} account.`
+    : `Turn on so every agent you connect from now on starts with this ${service} account.`;
   const control = (
     <label className="flex min-h-11 items-start gap-3 rounded-field bg-surface-muted px-3 py-2.5">
       <input

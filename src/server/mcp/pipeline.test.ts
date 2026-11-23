@@ -133,6 +133,7 @@ import { localAesKeyWrapper, type KeyWrapper } from "../crypto/key-wrapper";
 import { fixedClock, type Clock } from "../seams/clock";
 import type { Db } from "../db/index";
 
+import { grantServices } from "../../test/grants";
 // --- shapes derived from the stores' own signatures, so a later type rename that
 // preserves behaviour does not redden these tests. ---------------------------------
 type Grants = Parameters<typeof upsertPermissions>[1];
@@ -313,7 +314,7 @@ test("an allowed core read executes the tool and records ONE Warthog entry, exec
   const keyWrapper = keyWrapperFor();
   try {
     const { userId } = await makePerson(db, "ac1-core", keyWrapper);
-    await upsertPermissions(db, baseGrants(userId, CONN));
+    await grantServices(db, baseGrants(userId, CONN));
 
     const order: string[] = [];
     const rec = spyRecorder(fixedClock(NOW), order);
@@ -352,7 +353,7 @@ test("an allowed connector read (connector granted + reads allowed) executes and
   const keyWrapper = keyWrapperFor();
   try {
     const { userId } = await makePerson(db, "ac1-connector", keyWrapper);
-    await upsertPermissions(
+    await grantServices(
       db,
       baseGrants(userId, CONN, { grantedConnectors: ["gmail"], readTools: true, changeTools: "off" }),
     );
@@ -395,7 +396,7 @@ test("a disconnected (inactive) connection is refused and recorded, without exec
   const keyWrapper = keyWrapperFor();
   try {
     const { userId } = await makePerson(db, "ac2-disconnected", keyWrapper);
-    await upsertPermissions(db, baseGrants(userId, CONN));
+    await grantServices(db, baseGrants(userId, CONN));
 
     const rec = spyRecorder(fixedClock(NOW));
     const exec = spyExecutor();
@@ -432,7 +433,7 @@ test("a burst over the rate limit is each refused (never executed) and recorded 
   try {
     const { userId } = await makePerson(db, "ac3-burst", keyWrapper);
     // A tiny per-connection limit so a short burst exceeds it deterministically.
-    await upsertPermissions(db, baseGrants(userId, CONN, { rateLimit: 2 }));
+    await grantServices(db, baseGrants(userId, CONN, { rateLimit: 2 }));
 
     const rec = spyRecorder(fixedClock(NOW));
     const exec = spyExecutor();
@@ -480,7 +481,7 @@ test("an over-limit call is refused before the person's data key is unwrapped", 
   const keyWrapper: KeyWrapper = { wrap: (dek) => inner.wrap(dek), unwrap: async (wrapped) => { unwraps += 1; return inner.unwrap(wrapped); } };
   try {
     const { userId } = await makePerson(db, "limit-before-key", keyWrapper);
-    await upsertPermissions(db, baseGrants(userId, CONN, { rateLimit: 1 }));
+    await grantServices(db, baseGrants(userId, CONN, { rateLimit: 1 }));
     const rec = spyRecorder(fixedClock(NOW));
     const pipeline = buildPipeline(db, keyWrapper, {
       clock: fixedClock(NOW),
@@ -510,7 +511,7 @@ test("a call on a connector that is not granted is denied: refused + recorded, n
   try {
     const { userId } = await makePerson(db, "ac4-connector", keyWrapper);
     // Only gmail is granted; the call targets slack → the permission gate denies.
-    await upsertPermissions(db, baseGrants(userId, CONN, { grantedConnectors: ["gmail"], readTools: true }));
+    await grantServices(db, baseGrants(userId, CONN, { grantedConnectors: ["gmail"], readTools: true }));
 
     const rec = spyRecorder(fixedClock(NOW));
     const exec = spyExecutor();
@@ -544,7 +545,7 @@ test("a matching never_allow rule denies the call: refused + recorded, never exe
   const keyWrapper = keyWrapperFor();
   try {
     const { userId, dek } = await makePerson(db, "ac4-rule", keyWrapper);
-    await upsertPermissions(db, baseGrants(userId, CONN));
+    await grantServices(db, baseGrants(userId, CONN));
     // "Never allow any agent to make a change" → a change-making core tool is denied.
     await createRule(
       db,
@@ -591,7 +592,7 @@ test("a card request (an ASK decision) holds the call, creates a pending approva
     const { userId, dek } = await makePerson(db, "ask-card", keyWrapper);
     // Card access with a budget that comfortably covers the request → the policy engine
     // reaches "ask" (a card request always needs the person), not "deny".
-    await upsertPermissions(
+    await grantServices(
       db,
       baseGrants(userId, CONN, {
         cardAccess: true,
@@ -670,7 +671,7 @@ test("the held call's arguments are stored only DEK-encrypted, and the approval 
   const keyWrapper = keyWrapperFor();
   try {
     const { userId, dek } = await makePerson(db, "ask-dek", keyWrapper);
-    await upsertPermissions(
+    await grantServices(
       db,
       baseGrants(userId, CONN, {
         cardAccess: true,
@@ -743,7 +744,7 @@ test("an ask_first rule (an ASK decision) also holds the call and returns pendin
   const keyWrapper = keyWrapperFor();
   try {
     const { userId, dek } = await makePerson(db, "ask-rule", keyWrapper);
-    await upsertPermissions(db, baseGrants(userId, CONN));
+    await grantServices(db, baseGrants(userId, CONN));
     // "Ask me before any agent makes a change" → a change-making call asks.
     await createRule(
       db,
@@ -795,7 +796,7 @@ test("the recorded entry runs the call parameters through redaction: no raw secr
   const keyWrapper = keyWrapperFor();
   try {
     const { userId } = await makePerson(db, "sec-redaction", keyWrapper);
-    await upsertPermissions(db, baseGrants(userId, CONN));
+    await grantServices(db, baseGrants(userId, CONN));
 
     const rec = spyRecorder(fixedClock(NOW));
     const exec = spyExecutor();
@@ -846,7 +847,7 @@ test("an ask decision triggers notifyApprovalCreated with the created approval's
   const keyWrapper = keyWrapperFor();
   try {
     const { userId, dek } = await makePerson(db, "notify-trigger", keyWrapper);
-    await upsertPermissions(
+    await grantServices(
       db,
       baseGrants(userId, CONN, {
         cardAccess: true,
@@ -908,7 +909,7 @@ test("with the real notifier wired, a push failure on an ask decision still sche
   const keyWrapper = keyWrapperFor();
   try {
     const { userId, dek } = await makePerson(db, "notify-fallback", keyWrapper);
-    await upsertPermissions(
+    await grantServices(
       db,
       baseGrants(userId, CONN, {
         cardAccess: true,
@@ -992,7 +993,7 @@ test("a tool body's own refusal is recorded as refused and returned as a refusal
   const keyWrapper = keyWrapperFor();
   try {
     const { userId } = await makePerson(db, "c9-body-refusal", keyWrapper);
-    await upsertPermissions(db, baseGrants(userId, CONN));
+    await grantServices(db, baseGrants(userId, CONN));
 
     const reason = "This agent does not have permission to use memories.";
     const rec = spyRecorder(fixedClock(NOW));
@@ -1021,7 +1022,7 @@ test("a result that merely carries a status field is still executed (only a refu
   const keyWrapper = keyWrapperFor();
   try {
     const { userId } = await makePerson(db, "c9-not-refusal", keyWrapper);
-    await upsertPermissions(db, baseGrants(userId, CONN));
+    await grantServices(db, baseGrants(userId, CONN));
 
     const rec = spyRecorder(fixedClock(NOW));
     const exec = spyExecutor(undefined, { status: "saved", id: "m-1" });
@@ -1055,7 +1056,7 @@ test("if holding the call fails, no pending approval is left behind", async () =
   const keyWrapper = keyWrapperFor();
   try {
     const { userId } = await makePerson(db, "atomic-ask", keyWrapper);
-    await upsertPermissions(db, baseGrants(userId, CONN, {
+    await grantServices(db, baseGrants(userId, CONN, {
       cardAccess: true,
       cardBudget: { amount: 500, currency: "AUD", period: "month" },
     }));
@@ -1092,7 +1093,7 @@ test("unclassified provider tools always ask and cannot evade never-send rules",
   const db=await freshDb(),keyWrapper=keyWrapperFor();
   try {
     const {userId,dek}=await makePerson(db,"provider-policy",keyWrapper);
-    await upsertPermissions(db,baseGrants(userId,CONN,{grantedConnectors:["notion"],changeTools:"allow"}));
+    await grantServices(db,baseGrants(userId,CONN,{grantedConnectors:["notion"],changeTools:"allow"}));
     const clock=fixedClock(NOW),exec=spyExecutor();
     const pipeline=buildPipeline(db,keyWrapper,{clock,rateLimiter:createRateLimiter(clock),recorder:spyRecorder(clock).recorder,executeTool:exec.fn});
     const call=callFor({connector:"notion",tool:"notion__unknown_effect",makesChange:true,requiresApproval:true});
@@ -1104,17 +1105,23 @@ test("unclassified provider tools always ask and cannot evade never-send rules",
   } finally {await db.close();}
 });
 
-test("each service's read and change policies override agent defaults",async()=>{
+// A call bound to an account is checked against that account's own settings
+// (docs/adr/several-accounts-per-agent.md); binding itself is compose's, so the calls here
+// arrive bound.
+test("each account's read and change policies override agent defaults",async()=>{
  const db=await freshDb(),keyWrapper=keyWrapperFor();
  try {
   const {userId}=await makePerson(db,"service-policy",keyWrapper);
-  await upsertPermissions(db,baseGrants(userId,CONN,{grantedConnectors:["gmail","notion"],readTools:false,changeTools:"allow",connectorPolicies:{gmail:{readTools:true,changeTools:"off"},notion:{changeTools:"ask_first"}}}));
+  const stored=await grantServices(db,baseGrants(userId,CONN,{grantedConnectors:["gmail","notion"],readTools:false,changeTools:"allow",connectorPolicies:{gmail:{readTools:true,changeTools:"off"},notion:{changeTools:"ask_first"}}}));
+  const account=(service:string)=>stored.accounts.find(a=>a.connectorId===service)!.accountId;
   const clock=fixedClock(NOW),exec=spyExecutor();
   const pipeline=buildPipeline(db,keyWrapper,{clock,rateLimiter:createRateLimiter(clock),recorder:spyRecorder(clock).recorder,executeTool:exec.fn});
-  expectExecuted(await pipeline.handleAgentCall(connectionFor(userId),callFor({connector:"gmail",tool:"gmail__read",makesChange:false})));
-  expectRefused(await pipeline.handleAgentCall(connectionFor(userId),callFor({connector:"notion",tool:"notion__read",makesChange:false})));
-  expectRefused(await pipeline.handleAgentCall(connectionFor(userId),callFor({connector:"gmail",tool:"gmail__send",makesChange:true})));
-  expectPendingApproval(await pipeline.handleAgentCall(connectionFor(userId),callFor({connector:"notion",tool:"notion__edit",makesChange:true})));
+  expectExecuted(await pipeline.handleAgentCall(connectionFor(userId),callFor({connector:"gmail",tool:"gmail__read",makesChange:false,connectorAccountId:account("gmail")})));
+  expectRefused(await pipeline.handleAgentCall(connectionFor(userId),callFor({connector:"notion",tool:"notion__read",makesChange:false,connectorAccountId:account("notion")})));
+  expectRefused(await pipeline.handleAgentCall(connectionFor(userId),callFor({connector:"gmail",tool:"gmail__send",makesChange:true,connectorAccountId:account("gmail")})));
+  expectPendingApproval(await pipeline.handleAgentCall(connectionFor(userId),callFor({connector:"notion",tool:"notion__edit",makesChange:true,connectorAccountId:account("notion")})));
+  // An account the agent wasn't given is never granted, whatever its service's other accounts allow.
+  expectRefused(await pipeline.handleAgentCall(connectionFor(userId),callFor({connector:"gmail",tool:"gmail__read",makesChange:false,connectorAccountId:"99999999-9999-4999-8999-999999999999"})));
   assert.equal(exec.calls.length,1);
  } finally {await db.close();}
 });

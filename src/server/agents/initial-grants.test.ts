@@ -20,16 +20,35 @@ test("omitted memory choices retain the documented template defaults", () => {
   }
 });
 
-// docs/adr/default-services.md — a granted service that has an account on for new agents is
-// set to that account; a service not granted is never pinned.
-test("a granted service with an account on for new agents is set to that account", () => {
-  const defaults = { "google-gmail": "gmail-home", notion: "notion-family" };
-  const grants = initialGrants("person", "agent", { template: "standard" }, ["google-gmail", "outlook"], defaults);
-  assert.deepEqual(grants.grantedConnectors, ["google-gmail", "outlook"]);
-  assert.deepEqual(grants.connectorAccounts, { "google-gmail": "gmail-home" }, "notion was not granted, outlook has no default");
+// docs/adr/several-accounts-per-agent.md — the person ticks accounts, not services. Each ticked
+// account of a service the starting set grants is given to the agent, with the agent's own
+// settings; Minimal grants none.
+const HOME = { id: "gmail-home", connectorId: "google-gmail" };
+const BILLING = { id: "gmail-billing", connectorId: "google-gmail" };
+const NOTION = { id: "notion-family", connectorId: "notion" };
+
+test("every ticked account is granted, two accounts of one service included", () => {
+  const grants = initialGrants("person", "agent", { template: "standard", tickedAccounts: [HOME, BILLING, NOTION] });
+  assert.deepEqual(grants.accounts, [{ accountId: "gmail-home" }, { accountId: "gmail-billing" }, { accountId: "notion-family" }]);
+  assert.equal(grants.readTools, true, "reads are on for the granted accounts");
+  assert.equal(grants.changeTools, "ask_first", "changes ask first");
 });
 
-test("without accounts on for new agents no account is chosen", () => {
-  const grants = initialGrants("person", "agent", { template: "standard" }, ["google-gmail"]);
-  assert.equal(grants.connectorAccounts, undefined);
+test("an account ticked twice is granted once", () => {
+  const grants = initialGrants("person", "agent", { template: "custom", tickedAccounts: [HOME, HOME] });
+  assert.deepEqual(grants.accounts, [{ accountId: "gmail-home" }]);
+});
+
+test("Minimal grants no accounts, even ticked ones", () => {
+  const grants = initialGrants("person", "agent", { template: "minimal", tickedAccounts: [HOME, NOTION] });
+  assert.deepEqual(grants.accounts, []);
+  assert.equal(grants.readTools, false);
+  assert.equal(grants.changeTools, "off");
+});
+
+test("with nothing ticked no account is granted", () => {
+  const grants = initialGrants("person", "agent", { template: "standard" });
+  assert.deepEqual(grants.accounts, []);
+  assert.equal(grants.readTools, false);
+  assert.equal(grants.changeTools, "off");
 });

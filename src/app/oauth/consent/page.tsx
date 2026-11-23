@@ -109,6 +109,9 @@ async function approveConsentAction(formData: FormData): Promise<ConsentDecision
     // The screen was for a different request than the one in progress now (another tab or
     // site started one): nothing was used up; show the current one to review.
     if (!result.ok && result.error === "request_changed") notice = "changed";
+    // The screen listed services, not accounts (it was loaded before the change to accounts,
+    // docs/adr/several-accounts-per-agent.md): nothing was used up; show the accounts to check.
+    else if (!result.ok && result.error === "accounts_changed") notice = "accounts";
     else consumed = true;
     if (result.ok) clientRedirect = result.redirectTo;
   } catch (error) {
@@ -147,6 +150,7 @@ const NOTICES: Record<string, string> = {
   invalid: "We couldn’t use those details. Check the agent name and card budget, then try again.",
   expired: "This connection request has expired. Start connecting again from your agent.",
   changed: "Another connection request was started in this browser, so nothing was connected. This is the request in progress now. Only approve it if you started it and recognise it.",
+  accounts: "The list of accounts changed, so nothing was connected. Check it and approve again.",
 };
 
 // Shown when the pending request can't be found (an expired or already-used handle), so

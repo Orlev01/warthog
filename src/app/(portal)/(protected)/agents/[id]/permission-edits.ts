@@ -7,15 +7,19 @@
 // Review fix W2.3: controls are found by their stable `name` attribute (the view names every
 // input), never by matching visible label text — so a connected service or skill whose name
 // contains "card" or "learn" can never stand in for the card-access or sharing toggle, and a copy
-// change cannot break saving. The screen's tasks and records grants and one toggle per connected
-// service (`connector:<id>`) are carried the same way.
-import type { PermissionsSection } from "@/domain/permissions/workspace";
+// change cannot break saving. The screen's tasks and records grants are carried the same way.
+//
+// The Connectors section has one row per connected ACCOUNT (docs/adr/several-accounts-per-agent.md),
+// each with its own toggle, reading and changes choices and tool ticks, all named by the account's
+// id (ACCOUNT_CONTROL). Every row the screen shows is carried, ticked or not; "Same as this
+// agent's setting" leaves that setting out, so the account follows the agent's own.
+import { ACCOUNT_CONTROL, type PermissionsSection } from "@/domain/permissions/workspace";
 import type { PeriodKind } from "@/domain/budget/budget";
 import type { PermissionsSaveInput } from "./actions";
 
 export type ControlSnapshot = {
   readonly type: string; // the input's type: "checkbox" | "number" | …
-  readonly name: string; // its stable `name` attribute (e.g. "card", "connector:notion")
+  readonly name: string; // its stable `name` attribute (e.g. "card", "account:<account id>")
   readonly label?: string; // its accessible name, for diagnostics only — never matched on
   readonly checked: boolean;
   readonly value: string;
@@ -25,18 +29,14 @@ export type CollectResult =
   | { readonly ok: true; readonly input: PermissionsSaveInput }
   | { readonly ok: false; readonly reason: "form_incomplete"; readonly missing: readonly string[] };
 
-// The `name` a connected service's toggle carries on the screen.
-export function connectorControlName(connectorId: string): string {
-  return `connector:${connectorId}`;
-}
-
 // The toggles the screen always renders, by the save field each one feeds (field = input name).
 const REQUEST_LIMIT = "requestLimit";
 const CARD_BUDGET = "cardBudget";
 
 export function collectEdits(
   controls: readonly ControlSnapshot[],
-  opts: { readonly currency: string; readonly period: PeriodKind; readonly connectors: readonly string[]; readonly skills?: readonly string[]; readonly memories?:readonly string[]; readonly vaultFields?:readonly string[]; readonly section?: PermissionsSection },
+  // `accounts`: the ids of the connected accounts the Connectors section shows, one row each.
+  opts: { readonly currency: string; readonly period: PeriodKind; readonly accounts: readonly string[]; readonly skills?: readonly string[]; readonly memories?:readonly string[]; readonly vaultFields?:readonly string[]; readonly section?: PermissionsSection },
 ): CollectResult {
   const find = (type: string, name: string) => controls.find((c) => c.type === type && c.name === name);
 
@@ -51,12 +51,19 @@ export function collectEdits(
   ];
   const missing = names.filter(name => !find("checkbox", name));
   if (includes("settings") && !find("number", REQUEST_LIMIT)) missing.push(REQUEST_LIMIT);
-  const connectorIds = includes("connectors") ? opts.connectors : [];
+  const accountIds = includes("connectors") ? opts.accounts : [];
   const skillIds = includes("skills") ? opts.skills ?? [] : [];
   const memoryIds=includes("memory") ? opts.memories ?? [] : [];
   const vaultIds=includes("vault") && controls.find(c=>c.name==="identityScope")?.value==="chosen" ? opts.vaultFields ?? [] : [];
-  for (const name of [...connectorIds.map(connectorControlName), ...skillIds.map(id => `skill:${id}`), ...memoryIds.map(id=>`memory:${id}`), ...vaultIds.map(id=>`vaultField:${id}`)]) {
+  for (const name of [...accountIds.map(ACCOUNT_CONTROL.granted), ...skillIds.map(id => `skill:${id}`), ...memoryIds.map(id=>`memory:${id}`), ...vaultIds.map(id=>`vaultField:${id}`)]) {
     if (!find("checkbox", name)) missing.push(name);
+  }
+  // Each account row's own settings: one missing would otherwise reset that account to the
+  // agent's setting without the person choosing it.
+  for (const id of accountIds) {
+    for (const name of [ACCOUNT_CONTROL.read(id), ACCOUNT_CONTROL.change(id), ACCOUNT_CONTROL.toolScope(id)]) {
+      if (!controls.some(c => c.name === name)) missing.push(name);
+    }
   }
   const changes = controls.find(c => c.name === "changeTools");
   if (includes("connectors") && opts.section && !changes) missing.push("changeTools");
@@ -72,15 +79,7 @@ export function collectEdits(
     };
   }
   if (includes("connectors")) {
-    input.connectors = connectorIds.filter(id => find("checkbox", connectorControlName(id))!.checked);
-    input.connectorAccounts = Object.fromEntries(controls.filter(c => c.name.startsWith("connectorAccount:") && c.value).map(c => [c.name.slice("connectorAccount:".length), c.value]));
-    if (controls.some(c=>c.name.startsWith("connectorPolicy"))) input.connectorPolicies = Object.fromEntries(connectorIds.map(id=>{
-      const read=controls.find(c=>c.name===`connectorPolicyRead:${id}`)?.value;
-      const change=controls.find(c=>c.name===`connectorPolicyChange:${id}`)?.value;
-      const scope=controls.find(c=>c.name===`connectorToolScope:${id}`)?.value;
-      const allowedTools=scope === "chosen" ? controls.filter(c=>c.name===`connectorTool:${id}` && c.checked).map(c=>c.value) : null;
-      return [id,{...(scope ? {allowedTools}:{}),...(read&&read!=="default"?{readTools:read==="on"}:{}),...(change&&change!=="default"?{changeTools:change as "off"|"allow"|"ask_first"}:{})}];
-    }));
+    input.accounts = accountIds.map(id => accountEdit(controls, id));
     if (changes) input.changeTools = changes.value as PermissionsSaveInput["changeTools"];
   }
   if (includes("skills") && opts.skills) input.skills = skillIds.map(id => ({ id, granted: find("checkbox", `skill:${id}`)!.checked }));
@@ -94,4 +93,20 @@ export function collectEdits(
     input.cardBudget = { amount: Number(budget.value), currency: controls.find(c => c.name === "cardBudgetCurrency")?.value ?? opts.currency, period: (controls.find(c => c.name === "cardBudgetPeriod")?.value ?? opts.period) as PeriodKind };
   }
   return { ok: true, input };
+}
+
+// One account row as the save sends it: whether the agent may use the account, and each of its
+// own settings the person chose ("Same as this agent's setting" and "All tools" leave theirs out).
+function accountEdit(controls: readonly ControlSnapshot[], id: string): NonNullable<PermissionsSaveInput["accounts"]>[number] {
+  const value = (name: string) => controls.find(c => c.name === name)?.value;
+  const read = value(ACCOUNT_CONTROL.read(id));
+  const change = value(ACCOUNT_CONTROL.change(id));
+  const scope = value(ACCOUNT_CONTROL.toolScope(id));
+  return {
+    id,
+    granted: controls.find(c => c.type === "checkbox" && c.name === ACCOUNT_CONTROL.granted(id))!.checked,
+    ...(read === "on" || read === "off" ? { readTools: read === "on" } : {}),
+    ...(change === "off" || change === "ask_first" || change === "allow" ? { changeTools: change } : {}),
+    ...(scope === "chosen" ? { allowedTools: controls.filter(c => c.name === ACCOUNT_CONTROL.tool(id) && c.checked).map(c => c.value) } : {}),
+  };
 }

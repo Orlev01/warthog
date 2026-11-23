@@ -164,7 +164,10 @@ features:
     services with status (connected, needs reconnecting, error), the account connected, the date
     connected, the tools it offers (each marked as "reads" or "makes changes") and which agents may
     use it; disconnect in one click, which immediately removes every agent's access to that service
-    and revokes Warthog's stored access to the provider where the provider allows it.
+    and revokes Warthog's stored access to the provider where the provider allows it. (Amended 24
+    November 2026: "which agents may use it" is shown per account, and disconnecting one account
+    removes only that account from every agent; the service's other accounts stay. See
+    docs/adr/several-accounts-per-agent.md.)
   - >-
     Google early access — Google connectors (Gmail, Google Calendar, Google Drive) are available only
     to people whose email the founder has placed on the early-access list in Warthog's configuration
@@ -225,7 +228,10 @@ features:
     sharing what it learns are always opt-in. (Amended 23 November 2026: on Connectors the person
     can turn one account of each service "On for new agents"; that service then starts ticked on
     every later consent and access-key screen, and approving grants it set to that account. Agents
-    already connected don't change. See docs/adr/default-services.md.)
+    already connected don't change. See docs/adr/default-services.md.) (Amended 24 November 2026:
+    the screen lists each connected account as its own tick box, several accounts of a service can
+    be on for new agents, and approving grants the ticked accounts. See
+    docs/adr/several-accounts-per-agent.md.)
   - >-
     Per-agent permissions page — for each agent: which connected services and which of their tools
     it may use (read tools and change-making tools listed separately; change-making tools default to
@@ -235,7 +241,11 @@ features:
     person's currency), which skills
     it receives, whether it may read shared memory, whether what it learns is shared with other
     agents, its own rules, and (under Advanced) its request limit (default 120 requests per minute);
-    changes take effect on the agent's next request.
+    changes take effect on the agent's next request. (Amended 24 November 2026: each connected
+    account is its own row with its own on/off, reads, changes and tools, so an agent can use
+    several accounts of one service at once; an agent names the account it wants, a mail search
+    covers every inbox it may read, and a reply goes from the inbox that holds the email. See
+    docs/adr/several-accounts-per-agent.md.)
   - >-
     One-click disconnect — disconnecting an agent (after a single confirm) revokes its credential so
     its very next request is refused, denies all its pending approvals, cancels any released-but-not-yet

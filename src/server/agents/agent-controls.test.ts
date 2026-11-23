@@ -21,6 +21,7 @@ import {
 import { localAesKeyWrapper } from "@/server/crypto/key-wrapper";
 import { fixedClock } from "@/server/seams/clock";
 
+import { grantServices } from "../../test/grants";
 const clock = fixedClock(new Date("2026-11-10T00:00:00Z"));
 
 test("global defaults are account scoped and do not rewrite existing agent grants", async () => {
@@ -48,7 +49,7 @@ test("global defaults are account scoped and do not rewrite existing agent grant
       },
       clock,
     );
-    await upsertPermissions(db, {
+    await grantServices(db, {
       userId: user.id,
       connectionId: existing.connectionId,
       grantedConnectors: [],
@@ -234,7 +235,7 @@ test("memory read and write are independent permissions and partial edits preser
       rateLimit: 120,
       memoryWrite: false,
     };
-    await upsertPermissions(db, grants);
+    await grantServices(db, grants);
     const connection = {
       userId: user.id,
       connectionId: agent.connectionId,
@@ -246,7 +247,7 @@ test("memory read and write are independent permissions and partial edits preser
       (await remember.handle({ content: "do not save" }, connection)).status,
       "refused",
     );
-    await upsertPermissions(db, {
+    await grantServices(db, {
       ...grants,
       memoryRead: false,
       memoryWrite: true,
@@ -265,7 +266,7 @@ test("memory read and write are independent permissions and partial edits preser
       "refused",
     );
     const { memoryWrite: _write, ...partial } = grants;
-    await upsertPermissions(db, partial);
+    await grantServices(db, partial);
     assert.equal(
       (await getConnectionPermissions(db, user.id, agent.connectionId))
         ?.memoryWrite,
@@ -277,32 +278,18 @@ test("memory read and write are independent permissions and partial edits preser
 });
 
 test("connector account choice never falls back to another account", async () => {
-  const { selectConnectorAccount } = await import(
-    "@/server/connectors/tool-routing"
-  );
-  const one = {
-    id: randomUUID(),
-    userId: randomUUID(),
-    connectorId: "service",
-    accountLabel: "One",
-    status: "connected" as const,
-    connectedAt: clock.now(),
-  };
-  const two = { ...one, id: randomUUID(), accountLabel: "Two" };
-  assert.equal(selectConnectorAccount([one], "service")?.id, one.id);
-  assert.equal(selectConnectorAccount([one, two], "service"), undefined);
-  assert.equal(
-    selectConnectorAccount([one, two], "service", two.id)?.id,
-    two.id,
-  );
-  assert.equal(selectConnectorAccount([one], "service", two.id), undefined);
-  assert.equal(
-    selectConnectorAccount(
-      [one, { ...two, status: "needs_reconnect" }],
-      "service",
-    ),
-    undefined,
-  );
+  const { bindAccount } = await import("@/domain/permissions/account-access");
+  const one = { id: randomUUID(), connectorId: "service", label: "One", connected: true };
+  const two = { ...one, id: randomUUID(), label: "Two" };
+  const granted = (...accounts: (typeof one)[]) => accounts.map((account) => ({ account, grant: { accountId: account.id, connectorId: "service" } }));
+  const bind = (list: ReturnType<typeof granted>, named?: string) =>
+    bindAccount({ serviceName: "Service", granted: list, defaults: { readTools: true, changeTools: "ask_first" }, tool: { name: "service__read", makesChange: false }, ...(named ? { named } : {}) });
+  const bound = (result: ReturnType<typeof bind>) => (result.kind === "bound" ? result.account.id : undefined);
+  assert.equal(bound(bind(granted(one))), one.id);
+  assert.equal(bound(bind(granted(one, two))), undefined, "two granted accounts need a choice");
+  assert.equal(bound(bind(granted(one, two), "Two")), two.id);
+  assert.equal(bound(bind(granted(one), "Two")), undefined, "an account the agent wasn't given is never used");
+  assert.equal(bound(bind(granted(one, { ...two, connected: false }), "Two")), undefined, "an unavailable account is never swapped for another");
 });
 
 test("agent permission updates are audited, reject foreign skills, and roll back with the audit write", async () => {
@@ -344,7 +331,7 @@ test("agent permission updates are audited, reject foreign skills, and roll back
       rulesScope: [],
       rateLimit: 120,
     };
-    await upsertPermissions(db, grants);
+    await grantServices(db, grants);
     const session = {
       id: randomUUID(),
       userId: user.id,

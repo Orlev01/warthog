@@ -55,7 +55,9 @@ import { DefaultForAgentsSwitch } from "./default-for-agents-switch";
 // to. Connected services are rows in one list group, with the tool summary ("n tools · n
 // make changes") and the full list (each tool still marked "Reads" or "Makes changes")
 // behind "Show tools", and an "On for new agents" switch per account
-// (docs/adr/default-services.md). Disconnect stays one click (brief: "disconnect in one click").
+// (docs/adr/default-services.md). Each account is its own row with its own agents
+// (docs/adr/several-accounts-per-agent.md). Disconnect stays one click (brief: "disconnect in
+// one click"), and the row says what it does: the account leaves every agent that uses it.
 
 // One catalogue entry as the view renders it. `connectable` is the index's own
 // connectability truth (E09-S15). `gate` is the per-person decision (E09-S13): "connect"
@@ -104,9 +106,9 @@ export type ToolItem = {
   makesChange: boolean;
 };
 
-// One of the person's connected services as the view lists it (never credentials):
+// One of the person's connected accounts as the view lists it (never credentials):
 // the connector display name, the account connected, the pre-formatted connected-date
-// label, the status, the marked tools, and the names of the agents that may use it.
+// label, the status, the marked tools, and the names of the agents that may use THIS account.
 export type ConnectionItem = {
   id: string;
   // The catalogue entry this connection is an account of (identifies its brand mark).
@@ -124,8 +126,8 @@ export type ConnectionItem = {
   connectedAt: string;
   tools: readonly ToolItem[];
   agents: readonly string[];
-  // Every agent connected from now on starts with this service, using this account
-  // (docs/adr/default-services.md). At most one account of a service.
+  // Every agent connected from now on starts with this account ticked
+  // (docs/adr/default-services.md). Several accounts of a service can be on.
   defaultForAgents?: boolean;
 };
 
@@ -456,18 +458,18 @@ function RenameControl({
 const SUMMARY_LINK =
   "inline-flex min-h-11 w-fit cursor-pointer list-none items-center gap-2 rounded-field text-sm font-medium text-fg underline-offset-4 hover:underline lg:pointer-fine:min-h-9 [&::-webkit-details-marker]:hidden";
 
-// One connected service, as a divider row in the "Your services" group. `otherDefault` is
-// another account of the same service that is on for new agents, if any.
+// One connected account, as a divider row in the "Your services" group. `hasOtherAccounts`:
+// the person has other accounts of this service, which disconnecting this one leaves as they are.
 function ConnectionRow({
   connection,
-  otherDefault,
+  hasOtherAccounts,
   reconnectAction,
   disconnectAction,
   renameAction,
   defaultForAgentsAction,
 }: {
   connection: ConnectionItem;
-  otherDefault?: string;
+  hasOtherAccounts: boolean;
   disconnectAction?: (formData: FormData) => void | Promise<void>;
   reconnectAction?: (formData: FormData) => void | Promise<void>;
   renameAction?: (formData: FormData) => void | Promise<void>;
@@ -501,7 +503,6 @@ function ConnectionRow({
         accountLabel={connection.accountLabel}
         service={connection.name}
         on={connection.defaultForAgents === true}
-        otherAccount={otherDefault}
         action={connection.unavailableReason ? undefined : defaultForAgentsAction}
       />
 
@@ -540,6 +541,10 @@ function ConnectionRow({
         )}
         <DisconnectControl connection={connection} disconnectAction={disconnectAction} />
       </div>
+      <p className="text-xs text-fg-muted">
+        Disconnecting removes this account from every agent that uses it.
+        {hasOtherAccounts ? ` Your other ${connection.name} accounts stay as they are.` : null}
+      </p>
       {connection.renameable && renameAction ? <RenameControl connection={connection} renameAction={renameAction} /> : null}
     </li>
   );
@@ -616,10 +621,10 @@ export function ConnectorsView({
     category: category ?? undefined,
   };
   const filtered = Boolean(query) || category !== null;
-  // Which account of each service is on for new agents, so its other accounts can say so.
-  const defaultAccount = new Map(
-    connections.filter((c) => c.defaultForAgents).map((c) => [c.connectorId ?? c.name, c.accountLabel]),
-  );
+  // How many accounts the person has of each service, so a row can say its others stay.
+  const serviceOf = (c: ConnectionItem) => c.connectorId ?? c.name;
+  const accountsPerService = new Map<string, number>();
+  for (const c of connections) accountsPerService.set(serviceOf(c), (accountsPerService.get(serviceOf(c)) ?? 0) + 1);
   const entries = groups.flatMap((group) =>
     group.items.map((item) => ({ ...item, category: item.category ?? group.category })),
   );
@@ -668,13 +673,13 @@ export function ConnectorsView({
                     id="your-services"
                     title="Your services"
                     count={connections.length}
-                    summary="An agent can use a service only after you turn it on for that agent, or turn an account on for new agents here."
+                    summary="An agent can use an account only after you turn it on for that agent, or turn it on for new agents here."
                   >
                     {connections.map((connection) => (
                       <ConnectionRow
                         key={connection.id}
                         connection={connection}
-                        otherDefault={connection.defaultForAgents ? undefined : defaultAccount.get(connection.connectorId ?? connection.name)}
+                        hasOtherAccounts={(accountsPerService.get(serviceOf(connection)) ?? 0) > 1}
                         reconnectAction={reconnectAction}
                         disconnectAction={disconnectAction}
                         renameAction={renameAction}

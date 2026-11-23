@@ -58,7 +58,7 @@
 //     name: string;                      // the person's chosen name for the agent
 //     platform: string;                  // the connecting platform label
 //     template: string;                  // "minimal" | "standard" | "custom" (validated)
-//     tickedServices?: readonly string[];
+//     accounts?: readonly string[];      // the ticked connected accounts (connection ids)
 //     highTier?: boolean;                // always opt-in (off unless explicitly true)
 //     card?: boolean;                    // always opt-in; needs a budget when on
 //     cardBudget?: { amount: number; currency: string; period: string } | null;
@@ -92,7 +92,7 @@
 
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { createHash } from "node:crypto";
+import { createHash, randomBytes, randomUUID } from "node:crypto";
 
 import { createAuthorizeActions, type ConsentApproval } from "./actions";
 
@@ -106,6 +106,7 @@ import { getConnectionPermissions } from "../../../server/db/agent-permissions";
 import { saveAgentDefaults } from "../../../server/db/agent-defaults";
 import { readActivity } from "../../../server/activity/writer";
 import { createUser } from "../../../server/db/users";
+import { createConnection } from "../../../server/db/connections";
 import { HttpError } from "../../../server/http/validate";
 import { loadConfig, type Config } from "../../../server/config";
 import { fixedClock } from "../../../server/seams/clock";
@@ -980,6 +981,107 @@ test("approving needs a fresh confirm-it's-you; without one nothing is used up, 
     assert.ok((await actions.refuse(sessionFor(userId, null), other)).ok);
     const approved = await actions.approve(sessionFor(userId), handle, approval());
     assert.ok(approved.ok);
+  } finally {
+    await db.close();
+  }
+});
+
+// =====================================================================================
+// One agent, several accounts of a service (docs/adr/several-accounts-per-agent.md): the
+// consent screen lists each connected account, and approving grants exactly the ticked
+// accounts that are the person's own.
+// =====================================================================================
+
+async function connectAccount(db: Db, userId: string, connectorId: string, accountLabel: string): Promise<string> {
+  return (await createConnection(db, { userId, connectorId, accountLabel, credentials: { token: "x" } }, randomBytes(32), fixedClock(NOW))).id;
+}
+
+test("approving grants exactly the ticked accounts that are the person's own; another person's is ignored", async () => {
+  const db = await freshDb();
+  try {
+    const userId = await makeUser(db, "consent-accounts");
+    const otherId = await makeUser(db, "consent-accounts-other");
+    const home = await connectAccount(db, userId, "google-gmail", "levyoren1@gmail.com");
+    const billing = await connectAccount(db, userId, "google-gmail", "levyorenbilling@gmail.com");
+    await connectAccount(db, userId, "google-gmail", "levyorenbooking@gmail.com");
+    const notion = await connectAccount(db, userId, "notion", "Notion");
+    const theirs = await connectAccount(db, otherId, "google-gmail", "them@gmail.com");
+
+    const result = await makeActions(db).approve(
+      sessionFor(userId),
+      await seedPending(db, userId),
+      approval({ accounts: [home, billing, notion, theirs, randomUUID()] }),
+    );
+    assert.ok(result.ok, `approving succeeds, got ${JSON.stringify(result)}`);
+
+    const grants = await getConnectionPermissions(db, userId, await connectionOfIssuedCode(db, result.redirectTo));
+    assert.deepEqual(
+      [...grants!.accounts].map((a) => `${a.connectorId}:${a.accountId}`).sort(),
+      [`google-gmail:${home}`, `google-gmail:${billing}`, `notion:${notion}`].sort(),
+      "two Gmail accounts and Notion are granted; the unticked one, another person's and an unknown id are not",
+    );
+    assert.deepEqual(grants!.grantedConnectors, ["google-gmail", "notion"]);
+    assert.equal(grants!.readTools, true);
+    assert.equal(grants!.changeTools, "ask_first");
+  } finally {
+    await db.close();
+  }
+});
+
+test("Minimal grants none of the ticked accounts", async () => {
+  const db = await freshDb();
+  try {
+    const userId = await makeUser(db, "consent-accounts-minimal");
+    const home = await connectAccount(db, userId, "google-gmail", "home@gmail.com");
+    const result = await makeActions(db).approve(sessionFor(userId), await seedPending(db, userId), approval({ template: "minimal", accounts: [home] }));
+    assert.ok(result.ok);
+    const grants = await getConnectionPermissions(db, userId, await connectionOfIssuedCode(db, result.redirectTo));
+    assert.deepEqual(grants!.accounts, []);
+  } finally {
+    await db.close();
+  }
+});
+
+test("an account that isn't an account id, or too many of them, is refused with a 4xx and nothing is written", async () => {
+  const db = await freshDb();
+  try {
+    const userId = await makeUser(db, "consent-accounts-bad");
+    const actions = makeActions(db);
+    for (const accounts of [["google-gmail"], ["x'; DROP TABLE connections; --"], Array.from({ length: 101 }, () => randomUUID())]) {
+      const handle = await seedPending(db, userId);
+      await assertRejects4xx(`approve(accounts=${JSON.stringify(accounts.slice(0, 1))}…)`, () => actions.approve(sessionFor(userId), handle, approval({ accounts })));
+      assert.ok(getPendingAuthorization(handle, userId), "the request is still there to retry");
+    }
+    assert.equal((await listAgentsForUser(db, userId)).length, 0);
+    assert.equal(await tableExists(db, "connections"), true);
+  } finally {
+    await db.close();
+  }
+});
+
+// A screen loaded before the accounts were listed one by one sends services and no accounts.
+// Approving it would grant nothing the person saw ticked, so nothing is used up and the
+// person is shown the accounts to check; the same request then approves with accounts.
+test("an approval that ticks services but no accounts (an older screen) connects nothing and keeps the request", async () => {
+  const db = await freshDb();
+  try {
+    const userId = await makeUser(db, "consent-stale");
+    const home = await connectAccount(db, userId, "google-gmail", "home@gmail.com");
+    const handle = await seedPending(db, userId);
+    const actions = makeActions(db);
+
+    const stale = await actions.approve(sessionFor(userId), handle, approval({ tickedServices: ["google-gmail"] }));
+    assert.deepEqual(stale, { ok: false, error: "accounts_changed" });
+    assert.equal((await listAgentsForUser(db, userId)).length, 0, "nothing is connected");
+    assert.ok(getPendingAuthorization(handle, userId), "the request is kept for the person to review");
+
+    // Unconfirmed sessions are told the list changed first, so they don't confirm for nothing.
+    assert.deepEqual(await actions.approve(sessionFor(userId, null), handle, approval({ tickedServices: ["google-gmail"] })), { ok: false, error: "accounts_changed" });
+
+    const approved = await actions.approve(sessionFor(userId), handle, approval({ accounts: [home] }));
+    assert.ok(approved.ok, "the reviewed approval connects");
+    const grants = await getConnectionPermissions(db, userId, await connectionOfIssuedCode(db, approved.redirectTo));
+    assert.deepEqual(grants!.accounts, [{ accountId: home, connectorId: "google-gmail" }]);
   } finally {
     await db.close();
   }

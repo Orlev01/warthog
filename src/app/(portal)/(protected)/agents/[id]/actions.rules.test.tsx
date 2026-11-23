@@ -53,7 +53,7 @@ async function seedAgent(db: Db, userId: string, displayName: string) {
   await upsertPermissions(db, {
     userId,
     connectionId,
-    grantedConnectors: [],
+    accounts: [],
     readTools: false,
     changeTools: "off",
     identityAccess: true,

@@ -18,6 +18,7 @@ import {
 } from "../db/agent-permissions";
 import { saveHighTierField } from "../db/high-tier-fields";
 
+import { grantServices } from "../../test/grants";
 test("memory audiences override source defaults for one agent and a global rescope replaces overrides", async () => {
   const db = await freshDb();
   try {
@@ -122,19 +123,22 @@ test("field and service grants persist independently and omitted edits preserve 
       template: "standard",
       highTier: true,
     });
-    await upsertPermissions(db, {
+    await grantServices(db, {
       ...base,
       identityFields: [field.id],
+      grantedConnectors: ["notion"],
       connectorPolicies: { notion: { readTools: false, changeTools: "off" } },
     });
-    await upsertPermissions(db, { ...base, rateLimit: 42 });
+    // A later edit that leaves the accounts out keeps them, with their own settings.
+    const { accounts: _accounts, ...withoutAccounts } = base;
+    await grantServices(db, { ...withoutAccounts, rateLimit: 42 });
     const grants = (await getConnectionPermissions(
       db,
       user.id,
       base.connectionId,
     ))!;
     assert.deepEqual(grants.identityFields, [field.id]);
-    assert.equal(grants.connectorPolicies?.notion?.changeTools, "off");
+    assert.equal(grants.accounts.find((account) => account.connectorId === "notion")?.changeTools, "off");
     assert.equal(vaultFieldAllowed(grants, field.id), true);
     assert.equal(vaultFieldAllowed(grants, other.id), false);
     assert.equal(
@@ -149,7 +153,7 @@ test("field and service grants persist independently and omitted edits preserve 
       await highTierRequestAllowed(db, randomUUID(), grants, "passport"),
       false,
     );
-    await upsertPermissions(db, { ...base, identityFields: [] });
+    await grantServices(db, { ...base, identityFields: [] });
     assert.equal(
       await highTierRequestAllowed(
         db,
@@ -208,7 +212,7 @@ test("agent context exposes only permitted low-tier fields and rejects foreign f
       { userId: other.id, kind: "name", value: "Foreign" },
       dek,
     );
-    await upsertPermissions(db, {
+    await grantServices(db, {
       ...initialGrants(user.id, agent.connectionId, { template: "minimal" }),
       identityFields: [name.id],
     });

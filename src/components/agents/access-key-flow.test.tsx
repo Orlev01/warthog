@@ -56,7 +56,7 @@
 //     create: (input: {                       // the page's "use server" wrapper over
 //       name: string; platform: string;       //   createAccessKeyActions.create — the only
 //       template: "minimal"|"standard"|"custom";
-//       tickedServices?: readonly string[];
+//       accounts?: readonly string[];       // the ticked connected accounts' ids
 //   identity?: boolean;
 //   memoryRead?: boolean;
 //   memoryWrite?: boolean;
@@ -90,7 +90,7 @@
 //   AccessKeyFlow(props: {
 //     create: (...) => Promise<CreateResult>;          // as above
 //     defaultName?: string; defaultPlatform?: string;
-//     services?: readonly { id: string; name: string; ticked?: boolean }[];
+//     accounts?: readonly { id: string; connectorId: string; serviceName: string; label: string; ticked?: boolean }[];
 //     initialKey?: string; initialAgentId?: string;    // seed the issued panel for a
 //                                                      //   preview / render test (the
 //                                                      //   production flow reaches it via
@@ -119,7 +119,7 @@ type CreateInput = {
   name: string;
   platform: string;
   template: "minimal" | "standard" | "custom";
-  tickedServices?: readonly string[];
+  accounts?: readonly string[];
   identity?: boolean;
   memoryRead?: boolean;
   memoryWrite?: boolean;
@@ -676,26 +676,40 @@ test("the confirmation offers only the ways this person can confirm", () => {
   assert.match(both, /Authenticator app code/);
 });
 
-// docs/adr/default-services.md — a service the person turned on for new agents arrives ticked,
-// as on the consent screen: it starts selected, a Standard key grants it, Minimal drops it, and
-// going back to Standard selects it again.
-test("a service on for new agents starts ticked and is carried into the key's grants", async () => {
+// docs/adr/default-services.md with several accounts (docs/adr/several-accounts-per-agent.md):
+// every account the person turned on for new agents arrives ticked, as on the consent screen —
+// two Gmail accounts included. A Standard key grants them, Minimal drops them, and going back
+// to Standard selects them again.
+const ACCOUNTS = [
+  { id: "acct-gmail-home", connectorId: "google-gmail", serviceName: "Gmail", label: "home@example.test", ticked: true },
+  { id: "acct-gmail-billing", connectorId: "google-gmail", serviceName: "Gmail", label: "billing@example.test", ticked: true },
+  { id: "acct-notion", connectorId: "notion", serviceName: "Notion", label: "Family", ticked: false },
+];
+
+test("accounts on for new agents start ticked and are carried into the key's grants", async () => {
   const create = makeCreate();
   const flow = createAccessKeyFlow({
     create: create.fn,
     defaultName: "My Grok",
     defaultPlatform: "grok",
-    services: [
-      { id: "google-gmail", name: "Gmail", ticked: true },
-      { id: "notion", name: "Notion", ticked: false },
-    ],
+    accounts: ACCOUNTS,
   });
-  assert.deepEqual(flow.getState().choices.services, ["google-gmail"]);
+  assert.deepEqual(flow.getState().choices.accounts, ["acct-gmail-home", "acct-gmail-billing"]);
   flow.setTemplate("minimal");
-  assert.deepEqual(flow.getState().choices.services, []);
+  assert.deepEqual(flow.getState().choices.accounts, []);
   flow.setTemplate("standard");
-  assert.deepEqual(flow.getState().choices.services, ["google-gmail"]);
+  assert.deepEqual(flow.getState().choices.accounts, ["acct-gmail-home", "acct-gmail-billing"]);
 
   await flow.submit();
-  assert.deepEqual(create.inputs[0]?.tickedServices, ["google-gmail"]);
+  assert.deepEqual(create.inputs[0]?.accounts, ["acct-gmail-home", "acct-gmail-billing"]);
+  assert.equal("tickedServices" in create.inputs[0]!, false, "services are never sent");
+});
+
+test("the access-key screen offers one checkbox per account, labelled by service and account", () => {
+  const markup = renderToStaticMarkup(<AccessKeyFlow create={noopCreate} defaultName="My Grok" defaultPlatform="grok" accounts={ACCOUNTS} />);
+  const boxes = [...markup.matchAll(/<input[^>]*name="account"[^>]*>/g)].map((m) => m[0]);
+  assert.deepEqual(boxes.map((b) => /value="([^"]*)"/.exec(b)?.[1]), ["acct-gmail-billing", "acct-gmail-home", "acct-notion"], "by service, then account");
+  assert.deepEqual(boxes.map((b) => /checked=""/.test(b)), [true, true, false]);
+  assert.match(markup, /Gmail · billing@example\.test/);
+  assert.match(markup, /Each account is separate\. You can change these later in the agent(&#x27;|’|')s settings\./);
 });

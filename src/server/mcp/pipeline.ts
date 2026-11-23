@@ -66,7 +66,8 @@ import {
   type StoredHeldRequest,
 } from "../db/held-requests";
 import { countAgentRequest, getAgentById } from "../db/agents";
-import { getConnectionPermissions } from "../db/agent-permissions";
+import { getConnectionPermissions, type ConnectionPermissions } from "../db/agent-permissions";
+import { accountPolicy } from "../../domain/permissions/account-access";
 import { getUserById } from "../db/users";
 import { isReleaseRequest } from "../../domain/approvals/release-kind";
 import type { RateLimiter } from "./rate-limit";
@@ -90,8 +91,12 @@ export interface AgentCall {
   // Unlike `requiresApproval`, its effect is known, so rules match it as written.
   readonly alwaysAsk?: boolean;
   readonly connector: string | null;
+  // The account the call is bound to (docs/adr/several-accounts-per-agent.md). Server-owned:
+  // set only by binding, an approved hold or an Undo, never from agent arguments.
   readonly connectorAccountId?: string;
   readonly connectorAccountLabel?: string;
+  // The account the agent named, untrusted: binding can only pick it among the agent's own.
+  readonly requestedAccount?: string;
   readonly tool: string;
   readonly makesChange: boolean;
   readonly request?: "card" | "high_tier";
@@ -177,7 +182,9 @@ export interface PipelineDeps {
   readonly clock: Clock;
   readonly rateLimiter: RateLimiter;
   readonly recorder: ActivityRecorder;
-  readonly prepareCall?: (call: AgentCall, connection: AgentConnection) => Promise<AgentCall | null>;
+  // Binds a connector call to one of the agent's granted accounts before the policy runs, or
+  // refuses it with words the agent can act on (docs/adr/several-accounts-per-agent.md).
+  readonly bindAccount?: (call: AgentCall, connection: AgentConnection, permissions: ConnectionPermissions) => Promise<AgentCall | { readonly refused: string }>;
   readonly executeTool: (call: AgentCall, connection: AgentConnection) => Promise<unknown>;
   readonly rate?: ReferenceRate | null;
   readonly notifyApprovalCreated?: NotifyApprovalCreatedSeam;
@@ -278,13 +285,19 @@ const RATE_LIMITED_REASON = "This agent is going too fast — its request rate l
 // exact tool allowlist. An absent allowlist preserves all current and future tools;
 // an explicit empty list grants none. Discovery uses the same stored policy.
 
+// A connector call bound to an account is checked against THAT account's settings
+// (docs/adr/several-accounts-per-agent.md); an account the agent no longer has is not granted.
 function toPermission(call: AgentCall, context: AgentContext): Permission {
   const { permissions } = context;
+  const bound = call.connectorAccountId === undefined ? undefined
+    : permissions.accounts.find((account) => account.accountId === call.connectorAccountId && account.connectorId === call.connector);
+  const policy = accountPolicy(bound, permissions);
   return {
-    connectorGranted: call.connector !== null && permissions.grantedConnectors.includes(call.connector),
-    grantedTools: (call.connector ? permissions.connectorPolicies?.[call.connector]?.allowedTools : undefined) ?? [call.tool],
-    readsAllowed: (call.connector ? permissions.connectorPolicies?.[call.connector]?.readTools : undefined) ?? permissions.readTools,
-    changes: (call.connector ? permissions.connectorPolicies?.[call.connector]?.changeTools : undefined) ?? permissions.changeTools,
+    connectorGranted: call.connector !== null && permissions.grantedConnectors.includes(call.connector)
+      && (call.connectorAccountId === undefined || bound !== undefined),
+    grantedTools: [...(policy.allowedTools ?? [call.tool])],
+    readsAllowed: policy.readTools,
+    changes: policy.changeTools,
     highTierAllowed: permissions.highTierAccess,
   };
 }
@@ -603,6 +616,18 @@ export function createAgentCallPipeline(deps: PipelineDeps): AgentCallPipeline &
       return {result:{status:"refused",reason:"This agent cannot request that vault field."},errorCategory:CATEGORY_DENIED};
     }
 
+    // The account the call uses, bound before the policy so the policy checks that account's
+    // own settings. A service the agent wasn't given is left to the policy, which denies it.
+    if (deps.bindAccount && call.connector !== null && context.permissions.grantedConnectors.includes(call.connector)) {
+      const bound = await deps.bindAccount(call, connection, context.permissions);
+      if ("refused" in bound) {
+        await record(connection, call, "refused");
+        return { result: { status: "refused", reason: bound.refused }, errorCategory: CATEGORY_DENIED };
+      }
+      call = bound;
+      if (call.audit) { call.audit.connectorAccountId = call.connectorAccountId; call.audit.connectorAccountLabel = call.connectorAccountLabel; }
+    }
+
     // Gates 3 & 4 — the permission check and the policy engine, in design §8 order.
     const decision = evaluate(
       toPolicyCall(call),
@@ -618,16 +643,6 @@ export function createAgentCallPipeline(deps: PipelineDeps): AgentCallPipeline &
     if (decision.decision === "deny") {
       await record(connection, call, "denied");
       return { result: { status: "refused", reason: decision.reason }, errorCategory: CATEGORY_DENIED };
-    }
-
-    if (deps.prepareCall) {
-      const prepared = await deps.prepareCall(call, connection);
-      if (!prepared) {
-        await record(connection, call, "refused");
-        return { result: { status: "refused", reason: "The service account is unavailable or changed. Select an account in this agent’s Connectors settings and submit a new request." }, errorCategory: CATEGORY_DENIED };
-      }
-      call = prepared;
-      if (call.audit) { call.audit.connectorAccountId = call.connectorAccountId; call.audit.connectorAccountLabel = call.connectorAccountLabel; }
     }
 
     // The "recently read" window (docs/adr/read-side-protection.md): only for a call that could

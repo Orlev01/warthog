@@ -11,6 +11,7 @@ import { createDbRecorder, readActivity } from "../activity/writer";
 import { createAgentCallPipeline } from "./pipeline";
 import { createRateLimiter } from "./rate-limit";
 
+import { grantServices } from "../../test/grants";
 test("upstream failures and ambiguous writes have durable, correlated and content-minimal evidence", async () => {
   const db = await freshDb();
   try {
@@ -19,7 +20,7 @@ test("upstream failures and ambiguous writes have durable, correlated and conten
     const user = await createUser(db, { email: "outcomes@example.test", wrappedDek: await keyWrapper.wrap(dek) });
     const agent = await createAgent(db, { userId: user.id, connectionId: randomUUID(), displayName: "Evidence", platform: "other" }, clock);
     const connection = { userId: user.id, connectionId: agent.connectionId, agentId: agent.id, active: true };
-    await upsertPermissions(db, { userId: user.id, connectionId: connection.connectionId, grantedConnectors: ["google-gmail"], readTools: true, changeTools: "allow", identityAccess: true, highTierAccess: false, cardAccess: false, cardBudget: null, skillsScope: [], memoryRead: true, sharing: false, rulesScope: [], rateLimit: 120 });
+    await grantServices(db, { userId: user.id, connectionId: connection.connectionId, grantedConnectors: ["google-gmail"], readTools: true, changeTools: "allow", identityAccess: true, highTierAccess: false, cardAccess: false, cardBudget: null, skillsScope: [], memoryRead: true, sharing: false, rulesScope: [], rateLimit: 120 });
     const recorder = createDbRecorder({ db, clock, dekFor: async () => dek });
     let result: unknown = {};
     let throws = false;
@@ -57,7 +58,7 @@ test("upstream failures and ambiguous writes have durable, correlated and conten
     const unavailableAudit = createAgentCallPipeline({ db, keyWrapper, clock, recorder: { record: async input => { failedRecords.push(input.outcome ?? ""); throw new Error("audit unavailable"); } }, rateLimiter: createRateLimiter(clock), executeTool: async () => { executions++; } });
     await assert.rejects(() => unavailableAudit.handleAgentCall(connection, { ...call, makesChange: true }));
     assert.equal(executions, before, "a mutation cannot run without its persisted intent");
-    await upsertPermissions(db, { userId: user.id, connectionId: connection.connectionId, grantedConnectors: ["google-gmail"], readTools: true, changeTools: "ask_first", identityAccess: true, highTierAccess: false, cardAccess: false, cardBudget: null, skillsScope: [], memoryRead: true, sharing: false, rulesScope: [], rateLimit: 120 });
+    await grantServices(db, { userId: user.id, connectionId: connection.connectionId, grantedConnectors: ["google-gmail"], readTools: true, changeTools: "ask_first", identityAccess: true, highTierAccess: false, cardAccess: false, cardBudget: null, skillsScope: [], memoryRead: true, sharing: false, rulesScope: [], rateLimit: 120 });
     await assert.rejects(() => unavailableAudit.handleAgentCall(connection, { ...call, makesChange: true }));
     assert.equal(Number((await db.query("SELECT count(*) AS n FROM approvals WHERE user_id=$1", [user.id])).rows[0]!.n), 0, "an audit outage must roll back the pending approval");
     assert.ok(failedRecords.includes("pending_approval"), "the failure is at the audit append, after creating the approval inside the transaction");

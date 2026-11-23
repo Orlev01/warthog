@@ -9,12 +9,33 @@ export type ConnectionChoices = {
   highTier: boolean;
   card: boolean;
   learningSharing: boolean;
-  services: string[];
+  // The ids of the ticked connected accounts (docs/adr/several-accounts-per-agent.md).
+  accounts: string[];
   cardBudget: { amount: string; period: "day" | "week" | "month" };
 };
 
-export type ConnectionService = { id: string; name: string; ticked?: boolean };
-export type ChoiceKey = Exclude<keyof ConnectionChoices, "services" | "cardBudget">;
+// One of the person's connected accounts, as the consent and access-key screens list it: its
+// connection id, its service, and the account's own name, e.g. "levyorenbilling@gmail.com".
+// Each account is its own checkbox, so an agent can be given several accounts of a service.
+export type ConnectionAccount = { id: string; connectorId: string; serviceName: string; label: string; ticked?: boolean };
+export type ChoiceKey = Exclude<keyof ConnectionChoices, "accounts" | "cardBudget">;
+
+// How an account is named on these screens: "Gmail · levyorenbilling@gmail.com".
+export function accountName(account: Pick<ConnectionAccount, "serviceName" | "label">): string {
+  return `${account.serviceName} · ${account.label}`;
+}
+
+// Accounts are listed by service name, then by account, so a service's accounts sit together.
+export function byServiceThenAccount(a: ConnectionAccount, b: ConnectionAccount): number {
+  return a.serviceName.localeCompare(b.serviceName) || a.label.localeCompare(b.label) || a.id.localeCompare(b.id);
+}
+
+// A form from a screen loaded before accounts were listed one by one: it ticks services and
+// no accounts. Granting from it would give the agent nothing the person saw ticked, so the
+// screen is shown again for the person to check the accounts.
+export function choseServicesNotAccounts(input: { readonly accounts?: readonly string[]; readonly tickedServices?: readonly string[] }): boolean {
+  return (input.tickedServices?.length ?? 0) > 0 && (input.accounts?.length ?? 0) === 0;
+}
 
 export const CONNECTION_PRESETS = [
   { value: "minimal", label: "Minimal", description: "Everyday details, assigned skills and preferences. No memory, tasks or life-admin access." },
@@ -22,21 +43,23 @@ export const CONNECTION_PRESETS = [
   { value: "custom", label: "Custom", description: "Choose permissions individually. Keeps your current choices so you can adjust them below." },
 ] as const;
 
-export function connectionChoices(template: PermissionTemplate, tickedIds: readonly string[] = []): ConnectionChoices {
-  const set = permissionTemplate(template, tickedIds);
+// The starting choices for a template and the accounts that start ticked (those on for new
+// agents). The template decides whether ticked accounts are granted at all: Minimal grants none.
+export function connectionChoices(template: PermissionTemplate, tickedAccountIds: readonly string[] = []): ConnectionChoices {
+  const set = permissionTemplate(template, tickedAccountIds);
   return {
     identity: set.lowTierProfile, memoryRead: set.sharedMemoryRead, memoryWrite: set.ownMemorySave,
     tasks: set.tasks, records: set.lifeAdmin, highTier: set.highTier, card: set.card,
-    learningSharing: set.learningSharing, services: set.services.map(s => s.service),
+    learningSharing: set.learningSharing, accounts: set.services.map(s => s.service),
     cardBudget: { amount: "200", period: "month" },
   };
 }
 
 /** Explicit booleans ensure a template can never restore an unchecked choice. */
 export function connectionChoiceInput(state: ConnectionChoices, currency = "AUD") {
-  const { services, cardBudget, ...toggles } = state;
+  const { accounts, cardBudget, ...toggles } = state;
   return {
-    ...toggles, tickedServices: [...services],
+    ...toggles, accounts: [...accounts],
     cardBudget: state.card ? { amount: Number(cardBudget.amount.trim() || Number.NaN), period: cardBudget.period, currency } : null,
   };
 }

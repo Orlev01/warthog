@@ -100,6 +100,7 @@ import { fixedClock, type Clock } from "../../seams/clock";
 import type { AgentConnection } from "../context";
 import type { Db } from "../../db/index";
 
+import { grantServices } from "../../../test/grants";
 // --- fixtures ----------------------------------------------------------------------
 
 const DEK_BYTES = 32; // a 256-bit per-person data key
@@ -273,7 +274,7 @@ async function arrangeHeldCall(
   makeCall: (overrides: Record<string, unknown>) => Record<string, unknown> = heldChangeCall,
 ) {
   const { userId, dek } = await makePerson(db, who, keyWrapper);
-  await upsertPermissions(
+  await grantServices(
     db,
     baseGrants(userId, CONN, {
       cardAccess: true,
