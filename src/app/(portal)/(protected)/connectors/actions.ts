@@ -45,7 +45,7 @@ import { withTransaction, type Db } from "@/server/db/index";
 import type { Clock } from "@/server/seams/clock";
 import type { Session } from "@/server/auth/session";
 import { getUserById } from "@/server/db/users";
-import { getConnectionById, getConnectionCredentials, renameConnection } from "@/server/db/connections";
+import { defaultAccountsForAgents, getConnectionById, getConnectionCredentials, renameConnection, setDefaultForAgents as setConnectionDefault } from "@/server/db/connections";
 import { cleanShortText } from "@/domain/content/untrusted";
 import { createRedactingRecorder } from "@/server/mcp/recorder";
 import { listAgentsForUser } from "@/server/db/agents";
@@ -133,7 +133,7 @@ export interface ConnectorsActionsDeps {
 // controls the page binds when it mounts the view.
 export type ConnectorsViewData = Omit<
   ConnectorsViewProps,
-  "connectAction" | "disconnectAction" | "requestAction" | "renameAction"
+  "connectAction" | "disconnectAction" | "requestAction" | "renameAction" | "defaultForAgentsAction"
 >;
 
 // The outcome of a disconnect: success, or a refusal naming its reason (the connection is
@@ -155,6 +155,7 @@ export interface ConnectorsActions {
   ): Promise<unknown>;
   disconnectService(session: Session, connectionId: string): Promise<DisconnectServiceResult>;
   renameService(session: Session, input: { connectionId: string; name: string }): Promise<{ readonly ok: boolean }>;
+  setDefaultForAgents(session: Session, input: { connectionId: string; on: boolean }): Promise<{ readonly ok: boolean }>;
   requestConnector(session: Session, input: { name: string }): Promise<unknown>;
   askToJoin(session: Session, input: { connectorId: string }): Promise<unknown>;
 }
@@ -186,6 +187,10 @@ const RENAME_MAX = 60;
 const renameServiceSchema = z.object({
   connectionId: connectionIdSchema,
   name: z.string().trim().min(1).max(RENAME_MAX * 4),
+});
+const defaultForAgentsSchema = z.object({
+  connectionId: connectionIdSchema,
+  on: z.boolean(),
 });
 // Trimmed first, so a name of only spaces is refused like an empty one (interaction-02).
 const requestConnectorSchema = z.object({
@@ -291,6 +296,7 @@ export function createConnectorsActions(deps: ConnectorsActionsDeps): Connectors
     connection: ConnectionForPage,
     agentsByConnector: ReadonlyMap<string, string[]>,
     timeZone: string,
+    defaultIds: ReadonlySet<string>,
   ): ConnectionItem {
     const tools: ToolItem[] = connection.tools.map((tool) => ({
       name: tool.name,
@@ -308,6 +314,7 @@ export function createConnectorsActions(deps: ConnectorsActionsDeps): Connectors
       connectedAt: formatAccountTime(connection.connectedAt, timeZone, { dateOnly: true }),
       tools: unavailable ? [] : tools,
       agents: unavailable ? [] : agentsByConnector.get(connection.id) ?? [],
+      defaultForAgents: defaultIds.has(connection.id),
     };
   }
 
@@ -402,13 +409,16 @@ export function createConnectorsActions(deps: ConnectorsActionsDeps): Connectors
       }
     }
 
+    // The accounts the person turned on for new agents (docs/adr/default-services.md).
+    const defaultIds = new Set(Object.values(await defaultAccountsForAgents(db, userId)));
+
     return {
       groups,
       featured,
       categories,
       category,
       connections: connections
-        .map((connection) => toConnectionItem(connection, agentsByConnector, timeZone))
+        .map((connection) => toConnectionItem(connection, agentsByConnector, timeZone, defaultIds))
         .sort(byAttentionThenName),
       query: browse.query,
       // A miss is judged on what can be offered: a term that only matched a service that
@@ -624,6 +634,38 @@ export function createConnectorsActions(deps: ConnectorsActionsDeps): Connectors
     return { ok: true };
   }
 
+  // Turn "On for new agents" on or off for one of the person's own accounts
+  // (docs/adr/default-services.md): every agent connected afterwards starts with that service,
+  // set to that account; agents already connected don't change. Turning on a second account of
+  // a service moves it there. The change and its activity record commit together; another
+  // person's id changes nothing and records nothing.
+  async function setDefaultForAgents(session: Session, input: { connectionId: string; on: boolean }): Promise<{ readonly ok: boolean }> {
+    const { connectionId, on } = parseParams(defaultForAgentsSchema, input);
+    const userId = session.userId;
+    const connection = await getConnectionById(db, userId, connectionId);
+    if (!connection) return { ok: false };
+    const before = Object.values(await defaultAccountsForAgents(db, userId)).includes(connection.id);
+    const recordingDek = await dekFor(userId);
+    const changed = await withTransaction(db, async (tx) => {
+      if (!(await setConnectionDefault(tx, { userId, id: connection.id, on }))) return false;
+      await createRedactingRecorder({ db: tx, clock, dekFor: async () => recordingDek }).record({
+        userId,
+        kind: "agent_defaults_change",
+        source: "warthog",
+        connectorId: connection.connectorId,
+        outcome: "saved",
+        payload: {
+          service: catalogue.get(connection.connectorId)?.name ?? connection.connectorId,
+          accountLabel: connection.accountLabel,
+          before: { onForNewAgents: before },
+          after: { onForNewAgents: on },
+        },
+      });
+      return true;
+    });
+    return { ok: changed };
+  }
+
   return {
     load,
     connectProviderSignin,
@@ -631,6 +673,7 @@ export function createConnectorsActions(deps: ConnectorsActionsDeps): Connectors
     connectProviderMcp,
     disconnectService,
     renameService,
+    setDefaultForAgents,
     requestConnector,
     askToJoin,
   };

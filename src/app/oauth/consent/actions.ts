@@ -23,7 +23,7 @@
 import { getAgentDefaults } from "@/server/db/agent-defaults";
 import { consentRequestTag, getPendingAuthorization } from "../../../server/oauth/pending";
 import { isAllowedRedirectUri } from "../../../server/oauth/clients";
-import { listConnectionsForUser } from "../../../server/db/connections";
+import { defaultAccountsForAgents, listConnectionsForUser } from "../../../server/db/connections";
 import type { ConsentViewProps, ConsentViewService } from "../../../components/agents/consent-view";
 import type { ConsentApproval } from "../authorize/actions";
 import type { Db } from "../../../server/db/index";
@@ -54,7 +54,9 @@ const REQUESTED_SCOPES: ReadonlyArray<string> = [
 // Review fix A2 — the person's own connected services, offered on the screen so their
 // read tools can be ticked. Member-scoped by the SESSION's user id; one row per connected
 // service (a person can connect two accounts of one service), named through the
-// catalogue when it knows the service. Never ticked by default: the person opts in.
+// catalogue when it knows the service. A service starts ticked only when the person turned
+// one of its accounts on for new agents on the Connectors page (docs/adr/default-services.md);
+// every other service starts unticked, for the person to opt in.
 export interface ConsentServicesSource {
   readonly db: Db;
   readonly nameOf?: (connectorId: string) => string | undefined;
@@ -62,7 +64,8 @@ export interface ConsentServicesSource {
 
 export async function connectedServices(source: ConsentServicesSource, userId: string): Promise<ConsentViewService[]> {
   const ids = [...new Set((await listConnectionsForUser(source.db, userId)).map((c) => c.connectorId))];
-  return ids.map((id) => ({ id, name: source.nameOf?.(id) ?? id, ticked: false }));
+  const defaults = await defaultAccountsForAgents(source.db, userId);
+  return ids.map((id) => ({ id, name: source.nameOf?.(id) ?? id, ticked: Object.hasOwn(defaults, id) }));
 }
 
 // The consent view for the pending request under `handle`, as seen by the signed-in

@@ -79,7 +79,7 @@
 // `createUser` minted — never a bare uuid that would trip the foreign key. Entropy (the
 // access keys) is drawn from the REAL randomness seam so two issues never collide.
 
-import { createConnection } from "@/server/db/connections";
+import { createConnection, setDefaultForAgents } from "@/server/db/connections";
 import { randomBytes, randomUUID } from "node:crypto";
 import { auditedOwnerChange } from "@/server/activity/owner-change";
 import { disconnectAgent } from "@/server/agents/disconnect";
@@ -902,4 +902,30 @@ test("an alert that can't be sent doesn't undo the key: it is still shown and st
     if (!created.ok) throw new Error("unreachable");
     assert.ok(await verifyAccessKey(db, created.key));
   } finally { await db.close(); }
+});
+
+// docs/adr/default-services.md — a ticked service with an account on for new agents is set to
+// that account, the same as on the consent screen.
+test("create sets a ticked service to its account that is on for new agents", async () => {
+  const db = await freshDb();
+  try {
+    const userId = await makeUser(db, "create-default-account");
+    const connect = async (accountLabel: string) =>
+      (await createConnection(db, { userId, connectorId: "gmail", accountLabel, credentials: { api_key: "test" } }, randomBytes(32), fixedClock(NOW))).id;
+    await connect("Home");
+    const work = await connect("Work");
+    await setDefaultForAgents(db, { userId, id: work, on: true });
+
+    const result = await makeActions(db).create(
+      sessionFor(userId),
+      input({ name: "My Grok", platform: "grok", template: "standard", tickedServices: ["gmail"] }),
+    );
+    assert.ok(result.ok);
+    const agent = (await listAgentsForUser(db, userId))[0]!;
+    const grants = await getConnectionPermissions(db, userId, agent.connectionId);
+    assert.deepEqual(grants!.grantedConnectors, ["gmail"]);
+    assert.deepEqual(grants!.connectorAccounts, { gmail: work });
+  } finally {
+    await db.close();
+  }
 });

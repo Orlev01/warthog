@@ -123,12 +123,15 @@ export const CONFIRM_TO_CREATE_COPY =
   "Before we make this key, we need to check it's really you. Anyone with the key can act as this agent.";
 
 export function createAccessKeyFlow(deps: AccessKeyFlowDeps): AccessKeyController {
+  // Services the person turned on for new agents start ticked, as on the consent screen
+  // (docs/adr/default-services.md).
+  const ticked = (deps.services ?? []).filter((service) => service.ticked).map((service) => service.id);
   let state: AccessKeyFlowState = {
     name: deps.defaultName ?? "",
     platform: deps.defaultPlatform ?? "",
     template: deps.defaultTemplate ?? "standard",
     status: "idle",
-    choices: connectionChoices(deps.defaultTemplate ?? "standard"),
+    choices: connectionChoices(deps.defaultTemplate ?? "standard", ticked),
   };
 
   function set(patch: Partial<AccessKeyFlowState>): void {
@@ -180,7 +183,7 @@ export function createAccessKeyFlow(deps: AccessKeyFlowDeps): AccessKeyControlle
     getState: () => state,
     setName: (value) => set({ name: value }),
     setPlatform: (value) => set({ platform: value }),
-    setTemplate: (value) => set({ template: value, choices: value === "custom" ? state.choices : connectionChoices(value) }),
+    setTemplate: (value) => set({ template: value, choices: value === "custom" ? state.choices : connectionChoices(value, ticked) }),
     setChoices: (choices) => set({ template: "custom", choices }),
     submit,
     confirmed,

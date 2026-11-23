@@ -42,7 +42,7 @@ import type { KeyWrapper } from "@/server/crypto/key-wrapper";
 //     it's you in the last five minutes, and each emails the person (security audit
 //     2026-11-13). `revoke` needs neither: shutting an agent out stays one step.
 
-import { listConnectionsForUser } from "@/server/db/connections";
+import { defaultAccountsForAgents, listConnectionsForUser } from "@/server/db/connections";
 import { getAgentDefaults } from "@/server/db/agent-defaults";
 import { randomUUID } from "node:crypto";
 
@@ -209,8 +209,11 @@ export function createAccessKeyActions(deps: AccessKeyActionsDeps): AccessKeyAct
         clock,
       );
 
+      // A ticked service with an account on for new agents is set to that account
+      // (docs/adr/default-services.md).
+      const defaultAccounts = await defaultAccountsForAgents(tx, session.userId);
       const grants = await upsertPermissions(tx, {
-        ...initialGrants(session.userId, connectionId, valid),
+        ...initialGrants(session.userId, connectionId, valid, undefined, defaultAccounts),
         rateLimit: (await getAgentDefaults(tx, session.userId)).rateLimit,
       });
 

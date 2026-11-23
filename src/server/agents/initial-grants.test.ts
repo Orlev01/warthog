@@ -19,3 +19,17 @@ test("omitted memory choices retain the documented template defaults", () => {
     assert.equal(grants.memoryWrite, template !== "minimal");
   }
 });
+
+// docs/adr/default-services.md — a granted service that has an account on for new agents is
+// set to that account; a service not granted is never pinned.
+test("a granted service with an account on for new agents is set to that account", () => {
+  const defaults = { "google-gmail": "gmail-home", notion: "notion-family" };
+  const grants = initialGrants("person", "agent", { template: "standard" }, ["google-gmail", "outlook"], defaults);
+  assert.deepEqual(grants.grantedConnectors, ["google-gmail", "outlook"]);
+  assert.deepEqual(grants.connectorAccounts, { "google-gmail": "gmail-home" }, "notion was not granted, outlook has no default");
+});
+
+test("without accounts on for new agents no account is chosen", () => {
+  const grants = initialGrants("person", "agent", { template: "standard" }, ["google-gmail"]);
+  assert.equal(grants.connectorAccounts, undefined);
+});
