@@ -1,4 +1,17 @@
-# Delivery status — 23 November 2026 (the front door covers every feature shipped since launch)
+# Delivery status — 23 November 2026 (Life admin: receipts and subscriptions belong to what they were for, and what you pay a month)
+
+**Live at [warthog.com.au](https://warthog.com.au) (the website) and
+[app.warthog.com.au](https://app.warthog.com.au) (the app).** Application source
+`d57f625144b9633ced7fc54233d89507dd93f906` runs as `warthog--r45136369712a1`, with one healthy
+replica, explicit 100% traffic and zero old replicas.
+
+PR #49 keeps Life admin filed by what it's about, which the founder's real data confirmed, and adds
+two refinements. Receipts, subscriptions and memberships can belong to any thing (an eSIM under its
+trip, a software plan under its business), and the Records tab says what the active recurring
+records cost a month. No migrations (still 91). See the
+[release record](docs/audit/life-admin-links-costs-release-2026-11-23.md).
+
+# Earlier delivery status — 23 November 2026 (the front door covers every feature shipped since launch)
 
 **Live at [warthog.com.au](https://warthog.com.au) (the website) and
 [app.warthog.com.au](https://app.warthog.com.au) (the app).** Application source

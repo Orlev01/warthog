@@ -1,5 +1,13 @@
 # Warthog comprehensive engineering audit
 
+**Life admin: receipts and subscriptions belong to what they were for, and what you pay a month,
+23 November:** main `d57f625` runs as `warthog--r45136369712a1`. After agents filled Life admin from
+real inboxes, the founder asked whether to file by document type instead. Records stay filed by what
+they're about (the reasoning is in the [ADR](../adr/life-admin-profile.md)). PR #49 adds two
+refinements from the data: receipts, subscriptions and memberships can belong to any thing, and the
+Records tab says what the active recurring records cost a month. No migrations (still 91). See the
+[release record](life-admin-links-costs-release-2026-11-23.md).
+
 **The front door covers every feature shipped since launch, 23 November:** main `fd4f7b4` runs as
 `warthog--r45133098951a1`. PR #50 gives warthog.com.au a section or card for each feature added
 since launch: the services you can connect, what agents read and Undo, spending with cards and
