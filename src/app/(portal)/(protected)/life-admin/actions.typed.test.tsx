@@ -7,8 +7,8 @@
 // changes only what the person changed and never flattens a list or object an older agent
 // saved (engineering finding M4); the person confirms what agents suggest (one by one or all
 // at once), says a suggestion isn't theirs (a tombstone, so it isn't added again), and
-// accepts or declines an agent's change to a confirmed record. Every action is member-scoped
-// and validates its ids at the boundary.
+// accepts (one by one or all at once) or declines an agent's change to a confirmed record.
+// Every action is member-scoped and validates its ids at the boundary.
 
 import * as React from "react";
 import { test } from "node:test";
@@ -20,7 +20,7 @@ import { createLifeAdminActions, editChanges } from "./actions";
 import { LifeAdminView } from "@/components/life-admin/life-admin-view";
 import { createUser } from "@/server/db/users";
 import { createAgent } from "@/server/db/agents";
-import { createRecord, getRecordForUser, listRecordsForUser } from "@/server/db/life-admin-records";
+import { createRecord, getRecordForUser, listRecordsForUser, setPendingChange, type PendingChange } from "@/server/db/life-admin-records";
 import { changeRecord, saveTypedRecord } from "@/server/life-admin/record-service";
 import { BUILT_IN } from "@/domain/life-admin/catalogue";
 import type { ServiceContext } from "@/server/life-admin/record-service";
@@ -308,6 +308,56 @@ test("confirmAll confirms every one of the person's suggestions it is given, and
     assert.deepEqual(result, { ok: true, outcome: "confirmed", count: 2 });
     for (const id of ids) assert.equal((await getRecordForUser(ctx.db, me.userId, id, me.dek))!.reviewState, "confirmed");
     assert.equal((await getRecordForUser(ctx.db, other.userId, theirs, other.dek))!.reviewState, "suggested");
+  });
+});
+
+test("acceptAllPending accepts every waiting change it is given on the person's records, and nothing of anyone else's", async () => {
+  await withDb(async (ctx) => {
+    const me = await person(ctx, "accept-all");
+    const other = await person(ctx, "accept-all-other");
+    const agent = await agentOf(ctx, me.userId, "Claude");
+    const theirAgent = await agentOf(ctx, other.userId, "ChatGPT");
+    const ids: string[] = [];
+    for (const reference of ["M-1", "M-2", "M-3"]) {
+      const saved = (await ctx.actions.saveRecord(me.session, { type: "health.insurance", fields: { provider: "Medibank", reference, notes: "Mine" }, dueDate: "2027-03-01" })) as { recordId: string };
+      ids.push(saved.recordId);
+    }
+    for (const id of ids.slice(0, 2)) {
+      const existing = (await getRecordForUser(ctx.db, me.userId, id, me.dek))!;
+      assert.equal((await changeRecord(svc(ctx, me), existing, agent, { set: { hospital_cover: "gold" }, remove: ["notes"] })).action, "proposed");
+    }
+    const theirs = (await ctx.actions.saveRecord(other.session, { type: "health.insurance", fields: { provider: "Bupa", reference: "B-1" } })) as { recordId: string };
+    const theirRecord = (await getRecordForUser(ctx.db, other.userId, theirs.recordId, other.dek))!;
+    await changeRecord(svc(ctx, other), theirRecord, theirAgent, { set: { hospital_cover: "silver" } });
+
+    await rejects4xx("an empty list", () => ctx.actions.acceptAllPending(me.session, { ids: [] }));
+    await rejects4xx("a malformed id among them", () => ctx.actions.acceptAllPending(me.session, { ids: [ids[0]!, "nope"] }));
+    assert.ok((await getRecordForUser(ctx.db, me.userId, ids[0]!, me.dek))!.pending, "nothing accepted by a refused list");
+    assert.equal((await ctx.actions.acceptAllPending(me.session, { ids: [theirs.recordId] })).ok, false, "none of them mine");
+    assert.equal((await ctx.actions.acceptAllPending(me.session, { ids: [ids[2]!] })).ok, false, "a record of mine with no waiting change");
+
+    const result = await ctx.actions.acceptAllPending(me.session, { ids: [...ids, theirs.recordId, ids[0]!] });
+    assert.deepEqual(result, { ok: true, outcome: "updated", count: 2 });
+    for (const id of ids.slice(0, 2)) {
+      const accepted = (await getRecordForUser(ctx.db, me.userId, id, me.dek))!;
+      assert.deepEqual([accepted.fields.hospital_cover, accepted.fields.notes, accepted.pending], ["gold", undefined, null]);
+    }
+    assert.equal((await getRecordForUser(ctx.db, me.userId, ids[2]!, me.dek))!.fields.notes, "Mine", "the record with no change is untouched");
+    const still = (await getRecordForUser(ctx.db, other.userId, theirs.recordId, other.dek))!;
+    assert.deepEqual([still.fields.hospital_cover, still.pending?.set], [undefined, { hospital_cover: "silver" }], "another person's change still waits");
+  });
+});
+
+test("the loader passes on a waiting change's new kind, and only a kind", async () => {
+  await withDb(async (ctx) => {
+    const me = await person(ctx, "pending-kind");
+    const agent = await agentOf(ctx, me.userId, "ChatGPT");
+    const saved = (await ctx.actions.saveRecord(me.session, { type: "other.reminder", fields: { name: "Honda CB500X" } })) as { recordId: string };
+    const change = (type: unknown) => ({ set: { name: "Honda CB500X" }, remove: [], byAgentId: agent.agentId, at: NOW.toISOString(), type }) as unknown as PendingChange;
+    await setPendingChange(ctx.db, me.userId, saved.recordId, change("vehicles.vehicle"), me.dek);
+    assert.equal((await ctx.actions.load(me.session)).records.find((r) => r.id === saved.recordId)!.pending!.type, "vehicles.vehicle");
+    await setPendingChange(ctx.db, me.userId, saved.recordId, change({ id: "vehicles.vehicle" }), me.dek);
+    assert.equal("type" in (await ctx.actions.load(me.session)).records.find((r) => r.id === saved.recordId)!.pending!, false, "anything but a kind's id is left out");
   });
 });
 

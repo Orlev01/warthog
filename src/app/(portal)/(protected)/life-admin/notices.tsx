@@ -24,6 +24,7 @@ export type Notice =
   | "confirmed_all"
   | "dismissed"
   | "accepted"
+  | "accepted_all"
   | "declined"
   | "ticked"
   | "handed"
@@ -82,6 +83,7 @@ export const NOTICES: Record<Notice, { done: boolean; text: string }> = {
   confirmed_all: { done: true, text: "All confirmed. Your agents can't change these now without asking you first." },
   dismissed: { done: true, text: "Removed as not yours. If an agent finds it again, it won't be added back." },
   accepted: { done: true, text: "Change accepted." },
+  accepted_all: { done: true, text: "All the changes were accepted." },
   declined: { done: true, text: "Kept your version. The suggested change was dropped." },
   ticked: { done: true, text: "Checklist updated." },
   handed: { done: true, text: "Handed to an agent." },
@@ -91,7 +93,7 @@ export const NOTICES: Record<Notice, { done: boolean; text: string }> = {
   completed: { done: true, text: "Task marked done." },
   category_kept: { done: true, text: "Kept. It's one of your own categories now." },
   category_declined: { done: true, text: "Category declined. Its suggested records were removed, anything you'd confirmed moved to Something else, and agents won't suggest it again." },
-  category_shown: { done: true, text: "Shown. It stays in Your things while it's empty." },
+  category_shown: { done: true, text: "Done. It's suggested under Fill in the rest until there's something in it." },
   category_hidden: { done: true, text: "Marked as not for you. You can undo it under Not for me in Fill in the rest." },
   category_cleared: { done: true, text: "Done. That category shows again once there's something in it." },
   journal_added: { done: true, text: "Added to this item's log. Any agent working on it next will see it." },

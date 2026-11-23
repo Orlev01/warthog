@@ -19,7 +19,8 @@
 
 import { storedRecordName } from "@/domain/life-admin/normalise";
 import { isTimeZone, parseWhen } from "@/domain/life-admin/lifecycle";
-import type { FieldDef, Lifecycle, RecordTypeDef } from "@/domain/life-admin/record-types";
+import type { Catalogue } from "@/domain/life-admin/catalogue";
+import type { FieldDef, Lifecycle, RecordTypeDef, StoredKind } from "@/domain/life-admin/record-types";
 
 const FIELD_LABELS: Readonly<Record<string, string>> = {
   name: "Name",
@@ -196,6 +197,23 @@ export function recordFacts(
     facts.push({ key, label: labelOf(key), value: formatOf(key, value) });
   }
   return facts;
+}
+
+/**
+ * A record's cost in one phrase: "AUD 25.99 a month" for a plain amount (its currency and a
+ * known billing cycle folded in), an amount written with its own currency as written ("A$18.50
+ * a week"); null when it has none. `skip` is a field the row already leads with.
+ */
+export function costText(fields: Readonly<Record<string, string>>, skip: string | null = null): string | null {
+  const amountKey = findKey(fields, AMOUNT_KEYS, skip);
+  if (!amountKey) return null;
+  const cycleKey = findKey(fields, CYCLE_KEYS, skip);
+  const cycle = cycleKey ? CYCLE_WORDS[fields[cycleKey]!.trim().toLowerCase()] : undefined;
+  const amount = plainAmount(fields[amountKey]!);
+  const currencyKey = findKey(fields, CURRENCY_KEYS, skip);
+  const currency = currencyKey ? fields[currencyKey]!.trim().toUpperCase() : "";
+  const money = amount !== null ? `${currency ? `${currency} ` : ""}${amount.toFixed(2)}` : fields[amountKey]!.trim();
+  return cycle ? `${money} ${cycle}` : money;
 }
 
 /** One stored value as it reads on screen: a date formatted, a billing cycle in words. */
@@ -384,6 +402,30 @@ export function whenLine(
   return record.dueDate ? dueText(type, record.dueDate) : null;
 }
 
+/**
+ * A compact row's one muted line under the record's name: its kind (unless the name already
+ * starts with it, or the row leads with something else), when it's due, renews or starts, its
+ * cost and cycle, and its provider (unless it's named for it) — "Expires 14 Dec 2026 · AUD
+ * 412.50 a year · Transport for NSW". A list across categories leads with the `category`.
+ */
+export function rowSummary(
+  type: RecordTypeDef,
+  record: { readonly fields: Readonly<Record<string, string>>; readonly dueDate: string | null; readonly phase?: { readonly starts?: string; readonly ends?: string } },
+  options: { readonly name: string; readonly titleKey: string | null; readonly lead?: boolean; readonly category?: string; readonly zone?: string; readonly currentYear?: string },
+): string {
+  const { name, titleKey } = options;
+  const provider = record.fields.provider?.trim();
+  return [
+    options.category ?? null,
+    options.lead || name.startsWith(type.label) ? null : type.label,
+    whenLine(type, record, options.zone ?? "UTC", options.currentYear),
+    costText(record.fields, titleKey),
+    provider && titleKey !== "provider" && !name.includes(provider) ? provider : null,
+  ]
+    .filter(Boolean)
+    .join(" · ");
+}
+
 /** The line under a typed record's name: "Registration · Expires 14 Dec 2026 · Active". */
 export function typedDueLine(type: RecordTypeDef, dueDate: string | null, status: string): string {
   return [type.label, dueDate ? dueText(type, dueDate) : null, statusLabel(status) || null].filter(Boolean).join(" · ");
@@ -536,4 +578,46 @@ export function pendingChangeLines(
     lines.push({ key: "status", label: "Status", from: statusLabel(current.status) || null, to: statusLabel(pending.status) || null });
   }
   return lines;
+}
+
+/**
+ * An agent's pending change as the person reads it: when it gives the record another kind, a
+ * "Kind: Renewal or appointment → Vehicle (Vehicles)" line first, what it sets labelled through
+ * the new kind and what it removes through the old one, without the old schema's `type` and
+ * `source` fields (moving an older record into its proper kind drops them, which isn't news);
+ * otherwise the change line by line, as `pendingChangeLines`. A kind the catalogue doesn't have
+ * is ignored.
+ */
+export function pendingChangeView(
+  catalogue: Catalogue,
+  current: {
+    readonly kind: StoredKind;
+    readonly type?: string | null;
+    readonly fields: Readonly<Record<string, string>>;
+    readonly heldFields?: Readonly<Record<string, string>>;
+    readonly dueDate: string | null;
+    readonly status: string;
+  },
+  pending: {
+    readonly type?: string;
+    readonly set: Readonly<Record<string, string>>;
+    readonly remove: readonly string[];
+    readonly dueDate?: string | null;
+    readonly status?: string;
+  },
+  zone = "UTC",
+): ChangeLine[] {
+  const from = catalogue.typeOfRecord(current.kind, current.type ?? null);
+  const to = pending.type ? catalogue.type(pending.type) : undefined;
+  if (!to || to.id === from.id) return pendingChangeLines(from, current, pending, zone);
+  const gained = pendingChangeLines(to, current, { set: pending.set, remove: [], dueDate: pending.dueDate, status: pending.status }, zone);
+  const setCount = Object.keys(pending.set).length;
+  const removed = pendingChangeLines(from, current, { set: {}, remove: pending.remove.filter((key) => key !== "type" && key !== "source") }, zone);
+  const category = catalogue.category(to.category)?.label;
+  return [
+    { key: "kind", label: "Kind", from: from.label, to: category ? `${to.label} (${category})` : to.label },
+    ...gained.slice(0, setCount),
+    ...removed,
+    ...gained.slice(setCount),
+  ];
 }

@@ -1,9 +1,10 @@
-// "Your things": checking what agents found, and the typed forms (docs/adr/life-admin-profile.md).
+// The Records tab: checking what agents found, and the typed forms (docs/adr/life-admin-profile.md).
 //
 // Agents fill Life admin in from email. What an agent saves arrives as a SUGGESTION the person
 // confirms ("To check": Confirm, Not mine, or Edit — saving an edit confirms it), and an agent
 // never overwrites a confirmed record: its change waits as a PENDING change the person accepts
-// or declines ("<Agent> suggests a change", field: old → new). Each row says who added it and
+// or declines ("<Agent> suggests a change", field: old → new; a change of kind first), one by one
+// or all at once ("Accept all n changes"). Each row says who added it and
 // where an agent says it found it. Adding takes two steps with no client JavaScript: a GET
 // form picks the type, then that type's form shows every field by its kind. Editing shows
 // every field of the type, keeps the record's other text details, and lists values an older
@@ -15,7 +16,7 @@ import assert from "node:assert/strict";
 import { renderToStaticMarkup } from "react-dom/server";
 
 import { LifeAdminView, type LifeAdminRecordView, type LifeAdminViewProps } from "./life-admin-view";
-import { declineConsequence, fillInPrompt } from "./things-view";
+import { declineConsequence, fillInPrompt } from "./records-view";
 import { BUILT_IN, buildCatalogue, type CustomCategoryEntry } from "@/domain/life-admin/catalogue";
 import type { CategoryStateView, SuggestedCategoryView } from "./record-view-types";
 
@@ -86,6 +87,7 @@ function render(over: Partial<LifeAdminViewProps> = {}): string {
       confirmAllAction={noop}
       dismissRecordAction={noop}
       acceptPendingAction={noop}
+      acceptAllPendingAction={noop}
       declinePendingAction={noop}
       keepCategoryAction={noop}
       declineCategoryAction={noop}
@@ -120,13 +122,18 @@ function itemOf(markup: string, id: string): string {
   return markup.slice(start, end < 0 ? undefined : end);
 }
 
-// Each <form> with its posted hidden values and its submit buttons' words.
-function forms(markup: string): { body: string; hidden: [string, string][]; buttons: string[] }[] {
-  return [...markup.matchAll(/<form\b[^>]*>([\s\S]*?)<\/form>/g)].map((m) => ({
-    body: m[1]!,
-    hidden: [...m[1]!.matchAll(/<input type="hidden" name="([^"]+)" value="([^"]*)"/g)].map((h) => [h[1]!, h[2]!]),
-    buttons: [...m[1]!.matchAll(/<button\b[^>]*type="submit"[^>]*>([\s\S]*?)<\/button>/g)].map((b) => text(b[1]!)),
-  }));
+// Each <form> with its posted hidden values (without where it returns to, `returnTab` /
+// `returnCategory` / `returnStatus`, which `returns` holds), and its submit buttons' words.
+function forms(markup: string): { body: string; hidden: [string, string][]; returns: [string, string][]; buttons: string[] }[] {
+  return [...markup.matchAll(/<form\b[^>]*>([\s\S]*?)<\/form>/g)].map((m) => {
+    const values = [...m[1]!.matchAll(/<input type="hidden" name="([^"]+)" value="([^"]*)"/g)].map((h) => [h[1]!, h[2]!] as [string, string]);
+    return {
+      body: m[1]!,
+      hidden: values.filter(([name]) => !name.startsWith("return")),
+      returns: values.filter(([name]) => name.startsWith("return")),
+      buttons: [...m[1]!.matchAll(/<button\b[^>]*type="submit"[^>]*>([\s\S]*?)<\/button>/g)].map((b) => text(b[1]!)),
+    };
+  });
 }
 
 // ─── To check ────────────────────────────────────────────────────────────────────────
@@ -180,6 +187,55 @@ test("a pending change reads as '<Agent> suggests a change' with labelled old �
   assert.deepEqual(posted.find((form) => form.buttons.some((b) => /^Keep mine/.test(b)))!.hidden, [["recordId", HEALTH.id]]);
 });
 
+test("Accept all n changes posts every waiting change's id, and only appears with two or more", () => {
+  const second: LifeAdminRecordView = { ...HEALTH, id: "00000000-0000-4000-8000-000000000011", fields: { provider: "Bupa" }, heldFields: undefined };
+  const panel = panelOf(render({ records: [REGO, CARD, HEALTH, second] }), "To check");
+  const all = forms(panel).find((form) => form.buttons.includes("Accept all 2 changes"));
+  assert.ok(all, "Accept all 2 changes");
+  assert.deepEqual(all!.hidden.map(([, value]) => value).sort(), [HEALTH.id, second.id].sort());
+  assert.ok(forms(panel).some((form) => form.buttons.includes("Confirm all 2")), "beside Confirm all");
+  assert.ok(!/Accept all/.test(text(panelOf(render(), "To check"))), "one change has no Accept all");
+  assert.ok(!/Accept all/.test(text(panelOf(render({ records: [HEALTH, second], acceptAllPendingAction: undefined }), "To check"))), "no action, no button");
+});
+
+test("a change that gives a record another kind says so first, without the old schema's type and source lines", () => {
+  const legacy: LifeAdminRecordView = {
+    id: "00000000-0000-4000-8000-000000000012",
+    kind: "renewal_appointment",
+    fields: { what: "Honda CB500X", type: "vehicle", source: "gmail" },
+    dueDate: null,
+    status: "active",
+    reminderOffsets: [],
+    reviewState: "confirmed",
+    pending: { byName: "ChatGPT", type: "vehicles.vehicle", set: { name: "Honda CB500X", plate: "BX12AB" }, remove: ["what", "type", "source"] },
+  };
+  const item = itemOf(render({ records: [legacy] }), `change-${legacy.id}`);
+  const list = /<ul role="list" aria-label="Suggested changes"[^>]*>([\s\S]*?)<\/ul>/.exec(item)![1]!;
+  const lines = [...list.matchAll(/<li\b[^>]*>([\s\S]*?)<\/li>/g)].map((m) => text(m[1]!));
+  assert.deepEqual(lines, [
+    "Kind: Renewal or appointment → changes to Vehicle (Vehicles)",
+    "Nickname or make and model: not set → changes to Honda CB500X",
+    "Number plate: not set → changes to BX12AB",
+    "What: Honda CB500X → changes to removed",
+  ]);
+});
+
+test("a change's link lands on the record's row when the filters show it, else on its page", () => {
+  const shown = itemOf(render(), `change-${HEALTH.id}`);
+  assert.match(shown, new RegExp(`href="#record-${HEALTH.id}"`));
+  const hidden = itemOf(render({ recordFilter: { categories: ["vehicles"], statuses: ["active"] } }), `change-${HEALTH.id}`);
+  assert.match(hidden, new RegExp(`href="/life-admin/items/${HEALTH.id}"`));
+});
+
+test("every record action returns to the filters it was submitted under", () => {
+  const markup = render({ recordFilter: { categories: ["vehicles", "health"], statuses: ["active", "finished"] } });
+  const posting = forms(markup).filter((form) => form.buttons.some((b) => /^(Confirm|Not mine|Accept change|Keep mine|Save reminder|Save changes|Delete record|Not for me|Confirm all)/.test(b)));
+  assert.ok(posting.length > 5);
+  for (const form of posting) {
+    assert.deepEqual(form.returns, [["returnTab", "records"], ["returnCategory", "vehicles"], ["returnCategory", "health"], ["returnStatus", "active"], ["returnStatus", "finished"]], form.buttons.join());
+  }
+});
+
 test("in its category, a suggestion is tagged Not checked yet and a pending change is flagged, in words and an icon", () => {
   const markup = render();
   const rego = markup.slice(markup.indexOf(`id="record-${REGO.id}"`), markup.indexOf(`id="record-${REGO.id}"`) + 3000);
@@ -197,7 +253,7 @@ test("without the review actions, Confirm and Accept change are disabled and say
 
 // ─── Fill in the rest ────────────────────────────────────────────────────────────────
 
-test("Fill in the rest offers at most six empty categories by priority, each with Show and Not for me, a prompt to copy, and says Warthog doesn't read email itself", () => {
+test("Fill in the rest offers at most six empty categories by priority, each with Not for me only, a prompt to copy, and says Warthog doesn't read email itself", () => {
   const panel = panelOf(render(), "Fill in the rest");
   const words = text(panel);
   const offered = [...panel.matchAll(/<p class="text-sm font-medium text-fg">([^<]+)<\/p>/g)].map((m) => m[1]!.replace(/&amp;/g, "&")).filter((label) => label !== "Ask your agent");
@@ -205,9 +261,9 @@ test("Fill in the rest offers at most six empty categories by priority, each wit
   const posted = forms(panel);
   const home = posted.filter((form) => form.hidden.some(([name, value]) => name === "category" && value === "home"));
   assert.deepEqual(home.map((form) => [form.hidden, form.buttons]), [
-    [[["category", "home"], ["setting", "show"]], ["Show Home"]],
     [[["category", "home"], ["setting", "not_for_me"]], ["Not for me : Home"]],
-  ]);
+  ], "no Show: an empty category never has a panel, so showing one would do nothing");
+  assert.doesNotMatch(words, /\bShow\b/);
   assert.match(words, /Use Warthog to look through my email for my super fund and investments, lease or mortgage, home insurance and rates, electricity, gas, internet and phone accounts, passport, licence and visa expiry dates, flights, hotels and trips and tax, fines and government payments, and save what you find to my Life admin for me to check\./);
   assert.match(words, /Copy prompt for your agent/);
   assert.match(words, /Warthog doesn't read your email itself\. Your agent does, through Warthog, and only what you allow it to\./);
@@ -216,6 +272,12 @@ test("Fill in the rest offers at most six empty categories by priority, each wit
     "Use Warthog to look through my email for my rego and car insurance and health insurance and appointments, and save what you find to my Life admin for me to check.",
   );
   assert.match(text(panelOf(render({ records: [] }), "Fill in your life admin")), /Vehicles/, "with nothing yet, the first six are offered");
+});
+
+test("an empty category the person once chose to show is offered too, as production's every-category-shown accounts have", () => {
+  const states: CategoryStateView[] = CATEGORIES.map((category) => ({ id: category.id, visibility: "shown", records: category.id === "investing" ? 2 : 0 }));
+  const offered = [...panelOf(render({ records: [], categories: states }), "Fill in your life admin").matchAll(/<p class="text-sm font-medium text-fg">([^<]+)<\/p>/g)].map((m) => m[1]!.replace(/&amp;/g, "&")).filter((label) => label !== "Ask your agent");
+  assert.deepEqual(offered, ["Vehicles", "Health", "Home", "Utilities", "ID and residency", "Trips and travel"], "a category with records isn't");
 });
 
 test("Not for me (n) lists the hidden categories, with how many records they keep, and Undo", () => {
@@ -278,7 +340,7 @@ test("a suggested category of the person's own waits under To check with the age
   assert.match(words, /Decline \u201cRowing club\u201d\? Its 1 suggested record will be removed and the 1 record you confirmed will move to Something else, with their details kept\. Agents won't suggest it again\./);
   // Its records already show, in a panel of their own marked Suggested, with the kind's own fields.
   const panel = markup.slice(markup.search(/<h2\b[^>]*><span[^>]*>Rowing club/));
-  assert.match(text(panel), /^Rowing club Suggested Your rowing club membership/);
+  assert.match(text(panel), /^Rowing club Suggested Sydney Rowing Club Current Not checked yet Club membership · Renews 1 Jul\w* 2027/);
   assert.match(text(panel), /Boat rack B12/);
   assert.match(panel, /<optgroup label="Rowing club"><option value="x_7kq2mz.membership">Club membership<\/option><option value="x_7kq2mz.regatta">Regatta<\/option>/, "its kinds can be added");
 });
@@ -296,7 +358,7 @@ test("step one: a GET form picks the type from a list grouped by category", () =
   assert.ok(form, "a plain GET form, so it works without JavaScript");
   assert.match(form[1]!, /action="\/life-admin#new-record"/);
   assert.match(form[2]!, /<input type="hidden" name="view" value="life"\/>/);
-  assert.match(form[2]!, /<input type="hidden" name="tab" value="things"\/>/);
+  assert.match(form[2]!, /<input type="hidden" name="tab" value="records"\/>/);
   assert.match(form[2]!, /<select\b[^>]*name="add"/);
   const groups = [...form[2]!.matchAll(/<optgroup label="([^"]+)">/g)].map((m) => m[1]!.replace(/&amp;/g, "&"));
   assert.deepEqual(groups, CATEGORIES.map((category) => category.label), "every category of the catalogue, in its order");

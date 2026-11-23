@@ -8,6 +8,7 @@ import {
   BOOKING_STATUS_CHOICES,
   CASE_STATUS_CHOICES,
   RECORD_STATUS_CHOICES,
+  costText,
   daysBetween,
   daysText,
   dueText,
@@ -20,9 +21,11 @@ import {
   formatMonthYear,
   formatSpan,
   pendingChangeLines,
+  pendingChangeView,
   provenanceLine,
   recordFacts,
   recordName,
+  rowSummary,
   statusChoices,
   statusLabel,
   typedDueLine,
@@ -178,6 +181,56 @@ test("an agent's pending change reads as labelled old → new lines, due date an
     ["Status", "Active", "Cancelled"],
   ]);
   assert.deepEqual(pendingChangeLines(health, { fields: {}, dueDate: null, status: "active" }, { set: {}, remove: [] }), []);
+});
+
+test("a change that gives a record another kind says so first, and drops the old schema's type and source lines", () => {
+  const legacy = { kind: "renewal_appointment" as const, type: null, fields: { what: "Honda CB500X", type: "vehicle", source: "gmail", plate: "BX12AB" }, dueDate: null, status: "active" };
+  const lines = pendingChangeView(BUILT_IN, legacy, { type: "vehicles.vehicle", set: { name: "Honda CB500X", make: "Honda" }, remove: ["what", "type", "source"] });
+  assert.deepEqual(lines.map((line) => [line.label, line.from, line.to]), [
+    ["Kind", "Renewal or appointment", "Vehicle (Vehicles)"],
+    ["Nickname or make and model", null, "Honda CB500X"],
+    ["Make", null, "Honda"],
+    ["What", "Honda CB500X", null],
+  ], "what it gains labelled through the new kind; the removed type and source fields aren't news");
+  const same = pendingChangeView(BUILT_IN, { ...legacy, kind: "item" as const, type: "vehicles.vehicle" }, { type: "vehicles.vehicle", set: {}, remove: ["source"] });
+  assert.deepEqual(same.map((line) => [line.label, line.to]), [["Source", null]], "the same kind isn't a change of kind, and its removals all show");
+  const unknown = pendingChangeView(BUILT_IN, legacy, { type: "nope.gone", set: {}, remove: ["type"] });
+  assert.deepEqual(unknown.map((line) => line.label), ["Type"], "a kind the catalogue doesn't have is ignored");
+  assert.deepEqual(pendingChangeView(BUILT_IN, legacy, { set: {}, remove: [] }), []);
+});
+
+test("a row's one muted line: kind, when, cost and cycle, provider, each only once", () => {
+  const rego = BUILT_IN.type("vehicles.registration")!;
+  const regoFields = { plate: "BX12AB", provider: "Transport for NSW", amount: "412.50", currency: "aud", cycle: "yearly" };
+  const regoName = recordName(rego, regoFields);
+  assert.equal(
+    rowSummary(rego, { fields: regoFields, dueDate: "2026-12-14" }, { name: regoName.name, titleKey: regoName.key }),
+    "Expires 14 Dec 2026 · AUD 412.50 a year · Transport for NSW",
+    "a name that starts with its kind doesn't repeat it",
+  );
+  const health = BUILT_IN.type("health.insurance")!;
+  const healthName = recordName(health, { provider: "Medibank" });
+  assert.equal(rowSummary(health, { fields: { provider: "Medibank" }, dueDate: "2027-03-01" }, { name: healthName.name, titleKey: healthName.key }), "Health insurance · Renews or extras reset 1 Mar 2027", "the provider it's named for isn't repeated");
+  assert.equal(
+    rowSummary(health, { fields: { provider: "Medibank" }, dueDate: null }, { name: healthName.name, titleKey: healthName.key, category: "Health" }),
+    "Health · Health insurance",
+    "a list across categories leads with the category",
+  );
+  const flight = BUILT_IN.type("travel.flight")!;
+  assert.equal(
+    rowSummary(flight, { fields: { provider: "Qantas", reference: "QF25", starts_at: "2026-12-03T09:00+11:00[Australia/Sydney]" }, dueDate: "2026-12-03" }, { name: "Flight · QF25", titleKey: null, zone: "Australia/Sydney", currentYear: "2026" }),
+    "Starts Thu 3 Dec, 9:00 am AEDT · Qantas",
+  );
+  const bike = BUILT_IN.type("vehicles.vehicle")!;
+  assert.equal(rowSummary(bike, { fields: { name: "Honda CB500X" }, dueDate: null }, { name: "Honda CB500X", titleKey: "name", lead: true }), "", "an anchor's own row under its name has nothing more to say");
+});
+
+test("a cost reads once with its currency and cycle; one written with its own currency reads as written", () => {
+  assert.equal(costText({ amount: "25.99", currency: "AUD", cycle: "monthly" }), "AUD 25.99 a month");
+  assert.equal(costText({ price: "1,250" }), "1250.00");
+  assert.equal(costText({ amount: "A$18.50", cycle: "weekly" }), "A$18.50 a week");
+  assert.equal(costText({ amount: " " }), null);
+  assert.equal(costText({ provider: "Netflix" }), null);
 });
 
 // ─── field kinds (catalogue v2) ─────────────────────────────────────────────────────────

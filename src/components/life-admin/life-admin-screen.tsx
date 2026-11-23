@@ -12,8 +12,8 @@ import { TasksView, type TasksViewProps } from "./tasks-view";
 // Forward restore them). Both views stay mounted, so switching between them keeps a
 // half-typed record or task instead of reloading the page and dropping it. The outcome of
 // the last action (`notice`) is the first thing under the band, inside the view it came
-// from. The records view's own tabs (Your things | Moving checklist) are a bounded strip of
-// their own above its panels (./life-admin-view.tsx).
+// from. The records view's own tabs (Records | Upcoming | Bookings | Moving checklist) are a
+// bounded strip of their own above its panels (./life-admin-view.tsx).
 
 export type LifeAdminScreenView = "life" | "tasks";
 

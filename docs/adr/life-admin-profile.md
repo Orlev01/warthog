@@ -83,8 +83,9 @@ which anchors it may belong to (`belongsTo`, or "any").
 
 **A person's own categories.** People's lives differ, so the built-ins are a seed, not the whole
 list.
-- **Hidden until used:** a built-in category shows once the person has something in it or chooses
-  to show it; they can also say "not for me".
+- **Hidden until used:** a built-in category shows once the person has something in it; they can
+  also say "not for me", which hides its records too. (The earlier "Show" setting, which kept an
+  empty category on the page, no longer has a control: see [The Records tab](#the-records-tab).)
 - **Suggested when nothing fits:** the person's agent may suggest a category in a fixed, generic
   shape:
   - a label, description, life area and icon;
@@ -172,6 +173,53 @@ status is the coarse active, cancelled or done.
     days past its due date.
   - Several due at once go out as one push per person.
   - A person without a push device is marked handled instead of failing every hour.
+
+## The Records tab (amended 23 November 2026)
+
+The founder found the first page unreadable: a tab called "Your things", 17 empty "Nothing here
+yet" panels before any record (every built-in category had been set to show), each category mixing
+live records with a "Finished (n)" group, and rows listing every fact. He asked for a plain tab
+name, filters by category and by status (both multiple-choice), and what's active first, always.
+
+- **The tab is Records** (`?tab=records`). Its count is what's active. The old key (`things`) and
+  the older reminder-link tabs (subscriptions, receipts, renewals) still open it; Home, Bookings,
+  the item page and the notices link to it.
+- **Four statuses, worked out from the phase** (`listStatusOf` in
+  `src/components/life-admin/record-groups.ts`, never stored):
+  - **Active:** current, due soon, overdue, date passed, waiting to be confirmed, upcoming,
+    happening now, open, waiting.
+  - **On hold:** paused.
+  - **Finished:** ended, completed, resolved (a standing item expired or done, a booking that's
+    over, a case resolved).
+  - **Cancelled:** cancelled, missed, lapsed, and a standing item whose status is cancelled.
+- **Two filters, each multiple-choice:** Category (every category with a record, in catalogue order,
+  the person's own included; none ticked means all) and Status (default Active). They are repeated
+  GET parameters (`?category=vehicles&category=health&status=active&status=finished`) in a plain
+  GET form with an Apply button, so they deep-link and Back/Forward restore them; with JavaScript a
+  tick applies at once, in place, keeping the scroll position. The page validates them against the
+  person's catalogue and the four statuses (unknown values are dropped, no status means Active) and
+  the view filters; each option shows how many records it would show with the other filter as it
+  is. Applied filters show as removable chips, and one line says what's shown and what isn't
+  ("7 active · Not shown: 1 on hold, 2 finished, 1 cancelled"), each part not shown a link that
+  adds it. The control is the shared `MultiSelectFilter` (`src/components/ui/multi-select-filter.tsx`);
+  Bookings uses it for its Category, For and State filters, sharing `category` with Records.
+- **Active first, then the rest:** what's active is one panel per category with something active,
+  in catalogue order, anchors heading their records, most urgent first (overdue and date passed,
+  happening now, due soon, then by date, then undated by name). Each other chosen status follows as
+  its own quieter list across categories (On hold, Finished, Cancelled), newest first, each row
+  naming its category. Statuses never mix, and no panel is ever empty: a filter that matches
+  nothing shows one empty state with Clear filters.
+- **Compact rows:** the name (a link to the item's page), where it stands, "Not checked yet", one
+  muted line (kind, when it's due, renews or starts, cost and cycle, provider) and who's handling it
+  with the next step. Facts, reminders, provenance, downloads and the controls are one click away in
+  the row's Details. A record action returns to the filters it was submitted under; a link to a
+  record the filters hide opens the item's page, whose Back link shows that record's status.
+- **To check** stays above the filters, whatever they are. "Accept all n changes" accepts every
+  waiting change at once (member-scoped, audited like Confirm all). A change that gives a record
+  another kind reads first ("Kind: Renewal or appointment → Vehicle (Vehicles)"), without the old
+  schema's removed `type` and `source` fields; it needs the waiting change to carry the new kind.
+- **Fill in the rest** offers up to six empty built-in categories the person hasn't said are not
+  for them, with "Not for me" only, and the prompt to copy.
 
 ## Agents
 

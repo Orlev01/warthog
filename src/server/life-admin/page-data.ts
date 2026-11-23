@@ -38,7 +38,7 @@ export interface LifeAdminPageRecord extends LifeAdminRecord {
 
 // The owner-scoped list-all the Life Admin page renders: the records grouped by
 // kind, the moving-checklist items, and the shared tasks. `records` is every live record
-// in the owner order, typed ones (kind `item`) included — the "Your things" view reads it
+// in the owner order, typed ones (kind `item`) included — the Records tab reads it
 // (docs/adr/life-admin-profile.md); the three kind groups stay for older readers.
 export interface LifeAdminPageData {
   readonly records: LifeAdminPageRecord[];

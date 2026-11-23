@@ -13,7 +13,7 @@ import type { Catalogue } from "@/domain/life-admin/catalogue";
 import { calendarDate, MAX_FIELD_CHARS, MAX_NOTES_CHARS } from "@/domain/life-admin/normalise";
 import { CYCLES, type FieldDef, type RecordTypeDef } from "@/domain/life-admin/record-types";
 import { dueLabelOf, fieldLabel, statusChoices, statusLabel, typedFieldLabel } from "./record-format";
-import type { AssetOption, LifeAdminAction, LifeAdminRecordView } from "./record-view-types";
+import type { AssetOption, LifeAdminAction, LifeAdminRecordView, RecordFilter } from "./record-view-types";
 
 // The typed record forms (docs/adr/life-admin-profile.md): adding a record of a kind from the
 // person's own catalogue and editing one, with an input per field of the kind chosen by the
@@ -37,6 +37,27 @@ import type { AssetOption, LifeAdminAction, LifeAdminRecordView } from "./record
 // hidden because the label (and its chevron) says what opens.
 export function summaryClass(variant: ButtonVariant, size: "sm" | "md" = "md"): string {
   return buttonClasses({ variant, size, className: "w-fit list-none [&::-webkit-details-marker]:hidden" });
+}
+
+// Where a record action lands afterwards: the Records tab, under the filters it was shown with.
+// The Records view provides its filters; every record form posts them back as hidden values
+// (`returnTab`, `returnCategory`, `returnStatus`) and the page's actions redirect there.
+const RecordReturnContext = React.createContext<RecordFilter>({ categories: [], statuses: [] });
+export const RecordReturnProvider = RecordReturnContext.Provider;
+
+export function ReturnFields() {
+  const filter = React.useContext(RecordReturnContext);
+  return (
+    <>
+      <input type="hidden" name="returnTab" value="records" />
+      {filter.categories.map((category) => (
+        <input key={`c-${category}`} type="hidden" name="returnCategory" value={category} />
+      ))}
+      {filter.statuses.map((status) => (
+        <input key={`s-${status}`} type="hidden" name="returnStatus" value={status} />
+      ))}
+    </>
+  );
 }
 
 // A small muted line under a control: help text or the reason a control is unavailable.
@@ -387,7 +408,7 @@ export function EditRecordForm({
     <ActionForm action={editRecordAction} className="mt-3 flex min-w-0 flex-col gap-4">
       <PendingFormFields>
         <input type="hidden" name="recordId" value={record.id} />
-        <input type="hidden" name="returnTab" value="things" />
+        <ReturnFields />
         <TypeFieldInputs type={type} values={record.fields} zone={zone} />
         {held.length ? (
           <div className="flex min-w-0 flex-col gap-2 rounded-card bg-surface-muted p-4">
@@ -447,7 +468,7 @@ export function AddRecordPanel({
         <div className="flex min-w-0 flex-col gap-4">
           <form method="get" action={`/life-admin#${ADD_ANCHOR}`} className="flex min-w-0 flex-col gap-3 sm:flex-row sm:items-end">
             <input type="hidden" name="view" value="life" />
-            <input type="hidden" name="tab" value="things" />
+            <input type="hidden" name="tab" value="records" />
             <SelectField label="What are you adding?" id={pickerId} name="add" defaultValue={type?.id ?? ""} required width="text">
               <option value="" disabled>
                 Choose a type
@@ -494,7 +515,7 @@ function AddForm({
     <ActionForm action={addRecordAction} aria-label={`Add a ${type.label.toLowerCase()}`} className="flex min-w-0 flex-col gap-4 rounded-card bg-surface-muted p-4">
       <PendingFormFields>
         <input type="hidden" name="type" value={type.id} />
-        <input type="hidden" name="returnTab" value="things" />
+        <ReturnFields />
         <p className="font-medium text-fg">{type.label}</p>
         {type.documentLike ? (
           <Notice tone="info" announce={false}>
@@ -511,7 +532,7 @@ function AddForm({
       </PendingFormFields>
       <div className="flex flex-wrap items-center gap-2">
         <FormSubmit variant="primary" pendingLabel="Adding…">Add to Life admin</FormSubmit>
-        <ButtonLink variant="ghost" href={`/life-admin?view=life&tab=things#${ADD_ANCHOR}`}>
+        <ButtonLink variant="ghost" href={`/life-admin?view=life&tab=records#${ADD_ANCHOR}`}>
           Cancel
         </ButtonLink>
       </div>

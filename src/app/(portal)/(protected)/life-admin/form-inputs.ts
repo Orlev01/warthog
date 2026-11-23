@@ -1,5 +1,8 @@
 import { isTimeZone } from "@/domain/life-admin/lifecycle";
 import { canonicalDateTime, calendarDate } from "@/domain/life-admin/normalise";
+import { DEFAULT_LIST_STATUSES, LIST_STATUSES, recordsHref } from "@/components/life-admin/record-groups";
+import type { RecordFilter, RecordListStatus } from "@/components/life-admin/record-view-types";
+import { allParams } from "@/lib/href";
 
 // The Life admin forms' inputs, read from a submitted FormData (pure: no session, no DB).
 
@@ -60,17 +63,51 @@ export function recordStatus(form: FormData): string | undefined {
   return typeof value === "string" ? value || undefined : undefined;
 }
 
-// The records view's tab (`?tab=`): Your things, Upcoming, Bookings or the moving checklist.
-// The tabs Life admin had before typed records (subscriptions, receipts, renewals) — still
-// named in reminder links people already have — and anything else open "Your things".
-export type RecordTab = "things" | "upcoming" | "bookings" | "checklist";
-const RECORD_TABS: readonly RecordTab[] = ["things", "upcoming", "bookings", "checklist"];
+// The records view's tab (`?tab=`): Records, Upcoming, Bookings or the moving checklist. The
+// tab's old name ("things") and the tabs Life admin had before typed records (subscriptions,
+// receipts, renewals) — still named in reminder links people already have — and anything else
+// open Records.
+export type RecordTab = "records" | "upcoming" | "bookings" | "checklist";
+const RECORD_TABS: readonly RecordTab[] = ["records", "upcoming", "bookings", "checklist"];
 export function recordTab(value: unknown): RecordTab {
-  return typeof value === "string" && (RECORD_TABS as readonly string[]).includes(value) ? (value as RecordTab) : "things";
+  return typeof value === "string" && (RECORD_TABS as readonly string[]).includes(value) ? (value as RecordTab) : "records";
 }
 
+// A category id or a slug of the person's own ("vehicles", "x_7kq2mz"): the shape only; the page
+// checks it against the person's catalogue.
+const CATEGORY_ID = /^[a-z0-9_]{1,40}$/;
+const isListStatus = (value: string): value is RecordListStatus => (LIST_STATUSES as readonly string[]).includes(value);
+
+// Where a record action lands afterwards: the tab it was submitted from and, on Records, the
+// filters it was shown under (`returnCategory` / `returnStatus`, well-formed values only; the
+// page validates them again).
 export function recordReturnPath(form: FormData): string {
-  return `/life-admin?view=life&tab=${recordTab(form.get("returnTab"))}`;
+  const tab = recordTab(form.get("returnTab"));
+  if (tab !== "records") return `/life-admin?view=life&tab=${tab}`;
+  const strings = (name: string) => form.getAll(name).filter((value): value is string => typeof value === "string");
+  const statuses = allParams(strings("returnStatus")).filter(isListStatus);
+  return recordsHref({
+    categories: allParams(strings("returnCategory")).filter((value) => CATEGORY_ID.test(value)),
+    statuses: LIST_STATUSES.filter((status) => statuses.includes(status)),
+  });
+}
+
+/**
+ * The Records tab's filters from the address (`?category=…&status=…`, each repeatable): the
+ * categories the person's catalogue has (`categoryIds`, in its order), once each, and the known
+ * statuses in their usual order; Active when no status is left.
+ */
+export function recordFilters(
+  params: { readonly category?: string | readonly string[]; readonly status?: string | readonly string[] },
+  categoryIds: readonly string[],
+): RecordFilter {
+  const categories = new Set(allParams(params.category).filter((value) => CATEGORY_ID.test(value)));
+  const statuses = new Set(allParams(params.status).filter(isListStatus));
+  const chosen = LIST_STATUSES.filter((status) => statuses.has(status));
+  return {
+    categories: categoryIds.filter((id) => categories.has(id)),
+    statuses: chosen.length ? chosen : [...DEFAULT_LIST_STATUSES],
+  };
 }
 
 // The record type the Add form posts ("vehicles.registration"); the action validates it.
@@ -120,7 +157,7 @@ export function recordOffsets(raw: string): number[] {
 // Where an item-page action lands afterwards: that item's page (a well-formed id only), else
 // Life admin.
 export function itemPath(id: unknown): string {
-  return typeof id === "string" && UUID_RE.test(id) ? `/life-admin/items/${id.toLowerCase()}` : "/life-admin?view=life&tab=things";
+  return typeof id === "string" && UUID_RE.test(id) ? `/life-admin/items/${id.toLowerCase()}` : "/life-admin?view=life&tab=records";
 }
 
 // What the "Add a note or decision" form posts: the kind, the text and (for a next step) an
@@ -139,18 +176,30 @@ export function journalInput(form: FormData): { id: string; kind: string; text: 
 
 export const BOOKING_STATES = ["pending", "upcoming", "in_progress", "completed", "cancelled", "missed", "lapsed"] as const;
 
-// The Bookings tab's GET filters, each kept only when well formed (a category id or slug, a
-// short "for whom" label, a booking phase, a page number); the view matches them against
-// what the person actually has.
-export function bookingFilters(params: Readonly<Record<string, string | undefined>>): {
-  category?: string;
-  forWhom?: string;
-  state?: string;
+// The Bookings tab's GET filters, each repeatable and kept only when well formed (category ids
+// or slugs, short "for whom" labels, booking phases in their usual order, a page number); the
+// view matches them against what the person actually has.
+export function bookingFilters(params: Readonly<Record<string, string | readonly string[] | undefined>>): {
+  categories?: string[];
+  forWhom?: string[];
+  states?: string[];
   page?: number;
 } {
-  const category = params.category && /^[a-z0-9_]{1,40}$/.test(params.category) ? params.category : undefined;
-  const forWhom = params.for_whom && params.for_whom.trim().length > 0 && params.for_whom.length <= 60 ? params.for_whom.trim() : undefined;
-  const state = params.state && (BOOKING_STATES as readonly string[]).includes(params.state) ? params.state : undefined;
-  const page = params.page && /^\d{1,4}$/.test(params.page) && Number(params.page) >= 1 ? Number(params.page) : undefined;
-  return { ...(category ? { category } : {}), ...(forWhom ? { forWhom } : {}), ...(state ? { state } : {}), ...(page ? { page } : {}) };
+  const categories = allParams(params.category).filter((value) => CATEGORY_ID.test(value));
+  const people = new Map<string, string>();
+  for (const value of allParams(params.for_whom)) {
+    const who = value.trim();
+    if (who.length > 0 && value.length <= 60 && !people.has(who.toLowerCase())) people.set(who.toLowerCase(), who);
+  }
+  const forWhom = [...people.values()];
+  const given = allParams(params.state);
+  const states = BOOKING_STATES.filter((state) => given.includes(state));
+  const first = typeof params.page === "string" ? params.page : params.page?.[0];
+  const page = first && /^\d{1,4}$/.test(first) && Number(first) >= 1 ? Number(first) : undefined;
+  return {
+    ...(categories.length ? { categories } : {}),
+    ...(forWhom.length ? { forWhom } : {}),
+    ...(states.length ? { states } : {}),
+    ...(page ? { page } : {}),
+  };
 }

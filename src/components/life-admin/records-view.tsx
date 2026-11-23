@@ -1,48 +1,72 @@
 "use client";
 
 import * as React from "react";
-import { ChevronDown, ClipboardCheck, EyeOff, Inbox, MailSearch, Sparkles, Trash2 } from "lucide-react";
+import { ChevronDown, ClipboardCheck, EyeOff, MailSearch, SearchX, Sparkles, Trash2 } from "lucide-react";
 
 import { WorkspacePanel } from "@/components/shell/workspace-surfaces";
 import { ListGroup, LIST_ROW } from "@/components/ui/list-group";
+import { ListToolbar } from "@/components/ui/list-toolbar";
+import { ActiveFilters, type AppliedFilter } from "@/components/ui/filter-links";
+import { FilterForm, MultiSelectFilter } from "@/components/ui/multi-select-filter";
 import { ActionForm, FormSubmit } from "@/components/ui/form-submit";
 import { Badge } from "@/components/ui/badge";
+import { ButtonLink } from "@/components/ui/button-link";
 import { CopyButton } from "@/components/ui/copy-button";
 import { EmptyState } from "@/components/ui/empty";
 import type { Catalogue } from "@/domain/life-admin/catalogue";
 import type { CategoryDef, RecordTypeDef } from "@/domain/life-admin/record-types";
 import { categoryIcon } from "./category-icons";
-import { fillInChoices, fillInPrompt, joinWords, organiseByCategory, type AnchorGroup, type CategorySection } from "./record-groups";
-import { foundInSentence, pendingChangeLines, recordName, whenLine } from "./record-format";
-import { AddRecordPanel, DisabledControl, parentOptions, summaryClass } from "./record-forms";
-import { EditControl, NotCheckedTag, RecordFacts, RecordRow, kindLine, recordProvenance } from "./record-row";
+import {
+  DEFAULT_LIST_STATUSES,
+  LIST_STATUSES,
+  LIST_STATUS_LABELS,
+  fillInChoices,
+  fillInPrompt,
+  joinWords,
+  listedRecords,
+  recordsHref,
+  recordsView,
+  type AnchorGroup,
+  type CategorySection,
+  type RecordsView as RecordsViewModel,
+  type StatusSection,
+} from "./record-groups";
+import { foundInSentence, pendingChangeView, recordName, whenLine } from "./record-format";
+import { AddRecordPanel, DisabledControl, RecordReturnProvider, ReturnFields, parentOptions, summaryClass } from "./record-forms";
+import { EditControl, RecordFacts, RecordRow, itemHref, kindLine, recordProvenance } from "./record-row";
 import type {
   AssetOption,
   CategoryStateView,
   LifeAdminAction,
   LifeAdminRecordView,
   RecordActions,
+  RecordFilter,
+  RecordListStatus,
   SuggestedCategoryView,
 } from "./record-view-types";
 
 export { fillInPrompt } from "./record-groups";
 
-// "Your things" (docs/adr/life-admin-profile.md): the person's life admin as a typed profile,
+// The Records tab (docs/adr/life-admin-profile.md): the person's life admin as a typed profile,
 // filled in mostly by their own agents from email and checked by the person. Top to bottom:
 //
-//   1. To check — only when there is something to check: agents' suggestions (Confirm, Not
-//      mine, Edit), their proposed changes to confirmed records (Accept change, Keep mine), and
-//      categories of the person's own an agent suggested (Keep, Decline), each with the agent's
-//      reason. Agents are told a suggestion isn't checked until the person confirms it, and an
-//      agent never overwrites a confirmed record: its change waits here.
-//   2. One panel per category that shows — it has records, the person chose to show it, or it
-//      is one of their own — in the catalogue's order. An anchor (a vehicle, home, trip, pet,
-//      or a thing of a category of their own) heads the records that belong to it, whatever
-//      their category; a trip shows its dates from its bookings. What is finished is set aside
-//      in a collapsed "Finished (n)" per category.
-//   3. Fill in the rest — at most six empty built-in categories to show or say "not for me",
+//   1. To check — only when there is something to check, whatever the filters: agents'
+//      suggestions (Confirm, Not mine, Edit; Confirm all), their proposed changes to confirmed
+//      records (Accept change, Keep mine; Accept all), a change of kind first, and categories of
+//      the person's own an agent suggested (Keep, Decline), each with the agent's reason.
+//   2. The filters: Category and Status, each multiple-choice (`?category=…&status=…`), in a
+//      plain GET form, with the applied ones as removable chips and one line saying what's shown
+//      and what isn't (each part not shown a link that adds it).
+//   3. What's active, first and always when Active is chosen: one panel per category with
+//      something active, in catalogue order. An anchor (a vehicle, home, trip, pet, or a thing of
+//      a category of their own) heads the records that belong to it, whatever their category;
+//      within a group the most urgent comes first. Rows are compact; their details are one click
+//      away. No category panel is ever empty.
+//   4. Each other chosen status — On hold, Finished, Cancelled — as its own quieter list across
+//      categories, newest first, with each row's category. Statuses never mix.
+//   5. Fill in the rest — at most six empty built-in categories to look for or say "not for me",
 //      a prompt to copy into an agent, and the ones already marked "not for me", to undo.
-//   4. Add something yourself — pick a kind, then fill in its form.
+//   6. Add something yourself — pick a kind, then fill in its form.
 
 type Typed = { record: LifeAdminRecordView; type: RecordTypeDef; name: string; titleKey: string | null };
 
@@ -53,9 +77,18 @@ type Context = {
   currentYear: string;
   actions: RecordActions;
   names: ReadonlyMap<string, string>;
+  // The records the current filters show, so a link to one stays on the page.
+  visible: ReadonlySet<string>;
 };
 
-// A small form whose one button posts these hidden values to `action`.
+const DEFAULT_FILTER: RecordFilter = { categories: [], statuses: DEFAULT_LIST_STATUSES };
+
+function plural(count: number, one: string, many = `${one}s`): string {
+  return `${count} ${count === 1 ? one : many}`;
+}
+
+// A small form whose one button posts these hidden values to `action`, and returns to the
+// filters the page is showing.
 function PostButton({
   action,
   values,
@@ -74,6 +107,7 @@ function PostButton({
       {Object.entries(values).map(([name, value]) => (
         <input key={name} type="hidden" name={name} value={value} />
       ))}
+      <ReturnFields />
       <FormSubmit variant={variant} size="sm" pendingLabel={pendingLabel}>
         {children}
       </FormSubmit>
@@ -129,14 +163,16 @@ function PendingItem({ item, ctx }: { item: Typed; ctx: Context }) {
   const { record, type, name } = item;
   const { actions } = ctx;
   const pending = record.pending!;
-  const lines = pendingChangeLines(type, record, pending, ctx.zone);
+  const lines = pendingChangeView(ctx.catalogue, record, pending, ctx.zone);
+  // The record's own row when the filters show it, else its page.
+  const href = ctx.visible.has(record.id) ? `#record-${record.id}` : itemHref(record.id);
   return (
     <li id={`change-${record.id}`} className={LIST_ROW}>
       <div className="flex min-w-0 flex-col gap-3">
         <div className="flex min-w-0 flex-col gap-0.5">
           <p className="min-w-0 font-medium text-fg [overflow-wrap:anywhere]">{pending.byName} suggests a change</p>
           <p className="text-sm text-fg-muted [overflow-wrap:anywhere]">
-            {name.startsWith(type.label) ? null : `${type.label} · `}<a href={`#record-${record.id}`} className="font-medium text-fg underline underline-offset-4">{name}</a>
+            {name.startsWith(type.label) ? null : `${type.label} · `}<a href={href} className="font-medium text-fg underline underline-offset-4">{name}</a>
           </p>
         </div>
         {lines.length ? (
@@ -170,10 +206,6 @@ function PendingItem({ item, ctx }: { item: Typed; ctx: Context }) {
       </div>
     </li>
   );
-}
-
-function plural(count: number, one: string, many = `${one}s`): string {
-  return `${count} ${count === 1 ? one : many}`;
 }
 
 /** What declining a suggested category does, in words, for its confirmation. */
@@ -239,6 +271,21 @@ function SuggestedCategoryItem({ category, actions }: { category: SuggestedCateg
   );
 }
 
+// "Confirm all n" / "Accept all n changes": one form posting every id it covers.
+function AllForm({ action, ids, pendingLabel, children }: { action: LifeAdminAction; ids: readonly string[]; pendingLabel: string; children: React.ReactNode }) {
+  return (
+    <ActionForm action={action}>
+      {ids.map((id) => (
+        <input key={id} type="hidden" name="recordId" value={id} />
+      ))}
+      <ReturnFields />
+      <FormSubmit variant="secondary" pendingLabel={pendingLabel}>
+        {children}
+      </FormSubmit>
+    </ActionForm>
+  );
+}
+
 function ToCheckPanel({
   suggestions,
   changes,
@@ -253,21 +300,22 @@ function ToCheckPanel({
   const { actions } = ctx;
   const confirmAll =
     suggestions.length >= 2 && actions.confirmAllAction ? (
-      <ActionForm action={actions.confirmAllAction}>
-        {suggestions.map((item) => (
-          <input key={item.record.id} type="hidden" name="recordId" value={item.record.id} />
-        ))}
-        <FormSubmit variant="secondary" pendingLabel="Confirming…">
-          Confirm all {suggestions.length}
-        </FormSubmit>
-      </ActionForm>
-    ) : undefined;
+      <AllForm action={actions.confirmAllAction} ids={suggestions.map((item) => item.record.id)} pendingLabel="Confirming…">
+        Confirm all {suggestions.length}
+      </AllForm>
+    ) : null;
+  const acceptAll =
+    changes.length >= 2 && actions.acceptAllPendingAction ? (
+      <AllForm action={actions.acceptAllPendingAction} ids={changes.map((item) => item.record.id)} pendingLabel="Accepting…">
+        Accept all {changes.length} changes
+      </AllForm>
+    ) : null;
   return (
     <WorkspacePanel
       title="To check"
       description="Your agents found these. Agents are told they aren't checked yet until you confirm them, and an agent never changes what you've confirmed without asking you here."
       icon={ClipboardCheck}
-      footer={confirmAll}
+      footer={confirmAll || acceptAll ? <>{confirmAll}{acceptAll}</> : undefined}
     >
       {categories.length ? (
         <ListGroup id="to-check-categories" level={3} title="Suggested categories" count={categories.length}>
@@ -294,7 +342,86 @@ function ToCheckPanel({
   );
 }
 
-// ─── 2. One panel per category ───────────────────────────────────────────────────────
+// ─── 2. The filters ──────────────────────────────────────────────────────────────────
+
+const STATUS_WORDS: Readonly<Record<RecordListStatus, string>> = { active: "active", on_hold: "on hold", finished: "finished", cancelled: "cancelled" };
+
+function isDefault(filter: RecordFilter): boolean {
+  return filter.categories.length === 0 && filter.statuses.length === DEFAULT_LIST_STATUSES.length && filter.statuses.every((status) => DEFAULT_LIST_STATUSES.includes(status));
+}
+
+// "14 active · Not shown: 2 on hold, 15 finished, 3 cancelled", each part not shown a link that
+// adds it.
+function StatusLine({ view, filter }: { view: RecordsViewModel<LifeAdminRecordView>; filter: RecordFilter }) {
+  const count = (status: RecordListStatus) => view.statusOptions.find((option) => option.status === status)?.count ?? 0;
+  const shown = LIST_STATUSES.filter((status) => filter.statuses.includes(status)).map((status) => `${count(status)} ${STATUS_WORDS[status]}`);
+  const hidden = LIST_STATUSES.filter((status) => !filter.statuses.includes(status) && count(status) > 0);
+  return (
+    <>
+      {shown.join(", ")}
+      {hidden.length ? (
+        <>
+          {" · Not shown: "}
+          {hidden.map((status, index) => (
+            <React.Fragment key={status}>
+              {index > 0 ? ", " : null}
+              <a
+                href={recordsHref({ ...filter, statuses: [...filter.statuses, status] })}
+                className="inline-flex min-h-11 items-center font-medium text-fg underline underline-offset-4 lg:pointer-fine:min-h-0"
+              >
+                {count(status)} {STATUS_WORDS[status]}
+                <span className="sr-only">: show them</span>
+              </a>
+            </React.Fragment>
+          ))}
+        </>
+      ) : null}
+    </>
+  );
+}
+
+function RecordsToolbar({ view, filter }: { view: RecordsViewModel<LifeAdminRecordView>; filter: RecordFilter }) {
+  const applied: AppliedFilter[] = [];
+  for (const id of filter.categories) {
+    const label = view.categoryOptions.find((option) => option.category.id === id)?.category.label ?? id;
+    applied.push({ label: `Category: ${label}`, removeHref: recordsHref({ ...filter, categories: filter.categories.filter((other) => other !== id) }) });
+  }
+  if (!(filter.statuses.length === 1 && filter.statuses[0] === "active")) {
+    for (const status of filter.statuses) {
+      applied.push({ label: `Status: ${LIST_STATUS_LABELS[status]}`, removeHref: recordsHref({ ...filter, statuses: filter.statuses.filter((other) => other !== status) }) });
+    }
+  }
+  return (
+    <ListToolbar
+      label="Filter records"
+      search={
+        <FilterForm action="/life-admin" label="Filter records by category and status" hidden={{ view: "life", tab: "records" }}>
+          <MultiSelectFilter
+            label="Category"
+            name="category"
+            options={view.categoryOptions.map(({ category, count }) => ({ value: category.id, label: category.label, count }))}
+            selected={filter.categories}
+            hint="None ticked shows every category."
+            countLabel={(count) => plural(count, "record")}
+          />
+          <MultiSelectFilter
+            label="Status"
+            name="status"
+            options={view.statusOptions.map(({ status, label, count }) => ({ value: status, label, count }))}
+            selected={filter.statuses}
+            defaults={DEFAULT_LIST_STATUSES}
+            hint="What's active always comes first. With none ticked, Active shows."
+            countLabel={(count) => plural(count, "record")}
+          />
+        </FilterForm>
+      }
+      applied={<ActiveFilters filters={applied} clearHref={recordsHref(DEFAULT_FILTER)} />}
+      status={<StatusLine view={view} filter={filter} />}
+    />
+  );
+}
+
+// ─── 3. Active, one panel per category ───────────────────────────────────────────────
 
 function anchorSummary(group: AnchorGroup<LifeAdminRecordView>, ctx: Context): string {
   const { anchor, type, children } = group;
@@ -310,89 +437,101 @@ function anchorSummary(group: AnchorGroup<LifeAdminRecordView>, ctx: Context): s
   return [type.label, type.anchor && anchor.phase?.starts ? span : null, nextText].filter(Boolean).join(" · ");
 }
 
-function CategoryPanel({
-  category,
-  section,
-  suggested,
-  ctx,
-}: {
-  category: CategoryDef;
-  section?: CategorySection<LifeAdminRecordView>;
-  suggested: boolean;
-  ctx: Context;
-}) {
-  const row = (record: LifeAdminRecordView, options: { lead?: string; partOf?: string | null } = {}) => (
+function Row({ record, ctx, lead, partOf, category }: { record: LifeAdminRecordView; ctx: Context; lead?: string; partOf?: string | null; category?: string }) {
+  return (
     <RecordRow
-      key={record.id}
       record={record}
       type={ctx.catalogue.typeOfRecord(record.kind, record.type ?? null)}
       catalogue={ctx.catalogue}
-      lead={options.lead}
-      partOf={options.partOf}
+      lead={lead}
+      partOf={partOf}
+      category={category}
       assets={ctx.assets}
       zone={ctx.zone}
       currentYear={ctx.currentYear}
       actions={ctx.actions}
     />
   );
-  const title = suggested ? (
-    <span className="inline-flex flex-wrap items-center gap-2">
-      {category.label}
-      <Badge tone="info" icon={Sparkles}>Suggested</Badge>
-    </span>
-  ) : (
-    category.label
-  );
-  const anchors = section?.anchors ?? [];
-  const loose = section?.loose ?? [];
-  const finished = section?.finished ?? [];
+}
+
+function CategoryPanel({ section, suggested, ctx }: { section: CategorySection<LifeAdminRecordView>; suggested: boolean; ctx: Context }) {
+  const { category, anchors, loose } = section;
   const anchorNoun = anchors[0]?.type.label.toLowerCase();
-  const hide =
-    category.origin === "builtin" && ctx.actions.setCategoryVisibilityAction ? (
-      <PostButton action={ctx.actions.setCategoryVisibilityAction} values={{ category: category.id, setting: "clear" }} variant="secondary" pendingLabel="Hiding…">
-        Hide until there&apos;s something here<span className="sr-only">: {category.label}</span>
-      </PostButton>
-    ) : undefined;
   return (
-    <WorkspacePanel title={title} description={category.description} icon={categoryIcon(category.icon)}>
-      {!section ? (
-        <EmptyState
-          variant="inline"
-          icon={Inbox}
-          heading="Nothing here yet."
-          description="Add one yourself below, or ask your agent to look for it in your email."
-          action={hide}
-        />
-      ) : null}
+    <WorkspacePanel
+      title={
+        suggested ? (
+          <span className="inline-flex flex-wrap items-center gap-2">
+            {category.label}
+            <Badge tone="info" icon={Sparkles}>Suggested</Badge>
+          </span>
+        ) : (
+          category.label
+        )
+      }
+      icon={categoryIcon(category.icon)}
+    >
       {anchors.map((group) => {
         const { anchor, type, children } = group;
         const { name } = recordName(type, anchor.fields, Boolean(anchor.type));
         return (
           <ListGroup key={anchor.id} id={`asset-${anchor.id}`} level={3} title={name} summary={anchorSummary(group, ctx)}>
-            {row(anchor, { lead: `${type.label} details` })}
-            {children.map((child) => row(child))}
+            <Row record={anchor} ctx={ctx} lead={`${type.label} details`} />
+            {children.map((child) => (
+              <Row key={child.id} record={child} ctx={ctx} />
+            ))}
           </ListGroup>
         );
       })}
       {loose.length === 0 ? null : anchors.length ? (
         <ListGroup id={`category-${category.id}-unlinked`} level={3} title={`Not linked to a ${anchorNoun}`} count={loose.length}>
-          {loose.map((record) => row(record))}
+          {loose.map((record) => (
+            <Row key={record.id} record={record} ctx={ctx} />
+          ))}
         </ListGroup>
       ) : (
         <ul role="list" className="flex min-w-0 flex-col">
-          {loose.map((record) => row(record))}
+          {loose.map((record) => (
+            <Row key={record.id} record={record} ctx={ctx} />
+          ))}
         </ul>
       )}
-      {finished.length ? (
-        <ListGroup id={`category-${category.id}-finished`} level={3} title="Finished" count={finished.length} collapsible>
-          {finished.map((record) => row(record, { partOf: record.parentId ? ctx.names.get(record.parentId) ?? null : null }))}
-        </ListGroup>
-      ) : null}
     </WorkspacePanel>
   );
 }
 
-// ─── 3. Fill in the rest ─────────────────────────────────────────────────────────────
+// ─── 4. Each other status, across categories ─────────────────────────────────────────
+
+const SECTION_SUMMARY: Readonly<Record<RecordListStatus, string>> = {
+  active: "",
+  on_hold: "Paused for now, newest first.",
+  finished: "Ended, completed or resolved, newest first. Each keeps its whole history.",
+  cancelled: "Cancelled, missed or lapsed, newest first.",
+};
+
+function StatusList({ section, ctx }: { section: StatusSection<LifeAdminRecordView>; ctx: Context }) {
+  return (
+    <ListGroup
+      id={`records-${section.status}`}
+      level={2}
+      title={<span className="text-fg-muted">{section.label}</span>}
+      count={section.rows.length}
+      summary={SECTION_SUMMARY[section.status]}
+    >
+      {section.rows.map((row) => (
+        <Row
+          key={row.record.id}
+          record={row.record}
+          ctx={ctx}
+          category={row.category?.label}
+          partOf={row.anchor ? ctx.names.get(row.anchor.id) ?? null : null}
+        />
+      ))}
+    </ListGroup>
+  );
+}
+
+// ─── 5. Fill in the rest ─────────────────────────────────────────────────────────────
 
 function FillInPanel({
   available,
@@ -409,7 +548,7 @@ function FillInPanel({
   return (
     <WorkspacePanel
       title={hasRecords ? "Fill in the rest" : "Fill in your life admin"}
-      description="Your agent can find these in your email. What it saves waits under To check until you confirm it. Show a category to keep it here while it's empty, or say it's not for you."
+      description="Your agent can find these in your email. What it saves waits under To check until you confirm it. Say a category is not for you, and it won't be suggested again."
       icon={MailSearch}
       footer="Warthog doesn't read your email itself. Your agent does, through Warthog, and only what you allow it to."
     >
@@ -429,10 +568,8 @@ function FillInPanel({
                   </div>
                   {action ? (
                     <div className="flex shrink-0 flex-wrap items-start gap-2">
-                      <PostButton action={action} values={{ category: category.id, setting: "show" }} variant="secondary" pendingLabel="Showing…">
-                        Show<span className="sr-only"> {category.label}</span>
-                      </PostButton>
                       <PostButton action={action} values={{ category: category.id, setting: "not_for_me" }} variant="ghost" pendingLabel="Hiding…">
+                        <EyeOff aria-hidden={true} className="h-4 w-4 shrink-0 text-fg-muted" />
                         Not for me<span className="sr-only">: {category.label}</span>
                       </PostButton>
                     </div>
@@ -480,9 +617,35 @@ function FillInPanel({
   );
 }
 
-// ─── the "Your things" tab ───────────────────────────────────────────────────────────
+// ─── nothing matches ─────────────────────────────────────────────────────────────────
 
-export function ThingsView({
+function NoMatches({ filter, view }: { filter: RecordFilter; view: RecordsViewModel<LifeAdminRecordView> }) {
+  // With the default filters, nothing is active: offer what there is instead of a "Clear" that
+  // would change nothing.
+  if (isDefault(filter)) {
+    const others = view.statusOptions.filter((option) => option.status !== "active" && option.count > 0).map((option) => option.status);
+    return (
+      <EmptyState
+        icon={SearchX}
+        heading="Nothing is active right now."
+        description="Everything you keep is on hold, finished or cancelled."
+        action={<ButtonLink href={recordsHref({ categories: [], statuses: ["active", ...others] })} size="sm">Show everything</ButtonLink>}
+      />
+    );
+  }
+  return (
+    <EmptyState
+      icon={SearchX}
+      heading="No records match these filters."
+      description="Choose other categories or statuses, or clear the filters to see what's active."
+      action={<ButtonLink href={recordsHref(DEFAULT_FILTER)} size="sm">Clear filters</ButtonLink>}
+    />
+  );
+}
+
+// ─── the Records tab ─────────────────────────────────────────────────────────────────
+
+export function RecordsView({
   records,
   catalogue,
   categories,
@@ -490,6 +653,7 @@ export function ThingsView({
   today,
   zone = "UTC",
   addType,
+  filter = DEFAULT_FILTER,
   actions,
 }: {
   records: readonly LifeAdminRecordView[];
@@ -499,6 +663,8 @@ export function ThingsView({
   today: string;
   zone?: string;
   addType?: string | null;
+  // The filters the page validated; Active in every category when absent.
+  filter?: RecordFilter;
   actions: RecordActions;
 }) {
   const all: Typed[] = records.map((record) => {
@@ -510,36 +676,34 @@ export function ThingsView({
   const assets: AssetOption[] = all
     .filter((item) => item.type.anchor)
     .map((item) => ({ id: item.record.id, name: item.name, typeId: item.type.id, typeLabel: item.type.label }));
-  const ctx: Context = { catalogue, assets, zone, currentYear: today.slice(0, 4), actions, names };
+  const listed = listedRecords(records, catalogue, categories);
+  const view = recordsView(listed, catalogue, filter);
+  const visible = new Set([
+    ...view.active.flatMap((section) => [...section.anchors.flatMap((group) => [group.anchor, ...group.children]), ...section.loose]).map((record) => record.id),
+    ...view.others.flatMap((section) => section.rows.map((row) => row.record.id)),
+  ]);
+  const ctx: Context = { catalogue, assets, zone, currentYear: today.slice(0, 4), actions, names, visible };
   const suggestions = all.filter((item) => item.record.reviewState === "suggested");
   const changes = all.filter((item) => item.record.pending && item.record.reviewState !== "suggested");
-  const shownIds = new Set(categories.filter((state) => state.visibility === "shown").map((state) => state.id));
-  const counts = new Map(categories.map((state) => [state.id, state.records] as const));
-  const { sections } = organiseByCategory(records, catalogue, shownIds);
-  const sectionOf = new Map(sections.map((section) => [section.category.id, section] as const));
   const { available, notForMe } = fillInChoices(catalogue, categories);
   return (
-    <>
+    <RecordReturnProvider value={filter}>
       {suggestions.length || changes.length || suggestedCategories.length ? (
         <ToCheckPanel suggestions={suggestions} changes={changes} categories={suggestedCategories} ctx={ctx} />
       ) : null}
-      {catalogue.categories
-        // A category whose records all sit under an anchor elsewhere (an electricity account
-        // under its home) has no panel of its own; one shown while empty says so.
-        .filter((category) => shownIds.has(category.id) && (sectionOf.has(category.id) || (counts.get(category.id) ?? 0) === 0))
-        .map((category) => (
-          <CategoryPanel
-            key={category.id}
-            category={category}
-            section={sectionOf.get(category.id)}
-            suggested={catalogue.customStates[category.id] === "suggested"}
-            ctx={ctx}
-          />
-        ))}
+      {listed.length ? <RecordsToolbar view={view} filter={filter} /> : null}
+      {view.active.map((section) => (
+        <CategoryPanel key={section.category.id} section={section} suggested={catalogue.customStates[section.category.id] === "suggested"} ctx={ctx} />
+      ))}
+      {view.others.map((section) => (
+        <StatusList key={section.status} section={section} ctx={ctx} />
+      ))}
+      {listed.length && view.shown === 0 ? <NoMatches filter={filter} view={view} /> : null}
       {available.length || notForMe.length ? (
         <FillInPanel available={available} notForMe={notForMe} hasRecords={records.length > 0} action={actions.setCategoryVisibilityAction} />
       ) : null}
       <AddRecordPanel catalogue={catalogue} addType={addType} assets={assets} zone={zone} addRecordAction={actions.addRecordAction} />
-    </>
+    </RecordReturnProvider>
   );
 }
+

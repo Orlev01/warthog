@@ -48,7 +48,7 @@ test("one heading band holds the page title, its purpose and the two views as ta
 test("both views stay mounted, so a half-typed task survives switching to Records and back", () => {
   for (const initialView of ["life", "tasks"] as const) {
     const panels = tabpanels(render({ initialView }));
-    // The two outer views (the records view nests its own Your things | checklist panels).
+    // The two outer views (the records view nests its own Records | … | checklist panels).
     const records = panels.find((panel) => /role="tablist" aria-label="Life admin sections"/.test(panel.body));
     const tasks = panels.find((panel) => /placeholder="Describe the task"/.test(panel.body));
     assert.ok(records && tasks, `both views are rendered when ${initialView} is shown first`);

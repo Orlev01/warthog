@@ -48,7 +48,8 @@ import { validTaskAssignee } from "../../../../server/db/task-handoffs";
 // refused with the field's name — never its value. An edit sends only what changed, removes
 // what the person cleared, and never touches a value an older agent saved as a list or
 // object (engineering finding M4). The person confirms an agent's suggestion, says it isn't
-// theirs (a tombstone, so it isn't added again), or accepts or declines an agent's change.
+// theirs (a tombstone, so it isn't added again), or accepts (one by one or all at once) or
+// declines an agent's change.
 // They keep or decline a category an agent suggested, show or hide a built-in one, add a note,
 // decision or next step to an item's journal (refused when it holds an identifier Warthog
 // never keeps, naming the place, never the text), mark a next step done, and say which agent is
@@ -355,6 +356,7 @@ export interface LifeAdminActions {
   confirmAll(session: Session, input: IdsInput): Promise<ActionResult>;
   dismissRecord(session: Session, input: IdInput): Promise<ActionResult>;
   acceptPending(session: Session, input: IdInput): Promise<ActionResult>;
+  acceptAllPending(session: Session, input: IdsInput): Promise<ActionResult>;
   declinePending(session: Session, input: IdInput): Promise<ActionResult>;
   setRecordReminders(session: Session, input: SetRemindersInput): Promise<ActionResult>;
   toggleChecklistItem(session: Session, input: IdInput): Promise<ActionResult>;
@@ -421,12 +423,17 @@ function foundInView(foundIn: RecordFoundIn | null | undefined): RecordFoundInVi
   };
 }
 
+// A waiting change's new kind ("vehicles.vehicle"), when it carries one: a kind's id only.
+const KIND_ID = /^[a-z0-9_]{1,40}\.[a-z0-9_]{1,40}$/;
+
 function pendingView(pending: PendingChange | null, names: ReadonlyMap<string, string>): PendingChangeView | null {
   if (!pending) return null;
   const set: Record<string, string> = {};
   for (const [key, value] of Object.entries(pending.set ?? {})) set[key] = value == null ? "" : String(value);
+  const type = (pending as PendingChange & { readonly type?: unknown }).type;
   return {
     byName: agentName(names, pending.byAgentId),
+    ...(typeof type === "string" && KIND_ID.test(type) ? { type } : {}),
     set,
     remove: [...(pending.remove ?? [])],
     ...(pending.dueDate !== undefined ? { dueDate: pending.dueDate } : {}),
@@ -1010,6 +1017,27 @@ export function createLifeAdminActions(deps: LifeAdminActionsDeps): LifeAdminAct
     return accepted ? { ok: true, outcome: "updated", recordId: id } : { ok: false, reason: "not_found" };
   }
 
+  // Accept several waiting changes at once ("Accept all n changes"). Every id must be well formed
+  // (a 4xx otherwise, before any write); each is accepted member-scoped, so another person's id,
+  // or a record with no waiting change, changes nothing. Refused when none of them was accepted.
+  async function acceptAllPending(session: Session, input: IdsInput): Promise<ActionResult> {
+    const { ids } = parseParams(idsSchema, input);
+    const { ctx } = await personFor(session.userId);
+    const count = await audited(ctx, async (tx, record) => {
+      const done: string[] = [];
+      const fields: string[] = [];
+      for (const id of new Set(ids)) {
+        const before = await getRecordForUser(tx.db, session.userId, id, ctx.dek);
+        if (!before?.pending || !(await acceptPendingChange(tx, id))) continue;
+        done.push(id);
+        fields.push(...Object.keys(before.pending.set ?? {}), ...(before.pending.remove ?? []));
+      }
+      if (done.length > 0) await record("life_admin_change_accepted", { count: done.length, fields: fieldNames(fields) }, done);
+      return done.length;
+    });
+    return count > 0 ? { ok: true, outcome: "updated", count } : { ok: false, reason: "not_found" };
+  }
+
   // Keep the person's own values: the agent's waiting change is dropped. Member-scoped.
   async function declinePending(session: Session, input: IdInput): Promise<ActionResult> {
     const { id } = parseParams(idOnlySchema, input);
@@ -1313,6 +1341,7 @@ export function createLifeAdminActions(deps: LifeAdminActionsDeps): LifeAdminAct
     confirmAll,
     dismissRecord,
     acceptPending,
+    acceptAllPending,
     declinePending,
     saveRecord,
     updateRecord,
