@@ -747,11 +747,6 @@ export function ReleaseApprove(props: ReleaseApproveProps): React.ReactElement {
           {state.notice}
         </p>
       ) : null}
-      {state.status === "released" ? (
-        <p role="status" className="text-sm text-success">
-          Handed over. The agent can collect it once.
-        </p>
-      ) : null}
       {state.newPhrase !== null ? (
         <RecoveryPhraseReveal
           phrase={state.newPhrase}
