@@ -17,7 +17,7 @@ function render(over: Partial<LifeAdminScreenProps> = {}): string {
   return renderToStaticMarkup(
     <LifeAdminScreen
       initialView="life"
-      records={{ today: "2026-11-12", subscriptions: [], receipts: [], renewals: [], checklist: [], addRecordAction: noop }}
+      records={{ today: "2026-11-12", records: [], checklist: [], addRecordAction: noop }}
       tasks={{ tasks: [], agents: [{ id: "agent-1", name: "Zephyr Assistant" }], createTaskAction: noop }}
       {...over}
     />,
@@ -48,8 +48,8 @@ test("one heading band holds the page title, its purpose and the two views as ta
 test("both views stay mounted, so a half-typed task survives switching to Records and back", () => {
   for (const initialView of ["life", "tasks"] as const) {
     const panels = tabpanels(render({ initialView }));
-    // The two outer views (the records view nests its own record-kind panels).
-    const records = panels.find((panel) => /Records and reminders/.test(panel.body));
+    // The two outer views (the records view nests its own Your things | checklist panels).
+    const records = panels.find((panel) => /role="tablist" aria-label="Life admin sections"/.test(panel.body));
     const tasks = panels.find((panel) => /placeholder="Describe the task"/.test(panel.body));
     assert.ok(records && tasks, `both views are rendered when ${initialView} is shown first`);
     assert.equal(/\bhidden=""/.test(tasks!.attrs), initialView !== "tasks", "only the chosen view is visible");

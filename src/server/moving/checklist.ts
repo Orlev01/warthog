@@ -18,6 +18,8 @@
 // seams binds its values rather than splicing them (INV-102). A receipt/warranty record is NOT a place
 // that holds the address, so it is never seeded.
 
+import { catalogueFor } from "../life-admin/catalogue";
+import { storedRecordName } from "../../domain/life-admin/normalise";
 import { resolve, type Address, type MemberAddress } from "../../domain/address/moving";
 import type { Session } from "../auth/session";
 import { listConnectionsForUser } from "../db/connections";
@@ -117,15 +119,23 @@ async function gatherSources(db: Db, userId: string, dek: Uint8Array): Promise<S
     });
   }
 
+  // Typed records (docs/adr/life-admin-profile.md) whose kind keeps the address — rego, licence,
+  // insurers, utilities, super, a custom kind that says so … — are checklist places too, under
+  // "renewal"; the original subscriptions and renewals always were.
+  const { catalogue } = await catalogueFor(db, userId, dek);
   for (const record of await listRecordsForUser(db, userId, dek)) {
+    const typed = record.type ? catalogue.type(record.type) : undefined;
     const sourceKind =
       record.kind === "subscription"
         ? "subscription"
         : record.kind === "renewal_appointment"
           ? "renewal"
-          : null;
+          : typed?.holdsAddress
+            ? "renewal"
+            : null;
     if (sourceKind === null) continue; // a receipt/warranty does not hold the address
-    items.push({ label: labelFor(recordName(record.fields)), sourceKind, sourceReference: record.id });
+    const name = typed ? storedRecordName(typed, record.fields) : recordName(record.fields);
+    items.push({ label: labelFor(name), sourceKind, sourceReference: record.id });
   }
 
   return items;

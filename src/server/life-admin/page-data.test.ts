@@ -86,7 +86,8 @@ import assert from "node:assert/strict";
 import { randomBytes } from "node:crypto";
 import { z } from "zod";
 
-import { lifeAdminPageData } from "./page-data";
+import { lifeAdminPageData, recordPhases } from "./page-data";
+import { BUILT_IN } from "../../domain/life-admin/catalogue";
 import { createRecord } from "../db/life-admin-records";
 import { addOwnItem } from "../db/moving-checklist";
 import { createTask } from "../db/tasks";
@@ -805,4 +806,32 @@ test("[secrets-from-env] no ambient env secret appears in the assembled data; th
     restoreEnv("WARTHOG_DECOY_SECRET", prevDecoy);
     restoreEnv("DATABASE_URL", prevDbUrl);
   }
+});
+
+// ===========================================================================
+// recordPhases — where each record stands, from the one lifecycle module; a trip takes its
+// dates from its bookings, any other anchor shows the span of its live bookings.
+// ===========================================================================
+
+test("recordPhases: each record's phase, a trip's span from the bookings that went ahead, an anchor's from its live bookings", () => {
+  const now = new Date("2026-11-23T01:00:00.000Z");
+  const zone = "Australia/Sydney";
+  const base = { kind: "item" as const, status: "active", state: "confirmed", dueDate: null, parentId: null };
+  const records = [
+    { ...base, id: "trip", type: "travel.trip", fields: { name: "Tokyo" } },
+    { ...base, id: "f1", type: "travel.flight", parentId: "trip", fields: { starts_at: "2026-12-03T09:00+11:00[Australia/Sydney]" }, dueDate: "2026-12-03" },
+    { ...base, id: "f2", type: "travel.flight", parentId: "trip", fields: { starts_at: "2026-12-10T10:00+09:00[Asia/Tokyo]" }, dueDate: "2026-12-10" },
+    { ...base, id: "f3", type: "travel.flight", parentId: "trip", status: "cancelled", state: "cancelled", fields: { starts_at: "2026-12-20T10:00+09:00[Asia/Tokyo]" }, dueDate: "2026-12-20" },
+    { ...base, id: "bike", type: "vehicles.vehicle", fields: { name: "Honda" } },
+    { ...base, id: "svc-old", type: "vehicles.booking", parentId: "bike", fields: { starts_at: "2026-08-01T09:00+10:00[Australia/Sydney]" }, dueDate: "2026-08-01" },
+    { ...base, id: "svc-new", type: "vehicles.booking", parentId: "bike", fields: { starts_at: "2026-12-05T09:00+11:00[Australia/Sydney]" }, dueDate: "2026-12-05" },
+    { ...base, id: "rego", type: "vehicles.registration", parentId: "bike", fields: {}, dueDate: "2026-12-14" },
+  ];
+  const phases = recordPhases(records, BUILT_IN, now, zone);
+  const trip = phases.get("trip")!;
+  assert.deepEqual([trip.phase, trip.starts?.toISOString(), trip.ends?.toISOString()], ["upcoming", "2026-12-02T22:00:00.000Z", "2026-12-10T05:00:00.000Z"], "from the first flight to the end of the last one that's going ahead");
+  assert.equal(phases.get("f3")!.phase, "cancelled");
+  const bike = phases.get("bike")!;
+  assert.deepEqual([bike.phase, bike.starts?.toISOString()], ["current", "2026-12-04T22:00:00.000Z"], "a vehicle shows its live booking, not last August's service");
+  assert.deepEqual([phases.get("svc-old")!.bucket, phases.get("rego")!.phase], ["finished", "due_soon"]);
 });

@@ -392,33 +392,19 @@ test("the loader returns the session user's records, checklist and tasks and mou
       `the loader returns the owner's agents; got ${JSON.stringify(data.agents)}`,
     );
 
-    // "mounts LifeAdminView": feeding the loader's grouped records + checklist straight
-    // into the already-render-tested view renders the owner's screen. Each tab is checked
-    // via initialTab (only the active tab's panel renders).
-    const subsText = strip(
-      renderToStaticMarkup(
-        <LifeAdminView
-          today={data.today}
-          subscriptions={data.subscriptions}
-          receipts={data.receipts}
-          renewals={data.renewals}
-          checklist={data.checklist}
-          initialTab="subscriptions"
-        />,
-      ),
+    // "mounts LifeAdminView": feeding the loader's records + checklist straight into the
+    // already-render-tested view renders the owner's screen: every kind on "Your things".
+    assert.equal(data.records.length, 3, "every record kind is loaded");
+    const thingsText = strip(
+      renderToStaticMarkup(<LifeAdminView today={data.today} records={data.records} checklist={data.checklist} />),
     );
-    assert.ok(subsText.includes("Netflix"), "mounting LifeAdminView renders the owner's subscription");
+    for (const value of ["Netflix", "JB Hi-Fi", "Passport renewal"]) {
+      assert.ok(thingsText.includes(value), `mounting LifeAdminView renders the owner's ${value}`);
+    }
 
     const checklistText = strip(
       renderToStaticMarkup(
-        <LifeAdminView
-          today={data.today}
-          subscriptions={data.subscriptions}
-          receipts={data.receipts}
-          renewals={data.renewals}
-          checklist={data.checklist}
-          initialTab="checklist"
-        />,
+        <LifeAdminView today={data.today} records={data.records} checklist={data.checklist} initialTab="checklist" />,
       ),
     );
     assert.ok(checklistText.includes("Tell the bank"), "the owner's checklist item renders on the checklist tab");
@@ -444,23 +430,13 @@ test("the loader returns empty collections for a person who has saved nothing; t
 
     const data = await makeActions(db, keyWrapper).load(sessionFor(userId));
 
-    assert.deepEqual(data.subscriptions, [], "no subscriptions");
-    assert.deepEqual(data.receipts, [], "no receipts");
-    assert.deepEqual(data.renewals, [], "no renewals");
+    assert.deepEqual(data.records, [], "no records");
     assert.deepEqual(data.checklist, [], "no checklist items");
     assert.deepEqual(data.tasks, [], "no tasks");
 
     // The screens still render (the Add / Create controls, the empty states) with no data.
     const lifeText = strip(
-      renderToStaticMarkup(
-        <LifeAdminView
-          today={data.today}
-          subscriptions={data.subscriptions}
-          receipts={data.receipts}
-          renewals={data.renewals}
-          checklist={data.checklist}
-        />,
-      ),
+      renderToStaticMarkup(<LifeAdminView today={data.today} records={data.records} checklist={data.checklist} />),
     );
     assert.ok(lifeText.length > 0, "the empty Life Admin screen still renders");
     const tasksText = strip(renderToStaticMarkup(<TasksView tasks={data.tasks} agents={data.agents} />));
@@ -512,24 +488,30 @@ test("saveRecord persists a record the loader reads back; updateRecord edits it;
 
     const saved = await actions.saveRecord(
       session,
-      as<"saveRecord">({ kind: "subscription", fields: { service: "Spotify" }, dueDate: "2027-05-01", status: "active" }),
+      as<"saveRecord">({ type: "subscriptions.service", fields: { name: "Spotify", provider: "" }, dueDate: "2027-05-01", status: "active" }),
     );
     assert.equal(okOf(saved), true, "saveRecord succeeds for the session user");
 
-    // It round-trips decrypted through the store.
+    // It round-trips decrypted through the store, typed, as the person's own (confirmed) record.
     const afterSave = await listRecordsForUser(db, userId, dek);
-    const stored = afterSave.find((r) => (r.fields as { service?: string }).service === "Spotify");
+    const stored = afterSave.find((r) => (r.fields as { name?: string }).name === "Spotify");
     assert.ok(stored != null, "the saved record round-trips decrypted");
+    assert.deepEqual(stored!.fields, { name: "Spotify" }, "an empty field is not stored");
+    assert.equal(stored!.type, "subscriptions.service");
+    assert.equal(stored!.kind, "subscription");
+    assert.equal(stored!.reviewState, "confirmed");
+    assert.deepEqual(stored!.source, { kind: "person" });
+    assert.equal((saved as { recordId?: string }).recordId, stored!.id, "the save says which record it made");
 
-    // updateRecord replaces the owned record's fields.
+    // updateRecord changes the owned record's fields.
     const updated = await actions.updateRecord(
       session,
-      as<"updateRecord">({ id: stored!.id, fields: { service: "Spotify Family" }, status: "active" }),
+      as<"updateRecord">({ id: stored!.id, fields: { name: "Spotify Family" }, status: "active" }),
     );
     assert.equal(okOf(updated), true, "updateRecord succeeds");
     const afterUpdate = (await listRecordsForUser(db, userId, dek)).find((r) => r.id === stored!.id);
     assert.equal(
-      (afterUpdate!.fields as { service?: string }).service,
+      (afterUpdate!.fields as { name?: string }).name,
       "Spotify Family",
       "updateRecord changed the record's fields",
     );
@@ -543,7 +525,7 @@ test("saveRecord persists a record the loader reads back; updateRecord edits it;
     const afterReminders = (await listRecordsForUser(db, userId, dek)).find((r) => r.id === stored!.id);
     assert.deepEqual(afterReminders!.reminderOffsets, [30, 7], "the reminder offsets were changed");
     assert.equal(
-      (afterReminders!.fields as { service?: string }).service,
+      (afterReminders!.fields as { name?: string }).name,
       "Spotify Family",
       "setRecordReminders left the record's fields untouched",
     );
@@ -861,7 +843,7 @@ test("attachReceiptFile accepts a duck-typed (non-File) upload and stores only D
 
     // The loader now flags the receipt as having an attached file.
     const data = await actions.load(session);
-    const loadedReceipt = data.receipts.find((r: { id: string }) => r.id === receipt.id);
+    const loadedReceipt = data.records.find((r: { id: string }) => r.id === receipt.id);
     assert.ok(loadedReceipt != null, "the receipt appears on the loaded screen");
     assert.equal(loadedReceipt!.hasAttachedFile, true, "the loader flags the receipt as having an attached file");
   } finally {
@@ -1073,7 +1055,7 @@ test("saveRecord / createTask take the owner from the session — a userId smugg
 
     const savedRecord = await actions.saveRecord(
       sessionFor(session.userId),
-      as<"saveRecord">({ kind: "subscription", fields: { service: "Smuggled record" }, status: "active", userId: victim.userId }),
+      as<"saveRecord">({ type: "subscriptions.service", fields: { name: "Smuggled record" }, status: "active", userId: victim.userId }),
     );
     assert.equal(okOf(savedRecord), true, "the record save succeeds under the session user");
     const savedTask = await actions.createTask(
@@ -1084,7 +1066,7 @@ test("saveRecord / createTask take the owner from the session — a userId smugg
 
     // Everything landed under the SESSION user, never the smuggled victim id.
     assert.ok(
-      (await listRecordsForUser(db, session.userId, session.dek)).some((r) => (r.fields as { service?: string }).service === "Smuggled record"),
+      (await listRecordsForUser(db, session.userId, session.dek)).some((r) => (r.fields as { name?: string }).name === "Smuggled record"),
       "the record is stored under the session user",
     );
     assert.deepEqual(await listRecordsForUser(db, victim.userId, victim.dek), [], "the victim gained no record");
@@ -1113,15 +1095,22 @@ test("malformed / oversized input is rejected with a 4xx and nothing is persiste
     const session = sessionFor(userId);
     const HUGE = "x".repeat(200_000);
 
-    // saveRecord: an unknown kind, a missing kind, and a grossly oversized field value.
-    await assertRejects4xx("saveRecord(unknown kind)", () =>
-      actions.saveRecord(session, as<"saveRecord">({ kind: "nonsense", fields: { a: "b" }, status: "active" })),
+    // saveRecord: an unknown type, a missing type, an old kind in place of a type, an unknown
+    // status, and a grossly oversized field value.
+    await assertRejects4xx("saveRecord(unknown type)", () =>
+      actions.saveRecord(session, as<"saveRecord">({ type: "nonsense", fields: { a: "b" }, status: "active" })),
     );
-    await assertRejects4xx("saveRecord(missing kind)", () =>
+    await assertRejects4xx("saveRecord(missing type)", () =>
       actions.saveRecord(session, as<"saveRecord">({ fields: { a: "b" }, status: "active" })),
     );
+    await assertRejects4xx("saveRecord(a kind, not a type)", () =>
+      actions.saveRecord(session, as<"saveRecord">({ type: "subscription", fields: { a: "b" } })),
+    );
+    await assertRejects4xx("saveRecord(unknown status)", () =>
+      actions.saveRecord(session, as<"saveRecord">({ type: "subscriptions.service", fields: { name: "b" }, status: "upcoming" })),
+    );
     await assertRejects4xx("saveRecord(oversized field value)", () =>
-      actions.saveRecord(session, as<"saveRecord">({ kind: "subscription", fields: { note: HUGE }, status: "active" })),
+      actions.saveRecord(session, as<"saveRecord">({ type: "subscriptions.service", fields: { notes: HUGE }, status: "active" })),
     );
     // createTask: a missing title, a non-string title, and a grossly oversized title.
     await assertRejects4xx("createTask(missing title)", () =>
@@ -1194,7 +1183,7 @@ test("a SQL-injection probe in a record field / task title is bound as data: the
 
     const r = await actions.saveRecord(
       session,
-      as<"saveRecord">({ kind: "subscription", fields: { service: recordProbe }, status: "active" }),
+      as<"saveRecord">({ type: "subscriptions.service", fields: { name: recordProbe }, status: "active" }),
     );
     assert.equal(okOf(r), true, "a record field shaped like SQL is accepted and stored as data");
     const t = await actions.createTask(session, as<"createTask">({ title: taskProbe }));
@@ -1204,7 +1193,7 @@ test("a SQL-injection probe in a record field / task title is bound as data: the
     assert.equal(await tableExists(db, "tasks"), true, "the tasks table survives the probe");
 
     assert.ok(
-      (await listRecordsForUser(db, userId, dek)).some((rec) => (rec.fields as { service?: string }).service === recordProbe),
+      (await listRecordsForUser(db, userId, dek)).some((rec) => (rec.fields as { name?: string }).name === recordProbe),
       "the SQL-shaped record field round-trips verbatim as data (decrypted)",
     );
     assert.ok(
@@ -1240,7 +1229,7 @@ test("no ambient env secret leaks into any stored row or the loaded screen; the 
 
     const r = await actions.saveRecord(
       session,
-      as<"saveRecord">({ kind: "subscription", fields: { service: "Env record" }, status: "active" }),
+      as<"saveRecord">({ type: "subscriptions.service", fields: { name: "Env record" }, status: "active" }),
     );
     assert.equal(okOf(r), true, "the record save works from the injected seams with a decoy env present");
     const t = await actions.createTask(session, as<"createTask">({ title: "Env task" }));
@@ -1276,14 +1265,14 @@ test("record dates and reminder offsets reject impossible scheduling before writ
     const { userId, dek } = await makeUserWithDek(db, wrapper, "schedule-boundary");
     const actions = makeActions(db, wrapper), session = sessionFor(userId);
     for (const dueDate of ["2027-02-30", "0000-01-01", "tomorrow", "2027-01-01T00:00:00Z"]) {
-      await assertRejects4xx("invalid calendar date", () => actions.saveRecord(session, { kind: "subscription", fields: {}, dueDate }));
-    }
-    for (const reminderOffsets of [[2147483647], [-1], [1.5]]) {
-      await assertRejects4xx("unsafe reminder offset", () => actions.saveRecord(session, { kind: "subscription", fields: {}, reminderOffsets }));
+      await assertRejects4xx("invalid calendar date", () => actions.saveRecord(session, { type: "subscriptions.service", fields: { name: "x" }, dueDate }));
     }
     assert.equal((await listRecordsForUser(db, userId, dek)).length, 0);
-    await actions.saveRecord(session, { kind: "subscription", fields: { name: "Leap renewal" }, dueDate: "2028-02-29" });
+    await actions.saveRecord(session, { type: "subscriptions.service", fields: { name: "Leap renewal" }, dueDate: "2028-02-29" });
     const record = (await listRecordsForUser(db, userId, dek))[0];
+    for (const reminderOffsets of [[2147483647], [-1], [1.5]]) {
+      await assertRejects4xx("unsafe reminder offset", () => actions.setRecordReminders(session, { id: record.id, reminderOffsets }));
+    }
     await actions.updateRecord(session, { id: record.id, fields: { name: "Edited" } });
     assert.equal((await listRecordsForUser(db, userId, dek))[0].dueDate, "2028-02-29");
     await actions.updateRecord(session, { id: record.id, fields: { name: "Cleared" }, dueDate: null });

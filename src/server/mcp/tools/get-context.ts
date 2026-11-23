@@ -67,6 +67,13 @@ import { loadAgentContext, type AgentConnection } from "../context";
 import { requestObservation } from "../client-observation";
 import { startRun, type RunRef } from "../../agents/runs";
 import { releasedValueMatcher } from "../../crypto/hmac";
+import { listRecordsForUser } from "../../db/life-admin-records";
+import { summariseLifeAdmin, type LifeAdminSummary } from "../../../domain/life-admin/summary";
+import { LIFE_ADMIN_SKILL } from "../../../domain/life-admin/skill";
+import { MAIL_CONNECTOR_IDS } from "../../../domain/content/mail-connectors";
+import { visibleTo } from "./records";
+import { catalogueFor } from "../../life-admin/catalogue";
+import { handoverItems } from "../../life-admin/journal-views";
 import { lookupForUser } from "../../db/release-fingerprints";
 
 // What the agent is told to do with its run.
@@ -108,6 +115,9 @@ export interface AgentContextView {
     status: string;
     assignedTo: "you" | "any agent";
   }>;
+  // A short summary of the life-admin records this agent may see (docs/adr/life-admin-profile.md);
+  // null without the records permission. list_records has the rest.
+  readonly lifeAdmin: LifeAdminSummary | null;
   readonly permissions: {
     readonly resources?: { tasks: { read: boolean; write: boolean }; records: { read: boolean; write: boolean; scope: string } };
     readonly services: readonly string[];
@@ -194,7 +204,11 @@ export function createGetContextTool(deps: GetContextDeps): {
         cursor: pageInput.skill_cursor,
         limit: pageInput.limit,
       });
-      const skills = [...buildSkillIndex([], agentId), ...skillPage.items];
+      // Warthog's own skills first: the house skill, and the life-admin one for an agent that
+      // may use records.
+      const builtIn = buildSkillIndex([], agentId);
+      if (permissions.recordsAccess) builtIn.push({ title: LIFE_ADMIN_SKILL.title, useThisWhen: LIFE_ADMIN_SKILL.useThisWhen });
+      const skills = [...builtIn, ...skillPage.items];
       const memoryPage = permissions.memoryRead
         ? await pageMemories(db, userId, dek, {
             agentId,
@@ -250,6 +264,31 @@ export function createGetContextTool(deps: GetContextDeps): {
         }
       }
 
+      // The life-admin summary over exactly the records this agent may see (so its counts reveal
+      // nothing hidden). The offer to fill it in goes only to an agent that can read the
+      // person's mail and save records.
+      let lifeAdmin: LifeAdminSummary | null = null;
+      if (permissions.recordsAccess) {
+        const person = await catalogueFor(db, userId, dek);
+        const visible = (await listRecordsForUser(db, userId, dek)).filter(visibleTo(permissions, agentId));
+        const readsMail = permissions.readTools && permissions.grantedConnectors.some((id) => MAIL_CONNECTOR_IDS.has(id));
+        const writes = permissions.resourceControls?.recordsWrite !== false;
+        // A mail account the person connected that this agent can't read (not granted, or not the
+        // account it uses): a hint only, never which one.
+        const connections = await listConnectionsForUser(db, userId);
+        const readable = new Set(permissions.grantedConnectors.map((service) => selectConnectorAccount(connections, service, permissions.connectorAccounts?.[service])?.id).filter(Boolean));
+        const otherMailAccounts = connections.some((account) => MAIL_CONNECTOR_IDS.has(account.connectorId) && !readable.has(account.id));
+        const now = clock.now();
+        const savedByLife = await savedByResolver(db, userId, agentId);
+        const handover = await handoverItems(db, userId, visible, person.catalogue, dek, savedByLife, now, person.zone);
+        lifeAdmin = summariseLifeAdmin(visible, person.catalogue, now, person.zone, {
+          mayOffer: readsMail && writes,
+          settings: person.settings,
+          otherMailAccounts,
+          handover,
+        });
+      }
+
       const agent = await getAgentById(db, connection.userId, connection.agentId);
       const accounts = await listConnectionsForUser(db, connection.userId);
       return {
@@ -267,6 +306,7 @@ export function createGetContextTool(deps: GetContextDeps): {
         rules: context.rules.map((rule) => ruleSentence(rule)),
         memory,
         tasks,
+        lifeAdmin,
         permissions: {
           services: permissions.grantedConnectors,
           resources: { tasks: { read: permissions.tasksAccess, write: permissions.tasksAccess && permissions.resourceControls?.tasksWrite !== false }, records: { read: permissions.recordsAccess, write: permissions.recordsAccess && permissions.resourceControls?.recordsWrite !== false, scope: permissions.resourceControls?.recordIds == null ? "all" : "chosen_and_created_by_this_agent" } },

@@ -13,7 +13,7 @@ import { emailLogoUrl } from "./email";
 import { createTwilioSmsSender } from "./twilio";
 import { reserveSmsSegments } from "./sms-budget";
 import { createWebPushSender, SIGN_IN_REQUESTS_TARGET, type PushDeviceSubscription, type PushTarget } from "./web-push";
-import { disabledSmsSender, selectSenders, type PushSender, type Senders } from "./senders";
+import { disabledSmsSender, NoPushDeviceError, selectSenders, type PushSender, type Senders } from "./senders";
 import { outbox } from "./outbox";
 
 export function createUserPushSender(deps: {
@@ -25,7 +25,7 @@ export function createUserPushSender(deps: {
     sendDevicePush: deps.send,
     async sendPush(message) {
       const devices = await deps.subscriptions(message.recipient);
-      if (!devices.length) throw new Error("No registered push device");
+      if (!devices.length) throw new NoPushDeviceError();
       const results = await Promise.allSettled(devices.map(async (device) => {
         // Only fixed, known destinations become routing data; any other link is dropped.
         const target = message.link === SIGN_IN_REQUESTS_PATH ? SIGN_IN_REQUESTS_TARGET : recordNotificationFromLink(message.link);
@@ -54,7 +54,7 @@ export function notificationSenders(config: Config, suppliedDb?: Db): Senders {
     subscriptions: async (userId) => {
       const database = await db();
       const user = await person(userId);
-      if (!user) throw new Error("No registered push device");
+      if (!user) throw new NoPushDeviceError();
       const wrapper = selectKeyWrapper({ nodeEnv: config.nodeEnv, localKek: config.devKek });
       const dek = await wrapper.unwrap(user.wrappedDek);
       try { return await listSubscriptions(database, user.id, dek, systemClock); }

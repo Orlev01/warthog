@@ -59,6 +59,23 @@ export function Privacy({ links = RELATIVE_LINKS }: { links?: PublicLinks } = {}
           </p>
         </PublicSection>
 
+        <PublicSection id="life-admin" title="Your life admin">
+          <p>
+            Your life-admin records &mdash; your vehicles and their rego and insurance, your
+            health fund, super, bills, subscriptions, bookings and the dates that matter, and
+            the short log of decisions and next steps your agents keep for each &mdash; are
+            encrypted with your own data key on our servers rather than on your device, so
+            the agents you allow can read them. No staff tool displays them.
+          </p>
+          <p>
+            Warthog never reads your email itself. When you ask, your own agent reads it
+            through the services you connected and saves what it finds as suggestions for
+            you to check. Warthog never keeps tax file numbers, passwords or bank account
+            numbers in these records, and identity numbers such as passport, licence and
+            Medicare numbers stay in your device-encrypted details.
+          </p>
+        </PublicSection>
+
         <PublicSection id="releases" title="A release only happens when you approve it">
           <p>
             When an agent needs one of these details or a card, that value passes through

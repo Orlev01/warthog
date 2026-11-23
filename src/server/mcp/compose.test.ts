@@ -356,8 +356,13 @@ test("D1: tools/list advertises each tool's real required fields and a plain des
     assert.ok(required("create_task").includes("title"), "create_task requires title");
     assert.ok(required("update_task").includes("id"), "update_task requires id");
     assert.ok(required("complete_task").includes("id"), "complete_task requires id");
-    assert.deepEqual(required("save_record"), ["fields", "kind"], "save_record requires kind and fields");
-    assert.deepEqual(required("update_record"), ["fields", "id"], "update_record requires id and fields");
+    // save_record takes one record (type + fields) or a batch (records), so neither is required
+    // on its own; the schema refuses a call with neither.
+    for (const property of ["type", "fields", "records", "dueDate", "source"]) {
+      assert.ok(property in (byName.get("save_record")?.inputSchema?.properties ?? {}), `save_record lists ${property}`);
+    }
+    assert.deepEqual(required("update_record"), ["id"], "update_record requires id");
+    assert.ok("set" in (byName.get("update_record")?.inputSchema?.properties ?? {}), "update_record lists set");
     assert.deepEqual(required("request_card"), ["amount", "currency", "merchant"], "request_card requires its card fields");
 
     // Table-driven: each advertised schema matches the body schema it is routed to.

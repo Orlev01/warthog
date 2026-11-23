@@ -39,6 +39,9 @@ export interface ActivityEntryInput {
   // this entry's agent, already checked by the caller. The DB writer links the entry to it
   // beside the chain; the entry itself is unchanged.
   runId?: string;
+  // The life-admin records this entry touched (docs/adr/life-admin-journal.md): linked beside
+  // the chain so Activity can show everything that happened to one item.
+  recordIds?: readonly string[];
 }
 
 // The stored, chained entry `record()` returns. `payload` is the REDACTED payload;

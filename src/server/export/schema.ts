@@ -128,6 +128,9 @@ export const exportDocumentSchema = z.looseObject({
   rules: z.array(ruleSchema),
   tasks: z.array(taskSchema),
   lifeAdmin: z.array(lifeAdminSchema),
+  // The person's own categories, settings for built-ins and declined suggestions
+  // (docs/adr/life-admin-profile.md); optional, so older exports still import.
+  lifeAdminCategories: z.array(z.looseObject({ slug: z.string().max(40).optional(), state: z.string().max(20).optional() })).max(500).optional(),
   connections: z.array(connectionSchema),
   activity: z.array(activitySchema),
   importedActivity: z.array(activitySchema).optional(),

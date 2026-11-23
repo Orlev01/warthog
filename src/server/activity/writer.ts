@@ -42,6 +42,9 @@ import type { ActivityEntry, ActivityEntryInput, ActivityRecorder } from "./reco
 import { isRunId } from "../agents/runs";
 import { reversalTargetOf } from "./calendar-reversal";
 
+// A record id the writer links an entry to (anything else is ignored).
+const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+
 // The envelope's associated data binds each payload ciphertext to its exact
 // location, so a row lifted into another row/column/table fails to decrypt.
 const TABLE = "activity_entries";
@@ -281,6 +284,16 @@ export function createDbRecorder(options: DbRecorderOptions): ActivityRecorder {
             `INSERT INTO activity_entry_runs (user_id, entry_seq, run_id)
              SELECT $1, $2, id FROM agent_runs WHERE user_id = $1 AND id = $3::uuid`,
             [userId, appended.seq, input.runId.toLowerCase()],
+          );
+        }
+        // Links to the records the entry touched, in the same transaction; anything that isn't
+        // a uuid is ignored, and the record id is kept even if the record is later deleted.
+        const recordIds = (input.recordIds ?? []).filter((id) => UUID_RE.test(id)).map((id) => id.toLowerCase());
+        if (recordIds.length > 0) {
+          await tx.query(
+            `INSERT INTO activity_entry_records (user_id, entry_seq, record_id)
+             SELECT $1, $2, id FROM unnest($3::uuid[]) AS id ON CONFLICT DO NOTHING`,
+            [userId, appended.seq, [...new Set(recordIds)].slice(0, 50)],
           );
         }
         return appended;

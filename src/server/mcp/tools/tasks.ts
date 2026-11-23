@@ -29,6 +29,8 @@
 
 import { savedByResolver, type SavedBy, type SavedByResolver } from "../../agents/saved-by";
 import { z } from "zod";
+import { getRecordForUser } from "../../db/life-admin-records";
+import { visibleTo } from "./records";
 
 import { validTaskAssignee, changeTaskAsAgent } from "../../db/task-handoffs";
 import { systemClock } from "../../seams/clock";
@@ -71,6 +73,7 @@ export const listTasksSchema = z.object({ reason });
 export const createTaskSchema = z.object({
   title: z.string().min(1).max(MAX_TITLE),
   assignee: z.string().min(1).max(MAX_ASSIGNEE).optional(),
+  recordId: z.uuid().optional().describe("The life-admin record this task is about (an id from list_records), e.g. \"finalise the motorcycle insurance\"."),
   reason,
 });
 
@@ -110,6 +113,7 @@ export interface TaskView {
   readonly savedBy?: SavedBy;
   readonly claimedBy?: string;
   readonly claimExpiresAt?: string;
+  readonly recordId?: string;
 }
 
 export type ListTasksResult =
@@ -173,6 +177,8 @@ function toView(task: Task, savedBy?: SavedByResolver): TaskView {
     // Who created it, as this agent reads it (write provenance).
     ...(savedBy ? { savedBy: savedBy(task.createdBy.kind === "agent" ? task.createdBy.agentId : null) } : {}),
     ...(task.claimedBy ? {claimedBy:task.claimedBy,claimExpiresAt:task.claimExpiresAt} : {}),
+    // The life-admin record it's about: list_records {id} has its log.
+    ...(task.recordId ? { recordId: task.recordId } : {}),
   };
 }
 
@@ -258,6 +264,13 @@ export function createCreateTaskTool(deps: TasksToolDeps): CreateTaskTool {
       if (!(await validTaskAssignee(db, connection.userId, parsed.assignee ?? "any"))) {
         return { status: "refused", reason: "Choose one of your connected agents or any agent." };
       }
+      // A task about a life-admin record: one of this person's that this agent may see.
+      if (parsed.recordId) {
+        const record = await getRecordForUser(db, connection.userId, parsed.recordId, dek);
+        if (!record || !permissions.recordsAccess || !visibleTo(permissions, connection.agentId)(record)) {
+          return { status: "refused", reason: "No life-admin record with that id that this agent can see." };
+        }
+      }
       const task = await createTask(
         db,
         {
@@ -265,6 +278,7 @@ export function createCreateTaskTool(deps: TasksToolDeps): CreateTaskTool {
           title: parsed.title,
           assignee: parsed.assignee ?? "any",
           createdBy: { kind: "agent", agentId: connection.agentId },
+          ...(parsed.recordId ? { recordId: parsed.recordId } : {}),
         },
         dek,
       );

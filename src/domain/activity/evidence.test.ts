@@ -181,3 +181,18 @@ test("what Warthog's read check kept from the agent reads in words, counts only"
   const withheld = { ...read, payload: { ...read.payload, resultEvidence: { outcome: "executed", guard: { outcome: "withheld" } } } };
   assert.match(value(activityEvidence(withheld), "Result") ?? "", /couldn't check this, so the agent wasn't shown it/);
 });
+
+test("a life-admin save reads as what it did, counted, never what it saved", async () => {
+  const { observeResult } = await import("../../server/mcp/result-evidence");
+  const observed = observeResult({ status: "ok", results: [
+    { id: REFERENCE, action: "created", type: "travel.flight" },
+    { id: ATTEMPT, action: "proposed", type: "vehicles.insurance" },
+    { id: REQUEST, action: "created", type: "travel.stay" },
+  ] });
+  assert.deepEqual(observed.evidence.effects, { created: 2, proposed: 1 });
+  assert.equal(observed.evidence.counts, undefined, "a batch's results are not things it found");
+  const evidence = activityEvidence({ ...addTask, tool: "save_record", payload: { ...addTask.payload, params: {}, resultEvidence: observed.evidence } });
+  assert.equal(value(evidence, "Result"), "Done\nRecords: 2 added, 1 proposed (waiting for you to accept)");
+  assert.ok(!readable(evidence).includes("travel.flight"));
+  assert.equal(value(evidence, "Results ids", "technical"), [REFERENCE, ATTEMPT, REQUEST].join(", "), "the saved records' ids are technical details");
+});

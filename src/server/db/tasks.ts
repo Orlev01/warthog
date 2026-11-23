@@ -25,6 +25,7 @@ import { randomUUID } from "node:crypto";
 
 import { decrypt, encrypt } from "../crypto/envelope";
 import { withTransaction, type Db, type Row } from "./index";
+import { appendJournalEntry } from "./life-admin-journal";
 
 // The envelope's associated data binds each blob to its exact location, so a row's
 // ciphertext lifted into another row/column/table fails to decrypt.
@@ -58,6 +59,9 @@ export interface NewTask {
   readonly createdBy: TaskActor;
   readonly claimedBy?: string;
   readonly claimExpiresAt?: string;
+  // The life-admin record the task is about (db/migrations/0118; same person, cleared when the
+  // record goes).
+  readonly recordId?: string | null;
 }
 
 // What updateTask changes for the owner's own task. Member-scoped by `userId` +
@@ -68,6 +72,8 @@ export interface UpdateTaskInput {
   readonly title: string;
   readonly assignee: string;
   readonly status: TaskStatus;
+  // When the change happens (the caller's clock), for the journal entry of a linked item.
+  readonly now?: Date;
 }
 
 // What addNote appends to the owner's own task. Member-scoped by `userId` + `id`.
@@ -90,12 +96,13 @@ export interface Task {
   readonly createdBy: TaskActor;
   readonly claimedBy?: string;
   readonly claimExpiresAt?: string;
+  readonly recordId?: string;
 }
 
 // The metadata columns every read returns; `title` and `notes` come back as
 // ciphertext and are decrypted separately.
 const SELECT_COLUMNS =
-  "id, user_id, title, notes, assignee, status, created_by_kind, created_by_agent_id, claimed_by, claim_expires_at";
+  "id, user_id, title, notes, assignee, status, created_by_kind, created_by_agent_id, claimed_by, claim_expires_at, record_id";
 
 // Reconstruct the plaintext created-by actor from its two columns.
 function toActor(kind: unknown, agentId: unknown): TaskActor {
@@ -117,6 +124,7 @@ function toTask(row: Row, title: string, notes: TaskNote[]): Task {
     status: row.status as TaskStatus,
     createdBy: toActor(row.created_by_kind, row.created_by_agent_id),
     ...(row.claimed_by ? {claimedBy:row.claimed_by as string, claimExpiresAt:new Date(row.claim_expires_at as string).toISOString()} : {}),
+    ...(row.record_id ? { recordId: row.record_id as string } : {}),
   };
 }
 
@@ -136,9 +144,9 @@ export async function createTask(db: Db, input: NewTask, dek: Uint8Array): Promi
 
   await db.query(
     `INSERT INTO tasks
-       (id, user_id, title, notes, assignee, status, created_by_kind, created_by_agent_id)
-     VALUES ($1, $2, $3, $4, $5, $6, $7, $8)`,
-    [id, input.userId, titleEnvelope, notesEnvelope, input.assignee, status, createdBy.kind, createdByAgentId],
+       (id, user_id, title, notes, assignee, status, created_by_kind, created_by_agent_id, record_id)
+     VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)`,
+    [id, input.userId, titleEnvelope, notesEnvelope, input.assignee, status, createdBy.kind, createdByAgentId, input.recordId ?? null],
   );
 
   return {
@@ -149,6 +157,7 @@ export async function createTask(db: Db, input: NewTask, dek: Uint8Array): Promi
     assignee: input.assignee,
     status,
     createdBy,
+    ...(input.recordId ? { recordId: input.recordId } : {}),
   };
 }
 
@@ -186,7 +195,9 @@ export async function tasksForAgent(
 // LEAVES the notes untouched. THROWS when no such task belongs to this user — so
 // one person can never edit another's task.
 export async function updateTask(db: Db, input: UpdateTaskInput, dek: Uint8Array): Promise<Task> {
+  if (!db.inTransaction) return withTransaction(db, (tx) => updateTask(tx, input, dek));
   const titleEnvelope = await encrypt(dek, TABLE, TITLE_COLUMN, input.id, input.title);
+  const before = (await db.query("SELECT status FROM tasks WHERE id = $1 AND user_id = $2 FOR UPDATE", [input.id, input.userId])).rows[0];
 
   const result = await db.query(
     `UPDATE tasks
@@ -199,6 +210,13 @@ export async function updateTask(db: Db, input: UpdateTaskInput, dek: Uint8Array
   const row = result.rows[0];
   if (!row) {
     throw new Error("updateTask: no such task for this user");
+  }
+  // The person finishing a task about a life-admin item: Warthog's entry in the item's journal.
+  if (input.status === "done" && before?.status !== "done" && row.record_id) {
+    await appendJournalEntry(db, {
+      userId: input.userId, recordId: row.record_id as string, kind: "change", actorKind: "person",
+      at: input.now ?? new Date(), body: { change: { event: "task_done" } },
+    }, dek);
   }
   const notes = await decryptNotes(row, dek);
   return toTask(row, input.title, notes);

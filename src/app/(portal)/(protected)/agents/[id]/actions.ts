@@ -1,4 +1,7 @@
 import { listRecordsForUser, type RecordKind } from "@/server/db/life-admin-records";
+import { storedRecordName } from "@/domain/life-admin/normalise";
+import { BUILT_IN, type Catalogue } from "@/domain/life-admin/catalogue";
+import { catalogueFor } from "@/server/life-admin/catalogue";
 import { connectorToolsetFor } from "@/server/connectors/tool-routing";
 import { readProviderToolsets } from "@/server/connectors/provider-runtime";
 import type { CatalogueIndex } from "@/server/connectors/catalogue";
@@ -343,22 +346,10 @@ function mergeGrants(
   };
 }
 
-// A life-admin record's type in words, and the name a member gave it (interaction-12):
-// records keep their name in `name` (subscriptions, renewals) or `item` (receipts), and
-// older agent-written ones in `title` or `what`. The type in words is the fallback, never
-// the stored enum ("renewal_appointment").
-const RECORD_KIND_WORDS: Readonly<Record<RecordKind, string>> = {
-  subscription: "Subscription",
-  receipt_warranty: "Receipt or warranty",
-  renewal_appointment: "Renewal or appointment",
-};
-export function recordName(fields: Readonly<Record<string, unknown>>, kind: RecordKind): string {
-  for (const key of ["name", "title", "item", "what"]) {
-    const value = fields[key];
-    if (typeof value === "string" && value.trim() !== "") return value.trim();
-  }
-  const first = Object.values(fields).find((value): value is string => typeof value === "string" && value.trim() !== "");
-  return first?.trim() ?? RECORD_KIND_WORDS[kind];
+// A life-admin record's name (interaction-12): the name a member gave it, else its type in
+// words (docs/adr/life-admin-profile.md), never the stored enum ("renewal_appointment").
+export function recordName(fields: Readonly<Record<string, unknown>>, kind: RecordKind, type: string | null = null, catalogue: Catalogue = BUILT_IN): string {
+  return storedRecordName(catalogue.typeOfRecord(kind, type), fields, Boolean(type));
 }
 
 export function createPermissionsActions(
@@ -452,7 +443,8 @@ export function createPermissionsActions(
     const user = await getUserById(db, session.userId);
     if (!user) return null;
     const dek = await keyWrapper.unwrap(user.wrappedDek);
-    props.recordChoices = (await listRecordsForUser(db, session.userId, dek)).map(record => ({ id: record.id, name: recordName(record.fields, record.kind), description: RECORD_KIND_WORDS[record.kind], granted: grants.resourceControls?.recordIds == null || grants.resourceControls.recordIds.includes(record.id) }));
+    const { catalogue } = await catalogueFor(db, session.userId, dek);
+    props.recordChoices = (await listRecordsForUser(db, session.userId, dek)).map(record => ({ id: record.id, name: recordName(record.fields, record.kind, record.type, catalogue), description: catalogue.typeOfRecord(record.kind, record.type).label, granted: grants.resourceControls?.recordIds == null || grants.resourceControls.recordIds.includes(record.id) }));
 
     if (deps.catalogue) {
       const connections = await listConnectionsForUser(db, session.userId);

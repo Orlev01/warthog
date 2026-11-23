@@ -92,6 +92,22 @@ export const ACCOUNT_KINDS: readonly string[] = [
   "account_imported",
   // Recovery with the recovery code (it removed the old passkeys and authenticator app).
   "account_recovered",
+  // The person's own life-admin changes (docs/adr/life-admin-journal.md).
+  "life_admin_record_saved",
+  "life_admin_record_changed",
+  "life_admin_record_confirmed",
+  "life_admin_record_dismissed",
+  "life_admin_record_deleted",
+  "life_admin_change_accepted",
+  "life_admin_change_declined",
+  "life_admin_file_attached",
+  "life_admin_reminders_changed",
+  "life_admin_journal_added",
+  "life_admin_next_done",
+  "life_admin_steward_set",
+  "life_admin_category_kept",
+  "life_admin_category_declined",
+  "life_admin_category_setting",
 ];
 
 // The metadata classification reads. `source` "agent_reported" is always a report.

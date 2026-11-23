@@ -77,6 +77,22 @@ const KIND_LABELS: Record<string, string> = {
   memory_deleted: "Memory deleted",
   account_imported: "Account import",
   account_recovered: "Account recovered",
+  // The person's own life-admin changes (docs/adr/life-admin-journal.md): field names only.
+  life_admin_record_saved: "Life admin item added",
+  life_admin_record_changed: "Life admin item edited",
+  life_admin_record_confirmed: "Life admin item confirmed",
+  life_admin_record_dismissed: "Life admin item marked not mine",
+  life_admin_record_deleted: "Life admin item deleted",
+  life_admin_change_accepted: "Agent's change accepted",
+  life_admin_change_declined: "Agent's change declined",
+  life_admin_file_attached: "Receipt attached",
+  life_admin_reminders_changed: "Reminders changed",
+  life_admin_journal_added: "Note or decision added",
+  life_admin_next_done: "Next step done",
+  life_admin_steward_set: "Who's handling it changed",
+  life_admin_category_kept: "Suggested category kept",
+  life_admin_category_declined: "Suggested category declined",
+  life_admin_category_setting: "Category shown or hidden",
 };
 
 /** A recorded kind in words: "tool_call" → "Agent request". */

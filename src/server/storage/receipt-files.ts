@@ -24,6 +24,7 @@
 // remove another's files. The DEK is injected and this module reads no
 // `process.env` and holds no key (INV-103).
 
+import { dismissRecordRow } from "../db/life-admin-records";
 import { createCipheriv, createDecipheriv, randomBytes, randomUUID } from "node:crypto";
 import { Buffer } from "node:buffer";
 
@@ -245,5 +246,21 @@ export async function deleteRecordWithFiles(
     for (const file of files.rows) await blob.delete(file.blob_key as string);
     await tx.query("DELETE FROM life_admin_records WHERE id = $1 AND user_id = $2", [ref.recordId, ref.userId]);
     return true;
+  });
+}
+
+// "Not mine": remove the record's files (blobs first, as deleteRecordWithFiles does) and
+// leave the record as a tombstone that keeps only its type and match key, so an agent's
+// later scan doesn't add the same thing again (docs/adr/life-admin-profile.md).
+export async function dismissRecordWithFiles(
+  db: Db, blob: BlobStore, ref: { readonly userId: string; readonly recordId: string }, dek: Uint8Array,
+): Promise<boolean> {
+  return withTransaction(db, async (tx) => {
+    const owner = await tx.query("SELECT id FROM life_admin_records WHERE id = $1 AND user_id = $2 AND review_state <> 'dismissed' FOR UPDATE", [ref.recordId, ref.userId]);
+    if (owner.rows.length === 0) return false;
+    const files = await tx.query("SELECT blob_key FROM receipt_files WHERE record_id = $1 AND user_id = $2", [ref.recordId, ref.userId]);
+    for (const file of files.rows) await blob.delete(file.blob_key as string);
+    await tx.query("DELETE FROM receipt_files WHERE record_id = $1 AND user_id = $2", [ref.recordId, ref.userId]);
+    return dismissRecordRow(tx, ref.userId, ref.recordId, dek);
   });
 }

@@ -1,22 +1,27 @@
 import * as React from "react";
-import { cookies } from "next/headers";
 import { redirect } from "next/navigation";
-import { revalidatePath } from "next/cache";
-import { PageNotice } from "@/components/ui/notice";
 
-import { loadConfig } from "@/server/config";
 import { getServerDb } from "@/server/db/server";
-import { verifySession, type Session } from "@/server/auth/session";
-import { selectKeyWrapper } from "@/server/crypto/key-wrapper";
-import { selectBlobStore } from "@/server/storage/blob";
-import { systemClock } from "@/server/seams/clock";
-import { HttpError } from "@/server/http/validate";
-import type { Db } from "@/server/db/index";
-import { createLifeAdminActions, type LifeAdminActions } from "./actions";
+import type { ActionResult } from "./actions";
 import { LifeAdminScreen } from "@/components/life-admin/life-admin-screen";
 import { resolveAssigneeFilter } from "@/components/life-admin/task-groups";
 import { firstParam } from "@/lib/href";
-import { recordFields, recordDate, recordReturnPath, recordOffsets, recordStatus, recordTitle, taskReturnPath } from "./form-inputs";
+import {
+  bookingFilters,
+  noticeField,
+  recordDate,
+  recordFields,
+  recordIds,
+  recordOffsets,
+  recordParent,
+  recordReturnPath,
+  recordStatus,
+  recordTab,
+  recordTypeId,
+  taskReturnPath,
+} from "./form-inputs";
+import { OutcomeNotice, toNotice, type Notice } from "./notices";
+import { buildActions, resolveSession, run, type Outcome } from "./wiring";
 
 // E14-S13 — Life Admin page (the thin protected-page loader + action wiring over the
 // tested `createLifeAdminActions` seam, `./actions`). It reads the signed-in session
@@ -43,88 +48,52 @@ import { recordFields, recordDate, recordReturnPath, recordOffsets, recordStatus
 // through `loadConfig()` (INV-103) — this entry reads no `process.env` of its own, and
 // the seam holds no secret (db, KeyWrapper, clock and blob are injected).
 
-const SESSION_COOKIE = "__Host-wh_session";
-
-// Resolve the signed-in session from the cookie (or null), re-derived wherever it is
-// needed so no handler trusts a client value for identity (design §5).
-async function resolveSession(db: Db): Promise<Session | null> {
-  const token = (await cookies()).get(SESSION_COOKIE)?.value ?? null;
-  return token ? verifySession(db, token, { clock: systemClock }) : null;
-}
-
-// Build the life-admin actions with the real seams. The KeyWrapper (local AES outside
-// production, Key Vault in production) unwraps the session person's own DEK; the blob
-// store (in-memory outside production, Azure in production) holds receipt ciphertext;
-// the system clock supplies `now` to the moving-checklist builder.
-function buildActions(db: Db): LifeAdminActions {
-  const config = loadConfig();
-  const keyWrapper = selectKeyWrapper({ nodeEnv: config.nodeEnv, localKek: config.devKek });
-  const blob = selectBlobStore({
-    nodeEnv: config.nodeEnv,
-    account: config.blob.account,
-    container: config.blob.container,
-  });
-  return createLifeAdminActions({ db, keyWrapper, clock: systemClock, blob });
-}
-
 function str(formData: FormData, name: string): string {
   const raw = formData.get(name);
   return typeof raw === "string" ? raw : "";
 }
 
-// Run one mutation against the seam under the verified session and redirect back with a
-// notice naming the outcome. A reported refusal ({ ok: false }) or a 4xx `HttpError`
-// from the validation boundary becomes `problem` — shown in plain words, never
-// swallowed; a genuine fault rethrows.
-async function run(
-  success: Notice,
-  mutate: (actions: LifeAdminActions, session: Session) => Promise<{ ok: boolean }>,
-  returnPath = "/life-admin",
-  invalidNotice: Notice = "invalid_input",
-): Promise<never> {
-  const db = await getServerDb();
-  const session = await resolveSession(db);
-  if (!session) {
-    redirect("/signin");
-  }
-  let notice: Notice = success;
-  try {
-    const result = await mutate(buildActions(db), session);
-    if (!result.ok) {
-      notice = "problem";
-    }
-  } catch (error) {
-    if (!(error instanceof HttpError)) {
-      throw error;
-    }
-    notice = error.status === 413 ? "file_too_large" : error.status === 400 || error.status === 422 ? invalidNotice : "problem";
-  }
-  revalidatePath("/life-admin");
-  redirect(`${returnPath}${returnPath.includes("?") ? "&" : "?"}notice=${notice}`);
+const THINGS = "/life-admin?view=life&tab=things";
+
+// A save lands on the record it saved, unless something was left out: then the notice at the
+// top says what to check.
+function savedOutcome(result: Extract<ActionResult, { ok: true }>): Outcome {
+  if (result.problems?.length) return { notice: "saved_partly" };
+  const notice: Notice = result.outcome === "updated" ? "saved_matched" : result.outcome === "unchanged" ? "saved_unchanged" : "saved";
+  return { notice, recordId: result.recordId };
+}
+
+function updatedOutcome(result: Extract<ActionResult, { ok: true }>): Outcome {
+  if (result.problems?.length) return { notice: "updated_partly" };
+  const notice: Notice = result.outcome === "confirmed" ? "confirmed" : result.outcome === "unchanged" ? "unchanged" : "updated";
+  return { notice, recordId: result.recordId };
 }
 
 async function addRecordAction(formData: FormData): Promise<void> {
   "use server";
-  // A name made only of spaces is refused with a notice that names the field.
-  const title = recordTitle(formData);
-  if (title === null) redirect(`${recordReturnPath(formData)}&notice=record_title_missing`);
-  await run("saved", (actions, session) =>
+  const type = recordTypeId(formData);
+  if (!type) redirect(`${THINGS}&notice=record_type_missing#new-record`);
+  await run(savedOutcome, (actions, session) =>
     actions.saveRecord(session, {
-      kind: str(formData, "kind") as "subscription" | "receipt_warranty" | "renewal_appointment",
-      fields: { name: title },
+      type,
+      fields: recordFields(formData),
       dueDate: recordDate(formData),
       status: recordStatus(formData),
+      parentId: recordParent(formData),
     }),
-    recordReturnPath(formData),
+    THINGS,
+    "invalid_input",
+    `${THINGS}&add=${encodeURIComponent(type)}`,
   );
 }
 
 async function editRecordAction(formData: FormData): Promise<void> {
   "use server";
+  const recordId = str(formData, "recordId");
   if (str(formData, "setting") === "reminder") {
-    await run("reminded", (actions, session) =>
+    await run(() => ({ notice: "reminded", recordId }), (actions, session) =>
       actions.setRecordReminders(session, {
-        id: str(formData, "recordId"),
+        id: recordId,
         reminderOffsets: recordOffsets(str(formData, "reminderOffsets")),
       }),
       recordReturnPath(formData),
@@ -132,17 +101,23 @@ async function editRecordAction(formData: FormData): Promise<void> {
     );
     return;
   }
-  await run("updated", (actions, session) =>
-    actions.updateRecord(session, { id: str(formData, "recordId"), fields: recordFields(formData),
-      dueDate: recordDate(formData), status: recordStatus(formData) }),
+  await run(updatedOutcome, (actions, session) =>
+    actions.updateRecord(session, {
+      id: recordId,
+      fields: recordFields(formData),
+      dueDate: recordDate(formData),
+      status: recordStatus(formData),
+      parentId: recordParent(formData),
+    }),
     recordReturnPath(formData),
   );
 }
 
 async function attachFileAction(formData: FormData): Promise<void> {
   "use server";
-  await run("attached", (actions, session) =>
-    actions.attachReceiptFile(session, { recordId: str(formData, "recordId"), file: formData.get("file") }),
+  const recordId = str(formData, "recordId");
+  await run(() => ({ notice: "attached", recordId }), (actions, session) =>
+    actions.attachReceiptFile(session, { recordId, file: formData.get("file") }),
     recordReturnPath(formData),
   );
 }
@@ -150,6 +125,54 @@ async function attachFileAction(formData: FormData): Promise<void> {
 async function deleteRecordAction(formData: FormData): Promise<void> {
   "use server";
   await run("deleted", (actions, session) => actions.deleteRecord(session, { id: str(formData, "recordId") }), recordReturnPath(formData));
+}
+
+async function confirmRecordAction(formData: FormData): Promise<void> {
+  "use server";
+  await run("confirmed", (actions, session) => actions.confirmRecord(session, { id: str(formData, "recordId") }), THINGS);
+}
+
+async function confirmAllAction(formData: FormData): Promise<void> {
+  "use server";
+  await run("confirmed_all", (actions, session) => actions.confirmAll(session, { ids: recordIds(formData) }), THINGS);
+}
+
+async function dismissRecordAction(formData: FormData): Promise<void> {
+  "use server";
+  await run("dismissed", (actions, session) => actions.dismissRecord(session, { id: str(formData, "recordId") }), THINGS);
+}
+
+async function acceptPendingAction(formData: FormData): Promise<void> {
+  "use server";
+  const recordId = str(formData, "recordId");
+  await run(() => ({ notice: "accepted", recordId }), (actions, session) => actions.acceptPending(session, { id: recordId }), THINGS);
+}
+
+async function declinePendingAction(formData: FormData): Promise<void> {
+  "use server";
+  const recordId = str(formData, "recordId");
+  await run(() => ({ notice: "declined", recordId }), (actions, session) => actions.declinePending(session, { id: recordId }), THINGS);
+}
+
+async function keepCategoryAction(formData: FormData): Promise<void> {
+  "use server";
+  await run("category_kept", (actions, session) => actions.keepCategory(session, { slug: str(formData, "slug") }), THINGS);
+}
+
+async function declineCategoryAction(formData: FormData): Promise<void> {
+  "use server";
+  await run("category_declined", (actions, session) => actions.declineCategory(session, { slug: str(formData, "slug") }), THINGS);
+}
+
+const VISIBILITY_NOTICES: Readonly<Record<string, Notice>> = { shown: "category_shown", hidden: "category_hidden", cleared: "category_cleared" };
+
+async function setCategoryVisibilityAction(formData: FormData): Promise<void> {
+  "use server";
+  await run(
+    (result) => ({ notice: VISIBILITY_NOTICES[result.outcome ?? ""] ?? "updated" }),
+    (actions, session) => actions.setCategoryVisibility(session, { category: str(formData, "category"), setting: str(formData, "setting") }),
+    THINGS,
+  );
 }
 
 async function tickOffAction(formData: FormData): Promise<void> {
@@ -200,59 +223,6 @@ async function completeAction(formData: FormData): Promise<void> {
   );
 }
 
-type Notice =
-  | "deleted"
-  | "file_too_large"
-  | "saved"
-  | "updated"
-  | "attached"
-  | "reminded"
-  | "ticked"
-  | "handed"
-  | "created"
-  | "assigned"
-  | "noted"
-  | "completed"
-  | "invalid_input"
-  | "invalid_reminders"
-  | "record_title_missing"
-  | "task_title_missing"
-  | "note_missing"
-  | "problem";
-
-const NOTICES: Record<Notice, { done: boolean; text: string }> = {
-  deleted: { done: true, text: "Record and attached files deleted." },
-  file_too_large: { done: false, text: "Nothing was attached: choose a file of 25 MB or less." },
-  saved: { done: true, text: "Record added." },
-  updated: { done: true, text: "Changes saved." },
-  attached: { done: true, text: "File attached." },
-  reminded: { done: true, text: "Reminders updated." },
-  ticked: { done: true, text: "Checklist updated." },
-  handed: { done: true, text: "Handed to an agent." },
-  created: { done: true, text: "Task created." },
-  assigned: { done: true, text: "Task reassigned." },
-  noted: { done: true, text: "Note added." },
-  completed: { done: true, text: "Task marked done." },
-  invalid_input: { done: false, text: "Nothing was saved. Check the values you entered and try again." },
-  invalid_reminders: { done: false, text: "Reminders weren't changed. Enter whole days from 0 to 36500, separated by commas, or leave the field empty to turn reminders off." },
-  record_title_missing: { done: false, text: "Nothing was added: give the record a name in \u201cWhat to add\u201d." },
-  task_title_missing: { done: false, text: "No task was created: describe what needs doing in a few words." },
-  note_missing: { done: false, text: "No note was added: write the note first." },
-  problem: { done: false, text: "We couldn't save that change. It may have been removed already, so refresh the page and try again." },
-};
-
-function toNotice(raw: string | string[] | undefined): Notice | null {
-  return typeof raw === "string" && Object.hasOwn(NOTICES, raw) ? (raw as Notice) : null;
-}
-
-// The outcome of the last action, in words plus an icon (never colour alone), as the page's
-// one notice slot under the heading band. A problem is announced immediately (alert); a
-// success politely (status). It removes `?notice=` from the address once shown.
-function OutcomeNotice({ notice }: { notice: Notice }) {
-  const { done, text } = NOTICES[notice];
-  return <PageNotice tone={done ? "success" : "error"}>{text}</PageNotice>;
-}
-
 // Which of the two views opens first. The chosen view is carried in the URL (`?view=`).
 type LifeAdminTab = "life" | "tasks";
 
@@ -265,6 +235,12 @@ export default async function LifeAdminPage({
   // `next build` never prerenders it (and never opens the database at build time).
   const params = await searchParams;
   const notice = toNotice(params.notice);
+  const filters = bookingFilters({
+    category: firstParam(params.category),
+    for_whom: firstParam(params.for_whom),
+    state: firstParam(params.state),
+    page: firstParam(params.page),
+  });
   const active: LifeAdminTab = params.view === "tasks" ? "tasks" : "life";
   const db = await getServerDb();
   const session = await resolveSession(db);
@@ -286,18 +262,33 @@ export default async function LifeAdminPage({
     <div className="wh-page">
       <LifeAdminScreen
         initialView={active}
-        notice={notice ? <OutcomeNotice notice={notice} /> : null}
+        notice={notice ? <OutcomeNotice notice={notice} field={noticeField(firstParam(params.field))} /> : null}
         records={{
           today: data.today,
-          initialTab: params.tab === "receipts" || params.tab === "renewals" || params.tab === "checklist" ? params.tab : "subscriptions",
-          subscriptions: data.subscriptions,
-          receipts: data.receipts,
-          renewals: data.renewals,
+          zone: data.zone,
+          catalogue: data.catalogue,
+          categories: data.categories,
+          suggestedCategories: data.suggestedCategories,
+          nextSteps: data.nextSteps,
+          bookingFilters: filters,
+          // The older tabs (subscriptions, receipts, renewals) in reminder links open "Your things".
+          initialTab: recordTab(firstParam(params.tab)),
+          // A kind from the person's own catalogue (their categories included), else none.
+          addType: data.catalogue.types.some((type) => type.id === firstParam(params.add)) ? firstParam(params.add) : null,
+          records: data.records,
           checklist: data.checklist,
           addRecordAction,
           editRecordAction,
           attachFileAction,
           deleteRecordAction,
+          confirmRecordAction,
+          confirmAllAction,
+          dismissRecordAction,
+          acceptPendingAction,
+          declinePendingAction,
+          keepCategoryAction,
+          declineCategoryAction,
+          setCategoryVisibilityAction,
           tickOffAction,
           handToAgentAction,
         }}

@@ -1,6 +1,7 @@
 import { z } from "zod";
 import { withTransaction, type Db } from "./index";
 import { addNote, type TaskStatus } from "./tasks";
+import { appendJournalEntry } from "./life-admin-journal";
 
 export const TASK_CLAIM_MS = 10 * 60_000;
 
@@ -39,7 +40,7 @@ export async function changeTaskAsAgent(
   return withTransaction(db, async (tx) => {
     const row = (
       await tx.query(
-        "SELECT assignee, status, claimed_by, claim_expires_at FROM tasks WHERE user_id = $1 AND id = $2 FOR UPDATE",
+        "SELECT assignee, status, claimed_by, claim_expires_at, record_id FROM tasks WHERE user_id = $1 AND id = $2 FOR UPDATE",
         [input.userId, input.id],
       )
     ).rows[0];
@@ -78,6 +79,17 @@ export async function changeTaskAsAgent(
         },
         dek,
       );
+    // A task about a life-admin item: finishing it goes in the item's journal (Warthog's entry).
+    if (input.status === "done" && row.status !== "done" && row.record_id)
+      await appendJournalEntry(tx, {
+        userId: input.userId,
+        recordId: row.record_id as string,
+        kind: "change",
+        actorKind: "agent",
+        actorAgentId: input.agentId,
+        at: now,
+        body: { change: { event: "task_done" } },
+      }, dek);
     return { claimExpiresAt: expiry };
   });
 }

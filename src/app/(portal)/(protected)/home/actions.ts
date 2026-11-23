@@ -1,4 +1,5 @@
 import { activityEvidence } from "@/domain/activity/evidence";
+import { BUILT_IN, type Catalogue } from "@/domain/life-admin/catalogue";
 // E18-S08 — Home page loader (the injectable seam the thin `page.tsx` loader
 // composes). Extends the earlier minimal loader (E18-S13 greeting + all-not-done
 // checklist + empty states) to feed the dashboard view from the two already-built
@@ -159,21 +160,24 @@ function toDashboardAgent(
 }
 
 // Map one upcoming life-admin record to the view's reminder: its title (from the
-// decrypted fields) and a readable due label.
-function toDashboardReminder(record: LifeAdminRecord): DashboardReminder {
-  const categories: Record<LifeAdminRecord["kind"], string> = {
-    subscription: "Subscription",
-    receipt_warranty: "Receipt or warranty",
-    renewal_appointment: "Renewal or appointment",
-  };
+// decrypted fields), a readable due date in its kind's words ("Expires"; the person's own
+// catalogue, so a kind of a category of their own reads its own way), whether it is overdue
+// (a booking that has started is happening, not overdue), and a link to its row in Life admin.
+function toDashboardReminder(record: LifeAdminRecord, today: string | undefined, catalogue: Catalogue = BUILT_IN): DashboardReminder {
   // Portal-created records use name; older/agent-created records can use title or
-  // what. These are already decrypted by the owner-scoped Home read.
-  const title = ["title", "name", "what"]
+  // what; typed records fall back to their provider or type (docs/adr/life-admin-profile.md).
+  // These are already decrypted by the owner-scoped Home read.
+  const title = ["title", "name", "what", "item", "provider"]
     .map((key) => payloadText(record.fields, key).trim()).find(Boolean);
+  const type = catalogue.typeOfRecord(record.kind, record.type);
+  const dueDay = record.dueDate == null ? null : (record.dueDate instanceof Date ? record.dueDate.toISOString() : String(record.dueDate)).slice(0, 10);
   return {
     id: record.id,
-    title: title || categories[record.kind],
+    title: title || type.label,
     due: record.dueDate != null ? formatDue(record.dueDate) : "",
+    ...(type.due ? { dueLabel: type.due.label } : {}),
+    ...(today && dueDay && dueDay < today && type.lifecycle !== "booking" ? { overdue: true } : {}),
+    href: `/life-admin?view=life&tab=things#record-${encodeURIComponent(record.id)}`,
   };
 }
 
@@ -249,7 +253,8 @@ export function createHomeActions(deps: HomeActionsDeps): HomeActions {
         .map((entry) => toDashboardActivity(entry, agentNames, timeZone, serviceName, now)),
       agents: metrics.agents.map((agent) =>
         toDashboardAgent(agent, lastDay.find((group) => group.key === agent.agentId), timeZone, now)),
-      reminders: metrics.reminders.map(toDashboardReminder),
+      reminders: metrics.reminders.map((record) => toDashboardReminder(record, metrics.today, metrics.catalogue)),
+      ...(metrics.toCheck ? { toCheck: { count: metrics.toCheck, href: "/life-admin?view=life&tab=things" } } : {}),
       attention: attention > 0 ? { count: attention, href: "/activity?attention=1" } : undefined,
       ...(review
         ? {

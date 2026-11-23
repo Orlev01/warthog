@@ -22,16 +22,30 @@ export function observeResult(value: unknown): {
     const data = body as Record<string, unknown>;
     const counts: Record<string, number> = {};
     const references: Record<string, string[]> = {};
-    for (const key of ["messages", "threads", "items", "files", "events", "value", "memory", "memories", "records", "tasks", "skills", "tools"]) {
+    for (const key of ["messages", "threads", "items", "files", "events", "value", "memory", "memories", "records", "results", "tasks", "skills", "tools"]) {
       if (!Array.isArray(data[key])) continue;
-      counts[key] = data[key].length;
+      // A batch save's results are what it did (`effects` below), not things it found.
+      if (key !== "results") counts[key] = data[key].length;
       references[key] = data[key].slice(0, 20).flatMap(item => item && typeof item.id === "string" ? [item.id.slice(0, 200)] : []);
     }
     if (Array.isArray(body)) counts.items = body.length;
     if (Object.keys(counts).length) evidence.counts = counts;
     if (Object.values(references).some(ids => ids.length)) evidence.references = references;
     if (typeof data.id === "string") evidence.reference = data.id.slice(0, 200);
+    // What a life-admin save did (docs/adr/life-admin-journal.md): created, updated, unchanged,
+    // proposed for the person to accept, or skipped — counted, never the content.
+    const actions = [data.action, ...(Array.isArray(data.results) ? data.results.map((item) => (item && typeof item === "object" ? (item as Record<string, unknown>).action : undefined)) : [])]
+      .filter((action): action is string => typeof action === "string" && ["created", "updated", "unchanged", "proposed", "skipped"].includes(action));
+    if (actions.length > 0) evidence.effects = actions.reduce<Record<string, number>>((counts, action) => ({ ...counts, [action]: (counts[action] ?? 0) + 1 }), {});
     if (data.profile && typeof data.profile === "object") evidence.profileFields = Array.isArray(data.profile) ? data.profile.slice(0, 100).flatMap(field => typeof field?.kind === "string" ? [field.kind] : []) : Object.keys(data.profile).slice(0, 100);
   }
   return { outcome, evidence };
+}
+
+/** The life-admin records a record tool's result names (its id, and each batch result's). */
+export function recordIdsOf(tool: string, value: unknown): string[] {
+  if (tool !== "save_record" && tool !== "update_record") return [];
+  const result = value && typeof value === "object" ? value as Record<string, unknown> : {};
+  const ids = [result.id, ...(Array.isArray(result.results) ? result.results.map((item) => (item && typeof item === "object" ? (item as Record<string, unknown>).id : undefined)) : [])];
+  return ids.filter((id): id is string => typeof id === "string").slice(0, 50);
 }

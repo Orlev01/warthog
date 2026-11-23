@@ -383,7 +383,9 @@ test("record tools reject impossible dates and preserve omitted dates while allo
       await assert.rejects(save.handle({ kind: "subscription", fields: {}, dueDate }, conn));
       await assert.rejects(update.handle({ id: "record", fields: {}, dueDate }, conn));
     }
-    const record = await createRecord(db, { userId, kind: "subscription", fields: {}, dueDate: "2026-11-20", status: "active", source: { kind: "person" } }, dek);
+    // An agent's own suggestion, so its changes apply directly (one the person confirmed would
+    // wait for them instead; see the next test).
+    const record = await createRecord(db, { userId, kind: "subscription", fields: {}, dueDate: "2026-11-20", status: "active", source: { kind: "agent", agentId: conn.agentId } }, dek);
     await update.handle({ id: record.id, fields: { note: "changed" } }, conn);
     assert.equal((await listRecordsForUser(db, userId, dek))[0]!.dueDate, "2026-11-20");
     await update.handle({ id: record.id, fields: {}, dueDate: null }, conn);
@@ -391,7 +393,7 @@ test("record tools reject impossible dates and preserve omitted dates while allo
   } finally { await db.close(); }
 });
 
-test("update_record changes the fields of the person's own record (kind untouched)", async () => {
+test("update_record holds an agent's change to the person's own record until they accept it (kind untouched)", async () => {
   const db = await freshDb();
   const keyWrapper = keyWrapperFor();
   try {
@@ -408,13 +410,48 @@ test("update_record changes the fields of the person's own record (kind untouche
     const tool = createUpdateRecordTool(recordsDeps(db, keyWrapper, fixedClock(NOW)));
     const newFields = { service: "Streamflix", cost: "A$14.99", note: "price went up" };
     const result = (await tool.handle({ id: seeded.id, fields: newFields, status: "active" }, conn)) as UpdateRecordResult;
+    assert.equal(result.status, "proposed", "an agent never overwrites what the person entered");
+
+    const [held] = await listRecordsForUser(db, userId, dek);
+    assert.equal(held!.id, seeded.id);
+    assert.deepEqual(held!.fields, { service: "Streamflix", cost: "A$9.99" }, "the person's values are untouched");
+    assert.deepEqual(held!.pending?.set, { cost: "A$14.99", note: "price went up" }, "the change waits for the person");
+    assert.equal(held!.kind, "subscription");
+  } finally {
+    await db.close();
+  }
+});
+
+test("update_record changes an agent's own suggestion in place (kind untouched)", async () => {
+  const db = await freshDb();
+  const keyWrapper = keyWrapperFor();
+  try {
+    const { userId, dek } = await makePerson(db, "update-suggestion", keyWrapper);
+    const conn = connectionFor(userId);
+    await grantRecords(db, userId, conn.connectionId);
+
+    const seeded = await createRecord(
+      db,
+      { userId, kind: "subscription", fields: { service: "Streamflix", cost: "A$9.99" }, status: "active", source: { kind: "agent", agentId: conn.agentId } },
+      dek,
+    );
+
+    const tool = createUpdateRecordTool(recordsDeps(db, keyWrapper, fixedClock(NOW)));
+    const newFields = { service: "Streamflix", cost: "A$14.99", note: "price went up" };
+    const result = (await tool.handle({ id: seeded.id, fields: newFields, status: "active" }, conn)) as UpdateRecordResult;
     assert.equal(result.status, "updated", "a permitted update_record reports it updated the record");
 
     const stored = await listRecordsForUser(db, userId, dek);
     assert.equal(stored.length, 1, "still exactly one record");
     assert.equal(stored[0].id, seeded.id, "it is the same record (updated in place, not duplicated)");
-    assert.deepEqual(stored[0].fields, newFields, "the fields were replaced with the new content");
+    assert.deepEqual(stored[0].fields, newFields, "the fields were replaced with the new content, under their own names");
     assert.equal(stored[0].kind, "subscription", "a fields update does not change the record's kind");
+    assert.equal(stored[0].type, null, "an older record changed the older way keeps no type");
+
+    const patched = (await tool.handle({ id: seeded.id, set: { note: null, plan: "Premium" } }, conn)) as UpdateRecordResult;
+    assert.equal(patched.status, "updated");
+    const [after] = await listRecordsForUser(db, userId, dek);
+    assert.deepEqual(after!.fields, { service: "Streamflix", cost: "A$14.99", plan: "Premium" }, "set changes only the named fields; null removes one");
   } finally {
     await db.close();
   }
@@ -667,22 +704,29 @@ test("the record tools are named and their input schemas require the right field
       assert.equal(reason!.safeParse(123).success, false, `\`reason\` rejects a non-string on ${tool.name}`);
     }
 
-    // save_record: `kind` is REQUIRED and must be one of the three record kinds.
+    // save_record: a `type` (or, from older callers, one of the three `kind`s) is required,
+    // with an object of `fields` — or a batch of such records in `records`.
     const kind = subschema(save.inputSchema, "kind");
-    assert.ok(kind, "save_record exposes a `kind` field");
+    assert.ok(kind, "save_record still exposes the older `kind` field");
     assert.equal(kind!.safeParse("subscription").success, true, "`kind` accepts a known kind");
     assert.equal(kind!.safeParse("receipt_warranty").success, true, "`kind` accepts receipt_warranty");
     assert.equal(kind!.safeParse("renewal_appointment").success, true, "`kind` accepts renewal_appointment");
     assert.equal(kind!.safeParse("not-a-kind").success, false, "`kind` rejects an unknown kind");
-    assert.equal(kind!.safeParse(undefined).success, false, "`kind` is REQUIRED");
+    const type = subschema(save.inputSchema, "type");
+    assert.ok(type, "save_record exposes a `type` field");
+    assert.equal(type!.safeParse("vehicles.registration").success, true, "`type` accepts a known type");
+    assert.equal(type!.safeParse("vehicle.spaceship").success, false, "`type` rejects an unknown type");
+    assert.ok(subschema(save.inputSchema, "records"), "save_record exposes a `records` batch");
 
-    // save_record: `fields` is REQUIRED and must be an object.
     const saveFields = subschema(save.inputSchema, "fields");
     assert.ok(saveFields, "save_record exposes a `fields` field");
     assert.equal(saveFields!.safeParse({ service: "Netflix" }).success, true, "`fields` accepts an object");
-    assert.equal(saveFields!.safeParse(undefined).success, false, "`fields` is REQUIRED");
     assert.equal(saveFields!.safeParse("not an object").success, false, "`fields` rejects a non-object");
     assert.equal(saveFields!.safeParse(42).success, false, "`fields` rejects a number");
+    assert.equal(save.inputSchema.safeParse({ fields: { service: "x" } }).success, false, "a record needs a type or kind");
+    assert.equal(save.inputSchema.safeParse({ type: "vehicles.registration" }).success, false, "a record needs its fields");
+    assert.equal(save.inputSchema.safeParse({ type: "vehicles.registration", fields: {} }).success, true);
+    assert.equal(save.inputSchema.safeParse({ records: [{ type: "vehicles.registration", fields: {} }] }).success, true);
 
     // update_record: `id` is REQUIRED and must be a non-empty string; `fields` is an object.
     const id = subschema(update.inputSchema, "id");
@@ -693,9 +737,11 @@ test("the record tools are named and their input schemas require the right field
 
     const updateFields = subschema(update.inputSchema, "fields");
     assert.ok(updateFields, "update_record exposes a `fields` field");
+    assert.ok(subschema(update.inputSchema, "set"), "update_record exposes a `set` patch");
     assert.equal(updateFields!.safeParse({ service: "Netflix" }).success, true, "`fields` accepts an object");
-    assert.equal(updateFields!.safeParse(undefined).success, false, "`fields` is REQUIRED on update_record (the agent resupplies the content)");
     assert.equal(updateFields!.safeParse(42).success, false, "`fields` rejects a number");
+    assert.equal(update.inputSchema.safeParse({ id: "record-1" }).success, false, "an update must change something");
+    assert.equal(update.inputSchema.safeParse({ id: "record-1", status: "cancelled" }).success, true, "a status alone is a change");
   } finally {
     await db.close();
   }
