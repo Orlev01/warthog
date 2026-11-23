@@ -47,7 +47,13 @@ export interface NewCard {
   // The name on the card. Optional so a caller that predates it still saves (stored as
   // NULL); the add-card action always sends it.
   readonly cardholderName?: string | null;
-  readonly billingAddressId: string;
+  // The billing address: EITHER one of the owner's About you postal addresses
+  // (`billingAddressId`, an identity field id) OR a card-only address (`billingEntryId`,
+  // card_billing_addresses; migration 0123), never both. Neither means no billing address yet.
+  // The caller checks the reference is the owner's own; the database also refuses a card-only
+  // address of another person.
+  readonly billingAddressId?: string | null;
+  readonly billingEntryId?: string | null;
   readonly numberCiphertext: string;
 }
 
@@ -63,7 +69,8 @@ export interface CardMetadata {
   readonly nickname: string;
   // The name on the card, or null for a card saved before names were kept.
   readonly cardholderName: string | null;
-  readonly billingAddressId: string;
+  readonly billingAddressId: string | null;
+  readonly billingEntryId: string | null;
 }
 
 // Map a raw row to its metadata (snake_case columns → camelCase fields). The number
@@ -78,7 +85,8 @@ function toMetadata(row: Row): CardMetadata {
     expiryYear: Number(row.expiry_year),
     nickname: row.nickname as string,
     cardholderName: (row.cardholder_name as string | null) ?? null,
-    billingAddressId: row.billing_address_id as string,
+    billingAddressId: (row.billing_address_id as string | null) ?? null,
+    billingEntryId: (row.billing_entry_id as string | null) ?? null,
   };
 }
 
@@ -88,14 +96,19 @@ function toMetadata(row: Row): CardMetadata {
 // generated up front and the returned metadata is assembled from the inputs (no
 // dependency on a RETURNING read), so a save never hands back the stored ciphertext.
 export async function addCard(db: Db, input: NewCard): Promise<CardMetadata> {
+  const billingAddressId = input.billingAddressId ?? null;
+  const billingEntryId = input.billingEntryId ?? null;
+  if (billingAddressId !== null && billingEntryId !== null) {
+    throw new Error("A card has one billing address, not both kinds of reference");
+  }
   const id = randomUUID();
   const cardholderName = input.cardholderName ?? null;
 
   await db.query(
     `INSERT INTO cards
        (id, user_id, brand, last_four, expiry_month, expiry_year, nickname,
-        cardholder_name, billing_address_id, number_ciphertext)
-     VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)`,
+        cardholder_name, billing_address_id, billing_entry_id, number_ciphertext)
+     VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11)`,
     [
       id,
       input.userId,
@@ -105,7 +118,8 @@ export async function addCard(db: Db, input: NewCard): Promise<CardMetadata> {
       input.expiryYear,
       input.nickname,
       cardholderName,
-      input.billingAddressId,
+      billingAddressId,
+      billingEntryId,
       input.numberCiphertext,
     ],
   );
@@ -119,7 +133,8 @@ export async function addCard(db: Db, input: NewCard): Promise<CardMetadata> {
     expiryYear: input.expiryYear,
     nickname: input.nickname,
     cardholderName,
-    billingAddressId: input.billingAddressId,
+    billingAddressId,
+    billingEntryId,
   };
 }
 
@@ -130,7 +145,7 @@ export async function addCard(db: Db, input: NewCard): Promise<CardMetadata> {
 export async function listCards(db: Db, userId: string): Promise<CardMetadata[]> {
   const result = await db.query(
     `SELECT id, user_id, brand, last_four, expiry_month, expiry_year, nickname,
-            cardholder_name, billing_address_id
+            cardholder_name, billing_address_id, billing_entry_id
        FROM cards
       WHERE user_id = $1`,
     [userId],
@@ -166,4 +181,27 @@ export async function removeCard(db: Db, userId: string, cardId: string): Promis
     [cardId, userId],
   );
   return result.rows.length > 0;
+}
+
+// Point one of `userId`'s cards at a new billing address: an About you postal address id OR a
+// card-only address id (never both; the caller has checked the reference is the owner's). Returns
+// the card's previous card-only address id (so the caller can delete it if nothing else uses it),
+// or undefined when no card of this person has that id.
+export async function setCardBilling(
+  db: Db,
+  userId: string,
+  cardId: string,
+  ref: { readonly billingAddressId: string | null; readonly billingEntryId: string | null },
+): Promise<{ previousEntryId: string | null } | undefined> {
+  if (ref.billingAddressId !== null && ref.billingEntryId !== null) {
+    throw new Error("A card has one billing address, not both kinds of reference");
+  }
+  const before = await db.query(`SELECT billing_entry_id FROM cards WHERE id = $1 AND user_id = $2 FOR UPDATE`, [cardId, userId]);
+  const row = before.rows[0];
+  if (!row) return undefined;
+  await db.query(
+    `UPDATE cards SET billing_address_id = $3, billing_entry_id = $4 WHERE id = $1 AND user_id = $2`,
+    [cardId, userId, ref.billingAddressId, ref.billingEntryId],
+  );
+  return { previousEntryId: (row.billing_entry_id as string | null) ?? null };
 }
