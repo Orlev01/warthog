@@ -30,6 +30,8 @@ export type PendingChangeView = {
   // Present only when the change moves the due date (null clears it).
   dueDate?: string | null;
   status?: string;
+  // Present only when the change links the record to a thing (null unlinks it).
+  parentId?: string | null;
   foundIn?: RecordFoundInView | null;
 };
 

@@ -202,3 +202,25 @@ test("update_record links only to a parent this agent may see", async () => {
     assert.equal((await t.update.handle({ id: rego.id, parentId: hiddenBike.id }, t.connection)).status, "refused");
   });
 });
+
+test("a trip takes its dates from its bookings for agents too, so a past trip is finished, not upcoming", async () => {
+  const t = await setup();
+  await closing(t.db, async () => {
+    const saved = await t.save.handle({
+      records: [
+        { ref: "qt", type: "travel.trip", fields: { name: "Queenstown, Aug 2026", destination: "Queenstown" } },
+        { parentRef: "qt", type: "travel.stay", fields: { provider: "Goodstays", reference: "HMQ5", starts_at: "2026-08-27[Pacific/Auckland]", ends_at: "2026-08-31[Pacific/Auckland]" } },
+      ],
+    }, t.connection);
+    assert.equal(saved.status, "ok");
+    const live = await t.list.handle({ type: "travel.trip" }, t.connection);
+    assert.equal(live.status, "ok");
+    if (live.status === "ok" && "records" in live) assert.equal(live.records.length, 0, "a trip whose bookings are over isn't live");
+    const all = await t.list.handle({ type: "travel.trip", include: "all" }, t.connection);
+    if (all.status === "ok" && "records" in all) {
+      const trip = all.records[0] as unknown as { phase: { phase: string; live: boolean } };
+      assert.equal(trip.phase.phase, "completed");
+      assert.equal(trip.phase.live, false);
+    } else assert.fail("expected records");
+  });
+});

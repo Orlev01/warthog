@@ -316,3 +316,18 @@ test("a suggested change hides lines that read the same before and after", () =>
   assert.ok(lines.every((line) => line.from === null || line.to === null || line.from !== line.to), JSON.stringify(lines));
   assert.ok(!lines.some((line) => /^Start/.test(line.label)), "the same start, spelled with its offset, isn't a change");
 });
+
+test("a suggested change that links a record to a thing says so", () => {
+  const rego = { kind: "renewal_appointment" as const, type: "vehicles.registration", fields: { name: "Motorcycle registration" }, dueDate: "2026-11-24", status: "active", parentId: null };
+  const names = new Map([["bike-1", "Mondial HPS 300"]]);
+  const linked = pendingChangeView(BUILT_IN, rego, { set: {}, remove: [], parentId: "bike-1" }, "Australia/Sydney", names);
+  assert.deepEqual(linked, [{ key: "parent", label: "Belongs to", from: "not linked", to: "Mondial HPS 300" }]);
+  const unlinked = pendingChangeView(BUILT_IN, { ...rego, parentId: "bike-1" }, { set: {}, remove: [], parentId: null }, "Australia/Sydney", names);
+  assert.deepEqual(unlinked, [{ key: "parent", label: "Belongs to", from: "Mondial HPS 300", to: "not linked" }]);
+});
+
+test("an older record given the kind it already reads as doesn't list its stray type and source as removed", () => {
+  const chess = { kind: "subscription" as const, type: null, fields: { name: "Chess", type: "subscriptions.service", source: "Gmail" }, dueDate: null, status: "active" };
+  const lines = pendingChangeView(BUILT_IN, chess, { type: "subscriptions.service", set: { notes: "Renews in Feb" }, remove: ["type", "source"] }, "Australia/Sydney");
+  assert.deepEqual(lines.map((line) => line.key), ["notes"]);
+});
