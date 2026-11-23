@@ -1,26 +1,32 @@
 "use client";
 
 import * as React from "react";
-import { Bell, BellOff, ChevronDown, CircleDashed, GitCompare, Settings2, Trash2 } from "lucide-react";
+import { ArrowRight, Bell, BellOff, ChevronDown, CircleDashed, GitCompare, Link2, Settings2, Trash2, UserCheck } from "lucide-react";
 
 import { LIST_ROW } from "@/components/ui/list-group";
 import { ActionForm, FormSubmit, PendingFormFields } from "@/components/ui/form-submit";
 import { Field, Label } from "@/components/ui/field";
 import { CONTROL_TEXT } from "@/components/ui/input";
 import { Badge } from "@/components/ui/badge";
+import { ButtonLink } from "@/components/ui/button-link";
+import type { Catalogue } from "@/domain/life-admin/catalogue";
+import { shortDate } from "@/domain/life-admin/journal";
 import type { RecordTypeDef } from "@/domain/life-admin/record-types";
 import { receiptUploadError } from "@/lib/receipt-upload";
-import { reminderSummary } from "./record-groups";
-import { provenanceLine, recordFacts, recordName, typedDueLine, typedFieldLabel } from "./record-format";
+import { phaseOfView, reminderSummary } from "./record-groups";
+import { provenanceLine, recordName, typedFacts, whenLine } from "./record-format";
 import { DisabledControl, EditRecordForm, HINT_CLASS, parentOptions, summaryClass } from "./record-forms";
-import type { AssetOption, LifeAdminAction, LifeAdminRecordView, RecordActions } from "./record-view-types";
+import { PhaseBadge } from "./phase-badge";
+import type { AssetOption, LifeAdminAction, LifeAdminRecordView, RecordActions, RecordHandlingView } from "./record-view-types";
 
-// One record as a divider row (docs/adr/life-admin-profile.md): its name, then its type, due
-// date in the type's words and status ("Registration · Expires 14 Dec 2026 · Active"), a
-// "Not checked yet" tag while it is an agent's suggestion, its facts labelled the type's way,
-// its reminder setting in words, who added it (and where an agent says it found it), its
-// downloads (receipts) and one "Manage" disclosure holding reminders, attach, edit and
-// delete. Every value is text: nothing an agent read from email ever becomes a link.
+// One record as a divider row (docs/adr/life-admin-profile.md): its name, then its kind, when
+// it happens or is due in the kind's words ("Registration · Expires 14 Dec 2026", "Flight ·
+// Starts Thu 3 Dec, 7:30 pm AEDT") and where it stands as words and an icon ("Due soon"), a
+// "Not checked yet" tag while it is an agent's suggestion, its facts labelled and formatted the
+// kind's way, who is handling it and its next step, its reminder setting in words, who added it
+// (and where an agent says it found it), its downloads (receipts), "Open" (the item page, with
+// its journal) and one "Manage" disclosure holding reminders, attach, edit and delete. Every
+// value is text: nothing an agent read from email, or wrote in a journal, ever becomes a link.
 //
 // The row keeps the `record-<id>` anchor (focusable, clear of the sticky header) that
 // reminder notifications, Home and the Coming up list link to.
@@ -126,6 +132,7 @@ export function EditControl({
   type,
   name,
   parents,
+  zone,
   editRecordAction,
   submitLabel,
 }: {
@@ -133,6 +140,7 @@ export function EditControl({
   type: RecordTypeDef;
   name: string;
   parents: readonly AssetOption[];
+  zone?: string;
   editRecordAction?: LifeAdminAction;
   submitLabel?: string;
 }) {
@@ -145,7 +153,7 @@ export function EditControl({
         Edit<span className="sr-only"> {name}</span>
         <ChevronDown aria-hidden={true} className="h-4 w-4 shrink-0 text-fg-muted transition-transform group-open/edit:rotate-180" />
       </summary>
-      <EditRecordForm record={record} type={type} parents={parents} editRecordAction={editRecordAction} submitLabel={submitLabel} />
+      <EditRecordForm record={record} type={type} parents={parents} zone={zone} editRecordAction={editRecordAction} submitLabel={submitLabel} />
     </details>
   );
 }
@@ -178,18 +186,19 @@ function ManageControls({
   type,
   name,
   parents,
+  zone,
   actions,
 }: {
   record: LifeAdminRecordView;
   type: RecordTypeDef;
   name: string;
   parents: readonly AssetOption[];
+  zone: string;
   actions: RecordActions;
 }) {
   return (
-    <details className="group/manage min-w-0">
-      {/* Pulled left by its own padding, so its icon lines up with the row's text. */}
-      <summary className={`${summaryClass("ghost", "sm")} -ms-3`}>
+    <details className="group/manage min-w-0 open:basis-full">
+      <summary className={summaryClass("ghost", "sm")}>
         <Settings2 aria-hidden={true} className="h-4 w-4 shrink-0 text-fg-muted" />
         Manage<span className="sr-only"> {name}</span>
         <ChevronDown aria-hidden={true} className="h-4 w-4 shrink-0 text-fg-muted transition-transform group-open/manage:rotate-180" />
@@ -198,7 +207,7 @@ function ManageControls({
         <ReminderSetting record={record} editRecordAction={actions.editRecordAction} />
         {record.kind === "receipt_warranty" ? <AttachControl record={record} attachFileAction={actions.attachFileAction} /> : null}
         <div className="flex min-w-0 flex-wrap items-start gap-2 border-t border-line pt-4">
-          <EditControl record={record} type={type} name={name} parents={parents} editRecordAction={actions.editRecordAction} />
+          <EditControl record={record} type={type} name={name} parents={parents} zone={zone} editRecordAction={actions.editRecordAction} />
           {actions.deleteRecordAction ? <DeleteControl record={record} name={name} deleteRecordAction={actions.deleteRecordAction} /> : null}
         </div>
       </div>
@@ -231,9 +240,25 @@ export function NotCheckedTag() {
   );
 }
 
-/** The record's facts, labelled through its type, as a label/value list. */
-export function RecordFacts({ record, type, titleKey, limit }: { record: LifeAdminRecordView; type: RecordTypeDef; titleKey: string | null; limit?: number }) {
-  const facts = recordFacts(record.fields, titleKey, (key) => typedFieldLabel(type, key));
+/** The record's facts, labelled and formatted through its kind, as a label/value list. */
+export function RecordFacts({
+  record,
+  type,
+  titleKey,
+  limit,
+  zone = "UTC",
+  currentYear,
+}: {
+  record: LifeAdminRecordView;
+  type: RecordTypeDef;
+  titleKey: string | null;
+  limit?: number;
+  zone?: string;
+  currentYear?: string;
+}) {
+  // A booking's start already reads in the line under its name.
+  const fields = type.lifecycle === "booking" && record.fields.starts_at ? { ...record.fields, starts_at: "" } : record.fields;
+  const facts = typedFacts(type, fields, titleKey, zone, currentYear);
   const shown = limit === undefined ? facts : facts.slice(0, limit);
   if (shown.length === 0) return null;
   return (
@@ -248,29 +273,64 @@ export function RecordFacts({ record, type, titleKey, limit }: { record: LifeAdm
   );
 }
 
+/** "Handled by Instinct · Next: Book the roadworthy, due 28 Nov" (either part when it's there). */
+export function handlingText(handling: RecordHandlingView | undefined, zone: string): string | null {
+  if (!handling) return null;
+  const parts: string[] = [];
+  if (handling.steward) parts.push(`Handled by ${handling.steward}`);
+  if (handling.next?.text) parts.push(`Next: ${handling.next.text}${handling.next.due ? `, due ${shortDate(handling.next.due, zone)}` : ""}`);
+  return parts.length ? parts.join(" · ") : null;
+}
+
+/** The line under a record's name: its kind and when it happens or is due ("Flight · Starts Thu 3 Dec, 7:30 pm AEDT"). */
+export function kindLine(type: RecordTypeDef, record: LifeAdminRecordView, zone: string, currentYear?: string): string {
+  return [type.label, whenLine(type, record, zone, currentYear)].filter(Boolean).join(" · ");
+}
+
+/** "Open": the item's own page, with where it stands and its whole journal. */
+export function OpenLink({ recordId, name }: { recordId: string; name: string }) {
+  return (
+    <ButtonLink href={`/life-admin/items/${encodeURIComponent(recordId)}`} variant="secondary" size="sm">
+      Open<span className="sr-only"> {name}</span>
+      <ArrowRight aria-hidden={true} className="h-4 w-4 shrink-0" />
+    </ButtonLink>
+  );
+}
+
 export function RecordRow({
   record,
   type,
+  catalogue,
   lead,
+  partOf,
   assets,
+  zone = "UTC",
+  currentYear,
   actions,
 }: {
   record: LifeAdminRecordView;
   type: RecordTypeDef;
-  // What the row leads with instead of the record's name (an asset's own row under its
+  catalogue: Catalogue;
+  // What the row leads with instead of the record's name (an anchor's own row under its
   // name says "Vehicle details").
   lead?: string;
+  // The anchor it belongs to, when the row isn't listed under it.
+  partOf?: string | null;
   assets: readonly AssetOption[];
+  zone?: string;
+  currentYear?: string;
   actions: RecordActions;
 }) {
-  const { name, key: titleKey } = recordName(record.kind, record.type, record.fields);
+  const { name, key: titleKey } = recordName(type, record.fields, Boolean(record.type));
   const reminders = reminderSummary(record.dueDate, record.reminderOffsets);
   const ReminderIcon = reminders.on ? Bell : BellOff;
   const suggested = record.reviewState === "suggested";
+  const phase = phaseOfView(record);
+  const handling = handlingText(record.handling, zone);
   return (
     <li id={`record-${record.id}`} tabIndex={-1} className={`${LIST_ROW} scroll-mt-32`}>
       <div className="flex min-w-0 flex-col gap-3">
-        <div className="flex min-w-0 flex-col gap-0.5">
+        <div className="flex min-w-0 flex-col gap-1">
           <div className="flex min-w-0 flex-wrap items-center gap-x-2 gap-y-1">
             <p className="min-w-0 font-medium text-fg [overflow-wrap:anywhere]">{lead ?? name}</p>
             {suggested ? <NotCheckedTag /> : null}
@@ -280,10 +340,27 @@ export function RecordRow({
               </Badge>
             ) : null}
           </div>
-          <p className="text-sm text-fg-muted">{typedDueLine(type, record.dueDate, record.status)}</p>
+          <div className="flex min-w-0 flex-wrap items-center gap-x-2 gap-y-1">
+            <p className="min-w-0 text-sm text-fg-muted [overflow-wrap:anywhere]">{kindLine(type, record, zone, currentYear)}</p>
+            <PhaseBadge phase={phase.phase} label={phase.label} />
+          </div>
         </div>
 
-        <RecordFacts record={record} type={type} titleKey={lead ? null : titleKey} />
+        {partOf ? (
+          <p className="inline-flex min-w-0 items-center gap-1.5 text-sm text-fg-muted [overflow-wrap:anywhere]">
+            <Link2 aria-hidden={true} className="h-4 w-4 shrink-0" />
+            Part of {partOf}
+          </p>
+        ) : null}
+
+        <RecordFacts record={record} type={type} titleKey={lead ? null : titleKey} zone={zone} currentYear={currentYear} />
+
+        {handling ? (
+          <p className="inline-flex min-w-0 items-start gap-1.5 text-sm text-fg [overflow-wrap:anywhere]">
+            <UserCheck aria-hidden={true} className="mt-0.5 h-4 w-4 shrink-0 text-fg-muted" />
+            <span className="min-w-0">{handling}</span>
+          </p>
+        ) : null}
 
         <p className="inline-flex items-center gap-1.5 text-sm text-fg-muted">
           <ReminderIcon aria-hidden={true} className="h-4 w-4 shrink-0" />
@@ -308,7 +385,10 @@ export function RecordRow({
           </ul>
         ) : null}
 
-        <ManageControls record={record} type={type} name={name} parents={parentOptions(type, assets, record.id)} actions={actions} />
+        <div className="flex min-w-0 flex-wrap items-start gap-x-3 gap-y-2">
+          <OpenLink recordId={record.id} name={name} />
+          <ManageControls record={record} type={type} name={name} parents={parentOptions(type, assets, catalogue, record.id)} zone={zone} actions={actions} />
+        </div>
       </div>
     </li>
   );

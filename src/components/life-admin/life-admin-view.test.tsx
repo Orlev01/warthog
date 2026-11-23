@@ -79,7 +79,7 @@ const REN_A: LifeAdminRecordView = {
 const PET_INS: LifeAdminRecordView = {
   id: "pet-ins",
   kind: "item",
-  type: "pet.insurance",
+  type: "pets.insurance",
   fields: { provider: "Bow Wow Cover", reference: "PI-5521", notes: "Pay at https://pay.example.test/bill?ref=1" },
   dueDate: "2027-04-01",
   status: "active",
@@ -132,7 +132,7 @@ function renderChecklist(checklist: ReadonlyArray<ChecklistItemView>, overrides:
 
 // The markup inside the records' tab panel or the checklist's, so a checklist assertion
 // never meets the Add form and vice versa.
-function tabPanel(markup: string, index: 0 | 1): string {
+function tabPanel(markup: string, index: 0 | 1 | 2 | 3): string {
   const starts = [...markup.matchAll(/<div\b[^>]*role="tabpanel"[^>]*>/g)].map((m) => m.index!);
   return markup.slice(starts[index], starts[index + 1] ?? markup.length);
 }
@@ -387,14 +387,14 @@ test("a value an agent read from email is shown as text, never as a link", () =>
 // ════════════════════════════════════════════════════════════════════════════════
 
 test("Your things offers a live Add control, even with no records at all", () => {
-  assert.ok(hasSelectable(renderThings(RECORDS, { addType: "subscription.service" }), ADD_RE));
-  assert.ok(hasSelectable(renderThings([], { addType: "subscription.service" }), ADD_RE), "a person with no records can still add");
+  assert.ok(hasSelectable(renderThings(RECORDS, { addType: "subscriptions.service" }), ADD_RE));
+  assert.ok(hasSelectable(renderThings([], { addType: "subscriptions.service" }), ADD_RE), "a person with no records can still add");
   const text = visibleText(renderThings([]));
   assert.match(text, /What are you adding\?/, "the first step (choose a type) is always there");
 });
 
 test("with no add action, the add form is DISABLED and says why (no dead controls)", () => {
-  const dead = renderThings([], { addType: "subscription.service", addRecordAction: undefined });
+  const dead = renderThings([], { addType: "subscriptions.service", addRecordAction: undefined });
   assert.match(visibleText(dead), /Adding isn't available just now\./);
   const button = findAll(dead, "button").find((b) => /Add to Life admin/.test(controlFace(b)));
   assert.ok(button && isDisabled(button), "the Add button is disabled");
@@ -441,12 +441,12 @@ test("a receipt's attach-file control is DISABLED with a reason when no attach a
 
 test("the Moving checklist renders each item's label with a tick-off and a 'hand to an agent' control", () => {
   for (const item of CHECKLIST) {
-    const markup = tabPanel(renderChecklist([item]), 1);
+    const markup = tabPanel(renderChecklist([item]), 3);
     assert.ok(visibleText(markup).includes(item.label), `the checklist item "${item.label}" must render`);
     assert.ok(tickControls(markup).length >= 1, `the item "${item.label}" must render a tick-off control`);
     assert.ok(handControls(markup).length >= 1, `the item "${item.label}" must render a 'hand to an agent' control`);
   }
-  assert.match(visibleText(tabPanel(renderChecklist(CHECKLIST), 1)), /1 of 3 done\./, "the panel says how far along it is");
+  assert.match(visibleText(tabPanel(renderChecklist(CHECKLIST), 3)), /1 of 3 done\./, "the panel says how far along it is");
 });
 
 test("renders checklist items from the props given, and an empty checklist says how it starts", () => {
@@ -456,7 +456,7 @@ test("renders checklist items from the props given, and an empty checklist says 
 });
 
 test("a ticked-off (done) checklist item reflects its done state", () => {
-  const markup = tabPanel(renderChecklist([ITEM_DONE]), 1);
+  const markup = tabPanel(renderChecklist([ITEM_DONE]), 3);
   const checkedCheckbox = [...markup.matchAll(/<input\b([^>]*?)\/?>/gi)].some(
     (m) => (attr(m[1], "type") ?? "").toLowerCase() === "checkbox" && hasBoolAttr(m[1], "checked"),
   );
@@ -468,16 +468,16 @@ test("a ticked-off (done) checklist item reflects its done state", () => {
 // ════════════════════════════════════════════════════════════════════════════════
 
 test("a tick-off control with no tick action is DISABLED with a reason (no dead controls)", () => {
-  const live = tabPanel(renderChecklist([ITEM_OPEN]), 1);
-  const dead = tabPanel(renderChecklist([ITEM_OPEN], { tickOffAction: undefined }), 1);
+  const live = tabPanel(renderChecklist([ITEM_OPEN]), 3);
+  const dead = tabPanel(renderChecklist([ITEM_OPEN], { tickOffAction: undefined }), 3);
   assert.ok(tickControls(dead).length >= 1 && tickControls(dead).every(isDisabled));
   assert.ok(tickControls(live).some((c) => !isDisabled(c)));
   assert.ok(reasonSurface(dead).length > reasonSurface(live).length, "the disabled tick-off says WHY");
 });
 
 test("an item already handed to an agent renders its 'hand to an agent' control DISABLED with a reason", () => {
-  const handed = tabPanel(renderChecklist([ITEM_HANDED]), 1);
-  const open = tabPanel(renderChecklist([ITEM_OPEN]), 1);
+  const handed = tabPanel(renderChecklist([ITEM_HANDED]), 3);
+  const open = tabPanel(renderChecklist([ITEM_OPEN]), 3);
   assert.ok(handControls(handed).length >= 1 && handControls(handed).every(isDisabled));
   assert.ok(handControls(open).some((c) => !isDisabled(c)));
   assert.ok(reasonSurface(handed).length > reasonSurface(open).length, "the disabled hand-off says WHY");
@@ -490,7 +490,7 @@ test("an item already handed to an agent renders its 'hand to an agent' control 
 test("the life-admin view uses design tokens, never a raw hex colour", () => {
   for (const markup of [
     render(base()),
-    renderThings(RECORDS, { addType: "vehicle.registration" }),
+    renderThings(RECORDS, { addType: "vehicles.registration" }),
     renderChecklist(CHECKLIST, { tickOffAction: undefined }),
     renderThings([REC_A], { attachFileAction: undefined }),
   ]) {

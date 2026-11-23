@@ -35,7 +35,7 @@ export function LifeAdminScreen({ initialView, notice, records, tasks }: LifeAdm
       initialTab={initialView}
       heading={{
         title: "Life admin",
-        description: "Your vehicles, home, bills, insurance, ID expiry dates, subscriptions and tasks, kept up to date by you and your agents.",
+        description: "Your vehicles, home, bills, insurance, bookings, ID expiry dates and subscriptions, what's coming up, and tasks, kept up to date by you and your agents.",
       }}
       tabs={[
         {

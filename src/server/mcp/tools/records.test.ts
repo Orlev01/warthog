@@ -714,7 +714,7 @@ test("the record tools are named and their input schemas require the right field
     assert.equal(kind!.safeParse("not-a-kind").success, false, "`kind` rejects an unknown kind");
     const type = subschema(save.inputSchema, "type");
     assert.ok(type, "save_record exposes a `type` field");
-    assert.equal(type!.safeParse("vehicle.registration").success, true, "`type` accepts a known type");
+    assert.equal(type!.safeParse("vehicles.registration").success, true, "`type` accepts a known type");
     assert.equal(type!.safeParse("vehicle.spaceship").success, false, "`type` rejects an unknown type");
     assert.ok(subschema(save.inputSchema, "records"), "save_record exposes a `records` batch");
 
@@ -724,9 +724,9 @@ test("the record tools are named and their input schemas require the right field
     assert.equal(saveFields!.safeParse("not an object").success, false, "`fields` rejects a non-object");
     assert.equal(saveFields!.safeParse(42).success, false, "`fields` rejects a number");
     assert.equal(save.inputSchema.safeParse({ fields: { service: "x" } }).success, false, "a record needs a type or kind");
-    assert.equal(save.inputSchema.safeParse({ type: "vehicle.registration" }).success, false, "a record needs its fields");
-    assert.equal(save.inputSchema.safeParse({ type: "vehicle.registration", fields: {} }).success, true);
-    assert.equal(save.inputSchema.safeParse({ records: [{ type: "vehicle.registration", fields: {} }] }).success, true);
+    assert.equal(save.inputSchema.safeParse({ type: "vehicles.registration" }).success, false, "a record needs its fields");
+    assert.equal(save.inputSchema.safeParse({ type: "vehicles.registration", fields: {} }).success, true);
+    assert.equal(save.inputSchema.safeParse({ records: [{ type: "vehicles.registration", fields: {} }] }).success, true);
 
     // update_record: `id` is REQUIRED and must be a non-empty string; `fields` is an object.
     const id = subschema(update.inputSchema, "id");

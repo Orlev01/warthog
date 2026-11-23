@@ -675,10 +675,10 @@ test("typed records whose provider keeps the address join the checklist; the thi
     await setUpMove(db, userId, dek);
     const typed = (type: string, fields: Record<string, unknown>) =>
       createRecord(db, { userId, kind: "item", type, fields, status: "active", source: { kind: "person" } }, dek);
-    await typed("vehicle.vehicle", { name: "Honda CB500X", plate: "BX12AB" });
-    await typed("vehicle.registration", { plate: "BX12AB" });
+    await typed("vehicles.vehicle", { name: "Honda CB500X", plate: "BX12AB" });
+    await typed("vehicles.registration", { plate: "BX12AB" });
     await typed("health.insurance", { provider: "Bupa" });
-    await typed("money.super", { provider: "AustralianSuper" });
+    await typed("investing.super", { provider: "AustralianSuper" });
     await typed("id.passport", { country: "Australia" });
 
     await buildMovingChecklist(buildDeps(db, dek), sessionFor(userId));

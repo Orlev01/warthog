@@ -65,6 +65,8 @@ import { createMemory, listMemoriesForUser } from "../db/memories";
 import { listAllRules } from "../db/rules";
 import { listTasksForUser } from "../db/tasks";
 import { listRecordsForUser } from "../db/life-admin-records";
+import { listCategoryRows } from "../db/life-admin-categories";
+import { listJournal } from "../db/life-admin-journal";
 import { listConnectionsForUser } from "../db/connections";
 import { listAgentsForUser } from "../db/agents";
 import { listImportedEntriesForUser } from "../db/imported-history";
@@ -648,22 +650,64 @@ test("typed life-admin records round-trip with their type, review state and link
     const userId = await makeUser(db, "import-typed");
     const dek = freshDek();
     const lifeAdmin = [
-      { id: "old-bike", kind: "item", type: "vehicle.vehicle", fields: { name: "Honda CB500X", plate: "BX12AB" }, status: "active", source: { kind: "person" }, reviewState: "confirmed" },
-      { id: "old-rego", kind: "item", type: "vehicle.registration", fields: { plate: "BX12AB", tfn: "123456782", notes: "My TFN is 123 456 782" }, dueDate: "2026-12-14", status: "active", source: { kind: "agent", agentId: "a1" }, parentId: "old-bike", foundIn: { service: "gmail", sender: "service.nsw.gov.au", seenByWarthog: true } },
+      { id: "old-bike", kind: "item", type: "vehicles.vehicle", fields: { name: "Honda CB500X", plate: "BX12AB" }, status: "active", source: { kind: "person" }, reviewState: "confirmed" },
+      { id: "old-rego", kind: "item", type: "vehicles.registration", fields: { plate: "BX12AB", tfn: "123456782", notes: "My TFN is 123 456 782" }, dueDate: "2026-12-14", status: "active", source: { kind: "agent", agentId: "a1" }, parentId: "old-bike", foundIn: { service: "gmail", sender: "service.nsw.gov.au", seenByWarthog: true } },
     ];
     await importExportDocument(db, userId, fullExport(t, { lifeAdmin }), dek, CLOCK);
     const records = await listRecordsForUser(db, userId, dek);
-    const bike = one(records, (record) => record.type, "vehicle.vehicle", "the vehicle");
-    const rego = one(records, (record) => record.type, "vehicle.registration", "its rego");
+    const bike = one(records, (record) => record.type, "vehicles.vehicle", "the vehicle");
+    const rego = one(records, (record) => record.type, "vehicles.registration", "its rego");
     assert.equal(rego.parentId, bike.id, "the link follows the new ids");
     assert.equal(rego.reviewState, "suggested", "an agent's record without a review state is a suggestion");
     assert.equal(bike.reviewState, "confirmed");
     assert.deepEqual(rego.fields, { plate: "BX12AB" }, "a tax file number in a file is never restored");
     assert.equal(rego.foundIn?.sender, "service.nsw.gov.au");
-    assert.ok(bike.matchKey, "a later scan matches the restored vehicle");
+    assert.ok(bike.matchKeys.length > 0, "a later scan matches the restored vehicle");
 
     const other = await makeUser(db, "import-typed-bad");
     await assert.rejects(importExportDocument(db, other, fullExport(t, { lifeAdmin: [{ kind: "spaceship", fields: {} }] }), dek, CLOCK), (error: unknown) => (error as { status?: number }).status === 400);
+  } finally {
+    await db.close();
+  }
+});
+
+test("a person's own categories and every item's journal round-trip; a record of a missing category becomes Something else", async () => {
+  const db = await freshDb();
+  try {
+    const t = tag();
+    const userId = await makeUser(db, "import-areas");
+    const dek = freshDek();
+    const lifeAdminCategories = [
+      { slug: "x_bcdfgh", state: "active", origin: "agent", definition: { label: "Rowing club", description: "Club", lifeArea: "everyday", icon: "trophy", why: "Emails.", kinds: [{ key: "fees", label: "Fees", lifecycle: "standing", use: "Fees.", fields: [] }] } },
+      { slug: "x_cdfghj", state: "setting", builtIn: "pets", setting: "not_for_me" },
+      { slug: "x_dfghjk", state: "dismissed", declined: "Chess club" },
+    ];
+    const lifeAdmin = [
+      { id: "old-fees", kind: "item", type: "x_bcdfgh.fees", fields: { name: "2027 fees" }, status: "active", source: { kind: "person" }, reviewState: "confirmed", journal: [
+        { id: "j1", at: "2026-11-18T01:00:00Z", kind: "decision", by: "Instinct", text: "Paid the early-bird rate." },
+        { id: "j2", at: "2026-11-18T02:00:00Z", kind: "decision", by: "Muse", text: "Switched to monthly.", refId: "j1" },
+        { id: "j3", at: "2026-11-18T03:00:00Z", kind: "next", by: "Muse", text: "Confirm the direct debit", due: "2026-12-01" },
+        { id: "j4", at: "2026-11-19T00:00:00Z", kind: "next_done", by: "you", refId: "j3" },
+        { id: "j5", at: "2026-11-19T00:00:00Z", kind: "note", by: "Muse", text: "My TFN is 123 456 782" },
+      ] },
+      { id: "old-orphan", kind: "item", type: "x_zzzzzz.thing", fields: { name: "Lost kind" }, status: "active", source: { kind: "person" } },
+    ];
+    const tasks = [{ id: "old-task", title: "Set up the direct debit", status: "open", createdBy: { kind: "person" }, recordId: "old-fees" }];
+    const summary = await importExportDocument(db, userId, fullExport(t, { lifeAdmin, lifeAdminCategories, tasks } as Partial<ExportDoc>), dek, CLOCK);
+    assert.equal((summary as { lifeAdminRetyped?: number }).lifeAdminRetyped, 1);
+    const rows = await listCategoryRows(db, userId, dek);
+    assert.deepEqual([rows.custom.map((c) => c.slug), rows.settings, rows.declined], [["x_bcdfgh"], { pets: "not_for_me" }, ["Chess club"]]);
+    const records = await listRecordsForUser(db, userId, dek);
+    const fees = one(records, (record) => record.type, "x_bcdfgh.fees", "the fees record");
+    one(records, (record) => record.type, "other.item", "the orphan, as Something else");
+    const journal = (await listJournal(db, userId, fees.id, dek)).reverse();
+    assert.deepEqual(journal.map((entry) => [entry.kind, entry.actorKind, entry.body.actorName]), [
+      ["decision", "imported", "Instinct"], ["decision", "imported", "Muse"], ["next", "imported", "Muse"], ["next_done", "imported", "you"],
+    ], "a tax file number in a file is never restored");
+    assert.equal(journal[1]!.refId, journal[0]!.id, "the replaced decision is re-linked");
+    assert.equal(journal[3]!.refId, journal[2]!.id, "the closed step is re-linked");
+    const task = (await listTasksForUser(db, userId, dek)).find((item) => item.title === "Set up the direct debit")!;
+    assert.equal(task.recordId, fees.id, "a task about an item is re-linked to the item's new id");
   } finally {
     await db.close();
   }

@@ -410,29 +410,45 @@ features:
 
   # --- Life admin (the use cases made concrete) ---
   - >-
-    Life-admin records that agents and the person both maintain, organised by category (amended
-    2026-11-23, docs/adr/life-admin-profile.md) — vehicles (each vehicle with its number plate, and
-    its registration, insurance, servicing, roadside assistance and toll account), home (lease,
-    mortgage, home insurance, rates and levies), utilities (electricity or gas, water, internet,
-    phone), other insurance (life, income protection, travel), health (health insurance, ambulance
-    cover, the doctors and providers the person sees — never diagnoses, results or medicines), money
-    and super (super fund, banks and credit cards by name and last four only, loans, tax dates), ID
-    documents (passport, licence, Medicare, visa and checks — expiry dates only; their numbers stay
-    in the vault), work and study, subscriptions and memberships (service, cost, billing cycle, next
-    renewal, how to cancel, status), pets, receipts and warranties (merchant, item, date, amount,
-    return-by date, warranty end date, attached receipt file), and other renewals and appointments
-    (what, due date, where). Each record has a type with its own fields and a due date; records can
-    belong to a vehicle, home or pet; reminders by notification before due dates (default 14 days
-    and 1 day before, or the type's own schedule, adjustable per record; none for a record that is
-    cancelled, done, paused, expired or long past due). Agents add and update records through
-    Warthog: a record an agent saves is a suggestion, labelled with the agent and where it says it
-    found it, until the person confirms it; an agent's change to a record the person confirmed waits
-    for the person to accept it; saving the same thing again updates it rather than adding a copy,
-    and one the person marks "not mine" is not added again. Warthog refuses to keep tax file numbers,
-    passwords, PINs, security answers, card numbers, BSB and account numbers, payment references
-    taken from email and government identity numbers in records. A number plate in a vehicle record
-    is an everyday detail (it is shown on the vehicle); the vault's high-tier car registration field
-    stays available for anyone who prefers to keep it there.
+    Life-admin records that agents and the person both maintain, filed by what they are about
+    (amended 2026-11-23, docs/adr/life-admin-profile.md) — a built-in catalogue of categories in
+    life areas (home; utilities; vehicles; trips and travel; health; care and support; banking and
+    credit; super and investing; tax and government; personal insurance; ID and residency; legal and
+    estate; work and study; business; kids and family; pets; purchases and belongings;
+    subscriptions and memberships; going out; other), shown only once the person has something in
+    them or chooses to show them, plus categories of the person's own that their agent suggests when
+    nothing built-in fits, in a fixed generic shape Warthog validates and renders like any other.
+    Each record has a kind with its own fields (subscriptions keep service, cost, billing cycle,
+    next renewal, how to cancel and status; receipts and warranties keep merchant, item, date,
+    amount, return-by date, warranty end date and an attached receipt file; renewals and
+    appointments keep what, due date and where) and is a standing item (an account, policy or
+    document that renews or expires), a BOOKING (a flight, stay, restaurant, event, appointment,
+    tradie visit … booked for a time, live until it is over, then finished) or a CASE (a fine,
+    claim, application or dispute, open until resolved). Any kind can be a thing other records
+    belong to (a vehicle with its number plate, registration and insurance; a home; a trip with its
+    flights and stays; a pet; or a thing of the person's own category), and a record can be for
+    someone else (a first name or relationship only). Reminders by notification before due dates
+    (default 14 days and 1 day before, or the kind's own schedule, adjustable per record; none for
+    anything finished, paused or long past due). Agents add and update records through Warthog: a
+    record an agent saves is a suggestion, labelled with the agent and where it says it found it,
+    until the person confirms it; an agent's change to a record the person confirmed waits for the
+    person to accept it; saving the same thing again updates it rather than adding a copy, and one
+    the person marks "not mine" is not added again. Warthog refuses to keep tax file numbers,
+    passwords, PINs, security answers, card numbers, BSB and account numbers, payment details taken
+    from email, medical details and government identity numbers in records. A number plate in a
+    vehicle record is an everyday detail (it is shown on the vehicle); the vault's high-tier car
+    registration field stays available for anyone who prefers to keep it there.
+  - >-
+    Every life-admin item keeps a journal (amended 2026-11-23, docs/adr/life-admin-journal.md):
+    Warthog's own record of what changed and who changed it, and the one- or two-line decisions
+    (what was decided and why), notes, next steps and hand-over notes agents and the person write,
+    shown as reported by whoever wrote them. A live item may have an agent handling it — the last
+    agent to record a decision or next step on it, or one the person picks; another agent can take
+    it over, and Warthog records the hand-over. Any agent the person allows, from any provider, gets
+    the live items with work still open as one-line hand-over summaries and reads an item's journal
+    before carrying it on. Finished items keep their whole journal and stay one step away for the
+    person and agents, including a Bookings view of every booking, live and past; only deleting an
+    item, or marking it "not mine", removes its journal.
   - >-
     Filling in life admin from email — Warthog never reads the person's email itself and never runs
     a model to do it. When the person asks, or agrees when their agent offers, their own agent reads

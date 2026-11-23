@@ -80,6 +80,7 @@ import { createSession, type Session } from "@/server/auth/session";
 import { createApproval } from "@/server/db/approvals";
 import { createAgent } from "@/server/db/agents";
 import { createRecord } from "@/server/db/life-admin-records";
+import { createCustomCategory } from "@/server/db/life-admin-categories";
 import { saveIdentityField } from "@/server/db/identity-fields";
 import { createDbRecorder } from "@/server/activity/writer";
 import { localAesKeyWrapper, type KeyWrapper } from "@/server/crypto/key-wrapper";
@@ -139,7 +140,7 @@ test("each reminder links to its record in Life admin, says what its date means,
   const db = await freshDb();
   try {
     const owner = await seedSignedIn(db, "reminder-links@example.com");
-    const rego = await createRecord(db, { userId: owner.userId, kind: "item", type: "vehicle.registration", fields: { provider: "Transport for NSW" }, dueDate: "2026-12-14", status: "active", source: { kind: "person" } }, owner.dek);
+    const rego = await createRecord(db, { userId: owner.userId, kind: "item", type: "vehicles.registration", fields: { provider: "Transport for NSW" }, dueDate: "2026-12-14", status: "active", source: { kind: "person" } }, owner.dek);
     const lapsed = await createRecord(db, { userId: owner.userId, kind: "item", type: "health.insurance", fields: { provider: "Medibank" }, dueDate: "2026-11-02", status: "active", source: { kind: "agent", agentId: "agent-1" } }, owner.dek);
     const view = await makeActions(db).load(owner.session);
     assert.deepEqual(view.reminders, [
@@ -147,6 +148,34 @@ test("each reminder links to its record in Life admin, says what its date means,
       { id: rego.id, title: "Transport for NSW", due: "14 Dec 2026", dueLabel: "Expires", href: `/life-admin?view=life&tab=things#record-${rego.id}` },
     ]);
     assert.deepEqual(view.toCheck, { count: 1, href: "/life-admin?view=life&tab=things" }, "the agent's record waits to be checked");
+  } finally {
+    await db.close();
+  }
+});
+
+test("a kind of the person's own category reads its reminder its own way; a stay that has started is happening, not overdue", async () => {
+  const db = await freshDb();
+  try {
+    const owner = await seedSignedIn(db, "reminder-custom@example.com");
+    const { slug } = await createCustomCategory(db, {
+      userId: owner.userId,
+      state: "active",
+      origin: { kind: "person" },
+      definition: {
+        label: "Boat", description: "The boat.", lifeArea: "getting_around", icon: "sailboat",
+        kinds: [{ key: "mooring", label: "Mooring", lifecycle: "standing", use: "A mooring licence.", fields: [], due: { means: "renews", label: "Licence renews" } }],
+      },
+    }, owner.dek, clock);
+    const mooring = await createRecord(db, { userId: owner.userId, kind: "item", type: `${slug}.mooring`, fields: { provider: "Maritime NSW" }, dueDate: "2026-12-01", status: "active", source: { kind: "person" } }, owner.dek);
+    const stay = await createRecord(db, {
+      userId: owner.userId, kind: "item", type: "travel.stay",
+      fields: { provider: "Park Hyatt", starts_at: "2026-11-14T15:00+11:00[Australia/Sydney]", ends_at: "2026-11-17T11:00+11:00[Australia/Sydney]" },
+      dueDate: "2026-11-14", status: "active", state: "confirmed", source: { kind: "person" },
+    }, owner.dek);
+    const view = await makeActions(db).load(owner.session);
+    const byId = new Map(view.reminders.map((reminder) => [reminder.id, reminder]));
+    assert.equal(byId.get(mooring.id)?.dueLabel, "Licence renews");
+    assert.equal(byId.get(stay.id)?.overdue, undefined, "a stay under way isn't overdue");
   } finally {
     await db.close();
   }

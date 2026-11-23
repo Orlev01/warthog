@@ -33,6 +33,7 @@
 
 import { createHmac, hkdfSync, randomUUID } from "node:crypto";
 import { MAX_REMINDER_OFFSET_DAYS, recordDueDateSchema, reminderOffsetsSchema } from "../../domain/life-admin/record-metadata";
+import { remindUntilOf, WINDOWS } from "../../domain/life-admin/lifecycle";
 
 import { decrypt, encrypt } from "../crypto/envelope";
 import type { Clock } from "../seams/clock";
@@ -50,7 +51,7 @@ const PENDING_COLUMN = "pending";
 const DEFAULT_REMINDER_OFFSETS = [14, 1];
 
 // How long after its due date a record's unsent reminders may still go out.
-export const REMINDER_GRACE_DAYS = 7;
+export const REMINDER_GRACE_DAYS = WINDOWS.reminderGraceDays;
 
 // The stored kinds: the three original ones, and `item` for every other type (whose type
 // lives encrypted in `meta`, so the plaintext kind never names a category).
@@ -89,6 +90,16 @@ export interface PendingChange {
 interface RecordMeta {
   readonly type?: string;
   readonly foundIn?: RecordFoundIn;
+  // A booking's or case's detailed state (pending, confirmed, cancelled, no_show; open, waiting,
+  // resolved). Kept here, encrypted, so the plaintext status never says a record is a booking.
+  readonly state?: string;
+}
+
+// The agent handling a live item (a label, never a lock or a permission).
+export interface RecordSteward {
+  readonly agentId: string;
+  readonly setBy: "person" | "agent";
+  readonly since: string;
 }
 
 // What createRecord records. `userId` is the OWNER (the session's / connection's
@@ -108,7 +119,10 @@ export interface NewRecord {
   readonly foundIn?: RecordFoundIn | null;
   readonly reviewState?: ReviewState;
   readonly parentId?: string | null;
-  readonly matchKey?: string | null;
+  readonly matchKeys?: readonly string[];
+  readonly state?: string | null;
+  // The last day reminders may go out; omitted ⇒ worked out as for a standing item.
+  readonly remindUntil?: string | null;
 }
 
 // What updateRecord changes for the owner's own record. Member-scoped by
@@ -125,7 +139,9 @@ export interface UpdateRecordInput {
   readonly foundIn?: RecordFoundIn | null;
   readonly reviewState?: Exclude<ReviewState, "dismissed">;
   readonly parentId?: string | null;
-  readonly matchKey?: string | null;
+  readonly matchKeys?: readonly string[];
+  readonly state?: string | null;
+  readonly remindUntil?: string | null;
   readonly changedBy?: RecordSource;
   // Drop a pending agent change (the person accepted it into `fields`, or kept their own).
   readonly clearPending?: boolean;
@@ -148,7 +164,10 @@ export interface LifeAdminRecord {
   readonly foundIn: RecordFoundIn | null;
   readonly reviewState: ReviewState;
   readonly parentId: string | null;
-  readonly matchKey: string | null;
+  readonly matchKeys: readonly string[];
+  readonly state: string | null;
+  readonly remindUntil: string | null;
+  readonly steward: RecordSteward | null;
   readonly pending: PendingChange | null;
   readonly changedBy: RecordSource | null;
   readonly createdAt: string;
@@ -173,7 +192,8 @@ export interface DueReminder {
 const SELECT_COLUMNS =
   "id, user_id, kind, fields, due_date::text AS due_date, status, " +
   "reminder_offsets, sent_offsets, source_kind, source_agent_id, meta, review_state, parent_id, " +
-  "match_key, pending, changed_by_kind, changed_by_agent_id, created_at, updated_at";
+  "match_keys, pending, changed_by_kind, changed_by_agent_id, created_at, updated_at, " +
+  "remind_until::text AS remind_until, steward_agent_id, steward_set_by, steward_since";
 
 // Reconstruct the plaintext source metadata from its two columns.
 function toSource(row: Row): RecordSource {
@@ -215,7 +235,12 @@ function toRecord(row: Row, fields: Record<string, unknown>, meta: RecordMeta = 
     foundIn: meta.foundIn ?? null,
     reviewState: (row.review_state as ReviewState | undefined) ?? "confirmed",
     parentId: (row.parent_id as string | null) ?? null,
-    matchKey: (row.match_key as string | null) ?? null,
+    matchKeys: ((row.match_keys as string[] | null) ?? []).map(String),
+    state: meta.state ?? null,
+    remindUntil: (row.remind_until as string | null) ?? null,
+    steward: row.steward_agent_id
+      ? { agentId: row.steward_agent_id as string, setBy: (row.steward_set_by as "person" | "agent") ?? "agent", since: iso(row.steward_since) }
+      : null,
     pending,
     changedBy: toChangedBy(row),
     createdAt: iso(row.created_at),
@@ -227,14 +252,19 @@ function toRecord(row: Row, fields: Record<string, unknown>, meta: RecordMeta = 
 // context label, so it differs per person and from every other derived key.
 const MATCH_INFO = "warthog/life-admin-match/v1";
 
-/** The opaque match key for a type and its identifying values (see the domain's identityParts). */
-export function recordMatchKey(dek: Uint8Array, typeId: string, parts: readonly string[]): string {
+/** The opaque match key for a kind, the fields that identify it and their values (see identityAlternatives). */
+export function recordMatchKey(dek: Uint8Array, typeId: string, keys: readonly string[], values: readonly string[]): string {
   const key = Buffer.from(hkdfSync("sha256", dek, new Uint8Array(0), MATCH_INFO, 32));
-  return createHmac("sha256", key).update([typeId, ...parts].join("\u001f"), "utf8").digest("hex");
+  return createHmac("sha256", key).update([typeId, keys.join(","), ...values].join("\u001f"), "utf8").digest("hex");
+}
+
+// The default last reminder day: as for a standing item (live, due + grace).
+function defaultRemindUntil(status: string, dueDate: string | null): string | null {
+  return remindUntilOf({ lifecycle: "standing" }, status, null, dueDate);
 }
 
 async function encryptMeta(dek: Uint8Array, id: string, meta: RecordMeta): Promise<string | null> {
-  return meta.type || meta.foundIn ? encrypt(dek, TABLE, META_COLUMN, id, JSON.stringify(meta)) : null;
+  return meta.type || meta.foundIn || meta.state ? encrypt(dek, TABLE, META_COLUMN, id, JSON.stringify(meta)) : null;
 }
 
 // A parent must be another of the SAME person's records, and not a dismissed one.
@@ -268,7 +298,8 @@ export async function createRecord(
   const sourceAgentId = source.kind === "agent" ? source.agentId : null;
   const reviewState: ReviewState = input.reviewState ?? (source.kind === "agent" ? "suggested" : "confirmed");
   const parentId = input.parentId ?? null;
-  const meta: RecordMeta = { ...(input.type ? { type: input.type } : {}), ...(input.foundIn ? { foundIn: input.foundIn } : {}) };
+  const meta: RecordMeta = { ...(input.type ? { type: input.type } : {}), ...(input.foundIn ? { foundIn: input.foundIn } : {}), ...(input.state ? { state: input.state } : {}) };
+  const remindUntil = input.remindUntil !== undefined ? input.remindUntil : defaultRemindUntil(input.status, dueDate);
   const envelope = await encrypt(dek, TABLE, FIELDS_COLUMN, id, JSON.stringify(input.fields));
   const metaEnvelope = await encryptMeta(dek, id, meta);
   // Lock the owner row and check the person's record allowance (collection-bounds ADR); the
@@ -279,11 +310,11 @@ export async function createRecord(
   const result = await db.query(
     `INSERT INTO life_admin_records
        (id, user_id, kind, fields, due_date, status, reminder_offsets, source_kind, source_agent_id,
-        meta, review_state, parent_id, match_key, changed_by_kind, changed_by_agent_id)
-     VALUES ($1, $2, $3, $4, $5::date, $6, $7::int[], $8, $9, $10, $11, $12, $13, $8, $9)
+        meta, review_state, parent_id, match_keys, changed_by_kind, changed_by_agent_id, remind_until)
+     VALUES ($1, $2, $3, $4, $5::date, $6, $7::int[], $8, $9, $10, $11, $12, $13::text[], $8, $9, $14::date)
      RETURNING created_at, updated_at`,
     [id, input.userId, input.kind, envelope, dueDate, input.status, reminderOffsets, source.kind, sourceAgentId,
-      metaEnvelope, reviewState, parentId, input.matchKey ?? null],
+      metaEnvelope, reviewState, parentId, [...(input.matchKeys ?? [])], remindUntil],
   );
   const stamps = result.rows[0] ?? {};
 
@@ -301,7 +332,10 @@ export async function createRecord(
     foundIn: meta.foundIn ?? null,
     reviewState,
     parentId,
-    matchKey: input.matchKey ?? null,
+    matchKeys: [...(input.matchKeys ?? [])],
+    state: meta.state ?? null,
+    remindUntil,
+    steward: null,
     pending: null,
     changedBy: source,
     createdAt: iso(stamps.created_at ?? new Date()),
@@ -332,7 +366,7 @@ export async function updateRecord(
 
   // Lock the row (member-scoped) so its meta merges with what is there now.
   const current = (await db.query(
-    "SELECT meta, review_state FROM life_admin_records WHERE id = $1 AND user_id = $2 FOR UPDATE",
+    "SELECT meta, review_state, due_date::text AS due_date FROM life_admin_records WHERE id = $1 AND user_id = $2 FOR UPDATE",
     [input.id, input.userId],
   )).rows[0];
   if (!current || current.review_state === "dismissed") {
@@ -340,8 +374,12 @@ export async function updateRecord(
   }
   let meta: RecordMeta = current.meta ? JSON.parse(await decrypt(dek, TABLE, META_COLUMN, input.id, current.meta as string)) : {};
   let metaEnvelope = (current.meta as string | null) ?? null;
-  if (input.type !== undefined || input.foundIn !== undefined) {
-    const next: { type?: string; foundIn?: RecordFoundIn } = { ...meta };
+  if (input.type !== undefined || input.foundIn !== undefined || input.state !== undefined) {
+    const next: { type?: string; foundIn?: RecordFoundIn; state?: string } = { ...meta };
+    if (input.state !== undefined) {
+      if (input.state) next.state = input.state;
+      else delete next.state;
+    }
     if (input.type !== undefined) {
       if (input.type) next.type = input.type;
       else delete next.type;
@@ -355,6 +393,8 @@ export async function updateRecord(
   }
   if (input.parentId !== undefined) await assertParent(db, input.userId, input.id, input.parentId);
   const changedBy = input.changedBy ?? { kind: "person" as const };
+  const effectiveDue = input.dueDate !== undefined ? dueDate : ((current.due_date as string | null) ?? null);
+  const remindUntil = input.remindUntil !== undefined ? input.remindUntil : defaultRemindUntil(input.status, effectiveDue);
 
   const result = await db.query(
     `UPDATE life_admin_records
@@ -367,17 +407,18 @@ export async function updateRecord(
          meta = $8,
          review_state = COALESCE($9, review_state),
          parent_id = CASE WHEN $10::boolean THEN $11::uuid ELSE parent_id END,
-         match_key = CASE WHEN $12::boolean THEN $13 ELSE match_key END,
+         match_keys = CASE WHEN $12::boolean THEN $13::text[] ELSE match_keys END,
          pending = CASE WHEN $14::boolean THEN NULL ELSE pending END,
          changed_by_kind = $15,
          changed_by_agent_id = $16,
+         remind_until = $17::date,
          updated_at = now()
      WHERE id = $1 AND user_id = $2
      RETURNING ${SELECT_COLUMNS}`,
     [input.id, input.userId, envelope, dueDate, input.status, reminderOffsets, input.dueDate !== undefined,
       metaEnvelope, input.reviewState ?? null, input.parentId !== undefined, input.parentId ?? null,
-      input.matchKey !== undefined, input.matchKey ?? null, input.clearPending === true,
-      changedBy.kind, changedBy.kind === "agent" ? changedBy.agentId : null],
+      input.matchKeys !== undefined, [...(input.matchKeys ?? [])], input.clearPending === true,
+      changedBy.kind, changedBy.kind === "agent" ? changedBy.agentId : null, remindUntil],
   );
 
   const row = result.rows[0];
@@ -401,20 +442,36 @@ export async function getRecordForUser(
   return (await decryptRows(result.rows, dek))[0] ?? null;
 }
 
-// The person's record with this match key: a live one first, else a dismissed tombstone (so a
-// caller can tell "already saved" from "the person said not mine"). Null when there is none.
-export async function findRecordByMatchKey(
+// The person's record sharing any of these match keys: a live one first, else a dismissed
+// tombstone (so a caller can tell "already saved" from "the person said not mine"). Null when none.
+export async function findRecordByMatchKeys(
   db: Db,
   userId: string,
-  matchKey: string,
+  matchKeys: readonly string[],
   dek: Uint8Array,
 ): Promise<LifeAdminRecord | null> {
+  if (matchKeys.length === 0) return null;
   const result = await db.query(
-    `SELECT ${SELECT_COLUMNS} FROM life_admin_records WHERE user_id = $1 AND match_key = $2
+    `SELECT ${SELECT_COLUMNS} FROM life_admin_records WHERE user_id = $1 AND match_keys && $2::text[]
      ORDER BY (review_state = 'dismissed') ASC, updated_at DESC, id ASC LIMIT 1`,
-    [userId, matchKey],
+    [userId, [...matchKeys]],
   );
   return (await decryptRows(result.rows, dek))[0] ?? null;
+}
+
+// The agent handling a live item, or nobody (null). Member-scoped; true when the record exists.
+export async function setSteward(
+  db: Db,
+  userId: string,
+  id: string,
+  steward: { readonly agentId: string; readonly setBy: "person" | "agent"; readonly since: Date } | null,
+): Promise<boolean> {
+  const result = await db.query(
+    `UPDATE life_admin_records SET steward_agent_id = $3, steward_set_by = $4, steward_since = $5::timestamptz
+     WHERE id = $1 AND user_id = $2 AND review_state <> 'dismissed' RETURNING id`,
+    [id, userId, steward?.agentId ?? null, steward?.setBy ?? null, steward ? steward.since.toISOString() : null],
+  );
+  return result.rows.length > 0;
 }
 
 // The person checked an agent's suggestion: it becomes theirs. True when one was confirmed.
@@ -444,27 +501,29 @@ export async function setPendingChange(
   return result.rows.length > 0;
 }
 
-// Make one of the person's records a tombstone ("not mine"): its fields, date, link and any
-// pending change are cleared and only its type and match key stay, so the same suggestion is
-// not added again. Records that belonged to it are unlinked. Runs inside the caller's
-// transaction (receipt files are removed alongside, in storage/receipt-files.ts).
+// Make one of the person's records a tombstone ("not mine"): the record (and, through the
+// cascade, its journal and task links) is removed, and a new row keeps only its kind and match
+// keys, so the same suggestion is not added again. Records that belonged to it are unlinked by
+// the parent link's ON DELETE SET NULL. Runs inside the caller's transaction (receipt files are
+// removed alongside, in storage/receipt-files.ts). True when there was such a record.
 export async function dismissRecordRow(db: Db, userId: string, id: string, dek: Uint8Array): Promise<boolean> {
   const current = (await db.query(
-    "SELECT meta FROM life_admin_records WHERE id = $1 AND user_id = $2 AND review_state <> 'dismissed' FOR UPDATE",
+    "SELECT kind, meta, match_keys, source_kind, source_agent_id, status FROM life_admin_records WHERE id = $1 AND user_id = $2 AND review_state <> 'dismissed' FOR UPDATE",
     [id, userId],
   )).rows[0];
   if (!current) return false;
   const meta: RecordMeta = current.meta ? JSON.parse(await decrypt(dek, TABLE, META_COLUMN, id, current.meta as string)) : {};
-  const empty = await encrypt(dek, TABLE, FIELDS_COLUMN, id, "{}");
-  const metaEnvelope = await encryptMeta(dek, id, meta.type ? { type: meta.type } : {});
+  await db.query("DELETE FROM life_admin_records WHERE id = $1 AND user_id = $2", [id, userId]);
+  const tombstone = randomUUID();
+  const empty = await encrypt(dek, TABLE, FIELDS_COLUMN, tombstone, "{}");
+  const metaEnvelope = await encryptMeta(dek, tombstone, meta.type ? { type: meta.type } : {});
   await db.query(
-    `UPDATE life_admin_records
-     SET fields = $3, meta = $4, due_date = NULL, pending = NULL, parent_id = NULL, review_state = 'dismissed',
-         changed_by_kind = 'person', changed_by_agent_id = NULL, updated_at = now()
-     WHERE id = $1 AND user_id = $2`,
-    [id, userId, empty, metaEnvelope],
+    `INSERT INTO life_admin_records
+       (id, user_id, kind, fields, status, source_kind, source_agent_id, meta, review_state, match_keys,
+        changed_by_kind, changed_by_agent_id)
+     VALUES ($1, $2, $3, $4, $5, $6, $7, $8, 'dismissed', $9::text[], 'person', NULL)`,
+    [tombstone, userId, current.kind, empty, current.status, current.source_kind, current.source_agent_id, metaEnvelope, (current.match_keys as string[]) ?? []],
   );
-  await db.query("UPDATE life_admin_records SET parent_id = NULL WHERE user_id = $1 AND parent_id = $2", [userId, id]);
   return true;
 }
 
@@ -526,10 +585,12 @@ async function decryptRows(rows: Row[], dek: Uint8Array): Promise<LifeAdminRecor
 // marked sent, and the record has a due date — the earliest reminder date first. METADATA
 // ONLY — it never decrypts a field (the fields blob is not even selected), which is
 // exactly design §4.1's "filter without decrypting another person's data".
-// A record that is dismissed, cancelled, done, paused or expired reminds no one, and nor does
-// one more than REMINDER_GRACE_DAYS past its due date (it shows as overdue instead), so a
-// batch of old records an agent saves from email, or an imported export, never sets off a
-// burst of pushes — while a reminder missed during a short outage still catches up.
+// A record reminds only up to its `remind_until` day, worked out from its kind, status and due
+// date when it was written (none for anything dismissed, cancelled, done, paused or expired;
+// REMINDER_GRACE_DAYS past the due date for a live item; the start date for a booking) — so a
+// batch of old records an agent saves from email, or an imported export, never sets off a burst
+// of pushes, a reminder missed during a short outage still catches up, and this keyless sweep
+// needs no status list and never learns which records are bookings.
 export async function listDueForReminder(db: Db, clock: Clock): Promise<DueReminder[]> {
   const result = await db.query(
     `SELECT r.id AS record_id, r.user_id, r.kind, r.due_date::text AS due_date, o AS "offset"
@@ -540,13 +601,13 @@ export async function listDueForReminder(db: Db, clock: Clock): Promise<DueRemin
      ) offsets
      WHERE r.due_date IS NOT NULL
        AND r.review_state <> 'dismissed'
-       AND lower(r.status) NOT IN ('cancelled', 'canceled', 'done', 'paused', 'expired', 'ended')
-       AND r.due_date >= ($1::date - $3::int)
+       AND r.remind_until IS NOT NULL
+       AND r.remind_until >= $1::date
        AND o IS NOT NULL
        AND NOT (o = ANY(r.sent_offsets))
        AND (r.due_date - o) <= $1
      ORDER BY (r.due_date - o), r.id, o`,
-    [clock.now(), MAX_REMINDER_OFFSET_DAYS, REMINDER_GRACE_DAYS],
+    [clock.now(), MAX_REMINDER_OFFSET_DAYS],
   );
   return result.rows.map((row) => ({
     recordId: row.record_id as string,

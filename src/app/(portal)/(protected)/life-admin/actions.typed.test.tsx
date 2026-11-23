@@ -22,7 +22,8 @@ import { createUser } from "@/server/db/users";
 import { createAgent } from "@/server/db/agents";
 import { createRecord, getRecordForUser, listRecordsForUser } from "@/server/db/life-admin-records";
 import { changeRecord, saveTypedRecord } from "@/server/life-admin/record-service";
-import { recordType } from "@/domain/life-admin/record-types";
+import { BUILT_IN } from "@/domain/life-admin/catalogue";
+import type { ServiceContext } from "@/server/life-admin/record-service";
 import { createInMemoryBlobStore } from "@/server/storage/blob";
 import { HttpError } from "@/server/http/validate";
 import { localAesKeyWrapper, type KeyWrapper } from "@/server/crypto/key-wrapper";
@@ -32,7 +33,8 @@ import type { Db } from "@/server/db/index";
 import type { Session } from "@/server/auth/session";
 
 const NOW = new Date("2026-11-23T01:00:00.000Z");
-const type = (id: string) => recordType(id)!;
+const type = (id: string) => BUILT_IN.type(id)!;
+const svc = (ctx: { db: Db }, who: { userId: string; dek: Uint8Array }): ServiceContext => ({ db: ctx.db, dek: who.dek, userId: who.userId, catalogue: BUILT_IN, zone: "UTC", now: NOW });
 
 type Ctx = { db: Db; keyWrapper: KeyWrapper; actions: ReturnType<typeof createLifeAdminActions> };
 
@@ -70,11 +72,11 @@ async function rejects4xx(label: string, fn: () => Promise<unknown>): Promise<vo
 test("saveRecord adds a typed record the person's way: normalised, confirmed, linked to their own asset", async () => {
   await withDb(async (ctx) => {
     const me = await person(ctx, "add-typed");
-    const bike = await ctx.actions.saveRecord(me.session, { type: "vehicle.vehicle", fields: { name: "Honda CB500X", plate: "bx12ab" } });
+    const bike = await ctx.actions.saveRecord(me.session, { type: "vehicles.vehicle", fields: { name: "Honda CB500X", plate: "bx12ab" } });
     assert.equal(bike.ok, true);
     const bikeId = (bike as { recordId: string }).recordId;
     const rego = await ctx.actions.saveRecord(me.session, {
-      type: "vehicle.registration",
+      type: "vehicles.registration",
       fields: { plate: "BX12AB", amount: "$412.50", currency: "aud", cycle: "Yearly", notes: "" },
       dueDate: "2026-12-14",
       status: "active",
@@ -95,7 +97,7 @@ test("a person's save without the details that identify it is still a clean save
     const me = await person(ctx, "add-no-identity");
     const saved = await ctx.actions.saveRecord(me.session, { type: "health.insurance", fields: { provider: "Medibank" } });
     assert.deepEqual((saved as { problems?: string[] }).problems, [], "no reference number is not something the person left out");
-    const bad = await ctx.actions.saveRecord(me.session, { type: "purchase.receipt", fields: { item: "Kettle", purchased_on: "last spring" } });
+    const bad = await ctx.actions.saveRecord(me.session, { type: "belongings.receipt", fields: { item: "Kettle", purchased_on: "last spring" } });
     assert.equal((bad as { problems?: string[] }).problems?.length, 1, "a value Warthog couldn't read is reported");
   });
 });
@@ -104,10 +106,10 @@ test("saveRecord links only to one of the person's own assets of an allowed type
   await withDb(async (ctx) => {
     const me = await person(ctx, "add-parent");
     const other = await person(ctx, "add-parent-other");
-    const pet = (await ctx.actions.saveRecord(me.session, { type: "pet.pet", fields: { name: "Biscuit" } })) as { recordId: string };
-    const theirs = (await ctx.actions.saveRecord(other.session, { type: "vehicle.vehicle", fields: { name: "Their car" } })) as { recordId: string };
+    const pet = (await ctx.actions.saveRecord(me.session, { type: "pets.pet", fields: { name: "Biscuit" } })) as { recordId: string };
+    const theirs = (await ctx.actions.saveRecord(other.session, { type: "vehicles.vehicle", fields: { name: "Their car" } })) as { recordId: string };
     for (const parentId of [pet.recordId, theirs.recordId]) {
-      const saved = await ctx.actions.saveRecord(me.session, { type: "vehicle.service", fields: { provider: `Workshop ${parentId.slice(0, 4)}` }, parentId });
+      const saved = await ctx.actions.saveRecord(me.session, { type: "vehicles.service", fields: { provider: `Workshop ${parentId.slice(0, 4)}` }, parentId });
       assert.equal(saved.ok, true);
       assert.ok((saved as { problems: string[] }).problems.length > 0, "the person is told it wasn't linked");
       assert.equal((await getRecordForUser(ctx.db, me.userId, (saved as { recordId: string }).recordId, me.dek))!.parentId, null);
@@ -118,8 +120,8 @@ test("saveRecord links only to one of the person's own assets of an allowed type
 test("saveRecord updates the record it matches instead of adding a copy", async () => {
   await withDb(async (ctx) => {
     const me = await person(ctx, "add-match");
-    await ctx.actions.saveRecord(me.session, { type: "vehicle.registration", fields: { plate: "BX12AB" }, dueDate: "2026-12-14" });
-    const again = await ctx.actions.saveRecord(me.session, { type: "vehicle.registration", fields: { plate: "bx 12ab", provider: "Transport for NSW" }, dueDate: "2027-12-14" });
+    await ctx.actions.saveRecord(me.session, { type: "vehicles.registration", fields: { plate: "BX12AB" }, dueDate: "2026-12-14" });
+    const again = await ctx.actions.saveRecord(me.session, { type: "vehicles.registration", fields: { plate: "bx 12ab", provider: "Transport for NSW" }, dueDate: "2027-12-14" });
     assert.equal((again as { outcome?: string }).outcome, "updated");
     const records = await listRecordsForUser(ctx.db, me.userId, me.dek);
     assert.equal(records.length, 1, "still one registration");
@@ -131,10 +133,10 @@ test("saveRecord refuses an identifier Warthog never keeps, naming the field by 
   await withDb(async (ctx) => {
     const me = await person(ctx, "add-forbidden");
     const cases: [string, Record<string, string>, string, string][] = [
-      ["money.tax", { notes: "My TFN is 123 456 782" }, "tax_file_number", "Notes"],
+      ["government.lodgement", { notes: "My TFN is 123 456 782" }, "tax_file_number", "Notes"],
       ["id.passport", { country: "Australia", notes: "PA1234567" }, "government_id", "Notes"],
-      ["subscription.service", { name: "Bank portal", password: "hunter2" }, "secret", "Password"],
-      ["money.bank_account", { provider: "CBA", notes: "BSB 062-000 account 12345678" }, "bank_account", "Notes"],
+      ["subscriptions.service", { name: "Bank portal", password: "hunter2" }, "secret", "Password"],
+      ["banking.account", { provider: "CBA", notes: "BSB 062-000 account 12345678" }, "bank_account", "Notes"],
       ["id.medicare", { people: "Me", notes: "2123 45670 1" }, "medicare", "Notes"],
     ];
     for (const [typeId, fields, rule, field] of cases) {
@@ -151,10 +153,10 @@ test("saveRecord refuses an identifier Warthog never keeps, naming the field by 
 test("saveRecord refuses a form with nothing filled in, and an unknown type at the boundary", async () => {
   await withDb(async (ctx) => {
     const me = await person(ctx, "add-empty");
-    assert.deepEqual(await ctx.actions.saveRecord(me.session, { type: "general.other", fields: { name: "  ", notes: "" } }), { ok: false, reason: "empty" });
-    await rejects4xx("unknown type", () => ctx.actions.saveRecord(me.session, { type: "vehicle.spaceship", fields: { name: "x" } }));
+    assert.deepEqual(await ctx.actions.saveRecord(me.session, { type: "other.item", fields: { name: "  ", notes: "" } }), { ok: false, reason: "empty" });
+    await rejects4xx("unknown type", () => ctx.actions.saveRecord(me.session, { type: "vehicles.spaceship", fields: { name: "x" } }));
     await rejects4xx("prototype key", () => ctx.actions.saveRecord(me.session, { type: "__proto__", fields: { name: "x" } }));
-    await rejects4xx("malformed parent", () => ctx.actions.saveRecord(me.session, { type: "vehicle.service", fields: { provider: "x" }, parentId: "1" }));
+    await rejects4xx("malformed parent", () => ctx.actions.saveRecord(me.session, { type: "vehicles.service", fields: { provider: "x" }, parentId: "1" }));
     assert.deepEqual(await listRecordsForUser(ctx.db, me.userId, me.dek), []);
   });
 });
@@ -176,7 +178,7 @@ test("editChanges sets what changed, removes what was emptied, leaves the rest a
     { set: { reference: "ABD", excess: "500" }, remove: ["notes"] },
   );
   // A changed detail saved under another name moves to the type's own field.
-  assert.deepEqual(editChanges(type("subscription.service"), { service: "Spotify" }, { service: "Spotify Family", provider: "" }), {
+  assert.deepEqual(editChanges(type("subscriptions.service"), { service: "Spotify" }, { service: "Spotify Family", provider: "" }), {
     set: { service: "Spotify Family" },
     remove: ["service"],
   });
@@ -221,7 +223,7 @@ test("updateRecord changes only what the person changed and keeps a list or obje
 test("updateRecord refuses an identifier in what the person changed, and leaves the record as it was", async () => {
   await withDb(async (ctx) => {
     const me = await person(ctx, "edit-forbidden");
-    const saved = (await ctx.actions.saveRecord(me.session, { type: "money.bank_account", fields: { provider: "CBA", last4: "1234" } })) as { recordId: string };
+    const saved = (await ctx.actions.saveRecord(me.session, { type: "banking.account", fields: { provider: "CBA", last4: "1234" } })) as { recordId: string };
     const result = await ctx.actions.updateRecord(me.session, { id: saved.recordId, fields: { provider: "CBA", notes: "My PIN is 4821" } });
     assert.deepEqual(result, { ok: false, reason: "forbidden", refusal: { rule: "secret", field: "Notes" } });
     assert.deepEqual((await getRecordForUser(ctx.db, me.userId, saved.recordId, me.dek))!.fields, { provider: "CBA", last4: "1234" });
@@ -232,8 +234,8 @@ test("the person's edit confirms an agent's suggestion, even one that changed no
   await withDb(async (ctx) => {
     const me = await person(ctx, "edit-confirms");
     const agent = await agentOf(ctx, me.userId, "ChatGPT");
-    const a = await saveTypedRecord(ctx.db, me.dek, me.userId, agent, { type: type("health.insurance"), fields: { provider: "Medibank", reference: "M-1" } }, NOW);
-    const b = await saveTypedRecord(ctx.db, me.dek, me.userId, agent, { type: type("health.ambulance"), fields: { provider: "Ambulance Vic", reference: "A-1" } }, NOW);
+    const a = await saveTypedRecord(svc(ctx, me), agent, { type: type("health.insurance"), fields: { provider: "Medibank", reference: "M-1" } });
+    const b = await saveTypedRecord(svc(ctx, me), agent, { type: type("health.ambulance"), fields: { provider: "Ambulance Vic", reference: "A-1" } });
     const unchanged = await ctx.actions.updateRecord(me.session, { id: a.record!.id, fields: { provider: "Medibank", reference: "M-1" } });
     assert.equal((unchanged as { outcome?: string }).outcome, "confirmed");
     assert.equal((await getRecordForUser(ctx.db, me.userId, a.record!.id, me.dek))!.reviewState, "confirmed");
@@ -252,8 +254,8 @@ test("the loader shows who added a record, where the agent says it found it, and
     const chatgpt = await agentOf(ctx, me.userId, "ChatGPT");
     const sly = await agentOf(ctx, me.userId, "You");
     const foundIn = { service: "google-gmail", messageId: "18c2", sender: "service.nsw.gov.au", date: "2026-10-02", seenByWarthog: true };
-    const rego = await saveTypedRecord(ctx.db, me.dek, me.userId, chatgpt, { type: type("vehicle.registration"), fields: { plate: "BX12AB" }, dueDate: "2026-12-14", foundIn }, NOW);
-    await saveTypedRecord(ctx.db, me.dek, me.userId, sly, { type: type("pet.pet"), fields: { name: "Biscuit" } }, NOW);
+    const rego = await saveTypedRecord(svc(ctx, me), chatgpt, { type: type("vehicles.registration"), fields: { plate: "BX12AB" }, dueDate: "2026-12-14", foundIn });
+    await saveTypedRecord(svc(ctx, me), sly, { type: type("pets.pet"), fields: { name: "Biscuit" } });
     const data = await ctx.actions.load(me.session);
     const view = data.records.find((r) => r.id === rego.record!.id)!;
     assert.equal(view.reviewState, "suggested");
@@ -272,8 +274,8 @@ test("confirmRecord makes a suggestion the person's; another person's or a malfo
     const other = await person(ctx, "confirm-other");
     const agent = await agentOf(ctx, me.userId, "ChatGPT");
     const theirAgent = await agentOf(ctx, other.userId, "Claude");
-    const mine = await saveTypedRecord(ctx.db, me.dek, me.userId, agent, { type: type("money.super"), fields: { provider: "AustralianSuper", reference: "S-1" } }, NOW);
-    const theirs = await saveTypedRecord(ctx.db, other.dek, other.userId, theirAgent, { type: type("money.super"), fields: { provider: "Hostplus", reference: "H-1" } }, NOW);
+    const mine = await saveTypedRecord(svc(ctx, me), agent, { type: type("investing.super"), fields: { provider: "AustralianSuper", reference: "S-1" } });
+    const theirs = await saveTypedRecord(svc(ctx, other), theirAgent, { type: type("investing.super"), fields: { provider: "Hostplus", reference: "H-1" } });
     assert.equal((await ctx.actions.confirmRecord(me.session, { id: mine.record!.id })).ok, true);
     assert.equal((await getRecordForUser(ctx.db, me.userId, mine.record!.id, me.dek))!.reviewState, "confirmed");
     assert.equal((await ctx.actions.confirmRecord(me.session, { id: mine.record!.id })).ok, false, "already confirmed");
@@ -293,9 +295,9 @@ test("confirmAll confirms every one of the person's suggestions it is given, and
     const theirAgent = await agentOf(ctx, other.userId, "Claude");
     const ids: string[] = [];
     for (const provider of ["Origin", "Sydney Water"]) {
-      ids.push((await saveTypedRecord(ctx.db, me.dek, me.userId, agent, { type: type("utility.water"), fields: { provider, reference: provider } }, NOW)).record!.id);
+      ids.push((await saveTypedRecord(svc(ctx, me), agent, { type: type("utilities.water"), fields: { provider, reference: provider } })).record!.id);
     }
-    const theirs = (await saveTypedRecord(ctx.db, other.dek, other.userId, theirAgent, { type: type("utility.water"), fields: { provider: "Theirs", reference: "T" } }, NOW)).record!.id;
+    const theirs = (await saveTypedRecord(svc(ctx, other), theirAgent, { type: type("utilities.water"), fields: { provider: "Theirs", reference: "T" } })).record!.id;
 
     await rejects4xx("an empty list", () => ctx.actions.confirmAll(me.session, { ids: [] }));
     await rejects4xx("a malformed id among them", () => ctx.actions.confirmAll(me.session, { ids: [ids[0]!, "nope"] }));
@@ -314,12 +316,12 @@ test("dismissRecord ('Not mine') removes the record, and an agent finding it aga
     const me = await person(ctx, "dismiss");
     const other = await person(ctx, "dismiss-other");
     const agent = await agentOf(ctx, me.userId, "ChatGPT");
-    const found = { type: type("vehicle.registration"), fields: { plate: "ZZ99ZZ" }, dueDate: "2027-01-01" };
-    const suggestion = await saveTypedRecord(ctx.db, me.dek, me.userId, agent, found, NOW);
+    const found = { type: type("vehicles.registration"), fields: { plate: "ZZ99ZZ" }, dueDate: "2027-01-01" };
+    const suggestion = await saveTypedRecord(svc(ctx, me), agent, found);
     assert.equal((await ctx.actions.dismissRecord(other.session, { id: suggestion.record!.id })).ok, false, "another person can't dismiss it");
     assert.equal((await ctx.actions.dismissRecord(me.session, { id: suggestion.record!.id })).ok, true);
     assert.deepEqual((await ctx.actions.load(me.session)).records, [], "gone from Life admin");
-    const again = await saveTypedRecord(ctx.db, me.dek, me.userId, agent, found, NOW);
+    const again = await saveTypedRecord(svc(ctx, me), agent, found);
     assert.equal(again.action, "skipped");
     assert.deepEqual(await listRecordsForUser(ctx.db, me.userId, me.dek), []);
     await rejects4xx("malformed id", () => ctx.actions.dismissRecord(me.session, { id: "-1" }));
@@ -337,7 +339,7 @@ test("an agent's change to a confirmed record waits; the loader shows it; the pe
     const decline = await make("M-2");
     for (const { recordId } of [accept, decline]) {
       const existing = (await getRecordForUser(ctx.db, me.userId, recordId, me.dek))!;
-      const proposed = await changeRecord(ctx.db, me.dek, existing, agent, { set: { hospital_cover: "gold" }, remove: ["notes"], dueDate: "2028-03-01" }, NOW);
+      const proposed = await changeRecord(svc(ctx, me), existing, agent, { set: { hospital_cover: "gold" }, remove: ["notes"], dueDate: "2028-03-01" });
       assert.equal(proposed.action, "proposed");
     }
 

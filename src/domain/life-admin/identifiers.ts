@@ -18,6 +18,7 @@
 // Pure domain module: no React, no DB, no fetch, no process.env, no Date.now.
 
 import { normaliseValue, passesLuhn } from "../redaction/luhn";
+import { BUILT_IN_TYPES } from "./record-types";
 
 export type IdentifierRule =
   | "tax_file_number"
@@ -66,6 +67,12 @@ const FORBIDDEN_ENDINGS: readonly (readonly [string, IdentifierRule])[] = [
   ["securitycode", "secret"],
   ["securityanswer", "secret"],
   ["recoverycode", "secret"],
+  ["verificationcode", "secret"],
+  ["accesscode", "secret"],
+  ["authcode", "secret"],
+  ["authenticationcode", "secret"],
+  ["gatecode", "secret"],
+  ["doorcode", "secret"],
   ["tfn", "tax_file_number"],
   ["taxfilenumber", "tax_file_number"],
 ];
@@ -74,7 +81,7 @@ export function forbiddenFieldName(name: string): IdentifierRule | null {
   const key = normaliseValue(name);
   const exact = FORBIDDEN_NAMES.get(key);
   if (exact) return exact;
-  for (const [ending, rule] of FORBIDDEN_ENDINGS) if (key.length > ending.length && key.endsWith(ending)) return rule;
+  for (const [ending, rule] of FORBIDDEN_ENDINGS) if (key.endsWith(ending)) return rule;
   return null;
 }
 
@@ -106,9 +113,9 @@ function digitRuns(text: string): string[] {
   return [...text.matchAll(/\d(?:[ -]?\d)*/g)].map((match) => match[0].replace(/[^\d]/g, ""));
 }
 
-// The identifier-heavy ID document types, where any document-number-shaped token is refused
-// whatever it is called (a passport or licence number is never a field of these types).
-const DOCUMENT_TYPES = new Set(["id.passport", "id.driver_licence", "id.medicare", "id.visa"]);
+// The identifier-heavy ID document kinds (marked documentLike in the catalogue), where any
+// document-number-shaped token is refused whatever it is called.
+const DOCUMENT_TYPES = new Set(BUILT_IN_TYPES.filter((type) => type.documentLike).map((type) => type.id));
 
 // Fields whose values legitimately look like long numbers: a meter id (NMI and MIRN start
 // 2–6 like a Medicare number), and the record's own reference numbers.

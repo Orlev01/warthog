@@ -48,23 +48,23 @@ test("a batch saves a vehicle with its rego and insurance, linked by ref, as sug
   await closing(t.db, async () => {
     const result = await t.save.handle({
       records: [
-        { ref: "bike", type: "vehicle.vehicle", fields: { name: "Honda CB500X", body: "motorcycle", plate: "BX12AB", state: "NSW" } },
-        { parentRef: "bike", type: "vehicle.registration", fields: { plate: "BX12AB", expiry: "2026-12-14", renewal_cost: "412" }, source: { service: "gmail", sender: "noreply@service.nsw.gov.au", date: "2026-10-02" } },
-        { parentRef: "bike", type: "vehicle.insurance", fields: { insurer: "AAMI", policy_number: "MPA-2045" }, dueDate: "2027-01-20" },
+        { ref: "bike", type: "vehicles.vehicle", fields: { name: "Honda CB500X", body: "motorcycle", plate: "BX12AB", state: "NSW" } },
+        { parentRef: "bike", type: "vehicles.registration", fields: { plate: "BX12AB", expiry: "2026-12-14", renewal_cost: "412" }, source: { service: "gmail", sender: "noreply@service.nsw.gov.au", date: "2026-10-02" } },
+        { parentRef: "bike", type: "vehicles.insurance", fields: { insurer: "AAMI", policy_number: "MPA-2045" }, dueDate: "2027-01-20" },
       ],
     }, t.connection);
     assert.equal(result.status, "ok");
     if (result.status !== "ok") return;
     assert.deepEqual(result.results.map((item) => item.action), ["created", "created", "created"]);
     const records = await listRecordsForUser(t.db, t.userId, t.dek);
-    const bike = records.find((record) => record.type === "vehicle.vehicle")!;
-    const rego = records.find((record) => record.type === "vehicle.registration")!;
+    const bike = records.find((record) => record.type === "vehicles.vehicle")!;
+    const rego = records.find((record) => record.type === "vehicles.registration")!;
     assert.equal(rego.parentId, bike.id);
     assert.equal(rego.dueDate, "2026-12-14");
     assert.equal(rego.reviewState, "suggested");
     assert.deepEqual(rego.foundIn, { service: "gmail", date: "2026-10-02", sender: "service.nsw.gov.au", seenByWarthog: false });
 
-    const again = await t.save.handle({ type: "vehicle.insurance", fields: { provider: "AAMI", reference: "MPA-2045", premium: "1250.50", cycle: "yearly" } }, t.connection);
+    const again = await t.save.handle({ type: "vehicles.insurance", fields: { provider: "AAMI", reference: "MPA-2045", premium: "1250.50", cycle: "yearly" } }, t.connection);
     assert.equal(again.status, "saved");
     if (again.status === "saved") assert.equal(again.action, "updated", "a second scan updates the same policy");
     assert.equal((await listRecordsForUser(t.db, t.userId, t.dek)).length, 3);
@@ -73,7 +73,7 @@ test("a batch saves a vehicle with its rego and insurance, linked by ref, as sug
 
 test("values that must never be kept are refused at the schema, naming the field but not the value", () => {
   for (const fields of [{ tfn: "123456782" }, { notes: "My TFN is 123 456 782" }, { notes: "Medicare 2123 45670 1" }, { passport_number: "PA1234567" }, { bsb: "062-000" }, { notes: "password: hunter2" }]) {
-    const parsed = saveRecordSchema.safeParse({ type: "general.other", fields });
+    const parsed = saveRecordSchema.safeParse({ type: "other.item", fields });
     assert.equal(parsed.success, false, JSON.stringify(fields));
     const messages = parsed.error!.issues.map((issue) => issue.message).join(" ");
     for (const value of Object.values(fields)) assert.ok(!messages.includes(value), "the refusal never repeats the value");
@@ -91,15 +91,15 @@ test("list_records filters, labels and totals what an agent asks about", async (
   await closing(t.db, async () => {
     await t.save.handle({
       records: [
-        { type: "vehicle.registration", fields: { plate: "BX12AB" }, dueDate: "2026-12-14" },
+        { type: "vehicles.registration", fields: { plate: "BX12AB" }, dueDate: "2026-12-14" },
         { type: "health.insurance", fields: { provider: "Bupa", reference: "401", hospital_cover: "silver plus" }, dueDate: "2027-04-01" },
-        { type: "subscription.service", fields: { name: "Netflix", amount: "18.99", cycle: "monthly", currency: "AUD" } },
-        { type: "subscription.service", fields: { name: "Domain renewal", amount: "120", cycle: "yearly", currency: "AUD" } },
-        { type: "subscription.service", fields: { name: "Old gym" }, status: "cancelled" },
+        { type: "subscriptions.service", fields: { name: "Netflix", amount: "18.99", cycle: "monthly", currency: "AUD" } },
+        { type: "subscriptions.service", fields: { name: "Domain renewal", amount: "120", cycle: "yearly", currency: "AUD" } },
+        { type: "subscriptions.service", fields: { name: "Old gym" }, status: "cancelled" },
       ],
     }, t.connection);
 
-    const rego = await t.list.handle({ category: "vehicle" }, t.connection);
+    const rego = await t.list.handle({ category: "vehicles" }, t.connection);
     assert.equal(rego.status, "ok");
     if (rego.status !== "ok") return;
     assert.equal(rego.today, "2026-11-23");
@@ -111,17 +111,17 @@ test("list_records filters, labels and totals what an agent asks about", async (
     assert.equal(view!.labels.plate, "Number plate");
     assert.deepEqual(view!.savedBy, { kind: "you" });
 
-    const subs = await t.list.handle({ category: "subscription" }, t.connection);
+    const subs = await t.list.handle({ category: "subscriptions" }, t.connection);
     if (subs.status !== "ok") throw new Error("refused");
     assert.equal(subs.records.length, 2, "cancelled ones are left out by default");
     assert.deepEqual(subs.monthlyCost, [{ currency: "AUD", amount: 28.99, records: 2 }]);
-    const all = await t.list.handle({ category: "subscription", include: "all" }, t.connection);
+    const all = await t.list.handle({ category: "subscriptions", include: "all" }, t.connection);
     if (all.status === "ok") assert.equal(all.records.length, 3);
 
     const insurance = await t.list.handle({ type: "*.insurance" }, t.connection);
     if (insurance.status === "ok") assert.deepEqual(insurance.records.map((record) => record.type), ["health.insurance"]);
     const soon = await t.list.handle({ dueWithinDays: 60 }, t.connection);
-    if (soon.status === "ok") assert.deepEqual(soon.records.map((record) => record.type), ["vehicle.registration"]);
+    if (soon.status === "ok") assert.deepEqual(soon.records.map((record) => record.type), ["vehicles.registration"]);
     const found = await t.list.handle({ query: "silver bupa" }, t.connection);
     if (found.status === "ok") assert.equal(found.records.length, 1);
   });
@@ -130,7 +130,7 @@ test("list_records filters, labels and totals what an agent asks about", async (
 test("list_records pages with a cursor and refuses one it didn't issue", async () => {
   const t = await setup();
   await closing(t.db, async () => {
-    await t.save.handle({ records: Array.from({ length: 5 }, (_, index) => ({ type: "general.other", fields: { name: `Thing ${index}` }, dueDate: `2027-01-0${index + 1}` })) }, t.connection);
+    await t.save.handle({ records: Array.from({ length: 5 }, (_, index) => ({ type: "other.item", fields: { name: `Thing ${index}` }, dueDate: `2027-01-0${index + 1}` })) }, t.connection);
     const first = await t.list.handle({ limit: 2 }, t.connection);
     if (first.status !== "ok") throw new Error("refused");
     assert.equal(first.records.length, 2);
@@ -147,9 +147,9 @@ test("Warthog marks a source it saw: the agent had just read mail from that send
   const t = await setup();
   await closing(t.db, async () => {
     await recordReadExposure(t.db, { userId: t.userId, agentId: t.agentId, source: { service: "google-gmail", kind: "email", sender: "renewals@aami.com.au" }, at: new Date(NOW.getTime() - 60_000) }, t.dek);
-    await t.save.handle({ type: "vehicle.insurance", fields: { provider: "AAMI", reference: "P1" }, source: { service: "gmail", sender: "aami.com.au" } }, t.connection);
-    await t.save.handle({ type: "vehicle.insurance", fields: { provider: "Youi", reference: "P2" }, source: { service: "gmail", sender: "youi.com.au" } }, t.connection);
-    const views = await t.list.handle({ category: "vehicle" }, t.connection);
+    await t.save.handle({ type: "vehicles.insurance", fields: { provider: "AAMI", reference: "P1" }, source: { service: "gmail", sender: "aami.com.au" } }, t.connection);
+    await t.save.handle({ type: "vehicles.insurance", fields: { provider: "Youi", reference: "P2" }, source: { service: "gmail", sender: "youi.com.au" } }, t.connection);
+    const views = await t.list.handle({ category: "vehicles" }, t.connection);
     if (views.status !== "ok") throw new Error("refused");
     const byProvider = Object.fromEntries(views.records.map((record) => [record.fields.provider, record.foundIn?.readThroughWarthog]));
     assert.deepEqual(byProvider, { AAMI: true, Youi: false });
@@ -159,10 +159,10 @@ test("Warthog marks a source it saw: the agent had just read mail from that send
 test("an agent limited to chosen records sees only those and its own, and can't change the rest", async () => {
   const t = await setup({ recordIds: [] });
   await closing(t.db, async () => {
-    const own = await t.save.handle({ type: "general.other", fields: { name: "Mine" } }, t.connection);
+    const own = await t.save.handle({ type: "other.item", fields: { name: "Mine" } }, t.connection);
     assert.equal(own.status, "saved");
     const { createRecord } = await import("../../db/life-admin-records");
-    const hidden = await createRecord(t.db, { userId: t.userId, kind: "item", type: "money.super", fields: { provider: "Hostplus" }, status: "active", source: { kind: "person" } }, t.dek);
+    const hidden = await createRecord(t.db, { userId: t.userId, kind: "item", type: "investing.super", fields: { provider: "Hostplus" }, status: "active", source: { kind: "person" } }, t.dek);
     const listed = await t.list.handle({}, t.connection);
     if (listed.status === "ok") assert.deepEqual(listed.records.map((record) => record.name), ["Mine"]);
     assert.equal((await t.update.handle({ id: hidden.id, set: { provider: "x" } }, t.connection)).status, "refused");
@@ -173,8 +173,8 @@ test("update_record links only to a parent this agent may see", async () => {
   const t = await setup({ recordIds: [] });
   await closing(t.db, async () => {
     const { createRecord } = await import("../../db/life-admin-records");
-    const hiddenBike = await createRecord(t.db, { userId: t.userId, kind: "item", type: "vehicle.vehicle", fields: { plate: "ZZ99" }, status: "active", source: { kind: "person" } }, t.dek);
-    const rego = await t.save.handle({ type: "vehicle.registration", fields: { plate: "ZZ99" } }, t.connection);
+    const hiddenBike = await createRecord(t.db, { userId: t.userId, kind: "item", type: "vehicles.vehicle", fields: { plate: "ZZ99" }, status: "active", source: { kind: "person" } }, t.dek);
+    const rego = await t.save.handle({ type: "vehicles.registration", fields: { plate: "ZZ99" } }, t.connection);
     if (rego.status !== "saved") throw new Error("not saved");
     assert.equal((await t.update.handle({ id: rego.id, parentId: hiddenBike.id }, t.connection)).status, "refused");
   });

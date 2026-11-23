@@ -42,6 +42,8 @@ import { listMemoriesForUser } from "../db/memories";
 import { listAllRules } from "../db/rules";
 import { listTasksForUser } from "../db/tasks";
 import { listRecordsForUser } from "../db/life-admin-records";
+import { exportCategoryRows } from "../db/life-admin-categories";
+import { listJournal } from "../db/life-admin-journal";
 import { listConnectionsForUser } from "../db/connections";
 import { readActivityBatch } from "../activity/writer";
 import type { ActivityEntry } from "../activity/recorder";
@@ -122,6 +124,22 @@ export async function buildExportDocument(
   const rules = await listAllRules(db, userId, dek);
   const tasks = await listTasksForUser(db, userId, dek);
   const lifeAdmin = await listRecordsForUser(db, userId, dek);
+  const lifeAdminCategories = await exportCategoryRows(db, userId, dek);
+  // Every item's journal travels with it, oldest first, its authors as names.
+  const journalByRecord = new Map<string, unknown[]>();
+  const agentNames = new Map((await listAgentsForUser(db, userId)).map((agent) => [agent.id, agent.displayName]));
+  for (const record of lifeAdmin) {
+    const entries = (await listJournal(db, userId, record.id, dek, { limit: 200 })).reverse();
+    if (entries.length === 0) continue;
+    journalByRecord.set(record.id, entries.map((entry) => ({
+      id: entry.id, at: entry.at, kind: entry.kind,
+      by: entry.actorKind === "person" ? "you" : entry.actorKind === "imported" ? entry.body.actorName ?? "imported" : agentNames.get(entry.actorAgentId ?? "") ?? "an agent that is no longer connected",
+      ...(entry.refId ? { refId: entry.refId } : {}),
+      ...(entry.body.text ? { text: entry.body.text } : {}),
+      ...(entry.body.due ? { due: entry.body.due } : {}),
+      ...(entry.body.change ? { change: entry.body.change } : {}),
+    })));
+  }
   const connections = await listConnectionsForUser(db, userId);
   const activity = await readFullActivity(db, userId, dek);
   const importedActivity = await listImportedEntriesForUser(db, userId, dek);
@@ -187,6 +205,7 @@ export async function buildExportDocument(
       assignee: task.assignee,
       status: task.status,
       createdBy: task.createdBy,
+      ...(task.recordId ? { recordId: task.recordId } : {}),
     })),
     lifeAdmin: lifeAdmin.map((record) => ({
       id: record.id,
@@ -204,7 +223,10 @@ export async function buildExportDocument(
       foundIn: record.foundIn,
       createdAt: record.createdAt,
       updatedAt: record.updatedAt,
+      ...(record.state ? { state: record.state } : {}),
+      ...(journalByRecord.has(record.id) ? { journal: journalByRecord.get(record.id) } : {}),
     })),
+    ...(lifeAdminCategories.length ? { lifeAdminCategories } : {}),
     connections: connections.map((connection) => ({
       id: connection.id,
       connectorId: connection.connectorId,

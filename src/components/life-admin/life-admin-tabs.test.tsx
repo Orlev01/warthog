@@ -1,5 +1,5 @@
-// Review fix G10 — the Life admin section switcher is a real tab list (now two tabs: Your
-// things and the Moving checklist, docs/adr/life-admin-profile.md).
+// Review fix G10 — the Life admin section switcher is a real tab list (now four tabs: Your
+// things, Upcoming, Bookings and the Moving checklist, docs/adr/life-admin-profile.md).
 //
 // The four section buttons carried aria-selected on plain role=button elements (which
 // assistive technology does not announce), with no tablist/tabpanel relationship, and the
@@ -16,7 +16,7 @@ import { readFileSync } from "node:fs";
 
 import { LifeAdminView, nextTabIndex } from "./life-admin-view";
 
-function render(initialTab?: "things" | "checklist"): string {
+function render(initialTab?: "things" | "upcoming" | "bookings" | "checklist"): string {
   return renderToStaticMarkup(<LifeAdminView today="2026-11-12" records={[]} checklist={[]} initialTab={initialTab} />);
 }
 
@@ -41,7 +41,7 @@ test("the section buttons are tabs in a labelled tablist, exactly one selected, 
   }));
   assert.deepEqual(
     tabs.map((t) => t.text),
-    ["Your things (0)", "Moving checklist (0)"],
+    ["Your things (0)", "Upcoming (0)", "Bookings (0)", "Moving checklist (0)"],
   );
   const selected = tabs.filter(
     (t) => attr(t.attrs, "aria-selected") === "true",
@@ -50,12 +50,12 @@ test("the section buttons are tabs in a labelled tablist, exactly one selected, 
   assert.equal(selected[0]!.text, "Moving checklist (0)");
   assert.equal(
     tabs.filter((t) => attr(t.attrs, "aria-selected") === "false").length,
-    1,
+    3,
   );
   // Roving tabindex: only the selected tab is in the tab order.
   assert.deepEqual(
     tabs.map((t) => attr(t.attrs, "tabindex")),
-    ["-1", "0"],
+    ["-1", "-1", "-1", "0"],
   );
 
   const panelId = attr(selected[0]!.attrs, "aria-controls");
@@ -92,12 +92,12 @@ test("arrow keys, Home and End move between tabs, wrapping at the ends", () => {
   assert.equal(nextTabIndex(1, "a", 4), null, "other keys are left alone");
 });
 
-test("both panels stay mounted with only the selected panel visible; Your things opens by default", () => {
-  for (const [initialTab, hiddenIndex] of [[undefined, 1], ["things", 1], ["checklist", 0]] as const) {
+test("every panel stays mounted with only the selected panel visible; Your things opens by default", () => {
+  for (const [initialTab, shownIndex] of [[undefined, 0], ["things", 0], ["upcoming", 1], ["bookings", 2], ["checklist", 3]] as const) {
     const panels = [
       ...render(initialTab).matchAll(/<div\b([^>]*role="tabpanel"[^>]*)>/g),
     ].map((match) => match[1]!);
-    assert.equal(panels.length, 2);
-    assert.deepEqual(panels.map((attrs) => /\bhidden=""/.test(attrs)), [hiddenIndex === 0, hiddenIndex === 1], String(initialTab));
+    assert.equal(panels.length, 4);
+    assert.deepEqual(panels.map((attrs) => /\bhidden=""/.test(attrs)), [0, 1, 2, 3].map((index) => index !== shownIndex), String(initialTab));
   }
 });

@@ -70,6 +70,8 @@ export interface ActivityFilters {
   // Only entries recorded under one agent run (docs/adr/agent-runs.md), through the
   // plaintext `activity_entry_runs` link. A value that is not a run id matches nothing.
   runId?: string;
+  // Only entries that touched one life-admin record, through the `activity_entry_records` link.
+  recordId?: string;
 }
 
 // The most entries one read returns (design §4.1: at most 5,000 rows per query), and the
@@ -196,6 +198,11 @@ export function activityConditions(userId: string, filters: ActivityFilters, val
   if (filters.runId !== undefined) {
     conditions.push(isRunId(filters.runId)
       ? `EXISTS (SELECT 1 FROM activity_entry_runs AS run_link WHERE run_link.user_id = $1 AND run_link.entry_seq = activity_entries.seq AND run_link.run_id = ${param(filters.runId.toLowerCase())}::uuid)`
+      : "FALSE");
+  }
+  if (filters.recordId !== undefined) {
+    conditions.push(/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(filters.recordId)
+      ? `EXISTS (SELECT 1 FROM activity_entry_records AS record_link WHERE record_link.user_id = $1 AND record_link.entry_seq = activity_entries.seq AND record_link.record_id = ${param(filters.recordId.toLowerCase())}::uuid)`
       : "FALSE");
   }
   if (filters.attention) conditions.push(`(outcome = ANY(${param(ATTENTION_OUTCOMES)}::text[]) OR ${DISPUTED_SQL})`);

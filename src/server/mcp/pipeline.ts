@@ -1,7 +1,7 @@
 import { requestObservation } from "./client-observation";
 import type { RunRef } from "../agents/runs";
 import { randomUUID, createHash } from "node:crypto";
-import { observeResult } from "./result-evidence";
+import { observeResult, recordIdsOf } from "./result-evidence";
 import { highTierRequestAllowed } from "../agents/resource-access";
 import { calendarReversalFromResult } from "../activity/calendar-reversal";
 // E07-S16 — Agent call pipeline: gatekeeping and the allow/deny decision
@@ -418,9 +418,11 @@ export function createAgentCallPipeline(deps: PipelineDeps): AgentCallPipeline {
     // The call's own run (an approved hold), else the request's: get_context starts a run
     // while it runs, so its own entry joins it.
     const run = call.run ?? requestObservation.getStore()?.run;
+    const recordIds = result === undefined ? [] : recordIdsOf(call.tool, result);
     await targetRecorder.record({
       userId: connection.userId,
       ...(run ? { runId: run.id } : {}),
+      ...(recordIds.length > 0 ? { recordIds } : {}),
       kind: outcome === "attempted" ? "tool_attempt" : "tool_call",
       source: "warthog",
       agentId: connection.agentId,

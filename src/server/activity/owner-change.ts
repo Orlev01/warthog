@@ -9,15 +9,16 @@ import type { ActivityRecorder } from "./recorder";
 export async function auditedOwnerChange<T>(
   deps: { db: Db; clock: Clock; keyWrapper: KeyWrapper },
   userId: string,
-  change: (tx: Db, record: (kind: string, changes: unknown, agentId?: string) => Promise<void>) => Promise<T>,
+  change: (tx: Db, record: (kind: string, changes: unknown, agentId?: string, recordIds?: readonly string[]) => Promise<void>) => Promise<T>,
 ): Promise<T> {
   const user = await getUserById(deps.db, userId);
   if (!user) throw new Error("Account unavailable");
   const dek = await deps.keyWrapper.unwrap(user.wrappedDek);
   return withTransaction(deps.db, async tx => {
     const recorder: ActivityRecorder = createRedactingRecorder({ db: tx, clock: deps.clock, dekFor: async () => dek });
-    return change(tx, async (kind, changes, agentId) => {
-      await recorder.record({ userId, agentId, kind, source: "warthog", outcome: "saved", payload: { actor: "account_owner", changes } });
+    return change(tx, async (kind, changes, agentId, recordIds) => {
+      // `recordIds`: the life-admin records the change touched, linked beside the chain.
+      await recorder.record({ userId, agentId, kind, source: "warthog", outcome: "saved", payload: { actor: "account_owner", changes }, ...(recordIds?.length ? { recordIds } : {}) });
     });
   });
 }

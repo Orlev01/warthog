@@ -434,8 +434,8 @@ function RemindersPanel({
       description="Coming up in your life admin"
       icon={Bell}
       action={reminders.length > 0 ? (
-        <a href="/life-admin" className={ACTION_LINK}>
-          {reminders.length > HOME_REMINDER_ROWS ? `View all ${reminders.length} in Life admin` : "Open Life admin"}
+        <a href="/life-admin?view=life&tab=upcoming" className={ACTION_LINK}>
+          {reminders.length > HOME_REMINDER_ROWS ? `View all ${reminders.length} in Upcoming` : "See what's coming up"}
         </a>
       ) : undefined}
     >

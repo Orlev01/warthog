@@ -60,6 +60,7 @@ export interface ActivityState {
   type?: ActivityCategory;
   attention?: boolean;
   run?: string; // one agent conversation (docs/adr/agent-runs.md): a run id
+  record?: string; // one life-admin item (docs/adr/life-admin-journal.md): a record id
 }
 
 type Params = Record<string, string | string[] | undefined>;
@@ -96,6 +97,7 @@ export function readActivityState(params: Params, validDate: (value: string | un
     type: isActivityCategory(type) ? type : undefined,
     attention: first(params.attention) === "1" ? true : undefined,
     run: shaped(first(params.run)?.toLowerCase(), RUN),
+    record: shaped(first(params.record)?.toLowerCase(), RUN),
   };
 }
 
@@ -114,6 +116,7 @@ export function stateQuery(state: ActivityState): QueryState {
     type: state.type,
     attention: state.attention ? "1" : undefined,
     run: state.run,
+    record: state.record,
   };
 }
 
@@ -138,6 +141,7 @@ export function filtersFor(
   if (state.type !== undefined) filters.category = state.type;
   if (state.attention) filters.attention = true;
   if (state.run !== undefined) filters.runId = state.run;
+  if (state.record !== undefined) filters.recordId = state.record;
   return filters;
 }
 
@@ -232,6 +236,7 @@ export function appliedFilters(
   if (state.type !== undefined) chip(`Type: ${CATEGORY_LABELS[state.type]}`, "type", state.via === "types" ? ["via"] : []);
   if (state.attention) chip("Needs attention", "attention");
   if (state.run !== undefined) chip(`Conversation: ${names.run ?? "Untitled conversation"}`, "run");
+  if (state.record !== undefined) chip("One life-admin item", "record");
   if (state.kind !== undefined) chip(`Event: ${kindLabel(state.kind)}`, "kind");
   if (state.outcome !== undefined) chip(`Outcome: ${outcomeLabel(state.outcome)}`, "outcome");
   // Dates are calendar days in the account's time zone, which the page states once.

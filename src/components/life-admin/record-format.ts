@@ -9,13 +9,17 @@
 // field under its own key. Pure functions over plain values (no clock, no locale of the
 // machine), shared by the view and its tests.
 //
-// Typed records (docs/adr/life-admin-profile.md): a record's type supplies its field labels
-// ("Insurer", "Policy number"), what its due date means ("Expires 14 Dec 2026"), and the
-// provenance line says who added it and where an agent says it found it. Values an agent read
-// from email are only ever shown as text, never as a link.
+// Typed records (docs/adr/life-admin-profile.md): a record's kind — from the person's own
+// catalogue, built-in or a category of their own — supplies its field labels ("Insurer",
+// "Policy number"), how each value reads by its field kind (a date-time in its own zone as
+// "Thu 3 Dec, 7:30 pm AEDT", a month and year as "Mar 2027", yes/no, a duration in words), what
+// its due date means ("Expires 14 Dec 2026"), and the provenance line says who added it and
+// where an agent says it found it. Values an agent read from email are only ever shown as
+// text, never as a link.
 
 import { storedRecordName } from "@/domain/life-admin/normalise";
-import { typeFieldLabel, typeOfRecord, type RecordTypeDef, type StoredKind } from "@/domain/life-admin/record-types";
+import { isTimeZone, parseWhen } from "@/domain/life-admin/lifecycle";
+import type { FieldDef, Lifecycle, RecordTypeDef } from "@/domain/life-admin/record-types";
 
 const FIELD_LABELS: Readonly<Record<string, string>> = {
   name: "Name",
@@ -83,6 +87,12 @@ const STATUS_LABELS: Readonly<Record<string, string>> = {
   done: "Done",
   expired: "Expired",
   returned: "Returned",
+  confirmed: "Confirmed",
+  pending: "Waiting to be confirmed",
+  no_show: "Didn't go",
+  open: "Open",
+  waiting: "Waiting",
+  resolved: "Resolved",
 };
 
 /** The statuses the forms offer, in order, as stored value → label (the record service's
@@ -94,6 +104,24 @@ export const RECORD_STATUS_CHOICES: ReadonlyArray<{ value: string; label: string
   { value: "expired", label: "Expired" },
   { value: "done", label: "Done" },
 ];
+
+// A booking's and a case's status choices (the record service's words for them).
+export const BOOKING_STATUS_CHOICES: ReadonlyArray<{ value: string; label: string }> = [
+  { value: "confirmed", label: "Confirmed" },
+  { value: "pending", label: "Waiting to be confirmed" },
+  { value: "cancelled", label: "Cancelled" },
+  { value: "no_show", label: "Didn't go" },
+];
+export const CASE_STATUS_CHOICES: ReadonlyArray<{ value: string; label: string }> = [
+  { value: "open", label: "Open" },
+  { value: "waiting", label: "Waiting" },
+  { value: "resolved", label: "Resolved" },
+];
+
+/** The status choices a kind's forms offer, by its lifecycle. */
+export function statusChoices(lifecycle: Lifecycle): ReadonlyArray<{ value: string; label: string }> {
+  return lifecycle === "booking" ? BOOKING_STATUS_CHOICES : lifecycle === "case" ? CASE_STATUS_CHOICES : RECORD_STATUS_CHOICES;
+}
 
 /** A record's status as a word: "active" → "Active", an agent's own code tidied. */
 export function statusLabel(status: string): string {
@@ -146,6 +174,7 @@ export function recordFacts(
   fields: Readonly<Record<string, string>>,
   titleKey: string | null,
   labelOf: (key: string) => string = fieldLabel,
+  formatOf: (key: string, value: string) => string = formatValue,
 ): RecordFact[] {
   const facts: RecordFact[] = [];
   const used = new Set<string>(titleKey ? [titleKey] : []);
@@ -164,7 +193,7 @@ export function recordFacts(
   }
   for (const [key, value] of Object.entries(fields)) {
     if (used.has(key) || value.trim() === "") continue;
-    facts.push({ key, label: labelOf(key), value: formatValue(key, value) });
+    facts.push({ key, label: labelOf(key), value: formatOf(key, value) });
   }
   return facts;
 }
@@ -176,29 +205,136 @@ export function formatValue(key: string, value: string): string {
 
 // ─── typed records ──────────────────────────────────────────────────────────────────────
 
-/** The record type a stored record reads as: its own, else its original kind's. */
-export function recordTypeOf(record: { readonly kind: StoredKind; readonly type?: string | null }): RecordTypeDef {
-  return typeOfRecord(record.kind, record.type ?? null);
+const PARTS_FORMAT = (zone: string, withYear: boolean) =>
+  new Intl.DateTimeFormat("en-AU", {
+    weekday: "short",
+    day: "numeric",
+    month: "short",
+    ...(withYear ? { year: "numeric" as const } : {}),
+    hour: "numeric",
+    minute: "2-digit",
+    timeZone: zone,
+    timeZoneName: "short",
+  });
+
+/**
+ * A date-time as it reads on screen, in the zone it happens in (its own, else `fallbackZone`):
+ * "Thu 3 Dec, 7:30 pm AEDT". The year is added when it isn't `currentYear`. A date alone reads
+ * as "3 Dec 2026"; anything that isn't a date or date-time is returned unchanged.
+ */
+export function formatDateTime(value: string, fallbackZone = "UTC", currentYear?: string): string {
+  const when = parseWhen(value, isTimeZone(fallbackZone) ? fallbackZone : "UTC");
+  if (!when) return value;
+  if (when.dateOnly) return formatCalendarDate(when.date);
+  return formatInstant(when.instant, when.zone, currentYear);
+}
+
+/** An instant in a zone: "Thu 3 Dec, 7:30 pm AEDT" (the year added when it isn't `currentYear`). */
+export function formatInstant(at: Date, zone: string, currentYear?: string): string {
+  const tz = isTimeZone(zone) ? zone : "UTC";
+  const withYear = currentYear === undefined ? false : new Intl.DateTimeFormat("en-CA", { timeZone: tz, year: "numeric" }).format(at) !== currentYear;
+  const parts = Object.fromEntries(PARTS_FORMAT(tz, withYear).formatToParts(at).map((part) => [part.type, part.value]));
+  const date = `${parts.weekday} ${parts.day} ${parts.month}${withYear ? ` ${parts.year}` : ""}`;
+  return `${date}, ${parts.hour}:${parts.minute} ${(parts.dayPeriod ?? "").toLowerCase()} ${parts.timeZoneName}`.replace(/\s+/g, " ").trim();
+}
+
+const MONTH_FORMAT = new Intl.DateTimeFormat("en-AU", { month: "short", year: "numeric", timeZone: "UTC" });
+
+/** "2027-03" as "Mar 2027"; anything else unchanged. */
+export function formatMonthYear(value: string): string {
+  const match = /^(\d{4})-(\d{2})$/.exec(value.trim());
+  if (!match || Number(match[2]) < 1 || Number(match[2]) > 12) return value;
+  return MONTH_FORMAT.format(new Date(Date.UTC(Number(match[1]), Number(match[2]) - 1, 15)));
+}
+
+// The date part's units (its "M" is months; the time part's "M" is minutes).
+const DATE_UNITS: ReadonlyArray<[RegExp, string]> = [[/(\d+)Y/, "year"], [/(\d+)M/, "month"], [/(\d+)W/, "week"], [/(\d+)D/, "day"]];
+const TIME_UNITS: ReadonlyArray<[RegExp, string]> = [[/(\d+)H/, "hour"], [/(\d+)M/, "minute"], [/(\d+)S/, "second"]];
+
+/** An ISO duration in words: "PT45M" → "45 minutes", "P12M" → "12 months", "PT1H30M" → "1 hour 30 minutes". */
+export function formatDuration(value: string): string {
+  const match = /^P(?!$)((?:\d+[YMWD])*)(?:T((?:\d+[HMS])+))?$/.exec(value.trim());
+  if (!match) return value;
+  const words: string[] = [];
+  const unit = (n: number, word: string) => words.push(`${n} ${word}${n === 1 ? "" : "s"}`);
+  const datePart = match[1] ?? "";
+  const timePart = match[2] ?? "";
+  for (const [pattern, word] of DATE_UNITS) {
+    const found = pattern.exec(datePart);
+    if (found) unit(Number(found[1]), word);
+  }
+  for (const [pattern, word] of TIME_UNITS) {
+    const found = pattern.exec(timePart);
+    if (found) unit(Number(found[1]), word);
+  }
+  return words.length ? words.join(" ") : value;
+}
+
+/** "yes"/"no" as "Yes"/"No"; anything else unchanged. */
+export function formatBoolean(value: string): string {
+  const v = value.trim().toLowerCase();
+  return v === "yes" ? "Yes" : v === "no" ? "No" : value;
+}
+
+/** One stored value as it reads on screen, by its field's kind; an unknown field as formatValue does. */
+export function formatFieldValue(field: FieldDef | undefined, key: string, value: string, zone = "UTC", currentYear?: string): string {
+  switch (field?.kind) {
+    case "datetime":
+      return formatDateTime(value, zone, currentYear);
+    case "date":
+      return formatCalendarDate(value);
+    case "month_year":
+      return formatMonthYear(value);
+    case "boolean":
+      return formatBoolean(value);
+    case "duration":
+      return formatDuration(value);
+    case "number":
+      return field.unit && /^-?\d+(?:\.\d+)?$/.test(value.trim()) ? `${value.trim()} ${field.unit}` : value;
+    case "cycle":
+      return fieldLabel(value);
+    case undefined:
+      return formatValue(key, value);
+    default:
+      return value;
+  }
 }
 
 /** A field's label for a type: the type's own wording, else the key tidied. */
 export function typedFieldLabel(type: RecordTypeDef, key: string): string {
-  return typeFieldLabel(type, key) ?? fieldLabel(key);
+  return type.fields.find((field) => field.key === key)?.label ?? fieldLabel(key);
+}
+
+/** A record's facts, labelled and formatted through its kind (date-times in their own zone). */
+export function typedFacts(
+  type: RecordTypeDef,
+  fields: Readonly<Record<string, string>>,
+  titleKey: string | null,
+  zone = "UTC",
+  currentYear?: string,
+): RecordFact[] {
+  const defs = new Map(type.fields.map((field) => [field.key, field]));
+  return recordFacts(
+    fields,
+    titleKey,
+    (key) => typedFieldLabel(type, key),
+    (key, value) => formatFieldValue(defs.get(key), key, value, zone, currentYear),
+  );
 }
 
 const NAME_KEYS = ["name", "title", "item", "what", "provider", "service", "merchant"];
 
 /**
- * The name a record goes by (the same one Home and reminders use) and the field it came
- * from, so the row can list the other fields without repeating it. `key` is null when the
- * name is the type's own label.
+ * The name a record goes by (the same one Home, reminders and agents use) and the field it
+ * came from, so the row can list the other fields without repeating it. `key` is null when
+ * the name is the kind's own label or is built from it ("Registration · BX12AB").
  */
 export function recordName(
-  kind: StoredKind,
-  type: string | null | undefined,
+  type: RecordTypeDef,
   fields: Readonly<Record<string, string>>,
+  ownType = true,
 ): { name: string; key: string | null } {
-  const name = storedRecordName(kind, type, fields);
+  const name = storedRecordName(type, fields, ownType);
   const key =
     NAME_KEYS.find((candidate) => fields[candidate]?.trim() === name) ??
     Object.keys(fields).find((candidate) => fields[candidate]!.trim() === name) ??
@@ -214,6 +350,38 @@ export function dueLabelOf(type: RecordTypeDef | null | undefined): string {
 /** "Expires 14 Dec 2026": the date with the type's own wording. */
 export function dueText(type: RecordTypeDef | null | undefined, dueDate: string): string {
   return `${dueLabelOf(type)} ${formatCalendarDate(dueDate)}`;
+}
+
+const SPAN_DAY = (zone: string) => new Intl.DateTimeFormat("en-AU", { day: "numeric", month: "short", year: "numeric", timeZone: zone });
+
+/** An anchor's span from its bookings, as days: "3 – 10 Dec 2026", "28 Nov – 3 Dec 2026". */
+export function formatSpan(starts: string, ends: string, zone: string): string {
+  const tz = isTimeZone(zone) ? zone : "UTC";
+  const parts = (iso: string) => Object.fromEntries(SPAN_DAY(tz).formatToParts(new Date(iso)).map((part) => [part.type, part.value]));
+  const a = parts(starts);
+  const b = parts(ends);
+  if (a.year === b.year && a.month === b.month) return a.day === b.day ? `${a.day} ${a.month} ${a.year}` : `${a.day} – ${b.day} ${b.month} ${b.year}`;
+  if (a.year === b.year) return `${a.day} ${a.month} – ${b.day} ${b.month} ${b.year}`;
+  return `${a.day} ${a.month} ${a.year} – ${b.day} ${b.month} ${b.year}`;
+}
+
+/**
+ * When a record happens or is due, in its kind's words: a booking's start in its own zone
+ * ("Starts Thu 3 Dec, 7:30 pm AEDT"), an anchor's span ("3 – 10 Dec 2026"), else its due date
+ * ("Expires 14 Dec 2026"). Null when it has none.
+ */
+export function whenLine(
+  type: RecordTypeDef,
+  record: { readonly fields: Readonly<Record<string, string>>; readonly dueDate: string | null; readonly phase?: { readonly starts?: string; readonly ends?: string } },
+  zone: string,
+  currentYear?: string,
+): string | null {
+  if (type.anchor && record.phase?.starts && record.phase.ends) return formatSpan(record.phase.starts, record.phase.ends, zone);
+  if (type.lifecycle === "booking") {
+    const starts = record.fields.starts_at;
+    if (starts) return `${dueLabelOf(type)} ${formatDateTime(starts, zone, currentYear)}`;
+  }
+  return record.dueDate ? dueText(type, record.dueDate) : null;
 }
 
 /** The line under a typed record's name: "Registration · Expires 14 Dec 2026 · Active". */
@@ -235,7 +403,11 @@ export function daysBetween(today: string, date: string): number {
 
 /** How far away a date is, in words: "today", "tomorrow", "in 21 days", "3 days ago". */
 export function whenText(today: string, date: string): string {
-  const days = daysBetween(today, date);
+  return daysText(daysBetween(today, date));
+}
+
+/** A number of days from today, in words: "today", "tomorrow", "in 21 days", "3 days ago". */
+export function daysText(days: number): string {
   if (days === 0) return "today";
   if (days === 1) return "tomorrow";
   if (days > 1) return `in ${days} days`;
@@ -337,14 +509,17 @@ export function pendingChangeLines(
     readonly dueDate?: string | null;
     readonly status?: string;
   },
+  zone = "UTC",
 ): ChangeLine[] {
+  const defs = new Map(type.fields.map((field) => [field.key, field]));
+  const show = (key: string, value: string) => formatFieldValue(defs.get(key), key, value, zone);
   const before = (key: string): string | null => {
     const value = current.fields[key] ?? current.heldFields?.[key];
-    return value === undefined || value.trim() === "" ? null : formatValue(key, value);
+    return value === undefined || value.trim() === "" ? null : show(key, value);
   };
   const lines: ChangeLine[] = [];
   for (const [key, value] of Object.entries(pending.set)) {
-    lines.push({ key, label: typedFieldLabel(type, key), from: before(key), to: value.trim() === "" ? null : formatValue(key, value) });
+    lines.push({ key, label: typedFieldLabel(type, key), from: before(key), to: value.trim() === "" ? null : show(key, value) });
   }
   for (const key of pending.remove) {
     lines.push({ key, label: typedFieldLabel(type, key), from: before(key), to: null });

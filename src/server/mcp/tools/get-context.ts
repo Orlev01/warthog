@@ -71,7 +71,9 @@ import { listRecordsForUser } from "../../db/life-admin-records";
 import { summariseLifeAdmin, type LifeAdminSummary } from "../../../domain/life-admin/summary";
 import { LIFE_ADMIN_SKILL } from "../../../domain/life-admin/skill";
 import { MAIL_CONNECTOR_IDS } from "../../../domain/content/mail-connectors";
-import { todayFor, visibleTo } from "./records";
+import { visibleTo } from "./records";
+import { catalogueFor } from "../../life-admin/catalogue";
+import { handoverItems } from "../../life-admin/journal-views";
 import { lookupForUser } from "../../db/release-fingerprints";
 
 // What the agent is told to do with its run.
@@ -267,10 +269,24 @@ export function createGetContextTool(deps: GetContextDeps): {
       // person's mail and save records.
       let lifeAdmin: LifeAdminSummary | null = null;
       if (permissions.recordsAccess) {
+        const person = await catalogueFor(db, userId, dek);
         const visible = (await listRecordsForUser(db, userId, dek)).filter(visibleTo(permissions, agentId));
         const readsMail = permissions.readTools && permissions.grantedConnectors.some((id) => MAIL_CONNECTOR_IDS.has(id));
         const writes = permissions.resourceControls?.recordsWrite !== false;
-        lifeAdmin = summariseLifeAdmin(visible, await todayFor(db, userId, dek, clock), readsMail && writes);
+        // A mail account the person connected that this agent can't read (not granted, or not the
+        // account it uses): a hint only, never which one.
+        const connections = await listConnectionsForUser(db, userId);
+        const readable = new Set(permissions.grantedConnectors.map((service) => selectConnectorAccount(connections, service, permissions.connectorAccounts?.[service])?.id).filter(Boolean));
+        const otherMailAccounts = connections.some((account) => MAIL_CONNECTOR_IDS.has(account.connectorId) && !readable.has(account.id));
+        const now = clock.now();
+        const savedByLife = await savedByResolver(db, userId, agentId);
+        const handover = await handoverItems(db, userId, visible, person.catalogue, dek, savedByLife, now, person.zone);
+        lifeAdmin = summariseLifeAdmin(visible, person.catalogue, now, person.zone, {
+          mayOffer: readsMail && writes,
+          settings: person.settings,
+          otherMailAccounts,
+          handover,
+        });
       }
 
       const agent = await getAgentById(db, connection.userId, connection.agentId);

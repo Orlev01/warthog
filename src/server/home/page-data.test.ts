@@ -520,14 +520,33 @@ test("reminders are the upcoming and recently overdue live records, decrypted; l
   }
 });
 
+test("reminders follow the lifecycle: an upcoming booking shows; a booking that's over, a cancelled one and a resolved case never do", async () => {
+  const db = await freshDb();
+  try {
+    const { userId, dek } = await makeUserWithDek(db, "reminders-lifecycle");
+    const booking = (what: string, type: string, startsAt: string, dueDate: string, status: string, state: string) =>
+      createRecord(db, { userId, kind: "item", type, fields: { what, starts_at: startsAt }, dueDate, status, state, source: { kind: "person" } }, dek);
+    await booking("Dinner on Tuesday", "outings.restaurant", "2026-11-17T19:30+11:00[Australia/Sydney]", "2026-11-17", "active", "confirmed");
+    await booking("Dinner last week", "outings.restaurant", "2026-11-08T19:30+11:00[Australia/Sydney]", "2026-11-08", "active", "confirmed");
+    await booking("Cancelled flight", "travel.flight", "2026-11-20T09:00+11:00[Australia/Sydney]", "2026-11-20", "cancelled", "cancelled");
+    await createRecord(db, { userId, kind: "item", type: "government.fine", fields: { what: "Paid fine" }, dueDate: DUE_UPCOMING, status: "done", state: "resolved", source: { kind: "person" } }, dek);
+    await createRecord(db, { userId, kind: "item", type: "government.fine", fields: { what: "Open fine" }, dueDate: DUE_UPCOMING, status: "active", state: "open", source: { kind: "person" } }, dek);
+    const whats = reminderWhats(await load(db, userId));
+    assert.deepEqual(whats.sort(), ["Dinner on Tuesday", "Open fine"]);
+    assert.ok((await load(db, userId)).catalogue?.type("outings.restaurant"), "the person's catalogue comes back for the labels");
+  } finally {
+    await db.close();
+  }
+});
+
 test("toCheck counts the records waiting for the person: agents' suggestions and their proposed changes", async () => {
   const db = await freshDb();
   try {
     const { userId, dek } = await makeUserWithDek(db, "to-check");
     await seedReminder(db, dek, userId, { what: "Mine", dueDate: DUE_UPCOMING });
     assert.equal((await load(db, userId)).toCheck, 0, "the person's own records need no checking");
-    await createRecord(db, { userId, kind: "item", type: "money.super", fields: { provider: "Hostplus" }, status: "active", source: { kind: "agent", agentId: "agent-1" } }, dek);
-    await createRecord(db, { userId, kind: "item", type: "money.super", fields: { provider: "Aware" }, status: "active", source: { kind: "agent", agentId: "agent-1" } }, dek);
+    await createRecord(db, { userId, kind: "item", type: "investing.super", fields: { provider: "Hostplus" }, status: "active", source: { kind: "agent", agentId: "agent-1" } }, dek);
+    await createRecord(db, { userId, kind: "item", type: "investing.super", fields: { provider: "Aware" }, status: "active", source: { kind: "agent", agentId: "agent-1" } }, dek);
     const metrics = await load(db, userId);
     assert.equal(metrics.toCheck, 2);
     assert.equal(metrics.today, "2026-11-15", "the day the reminders were picked against");

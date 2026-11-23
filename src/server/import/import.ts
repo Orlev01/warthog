@@ -51,8 +51,14 @@ import type { RuleAction, RuleCondition, RuleKind, RuleScope } from "../../domai
 import { createTask, type TaskActor, type TaskNote, type TaskStatus } from "../db/tasks";
 import { createRecord, recordMatchKey, type RecordFoundIn, type RecordKind, type RecordSource } from "../db/life-admin-records";
 import { findForbidden } from "../../domain/life-admin/identifiers";
-import { identityParts } from "../../domain/life-admin/normalise";
-import { recordType } from "../../domain/life-admin/record-types";
+import { calendarDate, identityAlternatives } from "../../domain/life-admin/normalise";
+import { buildCatalogue, type Catalogue, type CustomCategoryDefinition, type CustomCategoryEntry } from "../../domain/life-admin/catalogue";
+import { definitionOf, newCategorySchema, SLUG_PATTERN } from "../../domain/life-admin/custom-category";
+import { JOURNAL_KINDS, type ChangeSummary, type JournalKind } from "../../domain/life-admin/journal";
+import { cleanJournalText, findForbiddenText } from "../../domain/life-admin/journal-text";
+import { remindUntilOf } from "../../domain/life-admin/lifecycle";
+import { createCustomCategory, restoreDeclined, setBuiltInSetting } from "../db/life-admin-categories";
+import { appendJournalEntry } from "../db/life-admin-journal";
 import { createImportedEntry } from "../db/imported-history";
 import type { Clock } from "../seams/clock";
 
@@ -105,6 +111,8 @@ interface TaskDoc {
   readonly assignee?: string;
   readonly status?: string;
   readonly createdBy?: TaskActor;
+  // The life-admin record it's about, by its id in the export (re-linked to the new id).
+  readonly recordId?: string;
 }
 interface LifeAdminDoc {
   readonly id?: string;
@@ -118,6 +126,26 @@ interface LifeAdminDoc {
   readonly reviewState?: string;
   readonly parentId?: string | null;
   readonly foundIn?: RecordFoundIn | null;
+  readonly state?: string;
+  readonly journal?: JournalDoc[];
+}
+interface JournalDoc {
+  readonly id?: string;
+  readonly at?: string;
+  readonly kind?: string;
+  readonly by?: string;
+  readonly refId?: string;
+  readonly text?: string;
+  readonly due?: string;
+  readonly change?: ChangeSummary;
+}
+interface CategoryDoc {
+  readonly slug?: string;
+  readonly state?: string;
+  readonly definition?: CustomCategoryDefinition & { readonly why?: string };
+  readonly builtIn?: string;
+  readonly setting?: string;
+  readonly declined?: string;
 }
 
 const RECORD_KIND_VALUES: readonly string[] = ["subscription", "receipt_warranty", "renewal_appointment", "item"];
@@ -126,17 +154,24 @@ const RECORD_KIND_VALUES: readonly string[] = ["subscription", "receipt_warranty
 // is refused as a bad file (a 400, never a database error); a field that must never be kept
 // (a tax file number, a password, a government ID number …) is dropped, since a hand-edited
 // file could carry one; a missing review state reads as checked only for the person's own.
-function restoredRecord(record: LifeAdminDoc): { kind: RecordKind; type: string | null; fields: Record<string, unknown>; reviewState: "suggested" | "confirmed" } {
+function restoredRecord(record: LifeAdminDoc, catalogue: Catalogue): { kind: RecordKind; type: string | null; fields: Record<string, unknown>; reviewState: "suggested" | "confirmed"; retyped: boolean } {
   if (!record.kind || !RECORD_KIND_VALUES.includes(record.kind)) throw new HttpError(400, "The export file has a life-admin record of an unknown kind.");
-  const type = record.type ?? null;
-  if (type !== null && !recordType(type)) throw new HttpError(400, "The export file has a life-admin record of an unknown type.");
+  let type = record.type ?? null;
+  let retyped = false;
+  if (type !== null && !catalogue.type(type)) {
+    // A kind of a category of the person's own that isn't in the file reads as "Something else";
+    // an unknown built-in kind means the file isn't one Warthog wrote.
+    if (!/^x_/.test(type)) throw new HttpError(400, "The export file has a life-admin record of an unknown type.");
+    type = "other.item";
+    retyped = true;
+  }
   const fields: Record<string, unknown> = { ...(record.fields ?? {}) };
   for (const finding of findForbidden(fields, type)) delete fields[finding.field];
   const source = record.source ?? { kind: "person" };
   const reviewState = record.reviewState === "confirmed" || record.reviewState === "suggested"
     ? record.reviewState
     : source.kind === "agent" ? "suggested" : "confirmed";
-  return { kind: record.kind as RecordKind, type, fields, reviewState };
+  return { kind: retyped ? "item" : (record.kind as RecordKind), type, fields, reviewState, retyped };
 }
 interface ActivityDoc {
   readonly occurredAt?: string;
@@ -156,6 +191,8 @@ export interface ImportSummary {
   readonly rules: number;
   readonly tasks: number;
   readonly lifeAdmin: number;
+  // Records whose own category wasn't in the file, restored as "Something else".
+  readonly lifeAdminRetyped?: number;
   readonly archivedActivity: number;
 }
 
@@ -300,8 +337,9 @@ export async function importExportDocument(
     }
 
     // Tasks — title, notes, assignee, status and created-by round-trip.
+    const taskLinks: { id: string; oldRecord: string }[] = [];
     for (const task of tasks) {
-      await createTask(
+      const createdTask = await createTask(
         tx,
         {
           userId,
@@ -313,20 +351,45 @@ export async function importExportDocument(
         },
         dek,
       );
+      if (typeof task.recordId === "string") taskLinks.push({ id: createdTask.id, oldRecord: task.recordId });
     }
 
-    // Life-admin records — kind, fields, due date, status, reminder offsets and source
-    // round-trip.
-    // Typed records keep their type, review state and provenance; links to a vehicle, home or
-    // pet are restored once every record has its new id.
+    // Life admin (docs/adr/life-admin-profile.md, life-admin-journal.md), in order: the person's
+    // own categories (re-validated, keeping their ids so records still resolve), settings and
+    // declined labels; then records — kind, fields, due date, status, reminder offsets, source,
+    // type, review state and provenance; then links between them; then each item's journal, as
+    // imported history with its authors' names.
+    let lifeAdminRetyped = 0;
+    const customEntries: CustomCategoryEntry[] = [];
+    for (const row of (doc.lifeAdminCategories ?? []) as CategoryDoc[]) {
+      if (row.definition && (row.state === "suggested" || row.state === "active")) {
+        const draft = newCategorySchema.safeParse({ ...row.definition, why: row.definition.why || "Imported", kinds: row.definition.kinds });
+        if (!draft.success || !row.slug || !SLUG_PATTERN.test(row.slug)) continue;
+        const definition = definitionOf(draft.data);
+        await createCustomCategory(tx, { userId, state: row.state, origin: { kind: "person" }, definition, slug: row.slug }, dek, clock);
+        customEntries.push({ slug: row.slug, state: row.state, definition });
+      } else if (row.builtIn && (row.setting === "show" || row.setting === "not_for_me")) {
+        await setBuiltInSetting(tx, userId, row.builtIn, row.setting, dek, clock);
+      } else if (typeof row.declined === "string") {
+        await restoreDeclined(tx, userId, row.declined.slice(0, 60), dek, clock);
+      }
+    }
+    const catalogue = buildCatalogue(customEntries);
+
     const newIds = new Map<string, string>();
     const links: { id: string; oldParent: string }[] = [];
+    const journals: { recordId: string; entries: JournalDoc[] }[] = [];
     for (const record of lifeAdmin) {
-      const restored = restoredRecord(record);
-      // Restore the match key (so a later scan updates the record instead of adding a copy),
-      // except for types identified by their parent, whose new id isn't known yet.
-      const typeDef = restored.type ? recordType(restored.type) : undefined;
-      const parts = typeDef && !typeDef.identity.includes("parent") ? identityParts(typeDef, restored.fields, null) : null;
+      const restored = restoredRecord(record, catalogue);
+      if (restored.retyped) lifeAdminRetyped += 1;
+      const typeDef = catalogue.typeOfRecord(restored.kind, restored.type);
+      // Restore the match keys (so a later scan updates the record instead of adding a copy),
+      // except those identified by their parent, whose new id isn't known yet.
+      const matchKeys = restored.type
+        ? identityAlternatives(typeDef, restored.fields, null).filter((alternative) => !alternative.keys.includes("parent")).map((alternative) => recordMatchKey(dek, typeDef.id, alternative.keys, alternative.values))
+        : [];
+      const status = record.status ?? "active";
+      const state = typeof record.state === "string" ? record.state.slice(0, 20) : null;
       const created = await createRecord(
         tx,
         {
@@ -335,21 +398,44 @@ export async function importExportDocument(
           type: restored.type,
           fields: restored.fields,
           dueDate: record.dueDate ?? null,
-          status: record.status ?? "active",
+          status,
+          state,
+          remindUntil: remindUntilOf(typeDef, status, state, record.dueDate ?? null),
           reminderOffsets: record.reminderOffsets,
           source: record.source ?? { kind: "person" },
           reviewState: restored.reviewState,
           foundIn: record.foundIn ?? null,
-          matchKey: typeDef && parts ? recordMatchKey(dek, typeDef.id, parts) : null,
+          matchKeys,
         },
         dek,
       );
       if (record.id) newIds.set(record.id, created.id);
       if (record.parentId) links.push({ id: created.id, oldParent: record.parentId });
+      if (Array.isArray(record.journal) && record.journal.length > 0) journals.push({ recordId: created.id, entries: record.journal.slice(0, 400) });
     }
     for (const link of links) {
       const parent = newIds.get(link.oldParent);
       if (parent) await tx.query("UPDATE life_admin_records SET parent_id = $3 WHERE id = $1 AND user_id = $2", [link.id, userId, parent]);
+    }
+    for (const link of taskLinks) {
+      const record = newIds.get(link.oldRecord);
+      if (record) await tx.query("UPDATE tasks SET record_id = $3 WHERE id = $1 AND user_id = $2", [link.id, userId, record]);
+    }
+    for (const { recordId, entries } of journals) {
+      const newEntryIds = new Map<string, string>();
+      for (const entry of entries) {
+        if (!JOURNAL_KINDS.includes(entry.kind as never)) continue;
+        const text = typeof entry.text === "string" ? cleanJournalText(entry.text) : null;
+        if (text && findForbiddenText(text.text)) continue;
+        const refId = entry.refId ? newEntryIds.get(entry.refId) ?? null : null;
+        if ((entry.kind === "next_done" || (entry.kind === "decision" && entry.refId)) && !refId) continue;
+        const at = typeof entry.at === "string" && !Number.isNaN(Date.parse(entry.at)) ? new Date(entry.at) : clock.now();
+        const outcome = await appendJournalEntry(tx, {
+          userId, recordId, kind: entry.kind as JournalKind, actorKind: "imported", refId, at,
+          body: { ...(text ? { text: text.text } : {}), ...(entry.due && calendarDate(entry.due) ? { due: calendarDate(entry.due)! } : {}), ...(entry.change ? { change: entry.change } : {}), actorName: String(entry.by ?? "imported").slice(0, 80) },
+        }, dek);
+        if (outcome.appended && entry.id) newEntryIds.set(entry.id, outcome.id);
+      }
     }
 
     // Activity history — into the READ-ONLY imported-history ARCHIVE, never the live
@@ -373,6 +459,7 @@ export async function importExportDocument(
       rules: rules.length,
       tasks: tasks.length,
       lifeAdmin: lifeAdmin.length,
+      ...(lifeAdminRetyped > 0 ? { lifeAdminRetyped } : {}),
       archivedActivity: activity.length,
     };
   };

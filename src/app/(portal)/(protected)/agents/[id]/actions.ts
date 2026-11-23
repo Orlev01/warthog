@@ -1,6 +1,7 @@
 import { listRecordsForUser, type RecordKind } from "@/server/db/life-admin-records";
 import { storedRecordName } from "@/domain/life-admin/normalise";
-import { typeOfRecord } from "@/domain/life-admin/record-types";
+import { BUILT_IN, type Catalogue } from "@/domain/life-admin/catalogue";
+import { catalogueFor } from "@/server/life-admin/catalogue";
 import { connectorToolsetFor } from "@/server/connectors/tool-routing";
 import { readProviderToolsets } from "@/server/connectors/provider-runtime";
 import type { CatalogueIndex } from "@/server/connectors/catalogue";
@@ -347,8 +348,8 @@ function mergeGrants(
 
 // A life-admin record's name (interaction-12): the name a member gave it, else its type in
 // words (docs/adr/life-admin-profile.md), never the stored enum ("renewal_appointment").
-export function recordName(fields: Readonly<Record<string, unknown>>, kind: RecordKind, type: string | null = null): string {
-  return storedRecordName(kind, type, fields);
+export function recordName(fields: Readonly<Record<string, unknown>>, kind: RecordKind, type: string | null = null, catalogue: Catalogue = BUILT_IN): string {
+  return storedRecordName(catalogue.typeOfRecord(kind, type), fields, Boolean(type));
 }
 
 export function createPermissionsActions(
@@ -442,7 +443,8 @@ export function createPermissionsActions(
     const user = await getUserById(db, session.userId);
     if (!user) return null;
     const dek = await keyWrapper.unwrap(user.wrappedDek);
-    props.recordChoices = (await listRecordsForUser(db, session.userId, dek)).map(record => ({ id: record.id, name: recordName(record.fields, record.kind, record.type), description: typeOfRecord(record.kind, record.type).label, granted: grants.resourceControls?.recordIds == null || grants.resourceControls.recordIds.includes(record.id) }));
+    const { catalogue } = await catalogueFor(db, session.userId, dek);
+    props.recordChoices = (await listRecordsForUser(db, session.userId, dek)).map(record => ({ id: record.id, name: recordName(record.fields, record.kind, record.type, catalogue), description: catalogue.typeOfRecord(record.kind, record.type).label, granted: grants.resourceControls?.recordIds == null || grants.resourceControls.recordIds.includes(record.id) }));
 
     if (deps.catalogue) {
       const connections = await listConnectionsForUser(db, session.userId);

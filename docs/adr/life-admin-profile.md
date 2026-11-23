@@ -39,37 +39,80 @@ If the founder ever wants Warthog to run extraction itself, it must:
 
 Nothing built here would be wasted.
 
-## Categories and types
+## Categories and types (amended the same day: life areas, bookings, a person's own categories)
 
-`src/domain/life-admin/record-types.ts` defines 12 categories and about 40 types, deliberately
-not granular:
-- vehicles;
-- home;
-- utilities;
-- other insurance;
-- health;
-- money & super;
-- ID documents;
-- work & study;
-- subscriptions;
-- pets;
-- receipts & warranties;
-- other.
+**Filed by what it's about.** Records are filed by the thing they're about (the motorcycle, the
+home, health), not by what kind of paperwork they are. People's questions are about things, and every
+record then has one obvious home. "What do I pay for" and "all my insurance" are views calculated
+across categories (monthly totals, `*.insurance`), not filing places.
 
-Each type declares:
-- its fields;
-- what its due date means (expires, renews, ends, due, return by);
-- its default reminders;
-- the fields that identify one record of it (insurer + policy number, a plate);
-- which assets it can belong to.
+**The catalogue.** `src/domain/life-admin/record-types.ts` holds 20 built-in categories (19 plus
+Other) in 8 life areas. They come from the research and from a sample of the founder's own inbox.
+- **Home:** home; utilities.
+- **Getting around:** vehicles; trips and travel.
+- **Health and care:** health; care and support.
+- **Money:** banking and credit; super and investing; tax and government.
+- **Papers:** personal insurance; ID and residency; legal and estate.
+- **Work:** work and study; business.
+- **Family:** kids and family; pets.
+- **Everyday:** purchases and belongings; subscriptions and memberships; going out; other.
 
-**Assets and links.** Vehicles, homes and pets are assets. A rego, a policy or a vaccination
-belongs to one through `parent_id`. That gives the "my motorcycle" view and the "all my insurance"
-view from the same records.
+They hold about 85 kinds.
 
-**How types are stored.** The three original kinds keep their meaning. Every other type is stored
-under the new plaintext kind `item`, and its type lives encrypted in `meta`. So the plaintext
-columns never say that someone has health insurance or a passport.
+**Lifecycles.** Every kind is one of three:
+- **standing:** an account, policy or document that renews or expires;
+- **booking:** booked for a time, live until it's over, then finished;
+- **case:** a fine, claim, application or dispute, open until resolved.
+
+Bookings and cases are kinds filed where they belong (a dentist in health, a car service in
+vehicles, a flight in travel). A cross-category Bookings view lists every booking, live and past.
+
+**Fields every kind shares:**
+- common to all: name, provider, reference, amount, currency, cycle, `for_whom` (a first name or
+  relationship), contact, email, website, notes, plus up to 20 labelled details;
+- bookings add start and end date-times, each in its own time zone (place, party size, booked via,
+  deposit, card held, cancel by, hold until);
+- cases add opened, stage, next step, waiting on and outcome.
+
+**Relationships are generic.** Any kind may be an anchor (others belong to it), and a kind says
+which anchors it may belong to (`belongsTo`, or "any").
+- One rule in the catalogue (`canBelongTo`) decides every link, built-in or custom. An anchor never
+  belongs to another anchor.
+- Bookings, cases and other insurance can belong to any anchor.
+- A trip's dates are worked out from its bookings when it's read.
+
+**A person's own categories.** People's lives differ, so the built-ins are a seed, not the whole
+list.
+- **Hidden until used:** a built-in category shows once the person has something in it or chooses
+  to show it; they can also say "not for me".
+- **Suggested when nothing fits:** the person's agent may suggest a category in a fixed, generic
+  shape:
+  - a label, description, life area and icon;
+  - up to 4 kinds, each with a lifecycle, a use line, an optional due date, up to 12 fields of a
+    closed set of 18 field kinds, an identity, and anchor / `belongsTo` links.
+
+  Warthog validates it deterministically in the input schema (`./custom-category.ts`):
+  - plain labels, with no links or long digit runs;
+  - no field names Warthog never keeps, no health details, no reserved names;
+  - no built-in under another name: "Flights" is redirected to `travel.flight`;
+  - at most 12 categories of the person's own and 3 suggestions waiting.
+- **Stored per person.** These categories live in `life_admin_categories`, under a random id
+  (`x_7kq2mz`), with everything that names them encrypted.
+- **Shown to the person as suggested.** A suggestion shows at once, marked suggested, with the
+  agent's reason. Confirming any of its records, or pressing Keep, keeps it. Declining it:
+  - turns its suggested records into tombstones;
+  - moves any confirmed record to "Something else";
+  - keeps the label, so the same suggestion isn't accepted again.
+- **Shown to other agents as data.** Agents see these labels quoted as data.
+
+**Everything goes through the person's catalogue.** `./catalogue.ts` merges the built-ins with the
+person's own categories, and every reader goes through it: validation, the page, the skill, import,
+the moving checklist. Nothing looks a kind up statically.
+
+**How types are stored.** Every kind beyond the original three is stored under the plaintext kind
+`item`, with its kind encrypted in `meta`, so no plaintext column says what someone has. A
+booking's detailed state (pending, confirmed, cancelled, no-show) is also encrypted. Its plaintext
+status is the coarse active, cancelled or done.
 
 ## Rules
 
@@ -84,7 +127,10 @@ columns never say that someone has health insurance or a passport.
   - An agent may keep refining its own suggestions.
   - `changed_by` records who changed a record last, so a record an agent rewrote no longer reads
     as the person's. That rewrite used to go unrecorded.
-- **One record, not copies.**
+- **One record, not copies.** A kind has identity *alternatives*: a booking matches on provider +
+  reference, or on provider + start date. Every alternative a save can fill is stored as a match key
+  (`match_keys`), so a booking first saved without its reference still matches once the reference
+  turns up.
   - `match_key` is an HMAC of the type and its identifying values, under a key derived from the
     person's data key.
   - Saving the same thing again updates the record.
@@ -115,7 +161,13 @@ columns never say that someone has health insurance or a passport.
   - Warthog marks the source `seenByWarthog` only when this agent had just read mail from that
     sender through Warthog (the [read-exposure](read-side-protection.md) window). Otherwise the
     page says "ChatGPT says it found this…".
-- **Reminders are calm.**
+- **Live or finished is worked out, never stored.** `./lifecycle.ts` is the one place it's decided,
+  replacing five copies. A booking finishes by time, read in its own zone. A standing item or case
+  finishes only when someone sets its status. Agents see live records by default; finished ones keep
+  their history and stay one call away.
+- **Reminders are calm.** The keyless sweep reads a plaintext `remind_until` worked out on every
+  write: due date + 7 for a live item, the start date for a booking, none for anything finished,
+  paused or undated.
   - None for dismissed, cancelled, done, paused or expired records, or for anything more than 7
     days past its due date.
   - Several due at once go out as one push per person.
@@ -125,25 +177,37 @@ columns never say that someone has health insurance or a passport.
 
 | Tool | Change |
 |---|---|
-| `get_context` | Adds `lifeAdmin`: counts by category, up to 5 things due within 60 days (or up to 30 days overdue), and how many wait for the person. Counts cover exactly the records this agent may see. An agent that can read the person's mail and save records gets `next`, a one-line offer to make once when life admin is mostly empty. |
-| `list_records` | Filters by category, type (`*.insurance`), words, due window and parent, and pages with a cursor. Each record comes labelled with its type, field labels, `due {date, label, inDays}`, `savedBy`, `checkedByPerson` and where it was found. Recurring costs come with a monthly total worked out by Warthog. Cancelled and ended records are left out unless asked for. |
-| `save_record` | Takes typed records, or a batch of up to 25 with `ref`/`parentRef` to save a vehicle and its rego together. Calls with the older `kind` still work. |
-| `update_record` | Takes `set` as a patch (`null` removes a field). Can link a record to its parent, or give an older record its type. |
+| `get_context` | Adds `lifeAdmin`: counts by category; up to 5 things due or starting within 60 days (or up to 30 days overdue), each with its phase; how many wait for the person; open cases and upcoming bookings; the person's own categories, "not for me" ones and how many built-ins are unused; `otherMailAccounts`; the hand-over block. Counts cover exactly the records this agent may see. An agent that can read mail and save records gets `next`: an offer to fill life admin in, or to find bookings. |
+| `list_records` | Filters by category (built-in or the person's own), kind (`*.insurance`), lifecycle (booking, case), words, `forWhom`, due window and parent, and pages with a cursor. `include` is `live` by default, or `finished` or `all`. `id` returns one record whatever its phase, and `view: "categories"` lists categories. Each record comes labelled with its kind and category, field labels, `due`, `phase`, `savedBy`, `checkedByPerson`, where it was found, who is handling it, and a journal summary. Recurring costs come with a monthly total worked out by Warthog. |
+| `save_record` | Takes typed records, or a batch of up to 25 with `ref`/`parentRef` (a trip and its flights; a vehicle and its rego). Also takes `details`, `journal` and `takeOver`, and `newCategory` to suggest a category of the person's own whose kinds the call's records use as `new.<kind>`. Calls with the older `kind` still work. |
+| `update_record` | Takes `set` as a patch (`null` removes a field), `details`, `journal` and `takeOver` (journal-only updates are fine). Can link a record to its parent, or give an older record its kind. |
+| `create_task` | Takes `recordId`, for a task about one item. |
 
 There is no new core tool: client tool budgets matter, so the count stays at 16.
 
 **The "Life admin records" skill.** It is a built-in skill, listed for agents with the records
 permission. It is generated from the same catalogue `save_record` validates against, so the two
 can't drift. It covers:
-- the types and their fields;
-- bounded Gmail and Outlook searches per category;
+- the kinds and their fields (the person's own categories quoted as data);
+- bounded Gmail and Outlook searches per category, across every connected mail account;
+- bookings (schema.org reservation mapping, one record per flight leg, forwarded bookings, trips);
+- cases;
+- working on an item over time (the journal);
+- when nothing fits: suggesting a category;
 - what never to save;
 - how to save and answer.
 
+Each item's journal and hand-over between agents is in [the journal ADR](life-admin-journal.md).
+
 ## Known limits and follow-ups
+
+- **One mail account per service per agent.** The founder keeps bookings and billing in separate
+  Google accounts, but an agent reads only the account it was given for each service. `get_context`
+  hints with `otherMailAccounts`.
 
 - **PDFs.** Agents can't read Gmail attachments or Drive PDFs, where policy schedules often sit.
   Email bodies usually carry the renewal date and premium.
+- **No parcels or deliveries in v1** (founder decision).
 - **One date per record.** A receipt reminds for its return-by date. Its warranty end is a field
   that doesn't remind.
 - **No recurrence.** A monthly subscription's next renewal date doesn't roll forward by itself yet.

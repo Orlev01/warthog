@@ -253,6 +253,22 @@ function resultLine(value: unknown, ids: EvidenceLine[]): string | undefined {
       if (kept) lines.push(kept);
       continue;
     }
+    if (key === "references" && isRecord(item)) {
+      // The ids a result named (records saved, messages found) are identifiers: technical details.
+      for (const [name, list] of Object.entries(item)) {
+        if (Array.isArray(list) && list.length > 0) ids.push({ label: `${words(name)} ids`, value: list.map(String).join(", ") });
+      }
+      continue;
+    }
+    if (key === "effects" && isRecord(item)) {
+      // What a life-admin save did, counted (docs/adr/life-admin-journal.md).
+      const effects = Object.entries(EFFECT_WORDS).flatMap(([effect, label]) => {
+        const n = typeof item[effect] === "number" ? (item[effect] as number) : 0;
+        return n > 0 ? [`${n} ${label}`] : [];
+      });
+      if (effects.length > 0) lines.push(`Records: ${effects.join(", ")}`);
+      continue;
+    }
     if (key === "profileFields" && Array.isArray(item)) {
       lines.push(`Profile details shared: ${item.length > 0 ? item.map((field) => words(String(field)).toLowerCase()).join(", ") : "none"}`);
       continue;
@@ -262,6 +278,14 @@ function resultLine(value: unknown, ids: EvidenceLine[]): string | undefined {
   }
   return lines.length > 0 ? lines.join("\n") : undefined;
 }
+
+const EFFECT_WORDS: Readonly<Record<string, string>> = {
+  created: "added",
+  updated: "updated",
+  proposed: "proposed (waiting for you to accept)",
+  unchanged: "unchanged",
+  skipped: "skipped",
+};
 
 // What Warthog's read check kept from the agent (docs/adr/read-side-protection.md), in words:
 // "Kept from the agent: 1 sign-in code, 2 sign-in links". Counts only, never the values.

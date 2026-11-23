@@ -9,19 +9,31 @@ import { ActionForm, FormSubmit, PendingFormFields } from "@/components/ui/form-
 import { ButtonLink } from "@/components/ui/button-link";
 import { EmptyState } from "@/components/ui/empty";
 import { WorkspacePanel } from "@/components/shell/workspace-surfaces";
+import { BUILT_IN, catalogueFromData, type CatalogueData } from "@/domain/life-admin/catalogue";
 import { DisabledControl, HINT_CLASS } from "./record-forms";
+import { bookingsView, upcomingSections } from "./record-groups";
 import { ThingsView } from "./things-view";
+import { UpcomingView } from "./upcoming-view";
+import { BookingsView } from "./bookings-view";
 import type {
+  BookingFilters,
+  CategoryStateView,
   ChecklistItemView,
   LifeAdminAction,
   LifeAdminRecordView,
   LifeAdminTab,
+  NextStepView,
   RecordActions,
+  SuggestedCategoryView,
 } from "./record-view-types";
 
 export type {
   AssetOption,
+  BookingFilters,
+  CategoryStateView,
   ChecklistItemView,
+  NextStepView,
+  SuggestedCategoryView,
   LifeAdminAction,
   LifeAdminRecordView,
   LifeAdminTab,
@@ -36,14 +48,16 @@ export type {
 // (src/components/life-admin/life-admin-view.tsx), reshaped by the life-admin profile
 // (docs/adr/life-admin-profile.md).
 //
-// The records half of Life admin has two in-page tabs (`?tab=`): "Your things", the
-// person's typed life admin — vehicles and their rego, insurance and servicing, home,
-// utilities, health insurance, super, ID expiry dates, work, subscriptions, pets, receipts —
-// that they and their agents keep, and the MOVING CHECKLIST. Agents fill most of it in from
-// email; what they save arrives as a suggestion the person confirms, and their change to a
-// confirmed record waits for the person (./things-view.tsx). The older tab values
-// (subscriptions, receipts, renewals) are mapped to "Your things" by the page, and each
-// record keeps its `#record-<id>` anchor, so reminder links still land on the record.
+// The records half of Life admin has four in-page tabs (`?tab=`): "Your things", the person's
+// typed life admin by category — their own catalogue, built-in and their own categories — that
+// they and their agents keep (./things-view.tsx); "Upcoming", what needs them soon across every
+// category (./upcoming-view.tsx); "Bookings", every booking live and past (./bookings-view.tsx);
+// and the MOVING CHECKLIST. Agents fill most of it in from email; what they save arrives as a
+// suggestion the person confirms, and their change to a confirmed record waits for the person.
+// The older tab values (subscriptions, receipts, renewals) are mapped to "Your things" by the
+// page, and each record keeps its `#record-<id>` anchor, so reminder links still land on the
+// record: one set aside under "Finished" is opened, and one not on this page (a category the
+// person hid) goes to the item's own page.
 //
 // This is the pure, prop-driven VIEW (a Client Component in the app): it renders FROM the
 // props the Life Admin loader hands it, with fields already decrypted, agent names resolved
@@ -60,6 +74,17 @@ export type LifeAdminViewProps = RecordActions & {
   // The person's local date (YYYY-MM-DD, in their account time zone), from the loader. What
   // is overdue or coming up is worked out against it; the view never reads the clock.
   today: string;
+  // The person's time zone (date-times without their own read in it; forms default to it).
+  zone?: string;
+  // The person's catalogue (built-in and their own categories), as plain data. Absent ⇒ built-in.
+  catalogue?: CatalogueData;
+  // Each category's place on the page. Absent ⇒ worked out from the records alone.
+  categories?: ReadonlyArray<CategoryStateView>;
+  suggestedCategories?: ReadonlyArray<SuggestedCategoryView>;
+  // Open next steps with a due date, across items.
+  nextSteps?: ReadonlyArray<NextStepView>;
+  // The Bookings tab's filters and page, validated by the page.
+  bookingFilters?: BookingFilters;
   // Every live record the person has (dismissed ones are never loaded).
   records: ReadonlyArray<LifeAdminRecordView>;
   checklist: ReadonlyArray<ChecklistItemView>;
@@ -233,11 +258,37 @@ function counted(label: string, count: number): string {
   return `${label} (${count})`;
 }
 
-// The records half of Life admin: a bounded tab strip ("Your things" | "Moving checklist"),
-// then the selected tab's panels. Both tabs stay mounted, so a half-typed record survives a
-// switch.
+// A `#record-<id>` link (reminder emails, Home, older bookmarks) lands on its row: a row set
+// aside in a collapsed group is opened first, and one that isn't on this page goes to the
+// item's own page instead.
+function useRecordAnchor() {
+  React.useEffect(() => {
+    const match = /^#record-([0-9a-f-]{36})$/i.exec(window.location.hash);
+    if (!match) return;
+    const row = document.getElementById(`record-${match[1]}`);
+    if (!row) {
+      window.location.replace(`/life-admin/items/${match[1]!.toLowerCase()}`);
+      return;
+    }
+    for (let parent = row.parentElement; parent; parent = parent.parentElement) {
+      if (parent instanceof HTMLDetailsElement) parent.open = true;
+    }
+    row.scrollIntoView({ block: "start" });
+    row.focus({ preventScroll: true });
+  }, []);
+}
+
+// The records half of Life admin: a bounded tab strip ("Your things" | "Upcoming" |
+// "Bookings" | "Moving checklist"), then the selected tab's panels. Every tab stays mounted, so
+// a half-typed record survives a switch.
 export function LifeAdminView({
   today,
+  zone = "UTC",
+  catalogue: catalogueData,
+  categories,
+  suggestedCategories = [],
+  nextSteps = [],
+  bookingFilters = {},
   records,
   checklist,
   initialTab,
@@ -246,6 +297,21 @@ export function LifeAdminView({
   handToAgentAction,
   ...actions
 }: LifeAdminViewProps) {
+  useRecordAnchor();
+  const catalogue = React.useMemo(() => (catalogueData ? catalogueFromData(catalogueData) : BUILT_IN), [catalogueData]);
+  const states = React.useMemo<CategoryStateView[]>(
+    () =>
+      categories
+        ? [...categories]
+        : catalogue.categories.map((category) => {
+            const count = records.filter((record) => catalogue.typeOfRecord(record.kind, record.type ?? null).category === category.id).length;
+            return { id: category.id, visibility: count > 0 || category.origin === "custom" ? "shown" : "available", records: count };
+          }),
+    [categories, catalogue, records],
+  );
+  const upcoming = upcomingSections(records);
+  const upcomingCount = upcoming.now.length + upcoming.overdue.length + upcoming.week.length + upcoming.later.length;
+  const liveBookings = bookingsView(records, catalogue, {}, zone).live.length;
   return (
     <ViewPanels
       label="Life admin sections"
@@ -256,7 +322,28 @@ export function LifeAdminView({
         {
           key: "things",
           label: counted("Your things", records.length),
-          content: <ThingsView records={records} today={today} addType={addType} actions={actions} />,
+          content: (
+            <ThingsView
+              records={records}
+              catalogue={catalogue}
+              categories={states}
+              suggestedCategories={suggestedCategories}
+              today={today}
+              zone={zone}
+              addType={addType}
+              actions={actions}
+            />
+          ),
+        },
+        {
+          key: "upcoming",
+          label: counted("Upcoming", upcomingCount),
+          content: <UpcomingView records={records} catalogue={catalogue} nextSteps={nextSteps} today={today} zone={zone} />,
+        },
+        {
+          key: "bookings",
+          label: counted("Bookings", liveBookings),
+          content: <BookingsView records={records} catalogue={catalogue} filters={bookingFilters} today={today} zone={zone} />,
         },
         {
           key: "checklist",

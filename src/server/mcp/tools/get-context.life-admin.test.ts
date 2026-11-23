@@ -43,7 +43,7 @@ async function setup(grants: { recordsAccess: boolean; grantedConnectors?: strin
 test("an agent with records access gets the summary and the skill; one without gets neither", async () => {
   const withAccess = await setup({ recordsAccess: true });
   try {
-    await withAccess.save.handle({ type: "vehicle.registration", fields: { plate: "BX12AB" }, dueDate: "2026-12-14" }, withAccess.connection);
+    await withAccess.save.handle({ type: "vehicles.registration", fields: { plate: "BX12AB" }, dueDate: "2026-12-14" }, withAccess.connection);
     const view = await withAccess.context.handle(withAccess.connection);
     assert.equal(view.lifeAdmin?.total, 1);
     assert.equal(view.lifeAdmin?.dueSoon[0]?.due.label, "Expires");

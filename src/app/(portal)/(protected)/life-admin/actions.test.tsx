@@ -488,7 +488,7 @@ test("saveRecord persists a record the loader reads back; updateRecord edits it;
 
     const saved = await actions.saveRecord(
       session,
-      as<"saveRecord">({ type: "subscription.service", fields: { name: "Spotify", provider: "" }, dueDate: "2027-05-01", status: "active" }),
+      as<"saveRecord">({ type: "subscriptions.service", fields: { name: "Spotify", provider: "" }, dueDate: "2027-05-01", status: "active" }),
     );
     assert.equal(okOf(saved), true, "saveRecord succeeds for the session user");
 
@@ -497,7 +497,7 @@ test("saveRecord persists a record the loader reads back; updateRecord edits it;
     const stored = afterSave.find((r) => (r.fields as { name?: string }).name === "Spotify");
     assert.ok(stored != null, "the saved record round-trips decrypted");
     assert.deepEqual(stored!.fields, { name: "Spotify" }, "an empty field is not stored");
-    assert.equal(stored!.type, "subscription.service");
+    assert.equal(stored!.type, "subscriptions.service");
     assert.equal(stored!.kind, "subscription");
     assert.equal(stored!.reviewState, "confirmed");
     assert.deepEqual(stored!.source, { kind: "person" });
@@ -1055,7 +1055,7 @@ test("saveRecord / createTask take the owner from the session — a userId smugg
 
     const savedRecord = await actions.saveRecord(
       sessionFor(session.userId),
-      as<"saveRecord">({ type: "subscription.service", fields: { name: "Smuggled record" }, status: "active", userId: victim.userId }),
+      as<"saveRecord">({ type: "subscriptions.service", fields: { name: "Smuggled record" }, status: "active", userId: victim.userId }),
     );
     assert.equal(okOf(savedRecord), true, "the record save succeeds under the session user");
     const savedTask = await actions.createTask(
@@ -1107,10 +1107,10 @@ test("malformed / oversized input is rejected with a 4xx and nothing is persiste
       actions.saveRecord(session, as<"saveRecord">({ type: "subscription", fields: { a: "b" } })),
     );
     await assertRejects4xx("saveRecord(unknown status)", () =>
-      actions.saveRecord(session, as<"saveRecord">({ type: "subscription.service", fields: { name: "b" }, status: "upcoming" })),
+      actions.saveRecord(session, as<"saveRecord">({ type: "subscriptions.service", fields: { name: "b" }, status: "upcoming" })),
     );
     await assertRejects4xx("saveRecord(oversized field value)", () =>
-      actions.saveRecord(session, as<"saveRecord">({ type: "subscription.service", fields: { notes: HUGE }, status: "active" })),
+      actions.saveRecord(session, as<"saveRecord">({ type: "subscriptions.service", fields: { notes: HUGE }, status: "active" })),
     );
     // createTask: a missing title, a non-string title, and a grossly oversized title.
     await assertRejects4xx("createTask(missing title)", () =>
@@ -1183,7 +1183,7 @@ test("a SQL-injection probe in a record field / task title is bound as data: the
 
     const r = await actions.saveRecord(
       session,
-      as<"saveRecord">({ type: "subscription.service", fields: { name: recordProbe }, status: "active" }),
+      as<"saveRecord">({ type: "subscriptions.service", fields: { name: recordProbe }, status: "active" }),
     );
     assert.equal(okOf(r), true, "a record field shaped like SQL is accepted and stored as data");
     const t = await actions.createTask(session, as<"createTask">({ title: taskProbe }));
@@ -1229,7 +1229,7 @@ test("no ambient env secret leaks into any stored row or the loaded screen; the 
 
     const r = await actions.saveRecord(
       session,
-      as<"saveRecord">({ type: "subscription.service", fields: { name: "Env record" }, status: "active" }),
+      as<"saveRecord">({ type: "subscriptions.service", fields: { name: "Env record" }, status: "active" }),
     );
     assert.equal(okOf(r), true, "the record save works from the injected seams with a decoy env present");
     const t = await actions.createTask(session, as<"createTask">({ title: "Env task" }));
@@ -1265,10 +1265,10 @@ test("record dates and reminder offsets reject impossible scheduling before writ
     const { userId, dek } = await makeUserWithDek(db, wrapper, "schedule-boundary");
     const actions = makeActions(db, wrapper), session = sessionFor(userId);
     for (const dueDate of ["2027-02-30", "0000-01-01", "tomorrow", "2027-01-01T00:00:00Z"]) {
-      await assertRejects4xx("invalid calendar date", () => actions.saveRecord(session, { type: "subscription.service", fields: { name: "x" }, dueDate }));
+      await assertRejects4xx("invalid calendar date", () => actions.saveRecord(session, { type: "subscriptions.service", fields: { name: "x" }, dueDate }));
     }
     assert.equal((await listRecordsForUser(db, userId, dek)).length, 0);
-    await actions.saveRecord(session, { type: "subscription.service", fields: { name: "Leap renewal" }, dueDate: "2028-02-29" });
+    await actions.saveRecord(session, { type: "subscriptions.service", fields: { name: "Leap renewal" }, dueDate: "2028-02-29" });
     const record = (await listRecordsForUser(db, userId, dek))[0];
     for (const reminderOffsets of [[2147483647], [-1], [1.5]]) {
       await assertRejects4xx("unsafe reminder offset", () => actions.setRecordReminders(session, { id: record.id, reminderOffsets }));

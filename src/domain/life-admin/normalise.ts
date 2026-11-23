@@ -1,63 +1,82 @@
-// Turning what an agent (or a form) sends into a record type's own fields
+// Turning what an agent (or a form) sends into a record kind's own fields
 // (docs/adr/life-admin-profile.md, "Saving").
 //
-// Agents name things their own way ("insurer", "policy_number", "premium", "rego"), so a known
-// alias is folded into the type's field ("provider", "reference", "amount", "plate"). Values
-// are kept as plain strings, the way the Life admin page shows and edits them. Dates must be
-// calendar dates, an amount a plain number, a cycle one of the known cycles. A date given as
-// a field the type uses as its due date ("expiry", "renews_on") becomes the record's due
-// date when none was given. Anything the type doesn't know is kept as an extra detail, within
-// limits, so nothing an agent found is silently lost.
+// Agents name things their own way ("insurer", "policy_number", "premium", "rego", "venue"), so a
+// known alias is folded into the kind's field ("provider", "reference", "amount", "plate",
+// "place"). Values are kept as plain strings, the way the Life admin page shows and edits them,
+// in a canonical form per field kind: calendar dates, date-times with their own time zone
+// ("2026-12-03T19:30+11:00[Australia/Sydney]"), month/year, plain numbers and amounts, yes/no,
+// ISO durations. A due date given as a field ("expiry") becomes the record's due date when none
+// was given. Anything the kind doesn't know is kept as an extra detail, within limits, so nothing
+// an agent found is silently lost; agents can also send labelled `details`.
 //
-// From an agent, links are cut to their site name (a "pay here" link in an email never
-// survives) and card numbers are masked to their last four. Identifiers that must never be
-// kept are refused before this runs (`./identifiers.ts`).
+// From an agent, links are cut to their site name (a "pay here" link in an email never survives)
+// and card numbers are masked to their last four. Identifiers that must never be kept are refused
+// before this runs (`./identifiers.ts`).
 //
 // Pure domain module: no React, no DB, no fetch, no process.env, no Date.now.
 
 import { linksToSiteNames, maskCards, siteName } from "./identifiers";
-import { CYCLES, typeOfRecord, type Cycle, type FieldDef, type RecordTypeDef, type StoredKind } from "./record-types";
+import { isTimeZone, parseWhen, zoneOffsetMinutes } from "./lifecycle";
+import { CYCLES, type Cycle, type FieldDef, type RecordTypeDef } from "./record-types";
 
 export const MAX_FIELD_CHARS = 500;
 export const MAX_NOTES_CHARS = 2000;
 export const MAX_EXTRA_FIELDS = 20;
+export const MAX_PLACE_CHARS = 300;
+export const MAX_PERSON_CHARS = 60;
 
-// Common ways agents name a field, folded into the field a type keeps. An alias is used only
-// when the type has the target field and not a field of the alias's own name.
-const ALIASES: Readonly<Record<string, string>> = {
-  service_name: "provider", merchant: "provider", store: "provider", retailer: "provider",
-  insurer: "provider", insurance_company: "provider", fund: "provider", fund_name: "provider",
-  lender: "provider", issuer: "provider", bank: "provider", company: "provider",
-  organisation: "provider", organization: "provider", employer_name: "provider", council: "provider",
-  workshop: "provider", practice: "provider", institution: "provider", authority: "provider",
-  service: "provider",
-  policy_number: "reference", policy_no: "reference", policy: "reference", member_number: "reference",
-  member_no: "reference", membership_number: "reference", membership_no: "reference",
-  account_number: "reference", account_no: "reference", customer_number: "reference",
-  customer_no: "reference", reference_number: "reference", ref: "reference",
-  registration_number_professional: "reference", student_number: "reference",
-  cost: "amount", price: "amount", premium: "amount", fee: "amount", bill: "amount", rent: "amount",
-  repayment: "amount", amount_due: "amount",
-  billing_cycle: "cycle", frequency: "cycle", billing_frequency: "cycle", payment_frequency: "cycle",
-  phone: "contact", phone_number: "contact", contact_phone: "contact",
-  url: "website", link: "website", site: "website", web: "website",
-  note: "notes", comments: "notes", comment: "notes", details: "notes", description: "notes",
-  title: "name", nickname: "name",
-  rego: "plate", rego_number: "plate", registration_number: "plate", plate_number: "plate",
-  number_plate: "plate", licence_plate: "plate", license_plate: "plate", registration: "plate",
-  last_four: "last4", last_4: "last4", last_digits: "last4", ending: "last4",
-  nmi: "meter_id", mirn: "meter_id",
-  warranty_end: "warranty_ends", warranty_until: "warranty_ends", warranty_expiry: "warranty_ends",
-  order_no: "order_number", order_id: "order_number",
-  date: "purchased_on", purchase_date: "purchased_on", bought_on: "purchased_on",
+// Common ways agents name a field, folded into the first of the targets the kind has. An alias is
+// used only when the kind has no field of the alias's own name.
+const ALIASES: Readonly<Record<string, readonly string[]>> = {
+  service_name: ["provider"], merchant: ["provider"], store: ["provider"], retailer: ["provider"],
+  insurer: ["provider"], insurance_company: ["provider"], fund: ["provider"], fund_name: ["provider"],
+  lender: ["provider"], issuer: ["provider"], bank: ["provider"], company: ["provider"], airline: ["provider"],
+  organisation: ["provider"], organization: ["provider"], employer_name: ["provider"], council: ["provider"],
+  workshop: ["provider"], practice: ["provider"], clinic: ["provider"], institution: ["provider"],
+  authority: ["provider"], restaurant: ["provider"], hotel: ["provider"], operator: ["provider"],
+  service: ["provider"], vendor: ["provider"], platform: ["booked_via", "provider"],
+  policy_number: ["reference"], policy_no: ["reference"], policy: ["reference"], member_number: ["reference"],
+  member_no: ["reference"], membership_number: ["reference"], membership_no: ["reference"],
+  account_number: ["reference"], account_no: ["reference"], customer_number: ["reference"],
+  customer_no: ["reference"], reference_number: ["reference"], ref: ["reference"],
+  confirmation: ["reference"], confirmation_number: ["reference"], confirmation_code: ["reference"],
+  booking_reference: ["reference"], booking_ref: ["reference"], booking_number: ["reference"],
+  reservation_number: ["reference"], pnr: ["reference"], claim_number: ["reference"], notice_number: ["reference"],
+  student_number: ["reference"],
+  cost: ["amount"], price: ["amount"], premium: ["amount"], fee: ["amount"], bill: ["amount"], rent: ["amount"],
+  repayment: ["amount"], amount_due: ["amount"], total: ["amount"], total_price: ["amount"],
+  billing_cycle: ["cycle"], frequency: ["cycle"], billing_frequency: ["cycle"], payment_frequency: ["cycle"],
+  phone: ["contact"], contact_phone: ["contact"], telephone: ["contact"],
+  email_address: ["email"],
+  url: ["website"], link: ["website"], site: ["website"], web: ["website"],
+  note: ["notes"], comments: ["notes"], comment: ["notes"], description: ["notes"],
+  title: ["name"], nickname: ["name"],
+  rego: ["plate"], rego_number: ["plate"], registration_number: ["plate"], plate_number: ["plate"],
+  number_plate: ["plate"], licence_plate: ["plate"], license_plate: ["plate"], registration: ["plate"],
+  last_four: ["last4"], last_4: ["last4"], last_digits: ["last4"], ending: ["last4"],
+  nmi: ["meter_id"], mirn: ["meter_id"],
+  warranty_end: ["warranty_ends"], warranty_until: ["warranty_ends"], warranty_expiry: ["warranty_ends"],
+  order_no: ["order_number"], order_id: ["order_number"],
+  date: ["purchased_on", "starts_at"], purchase_date: ["purchased_on"], bought_on: ["purchased_on"],
+  start: ["starts_at"], starts: ["starts_at"], start_time: ["starts_at"], start_date: ["starts_at"], when: ["starts_at"],
+  date_time: ["starts_at"], datetime: ["starts_at"], departure: ["starts_at"], departure_time: ["starts_at"],
+  check_in: ["starts_at"], checkin: ["starts_at"], pickup_time: ["starts_at"], appointment_time: ["starts_at"],
+  end: ["ends_at"], ends: ["ends_at"], end_time: ["ends_at"], end_date: ["ends_at"], arrival: ["ends_at"],
+  arrival_time: ["ends_at"], check_out: ["ends_at"], checkout: ["ends_at"], return_time: ["ends_at"],
+  venue: ["place"], location: ["place"], address: ["address", "place"], where: ["where", "place"],
+  party: ["party_size"], guests: ["party_size"], people: ["people", "party_size"], party_size: ["party_size"],
+  flight: ["flight_number"], flight_no: ["flight_number"],
+  for: ["for_whom"], for_person: ["for_whom"], on_behalf_of: ["for_whom"], traveller: ["for_whom"], passenger: ["for_whom"], patient: ["for_whom"],
+  cancellation_deadline: ["cancel_by"], free_cancellation_until: ["cancel_by"],
 };
 
-// Field names that carry a due date. When no due date was given and the type has one, the
-// first of these holding a calendar date becomes it.
+// Field names that carry a due date. When no due date was given and the kind has one, the first of
+// these holding a calendar date becomes it.
 const DUE_KEYS = [
   "due_date", "duedate", "due", "due_on", "expiry", "expiry_date", "expires", "expires_on", "expiration",
   "renewal_date", "renews_on", "renews", "next_renewal", "renewal", "valid_to", "valid_until",
-  "ends_on", "end_date", "return_by", "next_due", "next_service", "census_date",
+  "ends_on", "return_by", "next_due", "next_service", "census_date", "pay_by",
 ];
 
 const CYCLE_WORDS: Readonly<Record<string, Cycle>> = {
@@ -69,7 +88,8 @@ const CYCLE_WORDS: Readonly<Record<string, Cycle>> = {
   one_off: "one_off", once: "one_off", one_time: "one_off",
 };
 
-const ISO_DATE = /^(\d{4})-(\d{2})-(\d{2})(?:[T ][\d:.]+(?:Z|[+-]\d{2}:?\d{2})?)?$/;
+const ISO_DATE = /^(\d{4})-(\d{2})-(\d{2})(?:[T ][\d:.]+(?:Z|[+-]\d{2}:?\d{2})?)?(?:\[[^\]]+\])?$/;
+const MONTHS = ["jan", "feb", "mar", "apr", "may", "jun", "jul", "aug", "sep", "oct", "nov", "dec"];
 
 /** A field name as the catalogue writes it: lower case, words joined by underscores. */
 export function fieldKey(name: string): string {
@@ -104,9 +124,97 @@ export function cycleOf(value: string): Cycle | null {
   return (CYCLES as readonly string[]).includes(word) ? (word as Cycle) : CYCLE_WORDS[word] ?? null;
 }
 
+function offsetText(minutes: number): string {
+  const sign = minutes < 0 ? "-" : "+";
+  const abs = Math.abs(minutes);
+  return `${sign}${String(Math.floor(abs / 60)).padStart(2, "0")}:${String(abs % 60).padStart(2, "0")}`;
+}
+
+/**
+ * A date or date-time in canonical form: "2026-12-03" for a date alone, else
+ * "2026-12-03T19:30+11:00[Australia/Sydney]" — the wall time, its offset, and the zone it happens
+ * in (its own when given, else `fallbackZone`, which is then reported as assumed).
+ */
+export function canonicalDateTime(value: string, fallbackZone: string): { value: string; assumedZone: boolean } | null {
+  const raw = value.trim();
+  const bracket = /\[([^\]]+)\]$/.exec(raw)?.[1];
+  const explicitZone = bracket && isTimeZone(bracket) ? bracket : null;
+  if (bracket && !explicitZone) return null;
+  const when = parseWhen(raw, explicitZone ?? fallbackZone);
+  if (!when) return null;
+  if (when.dateOnly) return calendarDate(when.date) ? { value: when.date, assumedZone: false } : null;
+  const hasOffset = /(?:Z|[+-]\d{2}:?\d{2})(?:\[[^\]]+\])?$/.test(raw);
+  const zone = explicitZone ?? fallbackZone;
+  const offset = zoneOffsetMinutes(zone, when.instant);
+  // An offset given without a zone that doesn't fit the fallback zone: keep the offset, no zone.
+  if (hasOffset && !explicitZone) {
+    const given = /(Z|[+-]\d{2}:?\d{2})$/.exec(raw)![1]!;
+    const givenMinutes = given === "Z" ? 0 : (given.startsWith("-") ? -1 : 1) * (Number(given.replace(/[+:-]/g, "").slice(0, 2)) * 60 + Number(given.replace(/[+:-]/g, "").slice(2, 4)));
+    const local = new Date(when.instant.getTime() + givenMinutes * 60_000).toISOString().slice(0, 16);
+    return { value: givenMinutes === offset ? `${local}${offsetText(offset)}[${zone}]` : `${local}${offsetText(givenMinutes)}`, assumedZone: false };
+  }
+  const local = new Date(when.instant.getTime() + offset * 60_000).toISOString().slice(0, 16);
+  return { value: `${local}${offsetText(offset)}[${zone}]`, assumedZone: !explicitZone && !hasOffset };
+}
+
+/** "2027-03" from "2027-03", "03/27", "03/2027", "March 2027" or "Mar 2027". */
+export function monthYear(value: string): string | null {
+  const v = value.trim().toLowerCase();
+  let match = /^(\d{4})-(\d{1,2})$/.exec(v);
+  if (match) return Number(match[2]) >= 1 && Number(match[2]) <= 12 ? `${match[1]}-${match[2]!.padStart(2, "0")}` : null;
+  match = /^(\d{1,2})\s*\/\s*(\d{2}|\d{4})$/.exec(v);
+  if (match) {
+    const month = Number(match[1]);
+    const year = match[2]!.length === 2 ? 2000 + Number(match[2]) : Number(match[2]);
+    return month >= 1 && month <= 12 ? `${year}-${String(month).padStart(2, "0")}` : null;
+  }
+  match = /^([a-z]{3})[a-z]*\.?\s+(\d{4})$/.exec(v);
+  if (match) {
+    const month = MONTHS.indexOf(match[1]!);
+    return month >= 0 ? `${match[2]}-${String(month + 1).padStart(2, "0")}` : null;
+  }
+  return null;
+}
+
+/** "6" from "6 people", "45000" from "45,000 km"; null when it isn't a number. */
+export function plainNumber(value: string): string | null {
+  const match = /^-?[\d,]+(?:\.\d+)?/.exec(value.trim());
+  if (!match) return null;
+  const cleaned = match[0].replace(/,/g, "");
+  return /^-?\d+(?:\.\d+)?$/.test(cleaned) ? cleaned : null;
+}
+
+/** "yes" or "no", or null. */
+export function yesNo(value: string): "yes" | "no" | null {
+  const v = value.trim().toLowerCase();
+  if (["yes", "y", "true", "1"].includes(v)) return "yes";
+  if (["no", "n", "false", "0"].includes(v)) return "no";
+  return null;
+}
+
+/** An ISO 8601 duration ("PT45M", "P12M") from itself or from "45 minutes", "1h30m", "12 months". */
+export function isoDuration(value: string): string | null {
+  const v = value.trim();
+  if (/^P(?!$)(\d+Y)?(\d+M)?(\d+W)?(\d+D)?(T(?=\d)(\d+H)?(\d+M)?)?$/.test(v)) return v;
+  const units: Record<string, number> = { Y: 0, Mo: 0, W: 0, D: 0, H: 0, Mi: 0 };
+  let found = false;
+  for (const [, n, unit] of v.toLowerCase().matchAll(/(\d+)\s*(years?|yrs?|y|months?|mos?|weeks?|wks?|w|days?|d|hours?|hrs?|h|minutes?|mins?|m)(?![a-z])/g)) {
+    found = true;
+    const u = unit!;
+    const key = /^y/.test(u) ? "Y" : /^mo/.test(u) ? "Mo" : /^w/.test(u) ? "W" : /^d/.test(u) ? "D" : /^h/.test(u) ? "H" : "Mi";
+    units[key]! += Number(n);
+  }
+  if (!found) return null;
+  const date = `${units.Y ? `${units.Y}Y` : ""}${units.Mo ? `${units.Mo}M` : ""}${units.W ? `${units.W}W` : ""}${units.D ? `${units.D}D` : ""}`;
+  const time = `${units.H ? `${units.H}H` : ""}${units.Mi ? `${units.Mi}M` : ""}`;
+  return `P${date}${time ? `T${time}` : ""}` === "P" ? null : `P${date}${time ? `T${time}` : ""}`;
+}
+
 export interface NormaliseOptions {
   // From an agent: links become site names and card numbers are masked.
   readonly fromAgent: boolean;
+  // The time zone a date-time with no zone of its own is read in (the person's account zone).
+  readonly zone?: string;
 }
 
 export interface NormalisedFields {
@@ -124,26 +232,38 @@ function scalar(value: unknown): string | null {
   return null;
 }
 
+/** The field a raw key lands in for `type`: its own name, else the first alias target the kind has. */
+export function fieldFor(type: Pick<RecordTypeDef, "fields">, rawKey: string): string {
+  const plain = fieldKey(rawKey);
+  const known = new Set(type.fields.map((field) => field.key));
+  if (known.has(plain)) return plain;
+  return ALIASES[plain]?.find((target) => known.has(target)) ?? plain;
+}
+
 /**
- * The fields to keep for a record of `type`, from `raw` (an agent's or form's field map).
- * `hasDueDate` says whether a due date was given separately, so one is not lifted from the
- * fields. A null or empty value leaves the field out.
+ * The fields to keep for a record of `type`, from `raw` (an agent's or form's field map) and any
+ * labelled `details`. `hasDueDate` says whether a due date was given separately, so one is not
+ * lifted from the fields. A null or empty value leaves the field out.
  */
 export function normaliseFields(
   type: RecordTypeDef,
   raw: Readonly<Record<string, unknown>>,
   hasDueDate: boolean,
   options: NormaliseOptions,
+  details: readonly { readonly label: string; readonly value: string }[] = [],
 ): NormalisedFields {
   const known = new Map<string, FieldDef>(type.fields.map((field) => [field.key, field]));
+  const zone = options.zone && isTimeZone(options.zone) ? options.zone : "UTC";
   const fields: Record<string, string> = {};
   const problems: string[] = [];
   let dueDate: string | null = null;
   let extras = 0;
   let linksCut = false;
   let cardsMasked = false;
+  let assumedZone = false;
 
-  for (const [rawKey, rawValue] of Object.entries(raw)) {
+  const entries: [string, unknown][] = [...Object.entries(raw), ...details.map((detail) => [detail.label, detail.value] as [string, unknown])];
+  for (const [rawKey, rawValue] of entries) {
     let value = scalar(rawValue);
     if (value === null) {
       if (rawValue !== null && rawValue !== undefined) problems.push(`Left out "${rawKey}": give a plain text, number or date value.`);
@@ -153,12 +273,11 @@ export function normaliseFields(
 
     const plain = fieldKey(rawKey);
     if (!plain) continue;
-    const aliased = ALIASES[plain];
-    const key = known.has(plain) || !aliased || !known.has(aliased) ? plain : aliased;
+    const key = fieldFor(type, rawKey);
     const def = known.get(key);
 
     // A due date given as a field becomes the record's due date.
-    if (!def && type.due && !hasDueDate && dueDate === null && DUE_KEYS.includes(plain)) {
+    if (!def && type.due && type.lifecycle !== "booking" && !hasDueDate && dueDate === null && DUE_KEYS.includes(plain)) {
       const date = calendarDate(value);
       if (date) {
         dueDate = date;
@@ -185,40 +304,60 @@ export function normaliseFields(
       continue;
     }
 
+    const leftOut = (why: string) => problems.push(`Left out "${rawKey}": ${why}`);
     switch (def.kind) {
       case "date": {
         const date = calendarDate(value);
-        if (!date) {
-          problems.push(`Left out "${rawKey}": dates are YYYY-MM-DD.`);
-          continue;
-        }
+        if (!date) { leftOut("dates are YYYY-MM-DD."); continue; }
         fields[key] = date;
+        break;
+      }
+      case "datetime": {
+        const when = canonicalDateTime(value, zone);
+        if (!when) { leftOut("give a date (YYYY-MM-DD) or a date and time, ideally with its time zone, e.g. 2026-12-03T19:30[Australia/Sydney]."); continue; }
+        assumedZone ||= when.assumedZone;
+        fields[key] = when.value;
+        break;
+      }
+      case "month_year": {
+        const month = monthYear(value);
+        if (!month) { leftOut("give the month and year as YYYY-MM."); continue; }
+        fields[key] = month;
         break;
       }
       case "amount": {
         const amount = plainAmount(value);
-        if (amount === null) {
-          problems.push(`Left out "${rawKey}": give the amount as a plain number, with the currency in "currency".`);
-          continue;
-        }
+        if (amount === null) { leftOut('give the amount as a plain number, with the currency in "currency".'); continue; }
         fields[key] = amount;
+        break;
+      }
+      case "number": {
+        const number = plainNumber(value);
+        if (number === null) { leftOut("give a plain number."); continue; }
+        fields[key] = number;
+        break;
+      }
+      case "boolean": {
+        const answer = yesNo(value);
+        if (answer === null) { leftOut("give yes or no."); continue; }
+        fields[key] = answer;
+        break;
+      }
+      case "duration": {
+        const duration = isoDuration(value);
+        if (duration === null) { leftOut('give a length of time, such as "45 minutes" or "12 months".'); continue; }
+        fields[key] = duration;
         break;
       }
       case "currency": {
         const code = value.toUpperCase();
-        if (!/^[A-Z]{3}$/.test(code)) {
-          problems.push(`Left out "${rawKey}": give the currency as a three-letter code, for example AUD.`);
-          continue;
-        }
+        if (!/^[A-Z]{3}$/.test(code)) { leftOut("give the currency as a three-letter code, for example AUD."); continue; }
         fields[key] = code;
         break;
       }
       case "cycle": {
         const cycle = cycleOf(value);
-        if (!cycle) {
-          problems.push(`Left out "${rawKey}": use weekly, fortnightly, monthly, quarterly, yearly or one_off.`);
-          continue;
-        }
+        if (!cycle) { leftOut("use weekly, fortnightly, monthly, quarterly, yearly or one_off."); continue; }
         fields[key] = cycle;
         break;
       }
@@ -231,13 +370,24 @@ export function normaliseFields(
       }
       case "website": {
         const site = siteName(value);
-        if (!site) {
-          problems.push(`Left out "${rawKey}": give a website such as example.com.au.`);
-          continue;
-        }
+        if (!site) { leftOut("give a website such as example.com.au."); continue; }
         fields[key] = site;
         break;
       }
+      case "email": {
+        const email = value.toLowerCase();
+        if (email.length > 254 || !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email)) { leftOut("give an email address."); continue; }
+        fields[key] = email;
+        break;
+      }
+      case "person": {
+        if (value.includes("@") || /\d{4,}/.test(value)) { leftOut("give a first name or relationship only, such as Mum or Sam."); continue; }
+        fields[key] = value.slice(0, MAX_PERSON_CHARS);
+        break;
+      }
+      case "place":
+        fields[key] = value.slice(0, MAX_PLACE_CHARS);
+        break;
       case "long_text":
         fields[key] = value.slice(0, MAX_NOTES_CHARS);
         break;
@@ -248,10 +398,11 @@ export function normaliseFields(
 
   if (linksCut) problems.push("Links are kept as the website's name only.");
   if (cardsMasked) problems.push("Card numbers are kept as their last 4 digits only.");
+  if (assumedZone) problems.push(`Times without a time zone were read in ${zone}. Add the zone, e.g. [Australia/Sydney], if that's wrong.`);
   return { fields, dueDate, problems };
 }
 
-/** A record's display name: its name, else its provider, else its item, else the type's label. */
+/** A record's display name: its name, else its provider, else its item, else the kind's label. */
 export function recordDisplayName(type: RecordTypeDef, fields: Readonly<Record<string, unknown>>): string {
   for (const key of ["name", "provider", "item", "service", "merchant", "title"]) {
     const value = fields[key];
@@ -262,41 +413,50 @@ export function recordDisplayName(type: RecordTypeDef, fields: Readonly<Record<s
 
 /**
  * The name a stored record goes by anywhere it is listed: its own name or title (older and
- * agent-written records use `title` or `what`), else its provider or item, else the first
- * filled-in value, else its type in words — never a stored enum.
+ * agent-written records use `title` or `what`), else — for a kind identified by something other
+ * than its provider (a plate, a country, a flight) — its kind and that ("Registration · BX12AB"),
+ * else its provider or item, else (an older record) its first filled-in value, else its kind.
+ * `ownType` is false for a record saved before kinds existed.
  */
-export function storedRecordName(kind: StoredKind, storedType: string | null | undefined, fields: Readonly<Record<string, unknown>>): string {
+export function storedRecordName(type: RecordTypeDef, fields: Readonly<Record<string, unknown>>, ownType = true): string {
   const text = (key: string) => (typeof fields[key] === "string" ? (fields[key] as string).trim() : "");
   for (const key of ["name", "title", "item", "what"]) if (text(key)) return text(key);
-  const type = typeOfRecord(kind, storedType);
-  const typed = Boolean(storedType) && type.id === storedType;
-  // A typed record identified by something other than its provider (a plate, a country, a
-  // state) goes by its type and that ("Registration · BX12AB", "Passport · Australia"), so a
-  // rego isn't named after the registration authority.
-  if (typed && !type.identity.includes("provider")) {
-    const lead = type.identity.find((part) => !["provider", "parent", "title", "name"].includes(part) && text(part));
+  const first = type.identity[0] ?? [];
+  if (ownType && !first.includes("provider")) {
+    const lead = first.find((part) => !["provider", "parent", "title", "name", "starts_at"].includes(part) && text(part));
     if (lead) return `${type.label} · ${text(lead)}`;
   }
   for (const key of ["provider", "service", "merchant"]) if (text(key)) return text(key);
-  if (typed) return type.label;
-  const first = Object.values(fields).find((value): value is string => typeof value === "string" && value.trim() !== "");
-  return first?.trim() ?? type.label;
+  if (ownType) return type.label;
+  const any = Object.values(fields).find((value): value is string => typeof value === "string" && value.trim() !== "");
+  return any?.trim() ?? type.label;
 }
 
-/** The values that identify one record of `type` (normalised), or null when any is missing. */
-export function identityParts(
+/**
+ * Each identity alternative of `type` this record can fill: the field keys and their normalised
+ * values (a date-time matches on its date). A singleton kind has one empty alternative.
+ */
+export function identityAlternatives(
   type: RecordTypeDef,
   fields: Readonly<Record<string, unknown>>,
   parentId: string | null,
-): string[] | null {
-  if (type.singleton) return [];
-  if (type.identity.length === 0) return null;
-  const parts: string[] = [];
-  for (const key of type.identity) {
-    const value = key === "parent" ? parentId : key === "title" ? recordDisplayName(type, fields) : fields[key];
-    const text = typeof value === "string" ? value.toLowerCase().replace(/[^\p{L}\p{N}]/gu, "") : "";
-    if (text === "" || (key === "title" && value === type.label)) return null;
-    parts.push(text);
+): { readonly keys: readonly string[]; readonly values: readonly string[] }[] {
+  if (type.singleton) return [{ keys: [], values: [] }];
+  const alternatives: { keys: readonly string[]; values: string[] }[] = [];
+  for (const keys of type.identity) {
+    if (keys.length === 0) continue;
+    const values: string[] = [];
+    for (const key of keys) {
+      const def = type.fields.find((field) => field.key === key);
+      const raw = key === "parent" ? parentId : key === "title" ? recordDisplayName(type, fields) : fields[key];
+      if (key === "title" && raw === type.label) break;
+      let text = typeof raw === "string" ? raw : "";
+      if (def?.kind === "datetime" || def?.kind === "date") text = text.slice(0, 10);
+      text = text.toLowerCase().replace(/[^\p{L}\p{N}]/gu, "");
+      if (text === "") break;
+      values.push(text);
+    }
+    if (values.length === keys.length) alternatives.push({ keys, values });
   }
-  return parts;
+  return alternatives;
 }

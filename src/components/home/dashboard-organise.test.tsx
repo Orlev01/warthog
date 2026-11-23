@@ -60,12 +60,14 @@ test("each agent links to its workspace and its activity, with the last day's co
   assert.ok(shown.includes("last active Today, 3:04 pm"));
 });
 
-test("Home shows the soonest five reminders and a way to the rest", () => {
+test("Home shows the soonest five reminders and a way to the rest in Life admin's Upcoming", () => {
   const reminders = Array.from({ length: 7 }, (_, i) => ({ id: `r${i}`, title: `Reminder ${i}`, due: `${i + 1} Dec 2026` }));
-  const shown = text(renderToStaticMarkup(<DashboardView {...base} reminders={reminders} />));
+  const html = renderToStaticMarkup(<DashboardView {...base} reminders={reminders} />);
+  const shown = text(html);
   assert.ok(shown.includes("Reminder 4"));
   assert.ok(!shown.includes("Reminder 5"));
-  assert.ok(shown.includes("View all 7 in Life admin"));
+  assert.match(html, /href="\/life-admin\?view=life&amp;tab=upcoming"[^>]*>View all 7 in Upcoming/);
+  assert.match(renderToStaticMarkup(<DashboardView {...base} reminders={reminders.slice(0, 2)} />), /href="\/life-admin\?view=life&amp;tab=upcoming"[^>]*>See what&#x27;s coming up/);
 });
 
 // Life admin's typed records (docs/adr/life-admin-profile.md): each reminder opens its record

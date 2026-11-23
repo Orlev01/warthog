@@ -1,6 +1,6 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { noticeField, recordDate, recordFields, recordIds, recordOffsets, recordParent, recordReturnPath, recordStatus, recordTab, recordTypeId, taskReturnPath } from "./form-inputs";
+import { bookingFilters, combineDateTime, itemPath, journalInput, noticeField, recordDate, recordFields, recordIds, recordOffsets, recordParent, recordReturnPath, recordStatus, recordTab, recordTypeId, taskReturnPath } from "./form-inputs";
 
 test("record form keeps personal fields separate from metadata and action internals", () => {
   const form = new FormData();
@@ -47,11 +47,11 @@ test("the add and edit forms' type, parent and id inputs", () => {
   assert.equal(recordTypeId(form), "");
   assert.equal(recordParent(form), undefined, "no Belongs to choice: the link is kept");
   assert.deepEqual(recordIds(form), []);
-  form.set("type", "vehicle.registration");
+  form.set("type", "vehicles.registration");
   form.set("parentId", "");
   form.append("recordId", "a");
   form.append("recordId", "b");
-  assert.equal(recordTypeId(form), "vehicle.registration");
+  assert.equal(recordTypeId(form), "vehicles.registration");
   assert.equal(recordParent(form), null, "Not linked clears it");
   assert.deepEqual(recordIds(form), ["a", "b"]);
   form.set("parentId", "0b4c6c7e-1c1a-4b55-9a49-5e2f0d6d1a01");
@@ -99,4 +99,51 @@ test("a task action returns to the Tasks view, keeping a well-formed assignee fi
   for (const value of ["", "https://evil.test", "any&notice=saved", "__proto__", `${agentId}#x`, "Zephyr"]) {
     assert.equal(withFilter(value), "/life-admin?view=tasks", `ignored: ${value}`);
   }
+});
+
+test("the new tabs open by name; anything else opens Your things", () => {
+  for (const tab of ["upcoming", "bookings", "checklist", "things"] as const) assert.equal(recordTab(tab), tab);
+  assert.equal(recordTab("bookings&x=1"), "things");
+});
+
+test("a date-time picker's wall time and zone combine on the server into the canonical stored value", () => {
+  assert.equal(combineDateTime("2026-12-03T19:30", "Australia/Sydney"), "2026-12-03T19:30+11:00[Australia/Sydney]");
+  assert.equal(combineDateTime("2026-07-03T19:30", "Australia/Sydney"), "2026-07-03T19:30+10:00[Australia/Sydney]", "the offset follows daylight saving");
+  assert.equal(combineDateTime("2027-01-03T00:30", "Asia/Tokyo"), "2027-01-03T00:30+09:00[Asia/Tokyo]");
+  assert.equal(combineDateTime("2026-12-03T19:30", "offset:+05:30"), "2026-12-03T19:30+05:30", "a value saved with an offset only keeps it");
+  assert.equal(combineDateTime("2026-12-03T19:30", "Mars/Olympus"), "2026-12-03T19:30", "an unknown zone leaves it for the person's own zone");
+  assert.equal(combineDateTime("2026-12-03T00:00", "Australia/Sydney", "2026-12-03"), "2026-12-03", "a date alone stays a date unless a time is added");
+  assert.equal(combineDateTime("2026-12-03T09:15", "Australia/Sydney", "2026-12-03"), "2026-12-03T09:15+11:00[Australia/Sydney]");
+  assert.equal(combineDateTime("", "Australia/Sydney"), "", "an emptied picker clears the field");
+  assert.equal(combineDateTime("next Friday", "Australia/Sydney"), "next Friday", "anything else is left for the record service to report");
+
+  const form = new FormData();
+  form.set("recordFormVersion", "2");
+  form.set("field:starts_at", "2026-12-03T19:30");
+  form.set("zone:starts_at", "Asia/Tokyo");
+  form.set("field:cancel_by", "2026-12-01T00:00");
+  form.set("zone:cancel_by", "Australia/Sydney");
+  form.set("dateonly:cancel_by", "2026-12-01");
+  form.set("field:provider", "Sushi Saito");
+  assert.deepEqual(recordFields(form), { starts_at: "2026-12-03T19:30+09:00[Asia/Tokyo]", cancel_by: "2026-12-01", provider: "Sushi Saito" }, "the zone and date-only markers are never fields of their own");
+});
+
+test("the item page's inputs: its address, and the journal form", () => {
+  assert.equal(itemPath("0F8A4B2C-1D3E-4F5A-8B9C-0D1E2F3A4B5C"), "/life-admin/items/0f8a4b2c-1d3e-4f5a-8b9c-0d1e2f3a4b5c");
+  for (const bad of ["../activity", "1", "", null, "https://example.test"]) assert.equal(itemPath(bad), "/life-admin?view=life&tab=things", String(bad));
+  const form = new FormData();
+  form.set("recordId", "r1");
+  form.set("entryKind", "next");
+  form.set("text", "Book the roadworthy");
+  form.set("due", "2026-11-28");
+  assert.deepEqual(journalInput(form), { id: "r1", kind: "next", text: "Book the roadworthy", due: "2026-11-28" });
+  form.set("entryKind", "note");
+  assert.equal(journalInput(form).due, null, "only a next step takes a due date");
+});
+
+test("the Bookings filters keep only well-formed values", () => {
+  assert.deepEqual(bookingFilters({ category: "travel", for_whom: " Mum ", state: "upcoming", page: "2" }), { category: "travel", forWhom: "Mum", state: "upcoming", page: 2 });
+  assert.deepEqual(bookingFilters({ category: "x_7kq2mz" }), { category: "x_7kq2mz" }, "a category of the person's own");
+  assert.deepEqual(bookingFilters({ category: "Travel'; --", state: "booked", page: "0", for_whom: "x".repeat(61) }), {});
+  assert.deepEqual(bookingFilters({ page: "-1" }), {});
 });

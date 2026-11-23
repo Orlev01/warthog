@@ -18,6 +18,10 @@ export const COLLECTION_LIMITS = {
   // Life-admin records (docs/adr/life-admin-profile.md): far above a real person's admin,
   // well below what would fill the database. Counted on the fields blob, the bulk of a row.
   life_admin_records: { rows: 2000, bytes: 20_000_000, columns: ["fields"] },
+  // A person's own categories and their built-in settings, and every item's journal
+  // (docs/adr/life-admin-journal.md): far above a heavy user's decade of bookings.
+  life_admin_categories: { rows: 80, bytes: 400_000, columns: ["definition"] },
+  life_admin_journal: { rows: 50_000, bytes: 25_000_000, columns: ["body"] },
 } as const;
 export async function assertCollectionCapacity(
   db: Db,
