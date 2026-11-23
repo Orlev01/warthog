@@ -44,11 +44,9 @@ test("every kind has the common fields once, and bookings and cases their own", 
     if (type.lifecycle === "booking") {
       assert.ok(keys.includes("starts_at") && keys.includes("ends_at"), type.id);
       assert.ok(type.defaultMinutes, type.id);
-      assert.ok(!type.holdsAddress, `${type.id}: a booking never holds the address`);
     }
     if (type.lifecycle === "case") {
       assert.ok(keys.includes("stage") && keys.includes("next_step"), type.id);
-      assert.ok(!type.holdsAddress, `${type.id}: a case never holds the address`);
     }
   }
   assert.equal(BUILT_IN.type("vehicles.insurance")!.fields.find((field) => field.key === "provider")!.label, "Insurer", "a kind's own label wins");
@@ -149,4 +147,35 @@ test("built-in categories stay hidden until used, or shown, or set aside", () =>
   assert.equal(visibilityOf(false, "show", "builtin"), "shown");
   assert.equal(visibilityOf(true, "not_for_me", "builtin"), "not_for_me");
   assert.equal(visibilityOf(false, undefined, "custom"), "shown");
+});
+
+// Founder, 23 Nov 2026: "what is my account name, what is my account number, what email address
+// is it associated with … meaningful data should be carried over and stored." An account, policy
+// or membership says what identifies it to the person; a thing, an ID document, a booking, a
+// matter in progress or a government record has no account fields.
+test("accounts, policies and memberships have an account name, their number and the email they're registered to, in that order", () => {
+  const accounts = BUILT_IN_TYPES.filter((type) => type.account).map((type) => type.id);
+  for (const id of ["investing.super", "utilities.energy", "health.insurance", "vehicles.insurance", "subscriptions.service", "subscriptions.loyalty", "banking.card", "business.domain"]) {
+    assert.ok(accounts.includes(id), `${id} is an account`);
+  }
+  for (const id of ["vehicles.vehicle", "travel.trip", "travel.flight", "id.passport", "other.case", "government.payment", "legal.document", "health.script", "belongings.receipt"]) {
+    assert.ok(!accounts.includes(id), `${id} isn't an account`);
+  }
+  for (const type of BUILT_IN_TYPES) {
+    const keys = type.fields.map((field) => field.key);
+    if (type.account) {
+      assert.ok(type.lifecycle === "standing" && !type.anchor && !type.documentLike, type.id);
+      assert.deepEqual(keys.slice(0, 5), ["name", "provider", "account_name", "reference", "account_email"], type.id);
+      assert.equal(type.fields.find((field) => field.key === "account_email")!.kind, "email", type.id);
+    } else {
+      assert.ok(!keys.includes("account_name") && !keys.includes("account_email"), type.id);
+    }
+  }
+  const label = (id: string, key: string) => BUILT_IN.type(id)!.fields.find((field) => field.key === key)!.label;
+  assert.equal(label("investing.super", "reference"), "Member number", "a kind's own name for its number");
+  assert.equal(label("utilities.energy", "reference"), "Account number");
+  assert.equal(label("subscriptions.service", "reference"), "Account number");
+  assert.equal(label("banking.account", "reference"), "Reference", "a bank account keeps only its last 4, never an account number");
+  assert.equal(label("investing.super", "account_name"), "Account name");
+  assert.equal(label("investing.super", "account_email"), "Account email");
 });

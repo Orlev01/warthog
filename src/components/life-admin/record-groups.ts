@@ -1,11 +1,13 @@
-// How Life admin organises a person's records (docs/adr/life-admin-profile.md): where each record
-// stands on the Records tab (Active, On hold, Finished, Cancelled) and the tab's category and
-// status filters; what's active by category — the person's own catalogue, built-in and their own
-// categories, in catalogue order — with the anchors other records belong to (a vehicle, a home,
-// a trip, a pet, or a thing of a category of their own) heading those records, most urgent
-// first; each other status as its own list, newest first; what is coming up across every
-// category; every booking, live and past; the categories still to fill in; and each row's
-// reminder setting in one plain line.
+// How Life admin organises a person's records (docs/adr/life-admin-profile.md): which of the
+// three record tabs each record belongs to — Records (what's ongoing: accounts, policies,
+// documents, the things other records belong to and matters in progress), Upcoming (what needs
+// the person soon, and every booking ahead) or History (everything finished); where each record
+// stands on Records (Active, On hold) and in History (Finished, Cancelled), with each tab's
+// category and status filters; what's active by category — the person's own catalogue, built-in
+// and their own categories, in catalogue order — with the anchors other records belong to (a
+// vehicle, a home, a pet, or a thing of a category of their own) heading those records, most
+// urgent first; what is coming up across every category; the categories still to fill in; and
+// each row's reminder setting in one plain line.
 //
 // Pure functions over plain values, shared by the view and its tests. Nothing here reads the
 // clock or decides on its own whether a record is live: the loader works out each record's
@@ -13,10 +15,10 @@
 // the person's local date (`today`) too, so a render is the same for the same props.
 
 import type { Catalogue } from "@/domain/life-admin/catalogue";
-import { PHASE_LABELS, statusFor, WINDOWS, type Phase } from "@/domain/life-admin/lifecycle";
+import { statusFor, WINDOWS, type Phase } from "@/domain/life-admin/lifecycle";
 import type { CategoryDef, RecordTypeDef, StoredKind } from "@/domain/life-admin/record-types";
 import { recordName } from "./record-format";
-import type { BookingFilters, CategoryStateView, RecordFilter, RecordListStatus, RecordPhaseView } from "./record-view-types";
+import type { CategoryStateView, HistoryFilter, RecordFilter, RecordListStatus, RecordPhaseView } from "./record-view-types";
 import { monthlyCost, type MonthlyCost } from "@/domain/life-admin/costs";
 
 // A calendar date `days` after `isoDate` (both YYYY-MM-DD), computed on the calendar in
@@ -31,13 +33,21 @@ export function joinWords(parts: readonly string[]): string {
 }
 
 // A record's reminder setting in one line, so the row says what will happen without the
-// Manage disclosure being opened. `on` is false when no reminder can be sent.
-export function reminderSummary(dueDate: string | null, offsets: readonly number[]): { on: boolean; text: string } {
-  if (offsets.length === 0) return { on: false, text: "Reminders off" };
-  if (!dueDate) return { on: false, text: "Reminders start once it has a due date" };
+// Details disclosure being opened: when the reminders go, against the date they're for
+// ("Reminds you 14 days and 1 day before · Expires 14 Dec 2026"). Nothing without a date: a
+// reminder is only ever about a date. `on` is false when no reminder will be sent.
+export function reminderSummary(
+  dueDate: string | null,
+  offsets: readonly number[],
+  dateWords?: string,
+): { on: boolean; text: string } | null {
+  if (!dueDate) return null;
+  const suffix = dateWords ? ` · ${dateWords}` : "";
+  if (offsets.length === 0) return { on: false, text: `No reminders${suffix}` };
   const days = [...new Set(offsets)].sort((a, b) => b - a);
-  const parts = days.map((day) => (day === 0 ? "on the due date" : `${day} ${day === 1 ? "day" : "days"} before`));
-  return { on: true, text: `Reminds you ${joinWords(parts)}` };
+  const before = days.filter((day) => day > 0).map((day) => `${day} ${day === 1 ? "day" : "days"}`);
+  const when = before.length ? `${joinWords(before)} before${days.includes(0) ? " and on the day" : ""}` : "on the day";
+  return { on: true, text: `Reminds you ${when}${suffix}` };
 }
 
 // "Coming up" runs from anything recently overdue through today + 60 days (the lifecycle's window).
@@ -61,6 +71,42 @@ export function phaseOfView(record: { readonly phase?: RecordPhaseView }): Recor
 }
 
 const finished = (record: { readonly phase?: RecordPhaseView }) => phaseOfView(record).bucket === "finished";
+
+// ─── Which tab a record belongs to ───────────────────────────────────────────────────
+
+export type LifeAdminSection = "records" | "upcoming" | "history";
+
+/**
+ * Where a record lives: History once it's finished (a past booking, something ended or
+ * cancelled, a resolved matter); Upcoming while it's a live booking (or a trip, the anchor
+ * bookings belong to); Records for everything else that's ongoing — accounts, policies,
+ * memberships, documents, the things other records belong to and matters in progress. A record
+ * on Records with a date coming up shows in Upcoming too.
+ */
+export function sectionOf(record: Pick<Recordish, "kind" | "type" | "phase">, catalogue: Catalogue): LifeAdminSection {
+  return sectionOfType(record, catalogue.typeOfRecord(record.kind, record.type ?? null));
+}
+
+function sectionOfType(record: { readonly phase?: RecordPhaseView }, type: Pick<RecordTypeDef, "lifecycle">): LifeAdminSection {
+  if (finished(record)) return "history";
+  return type.lifecycle === "booking" ? "upcoming" : "records";
+}
+
+/**
+ * Back to a record on Life admin, on the tab it lives on: its row on Records (with On hold shown
+ * when it's paused) or in History, or Upcoming for a live booking.
+ */
+export function lifeAdminHrefFor(record: { readonly id: string; readonly status: string; readonly phase?: RecordPhaseView }, type: Pick<RecordTypeDef, "lifecycle">): string {
+  const anchor = `#record-${encodeURIComponent(record.id)}`;
+  switch (sectionOfType(record, type)) {
+    case "history":
+      return `${historyHref({ categories: [], statuses: [] })}${anchor}`;
+    case "upcoming":
+      return "/life-admin?tab=upcoming";
+    case "records":
+      return `${recordsHref({ categories: [], statuses: listStatusOf(record) === "on_hold" ? ["active", "on_hold"] : ["active"] })}${anchor}`;
+  }
+}
 
 // When a record happens or is due, for sorting: its start, else its due date (end of the list when neither).
 function whenKey(record: Recordish): string {
@@ -130,8 +176,11 @@ export function organiseByCategory<T extends Recordish>(
 
 // ─── Records: statuses, filters, Active by category and the other statuses ──────────────
 
-// The Records tab's statuses, in the order the tab lists them: what's active always first.
+// Every status a record can have, in order: what's active always first.
 export const LIST_STATUSES: readonly RecordListStatus[] = ["active", "on_hold", "finished", "cancelled"];
+// The Records tab's statuses (what's ongoing), and History's (what's finished).
+export const RECORDS_TAB_STATUSES: readonly RecordListStatus[] = ["active", "on_hold"];
+export const HISTORY_STATUSES: readonly RecordListStatus[] = ["finished", "cancelled"];
 export const DEFAULT_LIST_STATUSES: readonly RecordListStatus[] = ["active"];
 export const LIST_STATUS_LABELS: Readonly<Record<RecordListStatus, string>> = {
   active: "Active",
@@ -150,7 +199,7 @@ const STATUS_OF_PHASE: Readonly<Record<Phase, RecordListStatus>> = {
 };
 
 /**
- * Where a record stands on the Records tab, from the phase the loader worked out: Active (live),
+ * Where a record stands, from the phase the loader worked out: Active (live),
  * On hold (paused), Finished (ended, completed, resolved) or Cancelled (cancelled, missed,
  * lapsed, and a standing item whose status is cancelled).
  */
@@ -190,12 +239,12 @@ export type RecordsView<T> = {
   // Every category with at least one record (any status), plus any chosen one, in catalogue
   // order, each counted among the chosen statuses.
   readonly categoryOptions: { readonly category: CategoryDef; readonly count: number }[];
-  // The four statuses, each counted among the chosen categories.
+  // Active and On hold, each counted among the chosen categories.
   readonly statusOptions: { readonly status: RecordListStatus; readonly label: string; readonly count: number }[];
   // What's active, by category (empty when Active isn't chosen): a category's live anchors with
   // their records, then its other records, most urgent first. No category is ever empty.
   readonly active: CategorySection<T>[];
-  // Each other chosen status that has records, in the order On hold, Finished, Cancelled.
+  // On hold, when it's chosen and has records.
   readonly others: StatusSection<T>[];
   // How many records the chosen filters show.
   readonly shown: number;
@@ -204,9 +253,9 @@ export type RecordsView<T> = {
 };
 
 /**
- * The Records tab for `filter`: what's active by category first, then each other chosen
- * status, with the category and status choices and their counts. A record is shown when its
- * own category is chosen (or none is) and its status is.
+ * The Records tab for `filter`, over the records that belong on it (`sectionOf`): what's active by
+ * category first, then On hold when it's chosen, with the category and status choices and their
+ * counts. A record is shown when its own category is chosen (or none is) and its status is.
  */
 export function recordsView<T extends Recordish & { readonly status: string }>(
   records: readonly T[],
@@ -224,7 +273,7 @@ export function recordsView<T extends Recordish & { readonly status: string }>(
   const categoryOptions = catalogue.categories
     .filter((category) => chosenCategories.has(category.id) || records.some((record) => categoryOf(record) === category.id))
     .map((category) => ({ category, count: records.filter((record) => categoryOf(record) === category.id && inStatus(record)).length }));
-  const statusOptions = LIST_STATUSES.map((status) => ({
+  const statusOptions = RECORDS_TAB_STATUSES.map((status) => ({
     status,
     label: LIST_STATUS_LABELS[status],
     count: records.filter((record) => inCategory(record) && statusOf.get(record.id) === status).length,
@@ -250,7 +299,7 @@ export function recordsView<T extends Recordish & { readonly status: string }>(
     if (x === UNDATED || y === UNDATED) return x === y ? nameOf(a).localeCompare(nameOf(b)) : x === UNDATED ? 1 : -1;
     return y.localeCompare(x) || nameOf(a).localeCompare(nameOf(b));
   };
-  const others: StatusSection<T>[] = LIST_STATUSES.filter((status) => status !== "active" && chosenStatuses.has(status))
+  const others: StatusSection<T>[] = RECORDS_TAB_STATUSES.filter((status) => status !== "active" && chosenStatuses.has(status))
     .map((status) => ({
       status,
       label: LIST_STATUS_LABELS[status],
@@ -270,14 +319,15 @@ export function recordsView<T extends Recordish & { readonly status: string }>(
   return { categoryOptions, statusOptions, active, others, shown: shownRecords.length, monthly };
 }
 
-/** The Records tab with these filters: each chosen value repeated, the default status left out. */
+/** The Records tab (Life admin's first) with these filters: each chosen value repeated, the default status left out. */
 export function recordsHref(filter: RecordFilter): string {
-  const query = new URLSearchParams([["view", "life"], ["tab", "records"]]);
+  const query = new URLSearchParams();
   for (const category of filter.categories) query.append("category", category);
-  const statuses = LIST_STATUSES.filter((status) => filter.statuses.includes(status));
+  const statuses = RECORDS_TAB_STATUSES.filter((status) => filter.statuses.includes(status));
   const isDefault = statuses.length === DEFAULT_LIST_STATUSES.length && statuses.every((status) => DEFAULT_LIST_STATUSES.includes(status));
   if (!isDefault) for (const status of statuses) query.append("status", status);
-  return `/life-admin?${query.toString()}`;
+  const search = query.toString();
+  return search ? `/life-admin?${search}` : "/life-admin";
 }
 
 // ─── Fill in the rest ────────────────────────────────────────────────────────────────
@@ -322,18 +372,29 @@ export type UpcomingSections<T> = {
   readonly overdue: T[];
   readonly week: T[];
   readonly later: T[];
+  // Bookings further out than the coming-up window, soonest first.
+  readonly ahead: T[];
+  // Bookings with no date yet.
+  readonly undated: T[];
 };
+
+// A booking's live phases: only bookings have these.
+const LIVE_BOOKING: ReadonlySet<Phase> = new Set(["pending", "upcoming", "in_progress"]);
 
 /**
  * What is coming up, across every category: happening now, overdue (recently, within the
  * lifecycle's window), this week (today to 7 days) and later (to 60 days), each soonest first
- * (overdue: longest overdue first). Only what the lifecycle says is coming up is listed.
+ * (overdue: longest overdue first); then every other live booking — further ahead, soonest
+ * first, and those with no date yet. Only what the lifecycle says is coming up is listed, and
+ * every live booking.
  */
 export function upcomingSections<T extends Recordish>(records: readonly T[]): UpcomingSections<T> {
   const now: T[] = [];
   const overdue: T[] = [];
   const week: T[] = [];
   const later: T[] = [];
+  const ahead: T[] = [];
+  const undated: T[] = [];
   for (const record of records) {
     const phase = phaseOfView(record);
     if (!phase.live && phase.phase !== "pending") continue;
@@ -341,43 +402,43 @@ export function upcomingSections<T extends Recordish>(records: readonly T[]): Up
       now.push(record);
       continue;
     }
-    if (!phase.comingUp || phase.inDays === undefined) continue;
+    const booking = LIVE_BOOKING.has(phase.phase);
+    if (booking && phase.inDays === undefined && !phase.starts) {
+      undated.push(record);
+      continue;
+    }
+    if (!phase.comingUp || phase.inDays === undefined) {
+      if (booking) ahead.push(record);
+      continue;
+    }
     if (phase.inDays < 0) overdue.push(record);
     else if (phase.inDays <= 7) week.push(record);
     else later.push(record);
   }
   const soonest = (list: T[]) => list.sort((a, b) => whenKey(a).localeCompare(whenKey(b)));
-  return { now: soonest(now), overdue: soonest(overdue), week: soonest(week), later: soonest(later) };
+  return { now: soonest(now), overdue: soonest(overdue), week: soonest(week), later: soonest(later), ahead: soonest(ahead), undated };
 }
 
-// ─── Bookings ────────────────────────────────────────────────────────────────────────
+// ─── History ─────────────────────────────────────────────────────────────────────────
 
-export const BOOKINGS_PAGE_SIZE = 30;
-const LIVE_BOOKING: ReadonlySet<Phase> = new Set(["pending", "upcoming", "in_progress"]);
+export const HISTORY_PAGE_SIZE = 30;
 
-export type BookingRow<T> = { readonly record: T; readonly type: RecordTypeDef; readonly category?: CategoryDef; readonly anchor: T | null };
+export type HistoryRow<T> = StatusRow<T> & { readonly status: RecordListStatus };
 
-export type BookingsView<T> = {
-  readonly live: BookingRow<T>[];
-  // Past bookings on this page, newest first, by the month they started in.
-  readonly past: { readonly key: string; readonly label: string; readonly rows: BookingRow<T>[] }[];
-  readonly pastTotal: number;
+export type HistoryView<T> = {
+  // This page's rows, newest first, by the month they happened in; the undated last, by name.
+  readonly months: { readonly key: string; readonly label: string; readonly rows: HistoryRow<T>[] }[];
+  // Every finished record, whatever the filters.
+  readonly total: number;
+  // How many the chosen filters show (across pages).
+  readonly shown: number;
   readonly page: number;
   readonly pages: number;
-  // What the filters can offer: the categories, people and states present among the bookings,
-  // and any chosen one besides, so it can be unticked.
-  readonly options: {
-    readonly categories: CategoryDef[];
-    readonly forWhom: string[];
-    readonly states: { readonly phase: Phase; readonly label: string }[];
-  };
-  // How many bookings each choice would show with the other filters as they are.
-  readonly counts: {
-    readonly categories: Readonly<Record<string, number>>;
-    readonly forWhom: Readonly<Record<string, number>>;
-    readonly states: Readonly<Record<string, number>>;
-  };
-  readonly total: number;
+  // Every category with something finished, plus any chosen one, in catalogue order, each
+  // counted among the chosen statuses.
+  readonly categoryOptions: { readonly category: CategoryDef; readonly count: number }[];
+  // Finished and Cancelled, each counted among the chosen categories.
+  readonly statusOptions: { readonly status: RecordListStatus; readonly label: string; readonly count: number }[];
 };
 
 const MONTH_KEY = (zone: string) => new Intl.DateTimeFormat("en-CA", { year: "numeric", month: "2-digit", timeZone: zone });
@@ -392,83 +453,83 @@ function zoneOr(zone: string): string {
   }
 }
 
+const ISO_DATE = /^\d{4}-\d{2}-\d{2}$/;
+
+// When a finished record happened, for History: its start (a booking, a trip), else its date
+// (an expiry, a renewal, the date it ended), else the day it was bought or opened. None ⇒ undated.
+function historyWhen(record: Recordish): string | null {
+  const phase = phaseOfView(record);
+  if (phase.starts) return phase.starts;
+  const day = [record.dueDate, record.fields.purchased_on, record.fields.opened_on].find((value) => typeof value === "string" && ISO_DATE.test(value.slice(0, 10)));
+  return day ? `${day.slice(0, 10)}T12:00:00.000Z` : null;
+}
+
 /**
- * Every booking-lifecycle record from every category, built-in or the person's own: live ones
- * (waiting to be confirmed, upcoming, happening now) soonest first, and past ones (completed,
- * cancelled, missed, lapsed) newest first, grouped by month and paged. `filters` narrow both to
- * any of the chosen categories, people ("for whom") and states; values that match nothing simply
- * show nothing.
+ * History: every finished record (`sectionOf`), of any kind and category, built-in or the
+ * person's own — completed, cancelled, missed and lapsed bookings, things ended or cancelled,
+ * matters resolved — newest first, grouped by month (the undated last, by name), a page at a
+ * time. `filter` narrows it to any of the chosen categories and statuses (none chosen ⇒ all).
  */
-export function bookingsView<T extends Recordish>(
+export function historyView<T extends Recordish & { readonly status: string }>(
   records: readonly T[],
   catalogue: Catalogue,
-  filters: BookingFilters,
+  filter: HistoryFilter,
   zone: string,
-  pageSize = BOOKINGS_PAGE_SIZE,
-): BookingsView<T> {
-  const byId = new Map(records.map((record) => [record.id, record]));
-  const all: BookingRow<T>[] = [];
-  for (const record of records) {
-    const type = catalogue.typeOfRecord(record.kind, record.type ?? null);
-    if (type.lifecycle !== "booking") continue;
-    const parent = record.parentId && record.parentId !== record.id ? byId.get(record.parentId) ?? null : null;
-    all.push({ record, type, category: catalogue.category(type.category), anchor: parent });
-  }
-  const forWhomOf = (row: BookingRow<T>) => row.record.fields.for_whom?.trim() ?? "";
-  const chosen = {
-    categories: new Set(filters.categories ?? []),
-    forWhom: new Set((filters.forWhom ?? []).map((who) => who.toLowerCase())),
-    states: new Set<string>(filters.states ?? []),
-  };
-  const matches = {
-    categories: (row: BookingRow<T>) => chosen.categories.size === 0 || chosen.categories.has(row.type.category),
-    forWhom: (row: BookingRow<T>) => chosen.forWhom.size === 0 || chosen.forWhom.has(forWhomOf(row).toLowerCase()),
-    states: (row: BookingRow<T>) => chosen.states.size === 0 || chosen.states.has(phaseOfView(row.record).phase),
-  };
-  // What each choice would show with the other two filters as they are.
-  const without = (skip: keyof typeof matches) => all.filter((row) => (Object.keys(matches) as (keyof typeof matches)[]).every((key) => key === skip || matches[key](row)));
-  const countBy = (list: BookingRow<T>[], keyOf: (row: BookingRow<T>) => string) => {
-    const out: Record<string, number> = {};
-    for (const row of list) out[keyOf(row)] = (out[keyOf(row)] ?? 0) + 1;
-    return out;
-  };
-  const people = [...new Set(all.map(forWhomOf).filter(Boolean))];
-  for (const who of filters.forWhom ?? []) if (!people.some((person) => person.toLowerCase() === who.toLowerCase())) people.push(who);
-  const states = new Map(all.map((row) => { const phase = phaseOfView(row.record); return [phase.phase, phase.label] as const; }));
-  for (const state of filters.states ?? []) if (!states.has(state as Phase) && state in PHASE_LABELS) states.set(state as Phase, PHASE_LABELS[state as Phase]);
-  const options = {
-    categories: catalogue.categories.filter((category) => chosen.categories.has(category.id) || all.some((row) => row.type.category === category.id)),
-    forWhom: people.sort((a, b) => a.localeCompare(b)),
-    states: [...states.entries()].map(([phase, label]) => ({ phase, label })),
-  };
-  const byCategory = countBy(without("categories"), (row) => row.type.category);
-  const byPerson = countBy(without("forWhom"), (row) => forWhomOf(row).toLowerCase());
-  const byState = countBy(without("states"), (row) => phaseOfView(row.record).phase);
-  const counts = {
-    categories: Object.fromEntries(options.categories.map((category) => [category.id, byCategory[category.id] ?? 0])),
-    forWhom: Object.fromEntries(options.forWhom.map((who) => [who, byPerson[who.toLowerCase()] ?? 0])),
-    states: Object.fromEntries(options.states.map((state) => [state.phase, byState[state.phase] ?? 0])),
-  };
-  const rows = all.filter((row) => matches.categories(row) && matches.forWhom(row) && matches.states(row));
+  pageSize = HISTORY_PAGE_SIZE,
+): HistoryView<T> {
+  const byId = new Map(records.map((record) => [record.id, record] as const));
+  const all: HistoryRow<T>[] = records
+    .filter((record) => sectionOf(record, catalogue) === "history")
+    .map((record) => {
+      const type = catalogue.typeOfRecord(record.kind, record.type ?? null);
+      const parent = record.parentId && record.parentId !== record.id ? byId.get(record.parentId) ?? null : null;
+      return { record, type, category: catalogue.category(type.category), anchor: parent, status: listStatusOf(record) };
+    });
+  const chosenCategories = new Set(filter.categories);
+  const chosenStatuses = new Set(filter.statuses);
+  const inCategory = (row: HistoryRow<T>) => chosenCategories.size === 0 || chosenCategories.has(row.type.category);
+  const inStatus = (row: HistoryRow<T>) => chosenStatuses.size === 0 || chosenStatuses.has(row.status);
 
-  const live = rows
-    .filter((row) => LIVE_BOOKING.has(phaseOfView(row.record).phase))
-    .sort((a, b) => whenKey(a.record).localeCompare(whenKey(b.record)));
-  const pastAll = rows
-    .filter((row) => !LIVE_BOOKING.has(phaseOfView(row.record).phase))
-    .sort((a, b) => whenKey(b.record).localeCompare(whenKey(a.record)));
-  const pages = Math.max(1, Math.ceil(pastAll.length / pageSize));
-  const page = Math.min(Math.max(1, filters.page ?? 1), pages);
+  const categoryOptions = catalogue.categories
+    .filter((category) => chosenCategories.has(category.id) || all.some((row) => row.type.category === category.id))
+    .map((category) => ({ category, count: all.filter((row) => row.type.category === category.id && inStatus(row)).length }));
+  const statusOptions = HISTORY_STATUSES.map((status) => ({
+    status,
+    label: LIST_STATUS_LABELS[status],
+    count: all.filter((row) => inCategory(row) && row.status === status).length,
+  }));
+
+  const nameOf = (row: HistoryRow<T>) => recordName(row.type, row.record.fields, Boolean(row.record.type)).name;
+  const when = new Map(all.map((row) => [row.record.id, historyWhen(row.record)] as const));
+  const rows = all
+    .filter((row) => inCategory(row) && inStatus(row))
+    .sort((a, b) => {
+      const [x, y] = [when.get(a.record.id), when.get(b.record.id)];
+      if (!x || !y) return x === y ? nameOf(a).localeCompare(nameOf(b)) : x ? -1 : 1;
+      return y.localeCompare(x) || nameOf(a).localeCompare(nameOf(b));
+    });
+
+  const pages = Math.max(1, Math.ceil(rows.length / pageSize));
+  const page = Math.min(Math.max(1, filter.page ?? 1), pages);
   const tz = zoneOr(zone);
-  const past: { key: string; label: string; rows: BookingRow<T>[] }[] = [];
-  for (const row of pastAll.slice((page - 1) * pageSize, page * pageSize)) {
-    const when = whenKey(row.record);
-    const at = when === "9999" ? null : new Date(when);
-    const key = at ? MONTH_KEY(tz).format(at).slice(0, 7) : "undated";
-    const label = at ? MONTH_LABEL(tz).format(at) : "No date";
-    const group = past[past.length - 1];
+  const months: { key: string; label: string; rows: HistoryRow<T>[] }[] = [];
+  for (const row of rows.slice((page - 1) * pageSize, page * pageSize)) {
+    const at = when.get(row.record.id);
+    const date = at ? new Date(at) : null;
+    const key = date ? MONTH_KEY(tz).format(date).slice(0, 7) : "undated";
+    const label = date ? MONTH_LABEL(tz).format(date) : "No date";
+    const group = months[months.length - 1];
     if (group && group.key === key) group.rows.push(row);
-    else past.push({ key, label, rows: [row] });
+    else months.push({ key, label, rows: [row] });
   }
-  return { live, past, pastTotal: pastAll.length, page, pages, options, counts, total: all.length };
+  return { months, total: all.length, shown: rows.length, page, pages, categoryOptions, statusOptions };
+}
+
+/** The History tab with these filters: each chosen value repeated, the first page left out. */
+export function historyHref(filter: HistoryFilter): string {
+  const query = new URLSearchParams([["tab", "history"]]);
+  for (const category of filter.categories) query.append("history_category", category);
+  for (const status of HISTORY_STATUSES.filter((status) => filter.statuses.includes(status))) query.append("history_status", status);
+  if (filter.page && filter.page > 1) query.set("history_page", String(filter.page));
+  return `/life-admin?${query.toString()}`;
 }

@@ -14,6 +14,7 @@ import * as React from "react";
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import { renderToStaticMarkup } from "react-dom/server";
+import { phased } from "./phase-fixture";
 
 import { LifeAdminView, type LifeAdminRecordView, type LifeAdminViewProps } from "./life-admin-view";
 import { declineConsequence, fillInPrompt } from "./records-view";
@@ -79,7 +80,6 @@ function render(over: Partial<LifeAdminViewProps> = {}): string {
     <LifeAdminView
       today={TODAY}
       records={[REGO, CARD, HEALTH, BIKE, VAN, PET]}
-      checklist={[]}
       addRecordAction={noop}
       editRecordAction={noop}
       deleteRecordAction={noop}
@@ -357,8 +357,7 @@ test("step one: a GET form picks the type from a list grouped by category", () =
   const form = /<form\b([^>]*method="get"[^>]*)>([\s\S]*?)<\/form>/.exec(markup)!;
   assert.ok(form, "a plain GET form, so it works without JavaScript");
   assert.match(form[1]!, /action="\/life-admin#new-record"/);
-  assert.match(form[2]!, /<input type="hidden" name="view" value="life"\/>/);
-  assert.match(form[2]!, /<input type="hidden" name="tab" value="records"\/>/);
+  assert.doesNotMatch(form[2]!, /name="(?:view|tab)"/, "Records is the default tab: the form carries no tab of its own");
   assert.match(form[2]!, /<select\b[^>]*name="add"/);
   const groups = [...form[2]!.matchAll(/<optgroup label="([^"]+)">/g)].map((m) => m[1]!.replace(/&amp;/g, "&"));
   assert.deepEqual(groups, CATEGORIES.map((category) => category.label), "every category of the catalogue, in its order");
@@ -372,7 +371,7 @@ test("step two: the chosen type's form has every field by kind, the due date in 
   assert.ok(form, "the add form");
   assert.deepEqual(form.hidden.filter(([name]) => name === "type"), [["type", "vehicles.registration"]]);
   const names = [...form.body.matchAll(/name="(field:[^"]+)"/g)].map((m) => m[1]);
-  assert.deepEqual(names, ["field:name", "field:provider", "field:reference", "field:plate", "field:state", "field:term", "field:ctp_insurer", "field:inspection", "field:amount", "field:currency", "field:cycle", "field:for_whom", "field:contact", "field:email", "field:website", "field:notes"]);
+  assert.deepEqual(names, ["field:name", "field:provider", "field:account_name", "field:reference", "field:account_email", "field:plate", "field:state", "field:term", "field:ctp_insurer", "field:inspection", "field:amount", "field:currency", "field:cycle", "field:for_whom", "field:contact", "field:email", "field:website", "field:notes"]);
   assert.match(form.body, /inputMode="decimal"[^>]*name="field:amount"|name="field:amount"[^>]*inputMode="decimal"/, "amounts get a decimal keypad");
   assert.match(form.body, /<datalist id="[^"]+"><option value="NSW"><\/option>/, "the state's usual values are suggested");
   assert.match(form.body, /<textarea[^>]*name="field:notes"/, "notes are a text area");
@@ -404,7 +403,7 @@ test("Edit shows every field of the type, empty ones too, and the record's own o
   const markup = render({ records: [HEALTH] });
   const edit = forms(markup).find((f) => f.buttons.includes("Save changes") && /name="field:/.test(f.body))!;
   const names = [...edit.body.matchAll(/name="field:([^"]+)"/g)].map((m) => m[1]);
-  assert.deepEqual(names, ["name", "provider", "reference", "hospital_cover", "extras_cover", "excess", "scale", "ambulance", "amount", "currency", "cycle", "for_whom", "contact", "email", "website", "notes", "colour"]);
+  assert.deepEqual(names, ["name", "provider", "account_name", "reference", "account_email", "hospital_cover", "extras_cover", "excess", "scale", "ambulance", "amount", "currency", "cycle", "for_whom", "contact", "email", "website", "notes", "colour"]);
   assert.match(edit.body, /name="field:provider"[^>]*value="Medibank"|value="Medibank"[^>]*name="field:provider"/);
   assert.match(edit.body, /name="field:colour"[^>]*value="blue"|value="blue"[^>]*name="field:colour"/, "an agent's own detail stays editable");
 });
@@ -464,7 +463,8 @@ test("editing a date-time shows its own wall time and zone, and a booking's own 
     state: "pending",
     reminderOffsets: [1, 0],
   };
-  const edit = forms(render({ records: [dinner], zone: "Australia/Sydney" })).find((f) => f.buttons.includes("Save changes") && /name="field:/.test(f.body))!;
+  // Its phase worked out as the loader does: a live booking, managed from Upcoming.
+  const edit = forms(render({ records: [phased(dinner)], zone: "Australia/Sydney" })).find((f) => f.buttons.includes("Save changes") && /name="field:/.test(f.body))!;
   assert.match(edit.body, /name="field:starts_at"[^>]*value="2026-12-03T19:30"|value="2026-12-03T19:30"[^>]*name="field:starts_at"/);
   assert.match(/<select[^>]*name="zone:starts_at"[^>]*>[\s\S]*?<\/select>/.exec(edit.body)![0], /<option value="Asia\/Tokyo" selected="">/);
   assert.match(edit.body, /<input type="hidden" name="dateonly:cancel_by" value="2026-12-01"\/>/, "a date alone is kept a date unless a time is added");

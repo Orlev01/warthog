@@ -7,16 +7,15 @@
 //
 // These tests pin BEHAVIOUR (what the read DOES: the records grouped by kind for the
 // session person, each receipt flagged as having an attached file WITHOUT its bytes, the
-// moving-checklist items, the shared tasks, whose data it reads, what a handler rejects,
+// shared tasks, whose data it reads, what a handler rejects,
 // that the person id reaches the db as a BOUND parameter), never the source text of the
 // module — a later rename that preserves behaviour must not redden them.
 //
-// WHY this exists (task E14-S10; brief §"Life admin" + §"Tasks and hand-offs" +
-// §"Moving-house helper"; design §4.1): the Life Admin page needs ONE owner-scoped read
-// that sees EVERY record, checklist item and task regardless of state — distinct from the
-// agent-facing reads and never returning another person's data. It composes the
-// already-built, tested stores — `listRecordsForUser` (life-admin records, fields
-// DEK-decrypted), the moving-checklist `listForUser`, the `listTasksForUser` read — plus a
+// WHY this exists (task E14-S10; brief §"Life admin" + §"Tasks and hand-offs"; design
+// §4.1): the Life Admin page needs ONE owner-scoped read that sees EVERY record and task
+// regardless of state — distinct from the agent-facing reads and never returning another
+// person's data. It composes the already-built, tested stores — `listRecordsForUser`
+// (life-admin records, fields DEK-decrypted) and the `listTasksForUser` read — plus a
 // member-scoped look-up of which of the person's receipt records carry an attached file
 // (the `receipt_files` metadata only — never the encrypted file BYTES). It adds no crypto
 // of its own, takes the person's `dek` INJECTED (holds no key, reads no `process.env`,
@@ -44,7 +43,6 @@
 //     subscriptions: LifeAdminPageRecord[];  // kind "subscription"
 //     receipts: LifeAdminPageRecord[];        // kind "receipt_warranty" (with the attached-file flag)
 //     renewals: LifeAdminPageRecord[];        // kind "renewal_appointment"
-//     checklist: ChecklistItem[];             // the moving-checklist items (exactly listForUser)
 //     tasks: Task[];                          // the shared tasks (exactly listTasksForUser)
 //   }
 //
@@ -52,18 +50,18 @@
 //     • reads ALL of `userId`'s records (member-scoped), each fields-blob DECRYPTED under
 //       the owner's `dek`, groups them by kind, flags each receipt that carries a saved
 //       receipt file (member-scoped `receipt_files` metadata, NEVER the bytes), and
-//       returns the owner's moving-checklist items and shared tasks alongside. Every read
+//       returns the owner's shared tasks alongside. Every read
 //       is member-scoped by `userId` (the session's id, NEVER a client value).
 //
 // Acceptance criteria → tests:
-//   AC1 "Returns the owner's records grouped by kind, the moving checklist items, and the
-//        tasks, with receipts flagged as having an attached file without returning the file
-//        bytes." — one record of each kind lands in its own group with its fields decrypted;
-//        a receipt WITH a saved file is flagged `hasAttachedFile`, one WITHOUT is not; the
-//        flagged receipt's file BYTES never appear in the assembled data; the checklist
-//        items and tasks come back; a person with nothing gets empty collections.
+//   AC1 "Returns the owner's records grouped by kind and the tasks, with receipts flagged
+//        as having an attached file without returning the file bytes." — one record of
+//        each kind lands in its own group with its fields decrypted; a receipt WITH a saved
+//        file is flagged `hasAttachedFile`, one WITHOUT is not; the flagged receipt's file
+//        BYTES never appear in the assembled data; the tasks come back; a person with
+//        nothing gets empty collections.
 //   AC2 "It reads data only for the session user (filtered by session user id)." — with two
-//        people each holding records, checklist items and tasks, the read for one returns
+//        people each holding records and tasks, the read for one returns
 //        only that person's data, never the other's; and the attached-file flag is itself
 //        member-scoped (another person's receipt file never flags your receipt).
 //   AC3 [obligation:validate-and-parameterize-input] (INV-102) — a handler on the
@@ -89,7 +87,6 @@ import { z } from "zod";
 import { lifeAdminPageData, recordPhases } from "./page-data";
 import { BUILT_IN } from "../../domain/life-admin/catalogue";
 import { createRecord } from "../db/life-admin-records";
-import { addOwnItem } from "../db/moving-checklist";
 import { createTask } from "../db/tasks";
 import { saveReceiptFile } from "../storage/receipt-files";
 import { createInMemoryBlobStore } from "../storage/blob";
@@ -170,11 +167,6 @@ interface PageRecordLike {
   readonly hasAttachedFile?: boolean;
   readonly userId?: string;
 }
-interface ChecklistItemLike {
-  readonly id: string;
-  readonly label: string;
-  readonly userId?: string;
-}
 interface TaskLike {
   readonly id: string;
   readonly title: string;
@@ -184,7 +176,6 @@ interface PageDataLike {
   readonly subscriptions: PageRecordLike[];
   readonly receipts: PageRecordLike[];
   readonly renewals: PageRecordLike[];
-  readonly checklist: ChecklistItemLike[];
   readonly tasks: TaskLike[];
 }
 
@@ -201,7 +192,7 @@ function restoreEnv(name: string, prev: string | undefined): void {
 
 // ===========================================================================
 // AC1 — the read groups the owner's records by kind, flags receipts with an attached file
-// (never the bytes), and returns the checklist items and tasks.
+// (never the bytes), and returns the tasks.
 // ===========================================================================
 
 test("records come back grouped by kind, each with its fields DECRYPTED", async () => {
@@ -387,26 +378,6 @@ test("a flagged receipt's file BYTES never appear in the assembled page data", a
   }
 });
 
-test("the moving-checklist items are returned for the owner", async () => {
-  const db = await freshDb();
-  try {
-    const dek = freshDek();
-    const userId = await makeUser(db, "ac1-checklist");
-
-    await addOwnItem(db, { userId, label: "Tell the bank" }, dek);
-    await addOwnItem(db, { userId, label: "Redirect the mail" }, dek);
-
-    const data = (await lifeAdminPageData(db, userId, dek)) as PageDataLike;
-
-    const labels = new Set(data.checklist.map((i) => i.label));
-    assert.equal(data.checklist.length, 2, "both of the owner's checklist items are returned");
-    assert.ok(labels.has("Tell the bank"), "the first checklist label is decrypted and returned");
-    assert.ok(labels.has("Redirect the mail"), "the second checklist label is decrypted and returned");
-  } finally {
-    await db.close();
-  }
-});
-
 test("the shared tasks are returned for the owner", async () => {
   const db = await freshDb();
   try {
@@ -435,7 +406,7 @@ test("the shared tasks are returned for the owner", async () => {
   }
 });
 
-test("a person with nothing saved gets empty groups, checklist and tasks — not an error", async () => {
+test("a person with nothing saved gets empty groups and tasks — not an error", async () => {
   const db = await freshDb();
   try {
     const dek = freshDek();
@@ -446,7 +417,6 @@ test("a person with nothing saved gets empty groups, checklist and tasks — not
     assert.deepEqual(data.subscriptions, [], "no subscriptions");
     assert.deepEqual(data.receipts, [], "no receipts/warranties");
     assert.deepEqual(data.renewals, [], "no renewals/appointments");
-    assert.deepEqual(data.checklist, [], "no checklist items");
     assert.deepEqual(data.tasks, [], "no tasks");
   } finally {
     await db.close();
@@ -477,7 +447,6 @@ test("the read returns only the session person's data, never another person's", 
       { userId: a, kind: "receipt_warranty", fields: { merchant: "A-Merchant" }, status: "kept", source: { kind: "person" } },
       dekA,
     );
-    await addOwnItem(db, { userId: a, label: "A-checklist-item" }, dekA);
     await createTask(db, { userId: a, title: "A-task", assignee: "any", createdBy: { kind: "person" } }, dekA);
 
     // B's data — DIFFERENT values, encrypted under B's own DEK.
@@ -491,7 +460,6 @@ test("the read returns only the session person's data, never another person's", 
       { userId: b, kind: "renewal_appointment", fields: { what: "B-renewal" }, status: "upcoming", source: { kind: "person" } },
       dekB,
     );
-    await addOwnItem(db, { userId: b, label: "B-checklist-item" }, dekB);
     await createTask(db, { userId: b, title: "B-task", assignee: "any", createdBy: { kind: "person" } }, dekB);
 
     const data = (await lifeAdminPageData(db, a, dekA)) as PageDataLike;
@@ -501,8 +469,6 @@ test("the read returns only the session person's data, never another person's", 
     assert.equal(data.subscriptions[0]!.fields.service, "A-Netflix", "A's subscription value, decrypted");
     assert.equal(data.receipts.length, 1, "only A's one receipt");
     assert.equal(data.renewals.length, 0, "A has no renewals (B's renewal does not leak in)");
-    assert.equal(data.checklist.length, 1, "only A's one checklist item");
-    assert.equal(data.checklist[0]!.label, "A-checklist-item", "A's checklist label");
     assert.equal(data.tasks.length, 1, "only A's one task");
     assert.equal(data.tasks[0]!.title, "A-task", "A's task title");
 
@@ -510,7 +476,6 @@ test("the read returns only the session person's data, never another person's", 
     const whole = JSON.stringify(data);
     assert.ok(!whole.includes("B-Spotify"), "B's subscription never appears");
     assert.ok(!whole.includes("B-renewal"), "B's renewal never appears");
-    assert.ok(!whole.includes("B-checklist-item"), "B's checklist item never appears");
     assert.ok(!whole.includes("B-task"), "B's task never appears");
   } finally {
     await db.close();
@@ -724,7 +689,6 @@ test("[validate-and-parameterize-input] a SQL-injection person id cannot alter a
       { userId: owner, recordId: receipt.id, contentType: "image/png", bytes: new TextEncoder().encode("real-file") },
       dek,
     );
-    await addOwnItem(db, { userId: owner, label: "Real Item" }, dek);
     await createTask(db, { userId: owner, title: "Real Task", assignee: "any", createdBy: { kind: "person" } }, dek);
 
     const probe = "p'); DROP TABLE life_admin_records; --";
@@ -738,7 +702,6 @@ test("[validate-and-parameterize-input] a SQL-injection person id cannot alter a
         data.subscriptions.length === 0 &&
         data.receipts.length === 0 &&
         data.renewals.length === 0 &&
-        data.checklist.length === 0 &&
         data.tasks.length === 0;
     } catch {
       rejectedOrEmpty = true;
@@ -746,13 +709,12 @@ test("[validate-and-parameterize-input] a SQL-injection person id cannot alter a
     assert.ok(rejectedOrEmpty, "the probe is bound, not executed — it yields nothing or is rejected");
 
     // The decisive proof: every table and the real owner's whole set of data are intact.
-    for (const table of ["life_admin_records", "receipt_files", "moving_checklist", "tasks", "users"]) {
+    for (const table of ["life_admin_records", "receipt_files", "tasks", "users"]) {
       assert.equal(await tableExists(db, table), true, `the ${table} table is intact`);
     }
     const owned = (await lifeAdminPageData(db, owner, dek)) as PageDataLike;
     assert.equal(owned.receipts.length, 1, "the real owner's receipt survived the probe");
     assert.equal(owned.receipts[0]!.hasAttachedFile, true, "and its attached-file flag survived");
-    assert.equal(owned.checklist.length, 1, "the real owner's checklist survived the probe");
     assert.equal(owned.tasks.length, 1, "the real owner's task survived the probe");
   } finally {
     await db.close();
@@ -789,7 +751,6 @@ test("[secrets-from-env] no ambient env secret appears in the assembled data; th
       { userId, recordId: receipt.id, contentType: "image/png", bytes: new TextEncoder().encode("env-file") },
       dek,
     );
-    await addOwnItem(db, { userId, label: "Env Item" }, dek);
     await createTask(db, { userId, title: "Env Task", assignee: "any", createdBy: { kind: "person" } }, dek);
 
     const data = (await lifeAdminPageData(db, userId, dek)) as PageDataLike;
@@ -798,7 +759,6 @@ test("[secrets-from-env] no ambient env secret appears in the assembled data; th
     assert.equal(data.receipts.length, 1, "the injected db supplied the receipt, not an ambient one");
     assert.equal(data.receipts[0]!.fields.merchant, "Env Merchant", "the read works from its injected inputs alone");
     assert.equal(data.receipts[0]!.hasAttachedFile, true, "the attached-file flag is computed from the injected db");
-    assert.equal(data.checklist.length, 1, "the checklist came from the injected db");
     assert.equal(data.tasks.length, 1, "the tasks came from the injected db");
     assert.ok(!JSON.stringify(data).includes(DECOY), "no ambient env secret appears in the assembled data");
   } finally {

@@ -88,22 +88,14 @@ export type LifeAdminRecordView = {
   handling?: RecordHandlingView;
 };
 
-// One moving-checklist item: its id, its label, whether it is ticked off, and the id of
-// the task it was handed to an agent as (non-null ⇒ already handed off).
-export type ChecklistItemView = {
-  id: string;
-  label: string;
-  done: boolean;
-  linkedTaskId: string | null;
-};
+// Life admin's tabs (`?tab=`): Records (what's ongoing), Upcoming (what needs the person, and
+// every booking ahead), History (everything finished) and Tasks. The page maps older addresses
+// (`?view=tasks`, `?view=life&tab=…`, the Bookings tab, older reminder links) onto these.
+export type LifeAdminTab = "records" | "upcoming" | "history" | "tasks";
 
-// The records view's in-page tabs (`?tab=`). The page maps the older tab values ("things", and
-// subscriptions, receipts, renewals in older reminder links) to "records".
-export type LifeAdminTab = "records" | "upcoming" | "bookings" | "checklist";
-
-// Where a record stands on the Records tab, worked out from its phase (`listStatusOf`):
-// active (live), on hold (paused), finished (ended, completed, resolved) or cancelled
-// (cancelled, missed, lapsed, or a standing item whose status is cancelled).
+// Where a record stands, worked out from its phase (`listStatusOf`): active (live) or on hold
+// (paused) on Records; finished (ended, completed, resolved) or cancelled (cancelled, missed,
+// lapsed, or a standing item whose status is cancelled) in History.
 export type RecordListStatus = "active" | "on_hold" | "finished" | "cancelled";
 
 // The Records tab's filters (`?category=…&status=…`, each repeatable), validated by the page:
@@ -111,6 +103,15 @@ export type RecordListStatus = "active" | "on_hold" | "finished" | "cancelled";
 export type RecordFilter = {
   categories: readonly string[];
   statuses: readonly RecordListStatus[];
+};
+
+// History's filters (`?history_category=…&history_status=…&history_page=…`), validated by the
+// page: no category ⇒ every category, no status ⇒ both (finished and cancelled); the page number
+// is 1-based.
+export type HistoryFilter = {
+  categories: readonly string[];
+  statuses: readonly RecordListStatus[];
+  page?: number;
 };
 
 // A control bound to a server action the page passes.
@@ -167,15 +168,6 @@ export type NextStepView = {
   recordName: string;
   text: string;
   due: string;
-};
-
-// The Bookings tab's GET filters (validated by the page), each repeatable, and the page number
-// (1-based). An empty or absent list doesn't narrow.
-export type BookingFilters = {
-  categories?: readonly string[];
-  forWhom?: readonly string[];
-  states?: readonly string[];
-  page?: number;
 };
 
 // ─── the item page ───────────────────────────────────────────────────────────────────

@@ -73,8 +73,9 @@ export function Privacy({ links = RELATIVE_LINKS }: { links?: PublicLinks } = {}
         <PublicSection id="life-admin" title="Your life admin">
           <p>
             Your life-admin records &mdash; your vehicles and their rego and insurance, your
-            health fund, super, bills, subscriptions, bookings and the dates that matter, and
-            the short log of decisions and next steps your agents keep for each &mdash; are
+            health fund, super, bills, subscriptions, bookings and the dates that matter, the
+            name, number and email address each account is held under, and the short log of
+            decisions and next steps your agents keep for each &mdash; are
             encrypted with your own data key on our servers rather than on your device, so
             the agents you allow can read them. No staff tool displays them.
           </p>

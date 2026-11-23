@@ -4,7 +4,8 @@
 // Before this fix the "About you" fields had no name, no form and no Save button: a new
 // person could not enter their name, email, phone or postal address (brief flow 2),
 // edits to an existing value were thrown away, and a postal address's moving-on date —
-// the trigger for the Life admin moving checklist — could never be set from the UI.
+// the day an address the person is moving to becomes their current one — could never be
+// set from the UI.
 //
 // The module follows the repo's render-testable-AND-interactive split (HighTierFlow +
 // createHighTierFlow, AddCardFlow + createAddCardFlow):

@@ -7,18 +7,18 @@ import { LifeAdminScreen } from "@/components/life-admin/life-admin-screen";
 import { resolveAssigneeFilter } from "@/components/life-admin/task-groups";
 import { firstParam } from "@/lib/href";
 import {
-  bookingFilters,
+  historyFilters,
+  lifeAdminTab,
   noticeField,
   recordDate,
   recordFields,
   recordFilters,
   recordIds,
-  recordOffsets,
   recordParent,
   recordReturnPath,
   recordStatus,
-  recordTab,
   recordTypeId,
+  reminderOffsetsFrom,
   taskReturnPath,
 } from "./form-inputs";
 import { OutcomeNotice, toNotice, type Notice } from "./notices";
@@ -27,21 +27,23 @@ import { buildActions, resolveSession, run, type Outcome } from "./wiring";
 // E14-S13 — Life Admin page (the thin protected-page loader + action wiring over the
 // tested `createLifeAdminActions` seam, `./actions`). It reads the signed-in session
 // from the host-locked `__Host-wh_session` cookie, turns it (via the seam's `load`) into
-// the person's own records, moving checklist and tasks — content decrypted, each task's
-// assignee + note authors resolved to agent names — and mounts the already-render-tested
-// <LifeAdminView/> and <TasksView/> as the two in-page views of <LifeAdminScreen/> (the
-// `?view=` query param picks the first one shown; both stay mounted, so switching keeps a
-// half-typed record or task). Every control is BOUND to a `use server` wrapper
-// over the SAME seam; each wrapper re-derives the verified session (never trusting a
-// client value for identity), takes its input from the submitted form, persists
-// member-scoped through the seam, and redirects back with a `?notice=` the page renders
-// in plain words — a refusal (another person's id, a foreign agent) or a 4xx from the
+// the person's own records and tasks — content decrypted, each task's assignee + note authors
+// resolved to agent names — and mounts the already-render-tested <LifeAdminScreen/>: one row of
+// tabs, Records | Upcoming | History | Tasks (`?tab=` picks the one shown first; all stay
+// mounted, so switching keeps a half-typed record or task). An older address (`?view=…`, the
+// Bookings tab, the moving checklist, older reminder links) opens the tab it meant, and the view
+// puts today's address in the browser. Every control
+// is BOUND to a `use server` wrapper over the SAME seam; each wrapper re-derives the verified
+// session (never trusting a client value for identity), takes its input from the submitted
+// form, persists member-scoped through the seam, and redirects back with a `?notice=` the page
+// renders in plain words — a refusal (another person's id, a foreign agent) or a 4xx from the
 // boundary is reported as a plain problem, never swallowed (no dead controls). The Records tab's
-// `?category=…&status=…` filters (each repeatable) are validated against the person's own
-// catalogue and the known statuses here (unknown values are dropped; no status means Active), and
-// record actions return to the tab and filters they were submitted under. The Tasks view's
-// `?assignee=` filter is validated against the person's own agents here (anything else shows
-// every task), and task actions return to the filter they were submitted under.
+// `?category=…&status=…` filters and History's `?history_category=…&history_status=…` (each
+// repeatable) are validated against the person's own catalogue and the known statuses here
+// (unknown values are dropped; no Records status means Active), and record actions return to the
+// tab and filters they were submitted under. The Tasks view's `?assignee=` filter is validated
+// against the person's own agents here (anything else shows every task), and task actions return
+// to the filter they were submitted under.
 //
 // Thin by design (the server-composition-roots addendum): per-request data (the search
 // params) is read BEFORE `getServerDb()` so `next build` marks the page dynamic and
@@ -51,6 +53,11 @@ import { buildActions, resolveSession, run, type Outcome } from "./wiring";
 // The `(protected)` layout already guards every page. Config and secrets flow only
 // through `loadConfig()` (INV-103) — this entry reads no `process.env` of its own, and
 // the seam holds no secret (db, KeyWrapper, clock and blob are injected).
+
+// A path with one more query parameter.
+function withQuery(path: string, query: string): string {
+  return `${path}${path.includes("?") ? "&" : "?"}${query}`;
+}
 
 function str(formData: FormData, name: string): string {
   const raw = formData.get(name);
@@ -75,7 +82,7 @@ async function addRecordAction(formData: FormData): Promise<void> {
   "use server";
   const type = recordTypeId(formData);
   const back = recordReturnPath(formData);
-  if (!type) redirect(`${back}&notice=record_type_missing#new-record`);
+  if (!type) redirect(`${withQuery(back, "notice=record_type_missing")}#new-record`);
   await run(savedOutcome, (actions, session) =>
     actions.saveRecord(session, {
       type,
@@ -86,7 +93,7 @@ async function addRecordAction(formData: FormData): Promise<void> {
     }),
     back,
     "invalid_input",
-    `${back}&add=${encodeURIComponent(type)}`,
+    withQuery(back, `add=${encodeURIComponent(type)}`),
   );
 }
 
@@ -97,7 +104,7 @@ async function editRecordAction(formData: FormData): Promise<void> {
     await run(() => ({ notice: "reminded", recordId }), (actions, session) =>
       actions.setRecordReminders(session, {
         id: recordId,
-        reminderOffsets: recordOffsets(str(formData, "reminderOffsets")),
+        reminderOffsets: reminderOffsetsFrom(formData),
       }),
       recordReturnPath(formData),
       "invalid_reminders",
@@ -183,22 +190,6 @@ async function setCategoryVisibilityAction(formData: FormData): Promise<void> {
   );
 }
 
-async function tickOffAction(formData: FormData): Promise<void> {
-  "use server";
-  await run("ticked", (actions, session) =>
-    actions.toggleChecklistItem(session, { id: str(formData, "itemId") }),
-    "/life-admin?view=life&tab=checklist",
-  );
-}
-
-async function handToAgentAction(formData: FormData): Promise<void> {
-  "use server";
-  await run("handed", (actions, session) =>
-    actions.handChecklistItemToAgent(session, { id: str(formData, "itemId") }),
-    "/life-admin?view=life&tab=checklist",
-  );
-}
-
 async function createTaskAction(formData: FormData): Promise<void> {
   "use server";
   // The boundary trims the title, so one made only of spaces is refused as a missing title.
@@ -231,9 +222,6 @@ async function completeAction(formData: FormData): Promise<void> {
   );
 }
 
-// Which of the two views opens first. The chosen view is carried in the URL (`?view=`).
-type LifeAdminTab = "life" | "tasks";
-
 export default async function LifeAdminPage({
   searchParams,
 }: {
@@ -243,31 +231,25 @@ export default async function LifeAdminPage({
   // `next build` never prerenders it (and never opens the database at build time).
   const params = await searchParams;
   const notice = toNotice(params.notice);
-  const bookings = bookingFilters({ for_whom: params.for_whom, state: params.state, page: params.page });
-  const active: LifeAdminTab = params.view === "tasks" ? "tasks" : "life";
+  const tab = lifeAdminTab(params);
   const db = await getServerDb();
   const session = await resolveSession(db);
   if (!session) {
     redirect("/signin");
   }
 
-  // (Re)build the moving checklist from the person's current move before loading, so
-  // changing the postal address (in the vault) makes the checklist show here — exactly
-  // the brief's "Warthog shows the moving checklist in Life Admin". The builder is
-  // idempotent (it never duplicates a source or resets a ticked-off item) and seeds
-  // nothing when there is no move on file.
   const actions = buildActions(db);
-  await actions.refreshMovingChecklist(session);
   const data = await actions.load(session);
-  // The Records filters, checked against the person's own catalogue; Bookings filters by the same
-  // categories.
-  const recordFilter = recordFilters({ category: params.category, status: params.status }, data.catalogue.categories.map((category) => category.id));
+  // The Records and History filters, checked against the person's own catalogue.
+  const categoryIds = data.catalogue.categories.map((category) => category.id);
+  const recordFilter = recordFilters({ category: params.category, status: params.status }, categoryIds);
+  const historyFilter = historyFilters({ history_category: params.history_category, history_status: params.history_status, history_page: params.history_page }, categoryIds);
 
-  // Both views are rendered (and stay mounted); `active` only picks the one shown first.
+  // Every tab is rendered (and stays mounted); `tab` only picks the one shown first.
   return (
     <div className="wh-page">
       <LifeAdminScreen
-        initialView={active}
+        initialTab={tab}
         notice={notice ? <OutcomeNotice notice={notice} field={noticeField(firstParam(params.field))} /> : null}
         records={{
           today: data.today,
@@ -277,14 +259,10 @@ export default async function LifeAdminPage({
           suggestedCategories: data.suggestedCategories,
           nextSteps: data.nextSteps,
           recordFilter,
-          bookingFilters: { ...bookings, ...(recordFilter.categories.length ? { categories: recordFilter.categories } : {}) },
-          // The tab's old name ("things") and the older tabs in reminder links (subscriptions,
-          // receipts, renewals) open Records.
-          initialTab: recordTab(firstParam(params.tab)),
+          historyFilter,
           // A kind from the person's own catalogue (their categories included), else none.
           addType: data.catalogue.types.some((type) => type.id === firstParam(params.add)) ? firstParam(params.add) : null,
           records: data.records,
-          checklist: data.checklist,
           addRecordAction,
           editRecordAction,
           attachFileAction,
@@ -298,8 +276,6 @@ export default async function LifeAdminPage({
           keepCategoryAction,
           declineCategoryAction,
           setCategoryVisibilityAction,
-          tickOffAction,
-          handToAgentAction,
         }}
         tasks={{
           tasks: data.tasks,
