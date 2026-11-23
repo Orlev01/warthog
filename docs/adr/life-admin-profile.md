@@ -233,6 +233,24 @@ name, filters by category and by status (both multiple-choice), and what's activ
 
 There is no new core tool: client tool budgets matter, so the count stays at 16.
 
+**Agents with an older copy of the tools (amended 23 November 2026).** Some apps keep the tool
+list they fetched when the person connected them: ChatGPT keeps it until the person refreshes the
+connector, and the claude.ai connector keeps it too. After this release, such an agent read the new
+skill but could only send `kind` and `fields`. So it put `type` and `source` inside `fields`, and
+the founder's records landed under Other as "Renewal or appointment", with their kind and source
+shown as two fields.
+- **Lifting the older shape.** The MCP dispatch lifts a record tool call in that shape into today's
+  parameters before the SDK checks it, and each record tool does the same.
+  - The lifted parameters are `type`, `source`, `details`, `journal`, `parentId` and `takeOver`
+    found inside `fields`, plus parameters sent as JSON text.
+  - Only what is unmistakable is lifted: a kind id, an object for `source`, a list for `details`.
+  - A current call is unchanged, and a field named `type` that isn't a kind id stays a field.
+- **The skill** tells such an agent to do this, and to ask the person once to refresh or reconnect.
+- **Moving records an agent already saved.** An agent can move such a record into its kind with
+  `update_record {type}`. On a record the person has checked, that change waits as a pending change.
+  A pending change now carries the new kind, the parent it links to and a booking's or case's state,
+  and accepting it applies all three.
+
 **The "Life admin records" skill.** It is a built-in skill, listed for agents with the records
 permission. It is generated from the same catalogue `save_record` validates against, so the two
 can't drift. It covers:
