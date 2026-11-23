@@ -1,5 +1,10 @@
 # Warthog comprehensive engineering audit
 
+**Security and privacy answers on the front door, 23 November:** main `e8261f3` runs as
+`warthog--r45124440998a1`. PR #46 adds twelve Security and privacy questions to the landing FAQ, and
+a "We never sell your information" section to the privacy policy (the founder: "We never sell any
+data"). No migrations; still 90. See the [release record](security-faq-release-2026-11-23.md).
+
 **Services on for new agents, 23 November:** main `742d881` runs as `warthog--r45121816498a1`.
 PR #43 adds "On for new agents" to each account under Connectors › Your services, so every agent
 connected afterwards starts with that service ticked and set to that account. It also keeps reads on

@@ -1,4 +1,15 @@
-# Delivery status — 23 November 2026 (services on for new agents)
+# Delivery status — 23 November 2026 (security and privacy answers on the front door)
+
+**Live at [warthog.com.au](https://warthog.com.au) (the website) and
+[app.warthog.com.au](https://app.warthog.com.au) (the app).** Application source
+`e8261f3c991d9f43888d42cdddd3cc9a89f85604` runs as `warthog--r45124440998a1`, with one healthy
+replica, explicit 100% traffic and zero old replicas.
+
+PR #46 adds twelve Security and privacy questions to the landing FAQ, and a "We never sell your
+information" section to the privacy policy. No migrations; still 90. See the
+[release record](docs/audit/security-faq-release-2026-11-23.md). PRs #47 and #48 are next.
+
+# Earlier delivery status — 23 November 2026 (services on for new agents)
 
 **Live at [warthog.com.au](https://warthog.com.au) (the website) and
 [app.warthog.com.au](https://app.warthog.com.au) (the app).** Application source
