@@ -248,3 +248,76 @@ test("another person's agent cannot be given services, tasks or records by id", 
     await db.close();
   }
 });
+
+// The Connectors section always sends its "Defaults for every service" toggles as shown. An agent
+// connected with no services stores them off (nothing was granted), so the first service ticked
+// on its page used to be granted with reading and changes both off: the agent could "use" the
+// service and still got none of its tools. The first grant now takes what consent gives (reads
+// on, changes ask me first) unless the person changed a default in the same save.
+test("the first service granted from the Connectors section gets reads on and changes ask me first", async () => {
+  const db = await freshDb();
+  try {
+    const alice = await makeUser(db, "alice");
+    await connectService(db, alice, "notion");
+    const { agentId, connectionId } = await seedAgent(db, alice);
+
+    const result = await createPermissionsActions({ db, nameOf }).save(sessionFor(alice), agentId, {
+      connectors: ["notion"],
+      readTools: false,
+      changeTools: "off",
+    });
+    assert.deepEqual(result, { ok: true });
+    const stored = await getConnectionPermissions(db, alice, connectionId);
+    assert.deepEqual(stored?.grantedConnectors, ["notion"]);
+    assert.equal(stored?.readTools, true, "the untouched reading default does not switch the new grant off");
+    assert.equal(stored?.changeTools, "ask_first", "the untouched changes default does not switch the new grant off");
+  } finally {
+    await db.close();
+  }
+});
+
+test("on a first grant, a default the person changed in the same save is kept", async () => {
+  const db = await freshDb();
+  try {
+    const alice = await makeUser(db, "alice");
+    await connectService(db, alice, "notion");
+    const { agentId, connectionId } = await seedAgent(db, alice, { readTools: true, changeTools: "off" });
+
+    await createPermissionsActions({ db, nameOf }).save(sessionFor(alice), agentId, {
+      connectors: ["notion"],
+      readTools: false,
+      changeTools: "allow",
+    });
+    const stored = await getConnectionPermissions(db, alice, connectionId);
+    assert.equal(stored?.readTools, false, "the person turned reading off");
+    assert.equal(stored?.changeTools, "allow", "the person chose to allow changes");
+  } finally {
+    await db.close();
+  }
+});
+
+test("an agent that already has a service keeps the defaults the form sends", async () => {
+  const db = await freshDb();
+  try {
+    const alice = await makeUser(db, "alice");
+    await connectService(db, alice, "google-calendar");
+    await connectService(db, alice, "notion");
+    const { agentId, connectionId } = await seedAgent(db, alice, {
+      grantedConnectors: ["google-calendar"],
+      readTools: false,
+      changeTools: "off",
+    });
+
+    await createPermissionsActions({ db, nameOf }).save(sessionFor(alice), agentId, {
+      connectors: ["google-calendar", "notion"],
+      readTools: false,
+      changeTools: "off",
+    });
+    const stored = await getConnectionPermissions(db, alice, connectionId);
+    assert.deepEqual([...(stored?.grantedConnectors ?? [])].sort(), ["google-calendar", "notion"]);
+    assert.equal(stored?.readTools, false);
+    assert.equal(stored?.changeTools, "off");
+  } finally {
+    await db.close();
+  }
+});
