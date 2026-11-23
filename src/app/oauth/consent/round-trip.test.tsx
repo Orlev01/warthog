@@ -17,6 +17,7 @@ import { approvalFromForm, loadConsentView } from "./actions";
 import { createAuthorizeActions } from "../authorize/actions";
 import { ConsentView, consentToggleState } from "../../../components/agents/consent-view";
 import { beginAuthorization } from "../../../server/oauth/authorize";
+import { consentRequestTag, getPendingAuthorization } from "../../../server/oauth/pending";
 import { createClient } from "../../../server/oauth/store";
 import { createClientResolver } from "../../../server/oauth/clients";
 import { getConnectionPermissions } from "../../../server/db/agent-permissions";
@@ -62,7 +63,8 @@ function deps(db: Db) {
 }
 
 function sessionFor(userId: string): Session {
-  return { id: `sess-${userId}`, userId, createdAt: NOW, lastSeenAt: NOW, steppedUpAt: null };
+  // Approving needs a fresh "confirm it's you": this person has just confirmed.
+  return { id: `sess-${userId}`, userId, createdAt: NOW, lastSeenAt: NOW, steppedUpAt: NOW };
 }
 
 function attr(attrs: string, name: string): string | null {
@@ -149,8 +151,9 @@ test("the toggles the person leaves on the screen are exactly the grants stored"
     const markup = renderToStaticMarkup(
       <ConsentView {...props!} approveAction={async () => {}} refuseAction={async () => {}} initialState={left} />,
     );
-    const approval = approvalFromForm(formDataOf(markup), props!.platform);
-    const decided = await createAuthorizeActions(deps(db)).approve(sessionFor(userId), handle, approval);
+    const form = formDataOf(markup);
+    const approval = approvalFromForm(form, props!.platform);
+    const decided = await createAuthorizeActions(deps(db)).approve(sessionFor(userId), handle, approval, String(form.get("request")));
     assert.ok(decided.ok, `approve succeeds, got ${JSON.stringify(decided)}`);
 
     const [agent] = await listAgentsForUser(db, userId);
@@ -184,11 +187,33 @@ test("a malformed card budget is refused at the boundary (a 4xx), and the reques
     form.append("cardBudgetPeriod", "month");
     form.append("cardBudgetCurrency", "AUD");
     await assert.rejects(
-      createAuthorizeActions(deps(db)).approve(sessionFor(userId), handle, approvalFromForm(form, "Claude")),
+      createAuthorizeActions(deps(db)).approve(sessionFor(userId), handle, approvalFromForm(form, "Claude"), consentRequestTag(handle)),
       (err: unknown) => err instanceof HttpError && err.status >= 400 && err.status < 500,
     );
     assert.equal((await listAgentsForUser(db, userId)).length, 0, "nothing is created");
     assert.ok((await loadConsentView(handle, userId)) != null, "the pending request is still there to retry");
+  } finally {
+    await db.close();
+  }
+});
+
+// Review 2026-11-23 — the consent swap, through the real screen: the form carries the request it
+// was rendered for, so an Approve after another request replaced the cookie connects nothing.
+test("the consent form is bound to the request it shows; a swapped request isn't approved", async () => {
+  const { db, userId, handle } = await setUp();
+  try {
+    const props = await loadConsentView(handle, userId, { db });
+    const form = formDataOf(renderToStaticMarkup(<ConsentView {...props!} approveAction={async () => {}} refuseAction={async () => {}} />));
+    assert.equal(form.get("request"), consentRequestTag(handle), "the form names the request on screen");
+
+    const begun = await beginAuthorization(
+      { params: new URLSearchParams(Object.fromEntries(getPendingAuthorization(handle, userId)!.params)), session: sessionFor(userId) },
+      deps(db),
+    );
+    if (!begun.ok) throw new Error("a second request should begin");
+    const decided = await createAuthorizeActions(deps(db)).approve(sessionFor(userId), begun.handle, approvalFromForm(form, props!.platform), String(form.get("request")));
+    assert.deepEqual(decided, { ok: false, error: "request_changed" });
+    assert.equal((await listAgentsForUser(db, userId)).length, 0, "nothing is connected");
   } finally {
     await db.close();
   }

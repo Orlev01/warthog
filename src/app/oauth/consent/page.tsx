@@ -18,6 +18,7 @@ import { systemClientResolver } from "../../../server/oauth/clients";
 import { type CatalogueIndex } from "../../../server/connectors/catalogue";
 import { createAuthorizeActions } from "../authorize/actions";
 import { approvalFromForm, loadConsentView } from "./actions";
+import { confirmFactors } from "@/server/auth/confirm-factors";
 import type { Db } from "../../../server/db/index";
 
 // E10-S12 — the consent screen (loader + view + decision server-action wrappers).
@@ -100,10 +101,15 @@ async function approveConsentAction(formData: FormData): Promise<ConsentDecision
 
   let clientRedirect: string | null = null;
   let consumed = false;
-  const notice = "expired";
+  let notice = "expired";
   try {
-    const result = await buildActions(db).approve(session, handle, approvalFromForm(formData, platform));
-    consumed = true;
+    const result = await buildActions(db).approve(session, handle, approvalFromForm(formData, platform), String(formData.get("request") ?? ""));
+    // Confirm it's you first: nothing was used up, and the view approves straight after.
+    if (!result.ok && result.error === "step_up_required") return { stepUpRequired: true };
+    // The screen was for a different request than the one in progress now (another tab or
+    // site started one): nothing was used up; show the current one to review.
+    if (!result.ok && result.error === "request_changed") notice = "changed";
+    else consumed = true;
     if (result.ok) clientRedirect = result.redirectTo;
   } catch (error) {
     if (!(error instanceof HttpError)) throw error;
@@ -119,7 +125,7 @@ async function approveConsentAction(formData: FormData): Promise<ConsentDecision
 
 // Refuse the consent: take the pending request from the cookie handle and run the tested
 // decision, which creates nothing and redirects back to the client with access_denied.
-async function refuseConsentAction(_formData: FormData): Promise<void> {
+async function refuseConsentAction(formData: FormData): Promise<void> {
   "use server";
   const db = await getServerDb();
   const store = await cookies();
@@ -127,8 +133,10 @@ async function refuseConsentAction(_formData: FormData): Promise<void> {
   if (!session) redirect(SIGN_IN_AND_RETURN);
 
   const handle = store.get(CONSENT_COOKIE)?.value ?? "";
-  const result = await buildActions(db).refuse(session, handle);
+  const result = await buildActions(db).refuse(session, handle, String(formData.get("request") ?? ""));
 
+  // A Deny from a screen for another request leaves the current one in place to review.
+  if (!result.ok && result.error === "request_changed") redirect("/oauth/consent?notice=changed");
   store.set(CONSENT_COOKIE, "", CLEAR_CONSENT_COOKIE);
   if (result.ok) redirect(result.redirectTo);
   redirect("/oauth/consent?notice=expired");
@@ -138,6 +146,7 @@ async function refuseConsentAction(_formData: FormData): Promise<void> {
 const NOTICES: Record<string, string> = {
   invalid: "We couldn’t use those details. Check the agent name and card budget, then try again.",
   expired: "This connection request has expired. Start connecting again from your agent.",
+  changed: "Another connection request was started in this browser, so nothing was connected. This is the request in progress now. Only approve it if you started it and recognise it.",
 };
 
 // Shown when the pending request can't be found (an expired or already-used handle), so
@@ -165,6 +174,7 @@ export default async function ConsentPage({
     nameOf: (connectorId) => getCatalogue().get(connectorId)?.name,
   });
   if (!view) return <ExpiredConnection />;
+  const factors = await confirmFactors(db, session.userId);
 
   return (
     <ConnectionFrame>
@@ -172,6 +182,7 @@ export default async function ConsentPage({
       {noticeText ? <Notice tone="error">{noticeText}</Notice> : null}
       <ConsentView
         {...view}
+        confirm={factors}
         approveAction={approveConsentAction}
         refuseAction={refuseConsentAction}
       />

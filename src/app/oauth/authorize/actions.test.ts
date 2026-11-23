@@ -97,7 +97,7 @@ import { createHash } from "node:crypto";
 import { createAuthorizeActions, type ConsentApproval } from "./actions";
 
 import { beginAuthorization } from "../../../server/oauth/authorize";
-import { putPendingAuthorization } from "../../../server/oauth/pending";
+import { consentRequestTag, getPendingAuthorization, putPendingAuthorization } from "../../../server/oauth/pending";
 import type { ResolvedClient } from "../../../server/oauth/clients";
 import type { EmailSender, OutgoingMessage } from "../../../server/notify/senders";
 import { getAuthCode } from "../../../server/oauth/store";
@@ -169,7 +169,7 @@ const recordingEmail: EmailSender = {
   },
 };
 
-function makeActions(db: Db, base: string = BASE_URL, emailSender: EmailSender = recordingEmail) {
+function rawActions(db: Db, base: string = BASE_URL, emailSender: EmailSender = recordingEmail) {
   return createAuthorizeActions({ keyWrapper: { wrap: async () => "test-wrapped", unwrap: async () => new Uint8Array(32).fill(7) },
     db,
     config: configWithBaseUrl(base),
@@ -178,6 +178,16 @@ function makeActions(db: Db, base: string = BASE_URL, emailSender: EmailSender =
     resolveClient,
     alerts: { emailSender },
   });
+}
+
+// The decision as the consent screen drives it: the form carries the tag of the request it
+// was rendered for, which here is the same handle (the consent-swap tests use rawActions).
+function makeActions(db: Db, base: string = BASE_URL, emailSender: EmailSender = recordingEmail) {
+  const actions = rawActions(db, base, emailSender);
+  return {
+    approve: (session: Session, handle: string, choice: ConsentApproval) => actions.approve(session, handle, choice, consentRequestTag(handle)),
+    refuse: (session: Session, handle: string) => actions.refuse(session, handle, consentRequestTag(handle)),
+  };
 }
 
 test("consent audit records the persisted grants including the account request limit", async () => {
@@ -207,16 +217,16 @@ async function makeUser(db: Db, who: string): Promise<string> {
   return user.id;
 }
 
-// A plain signed-in session for `userId` — the route resolves this from the
-// `__Host-wh_session` cookie; the seam only needs its user id. Stepped-up state is
-// irrelevant to consent, so it is left null.
-function sessionFor(userId: string): Session {
+// A signed-in session for `userId` — the route resolves this from the `__Host-wh_session`
+// cookie. Approving needs a fresh "confirm it's you", so by default the person confirmed a
+// minute ago; `steppedUpAt: null` is a session that hasn't.
+function sessionFor(userId: string, steppedUpAt: Date | null = new Date(NOW.getTime() - 60_000)): Session {
   return {
     id: `sess-${userId}`,
     userId,
     createdAt: new Date(NOW.getTime() - 60_000),
     lastSeenAt: new Date(NOW.getTime() - 60_000),
-    steppedUpAt: null,
+    steppedUpAt,
   };
 }
 
@@ -907,6 +917,69 @@ test("another signed-in person can neither approve nor refuse someone's pending 
     const mine = await actions.approve(sessionFor(owner), handle, approval({ name: "Mine" }));
     assert.ok(mine.ok, "the request is still there for the person who started it");
     assert.equal((await listAgentsForUser(db, owner)).length, 1);
+  } finally {
+    await db.close();
+  }
+});
+
+// Review 2026-11-23 — the consent swap. Another site shows Claude's real consent in a popup,
+// then loads its own /oauth/authorize at the top level, which replaces the handle cookie. The
+// person's Approve on Claude's screen must not approve the other request.
+test("an Approve from a screen for one request never approves another the cookie now names", async () => {
+  const db = await freshDb();
+  try {
+    const userId = await makeUser(db, "consent-swap");
+    const shown = await seedPending(db, userId);    // the request the person is looking at
+    const swapped = await seedPending(db, userId);  // a later request that replaced the cookie
+    const actions = rawActions(db);
+    const result = await actions.approve(sessionFor(userId), swapped, approval(), consentRequestTag(shown));
+    assert.deepEqual(result, { ok: false, error: "request_changed" });
+    assert.equal((await listAgentsForUser(db, userId)).length, 0, "nothing is connected");
+    assert.ok(getPendingAuthorization(shown, userId) && getPendingAuthorization(swapped, userId), "neither request is used up");
+    const denied = await actions.refuse(sessionFor(userId), swapped, consentRequestTag(shown));
+    assert.deepEqual(denied, { ok: false, error: "request_changed" });
+    assert.ok(getPendingAuthorization(swapped, userId), "a Deny for another screen doesn't use it up either");
+
+    // The person reviews the request the cookie names and decides that one.
+    const decided = await actions.approve(sessionFor(userId), swapped, approval(), consentRequestTag(swapped));
+    assert.ok(decided.ok);
+  } finally {
+    await db.close();
+  }
+});
+
+test("a missing or malformed request tag is refused like a different one", async () => {
+  const db = await freshDb();
+  try {
+    const userId = await makeUser(db, "consent-tagless");
+    const handle = await seedPending(db, userId);
+    const actions = rawActions(db);
+    for (const tag of ["", "not-hex", consentRequestTag(handle).toUpperCase(), handle]) {
+      assert.deepEqual(await actions.approve(sessionFor(userId), handle, approval(), tag), { ok: false, error: "request_changed" }, JSON.stringify(tag));
+    }
+    assert.ok(getPendingAuthorization(handle, userId));
+  } finally {
+    await db.close();
+  }
+});
+
+test("approving needs a fresh confirm-it's-you; without one nothing is used up, and it works once confirmed", async () => {
+  const db = await freshDb();
+  try {
+    const userId = await makeUser(db, "consent-step-up");
+    const handle = await seedPending(db, userId);
+    const actions = makeActions(db);
+    for (const steppedUpAt of [null, new Date(NOW.getTime() - 6 * 60_000)]) {
+      const result = await actions.approve(sessionFor(userId, steppedUpAt), handle, approval());
+      assert.deepEqual(result, { ok: false, error: "step_up_required" });
+    }
+    assert.equal((await listAgentsForUser(db, userId)).length, 0);
+    assert.ok(getPendingAuthorization(handle, userId), "the request waits while the person confirms");
+    // Denying never needs it.
+    const other = await seedPending(db, userId);
+    assert.ok((await actions.refuse(sessionFor(userId, null), other)).ok);
+    const approved = await actions.approve(sessionFor(userId), handle, approval());
+    assert.ok(approved.ok);
   } finally {
     await db.close();
   }

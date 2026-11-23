@@ -6,6 +6,7 @@ import { Button } from "@/components/ui/button";
 import { Field } from "@/components/ui/field";
 import { Notice } from "@/components/ui/notice";
 import { createFormSubmissionGuard } from "@/components/ui/form-submit";
+import { ConfirmItsYou } from "@/components/ui/confirm-its-you";
 import type { PermissionTemplate } from "@/domain/permissions/templates";
 import { connectionChoices, type ConnectionChoices, type ConnectionService } from "@/domain/permissions/connection-choices";
 import { ConnectionPermissions, ConnectionAccessSummary, PermissionHelp } from "./connection-permissions";
@@ -13,7 +14,9 @@ import { ConnectionPermissions, ConnectionAccessSummary, PermissionHelp } from "
 export type ConsentViewService = ConnectionService;
 export type ConsentToggleState = ConnectionChoices;
 export const consentToggleState = connectionChoices;
-export type ConsentDecisionResult = void | { error: string };
+// An Approve can come back asking the person to confirm it's them first (a connection is
+// lasting access, like an access key); the view then confirms and approves without another tap.
+export type ConsentDecisionResult = void | { error: string } | { stepUpRequired: true };
 export type ConsentViewProps = {
   platform: string;
   defaultName?: string;
@@ -21,6 +24,11 @@ export type ConsentViewProps = {
   services?: readonly ConsentViewService[];
   template: PermissionTemplate;
   redirect: { host: string; verified: boolean };
+  // The tag of the request this screen shows; submitted so the decision can check it's still
+  // the request in progress (review 2026-11-23, the consent swap).
+  requestTag?: string;
+  // Which ways this person can confirm it's them (the page reads them); omitted offers both.
+  confirm?: { passkey: boolean; authenticator: boolean };
   approveAction?: (formData: FormData) => ConsentDecisionResult | Promise<ConsentDecisionResult>;
   refuseAction?: (formData: FormData) => void | Promise<void>;
   currency?: string;
@@ -38,7 +46,7 @@ function ConsentButtons({ live, canRefuse, pending, ready, decision }: { live: b
   </div>;
 }
 
-export function ConsentView({ platform, defaultName, requestedScopes, services = [], template, redirect, approveAction, refuseAction, currency = "AUD", initialState }: ConsentViewProps) {
+export function ConsentView({ platform, defaultName, requestedScopes, services = [], template, redirect, requestTag, confirm, approveAction, refuseAction, currency = "AUD", initialState }: ConsentViewProps) {
   const [startingSet, setStartingSet] = React.useState<PermissionTemplate>(initialState ? "custom" : template);
   const [state, setState] = React.useState(() => initialState ?? connectionChoices(template, services.filter(s => s.ticked).map(s => s.id)));
   const [pending, startTransition] = React.useTransition();
@@ -46,6 +54,10 @@ export function ConsentView({ platform, defaultName, requestedScopes, services =
   const [decision, setDecision] = React.useState<"approve" | "refuse">("approve");
   React.useEffect(() => setReady(true), []);
   const [error, setError] = React.useState<string | null>(null);
+  // The approval waiting on "confirm it's you", kept exactly as submitted. ConfirmItsYou keeps
+  // the first onConfirmed it is given, so what that callback needs lives in refs.
+  const [awaitingConfirm, setAwaitingConfirm] = React.useState(false);
+  const waiting = React.useRef<FormData | null>(null);
   const guard = React.useRef(createFormSubmissionGuard()).current;
   const id = React.useId();
   const edit = (next: ConnectionChoices) => { setState(next); setStartingSet("custom"); };
@@ -64,13 +76,28 @@ export function ConsentView({ platform, defaultName, requestedScopes, services =
     startTransition(async () => {
       await guard.run(async values => {
         if (nextDecision === "refuse") await refuseAction?.(values);
-        else {
-          const result = await approveAction?.(values);
-          if (result?.error) setError(result.error);
-        }
+        else await approve(values);
       }, data);
     });
   }
+  async function approve(values: FormData) {
+    const result = await approveAction?.(values);
+    if (result && "stepUpRequired" in result) {
+      waiting.current = values;
+      setAwaitingConfirm(true);
+    } else if (result?.error) setError(result.error);
+  }
+  const latestApprove = React.useRef(approve);
+  latestApprove.current = approve;
+  // Confirmed: approve the same choices, once.
+  const confirmed = React.useCallback(() => {
+    const values = waiting.current;
+    waiting.current = null;
+    setAwaitingConfirm(false);
+    if (!values || !guard.reserve()) return;
+    setDecision("approve");
+    startTransition(async () => { await guard.run((data) => latestApprove.current(data), values); });
+  }, [guard]);
 
   // An unrecognised callback is named by its host only in the destination inset; the title
   // and labels speak of "this agent" rather than echoing a hostname (public-20).
@@ -102,7 +129,9 @@ export function ConsentView({ platform, defaultName, requestedScopes, services =
         <PermissionHelp label="What happens after I approve?">Warthog creates a separate agent connection and returns you to {redirect.host} to finish setup. You can change its permissions or disconnect it in Agents. Disconnecting stops future Warthog access; it cannot recall information already received. Denying creates no connection.</PermissionHelp>
       </section>
     </fieldset>
+    {requestTag ? <input type="hidden" name="request" value={requestTag} /> : null}
     {error ? <Notice tone="error">{error}</Notice> : null}
+    {awaitingConfirm ? <ConfirmItsYou explanation="Connecting an agent gives it lasting access to your Warthog, so confirm it's you first. You'll connect straight after." passkey={confirm?.passkey} authenticator={confirm?.authenticator} onConfirmed={confirmed} /> : null}
     <div className="wh-connection-actionbar">
       <ConsentButtons live={!!approveAction} canRefuse={!!refuseAction} pending={pending} ready={ready} decision={decision} />
       <p className="wh-connection-footer">Only approve a connection you started and recognise.</p>
