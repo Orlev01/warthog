@@ -1,5 +1,13 @@
 # Warthog comprehensive engineering audit
 
+**UI/UX phase 0, 24 November:** main `8cacbd5` runs as `warthog--r45274398968a1`. PR #54 fixes
+the member-app audit's three critical issues. Held requests for Warthog's own tools now say what
+they would add or change. A released card or passport request ends and moves to History, and its
+countdown stays live. Unsaved edits on an agent's page or on Household are no longer thrown away
+silently: a new shared confirmation dialog asks first. It also restores the sidebar's active tint
+bar, updates the manifest colour and makes reduced motion stop loops. No migrations (still 91). See
+the [release record](uiux-phase0-release-2026-11-24.md).
+
 **Member-app UI/UX audit and redesign proposal, 23 November (no code changed):** seven specialist
 reviewers (usability, information architecture, visual, interaction, design system, responsive,
 accessibility) plus a code-rules pass, over 381 captures of three seeded accounts with axe-core and

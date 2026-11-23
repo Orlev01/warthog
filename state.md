@@ -1,4 +1,20 @@
-# Delivery status — 23 November 2026 (Life admin display fixes)
+# Delivery status — 24 November 2026 (UI/UX phase 0)
+
+**Live at [warthog.com.au](https://warthog.com.au) (the website) and
+[app.warthog.com.au](https://app.warthog.com.au) (the app).** Application source
+`8cacbd547e62f9253ea10a9bd4a19c45734c0fc0` runs as `warthog--r45274398968a1`, with one healthy
+replica, explicit 100% traffic and zero old replicas.
+
+PR #54 fixes the member-app UI/UX audit's three critical issues:
+- held requests for Warthog's own tools say what they would do;
+- released requests end;
+- unsaved edits are kept.
+
+The audit and redesign proposal (PR #53, docs) is in
+[docs/audit/uiux-audit-2026-11-23](docs/audit/uiux-audit-2026-11-23/README.md). No migrations
+(still 91). See the [release record](docs/audit/uiux-phase0-release-2026-11-24.md).
+
+# Earlier delivery status — 23 November 2026 (Life admin display fixes)
 
 **Live at [warthog.com.au](https://warthog.com.au) (the website) and
 [app.warthog.com.au](https://app.warthog.com.au) (the app).** Application source
