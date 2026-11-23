@@ -20,6 +20,7 @@ import {
 
 import { RELATIVE_LINKS, type PublicLinks } from "@/server/http/public-links";
 import { Wordmark } from "../shell/wordmark";
+import { SUPPORT_EMAIL } from "./operator";
 import { PolicyLinks } from "./policy-links";
 import { AskFirstFlow, ConnectOnceDiagrams, SharedMemoryFlow } from "./landing-diagrams";
 import { LandingBackdrop, LandingMotion, LandingMotionControl } from "./landing-motion";
@@ -105,6 +106,105 @@ const FAQS = [
     answer:
       "Warthog’s permissions, approval rules and activity record apply only to requests made through Warthog. Tools, conversations, spending and private memory managed directly by another provider remain outside that connection.",
   },
+] as const;
+
+// Plain answers to "where does my data go and how am I protected?". Each claim must stay
+// true to the code and the privacy policy: no "end-to-end", no certifications, and the
+// staff claim covers only what staff tools display and the device-encrypted tier.
+const SECURITY_FAQS = [
+  {
+    question: "Where is my information stored?",
+    answer: (
+      <>
+        Warthog is hosted in Australia, in Microsoft Azure’s Australia East region. Your
+        information is kept in a private database that can’t be reached from the internet,
+        only by Warthog’s own systems. A few services Warthog relies on work outside
+        Australia, such as the one that delivers Warthog’s emails to you. The{" "}
+        <a href="/privacy">privacy policy</a> explains which.
+      </>
+    ),
+  },
+  {
+    question: "How is my information protected?",
+    answer:
+      "Everything between you, your agents and Warthog travels over an encrypted connection. Once stored, your details, memory, skills, records, activity and service connections are encrypted with a key that belongs to your account alone. That key is locked in turn by a separate key held in Microsoft’s protected key storage, so your stored information can’t be read without it.",
+  },
+  {
+    question: "What about my passport, licence and card details?",
+    answer:
+      "These get an extra layer. They’re encrypted on your own device, with a key that stays with you, before they reach Warthog, so Warthog only ever stores the locked version. While they’re stored, Warthog’s servers can’t read them and neither can our staff. When you approve a request, your device unlocks just that one detail. Warthog hands it to the agent once, then discards it. We never keep a card’s security code.",
+  },
+  {
+    question: "Who decides what each agent can see and do?",
+    answer:
+      "You do. Each agent has its own connection and its own permissions, which you set service by service and detail by detail. New agents start with your sensitive details and cards switched off, and ask you before making changes in your connected services, such as sending an email. A request for a sensitive detail or a card asks you every time, and you approve it in Warthog itself, not in the agent’s chat. Agents never get the passwords to your services.",
+  },
+  {
+    question: "Can Warthog’s staff see my information?",
+    answer:
+      "We only see account-level facts, such as when you signed up and how many agents and services you’ve connected. No staff tool displays your details, memory, records, emails or activity. Your passport, licence and card details are locked on your own device, so our staff can’t unlock them.",
+  },
+  {
+    question: "Does Warthog read my email?",
+    answer:
+      "Not on its own. Warthog fetches an email only when an agent you’ve allowed asks for it, and passes on a cleaned-up copy with sign-in codes, password reset links and card numbers taken out. It doesn’t keep a copy of your mailbox. The access you give Warthog to each service is stored encrypted, and you can disconnect a service at any time.",
+  },
+  {
+    question: "Does Warthog sell my information or use it to train AI?",
+    answer: (
+      <>
+        No. We never sell any of your information, and there are no ads or third-party
+        trackers in Warthog. Warthog doesn’t run an AI model, so it isn’t training one on
+        your information. Your information goes only to the agents you connect, when they
+        ask and within the permissions you set. Once an agent has it, the agent’s own
+        provider handles it under its terms, so it’s worth checking those too. The{" "}
+        <a href="/privacy#never-sold">privacy policy</a> sets out our commitment.
+      </>
+    ),
+  },
+  {
+    question: "Is there a password someone could steal?",
+    answer:
+      "No, because Warthog doesn’t use sign-in passwords. You sign in with a passkey kept on your own devices and unlocked with your fingerprint, face or device PIN, which a fake website can’t trick out of you. You can also sign in with an emailed code plus an authenticator app. Sensitive steps, such as approving a card for an agent, exporting your data or changing your security settings, ask you to confirm it’s you again.",
+  },
+  {
+    question: "Can the record of what my agents did be changed?",
+    answer:
+      "Not by your agents. Warthog writes the record itself, covering every request an agent makes through Warthog, every approval and every change to your connections, and agents can’t edit or delete it. Each entry is linked to the one before it, and Warthog checks every day that the chain is unbroken. If it ever finds a break, it tells you.",
+  },
+  {
+    question: "What can other members of my household see?",
+    answer:
+      "Only what your household shares: the household address, currency and budget, the member list and each member’s spending total. Members never see each other’s details, cards, memory, skills, agents or activity.",
+  },
+  {
+    question: "Can I take my information with me, or delete it?",
+    answer: (
+      <>
+        Yes, both in Settings, once you’ve confirmed it’s you. Export gives you a copy of
+        everything you keep in Warthog. Deleting your account cuts off your agents and
+        services straight away, signs you out everywhere and schedules your information for
+        removal. Backups are cleared on their own schedule, which the{" "}
+        <a href="/privacy">privacy policy</a> explains.
+      </>
+    ),
+  },
+  {
+    question: "Who do I talk to about privacy or security?",
+    answer: (
+      <>
+        Signed in? Use Contact us in Warthog. Otherwise, email{" "}
+        <a href={`mailto:${SUPPORT_EMAIL}`}>{SUPPORT_EMAIL}</a>. The{" "}
+        <a href="/privacy">privacy policy</a> sets out what we store, where it’s kept and
+        who can read it.
+      </>
+    ),
+  },
+] as const;
+
+const FAQ_GROUPS = [
+  { id: "questions-using", title: "Using Warthog", items: FAQS },
+  { id: "questions-security", title: "Security and privacy", items: SECURITY_FAQS },
 ] as const;
 
 // A semantic, static product illustration. These are labelled examples, not
@@ -399,23 +499,36 @@ export function Landing({ links = RELATIVE_LINKS }: { links?: PublicLinks } = {}
           <div className="wh-landing-section-intro" data-motion-reveal>
             <p className="wh-landing-eyebrow">A few useful answers</p>
             <h2 id="faq-title">Before you settle in.</h2>
-            <p>Get to know your agent home.</p>
-            <a href="/help/compatibility" className="wh-landing-link">
-              Read the connection guide{" "}
-              <ArrowRight size={16} aria-hidden="true" />
-            </a>
+            <p>Get to know your agent home, and how it keeps your information safe.</p>
+            <div className="wh-landing-intro-links">
+              <a href="/help/compatibility" className="wh-landing-link">
+                Read the connection guide{" "}
+                <ArrowRight size={16} aria-hidden="true" />
+              </a>
+              <a href="/privacy" className="wh-landing-link">
+                Read the privacy policy{" "}
+                <ArrowRight size={16} aria-hidden="true" />
+              </a>
+            </div>
           </div>
           <div className="wh-landing-questions">
-            {FAQS.map(({ question, answer }) => (
-              <details key={question}>
-                <summary>
-                  {question}
-                  <ChevronDown size={18} aria-hidden="true" />
-                </summary>
-                <div className="wh-landing-answer">
-                  <p>{answer}</p>
-                </div>
-              </details>
+            {FAQ_GROUPS.map(({ id, title, items }) => (
+              <section key={id} id={id} aria-labelledby={`${id}-title`}>
+                <h3 id={`${id}-title`} className="wh-landing-eyebrow">
+                  {title}
+                </h3>
+                {items.map(({ question, answer }) => (
+                  <details key={question}>
+                    <summary>
+                      {question}
+                      <ChevronDown size={18} aria-hidden="true" />
+                    </summary>
+                    <div className="wh-landing-answer">
+                      <p>{answer}</p>
+                    </div>
+                  </details>
+                ))}
+              </section>
             ))}
           </div>
         </section>

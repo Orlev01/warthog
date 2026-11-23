@@ -46,6 +46,17 @@ export function Privacy({ links = RELATIVE_LINKS }: { links?: PublicLinks } = {}
           </p>
         </PublicSection>
 
+        <PublicSection id="never-sold" title="We never sell your information">
+          <p>
+            We never sell any of your information. We don&#39;t rent or trade it, share it
+            with advertisers or data brokers, or use it to train AI models, and there are no
+            ads or third-party trackers in Warthog. Your information goes to the agents and
+            services you choose to connect, and to the providers that help run Warthog, who
+            receive only what they need to do that job, as described below. We also disclose
+            information when the law requires it.
+          </p>
+        </PublicSection>
+
         <PublicSection id="sensitive-details" title="Your most sensitive details are encrypted on your device">
           <p>
             Your most sensitive identity details &mdash; such as your passport or licence

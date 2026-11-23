@@ -520,7 +520,11 @@ features:
     write to the operator from "Contact us" in the app — a question, a problem, a privacy request,
     an idea or something else — and see what they've sent and whether it's been answered; the
     operator reads it on the admin portal's Requests page and replies by email. The support address
-    stays for anyone who can't sign in. See docs/adr/requests-for-members.md.)
+    stays for anyone who can't sign in. See docs/adr/requests-for-members.md.) (Amended
+    23 November 2026, founder: "We never sell any data." The privacy policy states that Warthog
+    never sells, rents or trades any of a person's information, never shares it with advertisers
+    or data brokers or uses it to train AI models, and has no ads or third-party trackers; the
+    front door's security FAQ says the same.)
 
   # --- Operations readiness (no admin UI in V1) ---
   - >-

@@ -38,6 +38,18 @@ redirects to those flows.
   panel or card on a tinted page canvas; no copy sits loose on the background
   ([contained text](../adr/contained-text.md)). Inside a section, prefer aligned
   rows and dividers to a border around every paragraph.
+- The questions have two groups: Using Warthog, and Security and privacy. The second was
+  added on 23 November 2026 after a prospective user said they didn't know "where the data
+  gets stored and what the permissions are … how am I protected?". It answers storage,
+  protection, agent permissions, staff access, selling and AI training, sign-in, the
+  activity record, households, export and deletion, and contact in plain words, and links
+  the privacy policy. The staff answer is the founder's wording and doesn't mention the
+  admin portal. "We never sell any of your information" is the founder's commitment and
+  is stated in the privacy policy (`#never-sold`). Every answer must hold for the code and
+  the policy. Never claim end-to-end or zero-knowledge encryption, a certification or
+  independent audit, that all data stays in Australia, that staff can never reach
+  anything beyond the device-encrypted tier, a tamper-proof record, or deletion of
+  everything in a set time.
 - Compatibility varies by platform and plan; link the actual guide. Permissions,
   spending rules and activity records apply to requests through Warthog. Never
   imply control of other providers' direct tools, billing or private memory.
