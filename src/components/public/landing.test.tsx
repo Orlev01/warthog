@@ -128,6 +128,34 @@ test("marketing artwork is decorative and server content does not depend on anim
   assert.ok(!/<(?:main|section|article|h[1-3])\b[^>]*(?:hidden|aria-hidden)/.test(markup));
 });
 
+// The questions also answer "where is my data and how am I protected?" in their own group,
+// pointing to the privacy policy. Every claim has to be one the code and policy support, so
+// the strong-sounding words Warthog can't back up (no end-to-end path, no certification, no
+// independent audit yet) never appear on the front door.
+test("questions include a security and privacy group that doesn't overclaim", () => {
+  const markup = render();
+  const group = markup.match(/<section\b[^>]*id="questions-security"[\s\S]*?<\/section>/)?.[0];
+  assert.ok(group, "a security and privacy question group is present");
+  assert.match(visibleText(group), /^Security and privacy\b/);
+  assert.ok((group.match(/<summary\b/g) ?? []).length >= 8, "the group covers the common concerns");
+  const text = visibleText(group);
+  for (const concern of [/\bstored\b/i, /\bAustralia\b/, /\bencrypted\b/i, /\bstaff\b/i, /\bdelete\b/i]) {
+    assert.match(text, concern);
+  }
+  assert.ok(anchors(group).some((link) => link.href === "/privacy"));
+  for (const overclaim of [
+    /end[- ]to[- ]end/i,
+    /zero[- ]knowledge/i,
+    /\bSOC ?2\b/i,
+    /\bISO ?27001\b/i,
+    /(?:military|bank)[- ]grade/i,
+    /unhackable|tamper[- ]proof/i,
+    /independently audited|pen(?:etration)?[- ]test/i,
+  ]) {
+    assert.doesNotMatch(visibleText(markup), overclaim);
+  }
+});
+
 // The positioning line (brief overview; design_ux primary_journey) — asserted
 // without a trailing period so either "…home" or "…home." satisfies it.
 const POSITIONING_LINE = "Your agents work for you, on your terms, from your home";
