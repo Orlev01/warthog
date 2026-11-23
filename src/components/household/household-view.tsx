@@ -1,6 +1,8 @@
 "use client";
 
 import * as React from "react";
+import { ConfirmDialog } from "@/components/ui/confirm-dialog";
+import { useUnsavedChanges } from "@/components/ui/unsaved-changes";
 import { DoorOpen, LogOut, Trash2, UserMinus } from "lucide-react";
 
 import { Badge } from "@/components/ui/badge";
@@ -313,6 +315,10 @@ export function HouseholdView({
   closeAction,
   acceptOwnershipAction,
 }: HouseholdViewProps) {
+  // Each panel is its own form and saving one reloads the page; never let that silently
+  // discard what was typed into another (UI/UX audit W-03).
+  const pageRef = React.useRef<HTMLDivElement>(null);
+  const unsaved = useUnsavedChanges(pageRef);
   const isOwner = currentUserId === household.ownerId;
   const nameOf = new Map(household.members.map((member, index) => [member.userId, memberName(member, index)]));
   // The non-owner members — the candidates the owner may remove or transfer to.
@@ -327,7 +333,7 @@ export function HouseholdView({
   const transferToYou = household.pendingTransfer?.toUserId === currentUserId;
 
   return (
-    <div className="wh-page">
+    <div className="wh-page" ref={pageRef}>
       <WorkspaceHeading
         title="Household"
         description="Share an address and a monthly budget with the people you live with. Everyone keeps their own account and private details."
@@ -654,6 +660,15 @@ export function HouseholdView({
           />
         </WorkspacePanel>
       )}
+      <ConfirmDialog
+        open={unsaved.pending !== null}
+        title={unsaved.pending?.title ?? ""}
+        description={unsaved.pending?.description ?? ""}
+        confirmLabel={unsaved.pending?.confirmLabel ?? ""}
+        cancelLabel="Keep editing"
+        onConfirm={unsaved.confirm}
+        onCancel={unsaved.cancel}
+      />
     </div>
   );
 }

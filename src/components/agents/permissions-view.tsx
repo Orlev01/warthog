@@ -81,6 +81,8 @@ export type PermissionsViewProps = {
   memories?: ReadonlyArray<SkillGrant>;
   embedded?: boolean;
   saving?: boolean;
+  // True while the person has changed something that isn't saved yet (UI/UX audit W-03).
+  unsaved?: boolean;
   // granted connectors and the tools it may use, reads and changes listed apart.
   connectors: ReadonlyArray<ConnectorAccess>;
   // low-tier identity read (always low tier only) vs. the high-tier REQUEST toggle.
@@ -155,6 +157,7 @@ export function PermissionsView({
   memoryWrite = false,
   embedded = false,
   saving = false,
+  unsaved = false,
   connectors,
   lowTierRead,
   highTierRequest,
@@ -530,6 +533,8 @@ export function PermissionsView({
                 <TriangleAlert aria-hidden={true} className="h-4 w-4 shrink-0" />
                 Add a budget before you can save card access.
               </span>
+            ) : unsaved ? (
+              <span className="font-medium text-fg">You have unsaved changes.</span>
             ) : undefined
           }
         >
