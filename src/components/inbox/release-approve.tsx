@@ -519,6 +519,12 @@ export interface ReleaseApproveProps {
 // Why a release has nothing to hand over (no dead control: the button is marked
 // unavailable, this one line says why, and a link goes where it can be fixed).
 const NO_CARD_REASON = "Add a card in your vault first, then approve and release.";
+
+// "Add a card" opens the add panel and, once the card is saved, offers a way back to this request
+// (/inbox?approval=<id>, the same link a notification opens).
+export function addCardHref(approvalId: string): string {
+  return `/vault/cards?returnTo=${encodeURIComponent(`/inbox?approval=${encodeURIComponent(approvalId)}`)}`;
+}
 const NO_HIGH_TIER_REASON = "Save this detail in your vault first, then approve and release.";
 
 export function ReleaseApprove(props: ReleaseApproveProps): React.ReactElement {
@@ -628,7 +634,9 @@ export function ReleaseApprove(props: ReleaseApproveProps): React.ReactElement {
             Approve and release
             <RequestContext request={request} />
           </Button>
-          <ButtonLink href={isCard ? "/vault/cards" : "/vault"}>{isCard ? "Add a card" : "Open your vault"}</ButtonLink>
+          <ButtonLink href={isCard ? addCardHref(approvalId ?? request.id) : "/vault"}>
+            {isCard ? "Add a card" : "Open your vault"}
+          </ButtonLink>
           {secondaryActions}
         </div>
       </div>

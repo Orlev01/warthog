@@ -80,7 +80,7 @@ import assert from "node:assert/strict";
 import { webcrypto } from "node:crypto";
 import { renderToStaticMarkup } from "react-dom/server";
 
-import { CardsView, sealCard, createRemoveCardFlow } from "./cards-view";
+import { CardsView, sealCard, createRemoveCardFlow, createChangeBillingFlow, removingDeletesBillingAddress } from "./cards-view";
 import { decryptValue } from "@/client/vault/values";
 
 // --- the prop shapes this task renders (described here as the contract; declared
@@ -593,9 +593,9 @@ test("sealCard derives the last four from the number and preserves the card meta
   assert.equal(submission.expiryMonth, 11, "the submission must preserve the expiry month");
   assert.equal(submission.expiryYear, 2029, "the submission must preserve the expiry year");
   assert.equal(submission.nickname, "Everyday spending", "the submission must preserve the nickname");
-  assert.equal(
-    submission.billingAddressId,
-    "addr-home",
+  assert.deepEqual(
+    (submission as unknown as { billing: unknown }).billing,
+    { source: "postal", id: "addr-home" },
     "the submission must preserve the chosen billing-address reference",
   );
   // The sealed number is carried under the `numberCiphertext` field (the NewCard
@@ -720,4 +720,105 @@ test("the add-card explainer states the release as it happens, with no absolute 
   assert.match(text, /encrypted on this device/i);
   assert.match(text, /passed through Warthog once/i);
   assert.match(text, /type it each time you approve a purchase/i, "the security code note says what happens instead");
+});
+
+
+// ================================================================================
+// Card billing addresses (docs/adr/card-billing-addresses.md): each saved card shows its billing
+// address and can change it; a card without one says so and offers to add one.
+// ================================================================================
+
+const HOME_CHOICE = { id: "addr-home", value: "12 Banksia Street, Perth", source: "postal" as const, upcoming: false, movingOn: null, usedBy: ["Everyday spending"] };
+const BOX_CHOICE = { id: "box-1", value: "PO Box 12, Bondi Junction", source: "billing" as const, upcoming: false, movingOn: null, usedBy: ["Travel backup"] };
+const renderReal = (props: React.ComponentProps<typeof CardsView>) => renderToStaticMarkup(<CardsView {...props} />);
+
+test("each saved card shows its billing address, with a Change named for the card", () => {
+  const markup = renderReal({
+    cards: [
+      { ...CARD_A, billingEntryId: null, billing: { text: "12 Banksia Street, Perth", source: "postal" } },
+      { ...CARD_B, billingAddressId: null, billingEntryId: "box-1", billing: { text: "PO Box 12, Bondi Junction", source: "billing" } },
+    ],
+    billingAddresses: [HOME_CHOICE, BOX_CHOICE],
+    changeBillingAddress: async () => ({ ok: true }),
+  });
+  const text = visibleText(markup);
+  assert.match(text, /Billing address: 12 Banksia Street, Perth/);
+  assert.match(text, /Billing address: PO Box 12, Bondi Junction/);
+  assert.match(markup, /<button\b[^>]*aria-label="Change the billing address for Everyday spending"[^>]*>[\s\S]*?Change<\/button>/);
+  assert.ok(!/<form\b[^>]*aria-label="Change billing address/.test(markup), "the change form opens only when asked");
+});
+
+test("a card with no billing address says so and offers to add one", () => {
+  const markup = renderReal({
+    cards: [{ ...CARD_A, billingAddressId: null, billingEntryId: null, billing: null }],
+    billingAddresses: [],
+  });
+  assert.match(visibleText(markup), /No billing address yet/);
+  assert.match(markup, /<button\b[^>]*aria-label="Add a billing address for Everyday spending"[^>]*>[\s\S]*?Add one<\/button>/);
+});
+
+test("Change opens on the card's current address and saves the new choice once", async () => {
+  const calls: unknown[] = [];
+  const flow = createChangeBillingFlow({
+    cardId: CARD_B.id,
+    current: { source: "billing", id: "box-1" },
+    choices: [HOME_CHOICE, BOX_CHOICE],
+    changeBillingAddress: async (input) => {
+      calls.push(input);
+      return { ok: true };
+    },
+  });
+  assert.equal(flow.getState().stage, "idle");
+  flow.open();
+  assert.equal(flow.getState().stage, "editing");
+  assert.equal(flow.getState().key, "billing:box-1", "the card's current address starts chosen");
+  flow.choose("postal:addr-home");
+  await Promise.all([flow.save(), flow.save()]);
+  assert.deepEqual(calls, [{ cardId: CARD_B.id, billing: { source: "postal", id: "addr-home" } }], "saved once");
+  assert.equal(flow.getState().stage, "saved");
+});
+
+test("Change can type a different address; a missing one or a refusal is said in plain words", async () => {
+  const calls: unknown[] = [];
+  const flow = createChangeBillingFlow({
+    cardId: CARD_A.id,
+    current: null,
+    choices: [HOME_CHOICE],
+    changeBillingAddress: async (input) => {
+      calls.push(input);
+      return { ok: false, reason: "billing_address_not_found" };
+    },
+  });
+  flow.open();
+  assert.equal(flow.getState().key, "", "with no current address nothing starts chosen");
+  await flow.save();
+  assert.equal(flow.getState().stage, "error");
+  assert.match(flow.getState().error ?? "", /Choose a billing address/);
+  assert.deepEqual(calls, [], "nothing is sent without a choice");
+
+  flow.choose("new");
+  flow.setNewValue("  PO Box 3, Manly  ");
+  await flow.save();
+  assert.deepEqual(calls, [{ cardId: CARD_A.id, billing: { source: "new", value: "PO Box 3, Manly" } }]);
+  assert.equal(flow.getState().stage, "error");
+  assert.match(flow.getState().error ?? "", /no longer saved/);
+  assert.ok(!/billing_address_not_found/.test(flow.getState().error ?? ""));
+
+  const thrown = createChangeBillingFlow({ cardId: CARD_A.id, choices: [HOME_CHOICE], changeBillingAddress: async () => { throw new Error("offline"); } });
+  thrown.open();
+  thrown.choose("postal:addr-home");
+  await thrown.save();
+  assert.match(thrown.getState().error ?? "", /couldn't change the billing address/);
+
+  const kept = createChangeBillingFlow({ cardId: CARD_A.id, choices: [HOME_CHOICE], changeBillingAddress: async () => ({ ok: true }) });
+  kept.open();
+  kept.cancel();
+  assert.equal(kept.getState().stage, "idle");
+});
+
+test("removing the last card that uses a card-only address deletes the address too (and says so)", () => {
+  const travel = { ...CARD_B, billingAddressId: null, billingEntryId: "box-1" };
+  assert.equal(removingDeletesBillingAddress(travel, [BOX_CHOICE]), true, "its only card");
+  assert.equal(removingDeletesBillingAddress(travel, [{ ...BOX_CHOICE, usedBy: ["Travel backup", "Everyday spending"] }]), false, "another card still uses it");
+  assert.equal(removingDeletesBillingAddress({ ...CARD_A, billingEntryId: null }, [HOME_CHOICE]), false, "an About you address is never deleted");
 });

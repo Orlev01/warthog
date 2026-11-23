@@ -285,7 +285,7 @@ type Submission = {
   expiryMonth: number;
   expiryYear: number;
   nickname: string;
-  billingAddressId: string;
+  billing: { source: string; id?: string; value?: string };
   numberCiphertext: string;
 };
 
@@ -468,7 +468,7 @@ test("AC1 — a first add creates the vault key, saves its passkey-wrapped envel
   assert.equal(sub.expiryMonth, 11, "the expiry month is submitted as a number");
   assert.equal(sub.expiryYear, 2029, "the expiry year is submitted as a number");
   assert.equal(sub.nickname, "Everyday spending", "the nickname is submitted");
-  assert.equal(sub.billingAddressId, "addr-home", "the chosen billing address is submitted");
+  assert.deepEqual(sub.billing, { source: "postal", id: "addr-home" }, "the chosen billing address is submitted");
 
   // Only the sealed number leaves — never the full number, never a security code.
   assert.ok(
@@ -993,13 +993,87 @@ test("a vault passphrase shorter than 12 characters is refused before anything l
   assert.match(flow.getState().error ?? "", /12/);
 });
 
-test("with no postal address on file there is no dead Confirm: the reason and a link to add one are shown", () => {
+// Card billing addresses (docs/adr/card-billing-addresses.md): with no saved address, the billing
+// address is typed right here (no empty dropdown, no detour to About you), and Save card is live.
+test("with no saved address the billing address field shows straight away and Save card is live", () => {
   const markup = renderToStaticMarkup(
     <AddCardFlow billingAddresses={[]} addCard={noopAddCard} initialOpen />,
   );
-  assert.ok(!liveButtons(markup).some((n) => /^confirm$/i.test(n)), `no live Confirm; live=${JSON.stringify(liveButtons(markup))}`);
-  assert.match(visibleText(markup), /postal address/i);
-  assert.match(markup, /<a\b[^>]*href="\/vault"/);
+  assert.ok(liveButtons(markup).some((n) => /^save card$/i.test(n)), `a live Save card; live=${JSON.stringify(liveButtons(markup))}`);
+  assert.ok(!/<select\b/.test(markup), "no dropdown");
+  assert.ok(!/A different billing address/.test(visibleText(markup)), "no choices to pick from");
+  assert.match(markup, /<input[^>]*autoComplete="billing street-address"|<input[^>]*autocomplete="billing street-address"/i);
+  assert.ok(!/<a\b[^>]*href="\/vault"/.test(markup), "no link away to About you");
+  assert.ok(!/postal address in About you/i.test(visibleText(markup)));
+});
+
+test("with no saved address a typed billing address is submitted trimmed, kept with the card", async () => {
+  const server = makeServer();
+  const addCard = makeAddCard();
+  const flow = createAddCardFlow({
+    billingAddresses: [],
+    fetch: server.fetch,
+    startAuthentication: makePasskey().fn,
+    createVaultKey: makeCreateKey().fn,
+    addCard: addCard.fn,
+  });
+  flow.setNumber(VISA_NUMBER);
+  flow.setNickname("Everyday spending");
+  flow.setCardholderName("Phil Bos");
+  flow.setExpiryMonth("11");
+  flow.setExpiryYear("2029");
+  flow.setNewBillingAddress("  PO Box 12, Bondi Junction NSW 1355  ");
+  await submitThroughPhrase(flow);
+  assert.equal(addCard.count, 1);
+  assert.deepEqual(addCard.subs[0]!.billing, { source: "new", value: "PO Box 12, Bondi Junction NSW 1355" });
+  assert.equal(flow.getState().newBillingAddress, "", "the typed address is cleared once saved");
+});
+
+test("with saved addresses nothing is chosen for the person: Save without a choice asks for one and sends nothing", async () => {
+  const server = makeServer();
+  const addCard = makeAddCard();
+  const { flow } = makeFlow(server, makePasskey(), makeCreateKey(), addCard);
+  assert.equal(flow.getState().billingKey, "", "no address is preselected");
+  flow.setNumber(VISA_NUMBER);
+  flow.setNickname("Everyday spending");
+  flow.setCardholderName("Phil Bos");
+  flow.setExpiryMonth("11");
+  flow.setExpiryYear("2029");
+  await flow.submit();
+  assert.equal(addCard.count, 0);
+  assert.equal(server.gets.length + server.posts.length, 0, "the vault isn't unlocked for an incomplete card");
+  assert.equal(flow.getState().errorField, "billing");
+  assert.match(flow.getState().error ?? "", /Choose a billing address/);
+
+  // Choosing "A different billing address" without typing one asks for the address.
+  flow.chooseBilling("new");
+  await flow.submit();
+  assert.equal(addCard.count, 0);
+  assert.match(flow.getState().error ?? "", /Type the billing address/);
+});
+
+test("a billing address that's no longer saved is reported on the billing choice, not as a generic failure", async () => {
+  const server = makeServer();
+  const addCard = makeAddCard({ ok: false, reason: "billing_address_not_found" });
+  const { flow } = makeFlow(server, makePasskey(), makeCreateKey(), addCard);
+  fillCard(flow, { number: VISA_NUMBER });
+  await submitThroughPhrase(flow);
+  assert.equal(addCard.count, 1);
+  assert.equal(flow.getState().errorField, "billing");
+  assert.match(flow.getState().error ?? "", /no longer saved/);
+});
+
+test("the billing address is chosen before the unlock step, and its error shows on it once", () => {
+  const markup = renderToStaticMarkup(
+    <AddCardFlow billingAddresses={[ADDR_HOME, ADDR_WORK]} addCard={noopAddCard} initialOpen />,
+  );
+  const text = visibleText(markup);
+  assert.ok(text.indexOf("Billing address") < text.indexOf("How would you like to unlock"), "billing comes first");
+  assert.match(text, /A different billing address/);
+  assert.match(text, /From About you/);
+  const billing = markup.slice(markup.indexOf(">Billing address</legend>"), markup.indexOf("</fieldset>", markup.indexOf(">Billing address</legend>")));
+  assert.equal((billing.match(/type="radio"/g) ?? []).length, 3, "both addresses plus 'A different billing address'");
+  assert.ok(!/type="radio"[^>]*checked=""/.test(billing), "no billing address starts chosen");
 });
 
 // ═══ Review fix W1 — the vault recovery phrase ═══════════════════════════════════════
@@ -1185,6 +1259,7 @@ test("W6 — the name on the card is submitted with the card, and reset to the s
   flow.setCardholderName("  O Q Levy  ");
   flow.setExpiryMonth("11");
   flow.setExpiryYear("2029");
+  flow.setBillingAddressId("addr-home");
   await submitThroughPhrase(flow);
   assert.equal(addCard.count, 1, "the card is submitted");
   assert.equal(

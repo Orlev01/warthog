@@ -909,7 +909,11 @@ test("with nothing to hand over, the release asks for nothing it can't use and l
   assert.equal(findAll(markup, "select").length, 0, "no empty card picker");
   assert.ok(!SECURITY_CODE_RE.test(controlLabelText(markup)), "no security code to type for nothing");
   assert.doesNotMatch(visibleText(markup), /How would you like to unlock/, "no unlock choice");
-  assert.match(markup, /href="\/vault\/cards"[^>]*>Add a card/, "a way to add the missing card");
+  assert.match(
+    markup,
+    /href="\/vault\/cards\?returnTo=%2Finbox%3Fapproval%3D[^"]+"[^>]*>Add a card/,
+    "a way to add the missing card that comes back to this request",
+  );
   const control = findAll(markup, "button").find((b) => /^Approve and release/.test(controlFace(b)))!;
   const reasonId = attr(control.attrs, "aria-describedby");
   assert.ok(reasonId && markup.includes(`id="${reasonId}"`), "the reason is tied to the unavailable control");
