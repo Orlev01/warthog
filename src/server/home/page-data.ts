@@ -18,7 +18,9 @@
 //                                    (`sumForConnectionPeriod` + `periodKeyFor`);
 //   • the account currency         — `getAccountCurrency` (the person's own code);
 //   • the upcoming reminders       — the life-admin records (`listRecordsForUser`),
-//                                    filtered to a due date that has not passed.
+//                                    filtered to live records due from HOME_OVERDUE_DAYS
+//                                    ago onwards (so a recent overdue one still shows),
+//                                    and how many records wait for the person to check.
 //
 // It adds NO SQL and NO crypto of its own. Like the sibling set-up-checklist read
 // it resolves the person's DEK through the injected `KeyWrapper` seam (read the
@@ -90,7 +92,11 @@ export interface HomeMetrics {
   readonly pendingApprovals: number; // the count of PENDING approvals (decided excluded)
   readonly activity: ActivityEntry[]; // the latest HOME_ACTIVITY_LIMIT entries across ALL the person's agents, newest first
   readonly agents: HomeAgentSpend[]; // the person's agents, each with spend-this-period
-  readonly reminders: LifeAdminRecord[]; // the life-admin records whose reminder date is upcoming, soonest first
+  readonly reminders: LifeAdminRecord[]; // live life-admin records due from HOME_OVERDUE_DAYS ago onwards, soonest first
+  // The person's local date the reminders were picked against (YYYY-MM-DD).
+  readonly today?: string;
+  // How many records wait for the person: agents' suggestions and their proposed changes.
+  readonly toCheck?: number;
   // Exact counts of the last 24 hours' activity per agent (null key ⇒ no agent), from
   // plaintext metadata — so Home can say "14 entries today · 2 need attention" per agent.
   readonly lastDayByAgent?: ActivityGroupSummary[];
@@ -107,14 +113,29 @@ async function dataKeyFor(db: Db, keyWrapper: KeyWrapper, userId: string): Promi
   return keyWrapper.unwrap(user.wrappedDek);
 }
 
-// A record is an UPCOMING reminder iff it has a due date that has not yet passed
-// (today or later). A record with no due date, or whose due date is already gone,
-// is not upcoming. Compared as calendar-day keys ("YYYY-MM-DD"), so the exact
-// instant within the day never matters.
-function isUpcoming(record: LifeAdminRecord, today: string): boolean {
-  if (record.dueDate == null) return false;
+// How long after its due date a record still shows on Home, as overdue (docs/adr/
+// life-admin-profile.md): long enough to act on a lapsed rego, short enough that a batch of
+// old receipts an agent found never fills Home.
+export const HOME_OVERDUE_DAYS = 30;
+
+// Statuses that need nothing more; they never show as reminders (the reminders job skips
+// them too).
+const SETTLED_STATUSES = new Set(["cancelled", "canceled", "done", "paused", "expired", "ended"]);
+
+// The calendar day `days` before `isoDate`, on the calendar in UTC.
+function daysBefore(isoDate: string, days: number): string {
+  const [year, month, day] = isoDate.split("-").map(Number);
+  return new Date(Date.UTC(year!, month! - 1, day! - days)).toISOString().slice(0, 10);
+}
+
+// A record is a Home reminder iff it is live and has a due date no earlier than `earliest`
+// (HOME_OVERDUE_DAYS before today). A record with no due date, a settled one, or one long
+// past is not. Compared as calendar-day keys ("YYYY-MM-DD"), so the exact instant within
+// the day never matters.
+function isReminder(record: LifeAdminRecord, earliest: string): boolean {
+  if (record.dueDate == null || SETTLED_STATUSES.has(record.status.trim().toLowerCase())) return false;
   const iso = record.dueDate instanceof Date ? record.dueDate.toISOString() : record.dueDate;
-  return iso.slice(0, 10) >= today;
+  return iso.slice(0, 10) >= earliest;
 }
 
 // Aggregate the four home-dashboard figures for `userId` (the SESSION's id, NEVER a
@@ -178,19 +199,23 @@ export async function loadHomeMetrics(
     });
   }
 
-  // The records whose reminder date is upcoming (a due date today or later),
-  // decrypted; a record with no due date, or a past one, is excluded.
+  // The live records due today or later, or overdue by no more than HOME_OVERDUE_DAYS,
+  // decrypted; a record with no due date, a settled one or one long past is excluded.
   const today = periodKeyFor("day", now, timeZone);
   const records = await listRecordsForUser(db, userId, dek);
+  const earliest = daysBefore(today, HOME_OVERDUE_DAYS);
   const reminders = records
-    .filter((record) => isUpcoming(record, today))
+    .filter((record) => isReminder(record, earliest))
     .sort((a, b) => dueKey(a).localeCompare(dueKey(b)));
+  const toCheck = records.filter((record) => record.reviewState === "suggested" || record.pending !== null).length;
 
   return {
     pendingApprovals: pending.length,
     activity,
     agents,
     reminders,
+    today,
+    toCheck,
     lastDayByAgent,
   };
 }

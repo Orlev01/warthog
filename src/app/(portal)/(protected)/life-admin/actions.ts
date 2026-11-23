@@ -37,6 +37,16 @@ import { validTaskAssignee } from "../../../../server/db/task-handoffs";
 //   • This module reads no `process.env` and holds no secret (INV-103): db, keyWrapper,
 //     clock and blob are INJECTED seams, so no ambient env value can surface in the
 //     loaded screen or a stored row.
+//
+// Typed records (docs/adr/life-admin-profile.md): the person adds a record of a catalogue
+// type and edits one through the record service (`saveTypedRecord` / `changeRecord`, actor
+// "person"), so their values are normalised the same way an agent's are. Before anything is
+// saved, the person's input is checked for identifiers Warthog never keeps (tax file numbers,
+// passwords and PINs, BSB and account numbers, passport, licence and Medicare numbers …) and
+// refused with the field's name — never its value. An edit sends only what changed, removes
+// what the person cleared, and never touches a value an older agent saved as a list or
+// object (engineering finding M4). The person confirms an agent's suggestion, says it isn't
+// theirs (a tombstone, so it isn't added again), or accepts or declines an agent's change.
 
 import { z } from "zod";
 import { recordDueDateSchema, reminderOffsetsSchema } from "@/domain/life-admin/record-metadata";
@@ -51,10 +61,26 @@ import type { BlobStore } from "@/server/storage/blob";
 import { getUserById } from "@/server/db/users";
 import { getAgentById, listAgentsForUser } from "@/server/db/agents";
 import {
-  createRecord,
-  updateRecord as updateRecordRow,
+  confirmRecord as confirmRecordRow,
+  getRecordForUser,
   type LifeAdminRecord,
+  type PendingChange,
+  type RecordFoundIn,
+  type RecordSource,
 } from "@/server/db/life-admin-records";
+import {
+  RECORD_STATUSES,
+  acceptPendingChange,
+  changeRecord,
+  declinePendingChange,
+  saveTypedRecord,
+  typeOf,
+} from "@/server/life-admin/record-service";
+import { findForbidden, type IdentifierRule } from "@/domain/life-admin/identifiers";
+import { normaliseFields } from "@/domain/life-admin/normalise";
+import { recordType, type RecordTypeDef } from "@/domain/life-admin/record-types";
+import { cleanShortText } from "@/domain/content/untrusted";
+import { fieldLabel, typedFieldLabel } from "@/components/life-admin/record-format";
 import {
   createTask as createTaskRow,
   updateTask as updateTaskRow,
@@ -69,7 +95,7 @@ import {
   linkTask,
   type ChecklistItem,
 } from "@/server/db/moving-checklist";
-import { saveReceiptFile, deleteRecordWithFiles } from "@/server/storage/receipt-files";
+import { saveReceiptFile, deleteRecordWithFiles, dismissRecordWithFiles } from "@/server/storage/receipt-files";
 import { buildMovingChecklist } from "@/server/moving/checklist";
 import { lifeAdminPageData } from "@/server/life-admin/page-data";
 import { periodKeyFor } from "@/server/db/card-spend-ledger";
@@ -79,6 +105,9 @@ import { formatAccountTime } from "@/domain/display-time";
 import type {
   LifeAdminRecordView,
   ChecklistItemView,
+  PendingChangeView,
+  RecordActorView,
+  RecordFoundInView,
 } from "@/components/life-admin/life-admin-view";
 import type {
   AgentOption,
@@ -99,18 +128,16 @@ export interface LifeAdminActionsDeps {
   readonly blob: BlobStore;
 }
 
-// What `load` returns — ALL of the session person's records (grouped by kind, fields
-// decrypted and stringified for display), moving checklist and tasks (titles/notes
-// decrypted, assignee + note authors resolved to agent display names), plus the
-// person's agents — shaped into the props <LifeAdminView/> + <TasksView/> are mounted
-// over. `today` is the person's local date (YYYY-MM-DD in their account time zone, from
-// the injected clock): the record tabs group by due date against it, so the view never
-// reads the clock.
+// What `load` returns — ALL of the session person's live records (fields decrypted; text
+// values as strings, anything else summarised read-only; who added and changed each one
+// resolved to an agent's name), moving checklist and tasks (titles/notes decrypted,
+// assignee + note authors resolved to agent display names), plus the person's agents —
+// shaped into the props <LifeAdminView/> + <TasksView/> are mounted over. `today` is the
+// person's local date (YYYY-MM-DD in their account time zone, from the injected clock):
+// what is overdue or coming up is worked out against it, so the view never reads the clock.
 export interface LifeAdminPageData {
   readonly today: string;
-  readonly subscriptions: LifeAdminRecordView[];
-  readonly receipts: LifeAdminRecordView[];
-  readonly renewals: LifeAdminRecordView[];
+  readonly records: LifeAdminRecordView[];
   readonly checklist: ChecklistItemView[];
   readonly tasks: TaskItemView[];
   readonly agents: AgentOption[];
@@ -118,8 +145,20 @@ export interface LifeAdminPageData {
 
 // Every mutation reports its outcome — success, or a refusal naming its reason (the
 // row/agent is not this person's). Never a silent success (conventions: a server action
-// reports success, the refusal reason, or a 4xx).
-export type ActionResult = { readonly ok: true } | { readonly ok: false; readonly reason: string };
+// reports success, the refusal reason, or a 4xx). A record save also says what happened
+// (created, or the person already had it and it was updated) and whether anything was left
+// out; a refusal for an identifier Warthog never keeps names the rule and the field's label,
+// never the value.
+export type RecordRefusal = { readonly rule: IdentifierRule; readonly field: string };
+export type ActionResult =
+  | {
+      readonly ok: true;
+      readonly outcome?: "created" | "updated" | "unchanged" | "confirmed";
+      readonly recordId?: string;
+      readonly count?: number;
+      readonly problems?: readonly string[];
+    }
+  | { readonly ok: false; readonly reason: string; readonly refusal?: RecordRefusal };
 
 // ---- boundary validation (INV-102) -------------------------------------------------
 //
@@ -132,10 +171,11 @@ const MAX_FIELDS_CHARS = 100_000;
 const MAX_TITLE = 2000;
 const MAX_NOTE = 4000;
 export const MAX_FILE_BYTES = RECEIPT_MAX_BYTES;
-const DEFAULT_STATUS = "active";
 
 const uuid = z.uuid();
-const recordKind = z.enum(["subscription", "receipt_warranty", "renewal_appointment"]);
+const MAX_IDS = 500;
+// A record type from the catalogue ("vehicle.registration"); anything else is a 4xx.
+const recordTypeId = z.string().max(80).refine((id) => recordType(id) !== undefined, "Unknown record type");
 const taskStatus = z.enum(["open", "in_progress", "done"]);
 // The assignee the view offers: 'any', or one of the person's own agents (a uuid).
 const assignee = z.union([z.literal("any"), z.uuid()]);
@@ -147,20 +187,11 @@ const status = z.string().max(MAX_STATUS).optional();
 const dueDate = recordDueDateSchema.optional().nullable();
 const reminderOffsets = reminderOffsetsSchema;
 
-const saveRecordSchema = z.object({
-  kind: recordKind,
-  fields,
-  dueDate,
-  status,
-  reminderOffsets: reminderOffsets.optional(),
-});
-const updateRecordSchema = z.object({
-  id: uuid,
-  fields,
-  dueDate,
-  status,
-  reminderOffsets: reminderOffsets.optional(),
-});
+const recordStatus = z.enum(RECORD_STATUSES).optional();
+const parentId = uuid.nullable().optional();
+const saveRecordSchema = z.object({ type: recordTypeId, fields, dueDate, status: recordStatus, parentId });
+const updateRecordSchema = z.object({ id: uuid, fields, dueDate, status, parentId });
+const idsSchema = z.object({ ids: z.array(uuid).min(1).max(MAX_IDS) });
 const setRemindersSchema = z.object({ id: uuid, reminderOffsets });
 const attachRecordSchema = z.object({ recordId: uuid });
 const idOnlySchema = z.object({ id: uuid });
@@ -179,19 +210,27 @@ const addNoteSchema = z.object({ id: uuid, text: z.string().trim().min(1).max(MA
 
 // ---- the method input types (so the factory's shape is precise) --------------------
 
+// A new record of a catalogue type, from the Add form: the type's fields (empty ones are
+// ignored), its due date, status and the vehicle, home or pet it belongs to.
 export interface SaveRecordInput {
-  readonly kind: z.infer<typeof recordKind>;
+  readonly type: string;
   readonly fields: Record<string, unknown>;
   readonly dueDate?: string | null;
   readonly status?: string;
-  readonly reminderOffsets?: number[];
+  readonly parentId?: string | null;
 }
+// An edit from the Edit form: every field the form showed, as submitted. A changed value is
+// set, an emptied one removed and an unchanged one left alone. An omitted due date, status
+// or parent keeps the stored one; `null` clears the date or the link.
 export interface UpdateRecordInput {
   readonly id: string;
   readonly fields: Record<string, unknown>;
   readonly dueDate?: string | null;
   readonly status?: string;
-  readonly reminderOffsets?: number[];
+  readonly parentId?: string | null;
+}
+export interface IdsInput {
+  readonly ids: readonly string[];
 }
 export interface AttachReceiptFileInput {
   readonly recordId: string;
@@ -233,6 +272,11 @@ export interface LifeAdminActions {
   updateRecord(session: Session, input: UpdateRecordInput): Promise<ActionResult>;
   attachReceiptFile(session: Session, input: AttachReceiptFileInput): Promise<ActionResult>;
   deleteRecord(session: Session, input: IdInput): Promise<ActionResult>;
+  confirmRecord(session: Session, input: IdInput): Promise<ActionResult>;
+  confirmAll(session: Session, input: IdsInput): Promise<ActionResult>;
+  dismissRecord(session: Session, input: IdInput): Promise<ActionResult>;
+  acceptPending(session: Session, input: IdInput): Promise<ActionResult>;
+  declinePending(session: Session, input: IdInput): Promise<ActionResult>;
   setRecordReminders(session: Session, input: SetRemindersInput): Promise<ActionResult>;
   toggleChecklistItem(session: Session, input: IdInput): Promise<ActionResult>;
   handChecklistItemToAgent(session: Session, input: HandToAgentInput): Promise<ActionResult>;
@@ -256,6 +300,118 @@ function isUploadLike(file: unknown): file is UploadLike {
   if (typeof file !== "object" || file === null) return false;
   const f = file as { name?: unknown; size?: unknown; arrayBuffer?: unknown };
   return typeof f.name === "string" && typeof f.size === "number" && typeof f.arrayBuffer === "function";
+}
+
+// ---- typed records: shaping for the view, and the person's input --------------------
+
+const PERSON: RecordSource = { kind: "person" };
+
+const FORMER_AGENT = "an agent that is no longer connected";
+const MAX_HELD_SUMMARY = 300;
+
+// An agent's display name as the provenance line uses it. A name that would read as the
+// person or as Warthog itself ("you", "Warthog") is quoted, so an agent can never pass its
+// own record off as the person's.
+function agentName(names: ReadonlyMap<string, string>, agentId: string): string {
+  const name = names.get(agentId);
+  if (!name) return FORMER_AGENT;
+  return /^(you|yourself|me|the person|warthog)$/i.test(name.replace(/[^\p{L}\p{N} ]/gu, "").trim())
+    ? `an agent called \u201c${name}\u201d`
+    : name;
+}
+
+function actorView(source: RecordSource | null, names: ReadonlyMap<string, string>): RecordActorView | null {
+  if (!source) return null;
+  return source.kind === "agent" ? { kind: "agent", agentId: source.agentId, name: agentName(names, source.agentId) } : { kind: "person" };
+}
+
+// Where an agent says it found something, cleaned for display (it is the agent's text).
+function foundInView(foundIn: RecordFoundIn | null | undefined): RecordFoundInView | null {
+  if (!foundIn) return null;
+  return {
+    service: cleanShortText(String(foundIn.service ?? ""), 80),
+    ...(foundIn.sender ? { sender: cleanShortText(String(foundIn.sender), 120) } : {}),
+    ...(foundIn.date ? { date: cleanShortText(String(foundIn.date), 40) } : {}),
+    seenByWarthog: foundIn.seenByWarthog === true,
+  };
+}
+
+function pendingView(pending: PendingChange | null, names: ReadonlyMap<string, string>): PendingChangeView | null {
+  if (!pending) return null;
+  const set: Record<string, string> = {};
+  for (const [key, value] of Object.entries(pending.set ?? {})) set[key] = value == null ? "" : String(value);
+  return {
+    byName: agentName(names, pending.byAgentId),
+    set,
+    remove: [...(pending.remove ?? [])],
+    ...(pending.dueDate !== undefined ? { dueDate: pending.dueDate } : {}),
+    ...(pending.status !== undefined ? { status: pending.status } : {}),
+    foundIn: foundInView(pending.foundIn),
+  };
+}
+
+function scalarText(value: unknown): string | null {
+  if (typeof value === "string") return value;
+  if (typeof value === "number") return String(value);
+  if (typeof value === "boolean") return value ? "yes" : "no";
+  return null;
+}
+
+// A value an older agent saved as a list or an object, summarised for reading only.
+function heldSummary(value: object): string {
+  const text = Array.isArray(value)
+    ? value.map((item) => scalarText(item) ?? "…").join(", ")
+    : Object.entries(value).map(([key, item]) => `${fieldLabel(key)}: ${scalarText(item) ?? "…"}`).join("; ");
+  return text.length > MAX_HELD_SUMMARY ? `${text.slice(0, MAX_HELD_SUMMARY - 1)}…` : text || "…";
+}
+
+// The fields the person filled in on the Add form: empty ones dropped, text trimmed.
+function filledFields(raw: Readonly<Record<string, unknown>>): Record<string, unknown> {
+  const filled: Record<string, unknown> = {};
+  for (const [key, value] of Object.entries(raw)) {
+    const text = typeof value === "string" ? value.trim() : value;
+    if (text === "" || text === null || text === undefined) continue;
+    filled[key] = text;
+  }
+  return filled;
+}
+
+// The first identifier Warthog never keeps among `fields`, named by the type's label for
+// the field — never its value.
+function refusalFor(type: RecordTypeDef, fields: Readonly<Record<string, unknown>>): RecordRefusal | null {
+  const [finding] = findForbidden(fields, type.id);
+  return finding ? { rule: finding.rule, field: typedFieldLabel(type, finding.field) } : null;
+}
+
+/**
+ * What an Edit form submission changes on `current`: each value the person changed (set),
+ * each one they emptied (remove). An unchanged value is left out, so normalising never
+ * rewrites what the person didn't touch, and a stored list or object is never replaced from
+ * a form (M4). A changed detail saved under another name that now lands on one of the
+ * type's own fields ("service" → "provider") moves there instead of being kept twice.
+ */
+export function editChanges(
+  type: RecordTypeDef,
+  current: Readonly<Record<string, unknown>>,
+  submitted: Readonly<Record<string, unknown>>,
+): { set: Record<string, unknown>; remove: string[] } {
+  const set: Record<string, unknown> = {};
+  const remove: string[] = [];
+  for (const [key, raw] of Object.entries(submitted)) {
+    const stored = Object.hasOwn(current, key) ? current[key] : undefined;
+    if (stored !== null && typeof stored === "object") continue;
+    const value = typeof raw === "string" ? raw.trim() : raw;
+    const storedText = stored === undefined || stored === null ? "" : String(stored).trim();
+    if (value === "" || value === null || value === undefined) {
+      if (storedText !== "") remove.push(key);
+      continue;
+    }
+    if (storedText === String(value)) continue;
+    set[key] = value;
+    const landed = Object.keys(normaliseFields(type, { [key]: value }, true, { fromAgent: false }).fields);
+    if (stored !== undefined && landed.length === 1 && landed[0] !== key) remove.push(key);
+  }
+  return { set, remove };
 }
 
 export function createLifeAdminActions(deps: LifeAdminActionsDeps): LifeAdminActions {
@@ -286,20 +442,42 @@ export function createLifeAdminActions(deps: LifeAdminActionsDeps): LifeAdminAct
     return agents.find((a) => a.id === id)?.displayName ?? "an agent";
   }
 
-  function toRecordView(record: LifeAdminRecord, hasAttachedFile: boolean, files: { id: string; size: number }[] = []): LifeAdminRecordView {
+  // One record as the view renders it: text values as strings; a list or object an older
+  // agent saved summarised read-only in `heldFields` (never "[object Object]", never put back
+  // into a form); who added and last changed it, and where an agent says it found it,
+  // resolved for display; an agent's waiting change with its agent's name.
+  function toRecordView(
+    record: LifeAdminRecord,
+    hasAttachedFile: boolean,
+    names: ReadonlyMap<string, string>,
+    files: { id: string; size: number }[] = [],
+  ): LifeAdminRecordView {
     const display: Record<string, string> = {};
+    const held: Record<string, string> = {};
     for (const [key, value] of Object.entries(record.fields)) {
-      display[key] = value == null ? "" : String(value);
+      if (value !== null && typeof value === "object") held[key] = heldSummary(value);
+      else display[key] = value == null ? "" : String(value);
     }
+    const pending = pendingView(record.pending, names);
+    const foundIn = foundInView(record.foundIn);
+    const changedBy = actorView(record.changedBy, names);
     return {
       id: record.id,
       kind: record.kind,
+      type: record.type,
       fields: display,
-      dueDate: record.dueDate == null ? null : String(record.dueDate),
+      ...(Object.keys(held).length ? { heldFields: held } : {}),
+      dueDate: record.dueDate == null ? null : String(record.dueDate).slice(0, 10),
       status: record.status,
       reminderOffsets: record.reminderOffsets,
       hasAttachedFile,
       ...(files.length ? { files } : {}),
+      reviewState: record.reviewState === "suggested" ? "suggested" : "confirmed",
+      parentId: record.parentId,
+      addedBy: actorView(record.source, names) ?? { kind: "person" },
+      ...(changedBy ? { changedBy } : {}),
+      ...(foundIn ? { foundIn } : {}),
+      ...(pending ? { pending } : {}),
     };
   }
 
@@ -352,74 +530,123 @@ export function createLifeAdminActions(deps: LifeAdminActionsDeps): LifeAdminAct
     const fileRows = await db.query("SELECT id, record_id, size FROM receipt_files WHERE user_id=$1 ORDER BY id", [userId]);
     const filesFor = (id: string) => fileRows.rows.filter((r) => r.record_id === id).map((r) => ({ id: r.id as string, size: Number(r.size) }));
     const agents = await listAgentsForUser(db, userId);
+    const names = new Map(agents.map((agent) => [agent.id, cleanShortText(agent.displayName, 80)] as const));
     // "Today" is the person's own local day (the same derivation Home uses), not UTC.
     const timeZone = await timeZoneFor(db, userId, dek);
     const today = periodKeyFor("day", clock.now(), timeZone);
 
     return {
       today,
-      subscriptions: page.subscriptions.map((r) => toRecordView(r, r.hasAttachedFile)),
-      receipts: page.receipts.map((r) => toRecordView(r, r.hasAttachedFile, filesFor(r.id))),
-      renewals: page.renewals.map((r) => toRecordView(r, r.hasAttachedFile)),
+      records: page.records.map((r) => toRecordView(r, r.hasAttachedFile, names, filesFor(r.id))),
       checklist: page.checklist.map(toChecklistView),
       tasks: page.tasks.map((t) => toTaskView(t, agents, timeZone)),
       agents: agents.map((a) => ({ id: a.id, name: a.displayName })),
     };
   }
 
-  // Save a new record for the session person (fields DEK-encrypted by the store).
-  // Validate at the boundary first (a 4xx before any write); the owner is the session's
-  // id, so a userId smuggled in the input is ignored.
+  // Add a record of a catalogue type for the session person, through the record service
+  // (actor "person", so it is confirmed and its values normalised like an agent's). Validate
+  // at the boundary first (an unknown type is a 4xx before any write); refuse an identifier
+  // Warthog never keeps, naming the field; refuse a form with nothing filled in. The owner
+  // is the session's id, so a userId smuggled in the input is ignored. A record matching one
+  // the person already has (the same plate, the same insurer and policy) updates it.
   async function saveRecord(session: Session, input: SaveRecordInput): Promise<ActionResult> {
     const valid = parseParams(saveRecordSchema, input);
+    const type = recordType(valid.type)!;
+    const filled = filledFields(valid.fields);
+    const refusal = refusalFor(type, filled);
+    if (refusal) return { ok: false, reason: "forbidden", refusal };
+    if (Object.keys(filled).length === 0 && !valid.dueDate) return { ok: false, reason: "empty" };
     const dek = await dataKeyFor(session.userId);
-    await createRecord(
+    const saved = await saveTypedRecord(
       db,
-      {
-        userId: session.userId,
-        kind: valid.kind,
-        fields: valid.fields,
-        dueDate: valid.dueDate ?? null,
-        status: valid.status ?? DEFAULT_STATUS,
-        reminderOffsets: valid.reminderOffsets,
-        source: { kind: "person" },
-      },
       dek,
+      session.userId,
+      PERSON,
+      { type, fields: filled, dueDate: valid.dueDate ?? null, status: valid.status, parentId: valid.parentId },
+      clock.now(),
     );
-    return { ok: true };
+    const problems = saved.problems;
+    if (saved.action === "skipped") {
+      return { ok: true, outcome: "unchanged", ...(saved.record ? { recordId: saved.record.id } : {}), problems };
+    }
+    return { ok: true, outcome: saved.action === "proposed" ? "updated" : saved.action, recordId: saved.record.id, problems };
   }
 
-  // Edit an OWNED record's fields, PRESERVING the metadata the caller did not resubmit.
-  // Validate at the boundary first (a malformed id is a 4xx before any query), then read
-  // the current due date + status member-scoped (id AND user_id bound) — this both
-  // refuses a record that is not this person's (left unchanged) and lets a fields-only
-  // edit keep its due date, status and reminders: an OMITTED value (`undefined`) keeps
-  // the stored one, while an explicit value (including `null` to clear a date) replaces
-  // it. So editing the fields never silently wipes the due date or resets the status.
+  // Edit an OWNED record from the Edit form, through the record service (actor "person").
+  // Validate at the boundary first (a malformed id is a 4xx before any query), read the
+  // record member-scoped (id AND user_id bound — another person's record is refused and left
+  // unchanged), then change only what the person changed (editChanges), refusing an
+  // identifier Warthog never keeps. An omitted due date, status or parent keeps the stored
+  // one. The person's edit confirms an agent's suggestion — even one that changed nothing.
   async function updateRecord(session: Session, input: UpdateRecordInput): Promise<ActionResult> {
     const valid = parseParams(updateRecordSchema, input);
-    const current = await db.query(
-      "SELECT due_date::text AS due_date, status FROM life_admin_records WHERE id = $1 AND user_id = $2",
-      [valid.id, session.userId],
-    );
-    if (current.rows.length === 0) {
-      return { ok: false, reason: "not_found" };
-    }
-    const existing = current.rows[0] as { due_date: string | null; status: string };
     const dek = await dataKeyFor(session.userId);
-    await updateRecordRow(
+    const existing = await getRecordForUser(db, session.userId, valid.id, dek);
+    if (!existing) return { ok: false, reason: "not_found" };
+    const type = typeOf(existing);
+    const { set, remove } = editChanges(type, existing.fields, valid.fields);
+    const refusal = refusalFor(type, set);
+    if (refusal) return { ok: false, reason: "forbidden", refusal };
+    const changed = await changeRecord(
       db,
-      {
-        userId: session.userId,
-        id: valid.id,
-        fields: valid.fields,
-        dueDate: valid.dueDate === undefined ? existing.due_date : valid.dueDate,
-        status: valid.status === undefined ? existing.status : valid.status,
-        reminderOffsets: valid.reminderOffsets,
-      },
       dek,
+      existing,
+      PERSON,
+      { set, remove, dueDate: valid.dueDate, status: valid.status, parentId: valid.parentId },
+      clock.now(),
     );
-    return { ok: true };
+    if (changed.action === "refused") return { ok: false, reason: "not_found" };
+    if (changed.action === "unchanged" && existing.reviewState === "suggested") {
+      await confirmRecordRow(db, session.userId, existing.id);
+      return { ok: true, outcome: "confirmed", recordId: existing.id, problems: changed.problems };
+    }
+    return { ok: true, outcome: changed.action === "proposed" ? "updated" : changed.action, recordId: existing.id, problems: changed.problems };
+  }
+
+  // The person checked an agent's suggestion: it becomes theirs, and agents can no longer
+  // change it without asking. Member-scoped; a record that is not this person's suggestion
+  // (another person's, or one already confirmed) is refused.
+  async function confirmRecord(session: Session, input: IdInput): Promise<ActionResult> {
+    const { id } = parseParams(idOnlySchema, input);
+    return (await confirmRecordRow(db, session.userId, id))
+      ? { ok: true, outcome: "confirmed", recordId: id, count: 1 }
+      : { ok: false, reason: "not_found" };
+  }
+
+  // Confirm several suggestions at once ("Confirm all"). Every id must be well formed (a 4xx
+  // otherwise, before any write); each is confirmed member-scoped, so another person's id
+  // changes nothing. Refused when none of them was one of this person's suggestions.
+  async function confirmAll(session: Session, input: IdsInput): Promise<ActionResult> {
+    const { ids } = parseParams(idsSchema, input);
+    let count = 0;
+    for (const id of new Set(ids)) if (await confirmRecordRow(db, session.userId, id)) count += 1;
+    return count > 0 ? { ok: true, outcome: "confirmed", count } : { ok: false, reason: "not_found" };
+  }
+
+  // "Not mine": remove the record's files and leave a tombstone that keeps only its type and
+  // match key, so an agent finding the same thing again doesn't add it back. Member-scoped.
+  async function dismissRecord(session: Session, input: IdInput): Promise<ActionResult> {
+    const { id } = parseParams(idOnlySchema, input);
+    const dek = await dataKeyFor(session.userId);
+    return (await dismissRecordWithFiles(db, blob, { userId: session.userId, recordId: id }, dek))
+      ? { ok: true }
+      : { ok: false, reason: "not_found" };
+  }
+
+  // Accept an agent's waiting change to one of the person's records: it is applied and the
+  // record stays the person's. Refused when there is no such change on their record.
+  async function acceptPending(session: Session, input: IdInput): Promise<ActionResult> {
+    const { id } = parseParams(idOnlySchema, input);
+    const dek = await dataKeyFor(session.userId);
+    const record = await acceptPendingChange(db, dek, session.userId, id);
+    return record ? { ok: true, outcome: "updated", recordId: id } : { ok: false, reason: "not_found" };
+  }
+
+  // Keep the person's own values: the agent's waiting change is dropped. Member-scoped.
+  async function declinePending(session: Session, input: IdInput): Promise<ActionResult> {
+    const { id } = parseParams(idOnlySchema, input);
+    return (await declinePendingChange(db, session.userId, id)) ? { ok: true, recordId: id } : { ok: false, reason: "not_found" };
   }
 
   // Attach a receipt file to an OWNED record. Validate the id at the boundary (a 4xx
@@ -598,6 +825,11 @@ export function createLifeAdminActions(deps: LifeAdminActionsDeps): LifeAdminAct
   return {
     load,
     deleteRecord,
+    confirmRecord,
+    confirmAll,
+    dismissRecord,
+    acceptPending,
+    declinePending,
     saveRecord,
     updateRecord,
     attachReceiptFile,

@@ -135,6 +135,23 @@ test("reminders use the owner's saved title or name and friendly category fallba
   }
 });
 
+test("each reminder links to its record in Life admin, says what its date means, and marks a recent overdue one; suggestions are counted", async () => {
+  const db = await freshDb();
+  try {
+    const owner = await seedSignedIn(db, "reminder-links@example.com");
+    const rego = await createRecord(db, { userId: owner.userId, kind: "item", type: "vehicle.registration", fields: { provider: "Transport for NSW" }, dueDate: "2026-12-14", status: "active", source: { kind: "person" } }, owner.dek);
+    const lapsed = await createRecord(db, { userId: owner.userId, kind: "item", type: "health.insurance", fields: { provider: "Medibank" }, dueDate: "2026-11-02", status: "active", source: { kind: "agent", agentId: "agent-1" } }, owner.dek);
+    const view = await makeActions(db).load(owner.session);
+    assert.deepEqual(view.reminders, [
+      { id: lapsed.id, title: "Medibank", due: "2 Nov 2026", dueLabel: "Renews or extras reset", overdue: true, href: `/life-admin?view=life&tab=things#record-${lapsed.id}` },
+      { id: rego.id, title: "Transport for NSW", due: "14 Dec 2026", dueLabel: "Expires", href: `/life-admin?view=life&tab=things#record-${rego.id}` },
+    ]);
+    assert.deepEqual(view.toCheck, { count: 1, href: "/life-admin?view=life&tab=things" }, "the agent's record waits to be checked");
+  } finally {
+    await db.close();
+  }
+});
+
 // --- the view model the loader returns -----------------------------------------
 // Derived from the function itself so the test pins the BEHAVIOURAL fields without
 // locking the props type's NAME (the existing home tests take the same approach).

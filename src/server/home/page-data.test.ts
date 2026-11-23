@@ -138,6 +138,8 @@ interface HomeMetricsLike {
   readonly activity: HomeActivityLike[];
   readonly agents: HomeAgentLike[];
   readonly reminders: HomeReminderLike[];
+  readonly today?: string;
+  readonly toCheck?: number;
 }
 
 // --- fixtures ---------------------------------------------------------------------
@@ -163,6 +165,8 @@ const KEYS_OTHER: PeriodKeys = { day: "2026-12-20", week: "2026-W51", month: "20
 // already gone → not upcoming).
 const DUE_UPCOMING = "2026-11-17";
 const DUE_PAST = "2026-11-05";
+// More than HOME_OVERDUE_DAYS (30) before NOW: too old to show on Home.
+const DUE_LONG_PAST = "2026-10-05";
 
 // One real local KeyWrapper (dev/test) for the whole file — exactly the one a
 // non-production composition root selects, so a stored wrapped-DEK really unwraps to
@@ -483,30 +487,50 @@ test("the agent's spend and budget are expressed in the person's account currenc
 });
 
 // ===========================================================================
-// AC1 — the records whose reminder date is UPCOMING (a future due date); a record with
-// no due date, or whose reminder/due date has already passed, is not upcoming.
+// AC1 — the records whose reminder date is UPCOMING (a future due date), and live records
+// overdue by no more than 30 days (docs/adr/life-admin-profile.md); a record with no due
+// date, a settled one, or one long past is not shown.
 // ===========================================================================
 
-test("reminders are the records whose reminder date is upcoming, decrypted; past and no-due records are excluded", async () => {
+test("reminders are the upcoming and recently overdue live records, decrypted; long-past, settled and no-due records are excluded", async () => {
   const db = await freshDb();
   try {
     const { userId, dek } = await makeUserWithDek(db, "reminders");
 
     const upcomingId = await seedReminder(db, dek, userId, { what: "Passport renewal", dueDate: DUE_UPCOMING });
     await seedReminder(db, dek, userId, { what: "Missed dentist", dueDate: DUE_PAST });
+    await seedReminder(db, dek, userId, { what: "Old rego", dueDate: DUE_LONG_PAST });
     await seedReminder(db, dek, userId, { what: "Netflix (no date)", dueDate: null });
+    await createRecord(db, { userId, kind: "subscription", fields: { what: "Cancelled gym" }, dueDate: DUE_UPCOMING, status: "cancelled", source: { kind: "person" } }, dek);
 
     const metrics = await load(db, userId);
     const whats = reminderWhats(metrics);
 
-    assert.ok(whats.includes("Passport renewal"), "the record with an upcoming reminder date is returned");
-    assert.ok(!whats.includes("Missed dentist"), "a record whose reminder/due date has passed is NOT upcoming");
+    assert.deepEqual(whats, ["Missed dentist", "Passport renewal"], "overdue first, then upcoming, soonest first");
+    assert.ok(!whats.includes("Old rego"), "a record more than 30 days overdue is not shown");
+    assert.ok(!whats.includes("Cancelled gym"), "a cancelled record needs no reminder");
     assert.ok(!whats.includes("Netflix (no date)"), "a record with no due date has no reminder and is NOT upcoming");
 
     // The returned reminder is the real record, its encrypted fields decrypted.
     const upcoming = metrics.reminders.find((r) => r.id === upcomingId);
     assert.ok(upcoming, "the upcoming reminder carries the record's own id");
     assert.equal(upcoming!.fields.what, "Passport renewal", "the reminder's fields are decrypted");
+  } finally {
+    await db.close();
+  }
+});
+
+test("toCheck counts the records waiting for the person: agents' suggestions and their proposed changes", async () => {
+  const db = await freshDb();
+  try {
+    const { userId, dek } = await makeUserWithDek(db, "to-check");
+    await seedReminder(db, dek, userId, { what: "Mine", dueDate: DUE_UPCOMING });
+    assert.equal((await load(db, userId)).toCheck, 0, "the person's own records need no checking");
+    await createRecord(db, { userId, kind: "item", type: "money.super", fields: { provider: "Hostplus" }, status: "active", source: { kind: "agent", agentId: "agent-1" } }, dek);
+    await createRecord(db, { userId, kind: "item", type: "money.super", fields: { provider: "Aware" }, status: "active", source: { kind: "agent", agentId: "agent-1" } }, dek);
+    const metrics = await load(db, userId);
+    assert.equal(metrics.toCheck, 2);
+    assert.equal(metrics.today, "2026-11-15", "the day the reminders were picked against");
   } finally {
     await db.close();
   }

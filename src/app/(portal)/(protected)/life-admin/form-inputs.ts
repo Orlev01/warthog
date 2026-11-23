@@ -23,19 +23,42 @@ export function recordStatus(form: FormData): string | undefined {
   return typeof value === "string" ? value || undefined : undefined;
 }
 
-// The name typed into "What to add", trimmed; null when it is missing or only spaces, so the
-// page can refuse it with a notice that names the field instead of saving a blank record.
-export function recordTitle(form: FormData): string | null {
-  const value = form.get("title");
-  const title = typeof value === "string" ? value.trim() : "";
-  return title === "" ? null : title;
+// The records view's tab (`?tab=`): the moving checklist, or "Your things". The tabs Life
+// admin had before typed records (subscriptions, receipts, renewals) — still named in
+// reminder links people already have — and anything else open "Your things".
+export type RecordTab = "things" | "checklist";
+export function recordTab(value: unknown): RecordTab {
+  return value === "checklist" ? "checklist" : "things";
 }
 
 export function recordReturnPath(form: FormData): string {
-  const value = form.get("returnTab");
-  const tab = typeof value === "string" && ["subscriptions", "receipts", "renewals", "checklist"].includes(value)
-    ? value : "subscriptions";
-  return `/life-admin?view=life&tab=${tab}`;
+  return `/life-admin?view=life&tab=${recordTab(form.get("returnTab"))}`;
+}
+
+// The record type the Add form posts ("vehicle.registration"); the action validates it.
+export function recordTypeId(form: FormData): string {
+  const value = form.get("type");
+  return typeof value === "string" ? value : "";
+}
+
+// The vehicle, home or pet a record belongs to: undefined when the form has no "Belongs to"
+// choice (the link is kept), null for "Not linked", else the chosen record's id (the action
+// validates it as one of the person's own).
+export function recordParent(form: FormData): string | null | undefined {
+  const value = form.get("parentId");
+  if (typeof value !== "string") return undefined;
+  return value === "" ? null : value;
+}
+
+// Every record id a form posts (Confirm all posts one per suggestion).
+export function recordIds(form: FormData): string[] {
+  return form.getAll("recordId").filter((value): value is string => typeof value === "string");
+}
+
+// The field a refusal names, as carried back in the address (`&field=`): a short plain
+// label only (letters, digits, spaces and simple punctuation), else nothing.
+export function noticeField(value: unknown): string | null {
+  return typeof value === "string" && /^[\p{L}\p{N} ,.'()&/+-]{1,60}$/u.test(value) ? value : null;
 }
 
 // Where a task action lands afterwards: the Tasks view, keeping the `?assignee=` filter

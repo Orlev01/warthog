@@ -666,3 +666,29 @@ test("the build reads no process.env: a decoy secret in the environment never la
     else process.env.WARTHOG_DECOY_SECRET = prev;
   }
 });
+
+test("typed records whose provider keeps the address join the checklist; the things themselves don't", async () => {
+  const db = await freshDb();
+  try {
+    const userId = await makeUser(db, "typed-move");
+    const dek = freshDek();
+    await setUpMove(db, userId, dek);
+    const typed = (type: string, fields: Record<string, unknown>) =>
+      createRecord(db, { userId, kind: "item", type, fields, status: "active", source: { kind: "person" } }, dek);
+    await typed("vehicle.vehicle", { name: "Honda CB500X", plate: "BX12AB" });
+    await typed("vehicle.registration", { plate: "BX12AB" });
+    await typed("health.insurance", { provider: "Bupa" });
+    await typed("money.super", { provider: "AustralianSuper" });
+    await typed("id.passport", { country: "Australia" });
+
+    await buildMovingChecklist(buildDeps(db, dek), sessionFor(userId));
+
+    const labels = ((await listForUser(db, userId, dek)) as ItemLike[]).map((item) => item.label).sort();
+    assert.equal(labels.length, 3, "rego, health insurance and super; not the bike itself or the passport");
+    assert.ok(labels.some((label) => label.includes("Registration · BX12AB")));
+    assert.ok(labels.some((label) => label.includes("Bupa")));
+    assert.ok(labels.some((label) => label.includes("AustralianSuper")));
+  } finally {
+    await db.close();
+  }
+});

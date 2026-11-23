@@ -32,8 +32,8 @@
 // (INV-102) — so a record carrying a SQL-injection-shaped value is swept as data and cannot
 // alter a query.
 
-import { listDueForReminder, markReminderSent, type RecordKind } from "../db/life-admin-records";
-import type { PushSender } from "../notify/senders";
+import { listDueForReminder, markReminderSent, type DueReminder, type RecordKind } from "../db/life-admin-records";
+import { NoPushDeviceError, type PushSender } from "../notify/senders";
 import type { Clock } from "../seams/clock";
 import type { Db } from "../db/index";
 
@@ -53,17 +53,35 @@ export interface LifeAdminRemindersDeps {
 // job never loads, so it cannot ride in the body.
 const REMINDER_BODY =
   "You have a Warthog reminder coming up. Open Warthog and sign in to see the details.";
+const remindersBody = (count: number) =>
+  `You have ${count} Warthog reminders coming up. Open Warthog and sign in to see the details.`;
 
 // The REFERENCE the push carries: the record's opaque id as an app path the person opens
 // after sign-in. No personal content — just an identifier the app resolves against the
-// signed-in owner's own records.
+// signed-in owner's own records. Typed records (`item`) open through the renewals tab, one of
+// the three every installed service worker accepts (public/sw.js); the page shows any record
+// by its anchor whichever record tab is named.
 function buildReference(recordId: string, kind: RecordKind): string {
   const tabs: Record<RecordKind, string> = {
     subscription: "subscriptions",
     receipt_warranty: "receipts",
     renewal_appointment: "renewals",
+    item: "renewals",
   };
   return `/life-admin?view=life&tab=${tabs[kind]}#record-${encodeURIComponent(recordId)}`;
+}
+
+// The sweep's due reminders, one push per person: a record with several offsets due at once
+// (saved close to its date) reminds once, and a person with several records due gets one push
+// naming how many, linked to the soonest. Every offset is still marked, so none comes back.
+function byPerson(due: readonly DueReminder[]): DueReminder[][] {
+  const groups = new Map<string, DueReminder[]>();
+  for (const reminder of due) {
+    const group = groups.get(reminder.userId) ?? [];
+    group.push(reminder);
+    groups.set(reminder.userId, group);
+  }
+  return [...groups.values()];
 }
 
 export async function runLifeAdminReminders(deps: LifeAdminRemindersDeps): Promise<void> {
@@ -73,23 +91,30 @@ export async function runLifeAdminReminders(deps: LifeAdminRemindersDeps): Promi
   // The clock instant is bound as a parameter on the read (INV-102).
   const due = await listDueForReminder(db, clock);
 
-  // One reminder that cannot be delivered (an expired push subscription, a provider blip)
+  // One person whose push cannot be delivered (an expired push subscription, a provider blip)
   // must not stop the others: each is tried on its own, a failed one stays unmarked so the
-  // next sweep tries it again, and the failures are reported together at the end.
+  // next sweep tries it again, and the failures are reported together at the end. A person
+  // with no device at all has nothing to retry, so their reminders are marked handled.
   const failures: unknown[] = [];
-  for (const reminder of due) {
+  for (const reminders of byPerson(due)) {
+    const first = reminders[0]!;
+    const records = new Set(reminders.map((reminder) => reminder.recordId));
     try {
-      // ONE push to the record's OWNER (carried on the due reminder, never a client
-      // value), carrying only a reference to the record and no personal content.
-      await push.sendPush({
-        recipient: reminder.userId,
-        body: REMINDER_BODY,
-        link: buildReference(reminder.recordId, reminder.kind),
-      });
+      try {
+        // ONE push to the record's OWNER (carried on the due reminder, never a client
+        // value), carrying only a reference to the record and no personal content.
+        await push.sendPush({
+          recipient: first.userId,
+          body: records.size > 1 ? remindersBody(records.size) : REMINDER_BODY,
+          link: buildReference(first.recordId, first.kind),
+        });
+      } catch (error) {
+        if (!(error instanceof NoPushDeviceError)) throw error;
+      }
 
       // Mark only the captured owner/date/offset; an edit during delivery must not
       // suppress the new reminder cycle. Every value is bound as a parameter (INV-102).
-      await markReminderSent(db, reminder);
+      for (const reminder of reminders) await markReminderSent(db, reminder);
     } catch (error) {
       failures.push(error);
     }

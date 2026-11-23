@@ -1,55 +1,18 @@
-// How the Life admin record tabs organise a list (the "tidy and organise" pass): records
-// are grouped by how soon they fall due — Overdue, Next 30 days, Later, No due date — and
-// each row summarises its reminder setting in one plain line.
+// How Life admin organises a person's records (the "tidy and organise" pass, reshaped for
+// typed records): what is coming up, the records by category with the things other records
+// belong to as headers, and each row's reminder setting in one plain line.
 //
 // Pure functions over plain values, shared by the view and its tests. Nothing here reads
 // the clock: the page loader works out the person's local date (`today`, YYYY-MM-DD, in
 // their account time zone) and passes it in, so a render is the same for the same props.
 
-export type DueGroupKey = "overdue" | "soon" | "later" | "undated";
-
-// "Next 30 days" runs from today through today + DUE_SOON_DAYS, inclusive.
-export const DUE_SOON_DAYS = 30;
-
-const GROUP_ORDER: readonly DueGroupKey[] = ["overdue", "soon", "later", "undated"];
-
-export const DUE_GROUP_TITLES: Readonly<Record<DueGroupKey, string>> = {
-  overdue: "Overdue",
-  soon: `Next ${DUE_SOON_DAYS} days`,
-  later: "Later",
-  undated: "No due date",
-};
+import { CATEGORIES, typeOfRecord, type CategoryDef, type RecordTypeDef, type StoredKind } from "@/domain/life-admin/record-types";
 
 // A calendar date `days` after `isoDate` (both YYYY-MM-DD), computed on the calendar in
 // UTC so no local offset or daylight-saving change can shift it.
 export function addDays(isoDate: string, days: number): string {
   const [year, month, date] = isoDate.slice(0, 10).split("-").map(Number);
   return new Date(Date.UTC(year!, month! - 1, date! + days)).toISOString().slice(0, 10);
-}
-
-// Which group a due date falls in relative to `today`. ISO dates compare as strings.
-export function dueGroupOf(dueDate: string | null, today: string): DueGroupKey {
-  if (!dueDate) return "undated";
-  const due = dueDate.slice(0, 10);
-  if (due < today) return "overdue";
-  return due <= addDays(today, DUE_SOON_DAYS) ? "soon" : "later";
-}
-
-export type DueGroup<T> = { readonly key: DueGroupKey; readonly title: string; readonly records: T[] };
-
-// The non-empty groups, in the fixed order, each soonest due first. The sort is stable,
-// so records sharing a due date keep the loader's (deterministic) order.
-export function groupRecordsByDue<T extends { readonly dueDate: string | null }>(
-  records: readonly T[],
-  today: string,
-): DueGroup<T>[] {
-  const buckets = new Map<DueGroupKey, T[]>(GROUP_ORDER.map((key) => [key, []]));
-  for (const record of records) buckets.get(dueGroupOf(record.dueDate, today))!.push(record);
-  return GROUP_ORDER.filter((key) => buckets.get(key)!.length > 0).map((key) => ({
-    key,
-    title: DUE_GROUP_TITLES[key],
-    records: [...buckets.get(key)!].sort((a, b) => (a.dueDate ?? "").localeCompare(b.dueDate ?? "")),
-  }));
 }
 
 function joinWords(parts: readonly string[]): string {
@@ -66,12 +29,90 @@ export function reminderSummary(dueDate: string | null, offsets: readonly number
   return { on: true, text: `Reminds you ${joinWords(parts)}` };
 }
 
-// The name a row leads with: a "name" or "title" field (any case) when there is one, else
-// the first filled-in field. `key` says which field it came from (null when none), so the
-// row can list the remaining fields without repeating it.
-export function recordTitle(fields: Readonly<Record<string, string>>): { title: string; key: string | null } {
-  const entries = Object.entries(fields);
-  const named = entries.find(([key, value]) => /^(name|title)$/i.test(key) && value.trim() !== "");
-  const chosen = named ?? entries.find(([, value]) => value.trim() !== "");
-  return chosen ? { title: chosen[1], key: chosen[0] } : { title: "", key: null };
+// ─── "Your things": coming up, and one section per category ─────────────────────────────
+//
+// Typed records (docs/adr/life-admin-profile.md) are shown by category, in the catalogue's
+// order, with the things other records belong to (a vehicle, a home, a pet) as headers over
+// their records. "Coming up" lists what is overdue or due in the next COMING_UP_DAYS days.
+
+// "Coming up" runs from anything overdue through today + COMING_UP_DAYS, inclusive.
+export const COMING_UP_DAYS = 60;
+
+// Statuses that mean the record needs nothing more (reminders stop for these too).
+const SETTLED_STATUSES = new Set(["cancelled", "canceled", "done", "expired", "paused", "ended"]);
+
+/** Whether a record still needs attention: not cancelled, done, expired or paused. */
+export function isLive(status: string): boolean {
+  return !SETTLED_STATUSES.has(status.trim().toLowerCase());
+}
+
+type TypedLike = { readonly kind: StoredKind; readonly type?: string | null };
+
+function typeOf(record: TypedLike): RecordTypeDef {
+  return typeOfRecord(record.kind, record.type ?? null);
+}
+
+export type ComingUpItem<T> = { readonly record: T; readonly type: RecordTypeDef; readonly overdue: boolean };
+
+/**
+ * The live records that are overdue or due within COMING_UP_DAYS of `today`, soonest first.
+ * A return-by date that has passed is left out: the window is over, there is nothing to do.
+ */
+export function comingUp<T extends TypedLike & { readonly dueDate: string | null; readonly status: string }>(
+  records: readonly T[],
+  today: string,
+  days: number = COMING_UP_DAYS,
+): ComingUpItem<T>[] {
+  const last = addDays(today, days);
+  const items: ComingUpItem<T>[] = [];
+  for (const record of records) {
+    if (!record.dueDate || !isLive(record.status)) continue;
+    const due = record.dueDate.slice(0, 10);
+    const type = typeOf(record);
+    const overdue = due < today;
+    if (due > last || (overdue && type.due?.means === "return_by")) continue;
+    items.push({ record, type, overdue });
+  }
+  return items.sort((a, b) => a.record.dueDate!.slice(0, 10).localeCompare(b.record.dueDate!.slice(0, 10)));
+}
+
+export type AssetGroup<T> = { readonly asset: T; readonly type: RecordTypeDef; readonly children: T[] };
+
+export type CategorySection<T> = {
+  readonly category: CategoryDef;
+  // The vehicles, homes or pets in this category, each with the records that belong to it.
+  readonly assets: AssetGroup<T>[];
+  // This category's records that belong to no asset shown here.
+  readonly loose: T[];
+};
+
+/**
+ * The person's records by category, in the catalogue's order: each asset with its records
+ * (whatever their category: an electricity account sits under the home it belongs to), then
+ * the category's unlinked records. `empty` lists the categories with no records at all.
+ * Records keep the loader's order (soonest due first).
+ */
+export function organiseByCategory<T extends TypedLike & { readonly id: string; readonly parentId?: string | null }>(
+  records: readonly T[],
+): { sections: CategorySection<T>[]; empty: CategoryDef[] } {
+  const types = new Map<string, RecordTypeDef>(records.map((record) => [record.id, typeOf(record)]));
+  const assetIds = new Set(records.filter((record) => types.get(record.id)!.asset).map((record) => record.id));
+  const parentOf = (record: T): string | null =>
+    record.parentId && record.parentId !== record.id && assetIds.has(record.parentId) ? record.parentId : null;
+
+  const sections: CategorySection<T>[] = [];
+  const empty: CategoryDef[] = [];
+  for (const category of CATEGORIES) {
+    const inCategory = records.filter((record) => types.get(record.id)!.category === category.id);
+    if (inCategory.length === 0) {
+      empty.push(category);
+      continue;
+    }
+    const assets = inCategory
+      .filter((record) => assetIds.has(record.id))
+      .map((asset) => ({ asset, type: types.get(asset.id)!, children: records.filter((record) => parentOf(record) === asset.id) }));
+    const loose = inCategory.filter((record) => !assetIds.has(record.id) && parentOf(record) === null);
+    if (assets.length > 0 || loose.length > 0) sections.push({ category, assets, loose });
+  }
+  return { sections, empty };
 }

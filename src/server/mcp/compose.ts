@@ -336,9 +336,9 @@ function buildAgentPipeline(deps: McpDispatchDeps): AgentCallPipeline {
   const createTaskTool = createCreateTaskTool({ db, keyWrapper });
   const updateTaskTool = createUpdateTaskTool({ db, keyWrapper });
   const completeTaskTool = createCompleteTaskTool({ db, keyWrapper });
-  const listRecordsTool = createListRecordsTool({ db, keyWrapper });
-  const saveRecordTool = createSaveRecordTool({ db, keyWrapper });
-  const updateRecordTool = createUpdateRecordTool({ db, keyWrapper });
+  const listRecordsTool = createListRecordsTool({ db, keyWrapper, clock });
+  const saveRecordTool = createSaveRecordTool({ db, keyWrapper, clock });
+  const updateRecordTool = createUpdateRecordTool({ db, keyWrapper, clock });
   const checkApprovalTool = createCheckApprovalTool({
     db,
     keyWrapper,

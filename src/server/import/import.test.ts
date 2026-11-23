@@ -640,3 +640,31 @@ test("imported skills require assignment and disabled skills remain disabled", a
     }
   } finally { await db.close(); }
 });
+
+test("typed life-admin records round-trip with their type, review state and links, minus anything never kept", async () => {
+  const db = await freshDb();
+  try {
+    const t = tag();
+    const userId = await makeUser(db, "import-typed");
+    const dek = freshDek();
+    const lifeAdmin = [
+      { id: "old-bike", kind: "item", type: "vehicle.vehicle", fields: { name: "Honda CB500X", plate: "BX12AB" }, status: "active", source: { kind: "person" }, reviewState: "confirmed" },
+      { id: "old-rego", kind: "item", type: "vehicle.registration", fields: { plate: "BX12AB", tfn: "123456782", notes: "My TFN is 123 456 782" }, dueDate: "2026-12-14", status: "active", source: { kind: "agent", agentId: "a1" }, parentId: "old-bike", foundIn: { service: "gmail", sender: "service.nsw.gov.au", seenByWarthog: true } },
+    ];
+    await importExportDocument(db, userId, fullExport(t, { lifeAdmin }), dek, CLOCK);
+    const records = await listRecordsForUser(db, userId, dek);
+    const bike = one(records, (record) => record.type, "vehicle.vehicle", "the vehicle");
+    const rego = one(records, (record) => record.type, "vehicle.registration", "its rego");
+    assert.equal(rego.parentId, bike.id, "the link follows the new ids");
+    assert.equal(rego.reviewState, "suggested", "an agent's record without a review state is a suggestion");
+    assert.equal(bike.reviewState, "confirmed");
+    assert.deepEqual(rego.fields, { plate: "BX12AB" }, "a tax file number in a file is never restored");
+    assert.equal(rego.foundIn?.sender, "service.nsw.gov.au");
+    assert.ok(bike.matchKey, "a later scan matches the restored vehicle");
+
+    const other = await makeUser(db, "import-typed-bad");
+    await assert.rejects(importExportDocument(db, other, fullExport(t, { lifeAdmin: [{ kind: "spaceship", fields: {} }] }), dek, CLOCK), (error: unknown) => (error as { status?: number }).status === 400);
+  } finally {
+    await db.close();
+  }
+});

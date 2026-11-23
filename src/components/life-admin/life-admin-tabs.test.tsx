@@ -1,4 +1,5 @@
-// Review fix G10 — the Life admin section switcher is a real tab list.
+// Review fix G10 — the Life admin section switcher is a real tab list (now two tabs: Your
+// things and the Moving checklist, docs/adr/life-admin-profile.md).
 //
 // The four section buttons carried aria-selected on plain role=button elements (which
 // assistive technology does not announce), with no tablist/tabpanel relationship, and the
@@ -15,19 +16,8 @@ import { readFileSync } from "node:fs";
 
 import { LifeAdminView, nextTabIndex } from "./life-admin-view";
 
-function render(
-  initialTab?: "subscriptions" | "receipts" | "renewals" | "checklist",
-): string {
-  return renderToStaticMarkup(
-    <LifeAdminView
-      today="2026-11-12"
-      subscriptions={[]}
-      receipts={[]}
-      renewals={[]}
-      checklist={[]}
-      initialTab={initialTab}
-    />,
-  );
+function render(initialTab?: "things" | "checklist"): string {
+  return renderToStaticMarkup(<LifeAdminView today="2026-11-12" records={[]} checklist={[]} initialTab={initialTab} />);
 }
 
 function attr(attrs: string, name: string): string | null {
@@ -35,7 +25,7 @@ function attr(attrs: string, name: string): string | null {
 }
 
 test("the section buttons are tabs in a labelled tablist, exactly one selected, controlling a labelled tabpanel", () => {
-  const markup = render("receipts");
+  const markup = render("checklist");
   const tablist = /<div\b([^>]*role="tablist"[^>]*)>/.exec(markup);
   assert.ok(tablist, "a tablist is rendered");
   assert.ok(attr(tablist![1]!, "aria-label"), "the tablist is labelled");
@@ -51,26 +41,21 @@ test("the section buttons are tabs in a labelled tablist, exactly one selected, 
   }));
   assert.deepEqual(
     tabs.map((t) => t.text),
-    [
-      "Subscriptions (0)",
-      "Receipts & warranties (0)",
-      "Renewals & appointments (0)",
-      "Moving checklist (0)",
-    ],
+    ["Your things (0)", "Moving checklist (0)"],
   );
   const selected = tabs.filter(
     (t) => attr(t.attrs, "aria-selected") === "true",
   );
   assert.equal(selected.length, 1);
-  assert.equal(selected[0]!.text, "Receipts & warranties (0)");
+  assert.equal(selected[0]!.text, "Moving checklist (0)");
   assert.equal(
     tabs.filter((t) => attr(t.attrs, "aria-selected") === "false").length,
-    3,
+    1,
   );
   // Roving tabindex: only the selected tab is in the tab order.
   assert.deepEqual(
     tabs.map((t) => attr(t.attrs, "tabindex")),
-    ["-1", "0", "-1", "-1"],
+    ["-1", "0"],
   );
 
   const panelId = attr(selected[0]!.attrs, "aria-controls");
@@ -85,7 +70,7 @@ test("the section buttons are tabs in a labelled tablist, exactly one selected, 
 });
 
 test("the selected tab is marked by more than colour", () => {
-  const markup = render("subscriptions");
+  const markup = render("things");
   const selected = /<button\b([^>]*aria-selected="true"[^>]*)>/.exec(
     markup,
   )![1]!;
@@ -107,11 +92,12 @@ test("arrow keys, Home and End move between tabs, wrapping at the ends", () => {
   assert.equal(nextTabIndex(1, "a", 4), null, "other keys are left alone");
 });
 
-test("record panels stay mounted with only the selected panel visible", () => {
-  const markup = render("receipts");
-  const panels = [
-    ...markup.matchAll(/<div\b([^>]*role="tabpanel"[^>]*)>/g),
-  ].map((match) => match[1]!);
-  assert.equal(panels.length, 4);
-  assert.equal(panels.filter((attrs) => /\bhidden=""/.test(attrs)).length, 3);
+test("both panels stay mounted with only the selected panel visible; Your things opens by default", () => {
+  for (const [initialTab, hiddenIndex] of [[undefined, 1], ["things", 1], ["checklist", 0]] as const) {
+    const panels = [
+      ...render(initialTab).matchAll(/<div\b([^>]*role="tabpanel"[^>]*)>/g),
+    ].map((match) => match[1]!);
+    assert.equal(panels.length, 2);
+    assert.deepEqual(panels.map((attrs) => /\bhidden=""/.test(attrs)), [hiddenIndex === 0, hiddenIndex === 1], String(initialTab));
+  }
 });

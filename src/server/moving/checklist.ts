@@ -18,6 +18,8 @@
 // seams binds its values rather than splicing them (INV-102). A receipt/warranty record is NOT a place
 // that holds the address, so it is never seeded.
 
+import { holdsAddress, recordType } from "../../domain/life-admin/record-types";
+import { storedRecordName } from "../../domain/life-admin/normalise";
 import { resolve, type Address, type MemberAddress } from "../../domain/address/moving";
 import type { Session } from "../auth/session";
 import { listConnectionsForUser } from "../db/connections";
@@ -118,14 +120,20 @@ async function gatherSources(db: Db, userId: string, dek: Uint8Array): Promise<S
   }
 
   for (const record of await listRecordsForUser(db, userId, dek)) {
+    // Typed records (docs/adr/life-admin-profile.md) whose provider keeps the address — rego,
+    // licence, insurers, utilities, super … — are checklist places too, under "renewal".
+    const typed = record.type ? recordType(record.type) : undefined;
     const sourceKind =
       record.kind === "subscription"
         ? "subscription"
         : record.kind === "renewal_appointment"
           ? "renewal"
-          : null;
+          : typed && holdsAddress(typed)
+            ? "renewal"
+            : null;
     if (sourceKind === null) continue; // a receipt/warranty does not hold the address
-    items.push({ label: labelFor(recordName(record.fields)), sourceKind, sourceReference: record.id });
+    const name = typed ? storedRecordName(record.kind, record.type, record.fields) : recordName(record.fields);
+    items.push({ label: labelFor(name), sourceKind, sourceReference: record.id });
   }
 
   return items;

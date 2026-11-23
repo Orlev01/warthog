@@ -224,7 +224,7 @@ const CORE_TOOL_SPECS: readonly CoreToolSpec[] = [
   {
     name: "get_context",
     description:
-      "Fetch your granted context: the person's profile you may see, the skills and preferences scoped to you, the rules you must follow, the shared memory you may read, your open tasks and Warthog's house skill. Call this first in every conversation, with working_on saying in a few words what the conversation is for: it starts this conversation's run, and you pass run.id as run on every later Warthog call. Follow next.memory and next.skills with memory_cursor and skill_cursor (and your run) to retrieve further pages.",
+      "Fetch your granted context: the person's profile you may see, the skills and preferences scoped to you, the rules you must follow, the shared memory you may read, your open tasks, a short summary of their life-admin records (what is due soon, what is waiting for them to check) and Warthog's house skill. Call this first in every conversation, with working_on saying in a few words what the conversation is for: it starts this conversation's run, and you pass run.id as run on every later Warthog call. Follow next.memory and next.skills with memory_cursor and skill_cursor (and your run) to retrieve further pages.",
     makesChange: false,
     schema: getContextSchema,
   },
@@ -319,21 +319,21 @@ const CORE_TOOL_SPECS: readonly CoreToolSpec[] = [
   {
     name: "list_records",
     description:
-      "List the person's life-admin records: subscriptions, receipts and warranties, and renewals and appointments.",
+      "Use this when the person asks about their own life admin: a vehicle's rego, number plate or insurance; health insurance; their super fund; electricity, internet or phone accounts; subscriptions and what they cost; when a passport, licence or visa expires; their lease, mortgage or home insurance; pets; receipts and warranties; or what is due soon. Returns the records saved in Warthog, each with what its due date means (expires, renews, due), who saved it and whether the person has checked it, plus a monthly total for recurring costs. Filter by category, type, words or dueWithinDays; follow nextCursor for more. Answers come from saved records, so no email search is needed when one matches.",
     makesChange: false,
     schema: listRecordsSchema,
   },
   {
     name: "save_record",
     description:
-      "Save a new life-admin record (a subscription, a receipt or warranty, or a renewal or appointment) with its details and an optional due date.",
+      "Use this when you have learned life-admin details worth keeping, from the person or from their email: a vehicle and its rego or insurance, health insurance, a super fund, a utility or phone account, a subscription, an ID document's expiry date, a lease, a pet, a receipt or warranty, or a renewal or appointment. Give each record a type (such as \"vehicle.registration\"), its fields and its due date, and save up to 25 at once in records. A record matching one already saved is updated instead of duplicated. What you save is a suggestion until the person confirms it, and a record they have checked is never overwritten: your change waits for them. Never include tax file numbers, passwords, PINs, card numbers, BSB and account numbers, or passport, licence or Medicare numbers. The \"Life admin records\" skill lists every type and its fields.",
     makesChange: true,
     schema: saveRecordSchema,
   },
   {
     name: "update_record",
     description:
-      "Update a life-admin record by id, resupplying its details and optionally its status or due date.",
+      "Use this when one saved life-admin record needs a change you know about: a new due date, cost or status, a corrected detail, or linking it to its vehicle, home or pet. Pass the id from list_records; set changes only the fields it names (null removes one). A change to a record the person has checked waits for them to accept it.",
     makesChange: true,
     schema: updateRecordSchema,
   },

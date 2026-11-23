@@ -1,6 +1,6 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { recordFields, recordDate, recordReturnPath, recordOffsets, recordStatus, recordTitle, taskReturnPath } from "./form-inputs";
+import { noticeField, recordDate, recordFields, recordIds, recordOffsets, recordParent, recordReturnPath, recordStatus, recordTab, recordTypeId, taskReturnPath } from "./form-inputs";
 
 test("record form keeps personal fields separate from metadata and action internals", () => {
   const form = new FormData();
@@ -14,7 +14,8 @@ test("record form keeps personal fields separate from metadata and action intern
   form.set("field:dueDate", "A personal field, not scheduling metadata");
   assert.deepEqual(recordFields(form), { title: "Licence renewal", dueDate: "A personal field, not scheduling metadata" });
   assert.equal(recordDate(form), "2027-02-28");
-  assert.equal(recordReturnPath(form), "/life-admin?view=life&tab=renewals");
+  // A form left open from before typed records still lands on "Your things".
+  assert.equal(recordReturnPath(form), "/life-admin?view=life&tab=things");
 });
 
 test("date can be cleared without turning an omitted date into a destructive edit", () => {
@@ -26,12 +27,43 @@ test("date can be cleared without turning an omitted date into a destructive edi
 });
 
 test("record return location accepts known views only", () => {
-  for (const value of ["https://example.test", "receipts&notice=saved", "__proto__"]) {
+  for (const value of ["https://example.test", "receipts&notice=saved", "__proto__", "things", "subscriptions"]) {
     const form = new FormData(); form.set("returnTab", value);
-    assert.equal(recordReturnPath(form), "/life-admin?view=life&tab=subscriptions");
+    assert.equal(recordReturnPath(form), "/life-admin?view=life&tab=things");
   }
-  const form = new FormData(); form.set("returnTab", "receipts");
-  assert.equal(recordReturnPath(form), "/life-admin?view=life&tab=receipts");
+  const form = new FormData(); form.set("returnTab", "checklist");
+  assert.equal(recordReturnPath(form), "/life-admin?view=life&tab=checklist");
+});
+
+test("the older tabs in reminder links (subscriptions, receipts, renewals) open Your things", () => {
+  for (const legacy of ["subscriptions", "receipts", "renewals", "things", undefined, "", "nonsense"]) {
+    assert.equal(recordTab(legacy), "things", String(legacy));
+  }
+  assert.equal(recordTab("checklist"), "checklist");
+});
+
+test("the add and edit forms' type, parent and id inputs", () => {
+  const form = new FormData();
+  assert.equal(recordTypeId(form), "");
+  assert.equal(recordParent(form), undefined, "no Belongs to choice: the link is kept");
+  assert.deepEqual(recordIds(form), []);
+  form.set("type", "vehicle.registration");
+  form.set("parentId", "");
+  form.append("recordId", "a");
+  form.append("recordId", "b");
+  assert.equal(recordTypeId(form), "vehicle.registration");
+  assert.equal(recordParent(form), null, "Not linked clears it");
+  assert.deepEqual(recordIds(form), ["a", "b"]);
+  form.set("parentId", "0b4c6c7e-1c1a-4b55-9a49-5e2f0d6d1a01");
+  assert.equal(recordParent(form), "0b4c6c7e-1c1a-4b55-9a49-5e2f0d6d1a01");
+});
+
+test("a refusal's field label comes back through the address only as a short plain label", () => {
+  assert.equal(noticeField("Membership number"), "Membership number");
+  assert.equal(noticeField("Notes (as saved)"), "Notes (as saved)");
+  for (const bad of [undefined, "", "x".repeat(61), "<script>", "Click https://evil.test", "a\nb", ["Notes"]]) {
+    assert.equal(noticeField(bad), null, JSON.stringify(bad));
+  }
 });
 
 
@@ -67,16 +99,4 @@ test("a task action returns to the Tasks view, keeping a well-formed assignee fi
   for (const value of ["", "https://evil.test", "any&notice=saved", "__proto__", `${agentId}#x`, "Zephyr"]) {
     assert.equal(withFilter(value), "/life-admin?view=tasks", `ignored: ${value}`);
   }
-});
-
-test("a record name made only of spaces is refused (null), and a real one is trimmed", () => {
-  for (const raw of ["", "   ", "\t\n "]) {
-    const form = new FormData();
-    form.set("title", raw);
-    assert.equal(recordTitle(form), null, `blank: ${JSON.stringify(raw)}`);
-  }
-  assert.equal(recordTitle(new FormData()), null, "missing");
-  const form = new FormData();
-  form.set("title", "  Netflix Premium ");
-  assert.equal(recordTitle(form), "Netflix Premium");
 });

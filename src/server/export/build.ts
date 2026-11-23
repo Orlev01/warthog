@@ -195,7 +195,15 @@ export async function buildExportDocument(
       dueDate: record.dueDate,
       status: record.status,
       reminderOffsets: record.reminderOffsets,
+      sentOffsets: record.sentOffsets,
       source: record.source,
+      // Typed records (docs/adr/life-admin-profile.md).
+      type: record.type,
+      reviewState: record.reviewState,
+      parentId: record.parentId,
+      foundIn: record.foundIn,
+      createdAt: record.createdAt,
+      updatedAt: record.updatedAt,
     })),
     connections: connections.map((connection) => ({
       id: connection.id,

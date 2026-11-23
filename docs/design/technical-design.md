@@ -122,7 +122,11 @@ it does not approve an unquoted paid plan or change Warthog's own authentication
   receipt files (encrypted before upload).
 - Plaintext metadata (needed for filtering, never personal content): ids, timestamps, kinds, agent id,
   connector id, tool name, outcome, amounts + currency + merchant name for card releases (needed for
-  budgets), card brand + last four.
+  budgets), card brand + last four. Life-admin records keep their due date, status, review state
+  (suggested / confirmed / dismissed), parent link, who last changed them and an opaque match key
+  (an HMAC under a key derived from the DEK) in plaintext; their TYPE, provenance and any pending
+  agent change are encrypted, and every type beyond the original three is stored under the kind
+  `item`, so no plaintext column names a category ([life-admin profile](../adr/life-admin-profile.md)).
 - **Account deletion:** clear the live wrapped DEK and revoke access before confirmation;
   a job purges live rows within 24 hours. Retained backups can contain the older
   wrapped DEK and are not cryptographically erased by that update. The independent
@@ -222,6 +226,16 @@ Redaction is a pure module with exhaustive unit tests; the activity writer and t
   (`wait_seconds` ≤ 25, long-poll), `collect_release`, `remember`, `search_memory`, `list_tasks`,
   `create_task`, `update_task`, `complete_task`, `list_records`, `save_record`, `update_record`,
   `log_activity`. Every tool takes an optional `reason`.
+- **Life admin** ([ADR](../adr/life-admin-profile.md)): records are typed by the catalogue in
+  `src/domain/life-admin/record-types.ts` (12 categories, about 40 types). `get_context` carries a
+  short `lifeAdmin` summary; `list_records` filters, pages and labels; `save_record` takes typed
+  records or a batch of 25 and updates a matching record instead of adding a copy; `update_record`
+  takes a `set` patch. An agent's record is a suggestion until the person confirms it, and an
+  agent's change to a confirmed record waits as a pending change. Tax file numbers, secrets, BSB and
+  account numbers, payment references and government ID numbers are refused in the input schema, so
+  a refused call is recorded without its parameters. The built-in "Life admin records" skill
+  (generated from the catalogue) is how the person's own agent fills life admin in from their email;
+  Warthog itself never reads the mail.
 - **Pipeline for every call** (one function, `handleAgentCall`):
   connection active → rate limit (in-memory sliding window, default 120/min) → permission check →
   policy engine (§8) → `allow` | `ask` | `deny` → execute | hold | refuse → **activity entry written

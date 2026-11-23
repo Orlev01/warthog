@@ -22,28 +22,74 @@
 // `process.env` and holds no key, INV-103); `listDueForReminder` and
 // `markReminderSent` are the system job's reads/writes and take no DEK at all —
 // they only ever touch plaintext metadata.
+//
+// Typed records (migration 0117, docs/adr/life-admin-profile.md): a record's TYPE and where
+// an agent says it found it live in the encrypted `meta` envelope; its review state (suggested
+// by an agent, confirmed by the person, or dismissed), the asset it belongs to, its match key
+// (an opaque HMAC under a key derived from the DEK) and who last changed it are plaintext
+// metadata. An agent's proposed change to a confirmed record waits, encrypted, in `pending`.
+// A dismissed record is a tombstone: its fields are emptied and it is left out of every list,
+// so only its match key remains to stop the same suggestion being added again.
 
-import { randomUUID } from "node:crypto";
+import { createHmac, hkdfSync, randomUUID } from "node:crypto";
 import { MAX_REMINDER_OFFSET_DAYS, recordDueDateSchema, reminderOffsetsSchema } from "../../domain/life-admin/record-metadata";
 
 import { decrypt, encrypt } from "../crypto/envelope";
 import type { Clock } from "../seams/clock";
-import type { Db, Row } from "./index";
+import { assertCollectionCapacity } from "./collection-limits";
+import { withTransaction, type Db, type Row } from "./index";
 
 // The envelope's associated data binds each fields blob to its exact location, so
 // a row's ciphertext lifted into another row/column/table fails to decrypt.
 const TABLE = "life_admin_records";
 const FIELDS_COLUMN = "fields";
+const META_COLUMN = "meta";
+const PENDING_COLUMN = "pending";
 
 // The brief's default reminder schedule: 14 days and 1 day before the due date.
 const DEFAULT_REMINDER_OFFSETS = [14, 1];
 
-// The three record kinds (task / brief).
-export type RecordKind = "subscription" | "receipt_warranty" | "renewal_appointment";
+// How long after its due date a record's unsent reminders may still go out.
+export const REMINDER_GRACE_DAYS = 7;
+
+// The stored kinds: the three original ones, and `item` for every other type (whose type
+// lives encrypted in `meta`, so the plaintext kind never names a category).
+export type RecordKind = "subscription" | "receipt_warranty" | "renewal_appointment" | "item";
 
 // Who maintains this record (plaintext metadata): the signed-in person, or a
 // connected agent (an opaque id, like activity.agent_id).
 export type RecordSource = { kind: "person" } | { kind: "agent"; agentId: string };
+
+// Suggested by an agent and not yet checked; added or checked by the person; or dismissed.
+export type ReviewState = "suggested" | "confirmed" | "dismissed";
+
+// Where an agent says it found a record (encrypted in `meta`). `seenByWarthog` is set by
+// Warthog, not the agent: true only when this agent had just read mail from that sender
+// through Warthog (the read-exposure window), so the claim is not the agent's alone.
+export interface RecordFoundIn {
+  readonly service: string;
+  readonly messageId?: string;
+  readonly date?: string;
+  readonly sender?: string;
+  readonly seenByWarthog: boolean;
+}
+
+// An agent's proposed change to a record the person confirmed, kept until they decide.
+export interface PendingChange {
+  readonly set: Readonly<Record<string, string>>;
+  readonly remove: readonly string[];
+  readonly dueDate?: string | null;
+  readonly status?: string;
+  readonly byAgentId: string;
+  readonly at: string;
+  readonly foundIn?: RecordFoundIn;
+}
+
+// The encrypted `meta` envelope's content.
+interface RecordMeta {
+  readonly type?: string;
+  readonly foundIn?: RecordFoundIn;
+}
 
 // What createRecord records. `userId` is the OWNER (the session's / connection's
 // id, never a client value). `fields` is the kind's content, stored DEK-encrypted
@@ -57,6 +103,12 @@ export interface NewRecord {
   readonly status: string;
   readonly reminderOffsets?: number[];
   readonly source: RecordSource;
+  // Typed records (0117). An agent's record defaults to `suggested`, the person's to `confirmed`.
+  readonly type?: string | null;
+  readonly foundIn?: RecordFoundIn | null;
+  readonly reviewState?: ReviewState;
+  readonly parentId?: string | null;
+  readonly matchKey?: string | null;
 }
 
 // What updateRecord changes for the owner's own record. Member-scoped by
@@ -68,6 +120,15 @@ export interface UpdateRecordInput {
   readonly dueDate?: string | null;
   readonly status: string;
   readonly reminderOffsets?: number[];
+  // Each left unchanged when omitted. `changedBy` defaults to the person.
+  readonly type?: string | null;
+  readonly foundIn?: RecordFoundIn | null;
+  readonly reviewState?: Exclude<ReviewState, "dismissed">;
+  readonly parentId?: string | null;
+  readonly matchKey?: string | null;
+  readonly changedBy?: RecordSource;
+  // Drop a pending agent change (the person accepted it into `fields`, or kept their own).
+  readonly clearPending?: boolean;
 }
 
 // A record as handed back to its owner, with its fields DECRYPTED. `sentOffsets`
@@ -82,6 +143,16 @@ export interface LifeAdminRecord {
   readonly reminderOffsets: number[];
   readonly sentOffsets: number[];
   readonly source: RecordSource;
+  // Typed records (0117): null type ⇒ the record reads as its kind's type.
+  readonly type: string | null;
+  readonly foundIn: RecordFoundIn | null;
+  readonly reviewState: ReviewState;
+  readonly parentId: string | null;
+  readonly matchKey: string | null;
+  readonly pending: PendingChange | null;
+  readonly changedBy: RecordSource | null;
+  readonly createdAt: string;
+  readonly updatedAt: string;
 }
 
 // One due, unsent reminder — METADATA ONLY (no decrypted field): the owner + the
@@ -101,7 +172,8 @@ export interface DueReminder {
 // separately.
 const SELECT_COLUMNS =
   "id, user_id, kind, fields, due_date::text AS due_date, status, " +
-  "reminder_offsets, sent_offsets, source_kind, source_agent_id";
+  "reminder_offsets, sent_offsets, source_kind, source_agent_id, meta, review_state, parent_id, " +
+  "match_key, pending, changed_by_kind, changed_by_agent_id, created_at, updated_at";
 
 // Reconstruct the plaintext source metadata from its two columns.
 function toSource(row: Row): RecordSource {
@@ -117,9 +189,18 @@ function toOffsets(value: unknown): number[] {
   return ((value as unknown[]) ?? []).map(Number);
 }
 
-// Map a raw row (plus its already-decrypted fields) to a LifeAdminRecord,
+function toChangedBy(row: Row): RecordSource | null {
+  if (row.changed_by_kind === "agent") return { kind: "agent", agentId: row.changed_by_agent_id as string };
+  return row.changed_by_kind === "person" ? { kind: "person" } : null;
+}
+
+function iso(value: unknown): string {
+  return value instanceof Date ? value.toISOString() : new Date(String(value ?? 0)).toISOString();
+}
+
+// Map a raw row (plus its already-decrypted content) to a LifeAdminRecord,
 // translating the snake_case columns to the module's camelCase fields.
-function toRecord(row: Row, fields: Record<string, unknown>): LifeAdminRecord {
+function toRecord(row: Row, fields: Record<string, unknown>, meta: RecordMeta = {}, pending: PendingChange | null = null): LifeAdminRecord {
   return {
     id: row.id as string,
     userId: row.user_id as string,
@@ -130,7 +211,41 @@ function toRecord(row: Row, fields: Record<string, unknown>): LifeAdminRecord {
     reminderOffsets: toOffsets(row.reminder_offsets),
     sentOffsets: toOffsets(row.sent_offsets),
     source: toSource(row),
+    type: meta.type ?? null,
+    foundIn: meta.foundIn ?? null,
+    reviewState: (row.review_state as ReviewState | undefined) ?? "confirmed",
+    parentId: (row.parent_id as string | null) ?? null,
+    matchKey: (row.match_key as string | null) ?? null,
+    pending,
+    changedBy: toChangedBy(row),
+    createdAt: iso(row.created_at),
+    updatedAt: iso(row.updated_at ?? row.created_at),
   };
+}
+
+// The key a record's match key is an HMAC under: derived from the person's DEK with its own
+// context label, so it differs per person and from every other derived key.
+const MATCH_INFO = "warthog/life-admin-match/v1";
+
+/** The opaque match key for a type and its identifying values (see the domain's identityParts). */
+export function recordMatchKey(dek: Uint8Array, typeId: string, parts: readonly string[]): string {
+  const key = Buffer.from(hkdfSync("sha256", dek, new Uint8Array(0), MATCH_INFO, 32));
+  return createHmac("sha256", key).update([typeId, ...parts].join("\u001f"), "utf8").digest("hex");
+}
+
+async function encryptMeta(dek: Uint8Array, id: string, meta: RecordMeta): Promise<string | null> {
+  return meta.type || meta.foundIn ? encrypt(dek, TABLE, META_COLUMN, id, JSON.stringify(meta)) : null;
+}
+
+// A parent must be another of the SAME person's records, and not a dismissed one.
+async function assertParent(db: Db, userId: string, id: string, parentId: string | null | undefined): Promise<void> {
+  if (!parentId) return;
+  if (parentId === id) throw new Error("life-admin record: a record cannot belong to itself");
+  const owner = await db.query(
+    "SELECT id FROM life_admin_records WHERE id = $1 AND user_id = $2 AND review_state <> 'dismissed'",
+    [parentId, userId],
+  );
+  if (owner.rows.length === 0) throw new Error("life-admin record: no such parent record for this user");
 }
 
 // Save a life-admin record for `input.userId`, storing its fields DEK-encrypted
@@ -144,19 +259,33 @@ export async function createRecord(
   input: NewRecord,
   dek: Uint8Array,
 ): Promise<LifeAdminRecord> {
-  const id = randomUUID();
+  // Validate before any query, then do the work in one transaction.
   const dueDate = recordDueDateSchema.nullable().parse(input.dueDate ?? null);
   const reminderOffsets = reminderOffsetsSchema.parse(input.reminderOffsets ?? [...DEFAULT_REMINDER_OFFSETS]);
+  if (!db.inTransaction) return withTransaction(db, (tx) => createRecord(tx, input, dek));
+  const id = randomUUID();
   const source = input.source;
   const sourceAgentId = source.kind === "agent" ? source.agentId : null;
+  const reviewState: ReviewState = input.reviewState ?? (source.kind === "agent" ? "suggested" : "confirmed");
+  const parentId = input.parentId ?? null;
+  const meta: RecordMeta = { ...(input.type ? { type: input.type } : {}), ...(input.foundIn ? { foundIn: input.foundIn } : {}) };
   const envelope = await encrypt(dek, TABLE, FIELDS_COLUMN, id, JSON.stringify(input.fields));
+  const metaEnvelope = await encryptMeta(dek, id, meta);
+  // Lock the owner row and check the person's record allowance (collection-bounds ADR); the
+  // lock also serialises a caller's match look-up with this insert.
+  await assertCollectionCapacity(db, input.userId, "life_admin_records", envelope.length);
+  await assertParent(db, input.userId, id, parentId);
 
-  await db.query(
+  const result = await db.query(
     `INSERT INTO life_admin_records
-       (id, user_id, kind, fields, due_date, status, reminder_offsets, source_kind, source_agent_id)
-     VALUES ($1, $2, $3, $4, $5::date, $6, $7::int[], $8, $9)`,
-    [id, input.userId, input.kind, envelope, dueDate, input.status, reminderOffsets, source.kind, sourceAgentId],
+       (id, user_id, kind, fields, due_date, status, reminder_offsets, source_kind, source_agent_id,
+        meta, review_state, parent_id, match_key, changed_by_kind, changed_by_agent_id)
+     VALUES ($1, $2, $3, $4, $5::date, $6, $7::int[], $8, $9, $10, $11, $12, $13, $8, $9)
+     RETURNING created_at, updated_at`,
+    [id, input.userId, input.kind, envelope, dueDate, input.status, reminderOffsets, source.kind, sourceAgentId,
+      metaEnvelope, reviewState, parentId, input.matchKey ?? null],
   );
+  const stamps = result.rows[0] ?? {};
 
   return {
     id,
@@ -168,6 +297,15 @@ export async function createRecord(
     reminderOffsets,
     sentOffsets: [],
     source,
+    type: meta.type ?? null,
+    foundIn: meta.foundIn ?? null,
+    reviewState,
+    parentId,
+    matchKey: input.matchKey ?? null,
+    pending: null,
+    changedBy: source,
+    createdAt: iso(stamps.created_at ?? new Date()),
+    updatedAt: iso(stamps.updated_at ?? stamps.created_at ?? new Date()),
   };
 }
 
@@ -185,9 +323,38 @@ export async function updateRecord(
   input: UpdateRecordInput,
   dek: Uint8Array,
 ): Promise<LifeAdminRecord> {
+  // Validate before any query, then do the work in one transaction.
   const dueDate = recordDueDateSchema.nullable().parse(input.dueDate ?? null);
   const reminderOffsets = input.reminderOffsets === undefined ? null : reminderOffsetsSchema.parse(input.reminderOffsets);
+  if (!db.inTransaction) return withTransaction(db, (tx) => updateRecord(tx, input, dek));
   const envelope = await encrypt(dek, TABLE, FIELDS_COLUMN, input.id, JSON.stringify(input.fields));
+  await assertCollectionCapacity(db, input.userId, "life_admin_records", envelope.length, input.id);
+
+  // Lock the row (member-scoped) so its meta merges with what is there now.
+  const current = (await db.query(
+    "SELECT meta, review_state FROM life_admin_records WHERE id = $1 AND user_id = $2 FOR UPDATE",
+    [input.id, input.userId],
+  )).rows[0];
+  if (!current || current.review_state === "dismissed") {
+    throw new Error("updateRecord: no such record for this user");
+  }
+  let meta: RecordMeta = current.meta ? JSON.parse(await decrypt(dek, TABLE, META_COLUMN, input.id, current.meta as string)) : {};
+  let metaEnvelope = (current.meta as string | null) ?? null;
+  if (input.type !== undefined || input.foundIn !== undefined) {
+    const next: { type?: string; foundIn?: RecordFoundIn } = { ...meta };
+    if (input.type !== undefined) {
+      if (input.type) next.type = input.type;
+      else delete next.type;
+    }
+    if (input.foundIn !== undefined) {
+      if (input.foundIn) next.foundIn = input.foundIn;
+      else delete next.foundIn;
+    }
+    meta = next;
+    metaEnvelope = await encryptMeta(dek, input.id, meta);
+  }
+  if (input.parentId !== undefined) await assertParent(db, input.userId, input.id, input.parentId);
+  const changedBy = input.changedBy ?? { kind: "person" as const };
 
   const result = await db.query(
     `UPDATE life_admin_records
@@ -196,17 +363,109 @@ export async function updateRecord(
          status = $5,
          reminder_offsets = COALESCE($6::int[], reminder_offsets),
          sent_offsets = CASE WHEN $7::boolean AND due_date IS DISTINCT FROM $4::date
-                             THEN '{}'::int[] ELSE sent_offsets END
+                             THEN '{}'::int[] ELSE sent_offsets END,
+         meta = $8,
+         review_state = COALESCE($9, review_state),
+         parent_id = CASE WHEN $10::boolean THEN $11::uuid ELSE parent_id END,
+         match_key = CASE WHEN $12::boolean THEN $13 ELSE match_key END,
+         pending = CASE WHEN $14::boolean THEN NULL ELSE pending END,
+         changed_by_kind = $15,
+         changed_by_agent_id = $16,
+         updated_at = now()
      WHERE id = $1 AND user_id = $2
      RETURNING ${SELECT_COLUMNS}`,
-    [input.id, input.userId, envelope, dueDate, input.status, reminderOffsets, input.dueDate !== undefined],
+    [input.id, input.userId, envelope, dueDate, input.status, reminderOffsets, input.dueDate !== undefined,
+      metaEnvelope, input.reviewState ?? null, input.parentId !== undefined, input.parentId ?? null,
+      input.matchKey !== undefined, input.matchKey ?? null, input.clearPending === true,
+      changedBy.kind, changedBy.kind === "agent" ? changedBy.agentId : null],
   );
 
   const row = result.rows[0];
   if (!row) {
     throw new Error("updateRecord: no such record for this user");
   }
-  return toRecord(row, input.fields);
+  return toRecord(row, input.fields, meta, await decryptPending(dek, row));
+}
+
+// One of the person's live (not dismissed) records by id, decrypted; null when there is none.
+export async function getRecordForUser(
+  db: Db,
+  userId: string,
+  id: string,
+  dek: Uint8Array,
+): Promise<LifeAdminRecord | null> {
+  const result = await db.query(
+    `SELECT ${SELECT_COLUMNS} FROM life_admin_records WHERE id = $1 AND user_id = $2 AND review_state <> 'dismissed'`,
+    [id, userId],
+  );
+  return (await decryptRows(result.rows, dek))[0] ?? null;
+}
+
+// The person's record with this match key: a live one first, else a dismissed tombstone (so a
+// caller can tell "already saved" from "the person said not mine"). Null when there is none.
+export async function findRecordByMatchKey(
+  db: Db,
+  userId: string,
+  matchKey: string,
+  dek: Uint8Array,
+): Promise<LifeAdminRecord | null> {
+  const result = await db.query(
+    `SELECT ${SELECT_COLUMNS} FROM life_admin_records WHERE user_id = $1 AND match_key = $2
+     ORDER BY (review_state = 'dismissed') ASC, updated_at DESC, id ASC LIMIT 1`,
+    [userId, matchKey],
+  );
+  return (await decryptRows(result.rows, dek))[0] ?? null;
+}
+
+// The person checked an agent's suggestion: it becomes theirs. True when one was confirmed.
+export async function confirmRecord(db: Db, userId: string, id: string): Promise<boolean> {
+  const result = await db.query(
+    `UPDATE life_admin_records SET review_state = 'confirmed', changed_by_kind = 'person', changed_by_agent_id = NULL, updated_at = now()
+     WHERE id = $1 AND user_id = $2 AND review_state = 'suggested' RETURNING id`,
+    [id, userId],
+  );
+  return result.rows.length > 0;
+}
+
+// Hold an agent's change to a confirmed record for the person to decide (replacing any change
+// already waiting). True when the record exists.
+export async function setPendingChange(
+  db: Db,
+  userId: string,
+  id: string,
+  change: PendingChange,
+  dek: Uint8Array,
+): Promise<boolean> {
+  const envelope = await encrypt(dek, TABLE, PENDING_COLUMN, id, JSON.stringify(change));
+  const result = await db.query(
+    `UPDATE life_admin_records SET pending = $3 WHERE id = $1 AND user_id = $2 AND review_state <> 'dismissed' RETURNING id`,
+    [id, userId, envelope],
+  );
+  return result.rows.length > 0;
+}
+
+// Make one of the person's records a tombstone ("not mine"): its fields, date, link and any
+// pending change are cleared and only its type and match key stay, so the same suggestion is
+// not added again. Records that belonged to it are unlinked. Runs inside the caller's
+// transaction (receipt files are removed alongside, in storage/receipt-files.ts).
+export async function dismissRecordRow(db: Db, userId: string, id: string, dek: Uint8Array): Promise<boolean> {
+  const current = (await db.query(
+    "SELECT meta FROM life_admin_records WHERE id = $1 AND user_id = $2 AND review_state <> 'dismissed' FOR UPDATE",
+    [id, userId],
+  )).rows[0];
+  if (!current) return false;
+  const meta: RecordMeta = current.meta ? JSON.parse(await decrypt(dek, TABLE, META_COLUMN, id, current.meta as string)) : {};
+  const empty = await encrypt(dek, TABLE, FIELDS_COLUMN, id, "{}");
+  const metaEnvelope = await encryptMeta(dek, id, meta.type ? { type: meta.type } : {});
+  await db.query(
+    `UPDATE life_admin_records
+     SET fields = $3, meta = $4, due_date = NULL, pending = NULL, parent_id = NULL, review_state = 'dismissed',
+         changed_by_kind = 'person', changed_by_agent_id = NULL, updated_at = now()
+     WHERE id = $1 AND user_id = $2`,
+    [id, userId, empty, metaEnvelope],
+  );
+  await db.query("UPDATE life_admin_records SET parent_id = NULL WHERE user_id = $1 AND parent_id = $2", [userId, id]);
+  return true;
 }
 
 // The owner reads' order: soonest due first, undated records last, then creation
@@ -216,17 +475,17 @@ export async function updateRecord(
 const OWNER_ORDER =
   "ORDER BY life_admin_records.due_date ASC NULLS LAST, life_admin_records.created_at ASC, life_admin_records.id ASC";
 
-// List ALL of `userId`'s records (member-scoped: user_id is bound), each fields
-// blob DECRYPTED under the owner's `dek`, in OWNER_ORDER. Never another person's
-// records; an empty array when the person has none. A wrong DEK fails the GCM tag
-// and rejects.
+// List ALL of `userId`'s live records (member-scoped: user_id is bound; dismissed
+// tombstones are left out), each fields blob DECRYPTED under the owner's `dek`, in
+// OWNER_ORDER. Never another person's records; an empty array when the person has none.
+// A wrong DEK fails the GCM tag and rejects.
 export async function listRecordsForUser(
   db: Db,
   userId: string,
   dek: Uint8Array,
 ): Promise<LifeAdminRecord[]> {
   const result = await db.query(
-    `SELECT ${SELECT_COLUMNS} FROM life_admin_records WHERE user_id = $1 ${OWNER_ORDER}`,
+    `SELECT ${SELECT_COLUMNS} FROM life_admin_records WHERE user_id = $1 AND review_state <> 'dismissed' ${OWNER_ORDER}`,
     [userId],
   );
   return decryptRows(result.rows, dek);
@@ -240,18 +499,23 @@ export async function listRecordsByKind(
   dek: Uint8Array,
 ): Promise<LifeAdminRecord[]> {
   const result = await db.query(
-    `SELECT ${SELECT_COLUMNS} FROM life_admin_records WHERE user_id = $1 AND kind = $2 ${OWNER_ORDER}`,
+    `SELECT ${SELECT_COLUMNS} FROM life_admin_records WHERE user_id = $1 AND kind = $2 AND review_state <> 'dismissed' ${OWNER_ORDER}`,
     [userId, kind],
   );
   return decryptRows(result.rows, dek);
 }
 
-// Decrypt each row's fields blob under the owner's DEK and assemble the records.
+async function decryptPending(dek: Uint8Array, row: Row): Promise<PendingChange | null> {
+  return row.pending ? (JSON.parse(await decrypt(dek, TABLE, PENDING_COLUMN, row.id as string, row.pending as string)) as PendingChange) : null;
+}
+
+// Decrypt each row's fields, meta and pending change under the owner's DEK and assemble the records.
 async function decryptRows(rows: Row[], dek: Uint8Array): Promise<LifeAdminRecord[]> {
   const records: LifeAdminRecord[] = [];
   for (const row of rows) {
     const plaintext = await decrypt(dek, TABLE, FIELDS_COLUMN, row.id as string, row.fields as string);
-    records.push(toRecord(row, JSON.parse(plaintext) as Record<string, unknown>));
+    const meta = row.meta ? (JSON.parse(await decrypt(dek, TABLE, META_COLUMN, row.id as string, row.meta as string)) as RecordMeta) : {};
+    records.push(toRecord(row, JSON.parse(plaintext) as Record<string, unknown>, meta, await decryptPending(dek, row)));
   }
   return records;
 }
@@ -262,6 +526,10 @@ async function decryptRows(rows: Row[], dek: Uint8Array): Promise<LifeAdminRecor
 // marked sent, and the record has a due date — the earliest reminder date first. METADATA
 // ONLY — it never decrypts a field (the fields blob is not even selected), which is
 // exactly design §4.1's "filter without decrypting another person's data".
+// A record that is dismissed, cancelled, done, paused or expired reminds no one, and nor does
+// one more than REMINDER_GRACE_DAYS past its due date (it shows as overdue instead), so a
+// batch of old records an agent saves from email, or an imported export, never sets off a
+// burst of pushes — while a reminder missed during a short outage still catches up.
 export async function listDueForReminder(db: Db, clock: Clock): Promise<DueReminder[]> {
   const result = await db.query(
     `SELECT r.id AS record_id, r.user_id, r.kind, r.due_date::text AS due_date, o AS "offset"
@@ -271,11 +539,14 @@ export async function listDueForReminder(db: Db, clock: Clock): Promise<DueRemin
        FROM unnest(r.reminder_offsets) AS value
      ) offsets
      WHERE r.due_date IS NOT NULL
+       AND r.review_state <> 'dismissed'
+       AND lower(r.status) NOT IN ('cancelled', 'canceled', 'done', 'paused', 'expired', 'ended')
+       AND r.due_date >= ($1::date - $3::int)
        AND o IS NOT NULL
        AND NOT (o = ANY(r.sent_offsets))
        AND (r.due_date - o) <= $1
      ORDER BY (r.due_date - o), r.id, o`,
-    [clock.now(), MAX_REMINDER_OFFSET_DAYS],
+    [clock.now(), MAX_REMINDER_OFFSET_DAYS, REMINDER_GRACE_DAYS],
   );
   return result.rows.map((row) => ({
     recordId: row.record_id as string,

@@ -15,6 +15,9 @@ export const COLLECTION_LIMITS = {
     bytes: 30_000_000,
     columns: ["content_ct", "summary_ct"],
   },
+  // Life-admin records (docs/adr/life-admin-profile.md): far above a real person's admin,
+  // well below what would fill the database. Counted on the fields blob, the bulk of a row.
+  life_admin_records: { rows: 2000, bytes: 20_000_000, columns: ["fields"] },
 } as const;
 export async function assertCollectionCapacity(
   db: Db,

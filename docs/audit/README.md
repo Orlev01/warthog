@@ -1,5 +1,11 @@
 # Warthog comprehensive engineering audit
 
+**Review and the life-admin profile, 23 November (branch `claude/life-admin-profile`, not yet
+released):** a six-perspective review of main `1aaa546` (one High still open: the OAuth consent
+swap) and typed life-admin records that the person's own agent fills in from email. Migration 0117
+makes 88. See the [review](life-admin-profile-review-2026-11-23.md) and the
+[decision](../adr/life-admin-profile.md).
+
 **Contact us, your requests, LinkedIn switched off, 20 November:** main `70c2a9f` runs as
 `warthog--r44658921004a1`. PR #42 adds Contact us, "Your requests" on Connectors and an email when a
 request arrives. PR #41 adds the LinkedIn connector, off until its app is set up. Migration 0116

@@ -10,6 +10,7 @@ import {
   CheckCircle,
   CheckCircle2,
   Circle,
+  ClipboardCheck,
   Clock,
   Inbox,
   ListChecks,
@@ -106,11 +107,16 @@ export type DashboardActivity = {
   href?: string; // the entry on the Activity page
 };
 
-// One upcoming life-admin reminder: a title and a pre-formatted due label.
+// One upcoming life-admin reminder: a title and a pre-formatted due date, what the date
+// means for its type ("Expires"; "Due" when absent), whether it has passed, and its row in
+// Life admin.
 export type DashboardReminder = {
   id: string;
   title: string;
   due: string;
+  dueLabel?: string;
+  overdue?: boolean;
+  href?: string;
 };
 
 // After an account recovery (sign-in audit, founder decision 13 November 2026): when it
@@ -129,6 +135,8 @@ export type DashboardViewProps = {
   activity: ReadonlyArray<DashboardActivity>;
   agents: ReadonlyArray<DashboardAgent>;
   reminders: ReadonlyArray<DashboardReminder>;
+  // Agents' suggestions and proposed changes waiting for the person in Life admin.
+  toCheck?: { count: number; href: string };
   // Wiring for the install prompt's "Turn on notifications" (the page passes these in
   // the running app): the register-this-device server action and the PUBLIC VAPID key.
   registerPushDevice?: RegisterPushDeviceAction;
@@ -400,7 +408,26 @@ function AgentsPanel({ agents }: { agents: ReadonlyArray<DashboardAgent> }) {
   );
 }
 
-function RemindersPanel({ reminders }: { reminders: ReadonlyArray<DashboardReminder> }) {
+// What a reminder's date says: "Overdue since 2 Nov 2026", or "Expires 14 Dec 2026" in its
+// type's words.
+function reminderDue(reminder: DashboardReminder): string {
+  return reminder.overdue ? `Overdue since ${reminder.due}` : `${reminder.dueLabel ?? "Due"} ${reminder.due}`;
+}
+
+function RemindersPanel({
+  reminders,
+  toCheck,
+}: {
+  reminders: ReadonlyArray<DashboardReminder>;
+  toCheck?: { count: number; href: string };
+}) {
+  const checkLine = toCheck ? (
+    <a href={toCheck.href} className={`${ACTION_LINK} text-sm font-medium text-fg`}>
+      <ClipboardCheck aria-hidden={true} className="h-4 w-4 shrink-0 text-fg-muted" />
+      {toCheck.count === 1 ? "1 thing to check" : `${toCheck.count} things to check`}
+      <span className="sr-only"> in Life admin</span>
+    </a>
+  ) : null;
   return (
     <WorkspacePanel
       title="Reminders"
@@ -412,24 +439,39 @@ function RemindersPanel({ reminders }: { reminders: ReadonlyArray<DashboardRemin
         </a>
       ) : undefined}
     >
+      {checkLine ? <div className="mb-3 border-b border-line pb-3">{checkLine}</div> : null}
       {reminders.length > 0 ? (
         <ul className="flex flex-col divide-y divide-line">
-          {reminders.slice(0, HOME_REMINDER_ROWS).map((reminder) => (
-            <li key={reminder.id} className="flex items-start gap-3 py-3 first:pt-0 last:pb-0">
-              <Circle aria-hidden={true} className="mt-0.5 h-4 w-4 shrink-0 text-fg-muted" />
-              <div className="min-w-0">
-                <p className="text-sm text-fg [overflow-wrap:anywhere]">{reminder.title}</p>
-                {reminder.due ? <p className="mt-1 text-xs text-fg-muted">Due {reminder.due}</p> : null}
-              </div>
-            </li>
-          ))}
+          {reminders.slice(0, HOME_REMINDER_ROWS).map((reminder) => {
+            const Icon = reminder.overdue ? AlertTriangle : Circle;
+            const body = (
+              <>
+                <Icon aria-hidden={true} className={`mt-0.5 h-4 w-4 shrink-0 ${reminder.overdue ? "text-warning" : "text-fg-muted"}`} />
+                <span className="flex min-w-0 flex-col">
+                  <span className="text-sm text-fg [overflow-wrap:anywhere]">{reminder.title}</span>
+                  {reminder.due ? <span className="mt-1 text-xs text-fg-muted">{reminderDue(reminder)}</span> : null}
+                </span>
+              </>
+            );
+            return (
+              <li key={reminder.id} className="py-3 first:pt-0 last:pb-0">
+                {reminder.href ? (
+                  <a href={reminder.href} className="flex min-h-11 min-w-0 items-start gap-3 rounded-field hover:bg-surface-muted">
+                    {body}
+                  </a>
+                ) : (
+                  <div className="flex min-w-0 items-start gap-3">{body}</div>
+                )}
+              </li>
+            );
+          })}
         </ul>
       ) : (
         <EmptyState
           variant="inline"
           icon={Bell}
           heading="No reminders coming up"
-          description="Subscriptions, renewals and appointments with a due date in Life admin show here."
+          description="Renewals, expiry dates and bills with a due date in Life admin show here."
           action={<ButtonLink href="/life-admin" size="sm">Open Life admin</ButtonLink>}
         />
       )}
@@ -500,6 +542,7 @@ export function DashboardView({
   activity,
   agents,
   reminders,
+  toCheck,
   registerPushDevice,
   vapidPublicKey,
   attention,
@@ -511,13 +554,13 @@ export function DashboardView({
   const hasAgents = agents.length > 0;
   const inbox = <InboxPanel key="inbox" pendingApprovals={pendingApprovals} />;
   const recent = <ActivityPanel key="activity" activity={activity} attention={attention} />;
-  const upcoming = <RemindersPanel key="reminders" reminders={reminders} />;
+  const upcoming = <RemindersPanel key="reminders" reminders={reminders} toCheck={toCheck} />;
   // Before the first agent, only the panels with something in them appear (in one grid);
   // after it, the full two-column dashboard.
   const newcomerPanels = [
     pendingApprovals > 0 ? inbox : null,
     activity.length > 0 || attention ? recent : null,
-    reminders.length > 0 ? upcoming : null,
+    reminders.length > 0 || toCheck ? upcoming : null,
   ].filter((panel) => panel !== null);
   return (
     <div className="wh-page">

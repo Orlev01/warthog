@@ -49,7 +49,10 @@ import { createMemory, type MemoryScope } from "../db/memories";
 import { createRule } from "../db/rules";
 import type { RuleAction, RuleCondition, RuleKind, RuleScope } from "../../domain/rules/rules";
 import { createTask, type TaskActor, type TaskNote, type TaskStatus } from "../db/tasks";
-import { createRecord, type RecordKind, type RecordSource } from "../db/life-admin-records";
+import { createRecord, recordMatchKey, type RecordFoundIn, type RecordKind, type RecordSource } from "../db/life-admin-records";
+import { findForbidden } from "../../domain/life-admin/identifiers";
+import { identityParts } from "../../domain/life-admin/normalise";
+import { recordType } from "../../domain/life-admin/record-types";
 import { createImportedEntry } from "../db/imported-history";
 import type { Clock } from "../seams/clock";
 
@@ -104,12 +107,36 @@ interface TaskDoc {
   readonly createdBy?: TaskActor;
 }
 interface LifeAdminDoc {
+  readonly id?: string;
   readonly kind?: string;
   readonly fields?: Record<string, unknown>;
   readonly dueDate?: string | null;
   readonly status?: string;
   readonly reminderOffsets?: number[];
   readonly source?: RecordSource;
+  readonly type?: string | null;
+  readonly reviewState?: string;
+  readonly parentId?: string | null;
+  readonly foundIn?: RecordFoundIn | null;
+}
+
+const RECORD_KIND_VALUES: readonly string[] = ["subscription", "receipt_warranty", "renewal_appointment", "item"];
+
+// A record restored from an export (docs/adr/life-admin-profile.md): an unknown kind or type
+// is refused as a bad file (a 400, never a database error); a field that must never be kept
+// (a tax file number, a password, a government ID number …) is dropped, since a hand-edited
+// file could carry one; a missing review state reads as checked only for the person's own.
+function restoredRecord(record: LifeAdminDoc): { kind: RecordKind; type: string | null; fields: Record<string, unknown>; reviewState: "suggested" | "confirmed" } {
+  if (!record.kind || !RECORD_KIND_VALUES.includes(record.kind)) throw new HttpError(400, "The export file has a life-admin record of an unknown kind.");
+  const type = record.type ?? null;
+  if (type !== null && !recordType(type)) throw new HttpError(400, "The export file has a life-admin record of an unknown type.");
+  const fields: Record<string, unknown> = { ...(record.fields ?? {}) };
+  for (const finding of findForbidden(fields, type)) delete fields[finding.field];
+  const source = record.source ?? { kind: "person" };
+  const reviewState = record.reviewState === "confirmed" || record.reviewState === "suggested"
+    ? record.reviewState
+    : source.kind === "agent" ? "suggested" : "confirmed";
+  return { kind: record.kind as RecordKind, type, fields, reviewState };
 }
 interface ActivityDoc {
   readonly occurredAt?: string;
@@ -290,20 +317,39 @@ export async function importExportDocument(
 
     // Life-admin records — kind, fields, due date, status, reminder offsets and source
     // round-trip.
+    // Typed records keep their type, review state and provenance; links to a vehicle, home or
+    // pet are restored once every record has its new id.
+    const newIds = new Map<string, string>();
+    const links: { id: string; oldParent: string }[] = [];
     for (const record of lifeAdmin) {
-      await createRecord(
+      const restored = restoredRecord(record);
+      // Restore the match key (so a later scan updates the record instead of adding a copy),
+      // except for types identified by their parent, whose new id isn't known yet.
+      const typeDef = restored.type ? recordType(restored.type) : undefined;
+      const parts = typeDef && !typeDef.identity.includes("parent") ? identityParts(typeDef, restored.fields, null) : null;
+      const created = await createRecord(
         tx,
         {
           userId,
-          kind: record.kind as RecordKind,
-          fields: record.fields ?? {},
+          kind: restored.kind,
+          type: restored.type,
+          fields: restored.fields,
           dueDate: record.dueDate ?? null,
           status: record.status ?? "active",
           reminderOffsets: record.reminderOffsets,
           source: record.source ?? { kind: "person" },
+          reviewState: restored.reviewState,
+          foundIn: record.foundIn ?? null,
+          matchKey: typeDef && parts ? recordMatchKey(dek, typeDef.id, parts) : null,
         },
         dek,
       );
+      if (record.id) newIds.set(record.id, created.id);
+      if (record.parentId) links.push({ id: created.id, oldParent: record.parentId });
+    }
+    for (const link of links) {
+      const parent = newIds.get(link.oldParent);
+      if (parent) await tx.query("UPDATE life_admin_records SET parent_id = $3 WHERE id = $1 AND user_id = $2", [link.id, userId, parent]);
     }
 
     // Activity history — into the READ-ONLY imported-history ARCHIVE, never the live

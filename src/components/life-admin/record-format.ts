@@ -8,6 +8,14 @@
 // Display only: nothing here changes a stored value, and the edit form still posts every
 // field under its own key. Pure functions over plain values (no clock, no locale of the
 // machine), shared by the view and its tests.
+//
+// Typed records (docs/adr/life-admin-profile.md): a record's type supplies its field labels
+// ("Insurer", "Policy number"), what its due date means ("Expires 14 Dec 2026"), and the
+// provenance line says who added it and where an agent says it found it. Values an agent read
+// from email are only ever shown as text, never as a link.
+
+import { storedRecordName } from "@/domain/life-admin/normalise";
+import { typeFieldLabel, typeOfRecord, type RecordTypeDef, type StoredKind } from "@/domain/life-admin/record-types";
 
 const FIELD_LABELS: Readonly<Record<string, string>> = {
   name: "Name",
@@ -77,11 +85,13 @@ const STATUS_LABELS: Readonly<Record<string, string>> = {
   returned: "Returned",
 };
 
-/** The statuses the edit form offers, in order, as stored value → label. */
+/** The statuses the forms offer, in order, as stored value → label (the record service's
+ * RECORD_STATUSES; record-format.test.ts keeps the two lists the same). */
 export const RECORD_STATUS_CHOICES: ReadonlyArray<{ value: string; label: string }> = [
   { value: "active", label: "Active" },
   { value: "paused", label: "Paused" },
   { value: "cancelled", label: "Cancelled" },
+  { value: "expired", label: "Expired" },
   { value: "done", label: "Done" },
 ];
 
@@ -89,14 +99,6 @@ export const RECORD_STATUS_CHOICES: ReadonlyArray<{ value: string; label: string
 export function statusLabel(status: string): string {
   const trimmed = status.trim();
   return STATUS_LABELS[trimmed.toLowerCase()] ?? (trimmed ? fieldLabel(trimmed) : "");
-}
-
-/** The line under a record's name: "Due 1 Dec 2026 · Active", or just the status. */
-export function dueLine(dueDate: string | null, status: string): string {
-  const word = statusLabel(status);
-  if (!dueDate) return word;
-  const due = `Due ${formatCalendarDate(dueDate)}`;
-  return word ? `${due} · ${word}` : due;
 }
 
 const AMOUNT_KEYS = ["amount", "cost", "price"];
@@ -118,6 +120,7 @@ const CYCLE_WORDS: Readonly<Record<string, string>> = {
   year: "a year",
   annual: "a year",
   annually: "a year",
+  one_off: "once",
 };
 
 export type RecordFact = { readonly key: string; readonly label: string; readonly value: string };
@@ -139,7 +142,11 @@ function plainAmount(value: string): number | null {
  * other filled-in field with its label, dates formatted. `titleKey` (the field the row leads
  * with) is left out; so are empty values.
  */
-export function recordFacts(fields: Readonly<Record<string, string>>, titleKey: string | null): RecordFact[] {
+export function recordFacts(
+  fields: Readonly<Record<string, string>>,
+  titleKey: string | null,
+  labelOf: (key: string) => string = fieldLabel,
+): RecordFact[] {
   const facts: RecordFact[] = [];
   const used = new Set<string>(titleKey ? [titleKey] : []);
   const amountKey = findKey(fields, AMOUNT_KEYS, titleKey);
@@ -150,15 +157,208 @@ export function recordFacts(fields: Readonly<Record<string, string>>, titleKey: 
     const currency = currencyKey ? fields[currencyKey]!.trim().toUpperCase() : "";
     const cycle = cycleKey ? CYCLE_WORDS[fields[cycleKey]!.trim().toLowerCase()] : undefined;
     const money = `${currency ? `${currency} ` : ""}${amount.toFixed(2)}`;
-    facts.push({ key: amountKey, label: fieldLabel(amountKey), value: cycle ? `${money} ${cycle}` : money });
+    facts.push({ key: amountKey, label: labelOf(amountKey), value: cycle ? `${money} ${cycle}` : money });
     used.add(amountKey);
     if (currencyKey) used.add(currencyKey);
     if (cycleKey && cycle) used.add(cycleKey);
   }
   for (const [key, value] of Object.entries(fields)) {
     if (used.has(key) || value.trim() === "") continue;
-    const shown = CYCLE_KEYS.includes(key.trim().toLowerCase()) ? fieldLabel(value) : formatCalendarDate(value);
-    facts.push({ key, label: fieldLabel(key), value: shown });
+    facts.push({ key, label: labelOf(key), value: formatValue(key, value) });
   }
   return facts;
+}
+
+/** One stored value as it reads on screen: a date formatted, a billing cycle in words. */
+export function formatValue(key: string, value: string): string {
+  return CYCLE_KEYS.includes(key.trim().toLowerCase()) ? fieldLabel(value) : formatCalendarDate(value);
+}
+
+// ─── typed records ──────────────────────────────────────────────────────────────────────
+
+/** The record type a stored record reads as: its own, else its original kind's. */
+export function recordTypeOf(record: { readonly kind: StoredKind; readonly type?: string | null }): RecordTypeDef {
+  return typeOfRecord(record.kind, record.type ?? null);
+}
+
+/** A field's label for a type: the type's own wording, else the key tidied. */
+export function typedFieldLabel(type: RecordTypeDef, key: string): string {
+  return typeFieldLabel(type, key) ?? fieldLabel(key);
+}
+
+const NAME_KEYS = ["name", "title", "item", "what", "provider", "service", "merchant"];
+
+/**
+ * The name a record goes by (the same one Home and reminders use) and the field it came
+ * from, so the row can list the other fields without repeating it. `key` is null when the
+ * name is the type's own label.
+ */
+export function recordName(
+  kind: StoredKind,
+  type: string | null | undefined,
+  fields: Readonly<Record<string, string>>,
+): { name: string; key: string | null } {
+  const name = storedRecordName(kind, type, fields);
+  const key =
+    NAME_KEYS.find((candidate) => fields[candidate]?.trim() === name) ??
+    Object.keys(fields).find((candidate) => fields[candidate]!.trim() === name) ??
+    null;
+  return { name, key };
+}
+
+/** What a type's due date means, as the person reads it ("Expires", "Renews"). */
+export function dueLabelOf(type: RecordTypeDef | null | undefined): string {
+  return type?.due?.label ?? "Due";
+}
+
+/** "Expires 14 Dec 2026": the date with the type's own wording. */
+export function dueText(type: RecordTypeDef | null | undefined, dueDate: string): string {
+  return `${dueLabelOf(type)} ${formatCalendarDate(dueDate)}`;
+}
+
+/** The line under a typed record's name: "Registration · Expires 14 Dec 2026 · Active". */
+export function typedDueLine(type: RecordTypeDef, dueDate: string | null, status: string): string {
+  return [type.label, dueDate ? dueText(type, dueDate) : null, statusLabel(status) || null].filter(Boolean).join(" · ");
+}
+
+const DAY_MS = 86_400_000;
+
+function utcDay(isoDate: string): number {
+  const [year, month, day] = isoDate.slice(0, 10).split("-").map(Number);
+  return Date.UTC(year!, month! - 1, day!);
+}
+
+/** Whole calendar days from `today` to `date` (negative when it has passed). */
+export function daysBetween(today: string, date: string): number {
+  return Math.round((utcDay(date) - utcDay(today)) / DAY_MS);
+}
+
+/** How far away a date is, in words: "today", "tomorrow", "in 21 days", "3 days ago". */
+export function whenText(today: string, date: string): string {
+  const days = daysBetween(today, date);
+  if (days === 0) return "today";
+  if (days === 1) return "tomorrow";
+  if (days > 1) return `in ${days} days`;
+  if (days === -1) return "yesterday";
+  return `${-days} days ago`;
+}
+
+// ─── provenance: who added a record and where an agent says it found it ───────────────────
+
+export type ProvenanceActor =
+  | { readonly kind: "person" }
+  | { readonly kind: "agent"; readonly agentId?: string; readonly name: string };
+
+export type ProvenanceFoundIn = {
+  readonly service: string;
+  readonly sender?: string;
+  readonly date?: string;
+  readonly seenByWarthog: boolean;
+};
+
+function capitalise(text: string): string {
+  return text ? text[0]!.toUpperCase() + text.slice(1) : text;
+}
+
+// What kind of item the service holds, so the line says "an email" or "a file".
+function sourceNoun(service: string): { noun: string; hasSender: boolean } {
+  if (/calendar/i.test(service)) return { noun: "a calendar event", hasSender: false };
+  if (/drive|files?\b|dropbox|onedrive|sharepoint/i.test(service)) return { noun: "a file", hasSender: false };
+  return { noun: "an email", hasSender: true };
+}
+
+/** Where an agent says it found something, as a sentence ("Found by ChatGPT in an email from …"). */
+export function foundInSentence(agentName: string, foundIn: ProvenanceFoundIn): string {
+  const { noun, hasSender } = sourceNoun(foundIn.service);
+  const sender = hasSender && foundIn.sender?.trim() ? ` from ${foundIn.sender.trim()}` : "";
+  const date = foundIn.date?.trim() ? ` (${formatCalendarDate(foundIn.date.trim())})` : "";
+  return foundIn.seenByWarthog
+    ? `Found by ${agentName} in ${noun}${sender}${date}. ${capitalise(agentName)} read it through Warthog.`
+    : `${capitalise(agentName)} says it found this in ${noun}${sender}${date}.`;
+}
+
+function sameActor(a: ProvenanceActor, b: ProvenanceActor): boolean {
+  if (a.kind === "person" || b.kind === "person") return a.kind === b.kind;
+  return a.agentId !== undefined && b.agentId !== undefined ? a.agentId === b.agentId : a.name === b.name;
+}
+
+/**
+ * Who a record came from, in plain words: "Added by you.", "Found by ChatGPT in an email
+ * from service.nsw.gov.au (2 Oct 2026). ChatGPT read it through Warthog.", "ChatGPT says it
+ * found this in an email from …", "Added by ChatGPT." — then "Checked by you." once the
+ * person confirmed an agent's record, and "Last changed by Claude." when another agent
+ * rewrote it since.
+ */
+export function provenanceLine(input: {
+  readonly addedBy: ProvenanceActor;
+  readonly changedBy?: ProvenanceActor | null;
+  readonly reviewState: "suggested" | "confirmed";
+  readonly foundIn?: ProvenanceFoundIn | null;
+}): string {
+  const { addedBy, changedBy, reviewState, foundIn } = input;
+  const parts: string[] = [];
+  if (addedBy.kind === "person") {
+    parts.push("Added by you.");
+  } else {
+    parts.push(foundIn ? foundInSentence(addedBy.name, foundIn) : `Added by ${addedBy.name}.`);
+    if (reviewState === "confirmed") parts.push("Checked by you.");
+  }
+  if (changedBy && changedBy.kind === "agent" && !sameActor(addedBy, changedBy)) {
+    parts.push(`Last changed by ${changedBy.name}.`);
+  }
+  return parts.join(" ");
+}
+
+// ─── an agent's proposed change, line by line ─────────────────────────────────────────────
+
+export type ChangeLine = {
+  readonly key: string;
+  readonly label: string;
+  // null ⇒ not set (before) or removed (after).
+  readonly from: string | null;
+  readonly to: string | null;
+};
+
+/**
+ * An agent's pending change as "label: old → new" lines, labelled through the record's
+ * type, with the due date and status last. Values read as everywhere else (dates formatted).
+ */
+export function pendingChangeLines(
+  type: RecordTypeDef,
+  current: {
+    readonly fields: Readonly<Record<string, string>>;
+    readonly heldFields?: Readonly<Record<string, string>>;
+    readonly dueDate: string | null;
+    readonly status: string;
+  },
+  pending: {
+    readonly set: Readonly<Record<string, string>>;
+    readonly remove: readonly string[];
+    readonly dueDate?: string | null;
+    readonly status?: string;
+  },
+): ChangeLine[] {
+  const before = (key: string): string | null => {
+    const value = current.fields[key] ?? current.heldFields?.[key];
+    return value === undefined || value.trim() === "" ? null : formatValue(key, value);
+  };
+  const lines: ChangeLine[] = [];
+  for (const [key, value] of Object.entries(pending.set)) {
+    lines.push({ key, label: typedFieldLabel(type, key), from: before(key), to: value.trim() === "" ? null : formatValue(key, value) });
+  }
+  for (const key of pending.remove) {
+    lines.push({ key, label: typedFieldLabel(type, key), from: before(key), to: null });
+  }
+  if (pending.dueDate !== undefined) {
+    lines.push({
+      key: "dueDate",
+      label: dueLabelOf(type),
+      from: current.dueDate ? formatCalendarDate(current.dueDate) : null,
+      to: pending.dueDate ? formatCalendarDate(pending.dueDate) : null,
+    });
+  }
+  if (pending.status !== undefined) {
+    lines.push({ key: "status", label: "Status", from: statusLabel(current.status) || null, to: statusLabel(pending.status) || null });
+  }
+  return lines;
 }

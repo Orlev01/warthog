@@ -24,6 +24,15 @@ export interface OutgoingMessage {
   readonly email?: EmailContent;
 }
 
+// The person has no device to push to. Nothing can be delivered and nothing should be
+// retried: a sweep treats the notification as handled rather than failing every hour.
+export class NoPushDeviceError extends Error {
+  constructor() {
+    super("No registered push device");
+    this.name = "NoPushDeviceError";
+  }
+}
+
 export interface PushSender {
   sendPush(message: OutgoingMessage): Promise<void>;
   // Used by the notification test action after it has loaded an owned device.
