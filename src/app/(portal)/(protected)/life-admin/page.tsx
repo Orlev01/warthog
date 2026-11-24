@@ -9,7 +9,7 @@ import { firstParam } from "@/lib/href";
 import {
   historyFilters,
   requestedLifeAdminTab,
-  ADD_TAB_PATH,
+  recordTab,
   noticeField,
   recordDate,
   recordFields,
@@ -84,9 +84,10 @@ async function addRecordAction(formData: FormData): Promise<void> {
   const type = recordTypeId(formData);
   const back = recordReturnPath(formData);
   if (!type) redirect(`${withQuery(back, "notice=record_type_missing")}#new-record`);
-  // Added on the Add tab, a record is then shown where it lives (Records, or its own page when
-  // it's a booking or finished); a problem keeps the person on Add with the form open.
-  const landing = back === ADD_TAB_PATH ? "/life-admin" : back;
+  // Added on the Add tab, a record is then shown on Records (or, when it doesn't live there, as a
+  // booking or something finished, on its own page); a problem keeps the person on Add with the
+  // form open.
+  const landing = recordTab(formData.get("returnTab")) === "add" ? "/life-admin?tab=records" : back;
   await run(savedOutcome, (actions, session) =>
     actions.saveRecord(session, {
       type,

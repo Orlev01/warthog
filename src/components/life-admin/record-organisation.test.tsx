@@ -430,3 +430,18 @@ test("the toolbar says what the active, recurring records cost a month, and says
   assert.match(one, /You pay about AUD 25\.99 a month for 1 recurring record\./);
   assert.doesNotMatch(text(toolbarOf(render({ records: [LOOSE_INSURANCE] }))), /You pay/);
 });
+
+test("when everything kept is in categories marked not for me, Life admin opens on Add and Records says why it's empty", () => {
+  const states: CategoryStateView[] = BUILT_IN.categories.map((category) => ({
+    id: category.id,
+    visibility: category.id === "health" ? "not_for_me" : "available",
+    records: category.id === "health" ? 1 : 0,
+  }));
+  const markup = render({ records: [HEALTH], categories: states });
+  const selected = /<button\b[^>]*aria-selected="true"[^>]*>([\s\S]*?)<\/button>/.exec(markup)!;
+  assert.equal(text(selected[1]!), "Add", "nothing is shown on any tab, so Add opens");
+  const records = tabPanel(markup, 0);
+  assert.match(text(records), /Nothing to show\. What you keep is in categories you said are not for you\./);
+  assert.doesNotMatch(text(records), /Nothing on file yet/);
+  assert.match(text(tabPanel(markup, 1)), /Not for me \(1\)/);
+});

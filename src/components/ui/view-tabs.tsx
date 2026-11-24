@@ -2,6 +2,7 @@
 import * as React from "react";
 import { WorkspaceHeading } from "@/components/shell/workspace-surfaces";
 import { revealCurrent, useScrollEdges } from "@/components/shell/scroll-edges";
+import { ButtonLink, type ButtonLinkProps } from "@/components/ui/button-link";
 
 export function resolveView(
   value: string | null,
@@ -24,6 +25,9 @@ export function nextTabIndex(
 
 // Validate URL state, preserve unrelated filters, and restore the selected view
 // with Back/Forward. Keep forms mounted so changing tabs does not discard drafts.
+// On load, an address that names no view shows the one the page chose for it
+// (`initialSelection`, which may depend on the person's data); Back or Forward to
+// such an address shows the default (`fallback`).
 export function useQueryView<T extends string>(
   keys: readonly T[],
   fallback: T,
@@ -34,16 +38,18 @@ export function useQueryView<T extends string>(
     () => resolveView(initialSelection ?? null, keys, fallback) as T,
   );
   const keyList = keys.join("|");
+  const chosenOnLoad = React.useRef(initialSelection ?? null);
   React.useEffect(() => {
-    const restore = () =>
+    const read = (onLoad: boolean) =>
       setSelected(
         resolveView(
-          new URLSearchParams(window.location.search).get(parameter),
+          new URLSearchParams(window.location.search).get(parameter) ?? (onLoad ? chosenOnLoad.current : null),
           keyList.split("|"),
           fallback,
         ) as T,
       );
-    restore();
+    read(true);
+    const restore = () => read(false);
     window.addEventListener("popstate", restore);
     return () => window.removeEventListener("popstate", restore);
   }, [keyList, fallback, parameter]);
@@ -66,6 +72,32 @@ export function useQueryView<T extends string>(
 }
 
 export type ViewTab = { key: string; label: string; content: React.ReactNode };
+
+// Opens one of the enclosing ViewPanels' tabs in place, for links inside a panel (null outside).
+const OpenViewContext = React.createContext<((key: string) => void) | null>(null);
+
+// A link to another tab of the same ViewPanels: it opens that tab in place, so what's half-typed in
+// every tab survives (the panels stay mounted), then scrolls to `anchor` or the top. Without
+// JavaScript, or opened in a new tab or window, it's the plain link it renders.
+export function ViewTabLink({ tab, anchor, onClick, ...props }: ButtonLinkProps & { tab: string; anchor?: string }) {
+  const open = React.useContext(OpenViewContext);
+  return (
+    <ButtonLink
+      {...props}
+      onClick={(event) => {
+        onClick?.(event);
+        if (event.defaultPrevented || !open || event.button !== 0 || event.metaKey || event.ctrlKey || event.shiftKey || event.altKey) return;
+        event.preventDefault();
+        open(tab);
+        window.requestAnimationFrame(() => {
+          const target = anchor ? document.getElementById(anchor) : null;
+          if (target) target.scrollIntoView({ block: "start" });
+          else window.scrollTo({ top: 0 });
+        });
+      }}
+    />
+  );
+}
 
 // The page heading that owns these tabs, when they are the page's first navigation under its
 // title: the tablist then sits in the heading band's nav row (one band, not two).
@@ -158,7 +190,7 @@ export function ViewPanels({
     </div>
   );
   return (
-    <>
+    <OpenViewContext.Provider value={select as (key: string) => void}>
       {heading ? (
         <WorkspaceHeading
           eyebrow={heading.eyebrow}
@@ -189,6 +221,6 @@ export function ViewPanels({
           {tab.content}
         </div>
       ))}
-    </>
+    </OpenViewContext.Provider>
   );
 }

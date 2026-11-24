@@ -13,6 +13,10 @@ import type { LifeAdminTab } from "./record-view-types";
 type Params = Readonly<Record<string, string | readonly string[] | undefined>>;
 
 const PAGE_TABS: readonly LifeAdminTab[] = ["records", "add", "upcoming", "history", "tasks"];
+
+// The Add tab (what's still to fill in, and adding a record) and its add form's anchor.
+export const ADD_TAB_HREF = "/life-admin?tab=add";
+export const ADD_ANCHOR = "new-record";
 const OLDER_TABS: Readonly<Record<string, LifeAdminTab>> = {
   bookings: "upcoming",
   checklist: "records",
@@ -66,7 +70,39 @@ export function currentLifeAdminHref(params: Params): string | null {
 
 /** The same for a browser address's query string. */
 export function currentLifeAdminSearch(search: string): string | null {
+  return currentLifeAdminHref(paramsOf(search));
+}
+
+function paramsOf(search: string): Record<string, string[]> {
   const params: Record<string, string[]> = {};
   for (const [name, value] of new URLSearchParams(search)) (params[name] ??= []).push(value);
-  return currentLifeAdminHref(params);
+  return params;
+}
+
+/**
+ * The address for the tab the page opened (`shown`), or null when the browser's is already right:
+ * older addresses mapped onto today's, and the tab named in `?tab=` whenever it isn't the page's
+ * default for this person (`defaultTab`: Records, or Add while nothing is on file). The tabs read
+ * `?tab=` (or, on load, the tab the page drew) and otherwise the default, so naming it keeps Back,
+ * Forward and a reload on the tab the page drew.
+ */
+export function shownLifeAdminAddress(search: string, hash: string, shown: LifeAdminTab, defaultTab: LifeAdminTab): string | null {
+  const asked = paramsOf(search);
+  const mapped = new URL(currentLifeAdminHref(asked) ?? `/life-admin${search}`, "https://life-admin.invalid");
+  const query = new URLSearchParams(shown === defaultTab ? [] : [["tab", shown]]);
+  for (const [name, value] of mapped.searchParams) if (name !== "tab") query.append(name, value);
+  const built = query.toString();
+  const next = built ? `/life-admin?${built}` : "/life-admin";
+  const now = new URLSearchParams(search).toString();
+  return next === (now ? `/life-admin?${now}` : "/life-admin") ? null : `${next}${hash}`;
+}
+
+/**
+ * Where an old link to the add form (`/life-admin#new-record`, from before the Add tab) goes: the
+ * Add tab's address, when the address names no tab and the page drew another. Null otherwise.
+ */
+export function addFormRedirect(search: string, hash: string, shown: LifeAdminTab): string | null {
+  if (hash !== `#${ADD_ANCHOR}` || shown === "add") return null;
+  const asked = paramsOf(search);
+  return asked.tab === undefined && asked.view === undefined ? `${ADD_TAB_HREF}${hash}` : null;
 }

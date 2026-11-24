@@ -6,6 +6,7 @@ import { Plus } from "lucide-react";
 import { ActionForm, FormSubmit, PendingFormFields } from "@/components/ui/form-submit";
 import { Button, buttonClasses, type ButtonVariant } from "@/components/ui/button";
 import { ButtonLink } from "@/components/ui/button-link";
+import { ADD_ANCHOR, ADD_TAB_HREF } from "./tab-address";
 import { Field, SelectField, TextareaField } from "@/components/ui/field";
 import { Notice } from "@/components/ui/notice";
 import { WorkspacePanel } from "@/components/shell/workspace-surfaces";
@@ -438,7 +439,7 @@ export function EditRecordForm({
 
 // ─── adding ──────────────────────────────────────────────────────────────────────────
 
-const ADD_ANCHOR = "new-record";
+// The add form's anchor and the Add tab's address (./tab-address).
 
 /**
  * "Add something": step one picks the kind with a plain GET form (`?add=<kind>`), its choices
@@ -535,7 +536,7 @@ function AddForm({
       </PendingFormFields>
       <div className="flex flex-wrap items-center gap-2">
         <FormSubmit variant="primary" pendingLabel="Adding…">Add to Life admin</FormSubmit>
-        <ButtonLink variant="ghost" href={`/life-admin?tab=add#${ADD_ANCHOR}`}>
+        <ButtonLink variant="ghost" href={`${ADD_TAB_HREF}#${ADD_ANCHOR}`}>
           Cancel
         </ButtonLink>
       </div>

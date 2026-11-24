@@ -291,7 +291,7 @@ test("Not for me (n) lists the hidden categories, with how many records they kee
     records: category.id === "pets" ? 1 : 0,
   }));
   const panel = panelOf(render({ records: [], categories: states }), "Fill in your life admin");
-  assert.match(text(panel), /Not for me \(2\) Legal and estate Undo : show Legal and estate again Pets · 1 record kept, hidden here Undo : show Pets again/);
+  assert.match(text(panel), /Not for me \(2\) Legal and estate Undo : show Legal and estate again Pets · 1 record kept, hidden on every tab Undo : show Pets again/);
   const undo = forms(panel).filter((form) => form.buttons.some((b) => /^Undo/.test(b)));
   assert.deepEqual(undo.map((form) => form.hidden), [[["category", "legal"], ["setting", "clear"]], [["category", "pets"], ["setting", "clear"]]]);
 });

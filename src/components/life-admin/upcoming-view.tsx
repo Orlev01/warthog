@@ -7,6 +7,8 @@ import { WorkspacePanel } from "@/components/shell/workspace-surfaces";
 import { ListGroup, LIST_ROW } from "@/components/ui/list-group";
 import { EmptyState } from "@/components/ui/empty";
 import { ButtonLink } from "@/components/ui/button-link";
+import { ViewTabLink } from "@/components/ui/view-tabs";
+import { ADD_ANCHOR, ADD_TAB_HREF } from "./tab-address";
 import type { Catalogue } from "@/domain/life-admin/catalogue";
 import { shortDate } from "@/domain/life-admin/journal";
 import { phaseOfView, sectionOf, upcomingSections } from "./record-groups";
@@ -77,7 +79,7 @@ export function UpcomingView({
             icon={CalendarCheck}
             heading="Nothing coming up."
             description="Bookings, and renewals and expiry dates in the next 60 days, show here. Past ones move to History."
-            action={<ButtonLink href="/life-admin?tab=add#new-record" size="sm">Add a booking</ButtonLink>}
+            action={<ViewTabLink tab="add" anchor={ADD_ANCHOR} href={`${ADD_TAB_HREF}#${ADD_ANCHOR}`} size="sm">Add a booking</ViewTabLink>}
           />
         ) : (
           groups.map((group) => (

@@ -5,10 +5,10 @@ import * as React from "react";
 import { ViewPanels, type ViewPanelsHeading } from "@/components/ui/view-tabs";
 import { BUILT_IN, catalogueFromData, type CatalogueData } from "@/domain/life-admin/catalogue";
 import { DEFAULT_LIST_STATUSES, listedRecords } from "./record-groups";
-import { AddView, RecordsView } from "./records-view";
+import { AddView, RecordsView, assetsOf, nothingOnFile } from "./records-view";
 import { UpcomingView } from "./upcoming-view";
 import { HistoryView } from "./history-view";
-import { currentLifeAdminSearch } from "./tab-address";
+import { addFormRedirect, shownLifeAdminAddress } from "./tab-address";
 import type {
   CategoryStateView,
   HistoryFilter,
@@ -131,19 +131,31 @@ function useRecordAnchor() {
   }, []);
 }
 
-// An older address (`?view=…`, an older tab name) is replaced by today's, keeping the
-// `#record-<id>`, before the tabs read it: the page already opened the tab it meant. A layout
-// effect, so it runs before the tabs' own (passive) effect reads the address.
-function useCurrentAddress() {
+// The address is made to name the tab the page opened, before the tabs read it: an older address
+// (`?view=…`, an older tab name) becomes today's, keeping the `#record-<id>`, and `?tab=` names the
+// shown tab whenever it isn't this person's default (Records, or Add while nothing is on file), so
+// the tabs never fall back to a different one. A layout effect, so it runs before the tabs' own
+// (passive) effect reads the address.
+function useCurrentAddress(shown: LifeAdminTab, defaultTab: LifeAdminTab) {
   React.useLayoutEffect(() => {
-    const current = currentLifeAdminSearch(window.location.search);
-    if (current) window.history.replaceState(window.history.state, "", `${current}${window.location.hash}`);
+    // An old link to the add form (from before the Add tab) reloads at the Add tab's address.
+    const addForm = addFormRedirect(window.location.search, window.location.hash, shown);
+    if (addForm) {
+      window.location.replace(addForm);
+      return;
+    }
+    const next = shownLifeAdminAddress(window.location.search, window.location.hash, shown, defaultTab);
+    // No state of our own: Next.js then takes the new address as its own (it would put its old one
+    // back on its next render if handed its own state).
+    if (next) window.history.replaceState(null, "", next);
+    // Once, for the address the page was opened at; the tabs keep it current after that.
   }, []);
 }
 
 // Life admin's tabs: Records | Add | Upcoming | History (| Tasks), then the selected tab's panels.
 // Every tab stays mounted, so a half-typed record or task survives a switch. With nothing on file
-// (no records and no suggested categories to check) Add is the tab an address without `?tab=` opens.
+// (`nothingOnFile`: no record shown and nothing to check) Add is the tab an address without `?tab=`
+// opens.
 export function LifeAdminView({
   today,
   zone = "UTC",
@@ -161,7 +173,6 @@ export function LifeAdminView({
   tasks,
   ...actions
 }: LifeAdminViewProps) {
-  useCurrentAddress();
   useRecordAnchor();
   const catalogue = React.useMemo(() => (catalogueData ? catalogueFromData(catalogueData) : BUILT_IN), [catalogueData]);
   const states = React.useMemo<CategoryStateView[]>(
@@ -175,10 +186,12 @@ export function LifeAdminView({
     [categories, catalogue, records],
   );
   // A category the person said is not for them is hidden on every tab (its records are kept;
-  // Records lists it under "Not for me", to undo).
+  // Add lists it under "Not for me", to undo).
   const listed = React.useMemo(() => listedRecords(records, catalogue, states), [records, catalogue, states]);
-  const defaultTab: LifeAdminTab = records.length === 0 && suggestedCategories.length === 0 ? "add" : "records";
+  const defaultTab: LifeAdminTab = nothingOnFile(records, listed, suggestedCategories) ? "add" : "records";
   const shown = initialTab ?? defaultTab;
+  useCurrentAddress(shown, defaultTab);
+  const assets = React.useMemo(() => assetsOf(records, catalogue), [records, catalogue]);
   const withNotice = (key: LifeAdminTab, content: React.ReactNode) => (
     <>
       {shown === key ? notice : null}
@@ -206,6 +219,7 @@ export function LifeAdminView({
               today={today}
               zone={zone}
               filter={recordFilter}
+              assets={assets}
               actions={actions}
             />,
           ),
@@ -221,6 +235,7 @@ export function LifeAdminView({
               categories={states}
               zone={zone}
               addType={addType}
+              assets={assets}
               actions={actions}
             />,
           ),

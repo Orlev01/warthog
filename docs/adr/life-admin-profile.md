@@ -357,9 +357,15 @@ after Records.
   me" or Undo comes back to Add. A record added there lands where it lives (Records, or its own
   page when it's a booking or finished); a problem keeps the person on Add with the form open.
 - **Which tab opens.** An address without `?tab=` opens Records, or Add while nothing is on file
-  (no records and no suggested categories to check). Picking a kind to add (`?add=`) opens Add.
-  Upcoming's "Add a booking" links to `?tab=add#new-record`. Older addresses and reminder links
-  map as before.
+  (`nothingOnFile`: no record shown on any tab and nothing to check; when everything kept is in
+  categories marked not for them, Records says so). Picking a kind to add (`?add=`) opens Add.
+  Older addresses and reminder links map as before, and an old `/life-admin#new-record` link
+  reloads at `?tab=add#new-record`. The browser's address then names the tab shown whenever it
+  isn't this person's default (`shownLifeAdminAddress`), and the shared tabs show the page's tab on
+  load when the address names none, so the server and the browser never disagree.
+- **Links between tabs open in place.** "Add a record" and Upcoming's "Add a booking" switch tab
+  without reloading (`ViewTabLink`), so what's half-typed in other tabs survives; without
+  JavaScript they're plain links.
 ## Agents
 
 | Tool | Change |

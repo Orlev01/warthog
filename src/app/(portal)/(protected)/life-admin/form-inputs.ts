@@ -3,7 +3,7 @@ import { canonicalDateTime, calendarDate } from "@/domain/life-admin/normalise";
 import { DEFAULT_LIST_STATUSES, HISTORY_STATUSES, RECORDS_TAB_STATUSES, historyHref, recordsHref } from "@/components/life-admin/record-groups";
 import type { HistoryFilter, LifeAdminTab, RecordFilter, RecordListStatus } from "@/components/life-admin/record-view-types";
 import { allParams } from "@/lib/href";
-import { tabNamed } from "@/components/life-admin/tab-address";
+import { ADD_TAB_HREF, tabNamed } from "@/components/life-admin/tab-address";
 
 // The Life admin forms' inputs, read from a submitted FormData (pure: no session, no DB).
 
@@ -86,7 +86,7 @@ const pageNumber = (value: string | undefined): number | undefined =>
   value && /^\d{1,4}$/.test(value) && Number(value) >= 1 ? Number(value) : undefined;
 
 // The Add tab: what's still to fill in, and adding a record (founder, 24 Nov 2026).
-export const ADD_TAB_PATH = "/life-admin?tab=add";
+export { ADD_TAB_HREF } from "@/components/life-admin/tab-address";
 
 // Where a record action lands afterwards: the tab it was submitted from and, on Records or in
 // History, the filters it was shown under (`returnCategory` / `returnStatus` / `returnPage`,
@@ -94,7 +94,7 @@ export const ADD_TAB_PATH = "/life-admin?tab=add";
 export function recordReturnPath(form: FormData): string {
   const tab = recordTab(form.get("returnTab"));
   if (tab === "upcoming") return "/life-admin?tab=upcoming";
-  if (tab === "add") return ADD_TAB_PATH;
+  if (tab === "add") return ADD_TAB_HREF;
   const strings = (name: string) => form.getAll(name).filter((value): value is string => typeof value === "string");
   const categories = allParams(strings("returnCategory")).filter((value) => CATEGORY_ID.test(value));
   const statuses = allParams(strings("returnStatus")).filter(isListStatus);

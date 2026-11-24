@@ -14,8 +14,8 @@ import type { LifeAdminTab } from "./record-view-types";
 // thing in the tab it came from.
 
 export type LifeAdminScreenProps = {
-  // The tab the request asked for (`?tab=`, older addresses mapped by the page); Records when absent.
-  // The tab the address asks for; omitted, Records opens (or Add while nothing is on file).
+  // The tab the request asked for (`?tab=`, older addresses mapped by the page); when absent, Records,
+  // or Add while nothing is on file.
   initialTab?: LifeAdminTab;
   // The page's outcome notice (a PageNotice), shown at the top of the tab first shown.
   notice?: React.ReactNode;
