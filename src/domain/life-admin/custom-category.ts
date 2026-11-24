@@ -99,9 +99,9 @@ const HEALTH_DETAIL = /\b(diagnos\w*|condition|medications?|medicines?|drugs?|do
 const SENSITIVE = new RegExp(
   [
     "\\b(ivf|fertility|psychiatr\\w*|psycholog\\w*|counsell?ing|therapy|therapist|rehab\\w*|addiction|cancer|oncology|hiv|chemo\\w*|mental health|disabilit\\w*)\\b",
-    "\\b(church|parish|mosque|synagogue|temple|religio\\w*|faith|worship|tithe\\w*)\\b",
+    "\\b(church|mosque|synagogue|religio\\w*|worship|tithe\\w*)\\b",
     "\\b(politic\\w*|political party)\\b",
-    "(?<!credit\\s)\\bunions?\\b",
+    "\\b(trade|labou?r|workers'?|industrial|teachers'?|nurses'?)\\s+unions?\\b|\\bunion\\s+(dues|fees|membership|meetings?)\\b",
     "\\b(sexual\\w*|lgbt\\w*|gay|lesbian|queer|transgender)\\b",
     "\\b(criminal|convictions?|parole|probation|bail)\\b",
     "\\b(ethnic\\w*|racial)\\b",
@@ -159,6 +159,22 @@ interface CategoryDraftShape {
   readonly kinds: readonly Draft[];
 }
 
+/**
+ * A category an agent suggests mustn't be about a sensitive part of someone's life: its label,
+ * description and kinds are checked (not its reason, which names where the agent saw it). Only for
+ * an agent's new suggestion: a category the person already kept is restored as it was.
+ */
+export function checkSensitiveCategory(draft: CategoryDraftShape, ctx: z.RefinementCtx, path: readonly (string | number)[] = []): void {
+  const texts: [readonly (string | number)[], string | undefined][] = [
+    [["label"], draft.label],
+    [["description"], draft.description],
+    ...draft.kinds.flatMap((kind, k): [readonly (string | number)[], string | undefined][] => [[["kinds", k, "label"], kind.label], [["kinds", k, "use"], (kind as { use?: string }).use]]),
+  ];
+  for (const [where, value] of texts) {
+    if (value && SENSITIVE.test(value)) ctx.addIssue({ code: "custom", path: [...path, ...where], message: SENSITIVE_MESSAGE });
+  }
+}
+
 /** Every rule a suggested category must meet; issues name the place and rule, never echo text. */
 export function checkCategoryDraft(draft: CategoryDraftShape, ctx: z.RefinementCtx): void {
   const issue = (path: (string | number)[], message: string) => ctx.addIssue({ code: "custom", path, message });
@@ -172,9 +188,6 @@ export function checkCategoryDraft(draft: CategoryDraftShape, ctx: z.RefinementC
   const duplicate = builtInFor(draft.label);
   if (duplicate) issue(["label"], `This is already a built-in kind: save these as type "${duplicate}" instead of suggesting a category.`);
   if (HEALTH_DETAIL.test(draft.label)) issue(["label"], "Warthog doesn't keep medical details in life admin.");
-  for (const [path, value] of [[["label"], draft.label], [["description"], draft.description], [["why"], draft.why]] as const) {
-    if (value && SENSITIVE.test(value)) issue([...path], SENSITIVE_MESSAGE);
-  }
 
   const kindKeys = draft.kinds.map((kind) => kind.key);
   if (new Set(kindKeys).size !== kindKeys.length) issue(["kinds"], "Give each kind its own key.");

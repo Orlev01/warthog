@@ -129,3 +129,40 @@ test("the schema refuses a name, anything for the Vault, what Warthog never keep
   assert.equal(saveRecordSchema.safeParse({ aboutYou: [{ kind: "phone", value: "0412 345 678", source: RECENT }] }).success, true);
   assert.equal(saveRecordSchema.safeParse({}).success, false, "an empty call still needs something to save");
 });
+
+test("an impossible date, a phone without digits or a new category with no records is refused at the schema; a card number is masked", async () => {
+  const refused = (input: unknown) => saveRecordSchema.safeParse(input).success === false;
+  assert.ok(refused({ aboutYou: [{ kind: "postal_address", value: "1 Home St", movingOn: "2026-02-30", source: RECENT }] }));
+  assert.ok(refused({ aboutYou: [{ kind: "phone", value: "n/a", source: RECENT }] }));
+  assert.ok(refused({ aboutYou: [{ kind: "phone", value: "0412 345 678", movingOn: "2027-01-01", source: RECENT }] }), "only an address moves");
+  assert.ok(refused({ aboutYou: [{ kind: "phone", value: "0412 345 678", source: RECENT }], newCategory: { label: "Rowing club", description: "d", lifeArea: "everyday", why: "w", kinds: [] } }));
+
+  const t = await setup();
+  try {
+    await t.save.handle({ aboutYou: [{ kind: "postal_address", value: "Card 4111 1111 1111 1111, 1 Smith St", source: RECENT }] }, t.connection);
+    const [waiting] = await listIdentitySuggestions(t.db, t.userId, t.dek);
+    assert.equal(waiting!.value, "Card ••••1111, 1 Smith St");
+  } finally {
+    await t.db.close();
+  }
+});
+
+test("a phone written +61 is the same number as 04", async () => {
+  const t = await setup();
+  try {
+    await saveIdentityField(t.db, { userId: t.userId, kind: "phone", value: "0412 345 678" }, t.dek);
+    await t.save.handle({ aboutYou: [{ kind: "phone", value: "+61 412 345 678", source: RECENT }] }, t.connection);
+    assert.deepEqual(await listIdentitySuggestions(t.db, t.userId, t.dek), [], "already saved, so nothing waits");
+  } finally {
+    await t.db.close();
+  }
+});
+
+test("save_record refuses a new category about a sensitive part of someone's life", () => {
+  const category = (label: string) => ({
+    newCategory: { label, description: "Membership and events.", lifeArea: "everyday", icon: "trophy", why: "12 emails", kinds: [{ key: "fees", label: "Fees", lifecycle: "standing", use: "Annual fees.", fields: [] }] },
+    records: [{ type: "new.fees", fields: { name: "Fees" } }],
+  });
+  assert.equal(saveRecordSchema.safeParse(category("Church")).success, false);
+  assert.equal(saveRecordSchema.safeParse(category("Rowing club")).success, true);
+});

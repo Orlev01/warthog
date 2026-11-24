@@ -45,9 +45,10 @@ async function rows(db: Db, userId: string) {
 
 test("normaliseDetail folds the differences that don't make a different detail", () => {
   assert.equal(normaliseDetail("email", "  Phil.New@Example.COM "), "phil.new@example.com");
-  assert.equal(normaliseDetail("phone", " +61 (412) 345-678 "), "+61412345678");
-  assert.equal(normaliseDetail("phone", "0412 345 678"), "0412345678", "no country is ever inferred");
-  assert.equal(normaliseDetail("phone", "(+61) 412 345 678"), "+61412345678");
+  assert.equal(normaliseDetail("phone", " +61 (412) 345-678 "), "0412345678", "an Australian number written internationally is the same as 04…");
+  assert.equal(normaliseDetail("phone", "0412 345 678"), "0412345678", "no country is ever added to a local number");
+  assert.equal(normaliseDetail("phone", "+44 20 7946 0958"), "+442079460958", "other countries keep their +");
+  assert.equal(normaliseDetail("phone", "(+61) 412 345 678"), "0412345678");
   assert.equal(normaliseDetail("phone", "61+412"), "61412", "a + that isn't leading is dropped");
   assert.equal(normaliseDetail("postal_address", "  12  Example St,\n Bondi   NSW 2026 "), "12 example st, bondi nsw 2026");
   assert.equal(normaliseDetail("preferred_name", "  Phil   "), "phil");
@@ -468,6 +469,30 @@ test("a waiting suggestion the person has since saved themselves is removed, not
     assert.deepEqual((await listIdentitySuggestions(db, user.id, dek)).map((item) => item.kind), ["email"]);
     assert.equal(await countIdentitySuggestions(db, user.id), 1);
     assert.equal(await pruneSavedSuggestions(db, user.id, dek), 0, "nothing else to remove");
+  } finally {
+    await db.close();
+  }
+});
+
+test("adding a different preferred name, time zone or language replaces the person's one, never leaving two", async () => {
+  const db = await freshDb();
+  try {
+    const { createUser } = await import("./users");
+    const { saveIdentityField, listIdentityFields } = await import("./identity-fields");
+    const { acceptIdentitySuggestion, suggestIdentityDetail } = await import("./identity-suggestions");
+    const { randomBytes, randomUUID } = await import("node:crypto");
+    const dek = randomBytes(32);
+    const user = await createUser(db, { email: `${randomUUID()}@warthog.com.au`, wrappedDek: "w" });
+    await saveIdentityField(db, { userId: user.id, kind: "preferred_name", value: "Al" }, dek);
+    await saveIdentityField(db, { userId: user.id, kind: "phone", value: "0400 000 000" }, dek);
+    const source = { service: "gmail", date: "2026-10-01" };
+    const name = await suggestIdentityDetail(db, { userId: user.id, kind: "preferred_name", value: "Alex", source, agentId: "a" }, dek);
+    const phone = await suggestIdentityDetail(db, { userId: user.id, kind: "phone", value: "0412 345 678", source, agentId: "a" }, dek);
+    await acceptIdentitySuggestion(db, user.id, (name as { id: string }).id, dek);
+    await acceptIdentitySuggestion(db, user.id, (phone as { id: string }).id, dek);
+    const fields = await listIdentityFields(db, user.id, dek);
+    assert.deepEqual(fields.filter((field) => field.kind === "preferred_name").map((field) => field.value), ["Alex"], "replaced");
+    assert.deepEqual(fields.filter((field) => field.kind === "phone").map((field) => field.value).sort(), ["0400 000 000", "0412 345 678"], "a second phone is a second phone");
   } finally {
     await db.close();
   }

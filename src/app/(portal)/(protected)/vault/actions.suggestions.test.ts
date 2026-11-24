@@ -262,3 +262,27 @@ test("a malformed suggestion id is a 4xx before any query, and changes nothing",
     await db.close();
   }
 });
+
+// A suggestion the person answers by typing the same detail themselves no longer waits (so Home
+// doesn't keep saying something waits to be checked).
+test("saving a detail the agent also suggested clears that suggestion", async () => {
+  const { freshDb } = await import("@/test/db");
+  const { createUser } = await import("@/server/db/users");
+  const { localAesKeyWrapper } = await import("@/server/crypto/key-wrapper");
+  const { suggestIdentityDetail, countIdentitySuggestions } = await import("@/server/db/identity-suggestions");
+  const { createIdentityActions } = await import("./actions");
+  const { randomBytes, randomUUID } = await import("node:crypto");
+  const db = await freshDb();
+  try {
+    const keyWrapper = localAesKeyWrapper(randomBytes(32));
+    const dek = randomBytes(32);
+    const user = await createUser(db, { email: `${randomUUID()}@warthog.com.au`, wrappedDek: await keyWrapper.wrap(dek) });
+    await suggestIdentityDetail(db, { userId: user.id, kind: "phone", value: "0412 345 678", source: { service: "gmail", date: "2026-10-01" }, agentId: "a" }, dek);
+    const actions = createIdentityActions({ db, keyWrapper });
+    const session = { id: "s", userId: user.id, createdAt: new Date(), lastSeenAt: new Date(), steppedUpAt: null };
+    await actions.saveLowTierField(session, { kind: "phone", value: "+61 412 345 678" });
+    assert.equal(await countIdentitySuggestions(db, user.id), 0);
+  } finally {
+    await db.close();
+  }
+});

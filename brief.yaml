@@ -438,9 +438,10 @@ features:
     memory; the person can view, search, edit, re-scope and delete any memory, and add their own.
     Every memory and task an agent reads says who saved it — the person, that agent, or another
     agent by name — so a note another agent copied from an email is never mistaken for the
-    person's own wish. (Amended 24 November 2026: memories and tasks refuse what life-admin records
-    refuse — tax file numbers, passwords and codes, bank account, government ID and Medicare numbers,
-    payment details — and card numbers in them are masked.)
+    person's own wish. (Amended 24 November 2026: memories and tasks an agent saves, and memories the
+    person writes, refuse what life-admin records refuse — tax file numbers, passwords and codes, bank
+    account, government ID and Medicare numbers, payment details — and card numbers in them are
+    masked.)
 
   # --- Life admin (the use cases made concrete) ---
   - >-

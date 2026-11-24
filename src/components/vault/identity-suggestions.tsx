@@ -24,6 +24,9 @@ import { LOW_TIER_KIND_LABELS } from "./low-tier-detail-flow";
 
 // The kinds an agent may suggest (the store's IDENTITY_SUGGESTION_KINDS), declared here so this
 // client view never couples to the server db modules.
+// Details a person has one of (src/server/db/identity-suggestions.ts SINGLE_KINDS).
+const ONE_OF_A_KIND: ReadonlySet<string> = new Set(["preferred_name", "time_zone", "language"]);
+
 export type IdentitySuggestionKind = "preferred_name" | "email" | "phone" | "postal_address" | "language" | "time_zone";
 
 // A waiting suggestion as the page hands it over (the actions' IdentitySuggestionItem).
@@ -132,7 +135,8 @@ function SuggestionRow({
           <p className="text-sm text-fg-muted [overflow-wrap:anywhere]">{suggestionSourceLine(suggestion)}</p>
           {suggestion.differsFrom ? (
             <p className="pt-1">
-              <Badge tone="info">Different from the one you have</Badge>
+              {/* A preferred name, time zone or language is one of a kind: adding replaces it. */}
+              <Badge tone="info">{ONE_OF_A_KIND.has(suggestion.kind) ? "Adding replaces the one you have" : "Different from the one you have"}</Badge>
             </p>
           ) : null}
         </div>

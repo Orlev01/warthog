@@ -231,14 +231,17 @@ test("Warthog's check needs the same sender domain, not a part of it, and the sa
     const read = (sender: string) => recordReadExposure(t.db, { userId: t.userId, agentId: t.agentId, source: { service: "google-gmail", kind: "email", sender }, at: new Date(NOW.getTime() - 60_000) }, t.dek);
     await read("noreply@ato.gov.au");
     await read("friend@gmail.com");
+    await read("AGL <bills@mail.agl.com.au>");
     const save = (name: string, sender: string) => t.save.handle({ type: "other.item", fields: { name }, source: { service: "gmail", sender } }, t.connection);
     await save("Part of a domain", "gov.au");
     await save("Same domain", "ato.gov.au");
     await save("Anyone on gmail", "gmail.com");
     await save("Same gmail address", "friend@gmail.com");
+    await save("Its subdomain", "agl.com.au");
+    await save("Named sender", "Tax Office <noreply@ato.gov.au>");
     const views = await t.list.handle({}, t.connection);
     if (views.status !== "ok") throw new Error("refused");
     const byName = Object.fromEntries(views.records.map((record) => [record.name, record.foundIn?.readThroughWarthog]));
-    assert.deepEqual(byName, { "Part of a domain": false, "Same domain": true, "Anyone on gmail": false, "Same gmail address": true });
+    assert.deepEqual(byName, { "Part of a domain": false, "Same domain": true, "Anyone on gmail": false, "Same gmail address": true, "Its subdomain": true, "Named sender": true });
   });
 });

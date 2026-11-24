@@ -24,7 +24,7 @@ import { randomUUID } from "node:crypto";
 
 import { calendarDate } from "../../domain/life-admin/normalise";
 import { decrypt, encrypt } from "../crypto/envelope";
-import { listIdentityFields, saveIdentityField, type IdentityField } from "./identity-fields";
+import { listIdentityFields, saveIdentityField, type IdentityField, updateIdentityField } from "./identity-fields";
 import { withTransaction, type Db, type Row } from "./index";
 import { recordMatchKey } from "./life-admin-records";
 
@@ -95,12 +95,18 @@ export function normaliseDetail(kind: IdentitySuggestionKind, value: string): st
   switch (kind) {
     case "email":
       return trimmed.toLowerCase();
-    case "phone":
-      return (/^[\s(]*\+/.test(trimmed) ? "+" : "") + trimmed.replace(/\D/g, "");
+    case "phone": {
+      const digits = (/^[\s(]*\+/.test(trimmed) ? "+" : "") + trimmed.replace(/\D/g, "");
+      // An Australian number written internationally is the same number: +61 4… is 04….
+      return digits.startsWith("+61") ? `0${digits.slice(3)}` : digits;
+    }
     default:
       return trimmed.replace(/\s+/g, " ").toLowerCase();
   }
 }
+
+// Kinds a person has one of: an added suggestion replaces theirs.
+export const SINGLE_KINDS: ReadonlySet<IdentitySuggestionKind> = new Set(["preferred_name", "time_zone", "language"]);
 
 // The opaque match key of one detail: an HMAC under the person's derived match key.
 function matchKeyOf(dek: Uint8Array, kind: IdentitySuggestionKind, normalised: string): string {
@@ -268,8 +274,16 @@ export async function acceptIdentitySuggestion(
     const value = await decrypt(dek, TABLE, VALUE_COLUMN, rowId, row.value as string);
     const meta = await readMeta(dek, rowId, row.meta as string);
 
-    const existing = sameDetail(await listIdentityFields(tx, userId, dek), kind, normaliseDetail(kind, value));
+    const fields = await listIdentityFields(tx, userId, dek);
+    const existing = sameDetail(fields, kind, normaliseDetail(kind, value));
     if (existing) return existing;
+    // A detail a person has one of (preferred name, time zone, language): adding the suggestion
+    // replaces theirs, the person's own choice on About you, rather than leaving two.
+    const single = SINGLE_KINDS.has(kind) ? fields.find((field) => field.kind === kind) : undefined;
+    if (single) {
+      await updateIdentityField(tx, { id: single.id, userId, value }, dek);
+      return { ...single, value };
+    }
     return saveIdentityField(
       tx,
       { userId, kind, value, ...(kind === "postal_address" ? { movingOn: meta.movingOn ?? null } : {}) },

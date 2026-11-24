@@ -112,6 +112,7 @@ test("the source wording covers each service, and an unknown one is named as giv
 test("a suggestion that differs from the saved detail says so", () => {
   assert.match(visibleText(render([PHONE])), /Different from the one you have/);
   assert.doesNotMatch(visibleText(render([NAME])), /Different from the one you have/);
+  assert.match(visibleText(render([{ ...NAME, differsFrom: true }])), /Adding replaces the one you have/, "a preferred name is replaced, not added beside");
 });
 
 test("each row has its own Add and Not mine forms posting the suggestion's id, named for its kind", () => {

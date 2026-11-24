@@ -65,6 +65,7 @@ import {
   listIdentitySuggestions,
   normaliseDetail,
   type IdentitySuggestionKind,
+  pruneSavedSuggestions,
 } from "@/server/db/identity-suggestions";
 import { createVaultUnlockActions } from "@/server/vault/unlock";
 import { systemRandom } from "@/server/seams/random";
@@ -349,6 +350,8 @@ export function createIdentityActions(deps: IdentityActionsDeps): IdentityAction
       { userId: session.userId, kind: valid.kind, value: valid.value, movingOn: valid.movingOn ?? null },
       dek,
     );
+    // An agent's waiting suggestion of the same detail is answered (docs/adr/profile-build.md).
+    await pruneSavedSuggestions(db, session.userId, dek);
     return { ok: true };
   }
 
@@ -367,6 +370,7 @@ export function createIdentityActions(deps: IdentityActionsDeps): IdentityAction
       { id: valid.fieldId, userId: session.userId, value: valid.value, movingOn: valid.movingOn },
       dek,
     );
+    if (updated) await pruneSavedSuggestions(db, session.userId, dek);
     return updated ? { ok: true } : { ok: false, reason: "not_found" };
   }
 

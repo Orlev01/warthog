@@ -96,3 +96,17 @@ test("Warthog's own tools show what they would add or change", () => {
   const long = outgoingDetail({ tool: "create_task", connector: null, params: { title: "x".repeat(500) } });
   assert.ok(long?.kind === "core" && (long.title?.length ?? 0) <= 200, "titles are cut to a card-sized length");
 });
+
+// docs/adr/profile-build.md: a held save_record shows the About you details it would suggest.
+test("a held save_record shows each About you detail it would suggest", () => {
+  const detail = outgoingDetail({
+    tool: "save_record",
+    connector: null,
+    params: { aboutYou: [{ kind: "phone", value: "0412 345 678", source: { service: "gmail", date: "2026-10-01" } }, { kind: "postal_address", value: "9 New Rd, Fremantle" }] },
+  }) as { lines: { key: string; preview: string }[] };
+  assert.deepEqual(detail.lines.map((line) => line.preview), ["0412 345 678", "9 New Rd, Fremantle"]);
+  assert.ok(detail.lines.every((line) => line.key.startsWith("About you: ")), JSON.stringify(detail.lines));
+  const both = outgoingDetail({ tool: "save_record", connector: null, params: { records: [{ fields: { name: "Netflix" } }, { fields: { name: "Gym" } }], aboutYou: [{ kind: "email", value: "me@work.example" }] } }) as { lines: { key: string; preview: string }[] };
+  assert.deepEqual(both.lines, [{ key: "Records", preview: "Netflix, Gym" }, { key: both.lines[1]!.key, preview: "me@work.example" }]);
+  assert.match(both.lines[1]!.key, /^About you: /);
+});

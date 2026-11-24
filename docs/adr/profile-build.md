@@ -44,12 +44,15 @@ Life admin (every category and new ones it discovers) and About you, replacing "
    the person, nothing about others beyond a first name or relationship, no health conditions; the
    never-save list; memory only for what the person says. Everything saved waits for the person, and
    an agent never changes what they've confirmed. The person's approvals and rules still apply.
-7. **Guardrails that stand on their own.** `remember` and task titles and notes refuse what Warthog
-   never keeps (as records do) and mask card numbers, and so do the person's own memory edits. A
-   source counts as seen by Warthog only for the same sender domain (not a part of one), and on a
-   shared mail domain the same address. A suggested category about health, religion, politics, a
-   union, sexuality or criminal matters is refused. To check groups a big build's suggestions by
-   category, each with its own "Confirm all".
+7. **Guardrails that stand on their own.** `remember` and an agent's task titles and notes refuse
+   what Warthog never keeps (as records do) and mask card numbers, and so do the memories the person
+   writes; About you suggestions mask card numbers too. A source counts as seen by Warthog only for
+   the same organisation's mail (the same domain, or a subdomain of one that isn't a public suffix
+   such as gov.au), and on a shared mail domain the same address. An agent's new category about
+   health, religion, politics, a union, sexuality or criminal matters is refused (its label,
+   description and kinds; a category the person already kept restores from their export as it was).
+   A held `save_record` shows the About you details it would suggest. To check groups a big build's
+   suggestions by category, each with its own "Confirm all".
 
 ## Rejected
 
@@ -74,3 +77,9 @@ Life admin (every category and new ones it discovers) and About you, replacing "
 - A long build runs over several conversations; saves are idempotent, so carrying on is safe.
 - Records an About you suggestion becomes aren't marked as found by an agent, so accepting one
   doesn't by itself complete "Build your profile".
+- A preferred name, time zone or language is one of a kind: adding a different suggested one replaces
+  the person's (About you says so first). Other kinds add beside what's there.
+- Existing accounts see "Finish setting up" again until they've built a profile (or keep 5 records),
+  and "Connect a service" counts only a service some agent can read: both on purpose.
+- The person's own tasks, and memories restored from an export, aren't filtered (they're the
+  person's own words); the agent-facing paths and the person's memory edits are.

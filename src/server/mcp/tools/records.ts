@@ -43,6 +43,7 @@ import {
   newCategorySchema,
   sameLabel,
   SLUG_PATTERN,
+  checkSensitiveCategory,
 } from "../../../domain/life-admin/custom-category";
 import { findForbidden, findingMessage, siteName } from "../../../domain/life-admin/identifiers";
 import { findForbiddenText, JOURNAL_TEXT_LIMIT } from "../../../domain/life-admin/journal-text";
@@ -73,9 +74,9 @@ import type { KeyWrapper } from "../../crypto/key-wrapper";
 import { systemClock, type Clock } from "../../seams/clock";
 import { requestObservation } from "../client-observation";
 import type { AgentConnection } from "../context";
-import type { Db } from "../../db/index";
+import { withTransaction, type Db } from "../../db/index";
 import { liftOlderClientInput } from "./older-clients";
-import { neverKeptMessage, neverKeptRule } from "../../../domain/content/never-kept";
+import { neverKeptMessage, neverKeptRule, tidyKeptText } from "../../../domain/content/never-kept";
 import { countIdentitySuggestions, IDENTITY_SUGGESTION_KINDS, pruneSavedSuggestions, suggestIdentityDetail } from "../../db/identity-suggestions";
 import { monthlyCost } from "../../../domain/life-admin/costs";
 
@@ -212,13 +213,16 @@ const aboutYouItem = z.object({
     const rule = neverKeptRule(value);
     if (rule) ctx.addIssue({ code: "custom", message: neverKeptMessage("The detail", rule) });
   }),
-  movingOn: z.string().regex(/^\d{4}-\d{2}-\d{2}$/).optional().describe("For a postal address they're moving to: the date, YYYY-MM-DD."),
+  movingOn: z.string().regex(/^\d{4}-\d{2}-\d{2}$/).refine((day) => calendarDate(day) === day, "Give a real date, YYYY-MM-DD.").optional().describe("For a postal address they're moving to: the date, YYYY-MM-DD."),
   source: z.object({
     service: z.string().min(1).max(60),
     messageId: z.string().max(200).optional(),
     date: z.string().regex(/^\d{4}-\d{2}-\d{2}$/).describe("The date on the email, event or file, YYYY-MM-DD: within the last 12 months."),
     sender: z.string().max(200).optional(),
   }).describe("Where you found it: required."),
+}).superRefine((item, ctx) => {
+  if (item.kind === "phone" && item.value.replace(/\D/g, "").length < 6) ctx.addIssue({ code: "custom", path: ["value"], message: "Give the phone number's digits." });
+  if (item.movingOn && item.kind !== "postal_address") ctx.addIssue({ code: "custom", path: ["movingOn"], message: "Only a postal address has a moving date." });
 });
 
 export const saveRecordSchema = recordInput
@@ -231,8 +235,11 @@ export const saveRecordSchema = recordInput
   })
   .superRefine((input, ctx) => {
     const single = Boolean(input.fields || input.type || input.kind);
-    // A call can carry only About you suggestions.
-    if (!input.records && !single && input.aboutYou) return;
+    // A call can carry only About you suggestions (then nothing else: a new category needs records).
+    if (!input.records && !single && input.aboutYou) {
+      if (input.newCategory) ctx.addIssue({ code: "custom", path: ["newCategory"], message: 'Save at least one record in the new category, with type "new.<kind key>".' });
+      return;
+    }
     const all = input.records ?? [input as RecordInput];
     if (input.records) {
       if (input.fields || input.type || input.kind) ctx.addIssue({ code: "custom", path: ["records"], message: "Give records, or one record's type and fields, not both." });
@@ -245,6 +252,8 @@ export const saveRecordSchema = recordInput
       needsTypeOrKind(input, [], ctx);
       refuseForbidden(input, [], ctx);
     }
+    // A new category an agent suggests mustn't be about a sensitive part of the person's life.
+    if (input.newCategory) checkSensitiveCategory(input.newCategory, ctx, ["newCategory"]);
     const newKinds = new Set(input.newCategory?.kinds.map((kind) => kind.key) ?? []);
     const usesNew = all.filter((record) => record.type?.startsWith("new."));
     if (usesNew.length > 0 && !input.newCategory) ctx.addIssue({ code: "custom", path: ["newCategory"], message: 'A "new.<kind>" type needs newCategory in the same call.' });
@@ -594,22 +603,39 @@ const SHARED_MAIL_DOMAINS: ReadonlySet<string> = new Set([
   "protonmail.com", "proton.me", "zoho.com", "fastmail.com",
 ]);
 
+// Endings shared by many organisations: a sender "in" one of these proves nothing.
+const PUBLIC_SUFFIXES: ReadonlySet<string> = new Set([
+  "com", "net", "org", "edu", "gov", "io", "co", "au", "nz", "uk", "com.au", "net.au", "org.au", "edu.au", "gov.au",
+  "asn.au", "id.au", "co.nz", "govt.nz", "org.nz", "co.uk", "org.uk", "gov.uk",
+]);
+
+// The same organisation's mail: the same domain, or one a subdomain of the other where the shorter
+// isn't a public suffix (mail.agl.com.au and agl.com.au; never gov.au and ato.gov.au).
+function sameSender(a: string, b: string): boolean {
+  if (a === b) return true;
+  const [long, short] = a.length > b.length ? [a, b] : [b, a];
+  return long.endsWith(`.${short}`) && short.includes(".") && !PUBLIC_SUFFIXES.has(short);
+}
+
 // Where an agent says it found a record, with Warthog's own check: did this agent just read mail
 // from that sender through Warthog? (The read-exposure window keeps the last few senders.) The
-// sender's domain must be the same one, not a part of it ("gov.au" or "com" proves nothing), and
-// on a shared mail domain the same address.
+// sender must be the same organisation, not a public suffix ("gov.au" or "com" proves nothing),
+// and on a shared mail domain the same address.
 function foundInFor(
   claimed: RecordInput["source"],
   exposure: { sources: readonly { service: string; sender?: string }[] } | null,
 ): RecordFoundIn | null {
   if (!claimed || claimed.service.toLowerCase() === "person") return null;
-  const address = claimed.sender?.includes("@") ? claimed.sender.trim().toLowerCase() : null;
-  const domain = claimed.sender ? (address ? address.split("@").pop()! : siteName(claimed.sender) ?? claimed.sender).toLowerCase().replace(/^www\./, "") : null;
+  // "AGL <bills@agl.com.au>" names its address in angle brackets.
+  const sender = claimed.sender?.match(/<([^<>]+)>/)?.[1] ?? claimed.sender;
+  const address = sender?.includes("@") ? sender.trim().toLowerCase() : null;
+  const domain = sender ? (address ? address.split("@").pop()! : siteName(sender) ?? sender).toLowerCase().replace(/^www\./, "") : null;
   const seen = domain !== null && (exposure?.sources ?? []).some((read) => {
-    const readAddress = read.sender?.trim().toLowerCase();
+    const readAddress = (read.sender?.match(/<([^<>]+)>/)?.[1] ?? read.sender)?.trim().toLowerCase();
     const readDomain = readAddress?.split("@").pop();
-    if (readDomain === undefined || readDomain !== domain) return false;
-    return !SHARED_MAIL_DOMAINS.has(domain) || (address !== null && readAddress === address);
+    if (readDomain === undefined) return false;
+    if (SHARED_MAIL_DOMAINS.has(domain) || SHARED_MAIL_DOMAINS.has(readDomain)) return address !== null && readAddress === address;
+    return sameSender(readDomain, domain);
   });
   const date = claimed.date ? calendarDate(claimed.date) : null;
   return {
@@ -763,11 +789,14 @@ async function suggestAboutYou(
   clock: Clock,
 ): Promise<{ received: number; skipped?: readonly string[]; note: string } | { refused: string }> {
   if (!permissions.identityAccess) return { refused: "This agent can't read the person's About you details, so it can't suggest them." };
+  // One person's suggestions at a time, so parallel calls can't pass the waiting limit together.
+  return withTransaction(db, async (tx) => {
+  await tx.query("SELECT pg_advisory_xact_lock(hashtextextended($1, 0))", [`identity-suggestions:${connection.userId}`]);
   const skipped: string[] = [];
   const now = clock.now().getTime();
   // Waiting suggestions the person has since saved themselves don't count toward the limit.
-  await pruneSavedSuggestions(db, connection.userId, dek);
-  let waiting = await countIdentitySuggestions(db, connection.userId);
+  await pruneSavedSuggestions(tx, connection.userId, dek);
+  let waiting = await countIdentitySuggestions(tx, connection.userId);
   let received = 0;
   for (const [index, item] of items.entries()) {
     const when = Date.parse(`${item.source.date}T00:00:00Z`);
@@ -779,18 +808,26 @@ async function suggestAboutYou(
       skipped.push(`aboutYou[${index}]: ${MAX_ABOUT_YOU_WAITING} suggestions are already waiting for the person. Ask them to check About you first.`);
       continue;
     }
-    const outcome = await suggestIdentityDetail(db, {
+    let outcome: Awaited<ReturnType<typeof suggestIdentityDetail>>;
+    try {
+    outcome = await suggestIdentityDetail(tx, {
       userId: connection.userId,
       kind: item.kind,
-      value: item.value,
+      // Card numbers are masked, as in memories and tasks.
+      value: tidyKeptText(item.value),
       ...(item.movingOn ? { movingOn: item.movingOn } : {}),
       source: { service: item.source.service, ...(item.source.messageId ? { messageId: item.source.messageId } : {}), date: item.source.date, ...(item.source.sender ? { sender: item.source.sender } : {}) },
       agentId: connection.agentId,
     }, dek);
+    } catch {
+      skipped.push(`aboutYou[${index}]: not a detail Warthog can keep. Check its value.`);
+      continue;
+    }
     if (outcome.outcome === "suggested") waiting += 1;
     received += 1;
   }
   return { received, ...(skipped.length ? { skipped } : {}), note: ABOUT_YOU_NOTE };
+  });
 }
 
 export function createUpdateRecordTool(deps: RecordsToolDeps): UpdateRecordTool {
