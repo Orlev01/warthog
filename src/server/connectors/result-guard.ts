@@ -70,6 +70,9 @@ const DRIVE_READ_TEXT = "google-drive__read_text";
 const SUMMARY_FIELDS = ["id", "threadId", "labelIds", "date", "from", "subject", "preview", "withheld", "kind", "openInMail", "tellThePerson"] as const;
 const OUTLOOK_READ = "microsoft-outlook-mail__read";
 const OUTLOOK_SEARCH = "microsoft-outlook-mail__search";
+const OUTLOOK_CALENDAR_LIST = "microsoft-outlook-calendar__list";
+// An event's preview is a line or two, never its text.
+const EVENT_PREVIEW_CHARS = 200;
 const MAIL_CONNECTORS = MAIL_CONNECTOR_IDS;
 const CALENDAR_CONNECTORS = new Set(["google-calendar", "microsoft-outlook-calendar"]);
 
@@ -116,6 +119,8 @@ interface Envelope {
   readonly truncated?: boolean;
   readonly tooLargeToCheck?: boolean;
   readonly note?: unknown;
+  /** The window a calendar list covered. */
+  readonly window?: unknown;
 }
 
 function isEnvelope(value: unknown): value is Envelope {
@@ -138,6 +143,61 @@ function linkOnly(call: AgentCall, message: Record<string, unknown>): Record<str
   const links = Array.isArray(message.links) ? message.links : [];
   if (!Number.isInteger(n) || n < 1 || n > links.length) return { id: message.id, link: asked, note: "That link number isn't in this message." };
   return { id: message.id, link: n, url: links[n - 1] };
+}
+
+// A Graph date-time ({ dateTime, timeZone }) as one string: UTC ends in Z, any other zone is named.
+function graphWhen(value: unknown): string | undefined {
+  const when = value as { dateTime?: unknown; timeZone?: unknown } | null;
+  if (typeof when?.dateTime !== "string") return undefined;
+  const time = when.dateTime.replace(/\.0+$/, "");
+  const zone = typeof when.timeZone === "string" ? when.timeZone : "UTC";
+  return zone === "UTC" ? `${time}Z` : `${time} (${zone})`;
+}
+
+// One Outlook event as an agent sees it in a list: who, what, when and where, never its body.
+function calendarEvent(item: unknown, account: string | undefined): Record<string, unknown> {
+  const e = (item !== null && typeof item === "object" ? item : {}) as Record<string, unknown>;
+  const organizer = (e.organizer as { emailAddress?: { name?: unknown; address?: unknown } } | undefined)?.emailAddress;
+  const name = typeof organizer?.name === "string" ? organizer.name.trim() : "";
+  const address = typeof organizer?.address === "string" ? organizer.address.trim() : "";
+  const place = (e.location as { displayName?: unknown } | undefined)?.displayName;
+  const preview = typeof e.bodyPreview === "string" ? e.bodyPreview.replace(/\s+/g, " ").trim().slice(0, EVENT_PREVIEW_CHARS) : "";
+  const out: Record<string, unknown> = {};
+  const put = (key: string, value: unknown) => { if (value !== undefined && value !== "") out[key] = value; };
+  put("account", account);
+  put("id", typeof e.id === "string" ? e.id : undefined);
+  put("subject", typeof e.subject === "string" ? e.subject : undefined);
+  put("start", graphWhen(e.start));
+  put("end", graphWhen(e.end));
+  put("allDay", e.isAllDay === true);
+  put("location", typeof place === "string" ? place.trim() : undefined);
+  put("organizer", address ? (name && name !== address ? `${name} <${address}>` : address) : name || undefined);
+  put("youOrganised", e.isOrganizer === true);
+  put("cancelled", e.isCancelled === true);
+  put("showAs", typeof e.showAs === "string" ? e.showAs : undefined);
+  put("guests", Array.isArray(e.attendees) ? e.attendees.length : undefined);
+  if (typeof e.type === "string" && e.type !== "singleInstance") out.repeats = true;
+  put("preview", preview);
+  put("openInCalendar", typeof e.webLink === "string" ? e.webLink : undefined);
+  return out;
+}
+
+// The query for the next page of a calendar list, from Graph's next link (which the agent can't
+// fetch itself).
+function calendarNext(link: unknown): Record<string, string> | undefined {
+  if (typeof link !== "string") return undefined;
+  let params: URLSearchParams;
+  try {
+    params = new URL(link).searchParams;
+  } catch {
+    return undefined;
+  }
+  const next: Record<string, string> = {};
+  for (const key of ["startDateTime", "endDateTime", "$top", "$skip", "$skiptoken"]) {
+    const value = params.get(key);
+    if (value !== null) next[key] = value;
+  }
+  return next.$skip !== undefined || next.$skiptoken !== undefined ? next : undefined;
 }
 
 function gmailFormat(call: AgentCall): string | undefined {
@@ -234,6 +294,24 @@ export function createResultGuard(deps: ResultGuardDeps = {}): ResultGuard {
     return null;
   }
 
+  // An Outlook calendar list as a compact checked view (dogfood 25 Nov 2026): each event's who,
+  // what, when and where, the window it covers and the query for the next page.
+  function calendarView(call: AgentCall, parsed: unknown, envelope: Envelope, options: CleanOptions): GuardedResult | null {
+    const list = (parsed as { value?: unknown } | null)?.value;
+    if (!Array.isArray(list)) return null;
+    const counts = emptyJsonCounts();
+    const events = cleanJson(list.map((item) => calendarEvent(item, call.connectorAccountLabel)), counts, options) as unknown[];
+    const next = calendarNext((parsed as Record<string, unknown>)["@odata.nextLink"]);
+    const window = envelope.window !== null && typeof envelope.window === "object" ? { window: envelope.window } : {};
+    const note = events.length === 0
+      ? "No events in this window."
+      : next ? "Each event in short, sorted by start. For the next page, pass next as query." : "Each event in short, sorted by start.";
+    return {
+      result: { ...source(call, "content"), status: envelope.status, ...window, events, ...(next ? { next } : {}), note },
+      evidence: evidenceOf(call, outcomeOf(counts, false), nonZero(counts)),
+    };
+  }
+
   function reviewEnvelope(call: AgentCall, envelope: Envelope): GuardedResult {
     // A failed request's reply never reaches the agent (the pipeline returns a plain reason).
     if (!isSuccess(envelope.status)) return { result: envelope, evidence: { outcome: "shown" } };
@@ -252,6 +330,8 @@ export function createResultGuard(deps: ResultGuardDeps = {}): ResultGuard {
     if (isJson) {
       const mail = mailViews(call, parsed, envelope);
       if (mail) return { result: mail.result, evidence: evidenceOf(call, outcomeOf(mail.counts, mail.fallback), nonZero(mail.counts)) };
+      const calendar = call.tool === OUTLOOK_CALENDAR_LIST ? calendarView(call, parsed, envelope, options) : null;
+      if (calendar) return calendar;
     }
     // A mail reply that isn't whole JSON (cut short), or isn't a message, is never passed on raw.
     if (mailTool) return withheld(call, envelope.status);
@@ -340,7 +420,12 @@ export function createResultGuard(deps: ResultGuardDeps = {}): ResultGuard {
       const first = list.find((m) => !mine(m) && m.from !== undefined && fromSomeoneElse(m.from));
       return first ? { service, kind: "email", ...senderOf(first.from) } : undefined;
     }
-    if (call.tool === "google-calendar__list" || call.tool === "microsoft-outlook-calendar__list") {
+    // The compact Outlook list: the first event someone else organised counts.
+    if (call.tool === OUTLOOK_CALENDAR_LIST && Array.isArray(result.events)) {
+      const foreign = (result.events as { youOrganised?: unknown; organizer?: unknown }[]).find((event) => event.youOrganised !== true);
+      return foreign ? { service, kind: "event", ...senderOf(foreign.organizer) } : undefined;
+    }
+    if (call.tool === "google-calendar__list" || call.tool === OUTLOOK_CALENDAR_LIST) {
       let events: unknown[] = [];
       try {
         const body = JSON.parse(String(result.body)) as { items?: unknown; value?: unknown };

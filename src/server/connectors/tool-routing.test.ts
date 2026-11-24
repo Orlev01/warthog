@@ -63,6 +63,18 @@ test("Gmail discovery explains search/read arguments and distinguishes an unsent
   assert.match(get("send").description!, /Warthog builds a plain-text email/);
 });
 
+test("the Outlook calendar list explains its window and that it changes nothing", () => {
+  const outlook = { get: () => ({ ...entry("microsoft-outlook-calendar"), name: "Outlook Calendar" }) } as unknown as CatalogueIndex;
+  const tools = connectorToolsetFor([connection("microsoft-outlook-calendar")], [{ accountId: "c-microsoft-outlook-calendar" }], outlook)["microsoft-outlook-calendar"]!;
+  const list = tools.find((t) => typeof t !== "string" && t.name === "list");
+  assert.ok(list && typeof list !== "string");
+  assert.equal(list.title, "Outlook Calendar: List events");
+  assert.match(list.description!, /query\.startDateTime/);
+  assert.match(list.description!, /query\.endDateTime/);
+  assert.match(list.description!, /90 days/);
+  assert.match(list.description!, /Doesn't change/);
+});
+
 test("LinkedIn offers its profile, a post that always asks first, and deleting a post", () => {
   const linkedIn = { get: () => ({ ...entry("linkedin"), name: "LinkedIn", category: "social" }) } as unknown as CatalogueIndex;
   const tools = connectorToolsetFor([connection("linkedin")], [{ accountId: "c-linkedin" }], linkedIn)["linkedin"]!;

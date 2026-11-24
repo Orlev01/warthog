@@ -948,3 +948,94 @@ test("the handler is member-scoped: it refuses another person's connection with 
     await db.close();
   }
 });
+
+// ===========================================================================
+// The Outlook calendar list reads a WINDOW of events (Graph's calendarView), never every event
+// in the mailbox with their full bodies (dogfood 25 Nov 2026: 112,000 characters, cut short
+// after 8 events, and the window the agent asked for was ignored).
+// ===========================================================================
+
+async function listCalendar(query: Record<string, string> | undefined): Promise<{ url: URL; result: CuratedToolResult }> {
+  const db = await freshDb();
+  try {
+    const userId = await makeUser(db, `cal-${randomUUID().slice(0, 8)}`);
+    const dek = freshDek();
+    const conn = await seedConnection(db, CALENDAR_ENTRY, userId, dek, "connected");
+    const f = recordingFetch(() => new Response(JSON.stringify({ value: [] }), { status: 200 }));
+    const result = await callMicrosoftTool(
+      { tool: "microsoft-outlook-calendar__list", entry: CALENDAR_ENTRY, userId, connectionId: conn.id, dek, ...(query ? { query } : {}) },
+      makeDeps(db, f.fetch),
+    );
+    assert.equal(f.requests.length, 1);
+    return { url: new URL(f.requests[0]!.url), result };
+  } finally {
+    await db.close();
+  }
+}
+
+async function refusedCalendar(query: Record<string, string>, message: RegExp): Promise<void> {
+  const db = await freshDb();
+  try {
+    const userId = await makeUser(db, `cal-${randomUUID().slice(0, 8)}`);
+    const dek = freshDek();
+    const conn = await seedConnection(db, CALENDAR_ENTRY, userId, dek, "connected");
+    const f = recordingFetch(okResponse);
+    await assert.rejects(
+      callMicrosoftTool({ tool: "microsoft-outlook-calendar__list", entry: CALENDAR_ENTRY, userId, connectionId: conn.id, dek, query }, makeDeps(db, f.fetch)),
+      (err: unknown) => err instanceof HttpError && err.status === 400 && message.test(err.message),
+    );
+    assert.equal(f.requests.length, 0, "nothing is sent for a window Warthog refuses");
+  } finally {
+    await db.close();
+  }
+}
+
+test("the Outlook calendar list reads the window asked for, sorted by start, without event bodies", async () => {
+  const { url, result } = await listCalendar({ startDateTime: "2025-11-25", endDateTime: "2026-11-25T00:00:00Z", $top: "80", $filter: "isCancelled eq false", fields: "body", $expand: "attachments" });
+  assert.equal(url.pathname, "/v1.0/me/calendarView", "a window is Graph's calendarView, which expands repeating events");
+  assert.equal(url.searchParams.get("startDateTime"), "2025-11-25T00:00:00.000Z");
+  assert.equal(url.searchParams.get("endDateTime"), "2026-11-25T00:00:00.000Z");
+  assert.equal(url.searchParams.get("$top"), "50", "at most 50 a page");
+  assert.equal(url.searchParams.get("$orderby"), "start/dateTime");
+  assert.equal(url.searchParams.get("$filter"), "isCancelled eq false");
+  const select = (url.searchParams.get("$select") ?? "").split(",");
+  for (const field of ["id", "subject", "start", "end", "location", "organizer", "isOrganizer", "isAllDay", "isCancelled", "bodyPreview", "webLink", "attendees"]) {
+    assert.ok(select.includes(field), `$select asks for ${field}`);
+  }
+  assert.ok(!select.includes("body"), "never the event's full body");
+  assert.equal(url.searchParams.get("fields"), null, "unknown options are dropped");
+  assert.equal(url.searchParams.get("$expand"), null, "no $expand can inline attachments");
+  assert.deepEqual(result.window, { from: "2025-11-25T00:00:00.000Z", to: "2026-11-25T00:00:00.000Z" }, "the result says which window it covers");
+});
+
+test("with no window, the Outlook calendar list covers the next 90 days, 25 at a time", async () => {
+  const before = Date.now();
+  const { url, result } = await listCalendar(undefined);
+  const from = Date.parse(url.searchParams.get("startDateTime") ?? "");
+  const to = Date.parse(url.searchParams.get("endDateTime") ?? "");
+  assert.ok(from >= before - 1000 && from <= Date.now() + 1000, "it starts now");
+  assert.equal(to - from, 90 * 24 * 60 * 60 * 1000, "and ends 90 days later");
+  assert.equal(url.searchParams.get("$top"), "25");
+  assert.equal(result.window?.from, new Date(from).toISOString());
+  // Only one end given: the other follows from it.
+  const onlyEnd = await listCalendar({ endDateTime: "2027-03-01" });
+  assert.equal(onlyEnd.url.searchParams.get("startDateTime"), "2026-12-01T00:00:00.000Z", "90 days before the end");
+  const onlyStart = await listCalendar({ startDateTime: "2026-01-01" });
+  assert.equal(onlyStart.url.searchParams.get("endDateTime"), "2026-04-01T00:00:00.000Z", "90 days after the start");
+});
+
+test("Outlook calendar options are read with or without $, in any case, and a page is asked for with $skip", async () => {
+  const { url } = await listCalendar({ startdatetime: "2026-11-01", EndDateTime: "2026-12-01", top: "5", Skip: "25" });
+  assert.equal(url.searchParams.get("startDateTime"), "2026-11-01T00:00:00.000Z");
+  assert.equal(url.searchParams.get("endDateTime"), "2026-12-01T00:00:00.000Z");
+  assert.equal(url.searchParams.get("$top"), "5");
+  assert.equal(url.searchParams.get("$skip"), "25");
+});
+
+test("the Outlook calendar list refuses a window it can't read, saying what works", async () => {
+  await refusedCalendar({ startDateTime: "next tuesday" }, /startDateTime.*date/i);
+  await refusedCalendar({ startDateTime: "2026-12-01", endDateTime: "2026-11-01" }, /after/i);
+  await refusedCalendar({ startDateTime: "2020-01-01", endDateTime: "2026-01-01" }, /3 years/);
+  await refusedCalendar({ $search: "dentist" }, /\$filter/);
+  await refusedCalendar({ $skip: "-1" }, /\$skip/);
+});

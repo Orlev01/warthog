@@ -141,6 +141,62 @@ function outlookSearchQuery(query: Record<string, string> | undefined): Record<s
   return { $top: String(DEFAULT_OUTLOOK_TOP), ...out, $select: OUTLOOK_HEADERS_ONLY };
 }
 
+// The Outlook calendar list reads a window of events through Graph's calendarView (which also
+// expands repeating events), sorted by start, with the fields an agent needs and never the
+// event's body (dogfood 25 Nov 2026: /me/events with no window returned every event with its
+// full HTML, cut short after 8). Options are read with or without their `$`, in any case.
+export const OUTLOOK_CALENDAR_LIST = "microsoft-outlook-calendar__list";
+export const DEFAULT_CALENDAR_TOP = 25;
+export const MAX_CALENDAR_TOP = 50;
+export const DEFAULT_CALENDAR_DAYS = 90;
+const MAX_CALENDAR_DAYS = 3 * 366;
+const DAY_MS = 24 * 60 * 60 * 1000;
+const OUTLOOK_EVENT_FIELDS = "id,subject,start,end,location,organizer,isOrganizer,isAllDay,isCancelled,showAs,bodyPreview,webLink,attendees,type,seriesMasterId";
+const CALENDAR_DATE = /^\d{4}-\d{2}-\d{2}(T\d{2}:\d{2}(:\d{2}(\.\d{1,7})?)?(Z|[+-]\d{2}:?\d{2})?)?$/i;
+
+// A window end as an instant: a date is midnight UTC, and a date-time with no offset is UTC (as
+// Graph reads it).
+function calendarInstant(name: string, value: string): Date {
+  const text = value.trim();
+  if (!CALENDAR_DATE.test(text)) throw new HttpError(400, `query.${name} must be a date, e.g. 2026-11-25 or 2026-11-25T09:00:00+11:00.`);
+  const instant = new Date(text.length === 10 || /(Z|[+-]\d{2}:?\d{2})$/i.test(text) ? text : `${text}Z`);
+  if (Number.isNaN(instant.getTime())) throw new HttpError(400, `query.${name} must be a date, e.g. 2026-11-25 or 2026-11-25T09:00:00+11:00.`);
+  return instant;
+}
+
+/** The calendarView query for an Outlook calendar list, and the window it covers. */
+export function outlookCalendarQuery(query: Record<string, string> | undefined, now: Date): { query: Record<string, string>; window: { from: string; to: string } } {
+  const options: Record<string, string> = {};
+  for (const [key, value] of Object.entries(query ?? {})) options[key.replace(/^\$/, "").toLowerCase()] = value;
+  if (options.search !== undefined) {
+    throw new HttpError(400, "Outlook calendars can't be searched with $search. Narrow the window, or use query.$filter, e.g. startswith(subject,'Dentist').");
+  }
+  const given = (name: string, key: string) => (options[key]?.trim() ? calendarInstant(name, options[key]!) : undefined);
+  let from = given("startDateTime", "startdatetime");
+  let to = given("endDateTime", "enddatetime");
+  if (!from && !to) from = now;
+  if (from && !to) to = new Date(from.getTime() + DEFAULT_CALENDAR_DAYS * DAY_MS);
+  if (to && !from) from = new Date(to.getTime() - DEFAULT_CALENDAR_DAYS * DAY_MS);
+  if (to!.getTime() <= from!.getTime()) throw new HttpError(400, "query.endDateTime must be after query.startDateTime.");
+  if (to!.getTime() - from!.getTime() > MAX_CALENDAR_DAYS * DAY_MS) throw new HttpError(400, "A calendar window can be at most 3 years: list it in parts.");
+  const window = { from: from!.toISOString(), to: to!.toISOString() };
+  const top = Number.parseInt(options.top ?? "", 10);
+  const out: Record<string, string> = {
+    startDateTime: window.from,
+    endDateTime: window.to,
+    $top: String(Number.isFinite(top) && top > 0 ? Math.min(top, MAX_CALENDAR_TOP) : DEFAULT_CALENDAR_TOP),
+    $orderby: "start/dateTime",
+    $select: OUTLOOK_EVENT_FIELDS,
+  };
+  if (options.skip !== undefined) {
+    if (!/^\d{1,6}$/.test(options.skip.trim())) throw new HttpError(400, "query.$skip must be the whole number the results' next gave.");
+    out.$skip = options.skip.trim();
+  }
+  if (options.skiptoken !== undefined) out.$skiptoken = skipToken(options.skiptoken);
+  if (options.filter?.trim()) out.$filter = options.filter;
+  return { query: out, window };
+}
+
 function outlookMessage(input: CuratedToolCallInput): { path: string; query: Record<string, string> } {
   const id = input.query?.id;
   if (id === undefined || !OUTLOOK_MESSAGE_ID.test(id)) throw new HttpError(400, "query.id must be an Outlook message id from search results.");
@@ -187,12 +243,12 @@ const CURATED_DEFS: readonly CuratedToolDef[] = [
   // Outlook calendar — list is a read; create / delete / update make changes; create is
   // undone by delete.
   {
-    name: "microsoft-outlook-calendar__list",
+    name: OUTLOOK_CALENDAR_LIST,
     connectorId: "microsoft-outlook-calendar",
     makesChange: false,
     sendsMessage: false,
     method: "GET",
-    resolve: (i) => ({ path: "/v1.0/me/events", query: i.query }),
+    resolve: (i) => ({ path: "/v1.0/me/calendarView", query: outlookCalendarQuery(i.query, new Date()).query }),
   },
   {
     name: "microsoft-outlook-calendar__create",
@@ -298,6 +354,10 @@ export async function callMicrosoftTool(
     body: input.body,
     contentType: "application/json" as const,
   };
+  // A calendar list says which window it covered (Warthog may have chosen it).
+  if (def.name === OUTLOOK_CALENDAR_LIST) {
+    return { ...(await sendConnectorRequest(request, deps)), window: { from: query!.startDateTime!, to: query!.endDateTime! } };
+  }
   if (!checkedRead) return sendConnectorRequest(request, deps);
   const whole = await sendConnectorRequest({ ...request, maxBytes: MESSAGE_READ_BYTES }, deps);
   if (!whole.truncated) return whole;
