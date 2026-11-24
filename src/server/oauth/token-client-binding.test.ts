@@ -18,7 +18,7 @@ const CLIENT_B = "https://client-b.example.test/oauth.json";
 const REDIRECT = "https://client.example.test/callback";
 const VERIFIER = "a".repeat(43);
 const digest = (value: string) => createHash("sha256").update(value).digest("hex");
-const deps = (db: Db, now = NOW) => ({ db, clock: fixedClock(now), random: systemRandom, hmacKey: new Uint8Array(32).fill(7) });
+const deps = (db: Db, now = NOW) => ({ db, clock: fixedClock(now), random: systemRandom, hmacKey: new Uint8Array(32).fill(7), resource: "https://warthog.example.test/mcp" });
 
 async function grant(db: Db, connectionId: string, clientId = CLIENT_A) {
   const code = randomUUID();

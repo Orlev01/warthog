@@ -29,7 +29,7 @@ const now = new Date("2026-11-09T00:00:00Z");
 const clock = { now: () => now };
 const hash = (value: string) => createHash("sha256").update(value).digest("hex");
 const verifier = "dBjftJeZ4CVP-mB92K27uhbUJU1p1r_wW1gFWFOEjXk";
-const tokenDeps = (db: Db) => ({ db, clock, random: systemRandom, hmacKey: new Uint8Array(32).fill(71) });
+const tokenDeps = (db: Db) => ({ db, clock, random: systemRandom, hmacKey: new Uint8Array(32).fill(71), resource: "https://synthetic.example/mcp" });
 
 function deferred<T>() {
   let resolve!: (value: T) => void;

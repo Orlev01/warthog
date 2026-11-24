@@ -34,6 +34,12 @@
 // the SAME successor back instead of having its connection revoked as a replay. Past the
 // window, or once that successor has itself been used, a replay revokes as before.
 //
+// RFC 8707 — a token request MAY name its target with `resource`. Every code was issued
+// for exactly this server's MCP resource (authorize requires it), so when a request
+// names one it must be the code's bound resource (code exchange) or this server's MCP
+// resource (refresh); anything else is `invalid_target`. Omitting it is fine — the
+// tokens are only ever valid at `/mcp`.
+//
 // The endpoint never takes a connection from the caller (constitution: connection
 // scope is never read from the request): the connection is resolved from the code or
 // from the presented refresh token. Tokens are opaque high-entropy bearers drawn from
@@ -84,6 +90,9 @@ export interface TokenDeps {
   readonly clock: Clock;
   readonly random: Random;
   readonly hmacKey: Uint8Array;
+  // This server's MCP resource (`https://<public host>/mcp`, design §6.1) — what a
+  // refresh request's RFC 8707 `resource`, when present, must name.
+  readonly resource: string;
   // Optional, best-effort: every token request is one `agent.token` event whose outcome is
   // `ok` or the OAuth error code (docs/design/admin-portal.md §4) — never a token, code,
   // client id or connection id.
@@ -127,6 +136,12 @@ function successorOf(presented: string, hmacKey: Uint8Array): string {
   return hmac(hmacKey, `${SUCCESSOR_LABEL}${presented}`);
 }
 
+// True when the request names no RFC 8707 `resource`, or names exactly `expected`.
+function namesResource(params: URLSearchParams, expected: string): boolean {
+  const named = params.getAll("resource");
+  return named.length === 0 || (named.length === 1 && named[0] === expected);
+}
+
 export async function exchangeToken(input: TokenInput, deps: TokenDeps): Promise<TokenResult> {
   const grantType = input.params.get("grant_type");
   const result = grantType === "authorization_code" ? await exchangeAuthorizationCode(input.params, deps)
@@ -165,6 +180,7 @@ async function exchangeAuthorizationCode(
         s256Challenge(verifier) !== authCode.codeChallenge) {
       return { ok: false, error: "invalid_grant" };
     }
+    if (!namesResource(params, authCode.resource)) return { ok: false, error: "invalid_target" };
     return mintTokenPair({ ...deps, db: tx }, authCode.connectionId, authCode.clientId);
   });
 }
@@ -178,6 +194,7 @@ async function exchangeRefreshToken(
   const presented = params.get("refresh_token");
   const clientId = params.get("client_id");
   if (!presented || !clientId) return { ok: false, error: "invalid_request" };
+  if (!namesResource(params, deps.resource)) return { ok: false, error: "invalid_target" };
   const identified = await resolveToken(deps.db, sha256Hex(presented));
   if (!identified || identified.kind !== "refresh") return { ok: false, error: "invalid_grant" };
   return withTransaction(deps.db, async (tx) => {

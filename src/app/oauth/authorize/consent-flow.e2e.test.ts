@@ -53,6 +53,7 @@ import { createConnection, setDefaultForAgents } from "../../../server/db/connec
 import { fixedClock } from "../../../server/seams/clock";
 import { systemRandom } from "../../../server/seams/random";
 import { freshDb } from "../../../test/db";
+import { mcpRequest } from "../../../test/mcp-request";
 import type { Db } from "../../../server/db/index";
 import type { Session } from "../../../server/auth/session";
 
@@ -99,6 +100,7 @@ function deps(db: Db, config: Config) {
     random: systemRandom,
     alerts: { emailSender: { sendEmail: async () => {} } },
     hmacKey: config.hmacKey,
+    resource: MCP_RESOURCE,
     resolveClient: createClientResolver({
       db,
       fetchCimd: async (clientId: string): Promise<Record<string, unknown>> => {
@@ -158,20 +160,11 @@ function tokenParams(code: string): URLSearchParams {
   });
 }
 
-// A POST to /mcp with the Streamable-HTTP headers a real MCP client sends (Accept names both
-// JSON and SSE) and the bearer. Mirrors compose.test.ts's mcpPost.
+// A POST to /mcp as a real 2026-07-28 MCP client sends it, with the bearer. Mirrors
+// compose.test.ts's mcpPost.
 function mcpPost(body: unknown, opts: { bearer?: string } = {}): Request {
-  const headers: Record<string, string> = {
-    "content-type": "application/json",
-    accept: "application/json, text/event-stream",
-    "mcp-protocol-version": "2025-06-18",
-  };
-  if (opts.bearer !== undefined) headers.authorization = `Bearer ${opts.bearer}`;
-  return new Request(`${BASE_URL}/mcp`, {
-    method: "POST",
-    headers,
-    body: typeof body === "string" ? body : JSON.stringify(body),
-  });
+  const headers: Record<string, string> = opts.bearer === undefined ? {} : { authorization: `Bearer ${opts.bearer}` };
+  return mcpRequest(body, { url: `${BASE_URL}/mcp`, headers });
 }
 
 function callBody(name: string, args: unknown): Record<string, unknown> {

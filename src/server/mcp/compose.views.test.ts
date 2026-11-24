@@ -13,6 +13,7 @@ import { createAgent } from "../db/agents";
 import { upsertPermissions, type PermissionGrants } from "../db/agent-permissions";
 import { createConnection } from "../db/connections";
 import { freshDb } from "../../test/db";
+import { mcpRequest } from "../../test/mcp-request";
 import type { Db } from "../db/index";
 
 import { adoptStandIn, grantServices } from "../../test/grants";
@@ -30,14 +31,6 @@ function devConfig(): Config {
   } as NodeJS.ProcessEnv);
 }
 
-function mcpPost(body: unknown): Request {
-  return new Request("https://warthog.example/mcp", {
-    method: "POST",
-    headers: { "content-type": "application/json", accept: "application/json, text/event-stream", "mcp-protocol-version": "2025-06-18" },
-    body: JSON.stringify(body),
-  });
-}
-
 async function readRpc(res: Response): Promise<{ result?: { content?: { text?: string }[]; isError?: boolean; structuredContent?: Record<string, unknown>; instructions?: string } }> {
   const text = await res.text();
   if ((res.headers.get("content-type") ?? "").includes("text/event-stream")) {
@@ -47,7 +40,7 @@ async function readRpc(res: Response): Promise<{ result?: { content?: { text?: s
   return JSON.parse(text);
 }
 
-const call = (name: string, args: unknown) => mcpPost({ jsonrpc: "2.0", id: 1, method: "tools/call", params: { name, arguments: args } });
+const call = (name: string, args: unknown) => mcpRequest({ jsonrpc: "2.0", id: 1, method: "tools/call", params: { name, arguments: args } });
 
 async function seed(db: Db, config: Config, grants: Partial<PermissionGrants>, connectorId: string, credentials: Record<string, unknown>, accountLabel = "sam@example.com") {
   const keyWrapper = localAesKeyWrapper(config.devKek!);

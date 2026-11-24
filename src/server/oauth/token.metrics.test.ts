@@ -31,7 +31,7 @@ test("an exchange that mints tokens records ok; refusals record their OAuth erro
       expiresAt: new Date(NOW.getTime() + 60_000),
     });
     const metrics: RecordMetricInput[] = [];
-    const deps = { db, clock: fixedClock(NOW), random: systemRandom, hmacKey: HMAC_KEY, recordMetric: async (m: RecordMetricInput) => { metrics.push(m); } };
+    const deps = { db, clock: fixedClock(NOW), random: systemRandom, hmacKey: HMAC_KEY, resource: MCP_RESOURCE, recordMetric: async (m: RecordMetricInput) => { metrics.push(m); } };
     const params = (grant: Record<string, string>) => ({ params: new URLSearchParams(grant) });
 
     assert.equal((await exchangeToken(params({ grant_type: "password" }), deps)).ok, false);

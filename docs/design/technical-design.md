@@ -219,7 +219,8 @@ Redaction is a pure module with exhaustive unit tests; the activity writer and t
 - `/mcp` without a valid token → `401` with
   `WWW-Authenticate: Bearer resource_metadata="…", scope="warthog"`.
 - Authorization code + **PKCE S256 only**; `resource` parameter required and must equal the MCP
-  resource; `iss` returned in the authorization response (RFC 9207); form-urlencoded token endpoint.
+  resource; `iss` returned in the authorization response (RFC 9207); form-urlencoded token endpoint,
+  where a request that names a `resource` must name the MCP resource (`invalid_target` otherwise).
 - Client registration: **CIMD** (`client_id` is an https URL; fetch with SSRF guards — https only, no
   private/loopback IPs, 5 s timeout, 64 KB cap, cache 24 h) advertised with
   `client_id_metadata_document_supported: true` and `token_endpoint_auth_methods_supported: ["none"]`;
@@ -243,7 +244,7 @@ Redaction is a pure module with exhaustive unit tests; the activity writer and t
 ### 6.2 MCP server
 - `@modelcontextprotocol/server` v2 `createMcpHandler` in `src/app/mcp/route.ts` (`runtime = "nodejs"`),
   **stateless**; supports protocol 2026-07-28 and the 2025-11-25 `initialize` handshake; validates
-  `Origin` and the `Mcp-*` headers; `X-Accel-Buffering: no` on SSE; GET/DELETE → 405.
+  `Origin` and the `Mcp-*` headers; GET/DELETE → 405.
 - Tool list for an agent = Warthog core tools + the connector tools it is permitted, namespaced
   `<connector>__<tool>`. If the total exceeds 80, connector tools collapse into `find_tools` +
   `call_tool`. A service's tools are listed once however many of its accounts the agent has; each

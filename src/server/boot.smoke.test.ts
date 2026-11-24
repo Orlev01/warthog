@@ -330,6 +330,18 @@ describe("production build and boot of the whole app (E18-S12)", () => {
       "endpoint URLs are derived from the configured base URL",
     );
 
+    // RFC 9728 protected-resource metadata, at the bare path the 401 challenge names and at
+    // the path derived from the `/mcp` resource (§3.1) — the same public document at both.
+    const resourceMeta = await Promise.all(
+      ["/.well-known/oauth-protected-resource", "/.well-known/oauth-protected-resource/mcp"].map(async (path) => {
+        const res = await fetch(ctx.baseUrl + path, { redirect: "manual" });
+        assert.equal(res.status, 200, `${path} is public and returns 200`);
+        return (await res.json()) as Record<string, unknown>;
+      }),
+    );
+    assert.equal(resourceMeta[0]!.resource, `${ctx.baseUrl}/mcp`, "the resource is the configured MCP endpoint");
+    assert.deepEqual(resourceMeta[1], resourceMeta[0], "both metadata paths serve the same document");
+
     // The agent connector endpoint: a POST with no Bearer is rejected 401 and carries the
     // RFC 9728 challenge, proving the MCP auth boundary is live in the running app.
     const mcp = await fetch(ctx.baseUrl + "/mcp", {

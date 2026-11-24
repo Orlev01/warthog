@@ -17,6 +17,7 @@ import { createAgent } from "../db/agents";
 import { upsertPermissions } from "../db/agent-permissions";
 import { listActivity } from "../activity/list";
 import { freshDb } from "../../test/db";
+import { mcpRequest } from "../../test/mcp-request";
 
 function devConfig(): Config {
   return loadConfig({
@@ -30,11 +31,7 @@ function devConfig(): Config {
 }
 
 async function callTool(dispatch: ReturnType<typeof createMcpDispatch>, connectionId: string, name: string, args: unknown): Promise<Record<string, unknown>> {
-  const res = await dispatch(connectionId, new Request("https://warthog.example/mcp", {
-    method: "POST",
-    headers: { "content-type": "application/json", accept: "application/json, text/event-stream", "mcp-protocol-version": "2025-06-18" },
-    body: JSON.stringify({ jsonrpc: "2.0", id: 1, method: "tools/call", params: { name, arguments: args } }),
-  }));
+  const res = await dispatch(connectionId, mcpRequest({ jsonrpc: "2.0", id: 1, method: "tools/call", params: { name, arguments: args } }));
   const text = await res.text();
   const frame = (res.headers.get("content-type") ?? "").includes("text/event-stream")
     ? text.split(/\r?\n/).filter((line) => line.startsWith("data:")).map((line) => line.slice(5).trim()).filter(Boolean).at(-1)!

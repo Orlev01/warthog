@@ -21,10 +21,15 @@ export async function POST(request: Request): Promise<Response> {
   const params = await readOAuthForm(request);
   if (params instanceof Response) return params;
   const db = await getServerDb();
+  const config = loadConfig();
 
   const result = await exchangeToken(
     { params },
-    { db, clock: systemClock, random: systemRandom, hmacKey: loadConfig().hmacKey, recordMetric: metricSeamFor(db, systemClock) },
+    {
+      db, clock: systemClock, random: systemRandom, hmacKey: config.hmacKey,
+      resource: `${config.publicBaseUrl.replace(/\/$/, "")}/mcp`,
+      recordMetric: metricSeamFor(db, systemClock),
+    },
   );
 
   if (result.ok) {
