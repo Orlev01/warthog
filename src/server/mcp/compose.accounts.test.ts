@@ -26,6 +26,7 @@ import { toEntry } from "../activity/writer";
 import { decide, getApproval } from "../db/approvals";
 import { accountHandle } from "../../domain/permissions/account-access";
 import { freshDb } from "../../test/db";
+import { mcpRequest } from "../../test/mcp-request";
 import type { Db } from "../db/index";
 
 const NOW = new Date("2026-11-24T00:00:00.000Z");
@@ -41,14 +42,6 @@ function devConfig(): Config {
   } as NodeJS.ProcessEnv);
 }
 
-function mcpPost(body: unknown): Request {
-  return new Request("https://warthog.example/mcp", {
-    method: "POST",
-    headers: { "content-type": "application/json", accept: "application/json, text/event-stream", "mcp-protocol-version": "2025-06-18" },
-    body: JSON.stringify(body),
-  });
-}
-
 type Rpc = { result?: { content?: { text?: string }[]; isError?: boolean; structuredContent?: Record<string, unknown>; tools?: { name: string; inputSchema?: { properties?: Record<string, unknown> } }[] } };
 
 async function readRpc(res: Response): Promise<Rpc> {
@@ -60,8 +53,8 @@ async function readRpc(res: Response): Promise<Rpc> {
   return JSON.parse(text);
 }
 
-const call = (name: string, args: unknown) => mcpPost({ jsonrpc: "2.0", id: 1, method: "tools/call", params: { name, arguments: args } });
-const LIST = mcpPost({ jsonrpc: "2.0", id: 1, method: "tools/list", params: {} });
+const call = (name: string, args: unknown) => mcpRequest({ jsonrpc: "2.0", id: 1, method: "tools/call", params: { name, arguments: args } });
+const LIST = mcpRequest({ jsonrpc: "2.0", id: 1, method: "tools/list", params: {} });
 // A refusal comes back as an error result carrying the plain reason.
 const status = (rpc: Rpc) => (rpc.result?.isError ? "refused" : rpc.result?.structuredContent?.status);
 const reason = (rpc: Rpc) => String(rpc.result?.structuredContent?.reason ?? rpc.result?.content?.[0]?.text ?? "");
@@ -524,7 +517,7 @@ test("an app with an older tool list reaches a service through find_tools and ca
     const net = gmail({ home: { messages: [mail("h1", "AGL <hi@agl.com.au>", "Bill", 20)] }, Work: { messages: [] } });
     const dispatch = createMcpDispatch({ db, config, fetch: net.fetch });
     // A fresh list request: a request's body can be read only once.
-    const listed = await readRpc(await dispatch(connectionId, mcpPost({ jsonrpc: "2.0", id: 1, method: "tools/list", params: {} })));
+    const listed = await readRpc(await dispatch(connectionId, mcpRequest({ jsonrpc: "2.0", id: 1, method: "tools/list", params: {} })));
     const names = (listed.result?.tools ?? []).map((t) => t.name);
     assert.ok(names.includes("find_tools") && names.includes("call_tool"), "offered beside the service's own tools");
     const found = await readRpc(await dispatch(connectionId, call("find_tools", { query: "gmail search" })));

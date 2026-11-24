@@ -19,6 +19,7 @@ import { createRule } from "../db/rules";
 import { listActivity } from "../activity/list";
 import { listRuns } from "../agents/runs";
 import { freshDb } from "../../test/db";
+import { mcpRequest } from "../../test/mcp-request";
 import type { Db } from "../db/index";
 
 const NOW = new Date("2026-06-01T00:00:00.000Z");
@@ -37,16 +38,7 @@ function devConfig(): Config {
 // A modern (2026-07-28) request as Claude Code sends it through Anthropic's connector
 // service: the product header, and the client's own name in the request envelope.
 function mcpPost(body: Record<string, unknown>, headers: Record<string, string> = {}): Request {
-  return new Request("https://warthog.example/mcp", {
-    method: "POST",
-    headers: {
-      "content-type": "application/json",
-      accept: "application/json, text/event-stream",
-      "mcp-protocol-version": "2025-06-18",
-      ...headers,
-    },
-    body: JSON.stringify(body),
-  });
+  return mcpRequest(body, { headers, clientInfo: { name: "claude-code", version: "2.1.289" } });
 }
 
 function call(name: string, args: Record<string, unknown>): Record<string, unknown> {

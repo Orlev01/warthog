@@ -14,6 +14,7 @@ import { createUser } from "../../db/users";
 import { createAgent } from "../../db/agents";
 import { upsertPermissions } from "../../db/agent-permissions";
 import { freshDb } from "../../../test/db";
+import { mcpRequest } from "../../../test/mcp-request";
 import { localAesKeyWrapper } from "../../crypto/key-wrapper";
 import { fixedClock } from "../../seams/clock";
 import type { AgentConnection } from "../context";
@@ -167,11 +168,7 @@ test("through the real MCP dispatch, the SDK accepts an older client's call and 
     } as Parameters<typeof upsertPermissions>[1]);
     const dispatch = createMcpDispatch({ db, config });
     const call = async (name: string, args: unknown) => {
-      const res = await dispatch(agent.connectionId, new Request("https://warthog.example/mcp", {
-        method: "POST",
-        headers: { "content-type": "application/json", accept: "application/json, text/event-stream", "mcp-protocol-version": "2025-06-18" },
-        body: JSON.stringify({ jsonrpc: "2.0", id: 1, method: "tools/call", params: { name, arguments: args } }),
-      }));
+      const res = await dispatch(agent.connectionId, mcpRequest({ jsonrpc: "2.0", id: 1, method: "tools/call", params: { name, arguments: args } }));
       const text = await res.text();
       const frame = (res.headers.get("content-type") ?? "").includes("text/event-stream")
         ? text.split(/\r?\n/).filter((line) => line.startsWith("data:")).map((line) => line.slice(5).trim()).filter(Boolean).at(-1)!

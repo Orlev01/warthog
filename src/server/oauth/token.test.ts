@@ -121,7 +121,7 @@ function s256Challenge(verifier: string): string {
 const HMAC_KEY = new Uint8Array(32).fill(0x11);
 
 function deps(db: Db, now: Date = NOW): TokenDeps {
-  return { db, clock: fixedClock(now), random: systemRandom, hmacKey: HMAC_KEY };
+  return { db, clock: fixedClock(now), random: systemRandom, hmacKey: HMAC_KEY, resource: MCP_RESOURCE };
 }
 
 // An isolated in-memory db with the consenting client already registered.
@@ -352,6 +352,53 @@ test("a refresh token that was never issued is rejected", async () => {
   try {
     const result = await exchangeToken({ params: refreshParams(`never-issued-${randomUUID()}`) }, deps(db));
     assert.equal(result.ok, false, "an unknown refresh token cannot be exchanged for tokens");
+  } finally {
+    await db.close();
+  }
+});
+
+// --- RFC 8707: a token request that names a resource must name this one --------------
+
+test("a code exchange may name the code's bound resource, and any other resource is invalid_target", async () => {
+  const db = await dbWithClient();
+  try {
+    const named = await exchangeToken(
+      { params: codeExchangeParams(await seedAuthCode(db, { connectionId: randomUUID() }), { resource: MCP_RESOURCE }) },
+      deps(db),
+    );
+    assert.ok(named.ok, "naming the resource the code was issued for is accepted");
+
+    for (const resource of [`${MCP_RESOURCE}/`, "https://elsewhere.example/mcp"]) {
+      const code = await seedAuthCode(db, { connectionId: randomUUID() });
+      const other = await exchangeToken({ params: codeExchangeParams(code, { resource }) }, deps(db));
+      assert.deepEqual(other, { ok: false, error: "invalid_target" }, `${resource} is not the code's resource`);
+    }
+
+    const twice = codeExchangeParams(await seedAuthCode(db, { connectionId: randomUUID() }), { resource: MCP_RESOURCE });
+    twice.append("resource", MCP_RESOURCE);
+    assert.deepEqual(await exchangeToken({ params: twice }, deps(db)), { ok: false, error: "invalid_target" },
+      "a token is only ever issued for one resource");
+  } finally {
+    await db.close();
+  }
+});
+
+test("a refresh naming another resource is invalid_target and neither rotates nor revokes", async () => {
+  const db = await dbWithClient();
+  try {
+    const code = await seedAuthCode(db, { connectionId: randomUUID() });
+    const minted = await exchangeToken({ params: codeExchangeParams(code) }, deps(db));
+    if (!minted.ok) throw new Error("setup: the code exchange failed");
+    const refreshToken = minted.body.refresh_token;
+
+    const wrong = refreshParams(refreshToken);
+    wrong.set("resource", "https://elsewhere.example/mcp");
+    assert.deepEqual(await exchangeToken({ params: wrong }, deps(db)), { ok: false, error: "invalid_target" });
+
+    const right = refreshParams(refreshToken);
+    right.set("resource", MCP_RESOURCE);
+    const rotated = await exchangeToken({ params: right }, deps(db));
+    assert.ok(rotated.ok, "the refresh token is still current: the rejected request neither rotated nor revoked it");
   } finally {
     await db.close();
   }

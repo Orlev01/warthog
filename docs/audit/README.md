@@ -1,5 +1,11 @@
 # Warthog comprehensive engineering audit
 
+**MCP spec hygiene, 24 November:** main `32a8e6e` runs as `warthog--r45318664835a1`. PR #59 moves
+the `/mcp` tests onto the 2026-07-28 protocol production traffic uses (keeping deliberate 2025-era
+cases). The token endpoint now refuses a mismatched RFC 8707 `resource` with `invalid_target`. The
+RFC 9728 document is also served at `/.well-known/oauth-protected-resource/mcp`. No migrations
+(95). See the [release record](mcp-spec-hygiene-release-2026-11-24.md).
+
 **What agents see, 24 November:** main `460ae18` runs as `warthog--r45314256670a1`. PR #58 lets
 each person choose what agents see in their email and files: Private, Standard (default) or
 Everything. It fills a search's page across inboxes, covers up to 10 inboxes, always offers

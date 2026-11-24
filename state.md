@@ -1,4 +1,15 @@
-# Delivery status — 24 November 2026 (what agents see)
+# Delivery status — 24 November 2026 (MCP spec hygiene)
+
+**Live at [warthog.com.au](https://warthog.com.au) (the website) and
+[app.warthog.com.au](https://app.warthog.com.au) (the app).** Application source
+`32a8e6e89da88a51165c8d03a61eab0dfc66be54` runs as `warthog--r45318664835a1`, with one healthy
+replica, explicit 100% traffic and zero old replicas.
+
+PR #59: `/mcp` tests run on the 2026-07-28 protocol; the token endpoint refuses a mismatched
+`resource` (`invalid_target`); `/.well-known/oauth-protected-resource/mcp` is served. No migrations
+(95). See the [release record](docs/audit/mcp-spec-hygiene-release-2026-11-24.md).
+
+# Earlier delivery status — 24 November 2026 (what agents see)
 
 **Live at [warthog.com.au](https://warthog.com.au) (the website) and
 [app.warthog.com.au](https://app.warthog.com.au) (the app).** Application source
