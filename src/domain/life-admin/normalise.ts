@@ -287,7 +287,10 @@ export function normaliseFields(
 
     if (options.fromAgent && def?.kind !== "website") {
       const links = linksToSiteNames(value);
-      const cards = maskCards(links.value);
+      // A policy, account or member number is kept as written even when it looks like a card;
+      // only a banking record's reference could be one.
+      const keepNumber = def?.kind === "reference" && !type.id.startsWith("banking.");
+      const cards = keepNumber ? { value: links.value, masked: false } : maskCards(links.value);
       linksCut ||= links.changed;
       cardsMasked ||= cards.masked;
       value = cards.value.trim();

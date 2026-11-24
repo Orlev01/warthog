@@ -173,15 +173,28 @@ export function maskSignInCodes(text: string, counts: FilterCounts, options: Cle
 const CARD_CANDIDATE = /(?<![\p{N}])\d(?:[ -]?\d){12,18}(?![\p{N}])/gu;
 // Issuer prefixes of the card schemes Warthog's people use (Visa, Mastercard incl. 2-series,
 // Amex, Discover, JCB, Diners). A reference number rarely starts with these AND passes Luhn.
-const CARD_PREFIX = /^(?:4|5[1-5]|222[1-9]|22[3-9]\d|2[3-6]\d\d|27[01]\d|2720|3[47]|6011|65|64[4-9]|35(?:2[89]|[3-8]\d)|30[0-5]|3[68])/;
-const CARD_REFERENCE_WORDS = /\b(?:reference|ref|crn|bpay|biller|tracking|track|ticket|e-ticket|eticket|order|invoice|account|acct|member|policy|booking|consignment|parcel|item|serial|barcode|imei|phone|customer|receipt|transaction)\b/;
+export const CARD_PREFIX = /^(?:4|5[1-5]|222[1-9]|22[3-9]\d|2[3-6]\d\d|27[01]\d|2720|3[47]|6011|65|64[4-9]|35(?:2[89]|[3-8]\d)|30[0-5]|3[68])/;
+const CARD_REFERENCE_WORDS = /\b(?:reference|ref|crn|bpay|biller|tracking|track|ticket|e-ticket|eticket|order|invoice|account|acct|member|policy|insurance|ctp|green slip|booking|consignment|parcel|item|serial|barcode|imei|phone|customer|receipt|transaction)\b/;
+
+/**
+ * Whether a run of digits is grouped the way a card is printed: run together, in fours (the last
+ * group 1–4 digits), or Amex's 4-6-5 and Diners' 4-6-4. A policy number printed "36-0107901349-8"
+ * can pass a card's checks, but no card is printed that way.
+ */
+export function cardGrouped(run: string): boolean {
+  const sizes = run.split(/[ -]/).map((group) => group.length);
+  if (sizes.length === 1) return true;
+  const last = sizes[sizes.length - 1]!;
+  if (sizes.slice(0, -1).every((size) => size === 4) && last >= 1 && last <= 4) return true;
+  return sizes.length === 3 && sizes[0] === 4 && sizes[1] === 6 && (sizes[2] === 5 || sizes[2] === 4);
+}
 
 /** Mask what is very likely a full card number: a card-scheme prefix, a valid Luhn check, and no reference wording just before it. */
 export function maskLikelyCards(text: string, counts: FilterCounts): string {
   return text.replace(CARD_CANDIDATE, (match, offset: number) => {
     const digits = match.replace(/\D/g, "");
     if (digits.length < 13 || digits.length > 19) return match;
-    if (!CARD_PREFIX.test(digits) || !passesLuhn(digits)) return match;
+    if (!CARD_PREFIX.test(digits) || !passesLuhn(digits) || !cardGrouped(match)) return match;
     const before = text.slice(Math.max(0, offset - 30), offset).toLowerCase();
     if (CARD_REFERENCE_WORDS.test(before)) return match;
     counts.cards += 1;

@@ -18,6 +18,7 @@
 // Pure domain module: no React, no DB, no fetch, no process.env, no Date.now.
 
 import { normaliseValue, passesLuhn } from "../redaction/luhn";
+import { CARD_PREFIX, cardGrouped } from "../content/text-filters";
 import { BUILT_IN_TYPES } from "./record-types";
 
 export type IdentifierRule =
@@ -192,7 +193,8 @@ export function maskCards(value: string): { value: string; masked: boolean } {
   let masked = false;
   const out = value.replace(CARD_RUN, (run) => {
     const digits = run.replace(/[^0-9]/g, "");
-    if (!passesLuhn(digits)) return run;
+    // A card number: a card scheme's prefix, a valid check digit, and printed as cards are.
+    if (!passesLuhn(digits) || !CARD_PREFIX.test(digits) || !cardGrouped(run)) return run;
     masked = true;
     return `••••${digits.slice(-4)}`;
   });
