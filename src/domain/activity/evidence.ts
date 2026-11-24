@@ -1,4 +1,5 @@
 import { redact } from "../redaction/redact";
+import { isReadLevel, readLevelLabel } from "../content/read-levels";
 import { outcomeLabel } from "./category";
 import { entryTitle, humanise, toolLabel } from "./describe";
 
@@ -327,9 +328,14 @@ const KEPT_WORDS: Readonly<Record<string, [string, string]>> = {
   codes: ["sign-in code", "sign-in codes"],
   signInLinks: ["sign-in link", "sign-in links"],
   cards: ["card number", "card numbers"],
+  identifiers: ["account or ID number", "account or ID numbers"],
   downloadLinks: ["download link", "download links"],
   stubs: ["sign-in or password email", "sign-in or password emails"],
 };
+
+// The person's "what agents see" level, when the check ran at one other than the default
+// (docs/adr/read-side-protection.md, amendment 24 November 2026). Only a known level is named.
+const LEVEL_WORDS: Readonly<Record<string, string>> = { private: "Private", open: "Everything" };
 
 function guardLine(guard: Record<string, unknown>): string | undefined {
   if (guard.outcome === "withheld") return "Warthog couldn't check this, so the agent wasn't shown it";
@@ -339,7 +345,9 @@ function guardLine(guard: Record<string, unknown>): string | undefined {
     const n = typeof counts[key] === "number" ? (counts[key] as number) : 0;
     return n > 0 ? [`${n} ${n === 1 ? one : many}`] : [];
   });
-  return kept.length ? `Kept from the agent: ${kept.join(", ")}` : undefined;
+  const level = typeof guard.level === "string" && Object.hasOwn(LEVEL_WORDS, guard.level) ? LEVEL_WORDS[guard.level] : undefined;
+  if (!kept.length) return level === "Everything" ? "Shown as written: your setting is Everything" : undefined;
+  return `Kept from the agent: ${kept.join(", ")}${level ? ` (your setting is ${level})` : ""}`;
 }
 
 // "levyoren1@gmail.com, booking@example.com (needs reconnecting)".
@@ -455,6 +463,11 @@ export function activityEvidence(entry: EvidenceEntry): ActivityEvidence {
     if (changes.credentialKind === "oauth") fact("How it connects", "Signed in through its own app (OAuth)");
     if (isRecord(changes.grants)) fact("Access it was given", accessSentence(changes.grants));
     if (typeof changes.clientId === "string") ids.push({ label: "OAuth client ID", value: changes.clientId });
+    // The person's "what agents see" level, and which way it moved.
+    if (Array.isArray(changes.fields) && changes.fields.includes("readLevel")) {
+      const moved = isReadLevel(changes.from) && isReadLevel(changes.to) ? `: ${readLevelLabel(changes.from)} → ${readLevelLabel(changes.to)}` : "";
+      fact("What changed", `What agents see in your email and files${moved}`);
+    }
   }
   if (payload.before !== undefined || (payload.after !== undefined && entry.kind !== "rule_created")) {
     const lines = changedSettings(payload.before, payload.after);

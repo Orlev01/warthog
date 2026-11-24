@@ -56,6 +56,8 @@ import {
 } from "./context";
 import { createApproval, getApproval } from "../db/approvals";
 import { getApprovalExpiryMinutes } from "../db/approval-settings";
+import { getReadLevel } from "../db/read-settings";
+import type { ReadLevel } from "../../domain/content/read-levels";
 import {
   createHeldRequest,
   getByApproval,
@@ -68,7 +70,7 @@ import {
 import { countAgentRequest, getAgentById } from "../db/agents";
 import { getConnectionPermissions, type ConnectionPermissions } from "../db/agent-permissions";
 import { accountHandle, accountPolicy } from "../../domain/permissions/account-access";
-import { coverageOf, mergeMailSearch, splitSearchSize, tagMailIds, type InboxSearch, type InboxStatus } from "../../domain/content/merge-mail";
+import { coverageOf, mergeMailSearch, pageFills, splitSearchSize, tagMailIds, withFill, type InboxSearch, type InboxStatus, type PageFill } from "../../domain/content/merge-mail";
 import { MAIL_CONNECTOR_IDS } from "../../domain/content/mail-connectors";
 import { DEFAULT_SEARCH_RESULTS, MAX_SEARCH_RESULTS } from "../connectors/curated/google";
 import { DEFAULT_OUTLOOK_TOP, MAX_OUTLOOK_TOP } from "../connectors/curated/microsoft";
@@ -89,6 +91,8 @@ import type { ReadExposure, ReadSource } from "../db/read-exposures";
 export interface AgentCall {
   /** Server-owned request trace. Never populated from agent arguments. */
   readonly audit?: { requestId: string; attemptId?: string; policyFingerprint?: string; connectorAccountId?: string; connectorAccountLabel?: string; startedAt: number; attempted?: boolean; terminal?: boolean; decision?: unknown; approvalId?: string };
+  /** Server-owned: the person's "what agents see" level, from their stored setting, that the result guard checks at. Never populated from agent arguments. */
+  readonly readLevel?: ReadLevel;
   readonly unknownSemantics?: boolean;
   readonly requiresApproval?: boolean;
   // The tool always asks the person first, whatever the agent may do alone (a LinkedIn post).
@@ -317,12 +321,14 @@ const GMAIL_SEARCH = "google-gmail__search";
 // search across inboxes' one entry.
 const GUARD_RANK = ["shown", "masked", "stubbed", "fallback", "withheld"];
 function combinedGuard(evidence: readonly unknown[]): unknown {
-  const list = evidence.filter((e): e is { outcome: string; counts?: Record<string, number> } => e !== undefined && e !== null);
+  const list = evidence.filter((e): e is { outcome: string; counts?: Record<string, number>; level?: string } => e !== undefined && e !== null);
   if (list.length === 0) return undefined;
   const counts: Record<string, number> = {};
   for (const e of list) for (const [key, n] of Object.entries(e.counts ?? {})) counts[key] = (counts[key] ?? 0) + n;
   const outcome = list.map((e) => e.outcome).reduce((a, b) => (GUARD_RANK.indexOf(b) > GUARD_RANK.indexOf(a) ? b : a));
-  return { outcome, ...(Object.keys(counts).length > 0 ? { counts } : {}) };
+  // Every inbox is checked at the person's one level, so any of them says which.
+  const level = list.find((e) => typeof e.level === "string")?.level;
+  return { outcome, ...(Object.keys(counts).length > 0 ? { counts } : {}), ...(level ? { level } : {}) };
 }
 
 // One inbox's share of a search across `inboxes`, so the search returns about one page in all
@@ -338,6 +344,29 @@ function withPageShare(call: AgentCall, inboxes: number): AgentCall {
     const asked = tops.length > 0 ? query[tops[0]!] : undefined;
     for (const key of tops) delete query[key];
     query.$top = String(splitSearchSize(asked, inboxes, { default: DEFAULT_OUTLOOK_TOP, max: MAX_OUTLOOK_TOP }));
+  }
+  return { ...call, params: { ...params, query } };
+}
+
+// The page size the search asked for, and the limits of its service's own search tool.
+function searchLimits(call: AgentCall): { asked: string | undefined; limits: { default: number; max: number } } {
+  const query = ((call.params ?? {}) as { query?: Record<string, string> }).query ?? {};
+  if (call.tool === GMAIL_SEARCH) return { asked: query.maxResults, limits: { default: DEFAULT_SEARCH_RESULTS, max: MAX_SEARCH_RESULTS } };
+  const top = Object.keys(query).find((key) => key.replace(/^\$/, "").toLowerCase() === "top");
+  return { asked: top ? query[top] : undefined, limits: { default: DEFAULT_OUTLOOK_TOP, max: MAX_OUTLOOK_TOP } };
+}
+
+// One inbox's next page of a search, `size` results long (Gmail's pageToken; Outlook's $skip).
+function withNextPage(call: AgentCall, fill: PageFill): AgentCall {
+  const params = (call.params ?? {}) as { query?: Record<string, string> };
+  const query = { ...(params.query ?? {}) };
+  if (call.tool === GMAIL_SEARCH) {
+    query.maxResults = String(fill.size);
+    if (fill.pageToken) query.pageToken = fill.pageToken;
+  } else {
+    for (const key of Object.keys(query)) if (/^\$?(?:top|skip)$/i.test(key)) delete query[key];
+    query.$top = String(fill.size);
+    if (fill.skip) query.$skip = fill.skip;
   }
   return { ...call, params: { ...params, query } };
 }
@@ -597,7 +626,11 @@ export function createAgentCallPipeline(deps: PipelineDeps): AgentCallPipeline &
   // guard hand the result back unchanged.
   async function guardResult(call: AgentCall, result: unknown, connection: AgentConnection): Promise<{ result: unknown; evidence?: unknown }> {
     if (call.connector === null || !deps.resultGuard) return { result };
-    const guarded = deps.resultGuard.review(call, result) as ReturnType<ResultGuardSeam["review"]> & { exposure?: ReadSource };
+    // Checked at the person's level (docs/adr/read-side-protection.md, amendment 24 November
+    // 2026): the one the call carries (set from their context in `decide`), else read now. An
+    // approved hold carries none, so it is checked at the level they have when it runs.
+    const checked = call.readLevel ? call : { ...call, readLevel: await getReadLevel(db, connection.userId) };
+    const guarded = deps.resultGuard.review(checked, result) as ReturnType<ResultGuardSeam["review"]> & { exposure?: ReadSource; evidence: { level?: string } };
     // Opening the "recently read" window happens before the agent is handed the content.
     if (guarded.exposure && deps.readExposures) await deps.readExposures.record(connection, guarded.exposure);
     if (deps.recordMetric) {
@@ -612,9 +645,9 @@ export function createAgentCallPipeline(deps: PipelineDeps): AgentCallPipeline &
     // to that inbox (docs/adr/several-accounts-per-agent.md). Done here, once, for every checked
     // mail view, whether or not the agent has more than one inbox.
     const shown = MAIL_CONNECTOR_IDS.has(call.connector) && call.connectorAccountId !== undefined
-      ? tagMailIds(guarded.result, accountHandle(call.connectorAccountId)) : guarded.result;
-    // Activity shows the check only when it hid something.
-    return { result: shown, evidence: guarded.evidence.outcome === "shown" ? undefined : guarded.evidence };
+      ? tagMailIds(guarded.result, accountHandle(call.connectorAccountId), call.connectorAccountLabel) : guarded.result;
+    // Activity shows the check only when it hid something, or ran at a level other than the default.
+    return { result: shown, evidence: guarded.evidence.outcome === "shown" && guarded.evidence.level === undefined ? undefined : guarded.evidence };
   }
 
   // A mail search across inboxes (docs/adr/several-accounts-per-agent.md, decision 5). Each
@@ -685,6 +718,27 @@ export function createAgentCallPipeline(deps: PipelineDeps): AgentCallPipeline &
       }
       evidence.push(guarded.evidence);
       inboxes.push({ account: label(plan), status: "searched", view });
+    }
+    // Room an inbox left on the page goes to the inboxes that filled their share and have more,
+    // once, so one inbox with many results isn't cut short because another had none.
+    const { asked, limits } = searchLimits(call);
+    const fills = pageFills(inboxes, splitSearchSize(asked, runnable.length, limits), splitSearchSize(asked, 1, limits));
+    const fetched = await Promise.all(fills.map(async (fill) => {
+      const next = withNextPage(ran.get(planned[fill.index]!)!.call, fill);
+      try {
+        return { fill, call: next, result: await executeTool(next, connection) as unknown };
+      } catch {
+        return { fill, call: next, result: undefined as unknown };
+      }
+    }));
+    for (const done of fetched) {
+      if (done.result === undefined || asToolRefusal(done.result) || observeResult(done.result).outcome !== "executed") continue;
+      const guarded = await guardResult(done.call, done.result, connection);
+      const view = guarded.result as Record<string, unknown> | null;
+      if (!view || typeof view !== "object" || !Array.isArray(view.messages)) continue;
+      evidence.push(guarded.evidence);
+      const inbox = inboxes[done.fill.index]!;
+      inboxes[done.fill.index] = withFill(inbox, { account: inbox.account, status: "searched", view });
     }
     const recorded: AgentCall = { ...call, connectorAccountSet: outcomes(inboxes) };
     if (!inboxes.some((inbox) => inbox.status === "searched")) {
@@ -757,6 +811,9 @@ export function createAgentCallPipeline(deps: PipelineDeps): AgentCallPipeline &
     // The member-scoped policy context (binds the ids as parameters).
     // A card request also loads its household + currency context (design §8 step 4).
     const context = await loadAgentContext(connection, { db, keyWrapper, clock }, cardRequestOf(call));
+    // The person's "what agents see" level, on the call before it is bound (a search across
+    // inboxes copies it to each inbox's call), replacing anything the call came with.
+    call = { ...call, readLevel: context.readLevel };
     if(call.request === "high_tier" && !(await highTierRequestAllowed(db,connection.userId,context.permissions,call.field))) {
       await record(connection,call,"denied");
       return {result:{status:"refused",reason:"This agent cannot request that vault field."},errorCategory:CATEGORY_DENIED};
@@ -1018,7 +1075,8 @@ export function createAgentCallPipeline(deps: PipelineDeps): AgentCallPipeline &
         agentId: agent.id,
         active: true,
       };
-      const approvedCall: AgentCall = { ...call, audit: { requestId: call.audit?.requestId ?? randomUUID(), attemptId: randomUUID(), startedAt: clock.now().getTime(), approvalId } };
+      // The level the hold was made at is dropped: the result is checked at the person's level now.
+      const approvedCall: AgentCall = { ...call, readLevel: undefined, audit: { requestId: call.audit?.requestId ?? randomUUID(), attemptId: randomUUID(), startedAt: clock.now().getTime(), approvalId } };
       async function finish(outcome: HeldOutcome, result?: unknown, guardEvidence?: unknown) {
         await withTransaction(db, async tx => {
           await record(connection, approvedCall, outcome.status, result, recorder.forTransaction?.(tx, async () => dek) ?? recorder, false, guardEvidence);

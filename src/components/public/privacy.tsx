@@ -195,8 +195,10 @@ export function Privacy({ links = RELATIVE_LINKS }: { links?: PublicLinks } = {}
             email messages, calendar events or files covered by the permissions you
             grant. We use this access to carry out the requests allowed by your rules
             and approvals. Results are checked before they are returned to your
-            requesting agent: Warthog removes sign-in codes, password links and card
-            numbers and hands over a readable copy. When an agent asks to send or draft an email,
+            requesting agent: by default Warthog removes sign-in codes, password links and card
+            numbers and hands over a readable copy. In Settings you can choose to hide more (such
+            as tax file and account numbers) or to let agents see everything as written. When an
+            agent asks to send or draft an email,
             Warthog also searches your own Sent mail to tell you on the approval whether
             you&apos;ve emailed that address before; only that answer is kept, inside the
             approval. Review your agent&apos;s data practices before connecting it. We store encrypted access

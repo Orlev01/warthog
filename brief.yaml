@@ -205,7 +205,12 @@ features:
     numbers and ready-made download links; a sign-in code or password email reaches the agent as a
     short note that it arrived, with a link for the person to open it themselves. Booking and
     tracking references, ordinary links and everything else are left as written. Warthog never
-    claims to detect scams or malicious email.
+    claims to detect scams or malicious email. (Amended 24 November 2026, founder: the person
+    chooses what agents see in Settings, from three options: Private also hides tax file,
+    Medicare, passport, licence, BSB, account and similar numbers when the text names them;
+    Standard, the default, is the behaviour above; Everything hides nothing, sign-in emails
+    included. Hidden text is removed and content is marked as written by others at every level.
+    See docs/adr/read-side-protection.md.)
 
   # --- Agents and permissions ---
   - >-

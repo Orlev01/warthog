@@ -189,12 +189,12 @@ test("an inbox the agent may not read is listed too, so the result can name it",
   assert.equal(result.kind === "several" && result.accounts.length, 3);
 });
 
-test("a search covers at most five inboxes and names the ones left out", () => {
-  const many = Array.from({ length: 7 }, (_, i): ServiceAccount => ({ id: `7777777${i}-7777-4777-8777-777777777777`, connectorId: "google-gmail", label: `inbox${i}@gmail.com`, connected: true }));
+test("a search covers at most ten inboxes and names the ones left out", () => {
+  const many = Array.from({ length: 12 }, (_, i): ServiceAccount => ({ id: `77777777-7777-4777-8777-7777777777${String(i).padStart(2, "0")}`, connectorId: "google-gmail", label: `inbox${String(i).padStart(2, "0")}@gmail.com`, connected: true }));
   const result = bind({ granted: granted(...many.map((a): [ServiceAccount] => [a])), fanOut: true });
   assert.equal(result.kind, "several");
-  assert.deepEqual(result.kind === "several" && result.accounts.map((a) => a.label), ["inbox0@gmail.com", "inbox1@gmail.com", "inbox2@gmail.com", "inbox3@gmail.com", "inbox4@gmail.com"]);
-  assert.equal(result.kind === "several" && result.note, "Warthog searches at most 5 inboxes at once. Not searched: inbox5@gmail.com, inbox6@gmail.com: search one by naming it in account.");
+  assert.equal(result.kind === "several" && result.accounts.length, 10, "seven inboxes, as the founder has, are covered by one search");
+  assert.equal(result.kind === "several" && result.note, "Warthog searches at most 10 inboxes at once. Not searched: inbox10@gmail.com, inbox11@gmail.com: search one by naming it in account.");
 });
 
 test("a search fans out only when more than one inbox may be read, and never for a change, an id or a page", () => {

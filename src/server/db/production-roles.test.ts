@@ -16,6 +16,10 @@ test("runtime role writes ordinary data but cannot bypass append-only activity o
     for (const sql of ["SELECT * FROM approval_settings LIMIT 0", "INSERT INTO approval_settings (user_id, expiry_minutes, updated_at) SELECT gen_random_uuid(), 15, now() WHERE false", "UPDATE approval_settings SET expiry_minutes = 15 WHERE false", "DELETE FROM approval_settings WHERE false"]) {
       await db.query(sql);
     }
+    // The person's "what agents see" level (0124), the same shape of setting.
+    for (const sql of ["SELECT * FROM read_settings LIMIT 0", "INSERT INTO read_settings (user_id, level, updated_at) SELECT gen_random_uuid(), 'open', now() WHERE false", "UPDATE read_settings SET level = 'standard' WHERE false", "DELETE FROM read_settings WHERE false"]) {
+      await db.query(sql);
+    }
     for (const sql of ["DELETE FROM users WHERE false", "UPDATE activity_entries SET kind = kind WHERE false", "DELETE FROM activity_entries WHERE false", "DELETE FROM activity_disputes WHERE false", "TRUNCATE activity_entries", "DELETE FROM schema_migrations WHERE false"]) {
       await assert.rejects(db.query(sql), /permission denied/, sql);
     }

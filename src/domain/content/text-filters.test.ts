@@ -158,6 +158,18 @@ describe("maskSignInCodes", () => {
     assert.equal(mask("Your new password requirements: at least 12 characters"), "Your new password requirements: at least 12 characters");
   });
 
+  // 24 Nov 2026: an AGL bill's account number was masked as a sign-in code ("417 273" next to
+  // "Login"). A code is a standalone token, never part of a longer spaced digit group.
+  it("keeps a spaced account number next to sign-in wording, at every level", () => {
+    const agl = "Login to My Account … ACCOUNT 7126 417 273";
+    assert.equal(mask(agl), agl);
+    for (const level of ["standard", "open"] as const) assert.equal(cleanText(agl, emptyCounts(), { level }), agl, level);
+    assert.equal(cleanText(agl, emptyCounts(), { level: "private" }), "Login to My Account … ACCOUNT [number hidden by Warthog]");
+    assert.equal(mask("Sign in to see bill 482 913 112"), "Sign in to see bill 482 913 112");
+    // A code on its own is still masked.
+    assert.equal(mask("Login code: 417 273"), `Login code: ${SIGN_IN_CODE_MASK}`);
+  });
+
   it("keeps discount and gift codes, prices and references", () => {
     for (const text of ["Here is your discount code: 123456", "Your gift card code 12345678", "Use code 123456 for 10% off", "Order #123456", "Your booking reference is 482913", "flight QF1 departs 0645", "PIN 1234 for the gate", "$1,234,567", "BSB 062-000"]) {
       assert.equal(mask(text), text, text);

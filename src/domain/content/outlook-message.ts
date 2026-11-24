@@ -5,13 +5,20 @@
 //
 // Graph returns full message resources — HTML bodies included — for both a search and a
 // read. Each message becomes the same checked view as Gmail's: who, when, what, readable
-// text with links numbered, and a short stub for a sign-in or password email.
+// text with links numbered, and a short stub for a sign-in or password email (none at the
+// person's open level).
 
 import type { MailView } from "./gmail-message";
 import { previewOf, readableBody } from "./mail-body";
 import { classifySecurityMail, withheldSentence } from "./security-mail";
 import { cleanText, emptyCounts, type FilterCounts } from "./text-filters";
 import { stripInvisible } from "./untrusted";
+import type { ReadLevel } from "./read-levels";
+
+export interface OutlookViewOptions {
+  /** The person's level (read-levels.ts). Unset is the default, standard. */
+  readonly level?: ReadLevel;
+}
 
 interface GraphAddress {
   readonly emailAddress?: { readonly name?: unknown; readonly address?: unknown };
@@ -53,7 +60,7 @@ function webLink(value: unknown): string | undefined {
 }
 
 /** The checked view of one Graph message resource, or null when it isn't one. */
-export function outlookMessageView(input: unknown): MailView | null {
+export function outlookMessageView(input: unknown, options: OutlookViewOptions = {}): MailView | null {
   if (input === null || typeof input !== "object" || typeof (input as { id?: unknown }).id !== "string") return null;
   const message = input as Record<string, unknown>;
   const counts = emptyCounts();
@@ -69,12 +76,14 @@ export function outlookMessageView(input: unknown): MailView | null {
   add(base, "receivedDateTime", plain(message.receivedDateTime, counts, 64));
   add(base, "from", from);
 
-  const kind = classifySecurityMail(subject);
+  // A sign-in or password email becomes a stub, unless the person chose to see everything.
+  const { level } = options;
+  const kind = level === "open" ? null : classifySecurityMail(subject);
   if (kind) {
     return {
       message: {
         ...base,
-        ...(subject === undefined ? {} : { subject: cleanText(subject, counts, { signInMail: true }) }),
+        ...(subject === undefined ? {} : { subject: cleanText(subject, counts, { signInMail: true, level }) }),
         withheld: true,
         kind,
         ...(link ? { openInMail: link } : {}),
@@ -92,7 +101,7 @@ export function outlookMessageView(input: unknown): MailView | null {
   add(view, "to", addresses(message.toRecipients, counts));
   add(view, "cc", addresses(message.ccRecipients, counts));
   add(view, "replyTo", addresses(message.replyTo, counts));
-  add(view, "subject", subject === undefined ? undefined : cleanText(subject, counts));
+  add(view, "subject", subject === undefined ? undefined : cleanText(subject, counts, { level }));
   add(view, "internetMessageId", plain(message.internetMessageId, counts, 998));
   if (typeof message.isRead === "boolean") view.isRead = message.isRead;
   if (typeof message.hasAttachments === "boolean") view.hasAttachments = message.hasAttachments;
@@ -102,10 +111,10 @@ export function outlookMessageView(input: unknown): MailView | null {
   const body = message.body as { contentType?: unknown; content?: unknown } | undefined;
   const readsBody = body !== undefined && typeof body.content === "string";
   if (typeof message.bodyPreview === "string" && message.bodyPreview !== "") {
-    view.preview = cleanText(message.bodyPreview, readsBody ? emptyCounts() : counts);
+    view.preview = cleanText(message.bodyPreview, readsBody ? emptyCounts() : counts, { level });
   }
   if (readsBody) {
-    const readable = readableBody(String(body.content), String(body.contentType).toLowerCase() === "html", counts);
+    const readable = readableBody(String(body.content), String(body.contentType).toLowerCase() === "html", counts, { level });
     view.text = readable.text;
     if (view.preview !== undefined) view.preview = previewOf(readable.text);
     if (readable.links.length) view.links = readable.links;

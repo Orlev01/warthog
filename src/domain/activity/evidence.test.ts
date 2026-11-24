@@ -248,6 +248,20 @@ test("what Warthog's read check kept from the agent reads in words, counts only"
   assert.match(value(activityEvidence(withheld), "Result") ?? "", /couldn't check this, so the agent wasn't shown it/);
 });
 
+// The person's "what agents see" level (docs/adr/read-side-protection.md, amendment 24 November 2026).
+test("a read at a level other than the default says so, and identifying numbers are counted in words", () => {
+  const at = (guard: Record<string, unknown>) => ({ ...addTask, tool: "google-gmail__read", payload: { ...addTask.payload, resultEvidence: { outcome: "executed", status: 200, guard } } });
+  const open = value(activityEvidence(at({ outcome: "shown", level: "open" })), "Result") ?? "";
+  assert.match(open, /Shown as written: your setting is Everything/);
+  assert.doesNotMatch(open, /Kept from the agent/);
+  const kept = value(activityEvidence(at({ outcome: "masked", counts: { identifiers: 2, codes: 1 }, level: "private" })), "Result") ?? "";
+  assert.match(kept, /Kept from the agent: 1 sign-in code, 2 account or ID numbers \(your setting is Private\)/);
+  const one = value(activityEvidence(at({ outcome: "masked", counts: { identifiers: 1 } })), "Result") ?? "";
+  assert.match(one, /Kept from the agent: 1 account or ID number$/m);
+  // An unknown level is never written out.
+  assert.doesNotMatch(value(activityEvidence(at({ outcome: "shown", level: "<b>x</b>" })), "Result") ?? "", /<b>|your setting/);
+});
+
 test("a life-admin save reads as what it did, counted, never what it saved", async () => {
   const { observeResult } = await import("../../server/mcp/result-evidence");
   const observed = observeResult({ status: "ok", results: [

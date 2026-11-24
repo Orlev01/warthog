@@ -452,8 +452,10 @@ export async function saveTypedRecord(ctx: ServiceContext, actor: Actor, input: 
     }
     const hints: string[] = [];
     if (matchKeys.length === 0 && type.identity.length > 0 && !type.singleton) {
-      const first = type.identity[0]!.map((key) => (key === "parent" ? "parentId" : key === "title" ? "name" : key));
-      hints.push(`Add ${first.join(" and ")} so a later save updates this record instead of adding another.`);
+      // Only what this save left out: naming a field it already gave reads as a mistake.
+      const given = (key: string) => (key === "parent" ? Boolean(parentId) : (normalised.fields[key === "title" ? "name" : key] ?? "") !== "");
+      const missing = type.identity[0]!.filter((key) => !given(key)).map((key) => (key === "parent" ? "parentId" : key === "title" ? "name" : key));
+      if (missing.length > 0) hints.push(`Add ${missing.join(" and ")} so a later save updates this record instead of adding another.`);
     }
 
     const choice = statusChoice(type, input.status, problems);

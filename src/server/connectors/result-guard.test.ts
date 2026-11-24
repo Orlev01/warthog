@@ -159,3 +159,66 @@ describe("createResultGuard", () => {
     assert.equal(guard2.review(get("todoist__request"), { status: 200, truncated: false, body: "{}" }).exposure, undefined);
   });
 });
+
+// The person's "what agents see" level (docs/adr/read-side-protection.md, amendment 24 November
+// 2026), carried on the call by the pipeline: every path checks at that level, and the evidence
+// says when a result was shown at a level other than the default.
+describe("createResultGuard at the person's level", () => {
+  const signIn = () => gmailMessage("123456 is your Instagram code", "Your code is 123456. Reset: https://x.example/reset-password?t=12345678");
+
+  it("checks at standard when the call carries no level, and says nothing about the level", () => {
+    const guarded = guard.review(call("google-gmail__read"), { status: 200, truncated: false, body: signIn() });
+    assert.equal((guarded.result as { message: Record<string, unknown> }).message.withheld, true);
+    assert.equal((guarded.evidence as { level?: string }).level, undefined);
+    const standard = guard.review(call("google-gmail__read", { readLevel: "standard" }), { status: 200, truncated: false, body: signIn() });
+    assert.deepEqual(standard.evidence, guarded.evidence);
+  });
+
+  it("at open, shows a sign-in email in full, still strips hidden characters, and records the level", () => {
+    const guarded = guard.review(call("google-gmail__read", { readLevel: "open" }), { status: 200, truncated: false, body: gmailMessage("123456 is your Instagram code", "Your code​ is 123456. Reset: https://x.example/reset-password?t=12345678") });
+    const message = (guarded.result as { notice: string; message: Record<string, unknown> }).message;
+    assert.match(String((guarded.result as { notice: string }).notice), /^Checked by Warthog/);
+    assert.equal(message.withheld, undefined);
+    assert.equal(message.text, "Your code is 123456. Reset: https://x.example/reset-password?t=12345678");
+    assert.deepEqual(guarded.evidence, { outcome: "shown", counts: { hiddenCharacters: 1 }, level: "open" });
+    // The recently-read window still opens.
+    assert.equal(guarded.exposure?.sender, "ana@example.com");
+  });
+
+  it("at open, a search's sign-in email is a preview like any other and download links stay", () => {
+    const meta = { id: "b", threadId: "b", labelIds: ["INBOX"], snippet: "Your code is 123456", payload: { mimeType: "text/plain", headers: [{ name: "From", value: "Instagram <security@mail.instagram.com>" }, { name: "Subject", value: "123456 is your Instagram code" }] } };
+    const searched = guard.review(call("google-gmail__search", { readLevel: "open" }), { status: 200, truncated: false, body: JSON.stringify({ summaries: true, messages: [meta] }) });
+    const first = (searched.result as { messages: Record<string, unknown>[] }).messages[0]!;
+    assert.equal(first.withheld, undefined);
+    assert.equal(first.subject, "123456 is your Instagram code");
+    const file = guard.review(call("microsoft-onedrive__read", { readLevel: "open" }), { status: 200, truncated: false, body: JSON.stringify({ id: "i1", "@microsoft.graph.downloadUrl": "https://public.example/dl?tempauth=x" }) });
+    assert.match((file.result as { body: string }).body, /tempauth/);
+  });
+
+  it("at private, hides identifying numbers in every path and counts them", () => {
+    const line = "Your TFN is 123 456 782 and BSB 062-000.";
+    const mail = guard.review(call("google-gmail__read", { readLevel: "private" }), { status: 200, truncated: false, body: gmailMessage("Tax return", line) });
+    assert.equal((mail.result as { message: { text: string } }).message.text, "Your TFN is [number hidden by Warthog] and BSB [number hidden by Warthog].");
+    assert.deepEqual(mail.evidence, { outcome: "masked", counts: { identifiers: 2 }, level: "private" });
+
+    const rest = guard.review(call("xero__request", { readLevel: "private" }), { status: 200, truncated: false, body: JSON.stringify({ BankAccountNumber: "062000 12345678", Name: "Everyday" }) });
+    assert.deepEqual(JSON.parse((rest.result as { body: string }).body), { BankAccountNumber: "[number hidden by Warthog]", Name: "Everyday" });
+
+    const text = guard.review(call("google-drive__read_text", { readLevel: "private" }), { status: 200, truncated: false, body: `Medicare card 2123 45670 1` });
+    assert.equal((text.result as { body: string }).body, "Medicare card [number hidden by Warthog]");
+
+    const provider = guard.review(call("notion__search", { makesChange: true, requiresApproval: true, readLevel: "private" }), {
+      content: [{ type: "text", text: "Passport number PA1234567" }], structuredContent: { note: "Acct: 98765432" },
+    });
+    const result = provider.result as { content: { text: string }[]; structuredContent: { note: string } };
+    assert.equal(result.content[0]!.text, "Passport number [number hidden by Warthog]");
+    assert.equal(result.structuredContent.note, "Acct: [number hidden by Warthog]");
+    assert.equal(provider.evidence.counts?.identifiers, 2);
+
+    const outlook = guard.review(call("microsoft-outlook-mail__search", { readLevel: "private" }), {
+      status: 200, truncated: false,
+      body: JSON.stringify({ value: [{ id: "m1", subject: "Your bill", body: { contentType: "text", content: "Account number 1234 5678" } }] }),
+    });
+    assert.equal((outlook.result as { messages: Record<string, unknown>[] }).messages[0]!.text, "Account number [number hidden by Warthog]");
+  });
+});

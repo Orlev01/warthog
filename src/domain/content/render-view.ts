@@ -107,9 +107,10 @@ function messageLines(message: View): string[] {
   return lines;
 }
 
-function summaryLine(message: View, index: number): string {
-  // In a search across inboxes, each line starts with the inbox the email is in.
-  const inbox = str(message.account) ? `In ${str(message.account)} · ` : "";
+function summaryLine(message: View, index: number, acrossInboxes: boolean): string {
+  // In a search across inboxes, each line starts with the inbox the email is in; a one-inbox
+  // search names its inbox once, in its source.
+  const inbox = acrossInboxes && str(message.account) ? `In ${str(message.account)} · ` : "";
   if (message.withheld === true) {
     return `${index + 1}. ${inbox}Withheld ${str(message.kind) ?? "message"} from ${str(message.from) ?? "a sender"}${str(message.date) ? ` · ${str(message.date)}` : ""} — ${str(message.tellThePerson) ?? str(message.note) ?? ""}${idsOf(message) ? ` (${idsOf(message)})` : ""}`;
   }
@@ -156,7 +157,8 @@ export function renderCheckedView(result: unknown): string | null {
     // Which inboxes a search across inboxes covered, and why any weren't searched.
     if (str(view.coverage)) lines.push(str(view.coverage)!);
     if (!messages.length) lines.push("No messages found.");
-    messages.forEach((message, index) => lines.push(summaryLine(message, index)));
+    const acrossInboxes = Array.isArray(view.accounts);
+    messages.forEach((message, index) => lines.push(summaryLine(message, index, acrossInboxes)));
     if (str(view.nextPageToken)) lines.push(`More results: search again with the same account, query.q and query.pageToken=${str(view.nextPageToken)}`);
     if (str(view.nextLink)) lines.push(`More results: ${str(view.nextLink)}`);
     lines.push(...morePages(view.accounts));

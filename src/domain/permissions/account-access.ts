@@ -96,7 +96,7 @@ const HANDLE_ALPHABET = "abcdefghijkmnpqrstuvwxyz23456789";
 const REFRESH_HINT = " If your tool has no account field, ask the person to refresh Warthog in your app's connector settings.";
 
 // The most inboxes one search covers.
-const MAX_FAN_OUT = 5;
+const MAX_FAN_OUT = 10;
 // An account-tagged id: a handle, a dot, then the service's own id.
 const TAGGED_ID = /^([a-z2-9]{6})\.(.+)$/;
 
