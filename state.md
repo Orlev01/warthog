@@ -1,4 +1,20 @@
-# Delivery status — 24 November 2026 (UI/UX phase 0)
+# Delivery status — 24 November 2026 (several accounts per agent, Life admin tabs)
+
+**Live at [warthog.com.au](https://warthog.com.au) (the website) and
+[app.warthog.com.au](https://app.warthog.com.au) (the app).** Application source
+`873ab68f8172b88cc66cbbd48febe5d3e9c76f31` runs as `warthog--r45300201976a1`, with one healthy
+replica, explicit 100% traffic and zero old replicas.
+
+- PR #55: one agent can use several accounts of a service, each with its own settings; a mail
+  search covers every inbox it may read
+  ([ADR](docs/adr/several-accounts-per-agent.md)).
+- PR #52: Life admin has one row of tabs (Records, Upcoming, History, Tasks), no moving checklist,
+  account details and plain reminders.
+
+Migrations 0121 and 0122 (93). See the
+[release record](docs/audit/several-accounts-release-2026-11-24.md).
+
+# Earlier delivery status — 24 November 2026 (UI/UX phase 0)
 
 **Live at [warthog.com.au](https://warthog.com.au) (the website) and
 [app.warthog.com.au](https://app.warthog.com.au) (the app).** Application source

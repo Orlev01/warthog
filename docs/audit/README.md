@@ -1,5 +1,13 @@
 # Warthog comprehensive engineering audit
 
+**Several accounts per agent and Life admin's four tabs, 24 November:** main `873ab68` runs as
+`warthog--r45300201976a1`. PR #55 lets one agent use several accounts of a service, each with its
+own settings: a mail search covers every inbox the agent may read, ids carry their inbox, and
+disconnecting one account leaves the others granted. PR #52 gives Life admin one row of tabs
+(Records, Upcoming, History, Tasks), removes the moving checklist, adds account details and plain
+reminders. Migrations 0121 and 0122 (93). See the
+[release record](several-accounts-release-2026-11-24.md).
+
 **UI/UX phase 0, 24 November:** main `8cacbd5` runs as `warthog--r45274398968a1`. PR #54 fixes
 the member-app audit's three critical issues. Held requests for Warthog's own tools now say what
 they would add or change. A released card or passport request ends and moves to History, and its
